@@ -156,6 +156,14 @@ $("layouts").addEventListener("click", (e) => {
   if (e.target.dataset && e.target.dataset.cols) setLayout(Number(e.target.dataset.cols));
 });
 
+// Sidebar toggle: fully hide the sidebar so the terminal fills the width. State
+// persists across reloads (applied pre-paint by the inline <head> script).
+$("sidebar-toggle").onclick = () => {
+  const hidden = document.documentElement.classList.toggle("sidebar-hidden");
+  try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
+  renderGrid(); // reflow/refit terminals to the new width
+};
+
 // --- sidebar: session list ---------------------------------------------------
 function emptyLi(text) {
   const li = document.createElement("li");
