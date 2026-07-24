@@ -12,6 +12,7 @@ import (
 	"github.com/culiops/culiops-agent-console/internal/auth"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/culiops-agent-console/internal/secrets"
 	"github.com/culiops/culiops-agent-console/internal/session"
 	"github.com/culiops/culiops-agent-console/internal/terminal"
 	"github.com/culiops/culiops-agent-console/internal/web"
@@ -38,7 +39,17 @@ func main() {
 		log.Fatalf("auth: %v", err)
 	}
 
-	mgr := session.NewManager(launcher.New(cfg.Agents), 128*1024, 5*time.Minute)
+	resolver, err := secrets.New(cfg.SecretSources)
+	if err != nil {
+		log.Fatalf("secrets: %v", err)
+	}
+	// Surface each agent's effective base so the clean-by-default posture is
+	// visible at startup (an existing config's agents now default to clean).
+	for _, a := range cfg.Agents {
+		log.Printf("agent %q: base=%s", a.Name, a.BasePolicy())
+	}
+
+	mgr := session.NewManager(launcher.New(cfg.Agents, resolver), 128*1024, 5*time.Minute)
 
 	srv := &web.Server{
 		API:      &web.API{Sessions: web.ManagerService{M: mgr}},

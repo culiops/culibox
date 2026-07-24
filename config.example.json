@@ -1,0 +1,34 @@
+{
+  "bind_addr": "127.0.0.1:8899",
+  "basic_auth_user": "admin",
+  "basic_auth_pass_env": "AC_PASS",
+  "default_cwd": "/home/you",
+
+  "secret_sources": [
+    { "type": "env" },
+    { "type": "file", "path": "/etc/agent-console/secrets.env" }
+  ],
+
+  "agents": [
+    {
+      "comment": "base=login: sources your profile so the toolchain (nvm node, etc.) is found. Convenient; NOT contained — your profile may export secrets.",
+      "name": "claude",
+      "bin": "claude",
+      "base": "login"
+    },
+    {
+      "comment": "base=clean (default): no inherited secrets. Give it an explicit PATH for its toolchain and grant only the secrets it needs by name.",
+      "name": "claude-locked",
+      "bin": "claude",
+      "base": "clean",
+      "env": { "PATH": "/home/you/.nvm/versions/node/v24/bin:/usr/local/bin:/usr/bin:/bin" },
+      "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"]
+    },
+    {
+      "comment": "a plain login shell",
+      "name": "shell",
+      "bin": "bash",
+      "base": "login"
+    }
+  ]
+}

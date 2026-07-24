@@ -1,6 +1,7 @@
 package session
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -17,7 +18,11 @@ type mockBuilder struct {
 }
 
 func (b mockBuilder) Build(launcher.SpawnSpec) ([]string, []string, error) {
-	return b.argv, b.env, b.err
+	env := b.env
+	if env == nil { // give the child a PATH so `sh`/`sleep` work in tests
+		env = []string{"PATH=" + os.Getenv("PATH")}
+	}
+	return b.argv, env, b.err
 }
 
 func TestManager_SpawnListGetKill(t *testing.T) {
