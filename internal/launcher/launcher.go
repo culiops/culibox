@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/secrets"
@@ -44,11 +45,33 @@ var claudeSessionEnvBlocklist = map[string]bool{
 var cleanBaseVars = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG"}
 
 // AgentLauncher builds commands from configured agents + a secret resolver.
+// The agents map is refreshable at runtime (SetAgents) so newly stored profiles
+// are spawnable without a restart.
 type AgentLauncher struct {
+	mu         sync.RWMutex
 	agents     map[string]config.AgentConfig
 	secrets    secrets.Resolver
 	shell      string
 	optionDefs map[string]config.OptionDef
+}
+
+// SetAgents replaces the launchable profile set (config seeds merged with the
+// runtime store).
+func (l *AgentLauncher) SetAgents(agents []config.AgentConfig) {
+	m := make(map[string]config.AgentConfig, len(agents))
+	for _, a := range agents {
+		m[a.Name] = a
+	}
+	l.mu.Lock()
+	l.agents = m
+	l.mu.Unlock()
+}
+
+func (l *AgentLauncher) agent(name string) (config.AgentConfig, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	c, ok := l.agents[name]
+	return c, ok
 }
 
 // New indexes agents + option definitions and resolves a usable login shell.
@@ -86,7 +109,7 @@ func isExecutable(p string) bool {
 
 // Build composes (argv, env) for the agent per its base policy + env + secrets.
 func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
-	cfg, ok := l.agents[spec.Agent]
+	cfg, ok := l.agent(spec.Agent)
 	if !ok {
 		return nil, nil, fmt.Errorf("launcher: unknown agent %q", spec.Agent)
 	}

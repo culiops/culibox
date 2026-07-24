@@ -68,6 +68,7 @@ type Config struct {
 	BasicAuthPassEnv string         `json:"basic_auth_pass_env"`
 	DefaultCwd       string         `json:"default_cwd"`
 	AllowPublic      bool           `json:"allow_public"`
+	ProfilesPath     string         `json:"profiles_path,omitempty"` // store for runtime profiles
 	SecretSources    []SecretSource `json:"secret_sources,omitempty"`
 	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
@@ -162,6 +163,39 @@ func (c Config) Validate() error {
 		}
 	}
 	return c.checkBind()
+}
+
+// ValidateProfile validates a single profile (used for runtime-stored profiles)
+// against the given option definitions.
+func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
+	if a.Name == "" || a.Bin == "" {
+		return errors.New("profile requires a name and bin")
+	}
+	switch a.BasePolicy() {
+	case BaseClean, BaseLogin, BaseInherit:
+	default:
+		return fmt.Errorf("profile %q has invalid base %q (want clean|login|inherit)", a.Name, a.Base)
+	}
+	for k, v := range a.Options {
+		def, ok := optDefs[k]
+		if !ok {
+			return fmt.Errorf("profile %q sets unknown option %q", a.Name, k)
+		}
+		switch def.Type {
+		case OptBool:
+			if _, ok := v.(bool); !ok {
+				return fmt.Errorf("profile %q option %q must be a bool", a.Name, k)
+			}
+		case OptEnum:
+			if s, ok := v.(string); !ok || !contains(def.Choices, s) {
+				return fmt.Errorf("profile %q option %q must be one of %v", a.Name, k, def.Choices)
+			}
+		}
+		if def.Env != "" && contains(a.Secrets, def.Env) {
+			return fmt.Errorf("profile %q option %q env %q collides with a declared secret", a.Name, k, def.Env)
+		}
+	}
+	return nil
 }
 
 func contains(ss []string, s string) bool {

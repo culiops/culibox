@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
@@ -15,6 +16,7 @@ import (
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 	"github.com/culiops/culiops-agent-console/internal/secrets"
 	"github.com/culiops/culiops-agent-console/internal/session"
+	"github.com/culiops/culiops-agent-console/internal/store"
 	"github.com/culiops/culiops-agent-console/internal/terminal"
 	"github.com/culiops/culiops-agent-console/internal/web"
 )
@@ -50,7 +52,8 @@ func main() {
 		log.Printf("agent %q: base=%s", a.Name, a.BasePolicy())
 	}
 
-	mgr := session.NewManager(launcher.New(cfg.Agents, resolver, cfg.Options), 128*1024, 5*time.Minute)
+	lnch := launcher.New(cfg.Agents, resolver, cfg.Options)
+	mgr := session.NewManager(lnch, 128*1024, 5*time.Minute)
 
 	// Default working dir: config value if set, else $HOME.
 	home, _ := os.UserHomeDir()
@@ -59,10 +62,25 @@ func main() {
 		defaultCwd = home
 	}
 
+	// Runtime profile store (config.Agents are read-only seeds; the store holds
+	// UI-created/edited profiles). The manager pushes the merged set to the launcher.
+	profilesPath := cfg.ProfilesPath
+	if profilesPath == "" {
+		profilesPath = filepath.Join(home, ".local", "share", "agent-console", "profiles.json")
+	}
+	if err := os.MkdirAll(filepath.Dir(profilesPath), 0o700); err != nil {
+		log.Fatalf("profiles dir: %v", err)
+	}
+	st, err := store.Open(profilesPath)
+	if err != nil {
+		log.Fatalf("profiles store: %v", err)
+	}
+	pm := web.NewProfileManager(cfg.Agents, cfg.Options, st, lnch.SetAgents)
+
 	srv := &web.Server{
 		API:      &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Cookie:   cookie,
-		Profiles: web.Profiles(cfg),
+		Profiles: pm,
 		Home:     home,
 		Terminal: terminal.NewAttachHandler(mgr.Get),
 	}

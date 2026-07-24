@@ -203,6 +203,7 @@ async function loadProfiles() {
       return o;
     }));
     renderOptions();
+    renderEditable();
   } catch (_) {}
 }
 function currentProfile() {
@@ -248,6 +249,41 @@ function getOptions() {
   return out;
 }
 $("agent").addEventListener("change", renderOptions);
+
+// --- profile management (create / edit / delete runtime profiles) -----------
+const PROFILE_TEMPLATE = JSON.stringify({ name: "my-profile", bin: "claude", base: "inherit", args: [] }, null, 2);
+function renderEditable() {
+  const ul = $("editable");
+  ul.replaceChildren(...profiles.filter((p) => p.editable).map((p) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name"; name.textContent = p.name;
+    const del = document.createElement("button");
+    del.className = "del"; del.textContent = "×"; del.title = "Delete profile";
+    del.onclick = () => deleteProfile(p.name);
+    li.append(name, del);
+    return li;
+  }));
+}
+async function saveProfile() {
+  let p;
+  try { p = JSON.parse($("profile-json").value.trim()); }
+  catch (e) { alert("Invalid JSON: " + e.message); return; }
+  if (!p || !p.name) { alert("Profile needs a name"); return; }
+  const editing = profiles.some((x) => x.name === p.name && x.editable);
+  const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
+  try {
+    await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+  } catch (e) { alert("Save failed: " + e.message); return; }
+  await loadProfiles();
+}
+async function deleteProfile(name) {
+  try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
+  catch (e) { alert("Delete failed: " + e.message); return; }
+  await loadProfiles();
+}
+$("save-profile").addEventListener("click", saveProfile);
+$("profile-json").value = PROFILE_TEMPLATE;
 async function loadWorkspaces() {
   try {
     const ws = await api("/api/workspaces"); // [{label, path}] = $HOME + its subfolders

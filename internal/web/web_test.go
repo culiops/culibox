@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
+	"github.com/culiops/culiops-agent-console/internal/config"
 )
 
 // TestWSRouteRequiresCookieNotBasicAuth verifies the B2 fix: the /ws/ route is
@@ -35,7 +36,8 @@ func TestWSRouteRequiresCookieNotBasicAuth(t *testing.T) {
 
 func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 	ca, _ := auth.NewCookieAuth()
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler()}
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
+		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler("u", "p")
 
 	rec := httptest.NewRecorder()
