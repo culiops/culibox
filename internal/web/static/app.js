@@ -39,6 +39,19 @@ function execCopy(text) {
   document.body.removeChild(ta);
 }
 
+// sessionIsLive reports whether the server still has this session running, used to
+// tell a real session end from a transient WS drop. On error, assume transient
+// (return true) so we never falsely "end" a live session.
+async function sessionIsLive(id) {
+  try {
+    const list = await api("/api/sessions");
+    const s = (list || []).find((x) => x.id === id);
+    return !!s && s.status !== "exited";
+  } catch (_) {
+    return true;
+  }
+}
+
 const panes = new Map(); // id -> Pane
 let cols = 1;
 
@@ -115,19 +128,25 @@ class Pane {
     };
     ws.onclose = () => {
       if (this.closed) return;
-      // Only a connection that stayed up a while counts as healthy and refills
-      // the retry budget. An immediate open→close (e.g. attaching to an exited
-      // session) keeps counting, so we give up after 5 tries instead of looping
-      // every 1.5s for the whole retention window.
-      if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0;
-      this.openedAt = 0;
-      if (this.retries < 5) {
-        this.retries++;
-        this.setStatus("reconnecting…");
-        setTimeout(() => { if (!this.closed) this.connect(); }, 1500);
-      } else {
-        this.setStatus("disconnected");
-      }
+      // Tell a real session end from a transient drop (daemon restart / blip): if
+      // the server no longer has the session live, stop retrying and mark ended,
+      // rather than looping on "reconnecting…" against a dead session.
+      sessionIsLive(this.id).then((alive) => {
+        if (this.closed) return;
+        if (!alive) { this.markEnded(); return; }
+        // Only a connection that stayed up a while counts as healthy and refills
+        // the retry budget. An immediate open→close keeps counting, so we give up
+        // after 5 tries instead of looping for the whole retention window.
+        if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0;
+        this.openedAt = 0;
+        if (this.retries < 5) {
+          this.retries++;
+          this.setStatus("reconnecting…");
+          setTimeout(() => { if (!this.closed) this.connect(); }, 1500);
+        } else {
+          this.setStatus("disconnected");
+        }
+      });
     };
     ws.onerror = () => this.setStatus("error");
   }
@@ -142,6 +161,24 @@ class Pane {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "resize", rows: this.term.rows, cols: this.term.cols }));
     }
+  }
+
+  // markEnded: the session is gone for good — stop reconnecting and show a clear
+  // "session ended" banner with a Close button (the final output stays visible).
+  markEnded() {
+    if (this.ended) return;
+    this.ended = true;
+    this.setStatus("ended");
+    const bar = document.createElement("div");
+    bar.className = "pane-ended";
+    const msg = document.createElement("span");
+    msg.textContent = "session ended";
+    const btn = document.createElement("button");
+    btn.textContent = "Close";
+    btn.onclick = () => this.close();
+    bar.append(msg, btn);
+    this.el.insertBefore(bar, this.el.querySelector(".pane-term"));
+    this.fit(); // the banner shrank the terminal area — reflow to the new height
   }
 
   close() {

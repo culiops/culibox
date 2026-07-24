@@ -94,6 +94,8 @@
     .pane-head .x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 15px; padding: 0 4px; }
     .pane-head .x:hover { color: var(--danger); }
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
+    .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2d1618; border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
+    .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
     @media (max-width: 700px) {
       #layout { flex-direction: column; }
       #sidebar { width: 100%; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
