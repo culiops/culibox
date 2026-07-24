@@ -23,6 +23,7 @@ class Pane {
     this.id = id;
     this.closed = false;
     this.retries = 0;
+    this.openedAt = 0;
 
     this.el = document.createElement("div");
     this.el.className = "pane";
@@ -69,15 +70,26 @@ class Pane {
     const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(this.id)}`);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
-    ws.onopen = () => { this.retries = 0; this.setStatus("connected"); this.sendResize(); this.term.focus(); };
+    ws.onopen = () => { this.openedAt = Date.now(); this.setStatus("connected"); this.sendResize(); this.term.focus(); };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") this.term.write(ev.data);
       else this.term.write(new Uint8Array(ev.data));
     };
     ws.onclose = () => {
       if (this.closed) return;
-      this.setStatus("disconnected");
-      if (this.retries < 5) { this.retries++; setTimeout(() => { if (!this.closed) this.connect(); }, 1500); }
+      // Only a connection that stayed up a while counts as healthy and refills
+      // the retry budget. An immediate open→close (e.g. attaching to an exited
+      // session) keeps counting, so we give up after 5 tries instead of looping
+      // every 1.5s for the whole retention window.
+      if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0;
+      this.openedAt = 0;
+      if (this.retries < 5) {
+        this.retries++;
+        this.setStatus("reconnecting…");
+        setTimeout(() => { if (!this.closed) this.connect(); }, 1500);
+      } else {
+        this.setStatus("disconnected");
+      }
     };
     ws.onerror = () => this.setStatus("error");
   }

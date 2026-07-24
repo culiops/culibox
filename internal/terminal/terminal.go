@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -72,7 +73,11 @@ func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return
 				}
-				if err := c.Write(ctx, websocket.MessageBinary, b); err != nil {
+				// Bounded write so a black-hole client can't hang this goroutine.
+				wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
+				err := c.Write(wctx, websocket.MessageBinary, b)
+				wcancel()
+				if err != nil {
 					return
 				}
 			case <-ctx.Done():

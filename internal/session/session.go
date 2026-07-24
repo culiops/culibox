@@ -7,6 +7,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,6 +20,10 @@ import (
 
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 )
+
+// ErrNotFound is returned by Manager.Kill for an unknown id (so the API can map
+// it to 404, incl. the TOCTOU where the retention pruner removes it mid-request).
+var ErrNotFound = errors.New("session: not found")
 
 // Info is a read-only snapshot for listing.
 type Info struct {
@@ -45,10 +50,13 @@ type Session struct {
 	rows uint16
 	cols uint16
 
-	done      chan struct{}
-	closeOnce sync.Once
-	exited    bool
-	exitAt    time.Time
+	done         chan struct{}
+	closeOnce    sync.Once
+	exited       bool
+	exitAt       time.Time
+	pumpFinished bool // pump drained the PTY fully (ring is complete)
+	removed      chan struct{}
+	removedOnce  sync.Once
 
 	sub *subscription // current subscriber (at most one)
 }
@@ -64,9 +72,10 @@ func newSession(id, agent, cwd string, cmd *exec.Cmd, ptmx *os.File, ringCap int
 	s := &Session{
 		ID: id, Agent: agent, Cwd: cwd, Created: time.Now(),
 		cmd: cmd, ptmx: ptmx,
-		rb:   newRing(ringCap),
-		done: make(chan struct{}),
-		rows: 24, cols: 80,
+		rb:      newRing(ringCap),
+		done:    make(chan struct{}),
+		removed: make(chan struct{}),
+		rows:    24, cols: 80,
 	}
 	s.cond = sync.NewCond(&s.mu)
 	go s.pump()
@@ -77,6 +86,15 @@ func newSession(id, agent, cwd string, cmd *exec.Cmd, ptmx *os.File, ringCap int
 // pump: PTY -> ring. The sole appender. Never blocks on a subscriber, so the
 // child can never stall on a full PTY.
 func (s *Session) pump() {
+	// On exit, mark the ring complete so delivery goroutines flush the child's
+	// final output before closing — not merely when the process is reaped
+	// (cmd.Wait can return before the last PTY bytes are read).
+	defer func() {
+		s.mu.Lock()
+		s.pumpFinished = true
+		s.cond.Broadcast()
+		s.mu.Unlock()
+	}()
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.ptmx.Read(buf)
@@ -138,7 +156,7 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 	defer close(sub.out)
 	for {
 		s.mu.Lock()
-		for cursor >= s.rb.end() && !s.exited && !sub.stopped {
+		for cursor >= s.rb.end() && !s.pumpFinished && !sub.stopped {
 			s.cond.Wait()
 		}
 		if sub.stopped {
@@ -154,7 +172,9 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 			chunk = s.rb.bytesFrom(cursor)
 			cursor = s.rb.end()
 		}
-		exited := s.exited
+		// Terminate only once the pump has fully drained the PTY (ring complete)
+		// AND we've sent everything — so a live viewer never misses final output.
+		pumpDone := s.pumpFinished
 		end := s.rb.end()
 		s.mu.Unlock()
 
@@ -165,7 +185,7 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 				return
 			}
 		}
-		if exited && cursor >= end {
+		if pumpDone && cursor >= end {
 			return
 		}
 	}
@@ -278,9 +298,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	m.mu.Unlock()
 
 	// Retain an exited session (so the user can read why it died), then prune.
+	// An explicit Kill closes `removed` to skip the wait and exit early.
 	go func() {
 		<-sess.Done()
-		time.Sleep(m.retention)
+		select {
+		case <-time.After(m.retention):
+		case <-sess.removed:
+			return
+		}
 		_ = sess.ptmx.Close()
 		m.mu.Lock()
 		delete(m.sessions, id)
@@ -317,7 +342,7 @@ func (m *Manager) Kill(id string) error {
 	s, ok := m.sessions[id]
 	m.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("session: unknown id %q", id)
+		return ErrNotFound
 	}
 	_ = s.signal(syscall.SIGTERM)
 	select {
@@ -330,5 +355,6 @@ func (m *Manager) Kill(id string) error {
 	m.mu.Lock()
 	delete(m.sessions, id)
 	m.mu.Unlock()
+	s.removedOnce.Do(func() { close(s.removed) }) // let the retention goroutine exit now
 	return nil
 }

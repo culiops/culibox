@@ -104,6 +104,31 @@ func TestSession_ExitClosesOutAndDone(t *testing.T) {
 	}
 }
 
+// TestSession_FinalOutputDeliveredBeforeClose guards the review's finding #2:
+// a live subscriber must receive the child's final bytes before `out` closes
+// (delivery terminates on pump-drained, not merely on process-reaped).
+func TestSession_FinalOutputDeliveredBeforeClose(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "printf FINAL_MARKER; exit 0")
+	out, cancel := s.Subscribe()
+	defer cancel()
+	var b strings.Builder
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				if !strings.Contains(b.String(), "FINAL_MARKER") {
+					t.Fatalf("final output lost before close; got %q", b.String())
+				}
+				return
+			}
+			b.Write(chunk)
+		case <-deadline:
+			t.Fatalf("out never closed; got %q", b.String())
+		}
+	}
+}
+
 func TestSession_WriteReachesChild(t *testing.T) {
 	s := startProc(t, 1<<16, "cat")
 	out, cancel := s.Subscribe()

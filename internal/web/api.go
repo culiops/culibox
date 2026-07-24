@@ -4,6 +4,8 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -49,7 +51,8 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: req.Cwd})
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
+			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
+			writeErr(w, http.StatusBadRequest, "could not start session")
 			return
 		}
 		writeJSON(w, http.StatusCreated, info)
@@ -74,6 +77,10 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.Sessions.Kill(id); err != nil {
+		if errors.Is(err, session.ErrNotFound) { // pruned between Get and Kill
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "kill failed")
 		return
 	}
