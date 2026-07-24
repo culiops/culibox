@@ -11,6 +11,7 @@ GEMINI.md
 
 # --- Design docs kept local-only (per repo decision 2026-07-24) ---
 docs/superpowers/
+docs/handover/
 
 # --- OS / editor cruft ---
 .DS_Store
