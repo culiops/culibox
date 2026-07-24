@@ -59,3 +59,13 @@ func TestStore_CRUD_Persists(t *testing.T) {
 		t.Fatalf("store file too permissive: %o", info.Mode().Perm())
 	}
 }
+
+func TestStore_Open_CorruptErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(path); err == nil {
+		t.Fatal("corrupt store should return an error so the caller can quarantine it")
+	}
+}

@@ -29,6 +29,7 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
+	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))
 	})

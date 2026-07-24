@@ -119,6 +119,21 @@ func (m *ProfileManager) Views() []ProfileView {
 	return out
 }
 
+// OptionDefs returns the configured option definitions (for the profile editor).
+func (m *ProfileManager) OptionDefs() []config.OptionDef { return m.options }
+
+// Get returns the full merged profile config by name (for the profile editor).
+func (m *ProfileManager) Get(name string) (config.AgentConfig, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.merged() {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return config.AgentConfig{}, false
+}
+
 // Save validates and persists a runtime profile, then refreshes the launcher.
 func (m *ProfileManager) Save(p config.AgentConfig) error {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {

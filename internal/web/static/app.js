@@ -250,26 +250,75 @@ function getOptions() {
 }
 $("agent").addEventListener("change", renderOptions);
 
-// --- profile management (create / edit / delete runtime profiles) -----------
-const PROFILE_TEMPLATE = JSON.stringify({ name: "my-profile", bin: "claude", base: "inherit", args: [] }, null, 2);
-function renderEditable() {
-  const ul = $("editable");
-  ul.replaceChildren(...profiles.filter((p) => p.editable).map((p) => {
-    const li = document.createElement("li");
-    const name = document.createElement("span");
-    name.className = "name"; name.textContent = p.name;
-    const del = document.createElement("button");
-    del.className = "del"; del.textContent = "×"; del.title = "Delete profile";
-    del.onclick = () => deleteProfile(p.name);
-    li.append(name, del);
-    return li;
+// --- profile editor (structured create / edit / delete of runtime profiles) --
+let optionDefs = [];
+async function loadOptionDefs() {
+  try { optionDefs = (await api("/api/options")) || []; } catch (_) {}
+}
+function renderPfOptions(current) {
+  current = current || {};
+  $("pf-options").replaceChildren(...optionDefs.map((o) => {
+    const row = document.createElement("div");
+    row.className = "pf-row";
+    const lbl = document.createElement("label");
+    lbl.textContent = o.label || o.key;
+    let ctrl;
+    if (o.type === "bool") {
+      ctrl = document.createElement("input");
+      ctrl.type = "checkbox";
+      ctrl.checked = current[o.key] === true;
+    } else {
+      ctrl = document.createElement("select");
+      const none = document.createElement("option");
+      none.value = ""; none.textContent = "(not set)";
+      ctrl.appendChild(none);
+      for (const c of o.choices || []) {
+        const co = document.createElement("option");
+        co.value = c; co.textContent = c;
+        if (current[o.key] === c) co.selected = true;
+        ctrl.appendChild(co);
+      }
+    }
+    ctrl.dataset.optkey = o.key;
+    ctrl.dataset.opttype = o.type;
+    row.append(lbl, ctrl);
+    return row;
   }));
 }
+function fillForm(p) {
+  $("pf-name").value = p.name || "";
+  $("pf-bin").value = p.bin || "";
+  $("pf-base").value = p.base || "inherit";
+  $("pf-args").value = (p.args || []).join("\n");
+  $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
+  $("pf-secrets").value = (p.secrets || []).join(", ");
+  renderPfOptions(p.options || {});
+}
+function newProfile() { fillForm({ base: "inherit" }); $("pf-name").focus(); }
+function readForm() {
+  const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
+  const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (args.length) p.args = args;
+  const env = {};
+  for (const line of $("pf-env").value.split("\n")) {
+    const t = line.trim(); if (!t) continue;
+    const i = t.indexOf("="); if (i < 0) continue;
+    env[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+  }
+  if (Object.keys(env).length) p.env = env;
+  const secrets = $("pf-secrets").value.split(",").map((s) => s.trim()).filter(Boolean);
+  if (secrets.length) p.secrets = secrets;
+  const opts = {};
+  for (const ctrl of $("pf-options").querySelectorAll("[data-optkey]")) {
+    if (ctrl.dataset.opttype === "bool") opts[ctrl.dataset.optkey] = ctrl.checked;
+    else if (ctrl.value) opts[ctrl.dataset.optkey] = ctrl.value;
+  }
+  if (Object.keys(opts).length) p.options = opts;
+  return p;
+}
 async function saveProfile() {
-  let p;
-  try { p = JSON.parse($("profile-json").value.trim()); }
-  catch (e) { alert("Invalid JSON: " + e.message); return; }
-  if (!p || !p.name) { alert("Profile needs a name"); return; }
+  const p = readForm();
+  if (!p.name || !p.bin) { alert("Name and Command are required"); return; }
   const editing = profiles.some((x) => x.name === p.name && x.editable);
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
   try {
@@ -277,13 +326,30 @@ async function saveProfile() {
   } catch (e) { alert("Save failed: " + e.message); return; }
   await loadProfiles();
 }
+async function editProfile(name) {
+  try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); $("manage").open = true; }
+  catch (e) { alert("Load failed: " + e.message); }
+}
 async function deleteProfile(name) {
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
   catch (e) { alert("Delete failed: " + e.message); return; }
   await loadProfiles();
 }
-$("save-profile").addEventListener("click", saveProfile);
-$("profile-json").value = PROFILE_TEMPLATE;
+function renderEditable() {
+  $("editable").replaceChildren(...profiles.filter((p) => p.editable).map((p) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name"; name.textContent = p.name; name.title = "Edit"; name.style.cursor = "pointer";
+    name.onclick = () => editProfile(p.name);
+    const del = document.createElement("button");
+    del.className = "del"; del.textContent = "×"; del.title = "Delete profile";
+    del.onclick = () => deleteProfile(p.name);
+    li.append(name, del);
+    return li;
+  }));
+}
+$("pf-save").addEventListener("click", saveProfile);
+$("pf-new").addEventListener("click", newProfile);
 async function loadWorkspaces() {
   try {
     const ws = await api("/api/workspaces"); // [{label, path}] = $HOME + its subfolders
@@ -329,5 +395,6 @@ async function killSession(id) {
 window.addEventListener("resize", () => panes.forEach((p) => p.fit()));
 loadProfiles();
 loadWorkspaces();
+loadOptionDefs().then(newProfile);
 refreshSessions();
 setInterval(refreshSessions, 3000);

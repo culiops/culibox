@@ -39,6 +39,13 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.Method {
+	case http.MethodGet:
+		p, ok := s.Profiles.Get(name)
+		if !ok {
+			writeErr(w, http.StatusNotFound, "no such profile")
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
 	case http.MethodPut:
 		p, err := decodeProfile(w, r)
 		if err != nil {
@@ -64,6 +71,11 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleOptions serves GET /api/options — the option definitions for the editor.
+func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.Profiles.OptionDefs())
 }
 
 func decodeProfile(w http.ResponseWriter, r *http.Request) (config.AgentConfig, error) {

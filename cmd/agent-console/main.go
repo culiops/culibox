@@ -73,7 +73,15 @@ func main() {
 	}
 	st, err := store.Open(profilesPath)
 	if err != nil {
-		log.Fatalf("profiles store: %v", err)
+		// A corrupt/hand-edited store must not brick startup: quarantine it and
+		// start with an empty store.
+		log.Printf("profiles store %q unreadable (%v); quarantining to %s.corrupt and starting empty",
+			profilesPath, err, profilesPath)
+		_ = os.Rename(profilesPath, profilesPath+".corrupt")
+		st, err = store.Open(profilesPath)
+		if err != nil {
+			log.Fatalf("profiles store: %v", err)
+		}
 	}
 	pm := web.NewProfileManager(cfg.Agents, cfg.Options, st, lnch.SetAgents)
 
