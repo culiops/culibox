@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"strings"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
 )
@@ -33,6 +34,8 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))
 	})
+	protected.HandleFunc("/api/fs/list", s.handleFsList)
+	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
@@ -44,7 +47,11 @@ func (s *Server) Handler(user, pass string) http.Handler {
 		// The app's own files change on every rebuild, so force revalidation —
 		// otherwise browsers serve stale JS/HTML until a manual hard-refresh. The
 		// vendored /xterm/* bundle is immutable and left cacheable.
-		if r.URL.Path == "/" || r.URL.Path == "/app.js" {
+		// App HTML/JS change on every rebuild → force revalidation. The vendored
+		// /xterm/* and /vendor/* bundles are immutable and stay cacheable.
+		pth := r.URL.Path
+		if pth == "/" || (strings.HasSuffix(pth, ".js") &&
+			!strings.HasPrefix(pth, "/xterm/") && !strings.HasPrefix(pth, "/vendor/")) {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
 		fileServer.ServeHTTP(w, r)
