@@ -39,16 +39,16 @@ function execCopy(text) {
   document.body.removeChild(ta);
 }
 
-// sessionIsLive reports whether the server still has this session running, used to
-// tell a real session end from a transient WS drop. On error, assume transient
-// (return true) so we never falsely "end" a live session.
-async function sessionIsLive(id) {
+// sessionStatus returns the server-side status of a session ("live" | "exited" |
+// "detached"), or null if it is no longer listed (gone). On a fetch error it
+// returns "live" (assume a transient drop → keep reconnecting, never falsely end).
+async function sessionStatus(id) {
   try {
     const list = await api("/api/sessions");
     const s = (list || []).find((x) => x.id === id);
-    return !!s && s.status !== "exited";
+    return s ? s.status : null;
   } catch (_) {
-    return true;
+    return "live";
   }
 }
 
@@ -144,24 +144,20 @@ class Pane {
     };
     ws.onclose = () => {
       if (this.closed) return;
-      // Tell a real session end from a transient drop (daemon restart / blip): if
-      // the server no longer has the session live, stop retrying and mark ended,
-      // rather than looping on "reconnecting…" against a dead session.
-      sessionIsLive(this.id).then((alive) => {
+      this.setStatus("reconnecting…"); // sync, before the async status fetch (no "error" flash)
+      // Distinguish a real end from a transient drop, and self-heal live sessions:
+      // keep retrying (backoff) as long as the session is live, so a daemon restart /
+      // network blip / backgrounded tab all auto-recover instead of getting stuck.
+      sessionStatus(this.id).then((status) => {
         if (this.closed) return;
-        if (!alive) { this.markEnded(); return; }
-        // Only a connection that stayed up a while counts as healthy and refills
-        // the retry budget. An immediate open→close keeps counting, so we give up
-        // after 5 tries instead of looping for the whole retention window.
-        if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0;
+        if (status === null || status === "exited") { this.markEnded(); return; }
+        if (status === "detached") { this.setStatus("detached"); return; } // no live stream; recovers on restart/reopen
+        // live → reconnect with exponential backoff, capped, indefinitely.
+        if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0; // healthy conn refills budget
         this.openedAt = 0;
-        if (this.retries < 5) {
-          this.retries++;
-          this.setStatus("reconnecting…");
-          setTimeout(() => { if (!this.closed) this.connect(); }, 1500);
-        } else {
-          this.setStatus("disconnected");
-        }
+        const delay = Math.min(1500 * 2 ** this.retries, 10000); // 1.5→3→6→10s, then 10s (delay uses retries BEFORE ++)
+        setTimeout(() => { if (!this.closed) this.connect(); }, delay);
+        this.retries++;
       });
     };
     ws.onerror = () => this.setStatus("error");

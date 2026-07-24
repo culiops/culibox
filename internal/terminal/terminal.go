@@ -63,10 +63,14 @@ func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancelCtx := context.WithCancel(r.Context())
 	defer cancelCtx()
 
-	// output: session -> ws. Sole writer to the socket. `out` closes when the
-	// session ends or this subscription is cancelled.
+	// output: session -> ws. Sole writer to the socket (Write AND Ping live here so
+	// there is never a second concurrent writer). `out` closes when the session ends
+	// or this subscription is cancelled. The input Read loop below is the concurrent
+	// reader that Ping needs to receive its pong.
 	go func() {
 		defer cancelCtx()
+		ping := time.NewTicker(30 * time.Second)
+		defer ping.Stop()
 		for {
 			select {
 			case b, ok := <-out:
@@ -77,6 +81,16 @@ func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				wctx, wcancel := context.WithTimeout(ctx, 10*time.Second)
 				err := c.Write(wctx, websocket.MessageBinary, b)
 				wcancel()
+				if err != nil {
+					return
+				}
+			case <-ping.C:
+				// App-level keepalive: detect a dead/half-open peer (esp. an idle
+				// session with no output, which TCP keepalive is too slow to catch)
+				// so the socket closes and the client reconnects.
+				pctx, pcancel := context.WithTimeout(ctx, 10*time.Second)
+				err := c.Ping(pctx)
+				pcancel()
 				if err != nil {
 					return
 				}
