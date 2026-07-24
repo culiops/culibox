@@ -1,30 +1,19 @@
-// Package terminal streams a tmux session's PTY over a WebSocket to an
-// xterm.js frontend, in-process (no ttyd, no iframe).
-//
-// Wire protocol (browser <-> server):
-//   - binary frame  = raw terminal bytes (input in, output out)
-//   - text frame    = JSON control, currently {"type":"resize","rows":R,"cols":C}
-//
-// Concurrency invariant: exactly one goroutine writes to the socket (pty->ws);
-// the request goroutine only reads the socket and writes to the PTY. This
-// satisfies coder/websocket's one-reader/one-writer rule.
+// Package terminal bridges a WebSocket to a daemon-owned session's PTY stream.
+// It is a pure transport adapter: session output → binary frames; binary frames
+// → session input; text frames → resize control. No PTY or process logic lives
+// here (that is the session package).
 package terminal
 
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/coder/websocket"
+
+	"github.com/culiops/culiops-agent-console/internal/session"
 )
-
-// ResizeFunc resizes the underlying PTY.
-type ResizeFunc func(rows, cols uint16) error
-
-// PTYFactory opens a PTY for a named session. Injectable for testing.
-type PTYFactory func(name string) (io.ReadWriteCloser, ResizeFunc, error)
 
 type control struct {
 	Type string `json:"type"`
@@ -32,85 +21,89 @@ type control struct {
 	Cols uint16 `json:"cols"`
 }
 
-// WSHandler upgrades a request to a WebSocket and bridges it to a PTY.
-type WSHandler struct {
-	factory        PTYFactory
+// AttachHandler serves /ws/{id}, attaching the socket to a live session.
+type AttachHandler struct {
+	get            func(id string) (*session.Session, bool)
 	originPatterns []string
 }
 
-// NewWSHandler builds a handler. With no originPatterns, coder/websocket's
-// default same-origin check applies; the WS route is additionally gated by an
-// auth cookie at the mux layer.
-func NewWSHandler(f PTYFactory, originPatterns ...string) *WSHandler {
-	return &WSHandler{factory: f, originPatterns: originPatterns}
+// NewAttachHandler builds the handler. With no originPatterns, coder/websocket's
+// default same-origin check applies; the route is additionally cookie-gated at
+// the mux layer.
+func NewAttachHandler(get func(id string) (*session.Session, bool), originPatterns ...string) *AttachHandler {
+	return &AttachHandler{get: get, originPatterns: originPatterns}
 }
 
-func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/ws/")
-	if name == "" || strings.Contains(name, "/") {
-		http.Error(w, "missing session name", http.StatusBadRequest)
+func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/ws/")
+	if id == "" || strings.Contains(id, "/") {
+		http.Error(w, "missing session id", http.StatusBadRequest)
 		return
 	}
+	sess, ok := h.get(id)
+	if !ok {
+		http.Error(w, "no such session", http.StatusNotFound)
+		return
+	}
+
 	opts := &websocket.AcceptOptions{}
 	if len(h.originPatterns) > 0 {
 		opts.OriginPatterns = h.originPatterns
 	}
 	c, err := websocket.Accept(w, r, opts)
 	if err != nil {
-		return // Accept already wrote the response
+		return
 	}
 	defer c.CloseNow()
 
-	ptyRW, resize, err := h.factory(name)
-	if err != nil {
-		c.Close(websocket.StatusInternalError, "pty start failed")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(r.Context())
+	out, cancel := sess.Subscribe()
 	defer cancel()
 
-	done := make(chan struct{})
-	// pty -> ws: the sole socket writer.
+	ctx, cancelCtx := context.WithCancel(r.Context())
+	defer cancelCtx()
+
+	// output: session -> ws. Sole writer to the socket. `out` closes when the
+	// session ends or this subscription is cancelled.
 	go func() {
-		defer close(done)
-		buf := make([]byte, 4096)
+		defer cancelCtx()
 		for {
-			n, rerr := ptyRW.Read(buf)
-			if n > 0 {
-				if werr := c.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {
-					cancel()
+			select {
+			case b, ok := <-out:
+				if !ok {
 					return
 				}
-			}
-			if rerr != nil {
-				cancel()
+				if err := c.Write(ctx, websocket.MessageBinary, b); err != nil {
+					return
+				}
+			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	// ws -> pty: read loop (writes only to the PTY).
+	// input: ws -> session (only writes to the PTY, never the socket).
+	firstResize := true
 loop:
 	for {
-		typ, data, rerr := c.Read(ctx)
-		if rerr != nil {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
 			break
 		}
 		switch typ {
 		case websocket.MessageBinary:
-			if _, werr := ptyRW.Write(data); werr != nil {
+			if _, err := sess.Write(data); err != nil {
 				break loop
 			}
 		case websocket.MessageText:
 			var ctl control
 			if json.Unmarshal(data, &ctl) == nil && ctl.Type == "resize" {
-				_ = resize(ctl.Rows, ctl.Cols)
+				_ = sess.Resize(ctl.Rows, ctl.Cols)
+				if firstResize {
+					firstResize = false
+					sess.ForceRedraw() // repaint a TUI over the best-effort replay
+				}
 			}
 		}
 	}
-	// Closing the PTY unblocks the writer goroutine (and reaps the child).
-	_ = ptyRW.Close()
-	cancel()
-	<-done
+	cancelCtx()
 }

@@ -2,76 +2,75 @@ package terminal
 
 import (
 	"context"
-	"io"
-	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/culiops-agent-console/internal/session"
 )
 
-// TestWSHandler_PipesBytesBothWays uses a net.Pipe as the PTY stand-in and
-// sends input the way the browser will (binary frame), so the test exercises
-// the real wire protocol rather than a tautology.
-func TestWSHandler_PipesBytesBothWays(t *testing.T) {
-	resized := make(chan [2]uint16, 1)
-	ptySide, appSide := net.Pipe()
-	f := func(name string) (io.ReadWriteCloser, ResizeFunc, error) {
-		return appSide, func(r, c uint16) error { resized <- [2]uint16{r, c}; return nil }, nil
+type catBuilder struct{}
+
+func (catBuilder) Build(launcher.SpawnSpec) ([]string, []string, error) {
+	return []string{"cat"}, nil, nil
+}
+
+// TestAttachHandler drives the real handler against a real `cat` session:
+// input sent as binary (the way the browser does) echoes back as binary output,
+// and a text resize frame is accepted. Unknown ids 404.
+func TestAttachHandler(t *testing.T) {
+	m := session.NewManager(catBuilder{}, 1<<16, time.Minute)
+	sess, err := m.Spawn(launcher.SpawnSpec{Agent: "cat"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	ts := httptest.NewServer(NewWSHandler(f))
+	defer m.Kill(sess.ID)
+
+	ts := httptest.NewServer(NewAttachHandler(m.Get))
 	defer ts.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	url := "ws" + strings.TrimPrefix(ts.URL, "http") + "/ws/demo"
-	ws, _, err := websocket.Dial(ctx, url, nil)
+
+	// unknown id → the WS dial fails on the 404
+	if _, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/nope"), nil); err == nil {
+		t.Fatal("dial to unknown session should fail (404)")
+	}
+
+	ws, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/"+sess.ID), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ws.CloseNow()
 
-	// client -> PTY (browser sends keystrokes as binary)
-	if err := ws.Write(ctx, websocket.MessageBinary, []byte("hello")); err != nil {
+	// resize control frame first (text)
+	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","rows":30,"cols":100}`)); err != nil {
 		t.Fatal(err)
 	}
-	buf := make([]byte, 5)
-	readDone := make(chan error, 1)
-	go func() { _, e := io.ReadFull(ptySide, buf); readDone <- e }()
-	select {
-	case e := <-readDone:
-		if e != nil {
-			t.Fatalf("read pty: %v", e)
-		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("timeout waiting for bytes at pty")
-	}
-	if string(buf) != "hello" {
-		t.Fatalf("pty got %q", buf)
-	}
-
-	// PTY -> client
-	go func() { ptySide.Write([]byte("world")) }()
-	typ, data, err := ws.Read(ctx)
-	if err != nil {
-		t.Fatalf("ws read: %v", err)
-	}
-	if typ != websocket.MessageBinary || string(data) != "world" {
-		t.Fatalf("client got typ=%v data=%q", typ, data)
-	}
-
-	// resize control frame (text)
-	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"resize","rows":40,"cols":120}`)); err != nil {
+	// input as binary → cat echoes it back
+	if err := ws.Write(ctx, websocket.MessageBinary, []byte("ping\n")); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case rc := <-resized:
-		if rc != [2]uint16{40, 120} {
-			t.Fatalf("resize got %v", rc)
+
+	var b strings.Builder
+	for {
+		typ, data, err := ws.Read(ctx)
+		if err != nil {
+			t.Fatalf("did not see echoed input; got %q (err %v)", b.String(), err)
 		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("timeout waiting for resize")
+		if typ == websocket.MessageBinary {
+			b.Write(data)
+			if strings.Contains(b.String(), "ping") {
+				return
+			}
+		}
 	}
+}
+
+func wsURL(httpURL, path string) string {
+	return "ws" + strings.TrimPrefix(httpURL, "http") + path
 }
