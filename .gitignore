@@ -1,0 +1,25 @@
+# --- Agent / AI-assistant artifacts (keep local, never publish) ---
+# These give the local agent context but should not ship in the public repo.
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.claude/
+.cursor/
+.cursorrules
+.aider*
+.github/copilot-instructions.md
+
+# --- Design docs kept local-only (per repo decision 2026-07-24) ---
+docs/superpowers/
+
+# --- OS / editor cruft ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# --- Go build output ---
+/bin/
+*.exe
+*.test
+*.out
