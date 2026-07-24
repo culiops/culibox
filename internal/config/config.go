@@ -69,7 +69,15 @@ func (c Config) Validate() error {
 	if len(c.Agents) == 0 {
 		return errors.New("config: at least one agent required")
 	}
+	seen := map[string]bool{}
 	for _, a := range c.Agents {
+		if a.Name == "" || a.Bin == "" {
+			return errors.New("config: each agent requires a name and bin")
+		}
+		if seen[a.Name] {
+			return fmt.Errorf("config: duplicate agent name %q", a.Name)
+		}
+		seen[a.Name] = true
 		switch a.BasePolicy() {
 		case BaseClean, BaseLogin, BaseInherit:
 		default:

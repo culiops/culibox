@@ -27,7 +27,7 @@ func TestEnvSource(t *testing.T) {
 func TestFileSource_OwnerOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.env")
-	body := "# comment\n\nexport TOK=abc123\nPLAIN=zzz\nQUOTED=\"q u o t e d\"\nEQ=a=b=c\n"
+	body := "# comment\n\nexport TOK=abc123\nPLAIN=zzz\nQUOTED=\"q u o t e d\"\nEQ=a=b=c\nTRAIL=abc'\nDOUBLE=\"\"foo\"\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,12 @@ func TestFileSource_OwnerOnly(t *testing.T) {
 	}
 	if v, ok, _ := r.Resolve("EQ"); !ok || v != "a=b=c" { // split on FIRST '=' only
 		t.Fatalf("EQ: v=%q ok=%v", v, ok)
+	}
+	if v, ok, _ := r.Resolve("TRAIL"); !ok || v != "abc'" { // no matching pair → untouched
+		t.Fatalf("TRAIL: v=%q ok=%v (a trailing quote must not be stripped)", v, ok)
+	}
+	if v, ok, _ := r.Resolve("DOUBLE"); !ok || v != `"foo"` { // strip ONE layer only
+		t.Fatalf("DOUBLE: v=%q ok=%v (only one quote layer stripped)", v, ok)
 	}
 }
 

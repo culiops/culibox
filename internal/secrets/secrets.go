@@ -62,13 +62,20 @@ func (f *fileSource) load() {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		line = strings.TrimPrefix(line, "export ")
+		if rest, found := strings.CutPrefix(line, "export"); found && len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t') {
+			line = strings.TrimLeft(rest, " \t")
+		}
 		i := strings.IndexByte(line, '=')
 		if i < 0 {
 			continue
 		}
 		k := strings.TrimSpace(line[:i])
-		v := strings.Trim(strings.TrimSpace(line[i+1:]), `"'`)
+		v := strings.TrimSpace(line[i+1:])
+		// strip exactly ONE matching layer of surrounding quotes (not any run,
+		// so a value that legitimately ends in ' or " is not mangled)
+		if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+			v = v[1 : len(v)-1]
+		}
 		vals[k] = v
 	}
 	if err := sc.Err(); err != nil {
