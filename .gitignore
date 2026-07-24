@@ -24,3 +24,11 @@ docs/handover/
 *.exe
 *.test
 *.out
+
+# --- Local dev run (never publish: has a password + machine paths) ---
+config.json
+.air.toml
+/tmp/
+.dev.env
+config.prod.json
+.prod.env
