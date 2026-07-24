@@ -61,6 +61,14 @@ func (f *fakeBackend) Kill(id string) error {
 	f.killed = append(f.killed, id)
 	f.alive[id] = false
 	c := f.attached[id]
+	// model abduco: Kill unlinks the socket → it leaves the List.
+	out := f.list[:0]
+	for _, x := range f.list {
+		if x != id {
+			out = append(out, x)
+		}
+	}
+	f.list = out
 	f.mu.Unlock()
 	if c != nil && c.Process != nil {
 		_ = c.Process.Kill()
@@ -81,6 +89,15 @@ func (f *fakeBackend) seedLive(id string) {
 	defer f.mu.Unlock()
 	f.list = append(f.list, id)
 	f.alive[id] = true
+}
+
+// seedLingering models abduco's real behavior: the socket is still listed but the
+// inner agent has exited (InnerAlive false) — a session that died during downtime.
+func (f *fakeBackend) seedLingering(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.list = append(f.list, id)
+	f.alive[id] = false
 }
 
 // crashAttach simulates the attach process dying while the agent stays alive

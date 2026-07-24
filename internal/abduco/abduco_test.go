@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -121,6 +122,41 @@ func TestGuardRefusesForeignPid(t *testing.T) {
 	_ = a.Kill("x-1")
 	if err := exec.Command("kill", "-0", strconv.Itoa(pid)).Run(); err != nil {
 		t.Fatal("guard let us kill a foreign process we do not own")
+	}
+}
+
+// TestKillRefusesWhenServerNotOurs guards B1: even when the recorded inner's
+// ppid matches the recorded srv, if srv is NOT our abduco server for this id the
+// whole teardown must be refused (pids may have been reused).
+func TestKillRefusesWhenServerNotOurs(t *testing.T) {
+	a := testAdapter(t)
+	// A real process that IS its own group leader (as abduco's setsid makes the
+	// inner), whose parent is this test process. We record srv = the test process
+	// pid — a real, live pid whose cmdline is NOT our abduco server for "x-1".
+	// A broken guard (ppid==srv without srvIsOurs) would `kill -inner` and reap it;
+	// the correct guard refuses because srv isn't ours.
+	child := exec.Command("sleep", "30")
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // inner leads its own group
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	inner := child.Process.Pid
+	defer func() { _ = child.Process.Kill(); _, _ = child.Process.Wait() }()
+	srv := os.Getpid() // ppid of the sleep == this test process; not an abduco server
+
+	if err := os.MkdirAll(a.PidDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte(fmt.Sprintf("inner=%d srv=%d", inner, srv))
+	if err := os.WriteFile(filepath.Join(a.PidDir, "x-1.pid"), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if a.InnerAlive("x-1") {
+		t.Fatal("InnerAlive true though srv is not our abduco server")
+	}
+	_ = a.Kill("x-1")
+	if err := exec.Command("kill", "-0", strconv.Itoa(inner)).Run(); err != nil {
+		t.Fatal("Kill terminated a process group whose server is not ours (B1)")
 	}
 }
 

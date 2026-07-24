@@ -192,21 +192,28 @@ func (a *Adapter) Kill(id string) error {
 	if err != nil {
 		return ErrNotFound
 	}
-	innerOurs := inner > 1 && ppidOf(inner) == srv
-	srvOurs := srv > 1 && a.srvIsOurs(srv, id)
-	if innerOurs {
+	// The server's id-bearing cmdline is the anchor of trust. If srv is NOT our
+	// abduco server for this id, pids may have been reused and NEITHER pid is
+	// trustworthy — signal nothing (the reused-pid guard, applied to the whole
+	// teardown, not just the server kill). Limitation: if the server died
+	// out-of-band, we won't group-kill the inner here; in practice a server dying
+	// closes the pty master and the agent takes SIGHUP with it — a rare surviving
+	// orphan is strictly preferable to SIGKILLing a reused foreign process group.
+	if srv <= 1 || !a.srvIsOurs(srv, id) {
+		_ = os.Remove(pf)
+		return nil
+	}
+	if inner > 1 && ppidOf(inner) == srv {
 		_ = syscall.Kill(-inner, syscall.SIGTERM)
 		if !waitGone(inner, 3*time.Second) {
 			_ = syscall.Kill(-inner, syscall.SIGKILL)
 			waitGone(inner, time.Second)
 		}
 	}
-	if srvOurs {
-		_ = syscall.Kill(srv, syscall.SIGTERM)
-		if !waitGone(srv, 2*time.Second) {
-			_ = syscall.Kill(srv, syscall.SIGKILL)
-			waitGone(srv, time.Second)
-		}
+	_ = syscall.Kill(srv, syscall.SIGTERM)
+	if !waitGone(srv, 2*time.Second) {
+		_ = syscall.Kill(srv, syscall.SIGKILL)
+		waitGone(srv, time.Second)
 	}
 	_ = os.Remove(pf)
 	return nil

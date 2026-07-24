@@ -87,6 +87,8 @@ type Session struct {
 	pumpFinished bool // pump drained the PTY fully (ring is complete)
 	removed      chan struct{}
 	removedOnce  sync.Once
+	detachedCh   chan struct{} // closed when the session goes detached (agent alive, pipe lost)
+	detachedOnce sync.Once
 
 	backend Backend       // nil for an ephemeral (daemon-owned-PTY) session
 	sub     *subscription // current subscriber (at most one)
@@ -103,10 +105,11 @@ func newSession(id, agent, cwd string, created time.Time, cmd *exec.Cmd, ptmx *o
 	s := &Session{
 		ID: id, Agent: agent, Cwd: cwd, Created: created,
 		cmd: cmd, ptmx: ptmx,
-		rb:      newRing(ringCap),
-		done:    make(chan struct{}),
-		removed: make(chan struct{}),
-		rows:    24, cols: 80,
+		rb:         newRing(ringCap),
+		done:       make(chan struct{}),
+		removed:    make(chan struct{}),
+		detachedCh: make(chan struct{}),
+		rows:       24, cols: 80,
 		status:  statusLive,
 		backend: backend,
 	}
@@ -161,9 +164,15 @@ func (s *Session) reap() {
 	}
 	s.cond.Broadcast()
 	s.mu.Unlock()
-	if !detached {
-		s.finalize()
+	if detached {
+		// The attach pipe is dead but the agent lives on. Reclaim the (EOF'd)
+		// attach PTY fd now and release the retention goroutine — v1 recovers a
+		// detached session on the next daemon restart, not in-lifetime.
+		_ = s.ptmx.Close()
+		s.detachedOnce.Do(func() { close(s.detachedCh) })
+		return
 	}
+	s.finalize()
 }
 
 // finalize marks this Session torn down by closing `done` exactly once. `done`
@@ -387,6 +396,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 func (m *Manager) startProcess(id string, spec launcher.SpawnSpec, argv, env []string) (*exec.Cmd, *os.File, error) {
 	if m.backend != nil {
 		if err := m.backend.Create(id, spec.Cwd, argv, env); err != nil {
+			// Create may fail after abduco created the session (e.g. an agent that
+			// exits within the readiness poll). Tear down so we never leak it.
+			_ = m.backend.Kill(id)
 			return nil, nil, err
 		}
 		cmd, ptmx, err := m.backend.Attach(id, 24, 80)
@@ -413,7 +425,11 @@ func (m *Manager) startProcess(id string, spec launcher.SpawnSpec, argv, env []s
 // fires on finalize (agent exit OR kill), so a detached session never leaks here.
 func (m *Manager) watchRetention(id string, sess *Session) {
 	go func() {
-		<-sess.Done()
+		select {
+		case <-sess.Done(): // finalized (agent exited or killed) → retain then prune
+		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
+			return
+		}
 		select {
 		case <-time.After(m.retention):
 		case <-sess.removed:
@@ -423,9 +439,13 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		m.mu.Lock()
 		delete(m.sessions, id)
 		sc := m.sidecar
+		backend := m.backend
 		m.mu.Unlock()
 		if sc != nil {
 			sc.remove(id) // a naturally-exited session is gone for good
+		}
+		if backend != nil {
+			_ = backend.Kill(id) // idempotent: remove the pidfile + any lingering server/socket
 		}
 	}()
 }
@@ -499,9 +519,19 @@ func (m *Manager) Reconcile() error {
 	if err != nil {
 		return err
 	}
-	liveSet := make(map[string]bool, len(live))
+	// abduco keeps a session's socket after the inner agent exits (until a client
+	// consumes the exit status), so "listed" != "alive". Partition on InnerAlive:
+	// genuinely-alive sockets are re-attached; exited-but-lingering ones are torn
+	// down (unlink the socket + server) so they don't resurrect as live→exited.
+	aliveSet := make(map[string]bool, len(live))
+	var aliveIDs []string
 	for _, id := range live {
-		liveSet[id] = true
+		if m.backend.InnerAlive(id) {
+			aliveSet[id] = true
+			aliveIDs = append(aliveIDs, id)
+		} else {
+			_ = m.backend.Kill(id)
+		}
 	}
 
 	m.mu.Lock()
@@ -511,18 +541,21 @@ func (m *Manager) Reconcile() error {
 	var meta map[string]sessionMeta
 	if sc != nil {
 		meta = sc.all()
-		// Drop sidecar entries whose agent died while the daemon was down.
+		// Drop sidecar entries with no genuinely-alive session behind them.
 		for id := range meta {
-			if !liveSet[id] {
+			if !aliveSet[id] {
 				sc.remove(id)
 			}
 		}
 	}
 
-	for _, id := range live {
+	for _, id := range aliveIDs {
 		md, ok := meta[id]
 		if !ok { // orphan-adopt: recover the agent name from the id
-			agent, _, _ := parseID(id)
+			agent, _, parsed := parseID(id)
+			if !parsed {
+				agent = "unknown"
+			}
 			md = sessionMeta{Agent: agent, Created: time.Now()}
 			if sc != nil {
 				sc.put(id, md)
@@ -535,6 +568,8 @@ func (m *Manager) Reconcile() error {
 		}
 	}
 
+	// Seed counters from EVERY id we saw (alive or lingering) so a fresh spawn
+	// cannot collide with any recovered id.
 	m.mu.Lock()
 	for _, id := range live {
 		if agent, n, ok := parseID(id); ok && n > m.counters[agent] {

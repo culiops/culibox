@@ -83,6 +83,33 @@ func TestReconcileDropsDeadSidecarEntry(t *testing.T) {
 	}
 }
 
+// TestReconcileCleansLingeringDead guards S1: abduco keeps a socket after the
+// agent exits, so a session that died during downtime is still listed. Reconcile
+// must NOT resurrect it — it detects the dead inner, tears the socket down, and
+// drops the sidecar entry.
+func TestReconcileCleansLingeringDead(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLingering("bash-1") // listed, but InnerAlive == false
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"bash-1": {Agent: "bash", Created: time.Now()},
+	})
+	m := newReconcileManager(t, fb, path)
+
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Get("bash-1"); ok {
+		t.Fatal("lingering-dead session must not be re-attached")
+	}
+	if !fb.wasKilled("bash-1") {
+		t.Fatal("lingering-dead socket not torn down (backend.Kill not called)")
+	}
+	sc, _ := openSidecar(path)
+	if _, ok := sc.all()["bash-1"]; ok {
+		t.Fatal("sidecar entry for dead session not dropped")
+	}
+}
+
 // TestReconcileAdoptsOrphan: a live socket with no sidecar entry is adopted with
 // the agent name parsed from the id.
 func TestReconcileAdoptsOrphan(t *testing.T) {
