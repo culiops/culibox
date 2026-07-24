@@ -14,6 +14,31 @@ async function api(path, opts) {
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
 
+// copyText copies to the clipboard. The app is served over HTTP (not a secure
+// context), so navigator.clipboard is usually unavailable — fall back to a
+// hidden off-screen textarea + execCommand("copy"), which works over plain HTTP.
+// `done` restores terminal focus (the textarea steals it). window.__lastCopied
+// is a test hook.
+function copyText(text, done) {
+  window.__lastCopied = text;
+  const finish = () => { if (done) done(); };
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(finish, () => { execCopy(text); finish(); });
+    return;
+  }
+  execCopy(text);
+  finish();
+}
+function execCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "0"; ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand("copy"); } catch (_) { /* best effort */ }
+  document.body.removeChild(ta);
+}
+
 const panes = new Map(); // id -> Pane
 let cols = 1;
 
@@ -58,6 +83,18 @@ class Pane {
     } catch (_) { /* canvas fallback */ }
     this.fitAddon.fit();
     this.term.onData((d) => { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(d)); });
+    // Copy the selection with Ctrl+Shift+C (Linux/Win) or ⌘C (Mac). The canvas
+    // renderer's selection isn't a DOM selection, so native copy can't see it.
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown" || e.code !== "KeyC") return true;
+      const isCopy = (e.ctrlKey && e.shiftKey) || e.metaKey;
+      if (!isCopy) return true;              // plain Ctrl+C must still send SIGINT
+      const sel = this.term.getSelection();
+      if (!sel) return true;                 // nothing selected → don't clobber clipboard
+      e.preventDefault();                    // suppress DevTools (Ctrl+Shift+C) / native copy
+      copyText(sel, () => this.term.focus());
+      return false;
+    });
 
     this.connect();
   }
