@@ -163,6 +163,10 @@ function emptyLi(text) {
   li.textContent = text;
   return li;
 }
+// killing holds ids whose teardown is in flight, so the killing state is
+// re-applied on every poll re-render (not just at click time).
+const killing = new Set();
+
 function renderSession(s) {
   const li = document.createElement("li");
   if (panes.has(s.id)) li.classList.add("open");
@@ -170,6 +174,15 @@ function renderSession(s) {
   const name = document.createElement("span");
   name.className = "name";
   name.textContent = s.name || s.id;
+  if (killing.has(s.id)) {
+    // teardown in flight (can take a few seconds) — disabled row + "killing…"
+    li.classList.add("killing");
+    const st = document.createElement("span");
+    st.className = "badge";
+    st.textContent = "killing…";
+    li.append(name, st);
+    return li;
+  }
   name.onclick = () => openSession(s.id, s.name);
   name.ondblclick = (e) => { e.stopPropagation(); startRename(li, name, s); };
   li.appendChild(name);
@@ -435,10 +448,20 @@ $("spawn").addEventListener("submit", async (ev) => {
   } catch (e) { alert("Spawn failed: " + e.message); }
 });
 async function killSession(id) {
-  try { await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" }); }
-  catch (e) { alert("Kill failed: " + e.message); return; }
+  if (killing.has(id)) return; // already tearing down — ignore repeat clicks
+  killing.add(id);
+  await refreshSessions(); // re-render → row shows "killing…"
+  try {
+    await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+  } catch (e) {
+    killing.delete(id);
+    await refreshSessions();
+    alert("Kill failed: " + e.message);
+    return;
+  }
+  killing.delete(id);
   if (panes.has(id)) panes.get(id).close();
-  refreshSessions();
+  await refreshSessions(); // session gone → row removed
 }
 
 // --- boot --------------------------------------------------------------------
