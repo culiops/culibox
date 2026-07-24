@@ -52,195 +52,9 @@ async function sessionStatus(id) {
   }
 }
 
-const panes = new Map(); // id -> Pane
-let cols = 1;
-
-// --- Pane: one xterm.js terminal bound to one session's /ws/{id} -------------
-class Pane {
-  constructor(id, name) {
-    this.id = id;
-    this.closed = false;
-    this.retries = 0;
-    this.openedAt = 0;
-
-    this.el = document.createElement("div");
-    this.el.className = "pane";
-    const head = document.createElement("div");
-    head.className = "pane-head";
-    const pid = document.createElement("span");
-    pid.className = "pid";
-    pid.textContent = name || id;
-    this.pid = pid;
-    this.status = document.createElement("span");
-    this.status.className = "st";
-    this.status.textContent = "…";
-    const x = document.createElement("button");
-    x.className = "x";
-    x.title = "Close pane (session keeps running)";
-    x.textContent = "×";
-    x.onclick = () => this.close();
-    head.append(pid, this.status, x);
-    const termEl = document.createElement("div");
-    termEl.className = "pane-term";
-    this.el.append(head, termEl);
-
-    this.term = new Terminal({
-      cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace",
-      fontSize: 13, scrollback: 5000, theme: { background: "#000000" },
-    });
-    this.fitAddon = new FitAddon.FitAddon();
-    this.term.loadAddon(this.fitAddon);
-    this.term.open(termEl);
-    try {
-      this.term.loadAddon(new WebglAddon.WebglAddon()); // fast renderer
-    } catch (_) { /* canvas fallback */ }
-    this.fitAddon.fit();
-    this.term.onData((d) => { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(d)); });
-    // Copy-on-select: finish a mouse selection → auto-copy (drag in a shell,
-    // Shift+drag inside a mouse-tracking TUI like claude). mouseup is a trusted
-    // gesture, required for execCommand('copy') over HTTP; bound on our own pane
-    // element (selection is built during mousemove, so getSelection is ready here).
-    termEl.addEventListener("mouseup", () => {
-      const sel = this.term.getSelection();
-      if (sel) copyText(sel, () => this.term.focus());
-    });
-    // One custom-key handler (a second attach would REPLACE this one):
-    //  - Copy: Ctrl+Shift+C (Win/Linux) or ⌘C (Mac) — preventDefault only here.
-    //  - Paste: make Ctrl+V paste cleanly on Win/Linux by suppressing xterm's
-    //    quoted-insert \x16 (return false) WITHOUT preventDefault, so the browser's
-    //    native paste still fires. ⌘V on Mac is already native-clean.
-    //  !altKey guards keep AltGr+V / AltGr+Shift+C (real chars on EU layouts) working.
-    this.term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      if (e.code === "KeyC" && !e.altKey && ((e.ctrlKey && e.shiftKey) || e.metaKey)) {
-        const sel = this.term.getSelection();
-        if (!sel) return true;               // nothing selected → let plain Ctrl+C SIGINT pass
-        e.preventDefault();                  // suppress DevTools (Ctrl+Shift+C) / native copy
-        copyText(sel, () => this.term.focus());
-        return false;
-      }
-      if (e.code === "KeyV" && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
-        return false;                        // suppress \x16; native paste event still fires
-      }
-      return true;
-    });
-
-    this.connect();
-  }
-
-  connect() {
-    // Reconnect contract: reset before (re)play so the server's ring replay +
-    // forced redraw land on a clean screen (no double-render).
-    this.term.reset();
-    this.setStatus("connecting…");
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(this.id)}`);
-    ws.binaryType = "arraybuffer";
-    this.ws = ws;
-    ws.onopen = () => { this.openedAt = Date.now(); this.setStatus("connected"); this.sendResize(); this.term.focus(); };
-    ws.onmessage = (ev) => {
-      if (typeof ev.data === "string") this.term.write(ev.data);
-      else this.term.write(new Uint8Array(ev.data));
-    };
-    ws.onclose = () => {
-      if (this.closed) return;
-      this.setStatus("reconnecting…"); // sync, before the async status fetch (no "error" flash)
-      // Distinguish a real end from a transient drop, and self-heal live sessions:
-      // keep retrying (backoff) as long as the session is live, so a daemon restart /
-      // network blip / backgrounded tab all auto-recover instead of getting stuck.
-      sessionStatus(this.id).then((status) => {
-        if (this.closed) return;
-        if (status === null || status === "exited") { this.markEnded(); return; }
-        if (status === "detached") { this.setStatus("detached"); return; } // no live stream; recovers on restart/reopen
-        // live → reconnect with exponential backoff, capped, indefinitely.
-        if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0; // healthy conn refills budget
-        this.openedAt = 0;
-        const delay = Math.min(1500 * 2 ** this.retries, 10000); // 1.5→3→6→10s, then 10s (delay uses retries BEFORE ++)
-        setTimeout(() => { if (!this.closed) this.connect(); }, delay);
-        this.retries++;
-      });
-    };
-    ws.onerror = () => this.setStatus("error");
-  }
-
-  setStatus(t) { this.status.textContent = t; }
-  setTitle(name) { this.pid.textContent = name || this.id; }
-
-  fit() {
-    try { this.fitAddon.fit(); this.sendResize(); } catch (_) {}
-  }
-  sendResize() {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ type: "resize", rows: this.term.rows, cols: this.term.cols }));
-    }
-  }
-
-  // markEnded: the session is gone for good — stop reconnecting and show a clear
-  // "session ended" banner with a Close button (the final output stays visible).
-  markEnded() {
-    if (this.ended) return;
-    this.ended = true;
-    this.setStatus("ended");
-    const bar = document.createElement("div");
-    bar.className = "pane-ended";
-    const msg = document.createElement("span");
-    msg.textContent = "session ended";
-    const btn = document.createElement("button");
-    btn.textContent = "Close";
-    btn.onclick = () => this.close();
-    bar.append(msg, btn);
-    this.el.insertBefore(bar, this.el.querySelector(".pane-term"));
-    this.fit(); // the banner shrank the terminal area — reflow to the new height
-  }
-
-  close() {
-    this.closed = true;
-    try { this.ws && this.ws.close(); } catch (_) {}
-    try { this.term.dispose(); } catch (_) {}
-    this.el.remove();
-    panes.delete(this.id);
-    renderGrid();
-    refreshSessions();
-  }
-}
-
-// --- grid --------------------------------------------------------------------
-function renderGrid() {
-  const grid = $("grid");
-  grid.className = "cols-" + cols;
-  if (panes.size === 0) {
-    grid.classList.add("empty");
-    if (!grid.querySelector(".placeholder")) {
-      const p = document.createElement("div");
-      p.className = "placeholder";
-      p.textContent = "Spawn or open a session — panes appear here";
-      grid.replaceChildren(p);
-    }
-    return;
-  }
-  const ph = grid.querySelector(".placeholder");
-  if (ph) ph.remove();
-  // fit all panes after the grid reflows
-  requestAnimationFrame(() => panes.forEach((p) => p.fit()));
-}
-
-function openSession(id, name) {
-  if (panes.has(id)) { panes.get(id).term.focus(); return; }
-  const pane = new Pane(id, name);
-  panes.set(id, pane);
-  $("grid").appendChild(pane.el);
-  renderGrid();
-  refreshSessions();
-}
-
-function setLayout(n) {
-  cols = n;
-  for (const b of $("layouts").children) b.classList.toggle("active", Number(b.dataset.cols) === n);
-  renderGrid();
-}
-$("layouts").addEventListener("click", (e) => {
-  if (e.target.dataset && e.target.dataset.cols) setLayout(Number(e.target.dataset.cols));
-});
+// Grid + tabs live in tabs.js; terminals in terminal-tab.js; viewers in
+// viewer-tab.js; the file tree in filetree.js. This file owns boot and the
+// sidebar (spawn form, profile editor, session list).
 
 // Sidebar toggle: fully hide the sidebar so the terminal fills the width. State
 // persists across reloads (applied pre-paint by the inline <head> script).
@@ -277,7 +91,7 @@ const killing = new Set();
 
 function renderSession(s) {
   const li = document.createElement("li");
-  if (panes.has(s.id)) li.classList.add("open");
+  if (terminalOpen(s.id)) li.classList.add("open");
   li.title = s.id; // tiebreaker when two labels match
   const name = document.createElement("span");
   name.className = "name";
@@ -291,7 +105,7 @@ function renderSession(s) {
     li.append(name, st);
     return li;
   }
-  name.onclick = () => openSession(s.id, s.name);
+  name.onclick = () => openTerminal(s.id, s.name);
   name.ondblclick = (e) => { e.stopPropagation(); startRename(li, name, s); };
   li.appendChild(name);
   if (s.exited) {
@@ -337,7 +151,7 @@ function startRename(li, span, s) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: v }),
         });
-        panes.get(s.id)?.setTitle(v);
+        retitleTerminal(s.id, v);
       } catch (e) { alert("Rename failed: " + e.message); }
     }
     refreshSessions();
@@ -552,7 +366,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     });
     $("sess-name").value = "";
     await refreshSessions();
-    openSession(s.id, s.name);
+    openTerminal(s.id, s.name);
   } catch (e) { alert("Spawn failed: " + e.message); }
 });
 async function killSession(id) {
@@ -568,14 +382,20 @@ async function killSession(id) {
     return;
   }
   killing.delete(id);
-  if (panes.has(id)) panes.get(id).close();
+  closeTerminal(id);
   await refreshSessions(); // session gone → row removed
 }
 
 // --- boot --------------------------------------------------------------------
-window.addEventListener("resize", () => panes.forEach((p) => p.fit()));
+window.addEventListener("resize", fitAll);
+// Layout buttons 1/2/4 → column count (creates grid slots as needed).
+$("layouts").addEventListener("click", (e) => {
+  if (e.target.dataset && e.target.dataset.cols) setLayout(Number(e.target.dataset.cols));
+});
+setLayout(1);
 loadProfiles();
 loadWorkspaces();
 loadOptionDefs().then(newProfile);
 refreshSessions();
+initFileTree();
 setInterval(refreshSessions, 3000);

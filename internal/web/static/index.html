@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Console</title>
   <link rel="stylesheet" href="/xterm/xterm.css">
+  <link rel="stylesheet" href="/vendor/highlight-theme.css">
   <style>
     :root {
       --bg: #0d1117; --panel: #161b22; --border: #30363d;
@@ -91,12 +92,58 @@
     #grid.cols-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; } /* 2×2 quad */
     #grid.empty { display: flex; align-items: center; justify-content: center; }
     #grid .placeholder { color: var(--muted); }
-    .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #000; }
-    .pane-head { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: var(--panel); border-bottom: 1px solid var(--border); }
-    .pane-head .pid { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--fg); }
-    .pane-head .st { font-size: 11px; color: var(--muted); }
-    .pane-head .x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 15px; padding: 0 4px; }
-    .pane-head .x:hover { color: var(--danger); }
+    /* cells = grid slots; each holds a stack of tabs (terminal or viewer) */
+    .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #000; }
+    .cell.focused { outline: 1px solid var(--accent); }
+    .cell-bar { display: flex; align-items: center; gap: 3px; padding: 3px 5px; background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto; }
+    .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
+    .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+    .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
+    .cell-bar .tab-x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
+    .cell-bar .tab-x:hover { color: var(--danger); }
+    .cell-sp { flex: 1; }
+    .cell-max, .cell-del { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 13px; padding: 0 4px; }
+    .cell-max:hover { color: var(--accent); } .cell-del:hover { color: var(--danger); }
+    .cell-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .cell-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; padding: 10px; text-align: center; }
+    .tab-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #grid.maximized { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
+    /* viewer (code / markdown / image) */
+    .viewer-body { background: var(--bg); }
+    .viewer-tools { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid var(--border); }
+    .viewer-reload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 1px 7px; }
+    .viewer-reload:hover { color: var(--fg); border-color: var(--accent); }
+    .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .viewer-content { flex: 1; min-height: 0; overflow: auto; }
+    .viewer-pre { margin: 0; padding: 10px 12px; }
+    .viewer-pre code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; line-height: 1.55; background: none; }
+    .viewer-msg { padding: 14px; color: var(--muted); font-size: 13px; }
+    .viewer-msg.err { color: var(--danger); }
+    .viewer-img { max-width: 100%; max-height: 100%; margin: auto; display: block; object-fit: contain; }
+    .viewer-content:has(.viewer-img) { display: flex; align-items: center; justify-content: center; padding: 10px; background: #0d1117; }
+    /* markdown */
+    .md-body { padding: 14px 18px; font: 14px/1.6 -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); max-width: 900px; }
+    .md-body h1, .md-body h2, .md-body h3 { border-bottom: 1px solid var(--border); padding-bottom: .3em; margin: 1.2em 0 .6em; }
+    .md-body h1 { font-size: 1.7em; } .md-body h2 { font-size: 1.4em; } .md-body h3 { font-size: 1.2em; }
+    .md-body code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: .1em .35em; font-family: ui-monospace, Menlo, monospace; font-size: .88em; }
+    .md-body pre { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow: auto; }
+    .md-body pre code { background: none; border: none; padding: 0; }
+    .md-body a { color: var(--accent); } .md-body img { max-width: 100%; }
+    .md-body blockquote { border-left: 3px solid var(--border); margin: 0; padding: 0 1em; color: var(--muted); }
+    .md-body table { border-collapse: collapse; } .md-body th, .md-body td { border: 1px solid var(--border); padding: 6px 10px; }
+    .md-body ul, .md-body ol { padding-left: 1.6em; }
+    /* file tree */
+    #files { border-bottom: 1px solid var(--border); font-size: 12.5px; }
+    #files > summary { padding: 10px 14px; cursor: pointer; color: var(--muted); user-select: none; }
+    #files > summary:hover { color: var(--fg); }
+    .files-body { padding: 0 10px 10px; display: grid; gap: 6px; }
+    .ft-row select, .ft-row input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; }
+    #filetree { max-height: 34vh; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    .ft-node { padding: 2px 4px; white-space: nowrap; cursor: pointer; border-radius: 4px; color: var(--fg); }
+    .ft-node:hover { background: #1f2630; }
+    .ft-node.dir { color: var(--accent); }
+    .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2d1618; border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
@@ -166,6 +213,18 @@
           <ul id="editable"></ul>
         </div>
       </details>
+      <details id="files" open>
+        <summary>Files</summary>
+        <div class="files-body">
+          <div class="ft-row">
+            <select id="ft-root" title="Root folder"></select>
+          </div>
+          <div class="ft-row">
+            <input id="ft-path" type="text" placeholder="paste absolute path… (Enter)" autocomplete="off" spellcheck="false">
+          </div>
+          <div id="filetree"></div>
+        </div>
+      </details>
       <ul id="sessions"><li class="empty">Loading…</li></ul>
     </aside>
     <main id="grid" class="empty">
@@ -176,6 +235,12 @@
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/addon-fit.js"></script>
   <script src="/xterm/addon-webgl.js"></script>
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/highlight.min.js"></script>
+  <script src="/terminal-tab.js"></script>
+  <script src="/viewer-tab.js"></script>
+  <script src="/tabs.js"></script>
+  <script src="/filetree.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
