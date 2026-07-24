@@ -203,13 +203,35 @@ async function loadAgents() {
     }));
   } catch (_) {}
 }
+async function loadWorkspaces() {
+  try {
+    const ws = await api("/api/workspaces"); // [{label, path}] = $HOME + its subfolders
+    const opts = (ws || []).map((w) => {
+      const o = document.createElement("option");
+      o.value = w.path; o.textContent = w.label;
+      return o;
+    });
+    const custom = document.createElement("option");
+    custom.value = "__custom__"; custom.textContent = "Custom path…";
+    opts.push(custom);
+    $("workspace").replaceChildren(...opts);
+  } catch (_) {}
+}
+$("workspace").addEventListener("change", () => {
+  $("cwd-custom").style.display = $("workspace").value === "__custom__" ? "block" : "none";
+});
+function getCwd() {
+  const w = $("workspace").value;
+  return w === "__custom__" ? $("cwd-custom").value.trim() : (w || "");
+}
+
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   try {
     const s = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: $("agent").value, cwd: $("cwd").value.trim() }),
+      body: JSON.stringify({ agent: $("agent").value, cwd: getCwd() }),
     });
     await refreshSessions();
     openSession(s.id);
@@ -225,5 +247,6 @@ async function killSession(id) {
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", () => panes.forEach((p) => p.fit()));
 loadAgents();
+loadWorkspaces();
 refreshSessions();
 setInterval(refreshSessions, 3000);

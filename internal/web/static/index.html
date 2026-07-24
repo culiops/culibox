@@ -90,8 +90,9 @@
           <select id="agent"></select>
         </div>
         <div>
-          <label for="cwd">Working dir (optional)</label>
-          <input id="cwd" type="text" placeholder="/home/…" autocomplete="off">
+          <label for="workspace">Working dir</label>
+          <select id="workspace"></select>
+          <input id="cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
         </div>
         <button type="submit">Spawn session</button>
       </form>

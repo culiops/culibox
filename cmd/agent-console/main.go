@@ -7,6 +7,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
@@ -51,10 +52,18 @@ func main() {
 
 	mgr := session.NewManager(launcher.New(cfg.Agents, resolver), 128*1024, 5*time.Minute)
 
+	// Default working dir: config value if set, else $HOME.
+	home, _ := os.UserHomeDir()
+	defaultCwd := cfg.DefaultCwd
+	if defaultCwd == "" {
+		defaultCwd = home
+	}
+
 	srv := &web.Server{
-		API:      &web.API{Sessions: web.ManagerService{M: mgr}},
+		API:      &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Cookie:   cookie,
 		Agents:   web.AgentNames(cfg),
+		Home:     home,
 		Terminal: terminal.NewAttachHandler(mgr.Get),
 	}
 

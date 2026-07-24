@@ -17,6 +17,7 @@ type Server struct {
 	API      *API
 	Cookie   *auth.CookieAuth
 	Agents   []string
+	Home     string // for the workspace picker ($HOME + subfolders)
 	Terminal http.Handler
 }
 
@@ -38,6 +39,9 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
 	protected.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.Agents)
+	})
+	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))
 	})
 
 	sub, _ := fs.Sub(staticFS, "static")

@@ -12,15 +12,17 @@ import (
 )
 
 type mockSvc struct {
-	list      []session.Info
-	getOK     bool
-	killed    string
-	spawnInfo session.Info
-	spawnErr  error
+	list       []session.Info
+	getOK      bool
+	killed     string
+	spawnInfo  session.Info
+	spawnErr   error
+	spawnedCwd string
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
-func (m *mockSvc) Spawn(launcher.SpawnSpec) (session.Info, error) {
+func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
+	m.spawnedCwd = s.Cwd
 	if m.spawnErr != nil {
 		return session.Info{}, m.spawnErr
 	}
@@ -63,6 +65,23 @@ func TestAPI_ListSpawnDelete(t *testing.T) {
 	}
 	if svc.killed != "bash-1" {
 		t.Fatalf("killed %q", svc.killed)
+	}
+}
+
+func TestAPI_DefaultsCwd(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc, DefaultCwd: "/home/me"}
+
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(`{"agent":"bash"}`)))
+	if svc.spawnedCwd != "/home/me" {
+		t.Fatalf("empty cwd should default to DefaultCwd, got %q", svc.spawnedCwd)
+	}
+
+	rec = httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(`{"agent":"bash","cwd":"/tmp/x"}`)))
+	if svc.spawnedCwd != "/tmp/x" {
+		t.Fatalf("explicit cwd should win, got %q", svc.spawnedCwd)
 	}
 }
 

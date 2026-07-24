@@ -23,7 +23,10 @@ type SessionService interface {
 }
 
 // API holds the HTTP handlers for sessions.
-type API struct{ Sessions SessionService }
+type API struct {
+	Sessions   SessionService
+	DefaultCwd string // used when a spawn request omits cwd (e.g. $HOME)
+}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -49,7 +52,11 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "agent required")
 			return
 		}
-		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: req.Cwd})
+		cwd := strings.TrimSpace(req.Cwd)
+		if cwd == "" {
+			cwd = a.DefaultCwd // default working dir ($HOME unless configured)
+		}
+		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: cwd})
 		if err != nil {
 			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
 			writeErr(w, http.StatusBadRequest, "could not start session")
