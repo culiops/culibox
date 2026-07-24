@@ -54,3 +54,29 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 		t.Fatalf("api with basic-auth: want 200, got %d", rec.Code)
 	}
 }
+
+// TestStaticNoCacheOnAppFiles: the app's own files (index.html, app.js) must
+// carry Cache-Control: no-cache so a normal reload always shows the latest;
+// the vendored /xterm/* bundle stays cacheable.
+func TestStaticNoCacheOnAppFiles(t *testing.T) {
+	ca, _ := auth.NewCookieAuth()
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
+		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
+	h := s.Handler("u", "p")
+
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.SetBasicAuth("u", "p")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, p := range []string{"/", "/app.js"} {
+		if cc := get(p).Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Fatalf("%s Cache-Control=%q, want no-cache", p, cc)
+		}
+	}
+	if cc := get("/xterm/xterm.js").Header().Get("Cache-Control"); cc == "no-cache" {
+		t.Fatal("/xterm/xterm.js should stay cacheable, got no-cache")
+	}
+}

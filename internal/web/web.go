@@ -41,6 +41,12 @@ func (s *Server) Handler(user, pass string) http.Handler {
 		if r.URL.Path == "/" && s.Cookie != nil {
 			s.Cookie.Issue(w)
 		}
+		// The app's own files change on every rebuild, so force revalidation —
+		// otherwise browsers serve stale JS/HTML until a manual hard-refresh. The
+		// vendored /xterm/* bundle is immutable and left cacheable.
+		if r.URL.Path == "/" || r.URL.Path == "/app.js" {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		fileServer.ServeHTTP(w, r)
 	})
 
