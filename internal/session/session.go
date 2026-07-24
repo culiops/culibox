@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -97,9 +99,9 @@ type subscription struct {
 	stopped  bool // guarded by Session.mu (for the cond predicate)
 }
 
-func newSession(id, agent, cwd string, cmd *exec.Cmd, ptmx *os.File, ringCap int, backend Backend) *Session {
+func newSession(id, agent, cwd string, created time.Time, cmd *exec.Cmd, ptmx *os.File, ringCap int, backend Backend) *Session {
 	s := &Session{
-		ID: id, Agent: agent, Cwd: cwd, Created: time.Now(),
+		ID: id, Agent: agent, Cwd: cwd, Created: created,
 		cmd: cmd, ptmx: ptmx,
 		rb:      newRing(ringCap),
 		done:    make(chan struct{}),
@@ -298,10 +300,25 @@ type Manager struct {
 	mu        sync.Mutex
 	sessions  map[string]*Session
 	launcher  launcher.Builder
-	backend   Backend // nil = ephemeral (daemon-owned PTY); set = abduco persistence
+	backend   Backend  // nil = ephemeral (daemon-owned PTY); set = abduco persistence
+	sidecar   *sidecar // nil = no metadata persistence
 	counters  map[string]int
 	ringCap   int
 	retention time.Duration
+}
+
+// SetSidecarPath enables metadata persistence + restart reconcile by loading the
+// sidecar at path (a missing file is an empty sidecar). Call once at boot before
+// Reconcile/serving. Without it, sessions still run but are not recoverable.
+func (m *Manager) SetSidecarPath(path string) error {
+	sc, err := openSidecar(path)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.sidecar = sc
+	m.mu.Unlock()
+	return nil
 }
 
 // NewManager builds a registry. backend may be nil (ephemeral sessions).
@@ -350,11 +367,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		return nil, err
 	}
 
+	created := time.Now()
 	m.mu.Lock()
-	sess := newSession(id, spec.Agent, spec.Cwd, cmd, ptmx, m.ringCap, m.backend)
+	sess := newSession(id, spec.Agent, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	m.sessions[id] = sess
+	sc := m.sidecar
 	m.mu.Unlock()
 
+	if sc != nil {
+		sc.put(id, sessionMeta{Agent: spec.Agent, Cwd: spec.Cwd, Created: created})
+	}
 	m.watchRetention(id, sess)
 	return sess, nil
 }
@@ -400,7 +422,11 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		_ = sess.ptmx.Close()
 		m.mu.Lock()
 		delete(m.sessions, id)
+		sc := m.sidecar
 		m.mu.Unlock()
+		if sc != nil {
+			sc.remove(id) // a naturally-exited session is gone for good
+		}
 	}()
 }
 
@@ -450,8 +476,105 @@ func (m *Manager) Kill(id string) error {
 	_ = s.ptmx.Close()
 	m.mu.Lock()
 	delete(m.sessions, id)
+	sc := m.sidecar
 	m.mu.Unlock()
+	if sc != nil {
+		sc.remove(id)
+	}
 	s.finalize()                                  // close done uniformly (live/exited/detached)
 	s.removedOnce.Do(func() { close(s.removed) }) // let the retention goroutine exit now
 	return nil
+}
+
+// Reconcile rebuilds the registry from surviving abduco sessions after a daemon
+// restart: it re-attaches every live session, drops sidecar entries whose agent
+// died while the daemon was down, adopts sockets with no sidecar (agent from the
+// id), and seeds the per-agent counters so a fresh spawn cannot collide with a
+// recovered id. No-op without a backend.
+func (m *Manager) Reconcile() error {
+	if m.backend == nil {
+		return nil
+	}
+	live, err := m.backend.List()
+	if err != nil {
+		return err
+	}
+	liveSet := make(map[string]bool, len(live))
+	for _, id := range live {
+		liveSet[id] = true
+	}
+
+	m.mu.Lock()
+	sc := m.sidecar
+	m.mu.Unlock()
+
+	var meta map[string]sessionMeta
+	if sc != nil {
+		meta = sc.all()
+		// Drop sidecar entries whose agent died while the daemon was down.
+		for id := range meta {
+			if !liveSet[id] {
+				sc.remove(id)
+			}
+		}
+	}
+
+	for _, id := range live {
+		md, ok := meta[id]
+		if !ok { // orphan-adopt: recover the agent name from the id
+			agent, _, _ := parseID(id)
+			md = sessionMeta{Agent: agent, Created: time.Now()}
+			if sc != nil {
+				sc.put(id, md)
+			}
+		}
+		if err := m.reattach(id, md); err != nil {
+			// Leave the abduco session running; it can be recovered on a later
+			// restart. Don't fail the whole reconcile for one bad re-attach.
+			continue
+		}
+	}
+
+	m.mu.Lock()
+	for _, id := range live {
+		if agent, n, ok := parseID(id); ok && n > m.counters[agent] {
+			m.counters[agent] = n
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+// reattach connects a fresh attach PTY to a surviving abduco session and rebuilds
+// its Session, nudging a repaint (best-effort, no cross-restart scrollback).
+func (m *Manager) reattach(id string, md sessionMeta) error {
+	cmd, ptmx, err := m.backend.Attach(id, 24, 80)
+	if err != nil {
+		return err
+	}
+	created := md.Created
+	if created.IsZero() {
+		created = time.Now()
+	}
+	m.mu.Lock()
+	sess := newSession(id, md.Agent, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	m.sessions[id] = sess
+	m.mu.Unlock()
+	sess.ForceRedraw()
+	m.watchRetention(id, sess)
+	return nil
+}
+
+// parseID splits "<agent>-<n>" on the LAST dash (agent names may contain dashes,
+// e.g. "claude-code-3"); ok is false unless the suffix is a positive integer.
+func parseID(id string) (agent string, n int, ok bool) {
+	i := strings.LastIndex(id, "-")
+	if i <= 0 || i == len(id)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.Atoi(id[i+1:])
+	if err != nil || n <= 0 {
+		return "", 0, false
+	}
+	return id[:i], n, true
 }

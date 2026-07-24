@@ -19,6 +19,7 @@ type fakeBackend struct {
 	mu       sync.Mutex
 	alive    map[string]bool      // InnerAlive result per id
 	attached map[string]*exec.Cmd // attach process per id (so we can crash/kill it)
+	list     []string             // ids returned by List (live sockets)
 	created  []string
 	killed   []string
 }
@@ -67,7 +68,20 @@ func (f *fakeBackend) Kill(id string) error {
 	return nil
 }
 
-func (f *fakeBackend) List() ([]string, error) { return nil, nil }
+func (f *fakeBackend) List() ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.list...), nil
+}
+
+// seedLive marks a session as a surviving abduco session (in List + agent alive)
+// as if it had outlived a daemon restart.
+func (f *fakeBackend) seedLive(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.list = append(f.list, id)
+	f.alive[id] = true
+}
 
 // crashAttach simulates the attach process dying while the agent stays alive
 // (alive[id] remains true) — the case that must classify as `detached`.
@@ -119,7 +133,7 @@ func TestReaperExitedFinalizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	fb.alive["s-1"] = false // agent already gone
-	s := newSession("s-1", "test", "", cmd, ptmx, 1<<16, fb)
+	s := newSession("s-1", "test", "", time.Now(), cmd, ptmx, 1<<16, fb)
 	select {
 	case <-s.Done():
 	case <-time.After(2 * time.Second):
@@ -140,7 +154,7 @@ func TestReaperDetachedDoesNotFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newSession("s-1", "test", "", cmd, ptmx, 1<<16, fb)
+	s := newSession("s-1", "test", "", time.Now(), cmd, ptmx, 1<<16, fb)
 	_ = cmd.Process.Kill() // attach dies
 	waitStatus(t, s, statusDetached, 2*time.Second)
 	select {
