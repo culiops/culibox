@@ -32,3 +32,6 @@ config.json
 .dev.env
 config.prod.json
 .prod.env
+
+# Visual brainstorm companion (local only)
+.superpowers/
