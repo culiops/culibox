@@ -55,3 +55,42 @@ func TestValidate_RequiresAgent(t *testing.T) {
 		t.Error("empty agents should be rejected")
 	}
 }
+
+func TestLoad_EnvModelFields(t *testing.T) {
+	p := writeTemp(t, `{
+      "bind_addr":"127.0.0.1:8080","basic_auth_user":"me","basic_auth_pass_env":"AC_PASS",
+      "secret_sources":[{"type":"env"},{"type":"file","path":"/x/secrets.env"}],
+      "agents":[
+        {"name":"claude","bin":"claude","base":"login","env":{"ANTHROPIC_MODEL":"m"}},
+        {"name":"locked","bin":"claude","base":"clean","secrets":["TOK"]}
+      ]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.SecretSources) != 2 || c.SecretSources[1].Type != "file" || c.SecretSources[1].Path != "/x/secrets.env" {
+		t.Fatalf("secret_sources parsed wrong: %+v", c.SecretSources)
+	}
+	if c.Agents[0].Base != "login" || c.Agents[0].Env["ANTHROPIC_MODEL"] != "m" {
+		t.Fatalf("agent0 parsed wrong: %+v", c.Agents[0])
+	}
+	if len(c.Agents[1].Secrets) != 1 || c.Agents[1].Secrets[0] != "TOK" {
+		t.Fatalf("agent1 secrets parsed wrong: %+v", c.Agents[1])
+	}
+}
+
+func TestBasePolicy_DefaultsClean(t *testing.T) {
+	if (AgentConfig{}).BasePolicy() != BaseClean {
+		t.Fatal("empty base should default to clean")
+	}
+	if (AgentConfig{Base: "login"}).BasePolicy() != BaseLogin {
+		t.Fatal("explicit base should be honored")
+	}
+}
+
+func TestValidate_RejectsInvalidBase(t *testing.T) {
+	c := Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "a", Bin: "a", Base: "bogus"}}}
+	if err := c.Validate(); err == nil {
+		t.Error("invalid base should be rejected")
+	}
+}
