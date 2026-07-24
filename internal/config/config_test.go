@@ -79,6 +79,27 @@ func TestLoad_EnvModelFields(t *testing.T) {
 	}
 }
 
+func TestLoad_AbducoFields(t *testing.T) {
+	p := writeTemp(t, `{
+      "bind_addr":"127.0.0.1:8080","basic_auth_user":"me","basic_auth_pass_env":"AC_PASS",
+      "data_dir":"/var/lib/agent-console","abduco_bin":"/usr/local/bin/abduco",
+      "abduco_socket_dir":"/run/agent-console/abduco",
+      "agents":[{"name":"claude","bin":"claude"}]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DataDir != "/var/lib/agent-console" {
+		t.Fatalf("data_dir=%q", c.DataDir)
+	}
+	if c.AbducoBin != "/usr/local/bin/abduco" {
+		t.Fatalf("abduco_bin=%q", c.AbducoBin)
+	}
+	if c.AbducoSocketDir != "/run/agent-console/abduco" {
+		t.Fatalf("abduco_socket_dir=%q", c.AbducoSocketDir)
+	}
+}
+
 func TestBasePolicy_DefaultsInherit(t *testing.T) {
 	if (AgentConfig{}).BasePolicy() != BaseInherit {
 		t.Fatal("empty base should default to inherit")

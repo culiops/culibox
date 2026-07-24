@@ -8,9 +8,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
+	"github.com/culiops/culiops-agent-console/internal/abduco"
 	"github.com/culiops/culiops-agent-console/internal/auth"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
@@ -53,13 +55,41 @@ func main() {
 	}
 
 	lnch := launcher.New(cfg.Agents, resolver, cfg.Options)
-	mgr := session.NewManager(lnch, nil, 128*1024, 5*time.Minute)
 
 	// Default working dir: config value if set, else $HOME.
 	home, _ := os.UserHomeDir()
 	defaultCwd := cfg.DefaultCwd
 	if defaultCwd == "" {
 		defaultCwd = home
+	}
+
+	// Session persistence via abduco: agents run under abduco so they survive a
+	// daemon restart. abduco is a hard dependency — fail fast if it is missing.
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = filepath.Join(home, ".local", "share", "agent-console")
+	}
+	abducoBin := cfg.AbducoBin
+	if abducoBin == "" {
+		abducoBin = "abduco"
+	}
+	if _, err := exec.LookPath(abducoBin); err != nil {
+		log.Fatalf("abduco not found on PATH (%q): session persistence requires it; install abduco or set abduco_bin", abducoBin)
+	}
+	socketDir := cfg.AbducoSocketDir
+	if socketDir == "" {
+		socketDir = filepath.Join(dataDir, "abduco")
+	}
+	adapter, err := abduco.New(abducoBin, socketDir, filepath.Join(dataDir, "sessions", "pids"))
+	if err != nil {
+		log.Fatalf("abduco: %v", err)
+	}
+	mgr := session.NewManager(lnch, adapter, 128*1024, 5*time.Minute)
+	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
+		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
+	}
+	if err := mgr.Reconcile(); err != nil {
+		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
 	}
 
 	// Runtime profile store (config.Agents are read-only seeds; the store holds

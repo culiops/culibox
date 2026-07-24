@@ -69,6 +69,9 @@ type Config struct {
 	DefaultCwd       string         `json:"default_cwd"`
 	AllowPublic      bool           `json:"allow_public"`
 	ProfilesPath     string         `json:"profiles_path,omitempty"` // store for runtime profiles
+	DataDir          string         `json:"data_dir,omitempty"`      // default ~/.local/share/agent-console
+	AbducoBin        string         `json:"abduco_bin,omitempty"`    // default "abduco" on PATH
+	AbducoSocketDir  string         `json:"abduco_socket_dir,omitempty"`
 	SecretSources    []SecretSource `json:"secret_sources,omitempty"`
 	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
