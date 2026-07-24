@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,6 +21,43 @@ import (
 
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 )
+
+// claudeSessionEnvBlocklist are Claude Code session-identity variables injected
+// by a running Claude Code process. If the console is launched from within a
+// Claude session, blindly inheriting them makes every spawned `claude` behave as
+// a NESTED child session (transcripts off, inherited session id). Strip them so
+// each spawned agent is a clean top-level session, as if launched from a fresh
+// terminal. (Auth/model vars are intentionally left alone — that is the separate
+// secrets-injection concern, the future SecretResolver seam.)
+var claudeSessionEnvBlocklist = map[string]bool{
+	"CLAUDECODE":                                true,
+	"CLAUDE_CODE_CHILD_SESSION":                 true,
+	"CLAUDE_CODE_SESSION_ID":                    true,
+	"CLAUDE_CODE_ENTRYPOINT":                    true,
+	"CLAUDE_CODE_EXECPATH":                      true,
+	"CLAUDE_PID":                                true,
+	"CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX": true,
+}
+
+// childEnv builds a spawned agent's environment: the console's environment minus
+// the Claude session-identity markers, plus the launcher's extra env and TERM.
+func childEnv(extra []string) []string {
+	base := os.Environ()
+	out := make([]string, 0, len(base)+len(extra)+1)
+	for _, kv := range base {
+		name := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			name = kv[:i]
+		}
+		if claudeSessionEnvBlocklist[name] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	out = append(out, extra...)
+	out = append(out, "TERM=xterm-256color")
+	return out
+}
 
 // ErrNotFound is returned by Manager.Kill for an unknown id (so the API can map
 // it to 404, incl. the TOCTOU where the retention pruner removes it mid-request).
@@ -282,8 +320,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if spec.Cwd != "" {
 		cmd.Dir = spec.Cwd
 	}
-	cmd.Env = append(os.Environ(), env...)
-	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+	cmd.Env = childEnv(env)
 
 	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
