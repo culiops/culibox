@@ -1,94 +1,117 @@
 package session
 
 import (
-	"errors"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
+	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/tmux"
+	"github.com/creack/pty"
 )
 
-type mockTmux struct {
-	list    []tmux.Session
-	newErr  error
-	newArgs struct {
-		name, cwd string
-		argv, env []string
-	}
-	killed string
-}
-
-func (m *mockTmux) List() ([]tmux.Session, error) { return m.list, nil }
-func (m *mockTmux) New(name, cwd string, argv, env []string) error {
-	m.newArgs.name, m.newArgs.cwd, m.newArgs.argv, m.newArgs.env = name, cwd, argv, env
-	return m.newErr
-}
-func (m *mockTmux) Kill(name string) error   { m.killed = name; return nil }
-func (m *mockTmux) Has(string) (bool, error) { return false, nil }
-
-type mockBuilder struct {
-	argv, env []string
-	err       error
-}
-
-func (b mockBuilder) Build(launcher.SpawnSpec) ([]string, []string, error) {
-	return b.argv, b.env, b.err
-}
-
-func TestSpawn(t *testing.T) {
-	mt := &mockTmux{}
-	m := &Manager{
-		Tmux:     mt,
-		Launcher: mockBuilder{argv: []string{"claude"}, env: []string{"K=V"}},
-		NameFn:   func(s launcher.SpawnSpec) string { return "agent-" + s.Agent },
-	}
-	sess, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: "/w"})
+// startProc starts a real process on a PTY and wraps it in a Session (bypassing
+// Manager, so Session logic can be tested directly). Hermetic: coreutils only.
+func startProc(t *testing.T, ringCap int, name string, args ...string) *Session {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
+		t.Fatalf("start pty: %v", err)
+	}
+	t.Cleanup(func() { _ = ptmx.Close() })
+	return newSession("test-1", "test", "", cmd, ptmx, ringCap)
+}
+
+func readUntil(out <-chan []byte, want string, d time.Duration) (string, bool) {
+	var b strings.Builder
+	deadline := time.After(d)
+	for {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				return b.String(), strings.Contains(b.String(), want)
+			}
+			b.Write(chunk)
+			if strings.Contains(b.String(), want) {
+				return b.String(), true
+			}
+		case <-deadline:
+			return b.String(), false
+		}
+	}
+}
+
+func TestSession_OutputReachesSubscriber(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "printf HELLO; sleep 2")
+	out, cancel := s.Subscribe()
+	defer cancel()
+	if _, ok := readUntil(out, "HELLO", 3*time.Second); !ok {
+		t.Fatal("did not receive HELLO")
+	}
+}
+
+func TestSession_ReplayOnResubscribe(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "printf HELLO; sleep 3")
+	out1, cancel1 := s.Subscribe()
+	if _, ok := readUntil(out1, "HELLO", 3*time.Second); !ok {
+		t.Fatal("first subscribe missed HELLO")
+	}
+	cancel1()
+	// A fresh subscriber must replay the ring (HELLO is still buffered).
+	out2, cancel2 := s.Subscribe()
+	defer cancel2()
+	if _, ok := readUntil(out2, "HELLO", 2*time.Second); !ok {
+		t.Fatal("resubscribe did not replay HELLO")
+	}
+}
+
+func TestSession_SecondSubscribeCancelsFirst(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	out1, _ := s.Subscribe()
+	out2, cancel2 := s.Subscribe()
+	defer cancel2()
+	// out1 must close (its range ends) without panic.
+	select {
+	case _, ok := <-out1:
+		if ok {
+			// may deliver a final chunk before closing; drain to close
+			for range out1 {
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first subscription channel was not closed after a second Subscribe")
+	}
+	_ = out2
+}
+
+func TestSession_ExitClosesOutAndDone(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "printf BYE")
+	out, cancel := s.Subscribe()
+	defer cancel()
+	got, ok := readUntil(out, "BYE", 3*time.Second)
+	if !ok {
+		t.Fatalf("missed BYE, got %q", got)
+	}
+	select {
+	case <-s.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done not closed after child exit")
+	}
+	if !s.Exited() {
+		t.Fatal("Exited() should be true")
+	}
+}
+
+func TestSession_WriteReachesChild(t *testing.T) {
+	s := startProc(t, 1<<16, "cat")
+	out, cancel := s.Subscribe()
+	defer cancel()
+	if _, err := s.Write([]byte("ping\n")); err != nil {
 		t.Fatal(err)
 	}
-	if sess.Name != "agent-claude" {
-		t.Fatalf("name %q", sess.Name)
-	}
-	if mt.newArgs.name != "agent-claude" || mt.newArgs.cwd != "/w" {
-		t.Fatalf("tmux.New got %+v", mt.newArgs)
-	}
-	if len(mt.newArgs.argv) != 1 || mt.newArgs.argv[0] != "claude" {
-		t.Fatalf("argv passed wrong: %v", mt.newArgs.argv)
-	}
-	if len(mt.newArgs.env) != 1 || mt.newArgs.env[0] != "K=V" {
-		t.Fatalf("env not carried through: %v", mt.newArgs.env)
-	}
-}
-
-func TestSpawn_BuildErrorPropagates(t *testing.T) {
-	m := &Manager{
-		Tmux:     &mockTmux{},
-		Launcher: mockBuilder{err: errors.New("boom")},
-		NameFn:   func(launcher.SpawnSpec) string { return "x" },
-	}
-	if _, err := m.Spawn(launcher.SpawnSpec{}); err == nil {
-		t.Fatal("build error should propagate")
-	}
-}
-
-func TestKill(t *testing.T) {
-	mt := &mockTmux{}
-	m := &Manager{Tmux: mt}
-	if err := m.Kill("foo"); err != nil {
-		t.Fatal(err)
-	}
-	if mt.killed != "foo" {
-		t.Fatalf("killed %q", mt.killed)
-	}
-}
-
-func TestGet(t *testing.T) {
-	mt := &mockTmux{list: []tmux.Session{{Name: "a"}, {Name: "b"}}}
-	m := &Manager{Tmux: mt}
-	if _, ok, _ := m.Get("b"); !ok {
-		t.Fatal("b should be found")
-	}
-	if _, ok, _ := m.Get("z"); ok {
-		t.Fatal("z should not be found")
+	if _, ok := readUntil(out, "ping", 3*time.Second); !ok {
+		t.Fatal("input did not echo back through the child")
 	}
 }
