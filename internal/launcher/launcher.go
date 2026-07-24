@@ -1,6 +1,6 @@
-// Package launcher composes the command + env used to start an agent in a
-// new tmux session. In M1 it only resolves the agent binary; MCP/skills
-// toggles (M3) plug in here via the same Build interface.
+// Package launcher composes the command + env used to start an agent process.
+// For now it only resolves the agent binary; MCP/skills toggles (M3) plug in
+// here via the same Build interface.
 package launcher
 
 import (

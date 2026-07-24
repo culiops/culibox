@@ -1,19 +1,19 @@
 // Command agent-console is a self-hosted web control-plane for managing
-// Claude/agent CLI sessions running in tmux, viewed in the browser via
-// in-process PTY -> WebSocket -> xterm.js terminals.
+// CLI agent sessions. It spawns and owns each agent process on its own PTY
+// (no tmux), and serves them in the browser via xterm.js over a WebSocket.
 package main
 
 import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 	"github.com/culiops/culiops-agent-console/internal/session"
 	"github.com/culiops/culiops-agent-console/internal/terminal"
-	"github.com/culiops/culiops-agent-console/internal/tmux"
 	"github.com/culiops/culiops-agent-console/internal/web"
 )
 
@@ -38,17 +38,13 @@ func main() {
 		log.Fatalf("auth: %v", err)
 	}
 
-	mgr := &session.Manager{
-		Tmux:     tmux.NewCLIClient(),
-		Launcher: launcher.New(cfg.Agents),
-		NameFn:   session.DefaultNameFn,
-	}
+	mgr := session.NewManager(launcher.New(cfg.Agents), 128*1024, 5*time.Minute)
 
 	srv := &web.Server{
-		API:      &web.API{Sessions: mgr},
+		API:      &web.API{Sessions: web.ManagerService{M: mgr}},
 		Cookie:   cookie,
 		Agents:   web.AgentNames(cfg),
-		Terminal: terminal.NewWSHandler(terminal.TmuxAttachFactory),
+		Terminal: terminal.NewAttachHandler(mgr.Get),
 	}
 
 	log.Printf("agent-console listening on %s", cfg.BindAddr)

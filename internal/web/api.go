@@ -8,24 +8,20 @@ import (
 	"strings"
 
 	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/tmux"
+	"github.com/culiops/culiops-agent-console/internal/session"
 )
 
-// SessionService is the subset of session.Manager the API needs.
+// SessionService is the subset of session.Manager the API needs (Info-based so
+// handlers never touch a live *Session).
 type SessionService interface {
-	List() ([]tmux.Session, error)
-	Spawn(launcher.SpawnSpec) (tmux.Session, error)
-	Kill(name string) error
-	Get(name string) (tmux.Session, bool, error)
+	List() []session.Info
+	Spawn(launcher.SpawnSpec) (session.Info, error)
+	Kill(id string) error
+	Get(id string) (session.Info, bool)
 }
 
 // API holds the HTTP handlers for sessions.
 type API struct{ Sessions SessionService }
-
-type sessionDTO struct {
-	Name    string `json:"name"`
-	Created int64  `json:"created,omitempty"`
-}
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -41,20 +37,7 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		sessions, err := a.Sessions.List()
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "list failed")
-			return
-		}
-		out := make([]sessionDTO, 0, len(sessions))
-		for _, s := range sessions {
-			d := sessionDTO{Name: s.Name}
-			if !s.Created.IsZero() {
-				d.Created = s.Created.Unix()
-			}
-			out = append(out, d)
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, a.Sessions.List())
 	case http.MethodPost:
 		var req struct {
 			Agent string `json:"agent"`
@@ -64,38 +47,33 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "agent required")
 			return
 		}
-		sess, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: req.Cwd})
+		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: req.Cwd})
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, sessionDTO{Name: sess.Name})
+		writeJSON(w, http.StatusCreated, info)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-// handleSession serves DELETE (kill) on /api/sessions/{name}.
+// handleSession serves DELETE (kill) on /api/sessions/{id}.
 func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
-	if name == "" {
-		writeErr(w, http.StatusBadRequest, "name required")
+	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id required")
 		return
 	}
 	if r.Method != http.MethodDelete {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	_, ok, err := a.Sessions.Get(name)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "lookup failed")
-		return
-	}
-	if !ok {
+	if _, ok := a.Sessions.Get(id); !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	if err := a.Sessions.Kill(name); err != nil {
+	if err := a.Sessions.Kill(id); err != nil {
 		writeErr(w, http.StatusInternalServerError, "kill failed")
 		return
 	}

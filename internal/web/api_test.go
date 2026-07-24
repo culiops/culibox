@@ -8,31 +8,35 @@ import (
 	"testing"
 
 	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/tmux"
+	"github.com/culiops/culiops-agent-console/internal/session"
 )
 
 type mockSvc struct {
-	list      []tmux.Session
+	list      []session.Info
 	getOK     bool
 	killed    string
-	spawnName string
+	spawnInfo session.Info
 	spawnErr  error
 }
 
-func (m *mockSvc) List() ([]tmux.Session, error) { return m.list, nil }
-func (m *mockSvc) Spawn(launcher.SpawnSpec) (tmux.Session, error) {
+func (m *mockSvc) List() []session.Info { return m.list }
+func (m *mockSvc) Spawn(launcher.SpawnSpec) (session.Info, error) {
 	if m.spawnErr != nil {
-		return tmux.Session{}, m.spawnErr
+		return session.Info{}, m.spawnErr
 	}
-	return tmux.Session{Name: m.spawnName}, nil
+	return m.spawnInfo, nil
 }
-func (m *mockSvc) Kill(name string) error { m.killed = name; return nil }
-func (m *mockSvc) Get(name string) (tmux.Session, bool, error) {
-	return tmux.Session{Name: name}, m.getOK, nil
+func (m *mockSvc) Kill(id string) error { m.killed = id; return nil }
+func (m *mockSvc) Get(id string) (session.Info, bool) {
+	return session.Info{ID: id}, m.getOK
 }
 
 func TestAPI_ListSpawnDelete(t *testing.T) {
-	svc := &mockSvc{list: []tmux.Session{{Name: "a"}}, getOK: true, spawnName: "agent-claude"}
+	svc := &mockSvc{
+		list:      []session.Info{{ID: "bash-1", Agent: "bash"}},
+		getOK:     true,
+		spawnInfo: session.Info{ID: "bash-2", Agent: "bash"},
+	}
 	a := &API{Sessions: svc}
 
 	rec := httptest.NewRecorder()
@@ -40,24 +44,24 @@ func TestAPI_ListSpawnDelete(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("GET code %d", rec.Code)
 	}
-	var got []sessionDTO
+	var got []session.Info
 	json.Unmarshal(rec.Body.Bytes(), &got)
-	if len(got) != 1 || got[0].Name != "a" {
+	if len(got) != 1 || got[0].ID != "bash-1" {
 		t.Fatalf("list %+v", got)
 	}
 
 	rec = httptest.NewRecorder()
-	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(`{"agent":"claude"}`)))
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(`{"agent":"bash"}`)))
 	if rec.Code != 201 {
 		t.Fatalf("POST code %d body %s", rec.Code, rec.Body)
 	}
 
 	rec = httptest.NewRecorder()
-	a.handleSession(rec, httptest.NewRequest("DELETE", "/api/sessions/a", nil))
+	a.handleSession(rec, httptest.NewRequest("DELETE", "/api/sessions/bash-1", nil))
 	if rec.Code != 204 {
 		t.Fatalf("DELETE code %d", rec.Code)
 	}
-	if svc.killed != "a" {
+	if svc.killed != "bash-1" {
 		t.Fatalf("killed %q", svc.killed)
 	}
 }
@@ -72,7 +76,7 @@ func TestAPI_DeleteUnknownIs404(t *testing.T) {
 }
 
 func TestAPI_SpawnErrorIsStructured(t *testing.T) {
-	a := &API{Sessions: &mockSvc{spawnErr: errors.New("boom")}}
+	a := &API{Sessions: &mockSvc{spawnErr: errors.New("unknown agent")}}
 	rec := httptest.NewRecorder()
 	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(`{"agent":"x"}`)))
 	if rec.Code != 400 {
