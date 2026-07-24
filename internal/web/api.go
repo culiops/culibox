@@ -45,10 +45,11 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.Sessions.List())
 	case http.MethodPost:
 		var req struct {
-			Agent string `json:"agent"`
-			Cwd   string `json:"cwd"`
+			Agent   string         `json:"agent"`
+			Cwd     string         `json:"cwd"`
+			Options map[string]any `json:"options"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Agent == "" {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
 			return
 		}
@@ -56,7 +57,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if cwd == "" {
 			cwd = a.DefaultCwd // default working dir ($HOME unless configured)
 		}
-		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: cwd})
+		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: cwd, Options: req.Options})
 		if err != nil {
 			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
 			writeErr(w, http.StatusBadRequest, "could not start session")

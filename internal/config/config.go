@@ -22,6 +22,24 @@ type SecretSource struct {
 	Path string `json:"path,omitempty"` // for type "file"
 }
 
+// Option types.
+const (
+	OptBool = "bool"
+	OptEnum = "enum"
+)
+
+// OptionDef declares a launch option and how it maps to a flag and/or env var.
+// bool: value true → append Flag / set Env="1". enum: value (∈ Choices) →
+// append Flag <value> / set Env=<value>.
+type OptionDef struct {
+	Key     string   `json:"key"`
+	Label   string   `json:"label"`
+	Type    string   `json:"type"`              // bool | enum
+	Choices []string `json:"choices,omitempty"` // enum only
+	Flag    string   `json:"flag,omitempty"`
+	Env     string   `json:"env,omitempty"`
+}
+
 // AgentConfig describes one launchable agent CLI and its environment policy.
 type AgentConfig struct {
 	Name    string            `json:"name"`
@@ -30,6 +48,7 @@ type AgentConfig struct {
 	Base    string            `json:"base,omitempty"`    // inherit(default)|clean|login
 	Env     map[string]string `json:"env,omitempty"`     // static per-agent overrides
 	Secrets []string          `json:"secrets,omitempty"` // names resolved via SecretSources
+	Options map[string]any    `json:"options,omitempty"` // option key → default value (bool/enum)
 }
 
 // BasePolicy returns the effective base, defaulting to inherit (agents get the
@@ -50,6 +69,7 @@ type Config struct {
 	DefaultCwd       string         `json:"default_cwd"`
 	AllowPublic      bool           `json:"allow_public"`
 	SecretSources    []SecretSource `json:"secret_sources,omitempty"`
+	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
 }
 
@@ -86,6 +106,50 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: agent %q has invalid base %q (want clean|login|inherit)", a.Name, a.Base)
 		}
 	}
+	optDefs := map[string]OptionDef{}
+	for _, o := range c.Options {
+		if o.Key == "" {
+			return errors.New("config: option needs a key")
+		}
+		if _, dup := optDefs[o.Key]; dup {
+			return fmt.Errorf("config: duplicate option key %q", o.Key)
+		}
+		if o.Type != OptBool && o.Type != OptEnum {
+			return fmt.Errorf("config: option %q has invalid type %q (want bool|enum)", o.Key, o.Type)
+		}
+		if o.Type == OptEnum && len(o.Choices) == 0 {
+			return fmt.Errorf("config: enum option %q needs choices", o.Key)
+		}
+		if o.Type == OptBool && len(o.Choices) > 0 {
+			return fmt.Errorf("config: bool option %q must not set choices", o.Key)
+		}
+		if o.Flag == "" && o.Env == "" {
+			return fmt.Errorf("config: option %q must set a flag and/or env", o.Key)
+		}
+		optDefs[o.Key] = o
+	}
+	for _, a := range c.Agents {
+		for k, v := range a.Options {
+			def, ok := optDefs[k]
+			if !ok {
+				return fmt.Errorf("config: agent %q sets unknown option %q", a.Name, k)
+			}
+			switch def.Type {
+			case OptBool:
+				if _, ok := v.(bool); !ok {
+					return fmt.Errorf("config: agent %q option %q default must be a bool", a.Name, k)
+				}
+			case OptEnum:
+				if s, ok := v.(string); !ok || !contains(def.Choices, s) {
+					return fmt.Errorf("config: agent %q option %q default must be one of %v", a.Name, k, def.Choices)
+				}
+			}
+			// an option env must not collide with a declared secret (secrets stay authoritative)
+			if def.Env != "" && contains(a.Secrets, def.Env) {
+				return fmt.Errorf("config: agent %q option %q env %q collides with a declared secret", a.Name, k, def.Env)
+			}
+		}
+	}
 	for _, s := range c.SecretSources {
 		switch s.Type {
 		case "env":
@@ -98,6 +162,15 @@ func (c Config) Validate() error {
 		}
 	}
 	return c.checkBind()
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 // checkBind refuses any all-interfaces bind unless AllowPublic is set.

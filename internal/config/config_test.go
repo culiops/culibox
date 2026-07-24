@@ -94,3 +94,32 @@ func TestValidate_RejectsInvalidBase(t *testing.T) {
 		t.Error("invalid base should be rejected")
 	}
 }
+
+func TestValidate_Options(t *testing.T) {
+	mk := func(opts []OptionDef, agents []AgentConfig) Config {
+		return Config{BindAddr: "127.0.0.1:8080", Options: opts, Agents: agents}
+	}
+	good := mk(
+		[]OptionDef{{Key: "skip", Type: "bool", Flag: "-x"}, {Key: "eff", Type: "enum", Choices: []string{"hi"}, Flag: "--eff"}},
+		[]AgentConfig{{Name: "a", Bin: "a", Options: map[string]any{"skip": true, "eff": "hi"}}},
+	)
+	if err := good.Validate(); err != nil {
+		t.Fatalf("valid options config rejected: %v", err)
+	}
+
+	bad := map[string]Config{
+		"bad type":          mk([]OptionDef{{Key: "x", Type: "weird", Flag: "-x"}}, []AgentConfig{{Name: "a", Bin: "a"}}),
+		"enum no choices":   mk([]OptionDef{{Key: "x", Type: "enum", Flag: "-x"}}, []AgentConfig{{Name: "a", Bin: "a"}}),
+		"no flag/env":       mk([]OptionDef{{Key: "x", Type: "bool"}}, []AgentConfig{{Name: "a", Bin: "a"}}),
+		"dup key":           mk([]OptionDef{{Key: "x", Type: "bool", Flag: "-a"}, {Key: "x", Type: "bool", Flag: "-b"}}, []AgentConfig{{Name: "a", Bin: "a"}}),
+		"bool with choices": mk([]OptionDef{{Key: "x", Type: "bool", Flag: "-x", Choices: []string{"y"}}}, []AgentConfig{{Name: "a", Bin: "a"}}),
+		"unknown option":    mk([]OptionDef{{Key: "x", Type: "bool", Flag: "-x"}}, []AgentConfig{{Name: "a", Bin: "a", Options: map[string]any{"nope": true}}}),
+		"enum default bad":  mk([]OptionDef{{Key: "x", Type: "enum", Choices: []string{"hi"}, Flag: "-x"}}, []AgentConfig{{Name: "a", Bin: "a", Options: map[string]any{"x": "bad"}}}),
+		"env-secret clash":  mk([]OptionDef{{Key: "x", Type: "enum", Choices: []string{"hi"}, Env: "TOK"}}, []AgentConfig{{Name: "a", Bin: "a", Options: map[string]any{"x": "hi"}, Secrets: []string{"TOK"}}}),
+	}
+	for name, bc := range bad {
+		if err := bc.Validate(); err == nil {
+			t.Errorf("%s: should be rejected", name)
+		}
+	}
+}

@@ -39,12 +39,12 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 	h := s.Handler("u", "p")
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/agents", nil))
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/profiles", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("api without basic-auth: want 401, got %d", rec.Code)
 	}
 
-	req := httptest.NewRequest("GET", "/api/agents", nil)
+	req := httptest.NewRequest("GET", "/api/profiles", nil)
 	req.SetBasicAuth("u", "p")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

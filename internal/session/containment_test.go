@@ -23,7 +23,7 @@ func TestManager_CleanBaseContainsSecrets(t *testing.T) {
 	}
 	l := launcher.New([]config.AgentConfig{
 		{Name: "envprint", Bin: "/usr/bin/env", Base: "clean", Env: map[string]string{"FOO": "bar"}},
-	}, res)
+	}, res, nil)
 	m := NewManager(l, 1<<16, time.Minute)
 
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "envprint"})

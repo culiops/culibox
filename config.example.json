@@ -9,22 +9,30 @@
     { "type": "file", "path": "/etc/agent-console/secrets.env" }
   ],
 
+  "options": [
+    { "comment": "bool → append flag when on", "key": "skip_permissions", "label": "Skip permissions", "type": "bool", "flag": "--dangerously-skip-permissions" },
+    { "comment": "enum → --effort <value>", "key": "effort", "label": "Effort", "type": "enum", "choices": ["high", "medium", "low"], "flag": "--effort" },
+    { "comment": "enum → set env var", "key": "model", "label": "Model", "type": "enum", "choices": ["claude-opus-4-8", "claude-sonnet-5"], "env": "ANTHROPIC_MODEL" }
+  ],
+
   "agents": [
     {
-      "comment": "default base=inherit: the agent gets the daemon's full env (minus Claude session markers) — behaves like your normal shell. No config needed.",
+      "comment": "default base=inherit (full env). options set defaults shown as toggles on the spawn form, overridable per session.",
       "name": "claude",
-      "bin": "claude"
+      "bin": "claude",
+      "options": { "skip_permissions": true, "effort": "high", "model": "claude-opus-4-8" }
     },
     {
-      "comment": "a plain shell, same inherited env",
+      "comment": "a plain shell, no options",
       "name": "shell",
       "bin": "bash"
     },
     {
-      "comment": "opt-in lock-down: base=clean gets a curated env with NO inherited secrets; give it an explicit PATH and grant only the secrets it needs by name.",
+      "comment": "opt-in lock-down: base=clean, no inherited secrets; grant only what it needs by name.",
       "name": "claude-locked",
       "bin": "claude",
       "base": "clean",
+      "options": { "skip_permissions": true },
       "env": { "PATH": "/home/you/.nvm/versions/node/v24/bin:/usr/local/bin:/usr/bin:/bin" },
       "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"]
     }

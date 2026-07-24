@@ -27,7 +27,7 @@ func envMap(env []string) map[string]string {
 }
 
 func TestBuild_UnknownAgent(t *testing.T) {
-	l := New(nil, fakeResolver{})
+	l := New(nil, fakeResolver{}, nil)
 	if _, _, err := l.Build(SpawnSpec{Agent: "nope"}); err == nil {
 		t.Fatal("unknown agent should error")
 	}
@@ -37,7 +37,7 @@ func TestBuild_CleanExcludesDaemonSecrets(t *testing.T) {
 	t.Setenv("HOME", "/home/x")
 	t.Setenv("DECOY_SECRET", "leaked") // a daemon-only secret
 	// absolute bin so this test isolates env composition from PATH resolution
-	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "clean"}}, fakeResolver{})
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "clean"}}, fakeResolver{}, nil)
 	argv, env, err := l.Build(SpawnSpec{Agent: "a"})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestBuild_ResolvesBinAgainstComposedPath(t *testing.T) {
 	l := New([]config.AgentConfig{{
 		Name: "a", Bin: "mytool", Base: "clean",
 		Env: map[string]string{"PATH": dir},
-	}}, fakeResolver{})
+	}}, fakeResolver{}, nil)
 	argv, _, err := l.Build(SpawnSpec{Agent: "a"})
 	if err != nil {
 		t.Fatalf("bin should resolve against the composed PATH: %v", err)
@@ -80,7 +80,7 @@ func TestBuild_ResolvesBinAgainstComposedPath(t *testing.T) {
 func TestBuild_InheritStripsMarkersKeepsRest(t *testing.T) {
 	t.Setenv("SOME_VAR", "keep")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "abc")
-	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "inherit"}}, fakeResolver{})
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "inherit"}}, fakeResolver{}, nil)
 	_, env, err := l.Build(SpawnSpec{Agent: "a"})
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +99,7 @@ func TestBuild_EnvOverlayAndSecrets(t *testing.T) {
 		Name: "a", Bin: "/bin/cat", Base: "clean",
 		Env:     map[string]string{"ANTHROPIC_MODEL": "m", "PATH": "/custom"},
 		Secrets: []string{"TOK"},
-	}}, fakeResolver{vals: map[string]string{"TOK": "xyz"}})
+	}}, fakeResolver{vals: map[string]string{"TOK": "xyz"}}, nil)
 	_, env, err := l.Build(SpawnSpec{Agent: "a"})
 	if err != nil {
 		t.Fatal(err)
@@ -117,14 +117,14 @@ func TestBuild_EnvOverlayAndSecrets(t *testing.T) {
 }
 
 func TestBuild_UnresolvedSecretErrors(t *testing.T) {
-	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "clean", Secrets: []string{"MISSING"}}}, fakeResolver{})
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "clean", Secrets: []string{"MISSING"}}}, fakeResolver{}, nil)
 	if _, _, err := l.Build(SpawnSpec{Agent: "a"}); err == nil {
 		t.Fatal("unresolved declared secret should error (fail loud)")
 	}
 }
 
 func TestBuild_LoginWrapsArgv(t *testing.T) {
-	l := New([]config.AgentConfig{{Name: "a", Bin: "claude", Args: []string{"--foo bar"}, Base: "login"}}, fakeResolver{})
+	l := New([]config.AgentConfig{{Name: "a", Bin: "claude", Args: []string{"--foo bar"}, Base: "login"}}, fakeResolver{}, nil)
 	l.shell = "/bin/bash"
 	argv, _, err := l.Build(SpawnSpec{Agent: "a"})
 	if err != nil {
@@ -139,7 +139,7 @@ func TestBuild_LoginWrapsArgv(t *testing.T) {
 }
 
 func TestBuild_LoginZshUsesInteractive(t *testing.T) {
-	l := New([]config.AgentConfig{{Name: "a", Bin: "claude", Base: "login"}}, fakeResolver{})
+	l := New([]config.AgentConfig{{Name: "a", Bin: "claude", Base: "login"}}, fakeResolver{}, nil)
 	l.shell = "/usr/bin/zsh"
 	argv, _, err := l.Build(SpawnSpec{Agent: "a"})
 	if err != nil {
@@ -148,5 +148,80 @@ func TestBuild_LoginZshUsesInteractive(t *testing.T) {
 	// zsh needs -i so ~/.zshrc (toolchain) is sourced
 	if len(argv) != 5 || argv[1] != "-l" || argv[2] != "-i" || argv[3] != "-c" {
 		t.Fatalf("zsh login argv should include -i: %v", argv)
+	}
+}
+
+// argvHasPair reports whether argv contains flag immediately followed by value.
+func argvHasPair(argv []string, flag, value string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func TestBuild_OptionBoolFlag(t *testing.T) {
+	defs := []config.OptionDef{{Key: "skip", Label: "Skip", Type: "bool", Flag: "--dangerously-skip-permissions"}}
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "inherit", Options: map[string]any{"skip": true}}}, fakeResolver{}, defs)
+
+	argv, _, err := l.Build(SpawnSpec{Agent: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(argv, "--dangerously-skip-permissions") {
+		t.Fatalf("bool option flag not appended: %v", argv)
+	}
+	// per-spawn override to false drops the flag
+	argv, _, _ = l.Build(SpawnSpec{Agent: "a", Options: map[string]any{"skip": false}})
+	if contains(argv, "--dangerously-skip-permissions") {
+		t.Fatalf("override=false should drop the flag: %v", argv)
+	}
+}
+
+func TestBuild_OptionEnumFlagAndEnv(t *testing.T) {
+	defs := []config.OptionDef{
+		{Key: "effort", Type: "enum", Choices: []string{"high", "low"}, Flag: "--effort"},
+		{Key: "model", Type: "enum", Choices: []string{"opus", "sonnet"}, Env: "ANTHROPIC_MODEL"},
+	}
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "inherit",
+		Options: map[string]any{"effort": "high", "model": "opus"}}}, fakeResolver{}, defs)
+
+	argv, env, err := l.Build(SpawnSpec{Agent: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !argvHasPair(argv, "--effort", "high") {
+		t.Fatalf("enum flag/value missing: %v", argv)
+	}
+	if envMap(env)["ANTHROPIC_MODEL"] != "opus" {
+		t.Fatal("enum env option not set")
+	}
+	// per-spawn override wins
+	argv, env, _ = l.Build(SpawnSpec{Agent: "a", Options: map[string]any{"effort": "low", "model": "sonnet"}})
+	if !argvHasPair(argv, "--effort", "low") || envMap(env)["ANTHROPIC_MODEL"] != "sonnet" {
+		t.Fatalf("override not applied: argv=%v env=%v", argv, envMap(env)["ANTHROPIC_MODEL"])
+	}
+}
+
+func TestBuild_OptionSecurity(t *testing.T) {
+	defs := []config.OptionDef{{Key: "effort", Type: "enum", Choices: []string{"high"}, Flag: "--effort"}}
+	l := New([]config.AgentConfig{{Name: "a", Bin: "/bin/cat", Base: "inherit",
+		Options: map[string]any{"effort": "high"}}}, fakeResolver{}, defs)
+
+	// an invalid enum override is rejected → profile default kept, evil value never injected
+	argv, _, _ := l.Build(SpawnSpec{Agent: "a", Options: map[string]any{"effort": "$(evil)"}})
+	if contains(argv, "$(evil)") {
+		t.Fatalf("invalid enum override injected into argv: %v", argv)
+	}
+	if !argvHasPair(argv, "--effort", "high") {
+		t.Fatalf("invalid override should fall back to default: %v", argv)
+	}
+
+	// a request option NOT exposed by the profile is ignored
+	l2 := New([]config.AgentConfig{{Name: "b", Bin: "/bin/cat", Base: "inherit"}}, fakeResolver{}, defs)
+	argv2, _, _ := l2.Build(SpawnSpec{Agent: "b", Options: map[string]any{"effort": "high"}})
+	if argvHasPair(argv2, "--effort", "high") {
+		t.Fatalf("option not exposed by profile must be ignored: %v", argv2)
 	}
 }

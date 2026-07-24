@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
-	"github.com/culiops/culiops-agent-console/internal/config"
 )
 
 //go:embed static
@@ -16,18 +15,9 @@ var staticFS embed.FS
 type Server struct {
 	API      *API
 	Cookie   *auth.CookieAuth
-	Agents   []string
+	Profiles []ProfileView
 	Home     string // for the workspace picker ($HOME + subfolders)
 	Terminal http.Handler
-}
-
-// AgentNames extracts agent names for the /api/agents endpoint.
-func AgentNames(c config.Config) []string {
-	names := make([]string, 0, len(c.Agents))
-	for _, a := range c.Agents {
-		names = append(names, a.Name)
-	}
-	return names
 }
 
 // Handler builds the root handler. Everything except /ws/ sits behind
@@ -37,8 +27,8 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("/api/sessions", s.API.handleSessions)
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
-	protected.HandleFunc("/api/agents", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, s.Agents)
+	protected.HandleFunc("/api/profiles", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.Profiles)
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))

@@ -18,8 +18,9 @@ import (
 
 // SpawnSpec is the request to launch an agent.
 type SpawnSpec struct {
-	Agent string
-	Cwd   string
+	Agent   string
+	Cwd     string
+	Options map[string]any // per-spawn option overrides (profile keys only)
 }
 
 // Builder composes argv + env for a spawn.
@@ -44,13 +45,14 @@ var cleanBaseVars = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG"}
 
 // AgentLauncher builds commands from configured agents + a secret resolver.
 type AgentLauncher struct {
-	agents  map[string]config.AgentConfig
-	secrets secrets.Resolver
-	shell   string
+	agents     map[string]config.AgentConfig
+	secrets    secrets.Resolver
+	shell      string
+	optionDefs map[string]config.OptionDef
 }
 
-// New indexes agents and resolves a usable login shell.
-func New(agents []config.AgentConfig, resolver secrets.Resolver) *AgentLauncher {
+// New indexes agents + option definitions and resolves a usable login shell.
+func New(agents []config.AgentConfig, resolver secrets.Resolver, optionDefs []config.OptionDef) *AgentLauncher {
 	m := make(map[string]config.AgentConfig, len(agents))
 	for _, a := range agents {
 		m[a.Name] = a
@@ -59,7 +61,11 @@ func New(agents []config.AgentConfig, resolver secrets.Resolver) *AgentLauncher 
 				"already exposes profile env and can override injected values — use base=clean for contained/authoritative secrets", a.Name)
 		}
 	}
-	return &AgentLauncher{agents: m, secrets: resolver, shell: resolveShell()}
+	defs := make(map[string]config.OptionDef, len(optionDefs))
+	for _, o := range optionDefs {
+		defs[o.Key] = o
+	}
+	return &AgentLauncher{agents: m, secrets: resolver, shell: resolveShell(), optionDefs: defs}
 }
 
 // resolveShell returns a usable login shell: $SHELL if it's an executable that
@@ -94,7 +100,14 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	for k, v := range cfg.Env { // static per-agent overrides
 		env[k] = v
 	}
-	for _, name := range cfg.Secrets { // secrets by reference (win over env)
+
+	// Merge option defaults ⊕ per-spawn overrides (profile keys only). Apply the
+	// ENV part at the static-env layer — BEFORE secrets — so an injected secret
+	// always wins over an option env of the same name.
+	opts := l.mergeOptions(cfg, spec)
+	l.applyOptionEnv(opts, env)
+
+	for _, name := range cfg.Secrets { // secrets by reference (authoritative)
 		v, ok, err := l.secrets.Resolve(name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("launcher: resolving secret %q for agent %q: %w", name, cfg.Name, err)
@@ -108,11 +121,125 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 		env["TERM"] = "xterm-256color"
 	}
 
-	argv, err := l.argv(cfg, env["PATH"])
+	// Agent command + option FLAGS appended to the cmd slice, so for base=login
+	// they pass through shellJoin's single-quoting (never string-concatenated
+	// post-quote — that would be an injection vector).
+	cmd := append([]string{cfg.Bin}, cfg.Args...)
+	cmd = l.applyOptionFlags(opts, cmd)
+
+	argv, err := l.argv(cfg, cmd, env["PATH"])
 	if err != nil {
 		return nil, nil, err
 	}
 	return argv, envSlice(env), nil
+}
+
+// mergeOptions layers per-spawn overrides over the profile's option defaults,
+// keeping only keys the profile actually exposes.
+func (l *AgentLauncher) mergeOptions(cfg config.AgentConfig, spec SpawnSpec) map[string]any {
+	merged := make(map[string]any, len(cfg.Options))
+	for k, v := range cfg.Options {
+		merged[k] = v
+	}
+	for k, v := range spec.Options {
+		if _, ok := cfg.Options[k]; !ok {
+			continue // option not exposed by this profile → ignore
+		}
+		// Accept the override only if it's a valid value for the option's type;
+		// otherwise keep the (config-validated) profile default. An untrusted
+		// enum value never reaches the command.
+		if def, ok := l.optionDefs[k]; ok && validOptionValue(def, v) {
+			merged[k] = v
+		}
+	}
+	return merged
+}
+
+func validOptionValue(def config.OptionDef, v any) bool {
+	switch def.Type {
+	case config.OptBool:
+		_, ok := v.(bool)
+		return ok
+	case config.OptEnum:
+		s, ok := v.(string)
+		return ok && contains(def.Choices, s)
+	}
+	return false
+}
+
+// applyOptionEnv sets option-mapped env vars. Enum values are validated against
+// choices (an untrusted override with a bogus value is ignored, not injected).
+func (l *AgentLauncher) applyOptionEnv(opts map[string]any, env map[string]string) {
+	for _, k := range sortedKeys(opts) {
+		def, ok := l.optionDefs[k]
+		if !ok || def.Env == "" {
+			continue
+		}
+		switch def.Type {
+		case config.OptBool:
+			if truthy(opts[k]) {
+				env[def.Env] = "1"
+			}
+		case config.OptEnum:
+			if s, ok := opts[k].(string); ok && contains(def.Choices, s) {
+				env[def.Env] = s
+			}
+		}
+	}
+}
+
+// applyOptionFlags appends option-mapped flags to the agent command. Enum values
+// are validated against choices before use.
+func (l *AgentLauncher) applyOptionFlags(opts map[string]any, cmd []string) []string {
+	for _, k := range sortedKeys(opts) {
+		def, ok := l.optionDefs[k]
+		if !ok || def.Flag == "" {
+			continue
+		}
+		switch def.Type {
+		case config.OptBool:
+			if truthy(opts[k]) {
+				cmd = append(cmd, def.Flag)
+			}
+		case config.OptEnum:
+			if s, ok := opts[k].(string); ok && contains(def.Choices, s) {
+				cmd = append(cmd, def.Flag, s)
+			}
+		}
+	}
+	return cmd
+}
+
+func sortedKeys(m map[string]any) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
+}
+
+// truthy coerces a JSON-decoded value to bool without panicking on wrong types.
+func truthy(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t == "true" || t == "1"
+	case float64:
+		return t != 0
+	default:
+		return false
+	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *AgentLauncher) baseEnv(policy string) map[string]string {
@@ -157,8 +284,7 @@ func curatedBase() map[string]string {
 // agent keeps the process-group leadership the daemon's negative-pid kill needs;
 // zsh needs -i to source ~/.zshrc). Non-login resolves bin against the COMPOSED
 // PATH (not the daemon's), so a clean agent's custom PATH actually finds it.
-func (l *AgentLauncher) argv(cfg config.AgentConfig, pathv string) ([]string, error) {
-	cmd := append([]string{cfg.Bin}, cfg.Args...)
+func (l *AgentLauncher) argv(cfg config.AgentConfig, cmd []string, pathv string) ([]string, error) {
 	if cfg.BasePolicy() == config.BaseLogin {
 		flags := []string{"-l", "-c"}
 		if strings.Contains(filepath.Base(l.shell), "zsh") {
@@ -166,11 +292,11 @@ func (l *AgentLauncher) argv(cfg config.AgentConfig, pathv string) ([]string, er
 		}
 		return append(append([]string{l.shell}, flags...), "exec "+shellJoin(cmd)), nil
 	}
-	bin, err := lookPathIn(cfg.Bin, pathv)
+	bin, err := lookPathIn(cmd[0], pathv)
 	if err != nil {
-		return nil, fmt.Errorf("launcher: agent %q binary %q not found on its PATH", cfg.Name, cfg.Bin)
+		return nil, fmt.Errorf("launcher: agent %q binary %q not found on its PATH", cfg.Name, cmd[0])
 	}
-	return append([]string{bin}, cfg.Args...), nil
+	return append([]string{bin}, cmd[1:]...), nil
 }
 
 // lookPathIn resolves bin against the given PATH string (not the daemon's env).

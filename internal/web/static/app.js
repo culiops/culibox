@@ -193,16 +193,61 @@ async function refreshSessions() {
 }
 
 // --- spawn / kill ------------------------------------------------------------
-async function loadAgents() {
+let profiles = [];
+async function loadProfiles() {
   try {
-    const agents = await api("/api/agents");
-    $("agent").replaceChildren(...(agents || []).map((a) => {
-      const opt = document.createElement("option");
-      opt.value = a; opt.textContent = a;
-      return opt;
+    profiles = (await api("/api/profiles")) || [];
+    $("agent").replaceChildren(...profiles.map((p) => {
+      const o = document.createElement("option");
+      o.value = p.name; o.textContent = p.name;
+      return o;
     }));
+    renderOptions();
   } catch (_) {}
 }
+function currentProfile() {
+  return profiles.find((p) => p.name === $("agent").value);
+}
+// renderOptions builds a toggle per option the selected profile exposes
+// (checkbox for bool, select for enum), pre-set to the profile's default.
+function renderOptions() {
+  const p = currentProfile();
+  const opts = (p && p.options) || [];
+  $("options").replaceChildren(...opts.map((o) => {
+    const row = document.createElement("div");
+    row.className = "opt";
+    const lbl = document.createElement("label");
+    lbl.textContent = o.label || o.key;
+    lbl.htmlFor = "opt-" + o.key;
+    let ctrl;
+    if (o.type === "bool") {
+      ctrl = document.createElement("input");
+      ctrl.type = "checkbox";
+      ctrl.checked = o.value === true;
+    } else {
+      ctrl = document.createElement("select");
+      for (const c of o.choices || []) {
+        const co = document.createElement("option");
+        co.value = c; co.textContent = c;
+        if (c === o.value) co.selected = true;
+        ctrl.appendChild(co);
+      }
+    }
+    ctrl.id = "opt-" + o.key;
+    ctrl.dataset.key = o.key;
+    ctrl.dataset.type = o.type;
+    row.append(lbl, ctrl);
+    return row;
+  }));
+}
+function getOptions() {
+  const out = {};
+  for (const ctrl of $("options").querySelectorAll("[data-key]")) {
+    out[ctrl.dataset.key] = ctrl.dataset.type === "bool" ? ctrl.checked : ctrl.value;
+  }
+  return out;
+}
+$("agent").addEventListener("change", renderOptions);
 async function loadWorkspaces() {
   try {
     const ws = await api("/api/workspaces"); // [{label, path}] = $HOME + its subfolders
@@ -231,7 +276,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     const s = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: $("agent").value, cwd: getCwd() }),
+      body: JSON.stringify({ agent: $("agent").value, cwd: getCwd(), options: getOptions() }),
     });
     await refreshSessions();
     openSession(s.id);
@@ -246,7 +291,7 @@ async function killSession(id) {
 
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", () => panes.forEach((p) => p.fit()));
-loadAgents();
+loadProfiles();
 loadWorkspaces();
 refreshSessions();
 setInterval(refreshSessions, 3000);

@@ -50,7 +50,7 @@ func main() {
 		log.Printf("agent %q: base=%s", a.Name, a.BasePolicy())
 	}
 
-	mgr := session.NewManager(launcher.New(cfg.Agents, resolver), 128*1024, 5*time.Minute)
+	mgr := session.NewManager(launcher.New(cfg.Agents, resolver, cfg.Options), 128*1024, 5*time.Minute)
 
 	// Default working dir: config value if set, else $HOME.
 	home, _ := os.UserHomeDir()
@@ -62,7 +62,7 @@ func main() {
 	srv := &web.Server{
 		API:      &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Cookie:   cookie,
-		Agents:   web.AgentNames(cfg),
+		Profiles: web.Profiles(cfg),
 		Home:     home,
 		Terminal: terminal.NewAttachHandler(mgr.Get),
 	}

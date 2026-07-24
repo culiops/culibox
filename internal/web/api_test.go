@@ -12,21 +12,37 @@ import (
 )
 
 type mockSvc struct {
-	list       []session.Info
-	getOK      bool
-	killed     string
-	spawnInfo  session.Info
-	spawnErr   error
-	spawnedCwd string
+	list           []session.Info
+	getOK          bool
+	killed         string
+	spawnInfo      session.Info
+	spawnErr       error
+	spawnedCwd     string
+	spawnedOptions map[string]any
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
 func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedCwd = s.Cwd
+	m.spawnedOptions = s.Options
 	if m.spawnErr != nil {
 		return session.Info{}, m.spawnErr
 	}
 	return m.spawnInfo, nil
+}
+
+func TestAPI_ForwardsOptions(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions",
+		strings.NewReader(`{"agent":"claude","options":{"skip":true,"effort":"high"}}`)))
+	if rec.Code != 201 {
+		t.Fatalf("code %d", rec.Code)
+	}
+	if svc.spawnedOptions["skip"] != true || svc.spawnedOptions["effort"] != "high" {
+		t.Fatalf("options not forwarded: %v", svc.spawnedOptions)
+	}
 }
 func (m *mockSvc) Kill(id string) error { m.killed = id; return nil }
 func (m *mockSvc) Get(id string) (session.Info, bool) {
