@@ -79,11 +79,11 @@ func TestLoad_EnvModelFields(t *testing.T) {
 	}
 }
 
-func TestBasePolicy_DefaultsClean(t *testing.T) {
-	if (AgentConfig{}).BasePolicy() != BaseClean {
-		t.Fatal("empty base should default to clean")
+func TestBasePolicy_DefaultsInherit(t *testing.T) {
+	if (AgentConfig{}).BasePolicy() != BaseInherit {
+		t.Fatal("empty base should default to inherit")
 	}
-	if (AgentConfig{Base: "login"}).BasePolicy() != BaseLogin {
+	if (AgentConfig{Base: "clean"}).BasePolicy() != BaseClean {
 		t.Fatal("explicit base should be honored")
 	}
 }

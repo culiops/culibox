@@ -11,9 +11,9 @@ import (
 
 // Base env policies for a spawned agent.
 const (
-	BaseClean   = "clean"   // curated minimal env, no inherited secrets (default)
+	BaseInherit = "inherit" // daemon env minus Claude session markers (default)
+	BaseClean   = "clean"   // curated minimal env, no inherited secrets (opt-in lock-down)
 	BaseLogin   = "login"   // run via $SHELL -l so the profile/toolchain is sourced
-	BaseInherit = "inherit" // daemon env minus Claude session markers (escape hatch)
 )
 
 // SecretSource is one place secrets are resolved from, tried in order.
@@ -27,15 +27,17 @@ type AgentConfig struct {
 	Name    string            `json:"name"`
 	Bin     string            `json:"bin"`
 	Args    []string          `json:"args,omitempty"`
-	Base    string            `json:"base,omitempty"`    // clean(default)|login|inherit
+	Base    string            `json:"base,omitempty"`    // inherit(default)|clean|login
 	Env     map[string]string `json:"env,omitempty"`     // static per-agent overrides
 	Secrets []string          `json:"secrets,omitempty"` // names resolved via SecretSources
 }
 
-// BasePolicy returns the effective base, defaulting to clean.
+// BasePolicy returns the effective base, defaulting to inherit (agents get the
+// daemon's full env minus Claude session markers; set base:clean per agent to
+// contain one).
 func (a AgentConfig) BasePolicy() string {
 	if a.Base == "" {
-		return BaseClean
+		return BaseInherit
 	}
 	return a.Base
 }

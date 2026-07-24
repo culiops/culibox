@@ -11,24 +11,22 @@
 
   "agents": [
     {
-      "comment": "base=login: sources your profile so the toolchain (nvm node, etc.) is found. Convenient; NOT contained — your profile may export secrets.",
+      "comment": "default base=inherit: the agent gets the daemon's full env (minus Claude session markers) — behaves like your normal shell. No config needed.",
       "name": "claude",
-      "bin": "claude",
-      "base": "login"
+      "bin": "claude"
     },
     {
-      "comment": "base=clean (default): no inherited secrets. Give it an explicit PATH for its toolchain and grant only the secrets it needs by name.",
+      "comment": "a plain shell, same inherited env",
+      "name": "shell",
+      "bin": "bash"
+    },
+    {
+      "comment": "opt-in lock-down: base=clean gets a curated env with NO inherited secrets; give it an explicit PATH and grant only the secrets it needs by name.",
       "name": "claude-locked",
       "bin": "claude",
       "base": "clean",
       "env": { "PATH": "/home/you/.nvm/versions/node/v24/bin:/usr/local/bin:/usr/bin:/bin" },
       "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"]
-    },
-    {
-      "comment": "a plain login shell",
-      "name": "shell",
-      "bin": "bash",
-      "base": "login"
     }
   ]
 }
