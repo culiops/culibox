@@ -23,7 +23,7 @@ func (catBuilder) Build(launcher.SpawnSpec) ([]string, []string, error) {
 // input sent as binary (the way the browser does) echoes back as binary output,
 // and a text resize frame is accepted. Unknown ids 404.
 func TestAttachHandler(t *testing.T) {
-	m := session.NewManager(catBuilder{}, 1<<16, time.Minute)
+	m := session.NewManager(catBuilder{}, nil, 1<<16, time.Minute)
 	sess, err := m.Spawn(launcher.SpawnSpec{Agent: "cat"})
 	if err != nil {
 		t.Fatal(err)

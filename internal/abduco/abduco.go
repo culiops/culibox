@@ -81,7 +81,7 @@ func (a *Adapter) withSocketDir(env []string) []string {
 // already quotes argv, e.g. for base=login). The wrapper uses only shell
 // builtins (printf, exec) so a base=clean agent with no PATH still spawns — a
 // deliberate choice over tmp+mv, which needs external `mv`.
-func (a *Adapter) Create(id string, argv, env []string) error {
+func (a *Adapter) Create(id, cwd string, argv, env []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("abduco create %q: empty argv", id)
 	}
@@ -94,6 +94,7 @@ func (a *Adapter) Create(id string, argv, env []string) error {
 	const wrap = `printf 'inner=%s srv=%s' "$$" "$PPID" > "$0"; exec "$@"`
 	args := append([]string{"-n", id, "sh", "-c", wrap, pf}, argv...)
 	cmd := exec.Command(a.Bin, args...)
+	cmd.Dir = cwd // agent (via abduco → wrapper → exec) inherits the working dir
 	cmd.Env = a.withSocketDir(env)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("abduco create %q: %w: %s", id, err, strings.TrimSpace(string(out)))

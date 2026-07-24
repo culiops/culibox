@@ -26,7 +26,7 @@ func (b mockBuilder) Build(launcher.SpawnSpec) ([]string, []string, error) {
 }
 
 func TestManager_SpawnListGetKill(t *testing.T) {
-	m := NewManager(mockBuilder{argv: []string{"sh", "-c", "sleep 30"}}, 1<<16, time.Minute)
+	m := NewManager(mockBuilder{argv: []string{"sh", "-c", "sleep 30"}}, nil, 1<<16, time.Minute)
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "sh"})
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +51,7 @@ func TestManager_SpawnListGetKill(t *testing.T) {
 // TestManager_KillTerminatesProcessGroup proves the negative-pid kill reaches a
 // backgrounded grandchild — i.e. claude's children won't orphan.
 func TestManager_KillTerminatesProcessGroup(t *testing.T) {
-	m := NewManager(mockBuilder{argv: []string{"sh", "-c", "sleep 30 & echo $!; wait"}}, 1<<16, time.Minute)
+	m := NewManager(mockBuilder{argv: []string{"sh", "-c", "sleep 30 & echo $!; wait"}}, nil, 1<<16, time.Minute)
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "sh"})
 	if err != nil {
 		t.Fatal(err)

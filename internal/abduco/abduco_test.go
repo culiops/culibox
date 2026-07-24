@@ -27,7 +27,7 @@ func testAdapter(t *testing.T) *Adapter {
 func TestCreateListAttachKill(t *testing.T) {
 	a := testAdapter(t)
 	id := "bash-1"
-	if err := a.Create(id, []string{"sh", "-c", "sleep 300"}, os.Environ()); err != nil {
+	if err := a.Create(id, "", []string{"sh", "-c", "sleep 300"}, os.Environ()); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	t.Cleanup(func() { _ = a.Kill(id) })
@@ -71,7 +71,7 @@ func TestKillNoOrphanGrandchild(t *testing.T) {
 	// inner backgrounds a grandchild; kill of the inner GROUP must reap it too.
 	marker := filepath.Join(t.TempDir(), "gc.pid")
 	script := "sleep 300 & echo $! > " + marker + "; wait"
-	if err := a.Create(id, []string{"sh", "-c", script}, os.Environ()); err != nil {
+	if err := a.Create(id, "", []string{"sh", "-c", script}, os.Environ()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = a.Kill(id) })

@@ -53,7 +53,7 @@ func main() {
 	}
 
 	lnch := launcher.New(cfg.Agents, resolver, cfg.Options)
-	mgr := session.NewManager(lnch, 128*1024, 5*time.Minute)
+	mgr := session.NewManager(lnch, nil, 128*1024, 5*time.Minute)
 
 	// Default working dir: config value if set, else $HOME.
 	home, _ := os.UserHomeDir()
