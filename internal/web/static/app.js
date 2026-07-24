@@ -96,17 +96,33 @@ class Pane {
     } catch (_) { /* canvas fallback */ }
     this.fitAddon.fit();
     this.term.onData((d) => { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(d)); });
-    // Copy the selection with Ctrl+Shift+C (Linux/Win) or ⌘C (Mac). The canvas
-    // renderer's selection isn't a DOM selection, so native copy can't see it.
-    this.term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown" || e.code !== "KeyC") return true;
-      const isCopy = (e.ctrlKey && e.shiftKey) || e.metaKey;
-      if (!isCopy) return true;              // plain Ctrl+C must still send SIGINT
+    // Copy-on-select: finish a mouse selection → auto-copy (drag in a shell,
+    // Shift+drag inside a mouse-tracking TUI like claude). mouseup is a trusted
+    // gesture, required for execCommand('copy') over HTTP; bound on our own pane
+    // element (selection is built during mousemove, so getSelection is ready here).
+    termEl.addEventListener("mouseup", () => {
       const sel = this.term.getSelection();
-      if (!sel) return true;                 // nothing selected → don't clobber clipboard
-      e.preventDefault();                    // suppress DevTools (Ctrl+Shift+C) / native copy
-      copyText(sel, () => this.term.focus());
-      return false;
+      if (sel) copyText(sel, () => this.term.focus());
+    });
+    // One custom-key handler (a second attach would REPLACE this one):
+    //  - Copy: Ctrl+Shift+C (Win/Linux) or ⌘C (Mac) — preventDefault only here.
+    //  - Paste: make Ctrl+V paste cleanly on Win/Linux by suppressing xterm's
+    //    quoted-insert \x16 (return false) WITHOUT preventDefault, so the browser's
+    //    native paste still fires. ⌘V on Mac is already native-clean.
+    //  !altKey guards keep AltGr+V / AltGr+Shift+C (real chars on EU layouts) working.
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== "keydown") return true;
+      if (e.code === "KeyC" && !e.altKey && ((e.ctrlKey && e.shiftKey) || e.metaKey)) {
+        const sel = this.term.getSelection();
+        if (!sel) return true;               // nothing selected → let plain Ctrl+C SIGINT pass
+        e.preventDefault();                  // suppress DevTools (Ctrl+Shift+C) / native copy
+        copyText(sel, () => this.term.focus());
+        return false;
+      }
+      if (e.code === "KeyV" && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
+        return false;                        // suppress \x16; native paste event still fires
+      }
+      return true;
     });
 
     this.connect();
@@ -237,6 +253,20 @@ $("sidebar-toggle").onclick = () => {
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
 };
+
+// Copy/paste hint — platform-aware, dismissable (persisted). Lives outside the
+// sidebar so it survives the sidebar-hide toggle.
+(function initHint() {
+  const hint = $("hint");
+  if (!hint) return;
+  if (localStorage.getItem("hintDismissed") === "1") { hint.classList.add("hidden"); return; }
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  $("hint-text").textContent = `Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · Shift+drag to select inside TUIs (e.g. claude)`;
+  $("hint-x").onclick = () => {
+    hint.classList.add("hidden");
+    try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}
+  };
+})();
 
 // --- sidebar: session list ---------------------------------------------------
 function emptyLi(text) {
