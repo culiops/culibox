@@ -21,6 +21,8 @@ func (a ManagerService) Spawn(spec launcher.SpawnSpec) (session.Info, error) {
 
 func (a ManagerService) Kill(id string) error { return a.M.Kill(id) }
 
+func (a ManagerService) Rename(id, name string) error { return a.M.Rename(id, name) }
+
 func (a ManagerService) Get(id string) (session.Info, bool) {
 	sess, ok := a.M.Get(id)
 	if !ok {

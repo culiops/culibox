@@ -20,6 +20,7 @@ import (
 // SpawnSpec is the request to launch an agent.
 type SpawnSpec struct {
 	Agent   string
+	Name    string // optional display label; blank -> working-dir basename
 	Cwd     string
 	Options map[string]any // per-spawn option overrides (profile keys only)
 }

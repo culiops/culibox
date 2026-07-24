@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,7 @@ type Info struct {
 	Created time.Time `json:"created"`
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
+	Name    string    `json:"name"` // mutable display label (id is the stable key)
 }
 
 // Session owns one agent child process and its PTY.
@@ -83,6 +85,7 @@ type Session struct {
 	closeOnce    sync.Once
 	exited       bool
 	status       string // statusLive | statusExited | statusDetached (guarded by mu)
+	name         string // mutable display label (guarded by mu)
 	exitAt       time.Time
 	pumpFinished bool // pump drained the PTY fully (ring is complete)
 	removed      chan struct{}
@@ -101,7 +104,7 @@ type subscription struct {
 	stopped  bool // guarded by Session.mu (for the cond predicate)
 }
 
-func newSession(id, agent, cwd string, created time.Time, cmd *exec.Cmd, ptmx *os.File, ringCap int, backend Backend) *Session {
+func newSession(id, agent, name, cwd string, created time.Time, cmd *exec.Cmd, ptmx *os.File, ringCap int, backend Backend) *Session {
 	s := &Session{
 		ID: id, Agent: agent, Cwd: cwd, Created: created,
 		cmd: cmd, ptmx: ptmx,
@@ -111,6 +114,7 @@ func newSession(id, agent, cwd string, created time.Time, cmd *exec.Cmd, ptmx *o
 		detachedCh: make(chan struct{}),
 		rows:       24, cols: 80,
 		status:  statusLive,
+		name:    name,
 		backend: backend,
 	}
 	s.cond = sync.NewCond(&s.mu)
@@ -291,7 +295,14 @@ func (s *Session) Exited() bool {
 func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name}
+}
+
+// SetName updates the mutable display label.
+func (s *Session) SetName(name string) {
+	s.mu.Lock()
+	s.name = name
+	s.mu.Unlock()
 }
 
 // signal sends sig to the child's whole process group (negative pid). creack/pty
@@ -367,8 +378,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 
 	m.mu.Lock()
-	m.counters[spec.Agent]++
-	id := fmt.Sprintf("%s-%d", spec.Agent, m.counters[spec.Agent])
+	id := m.nextIDLocked(spec.Agent)
 	m.mu.Unlock()
 
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
@@ -377,14 +387,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 
 	created := time.Now()
+	name := deriveName(spec.Name, spec.Cwd, id)
 	m.mu.Lock()
-	sess := newSession(id, spec.Agent, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	sess := newSession(id, spec.Agent, name, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Cwd: spec.Cwd, Created: created})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -591,12 +602,84 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	if created.IsZero() {
 		created = time.Now()
 	}
+	name := md.Name
+	if name == "" { // pre-existing sidecar entries predate the Name field
+		name = deriveName("", md.Cwd, id)
+	}
 	m.mu.Lock()
-	sess := newSession(id, md.Agent, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	m.sessions[id] = sess
 	m.mu.Unlock()
 	sess.ForceRedraw()
 	m.watchRetention(id, sess)
+	return nil
+}
+
+// ErrInvalidName is returned by Rename for an empty name (safe to show the user).
+var ErrInvalidName = errors.New("session: name must not be empty")
+
+const maxNameLen = 64
+
+// nextIDLocked returns the next free stable id "<agent>-<n>" (caller holds mu).
+// The id is the immutable technical key (abduco session, pidfile, WS route); the
+// user-facing name is a separate mutable label (see deriveName / Rename).
+func (m *Manager) nextIDLocked(agent string) string {
+	for {
+		m.counters[agent]++
+		id := fmt.Sprintf("%s-%d", agent, m.counters[agent])
+		if _, exists := m.sessions[id]; exists {
+			continue
+		}
+		if m.backend != nil && m.backend.Alive(id) {
+			continue
+		}
+		return id
+	}
+}
+
+// deriveName picks the initial display label: an explicit custom name, else the
+// working dir's basename, else the id.
+func deriveName(custom, cwd, id string) string {
+	if n := strings.TrimSpace(custom); n != "" {
+		return capName(n)
+	}
+	if cwd != "" {
+		if b := filepath.Base(cwd); b != "" && b != "/" && b != "." && b != ".." {
+			return capName(b)
+		}
+	}
+	return id
+}
+
+// capName trims and caps to maxNameLen RUNES (not bytes) so a multibyte label
+// (e.g. Vietnamese) is never sliced mid-rune into invalid UTF-8.
+func capName(s string) string {
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > maxNameLen {
+		s = string(r[:maxNameLen])
+	}
+	return s
+}
+
+// Rename updates a session's display label (not its id). Persisted to the sidecar
+// so it survives a restart. Follows the release-before-act lock pattern: look up
+// under m.mu, then touch the leaf locks (Session.mu, sidecar.mu) unlocked.
+func (m *Manager) Rename(id, name string) error {
+	name = capName(name)
+	if name == "" {
+		return ErrInvalidName
+	}
+	m.mu.Lock()
+	s, ok := m.sessions[id]
+	sc := m.sidecar
+	m.mu.Unlock()
+	if !ok {
+		return ErrNotFound
+	}
+	s.SetName(name)
+	if sc != nil {
+		sc.rename(id, name)
+	}
 	return nil
 }
 

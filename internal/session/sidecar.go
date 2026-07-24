@@ -14,6 +14,7 @@ import (
 // are not — so they live in the sidecar.
 type sessionMeta struct {
 	Agent   string    `json:"agent"`
+	Name    string    `json:"name,omitempty"` // mutable display label
 	Cwd     string    `json:"cwd,omitempty"`
 	Created time.Time `json:"created"`
 }
@@ -66,6 +67,20 @@ func (sc *sidecar) remove(id string) {
 		return
 	}
 	delete(sc.m, id)
+	_ = sc.flushLocked()
+}
+
+// rename updates an entry's label. No-op if the id is absent, so a concurrent
+// retention-prune can never be resurrected into a stale entry (TOCTOU-safe).
+func (sc *sidecar) rename(id, name string) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	md, ok := sc.m[id]
+	if !ok {
+		return
+	}
+	md.Name = name
+	sc.m[id] = md
 	_ = sc.flushLocked()
 }
 

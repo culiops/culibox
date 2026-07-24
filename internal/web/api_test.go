@@ -19,6 +19,9 @@ type mockSvc struct {
 	spawnErr       error
 	spawnedCwd     string
 	spawnedOptions map[string]any
+	renamedID      string
+	renamedName    string
+	renameErr      error
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -46,7 +49,52 @@ func TestAPI_ForwardsOptions(t *testing.T) {
 }
 func (m *mockSvc) Kill(id string) error { m.killed = id; return nil }
 func (m *mockSvc) Get(id string) (session.Info, bool) {
-	return session.Info{ID: id}, m.getOK
+	return session.Info{ID: id, Name: m.renamedName}, m.getOK
+}
+func (m *mockSvc) Rename(id, name string) error {
+	m.renamedID, m.renamedName = id, name
+	return m.renameErr
+}
+
+func TestAPI_Rename(t *testing.T) {
+	svc := &mockSvc{getOK: true}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("PATCH", "/api/sessions/x-1",
+		strings.NewReader(`{"name":"new"}`)))
+	if rec.Code != 200 {
+		t.Fatalf("code %d", rec.Code)
+	}
+	if svc.renamedID != "x-1" || svc.renamedName != "new" {
+		t.Fatalf("rename not forwarded: id=%q name=%q", svc.renamedID, svc.renamedName)
+	}
+	var info session.Info
+	_ = json.NewDecoder(rec.Body).Decode(&info)
+	if info.Name != "new" {
+		t.Fatalf("body name=%q want new", info.Name)
+	}
+}
+
+func TestAPI_RenameUnknown(t *testing.T) {
+	svc := &mockSvc{renameErr: session.ErrNotFound}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("PATCH", "/api/sessions/nope",
+		strings.NewReader(`{"name":"x"}`)))
+	if rec.Code != 404 {
+		t.Fatalf("code %d want 404", rec.Code)
+	}
+}
+
+func TestAPI_RenameEmpty(t *testing.T) {
+	svc := &mockSvc{renameErr: session.ErrInvalidName}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("PATCH", "/api/sessions/x-1",
+		strings.NewReader(`{"name":"  "}`)))
+	if rec.Code != 400 {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
 }
 
 func TestAPI_ListSpawnDelete(t *testing.T) {

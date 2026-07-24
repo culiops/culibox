@@ -19,6 +19,7 @@ type SessionService interface {
 	List() []session.Info
 	Spawn(launcher.SpawnSpec) (session.Info, error)
 	Kill(id string) error
+	Rename(id, name string) error
 	Get(id string) (session.Info, bool)
 }
 
@@ -46,6 +47,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPost:
 		var req struct {
 			Agent   string         `json:"agent"`
+			Name    string         `json:"name"`
 			Cwd     string         `json:"cwd"`
 			Options map[string]any `json:"options"`
 		}
@@ -57,7 +59,9 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		if cwd == "" {
 			cwd = a.DefaultCwd // default working dir ($HOME unless configured)
 		}
-		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Cwd: cwd, Options: req.Options})
+		// Name is a free-form display label (blank → working-dir default), so a
+		// spawn no longer fails on the name.
+		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options})
 		if err != nil {
 			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
 			writeErr(w, http.StatusBadRequest, "could not start session")
@@ -76,21 +80,46 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "id required")
 		return
 	}
-	if r.Method != http.MethodDelete {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if _, ok := a.Sessions.Get(id); !ok {
-		writeErr(w, http.StatusNotFound, "no such session")
-		return
-	}
-	if err := a.Sessions.Kill(id); err != nil {
-		if errors.Is(err, session.ErrNotFound) { // pruned between Get and Kill
+	switch r.Method {
+	case http.MethodDelete:
+		if _, ok := a.Sessions.Get(id); !ok {
 			writeErr(w, http.StatusNotFound, "no such session")
 			return
 		}
-		writeErr(w, http.StatusInternalServerError, "kill failed")
-		return
+		if err := a.Sessions.Kill(id); err != nil {
+			if errors.Is(err, session.ErrNotFound) { // pruned between Get and Kill
+				writeErr(w, http.StatusNotFound, "no such session")
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, "kill failed")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case http.MethodPatch:
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad request")
+			return
+		}
+		if err := a.Sessions.Rename(id, req.Name); err != nil {
+			switch {
+			case errors.Is(err, session.ErrNotFound):
+				writeErr(w, http.StatusNotFound, "no such session")
+			case errors.Is(err, session.ErrInvalidName):
+				writeErr(w, http.StatusBadRequest, err.Error())
+			default:
+				writeErr(w, http.StatusInternalServerError, "rename failed")
+			}
+			return
+		}
+		if info, ok := a.Sessions.Get(id); ok {
+			writeJSON(w, http.StatusOK, info)
+		} else { // pruned between Rename and Get — renamed, but already gone
+			w.WriteHeader(http.StatusNoContent)
+		}
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
-	w.WriteHeader(http.StatusNoContent)
 }

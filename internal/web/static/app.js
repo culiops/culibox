@@ -19,7 +19,7 @@ let cols = 1;
 
 // --- Pane: one xterm.js terminal bound to one session's /ws/{id} -------------
 class Pane {
-  constructor(id) {
+  constructor(id, name) {
     this.id = id;
     this.closed = false;
     this.retries = 0;
@@ -31,7 +31,8 @@ class Pane {
     head.className = "pane-head";
     const pid = document.createElement("span");
     pid.className = "pid";
-    pid.textContent = id;
+    pid.textContent = name || id;
+    this.pid = pid;
     this.status = document.createElement("span");
     this.status.className = "st";
     this.status.textContent = "…";
@@ -95,6 +96,7 @@ class Pane {
   }
 
   setStatus(t) { this.status.textContent = t; }
+  setTitle(name) { this.pid.textContent = name || this.id; }
 
   fit() {
     try { this.fitAddon.fit(); this.sendResize(); } catch (_) {}
@@ -136,9 +138,9 @@ function renderGrid() {
   requestAnimationFrame(() => panes.forEach((p) => p.fit()));
 }
 
-function openSession(id) {
+function openSession(id, name) {
   if (panes.has(id)) { panes.get(id).term.focus(); return; }
-  const pane = new Pane(id);
+  const pane = new Pane(id, name);
   panes.set(id, pane);
   $("grid").appendChild(pane.el);
   renderGrid();
@@ -164,10 +166,12 @@ function emptyLi(text) {
 function renderSession(s) {
   const li = document.createElement("li");
   if (panes.has(s.id)) li.classList.add("open");
+  li.title = s.id; // tiebreaker when two labels match
   const name = document.createElement("span");
   name.className = "name";
-  name.textContent = s.id;
-  name.onclick = () => openSession(s.id);
+  name.textContent = s.name || s.id;
+  name.onclick = () => openSession(s.id, s.name);
+  name.ondblclick = (e) => { e.stopPropagation(); startRename(li, name, s); };
   li.appendChild(name);
   if (s.exited) {
     const badge = document.createElement("span");
@@ -183,7 +187,52 @@ function renderSession(s) {
   li.appendChild(kill);
   return li;
 }
+// editing guards the inline rename: while true, the background poll must NOT
+// re-render the list (that would destroy the input + focus) and a stray click
+// must not open a pane.
+let editing = false;
+
+// startRename swaps the name span for an input; Enter/blur commit, Esc cancels.
+// A single finish(commit) guarded by `finished` prevents Enter+blur double-commit
+// and Esc+blur commit-on-cancel.
+function startRename(li, span, s) {
+  if (editing) return;
+  editing = true;
+  const cur = s.name || s.id;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "ren-input";
+  input.value = cur;
+  let finished = false;
+  const finish = async (commit) => {
+    if (finished) return;
+    finished = true;
+    editing = false;
+    const v = input.value.trim();
+    if (commit && v && v !== cur) {
+      try {
+        await api("/api/sessions/" + encodeURIComponent(s.id), {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: v }),
+        });
+        panes.get(s.id)?.setTitle(v);
+      } catch (e) { alert("Rename failed: " + e.message); }
+    }
+    refreshSessions();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  };
+  input.onblur = () => finish(true);
+  li.replaceChild(input, span);
+  input.focus();
+  input.select();
+}
+
 async function refreshSessions() {
+  if (editing) return; // don't clobber an in-progress inline rename
   const ul = $("sessions");
   let sessions;
   try { sessions = await api("/api/sessions"); }
@@ -378,10 +427,11 @@ $("spawn").addEventListener("submit", async (ev) => {
     const s = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: $("agent").value, cwd: getCwd(), options: getOptions() }),
+      body: JSON.stringify({ agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() }),
     });
+    $("sess-name").value = "";
     await refreshSessions();
-    openSession(s.id);
+    openSession(s.id, s.name);
   } catch (e) { alert("Spawn failed: " + e.message); }
 });
 async function killSession(id) {

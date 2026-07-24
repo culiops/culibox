@@ -150,7 +150,7 @@ func TestReaperExitedFinalizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	fb.alive["s-1"] = false // agent already gone
-	s := newSession("s-1", "test", "", time.Now(), cmd, ptmx, 1<<16, fb)
+	s := newSession("s-1", "test", "s-1", "", time.Now(), cmd, ptmx, 1<<16, fb)
 	select {
 	case <-s.Done():
 	case <-time.After(2 * time.Second):
@@ -171,7 +171,7 @@ func TestReaperDetachedDoesNotFinalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := newSession("s-1", "test", "", time.Now(), cmd, ptmx, 1<<16, fb)
+	s := newSession("s-1", "test", "s-1", "", time.Now(), cmd, ptmx, 1<<16, fb)
 	_ = cmd.Process.Kill() // attach dies
 	waitStatus(t, s, statusDetached, 2*time.Second)
 	select {

@@ -21,7 +21,7 @@ func startProc(t *testing.T, ringCap int, name string, args ...string) *Session 
 		t.Fatalf("start pty: %v", err)
 	}
 	t.Cleanup(func() { _ = ptmx.Close() })
-	return newSession("test-1", "test", "", time.Now(), cmd, ptmx, ringCap, nil)
+	return newSession("test-1", "test", "test-1", "", time.Now(), cmd, ptmx, ringCap, nil)
 }
 
 func readUntil(out <-chan []byte, want string, d time.Duration) (string, bool) {
