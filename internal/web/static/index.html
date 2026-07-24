@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Console</title>
+  <link rel="stylesheet" href="/xterm/xterm.css">
+  <style>
+    :root {
+      --bg: #0d1117; --panel: #161b22; --border: #30363d;
+      --fg: #e6edf3; --muted: #8b949e; --accent: #2f81f7; --danger: #f85149;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      background: var(--bg); color: var(--fg);
+      font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; height: 100vh;
+    }
+    header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+    }
+    header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .2px; }
+    header .spacer { flex: 1; }
+    header .hint { color: var(--muted); font-size: 12px; }
+    #layout { flex: 1; display: flex; min-height: 0; }
+    #sidebar {
+      width: 280px; flex-shrink: 0; border-right: 1px solid var(--border);
+      background: var(--panel); display: flex; flex-direction: column; min-height: 0;
+    }
+    #spawn { padding: 14px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+    #spawn label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+    #spawn select, #spawn input, #spawn button, .btn {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit;
+    }
+    #spawn button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; font-weight: 600; }
+    #spawn button:hover { filter: brightness(1.08); }
+    #sessions { list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; }
+    #sessions li {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    }
+    #sessions li:hover { background: #1f2630; }
+    #sessions li.active { background: #1f6feb2e; outline: 1px solid var(--accent); }
+    #sessions .name { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+    #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
+    #sessions .kill:hover { background: #f851492e; border-radius: 4px; }
+    #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
+    #main { flex: 1; min-width: 0; position: relative; background: #000; }
+    #term { position: absolute; inset: 0; padding: 6px; }
+    #placeholder {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 14px; pointer-events: none;
+    }
+    #status { position: absolute; top: 8px; right: 12px; font-size: 11px; color: var(--muted); z-index: 5; }
+    @media (max-width: 700px) {
+      #layout { flex-direction: column; }
+      #sidebar { width: 100%; max-height: 42vh; border-right: none; border-bottom: 1px solid var(--border); }
+      #main { min-height: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="dot"></span>
+    <h1>Agent Console</h1>
+    <span class="spacer"></span>
+    <span class="hint">tmux &middot; in-process xterm.js</span>
+  </header>
+  <div id="layout">
+    <aside id="sidebar">
+      <form id="spawn">
+        <div>
+          <label for="agent">Agent</label>
+          <select id="agent"></select>
+        </div>
+        <div>
+          <label for="cwd">Working dir (optional)</label>
+          <input id="cwd" type="text" placeholder="/home/…" autocomplete="off">
+        </div>
+        <button type="submit">Spawn session</button>
+      </form>
+      <ul id="sessions"><li class="empty">Loading…</li></ul>
+    </aside>
+    <main id="main">
+      <div id="status"></div>
+      <div id="term"></div>
+      <div id="placeholder">Select or spawn a session to open its terminal</div>
+    </main>
+  </div>
+  <script src="/xterm/xterm.js"></script>
+  <script src="/xterm/addon-fit.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
