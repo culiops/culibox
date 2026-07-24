@@ -77,27 +77,27 @@ class ViewerTab {
 
   renderMarkdown(text) {
     const dir = this.path.slice(0, this.path.lastIndexOf("/") + 1);
-    let html;
+    // Markdown can be semi-untrusted (agent-written reports, cloned-repo READMEs),
+    // so require DOMPurify to render HTML; without it, fall back to plain code.
+    if (!(window.marked && marked.parse) || !window.DOMPurify) { this.renderCode(text, "markdown"); return; }
+    let frag;
     try {
-      if (window.marked && marked.parse) {
-        marked.setOptions({ breaks: false, gfm: true }); // NOTE: marked v12 removed the `highlight` option
-        html = marked.parse(text);
-      } else { this.renderCode(text, "markdown"); return; }
+      marked.setOptions({ breaks: false, gfm: true }); // NOTE: marked v12 removed the `highlight` option
+      // DOMPurify handles every XSS vector robustly (javascript:/data: schemes incl.
+      // control-char obfuscation, mXSS, on* handlers, svg/math) — a hand-rolled
+      // strip-and-reserialize sanitizer is not safe against these.
+      frag = DOMPurify.sanitize(marked.parse(text), { RETURN_DOM_FRAGMENT: true });
     } catch (_) { this.renderCode(text, "markdown"); return; }
+    // rewrite relative <img src> against the file's dir BEFORE attaching (no wasted 404 fetch)
+    frag.querySelectorAll("img").forEach((img) => {
+      const src = img.getAttribute("src") || "";
+      if (!/^(https?:|data:|\/)/.test(src)) img.setAttribute("src", "/api/fs/read?path=" + encodeURIComponent(dir + src));
+    });
+    // marked v12 dropped the highlight option — highlight fenced blocks here (hljs v11 API).
+    if (window.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });
     const wrap = document.createElement("div");
     wrap.className = "md-body";
-    wrap.innerHTML = sanitizeHtml(html);
-    // marked v12 dropped the highlight option — highlight fenced blocks here (hljs v11 API).
-    if (window.hljs) {
-      wrap.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });
-    }
-    // resolve relative <img src> against the file's directory via /api/fs/read
-    wrap.querySelectorAll("img").forEach((img) => {
-      const src = img.getAttribute("src") || "";
-      if (!/^(https?:|data:|\/)/.test(src)) {
-        img.src = "/api/fs/read?path=" + encodeURIComponent(dir + src);
-      }
-    });
+    wrap.appendChild(frag);
     this.content.replaceChildren(wrap);
   }
 
@@ -113,18 +113,4 @@ class ViewerTab {
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-}
-
-function sanitizeHtml(html) {
-  const tpl = document.createElement("template");
-  tpl.innerHTML = html;
-  tpl.content.querySelectorAll("script, style, iframe, object, embed").forEach((n) => n.remove());
-  tpl.content.querySelectorAll("*").forEach((el) => {
-    [...el.attributes].forEach((a) => {
-      const n = a.name.toLowerCase();
-      if (n.startsWith("on")) el.removeAttribute(a.name);
-      if ((n === "href" || n === "src") && /^\s*javascript:/i.test(a.value)) el.removeAttribute(a.name);
-    });
-  });
-  return tpl.innerHTML;
 }

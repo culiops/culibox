@@ -152,6 +152,10 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	if ctype, ok := imageExt[ext]; ok {
 		w.Header().Set("Content-Type", ctype)
 		w.Header().Set("Cache-Control", "no-cache")
+		// Defense-in-depth: don't let the browser MIME-sniff, and sandbox the
+		// response so an SVG opened as a top-level navigation can't run script.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "sandbox")
 		http.ServeContent(w, r, filepath.Base(p), info.ModTime(), f)
 		return
 	}
