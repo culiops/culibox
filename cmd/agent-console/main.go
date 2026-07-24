@@ -39,10 +39,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("auth: %v", err)
 	}
-	cookie, err := auth.NewCookieAuth()
-	if err != nil {
-		log.Fatalf("auth: %v", err)
-	}
 
 	resolver, err := secrets.New(cfg.SecretSources)
 	if err != nil {
@@ -68,6 +64,13 @@ func main() {
 	dataDir := cfg.DataDir
 	if dataDir == "" {
 		dataDir = filepath.Join(home, ".local", "share", "agent-console")
+	}
+	// WS auth cookie secret, persisted under dataDir so a daemon restart does not
+	// invalidate live browsers' cookies (the /ws route is cookie-only gated; a
+	// per-process secret would 401 the client's auto-reconnect forever).
+	cookie, err := auth.NewCookieAuth(filepath.Join(dataDir, "cookie.secret"))
+	if err != nil {
+		log.Fatalf("auth: %v", err)
 	}
 	abducoBin := cfg.AbducoBin
 	if abducoBin == "" {

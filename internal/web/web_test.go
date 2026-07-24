@@ -14,7 +14,7 @@ import (
 // instead requires the signed cookie. Without the cookie it must 401 before
 // touching the terminal handler.
 func TestWSRouteRequiresCookieNotBasicAuth(t *testing.T) {
-	ca, _ := auth.NewCookieAuth()
+	ca, _ := auth.NewCookieAuth("")
 	termHit := false
 	s := &Server{
 		API:      &API{Sessions: &mockSvc{}},
@@ -35,7 +35,7 @@ func TestWSRouteRequiresCookieNotBasicAuth(t *testing.T) {
 }
 
 func TestAPIRouteRequiresBasicAuth(t *testing.T) {
-	ca, _ := auth.NewCookieAuth()
+	ca, _ := auth.NewCookieAuth("")
 	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler("u", "p")
@@ -59,7 +59,7 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 // carry Cache-Control: no-cache so a normal reload always shows the latest;
 // the vendored /xterm/* bundle stays cacheable.
 func TestStaticNoCacheOnAppFiles(t *testing.T) {
-	ca, _ := auth.NewCookieAuth()
+	ca, _ := auth.NewCookieAuth("")
 	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler("u", "p")
