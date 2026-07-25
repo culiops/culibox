@@ -27,6 +27,10 @@ class TerminalTab {
       cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace",
       fontSize: (typeof fontPrefs !== "undefined" ? fontPrefs.get("terminal") : 13),
       scrollback: 5000, theme: { background: "#000000" },
+      // xterm defaults to 1 line per wheel notch, which crawls over a 5000-line
+      // scrollback. 3 matches vim's default. Alt+wheel multiplies on top of this
+      // (fastScrollSensitivity), so the fast gear stays proportional at 15.
+      scrollSensitivity: 3,
     });
     this.fitAddon = new FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
