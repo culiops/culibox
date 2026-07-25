@@ -25,7 +25,8 @@ class TerminalTab {
 
     this.term = new Terminal({
       cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace",
-      fontSize: 13, scrollback: 5000, theme: { background: "#000000" },
+      fontSize: (typeof fontPrefs !== "undefined" ? fontPrefs.get("terminal") : 13),
+      scrollback: 5000, theme: { background: "#000000" },
     });
     this.fitAddon = new FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
@@ -132,6 +133,13 @@ class TerminalTab {
   }
 
   fit() { try { this.fitAddon.fit(); this.sendResize(); } catch (_) {} }
+
+  // Font size: setFontSize applies a size and re-fits (xterm recomputes cell
+  // geometry from options.fontSize). zoom/resetZoom drive transient live zoom.
+  setFontSize(px) { this.term.options.fontSize = px; this.fit(); }
+  zoom(delta) { this.setFontSize(fontPrefs.clamp(this.term.options.fontSize + delta)); }
+  resetZoom() { this.setFontSize(fontPrefs.get("terminal")); }
+
   sendResize() {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "resize", rows: this.term.rows, cols: this.term.cols }));

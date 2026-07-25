@@ -117,6 +117,14 @@ function focusedTerminal() {
   const t = focusedCell && focusedCell.activeTab;
   return t && t.kind === "terminal" ? t : null;
 }
+// eachTerminal / eachViewer iterate live tabs across all cells — used by fontPrefs
+// to apply a changed default to every open terminal / viewer.
+function eachTerminal(cb) {
+  for (const c of cells) for (const t of c.tabs) if (t.kind === "terminal") cb(t);
+}
+function eachViewer(cb) {
+  for (const c of cells) for (const t of c.tabs) if (t.kind === "viewer") cb(t);
+}
 // syncFocusedTree re-roots the file tree to the focused session's cwd. No-op if
 // the focused tab isn't a terminal or its cwd hasn't been fetched yet (the
 // terminal calls this again once its cwd resolves).
