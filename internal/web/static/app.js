@@ -239,9 +239,17 @@ let optionDefs = [];
 async function loadOptionDefs() {
   try { optionDefs = (await api("/api/options")) || []; } catch (_) {}
 }
+// optApplies mirrors config.OptionDef.AppliesTo: no bins → all agents; else match
+// the bin or its basename. Keeps the editor's option list scoped to the agent.
+function optApplies(o, bin) {
+  if (!o.bins || o.bins.length === 0) return true;
+  const base = (bin || "").split("/").pop();
+  return o.bins.includes(bin) || o.bins.includes(base);
+}
 function renderPfOptions(current) {
   current = current || {};
-  $("pf-options").replaceChildren(...optionDefs.map((o) => {
+  const bin = $("pf-bin").value.trim();
+  $("pf-options").replaceChildren(...optionDefs.filter((o) => optApplies(o, bin)).map((o) => {
     const row = document.createElement("div");
     row.className = "pf-row";
     const lbl = document.createElement("label");
@@ -334,6 +342,8 @@ function renderEditable() {
 }
 $("pf-save").addEventListener("click", saveProfile);
 $("pf-new").addEventListener("click", newProfile);
+// Re-scope the option list when the agent binary changes.
+$("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
 async function loadWorkspaces() {
   try {
     const ws = await api("/api/workspaces"); // [{label, path}] = $HOME + its subfolders
