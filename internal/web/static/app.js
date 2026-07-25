@@ -432,6 +432,23 @@ loadWorkspaces();
 loadOptionDefs().then(newProfile);
 refreshSessions();
 initFileTree();
+
+// Env signal: show a colored DEV/PROD badge + top strip + tab title, so the
+// active environment is unmistakable. Config-driven via /api/meta; empty label
+// (no env configured) leaves the UI unchanged.
+(async function initEnv() {
+  try {
+    const meta = await api("/api/meta");
+    if (!meta || !meta.env_label) return;
+    const badge = $("env-badge"), strip = $("env-strip");
+    badge.textContent = meta.env_label;
+    if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
+    badge.hidden = false;
+    strip.hidden = false;
+    document.title = "[" + meta.env_label + "] Agent Console";
+  } catch (_) { /* no badge on error */ }
+})();
+
 fontPrefs.applyCssVars();
 initSettings();
 setInterval(refreshSessions, 3000);

@@ -25,6 +25,10 @@
     }
     header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
     header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+    #env-strip { height: 3px; width: 100%; flex-shrink: 0; }
+    #env-strip[hidden] { display: none; }
+    #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: 6px; }
+    #env-badge[hidden] { display: none; }
     #sidebar-toggle { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; }
     #sidebar-toggle:hover { color: var(--fg); border-color: var(--accent); }
     .sidebar-hidden #sidebar { display: none; }
@@ -177,10 +181,12 @@
   <script>/* apply persisted font sizes before first paint (no flash) */try{var _fp=JSON.parse(localStorage.getItem('agent-console:fontPrefs')||'{}');var _d={code:['--fs-code',12.5],markdown:['--fs-md',14],filetree:['--fs-tree',12]};for(var _k in _d){var _v=Number(_fp[_k]);if(!isFinite(_v))_v=_d[_k][1];_v=Math.min(32,Math.max(8,_v));document.documentElement.style.setProperty(_d[_k][0],_v+'px');}}catch(e){}</script>
 </head>
 <body>
+  <div id="env-strip" hidden></div>
   <header>
     <button id="sidebar-toggle" title="Hide/show sidebar" aria-label="Toggle sidebar">☰</button>
     <span class="dot"></span>
     <h1>Agent Console</h1>
+    <span id="env-badge" hidden></span>
     <span class="spacer"></span>
     <div class="layouts" id="layouts">
       <button data-cols="1">1</button>
