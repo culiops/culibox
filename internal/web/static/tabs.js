@@ -31,12 +31,16 @@ class Cell {
   }
 
   activate(tab) {
-    if (this.activeTab === tab) { this.renderBody(); tab.onShow?.(); return; }
-    if (this.activeTab) this.activeTab.onHide?.();
-    this.activeTab = tab;
-    this.renderBar();
-    this.renderBody();
-    tab.onShow?.();
+    if (this.activeTab === tab) {
+      this.renderBody(); tab.onShow?.();
+    } else {
+      if (this.activeTab) this.activeTab.onHide?.();
+      this.activeTab = tab;
+      this.renderBar();
+      this.renderBody();
+      tab.onShow?.();
+    }
+    if (this === focusedCell) syncFocusedTree(); // tree follows the focused session
   }
 
   closeTab(tab) {
@@ -101,6 +105,20 @@ function setFocusedCell(cell) {
   if (focusedCell === cell) return;
   focusedCell = cell;
   cells.forEach((c) => c.renderBar());
+  syncFocusedTree(); // tree follows the focused session
+}
+
+// focusedTerminal returns the terminal tab active in the focused cell, or null.
+function focusedTerminal() {
+  const t = focusedCell && focusedCell.activeTab;
+  return t && t.kind === "terminal" ? t : null;
+}
+// syncFocusedTree re-roots the file tree to the focused session's cwd. No-op if
+// the focused tab isn't a terminal or its cwd hasn't been fetched yet (the
+// terminal calls this again once its cwd resolves).
+function syncFocusedTree() {
+  const t = focusedTerminal();
+  if (t && typeof syncTreeToSession === "function") syncTreeToSession(t.cwd, t.id);
 }
 
 function ensureCells(n) {

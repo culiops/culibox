@@ -50,10 +50,14 @@ class TerminalTab {
       return true;
     });
 
-    // best-effort cwd for resolving relative paths clicked in output
+    // cwd: used to resolve relative clicked paths AND to root the file tree.
+    // Fetched async, so re-sync the tree once it arrives (if this is the focused session).
     api("/api/sessions").then((list) => {
       const s = (list || []).find((x) => x.id === id);
-      if (s && s.cwd) this.cwd = s.cwd;
+      if (s && s.cwd) {
+        this.cwd = s.cwd;
+        if (typeof syncFocusedTree === "function") syncFocusedTree();
+      }
     }).catch(() => {});
 
     // Make path-like tokens in terminal output clickable → open in a viewer.
