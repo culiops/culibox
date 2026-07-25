@@ -17,6 +17,10 @@ class ViewerTab {
     this.auto = false;      // auto-reload poll on/off (per viewer, opt-in)
     this.timer = null;
     this.lastContent = null; // last rendered text, to skip no-op re-renders
+    this.fontPx = null;     // transient live-zoom size (null = follow the global default)
+    const ext0 = extOf(path);
+    // which CSS var this viewer's text reads (null for images → zoom is a no-op)
+    this.zoomVar = IMAGE_EXTS.has(ext0) ? null : (MD_EXTS.has(ext0) ? "--fs-md" : "--fs-code");
 
     this.el = document.createElement("div");
     this.el.className = "tab-body viewer-body";
@@ -31,6 +35,15 @@ class ViewerTab {
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
       auto.onclick = () => this.toggleAuto(auto);
       this.toolbar.append(auto);
+    }
+    if (this.zoomVar) { // text viewers only — images have nothing to size
+      const zout = document.createElement("button");
+      zout.className = "viewer-zoom zout"; zout.textContent = "A−"; zout.title = "Smaller (Ctrl+-)";
+      zout.onclick = () => this.zoom(-fontPrefs.STEP);
+      const zin = document.createElement("button");
+      zin.className = "viewer-zoom zin"; zin.textContent = "A+"; zin.title = "Bigger (Ctrl+=)";
+      zin.onclick = () => this.zoom(+fontPrefs.STEP);
+      this.toolbar.append(zout, zin);
     }
     const pathLbl = document.createElement("span");
     pathLbl.className = "viewer-path"; pathLbl.textContent = path; pathLbl.title = path;
@@ -51,6 +64,20 @@ class ViewerTab {
     btn.classList.toggle("on", this.auto);
     if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
     else { clearInterval(this.timer); this.timer = null; }
+  }
+  // Live zoom (transient): override the pane-local CSS var so only this viewer's
+  // text resizes; the var lives on this.el, an ancestor of the rendered content,
+  // so it survives re-renders (reload / auto-reload) automatically. Not persisted.
+  zoom(delta) {
+    if (!this.zoomVar) return;
+    const base = this.fontPx ?? fontPrefs.get(this.zoomVar === "--fs-md" ? "markdown" : "code");
+    this.fontPx = fontPrefs.clamp(base + delta);
+    this.el.style.setProperty(this.zoomVar, this.fontPx + "px");
+  }
+  resetZoom() {
+    if (!this.zoomVar) return;
+    this.fontPx = null;
+    this.el.style.removeProperty(this.zoomVar);
   }
   setStatus(t) { this.statusText = t; this.onUpdate?.(); }
 

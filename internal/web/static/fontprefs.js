@@ -50,15 +50,20 @@ const fontPrefs = (function () {
     if (typeof eachTerminal === "function") eachTerminal((t) => t.setFontSize(prefs.terminal));
   }
 
-  // set a global default for one surface → persist + re-apply everywhere. Viewer
-  // re-baseline (clearing transient zoom on that surface) is added in Task 4.
+  // set a global default for one surface → persist + re-apply everywhere, and
+  // re-baseline (clear transient live zoom) on panes of that surface for predictability.
   function set(surface, px) {
     const c = clamp(px);
     if (c === null || !(surface in prefs)) return;
     prefs[surface] = c;
     save();
-    if (surface === "terminal") applyTerminals();
-    else applyCssVars();
+    if (surface === "terminal") {
+      applyTerminals(); // overwrites each terminal's size → clears their live zoom
+    } else {
+      applyCssVars();
+      const v = CSS_VAR[surface];
+      if (typeof eachViewer === "function") eachViewer((vt) => { if (vt.zoomVar === v) vt.resetZoom(); });
+    }
   }
 
   function reset() {
@@ -66,6 +71,7 @@ const fontPrefs = (function () {
     save();
     applyCssVars();
     applyTerminals();
+    if (typeof eachViewer === "function") eachViewer((vt) => vt.resetZoom());
   }
 
   return { DEFAULTS, BOUNDS, STEP, CSS_VAR, clamp, get, set, reset, applyCssVars, applyTerminals };

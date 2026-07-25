@@ -423,3 +423,21 @@ initFileTree();
 fontPrefs.applyCssVars();
 initSettings();
 setInterval(refreshSessions, 3000);
+
+// Live zoom the focused pane: Ctrl/Cmd + '='/'+' bigger, '-'/'_' smaller, '0' reset.
+// Capture phase + stopPropagation so xterm (which listens on its textarea) never
+// sees the combo; preventDefault stops the browser's own page zoom.
+document.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  let delta = null, doReset = false;
+  if (e.key === "=" || e.key === "+") delta = +fontPrefs.STEP;
+  else if (e.key === "-" || e.key === "_") delta = -fontPrefs.STEP;
+  else if (e.key === "0") doReset = true;
+  else return;
+  const tab = focusedCell && focusedCell.activeTab;
+  if (!tab || (!tab.zoom && !tab.resetZoom)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (doReset) tab.resetZoom?.();
+  else tab.zoom?.(delta);
+}, true);
