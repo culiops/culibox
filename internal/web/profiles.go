@@ -68,8 +68,29 @@ func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, s
 	return m
 }
 
+// scopeOptions returns a copy of a with any KNOWN option not applicable to its
+// bin removed, so a legacy stored profile can never emit an inapplicable flag/env
+// at spawn. Unknown keys are left as-is (the launcher already ignores them).
+func (m *ProfileManager) scopeOptions(a config.AgentConfig) config.AgentConfig {
+	if len(a.Options) == 0 {
+		return a
+	}
+	scoped := make(map[string]any, len(a.Options))
+	for k, v := range a.Options {
+		if def, ok := m.optDefs[k]; ok && !def.AppliesTo(a.Bin) {
+			continue // drop inapplicable option (self-heal)
+		}
+		scoped[k] = v
+	}
+	a.Options = scoped
+	return a
+}
+
 // merged is the effective set: a stored profile overrides a same-named seed;
-// order = config seeds first, then store-only profiles (sorted).
+// order = config seeds first, then store-only profiles (sorted). Every
+// returned profile's Options is scoped to its bin (see scopeOptions) so
+// callers (launcher apply, Views, Get) never see an inapplicable option even
+// for a legacy stored profile created before bin-scoping was enforced.
 func (m *ProfileManager) merged() []config.AgentConfig {
 	stored := map[string]config.AgentConfig{}
 	for _, p := range m.store.List() {
@@ -80,15 +101,15 @@ func (m *ProfileManager) merged() []config.AgentConfig {
 	for _, name := range m.seedOrder {
 		seen[name] = true
 		if p, ok := stored[name]; ok {
-			out = append(out, p)
+			out = append(out, m.scopeOptions(p))
 		} else {
-			out = append(out, m.seeds[name])
+			out = append(out, m.scopeOptions(m.seeds[name]))
 		}
 	}
 	var extra []config.AgentConfig
 	for name, p := range stored {
 		if !seen[name] {
-			extra = append(extra, p)
+			extra = append(extra, m.scopeOptions(p))
 		}
 	}
 	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })

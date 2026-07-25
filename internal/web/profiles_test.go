@@ -109,3 +109,44 @@ func TestViewsFilterOptionsByBin(t *testing.T) {
 		t.Errorf("bash agent must not expose the claude-only model option, got %d", got["shell"])
 	}
 }
+
+// TestMergedStripsInapplicableOptions covers a legacy stored profile (created
+// via an older editor, before bin-scoping was enforced) that still carries a
+// claude-only option on a bash bin. merged() must strip it before it reaches
+// the launcher's apply callback, Views(), or Get() — bin-scoping must hold on
+// load, not just on Save/UI.
+func TestMergedStripsInapplicableOptions(t *testing.T) {
+	opts := []config.OptionDef{
+		{Key: "model", Label: "Model", Type: config.OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},
+	}
+	fs := newFakeStore()
+	// Seed the store directly (bypassing ProfileManager.Save's ValidateProfile)
+	// to simulate a legacy profile that predates bin-scoping enforcement.
+	fs.m["legacy"] = config.AgentConfig{Name: "legacy", Bin: "bash", Options: map[string]any{"model": "claude-opus-5"}}
+
+	var applied []config.AgentConfig
+	apply := func(a []config.AgentConfig) { applied = a }
+	m := NewProfileManager(nil, opts, fs, apply)
+
+	found := false
+	for _, a := range applied {
+		if a.Name == "legacy" {
+			found = true
+			if _, ok := a.Options["model"]; ok {
+				t.Fatal("inapplicable option 'model' must be stripped from the launcher-facing profile for a bash profile")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected the 'legacy' profile to be pushed to the launcher")
+	}
+
+	// Also verify Get() (used by the profile editor) never surfaces it.
+	got, ok := m.Get("legacy")
+	if !ok {
+		t.Fatal("Get(\"legacy\") should find the stored profile")
+	}
+	if _, ok := got.Options["model"]; ok {
+		t.Fatal("inapplicable option 'model' must be stripped from Get() as well")
+	}
+}
