@@ -147,9 +147,18 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 		ix.building = true
 		b := walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDepth, ix.budget}
 		rebuild := func() {
+			// Clearing `building` is deferred so a panic in the walk cannot wedge
+			// the flag on. The synchronous first build runs inside an HTTP handler,
+			// where net/http recovers the panic per connection — the process would
+			// survive and the index would then never rebuild again.
+			defer func() {
+				ix.mu.Lock()
+				ix.building = false
+				ix.mu.Unlock()
+			}()
 			entries, truncated := walkTree(b)
 			ix.mu.Lock()
-			ix.entries, ix.truncated, ix.built, ix.building = entries, truncated, time.Now(), false
+			ix.entries, ix.truncated, ix.built = entries, truncated, time.Now()
 			ix.mu.Unlock()
 		}
 		if first {
