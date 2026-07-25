@@ -66,6 +66,13 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
+		// Re-mint the WS cookie here too, not just on the dashboard load. /ws is
+		// cookie-only gated, so a live tab whose cookie went stale (regenerated
+		// secret) could otherwise never reconnect without a manual page reload.
+		// Same basic-auth gate as "/", so this is not a wider trust boundary.
+		if s.Cookie != nil {
+			s.Cookie.Issue(w)
+		}
 		writeJSON(w, http.StatusOK, map[string]string{
 			"env_label":     s.EnvLabel,
 			"env_color":     s.EnvColor,

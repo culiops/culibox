@@ -39,16 +39,47 @@ function execCopy(text) {
   document.body.removeChild(ta);
 }
 
+// PROBE_MS bounds every request on the reconnect path. A page whose fetches are
+// wedged (e.g. behind an unanswered basic-auth challenge) leaves promises pending
+// forever; without a deadline that silently killed the reconnect loop.
+const PROBE_MS = 4000;
+
+// timedFetch is fetch with a hard deadline. AbortSignal.timeout is not in every
+// browser this may be opened from, so fall back to an AbortController + timer.
+function timedFetch(path, ms) {
+  if (AbortSignal.timeout) return fetch(path, { signal: AbortSignal.timeout(ms) });
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  return fetch(path, { signal: ac.signal }).finally(() => clearTimeout(t));
+}
+
 // sessionStatus returns the server-side status of a session ("live" | "exited" |
-// "detached"), or null if it is no longer listed (gone). On a fetch error it
-// returns "live" (assume a transient drop → keep reconnecting, never falsely end).
+// "detached"), null if it is no longer listed (gone), or "unknown" when the server
+// could not be asked. "unknown" must NOT be confused with null: only a definite
+// "this session is not listed" may end a terminal.
 async function sessionStatus(id) {
   try {
-    const list = await api("/api/sessions");
+    const res = await timedFetch("/api/sessions", PROBE_MS);
+    if (!res.ok) return "unknown";
+    const list = await res.json();
     const s = (list || []).find((x) => x.id === id);
     return s ? s.status : null;
   } catch (_) {
-    return "live";
+    return "unknown";
+  }
+}
+
+// probeServer classifies why we cannot reach the socket: "ok" (server answered),
+// "unauthorized" (the login/cookie is stale — a reload is the cure), "unreachable"
+// (down, or this page's requests are wedged). A successful probe also re-mints the
+// WS cookie server-side, so a stale-cookie tab heals itself here.
+async function probeServer() {
+  try {
+    const res = await timedFetch("/api/meta", PROBE_MS);
+    if (res.status === 401 || res.status === 403) return "unauthorized";
+    return res.ok ? "ok" : "unreachable";
+  } catch (_) {
+    return "unreachable";
   }
 }
 

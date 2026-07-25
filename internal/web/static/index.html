@@ -123,6 +123,8 @@
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     .cell-bar .tab-x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
     .cell-bar .tab-x:hover { color: var(--danger); }
+    .cell-bar .tab-kill { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 12px; line-height: 1; }
+    .cell-bar .tab-kill:hover { color: var(--danger); }
     .cell-sp { flex: 1; min-width: 4px; }
     .cell-ctl { position: sticky; right: 0; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 5px 0 4px; background: var(--panel); }
     .cell-sh { flex: none; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.4; padding: 1px 6px; }
@@ -177,6 +179,14 @@
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2d1618; border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    /* Disconnected (recoverable) — amber, distinct from the red "ended" bar. */
+    .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2a2113; border-bottom: 1px solid #b45309; color: #fbbf24; font-size: 12px; }
+    .pane-trouble.expired { background: #2d1618; border-bottom-color: var(--danger); color: var(--danger); }
+    .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .pane-trouble button { margin-left: auto; background: #b45309; color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid #b45309; color: #fbbf24; }
+    .pane-trouble button.alt + button { margin-left: 6px; }
+    .pane-trouble.expired button { background: var(--danger); }
     @media (max-width: 700px) {
       #layout { flex-direction: column; }
       #sidebar { width: 100%; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
@@ -187,6 +197,10 @@
       .cell-ctl button { min-height: 28px; }
       .cell-max, .cell-del { font-size: 15px; padding: 0 8px; }
       .cell-sh { padding: 4px 9px; }
+      /* ⏻ kills the session and sits beside ×; on touch it needs room so the
+         destructive one is not mis-tapped. */
+      .cell-bar .tab { gap: 8px; }
+      .cell-bar .tab-kill, .cell-bar .tab-x { min-width: 28px; min-height: 28px; font-size: 15px; }
     }
   </style>
   <script>/* apply persisted sidebar state before first paint (no flash) */try{if(localStorage.getItem('sidebarHidden')==='1')document.documentElement.classList.add('sidebar-hidden');}catch(e){}</script>
