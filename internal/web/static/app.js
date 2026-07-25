@@ -71,7 +71,9 @@ $("sidebar-toggle").onclick = () => {
   if (!hint) return;
   if (localStorage.getItem("hintDismissed") === "1") { hint.classList.add("hidden"); return; }
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
-  $("hint-text").textContent = `Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · Shift+drag to select inside TUIs (e.g. claude)`;
+  // The select-inside-a-TUI bypass key is platform-specific: Option on macOS,
+  // Shift elsewhere (see macOptionClickForcesSelection in terminal-tab.js).
+  $("hint-text").textContent = `Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
   $("hint-x").onclick = () => {
     hint.classList.add("hidden");
     try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}

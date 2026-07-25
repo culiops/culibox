@@ -27,6 +27,12 @@ class TerminalTab {
       cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace",
       fontSize: (typeof fontPrefs !== "undefined" ? fontPrefs.get("terminal") : 13),
       scrollback: 5000, theme: { background: "#000000" },
+      // While the agent holds mouse tracking on (claude's fullscreen renderer),
+      // xterm forwards drags to the app instead of selecting. The bypass key is
+      // Shift on Windows/Linux but Option on macOS, and the macOS branch is gated
+      // on this option — without it, no modifier can select on a Mac at all.
+      // Cost: Option+drag no longer does a column selection on macOS.
+      macOptionClickForcesSelection: true,
     });
     this.fitAddon = new FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
