@@ -89,23 +89,7 @@ func New(agents []config.AgentConfig, resolver secrets.Resolver, optionDefs []co
 	for _, o := range optionDefs {
 		defs[o.Key] = o
 	}
-	return &AgentLauncher{agents: m, secrets: resolver, shell: resolveShell(), optionDefs: defs}
-}
-
-// resolveShell returns a usable login shell: $SHELL if it's an executable that
-// isn't nologin, else /bin/bash (so a service account with SHELL=/usr/sbin/nologin
-// doesn't break base=login).
-func resolveShell() string {
-	sh := os.Getenv("SHELL")
-	if sh == "" || strings.Contains(filepath.Base(sh), "nologin") || !isExecutable(sh) {
-		return "/bin/bash"
-	}
-	return sh
-}
-
-func isExecutable(p string) bool {
-	info, err := os.Stat(p)
-	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+	return &AgentLauncher{agents: m, secrets: resolver, shell: config.DetectShell(), optionDefs: defs}
 }
 
 // Build composes (argv, env) for the agent per its base policy + env + secrets.
