@@ -386,6 +386,28 @@ async function killSession(id) {
   await refreshSessions(); // session gone → row removed
 }
 
+// --- settings: font sizes ----------------------------------------------------
+const FS_SURFACES = ["terminal", "code", "markdown", "filetree"];
+function bumpFs(surface, delta) {
+  fontPrefs.set(surface, fontPrefs.get(surface) + delta);
+  const val = document.querySelector('.fs-val[data-fs="' + surface + '"]');
+  if (val) val.value = fontPrefs.get(surface);
+}
+function initSettings() {
+  for (const s of FS_SURFACES) {
+    const val = document.querySelector('.fs-val[data-fs="' + s + '"]');
+    if (val) val.value = fontPrefs.get(s);
+  }
+  document.querySelectorAll("#settings [data-fs]").forEach((el) => {
+    const s = el.dataset.fs;
+    if (el.classList.contains("fs-inc")) el.onclick = () => bumpFs(s, +fontPrefs.STEP);
+    else if (el.classList.contains("fs-dec")) el.onclick = () => bumpFs(s, -fontPrefs.STEP);
+    else if (el.classList.contains("fs-val")) el.onchange = () => { fontPrefs.set(s, el.value); el.value = fontPrefs.get(s); };
+  });
+  const reset = $("fs-reset");
+  if (reset) reset.onclick = () => { fontPrefs.reset(); initSettings(); };
+}
+
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", fitAll);
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
@@ -398,4 +420,6 @@ loadWorkspaces();
 loadOptionDefs().then(newProfile);
 refreshSessions();
 initFileTree();
+fontPrefs.applyCssVars();
+initSettings();
 setInterval(refreshSessions, 3000);

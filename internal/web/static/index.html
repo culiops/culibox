@@ -74,6 +74,17 @@
     #editable li { display: flex; align-items: center; gap: 8px; }
     #editable .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
     #editable .del { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 15px; }
+    #settings { border-bottom: 1px solid var(--border); font-size: 12.5px; }
+    #settings > summary { padding: 10px 14px; cursor: pointer; color: var(--muted); user-select: none; }
+    #settings > summary:hover { color: var(--fg); }
+    .settings-body { padding: 0 14px 12px; display: grid; gap: 8px; }
+    .fs-row { display: flex; align-items: center; gap: 6px; }
+    .fs-row > label { flex: 1; color: var(--muted); font-size: 12px; }
+    .fs-val { width: 56px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12.5px; text-align: center; }
+    .fs-dec, .fs-inc { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; width: 28px; padding: 4px 0; cursor: pointer; font-size: 14px; line-height: 1; }
+    .fs-dec:hover, .fs-inc:hover { border-color: var(--accent); }
+    #fs-reset { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; cursor: pointer; }
+    #fs-reset:hover { border-color: var(--accent); }
     #sessions { list-style: none; margin: 0; padding: 8px; overflow-y: auto; flex: 1; }
     #sessions li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
     #sessions li:hover { background: #1f2630; }
@@ -219,6 +230,16 @@
             <button id="pf-new" type="button" class="ghost">New</button>
           </div>
           <ul id="editable"></ul>
+        </div>
+      </details>
+      <details id="settings">
+        <summary>Font sizes</summary>
+        <div class="settings-body">
+          <div class="fs-row"><label>Terminal</label><button type="button" class="fs-dec" data-fs="terminal">−</button><input class="fs-val" data-fs="terminal" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="terminal">+</button></div>
+          <div class="fs-row"><label>Code</label><button type="button" class="fs-dec" data-fs="code">−</button><input class="fs-val" data-fs="code" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="code">+</button></div>
+          <div class="fs-row"><label>Markdown</label><button type="button" class="fs-dec" data-fs="markdown">−</button><input class="fs-val" data-fs="markdown" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="markdown">+</button></div>
+          <div class="fs-row"><label>File tree</label><button type="button" class="fs-dec" data-fs="filetree">−</button><input class="fs-val" data-fs="filetree" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="filetree">+</button></div>
+          <button id="fs-reset" type="button">Reset defaults</button>
         </div>
       </details>
       <details id="files" open>
