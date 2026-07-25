@@ -21,6 +21,8 @@ func TestDetectShell(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	noPasswd := filepath.Join(dir, "no-such-passwd") // isolate the $SHELL rules
+
 	for _, tc := range []struct {
 		name, shell, want string
 	}{
@@ -31,12 +33,65 @@ func TestDetectShell(t *testing.T) {
 		{"missing path falls back", filepath.Join(dir, "nope"), "/bin/bash"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("SHELL", tc.shell)
-			if got := DetectShell(); got != tc.want {
-				t.Fatalf("DetectShell() = %q, want %q", got, tc.want)
+			if got := detectShell(tc.shell, noPasswd, 1001); got != tc.want {
+				t.Fatalf("detectShell(%q) = %q, want %q", tc.shell, got, tc.want)
 			}
 		})
 	}
+
+	// The exported entry point must return something actually runnable on this host.
+	t.Run("exported DetectShell returns a usable shell", func(t *testing.T) {
+		got := DetectShell()
+		if !usableShell(got) {
+			t.Fatalf("DetectShell() = %q, which is not a usable shell", got)
+		}
+	})
+}
+
+// $SHELL is absent from non-login contexts — notably a systemd --user service, which
+// is how this console runs in production. The login shell from /etc/passwd is the
+// authoritative fallback; without it prod would silently detect /bin/bash.
+func TestDetectShellFallsBackToPasswd(t *testing.T) {
+	dir := t.TempDir()
+	zsh := filepath.Join(dir, "zsh")
+	if err := os.WriteFile(zsh, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "fish")
+	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	passwd := filepath.Join(dir, "passwd")
+	body := "root:x:0:0:root:/root:/bin/sh\n" +
+		"svc:x:999:999::/home/svc:/usr/sbin/nologin\n" +
+		"claude:x:1001:1001::/home/claude:" + zsh + "\n"
+	if err := os.WriteFile(passwd, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name, envShell string
+		uid            int
+		want           string
+	}{
+		{"no SHELL uses the passwd entry", "", 1001, zsh},
+		{"SHELL still wins when usable", other, 1001, other},
+		{"unusable SHELL falls through to passwd", "/usr/sbin/nologin", 1001, zsh},
+		{"nologin passwd entry falls back to bash", "", 999, "/bin/bash"},
+		{"uid absent from passwd falls back to bash", "", 4242, "/bin/bash"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectShell(tc.envShell, passwd, tc.uid); got != tc.want {
+				t.Fatalf("detectShell(%q, uid %d) = %q, want %q", tc.envShell, tc.uid, got, tc.want)
+			}
+		})
+	}
+
+	t.Run("missing passwd file falls back to bash", func(t *testing.T) {
+		if got := detectShell("", filepath.Join(dir, "nope"), 1001); got != "/bin/bash" {
+			t.Fatalf("got %q, want /bin/bash", got)
+		}
+	})
 }
 
 func TestWithDetectedShell(t *testing.T) {

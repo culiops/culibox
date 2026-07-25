@@ -1,26 +1,66 @@
 package config
 
 import (
+	"bufio"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
-// DetectShell returns a usable interactive shell: $SHELL when it is an existing
-// executable file that isn't a nologin stub, else /bin/bash (so a service account
-// with SHELL=/usr/sbin/nologin still gets a working shell). This is the single
+// DetectShell returns a usable interactive shell. This is the single
 // shell-detection implementation — the launcher's base=login wrapper uses it too.
 func DetectShell() string {
-	sh := os.Getenv("SHELL")
-	if sh == "" || strings.Contains(filepath.Base(sh), "nologin") || !isExecutableFile(sh) {
-		return "/bin/bash"
-	}
-	return sh
+	return detectShell(os.Getenv("SHELL"), "/etc/passwd", os.Getuid())
 }
 
-func isExecutableFile(p string) bool {
+// detectShell resolves the shell in order: $SHELL, then the login shell from
+// /etc/passwd, then /bin/bash.
+//
+// The passwd step is not redundant: $SHELL is set by login shells, NOT by
+// non-login contexts — a systemd --user service (how this console runs in
+// production), cron, or a bare exec all start without it. Trusting $SHELL alone
+// would silently hand those a /bin/bash "detected" shell.
+func detectShell(envShell, passwdPath string, uid int) string {
+	if usableShell(envShell) {
+		return envShell
+	}
+	if sh := shellFromPasswd(passwdPath, uid); usableShell(sh) {
+		return sh
+	}
+	return "/bin/bash"
+}
+
+// usableShell rejects empty paths, nologin/false stubs, and anything that isn't
+// an executable file.
+func usableShell(p string) bool {
+	if p == "" {
+		return false
+	}
+	switch base := filepath.Base(p); {
+	case strings.Contains(base, "nologin"), base == "false":
+		return false
+	}
 	info, err := os.Stat(p)
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+}
+
+// shellFromPasswd returns field 7 of the passwd line for uid, or "".
+func shellFromPasswd(path string, uid int) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	want := strconv.Itoa(uid)
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		fields := strings.Split(sc.Text(), ":")
+		if len(fields) >= 7 && fields[2] == want {
+			return fields[6]
+		}
+	}
+	return ""
 }
 
 // WithDetectedShell returns the agent list to launch with, plus the name of the
