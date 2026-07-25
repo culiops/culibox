@@ -144,11 +144,29 @@ async function palSearchFiles(q, seq, local) {
   if (seq !== palSeq) return; // a newer query already won
   palAbort = null;
   if (failed || !data) { palRender(local, "file search unavailable"); return; }
-  const files = (data.results || []).map((r) => ({
-    kind: "file", label: r.rel, hint: shortPath(r.path), run: () => openFile(r.path),
-  }));
+  // Basename in the label column, directory in the hint column. Showing the
+  // whole relative path in both truncated the part that identifies the file.
+  const files = (data.results || []).map((r) => {
+    const cut = r.rel.lastIndexOf("/");
+    return {
+      kind: "file",
+      label: cut >= 0 ? r.rel.slice(cut + 1) : r.rel,
+      hint: cut >= 0 ? tailDirs(r.rel.slice(0, cut)) : "",
+      title: shortPath(r.path),
+      run: () => openFile(r.path),
+    };
+  });
   palRender(local.concat(files),
     data.truncated ? "index truncated — some files are not listed" : "");
+}
+
+// tailDirs keeps the last few components of a directory path. CSS would ellipsis
+// the END of a long path, cutting exactly the part that identifies where a file
+// lives ("…/internal/web/static" is useful; "culiops-agent-console/inter…" is not).
+function tailDirs(dir, keep) {
+  const parts = dir.split("/");
+  keep = keep || 3;
+  return parts.length <= keep ? dir : "…/" + parts.slice(-keep).join("/");
 }
 
 // --- rendering ---------------------------------------------------------------
@@ -165,7 +183,7 @@ function palRender(items, note) {
     const label = document.createElement("span");
     label.className = "pal-label";
     label.textContent = it.label;
-    label.title = it.label;
+    label.title = it.title || it.label;
     li.append(kind, label);
     if (it.hint) {
       const h = document.createElement("span");
@@ -200,6 +218,10 @@ function initPalette() {
 
   const openBtn = document.getElementById("palette-open");
   if (openBtn) {
+    // The button is labelled with the shortcut itself rather than a magnifier
+    // glyph: it doubles as the only always-visible place the combo is written
+    // down (the hint bar can be dismissed for good).
+    openBtn.textContent = mac ? "⌘K" : "^⇧K";
     openBtn.title = "Command palette (" + combo + ")";
     openBtn.onclick = openPalette;
   }

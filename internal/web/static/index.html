@@ -32,6 +32,7 @@
     #env-badge[hidden] { display: none; }
     #sidebar-toggle, #settings-open, #palette-open { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
     #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { color: var(--fg); border-color: var(--accent); }
+    #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     .sidebar-hidden #sidebar { display: none; }
     #hint { display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }
@@ -344,7 +345,7 @@
       <button data-cols="2">2</button>
       <button data-cols="4" class="active">4</button>
     </div>
-    <button id="palette-open" title="Command palette" aria-label="Open command palette">⌕</button>
+    <button id="palette-open" title="Command palette" aria-label="Open command palette">^⇧K</button>
     <button id="settings-open" title="Settings — profiles and font sizes" aria-label="Settings">⚙</button>
   </header>
   <div id="layout">

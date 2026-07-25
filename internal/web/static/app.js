@@ -488,7 +488,11 @@ async function spawnSession(req, opts) {
   await refreshSessions();
   openTerminal(s.id, s.name);
   if (opts.toast !== false) {
-    showToast('Spawned "' + (s.name || s.id) + '" in ' + (req.cwd ? shortPath(req.cwd) : "the default dir"),
+    // Report the directory the SERVER chose, not the one requested: a one-click
+    // spawn usually sends an empty cwd and lets default_cwd decide, and "the
+    // default dir" tells the user nothing about where their agent just landed.
+    const where = s.cwd || req.cwd;
+    showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir"),
       { undo: () => killSession(s.id) });
   }
   return s;
