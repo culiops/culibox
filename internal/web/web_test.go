@@ -83,7 +83,7 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 }
 
 func TestHandleMeta(t *testing.T) {
-	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309"}
+	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh"}
 	h := s.Handler("admin", "pw")
 	req := httptest.NewRequest("GET", "/api/meta", nil)
 	req.SetBasicAuth("admin", "pw")
@@ -98,5 +98,30 @@ func TestHandleMeta(t *testing.T) {
 	}
 	if got["env_label"] != "PROD" || got["env_color"] != "#b45309" {
 		t.Fatalf("got %v", got)
+	}
+	if got["shell_profile"] != "zsh" {
+		t.Fatalf("shell_profile = %q, want zsh", got["shell_profile"])
+	}
+}
+
+// The key must always be present: the frontend treats an empty shell_profile as
+// "no quick shell available" and hides the +sh button, so a missing key (rather
+// than an empty one) would be an ambiguous signal.
+func TestHandleMetaNoShellProfile(t *testing.T) {
+	s := &Server{}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var got map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, ok := got["shell_profile"]; !ok {
+		t.Fatal("shell_profile key must always be present (empty = no quick shell)")
+	}
+	if got["shell_profile"] != "" {
+		t.Fatalf("shell_profile = %q, want empty", got["shell_profile"])
 	}
 }

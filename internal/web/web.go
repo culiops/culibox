@@ -21,6 +21,10 @@ type Server struct {
 	Terminal http.Handler
 	EnvLabel string // shown as the UI env badge; empty → no badge
 	EnvColor string // CSS color for the env badge/strip
+	// ShellProfile is the profile the UI's quick-shell (+sh) button spawns —
+	// the auto-detected $SHELL seed, or the user's own profile for that binary.
+	// Empty → the UI offers no quick shell.
+	ShellProfile string
 }
 
 // Handler builds the root handler. Everything except /ws/ sits behind
@@ -34,7 +38,11 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"env_label": s.EnvLabel, "env_color": s.EnvColor})
+		writeJSON(w, http.StatusOK, map[string]string{
+			"env_label":     s.EnvLabel,
+			"env_color":     s.EnvColor,
+			"shell_profile": s.ShellProfile,
+		})
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))
