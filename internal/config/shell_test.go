@@ -146,6 +146,18 @@ func TestWithDetectedShell(t *testing.T) {
 		}
 	})
 
+	t.Run("second collision falls back to <base>-shell", func(t *testing.T) {
+		t.Setenv("SHELL", sh)
+		in := []AgentConfig{{Name: "zsh", Bin: "bash"}, {Name: "shell", Bin: "bash"}}
+		out, name := WithDetectedShell(in)
+		if name != "zsh-shell" {
+			t.Fatalf("name = %q, want zsh-shell", name)
+		}
+		if len(out) != 3 || out[2].Name != "zsh-shell" || out[2].Bin != sh {
+			t.Fatalf("out = %+v", out)
+		}
+	})
+
 	t.Run("all candidate names taken gives no quick shell", func(t *testing.T) {
 		t.Setenv("SHELL", sh)
 		in := []AgentConfig{

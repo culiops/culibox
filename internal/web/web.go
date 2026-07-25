@@ -32,12 +32,21 @@ type Server struct {
 	ShellBin string
 }
 
+// QuickShell exposes the verified quick-shell name for startup diagnostics.
+func (s *Server) QuickShell() string { return s.quickShell() }
+
 // quickShell returns the quick-shell profile name, or "" when it no longer runs
 // the detected shell binary — the +sh button must never silently launch something
 // else because a stored profile took the name.
+//
+// The comparison is by BASENAME, matching config.WithDetectedShell: that function
+// deliberately treats an agent whose bin is a bare "zsh" as the user's own profile
+// for /usr/bin/zsh, so full-path equality here would reject selections it just made.
+//
+// Fails closed: without the pieces needed to verify, offer no quick shell.
 func (s *Server) quickShell() string {
 	if s.ShellProfile == "" || s.Profiles == nil || s.ShellBin == "" {
-		return s.ShellProfile
+		return ""
 	}
 	p, ok := s.Profiles.Get(s.ShellProfile)
 	if !ok || filepath.Base(p.Bin) != filepath.Base(s.ShellBin) {

@@ -83,7 +83,11 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 }
 
 func TestHandleMeta(t *testing.T) {
-	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh"}
+	pm := NewProfileManager(
+		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
+		nil, newFakeStore(), func([]config.AgentConfig) {},
+	)
+	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	h := s.Handler("admin", "pw")
 	req := httptest.NewRequest("GET", "/api/meta", nil)
 	req.SetBasicAuth("admin", "pw")
@@ -129,6 +133,24 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 	}
 	if got["shell_profile"] != "" {
 		t.Fatalf("shell_profile = %q, want empty (shadowed by a profile running python3)", got["shell_profile"])
+	}
+}
+
+// Without the pieces needed to verify the profile, the answer must be "no quick
+// shell" — never an unverified name.
+func TestHandleMetaFailsClosedWithoutProfiles(t *testing.T) {
+	s := &Server{ShellProfile: "zsh"} // no Profiles, no ShellBin
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var got map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["shell_profile"] != "" {
+		t.Fatalf("shell_profile = %q, want empty (unverifiable)", got["shell_profile"])
 	}
 }
 

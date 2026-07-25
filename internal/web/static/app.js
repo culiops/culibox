@@ -408,6 +408,11 @@ async function spawnShellIn(cell) {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   shellSpawning.add(cell);
   try {
+    // Re-read the profile name instead of trusting the boot-time cache: the server
+    // withholds it once a stored profile takes over the seed's name, and profiles
+    // can be created after this page loaded.
+    const profile = await currentShellProfile();
+    if (!profile) { alert("No shell profile available — check the console log."); return; }
     const cwd = await resolveCellCwd(cell);
     // Always prefix the label: with no cwd the server would name the session after
     // default_cwd's basename, which reads exactly like an agent session.
@@ -415,10 +420,13 @@ async function spawnShellIn(cell) {
     const s = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: window.shellProfile, cwd, name: "sh:" + (base || window.shellProfile) }),
+      body: JSON.stringify({ agent: profile, cwd, name: "sh:" + (base || profile) }),
     });
-    setFocusedCell(cell);
     await refreshSessions();
+    // The cell can be destroyed while we await (applyCap collapses windows, a pane
+    // can be removed). Attaching to a detached cell would leak a live xterm + socket
+    // that is never rendered, so fall back to normal placement instead.
+    if (cells.includes(cell)) setFocusedCell(cell);
     openTerminal(s.id, s.name);
   } catch (e) {
     alert("Shell failed: " + e.message);
@@ -434,7 +442,15 @@ async function spawnShellIn(cell) {
 async function resolveCellCwd(cell) {
   const known = cellCwd(cell);
   if (known) return known;
-  const term = cell.tabs.find((t) => t.kind === "terminal" && t.id);
+  // Mirror cellCwd's precedence exactly — active tab first, then newest backwards.
+  // Picking a different terminal here would open the shell in another session's
+  // directory, which is the bug this function exists to prevent.
+  const act = cell.activeTab;
+  let term = act && act.kind === "terminal" && act.id ? act : null;
+  for (let i = cell.tabs.length - 1; !term && i >= 0; i--) {
+    const t = cell.tabs[i];
+    if (t.kind === "terminal" && t.id) term = t;
+  }
   if (!term) return "";
   try {
     const list = await api("/api/sessions");
@@ -443,6 +459,17 @@ async function resolveCellCwd(cell) {
   } catch (_) {
     return "";
   }
+}
+
+// currentShellProfile re-fetches the server's verdict, falling back to the cached
+// value only if the request fails (so a network blip doesn't disable the button).
+async function currentShellProfile() {
+  try {
+    const meta = await api("/api/meta");
+    window.shellProfile = (meta && meta.shell_profile) || "";
+    cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
+  } catch (_) { /* keep the cached value */ }
+  return window.shellProfile;
 }
 
 // --- settings: font sizes ----------------------------------------------------

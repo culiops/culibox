@@ -139,6 +139,17 @@ func main() {
 		ShellBin:     config.DetectShell(),
 	}
 
+	// Report what the console will actually offer. WithDetectedShell only sees the
+	// config seeds, so a STORED profile shadowing the seed name leaves shellProfile
+	// set here while every /api/meta answers "" — without this line the button just
+	// silently never appears.
+	if effective := srv.QuickShell(); effective != shellProfile {
+		log.Printf("quick shell disabled: profile %q no longer runs the detected shell %s "+
+			"(a stored profile has taken the name)", shellProfile, config.DetectShell())
+	} else if effective != "" {
+		log.Printf("quick shell: profile %q → %s", effective, config.DetectShell())
+	}
+
 	log.Printf("agent-console listening on %s", cfg.BindAddr)
 	if err := http.ListenAndServe(cfg.BindAddr, srv.Handler(user, pass)); err != nil {
 		log.Fatal(err)

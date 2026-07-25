@@ -31,10 +31,11 @@ func detectShell(envShell, passwdPath string, uid int) string {
 	return "/bin/bash"
 }
 
-// usableShell rejects empty paths, nologin/false stubs, and anything that isn't
-// an executable file.
+// usableShell rejects empty or relative paths, nologin/false stubs, and anything
+// that isn't an executable file. The path must be absolute: it becomes a profile's
+// Bin, which is resolved later against a composed PATH, not the daemon's cwd.
 func usableShell(p string) bool {
-	if p == "" {
+	if p == "" || !filepath.IsAbs(p) {
 		return false
 	}
 	switch base := filepath.Base(p); {

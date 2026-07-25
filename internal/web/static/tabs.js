@@ -95,7 +95,12 @@ class Cell {
     sh.className = "cell-sh"; sh.textContent = "+sh";
     sh.title = "New shell here (Ctrl+Shift+`)";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
-    sh.onclick = (e) => { e.stopPropagation(); spawnShellIn(this); };
+    // Disable while in flight so the ignored second click is visible, not silent.
+    sh.onclick = (e) => {
+      e.stopPropagation();
+      sh.disabled = true;
+      Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
+    };
     const max = document.createElement("button");
     max.className = "cell-max"; max.textContent = maximized === this ? "🗗" : "⛶";
     max.title = "Maximize / restore";
