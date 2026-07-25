@@ -85,3 +85,27 @@ func TestProfileManager(t *testing.T) {
 		t.Fatalf("deleting a config seed should be ErrNotFound, got %v", err)
 	}
 }
+
+func TestViewsFilterOptionsByBin(t *testing.T) {
+	opts := []config.OptionDef{
+		{Key: "model", Label: "Model", Type: config.OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},
+	}
+	seeds := []config.AgentConfig{
+		{Name: "claude", Bin: "claude", Options: map[string]any{"model": "claude-opus-5"}},
+		// a bash agent that (wrongly) carries a claude-only option value in its map
+		{Name: "shell", Bin: "bash", Options: map[string]any{"model": "claude-opus-5"}},
+	}
+	fs := newFakeStore()
+	m := NewProfileManager(seeds, opts, fs, func([]config.AgentConfig) {})
+	views := m.Views()
+	got := map[string]int{}
+	for _, v := range views {
+		got[v.Name] = len(v.Options)
+	}
+	if got["claude"] != 1 {
+		t.Errorf("claude should expose the model option, got %d", got["claude"])
+	}
+	if got["shell"] != 0 {
+		t.Errorf("bash agent must not expose the claude-only model option, got %d", got["shell"])
+	}
+}

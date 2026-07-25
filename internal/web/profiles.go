@@ -108,7 +108,7 @@ func (m *ProfileManager) Views() []ProfileView {
 	for _, a := range merged {
 		pv := ProfileView{Name: a.Name, Editable: editable[a.Name]}
 		for _, def := range m.options {
-			if v, ok := a.Options[def.Key]; ok {
+			if v, ok := a.Options[def.Key]; ok && def.AppliesTo(a.Bin) {
 				pv.Options = append(pv.Options, ProfileOption{
 					Key: def.Key, Label: def.Label, Type: def.Type, Choices: def.Choices, Value: v,
 				})
