@@ -14,6 +14,9 @@ class ViewerTab {
     this.name = path.split("/").pop() || path;
     this.statusText = "";
     this.onUpdate = null;
+    this.auto = false;      // auto-reload poll on/off (per viewer, opt-in)
+    this.timer = null;
+    this.lastContent = null; // last rendered text, to skip no-op re-renders
 
     this.el = document.createElement("div");
     this.el.className = "tab-body viewer-body";
@@ -22,9 +25,16 @@ class ViewerTab {
     const reload = document.createElement("button");
     reload.className = "viewer-reload"; reload.textContent = "⟳"; reload.title = "Reload";
     reload.onclick = () => this.load();
+    this.toolbar.append(reload);
+    if (!IMAGE_EXTS.has(extOf(path))) { // auto-reload is pointless for images
+      const auto = document.createElement("button");
+      auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
+      auto.onclick = () => this.toggleAuto(auto);
+      this.toolbar.append(auto);
+    }
     const pathLbl = document.createElement("span");
     pathLbl.className = "viewer-path"; pathLbl.textContent = path; pathLbl.title = path;
-    this.toolbar.append(reload, pathLbl);
+    this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
     this.el.append(this.toolbar, this.content);
@@ -35,7 +45,13 @@ class ViewerTab {
   status() { return this.statusText; }
   onShow() {}
   onHide() {}
-  dispose() {}
+  dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
+  toggleAuto(btn) {
+    this.auto = !this.auto;
+    btn.classList.toggle("on", this.auto);
+    if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
+    else { clearInterval(this.timer); this.timer = null; }
+  }
   setStatus(t) { this.statusText = t; this.onUpdate?.(); }
 
   msg(text, cls) {
@@ -45,18 +61,24 @@ class ViewerTab {
     this.content.replaceChildren(d);
   }
 
-  async load() {
+  // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
+  // churn, skips re-render when the content is unchanged, and preserves scroll.
+  async load(poll) {
     const ext = extOf(this.path);
-    this.setStatus("loading…");
-    if (IMAGE_EXTS.has(ext)) { this.renderImage(); this.setStatus(""); return; }
+    if (IMAGE_EXTS.has(ext)) { if (!poll) { this.renderImage(); this.setStatus(""); } return; }
+    if (!poll) this.setStatus("loading…");
     let data;
     try {
       data = await api("/api/fs/read?path=" + encodeURIComponent(this.path));
-    } catch (e) { this.msg(e.message, "err"); this.setStatus("error"); return; }
-    this.setStatus("");
-    if (data.kind === "binary") { this.msg(`binary file · ${data.size} bytes`); return; }
+    } catch (e) { if (!poll) { this.msg(e.message, "err"); this.setStatus("error"); } return; }
+    if (!poll) this.setStatus("");
+    if (data.kind === "binary") { if (!poll) this.msg(`binary file · ${data.size} bytes`); return; }
+    if (poll && data.content === this.lastContent) return; // unchanged → no re-render
+    this.lastContent = data.content;
+    const scroll = this.content.scrollTop;
     if (MD_EXTS.has(ext)) this.renderMarkdown(data.content);
     else this.renderCode(data.content, data.lang);
+    this.content.scrollTop = scroll; // preserve position across reload
   }
 
   renderCode(text, lang) {
