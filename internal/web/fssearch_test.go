@@ -91,26 +91,44 @@ func TestFuzzyScoreRanking(t *testing.T) {
 	}
 }
 
-func TestFileIndexSkipsNoiseDirs(t *testing.T) {
+// rels flattens an index snapshot to its relative paths.
+func rels(entries []indexEntry) []string {
+	out := make([]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, e.rel)
+	}
+	return out
+}
+
+func TestFileIndexSkipsGeneratedDirsButKeepsDotfiles(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, "keep.go"))
 	mustWrite(t, filepath.Join(home, "proj", "main.go"))
 	mustWrite(t, filepath.Join(home, ".git", "config"))
-	mustWrite(t, filepath.Join(home, ".hidden", "secret.txt"))
+	mustWrite(t, filepath.Join(home, ".cache", "junk.bin"))
+	mustWrite(t, filepath.Join(home, ".ssh", "id_rsa"))
 	mustWrite(t, filepath.Join(home, "proj", "node_modules", "left-pad", "index.js"))
+	// This console runs coding agents: ~/.claude and dotfiles are the files a
+	// user actually reaches for, so they must be findable.
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"))
+	mustWrite(t, filepath.Join(home, "proj", ".gitignore"))
 	mustWrite(t, filepath.Join(home, "proj", "vendor", "dep.go"))
-	mustWrite(t, filepath.Join(home, "proj", ".env"))
 
-	ix := newFileIndex(home)
-	paths, _ := ix.snapshot()
+	paths := rels(mustSnapshot(t, newFileIndex(home)))
 	joined := strings.Join(paths, "\n")
 
-	for _, want := range []string{"keep.go", filepath.Join("proj", "main.go")} {
+	for _, want := range []string{
+		"keep.go",
+		filepath.Join("proj", "main.go"),
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join("proj", ".gitignore"),
+		filepath.Join("proj", "vendor", "dep.go"),
+	} {
 		if !contains(paths, want) {
 			t.Fatalf("expected %q in index, got:\n%s", want, joined)
 		}
 	}
-	for _, bad := range []string{".git", ".hidden", "node_modules", "vendor", ".env"} {
+	for _, bad := range []string{".git" + string(filepath.Separator), ".cache", ".ssh", "node_modules"} {
 		if strings.Contains(joined, bad) {
 			t.Fatalf("index must not contain %q, got:\n%s", bad, joined)
 		}
@@ -124,7 +142,7 @@ func TestFileIndexRespectsMaxDepth(t *testing.T) {
 
 	ix := newFileIndex(home)
 	ix.maxDepth = 2 // at most 2 path elements: "a/shallow.txt" in, "a/b/c/deep.txt" out
-	paths, _ := ix.snapshot()
+	paths := rels(mustSnapshot(t, ix))
 
 	if !contains(paths, filepath.Join("a", "shallow.txt")) {
 		t.Fatalf("shallow file missing: %v", paths)
@@ -141,35 +159,55 @@ func TestFileIndexTruncatesAtMaxPaths(t *testing.T) {
 	}
 	ix := newFileIndex(home)
 	ix.maxPaths = 5
-	paths, truncated := ix.snapshot()
+	entries, truncated := ix.snapshot()
 
-	if len(paths) != 5 {
-		t.Fatalf("want 5 paths, got %d", len(paths))
+	if len(entries) != 5 {
+		t.Fatalf("want 5 paths, got %d", len(entries))
 	}
 	if !truncated {
 		t.Fatal("hitting maxPaths must report truncated")
 	}
 }
 
-func TestFileIndexCachesUntilTTL(t *testing.T) {
+// mustSnapshot returns the first snapshot, which always builds synchronously.
+func mustSnapshot(t *testing.T, ix *fileIndex) []indexEntry {
+	t.Helper()
+	entries, _ := ix.snapshot()
+	return entries
+}
+
+func TestFileIndexServesStaleAndRefreshesInBackground(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, "one.txt"))
 
 	ix := newFileIndex(home)
-	if paths, _ := ix.snapshot(); len(paths) != 1 {
-		t.Fatalf("want 1 path, got %v", paths)
+	// The very first call has nothing to serve, so it builds synchronously.
+	if entries := mustSnapshot(t, ix); len(entries) != 1 {
+		t.Fatalf("want 1 path, got %v", rels(entries))
 	}
 	mustWrite(t, filepath.Join(home, "two.txt"))
 
 	// Inside the TTL the new file must NOT appear (that is the documented trade).
-	if paths, _ := ix.snapshot(); len(paths) != 1 {
-		t.Fatalf("cached snapshot should still hold 1 path, got %v", paths)
+	if entries, _ := ix.snapshot(); len(entries) != 1 {
+		t.Fatalf("cached snapshot should still hold 1 path, got %v", rels(entries))
 	}
-	// Expiring the TTL rebuilds.
-	ix.ttl = time.Nanosecond
-	time.Sleep(2 * time.Millisecond)
-	if paths, _ := ix.snapshot(); len(paths) != 2 {
-		t.Fatalf("expired snapshot should rebuild to 2 paths, got %v", paths)
+
+	// Once stale, the request is still answered immediately from the old cache —
+	// never blocked on the walk — and a background rebuild lands shortly after.
+	ix.setTTL(time.Nanosecond)
+	if entries, _ := ix.snapshot(); len(entries) != 1 {
+		t.Fatalf("stale snapshot must be served as is, got %v", rels(entries))
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		entries, _ := ix.snapshot()
+		if len(entries) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background rebuild never landed, got %v", rels(entries))
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

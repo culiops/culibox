@@ -104,7 +104,7 @@ $("sidebar-toggle").onclick = () => {
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   // The select-inside-a-TUI bypass key is platform-specific: Option on macOS,
   // Shift elsewhere (see macOptionClickForcesSelection in terminal-tab.js).
-  $("hint-text").textContent = `Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
+  $("hint-text").textContent = `${mac ? "⌘K" : "Ctrl+K"} for commands · Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
   $("hint-x").onclick = () => {
     hint.classList.add("hidden");
     try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}
@@ -199,14 +199,21 @@ function startRename(li, span, s) {
   input.select();
 }
 
+// lastSessions caches the most recent poll so the command palette can list
+// sessions without issuing its own request on every keystroke.
+let lastSessions = [];
+
 async function refreshSessions() {
   if (editing) return; // don't clobber an in-progress inline rename
   const ul = $("sessions");
   let sessions;
   try { sessions = await api("/api/sessions"); }
   catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return; }
-  if (!sessions || sessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return; }
-  ul.replaceChildren(...sessions.map(renderSession));
+  lastSessions = sessions || [];
+  const cnt = $("sessions-count");
+  if (cnt) cnt.textContent = String(lastSessions.length);
+  if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return; }
+  ul.replaceChildren(...lastSessions.map(renderSession));
 }
 
 // --- spawn / kill ------------------------------------------------------------
@@ -221,6 +228,7 @@ async function loadProfiles() {
     }));
     renderOptions();
     renderEditable();
+    updateSpawnTarget(); // the one-click button's caption depends on this list
   } catch (_) {}
 }
 function currentProfile() {
@@ -319,7 +327,12 @@ function fillForm(p) {
   $("pf-secrets").value = (p.secrets || []).join(", ");
   renderPfOptions(p.options || {});
 }
-function newProfile() { fillForm({ base: "inherit" }); $("pf-name").focus(); }
+// The editor lives in a closed <dialog> at boot, where focus() is a silent
+// no-op; only grab focus when the dialog is actually on screen.
+function newProfile() {
+  fillForm({ base: "inherit" });
+  if ($("settings-modal").open) $("pf-name").focus();
+}
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -352,7 +365,7 @@ async function saveProfile() {
   await loadProfiles();
 }
 async function editProfile(name) {
-  try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); $("manage").open = true; }
+  try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
   catch (e) { alert("Load failed: " + e.message); }
 }
 async function deleteProfile(name) {
