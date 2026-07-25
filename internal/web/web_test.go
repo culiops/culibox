@@ -104,6 +104,55 @@ func TestHandleMeta(t *testing.T) {
 	}
 }
 
+// A stored profile overrides a same-named seed (see ProfileManager.merged), so the
+// quick-shell name alone is not a guarantee. If the name no longer resolves to the
+// detected shell binary the console must offer no quick shell rather than silently
+// launching whatever took the name.
+func TestHandleMetaShellProfileShadowed(t *testing.T) {
+	fs := newFakeStore()
+	if err := fs.Save(config.AgentConfig{Name: "zsh", Bin: "python3"}); err != nil {
+		t.Fatal(err)
+	}
+	pm := NewProfileManager(
+		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
+		nil, fs, func([]config.AgentConfig) {},
+	)
+	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var got map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["shell_profile"] != "" {
+		t.Fatalf("shell_profile = %q, want empty (shadowed by a profile running python3)", got["shell_profile"])
+	}
+}
+
+// The same check must not disable a legitimate quick shell.
+func TestHandleMetaShellProfileIntact(t *testing.T) {
+	pm := NewProfileManager(
+		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
+		nil, newFakeStore(), func([]config.AgentConfig) {},
+	)
+	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var got map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["shell_profile"] != "zsh" {
+		t.Fatalf("shell_profile = %q, want zsh", got["shell_profile"])
+	}
+}
+
 // The key must always be present: the frontend treats an empty shell_profile as
 // "no quick shell available" and hides the +sh button, so a missing key (rather
 // than an empty one) would be an ambiguous signal.

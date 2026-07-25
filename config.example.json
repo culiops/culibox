@@ -6,7 +6,9 @@
   "env_label": "DEV",
   "env_color": "#64748b",
 
-  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. All optional — sensible defaults under data_dir (default ~/.local/share/agent-console). abduco must be installed (the daemon fails fast if not).",
+  "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns — define your own shell agent to override the detection.",
+
+  "comment_persistence":"Sessions run under abduco so they survive a daemon restart. All optional — sensible defaults under data_dir (default ~/.local/share/agent-console). abduco must be installed (the daemon fails fast if not).",
   "data_dir": "/home/you/.local/share/agent-console",
   "abduco_bin": "abduco",
   "abduco_socket_dir": "/home/you/.local/share/agent-console/abduco",
@@ -28,11 +30,6 @@
       "name": "claude",
       "bin": "claude",
       "options": { "skip_permissions": true, "effort": "high", "model": "claude-opus-5" }
-    },
-    {
-      "comment": "a plain shell, no options",
-      "name": "shell",
-      "bin": "bash"
     },
     {
       "comment": "opt-in lock-down: base=clean, no inherited secrets; grant only what it needs by name.",

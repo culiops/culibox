@@ -398,6 +398,53 @@ async function killSession(id) {
   await refreshSessions(); // session gone → row removed
 }
 
+// --- quick shell -------------------------------------------------------------
+// Spawn the detected shell profile in a cell's working dir, then hand off to the
+// normal openTerminal path so auto-split/cap placement stays in one place.
+// Per-cell (not global) in-flight guard: a double click on one window is ignored,
+// but +sh on another window still works instead of dying silently.
+const shellSpawning = new WeakSet();
+async function spawnShellIn(cell) {
+  if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
+  shellSpawning.add(cell);
+  try {
+    const cwd = await resolveCellCwd(cell);
+    // Always prefix the label: with no cwd the server would name the session after
+    // default_cwd's basename, which reads exactly like an agent session.
+    const base = cwd.replace(/\/$/, "").split("/").pop();
+    const s = await api("/api/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: window.shellProfile, cwd, name: "sh:" + (base || window.shellProfile) }),
+    });
+    setFocusedCell(cell);
+    await refreshSessions();
+    openTerminal(s.id, s.name);
+  } catch (e) {
+    alert("Shell failed: " + e.message);
+  } finally {
+    shellSpawning.delete(cell);
+  }
+}
+
+// resolveCellCwd falls back to the server when a terminal tab exists but hasn't
+// resolved its cwd yet (TerminalTab fetches it asynchronously). Without this, a
+// +sh right after opening a session silently lands in default_cwd instead of the
+// session's directory — the failure the feature exists to prevent.
+async function resolveCellCwd(cell) {
+  const known = cellCwd(cell);
+  if (known) return known;
+  const term = cell.tabs.find((t) => t.kind === "terminal" && t.id);
+  if (!term) return "";
+  try {
+    const list = await api("/api/sessions");
+    const s = (list || []).find((x) => x.id === term.id);
+    return (s && s.cwd) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
 // --- settings: font sizes ----------------------------------------------------
 const FS_SURFACES = ["terminal", "code", "markdown", "filetree"];
 function bumpFs(surface, delta) {
@@ -436,9 +483,15 @@ initFileTree();
 // Env signal: show a colored DEV/PROD badge + top strip + tab title, so the
 // active environment is unmistakable. Config-driven via /api/meta; empty label
 // (no env configured) leaves the UI unchanged.
-(async function initEnv() {
+// One retry: this fetch also carries shell_profile, and a single transient failure
+// would otherwise hide the +sh button for the whole page session.
+(async function initEnv(retry = true) {
   try {
     const meta = await api("/api/meta");
+    // Quick-shell profile first: it is independent of the env badge, so it must
+    // be captured before the no-badge early return below.
+    window.shellProfile = (meta && meta.shell_profile) || "";
+    if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
@@ -446,12 +499,30 @@ initFileTree();
     badge.hidden = false;
     strip.hidden = false;
     document.title = "[" + meta.env_label + "] Agent Console";
-  } catch (_) { /* no badge on error */ }
+  } catch (_) {
+    if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh
+  }
 })();
 
 fontPrefs.applyCssVars();
 initSettings();
 setInterval(refreshSessions, 3000);
+
+// Ctrl+Shift+` → new shell in the focused window. Capture phase + stopPropagation
+// for the same reason as the zoom handler below: xterm listens on its textarea and
+// would otherwise swallow the combo while a terminal has focus.
+document.addEventListener("keydown", (e) => {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+  if (e.code !== "Backquote") return; // .code is layout/shift independent
+  // Don't steal the combo from a real text field (session name, inline rename) —
+  // but xterm's own focus target IS a textarea, so exempt that one.
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" ||
+      (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+  e.preventDefault();
+  e.stopPropagation();
+  spawnShellIn(focusedCell);
+}, true);
 
 // Live zoom the focused pane: Ctrl/Cmd + '='/'+' bigger, '-'/'_' smaller, '0' reset.
 // Capture phase + stopPropagation so xterm (which listens on its textarea) never

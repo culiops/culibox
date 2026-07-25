@@ -136,6 +136,7 @@ func main() {
 		EnvColor: cfg.EnvColor,
 
 		ShellProfile: shellProfile,
+		ShellBin:     config.DetectShell(),
 	}
 
 	log.Printf("agent-console listening on %s", cfg.BindAddr)

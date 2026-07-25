@@ -107,12 +107,19 @@ func TestWithDetectedShell(t *testing.T) {
 		}
 	})
 
-	t.Run("does not mutate the caller's slice", func(t *testing.T) {
+	// A plain append() would write the seed into the caller's spare capacity,
+	// silently changing a slice the caller still holds. len() can never catch
+	// that — inspect the backing array itself.
+	t.Run("does not write into the caller's backing array", func(t *testing.T) {
 		t.Setenv("SHELL", sh)
-		in := []AgentConfig{{Name: "claude", Bin: "claude"}}
+		in := make([]AgentConfig, 1, 4)
+		in[0] = AgentConfig{Name: "claude", Bin: "claude"}
 		WithDetectedShell(in)
 		if len(in) != 1 {
-			t.Fatalf("caller slice mutated: %+v", in)
+			t.Fatalf("caller slice length changed: %+v", in)
+		}
+		if spare := in[:2]; spare[1].Name != "" || spare[1].Bin != "" {
+			t.Fatalf("wrote into the caller's spare capacity: %+v", spare[1])
 		}
 	})
 }

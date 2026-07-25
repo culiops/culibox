@@ -120,7 +120,10 @@
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     .cell-bar .tab-x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
     .cell-bar .tab-x:hover { color: var(--danger); }
-    .cell-sp { flex: 1; }
+    .cell-sp { flex: 1; min-width: 4px; }
+    .cell-ctl { position: sticky; right: 0; flex: none; display: flex; align-items: center; gap: 2px; padding-left: 4px; background: var(--panel); }
+    .cell-sh { flex: none; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.4; padding: 1px 6px; margin-right: 3px; }
+    .cell-sh:hover { color: var(--fg); border-color: var(--accent); }
     .cell-max, .cell-del { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 13px; padding: 0 4px; }
     .cell-max:hover { color: var(--accent); } .cell-del:hover { color: var(--danger); }
     .cell-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
