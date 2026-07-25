@@ -54,6 +54,15 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("api with basic-auth: want 200, got %d", rec.Code)
 	}
+
+	// The file endpoints read the user's home directory, so registering one on
+	// the wrong mux would expose it unauthenticated. Assert the newest of them
+	// is gated, not just that it exists.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/fs/search?q=x", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("fs search without basic-auth: want 401, got %d", rec.Code)
+	}
 }
 
 // TestStaticNoCacheOnAppFiles: the app's own files (index.html, app.js) must
