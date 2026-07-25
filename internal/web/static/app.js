@@ -388,11 +388,11 @@ async function killSession(id) {
 
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", fitAll);
-// Layout buttons 1/2/4 → column count (creates grid slots as needed).
+// Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
 $("layouts").addEventListener("click", (e) => {
-  if (e.target.dataset && e.target.dataset.cols) setLayout(Number(e.target.dataset.cols));
+  if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
 });
-setLayout(1);
+applyCap(4); // default: auto-split up to 4 windows
 loadProfiles();
 loadWorkspaces();
 loadOptionDefs().then(newProfile);

@@ -1,12 +1,15 @@
 "use strict";
 
-// Layout model: cells are grid slots. setLayout(n) ensures ≥ n slots and sets
-// the column count. Opening a session/file adds a *tab* to the focused cell.
-// ⛶ maximizes one cell to fill the grid for full-screen reading.
+// Layout model: cells are grid windows. Opening a session auto-splits a new
+// window (grow 1→2→3→4, capped at `cap`); beyond the cap it stacks as a tab.
+// Opening a file always tabs into the focused cell. ⛶ maximizes one cell.
 let cells = [];
 let focusedCell = null;
-let cols = 1;
+let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
 let maximized = null;
+
+// gridCols → columns/rows the grid uses, derived from the live cell count.
+function gridCols() { return Math.min(Math.max(cells.length, 1), 4); }
 
 class Cell {
   constructor() {
@@ -48,6 +51,7 @@ class Cell {
     if (i < 0) return;
     this.tabs.splice(i, 1);
     tab.dispose?.();
+    if (this.tabs.length === 0 && cells.length > 1) { removeCell(this); return; } // reflow: drop the emptied window
     if (this.activeTab === tab) {
       this.activeTab = this.tabs[Math.min(i, this.tabs.length - 1)] || null;
       if (this.activeTab) this.activeTab.onShow?.();
@@ -121,13 +125,13 @@ function syncFocusedTree() {
   if (t && typeof syncTreeToSession === "function") syncTreeToSession(t.cwd, t.id);
 }
 
-function ensureCells(n) {
-  while (cells.length < n) cells.push(new Cell());
+function ensureFirstCell() {
+  if (cells.length === 0) cells.push(new Cell());
   if (!focusedCell) focusedCell = cells[0];
 }
 
 function focusedCellOrCreate() {
-  if (!focusedCell) ensureCells(1);
+  if (!focusedCell) ensureFirstCell();
   return focusedCell;
 }
 
@@ -136,8 +140,8 @@ function removeCell(cell) {
   cells = cells.filter((c) => c !== cell);
   if (maximized === cell) maximized = null;
   if (focusedCell === cell) focusedCell = null;
-  if (cells.length === 0) ensureCells(1);
-  if (!focusedCell) focusedCell = cells[0];
+  if (cells.length === 0) ensureFirstCell();
+  if (!focusedCell) focusedCell = cells[cells.length - 1];
   renderGrid();
   refreshSessions();
 }
@@ -149,7 +153,7 @@ function toggleMax(cell) {
 
 function renderGrid() {
   const grid = document.getElementById("grid");
-  grid.className = "cols-" + cols + (maximized ? " maximized" : "");
+  grid.className = "cols-" + gridCols() + (maximized ? " maximized" : "");
   const show = maximized ? [maximized] : cells;
   grid.replaceChildren(...show.map((c) => c.el));
   cells.forEach((c) => c.renderBar());
@@ -161,22 +165,44 @@ function fitAll() {
   visible.forEach((c) => c.activeTab && c.activeTab.fit && c.activeTab.fit());
 }
 
-function setLayout(n) {
-  cols = n;
-  ensureCells(n);
+// applyCap sets the max window count (the 1/2/4 buttons). Lowering it below the
+// current window count collapses the extra windows: their tabs move into the last
+// kept cell (so "1" instantly stacks everything into one window).
+function applyCap(n) {
+  cap = n;
   for (const b of document.getElementById("layouts").children) {
     b.classList.toggle("active", Number(b.dataset.cols) === n);
   }
+  while (cells.length > cap) {
+    const extra = cells.pop();
+    const keep = cells[cells.length - 1];
+    for (const t of extra.tabs) { t.onUpdate = () => keep.renderBar(); keep.tabs.push(t); }
+    if (!keep.activeTab && keep.tabs.length) keep.activeTab = keep.tabs[0];
+    if (maximized === extra) maximized = null;
+    if (focusedCell === extra) focusedCell = keep;
+    extra.tabs = []; // detach — do NOT dispose (tabs live on in `keep`)
+  }
+  if (!cells.includes(focusedCell)) focusedCell = cells[cells.length - 1] || null;
+  ensureFirstCell();
+  cells.forEach((c) => { c.renderBar(); c.renderBody(); });
   renderGrid();
+  refreshSessions();
 }
 
-// openTerminal / openFile add a tab to the focused cell.
+// openTerminal auto-splits a new window per session up to `cap`; beyond the cap
+// it stacks as a tab in the focused cell. (openFile always tabs into the focused
+// cell — files never create a window.)
 function openTerminal(id, name) {
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) { setFocusedCell(c); c.activate(t); return; }
   }
-  const cell = focusedCellOrCreate();
+  ensureFirstCell();
+  let cell;
+  if (focusedCell && focusedCell.tabs.length === 0) cell = focusedCell; // fill the empty focused cell
+  else if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // auto-split a new window
+  else cell = focusedCell;                                              // capped → stack as a tab
+  setFocusedCell(cell);
   cell.addTab(new TerminalTab(id, name));
   renderGrid();
   refreshSessions();
