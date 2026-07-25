@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -199,6 +200,58 @@ func TestFileIndexSkipsMachineManagedTrees(t *testing.T) {
 		if !contains(paths, want) {
 			t.Fatalf("expected %q in index, got:\n%s", want, joined)
 		}
+	}
+}
+
+func TestFileIndexFirstBuildBlocksConcurrentCallers(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 20; i++ {
+		mustWrite(t, filepath.Join(home, "d"+strconv.Itoa(i), "f.txt"))
+	}
+	ix := newFileIndex(home)
+
+	// Every caller that arrives during the very first walk must wait for real
+	// results. Answering them with an empty index and truncated=false would read
+	// as "no such file" — the palette would show nothing while the user types.
+	var wg sync.WaitGroup
+	counts := make([]int, 8)
+	for i := range counts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			entries, _ := ix.snapshot()
+			counts[i] = len(entries)
+		}(i)
+	}
+	wg.Wait()
+	for i, n := range counts {
+		if n != 20 {
+			t.Fatalf("caller %d saw %d entries, want 20 — an empty index leaked to a concurrent first caller", i, n)
+		}
+	}
+}
+
+func TestFileIndexSkipsCredentialStores(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".aws", "credentials"))
+	mustWrite(t, filepath.Join(home, ".kube", "config"))
+	mustWrite(t, filepath.Join(home, ".config", "rclone", "rclone.conf"))
+	mustWrite(t, filepath.Join(home, ".config", "gh", "hosts.yml"))
+	mustWrite(t, filepath.Join(home, ".netrc"))
+	mustWrite(t, filepath.Join(home, "proj", ".npmrc"))
+	// Not a secret store: the rest of .config stays searchable.
+	mustWrite(t, filepath.Join(home, ".config", "nvim", "init.lua"))
+
+	paths := rels(mustSnapshot(t, newFileIndex(home)))
+	joined := strings.Join(paths, "\n")
+
+	for _, bad := range []string{"credentials", "kube", "rclone", "hosts.yml", ".netrc", ".npmrc"} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("credential store %q must not be indexed, got:\n%s", bad, joined)
+		}
+	}
+	if !contains(paths, filepath.Join(".config", "nvim", "init.lua")) {
+		t.Fatalf("the rest of .config must stay searchable, got:\n%s", joined)
 	}
 }
 

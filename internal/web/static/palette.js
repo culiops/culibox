@@ -141,7 +141,8 @@ async function palSearchFiles(q, seq, local) {
   } finally {
     clearTimeout(timer);
   }
-  if (seq !== palSeq) return; // a newer query already won
+  if (seq !== palSeq) return;   // a newer query already won
+  if (!paletteOpen()) return;   // closed while in flight — nothing to render into
   palAbort = null;
   if (failed || !data) { palRender(local, "file search unavailable"); return; }
   // Basename in the label column, directory in the hint column. Showing the

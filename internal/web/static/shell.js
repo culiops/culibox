@@ -44,8 +44,8 @@ function hideToast() {
 // app means keystrokes stop reaching the agent — the one thing that must not
 // happen after closing a modal.
 function focusTerminal() {
-  const tab = typeof focusedCell !== "undefined" && focusedCell ? focusedCell.activeTab : null;
-  if (tab && tab.kind === "terminal" && tab.term) tab.term.focus();
+  const tab = typeof focusedTerminal === "function" ? focusedTerminal() : null;
+  if (tab && tab.term) tab.term.focus();
 }
 
 function openDialog(id) {
@@ -86,7 +86,14 @@ function initDialogs() {
   for (const d of document.querySelectorAll("dialog")) {
     // A click landing on the dialog element itself is a backdrop click: the
     // padding is 0 and the children cover the box, so nothing else can target it.
-    d.addEventListener("click", (e) => { if (e.target === d) d.close(); });
+    //
+    // The mousedown must have landed there too. A `click` fires on the nearest
+    // common ancestor of press and release, so drag-selecting text inside a
+    // textarea and releasing past the dialog edge would otherwise synthesise a
+    // backdrop click and dismiss the profile editor mid-edit.
+    let pressedBackdrop = false;
+    d.addEventListener("mousedown", (e) => { pressedBackdrop = e.target === d; });
+    d.addEventListener("click", (e) => { if (pressedBackdrop && e.target === d) d.close(); });
     // Fires for Esc, ×, backdrop and programmatic close alike.
     d.addEventListener("close", focusTerminal);
   }
@@ -101,19 +108,35 @@ function initDialogs() {
 // --sidebar-split, persisted and re-applied pre-paint by the inline <head>
 // script so a reload does not flash the default split.
 const SPLIT_KEY = "agent-console:sidebarSplit";
-const SPLIT_MIN_PX = 56; // must match the smaller of the two min-heights in CSS
 
+// setSidebarSplit applies the ratio; persist() writes it. They are separate
+// because a drag calls this on every pointermove, and a synchronous
+// localStorage write per move is dozens of writes per drag.
 function setSidebarSplit(pct) {
   pct = Math.min(85, Math.max(15, pct));
   document.documentElement.style.setProperty("--sidebar-split", pct + "%");
+  return pct;
+}
+
+function persistSidebarSplit(pct) {
   try { localStorage.setItem(SPLIT_KEY, String(pct)); } catch (_) {}
 }
 
+// minHeightOf reads the pane's CSS minimum rather than hardcoding it: the two
+// viewports use different values, and a constant here drifts from the stylesheet
+// silently (the JS would allow a drag that CSS then refuses to render, and the
+// unhonourable ratio would still get persisted).
+function minHeightOf(el) {
+  const v = parseFloat(getComputedStyle(el).minHeight);
+  return isFinite(v) && v > 0 ? v : 56;
+}
+
 function initSplitter() {
+  const sidebar = document.getElementById("sidebar");
   const handle = document.getElementById("split-h");
   const top = document.getElementById("sessions-pane");
   const bottom = document.getElementById("files-pane");
-  if (!handle || !top || !bottom) return;
+  if (!sidebar || !handle || !top || !bottom) return;
 
   handle.addEventListener("pointerdown", (e) => {
     // Pointer events (not mouse) so the drag also works under touch; the handle
@@ -121,16 +144,22 @@ function initSplitter() {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
     handle.classList.add("dragging");
+    let pct = null;
 
     const move = (ev) => {
       const a = top.getBoundingClientRect();
       const b = bottom.getBoundingClientRect();
-      const total = b.bottom - a.top;
-      if (total <= 0) return;
-      // Clamp in pixels first so neither pane can be dragged out of existence,
-      // then convert — a percentage clamp alone would not respect the minimums.
-      const y = Math.min(b.bottom - SPLIT_MIN_PX, Math.max(a.top + SPLIT_MIN_PX, ev.clientY));
-      setSidebarSplit(((y - a.top) / total) * 100);
+      // The percentage is a flex-basis, so it resolves against the FLEX
+      // CONTAINER's content height — all of #sidebar, spawn bar and handle
+      // included — not against the two panes. Dividing by the panes alone made
+      // the handle overshoot the pointer by ~12% on desktop and ~31% on mobile.
+      const space = sidebar.clientHeight;
+      if (space <= 0) return;
+      // Clamp in pixels first so neither pane can be dragged out of existence;
+      // a percentage clamp alone would not respect the minimums.
+      const y = Math.min(b.bottom - minHeightOf(bottom),
+        Math.max(a.top + minHeightOf(top), ev.clientY));
+      pct = setSidebarSplit(((y - a.top) / space) * 100);
     };
     const up = (ev) => {
       handle.releasePointerCapture(ev.pointerId);
@@ -138,6 +167,7 @@ function initSplitter() {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
+      if (pct !== null) persistSidebarSplit(pct);
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
@@ -146,5 +176,5 @@ function initSplitter() {
 
   // Double-click restores the default ratio — a cheap escape hatch from a drag
   // that went wrong on a small screen.
-  handle.addEventListener("dblclick", () => setSidebarSplit(45));
+  handle.addEventListener("dblclick", () => persistSidebarSplit(setSidebarSplit(45)));
 }

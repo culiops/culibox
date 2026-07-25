@@ -223,9 +223,15 @@ async function refreshSessions() {
 
 // --- spawn / kill ------------------------------------------------------------
 let profiles = [];
-async function loadProfiles() {
+// profilesLoaded distinguishes "the server has no profiles" from "we could not
+// ask". Without it, one transient failure at boot leaves the primary spawn
+// button disabled under a caption that blames the config — and in dev, `air`
+// restarts the daemon under an open tab routinely. Retries once, like initEnv.
+let profilesLoaded = false;
+async function loadProfiles(retry = true) {
   try {
     profiles = (await api("/api/profiles")) || [];
+    profilesLoaded = true;
     $("agent").replaceChildren(...profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.name; o.textContent = p.name;
@@ -234,7 +240,10 @@ async function loadProfiles() {
     renderOptions();
     renderEditable();
     updateSpawnTarget(); // the one-click button's caption depends on this list
-  } catch (_) {}
+  } catch (_) {
+    updateSpawnTarget();
+    if (retry) setTimeout(() => loadProfiles(false), 2000);
+  }
 }
 function currentProfile() {
   return profiles.find((p) => p.name === $("agent").value);
@@ -456,12 +465,15 @@ function updateSpawnTarget() {
   if (!el || !btn) return;
   const t = spawnTarget();
   if (!t.agent) {
-    el.textContent = "no profiles configured";
+    // Never blame the config for a failed request — say which one it is.
+    el.textContent = profilesLoaded ? "no profiles configured" : "profiles unavailable — retrying";
     el.title = "";
     btn.disabled = true;
     return;
   }
-  btn.disabled = false;
+  // Stay disabled while a one-click spawn is in flight, so the button does not
+  // briefly look clickable while the guard silently swallows the click.
+  btn.disabled = quickSpawning;
   const where = t.cwd ? (t.cwd.replace(/\/$/, "").split("/").pop() || t.cwd) : "default dir";
   el.textContent = t.agent + " · " + where;
   el.title = t.agent + " in " + (t.cwd ? shortPath(t.cwd) : "the server's default working dir");

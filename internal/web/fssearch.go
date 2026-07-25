@@ -64,10 +64,24 @@ var skipDirs = map[string]bool{
 	".pyenv":         true,
 	".rbenv":         true,
 	".vscode-server": true,
-	// Credential stores: reachable by deliberate navigation in the file tree,
-	// but never surfaced by typing three letters into a palette.
+	// Credential stores. This is NOT a security boundary — /api/fs/list and
+	// /api/fs/read already reach all of $HOME behind the same basic auth, and no
+	// blocklist could be exhaustive. It only keeps secrets from surfacing by
+	// accident when someone types three letters into a palette; deliberate
+	// navigation in the file tree still finds them.
 	".ssh":   true,
 	".gnupg": true,
+	".aws":   true,
+	".kube":  true,
+}
+
+// skipFiles are excluded by filename anywhere in the tree, for the same
+// accident-reduction reason as the credential directories above.
+var skipFiles = map[string]bool{
+	".netrc":           true,
+	".git-credentials": true,
+	".npmrc":           true,
+	".pypirc":          true,
 }
 
 // skipRelPaths are skipped by their position, not their name — the same name
@@ -84,6 +98,8 @@ var skipRelPaths = map[string]bool{
 	".claude/paste-cache":     true,
 	".claude/shell-snapshots": true,
 	"go/pkg":                  true, // module cache; go/bin stays
+	".config/gh":              true, // credential stores under an otherwise
+	".config/rclone":          true, // useful, indexed directory
 }
 
 // indexEntry caches the lowercased path and basename offset alongside the path.
@@ -140,17 +156,26 @@ func (ix *fileIndex) setTTL(d time.Duration) {
 // callers may read it after releasing the lock.
 func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 	ix.mu.Lock()
-	stale := ix.built.IsZero() || time.Since(ix.built) > ix.ttl
-	first := ix.built.IsZero()
+	defer ix.mu.Unlock()
 
-	if stale && !ix.building {
+	if ix.built.IsZero() {
+		// Nothing to serve. Build with the lock HELD so every concurrent caller
+		// waits for real results: releasing it here would let the requests that
+		// arrive during the first walk answer with an empty index and
+		// truncated=false, which reads as "no such file" — exactly the confusion
+		// that field exists to prevent. Costs one stall per process, on the very
+		// first search. The deferred Unlock also covers a panic in the walk.
+		ix.entries, ix.truncated = walkTree(ix.bounds())
+		ix.built = time.Now()
+		return ix.entries, ix.truncated
+	}
+
+	if time.Since(ix.built) > ix.ttl && !ix.building {
 		ix.building = true
-		b := walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDepth, ix.budget}
-		rebuild := func() {
+		b := ix.bounds()
+		go func() {
 			// Clearing `building` is deferred so a panic in the walk cannot wedge
-			// the flag on. The synchronous first build runs inside an HTTP handler,
-			// where net/http recovers the panic per connection — the process would
-			// survive and the index would then never rebuild again.
+			// the flag on and leave the index frozen for the process's lifetime.
 			defer func() {
 				ix.mu.Lock()
 				ix.building = false
@@ -160,18 +185,15 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 			ix.mu.Lock()
 			ix.entries, ix.truncated, ix.built = entries, truncated, time.Now()
 			ix.mu.Unlock()
-		}
-		if first {
-			ix.mu.Unlock()
-			rebuild() // nothing to serve yet — this one call waits
-			ix.mu.Lock()
-		} else {
-			go rebuild()
-		}
+		}()
 	}
-	entries, truncated := ix.entries, ix.truncated
-	ix.mu.Unlock()
-	return entries, truncated
+	return ix.entries, ix.truncated
+}
+
+// bounds snapshots the limits for a walk. Caller holds mu, so the background
+// rebuild never reads a field another goroutine is writing.
+func (ix *fileIndex) bounds() walkBounds {
+	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDepth, ix.budget}
 }
 
 // walkBounds is every limit a walk honours, captured under the index lock so the
@@ -230,7 +252,7 @@ func walkTree(b walkBounds) ([]indexEntry, bool) {
 			}
 			return nil
 		}
-		if len(parts) > b.maxDepth {
+		if len(parts) > b.maxDepth || skipFiles[d.Name()] {
 			return nil
 		}
 		// Symlinks are indexed so the containment check at result time is real;
