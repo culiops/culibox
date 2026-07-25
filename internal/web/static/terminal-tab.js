@@ -97,7 +97,7 @@ class TerminalTab {
 
   resolvePath(tok) {
     if (tok.startsWith("/")) return tok;
-    if (tok.startsWith("~/")) return tok; // server-side home resolution not available; best-effort as-is
+    if (tok.startsWith("~/")) return window.HOME_DIR ? window.HOME_DIR + tok.slice(1) : tok; // ~/foo → <home>/foo
     const base = (this.cwd || "").replace(/\/$/, "");
     return base ? base + "/" + tok.replace(/^\.\//, "") : tok;
   }

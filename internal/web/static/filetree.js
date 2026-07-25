@@ -72,6 +72,7 @@ async function initFileTree() {
 
   try {
     const ws = (await api("/api/workspaces")) || [];
+    window.HOME_DIR = (ws[0] && ws[0].path) || ""; // first entry is "~ (home)" — used to expand ~/ in clicked links
     ftRootSel.replaceChildren(...ws.map((w) => {
       const o = document.createElement("option");
       o.value = w.path; o.textContent = w.label;
