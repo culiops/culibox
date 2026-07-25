@@ -30,7 +30,7 @@ class ViewerTab {
     reload.className = "viewer-reload"; reload.textContent = "⟳"; reload.title = "Reload";
     reload.onclick = () => this.load();
     this.toolbar.append(reload);
-    if (!IMAGE_EXTS.has(extOf(path))) { // auto-reload is pointless for images
+    if (!IMAGE_EXTS.has(ext0)) { // auto-reload is pointless for images
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
       auto.onclick = () => this.toggleAuto(auto);

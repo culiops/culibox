@@ -402,7 +402,7 @@ function initSettings() {
     const s = el.dataset.fs;
     if (el.classList.contains("fs-inc")) el.onclick = () => bumpFs(s, +fontPrefs.STEP);
     else if (el.classList.contains("fs-dec")) el.onclick = () => bumpFs(s, -fontPrefs.STEP);
-    else if (el.classList.contains("fs-val")) el.onchange = () => { fontPrefs.set(s, el.value); el.value = fontPrefs.get(s); };
+    else if (el.classList.contains("fs-val")) el.onchange = () => { if (el.value.trim() !== "") fontPrefs.set(s, el.value); el.value = fontPrefs.get(s); };
   });
   const reset = $("fs-reset");
   if (reset) reset.onclick = () => { fontPrefs.reset(); initSettings(); };
@@ -431,11 +431,12 @@ document.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
   let delta = null, doReset = false;
   if (e.key === "=" || e.key === "+") delta = +fontPrefs.STEP;
-  else if (e.key === "-" || e.key === "_") delta = -fontPrefs.STEP;
+  else if (e.key === "-") delta = -fontPrefs.STEP; // not "_": Ctrl+_ is readline undo in terminals
   else if (e.key === "0") doReset = true;
   else return;
   const tab = focusedCell && focusedCell.activeTab;
-  if (!tab || (!tab.zoom && !tab.resetZoom)) return;
+  const canZoom = tab && (tab.kind === "terminal" || (tab.kind === "viewer" && tab.zoomVar));
+  if (!canZoom) return;
   e.preventDefault();
   e.stopPropagation();
   if (doReset) tab.resetZoom?.();
