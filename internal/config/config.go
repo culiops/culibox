@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 )
 
 // Base env policies for a spawned agent.
@@ -38,6 +39,23 @@ type OptionDef struct {
 	Choices []string `json:"choices,omitempty"` // enum only
 	Flag    string   `json:"flag,omitempty"`
 	Env     string   `json:"env,omitempty"`
+	Bins    []string `json:"bins,omitempty"` // agent bins this option applies to; empty = all
+}
+
+// AppliesTo reports whether this option is offered for an agent binary. No bins →
+// applies to every agent; otherwise matches the bin exactly or by basename (so
+// "/usr/local/bin/claude" matches ["claude"]).
+func (o OptionDef) AppliesTo(bin string) bool {
+	if len(o.Bins) == 0 {
+		return true
+	}
+	base := filepath.Base(bin)
+	for _, b := range o.Bins {
+		if b == bin || b == base {
+			return true
+		}
+	}
+	return false
 }
 
 // AgentConfig describes one launchable agent CLI and its environment policy.
@@ -138,6 +156,9 @@ func (c Config) Validate() error {
 			if !ok {
 				return fmt.Errorf("config: agent %q sets unknown option %q", a.Name, k)
 			}
+			if !def.AppliesTo(a.Bin) {
+				return fmt.Errorf("config: agent %q sets option %q that does not apply to bin %q", a.Name, k, a.Bin)
+			}
 			switch def.Type {
 			case OptBool:
 				if _, ok := v.(bool); !ok {
@@ -183,6 +204,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		def, ok := optDefs[k]
 		if !ok {
 			return fmt.Errorf("profile %q sets unknown option %q", a.Name, k)
+		}
+		if !def.AppliesTo(a.Bin) {
+			return fmt.Errorf("profile %q sets option %q that does not apply to bin %q", a.Name, k, a.Bin)
 		}
 		switch def.Type {
 		case OptBool:

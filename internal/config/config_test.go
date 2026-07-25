@@ -144,3 +144,37 @@ func TestValidate_Options(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionDefAppliesTo(t *testing.T) {
+	tests := []struct {
+		name string
+		bins []string
+		bin  string
+		want bool
+	}{
+		{"empty bins applies to all", nil, "bash", true},
+		{"exact match", []string{"claude"}, "claude", true},
+		{"basename match", []string{"claude"}, "/usr/local/bin/claude", true},
+		{"no match", []string{"claude"}, "bash", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			o := OptionDef{Bins: tt.bins}
+			if got := o.AppliesTo(tt.bin); got != tt.want {
+				t.Errorf("AppliesTo(%q) bins=%v = %v, want %v", tt.bin, tt.bins, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateProfileBinScoping(t *testing.T) {
+	defs := map[string]OptionDef{
+		"model": {Key: "model", Label: "Model", Type: OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},
+	}
+	if err := ValidateProfile(AgentConfig{Name: "b", Bin: "bash", Options: map[string]any{"model": "claude-opus-5"}}, defs); err == nil {
+		t.Fatal("expected error: bash may not set a claude-only option")
+	}
+	if err := ValidateProfile(AgentConfig{Name: "c", Bin: "claude", Options: map[string]any{"model": "claude-opus-5"}}, defs); err != nil {
+		t.Fatalf("claude setting model should be valid, got %v", err)
+	}
+}
