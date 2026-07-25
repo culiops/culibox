@@ -86,7 +86,17 @@ class Cell {
       const x = document.createElement("button");
       x.className = "tab-x"; x.textContent = "×"; x.title = "Close tab";
       x.onclick = (e) => { e.stopPropagation(); this.closeTab(t); };
-      b.append(label, st, x);
+      b.append(label, st);
+      // Kill lives on the TAB, not the cell: a cell can hold several session tabs
+      // and killing is per-session. ⏻ ends the session, × only closes the view.
+      if (t.kind === "terminal") {
+        const kill = document.createElement("button");
+        kill.className = "tab-kill"; kill.textContent = "⏻";
+        kill.title = "Kill session (ends the agent)";
+        kill.onclick = (e) => { e.stopPropagation(); confirmKill(t.id, t.title()); };
+        b.append(kill);
+      }
+      b.append(x);
       return b;
     });
     const spacer = document.createElement("span");

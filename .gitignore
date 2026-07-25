@@ -35,3 +35,6 @@ config.prod.json
 
 # Visual brainstorm companion (local only)
 .superpowers/
+
+# Handover evidence (local-only: this repo is public; see CLAUDE.md rule 2)
+docs/handover/

@@ -21,6 +21,17 @@ var (
 // path, or a sentinel error: errBadPath (empty/relative), os.ErrNotExist
 // (missing), errOutsideHome (escapes home, including via a symlink).
 func containedPath(home, reqPath string) (string, error) {
+	rhome, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		return "", err
+	}
+	return containedUnder(rhome, reqPath)
+}
+
+// containedUnder is containedPath with the home directory already resolved, for
+// callers checking many paths in a row (see handleFsSearch) that would otherwise
+// re-resolve $HOME on every one.
+func containedUnder(rhome, reqPath string) (string, error) {
 	if reqPath == "" || !filepath.IsAbs(reqPath) {
 		return "", errBadPath
 	}
@@ -29,10 +40,6 @@ func containedPath(home, reqPath string) (string, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", os.ErrNotExist
 		}
-		return "", err
-	}
-	rhome, err := filepath.EvalSymlinks(home)
-	if err != nil {
 		return "", err
 	}
 	if resolved != rhome && !strings.HasPrefix(resolved, rhome+string(os.PathSeparator)) {

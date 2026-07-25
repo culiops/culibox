@@ -39,16 +39,47 @@ function execCopy(text) {
   document.body.removeChild(ta);
 }
 
+// PROBE_MS bounds every request on the reconnect path. A page whose fetches are
+// wedged (e.g. behind an unanswered basic-auth challenge) leaves promises pending
+// forever; without a deadline that silently killed the reconnect loop.
+const PROBE_MS = 4000;
+
+// timedFetch is fetch with a hard deadline. AbortSignal.timeout is not in every
+// browser this may be opened from, so fall back to an AbortController + timer.
+function timedFetch(path, ms) {
+  if (AbortSignal.timeout) return fetch(path, { signal: AbortSignal.timeout(ms) });
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms);
+  return fetch(path, { signal: ac.signal }).finally(() => clearTimeout(t));
+}
+
 // sessionStatus returns the server-side status of a session ("live" | "exited" |
-// "detached"), or null if it is no longer listed (gone). On a fetch error it
-// returns "live" (assume a transient drop → keep reconnecting, never falsely end).
+// "detached"), null if it is no longer listed (gone), or "unknown" when the server
+// could not be asked. "unknown" must NOT be confused with null: only a definite
+// "this session is not listed" may end a terminal.
 async function sessionStatus(id) {
   try {
-    const list = await api("/api/sessions");
+    const res = await timedFetch("/api/sessions", PROBE_MS);
+    if (!res.ok) return "unknown";
+    const list = await res.json();
     const s = (list || []).find((x) => x.id === id);
     return s ? s.status : null;
   } catch (_) {
-    return "live";
+    return "unknown";
+  }
+}
+
+// probeServer classifies why we cannot reach the socket: "ok" (server answered),
+// "unauthorized" (the login/cookie is stale — a reload is the cure), "unreachable"
+// (down, or this page's requests are wedged). A successful probe also re-mints the
+// WS cookie server-side, so a stale-cookie tab heals itself here.
+async function probeServer() {
+  try {
+    const res = await timedFetch("/api/meta", PROBE_MS);
+    if (res.status === 401 || res.status === 403) return "unauthorized";
+    return res.ok ? "ok" : "unreachable";
+  } catch (_) {
+    return "unreachable";
   }
 }
 
@@ -58,11 +89,14 @@ async function sessionStatus(id) {
 
 // Sidebar toggle: fully hide the sidebar so the terminal fills the width. State
 // persists across reloads (applied pre-paint by the inline <head> script).
-$("sidebar-toggle").onclick = () => {
+// Named so the command palette can invoke the same path as the ☰ button rather
+// than duplicating it (or synthesising a click on the DOM node).
+function toggleSidebar() {
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
-};
+}
+$("sidebar-toggle").onclick = toggleSidebar;
 
 // Copy/paste hint — platform-aware, dismissable (persisted). Lives outside the
 // sidebar so it survives the sidebar-hide toggle.
@@ -73,7 +107,9 @@ $("sidebar-toggle").onclick = () => {
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   // The select-inside-a-TUI bypass key is platform-specific: Option on macOS,
   // Shift elsewhere (see macOptionClickForcesSelection in terminal-tab.js).
-  $("hint-text").textContent = `Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
+  // Non-mac uses Ctrl+Shift+K, not Ctrl+K: Ctrl+K is readline's kill-to-end-of-line
+  // inside the shells and TUIs these panes host (see initPalette).
+  $("hint-text").textContent = `${mac ? "⌘K" : "Ctrl+Shift+K"} for commands · Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
   $("hint-x").onclick = () => {
     hint.classList.add("hidden");
     try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}
@@ -168,21 +204,34 @@ function startRename(li, span, s) {
   input.select();
 }
 
+// lastSessions caches the most recent poll so the command palette can list
+// sessions without issuing its own request on every keystroke.
+let lastSessions = [];
+
 async function refreshSessions() {
   if (editing) return; // don't clobber an in-progress inline rename
   const ul = $("sessions");
   let sessions;
   try { sessions = await api("/api/sessions"); }
   catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return; }
-  if (!sessions || sessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return; }
-  ul.replaceChildren(...sessions.map(renderSession));
+  lastSessions = sessions || [];
+  const cnt = $("sessions-count");
+  if (cnt) cnt.textContent = String(lastSessions.length);
+  if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return; }
+  ul.replaceChildren(...lastSessions.map(renderSession));
 }
 
 // --- spawn / kill ------------------------------------------------------------
 let profiles = [];
-async function loadProfiles() {
+// profilesLoaded distinguishes "the server has no profiles" from "we could not
+// ask". Without it, one transient failure at boot leaves the primary spawn
+// button disabled under a caption that blames the config — and in dev, `air`
+// restarts the daemon under an open tab routinely. Retries once, like initEnv.
+let profilesLoaded = false;
+async function loadProfiles(retry = true) {
   try {
     profiles = (await api("/api/profiles")) || [];
+    profilesLoaded = true;
     $("agent").replaceChildren(...profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.name; o.textContent = p.name;
@@ -190,7 +239,11 @@ async function loadProfiles() {
     }));
     renderOptions();
     renderEditable();
-  } catch (_) {}
+    updateSpawnTarget(); // the one-click button's caption depends on this list
+  } catch (_) {
+    updateSpawnTarget();
+    if (retry) setTimeout(() => loadProfiles(false), 2000);
+  }
 }
 function currentProfile() {
   return profiles.find((p) => p.name === $("agent").value);
@@ -288,7 +341,12 @@ function fillForm(p) {
   $("pf-secrets").value = (p.secrets || []).join(", ");
   renderPfOptions(p.options || {});
 }
-function newProfile() { fillForm({ base: "inherit" }); $("pf-name").focus(); }
+// The editor lives in a closed <dialog> at boot, where focus() is a silent
+// no-op; only grab focus when the dialog is actually on screen.
+function newProfile() {
+  fillForm({ base: "inherit" });
+  if ($("settings-modal").open) $("pf-name").focus();
+}
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -321,7 +379,7 @@ async function saveProfile() {
   await loadProfiles();
 }
 async function editProfile(name) {
-  try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); $("manage").open = true; }
+  try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
   catch (e) { alert("Load failed: " + e.message); }
 }
 async function deleteProfile(name) {
@@ -368,19 +426,184 @@ function getCwd() {
   return w === "__custom__" ? $("cwd-custom").value.trim() : (w || "");
 }
 
+// --- the "+ New session" split button ----------------------------------------
+// Spawning is the most frequent action in this app, so the primary control does
+// it in one click using the last-used profile and working dir. The caption below
+// the button is the safety rail: an instant-spawn button whose target is
+// invisible is a trap, so what it will do is always written out.
+const LAST_SPAWN_KEY = "agent-console:lastSpawn";
+
+function loadLastSpawn() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_SPAWN_KEY) || "null");
+    if (v && typeof v.agent === "string") return v;
+  } catch (_) {}
+  return null;
+}
+
+// spawnTarget resolves what a one-click spawn does right now. The stored profile
+// is validated against the live list, so one deleted from under the button can
+// never wedge it.
+function spawnTarget() {
+  const last = loadLastSpawn();
+  const valid = last && profiles.some((p) => p.name === last.agent);
+  return {
+    agent: valid ? last.agent : (profiles[0] && profiles[0].name) || "",
+    cwd: (valid && last.cwd) || "",
+    options: (valid && last.options) || {},
+  };
+}
+
+// shortPath renders an absolute path as ~/… when it sits under home.
+function shortPath(p) {
+  const home = window.HOME_DIR || "";
+  return home && p.indexOf(home) === 0 ? "~" + p.slice(home.length) : p;
+}
+
+function updateSpawnTarget() {
+  const el = $("spawn-target"), btn = $("spawn-go");
+  if (!el || !btn) return;
+  const t = spawnTarget();
+  if (!t.agent) {
+    // Never blame the config for a failed request — say which one it is.
+    el.textContent = profilesLoaded ? "no profiles configured" : "profiles unavailable — retrying";
+    el.title = "";
+    btn.disabled = true;
+    return;
+  }
+  // Stay disabled while a one-click spawn is in flight, so the button does not
+  // briefly look clickable while the guard silently swallows the click.
+  btn.disabled = quickSpawning;
+  const where = t.cwd ? (t.cwd.replace(/\/$/, "").split("/").pop() || t.cwd) : "default dir";
+  el.textContent = t.agent + " · " + where;
+  el.title = t.agent + " in " + (t.cwd ? shortPath(t.cwd) : "the server's default working dir");
+  btn.title = "Spawn " + el.title;
+}
+
+// spawnSession is the single POST path for every *agent* spawn entry point (one
+// click, the ▾ menu, the advanced form, the palette) so "last used" and the undo
+// toast are recorded in exactly one place. spawnShellIn deliberately does NOT
+// route through here: a quick shell must never become what "+ New session" does.
+async function spawnSession(req, opts) {
+  opts = opts || {};
+  const s = await api("/api/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  try {
+    localStorage.setItem(LAST_SPAWN_KEY, JSON.stringify({
+      agent: req.agent, cwd: req.cwd || "", options: req.options || {},
+    }));
+  } catch (_) {}
+  updateSpawnTarget();
+  await refreshSessions();
+  openTerminal(s.id, s.name);
+  if (opts.toast !== false) {
+    // Report the directory the SERVER chose, not the one requested: a one-click
+    // spawn usually sends an empty cwd and lets default_cwd decide, and "the
+    // default dir" tells the user nothing about where their agent just landed.
+    const where = s.cwd || req.cwd;
+    showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir"),
+      { undo: () => killSession(s.id) });
+  }
+  return s;
+}
+
+let quickSpawning = false;
+async function quickSpawn(agentName) {
+  if (quickSpawning) return;
+  const t = spawnTarget();
+  const agent = agentName || t.agent;
+  if (!agent) { showToast("No profiles configured", { error: true }); return; }
+  // Stored options belong to the profile they were captured from; carrying them
+  // onto a different profile would apply flags it never declared.
+  const options = agent === t.agent ? t.options : {};
+  quickSpawning = true;
+  $("spawn-go").disabled = true;
+  try {
+    await spawnSession({ agent, name: "", cwd: t.cwd, options });
+  } catch (e) {
+    showToast("Spawn failed: " + e.message, { error: true });
+  } finally {
+    quickSpawning = false;
+    updateSpawnTarget(); // re-enables the button
+  }
+}
+
+function closeSpawnMenu() { $("spawn-menu").classList.remove("open"); }
+
+function openSpawnMenu() {
+  const menu = $("spawn-menu"), anchor = $("spawn-more");
+  const rows = profiles.map((p) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "mono"; b.textContent = p.name;
+    b.onclick = () => { closeSpawnMenu(); quickSpawn(p.name); };
+    return b;
+  });
+  if (!rows.length) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = "No profiles yet"; b.disabled = true;
+    rows.push(b);
+  }
+  const sep = document.createElement("div");
+  sep.className = "sep";
+  const adv = document.createElement("button");
+  adv.type = "button"; adv.textContent = "Advanced…";
+  adv.onclick = () => { closeSpawnMenu(); openSpawnDialog(); };
+  menu.replaceChildren(...rows, sep, adv);
+  menu.classList.add("open"); // must be visible before it can be measured
+  const r = anchor.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+  menu.style.top = (r.bottom + 6) + "px";
+}
+
+// openSpawnDialog preselects whatever the one-click button would have done, so
+// "Advanced…" elaborates the visible target instead of presenting a fresh form.
+function openSpawnDialog() {
+  const t = spawnTarget();
+  if (t.agent) { $("agent").value = t.agent; renderOptions(); }
+  const ws = $("workspace");
+  if (t.cwd && Array.prototype.some.call(ws.options, (o) => o.value === t.cwd)) ws.value = t.cwd;
+  $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
+  openDialog("spawn-modal");
+  $("sess-name").focus();
+}
+
+function initSpawnControl() {
+  $("spawn-go").onclick = () => quickSpawn();
+  $("spawn-more").onclick = (e) => {
+    e.stopPropagation();
+    if ($("spawn-menu").classList.contains("open")) closeSpawnMenu();
+    else openSpawnMenu();
+  };
+  document.addEventListener("click", (e) => {
+    const menu = $("spawn-menu");
+    if (menu.classList.contains("open") && !menu.contains(e.target)) closeSpawnMenu();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSpawnMenu(); });
+  updateSpawnTarget();
+}
+
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  const req = { agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() };
+  // Close first: a fixed-position toast renders *beneath* a modal dialog's
+  // backdrop, so an Undo offered while the dialog is still up is unreachable.
+  closeDialog("spawn-modal");
+  $("sess-name").value = "";
   try {
-    const s = await api("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() }),
-    });
-    $("sess-name").value = "";
-    await refreshSessions();
-    openTerminal(s.id, s.name);
-  } catch (e) { alert("Spawn failed: " + e.message); }
+    await spawnSession(req);
+  } catch (e) { showToast("Spawn failed: " + e.message, { error: true }); }
 });
+// confirmKill is the guarded entry point (tab ⏻ button, command palette).
+// killSession itself stays unguarded: the sidebar × has always been immediate,
+// and Undo on a fresh spawn must not ask twice.
+function confirmKill(id, name) {
+  if (confirm('Kill session "' + (name || id) + '"? This cannot be undone.')) killSession(id);
+}
+
 async function killSession(id) {
   if (killing.has(id)) return; // already tearing down — ignore repeat clicks
   killing.add(id);
@@ -501,6 +724,10 @@ $("layouts").addEventListener("click", (e) => {
   if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
 });
 applyCap(4); // default: auto-split up to 4 windows
+initDialogs();
+initSplitter();
+initSpawnControl();
+initPalette();
 loadProfiles();
 loadWorkspaces();
 loadOptionDefs().then(newProfile);
@@ -561,11 +788,27 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "-") delta = -fontPrefs.STEP; // not "_": Ctrl+_ is readline undo in terminals
   else if (e.key === "0") doReset = true;
   else return;
-  const tab = focusedCell && focusedCell.activeTab;
-  const canZoom = tab && (tab.kind === "terminal" || (tab.kind === "viewer" && tab.zoomVar));
-  if (!canZoom) return;
+  if (!(doReset ? resetZoomFocused() : zoomFocused(delta))) return;
   e.preventDefault();
   e.stopPropagation();
-  if (doReset) tab.resetZoom?.();
-  else tab.zoom?.(delta);
 }, true);
+
+// zoomFocused / resetZoomFocused are the named zoom path, shared by the keyboard
+// handler above and the command palette. Return false when the focused tab has
+// nothing to zoom, so the caller can leave the key event alone.
+function zoomableTab() {
+  const tab = focusedCell && focusedCell.activeTab;
+  return tab && (tab.kind === "terminal" || (tab.kind === "viewer" && tab.zoomVar)) ? tab : null;
+}
+function zoomFocused(delta) {
+  const tab = zoomableTab();
+  if (!tab) return false;
+  tab.zoom?.(delta);
+  return true;
+}
+function resetZoomFocused() {
+  const tab = zoomableTab();
+  if (!tab) return false;
+  tab.resetZoom?.();
+  return true;
+}

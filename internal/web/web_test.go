@@ -54,6 +54,15 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("api with basic-auth: want 200, got %d", rec.Code)
 	}
+
+	// The file endpoints read the user's home directory, so registering one on
+	// the wrong mux would expose it unauthenticated. Assert the newest of them
+	// is gated, not just that it exists.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/fs/search?q=x", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("fs search without basic-auth: want 401, got %d", rec.Code)
+	}
 }
 
 // TestStaticNoCacheOnAppFiles: the app's own files (index.html, app.js) must
@@ -133,6 +142,42 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 	}
 	if got["shell_profile"] != "" {
 		t.Fatalf("shell_profile = %q, want empty (shadowed by a profile running python3)", got["shell_profile"])
+	}
+}
+
+// /api/meta re-issues the WS cookie. The /ws route is cookie-only gated and the
+// cookie was previously minted only on a full dashboard load, so a tab whose cookie
+// went stale (regenerated secret) could never reconnect — it retried forever with no
+// way back short of a manual reload. /api/meta is behind the same basic auth as "/",
+// so minting here is the same trust level and lets a live tab self-heal.
+func TestHandleMetaReissuesWSCookie(t *testing.T) {
+	ca, err := auth.NewCookieAuth("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Cookie: ca}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var got *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			got = c
+		}
+	}
+	if got == nil {
+		t.Fatalf("no %s cookie set; cookies = %v", auth.CookieName, rec.Result().Cookies())
+	}
+	// The minted cookie must actually authenticate /ws.
+	probe := httptest.NewRequest("GET", "/ws/x", nil)
+	probe.AddCookie(got)
+	if !ca.Valid(probe) {
+		t.Fatal("the cookie issued by /api/meta does not validate")
 	}
 }
 

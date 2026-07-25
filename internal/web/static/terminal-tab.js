@@ -14,6 +14,10 @@ class TerminalTab {
     this.ended = false;
     this.retries = 0;
     this.openedAt = 0;
+    this.retryTimer = null;  // pending reconnect; its existence IS the live loop
+    this.retryAt = 0;        // wall-clock target, for the countdown
+    this.troubleEl = null;
+    this.troubleTimer = null;
     this.statusText = "…";
     this.onUpdate = null;
 
@@ -115,6 +119,8 @@ class TerminalTab {
 
   connect() {
     this.term.reset();
+    this.clearRetry();
+    this.hideTrouble();
     this.setStatus("connecting…");
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(this.id)}`);
@@ -125,21 +131,60 @@ class TerminalTab {
       if (typeof ev.data === "string") this.term.write(ev.data);
       else this.term.write(new Uint8Array(ev.data));
     };
+    // Schedule the retry FIRST, then diagnose. The loop must never depend on a
+    // network call completing: a wedged page (unanswered auth challenge) leaves
+    // fetches pending forever, and scheduling from inside that callback meant the
+    // terminal stopped retrying entirely and sat on "reconnecting…" for good.
+    // diagnose() can only ever CANCEL this retry, never be required to start it.
     ws.onclose = () => {
       if (this.closed) return;
       this.setStatus("reconnecting…");
-      sessionStatus(this.id).then((status) => {
-        if (this.closed) return;
-        if (status === null || status === "exited") { this.markEnded(); return; }
-        if (status === "detached") { this.setStatus("detached"); return; }
-        if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0;
-        this.openedAt = 0;
-        const delay = Math.min(1500 * 2 ** this.retries, 10000);
-        setTimeout(() => { if (!this.closed) this.connect(); }, delay);
-        this.retries++;
-      });
+      this.scheduleRetry();
+      this.diagnose();
     };
     ws.onerror = () => this.setStatus("error");
+  }
+
+  scheduleRetry() {
+    this.clearRetry();
+    if (this.openedAt && Date.now() - this.openedAt > 3000) this.retries = 0; // a long-lived
+    this.openedAt = 0;                                                        // link resets backoff
+    const delay = Math.min(1500 * 2 ** this.retries, 10000);
+    this.retries++;
+    this.retryAt = Date.now() + delay;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      if (!this.closed) this.connect();
+    }, delay);
+    this.showTrouble("offline");
+  }
+
+  clearRetry() {
+    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+    this.retryAt = 0;
+  }
+
+  // retryNow skips the remaining backoff (up to 10s), so a server that came back
+  // early is usable immediately instead of after the next scheduled attempt.
+  retryNow() {
+    if (this.closed) return;
+    this.retries = 0;
+    this.connect();
+  }
+
+  // diagnose refines the trouble message and may end the terminal. It is advisory:
+  // every branch that does not definitively end the session leaves the retry armed.
+  async diagnose() {
+    const probe = await probeServer();
+    if (this.closed || !this.retryTimer) return; // reconnected or ended meanwhile
+    this.probeFails = probe === "ok" ? 0 : (this.probeFails || 0) + 1;
+    if (probe === "unauthorized") { this.showTrouble("expired"); return; }
+    if (probe === "unreachable") { this.showTrouble("offline"); return; }
+    const status = await sessionStatus(this.id);
+    if (this.closed || !this.retryTimer) return;
+    if (status === null || status === "exited") { this.clearRetry(); this.markEnded(); return; }
+    if (status === "detached") { this.showTrouble("detached"); return; }
+    this.showTrouble("offline"); // server is up, socket is not — keep retrying
   }
 
   fit() { try { this.fitAddon.fit(); this.sendResize(); } catch (_) {} }
@@ -156,9 +201,63 @@ class TerminalTab {
     }
   }
 
+  // showTrouble renders one line above the terminal naming WHY it is disconnected
+  // and what the user can do about it. "reconnecting…" alone left a stale login
+  // indistinguishable from a restarting server, with no hint that only a reload
+  // could fix it.
+  showTrouble(kind) {
+    if (this.ended || this.closed) return;
+    this.troubleKind = kind;
+    if (!this.troubleEl) {
+      this.troubleEl = document.createElement("div");
+      this.troubleEl.className = "pane-trouble";
+      this.troubleMsg = document.createElement("span");
+      this.troubleCount = document.createElement("span");
+      this.troubleCount.className = "pane-trouble-count";
+      this.troubleBtn = document.createElement("button");
+      this.troubleAlt = document.createElement("button");
+      this.troubleAlt.className = "alt";
+      this.troubleAlt.textContent = "Reload page";
+      this.troubleAlt.onclick = () => location.reload();
+      this.troubleEl.append(this.troubleMsg, this.troubleCount, this.troubleAlt, this.troubleBtn);
+      this.el.insertBefore(this.troubleEl, this.el.firstChild);
+      this.fit();
+    }
+    const expired = kind === "expired";
+    this.troubleMsg.textContent =
+      expired ? "Login session expired — the terminal cannot authenticate."
+      : kind === "detached" ? "Session detached from the daemon."
+      : "Lost connection to the server.";
+    this.troubleEl.classList.toggle("expired", expired);
+    this.troubleBtn.textContent = expired ? "Reload page" : "Retry now";
+    this.troubleBtn.onclick = () => (expired ? location.reload() : this.retryNow());
+    // A timed-out probe cannot distinguish "server is down" from "the browser is
+    // waiting on a login prompt this page can't see" — both just never answer. So
+    // after a few failures, offer the reload that fixes the second case too rather
+    // than asserting a cause we do not actually know.
+    const stuck = !expired && (this.probeFails || 0) >= 3;
+    this.troubleAlt.hidden = !stuck;
+    if (stuck) this.troubleMsg.textContent = "Still cannot reach the server — your login may have expired.";
+    this.tickTrouble();
+    if (!this.troubleTimer) this.troubleTimer = setInterval(() => this.tickTrouble(), 500);
+  }
+
+  tickTrouble() {
+    if (!this.troubleCount) return;
+    const left = this.retryAt ? Math.max(0, Math.ceil((this.retryAt - Date.now()) / 1000)) : 0;
+    this.troubleCount.textContent = this.retryAt ? "retrying in " + left + "s" : "";
+  }
+
+  hideTrouble() {
+    if (this.troubleTimer) { clearInterval(this.troubleTimer); this.troubleTimer = null; }
+    if (this.troubleEl) { this.troubleEl.remove(); this.troubleEl = null; this.fit(); }
+  }
+
   markEnded() {
     if (this.ended) return;
     this.ended = true;
+    this.clearRetry();
+    this.hideTrouble();
     this.setStatus("ended");
     const bar = document.createElement("div");
     bar.className = "pane-ended";
@@ -174,6 +273,8 @@ class TerminalTab {
 
   dispose() {
     this.closed = true;
+    this.clearRetry();
+    this.hideTrouble();
     try { this.ws && this.ws.close(); } catch (_) {}
     try { this.term.dispose(); } catch (_) {}
   }
