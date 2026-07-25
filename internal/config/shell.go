@@ -22,3 +22,31 @@ func isExecutableFile(p string) bool {
 	info, err := os.Stat(p)
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
+
+// WithDetectedShell returns the agent list to launch with, plus the name of the
+// profile the UI's quick-shell button should spawn ("" = offer no quick shell).
+//
+// The detected shell is a VIRTUAL seed: recomputed every boot, never written to
+// the profile store, and never shadowing a user profile — if any configured agent
+// already runs this shell binary, that profile is used as-is.
+func WithDetectedShell(agents []AgentConfig) ([]AgentConfig, string) {
+	sh := DetectShell()
+	base := filepath.Base(sh)
+
+	names := make(map[string]bool, len(agents))
+	for _, a := range agents {
+		if a.Bin == sh || filepath.Base(a.Bin) == base {
+			return agents, a.Name // the user's own profile wins
+		}
+		names[a.Name] = true
+	}
+	for _, cand := range []string{base, "shell", base + "-shell"} {
+		if names[cand] {
+			continue
+		}
+		out := make([]AgentConfig, len(agents), len(agents)+1)
+		copy(out, agents)
+		return append(out, AgentConfig{Name: cand, Bin: sh, Base: BaseInherit}), cand
+	}
+	return agents, "" // every candidate name is taken by a different bin
+}
