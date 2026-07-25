@@ -167,6 +167,16 @@ func TestOptionDefAppliesTo(t *testing.T) {
 	}
 }
 
+func TestConfigExampleValidates(t *testing.T) {
+	c, err := Load("../../config.example.json")
+	if err != nil {
+		t.Fatalf("load config.example.json: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("config.example.json must validate: %v", err)
+	}
+}
+
 func TestValidateProfileBinScoping(t *testing.T) {
 	defs := map[string]OptionDef{
 		"model": {Key: "model", Label: "Model", Type: OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},

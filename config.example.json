@@ -15,9 +15,9 @@
   ],
 
   "options": [
-    { "comment": "bool → append flag when on", "key": "skip_permissions", "label": "Skip permissions", "type": "bool", "flag": "--dangerously-skip-permissions" },
-    { "comment": "enum → --effort <value>", "key": "effort", "label": "Effort", "type": "enum", "choices": ["high", "medium", "low"], "flag": "--effort" },
-    { "comment": "enum → set env var", "key": "model", "label": "Model", "type": "enum", "choices": ["claude-opus-4-8", "claude-sonnet-5"], "env": "ANTHROPIC_MODEL" }
+    { "comment": "bool → append flag when on", "key": "skip_permissions", "label": "Skip permissions", "type": "bool", "flag": "--dangerously-skip-permissions", "bins": ["claude"] },
+    { "comment": "enum → --effort <value>", "key": "effort", "label": "Effort", "type": "enum", "choices": ["low", "medium", "high", "xhigh", "max"], "flag": "--effort", "bins": ["claude"] },
+    { "comment": "enum → set env var", "key": "model", "label": "Model", "type": "enum", "choices": ["claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"], "env": "ANTHROPIC_MODEL", "bins": ["claude"] }
   ],
 
   "agents": [
@@ -25,7 +25,7 @@
       "comment": "default base=inherit (full env). options set defaults shown as toggles on the spawn form, overridable per session.",
       "name": "claude",
       "bin": "claude",
-      "options": { "skip_permissions": true, "effort": "high", "model": "claude-opus-4-8" }
+      "options": { "skip_permissions": true, "effort": "high", "model": "claude-opus-5" }
     },
     {
       "comment": "a plain shell, no options",
