@@ -44,13 +44,21 @@ func main() {
 	if err != nil {
 		log.Fatalf("secrets: %v", err)
 	}
+	// Seed a profile for the user's real $SHELL unless a configured agent already
+	// runs that binary, so a quick shell works out of the box. Virtual seed: it is
+	// recomputed every boot and never written to the profile store.
+	agents, shellProfile := config.WithDetectedShell(cfg.Agents)
+	if shellProfile == "" {
+		log.Printf("quick shell disabled: every candidate profile name is taken by another binary")
+	}
+
 	// Surface each agent's effective base so the clean-by-default posture is
 	// visible at startup (an existing config's agents now default to clean).
-	for _, a := range cfg.Agents {
+	for _, a := range agents {
 		log.Printf("agent %q: base=%s", a.Name, a.BasePolicy())
 	}
 
-	lnch := launcher.New(cfg.Agents, resolver, cfg.Options)
+	lnch := launcher.New(agents, resolver, cfg.Options)
 
 	// Default working dir: config value if set, else $HOME.
 	home, _ := os.UserHomeDir()
@@ -116,7 +124,7 @@ func main() {
 			log.Fatalf("profiles store: %v", err)
 		}
 	}
-	pm := web.NewProfileManager(cfg.Agents, cfg.Options, st, lnch.SetAgents)
+	pm := web.NewProfileManager(agents, cfg.Options, st, lnch.SetAgents)
 
 	srv := &web.Server{
 		API:      &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
@@ -126,6 +134,20 @@ func main() {
 		Terminal: terminal.NewAttachHandler(mgr.Get),
 		EnvLabel: cfg.EnvLabel,
 		EnvColor: cfg.EnvColor,
+
+		ShellProfile: shellProfile,
+		ShellBin:     config.DetectShell(),
+	}
+
+	// Report what the console will actually offer. WithDetectedShell only sees the
+	// config seeds, so a STORED profile shadowing the seed name leaves shellProfile
+	// set here while every /api/meta answers "" — without this line the button just
+	// silently never appears.
+	if effective := srv.QuickShell(); effective != shellProfile {
+		log.Printf("quick shell disabled: profile %q no longer runs the detected shell %s "+
+			"(a stored profile has taken the name)", shellProfile, config.DetectShell())
+	} else if effective != "" {
+		log.Printf("quick shell: profile %q → %s", effective, config.DetectShell())
 	}
 
 	log.Printf("agent-console listening on %s", cfg.BindAddr)

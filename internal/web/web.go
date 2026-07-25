@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
@@ -21,6 +22,37 @@ type Server struct {
 	Terminal http.Handler
 	EnvLabel string // shown as the UI env badge; empty → no badge
 	EnvColor string // CSS color for the env badge/strip
+	// ShellProfile is the profile the UI's quick-shell (+sh) button spawns —
+	// the auto-detected $SHELL seed, or the user's own profile for that binary.
+	// Empty → the UI offers no quick shell.
+	ShellProfile string
+	// ShellBin is the binary ShellProfile must still resolve to. A runtime-stored
+	// profile can take over a same-named seed (ProfileManager.merged), so the name
+	// is re-checked against this on every /api/meta rather than trusted from boot.
+	ShellBin string
+}
+
+// QuickShell exposes the verified quick-shell name for startup diagnostics.
+func (s *Server) QuickShell() string { return s.quickShell() }
+
+// quickShell returns the quick-shell profile name, or "" when it no longer runs
+// the detected shell binary — the +sh button must never silently launch something
+// else because a stored profile took the name.
+//
+// The comparison is by BASENAME, matching config.WithDetectedShell: that function
+// deliberately treats an agent whose bin is a bare "zsh" as the user's own profile
+// for /usr/bin/zsh, so full-path equality here would reject selections it just made.
+//
+// Fails closed: without the pieces needed to verify, offer no quick shell.
+func (s *Server) quickShell() string {
+	if s.ShellProfile == "" || s.Profiles == nil || s.ShellBin == "" {
+		return ""
+	}
+	p, ok := s.Profiles.Get(s.ShellProfile)
+	if !ok || filepath.Base(p.Bin) != filepath.Base(s.ShellBin) {
+		return ""
+	}
+	return s.ShellProfile
 }
 
 // Handler builds the root handler. Everything except /ws/ sits behind
@@ -34,7 +66,11 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"env_label": s.EnvLabel, "env_color": s.EnvColor})
+		writeJSON(w, http.StatusOK, map[string]string{
+			"env_label":     s.EnvLabel,
+			"env_color":     s.EnvColor,
+			"shell_profile": s.quickShell(),
+		})
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))

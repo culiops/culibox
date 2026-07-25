@@ -91,6 +91,16 @@ class Cell {
     });
     const spacer = document.createElement("span");
     spacer.className = "cell-sp";
+    const sh = document.createElement("button");
+    sh.className = "cell-sh"; sh.textContent = "+sh";
+    sh.title = "New shell here (Ctrl+Shift+`)";
+    sh.hidden = !window.shellProfile; // no detected shell → no quick shell
+    // Disable while in flight so the ignored second click is visible, not silent.
+    sh.onclick = (e) => {
+      e.stopPropagation();
+      sh.disabled = true;
+      Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
+    };
     const max = document.createElement("button");
     max.className = "cell-max"; max.textContent = maximized === this ? "🗗" : "⛶";
     max.title = "Maximize / restore";
@@ -98,7 +108,12 @@ class Cell {
     const del = document.createElement("button");
     del.className = "cell-del"; del.textContent = "✕"; del.title = "Remove pane";
     del.onclick = (e) => { e.stopPropagation(); removeCell(this); };
-    this.bar.replaceChildren(...tabs, spacer, max, del);
+    // Controls live in one sticky cluster so they stay reachable when the tab
+    // strip overflows (a capped cell stacks many tabs — see openTerminal).
+    const ctl = document.createElement("span");
+    ctl.className = "cell-ctl";
+    ctl.append(sh, max, del);
+    this.bar.replaceChildren(...tabs, spacer, ctl);
     this.el.classList.toggle("focused", this === focusedCell);
   }
 
@@ -125,6 +140,21 @@ function eachTerminal(cb) {
 function eachViewer(cb) {
   for (const c of cells) for (const t of c.tabs) if (t.kind === "viewer") cb(t);
 }
+// cellCwd → the working dir a new shell for this cell should start in: the active
+// terminal's cwd, else the most recent terminal tab in the cell that resolved one
+// (so a cell showing a file viewer still opens the shell where its agent lives),
+// else "" — the server falls back to default_cwd.
+function cellCwd(cell) {
+  if (!cell) return "";
+  const act = cell.activeTab;
+  if (act && act.kind === "terminal" && act.cwd) return act.cwd;
+  for (let i = cell.tabs.length - 1; i >= 0; i--) {
+    const t = cell.tabs[i];
+    if (t.kind === "terminal" && t.cwd) return t.cwd;
+  }
+  return "";
+}
+
 // syncFocusedTree re-roots the file tree to the focused session's cwd. No-op if
 // the focused tab isn't a terminal or its cwd hasn't been fetched yet (the
 // terminal calls this again once its cwd resolves).
