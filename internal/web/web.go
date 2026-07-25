@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/culiops/culiops-agent-console/internal/auth"
 )
@@ -30,6 +31,10 @@ type Server struct {
 	// profile can take over a same-named seed (ProfileManager.merged), so the name
 	// is re-checked against this on every /api/meta rather than trusted from boot.
 	ShellBin string
+
+	// idx is the lazily-built file index behind /api/fs/search (see fssearch.go).
+	idxMu sync.Mutex
+	idx   *fileIndex
 }
 
 // QuickShell exposes the verified quick-shell name for startup diagnostics.
@@ -84,6 +89,7 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	})
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
+	protected.HandleFunc("/api/fs/search", s.handleFsSearch)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
