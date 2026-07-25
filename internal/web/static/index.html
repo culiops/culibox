@@ -25,13 +25,13 @@
       padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
     }
     header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
-    header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #env-strip { height: 3px; width: 100%; flex-shrink: 0; }
     #env-strip[hidden] { display: none; }
     #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: 6px; }
     #env-badge[hidden] { display: none; }
-    #sidebar-toggle, #settings-open { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; }
-    #sidebar-toggle:hover, #settings-open:hover { color: var(--fg); border-color: var(--accent); }
+    #sidebar-toggle, #settings-open, #palette-open { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+    #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { color: var(--fg); border-color: var(--accent); }
     .sidebar-hidden #sidebar { display: none; }
     #hint { display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }
@@ -48,6 +48,9 @@
     #sidebar {
       width: 280px; flex-shrink: 0; border-right: 1px solid var(--border);
       background: var(--panel); display: flex; flex-direction: column; min-height: 0;
+      /* The panes below are sized from a percentage basis; without this a pane
+         at its min-height would paint over the terminal grid instead of clipping. */
+      overflow: hidden;
     }
 
     /* --- spawn split button --------------------------------------------- */
@@ -298,10 +301,15 @@
     .pane-trouble.expired button { background: var(--danger); }
     @media (max-width: 700px) {
       #layout { flex-direction: column; }
-      #sidebar { width: 100%; max-height: 46vh; border-right: none; border-bottom: 1px solid var(--border); }
+      /* A DEFINITE height, not max-height: the panes below use a percentage
+         flex-basis, which silently degrades to `auto` against a content-derived
+         height — the drag ratio would be ignored on mobile. */
+      #sidebar { width: 100%; height: 46vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
          with it — otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
+      header { gap: 7px; padding: 8px 10px; }
+      header h1 { display: none; } /* the badge + dot carry identity in this width */
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
@@ -336,6 +344,7 @@
       <button data-cols="2">2</button>
       <button data-cols="4" class="active">4</button>
     </div>
+    <button id="palette-open" title="Command palette" aria-label="Open command palette">⌕</button>
     <button id="settings-open" title="Settings — profiles and font sizes" aria-label="Settings">⚙</button>
   </header>
   <div id="layout">
@@ -457,7 +466,7 @@
 
   <dialog id="palette">
     <input id="pal-input" type="text" autocomplete="off" spellcheck="false"
-           placeholder="Type to search files and sessions — prefix with &gt; for commands">
+           placeholder="Search files and sessions — type &gt; for commands">
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span><span id="pal-note"></span></div>

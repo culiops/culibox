@@ -93,10 +93,7 @@ class Cell {
         const kill = document.createElement("button");
         kill.className = "tab-kill"; kill.textContent = "⏻";
         kill.title = "Kill session (ends the agent)";
-        kill.onclick = (e) => {
-          e.stopPropagation();
-          if (confirm('Kill session "' + t.title() + '"? This cannot be undone.')) killSession(t.id);
-        };
+        kill.onclick = (e) => { e.stopPropagation(); confirmKill(t.id, t.title()); };
         b.append(kill);
       }
       b.append(x);
