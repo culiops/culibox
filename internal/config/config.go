@@ -85,6 +85,8 @@ type Config struct {
 	BasicAuthUser    string         `json:"basic_auth_user"`
 	BasicAuthPassEnv string         `json:"basic_auth_pass_env"`
 	DefaultCwd       string         `json:"default_cwd"`
+	EnvLabel         string         `json:"env_label,omitempty"` // e.g. "PROD"/"DEV"; empty → no UI badge
+	EnvColor         string         `json:"env_color,omitempty"` // CSS color for the badge/strip
 	AllowPublic      bool           `json:"allow_public"`
 	ProfilesPath     string         `json:"profiles_path,omitempty"` // store for runtime profiles
 	DataDir          string         `json:"data_dir,omitempty"`      // default ~/.local/share/agent-console

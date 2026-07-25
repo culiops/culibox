@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -174,6 +175,16 @@ func TestConfigExampleValidates(t *testing.T) {
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("config.example.json must validate: %v", err)
+	}
+}
+
+func TestConfigEnvFieldsParse(t *testing.T) {
+	var c Config
+	if err := json.Unmarshal([]byte(`{"env_label":"PROD","env_color":"#b45309"}`), &c); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if c.EnvLabel != "PROD" || c.EnvColor != "#b45309" {
+		t.Fatalf("got %q/%q, want PROD/#b45309", c.EnvLabel, c.EnvColor)
 	}
 }
 

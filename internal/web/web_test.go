@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -78,5 +79,24 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 	}
 	if cc := get("/xterm/xterm.js").Header().Get("Cache-Control"); cc == "no-cache" {
 		t.Fatal("/xterm/xterm.js should stay cacheable, got no-cache")
+	}
+}
+
+func TestHandleMeta(t *testing.T) {
+	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309"}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var got map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got["env_label"] != "PROD" || got["env_color"] != "#b45309" {
+		t.Fatalf("got %v", got)
 	}
 }

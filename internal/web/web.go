@@ -19,6 +19,8 @@ type Server struct {
 	Profiles *ProfileManager
 	Home     string // for the workspace picker ($HOME + subfolders)
 	Terminal http.Handler
+	EnvLabel string // shown as the UI env badge; empty → no badge
+	EnvColor string // CSS color for the env badge/strip
 }
 
 // Handler builds the root handler. Everything except /ws/ sits behind
@@ -31,6 +33,9 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
 	protected.HandleFunc("/api/options", s.handleOptions)
+	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"env_label": s.EnvLabel, "env_color": s.EnvColor})
+	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))
 	})

@@ -124,6 +124,8 @@ func main() {
 		Profiles: pm,
 		Home:     home,
 		Terminal: terminal.NewAttachHandler(mgr.Get),
+		EnvLabel: cfg.EnvLabel,
+		EnvColor: cfg.EnvColor,
 	}
 
 	log.Printf("agent-console listening on %s", cfg.BindAddr)
