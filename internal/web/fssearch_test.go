@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,72 @@ func TestFileIndexSkipsGeneratedDirsButKeepsDotfiles(t *testing.T) {
 	for _, bad := range []string{".git" + string(filepath.Separator), ".cache", ".ssh", "node_modules"} {
 		if strings.Contains(joined, bad) {
 			t.Fatalf("index must not contain %q, got:\n%s", bad, joined)
+		}
+	}
+}
+
+func TestFileIndexCapsEachTopLevelSubtree(t *testing.T) {
+	home := t.TempDir()
+	// A machine-generated tree that would otherwise consume the whole budget
+	// before the walk ever reaches the user's own directories. The walk is a
+	// lexical DFS, so "aaa-huge" is visited first.
+	for i := 0; i < 40; i++ {
+		mustWrite(t, filepath.Join(home, "aaa-huge", "pkg", "f"+strconv.Itoa(i)+".txt"))
+	}
+	mustWrite(t, filepath.Join(home, "zzz-repo", "main.go"))
+	mustWrite(t, filepath.Join(home, "zzz-repo", "README.md"))
+
+	ix := newFileIndex(home)
+	ix.maxPaths = 50
+	ix.maxPerRoot = 5
+	paths := rels(mustSnapshot(t, ix))
+
+	huge := 0
+	for _, p := range paths {
+		if strings.HasPrefix(p, "aaa-huge") {
+			huge++
+		}
+	}
+	if huge > 5 {
+		t.Fatalf("one subtree took %d slots, cap is 5: %v", huge, paths)
+	}
+	// The point of the cap: the user's own files still make it in.
+	for _, want := range []string{
+		filepath.Join("zzz-repo", "main.go"),
+		filepath.Join("zzz-repo", "README.md"),
+	} {
+		if !contains(paths, want) {
+			t.Fatalf("expected %q to survive the cap, got %v", want, paths)
+		}
+	}
+}
+
+func TestFileIndexSkipsMachineManagedTrees(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".local", "share", "thing.db"))
+	mustWrite(t, filepath.Join(home, ".claude", "projects", "log.jsonl"))
+	mustWrite(t, filepath.Join(home, ".claude", "plugins", "cache", "dep.js"))
+	mustWrite(t, filepath.Join(home, "go", "pkg", "mod", "dep.go"))
+	// Kept: the user's own agent configuration lives right beside those.
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"))
+	mustWrite(t, filepath.Join(home, ".claude", "skills", "brain", "SKILL.md"))
+	mustWrite(t, filepath.Join(home, "go", "bin", "tool"))
+
+	paths := rels(mustSnapshot(t, newFileIndex(home)))
+	joined := strings.Join(paths, "\n")
+
+	for _, bad := range []string{".local", "projects", "plugins", filepath.Join("pkg", "mod")} {
+		if strings.Contains(joined, bad) {
+			t.Fatalf("machine-managed tree %q must be skipped, got:\n%s", bad, joined)
+		}
+	}
+	for _, want := range []string{
+		filepath.Join(".claude", "settings.json"),
+		filepath.Join(".claude", "skills", "brain", "SKILL.md"),
+		filepath.Join("go", "bin", "tool"),
+	} {
+		if !contains(paths, want) {
+			t.Fatalf("expected %q in index, got:\n%s", want, joined)
 		}
 	}
 }

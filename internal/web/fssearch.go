@@ -22,6 +22,12 @@ const (
 	maxIndexPaths = 60000
 	maxIndexDepth = 12
 	indexBudget   = 2 * time.Second
+	// maxPerRootPaths stops any single top-level subtree from consuming the
+	// whole budget. The walk is a lexical DFS, so without this the directories
+	// that happen to sort first decide what is findable: on a real home dir
+	// ~/.local alone holds 100k files and the index filled up before reaching a
+	// single one of the user's repos.
+	maxPerRootPaths = 10000
 
 	searchDefaultLimit = 50
 	searchMaxLimit     = 200
@@ -48,10 +54,36 @@ var skipDirs = map[string]bool{
 	".tox":          true,
 	".svn":          true,
 	".hg":           true,
+	// Package and tool caches — machine-managed, and enormous.
+	".local":         true,
+	".npm":           true,
+	".nvm":           true,
+	".cargo":         true,
+	".rustup":        true,
+	".gem":           true,
+	".pyenv":         true,
+	".rbenv":         true,
+	".vscode-server": true,
 	// Credential stores: reachable by deliberate navigation in the file tree,
 	// but never surfaced by typing three letters into a palette.
 	".ssh":   true,
 	".gnupg": true,
+}
+
+// skipRelPaths are skipped by their position, not their name — the same name
+// elsewhere is a perfectly good directory to search. Paths are slash-separated
+// and relative to the index root.
+var skipRelPaths = map[string]bool{
+	// Claude Code's own machine-managed state. ~/.claude/{skills,context,
+	// settings.json,CLAUDE.md} are exactly what a user wants to open, so the
+	// parent must stay indexed.
+	".claude/projects":        true,
+	".claude/file-history":    true,
+	".claude/security":        true,
+	".claude/plugins":         true,
+	".claude/paste-cache":     true,
+	".claude/shell-snapshots": true,
+	"go/pkg":                  true, // module cache; go/bin stays
 }
 
 // indexEntry caches the lowercased path and basename offset alongside the path.
@@ -65,12 +97,13 @@ type indexEntry struct {
 // fileIndex is a TTL-cached, bounded list of files under root. The bounds are
 // fields rather than constants so tests can shrink them.
 type fileIndex struct {
-	root     string
-	mu       sync.Mutex
-	ttl      time.Duration
-	maxPaths int
-	maxDepth int
-	budget   time.Duration
+	root       string
+	mu         sync.Mutex
+	ttl        time.Duration
+	maxPaths   int
+	maxPerRoot int
+	maxDepth   int
+	budget     time.Duration
 
 	entries   []indexEntry
 	truncated bool
@@ -80,11 +113,12 @@ type fileIndex struct {
 
 func newFileIndex(root string) *fileIndex {
 	return &fileIndex{
-		root:     root,
-		ttl:      indexTTL,
-		maxPaths: maxIndexPaths,
-		maxDepth: maxIndexDepth,
-		budget:   indexBudget,
+		root:       root,
+		ttl:        indexTTL,
+		maxPaths:   maxIndexPaths,
+		maxPerRoot: maxPerRootPaths,
+		maxDepth:   maxIndexDepth,
+		budget:     indexBudget,
 	}
 }
 
@@ -111,9 +145,9 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 
 	if stale && !ix.building {
 		ix.building = true
-		root, maxPaths, maxDepth, budget := ix.root, ix.maxPaths, ix.maxDepth, ix.budget
+		b := walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDepth, ix.budget}
 		rebuild := func() {
-			entries, truncated := walkTree(root, maxPaths, maxDepth, budget)
+			entries, truncated := walkTree(b)
 			ix.mu.Lock()
 			ix.entries, ix.truncated, ix.built, ix.building = entries, truncated, time.Now(), false
 			ix.mu.Unlock()
@@ -131,15 +165,27 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 	return entries, truncated
 }
 
+// walkBounds is every limit a walk honours, captured under the index lock so the
+// background rebuild never reads a field that a test (or a future setter) is
+// concurrently writing.
+type walkBounds struct {
+	root       string
+	maxPaths   int
+	maxPerRoot int
+	maxDepth   int
+	budget     time.Duration
+}
+
 // walkTree collects files under root, honouring every bound. Returns the entries
 // and whether a bound cut the walk short.
-func walkTree(root string, maxPaths, maxDepth int, budget time.Duration) ([]indexEntry, bool) {
-	deadline := time.Now().Add(budget)
+func walkTree(b walkBounds) ([]indexEntry, bool) {
+	deadline := time.Now().Add(b.budget)
 	entries := make([]indexEntry, 0, 1024)
+	perRoot := make(map[string]int)
 	truncated := false
 	n := 0
 
-	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	filepath.WalkDir(b.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// An unreadable directory must not abort the whole walk.
 			if d != nil && d.IsDir() {
@@ -147,7 +193,7 @@ func walkTree(root string, maxPaths, maxDepth int, budget time.Duration) ([]inde
 			}
 			return nil
 		}
-		if p == root {
+		if p == b.root {
 			return nil
 		}
 		// Check the clock every so often rather than on every entry.
@@ -155,19 +201,27 @@ func walkTree(root string, maxPaths, maxDepth int, budget time.Duration) ([]inde
 			truncated = true
 			return filepath.SkipAll
 		}
-		rel, relErr := filepath.Rel(root, p)
+		rel, relErr := filepath.Rel(b.root, p)
 		if relErr != nil {
 			return nil
 		}
-		depth := len(strings.Split(rel, string(os.PathSeparator)))
+		slash := filepath.ToSlash(rel)
+		parts := strings.Split(slash, "/")
+		top := parts[0]
 
 		if d.IsDir() {
-			if skipDirs[d.Name()] || depth >= maxDepth {
+			if skipDirs[d.Name()] || skipRelPaths[slash] || len(parts) >= b.maxDepth {
+				return fs.SkipDir
+			}
+			// This subtree has had its share; skip the rest of it rather than
+			// letting it crowd out everything that sorts after it.
+			if perRoot[top] >= b.maxPerRoot {
+				truncated = true
 				return fs.SkipDir
 			}
 			return nil
 		}
-		if depth > maxDepth {
+		if len(parts) > b.maxDepth {
 			return nil
 		}
 		// Symlinks are indexed so the containment check at result time is real;
@@ -175,11 +229,15 @@ func walkTree(root string, maxPaths, maxDepth int, budget time.Duration) ([]inde
 		if !d.Type().IsRegular() && d.Type()&fs.ModeSymlink == 0 {
 			return nil
 		}
-		if len(entries) >= maxPaths {
+		if len(entries) >= b.maxPaths {
 			truncated = true
 			return filepath.SkipAll
 		}
-		slash := filepath.ToSlash(rel)
+		if perRoot[top] >= b.maxPerRoot {
+			truncated = true
+			return nil
+		}
+		perRoot[top]++
 		lower := strings.ToLower(slash)
 		entries = append(entries, indexEntry{rel: rel, lower: lower, baseStart: baseStartOf(lower)})
 		return nil
