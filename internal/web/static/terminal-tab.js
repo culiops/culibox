@@ -5,6 +5,23 @@
 // so it can never be a protocol status. Changing it means changing both files.
 const WS_SUPERSEDED = 4001;
 
+// isBrokenMouseReport spots an SGR mouse report whose coordinates came out NaN
+// (`ESC[<0;NaN;NaNm`). xterm derives those from the renderer's measured cell
+// size, and something upstream can leave that unmeasured at click time.
+//
+// The bug is not this app's — the same junk appears clicking a link in a
+// terminal inside code-server, a different embedder of the same library. What IS
+// ours is the wire: a program like claude cannot parse the sequence, gives up
+// partway, and pastes the remainder into its prompt as "aN;NaNm" for the user to
+// delete by hand. Dropping it costs nothing: a report with no coordinates could
+// not have told the program anything anyway.
+//
+// Scoped deliberately to the CSI < prefix. Typing the letters N, a, N arrives as
+// three separate one-character chunks, so real input can never match.
+function isBrokenMouseReport(data) {
+  return typeof data === "string" && data.startsWith("\x1b[<") && data.includes("NaN");
+}
+
 // TerminalTab is one agent session as a tab body: an xterm.js terminal bound to
 // /ws/{id}, with self-healing reconnect and copy-on-select / clean-paste. The
 // terminal + WebSocket + reconnect logic is unchanged from the original Pane;
@@ -81,7 +98,14 @@ class TerminalTab {
     this.term.open(termEl);
     try { this.term.loadAddon(new WebglAddon.WebglAddon()); } catch (_) {}
     this.fitAddon.fit();
-    this.term.onData((d) => { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(d)); });
+    this.term.onData((d) => {
+      if (isBrokenMouseReport(d)) {
+        // Once per tab: enough to diagnose later, not enough to spam.
+        if (!this.warnedBadMouse) { this.warnedBadMouse = true; console.warn("dropped a mouse report with NaN coordinates:", JSON.stringify(d)); }
+        return;
+      }
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(d));
+    });
     termEl.addEventListener("mouseup", () => {
       const sel = this.term.getSelection();
       if (sel) copyText(sel, () => this.term.focus());
@@ -380,4 +404,8 @@ function openTerminalUrl(raw, opts) {
   if (url !== raw && typeof showToast === "function") {
     showToast("opened " + new URL(url).host + " instead of localhost");
   }
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { isBrokenMouseReport };
 }
