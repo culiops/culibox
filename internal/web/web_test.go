@@ -103,7 +103,7 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		return rec
 	}
-	for _, p := range []string{"/", "/app.js"} {
+	for _, p := range []string{"/", "/app.js", "/links.js"} {
 		if cc := get(p).Header().Get("Cache-Control"); cc != "no-cache" {
 			t.Fatalf("%s Cache-Control=%q, want no-cache", p, cc)
 		}

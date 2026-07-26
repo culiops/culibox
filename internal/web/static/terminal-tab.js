@@ -63,6 +63,11 @@ class TerminalTab {
       // on this option — without it, no modifier can select on a Mac at all.
       // Cost: Option+drag no longer does a column selection on macOS.
       macOptionClickForcesSelection: true,
+      // OSC 8 hyperlinks already work in xterm; installing a linkHandler REPLACES
+      // its default, which confirms before opening. Keep that confirmation — an OSC
+      // 8 link's visible text is arbitrary and can point anywhere — and add what the
+      // default lacks: localhost rewriting and noreferrer.
+      linkHandler: { activate: (_e, text) => openTerminalUrl(text, { confirm: true }) },
     });
     this.fitAddon = new FitAddon.FitAddon();
     this.term.loadAddon(this.fitAddon);
@@ -97,25 +102,22 @@ class TerminalTab {
       }
     }).catch(() => {});
 
-    // Make path-like tokens in terminal output clickable → open in a viewer.
-    // Absolute paths open directly; relative paths join the session's initial
-    // cwd (best-effort — may miss if the agent cd'd elsewhere).
+    // Clickable tokens in terminal output. links.js decides what is a URL, what is
+    // a file path, which wins when they overlap — the bug that used to send
+    // `https://host/a.html` to the file viewer as a relative path — and which links
+    // may be returned for this row. Absolute paths open directly; relative paths
+    // join the session's initial cwd (best-effort — may miss if the agent cd'd).
     if (this.term.registerLinkProvider) {
-      const re = /(?:\/|~\/|\.{1,2}\/|[\w.\-]+\/)[\w./\-]+\.[A-Za-z0-9]{1,8}/g;
       this.term.registerLinkProvider({
-        provideLinks: (line, cb) => {
-          const text = this.term.buffer.active.getLine(line - 1)?.translateToString(true) || "";
-          const links = [];
-          let m;
-          re.lastIndex = 0;
-          while ((m = re.exec(text)) !== null) {
-            const startX = m.index, tok = m[0];
-            links.push({
-              range: { start: { x: startX + 1, y: line }, end: { x: startX + tok.length, y: line } },
-              text: tok,
-              activate: () => openFile(this.resolvePath(tok)),
-            });
-          }
+        provideLinks: (y, cb) => {
+          const links = linksForRow(this.term, y).map((l) => ({
+            range: l.range,
+            text: l.text,
+            activate: () => {
+              if (l.kind === "url") openTerminalUrl(l.text);
+              else openFile(this.resolvePath(l.text));
+            },
+          }));
           cb(links.length ? links : undefined);
         },
       });
@@ -315,5 +317,25 @@ class TerminalTab {
     this.hideTrouble();
     try { this.ws && this.ws.close(); } catch (_) {}
     try { this.term.dispose(); } catch (_) {}
+  }
+}
+
+// openTerminalUrl is the single gate for every URL a terminal can open: the regex
+// provider and the OSC 8 linkHandler both funnel through it. Terminal output is
+// semi-trusted (agent output, cloned repos), so the scheme check is here rather
+// than in the regex — OSC 8 text never passes through the regex. noopener denies
+// the opened page a handle back into the console; noreferrer keeps the console's
+// host out of a third party's logs.
+function openTerminalUrl(raw, opts) {
+  if (!/^https?:\/\//i.test(raw)) return;
+  const url = rewriteLocalhost(raw, location.hostname);
+  // Only OSC 8 confirms. A plain-text URL is its own label — you read the target
+  // and then clicked it — but an OSC 8 link's visible text can say anything.
+  if (opts && opts.confirm && !window.confirm("Open this link?\n\n" + url)) return;
+  window.open(url, "_blank", "noopener,noreferrer");
+  if (url !== raw) {
+    try {
+      showToast("opened " + new URL(url).host + " instead of localhost");
+    } catch (_) {}
   }
 }
