@@ -70,3 +70,44 @@ test("tokens never overlap and are sorted by start", () => {
     assert.ok(toks[i - 1].end <= toks[i].start, "non-overlapping");
   }
 });
+
+const { rewriteLocalhost } = require("../static/links.js");
+
+test("localhost forms are rewritten to the host the console is viewed on", () => {
+  for (const h of ["localhost", "127.0.0.1", "0.0.0.0"]) {
+    assert.strictEqual(
+      rewriteLocalhost("http://" + h + ":3030/deck?x=1#s", "100.76.118.121"),
+      "http://100.76.118.121:3030/deck?x=1#s",
+    );
+  }
+});
+
+test("ipv6 loopback is rewritten too", () => {
+  assert.strictEqual(
+    rewriteLocalhost("http://[::1]:9000/a", "100.76.118.121"),
+    "http://100.76.118.121:9000/a",
+  );
+});
+
+test("a non-local host is returned byte-identical", () => {
+  const u = "https://culiops.dev/a?b=1#c";
+  assert.strictEqual(rewriteLocalhost(u, "100.76.118.121"), u);
+});
+
+test("no rewrite when the console itself is viewed at localhost", () => {
+  const u = "http://localhost:3030/deck";
+  assert.strictEqual(rewriteLocalhost(u, "localhost"), u);
+});
+
+test("unparseable input is returned unchanged", () => {
+  assert.strictEqual(rewriteLocalhost("http://", "100.76.118.121"), "http://");
+  assert.strictEqual(rewriteLocalhost("not a url", "100.76.118.121"), "not a url");
+});
+
+// Documents URL.toString() normalisation on the rewrite path. It only ever fires
+// when a rewrite actually happened (a non-local host returns early, byte-identical),
+// so it cannot cause a spurious "opened X instead of localhost" toast.
+test("rewriting also normalises, and that is accepted", () => {
+  assert.strictEqual(rewriteLocalhost("http://localhost:3030", "1.2.3.4"), "http://1.2.3.4:3030/");
+  assert.strictEqual(rewriteLocalhost("http://localhost:80/a", "1.2.3.4"), "http://1.2.3.4/a");
+});

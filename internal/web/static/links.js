@@ -73,6 +73,26 @@ function scanLinks(text) {
   return out;
 }
 
+// The browser is never on the same machine as the terminal: this console is
+// reached over Tailscale, so a `localhost:3030` printed by a dev server points at
+// the viewer's own machine and reliably fails. Rewriting the host to whatever
+// hostname the console is being viewed on is what the user actually meant.
+// URL.hostname keeps the brackets on an IPv6 literal, so both spellings are listed.
+const LINK_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"]);
+
+function rewriteLocalhost(raw, pageHost) {
+  if (!pageHost || LINK_LOCAL_HOSTS.has(pageHost.toLowerCase())) return raw;
+  let u;
+  try {
+    u = new URL(raw);
+  } catch (_) {
+    return raw;
+  }
+  if (!u.hostname || !LINK_LOCAL_HOSTS.has(u.hostname.toLowerCase())) return raw;
+  u.hostname = pageHost;
+  return u.toString();
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { scanLinks, trimUrl };
+  module.exports = { scanLinks, trimUrl, rewriteLocalhost };
 }
