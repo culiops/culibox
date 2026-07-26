@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 var (
@@ -97,11 +98,15 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, errArchiveTooBig):
+			// No measured size in the message: measureTree short-circuits the
+			// moment the cap is passed, so `total` is always "just over the
+			// limit" and would read as a self-contradiction ("folder is 512 MB,
+			// over the 512 MB limit") for a folder that might be 50 GB.
 			writeErr(w, http.StatusRequestEntityTooLarge,
-				"folder is "+humanBytes(total)+", over the "+humanBytes(maxBytes)+" limit")
+				"folder is over the "+humanBytes(maxBytes)+" limit")
 		case errors.Is(err, errArchiveTooMany):
 			writeErr(w, http.StatusRequestEntityTooLarge,
-				"folder has more than "+humanBytes(int64(maxFiles))+" files")
+				"folder has more than "+strconv.Itoa(maxFiles)+" files")
 		default:
 			writeErr(w, http.StatusInternalServerError, "could not read the folder")
 		}

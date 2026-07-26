@@ -378,3 +378,80 @@ func TestUploadRefusesTooManyParts(t *testing.T) {
 		t.Fatalf("errors = %+v, want one part-cap error", got.Errors)
 	}
 }
+
+// Basic-auth credentials ride along on cross-site requests and multipart is a
+// CORS-safelisted content type, so without an origin check any page on the
+// internet could write files into $HOME through a logged-in browser. The
+// response would be opaque to the attacker; the write would still land.
+func TestUploadRejectsCrossSiteRequest(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+
+	for _, c := range []struct {
+		name, header, value string
+		want                int
+	}{
+		{"cross-site fetch metadata", "Sec-Fetch-Site", "cross-site", http.StatusForbidden},
+		{"foreign origin", "Origin", "http://evil.example", http.StatusForbidden},
+		{"same-origin metadata", "Sec-Fetch-Site", "same-origin", http.StatusOK},
+		{"no headers at all (old browser)", "", "", http.StatusOK},
+	} {
+		r := uploadReq(t, home, [][2]string{{c.name + ".txt", "x"}})
+		if c.header != "" {
+			r.Header.Set(c.header, c.value)
+		}
+		w := httptest.NewRecorder()
+		s.handleFsUpload(w, r)
+		if w.Code != c.want {
+			t.Errorf("%s: code = %d, want %d", c.name, w.Code, c.want)
+		}
+	}
+
+	// The page's own request carries its real Origin, which must pass.
+	r := uploadReq(t, home, [][2]string{{"same.txt", "x"}})
+	r.Header.Set("Origin", "http://"+r.Host)
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, r)
+	if w.Code != http.StatusOK {
+		t.Errorf("same-origin request: code = %d, want 200", w.Code)
+	}
+}
+
+// A stray non-file form field must be skipped without counting against the part
+// cap — otherwise a form that grows a field silently loses an upload slot.
+func TestUploadIgnoresNonFileParts(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	mw.WriteField("csrf", "irrelevant")
+	fw, _ := mw.CreateFormFile("file", "real.txt")
+	io.WriteString(fw, "content")
+	mw.Close()
+	r := httptest.NewRequest(http.MethodPost, "/api/fs/upload?dir="+home, &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, r)
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Uploaded) != 1 || got.Uploaded[0].Name != "real.txt" || len(got.Errors) != 0 {
+		t.Fatalf("uploaded=%+v errors=%+v", got.Uploaded, got.Errors)
+	}
+}
+
+// A dotfile has no extension to preserve; splitting on filepath.Ext would leave
+// an empty stem and produce "-1.bashrc" instead of ".bashrc-1".
+func TestUploadDotfileCollisionKeepsTheName(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, ".bashrc"), []byte("original"), 0o644)
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, [][2]string{{".bashrc", "new"}}))
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Uploaded) != 1 || got.Uploaded[0].Name != ".bashrc-1" {
+		t.Fatalf("uploaded = %+v, want .bashrc-1", got.Uploaded)
+	}
+}

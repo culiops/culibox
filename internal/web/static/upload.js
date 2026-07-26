@@ -103,13 +103,22 @@ async function downloadPath(path, isDir) {
     showToast("Preparing " + (probe.files || 0) + " files (" + humanBytes(probe.bytes || 0) +
       ") — symlinks are skipped");
   }
-  const url = isDir
-    ? "/api/fs/archive?path=" + encodeURIComponent(path)
-    : "/api/fs/read?download=1&path=" + encodeURIComponent(path);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "";
   a.style.display = "none";
+  if (isDir) {
+    a.href = "/api/fs/archive?path=" + encodeURIComponent(path);
+    a.download = "";
+  } else {
+    a.href = "/api/fs/read?download=1&path=" + encodeURIComponent(path);
+    // Deliberately no `download` attribute here. It makes the browser consume
+    // the response whatever the status, so a 404 for a file deleted since the
+    // tree was rendered would "download" a 30-byte JSON error named `read` with
+    // nothing shown anywhere. Content-Disposition already forces the save, and
+    // _blank means an error status renders in a throwaway tab instead of
+    // navigating this one away and destroying the layout.
+    a.target = "_blank";
+    a.rel = "noopener";
+  }
   document.body.append(a);
   a.click();
   a.remove();
@@ -151,6 +160,11 @@ function makeDropZone(el, destFn, opts) {
   });
   el.addEventListener("dragleave", (e) => {
     if (!dragHasFiles(e)) return;
+    // Must stop propagation like the other three handlers: a nested zone's
+    // dragleave bubbling to its parent decrements a counter the parent never
+    // incremented (its dragenter was stopped), which strips the parent's
+    // highlight while the pointer is still over a live drop target.
+    e.stopPropagation();
     depth = Math.max(0, depth - 1);
     if (!depth && lit) { lit.classList.remove("drop-hot"); lit = null; }
   });
@@ -204,16 +218,29 @@ function clipboardFiles(e) {
   return Array.from(dt.files);
 }
 
-// pasteName gives a clipboard image a stable, sortable name. Browsers report it
-// as "image.png" or as nothing at all, so every paste would otherwise collide.
+// pasteFileName keeps the name the browser supplied and only invents one when
+// there is nothing usable. clipboardData.files is also non-empty for a copy from
+// the OS file manager, and those carry a real filename — renaming those to
+// paste-<timestamp> would throw away the only identifying information the file
+// had. "image.png" is the generic name browsers synthesise for a raw bitmap.
+function pasteFileName(file) {
+  const n = file.name || "";
+  if (n && n !== "image.png") return n;
+  return pasteName(file);
+}
+
+// pasteName gives a clipboard bitmap a stable, sortable name.
 function pasteName(file) {
   const d = new Date();
   const p = (n) => String(n).padStart(2, "0");
   const stamp = d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" +
                 p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
-  const sub = (file.type || "").split("/")[1] || "";
-  const ext = sub.replace(/[^a-z0-9]/gi, "").slice(0, 8) || "bin";
-  return "paste-" + stamp + "." + ext;
+  // Take the leading token of the MIME subtype: "svg+xml" is svg, "plain" is
+  // not a useful extension so text/* falls back to txt.
+  const sub = (file.type || "").split("/");
+  let ext = (sub[1] || "").split(/[+;]/)[0].replace(/[^a-z0-9]/gi, "").slice(0, 8);
+  if (sub[0] === "text") ext = "txt";
+  return "paste-" + stamp + "." + (ext || "bin");
 }
 
 function initUpload() {

@@ -124,10 +124,15 @@
     .ft-node:hover { background: #1f2630; }
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-    /* Hidden until hover so the tree stays a tree, not a toolbar. On touch there
-       is no hover, so the row keeps the button reachable at all times. */
+    /* Hidden until hover so the tree stays a tree, not a toolbar. */
     .ft-dl { flex: none; visibility: hidden; background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 3px; }
     .ft-node:hover .ft-dl { visibility: visible; }
+    /* On touch there is no hover, and `visibility: hidden` also removes the
+       button from hit-testing — so without this the tree row is the ONLY entry
+       point for downloading a folder and it would be unreachable on a phone. */
+    @media (hover: none) {
+      .ft-dl { visibility: visible; padding: 4px 8px; font-size: 14px; }
+    }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
     #ft-upload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
     #ft-upload:hover { color: var(--fg); border-color: var(--accent); }

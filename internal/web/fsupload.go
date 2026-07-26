@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,6 @@ var (
 	errBadName           = errors.New("bad filename")
 	errTooManyCollisions = errors.New("too many name collisions")
 	errNotDir            = errors.New("not a directory")
-	errTooLarge          = errors.New("file is over the upload limit")
 )
 
 const (
@@ -123,6 +123,11 @@ func openHomeRoot(home string) (*os.Root, string, error) {
 func createExclusive(root *os.Root, relDir, name string) (*os.File, string, error) {
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
+	// filepath.Ext(".bashrc") is the whole name, which would leave an empty stem
+	// and produce "-1.bashrc". A dotfile has no extension to preserve.
+	if stem == "" {
+		stem, ext = name, ""
+	}
 	for i := 0; i <= maxNameAttempts; i++ {
 		candidate := name
 		if i > 0 {
@@ -165,6 +170,10 @@ type uploadFailure struct {
 func (s *Server) handleFsUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !sameOrigin(r) {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	dir, err := containedDir(s.Home, r.URL.Query().Get("dir"))
@@ -234,6 +243,9 @@ func (s *Server) handleFsUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		u, ferr := storePart(root, relDir, dir, part.FileName(), part, limit)
 		if ferr != nil {
+			// The client message deliberately carries no path, so the server log
+			// is the only place a disk-full or EACCES leaves any trace at all.
+			log.Printf("upload %s: %v", dir, ferr)
 			failures = append(failures, uploadFailure{Name: displayName(part.FileName()), Error: ferr.Error()})
 		} else {
 			uploaded = append(uploaded, u)
@@ -311,4 +323,32 @@ func humanBytes(n int64) string {
 	default:
 		return fmt.Sprintf("%d bytes", n)
 	}
+}
+
+// sameOrigin rejects a cross-site request. Basic-auth credentials are cached
+// per-origin and re-attached to cross-site requests — there is no SameSite
+// equivalent for them — and multipart/form-data is a CORS-safelisted content
+// type, so without this any page on the internet could POST a file into $HOME
+// on behalf of a logged-in browser. The response would be opaque to the
+// attacker, but the write would still happen, and this box runs agents that
+// read those files.
+//
+// The JSON APIs are incidentally protected because application/json forces a
+// preflight; multipart does not, which is why this endpoint needs it
+// explicitly.
+//
+// Both headers are checked only when present: a same-origin GET sends no
+// Origin, and older browsers send no Sec-Fetch-Site, so an absent header must
+// not fail the request.
+func sameOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return false
+	}
+	if o := r.Header.Get("Origin"); o != "" &&
+		o != "http://"+r.Host && o != "https://"+r.Host {
+		return false
+	}
+	return true
 }

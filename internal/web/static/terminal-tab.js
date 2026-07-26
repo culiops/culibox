@@ -45,7 +45,7 @@ class TerminalTab {
       if (!files.length) return;
       e.preventDefault();
       e.stopPropagation();
-      const named = files.map((f) => new File([f], pasteName(f), { type: f.type }));
+      const named = files.map((f) => new File([f], pasteFileName(f), { type: f.type }));
       uploadFiles(named, this.cwd, { onDone: (data) => insertPathsIntoTerminal(this, data) });
     }, true);
 

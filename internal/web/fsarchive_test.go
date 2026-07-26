@@ -95,6 +95,14 @@ func TestArchiveRefusesOverCapBeforeStreaming(t *testing.T) {
 	if strings.HasPrefix(w.Body.String(), "\x1f\x8b") {
 		t.Fatal("gzip stream started before the cap was enforced")
 	}
+	// measureTree short-circuits at the cap, so any "measured" size it could
+	// report is meaningless — the message must not claim one.
+	if strings.Contains(w.Body.String(), "folder is 500") {
+		t.Fatalf("body reports a short-circuited running total: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "over the") {
+		t.Fatalf("body = %s, want the limit named", w.Body.String())
+	}
 }
 
 func TestArchiveRefusesTooManyFiles(t *testing.T) {
@@ -111,6 +119,12 @@ func TestArchiveRefusesTooManyFiles(t *testing.T) {
 	s.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?path="+root, nil))
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("code = %d, want 413", w.Code)
+	}
+	// Assert the MESSAGE, not just the status: a file COUNT rendered through a
+	// byte formatter reads "more than 19.5 KB files", and a status-only test
+	// passes with that bug in place.
+	if !strings.Contains(w.Body.String(), "more than 3 files") {
+		t.Fatalf("body = %s, want a plain file count", w.Body.String())
 	}
 }
 

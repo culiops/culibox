@@ -177,6 +177,11 @@ func TestReadDownloadServesBinaryAndLargeFiles(t *testing.T) {
 		if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
 			t.Errorf("%s: Content-Type = %q", p, ct)
 		}
+		// nosniff is what stops the browser from second-guessing that
+		// Content-Type and rendering, say, an HTML file inline from $HOME.
+		if ns := w.Header().Get("X-Content-Type-Options"); ns != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q, want nosniff", p, ns)
+		}
 	}
 
 	// Without download=1 the same two files are still refused exactly as before.
