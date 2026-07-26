@@ -8,6 +8,32 @@ let focusedCell = null;
 let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
 let maximized = null;
 
+// `restoring` is what protects the stored snapshot during boot: every layout call
+// boot makes (applyCap(4) and friends) would otherwise write an empty grid over it
+// before the restore has read it. bootLayout is captured at script-evaluation time
+// as well, so the snapshot in hand can never depend on when the flag is cleared.
+const bootLayout = typeof readLayout === "function" ? readLayout() : null;
+let restoring = true;
+let saveTimer = null;
+
+// scheduleSaveLayout debounces the write: applyCap collapses several cells in one
+// loop, and one user action should cost one write, not one per step.
+function scheduleSaveLayout() {
+  if (restoring || saveTimer) return;
+  saveTimer = setTimeout(saveLayoutNow, 200);
+}
+
+function saveLayoutNow() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (restoring || typeof writeLayout !== "function") return;
+  writeLayout(serializeLayout({ cells, focused: focusedCell, maximized, cap }));
+}
+
+// Flush on unload: the last layout change before a reload is exactly the one the
+// restore needs, and it is the one most likely to still be inside the debounce.
+// pagehide (not unload) is the event that also fires for the bfcache path.
+window.addEventListener("pagehide", () => { if (saveTimer) saveLayoutNow(); });
+
 // gridCols → columns/rows the grid uses, derived from the live cell count.
 function gridCols() { return Math.min(Math.max(cells.length, 1), 4); }
 
@@ -31,6 +57,7 @@ class Cell {
     tab.onUpdate = () => this.renderBar();
     this.tabs.push(tab);
     this.activate(tab);
+    scheduleSaveLayout();
   }
 
   activate(tab) {
@@ -44,6 +71,7 @@ class Cell {
       tab.onShow?.();
     }
     if (this === focusedCell) syncFocusedTree(); // tree follows the focused session
+    scheduleSaveLayout();
   }
 
   closeTab(tab) {
@@ -59,6 +87,7 @@ class Cell {
     this.renderBar();
     this.renderBody();
     refreshSessions();
+    scheduleSaveLayout();
   }
 
   renderBody() {
@@ -135,6 +164,7 @@ function setFocusedCell(cell) {
   focusedCell = cell;
   cells.forEach((c) => c.renderBar());
   syncFocusedTree(); // tree follows the focused session
+  scheduleSaveLayout();
 }
 
 // focusedTerminal returns the terminal tab active in the focused cell, or null.
@@ -192,11 +222,13 @@ function removeCell(cell) {
   if (!focusedCell) focusedCell = cells[cells.length - 1];
   renderGrid();
   refreshSessions();
+  scheduleSaveLayout();
 }
 
 function toggleMax(cell) {
   maximized = maximized === cell ? null : cell;
   renderGrid();
+  scheduleSaveLayout();
 }
 
 function renderGrid() {
@@ -235,6 +267,7 @@ function applyCap(n) {
   cells.forEach((c) => { c.renderBar(); c.renderBody(); });
   renderGrid();
   refreshSessions();
+  scheduleSaveLayout();
 }
 
 // openTerminal auto-splits a new window per session up to `cap`; beyond the cap
@@ -288,4 +321,56 @@ function closeTerminal(id) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) { c.closeTab(t); return; }
   }
+}
+
+// --- restore (see layout.js) -------------------------------------------------
+
+// applyPlan rebuilds the grid from a reconciled snapshot. Session names come from
+// the live list, not the snapshot, so a session renamed since the last visit comes
+// back under its current name.
+function applyPlan(plan, sessions) {
+  const nameOf = new Map((sessions || []).map((s) => [s.id, s.name || s.id]));
+  cells.forEach((c) => c.dispose());
+  cells = [];
+  focusedCell = null;
+  maximized = null;
+  for (const pc of plan.cells) {
+    const cell = new Cell();
+    cells.push(cell);
+    for (const t of pc.tabs) cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
+    cell.activate(cell.tabs[pc.active] || cell.tabs[0]);
+  }
+  // applyCap first: it is what collapses extra panes if a snapshot ever holds
+  // more of them than its own cap allows, and the focus below must be picked
+  // from the cells that survive that.
+  applyCap(plan.cap);
+  // applyCap parks focus on the last cell, so clear it first: setFocusedCell
+  // early-returns on an unchanged cell, and that would skip the tree sync.
+  const target = cells[plan.focused] || cells[0];
+  focusedCell = null;
+  setFocusedCell(target);
+  target.activeTab?.onShow?.(); // fit + keyboard focus land on the restored pane
+  const max = plan.maximized == null ? null : cells[plan.maximized];
+  if (max) toggleMax(max);
+}
+
+// restoreLayout replays the boot snapshot against the live session list. Called
+// once from boot; endRestore re-arms saving whether or not anything was restored.
+// The finally matters: if building the grid throws, `restoring` must still clear,
+// or every later layout change is silently never persisted.
+function restoreLayout(sessions) {
+  try {
+    const plan = typeof reconcileLayout === "function" ? reconcileLayout(bootLayout, sessions) : null;
+    if (plan) applyPlan(plan, sessions);
+  } finally {
+    endRestore();
+  }
+}
+
+// endRestore re-arms saving. `save` is false on the give-up path, where the
+// session list could not be fetched: the grid is empty there only because we
+// never restored it, and persisting that would delete the user's real layout.
+function endRestore(save = true) {
+  restoring = false;
+  if (save) scheduleSaveLayout(); // fold in whatever boot already built
 }

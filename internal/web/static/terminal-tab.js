@@ -152,7 +152,13 @@ class TerminalTab {
     const ws = new WebSocket(`${proto}://${location.host}/ws/${encodeURIComponent(this.id)}`);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
-    ws.onopen = () => { this.openedAt = Date.now(); this.setStatus("connected"); this.sendResize(); this.term.focus(); };
+    // Only the pane the user is actually on may take keyboard focus on connect:
+    // a restore opens every pane's socket at once, and whichever answered last
+    // would otherwise end up holding the cursor while another pane is outlined.
+    ws.onopen = () => {
+      this.openedAt = Date.now(); this.setStatus("connected"); this.sendResize();
+      if (typeof focusedTerminal !== "function" || focusedTerminal() === this) this.term.focus();
+    };
     ws.onmessage = (ev) => {
       if (typeof ev.data === "string") this.term.write(ev.data);
       else this.term.write(new Uint8Array(ev.data));
