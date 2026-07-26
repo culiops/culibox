@@ -3,14 +3,17 @@ const test = require("node:test");
 const assert = require("node:assert");
 const { tierBadge, tierRuntimeLabel } = require("../static/tier.js");
 
-test("a boxed session names the detected isolation runtime", () => {
+test("a boxed session reads as boxed, keeping the row narrow", () => {
   const b = tierBadge({ runtime: "box" }, "runc");
-  assert.equal(b.text, "boxed · runc");
+  assert.equal(b.text, "boxed");
   assert.equal(b.tone, "neutral");
 });
 
-test("sysbox is shown by its short name", () => {
-  assert.equal(tierBadge({ runtime: "box" }, "sysbox-runc").text, "boxed · sysbox");
+// The runtime is instance-wide, so it belongs in the tooltip rather than eating
+// sidebar width and wrapping the session name.
+test("the isolation runtime is carried in the tooltip, not the label", () => {
+  assert.match(tierBadge({ runtime: "box" }, "sysbox-runc").title, /sysbox/);
+  assert.equal(tierBadge({ runtime: "box" }, "sysbox-runc").text, "boxed");
   assert.equal(tierRuntimeLabel("sysbox-runc"), "sysbox");
 });
 

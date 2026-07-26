@@ -26,11 +26,15 @@ function tierRuntimeLabel(boxRuntime) {
 function tierBadge(session, boxRuntime) {
   if (!session || session.exited) return null;
   if (session.runtime === TIER_BOX) {
+    // The row shows the TIER only. The isolation runtime is an instance-wide
+    // fact, identical for every session, so spending scarce sidebar width on it
+    // just wraps the session name — it lives in the tooltip instead.
     return {
-      text: "boxed · " + tierRuntimeLabel(boxRuntime),
+      text: "boxed",
       tone: "neutral",
       title:
-        "Contained: only this project directory is mounted. No host home, no ~/.ssh, no docker socket.",
+        "Contained (" + tierRuntimeLabel(boxRuntime) + "): only this project directory is mounted. " +
+        "No host home, no ~/.ssh, no docker socket.",
     };
   }
   return {
