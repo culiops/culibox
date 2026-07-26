@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -152,4 +154,64 @@ func TestHandleFsRead(t *testing.T) {
 	}
 	// ensure io import is used (guards against accidental removal)
 	_ = io.Discard
+}
+
+func TestReadDownloadServesBinaryAndLargeFiles(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+
+	bin := filepath.Join(home, "blob.bin")
+	os.WriteFile(bin, []byte{0x00, 0x01, 0x02, 0x00}, 0o644)
+	big := filepath.Join(home, "big.txt")
+	os.WriteFile(big, bytes.Repeat([]byte("x"), maxTextBytes+10), 0o644)
+
+	for _, p := range []string{bin, big} {
+		w := httptest.NewRecorder()
+		s.handleFsRead(w, httptest.NewRequest(http.MethodGet, "/api/fs/read?download=1&path="+p, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: code = %d, want 200", p, w.Code)
+		}
+		if cd := w.Header().Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment;") {
+			t.Errorf("%s: Content-Disposition = %q", p, cd)
+		}
+		if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
+			t.Errorf("%s: Content-Type = %q", p, ct)
+		}
+	}
+
+	// Without download=1 the same two files are still refused exactly as before.
+	w := httptest.NewRecorder()
+	s.handleFsRead(w, httptest.NewRequest(http.MethodGet, "/api/fs/read?path="+big, nil))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("no download flag, big file: code = %d, want 413", w.Code)
+	}
+}
+
+func TestReadDownloadQuotesFilename(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home}
+	p := filepath.Join(home, `we"ird name.txt`)
+	os.WriteFile(p, []byte("x"), 0o644)
+	w := httptest.NewRecorder()
+	s.handleFsRead(w, httptest.NewRequest(http.MethodGet,
+		"/api/fs/read?download=1&path="+url.QueryEscape(p), nil))
+	cd := w.Header().Get("Content-Disposition")
+	// The quote must survive as an ESCAPED quote inside the quoted-string, not
+	// as a bare one that would terminate the parameter early and let the rest of
+	// the filename be read as header syntax.
+	if !strings.Contains(cd, `filename="we\"ird name.txt"`) {
+		t.Fatalf("quote not escaped in header: %q", cd)
+	}
+}
+
+func TestReadDownloadStillContained(t *testing.T) {
+	home := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	os.WriteFile(outside, []byte("x"), 0o644)
+	s := &Server{Home: home}
+	w := httptest.NewRecorder()
+	s.handleFsRead(w, httptest.NewRequest(http.MethodGet, "/api/fs/read?download=1&path="+outside, nil))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403", w.Code)
+	}
 }
