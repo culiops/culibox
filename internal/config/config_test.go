@@ -199,3 +199,26 @@ func TestValidateProfileBinScoping(t *testing.T) {
 		t.Fatalf("claude setting model should be valid, got %v", err)
 	}
 }
+
+func TestUploadLimitDefaults(t *testing.T) {
+	if got := (Config{}).UploadLimit(); got != 64<<20 {
+		t.Errorf("zero: got %d, want %d", got, int64(64<<20))
+	}
+	if got := (Config{MaxUploadBytes: -5}).UploadLimit(); got != 64<<20 {
+		t.Errorf("negative: got %d, want default", got)
+	}
+	if got := (Config{MaxUploadBytes: 123}).UploadLimit(); got != 123 {
+		t.Errorf("set: got %d, want 123", got)
+	}
+}
+
+func TestArchiveLimitsDefaults(t *testing.T) {
+	b, n := (Config{}).ArchiveLimits()
+	if b != 512<<20 || n != 20000 {
+		t.Errorf("defaults = %d, %d; want %d, 20000", b, n, int64(512<<20))
+	}
+	b, n = (Config{MaxArchiveBytes: 7, MaxArchiveFiles: 9}).ArchiveLimits()
+	if b != 7 || n != 9 {
+		t.Errorf("set = %d, %d; want 7, 9", b, n)
+	}
+}

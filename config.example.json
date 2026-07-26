@@ -13,6 +13,11 @@
   "abduco_bin": "abduco",
   "abduco_socket_dir": "/home/you/.local/share/agent-console/abduco",
 
+  "comment_transfer": "File transfer caps. All optional; omitting one uses the default shown. There is deliberately no way to express 'unlimited' — 0 or a negative number means 'use the default', so a typo cannot uncap the write path.",
+  "max_upload_bytes": 67108864,
+  "max_archive_bytes": 536870912,
+  "max_archive_files": 20000,
+
   "secret_sources": [
     { "type": "env" },
     { "type": "file", "path": "/etc/agent-console/secrets.env" }

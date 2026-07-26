@@ -92,6 +92,9 @@ type Config struct {
 	DataDir          string         `json:"data_dir,omitempty"`      // default ~/.local/share/agent-console
 	AbducoBin        string         `json:"abduco_bin,omitempty"`    // default "abduco" on PATH
 	AbducoSocketDir  string         `json:"abduco_socket_dir,omitempty"`
+	MaxUploadBytes   int64          `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB
+	MaxArchiveBytes  int64          `json:"max_archive_bytes,omitempty"` // per directory download; 0 → 512 MiB
+	MaxArchiveFiles  int            `json:"max_archive_files,omitempty"` // per directory download; 0 → 20000
 	SecretSources    []SecretSource `json:"secret_sources,omitempty"`
 	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
@@ -250,4 +253,28 @@ func (c Config) checkBind() error {
 		return fmt.Errorf("config: bind_addr %q binds all interfaces; set allow_public to override", c.BindAddr)
 	}
 	return nil
+}
+
+// UploadLimit is the per-file upload cap, defaulting to 64 MiB. A zero or
+// negative value means "unset", never "unlimited" — the upload path must never
+// run uncapped, so there is deliberately no way to express that in config.
+func (c Config) UploadLimit() int64 {
+	if c.MaxUploadBytes <= 0 {
+		return 64 << 20
+	}
+	return c.MaxUploadBytes
+}
+
+// ArchiveLimits returns the directory-download caps (total uncompressed bytes,
+// file count), defaulting to 512 MiB and 20000. As with UploadLimit, unset is
+// never unlimited.
+func (c Config) ArchiveLimits() (int64, int) {
+	b, n := c.MaxArchiveBytes, c.MaxArchiveFiles
+	if b <= 0 {
+		b = 512 << 20
+	}
+	if n <= 0 {
+		n = 20000
+	}
+	return b, n
 }

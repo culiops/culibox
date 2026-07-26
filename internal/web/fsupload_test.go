@@ -1,7 +1,13 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -102,7 +108,7 @@ func TestCreateExclusiveGivesUpAfterManyCollisions(t *testing.T) {
 	}
 }
 
-func TestContainedNewFile(t *testing.T) {
+func TestContainedDir(t *testing.T) {
 	home := t.TempDir()
 	sub := filepath.Join(home, "work")
 	if err := os.Mkdir(sub, 0o755); err != nil {
@@ -113,24 +119,164 @@ func TestContainedNewFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotDir, gotName, err := containedNewFile(home, sub, "new.png")
+	gotDir, err := containedDir(home, sub)
 	if err != nil {
-		t.Fatalf("containedNewFile: %v", err)
+		t.Fatalf("containedDir: %v", err)
 	}
-	if gotName != "new.png" || !strings.HasPrefix(gotDir, home) {
-		t.Fatalf("got %q, %q", gotDir, gotName)
+	if !strings.HasPrefix(gotDir, home) {
+		t.Fatalf("got %q, want a path under %q", gotDir, home)
 	}
 
-	if _, _, err := containedNewFile(home, filepath.Dir(home), "x.txt"); !errors.Is(err, errOutsideHome) {
+	if _, err := containedDir(home, filepath.Dir(home)); !errors.Is(err, errOutsideHome) {
 		t.Errorf("outside home: err = %v, want errOutsideHome", err)
 	}
-	if _, _, err := containedNewFile(home, filepath.Join(home, "nope"), "x.txt"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := containedDir(home, filepath.Join(home, "nope")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("missing dir: err = %v, want os.ErrNotExist", err)
 	}
-	if _, _, err := containedNewFile(home, regular, "x.txt"); err == nil {
-		t.Error("dir that is a regular file: want error")
+	if _, err := containedDir(home, regular); !errors.Is(err, errNotDir) {
+		t.Errorf("dir that is a regular file: err = %v, want errNotDir", err)
 	}
-	if _, _, err := containedNewFile(home, sub, ".."); !errors.Is(err, errBadName) {
-		t.Errorf("bad name: err = %v, want errBadName", err)
+	if _, err := containedDir(home, "relative/path"); !errors.Is(err, errBadPath) {
+		t.Errorf("relative path: err = %v, want errBadPath", err)
+	}
+}
+
+// uploadReq builds a multipart request with the given name→content parts.
+func uploadReq(t *testing.T, dir string, parts [][2]string) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for _, p := range parts {
+		w, err := mw.CreateFormFile("file", p[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.WriteString(w, p[1])
+	}
+	mw.Close()
+	r := httptest.NewRequest(http.MethodPost, "/api/fs/upload?dir="+dir, &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	return r
+}
+
+type uploadResp struct {
+	Uploaded []struct {
+		Name        string `json:"name"`
+		Path        string `json:"path"`
+		Size        int64  `json:"size"`
+		RenamedFrom string `json:"renamed_from"`
+	} `json:"uploaded"`
+	Errors []struct {
+		Name  string `json:"name"`
+		Error string `json:"error"`
+	} `json:"errors"`
+}
+
+func TestUploadWritesFiles(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, [][2]string{{"a.txt", "alpha"}, {"b.txt", "beta"}}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Uploaded) != 2 || len(got.Errors) != 0 {
+		t.Fatalf("uploaded=%d errors=%d, want 2/0", len(got.Uploaded), len(got.Errors))
+	}
+	b, err := os.ReadFile(filepath.Join(home, "a.txt"))
+	if err != nil || string(b) != "alpha" {
+		t.Fatalf("a.txt = %q, %v", b, err)
+	}
+}
+
+func TestUploadRenamesOnCollision(t *testing.T) {
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "a.txt"), []byte("original"), 0o644)
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, [][2]string{{"a.txt", "new"}}))
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Uploaded) != 1 || got.Uploaded[0].Name != "a-1.txt" || got.Uploaded[0].RenamedFrom != "a.txt" {
+		t.Fatalf("got %+v", got.Uploaded)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, "a.txt"))
+	if string(b) != "original" {
+		t.Fatalf("original overwritten: %q", b)
+	}
+}
+
+// A part over the cap fails alone: its partial file is removed and its siblings
+// still land. The response is still 200 — the destination was fine.
+func TestUploadOverCapFailsThatPartOnly(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 4}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, [][2]string{{"big.txt", "way too long"}, {"ok.txt", "ok"}}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Errors) != 1 || got.Errors[0].Name != "big.txt" {
+		t.Fatalf("errors = %+v, want one for big.txt", got.Errors)
+	}
+	if len(got.Uploaded) != 1 || got.Uploaded[0].Name != "ok.txt" {
+		t.Fatalf("uploaded = %+v, want ok.txt", got.Uploaded)
+	}
+	if _, err := os.Stat(filepath.Join(home, "big.txt")); !os.IsNotExist(err) {
+		t.Fatal("partial file was left on disk")
+	}
+}
+
+func TestUploadBadFilenameIsAPartError(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, [][2]string{{"..", "x"}, {"fine.txt", "y"}}))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Errors) != 1 || len(got.Uploaded) != 1 {
+		t.Fatalf("got %+v / %+v", got.Errors, got.Uploaded)
+	}
+}
+
+func TestUploadDestinationErrors(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	file := filepath.Join(home, "f.txt")
+	os.WriteFile(file, nil, 0o644)
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+
+	cases := []struct {
+		dir  string
+		want int
+	}{
+		{outside, http.StatusForbidden},
+		{filepath.Join(home, "missing"), http.StatusNotFound},
+		{file, http.StatusBadRequest},
+		{"relative/path", http.StatusBadRequest},
+	}
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		s.handleFsUpload(w, uploadReq(t, c.dir, [][2]string{{"a.txt", "x"}}))
+		if w.Code != c.want {
+			t.Errorf("dir %q: code = %d, want %d", c.dir, w.Code, c.want)
+		}
+	}
+}
+
+func TestUploadRejectsGet(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, httptest.NewRequest(http.MethodGet, "/api/fs/upload?dir="+home, nil))
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", w.Code)
 	}
 }

@@ -55,13 +55,19 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 		t.Fatalf("api with basic-auth: want 200, got %d", rec.Code)
 	}
 
-	// The file endpoints read the user's home directory, so registering one on
-	// the wrong mux would expose it unauthenticated. Assert the newest of them
-	// is gated, not just that it exists.
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/fs/search?q=x", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("fs search without basic-auth: want 401, got %d", rec.Code)
+	// The file endpoints read AND WRITE the user's home directory, so
+	// registering one on the wrong mux would expose it unauthenticated. Assert
+	// every one of them is gated, not just that they exist.
+	for _, probe := range []struct{ method, path string }{
+		{"GET", "/api/fs/search?q=x"},
+		{"GET", "/api/fs/archive?path=/tmp"},
+		{"POST", "/api/fs/upload?dir=/tmp"},
+	} {
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s without basic-auth: want 401, got %d", probe.method, probe.path, rec.Code)
+		}
 	}
 }
 
