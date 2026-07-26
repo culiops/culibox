@@ -1,0 +1,153 @@
+package session
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/culiops/culiops-agent-console/internal/config"
+	"github.com/culiops/culiops-agent-console/internal/launcher"
+)
+
+// tieredLauncher is a builder that also answers RuntimeFor, like the real one.
+type tieredLauncher struct {
+	argv    []string
+	runtime string
+}
+
+func (l tieredLauncher) Build(launcher.SpawnSpec) ([]string, []string, error) {
+	return l.argv, []string{"TERM=xterm"}, nil
+}
+
+func (l tieredLauncher) RuntimeFor(spec launcher.SpawnSpec) (string, error) {
+	if spec.Runtime != "" {
+		return spec.Runtime, nil
+	}
+	return l.runtime, nil
+}
+
+type fakeBoxes struct {
+	mu       sync.Mutex
+	wraps    int
+	releases int
+	adopts   int
+}
+
+func (f *fakeBoxes) Wrap(_ context.Context, _ string, argv, env []string) ([]string, []string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.wraps++
+	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, nil
+}
+
+func (f *fakeBoxes) Adopt(string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.adopts++
+	return nil
+}
+
+func (f *fakeBoxes) Release(string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases++
+}
+
+func (f *fakeBoxes) Runtime() string { return "runc" }
+
+func (f *fakeBoxes) counts() (int, int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.wraps, f.releases, f.adopts
+}
+
+func managerWithBoxes(t *testing.T, argv []string) (*Manager, *fakeBoxes) {
+	t.Helper()
+	m := NewManager(tieredLauncher{argv: argv, runtime: config.RuntimeBox}, nil, 1<<16, time.Minute)
+	b := &fakeBoxes{}
+	m.SetBoxes(b)
+	return m, b
+}
+
+func TestSpawnWithHostRuntimeSkipsTheBox(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if wraps, _, _ := boxes.counts(); wraps != 0 {
+		t.Fatalf("trusted-host spawn must not touch the box layer, got %d wraps", wraps)
+	}
+	if s.Runtime != config.RuntimeHost {
+		t.Fatalf("session runtime = %q, want host", s.Runtime)
+	}
+}
+
+func TestSpawnWithBoxRuntimeWrapsArgvOnce(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if wraps, _, _ := boxes.counts(); wraps != 1 {
+		t.Fatalf("boxed spawn must wrap argv exactly once, got %d", wraps)
+	}
+	if s.Info().Runtime != config.RuntimeBox {
+		t.Fatalf("Info().Runtime = %q, want box", s.Info().Runtime)
+	}
+}
+
+// Without a box layer installed, containment is never assumed.
+func TestSpawnWithoutBoxesFallsBackToHost(t *testing.T) {
+	m := NewManager(tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, nil, 1<<16, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if s.Runtime != config.RuntimeHost {
+		t.Fatalf("runtime = %q, want host when no box layer is installed", s.Runtime)
+	}
+}
+
+func TestKilledBoxedSessionReleasesItsBoxExactlyOnce(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, releases, _ := boxes.counts(); releases == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, releases, _ := boxes.counts(); releases != 1 {
+		t.Fatalf("killed boxed session released its box %d times, want exactly 1", releases)
+	}
+}
+
+// An agent that exits on its own must release too, or the box lingers past its
+// TTL forever.
+func TestExitedBoxedSessionReleasesItsBox(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "exit 0"})
+	if _, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, releases, _ := boxes.counts(); releases == 1 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, releases, _ := boxes.counts()
+	t.Fatalf("exited boxed session released %d times, want 1", releases)
+}

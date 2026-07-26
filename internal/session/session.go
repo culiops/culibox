@@ -7,8 +7,10 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 )
 
@@ -54,6 +57,23 @@ type Backend interface {
 	List() ([]string, error)
 }
 
+// Boxes is the optional containment layer. A nil Boxes means boxing is
+// unavailable (no docker, or no image) and every spawn runs on the host tier.
+// Kept as an interface here so the session package does not depend on the box
+// package and stays unit-testable with a fake.
+type Boxes interface {
+	Wrap(ctx context.Context, cwd string, argv, env []string) ([]string, []string, error)
+	Adopt(cwd string) error
+	Release(cwd string)
+	Runtime() string
+}
+
+// RuntimeResolver is implemented by launchers that understand tiers. It is an
+// optional interface so existing fake builders keep compiling.
+type RuntimeResolver interface {
+	RuntimeFor(spec launcher.SpawnSpec) (string, error)
+}
+
 // Info is a read-only snapshot for listing.
 type Info struct {
 	ID      string    `json:"id"`
@@ -62,7 +82,8 @@ type Info struct {
 	Created time.Time `json:"created"`
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
-	Name    string    `json:"name"` // mutable display label (id is the stable key)
+	Name    string    `json:"name"`              // mutable display label (id is the stable key)
+	Runtime string    `json:"runtime,omitempty"` // box | host
 }
 
 // Session owns one agent child process and its PTY.
@@ -71,6 +92,7 @@ type Session struct {
 	Agent   string
 	Cwd     string
 	Created time.Time
+	Runtime string // box | host; immutable for the session's lifetime
 
 	cmd  *exec.Cmd
 	ptmx *os.File
@@ -324,7 +346,7 @@ func (s *Session) Exited() bool {
 func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name, Runtime: s.Runtime}
 }
 
 // SetName updates the mutable display label.
@@ -354,6 +376,34 @@ type Manager struct {
 	counters  map[string]int
 	ringCap   int
 	retention time.Duration
+	boxes     Boxes // nil = containment unavailable; every spawn is host tier
+}
+
+// SetBoxes installs the containment layer. Call once at boot, before Reconcile.
+func (m *Manager) SetBoxes(b Boxes) {
+	m.mu.Lock()
+	m.boxes = b
+	m.mu.Unlock()
+}
+
+// runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
+// box layer the answer is host — containment is never assumed, only granted.
+func (m *Manager) runtimeFor(spec launcher.SpawnSpec) string {
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if boxes == nil {
+		return config.RuntimeHost
+	}
+	rr, ok := m.launcher.(RuntimeResolver)
+	if !ok {
+		return config.RuntimeHost
+	}
+	rt, err := rr.RuntimeFor(spec)
+	if err != nil || rt == "" {
+		return config.RuntimeHost
+	}
+	return rt
 }
 
 // SetSidecarPath enables metadata persistence + restart reconcile by loading the
@@ -406,12 +456,32 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		env = []string{}
 	}
 
+	// Containment is applied here, between the launcher and the process start,
+	// so abduco persistence and the whole session lifecycle stay untouched.
+	runtime := m.runtimeFor(spec)
+	if runtime == config.RuntimeBox {
+		m.mu.Lock()
+		boxes := m.boxes
+		m.mu.Unlock()
+		wrapped, wrappedEnv, err := boxes.Wrap(context.Background(), spec.Cwd, argv, env)
+		if err != nil {
+			// Name the way out: a silent failure here is what makes people
+			// disable containment entirely.
+			return nil, fmt.Errorf("session: starting box for %q: %w — spawn with runtime %q to run on the host instead",
+				spec.Cwd, err, config.RuntimeHost)
+		}
+		argv, env = wrapped, wrappedEnv
+	}
+
 	m.mu.Lock()
 	id := m.nextIDLocked(spec.Agent)
 	m.mu.Unlock()
 
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
+		if runtime == config.RuntimeBox {
+			m.releaseBox(spec.Cwd) // never leak a box for a session that failed to start
+		}
 		return nil, err
 	}
 
@@ -419,15 +489,26 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	name := deriveName(spec.Name, spec.Cwd, id)
 	m.mu.Lock()
 	sess := newSession(id, spec.Agent, name, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	sess.Runtime = runtime
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// releaseBox tells the box layer one session for this workspace is gone.
+func (m *Manager) releaseBox(cwd string) {
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if boxes != nil {
+		boxes.Release(cwd)
+	}
 }
 
 // startProcess creates the OS process + PTY for a session. With a backend the
@@ -467,6 +548,12 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 	go func() {
 		select {
 		case <-sess.Done(): // finalized (agent exited or killed) → retain then prune
+			// Release only on finalize. A DETACHED session's agent is still
+			// alive inside its box, so releasing there would arm the idle timer
+			// and stop the box under a session we intend to recover.
+			if sess.Runtime == config.RuntimeBox {
+				m.releaseBox(sess.Cwd)
+			}
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}
@@ -674,10 +761,23 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	if name == "" { // pre-existing sidecar entries predate the Name field
 		name = deriveName("", md.Cwd, id)
 	}
+	runtime := md.Runtime
+	if runtime == "" { // sidecar entries written before containment existed
+		runtime = config.RuntimeHost
+	}
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	sess.Runtime = runtime
 	m.sessions[id] = sess
+	boxes := m.boxes
 	m.mu.Unlock()
+	// Re-register the box BEFORE the caller reconciles boxes, or the orphan
+	// reaper stops the container this session is running inside.
+	if runtime == config.RuntimeBox && boxes != nil {
+		if err := boxes.Adopt(md.Cwd); err != nil {
+			log.Printf("session %s: adopting box for %q: %v", id, md.Cwd, err)
+		}
+	}
 	sess.ForceRedraw()
 	m.watchRetention(id, sess)
 	return nil

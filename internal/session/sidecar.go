@@ -17,6 +17,12 @@ type sessionMeta struct {
 	Name    string    `json:"name,omitempty"` // mutable display label
 	Cwd     string    `json:"cwd,omitempty"`
 	Created time.Time `json:"created"`
+	// Runtime is the tier the session was spawned under (box|host). It must
+	// survive a restart: without it, reconcile cannot tell which reattached
+	// sessions still own a box, and the orphan reaper would stop boxes out from
+	// under live sessions. An empty value means a pre-containment entry, which
+	// is host by definition.
+	Runtime string `json:"runtime,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
