@@ -136,10 +136,10 @@
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
     #ft-upload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
     #ft-upload:hover { color: var(--fg); border-color: var(--accent); }
-    /* Drop affordance — it has to read as a target at a glance, on both the
-       tree and a terminal cell, or the whole gesture is guesswork. */
+    /* Drop affordance — it has to read as a target at a glance, or the whole
+       gesture is guesswork. The terminal-cell variant lives with the .cell
+       rules below, where source order lets it beat the focus outline. */
     .drop-hot { outline: 2px dashed var(--accent); outline-offset: -3px; background: #1f6feb1f; }
-    .cell.drop-hot { outline-offset: -2px; }
 
     /* --- dialogs (settings / advanced spawn / palette) -------------------- */
     dialog {
@@ -258,6 +258,11 @@
     /* cells = grid slots; each holds a stack of tabs (terminal or viewer) */
     .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #000; }
     .cell.focused { outline: 1px solid var(--accent); }
+    /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
+       Placed before it, the drag highlight on the focused cell was painted over
+       by the 1px focus outline and the drop target looked like every other
+       pane — the affordance existed in the DOM and not on screen. */
+    .cell.drop-hot { outline: 2px dashed var(--accent); outline-offset: -2px; background: #1f6feb1f; }
     /* No right padding: the sticky control cluster pins to the scrollport edge, and
        any padding there would leave a strip where scrolled tabs bleed through. The
        cluster carries that 5px itself. */
@@ -337,6 +342,14 @@
       #palette { width: 96vw; margin-top: 4vh; }
       #settings-modal, #spawn-modal { width: 94vw; }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
+      /* ＋ is the ONLY upload route on a phone (no drag exists), so it cannot
+         stay an 18px-tall desktop button sitting in a header. */
+      #ft-upload { min-height: 30px; min-width: 38px; font-size: 15px; }
+      #files-pane .pane-head { padding-top: 4px; padding-bottom: 4px; }
+      /* Also size ⤓ by viewport, not only by (hover: none): the folder-download
+         tooltip is unreachable on touch anyway, so the button IS the whole
+         affordance, and an 11×12px target is not one. */
+      .ft-dl { visibility: visible; padding: 4px 8px; font-size: 15px; }
       /* Bigger tap targets: three small controls sit next to the destructive ✕. */
       .cell-ctl { gap: 6px; }
       .cell-ctl button { min-height: 28px; }
