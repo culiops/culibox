@@ -17,6 +17,24 @@ let palSeq = 0;   // guards against an older file response overwriting a newer o
 let palTimer = null;
 let palAbort = null;
 
+// isPaletteHotkey matches the key events that open the palette.
+//
+// ⌘K is free on macOS, but on every other platform Ctrl+K is readline's
+// kill-to-end-of-line — which the shells and agent TUIs running in these panes
+// actually use — so the non-mac combo is Ctrl+Shift+K, matching the Ctrl+Shift+`
+// convention already used for the quick shell.
+//
+// Ctrl+Shift+Space is accepted everywhere as a second way in. A letter combo is
+// exactly what other desktop apps register as a SYSTEM-WIDE hotkey (Notion took
+// Ctrl+Shift+K on a Windows machine, so Chrome never received the keypress at
+// all — no page can defend against that). Space is a far less popular target,
+// and it carries no meaning inside a terminal either.
+function isPaletteHotkey(e, mac) {
+  if (e.altKey) return false;
+  if (e.ctrlKey && e.shiftKey && !e.metaKey && (e.code === "Space" || (!mac && e.code === "KeyK"))) return true;
+  return !!(mac && e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyK");
+}
+
 function paletteOpen() {
   const d = document.getElementById("palette");
   return !!(d && d.open);
@@ -76,6 +94,7 @@ function paletteCommands() {
   cmds.push({ kind: "settings", label: "Settings · Profiles", hint: "", run: () => openSettings("manage") });
   cmds.push({ kind: "settings", label: "Settings · Font sizes", hint: "", run: () => openSettings("settings") });
   cmds.push({ kind: "view", label: "Toggle sidebar", hint: "", run: toggleSidebar });
+  cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
   cmds.push({ kind: "view", label: "Increase font size", hint: "Ctrl +", run: () => zoomFocused(+fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Decrease font size", hint: "Ctrl -", run: () => zoomFocused(-fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Reset font size", hint: "Ctrl 0", run: () => resetZoomFocused() });
@@ -216,6 +235,10 @@ function initPalette() {
   if (!d || !inp) return;
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   const combo = mac ? "⌘K" : "Ctrl+Shift+K";
+  // The fallback is written next to the primary everywhere the combo appears:
+  // when another app has grabbed the primary system-wide, the user needs to be
+  // told a second one exists — they cannot guess it.
+  const combos = combo + " or Ctrl+Shift+Space";
 
   const openBtn = document.getElementById("palette-open");
   if (openBtn) {
@@ -223,7 +246,7 @@ function initPalette() {
     // glyph: it doubles as the only always-visible place the combo is written
     // down (the hint bar can be dismissed for good).
     openBtn.textContent = mac ? "⌘K" : "^⇧K";
-    openBtn.title = "Command palette (" + combo + ")";
+    openBtn.title = "Command palette (" + combos + ")";
     openBtn.onclick = openPalette;
   }
 
@@ -240,17 +263,11 @@ function initPalette() {
     if (palAbort) { palAbort.abort(); palAbort = null; }
   });
 
-  // Hotkey. ⌘K is free on macOS, but on every other platform Ctrl+K is
-  // readline's kill-to-end-of-line — which the shells and agent TUIs running in
-  // these panes actually use. Stealing it would break a binding the app exists
-  // to host, so the non-mac combo is Ctrl+Shift+K, matching the Ctrl+Shift+`
-  // convention already used for the quick shell. The ⌕ header button is the
-  // mouse path, and the guaranteed one if a browser claims the combo.
+  // Hotkey — see isPaletteHotkey for which combos and why. The ⌕ header button
+  // is the mouse path, and the guaranteed one when something outside the page
+  // claims a combo: a browser shortcut, or another app's system-wide hotkey.
   document.addEventListener("keydown", (e) => {
-    const hit = mac
-      ? (e.metaKey && !e.ctrlKey && !e.altKey && e.code === "KeyK")
-      : (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.code === "KeyK");
-    if (!hit || paletteOpen()) return;
+    if (!isPaletteHotkey(e, mac) || paletteOpen()) return;
     // Never steal the combo from a real text field (inline rename, path box,
     // profile editor). xterm's own focus target IS a textarea, so exempt that
     // one — opening the palette over a terminal is the whole point.
@@ -261,4 +278,8 @@ function initPalette() {
     e.stopPropagation();
     openPalette();
   }, true);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { isPaletteHotkey };
 }

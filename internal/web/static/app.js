@@ -109,7 +109,10 @@ $("sidebar-toggle").onclick = toggleSidebar;
   // Shift elsewhere (see macOptionClickForcesSelection in terminal-tab.js).
   // Non-mac uses Ctrl+Shift+K, not Ctrl+K: Ctrl+K is readline's kill-to-end-of-line
   // inside the shells and TUIs these panes host (see initPalette).
-  $("hint-text").textContent = `${mac ? "⌘K" : "Ctrl+Shift+K"} for commands · Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
+  // Both palette combos are named: another desktop app can hold the primary one
+  // system-wide (Notion grabs Ctrl+Shift+K on Windows), and a shortcut that does
+  // nothing with no alternative in sight reads as a broken app.
+  $("hint-text").textContent = `${mac ? "⌘K" : "Ctrl+Shift+K"} or Ctrl+Shift+Space for commands · Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
   $("hint-x").onclick = () => {
     hint.classList.add("hidden");
     try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}

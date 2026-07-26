@@ -71,6 +71,29 @@ function reportUpload(data, destDir) {
   }
 }
 
+// shouldRefreshTree decides whether an upload that landed in destDir changes what
+// the file tree is currently showing. Only an upload into the tree's own root
+// does: the tree lists one level, so a file dropped into a subfolder would not
+// appear anyway, and re-listing would collapse every folder the user had opened.
+// Trailing slashes differ by source (a <select> value vs a session's cwd), so
+// they are normalised before comparing.
+function shouldRefreshTree(destDir, treeRoot) {
+  if (!destDir || !treeRoot) return false;
+  const trim = (p) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
+  return trim(destDir) === trim(treeRoot);
+}
+
+// refreshTreeAfterUpload re-lists the tree when the upload changed what it shows.
+// The terminal-pane drop and the image paste both upload into the session's cwd —
+// which is usually exactly the tree's root, since the tree follows the focused
+// session — and they were the only upload routes that never told the tree, so an
+// uploaded file simply never appeared until something else re-rooted it.
+function refreshTreeAfterUpload(destDir) {
+  if (typeof ftRootSel === "undefined" || !ftRootSel) return;
+  if (!shouldRefreshTree(destDir, ftRootSel.value)) return;
+  if (typeof ftLoadRoot === "function") ftLoadRoot();
+}
+
 function humanBytes(n) {
   if (n >= (1 << 30)) return (n / (1 << 30)).toFixed(1) + " GB";
   if (n >= (1 << 20)) return (n / (1 << 20)).toFixed(1) + " MB";
@@ -216,6 +239,10 @@ function clipboardFiles(e) {
   const dt = e.clipboardData;
   if (!dt || !dt.files) return [];
   return Array.from(dt.files);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when
