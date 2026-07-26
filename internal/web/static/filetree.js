@@ -89,9 +89,11 @@ function openRowMenu(anchor, path, name, isDir) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   const items = [];
-  // Download first (the one you reach for most), destructive last.
-  items.push([isDir ? "Download .tar.gz — symlinks skipped" : "Download",
-    () => downloadPath(path, isDir)]);
+  // Download first (the one you reach for most), destructive last. The
+  // symlink-skip disclosure is NOT repeated here: downloadPath's probe toast
+  // already carries it on every folder download, and a toast is readable on a
+  // phone where the old ⤓ tooltip never was.
+  items.push([isDir ? "Download .tar.gz" : "Download", () => downloadPath(path, isDir)]);
   if (isDir) items.push(["New folder here…", () => promptMkdir(path)]);
   items.push(["Rename…", () => promptRename(path, name)]);
   items.push(["Delete…", () => confirmDelete(path, name, isDir)]);

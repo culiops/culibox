@@ -123,7 +123,10 @@ async function downloadPath(path, isDir) {
       showToast("Cannot download that folder — " + e.message, { error: true });
       return;
     }
-    showToast("Preparing " + (probe.files || 0) + " files (" + humanBytes(probe.bytes || 0) +
+    // This toast is now the ONLY place the symlink-skip is disclosed — the row
+    // menu says just "Download .tar.gz" — so it has to read properly.
+    const n = probe.files || 0;
+    showToast("Preparing " + n + (n === 1 ? " file (" : " files (") + humanBytes(probe.bytes || 0) +
       ") — symlinks are skipped");
   }
   const a = document.createElement("a");
