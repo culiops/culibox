@@ -19,13 +19,17 @@ async function fsPost(path, body) {
 }
 
 function fsMkdir(dir, name) { return fsPost("/api/fs/mkdir", { dir, name }); }
-function fsRename(path, name) { return fsPost("/api/fs/rename", { path, name }); }
+function fsRename(path, name, confirmName) {
+  return fsPost("/api/fs/rename", { path, name, confirm_name: confirmName || "" });
+}
 function fsDelete(path, opts) {
   opts = opts || {};
   return fsPost("/api/fs/delete", {
     path,
     recursive: !!opts.recursive,
-    files: opts.files || 0,
+    // Echo back the entry count that was actually shown: the server re-measures
+    // and refuses if the tree has grown well past what the user agreed to.
+    entries: opts.entries || 0,
     confirm_name: opts.confirmName || "",
   });
 }
@@ -35,21 +39,52 @@ function fsErrText(res) {
   return (res && res.data && res.data.error) || ("HTTP " + (res && res.status));
 }
 
-// deleteConfirmText says exactly what is about to be lost. A capped measurement
-// never states a total: after a short-circuit the number is "just over the cap",
-// not the truth — the same lesson the archive probe already learned.
-function deleteConfirmText(name, isDir, files, bytes, capped) {
-  const what = isDir ? "folder" : "file";
-  let size = "";
-  if (isDir && files > 0) {
-    size = capped
-      ? " — over " + files + " files"
-      : " — " + files + (files === 1 ? " file" : " files") + ", " +
-        (typeof humanBytes === "function" ? humanBytes(bytes) : bytes + " bytes");
+// deleteSummary describes a measurement in one clause, leading with the ENTRY
+// count — everything the delete destroys, not just the regular files. Counting
+// files alone let a tree of folders and symlinks describe itself as empty.
+//
+// A capped measurement never states the capped total: past a short-circuit the
+// number is "just over the bound", not the truth. Which bound was hit decides
+// which half of the sentence hedges.
+function deleteSummary(m) {
+  m = m || {};
+  const entries = m.entries || 0;
+  if (entries <= 0) return "";
+  const size = (n) => (typeof humanBytes === "function" ? humanBytes(n) : n + " bytes");
+  let out = m.capped === "entries"
+    ? "over " + entries + " items"
+    : entries + (entries === 1 ? " item" : " items");
+  if (m.files > 0) {
+    out += ", " + m.files + (m.files === 1 ? " file" : " files") +
+      (m.capped === "bytes" ? ", over " + size(m.bytes) : ", " + size(m.bytes));
   }
-  return "Delete the " + what + ' "' + name + '"' + size + "?\n\nThis cannot be undone.";
+  return out;
+}
+
+// deleteConfirmText says exactly what is about to be lost.
+function deleteConfirmText(name, isDir, m) {
+  const what = isDir ? "folder" : "file";
+  const summary = isDir ? deleteSummary(m) : "";
+  return "Delete the " + what + ' "' + name + '"' +
+    (summary ? " — " + summary : "") + "?\n\nThis cannot be undone.";
+}
+
+// normalizePath collapses "." segments and duplicate slashes so a path typed
+// into the paste box matches the one the tree renders. Viewer tabs are keyed by
+// this string, and a tab opened as "/home/u/./a.txt" would otherwise survive the
+// deletion of "/home/u/a.txt" showing content that no longer exists.
+function normalizePath(p) {
+  if (!p) return p;
+  const abs = p.charAt(0) === "/";
+  const out = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === ".." && out.length && out[out.length - 1] !== "..") { out.pop(); continue; }
+    out.push(part);
+  }
+  return (abs ? "/" : "") + out.join("/");
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deleteConfirmText, fsErrText };
+  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText };
 }

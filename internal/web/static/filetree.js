@@ -111,7 +111,11 @@ function openRowMenu(anchor, path, name, isDir) {
   const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
   menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
-  menu.style.top = (r.bottom + 4) + "px";
+  // Rows sit anywhere in the viewport, unlike the spawn menu's header anchor, so
+  // a menu opened near the bottom must flip above its row instead of clipping.
+  const h = menu.offsetHeight;
+  const below = r.bottom + 4;
+  menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
 }
 
 function closeRowMenu() {
@@ -135,7 +139,13 @@ async function promptRename(path, name) {
   if (raw === null) return;
   const next = raw.trim();
   if (!next || next === name) return;
-  const res = await fsRename(path, next);
+  let res = await fsRename(path, next);
+  // A protected folder must not be renamable around its delete gate.
+  if (res.status === 409 && res.data && res.data.confirm_name) {
+    const typed = prompt('This folder is protected. Type "' + res.data.confirm_name + '" to rename it:');
+    if (typed !== res.data.confirm_name) return;
+    res = await fsRename(path, next, typed);
+  }
   if (!res.ok) { showToast("Could not rename: " + fsErrText(res), { error: true }); return; }
   // The old path is gone either way, so any viewer tab on it is stale.
   if (typeof closeViewersFor === "function") closeViewersFor(path);
@@ -148,13 +158,18 @@ async function promptRename(path, name) {
 async function confirmDelete(path, name, isDir) {
   let res = await fsDelete(path);
   if (res.status === 409 && res.data && res.data.confirm_name) {
-    const typed = prompt('This folder is protected. Type "' + res.data.confirm_name + '" to delete it:');
-    if (typed !== res.data.confirm_name) return;
-    res = await fsDelete(path, { recursive: true, confirmName: typed });
+    // Protected: name what is inside as well as demanding the typed name. The
+    // folders that earn this gate must not be the ones told the least.
+    const d = res.data;
+    const inside = deleteSummary(d);
+    const typed = prompt('Deleting "' + d.confirm_name + '"' + (inside ? " — " + inside : "") +
+      ". This cannot be undone.\n\nType the folder name to confirm:");
+    if (typed !== d.confirm_name) return;
+    res = await fsDelete(path, { recursive: true, confirmName: typed, entries: d.entries || 0 });
   } else if (res.status === 409 && res.data) {
     const d = res.data;
-    if (!confirm(deleteConfirmText(name, isDir, d.files || 0, d.bytes || 0, !!d.capped))) return;
-    res = await fsDelete(path, { recursive: true, files: d.files || 0 });
+    if (!confirm(deleteConfirmText(name, isDir, d))) return;
+    res = await fsDelete(path, { recursive: true, entries: d.entries || 0 });
   }
   if (!res.ok) { showToast("Could not delete: " + fsErrText(res), { error: true }); return; }
   if (typeof closeViewersFor === "function") closeViewersFor(path);
@@ -202,11 +217,6 @@ async function initFileTree() {
   // we're following, so it survives until a different session is focused.
   ftRootSel.onchange = ftLoadRoot;
 
-  // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
-  // writes — which is most of what changes in this app — is invisible until the
-  // root is re-listed. Without this the only ways were re-rooting or reloading
-  // the whole page. Disabled while in flight so an impatient double click cannot
-  // stack requests (ftLoadRoot's generation guard would drop one anyway).
   // New folder in the root currently shown — no row can reach the root itself.
   const newdir = document.getElementById("ft-newdir");
   if (newdir) newdir.onclick = () => promptMkdir(ftRootSel.value);
@@ -218,6 +228,11 @@ async function initFileTree() {
   });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRowMenu(); });
 
+  // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
+  // writes — which is most of what changes in this app — is invisible until the
+  // root is re-listed. Without this the only ways were re-rooting or reloading
+  // the whole page. Disabled while in flight so an impatient double click cannot
+  // stack requests (ftLoadRoot's generation guard would drop one anyway).
   const refresh = document.getElementById("ft-refresh");
   if (refresh) {
     refresh.onclick = async () => {

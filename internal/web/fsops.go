@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,20 +72,33 @@ func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
 	if base == "." || base == ".." || base == string(os.PathSeparator) {
 		return nil, "", "", errBadPath
 	}
-	parent, err := containedDir(s.Home, filepath.Dir(clean))
+	_, root, relParent, err := s.openParent(filepath.Dir(clean))
 	if err != nil {
-		return nil, "", "", err
-	}
-	root, rhome, err := openHomeRoot(s.Home)
-	if err != nil {
-		return nil, "", "", err
-	}
-	relParent, err := relUnderHome(rhome, parent)
-	if err != nil {
-		root.Close()
 		return nil, "", "", err
 	}
 	return root, relParent, base, nil
+}
+
+// openParent resolves an existing directory and opens the home root it lives
+// under, returning the directory's root-relative path. resolveParent calls it
+// after splitting a target; mkdir calls it directly because its parent arrives
+// as its own field. Both go through the same containment sequence, so a change
+// to it cannot reach two handlers out of three.
+func (s *Server) openParent(dir string) (string, *os.Root, string, error) {
+	resolved, err := containedDir(s.Home, dir)
+	if err != nil {
+		return "", nil, "", err
+	}
+	root, rhome, err := openHomeRoot(s.Home)
+	if err != nil {
+		return "", nil, "", err
+	}
+	rel, err := relUnderHome(rhome, resolved)
+	if err != nil {
+		root.Close()
+		return "", nil, "", err
+	}
+	return resolved, root, rel, nil
 }
 
 // relUnderHome expresses dir relative to the resolved home, refusing anything
@@ -134,26 +148,12 @@ func (s *Server) handleFsMkdir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad name")
 		return
 	}
-	dir, err := containedDir(s.Home, req.Dir)
+	dir, root, relParent, err := s.openParent(req.Dir)
 	if err != nil {
-		if errors.Is(err, errNotDir) {
-			writeErr(w, http.StatusBadRequest, "not a directory")
-			return
-		}
 		writeFsErr(w, err)
 		return
 	}
-	root, rhome, err := openHomeRoot(s.Home)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "cannot open home")
-		return
-	}
 	defer root.Close()
-	relParent, err := relUnderHome(rhome, dir)
-	if err != nil {
-		writeErr(w, http.StatusForbidden, "forbidden")
-		return
-	}
 	if err := root.Mkdir(relOf(relParent, name), 0o755); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			writeErr(w, http.StatusConflict, "name already exists")
@@ -166,8 +166,9 @@ func (s *Server) handleFsMkdir(w http.ResponseWriter, r *http.Request) {
 }
 
 type renameReq struct {
-	Path string `json:"path"`
-	Name string `json:"name"`
+	Path        string `json:"path"`
+	Name        string `json:"name"`
+	ConfirmName string `json:"confirm_name"`
 }
 
 // handleFsRename serves POST /api/fs/rename — a new base name in the SAME
@@ -191,6 +192,16 @@ func (s *Server) handleFsRename(w http.ResponseWriter, r *http.Request) {
 	defer root.Close()
 	if _, err := root.Lstat(relOf(relParent, base)); err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	// The same gate delete uses. Without it the two entries in one ⋯ menu compose
+	// into a bypass: rename .ssh to anything, then delete it with no typed name.
+	// Renaming ~/.ssh or a .git is independently destructive anyway.
+	if protectedDirs[base] && req.ConfirmName != base {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":        "this folder needs its name typed to confirm",
+			"confirm_name": base,
+		})
 		return
 	}
 	newPath := filepath.Join(filepath.Dir(filepath.Clean(req.Path)), name)
@@ -234,10 +245,75 @@ var protectedDirs = map[string]bool{
 type deleteReq struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
-	// Files is the count the client showed the user. The recursive delete
-	// re-measures and refuses if the tree has grown well past it.
-	Files       int    `json:"files"`
+	// Entries is the entry count the client showed the user. The recursive
+	// delete re-measures and refuses if the tree has grown well past it.
+	Entries     int    `json:"entries"`
 	ConfirmName string `json:"confirm_name"`
+}
+
+// deleteMeasure is what a delete needs to know about a directory before anyone
+// consents to losing it.
+//
+// Entries counts EVERYTHING RemoveAll would destroy — directories, symlinks,
+// sockets, fifos — not just regular files. measureTree answers a different
+// question ("what ends up in the tarball"), and borrowing it here made a tree of
+// 500 symlinks and 2 subdirectories report "0 files, 0 bytes", so its
+// confirmation dialog was byte-identical to an empty folder's.
+type deleteMeasure struct {
+	Entries int
+	Files   int
+	Bytes   int64
+	Capped  string // "" | "entries" | "bytes" — which bound stopped the walk
+}
+
+// measureForDelete walks INSIDE the os.Root, so the tree it measures is the tree
+// the delete will remove. Walking the caller's absolute path instead would let a
+// symlink repointed after resolution move the measurement outside $HOME — and,
+// worse, describe a different tree than the one destroyed.
+//
+// fs.WalkDir takes entry types from the dirent, so it never descends a symlink
+// and a loop cannot hang it.
+func measureForDelete(root *os.Root, rel string) deleteMeasure {
+	var m deleteMeasure
+	fs.WalkDir(root.FS(), rel, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entries are skipped, not fatal
+		}
+		if p == rel {
+			return nil // the directory itself is not one of its contents
+		}
+		m.Entries++
+		if d.Type().IsRegular() {
+			m.Files++
+			if info, err := d.Info(); err == nil {
+				m.Bytes += info.Size()
+			}
+		}
+		if m.Entries >= deleteMeasureMaxFiles {
+			m.Capped = "entries"
+			return errStopMeasure
+		}
+		if m.Bytes >= deleteMeasureMaxBytes {
+			m.Capped = "bytes"
+			return errStopMeasure
+		}
+		return nil
+	})
+	return m
+}
+
+var errStopMeasure = errors.New("measurement bound reached")
+
+// body renders a measurement for the client, always naming the entry count so a
+// non-empty directory can never present itself as an empty one.
+func (m deleteMeasure) body(extra map[string]any) map[string]any {
+	out := map[string]any{
+		"entries": m.Entries, "files": m.Files, "bytes": m.Bytes, "capped": m.Capped,
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
 }
 
 // handleFsDelete serves POST /api/fs/delete. A file, a symlink (the link, never
@@ -275,39 +351,53 @@ func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Measure BEFORE any gate, so every refusal can say what is at stake. The
+	// protected-name gate used to answer first and shadow the counts, which left
+	// the directories that matter most — .git, .ssh — as the only ones deleted
+	// with no idea of what was inside.
+	m := measureForDelete(root, rel)
 	if protectedDirs[base] && req.ConfirmName != base {
-		writeJSON(w, http.StatusConflict, map[string]any{
+		writeJSON(w, http.StatusConflict, m.body(map[string]any{
 			"error":        "this folder needs its name typed to confirm",
 			"confirm_name": base,
-		})
+		}))
 		return
 	}
-	if err := root.Remove(rel); err == nil { // empty: gone in one step
+	if m.Entries == 0 {
+		if err := root.Remove(rel); err != nil {
+			writeDeleteErr(w, err)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-
-	abs := filepath.Join(filepath.Dir(filepath.Clean(req.Path)), base)
-	bytes, files, mErr := measureTree(abs, deleteMeasureMaxBytes, deleteMeasureMaxFiles)
-	capped := mErr != nil
 	if !req.Recursive {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "directory not empty", "files": files, "bytes": bytes, "capped": capped,
-		})
+		writeJSON(w, http.StatusConflict, m.body(map[string]any{"error": "directory not empty"}))
 		return
 	}
 	// Consent was given against numbers a human read seconds or minutes ago, on a
 	// box whose whole purpose is running agents that write files. If the tree has
-	// grown materially since, ask again with the new numbers.
-	if req.Files > 0 && files > req.Files*2 {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"error": "the folder grew since you confirmed", "files": files, "bytes": bytes, "capped": capped,
-		})
+	// grown materially since, ask again with the new numbers. Compared by
+	// division so a hostile or absurd Entries cannot overflow into "always grew".
+	if req.Entries > 0 && m.Entries/2 > req.Entries {
+		writeJSON(w, http.StatusConflict, m.body(map[string]any{
+			"error": "the folder grew since you confirmed",
+		}))
 		return
 	}
 	if err := root.RemoveAll(rel); err != nil {
-		writeErr(w, http.StatusInternalServerError, "cannot delete")
+		writeDeleteErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeDeleteErr keeps a refusal honest about its cause: a permission problem is
+// the user's to fix and must not be reported as a server fault.
+func writeDeleteErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, os.ErrPermission) {
+		writeErr(w, http.StatusForbidden, "permission denied")
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, "cannot delete")
 }

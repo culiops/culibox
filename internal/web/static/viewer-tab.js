@@ -8,6 +8,11 @@ function extOf(path) { const b = path.split("/").pop() || ""; const i = b.lastIn
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
 class ViewerTab {
   constructor(path) {
+    // Normalise once, here: tabs are keyed and matched by this string, and the
+    // paste-path box hands over whatever was typed. "/home/u/./a.txt" would
+    // otherwise open a second tab for a file already open, and survive that
+    // file's deletion still rendering content that no longer exists.
+    if (typeof normalizePath === "function") path = normalizePath(path);
     this.id = "view:" + path;
     this.kind = "viewer";
     this.path = path;
