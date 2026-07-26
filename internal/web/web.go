@@ -99,6 +99,7 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)
 	protected.HandleFunc("/api/fs/upload", s.handleFsUpload)
 	protected.HandleFunc("/api/fs/archive", s.handleFsArchive)
+	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
