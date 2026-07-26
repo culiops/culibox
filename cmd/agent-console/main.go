@@ -4,12 +4,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/culiops/culiops-agent-console/internal/abduco"
@@ -95,6 +99,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("abduco: %v", err)
 	}
+	// Sweep before Reconcile, while every attach client for our socket dir is by
+	// definition someone else's leftover. A previous daemon that died by SIGKILL
+	// or panic leaves clients whose PTY master is gone; if such a client was not
+	// its terminal's foreground process group it never got SIGHUP, and abduco's
+	// read loop then spins at 100% CPU indefinitely.
+	if n := adapter.SweepOrphanAttachers(); n > 0 {
+		log.Printf("swept %d orphaned abduco attach client(s) from a previous daemon", n)
+	}
+
 	mgr := session.NewManager(lnch, adapter, 128*1024, 5*time.Minute)
 	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
 		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
@@ -155,8 +168,27 @@ func main() {
 		log.Printf("quick shell: profile %q → %s", effective, config.DetectShell())
 	}
 
+	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler(user, pass)}
+
+	// Release attach clients on the way out instead of leaving it to SIGHUP.
+	// SIGHUP on a closing PTY master reaches only that terminal's foreground
+	// process group, so a client that is not it survives the daemon and spins at
+	// 100% CPU forever on a hung-up fd. The agents themselves are untouched —
+	// they live under abduco and are meant to survive a restart.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-stop
+		log.Printf("received %v: releasing %d attach client(s), agents stay running",
+			sig, mgr.DetachAll())
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(ctx)
+	}()
+
 	log.Printf("agent-console listening on %s", cfg.BindAddr)
-	if err := http.ListenAndServe(cfg.BindAddr, srv.Handler(user, pass)); err != nil {
+	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
+	log.Printf("agent-console stopped")
 }

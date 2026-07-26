@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -235,5 +236,55 @@ func TestSpawnUsesBackend(t *testing.T) {
 	}
 	if s.Info().Status != statusLive {
 		t.Fatalf("status=%q, want live", s.Info().Status)
+	}
+}
+
+// A daemon that exits without killing its attach clients leaves them orphaned on
+// a PTY whose master just closed. If such a client is not the foreground process
+// group at that moment it never receives SIGHUP, and abduco's select/read loop
+// then spins at 100% CPU forever (observed: four of them, 11.5h each). Shutdown
+// must therefore release attach clients explicitly rather than rely on the
+// hangup signal — and it must NOT touch the agent, which persistence exists to
+// keep alive across a restart.
+func TestDetachAllReleasesAttachClientsWithoutKillingAgents(t *testing.T) {
+	fb := newFakeBackend()
+	m := NewManager(fakeLauncher{}, fb, 1<<16, time.Minute)
+	s1, err := m.Spawn(launcher.SpawnSpec{Agent: "bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := m.Spawn(launcher.SpawnSpec{Agent: "bash"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pids := []int{s1.cmd.Process.Pid, s2.cmd.Process.Pid}
+	for _, p := range pids {
+		if syscall.Kill(p, 0) != nil {
+			t.Fatalf("attach client %d should be running before shutdown", p)
+		}
+	}
+
+	if n := m.DetachAll(); n != 2 {
+		t.Fatalf("DetachAll released %d clients, want 2", n)
+	}
+
+	for _, p := range pids {
+		deadline := time.Now().Add(3 * time.Second)
+		for syscall.Kill(p, 0) == nil && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if syscall.Kill(p, 0) == nil {
+			t.Fatalf("attach client %d survived DetachAll", p)
+		}
+	}
+
+	// The whole point of abduco persistence: the agent outlives the daemon.
+	for _, id := range []string{s1.ID, s2.ID} {
+		if fb.wasKilled(id) {
+			t.Fatalf("session %q agent was torn down by DetachAll", id)
+		}
+		if !fb.InnerAlive(id) {
+			t.Fatalf("session %q agent should still be alive", id)
+		}
 	}
 }

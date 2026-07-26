@@ -170,3 +170,73 @@ func TestListEmptyForeignDir(t *testing.T) {
 		t.Fatalf("List on fresh dir = %v, want empty", ls)
 	}
 }
+
+// writeProc fakes one /proc/<pid> entry.
+func writeProc(t *testing.T, root, pid string, argv, env []string) string {
+	t.Helper()
+	d := filepath.Join(root, pid)
+	if err := os.MkdirAll(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nulJoin := func(ss []string) []byte {
+		var b []byte
+		for _, s := range ss {
+			b = append(b, []byte(s)...)
+			b = append(b, 0)
+		}
+		return b
+	}
+	if err := os.WriteFile(filepath.Join(d, "cmdline"), nulJoin(argv), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "environ"), nulJoin(env), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+// The sweep kills processes, so misclassifying one is worse than missing one.
+// The two failure modes that matter: killing an attach client belonging to a
+// DIFFERENT console instance (session ids like "zsh-1" collide across
+// instances), and killing an abduco SERVER, which is the user's actual agent.
+func TestProcIsAttacher(t *testing.T) {
+	root := t.TempDir()
+	ours := "/home/u/.local/share/agent-console/abduco"
+	theirs := "/tmp/other-instance/abduco"
+
+	cases := []struct {
+		name string
+		argv []string
+		env  []string
+		want bool
+	}{
+		{"our attach client", []string{"abduco", "-e", "^\\", "-a", "zsh-1"},
+			[]string{"PATH=/usr/bin", "ABDUCO_SOCKET_DIR=" + ours}, true},
+		{"attach client of another instance, same session name",
+			[]string{"abduco", "-e", "^\\", "-a", "zsh-1"},
+			[]string{"ABDUCO_SOCKET_DIR=" + theirs}, false},
+		{"our SERVER — this is the user's agent, never kill it",
+			[]string{"abduco", "-n", "zsh-1", "/usr/bin/zsh"},
+			[]string{"ABDUCO_SOCKET_DIR=" + ours}, false},
+		{"absolute path to the abduco binary still counts",
+			[]string{"/usr/local/bin/abduco", "-e", "^\\", "-a", "claude-2"},
+			[]string{"ABDUCO_SOCKET_DIR=" + ours}, true},
+		{"not abduco at all", []string{"grep", "-a", "zsh-1"},
+			[]string{"ABDUCO_SOCKET_DIR=" + ours}, false},
+		{"no socket dir in env", []string{"abduco", "-e", "^\\", "-a", "zsh-1"},
+			[]string{"PATH=/usr/bin"}, false},
+		{"socket dir is a prefix of ours, not ours",
+			[]string{"abduco", "-e", "^\\", "-a", "zsh-1"},
+			[]string{"ABDUCO_SOCKET_DIR=" + ours + "-2"}, false},
+	}
+	for _, c := range cases {
+		d := writeProc(t, root, strings.ReplaceAll(c.name, " ", "_"), c.argv, c.env)
+		if got := procIsAttacher(d, ours); got != c.want {
+			t.Errorf("%s: procIsAttacher = %v, want %v", c.name, got, c.want)
+		}
+	}
+
+	if procIsAttacher(filepath.Join(root, "does-not-exist"), ours) {
+		t.Error("missing proc entry must not be classified as an attacher")
+	}
+}
