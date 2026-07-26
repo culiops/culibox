@@ -79,7 +79,7 @@
     }
     #spawn-menu.open, #ft-menu.open { display: block; }
     #ft-menu {
-      position: fixed; z-index: 40; min-width: 168px;
+      position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
       background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
       box-shadow: 0 10px 34px #000b; padding: 5px; display: none;
     }
@@ -130,15 +130,14 @@
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* Hidden until hover so the tree stays a tree, not a toolbar. */
-    .ft-dl, .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 3px; }
-    .ft-more { color: var(--muted); font-size: 14px; }
+    .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
     .ft-more:hover { color: var(--fg); }
-    .ft-node:hover .ft-dl, .ft-node:hover .ft-more { visibility: visible; }
+    .ft-node:hover .ft-more { visibility: visible; }
     /* On touch there is no hover, and `visibility: hidden` also removes the
-       button from hit-testing — so without this the tree row is the ONLY entry
-       point for downloading a folder and it would be unreachable on a phone. */
+       button from hit-testing — so without this the row's whole action menu,
+       download included, would be unreachable on a phone. */
     @media (hover: none) {
-      .ft-dl, .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
+      .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
     #ft-upload, #ft-refresh, #ft-newdir { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
@@ -363,10 +362,9 @@
          stay an 18px-tall desktop button sitting in a header. */
       #ft-upload, #ft-refresh, #ft-newdir { min-height: 30px; min-width: 38px; font-size: 15px; }
       #files-pane .pane-head { padding-top: 4px; padding-bottom: 4px; }
-      /* Also size ⤓ by viewport, not only by (hover: none): the folder-download
-         tooltip is unreachable on touch anyway, so the button IS the whole
+      /* Also size ⋯ by viewport, not only by (hover: none): it is the row's only
          affordance, and an 11×12px target is not one. */
-      .ft-dl, .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }
+      .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }
       /* Bigger tap targets: three small controls sit next to the destructive ✕. */
       .cell-ctl { gap: 6px; }
       .cell-ctl button { min-height: 28px; }
