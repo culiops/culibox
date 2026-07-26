@@ -733,6 +733,7 @@ loadWorkspaces();
 loadOptionDefs().then(newProfile);
 refreshSessions();
 initFileTree();
+initUpload();
 
 // Env signal: show a colored DEV/PROD badge + top strip + tab title, so the
 // active environment is unmistakable. Config-driven via /api/meta; empty label

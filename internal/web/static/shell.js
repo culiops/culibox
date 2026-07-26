@@ -27,6 +27,17 @@ function showToast(msg, opts) {
     undoBtn.hidden = true;
     undoBtn.onclick = null;
   }
+  // A numeric `progress` (0..1) reveals the rail; anything else hides it, so an
+  // ordinary toast never inherits a stale bar from a finished transfer.
+  const bar = document.getElementById("toast-bar");
+  if (bar) {
+    if (typeof opts.progress === "number") {
+      bar.hidden = false;
+      bar.firstElementChild.style.width = Math.max(0, Math.min(1, opts.progress)) * 100 + "%";
+    } else {
+      bar.hidden = true;
+    }
+  }
   box.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, opts.ms || 6000);

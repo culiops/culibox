@@ -120,10 +120,21 @@
     .ft-row { flex: none; }
     .ft-row select, .ft-row input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; }
     #filetree { flex: 1; min-height: 0; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-tree); }
-    .ft-node { padding: 2px 4px; white-space: nowrap; cursor: pointer; border-radius: 4px; color: var(--fg); }
+    .ft-node { display: flex; align-items: center; gap: 4px; padding: 2px 4px; white-space: nowrap; cursor: pointer; border-radius: 4px; color: var(--fg); }
     .ft-node:hover { background: #1f2630; }
     .ft-node.dir { color: var(--accent); }
+    .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* Hidden until hover so the tree stays a tree, not a toolbar. On touch there
+       is no hover, so the row keeps the button reachable at all times. */
+    .ft-dl { flex: none; visibility: hidden; background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 3px; }
+    .ft-node:hover .ft-dl { visibility: visible; }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
+    #ft-upload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload:hover { color: var(--fg); border-color: var(--accent); }
+    /* Drop affordance — it has to read as a target at a glance, on both the
+       tree and a terminal cell, or the whole gesture is guesswork. */
+    .drop-hot { outline: 2px dashed var(--accent); outline-offset: -3px; background: #1f6feb1f; }
+    .cell.drop-hot { outline-offset: -2px; }
 
     /* --- dialogs (settings / advanced spawn / palette) -------------------- */
     dialog {
@@ -215,7 +226,12 @@
       align-items: center; gap: 12px; max-width: min(440px, 92vw);
       background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
       border-radius: 8px; padding: 10px 12px; box-shadow: 0 10px 34px #000b; font-size: 12.5px;
+      flex-wrap: wrap; row-gap: 8px;
     }
+    /* Full-width progress rail under the message; only shown while transferring. */
+    #toast-bar { flex: 0 0 100%; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    #toast-bar[hidden] { display: none; }
+    #toast-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
     #toast.show { display: flex; }
     #toast.err { border-left-color: var(--danger); }
     #toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -363,7 +379,10 @@
       </div>
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div id="files-pane">
-        <div class="pane-head">Files</div>
+        <div class="pane-head">Files<span class="spacer" style="flex:1"></span>
+          <button id="ft-upload" type="button" title="Upload files into the current folder">＋</button>
+          <input id="ft-upload-input" type="file" multiple hidden>
+        </div>
         <div class="files-body">
           <div class="ft-row">
             <select id="ft-root" title="Root folder"></select>
@@ -387,6 +406,7 @@
     <span id="toast-msg"></span>
     <button id="toast-undo" type="button" hidden>Undo</button>
     <button id="toast-x" type="button" title="Dismiss">×</button>
+    <div id="toast-bar" hidden><i></i></div>
   </div>
 
   <dialog id="spawn-modal">
@@ -483,6 +503,7 @@
   <script src="/terminal-tab.js"></script>
   <script src="/viewer-tab.js"></script>
   <script src="/tabs.js"></script>
+  <script src="/upload.js"></script>
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
   <script src="/palette.js"></script>
