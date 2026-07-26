@@ -77,6 +77,8 @@ func writeFsErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, "bad path")
 	case errors.Is(err, os.ErrNotExist):
 		writeErr(w, http.StatusNotFound, "not found")
+	case errors.Is(err, errNotDir):
+		writeErr(w, http.StatusBadRequest, "not a directory")
 	case errors.Is(err, errOutsideHome):
 		writeErr(w, http.StatusForbidden, "forbidden")
 	default:
