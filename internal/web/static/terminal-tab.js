@@ -174,7 +174,11 @@ class TerminalTab {
     // terminal stopped retrying entirely and sat on "reconnecting…" for good.
     // diagnose() can only ever CANCEL this retry, never be required to start it.
     ws.onclose = (ev) => {
-      if (this.closed) return;
+      // Ignore a close from a socket this tab has already replaced: only the
+      // current one may drive the tab's state. Unreachable today (connect() runs
+      // only when no socket is live) — the guard makes it structural, not a
+      // property of the call graph.
+      if (this.closed || this.ws !== ws) return;
       // A takeover is the one close the client cannot diagnose for itself, and
       // the one where reconnecting is exactly wrong: the server allows a single
       // viewer, so retrying would evict whoever just took the session and start
@@ -265,7 +269,6 @@ class TerminalTab {
   // could fix it.
   showTrouble(kind) {
     if (this.ended || this.closed) return;
-    this.troubleKind = kind;
     if (!this.troubleEl) {
       this.troubleEl = document.createElement("div");
       this.troubleEl.className = "pane-trouble";
@@ -296,12 +299,15 @@ class TerminalTab {
     // after a few failures, offer the reload that fixes the second case too rather
     // than asserting a cause we do not actually know.
     // "stuck" is about not reaching the server. A takeover means we reached it
-    // fine, so an earlier failure count must not rewrite this message.
+    // fine, so it must never inherit that message. markTakenOver already zeroes
+    // the counter; !taken keeps that true no matter who else calls in here.
     const stuck = !expired && !taken && (this.probeFails || 0) >= 3;
     this.troubleAlt.hidden = !stuck;
     if (stuck) this.troubleMsg.textContent = "Still cannot reach the server — your login may have expired.";
     this.tickTrouble();
-    if (!this.troubleTimer) this.troubleTimer = setInterval(() => this.tickTrouble(), 500);
+    // The ticker exists to count a retry down. A parked pane (taken over) has no
+    // retry, so arming it would spin at 2 Hz forever writing the same empty string.
+    if (!this.troubleTimer && this.retryAt) this.troubleTimer = setInterval(() => this.tickTrouble(), 500);
   }
 
   tickTrouble() {

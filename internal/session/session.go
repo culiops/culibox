@@ -235,7 +235,20 @@ func (s *Session) Subscribe() (<-chan []byte, func(), func() bool) {
 // this viewer lags); if the cursor is evicted it force-resyncs with a terminal
 // reset so the client repaints rather than showing a silent gap.
 func (s *Session) deliver(sub *subscription, cursor int64) {
-	defer close(sub.out)
+	// Deregister before closing. A finished subscription must stop being the
+	// session's current one, or a later Subscribe would retro-mark it superseded
+	// — telling a viewer whose session merely ended that another tab took it,
+	// a state that deliberately stops reconnecting and so never self-corrects.
+	// The identity check matters: an eviction has already installed its
+	// replacement, and this must not null that out.
+	defer func() {
+		s.mu.Lock()
+		if s.sub == sub {
+			s.sub = nil
+		}
+		s.mu.Unlock()
+		close(sub.out)
+	}()
 	for {
 		s.mu.Lock()
 		for cursor >= s.rb.end() && !s.pumpFinished && !sub.stopped {

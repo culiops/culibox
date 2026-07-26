@@ -110,7 +110,26 @@ func TestAttachHandler_SupersededCloseCode(t *testing.T) {
 		if got := websocket.CloseStatus(err); got != wsSuperseded {
 			t.Fatalf("evicted socket closed with status %d, want %d (err %v)", got, wsSuperseded, err)
 		}
-		return
+		break
+	}
+
+	// Evicting the first viewer must leave the second one working — the whole
+	// point is that the session moves, not that it breaks.
+	if err := second.Write(ctx, websocket.MessageBinary, []byte("pong\n")); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for {
+		typ, data, err := second.Read(ctx)
+		if err != nil {
+			t.Fatalf("survivor stopped working after the eviction; got %q (err %v)", b.String(), err)
+		}
+		if typ == websocket.MessageBinary {
+			b.Write(data)
+			if strings.Contains(b.String(), "pong") {
+				return
+			}
+		}
 	}
 }
 

@@ -84,8 +84,13 @@ func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					// `out` closes for three different reasons and the client can
 					// only act correctly if it can tell them apart. Name the one
 					// it cannot infer: another viewer took this session over.
-					// (This goroutine is the socket's sole writer — see above —
-					// so writing the close frame here is safe.)
+					//
+					// Close() belongs here because this goroutine is the socket's
+					// sole writer. It also READS — it waits for the peer's close
+					// echo — which works only because cancelCtx runs after this
+					// returns, leaving the handler's Read loop alive to consume
+					// that echo. Cancelling earlier would stall every superseded
+					// close until the handshake times out.
 					if superseded() {
 						_ = c.Close(wsSuperseded, "superseded")
 					}
