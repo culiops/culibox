@@ -18,6 +18,7 @@ import (
 
 	"github.com/culiops/culiops-agent-console/internal/abduco"
 	"github.com/culiops/culiops-agent-console/internal/auth"
+	"github.com/culiops/culiops-agent-console/internal/box"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 	"github.com/culiops/culiops-agent-console/internal/secrets"
@@ -112,8 +113,31 @@ func main() {
 	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
 		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
 	}
+
+	// Containment layer. Installed BEFORE session reconcile so reattached boxed
+	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
+	// reaper never stops a container a live session is running inside.
+	boxRuntime := ""
+	boxes, err := newBoxes(cfg)
+	switch {
+	case err != nil:
+		// Not fatal: without containment the console still runs, on the host
+		// tier, and says so rather than pretending to be contained.
+		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
+	default:
+		mgr.SetBoxes(boxes)
+		boxRuntime = boxes.Runtime()
+		log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
+			boxImage(cfg), boxRuntime, cfg.BoxIdleTTL())
+	}
+
 	if err := mgr.Reconcile(); err != nil {
 		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
+	}
+	if boxes != nil {
+		if err := boxes.Reconcile(context.Background()); err != nil {
+			log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
+		}
 	}
 
 	// Runtime profile store (config.Agents are read-only seeds; the store holds
@@ -146,8 +170,9 @@ func main() {
 		Profiles: pm,
 		Home:     home,
 		Terminal: terminal.NewAttachHandler(mgr.Get),
-		EnvLabel: cfg.EnvLabel,
-		EnvColor: cfg.EnvColor,
+		EnvLabel:   cfg.EnvLabel,
+		EnvColor:   cfg.EnvColor,
+		BoxRuntime: boxRuntime,
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),
@@ -191,4 +216,33 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("agent-console stopped")
+}
+
+// boxImage picks the configured box image, falling back to the project default.
+func boxImage(cfg config.Config) string {
+	if cfg.BoxImage != "" {
+		return cfg.BoxImage
+	}
+	return "culiops/agent-box:base"
+}
+
+// newBoxes builds the containment layer, or reports why it is unavailable. A
+// missing docker or a missing image must degrade to the host tier loudly, never
+// silently pretend to contain.
+func newBoxes(cfg config.Config) (*box.Manager, error) {
+	bin, err := box.LookDocker(cfg.DockerBin)
+	if err != nil {
+		return nil, err
+	}
+	instance := cfg.EnvLabel
+	if instance == "" {
+		instance = "default"
+	}
+	return box.New(box.Options{
+		DockerBin: bin,
+		Image:     boxImage(cfg),
+		Instance:  instance,
+		IdleTTL:   cfg.BoxIdleTTL(),
+		Client:    box.CLIClient{Bin: bin},
+	})
 }

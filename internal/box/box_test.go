@@ -225,3 +225,29 @@ func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 		t.Fatalf("expected only the orphan reaped, stops=%d", fake.stops())
 	}
 }
+
+// After a daemon restart the session layer reattaches live sessions before the
+// box layer reconciles. Without Adopt, reconcile would reap the box out from
+// under a session abduco just brought back — the worst regression this slice
+// could ship.
+func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	name, err := m.boxName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Adopt(dir); err != nil {
+		t.Fatal(err)
+	}
+	fake.existing = []string{name, "ac-box-orphan"}
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fake.stoppedAny(name) {
+		t.Fatal("reconcile reaped a box belonging to a reattached session")
+	}
+	if fake.stops() != 1 {
+		t.Fatalf("expected exactly the orphan reaped, stops=%d", fake.stops())
+	}
+}

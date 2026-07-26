@@ -205,6 +205,18 @@ func (m *Manager) stopIfIdle(name string) {
 	_ = m.opts.Client.Stop(context.Background(), name)
 }
 
+// Adopt re-registers a workspace whose session survived a daemon restart, so
+// the following Reconcile does not reap the box out from under a live session.
+// Callers MUST adopt every reattached boxed session before calling Reconcile.
+func (m *Manager) Adopt(cwd string) error {
+	name, err := m.boxName(cwd)
+	if err != nil {
+		return err
+	}
+	m.acquire(name)
+	return nil
+}
+
 // Reconcile adopts this instance's boxes after a daemon restart and stops the
 // ones with no live sessions. This is the orphan guard: leaked containers would
 // be the 2.0 of the orphaned `abduco -a` clients that pegged a core, so it is
