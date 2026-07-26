@@ -30,6 +30,15 @@ class ViewerTab {
     reload.className = "viewer-reload"; reload.textContent = "⟳"; reload.title = "Reload";
     reload.onclick = () => this.load();
     this.toolbar.append(reload);
+    // Download works for files this viewer refuses to render — binaries and
+    // anything over the 2 MiB preview cap — which are exactly the ones worth
+    // fetching, so the button is never conditional on the render succeeding.
+    const dl = document.createElement("button");
+    dl.className = "viewer-reload";
+    dl.textContent = "⤓";
+    dl.title = "Download this file";
+    dl.onclick = () => downloadPath(this.path, false);
+    this.toolbar.append(dl);
     if (!IMAGE_EXTS.has(ext0)) { // auto-reload is pointless for images
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";

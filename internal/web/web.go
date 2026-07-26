@@ -32,6 +32,13 @@ type Server struct {
 	// is re-checked against this on every /api/meta rather than trusted from boot.
 	ShellBin string
 
+	// MaxUploadBytes caps a single uploaded file; MaxArchiveBytes/Files cap a
+	// directory download. Zero means the built-in default in every case — unset
+	// must never be read as "unlimited".
+	MaxUploadBytes  int64
+	MaxArchiveBytes int64
+	MaxArchiveFiles int
+
 	// idx is the lazily-built file index behind /api/fs/search (see fssearch.go).
 	idxMu sync.Mutex
 	idx   *fileIndex
@@ -90,6 +97,8 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)
 	protected.HandleFunc("/api/fs/search", s.handleFsSearch)
+	protected.HandleFunc("/api/fs/upload", s.handleFsUpload)
+	protected.HandleFunc("/api/fs/archive", s.handleFsArchive)
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))

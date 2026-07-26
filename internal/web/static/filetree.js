@@ -17,19 +17,46 @@ async function ftRenderDir(path, container, depth) {
     const row = document.createElement("div");
     row.className = "ft-node";
     row.style.paddingLeft = (depth * 12 + 6) + "px";
-    row.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
+    // The label lives in its own span so the row can also carry a download
+    // button — writing row.textContent would wipe any child element.
+    const label = document.createElement("span");
+    label.className = "ft-name";
+    label.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
+    row.append(label);
+    const dl = document.createElement("button");
+    dl.className = "ft-dl";
+    dl.textContent = "⤓";
+    // The directory tooltip discloses the symlink-skip up front: a tarball
+    // quietly missing symlinked content is the kind of surprise you only find
+    // out about after you needed it.
+    dl.title = ent.is_dir
+      ? "Download " + ent.name + ".tar.gz (symlinks are skipped)"
+      : "Download " + ent.name;
+    dl.onclick = (e) => { e.stopPropagation(); downloadPath(full, ent.is_dir); };
+    row.append(dl);
     if (ent.is_dir) {
       let open = false, childBox = null;
       row.classList.add("dir");
       row.onclick = async () => {
         open = !open;
-        row.textContent = (open ? "▾ " : "▸ ") + ent.name;
+        label.textContent = (open ? "▾ " : "▸ ") + ent.name;
         if (open) {
           childBox = document.createElement("div");
           row.after(childBox);
           await ftRenderDir(full, childBox, depth + 1);
         } else if (childBox) { childBox.remove(); childBox = null; }
       };
+      // Each directory row is its own drop target and stops propagation, so it
+      // wins over the whole-tree zone underneath it.
+      if (typeof makeDropZone === "function") {
+        makeDropZone(row, () => full, {
+          onDone: () => {
+            if (!open || !childBox) return;
+            childBox.replaceChildren();
+            ftRenderDir(full, childBox, depth + 1);
+          },
+        });
+      }
     } else {
       row.classList.add("file");
       row.onclick = () => openFile(full);

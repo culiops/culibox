@@ -27,6 +27,28 @@ class TerminalTab {
     termEl.className = "pane-term";
     this.el.append(termEl);
 
+    // Drop a file on the pane → upload into this session's cwd, then type the
+    // path at the prompt. The cell outlines while dragging, so the destination
+    // is something you can see before letting go.
+    if (typeof makeDropZone === "function") {
+      makeDropZone(this.el, () => this.cwd, {
+        highlight: () => this.el.closest(".cell") || this.el,
+        onDone: (data) => insertPathsIntoTerminal(this, data),
+      });
+    }
+
+    // Image paste: upload and insert the path. Capture phase so it runs before
+    // xterm's own paste handling, but only when the clipboard actually carries
+    // files — a text paste must reach xterm completely untouched.
+    this.el.addEventListener("paste", (e) => {
+      const files = (typeof clipboardFiles === "function") ? clipboardFiles(e) : [];
+      if (!files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const named = files.map((f) => new File([f], pasteFileName(f), { type: f.type }));
+      uploadFiles(named, this.cwd, { onDone: (data) => insertPathsIntoTerminal(this, data) });
+    }, true);
+
     this.term = new Terminal({
       cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace",
       fontSize: (typeof fontPrefs !== "undefined" ? fontPrefs.get("terminal") : 13),
@@ -199,6 +221,22 @@ class TerminalTab {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "resize", rows: this.term.rows, cols: this.term.cols }));
     }
+  }
+
+  // sendText writes text into the session exactly as typing would. It never
+  // sends a newline: nothing here can tell whether the terminal is sitting at a
+  // prompt, mid-agent-turn, or inside vim, so the user stays the one who
+  // presses Enter. Returns false when the socket is not open, so the caller can
+  // say so instead of silently dropping the text.
+  sendText(text) {
+    if (!text) return false;
+    // Defense in depth for the "never auto-submit" guarantee: a \n anywhere in
+    // this string submits the line, and C1 bytes are read as escape sequences
+    // once echoed. Callers validate too; this is the last gate before the PTY.
+    if (typeof UNSAFE_TEXT !== "undefined" && UNSAFE_TEXT.test(text)) return false;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(enc.encode(text));
+    return true;
   }
 
   // showTrouble renders one line above the terminal naming WHY it is disconnected

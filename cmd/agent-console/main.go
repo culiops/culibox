@@ -126,6 +126,7 @@ func main() {
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, st, lnch.SetAgents)
 
+	archiveBytes, archiveFiles := cfg.ArchiveLimits()
 	srv := &web.Server{
 		API:      &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Cookie:   cookie,
@@ -137,6 +138,10 @@ func main() {
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),
+
+		MaxUploadBytes:  cfg.UploadLimit(),
+		MaxArchiveBytes: archiveBytes,
+		MaxArchiveFiles: archiveFiles,
 	}
 
 	// Report what the console will actually offer. WithDetectedShell only sees the

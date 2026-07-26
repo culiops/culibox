@@ -3,8 +3,10 @@ package web
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -156,6 +158,20 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
+	// download=1 is a byte pipe, not a preview: it deliberately bypasses both
+	// preview guards below (the binary-metadata branch and the maxTextBytes
+	// cap), because a binary or an oversized log is exactly the file you most
+	// need to fetch, and refusing to hand over something the tree already lists
+	// makes the viewer a dead end. Always octet-stream + nosniff so the browser
+	// saves it instead of trying to render it.
+	if r.URL.Query().Get("download") == "1" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Disposition", contentDisposition(filepath.Base(p)))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, filepath.Base(p), info.ModTime(), f)
+		return
+	}
+
 	if ctype, ok := imageExt[ext]; ok {
 		w.Header().Set("Content-Type", ctype)
 		w.Header().Set("Cache-Control", "no-cache")
@@ -189,4 +205,12 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fsRead{
 		Kind: "text", Lang: strings.TrimPrefix(ext, "."), Size: info.Size(), Content: string(content),
 	})
+}
+
+// contentDisposition builds an attachment header for name. The quoted form is
+// escaped so a filename containing a quote cannot inject header syntax, and the
+// RFC 5987 filename* carries a non-ASCII name through intact.
+func contentDisposition(name string) string {
+	q := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\r", "", "\n", "").Replace(name)
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, q, url.PathEscape(name))
 }
