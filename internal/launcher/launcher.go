@@ -23,6 +23,7 @@ type SpawnSpec struct {
 	Name    string // optional display label; blank -> working-dir basename
 	Cwd     string
 	Options map[string]any // per-spawn option overrides (profile keys only)
+	Runtime string         // "" = use the agent's setting; box|host otherwise
 }
 
 // Builder composes argv + env for a spawn.
@@ -92,14 +93,40 @@ func New(agents []config.AgentConfig, resolver secrets.Resolver, optionDefs []co
 	return &AgentLauncher{agents: m, secrets: resolver, shell: config.DetectShell(), optionDefs: defs}
 }
 
+// RuntimeFor reports the effective tier for a spawn: the per-spawn override when
+// set, else the agent's configured policy (which defaults to box).
+func (l *AgentLauncher) RuntimeFor(spec SpawnSpec) (string, error) {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return "", fmt.Errorf("launcher: unknown agent %q", spec.Agent)
+	}
+	if spec.Runtime != "" {
+		return spec.Runtime, nil
+	}
+	return cfg.RuntimePolicy(), nil
+}
+
 // Build composes (argv, env) for the agent per its base policy + env + secrets.
+//
+// A boxed spawn overrides the base policy on purpose. base=inherit would hand
+// the agent the daemon's WHOLE environment, and the box forwards env by name —
+// so inheriting would pipe every daemon secret into the container and undo the
+// containment. base=login is equally wrong: it wraps argv in the HOST $SHELL,
+// which need not exist in the image. Boxed therefore always composes from the
+// curated base and never login-wraps.
 func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	cfg, ok := l.agent(spec.Agent)
 	if !ok {
 		return nil, nil, fmt.Errorf("launcher: unknown agent %q", spec.Agent)
 	}
+	boxed := spec.Runtime == config.RuntimeBox ||
+		(spec.Runtime == "" && cfg.RuntimePolicy() == config.RuntimeBox)
 
-	env := l.baseEnv(cfg.BasePolicy())
+	basePolicy := cfg.BasePolicy()
+	if boxed {
+		basePolicy = config.BaseClean
+	}
+	env := l.baseEnv(basePolicy)
 	for k := range env { // strip Claude session markers from any base
 		if claudeSessionEnvBlocklist[k] {
 			delete(env, k)
@@ -135,7 +162,7 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	cmd := append([]string{cfg.Bin}, cfg.Args...)
 	cmd = l.applyOptionFlags(opts, cmd)
 
-	argv, err := l.argv(cfg, cmd, env["PATH"])
+	argv, err := l.argv(cfg, cmd, env["PATH"], boxed)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -292,7 +319,12 @@ func curatedBase() map[string]string {
 // agent keeps the process-group leadership the daemon's negative-pid kill needs;
 // zsh needs -i to source ~/.zshrc). Non-login resolves bin against the COMPOSED
 // PATH (not the daemon's), so a clean agent's custom PATH actually finds it.
-func (l *AgentLauncher) argv(cfg config.AgentConfig, cmd []string, pathv string) ([]string, error) {
+func (l *AgentLauncher) argv(cfg config.AgentConfig, cmd []string, pathv string, boxed bool) ([]string, error) {
+	if boxed {
+		// Resolution belongs to the CONTAINER's PATH. The host may not have this
+		// binary at all, and a host absolute path is meaningless inside the image.
+		return cmd, nil
+	}
 	if cfg.BasePolicy() == config.BaseLogin {
 		flags := []string{"-l", "-c"}
 		if strings.Contains(filepath.Base(l.shell), "zsh") {
