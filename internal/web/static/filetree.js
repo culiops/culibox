@@ -24,20 +24,12 @@ async function ftRenderDir(path, container, depth) {
     label.className = "ft-name";
     label.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
     row.append(label);
-    const dl = document.createElement("button");
-    dl.className = "ft-dl";
-    dl.textContent = "⤓";
-    // The directory tooltip discloses the symlink-skip up front: a tarball
-    // quietly missing symlinked content is the kind of surprise you only find
-    // out about after you needed it.
-    dl.title = ent.is_dir
-      ? "Download " + ent.name + ".tar.gz (symlinks are skipped)"
-      : "Download " + ent.name;
-    dl.onclick = (e) => { e.stopPropagation(); downloadPath(full, ent.is_dir); };
-    row.append(dl);
-    // Rename and delete live behind a menu, not as bare buttons: a destructive
-    // control one finger-width from ⤓ is a mis-tap, and this delete cannot be
-    // undone.
+    // One affordance per row. Download used to sit here as a bare ⤓ and Rename /
+    // Delete behind the menu; two controls squeezed the name column (badly at
+    // 390px) and put a destructive action a finger-width from a harmless one.
+    // Download costs a second click now, and in exchange the tarball's
+    // symlink-skip finally reads as a visible label instead of a tooltip no
+    // touch device can reach.
     const more = document.createElement("button");
     more.className = "ft-more";
     more.textContent = "⋯";
@@ -97,6 +89,9 @@ function openRowMenu(anchor, path, name, isDir) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
   const items = [];
+  // Download first (the one you reach for most), destructive last.
+  items.push([isDir ? "Download .tar.gz — symlinks skipped" : "Download",
+    () => downloadPath(path, isDir)]);
   if (isDir) items.push(["New folder here…", () => promptMkdir(path)]);
   items.push(["Rename…", () => promptRename(path, name)]);
   items.push(["Delete…", () => confirmDelete(path, name, isDir)]);
