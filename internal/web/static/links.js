@@ -18,28 +18,43 @@ const LINK_URL_RE = /https?:\/\/[^\s<>"'`]+/gi;
 // URLs is resolved by precedence below, not by making this regex cleverer.
 const LINK_PATH_RE = /(?:\/|~\/|\.{1,2}\/|[\w.\-]+\/)[\w./\-]+\.[A-Za-z0-9]{1,8}/g;
 
-const LINK_TRAILING_PUNCT = /[.,;:!?]+$/;
+const LINK_TRAILING_PUNCT = ".,;:!?";
 const LINK_CLOSERS = { ")": "(", "]": "[", "}": "{" };
 
-function linkCountChar(s, c) {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) if (s[i] === c) n++;
-  return n;
-}
+// A scheme alone is not a link: prose like "use https:// not http://" would
+// otherwise underline, and clicking it passes the scheme guard and opens a blank
+// tab. Requiring one non-slash character after `//` is the whole test.
+const LINK_HAS_HOST = /^https?:\/\/[^\s/]/i;
 
 // trimUrl strips characters that belong to the surrounding prose rather than to
 // the URL. A closing bracket is only dropped when it is unbalanced, so a URL that
 // genuinely ends in one — `.../Foo_(bar)` — survives.
+//
+// Bracket counts are taken ONCE and decremented as characters come off. Counting by
+// rescanning the string per stripped character is quadratic, and this runs on every
+// hover row change over semi-trusted terminal output: 20k trailing `)` measured
+// 2.3s that way, i.e. one crafted line freezes the tab on mouse-over.
 function trimUrl(url) {
-  let out = url;
-  for (;;) {
-    const before = out;
-    out = out.replace(LINK_TRAILING_PUNCT, "");
-    const last = out[out.length - 1];
-    const opener = LINK_CLOSERS[last];
-    if (opener && linkCountChar(out, last) > linkCountChar(out, opener)) out = out.slice(0, -1);
-    if (out === before) return out;
+  const counts = Object.create(null);
+  for (let i = 0; i < url.length; i++) counts[url[i]] = (counts[url[i]] || 0) + 1;
+  let end = url.length;
+  while (end > 0) {
+    const c = url[end - 1];
+    if (LINK_TRAILING_PUNCT.indexOf(c) >= 0) {
+      counts[c]--;
+      end--;
+      continue;
+    }
+    const opener = LINK_CLOSERS[c];
+    // Openers are never stripped, so their counts stay valid as `end` moves left.
+    if (opener && counts[c] > (counts[opener] || 0)) {
+      counts[c]--;
+      end--;
+      continue;
+    }
+    break;
   }
+  return url.slice(0, end);
 }
 
 // scanLinks returns every clickable token in `text`, sorted by position and never
@@ -54,7 +69,7 @@ function scanLinks(text) {
   LINK_URL_RE.lastIndex = 0;
   while ((m = LINK_URL_RE.exec(text)) !== null) {
     const trimmed = trimUrl(m[0]);
-    if (!trimmed) continue;
+    if (!trimmed || !LINK_HAS_HOST.test(trimmed)) continue;
     const start = m.index;
     const end = start + trimmed.length;
     claimed.push([start, end]);
@@ -88,6 +103,10 @@ function rewriteLocalhost(raw, pageHost) {
   } catch (_) {
     return raw;
   }
+  // A URL carrying credentials is left alone. Rewriting `https://evil.com@localhost/`
+  // would keep the userinfo while the toast reports only the (rewritten) host, so
+  // the notice would hide the part of the URL that actually matters.
+  if (u.username || u.password) return raw;
   if (!u.hostname || !LINK_LOCAL_HOSTS.has(u.hostname.toLowerCase())) return raw;
   u.hostname = pageHost;
   return u.toString();
@@ -144,6 +163,7 @@ function readLogicalLine(term, y, maxRows) {
 // translated offset; it is clamped to the terminal width so a link can never point
 // off-row.
 function cellFromIndex(index, rowStarts, startY, cols) {
+  if (!rowStarts.length) return { x: 1, y: startY }; // unreachable via linksForRow
   let r = 0;
   while (r + 1 < rowStarts.length && rowStarts[r + 1] <= index) r++;
   const x = Math.min(cols, index - rowStarts[r] + 1);

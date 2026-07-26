@@ -131,21 +131,22 @@ function fakeTerm(rows, cols) {
           // models it, and honouring the start/end arguments is what lets a caller
           // clamp back to the real terminal width.
           const w = r.width || cols;
-          // `visible` is the string covering columns [0, cols). For an `exact` row
-          // it deliberately differs in LENGTH from cols — that is what a
-          // double-width or combining character does — and start/end are COLUMN
-          // indices, not string indices, so asking for [0, cols) never truncates it.
-          const visible = r.exact ? r.text : r.text.padEnd(cols, " ");
+          // A row is modelled as one string PER COLUMN, because start/end are
+          // COLUMN indices, not string indices. A cell may hold more than one JS
+          // character (combining marks) or none at all (the second half of a
+          // double-width character), which is why a row's translated length is not
+          // its column count. Columns beyond `cols` are the stale padding a
+          // BufferLine keeps after the terminal shrinks.
+          const cells = new Array(w).fill(" ");
+          if (r.exact) cells[0] = r.text; // whole string in one cell: length != cols
+          else for (let c = 0; c < cols; c++) cells[c] = r.text[c] === undefined ? " " : r.text[c];
+          for (let c = cols; c < w; c++) cells[c] = " ";
+          if (r.exact) for (let c = 1; c < cols; c++) cells[c] = "";
           return {
             isWrapped: !!r.wrapped,
             length: w,
-            translateToString: (_trim, start, end) => {
-              const s = start || 0;
-              const e = end === undefined ? w : end;
-              let out = s < cols && e > 0 ? visible : "";
-              if (e > cols) out += " ".repeat(e - Math.max(s, cols));
-              return out;
-            },
+            translateToString: (_trim, start, end) =>
+              cells.slice(start || 0, end === undefined ? w : end).join(""),
           };
         },
       },
@@ -262,4 +263,78 @@ test("a stale over-wide row does not splice spaces into the joined line", () => 
   assert.ok(!/\s{2,}/.test(text.trimEnd()), "no space gap inside the joined line: " + JSON.stringify(text));
   const tok = scanLinks(text).find((k) => k.kind === "url");
   assert.strictEqual(tok.text, "https://culiops.dev/learn/quan-tri-he-thong-linux/bai-1.html");
+});
+
+const { trimUrl } = require("../static/links.js");
+
+test("trimUrl strips prose punctuation but keeps balanced brackets", () => {
+  assert.strictEqual(trimUrl("https://a.dev/x."), "https://a.dev/x");
+  assert.strictEqual(trimUrl("https://a.dev/x),"), "https://a.dev/x");
+  assert.strictEqual(trimUrl("https://a.dev/F_(b)"), "https://a.dev/F_(b)");
+  assert.strictEqual(trimUrl("https://a.dev/[i]"), "https://a.dev/[i]");
+  assert.strictEqual(trimUrl("https://a.dev/x]}"), "https://a.dev/x");
+});
+
+// provideLinks runs on every hover row change over semi-trusted terminal output, so
+// a quadratic trim is a freeze-the-tab vector: counting brackets by rescanning the
+// whole string per stripped character measured 2.36s for 20k closers.
+// Measured explicitly rather than via node:test's `timeout`, which is timer-based
+// and cannot interrupt a synchronous function — it reported PASS on a call that
+// really took 2.3s. Quadratic measured 150ms / 587ms / 2302ms / 9083ms at
+// 5k / 10k / 20k / 40k closers; linear is ~1ms, so 500ms separates them by ~1000x.
+test("trimUrl stays fast on a pathological run of closers", () => {
+  const s = "https://a.dev/" + ")".repeat(20000);
+  const t0 = process.hrtime.bigint();
+  assert.strictEqual(trimUrl(s), "https://a.dev/");
+  const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+  assert.ok(ms < 500, "trimUrl took " + ms.toFixed(1) + "ms, expected linear (<500ms)");
+});
+
+test("a scheme with no host is not a link", () => {
+  assert.deepStrictEqual(scanLinks("use https:// not http://").filter((t) => t.kind === "url"), []);
+  assert.deepStrictEqual(scanLinks("see https://; done").filter((t) => t.kind === "url"), []);
+});
+
+test("a URL carrying credentials is never rewritten", () => {
+  const u = "https://evil.com@localhost:9000/a";
+  assert.strictEqual(rewriteLocalhost(u, "100.76.118.121"), u);
+});
+
+test("cellFromIndex survives an empty rowStarts", () => {
+  assert.deepStrictEqual(cellFromIndex(0, [], 7, 80), { x: 1, y: 7 });
+});
+
+// The up-walk is capped one row SHORTER than the read loop, which is the only thing
+// guaranteeing the queried row ends up inside the joined window. Start it at 0 and a
+// wrapped line longer than maxRows joins the rows ABOVE y, the row filter drops
+// everything, and the bottom of the line silently has no links at all.
+test("a wrapped line longer than maxRows still links its last row", () => {
+  const rows = [{ text: "aaaaaaaaa" }];
+  for (let i = 1; i < 59; i++) rows.push({ text: "aaaaaaaaa", wrapped: true });
+  rows.push({ text: "http://b/", wrapped: true }); // index 59 -> 1-based row 60
+  const links = linksForRow(fakeTerm(rows, 9), 60);
+  assert.deepStrictEqual(links.map((l) => l.text), ["http://b/"]);
+  assert.ok(links[0].range.end.y >= 60, "link must reach the queried row");
+});
+
+test("a token ending mid-row reports the inclusive end column", () => {
+  const t = fakeTerm([{ text: "x https://a.dev y" }], 20);
+  const link = linksForRow(t, 1).find((l) => l.kind === "url");
+  // "x " then the 13-char URL: columns 3..15, inclusive end — and 15 < cols, so the
+  // clamp cannot mask an off-by-one here the way an end-of-row token would.
+  assert.deepStrictEqual(link.range, { start: { x: 3, y: 1 }, end: { x: 15, y: 1 } });
+});
+
+test("each row returns exactly the links that cross it", () => {
+  const t = fakeTerm(
+    [
+      { text: "~/aaa.md " },
+      { text: "http://b." , wrapped: true },
+      { text: "dev/c.md  ", wrapped: true },
+    ],
+    9,
+  );
+  assert.deepStrictEqual(linksForRow(t, 1).map((l) => l.text), ["~/aaa.md"]);
+  assert.deepStrictEqual(linksForRow(t, 2).map((l) => l.text), ["http://b.dev/c.md"]);
+  assert.deepStrictEqual(linksForRow(t, 3).map((l) => l.text), ["http://b.dev/c.md"]);
 });

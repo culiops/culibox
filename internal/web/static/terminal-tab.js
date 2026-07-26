@@ -107,7 +107,9 @@ class TerminalTab {
     // `https://host/a.html` to the file viewer as a relative path — and which links
     // may be returned for this row. Absolute paths open directly; relative paths
     // join the session's initial cwd (best-effort — may miss if the agent cd'd).
-    if (this.term.registerLinkProvider) {
+    // Guarded like the other cross-file collaborators in this file: without it a
+    // missing /links.js would throw on every hover, not merely lose the feature.
+    if (this.term.registerLinkProvider && typeof linksForRow === "function") {
       this.term.registerLinkProvider({
         provideLinks: (y, cb) => {
           const links = linksForRow(this.term, y).map((l) => ({
@@ -333,9 +335,11 @@ function openTerminalUrl(raw, opts) {
   // and then clicked it — but an OSC 8 link's visible text can say anything.
   if (opts && opts.confirm && !window.confirm("Open this link?\n\n" + url)) return;
   window.open(url, "_blank", "noopener,noreferrer");
-  if (url !== raw) {
-    try {
-      showToast("opened " + new URL(url).host + " instead of localhost");
-    } catch (_) {}
+  // The toast is the ONLY signal that the URL opened differs from the one on
+  // screen, so it is guarded by existence rather than wrapped in a catch that would
+  // swallow the failure silently. new URL() cannot throw here: url !== raw only
+  // when rewriteLocalhost already parsed it.
+  if (url !== raw && typeof showToast === "function") {
+    showToast("opened " + new URL(url).host + " instead of localhost");
   }
 }
