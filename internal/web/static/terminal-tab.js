@@ -38,7 +38,7 @@ class TerminalTab {
     if (typeof makeDropZone === "function") {
       makeDropZone(this.el, () => this.cwd, {
         highlight: () => this.el.closest(".cell") || this.el,
-        onDone: (data) => insertPathsIntoTerminal(this, data),
+        onDone: (data) => { insertPathsIntoTerminal(this, data); refreshTreeAfterUpload(this.cwd); },
       });
     }
 
@@ -51,7 +51,9 @@ class TerminalTab {
       e.preventDefault();
       e.stopPropagation();
       const named = files.map((f) => new File([f], pasteFileName(f), { type: f.type }));
-      uploadFiles(named, this.cwd, { onDone: (data) => insertPathsIntoTerminal(this, data) });
+      uploadFiles(named, this.cwd, {
+        onDone: (data) => { insertPathsIntoTerminal(this, data); refreshTreeAfterUpload(this.cwd); },
+      });
     }, true);
 
     this.term = new Terminal({
