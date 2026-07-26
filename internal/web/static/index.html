@@ -77,13 +77,18 @@
       background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
       box-shadow: 0 10px 34px #000b; padding: 5px; display: none;
     }
-    #spawn-menu.open { display: block; }
-    #spawn-menu button {
+    #spawn-menu.open, #ft-menu.open { display: block; }
+    #ft-menu {
+      position: fixed; z-index: 40; min-width: 168px;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 10px 34px #000b; padding: 5px; display: none;
+    }
+    #ft-menu button, #spawn-menu button {
       display: block; width: 100%; text-align: left; background: none; border: none;
       color: var(--fg); font: inherit; font-size: 12.5px; padding: 6px 9px;
       border-radius: 5px; cursor: pointer;
     }
-    #spawn-menu button:hover { background: #1f6feb2e; }
+    #spawn-menu button:hover, #ft-menu button:hover { background: #1f6feb2e; }
     #spawn-menu .sep { height: 1px; background: var(--border); margin: 5px 2px; }
     #spawn-menu .mono { font-family: ui-monospace, Menlo, monospace; }
 
@@ -125,18 +130,20 @@
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* Hidden until hover so the tree stays a tree, not a toolbar. */
-    .ft-dl { flex: none; visibility: hidden; background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 3px; }
-    .ft-node:hover .ft-dl { visibility: visible; }
+    .ft-dl, .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1; padding: 0 3px; }
+    .ft-more { color: var(--muted); font-size: 14px; }
+    .ft-more:hover { color: var(--fg); }
+    .ft-node:hover .ft-dl, .ft-node:hover .ft-more { visibility: visible; }
     /* On touch there is no hover, and `visibility: hidden` also removes the
        button from hit-testing — so without this the tree row is the ONLY entry
        point for downloading a folder and it would be unreachable on a phone. */
     @media (hover: none) {
-      .ft-dl { visibility: visible; padding: 4px 8px; font-size: 14px; }
+      .ft-dl, .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
-    #ft-upload, #ft-refresh { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
-    #ft-upload:hover, #ft-refresh:hover { color: var(--fg); border-color: var(--accent); }
-    #ft-refresh { margin-right: 4px; }
+    #ft-upload, #ft-refresh, #ft-newdir { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { color: var(--fg); border-color: var(--accent); }
+    #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
     /* Drop affordance — it has to read as a target at a glance, or the whole
        gesture is guesswork. The terminal-cell variant lives with the .cell
@@ -354,12 +361,12 @@
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* ＋ is the ONLY upload route on a phone (no drag exists), so it cannot
          stay an 18px-tall desktop button sitting in a header. */
-      #ft-upload, #ft-refresh { min-height: 30px; min-width: 38px; font-size: 15px; }
+      #ft-upload, #ft-refresh, #ft-newdir { min-height: 30px; min-width: 38px; font-size: 15px; }
       #files-pane .pane-head { padding-top: 4px; padding-bottom: 4px; }
       /* Also size ⤓ by viewport, not only by (hover: none): the folder-download
          tooltip is unreachable on touch anyway, so the button IS the whole
          affordance, and an 11×12px target is not one. */
-      .ft-dl { visibility: visible; padding: 4px 8px; font-size: 15px; }
+      .ft-dl, .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }
       /* Bigger tap targets: three small controls sit next to the destructive ✕. */
       .cell-ctl { gap: 6px; }
       .cell-ctl button { min-height: 28px; }
@@ -408,6 +415,7 @@
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div id="files-pane">
         <div class="pane-head">Files<span class="spacer" style="flex:1"></span>
+          <button id="ft-newdir" type="button" title="New folder in this folder">⊞</button>
           <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)">⟳</button>
           <button id="ft-upload" type="button" title="Upload files into the current folder">＋</button>
           <input id="ft-upload-input" type="file" multiple hidden>
@@ -528,6 +536,7 @@
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
+  <div id="ft-menu"></div>
   <script src="/fontprefs.js"></script>
   <script src="/links.js"></script>
   <script src="/layout.js"></script>
@@ -535,6 +544,7 @@
   <script src="/viewer-tab.js"></script>
   <script src="/tabs.js"></script>
   <script src="/upload.js"></script>
+  <script src="/fsops.js"></script>
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
   <script src="/palette.js"></script>

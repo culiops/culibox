@@ -335,6 +335,20 @@ function closeTerminal(id) {
   }
 }
 
+// closeViewersFor closes viewer tabs showing a path that no longer exists, or no
+// longer means what it did. Without it a deleted file keeps a tab rendering
+// stale content whose ⤓ 404s, and a renamed one keeps a tab pointing nowhere.
+// Matches the path itself and anything under it, so deleting a folder clears the
+// tabs for every file it held.
+function closeViewersFor(path) {
+  if (!path) return;
+  const prefix = path.replace(/\/+$/, "") + "/";
+  const hit = (p) => p === path || (p && p.indexOf(prefix) === 0);
+  for (const c of cells.slice()) {
+    for (const t of c.tabs.slice()) if (t.kind === "viewer" && hit(t.path)) c.closeTab(t);
+  }
+}
+
 // --- restore (see layout.js) -------------------------------------------------
 
 // applyPlan rebuilds the grid from a reconciled snapshot. Session names come from

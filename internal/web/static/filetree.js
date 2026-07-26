@@ -35,6 +35,15 @@ async function ftRenderDir(path, container, depth) {
       : "Download " + ent.name;
     dl.onclick = (e) => { e.stopPropagation(); downloadPath(full, ent.is_dir); };
     row.append(dl);
+    // Rename and delete live behind a menu, not as bare buttons: a destructive
+    // control one finger-width from ⤓ is a mis-tap, and this delete cannot be
+    // undone.
+    const more = document.createElement("button");
+    more.className = "ft-more";
+    more.textContent = "⋯";
+    more.title = "Actions";
+    more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
+    row.append(more);
     if (ent.is_dir) {
       let open = false, childBox = null;
       row.classList.add("dir");
@@ -78,6 +87,79 @@ async function ftLoadRoot() {
   await ftRenderDir(ftRootSel.value, box, 0);
   if (gen !== ftGen) return; // a newer root started meanwhile — drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
+}
+
+// --- row actions -------------------------------------------------------------
+
+// openRowMenu shows what can be done to one entry, positioned under the ⋯ that
+// opened it (same placement maths as the spawn menu in app.js).
+function openRowMenu(anchor, path, name, isDir) {
+  const menu = document.getElementById("ft-menu");
+  if (!menu) return;
+  const items = [];
+  if (isDir) items.push(["New folder here…", () => promptMkdir(path)]);
+  items.push(["Rename…", () => promptRename(path, name)]);
+  items.push(["Delete…", () => confirmDelete(path, name, isDir)]);
+  menu.replaceChildren(...items.map(([label, run]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.onclick = () => { closeRowMenu(); run(); };
+    return b;
+  }));
+  menu.classList.add("open"); // must be visible before it can be measured
+  const r = anchor.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+  menu.style.top = (r.bottom + 4) + "px";
+}
+
+function closeRowMenu() {
+  const menu = document.getElementById("ft-menu");
+  if (menu) menu.classList.remove("open");
+}
+
+async function promptMkdir(dir) {
+  const raw = prompt("New folder name:");
+  if (raw === null) return;
+  const name = raw.trim();
+  if (!name) return;
+  const res = await fsMkdir(dir, name);
+  if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
+  showToast("Created " + name);
+  ftLoadRoot();
+}
+
+async function promptRename(path, name) {
+  const raw = prompt("Rename to:", name);
+  if (raw === null) return;
+  const next = raw.trim();
+  if (!next || next === name) return;
+  const res = await fsRename(path, next);
+  if (!res.ok) { showToast("Could not rename: " + fsErrText(res), { error: true }); return; }
+  // The old path is gone either way, so any viewer tab on it is stale.
+  if (typeof closeViewersFor === "function") closeViewersFor(path);
+  showToast("Renamed to " + next);
+  ftLoadRoot();
+}
+
+// confirmDelete drives the server's two-step gate: the first request reports
+// what is inside, the second carries back the count the user actually saw.
+async function confirmDelete(path, name, isDir) {
+  let res = await fsDelete(path);
+  if (res.status === 409 && res.data && res.data.confirm_name) {
+    const typed = prompt('This folder is protected. Type "' + res.data.confirm_name + '" to delete it:');
+    if (typed !== res.data.confirm_name) return;
+    res = await fsDelete(path, { recursive: true, confirmName: typed });
+  } else if (res.status === 409 && res.data) {
+    const d = res.data;
+    if (!confirm(deleteConfirmText(name, isDir, d.files || 0, d.bytes || 0, !!d.capped))) return;
+    res = await fsDelete(path, { recursive: true, files: d.files || 0 });
+  }
+  if (!res.ok) { showToast("Could not delete: " + fsErrText(res), { error: true }); return; }
+  if (typeof closeViewersFor === "function") closeViewersFor(path);
+  showToast("Deleted " + name);
+  ftLoadRoot();
 }
 
 // syncTreeToSession re-roots the tree at a session's cwd, but ONLY when a
@@ -125,6 +207,17 @@ async function initFileTree() {
   // root is re-listed. Without this the only ways were re-rooting or reloading
   // the whole page. Disabled while in flight so an impatient double click cannot
   // stack requests (ftLoadRoot's generation guard would drop one anyway).
+  // New folder in the root currently shown — no row can reach the root itself.
+  const newdir = document.getElementById("ft-newdir");
+  if (newdir) newdir.onclick = () => promptMkdir(ftRootSel.value);
+
+  // One document-level closer for the row menu, like the spawn menu's.
+  document.addEventListener("click", (e) => {
+    const menu = document.getElementById("ft-menu");
+    if (menu && menu.classList.contains("open") && !menu.contains(e.target)) closeRowMenu();
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRowMenu(); });
+
   const refresh = document.getElementById("ft-refresh");
   if (refresh) {
     refresh.onclick = async () => {
