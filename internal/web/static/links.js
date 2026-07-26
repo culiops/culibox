@@ -125,7 +125,12 @@ function readLogicalLine(term, y, maxRows) {
     const line = buf.getLine(row - 1);
     if (!line) break;
     rowStarts.push(text.length);
-    text += line.translateToString(false);
+    // Clamp to the terminal's CURRENT width. A BufferLine keeps its allocated
+    // width after the terminal shrinks (a 51-column terminal was observed holding
+    // 138-wide lines), and an unclamped translateToString returns that stale width
+    // space-padded — which splices a gap into the middle of the joined line and
+    // truncates any token spanning the wrap at that gap.
+    text += line.translateToString(false, 0, cols);
     const next = buf.getLine(row);
     if (!next || !next.isWrapped) break;
     row++;

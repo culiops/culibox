@@ -125,9 +125,27 @@ function fakeTerm(rows, cols) {
         getLine(i) {
           const r = rows[i];
           if (!r) return undefined;
+          // A real BufferLine keeps its ALLOCATED width, which stays wider than
+          // term.cols after the terminal shrinks until reflow catches up —
+          // translateToString then returns that stale width, space-padded. `width`
+          // models it, and honouring the start/end arguments is what lets a caller
+          // clamp back to the real terminal width.
+          const w = r.width || cols;
+          // `visible` is the string covering columns [0, cols). For an `exact` row
+          // it deliberately differs in LENGTH from cols — that is what a
+          // double-width or combining character does — and start/end are COLUMN
+          // indices, not string indices, so asking for [0, cols) never truncates it.
+          const visible = r.exact ? r.text : r.text.padEnd(cols, " ");
           return {
             isWrapped: !!r.wrapped,
-            translateToString: () => (r.exact ? r.text : r.text.padEnd(cols, " ").slice(0, cols)),
+            length: w,
+            translateToString: (_trim, start, end) => {
+              const s = start || 0;
+              const e = end === undefined ? w : end;
+              let out = s < cols && e > 0 ? visible : "";
+              if (e > cols) out += " ".repeat(e - Math.max(s, cols));
+              return out;
+            },
           };
         },
       },
@@ -224,4 +242,24 @@ test("joining is bounded by maxRows", () => {
   for (let i = 0; i < 200; i++) rows.push({ text: "aaaaaaaaa", wrapped: true });
   const got = readLogicalLine(fakeTerm(rows, 9), 150, 5);
   assert.ok(got.text.length <= 5 * 9, "joined at most maxRows rows, got " + got.text.length);
+});
+
+// Regression, found only by running against a real terminal: after the terminal
+// shrinks (138 -> 51 cols here), a BufferLine keeps its old allocated width, so
+// translateToString(false) returns the STALE width padded with spaces. Joining
+// wrapped rows then splices ~87 spaces into the middle of the logical line, and a
+// URL spanning the wrap is truncated at that gap. The join must clamp each row to
+// the terminal's current width.
+test("a stale over-wide row does not splice spaces into the joined line", () => {
+  const t = fakeTerm(
+    [
+      { text: "docs: https://culiops.dev/learn/quan-tri-he", width: 138 },
+      { text: "-thong-linux/bai-1.html", wrapped: true, width: 138 },
+    ],
+    43,
+  );
+  const { text } = readLogicalLine(t, 1);
+  assert.ok(!/\s{2,}/.test(text.trimEnd()), "no space gap inside the joined line: " + JSON.stringify(text));
+  const tok = scanLinks(text).find((k) => k.kind === "url");
+  assert.strictEqual(tok.text, "https://culiops.dev/learn/quan-tri-he-thong-linux/bai-1.html");
 });
