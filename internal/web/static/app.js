@@ -155,6 +155,17 @@ function renderSession(s) {
     badge.textContent = "exited";
     li.appendChild(badge);
   }
+  // Containment tier. Shown for every live session, not only the risky one: a
+  // badge that appears only when something is wrong trains you to ignore its
+  // absence.
+  const tier = tierBadge(s, boxRuntime);
+  if (tier) {
+    const tb = document.createElement("span");
+    tb.className = "badge tier" + (tier.tone === "danger" ? " tier-danger" : "");
+    tb.textContent = tier.text;
+    tb.title = tier.title;
+    li.appendChild(tb);
+  }
   const kill = document.createElement("button");
   kill.className = "kill";
   kill.title = "Kill session";
@@ -519,7 +530,10 @@ async function spawnSession(req, opts) {
 }
 
 let quickSpawning = false;
-async function quickSpawn(agentName) {
+// boxRuntime is the isolation runtime the daemon detected ("runc"/"sysbox-runc"),
+// or "" when containment is unavailable. Empty means every session is host tier.
+let boxRuntime = "";
+async function quickSpawn(agentName, opts) {
   if (quickSpawning) return;
   const t = spawnTarget();
   const agent = agentName || t.agent;
@@ -530,7 +544,9 @@ async function quickSpawn(agentName) {
   quickSpawning = true;
   $("spawn-go").disabled = true;
   try {
-    await spawnSession({ agent, name: "", cwd: t.cwd, options });
+    const req = { agent, name: "", cwd: t.cwd, options };
+    if (opts && opts.runtime) req.runtime = opts.runtime;
+    await spawnSession(req);
   } catch (e) {
     showToast("Spawn failed: " + e.message, { error: true });
   } finally {
@@ -559,7 +575,19 @@ function openSpawnMenu() {
   const adv = document.createElement("button");
   adv.type = "button"; adv.textContent = "Advanced…";
   adv.onclick = () => { closeSpawnMenu(); openSpawnDialog(); };
-  menu.replaceChildren(...rows, sep, adv);
+  const extra = [];
+  // The escape hatch is easy but loud. Making it HARD to reach would only breed
+  // workarounds; making it visible and clearly labelled keeps the choice honest.
+  if (boxRuntime) {
+    const host = document.createElement("button");
+    host.type = "button";
+    host.className = "tier-danger-item";
+    host.textContent = "Run on trusted host (uncontained)";
+    host.title = "Spawn outside the box: full access to your host, for work that needs it.";
+    host.onclick = () => { closeSpawnMenu(); quickSpawn(undefined, { runtime: "host" }); };
+    extra.push(host);
+  }
+  menu.replaceChildren(...rows, sep, adv, ...extra);
   menu.classList.add("open"); // must be visible before it can be measured
   const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
@@ -698,6 +726,7 @@ async function currentShellProfile() {
   try {
     const meta = await api("/api/meta");
     window.shellProfile = (meta && meta.shell_profile) || "";
+    boxRuntime = (meta && meta.box_runtime) || "";
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
   return window.shellProfile;
@@ -766,6 +795,8 @@ initUpload();
     // Quick-shell profile first: it is independent of the env badge, so it must
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
+    boxRuntime = (meta && meta.box_runtime) || "";
+    refreshSessions(); // re-render rows now that the tier label is known
     if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");

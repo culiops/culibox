@@ -116,6 +116,11 @@
     #sessions li.open { background: #1f6feb2e; outline: 1px solid var(--accent); }
     #sessions .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
     #sessions .badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+    /* Containment tier. The uncontained tier borrows the PROD badge's red so one
+       visual language means "you are somewhere with real consequences". */
+    #sessions .tier { white-space: nowrap; }
+    #sessions .tier-danger { color: #fca5a5; border-color: #b45309; background: #b4530922; font-weight: 600; }
+    #spawn-menu .tier-danger-item { color: #fca5a5; }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: 6px; padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
@@ -537,6 +542,7 @@
   <div id="ft-menu"></div>
   <script src="/fontprefs.js"></script>
   <script src="/links.js"></script>
+  <script src="/tier.js"></script>
   <script src="/layout.js"></script>
   <script src="/terminal-tab.js"></script>
   <script src="/viewer-tab.js"></script>
