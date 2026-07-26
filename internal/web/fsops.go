@@ -164,3 +164,150 @@ func (s *Server) handleFsMkdir(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"path": filepath.Join(dir, name)})
 }
+
+type renameReq struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+}
+
+// handleFsRename serves POST /api/fs/rename — a new base name in the SAME
+// directory. typedName is what keeps it in place: os.Root would rename across
+// directories happily, so "sub/evil" must never reach it.
+func (s *Server) handleFsRename(w http.ResponseWriter, r *http.Request) {
+	var req renameReq
+	if !decodeOpBody(w, r, &req) {
+		return
+	}
+	name, err := typedName(req.Name)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad name")
+		return
+	}
+	root, relParent, base, err := s.resolveParent(req.Path)
+	if err != nil {
+		writeFsErr(w, err)
+		return
+	}
+	defer root.Close()
+	if _, err := root.Lstat(relOf(relParent, base)); err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	newPath := filepath.Join(filepath.Dir(filepath.Clean(req.Path)), name)
+	if name == base {
+		// A no-op is not a conflict: the user typed the name it already has.
+		writeJSON(w, http.StatusOK, map[string]string{"path": newPath})
+		return
+	}
+	// Never overwrite. root.Rename already refuses when the destination is a
+	// directory (it lstats and returns EEXIST); this closes the file-onto-file
+	// and file-onto-symlink cases, up to the microseconds between this Lstat and
+	// the Rename — the race the spec accepts.
+	if _, err := root.Lstat(relOf(relParent, name)); err == nil {
+		writeErr(w, http.StatusConflict, "name already exists")
+		return
+	}
+	if err := root.Rename(relOf(relParent, base), relOf(relParent, name)); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			writeErr(w, http.StatusConflict, "name already exists")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "cannot rename")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"path": newPath})
+}
+
+// protectedDirs are directories whose loss is unrecoverable or catastrophic, so
+// deleting one asks the user to TYPE its name instead of clicking OK.
+//
+// This is NOT a security boundary — the console spawns shells, so anyone who can
+// reach it can rm -rf anyway — and it deliberately mirrors skipDirs in
+// fssearch.go: it stops an accident, not an attacker. .git earns its place
+// because several of this user's repositories have no remote at all, so deleting
+// one destroys the only copy of their history.
+var protectedDirs = map[string]bool{
+	".ssh": true, ".gnupg": true, ".aws": true, ".kube": true,
+	".git": true, ".claude": true,
+}
+
+type deleteReq struct {
+	Path      string `json:"path"`
+	Recursive bool   `json:"recursive"`
+	// Files is the count the client showed the user. The recursive delete
+	// re-measures and refuses if the tree has grown well past it.
+	Files       int    `json:"files"`
+	ConfirmName string `json:"confirm_name"`
+}
+
+// handleFsDelete serves POST /api/fs/delete. A file, a symlink (the link, never
+// its target) or an empty directory goes immediately; a directory with contents
+// is refused with its measured size so the client can say what would be lost.
+//
+// The two-step gate is a CLIENT affordance: this handler honours recursive on a
+// first request. It grants no capability a spawned shell lacks.
+func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
+	var req deleteReq
+	if !decodeOpBody(w, r, &req) {
+		return
+	}
+	root, relParent, base, err := s.resolveParent(req.Path)
+	if err != nil {
+		writeFsErr(w, err)
+		return
+	}
+	defer root.Close()
+	rel := relOf(relParent, base)
+	info, err := root.Lstat(rel)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	// A symlink is removed as a link whatever it points at, so it must never take
+	// the directory path below — that is the difference between deleting a
+	// shortcut and deleting the tree it points at.
+	if !info.IsDir() {
+		if err := root.Remove(rel); err != nil {
+			writeErr(w, http.StatusInternalServerError, "cannot delete")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if protectedDirs[base] && req.ConfirmName != base {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":        "this folder needs its name typed to confirm",
+			"confirm_name": base,
+		})
+		return
+	}
+	if err := root.Remove(rel); err == nil { // empty: gone in one step
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	abs := filepath.Join(filepath.Dir(filepath.Clean(req.Path)), base)
+	bytes, files, mErr := measureTree(abs, deleteMeasureMaxBytes, deleteMeasureMaxFiles)
+	capped := mErr != nil
+	if !req.Recursive {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "directory not empty", "files": files, "bytes": bytes, "capped": capped,
+		})
+		return
+	}
+	// Consent was given against numbers a human read seconds or minutes ago, on a
+	// box whose whole purpose is running agents that write files. If the tree has
+	// grown materially since, ask again with the new numbers.
+	if req.Files > 0 && files > req.Files*2 {
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": "the folder grew since you confirmed", "files": files, "bytes": bytes, "capped": capped,
+		})
+		return
+	}
+	if err := root.RemoveAll(rel); err != nil {
+		writeErr(w, http.StatusInternalServerError, "cannot delete")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

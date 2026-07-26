@@ -69,6 +69,13 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 		{"GET", "/api/fs/archive?path=/tmp", http.StatusForbidden}, // outside home
 		{"POST", "/api/fs/upload?dir=/tmp", http.StatusForbidden},  // outside home
 		{"GET", "/api/fs/upload?dir=/tmp", http.StatusMethodNotAllowed},
+		// The mutation routes. These carry no body, so a registered handler
+		// answers 400 at the decode step — which is exactly what pins that a real
+		// handler answered rather than the mux 404ing.
+		{"POST", "/api/fs/mkdir", http.StatusBadRequest},
+		{"POST", "/api/fs/rename", http.StatusBadRequest},
+		{"POST", "/api/fs/delete", http.StatusBadRequest},
+		{"GET", "/api/fs/delete", http.StatusMethodNotAllowed},
 	} {
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, nil))
