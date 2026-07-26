@@ -102,6 +102,10 @@ type subscription struct {
 	stop     chan struct{}
 	stopOnce sync.Once
 	stopped  bool // guarded by Session.mu (for the cond predicate)
+	// superseded distinguishes "a newer Subscribe evicted you" from every other
+	// reason this channel can close (the caller cancelled, the session exited).
+	// Only the eviction branch in Subscribe sets it. Guarded by Session.mu.
+	superseded bool
 }
 
 func newSession(id, agent, name, cwd string, created time.Time, cmd *exec.Cmd, ptmx *os.File, ringCap int, backend Backend) *Session {
@@ -191,9 +195,16 @@ func (s *Session) finalize() {
 // Subscribe cancels the previous (its channel closes). The returned channel is
 // closed by its own delivery goroutine — never by anyone else — so there is no
 // send-on-closed hazard even across a subscriber swap (each has its own channel).
-func (s *Session) Subscribe() (<-chan []byte, func()) {
+//
+// The third return reports whether THIS subscription was evicted by a later
+// Subscribe. A closed channel alone cannot say that, and the difference matters
+// to a viewer: one that was taken over must stop reconnecting (or the two
+// viewers evict each other forever), while one whose session ended or whose
+// server died must keep reconnecting.
+func (s *Session) Subscribe() (<-chan []byte, func(), func() bool) {
 	s.mu.Lock()
 	if s.sub != nil {
+		s.sub.superseded = true
 		s.sub.stopped = true
 		s.sub.stopOnce.Do(func() { close(s.sub.stop) })
 	}
@@ -212,7 +223,12 @@ func (s *Session) Subscribe() (<-chan []byte, func()) {
 		s.cond.Broadcast()
 		s.mu.Unlock()
 	}
-	return sub.out, cancel
+	superseded := func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return sub.superseded
+	}
+	return sub.out, cancel, superseded
 }
 
 // deliver: ring -> out for one subscription. Blocks on a slow WS write (only

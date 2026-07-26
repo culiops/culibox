@@ -56,7 +56,7 @@ func TestManager_KillTerminatesProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 
 	// Read the backgrounded PID; the tty CRLF-translates and may split reads.

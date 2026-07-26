@@ -52,7 +52,7 @@ func TestReconcile_RealAbduco(t *testing.T) {
 		t.Fatalf("status=%q, want live", s.Info().Status)
 	}
 
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	if _, err := s.Write([]byte("PING_RECON\n")); err != nil {
 		t.Fatal(err)

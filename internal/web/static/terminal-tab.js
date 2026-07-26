@@ -1,5 +1,10 @@
 "use strict";
 
+// WS_SUPERSEDED mirrors wsSuperseded in internal/terminal/terminal.go: the close
+// code the server uses when a newer attach evicted this socket. Private-use range,
+// so it can never be a protocol status. Changing it means changing both files.
+const WS_SUPERSEDED = 4001;
+
 // TerminalTab is one agent session as a tab body: an xterm.js terminal bound to
 // /ws/{id}, with self-healing reconnect and copy-on-select / clean-paste. The
 // terminal + WebSocket + reconnect logic is unchanged from the original Pane;
@@ -168,8 +173,13 @@ class TerminalTab {
     // fetches pending forever, and scheduling from inside that callback meant the
     // terminal stopped retrying entirely and sat on "reconnecting…" for good.
     // diagnose() can only ever CANCEL this retry, never be required to start it.
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (this.closed) return;
+      // A takeover is the one close the client cannot diagnose for itself, and
+      // the one where reconnecting is exactly wrong: the server allows a single
+      // viewer, so retrying would evict whoever just took the session and start
+      // an eviction ping-pong. The server names it (see wsSuperseded).
+      if (ev && ev.code === WS_SUPERSEDED) { this.markTakenOver(); return; }
       this.setStatus("reconnecting…");
       this.scheduleRetry();
       this.diagnose();
@@ -272,18 +282,22 @@ class TerminalTab {
       this.fit();
     }
     const expired = kind === "expired";
+    const taken = kind === "taken-over";
     this.troubleMsg.textContent =
       expired ? "Login session expired — the terminal cannot authenticate."
+      : taken ? "Another tab or window took over this session."
       : kind === "detached" ? "Session detached from the daemon."
       : "Lost connection to the server.";
     this.troubleEl.classList.toggle("expired", expired);
-    this.troubleBtn.textContent = expired ? "Reload page" : "Retry now";
+    this.troubleBtn.textContent = expired ? "Reload page" : taken ? "Take back" : "Retry now";
     this.troubleBtn.onclick = () => (expired ? location.reload() : this.retryNow());
     // A timed-out probe cannot distinguish "server is down" from "the browser is
     // waiting on a login prompt this page can't see" — both just never answer. So
     // after a few failures, offer the reload that fixes the second case too rather
     // than asserting a cause we do not actually know.
-    const stuck = !expired && (this.probeFails || 0) >= 3;
+    // "stuck" is about not reaching the server. A takeover means we reached it
+    // fine, so an earlier failure count must not rewrite this message.
+    const stuck = !expired && !taken && (this.probeFails || 0) >= 3;
     this.troubleAlt.hidden = !stuck;
     if (stuck) this.troubleMsg.textContent = "Still cannot reach the server — your login may have expired.";
     this.tickTrouble();
@@ -299,6 +313,16 @@ class TerminalTab {
   hideTrouble() {
     if (this.troubleTimer) { clearInterval(this.troubleTimer); this.troubleTimer = null; }
     if (this.troubleEl) { this.troubleEl.remove(); this.troubleEl = null; this.fit(); }
+  }
+
+  // markTakenOver parks the pane instead of reconnecting: the session is alive
+  // and well, it just belongs to another viewer now. "Take back" re-attaches,
+  // which evicts that viewer in turn — it will say the same thing, not fight.
+  markTakenOver() {
+    this.clearRetry();
+    this.probeFails = 0;
+    this.setStatus("taken over");
+    this.showTrouble("taken-over");
   }
 
   markEnded() {

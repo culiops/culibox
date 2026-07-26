@@ -16,6 +16,12 @@ import (
 	"github.com/culiops/culiops-agent-console/internal/session"
 )
 
+// wsSuperseded closes a socket that a newer attach evicted. It lives in the
+// WebSocket private-use range (4000–4999), so it can never collide with a
+// protocol-defined status. The client keys its "another tab took over" state off
+// this exact code and stops reconnecting; every other close still retries.
+const wsSuperseded = websocket.StatusCode(4001)
+
 type control struct {
 	Type string `json:"type"`
 	Rows uint16 `json:"rows"`
@@ -57,7 +63,7 @@ func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.CloseNow()
 
-	out, cancel := sess.Subscribe()
+	out, cancel, superseded := sess.Subscribe()
 	defer cancel()
 
 	ctx, cancelCtx := context.WithCancel(r.Context())
@@ -75,6 +81,14 @@ func (h *AttachHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			select {
 			case b, ok := <-out:
 				if !ok {
+					// `out` closes for three different reasons and the client can
+					// only act correctly if it can tell them apart. Name the one
+					// it cannot infer: another viewer took this session over.
+					// (This goroutine is the socket's sole writer — see above —
+					// so writing the close frame here is safe.)
+					if superseded() {
+						_ = c.Close(wsSuperseded, "superseded")
+					}
 					return
 				}
 				// Bounded write so a black-hole client can't hang this goroutine.

@@ -45,7 +45,7 @@ func readUntil(out <-chan []byte, want string, d time.Duration) (string, bool) {
 
 func TestSession_OutputReachesSubscriber(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf HELLO; sleep 2")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	if _, ok := readUntil(out, "HELLO", 3*time.Second); !ok {
 		t.Fatal("did not receive HELLO")
@@ -54,13 +54,13 @@ func TestSession_OutputReachesSubscriber(t *testing.T) {
 
 func TestSession_ReplayOnResubscribe(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf HELLO; sleep 3")
-	out1, cancel1 := s.Subscribe()
+	out1, cancel1, _ := s.Subscribe()
 	if _, ok := readUntil(out1, "HELLO", 3*time.Second); !ok {
 		t.Fatal("first subscribe missed HELLO")
 	}
 	cancel1()
 	// A fresh subscriber must replay the ring (HELLO is still buffered).
-	out2, cancel2 := s.Subscribe()
+	out2, cancel2, _ := s.Subscribe()
 	defer cancel2()
 	if _, ok := readUntil(out2, "HELLO", 2*time.Second); !ok {
 		t.Fatal("resubscribe did not replay HELLO")
@@ -69,8 +69,8 @@ func TestSession_ReplayOnResubscribe(t *testing.T) {
 
 func TestSession_SecondSubscribeCancelsFirst(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
-	out1, _ := s.Subscribe()
-	out2, cancel2 := s.Subscribe()
+	out1, _, _ := s.Subscribe()
+	out2, cancel2, _ := s.Subscribe()
 	defer cancel2()
 	// out1 must close (its range ends) without panic.
 	select {
@@ -86,9 +86,52 @@ func TestSession_SecondSubscribeCancelsFirst(t *testing.T) {
 	_ = out2
 }
 
+// The evicted subscriber must be able to say WHY its channel closed: a viewer
+// that was taken over has to stop reconnecting, while one whose session ended or
+// whose server died must keep its existing behaviour.
+func TestSession_SupersededMarksOnlyTheEvictedSubscription(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	out1, _, superseded1 := s.Subscribe()
+	if superseded1() {
+		t.Fatal("a lone subscription reports itself superseded")
+	}
+	_, cancel2, superseded2 := s.Subscribe()
+	defer cancel2()
+	for range out1 { // drain until the evicted channel closes
+	}
+	if !superseded1() {
+		t.Fatal("the evicted subscription does not report superseded")
+	}
+	if superseded2() {
+		t.Fatal("the live subscription reports superseded")
+	}
+}
+
+func TestSession_CancelIsNotSuperseded(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	out, cancel, superseded := s.Subscribe()
+	cancel()
+	for range out {
+	}
+	if superseded() {
+		t.Fatal("a subscription the client cancelled must not read as superseded")
+	}
+}
+
+func TestSession_ExitIsNotSuperseded(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "printf BYE")
+	out, cancel, superseded := s.Subscribe()
+	defer cancel()
+	for range out { // the session exits, closing the channel
+	}
+	if superseded() {
+		t.Fatal("a subscription outliving its session must not read as superseded")
+	}
+}
+
 func TestSession_ExitClosesOutAndDone(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf BYE")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	got, ok := readUntil(out, "BYE", 3*time.Second)
 	if !ok {
@@ -109,7 +152,7 @@ func TestSession_ExitClosesOutAndDone(t *testing.T) {
 // (delivery terminates on pump-drained, not merely on process-reaped).
 func TestSession_FinalOutputDeliveredBeforeClose(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf FINAL_MARKER; exit 0")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	var b strings.Builder
 	deadline := time.After(3 * time.Second)
@@ -131,7 +174,7 @@ func TestSession_FinalOutputDeliveredBeforeClose(t *testing.T) {
 
 func TestSession_WriteReachesChild(t *testing.T) {
 	s := startProc(t, 1<<16, "cat")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	if _, err := s.Write([]byte("ping\n")); err != nil {
 		t.Fatal(err)

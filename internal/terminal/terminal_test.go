@@ -71,6 +71,85 @@ func TestAttachHandler(t *testing.T) {
 	}
 }
 
+// A second attach evicts the first, and the evicted socket must be TOLD so —
+// with the private-range close code, not an abrupt drop. Without the code the
+// client cannot tell a takeover from a dead server, reconnects, evicts the other
+// viewer, and the two ping-pong forever.
+func TestAttachHandler_SupersededCloseCode(t *testing.T) {
+	m := session.NewManager(catBuilder{}, nil, 1<<16, time.Minute)
+	sess, err := m.Spawn(launcher.SpawnSpec{Agent: "cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(sess.ID)
+
+	ts := httptest.NewServer(NewAttachHandler(m.Get))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/"+sess.ID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.CloseNow()
+
+	second, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/"+sess.ID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.CloseNow()
+
+	// Read until the first socket dies; it must die with the superseded code.
+	for {
+		_, _, err := first.Read(ctx)
+		if err == nil {
+			continue // replayed ring output — keep reading
+		}
+		if got := websocket.CloseStatus(err); got != wsSuperseded {
+			t.Fatalf("evicted socket closed with status %d, want %d (err %v)", got, wsSuperseded, err)
+		}
+		return
+	}
+}
+
+// A socket that is NOT evicted must keep today's behaviour when the session ends:
+// no superseded code, so the client's reconnect/ended path stays untouched.
+func TestAttachHandler_SessionEndIsNotSuperseded(t *testing.T) {
+	m := session.NewManager(catBuilder{}, nil, 1<<16, time.Minute)
+	sess, err := m.Spawn(launcher.SpawnSpec{Agent: "cat"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts := httptest.NewServer(NewAttachHandler(m.Get))
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ws, _, err := websocket.Dial(ctx, wsURL(ts.URL, "/ws/"+sess.ID), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.CloseNow()
+
+	if err := m.Kill(sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		_, _, err := ws.Read(ctx)
+		if err == nil {
+			continue
+		}
+		if got := websocket.CloseStatus(err); got == wsSuperseded {
+			t.Fatalf("a session that ended reported itself superseded (err %v)", err)
+		}
+		return
+	}
+}
+
 func wsURL(httpURL, path string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http") + path
 }
