@@ -121,7 +121,7 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	})
 
 	root := http.NewServeMux()
-	root.Handle("/", auth.BasicAuth(user, pass, protected))
+	root.Handle("/", auth.BasicAuth(user, pass, csrfGuard(protected)))
 	root.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
 		if s.Cookie != nil && !s.Cookie.Valid(r) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -130,4 +130,31 @@ func (s *Server) Handler(user, pass string) http.Handler {
 		s.Terminal.ServeHTTP(w, r)
 	})
 	return root
+}
+
+// csrfGuard rejects cross-site requests that could change state.
+//
+// Basic-auth credentials are cached per origin by the browser and re-attached to
+// cross-site requests; unlike cookies there is no SameSite to opt out of that.
+// Most of this API is incidentally safe because a JSON content type forces a
+// CORS preflight the attacker cannot satisfy — but that is a property of the
+// body encoding, not a boundary, and multipart/form-data (the upload) is
+// safelisted and needs no preflight. Guarding every unsafe method here means a
+// future handler cannot re-open the hole by changing content type.
+//
+// Reads are deliberately not blocked: a cross-site GET cannot change state, and
+// the response is opaque to the caller anyway.
+func csrfGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !sameOrigin(r) {
+			writeErr(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
