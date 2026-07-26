@@ -8,6 +8,26 @@ let focusedCell = null;
 let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
 let maximized = null;
 
+// bootLayout is the snapshot as it stood when the page loaded. It is read here,
+// at script-evaluation time, because boot's own applyCap(4) runs before the
+// restore does and would otherwise overwrite the snapshot before anything reads
+// it. `restoring` suppresses writes until the restore has had its turn.
+const bootLayout = typeof readLayout === "function" ? readLayout() : null;
+let restoring = true;
+let saveTimer = null;
+
+// scheduleSaveLayout debounces the write: applyCap collapses several cells in one
+// loop, and one user action should cost one write, not one per step.
+function scheduleSaveLayout() {
+  if (restoring || saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (typeof writeLayout === "function") {
+      writeLayout(serializeLayout({ cells, focused: focusedCell, maximized, cap }));
+    }
+  }, 200);
+}
+
 // gridCols → columns/rows the grid uses, derived from the live cell count.
 function gridCols() { return Math.min(Math.max(cells.length, 1), 4); }
 
@@ -31,6 +51,7 @@ class Cell {
     tab.onUpdate = () => this.renderBar();
     this.tabs.push(tab);
     this.activate(tab);
+    scheduleSaveLayout();
   }
 
   activate(tab) {
@@ -44,6 +65,7 @@ class Cell {
       tab.onShow?.();
     }
     if (this === focusedCell) syncFocusedTree(); // tree follows the focused session
+    scheduleSaveLayout();
   }
 
   closeTab(tab) {
@@ -59,6 +81,7 @@ class Cell {
     this.renderBar();
     this.renderBody();
     refreshSessions();
+    scheduleSaveLayout();
   }
 
   renderBody() {
@@ -135,6 +158,7 @@ function setFocusedCell(cell) {
   focusedCell = cell;
   cells.forEach((c) => c.renderBar());
   syncFocusedTree(); // tree follows the focused session
+  scheduleSaveLayout();
 }
 
 // focusedTerminal returns the terminal tab active in the focused cell, or null.
@@ -192,11 +216,13 @@ function removeCell(cell) {
   if (!focusedCell) focusedCell = cells[cells.length - 1];
   renderGrid();
   refreshSessions();
+  scheduleSaveLayout();
 }
 
 function toggleMax(cell) {
   maximized = maximized === cell ? null : cell;
   renderGrid();
+  scheduleSaveLayout();
 }
 
 function renderGrid() {
@@ -235,6 +261,7 @@ function applyCap(n) {
   cells.forEach((c) => { c.renderBar(); c.renderBody(); });
   renderGrid();
   refreshSessions();
+  scheduleSaveLayout();
 }
 
 // openTerminal auto-splits a new window per session up to `cap`; beyond the cap
@@ -288,4 +315,43 @@ function closeTerminal(id) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) { c.closeTab(t); return; }
   }
+}
+
+// --- restore (see layout.js) -------------------------------------------------
+
+// applyPlan rebuilds the grid from a reconciled snapshot. Session names come from
+// the live list, not the snapshot, so a session renamed since the last visit comes
+// back under its current name.
+function applyPlan(plan, sessions) {
+  const nameOf = new Map((sessions || []).map((s) => [s.id, s.name || s.id]));
+  cells.forEach((c) => c.dispose());
+  cells = [];
+  focusedCell = null;
+  maximized = null;
+  for (const pc of plan.cells) {
+    const cell = new Cell();
+    cells.push(cell);
+    for (const t of pc.tabs) cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
+    cell.activate(cell.tabs[pc.active] || cell.tabs[0]);
+  }
+  // applyCap first: it is what collapses extra panes if a snapshot ever holds
+  // more of them than its own cap allows, and the focus below must be picked
+  // from the cells that survive that.
+  applyCap(plan.cap);
+  setFocusedCell(cells[plan.focused] || cells[0]);
+  const max = plan.maximized == null ? null : cells[plan.maximized];
+  if (max) toggleMax(max);
+}
+
+// restoreLayout replays the boot snapshot against the live session list. Called
+// once from boot; endRestore re-arms saving whether or not anything was restored.
+function restoreLayout(sessions) {
+  const plan = typeof reconcileLayout === "function" ? reconcileLayout(bootLayout, sessions) : null;
+  if (plan) applyPlan(plan, sessions);
+  endRestore();
+}
+
+function endRestore() {
+  restoring = false;
+  scheduleSaveLayout(); // fold in whatever boot already built
 }

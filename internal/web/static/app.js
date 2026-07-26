@@ -208,17 +208,22 @@ function startRename(li, span, s) {
 // sessions without issuing its own request on every keystroke.
 let lastSessions = [];
 
+// Returns the live session list, or null if the request failed — the boot-time
+// restore must be able to tell "the server says there are none" (a valid answer:
+// restore nothing) from "the server could not be asked" (retry, restore nothing
+// yet). An empty array is the former.
 async function refreshSessions() {
-  if (editing) return; // don't clobber an in-progress inline rename
+  if (editing) return lastSessions; // don't clobber an in-progress inline rename
   const ul = $("sessions");
   let sessions;
   try { sessions = await api("/api/sessions"); }
-  catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return; }
+  catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return null; }
   lastSessions = sessions || [];
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
-  if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return; }
+  if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
   ul.replaceChildren(...lastSessions.map(renderSession));
+  return lastSessions;
 }
 
 // --- spawn / kill ------------------------------------------------------------
@@ -731,7 +736,19 @@ initPalette();
 loadProfiles();
 loadWorkspaces();
 loadOptionDefs().then(newProfile);
-refreshSessions();
+// Restore the grid from the last visit, once the live session list is known.
+// A failed list is retried once (the loadProfiles/initEnv pattern): restoring
+// against an unknown server would open tabs for sessions that may be gone, so
+// on a second failure we give up on restoring and just re-arm saving.
+(async function restoreBoot(retry = true) {
+  const sessions = await refreshSessions();
+  if (sessions === null) {
+    if (retry) { setTimeout(() => restoreBoot(false), 2000); return; }
+    endRestore();
+    return;
+  }
+  restoreLayout(sessions);
+})();
 initFileTree();
 initUpload();
 
