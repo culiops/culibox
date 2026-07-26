@@ -32,9 +32,10 @@ type fakeBoxes struct {
 	wraps    int
 	releases int
 	adopts   int
+	kills    int
 }
 
-func (f *fakeBoxes) Wrap(_ context.Context, _ string, argv, env []string) ([]string, []string, error) {
+func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []string) ([]string, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
@@ -54,12 +55,25 @@ func (f *fakeBoxes) Release(string) {
 	f.releases++
 }
 
+func (f *fakeBoxes) KillSession(_ context.Context, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.kills++
+	return nil
+}
+
 func (f *fakeBoxes) Runtime() string { return "runc" }
 
 func (f *fakeBoxes) counts() (int, int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.wraps, f.releases, f.adopts
+}
+
+func (f *fakeBoxes) killCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.kills
 }
 
 func managerWithBoxes(t *testing.T, argv []string) (*Manager, *fakeBoxes) {
@@ -150,4 +164,36 @@ func TestExitedBoxedSessionReleasesItsBox(t *testing.T) {
 	}
 	_, releases, _ := boxes.counts()
 	t.Fatalf("exited boxed session released %d times, want 1", releases)
+}
+
+// Signals do not cross `docker exec`. Killing only the host-side client would
+// leave the agent running inside a box other sessions keep alive — the same
+// orphan class as the abduco attach clients that once pegged a core.
+func TestKillingABoxedSessionAlsoKillsTheAgentInsideTheBox(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := boxes.killCount(); got != 1 {
+		t.Fatalf("in-box kill called %d times, want exactly 1", got)
+	}
+}
+
+// A host-tier session has no box to reach into.
+func TestKillingAHostSessionDoesNotTouchTheBoxLayer(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := boxes.killCount(); got != 0 {
+		t.Fatalf("host session triggered %d in-box kills, want 0", got)
+	}
 }

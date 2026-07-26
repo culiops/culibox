@@ -39,7 +39,11 @@ func (m *Manager) runArgs(boxName, cwd string) []string {
 		"--pids-limit", "512",
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"-v", cwd + ":" + cwd + ":rw",
-		"-v", stateVolume(boxName) + ":" + boxHome + "/.claude",
+		// The WHOLE home, not just ~/.claude. Claude Code's primary state file is
+		// $HOME/.claude.json, which sits beside that directory — with only
+		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
+		// session starts un-onboarded and unresumable while writes report success.
+		"-v", stateVolume(boxName) + ":" + boxHome,
 	}
 	if m.runtime == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)
@@ -50,14 +54,28 @@ func (m *Manager) runArgs(boxName, cwd string) []string {
 // execArgv builds the argv a session actually runs. Environment is forwarded BY
 // NAME (`-e NAME`), never by value: argv is world-readable through `ps` on the
 // host, so a value here would undo the secret handling the launcher does.
-func (m *Manager) execArgv(boxName, cwd string, argv, env []string) []string {
+//
+// The command is wrapped so the in-container process records its own pid.
+// Signals do NOT cross `docker exec`: killing the host-side client leaves the
+// agent running inside the box, which is the same orphan class as the
+// `abduco -a` clients that once pegged a core here. KillSession needs that pid
+// to reach the real process.
+func (m *Manager) execArgv(boxName, cwd, sessionID string, argv, env []string) []string {
 	out := []string{m.opts.DockerBin, "exec", "-it", "-w", cwd}
 	for _, name := range forwardableEnvNames(env) {
 		out = append(out, "-e", name)
 	}
-	out = append(out, boxName)
+	out = append(out, boxName, "sh", "-c", inContainerWrap, pidFile(sessionID))
 	return append(out, argv...)
 }
+
+// inContainerWrap records the shell's pid ($$, preserved across exec) into $0,
+// then becomes the agent. Only shell builtins, so it works in a minimal image.
+const inContainerWrap = `echo $$ > "$0"; exec "$@"`
+
+// pidFile is where a session's in-container pid lives. /tmp is the box's tmpfs,
+// so it is writable even with a read-only rootfs and vanishes with the box.
+func pidFile(sessionID string) string { return "/tmp/ac-session-" + sessionID + ".pid" }
 
 // forwardableEnvNames extracts sorted variable names from a KEY=VALUE slice,
 // dropping the values entirely and skipping host-only names.

@@ -52,7 +52,7 @@ func TestBoxNameSeparatesInstances(t *testing.T) {
 func TestExecArgvForwardsEnvByNameOnly(t *testing.T) {
 	m := newTestManager(t)
 	env := []string{"ANTHROPIC_API_KEY=sk-super-secret", "TERM=xterm-256color"}
-	got := m.execArgv("ac-box-abc", "/home/claude/proj", []string{"claude", "--model", "opus"}, env)
+	got := m.execArgv("ac-box-abc", "/home/claude/proj", "bash-1", []string{"claude", "--model", "opus"}, env)
 	joined := strings.Join(got, " ")
 	if strings.Contains(joined, "sk-super-secret") {
 		t.Fatalf("secret VALUE leaked into argv: %q", joined)
@@ -82,7 +82,7 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 		"ABDUCO_SOCKET_DIR=/run/x",
 		"TERM=xterm-256color",
 	}
-	got := m.execArgv("b", "/w", []string{"claude"}, env)
+	got := m.execArgv("b", "/w", "bash-1", []string{"claude"}, env)
 	for _, forbidden := range []string{"PATH", "HOME", "SHELL", "USER", "LOGNAME", "PWD", "ABDUCO_SOCKET_DIR"} {
 		if containsPair(got, "-e", forbidden) {
 			t.Fatalf("host-specific %q must not be forwarded into the box: %v", forbidden, got)
@@ -143,7 +143,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, err := m.Wrap(context.Background(), dir, []string{"claude"}, nil); err != nil {
+		if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,7 +155,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 func TestBoxStopsAfterIdleTTLWhenLastSessionReleases(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, err := m.Wrap(context.Background(), dir, []string{"claude"}, nil); err != nil {
+	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	m.Release(dir)
@@ -166,7 +166,7 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, err := m.Wrap(context.Background(), dir, []string{"claude"}, nil); err != nil {
+		if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -182,12 +182,12 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 func TestSpawnDuringIdleWindowCancelsTheStop(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 150*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, err := m.Wrap(context.Background(), dir, []string{"claude"}, nil); err != nil {
+	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	m.Release(dir)
 	time.Sleep(30 * time.Millisecond)
-	if _, _, err := m.Wrap(context.Background(), dir, []string{"claude"}, nil); err != nil {
+	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -210,7 +210,7 @@ func TestReconcileReapsBoxesWithNoSessions(t *testing.T) {
 func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	if _, _, err := m.Wrap(context.Background(), dir, []string{"claude"}, nil); err != nil {
+	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	name, _ := m.boxName(dir)

@@ -62,9 +62,10 @@ type Backend interface {
 // Kept as an interface here so the session package does not depend on the box
 // package and stays unit-testable with a fake.
 type Boxes interface {
-	Wrap(ctx context.Context, cwd string, argv, env []string) ([]string, []string, error)
+	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) ([]string, []string, error)
 	Adopt(cwd string) error
 	Release(cwd string)
+	KillSession(ctx context.Context, cwd, sessionID string) error
 	Runtime() string
 }
 
@@ -459,11 +460,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// Containment is applied here, between the launcher and the process start,
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	runtime := m.runtimeFor(spec)
+	m.mu.Lock()
+	id := m.nextIDLocked(spec.Agent)
+	m.mu.Unlock()
+
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		wrapped, wrappedEnv, err := boxes.Wrap(context.Background(), spec.Cwd, argv, env)
+		wrapped, wrappedEnv, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env)
 		if err != nil {
 			// Name the way out: a silent failure here is what makes people
 			// disable containment entirely.
@@ -472,10 +477,6 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		argv, env = wrapped, wrappedEnv
 	}
-
-	m.mu.Lock()
-	id := m.nextIDLocked(spec.Agent)
-	m.mu.Unlock()
 
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
@@ -647,6 +648,19 @@ func (m *Manager) Kill(id string) error {
 	m.mu.Unlock()
 	if !ok {
 		return ErrNotFound
+	}
+	// Signals do not cross `docker exec`: killing the host-side client leaves the
+	// agent running inside a box that other sessions keep alive. Reach the real
+	// process first, then tear down the host side.
+	if s.Runtime == config.RuntimeBox {
+		m.mu.Lock()
+		boxes := m.boxes
+		m.mu.Unlock()
+		if boxes != nil {
+			if err := boxes.KillSession(context.Background(), s.Cwd, id); err != nil {
+				log.Printf("session %s: killing agent inside its box: %v", id, err)
+			}
+		}
 	}
 	if m.backend != nil {
 		_ = m.backend.Kill(id)

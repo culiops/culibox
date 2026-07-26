@@ -35,8 +35,8 @@ const (
 	runtimeSysbox = "sysbox-runc"
 
 	// boxHome is the image's home for the unprivileged agent user. The state
-	// volume mounts at <boxHome>/.claude so the agent keeps history and resume
-	// data across spawns.
+	// volume mounts over the WHOLE home so the agent keeps history and resume
+	// data across spawns — see runArgs for why ~/.claude alone is not enough.
 	boxHome = "/home/agent"
 )
 
@@ -63,6 +63,10 @@ type Options struct {
 type Manager struct {
 	opts    Options
 	runtime string
+
+	// opMu serializes start/stop of boxes against each other. mu guards only the
+	// maps below and is never held across a docker call.
+	opMu sync.Mutex
 
 	mu     sync.Mutex
 	active map[string]int // box name → live session count
@@ -124,7 +128,7 @@ func stateVolume(boxName string) string {
 // execute. The returned env is the caller's env unchanged: it stays on the
 // docker CLIENT process so `-e NAME` can forward values without ever putting
 // them in argv, which is world-readable through `ps` on the host.
-func (m *Manager) Wrap(ctx context.Context, cwd string, argv, env []string) ([]string, []string, error) {
+func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) ([]string, []string, error) {
 	name, err := m.boxName(cwd)
 	if err != nil {
 		return nil, nil, err
@@ -136,13 +140,20 @@ func (m *Manager) Wrap(ctx context.Context, cwd string, argv, env []string) ([]s
 	if err := m.ensure(ctx, name, real); err != nil {
 		return nil, nil, err
 	}
-	m.acquire(name)
-	return m.execArgv(name, real, argv, env), env, nil
+	return m.execArgv(name, real, sessionID, argv, env), env, nil
 }
 
-// ensure starts the box if it is not already running, cancelling any pending
-// idle stop first so a spawn inside the idle window never races the timer.
+// ensure starts the box if it is not already running, and registers the caller
+// as a live session.
+//
+// The whole body runs under opMu, which also guards the idle stop. Without that
+// serialization two first spawns race to `docker run` the same --name (docker
+// answers with a Conflict), and a spawn can `docker exec` into a container the
+// idle timer is concurrently removing.
 func (m *Manager) ensure(ctx context.Context, name, cwd string) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
 	if t, ok := m.timers[name]; ok {
 		t.Stop()
@@ -152,15 +163,53 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string) error {
 
 	running, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil {
+		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
 	}
-	if running {
-		return nil
+	if !running {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd)); err != nil {
+			// The idle timer was cancelled above. Without re-arming, a box that
+			// survives a failed spawn would never be stopped by anyone.
+			m.rearmIfIdle(name)
+			return fmt.Errorf("box: starting %s: %w", name, err)
+		}
 	}
-	if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd)); err != nil {
-		return fmt.Errorf("box: starting %s: %w", name, err)
-	}
+	// Count the session only once the box is genuinely usable, so a failed spawn
+	// cannot leak a reference that keeps the box alive forever.
+	m.acquire(name)
 	return nil
+}
+
+// rearmIfIdle restores the idle timer after a failed ensure, but only when no
+// session is live — a live session must never be handed a dying box.
+func (m *Manager) rearmIfIdle(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active[name] > 0 {
+		return
+	}
+	if t, ok := m.timers[name]; ok {
+		t.Stop()
+	}
+	m.timers[name] = time.AfterFunc(m.opts.IdleTTL, func() { m.stopIfIdle(name) })
+}
+
+// KillSession terminates a session's process INSIDE the box. Signals do not
+// cross `docker exec`, so killing the host-side client would leave the agent
+// running — with box reuse, a "killed" runaway agent would keep going.
+func (m *Manager) KillSession(ctx context.Context, cwd, sessionID string) error {
+	name, err := m.boxName(cwd)
+	if err != nil {
+		return err
+	}
+	pf := pidFile(sessionID)
+	// TERM the recorded pid and any child it left behind, then remove the
+	// pidfile. Missing pid or already-dead process is success, not an error:
+	// this runs on the teardown path and must be idempotent.
+	script := `p=$(cat "$1" 2>/dev/null) || exit 0; [ -n "$p" ] || exit 0; ` +
+		`kill -TERM "$p" 2>/dev/null; sleep 1; kill -KILL "$p" 2>/dev/null; rm -f "$1"; exit 0`
+	_, err = m.opts.Client.Run(ctx, []string{"exec", name, "sh", "-c", script, "sh", pf})
+	return err
 }
 
 func (m *Manager) acquire(name string) {
@@ -195,8 +244,13 @@ func (m *Manager) Release(cwd string) {
 // stopIfIdle re-checks under the lock, so a session started during the idle
 // window keeps the box alive even if the timer had already fired.
 func (m *Manager) stopIfIdle(name string) {
+	// Same lock ensure() holds, so a spawn can never exec into a container this
+	// is removing: the two operations are strictly ordered.
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
 	m.mu.Lock()
-	if m.active[name] > 0 {
+	if m.active[name] > 0 { // a session started during the idle window
 		m.mu.Unlock()
 		return
 	}
