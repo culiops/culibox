@@ -7,6 +7,7 @@
 
 let ftRootSel = null, ftTreeEl = null;
 let lastSyncedSessionId = null; // which session the tree is currently following
+let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 
 async function ftRenderDir(path, container, depth) {
   let data;
@@ -65,10 +66,18 @@ async function ftRenderDir(path, container, depth) {
   }
 }
 
+// ftLoadRoot renders off-DOM and swaps in only if it is still the newest load.
+// Two roots can be in flight at once — boot loads home while a session's cwd
+// arrives and re-roots — and ftRenderDir appends after its own await, so painting
+// straight into the tree let a superseded load leave its rows behind (the tree
+// showed home while the picker said the session's directory).
 async function ftLoadRoot() {
   if (!ftRootSel || !ftTreeEl) return;
-  ftTreeEl.replaceChildren();
-  await ftRenderDir(ftRootSel.value, ftTreeEl, 0);
+  const gen = ++ftGen;
+  const box = document.createElement("div");
+  await ftRenderDir(ftRootSel.value, box, 0);
+  if (gen !== ftGen) return; // a newer root started meanwhile — drop this render
+  ftTreeEl.replaceChildren(...box.childNodes);
 }
 
 // syncTreeToSession re-roots the tree at a session's cwd, but ONLY when a

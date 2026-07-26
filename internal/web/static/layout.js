@@ -14,11 +14,13 @@ const LAYOUT_KEY = "agent-console:layout";
 const LAYOUT_V = 1;
 const LAYOUT_MAX_CAP = 4;
 
-// clampCap keeps a stored cap inside the range the layout buttons can produce.
-// Anything unusable falls back to the boot default rather than disabling panes.
+// clampCap keeps a stored cap to a value the layout buttons can actually produce
+// (1, 2 or 4). A cap of 3 would restore a window limit with no button lit, so
+// anything else falls back to the boot default rather than to a phantom state.
+const LAYOUT_CAPS = [1, 2, LAYOUT_MAX_CAP];
 function clampCap(v) {
   const n = Math.round(Number(v));
-  return Number.isFinite(n) && n >= 1 && n <= LAYOUT_MAX_CAP ? n : LAYOUT_MAX_CAP;
+  return LAYOUT_CAPS.includes(n) ? n : LAYOUT_MAX_CAP;
 }
 
 // serializeLayout builds the snapshot from the live model. `model.cells` are the

@@ -744,7 +744,7 @@ loadOptionDefs().then(newProfile);
   const sessions = await refreshSessions();
   if (sessions === null) {
     if (retry) { setTimeout(() => restoreBoot(false), 2000); return; }
-    endRestore();
+    endRestore(false); // never persist the empty boot grid over a real snapshot
     return;
   }
   restoreLayout(sessions);

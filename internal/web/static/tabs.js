@@ -8,10 +8,10 @@ let focusedCell = null;
 let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
 let maximized = null;
 
-// bootLayout is the snapshot as it stood when the page loaded. It is read here,
-// at script-evaluation time, because boot's own applyCap(4) runs before the
-// restore does and would otherwise overwrite the snapshot before anything reads
-// it. `restoring` suppresses writes until the restore has had its turn.
+// `restoring` is what protects the stored snapshot during boot: every layout call
+// boot makes (applyCap(4) and friends) would otherwise write an empty grid over it
+// before the restore has read it. bootLayout is captured at script-evaluation time
+// as well, so the snapshot in hand can never depend on when the flag is cleared.
 const bootLayout = typeof readLayout === "function" ? readLayout() : null;
 let restoring = true;
 let saveTimer = null;
@@ -20,13 +20,19 @@ let saveTimer = null;
 // loop, and one user action should cost one write, not one per step.
 function scheduleSaveLayout() {
   if (restoring || saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    if (typeof writeLayout === "function") {
-      writeLayout(serializeLayout({ cells, focused: focusedCell, maximized, cap }));
-    }
-  }, 200);
+  saveTimer = setTimeout(saveLayoutNow, 200);
 }
+
+function saveLayoutNow() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  if (restoring || typeof writeLayout !== "function") return;
+  writeLayout(serializeLayout({ cells, focused: focusedCell, maximized, cap }));
+}
+
+// Flush on unload: the last layout change before a reload is exactly the one the
+// restore needs, and it is the one most likely to still be inside the debounce.
+// pagehide (not unload) is the event that also fires for the bfcache path.
+window.addEventListener("pagehide", () => { if (saveTimer) saveLayoutNow(); });
 
 // gridCols → columns/rows the grid uses, derived from the live cell count.
 function gridCols() { return Math.min(Math.max(cells.length, 1), 4); }
@@ -338,20 +344,33 @@ function applyPlan(plan, sessions) {
   // more of them than its own cap allows, and the focus below must be picked
   // from the cells that survive that.
   applyCap(plan.cap);
-  setFocusedCell(cells[plan.focused] || cells[0]);
+  // applyCap parks focus on the last cell, so clear it first: setFocusedCell
+  // early-returns on an unchanged cell, and that would skip the tree sync.
+  const target = cells[plan.focused] || cells[0];
+  focusedCell = null;
+  setFocusedCell(target);
+  target.activeTab?.onShow?.(); // fit + keyboard focus land on the restored pane
   const max = plan.maximized == null ? null : cells[plan.maximized];
   if (max) toggleMax(max);
 }
 
 // restoreLayout replays the boot snapshot against the live session list. Called
 // once from boot; endRestore re-arms saving whether or not anything was restored.
+// The finally matters: if building the grid throws, `restoring` must still clear,
+// or every later layout change is silently never persisted.
 function restoreLayout(sessions) {
-  const plan = typeof reconcileLayout === "function" ? reconcileLayout(bootLayout, sessions) : null;
-  if (plan) applyPlan(plan, sessions);
-  endRestore();
+  try {
+    const plan = typeof reconcileLayout === "function" ? reconcileLayout(bootLayout, sessions) : null;
+    if (plan) applyPlan(plan, sessions);
+  } finally {
+    endRestore();
+  }
 }
 
-function endRestore() {
+// endRestore re-arms saving. `save` is false on the give-up path, where the
+// session list could not be fetched: the grid is empty there only because we
+// never restored it, and persisting that would delete the user's real layout.
+function endRestore(save = true) {
   restoring = false;
-  scheduleSaveLayout(); // fold in whatever boot already built
+  if (save) scheduleSaveLayout(); // fold in whatever boot already built
 }
