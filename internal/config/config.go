@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Base env policies for a spawned agent.
@@ -16,6 +17,21 @@ const (
 	BaseClean   = "clean"   // curated minimal env, no inherited secrets (opt-in lock-down)
 	BaseLogin   = "login"   // run via $SHELL -l so the profile/toolchain is sourced
 )
+
+// Runtime tiers for a spawned session. box = contained in a per-workspace
+// container with no host filesystem, no secrets and no docker socket; host =
+// the pre-containment behaviour, trusted by definition. A session's WHOLE
+// process tree lives in exactly one of these — there is deliberately no mixed
+// mode, because a "boxed" session with a host shell is a trivial bypass.
+const (
+	RuntimeBox  = "box"
+	RuntimeHost = "host"
+)
+
+// BoxConfig is the per-agent box override.
+type BoxConfig struct {
+	Image string `json:"image,omitempty"`
+}
 
 // SecretSource is one place secrets are resolved from, tried in order.
 type SecretSource struct {
@@ -67,6 +83,18 @@ type AgentConfig struct {
 	Env     map[string]string `json:"env,omitempty"`     // static per-agent overrides
 	Secrets []string          `json:"secrets,omitempty"` // names resolved via SecretSources
 	Options map[string]any    `json:"options,omitempty"` // option key → default value (bool/enum)
+	Runtime string            `json:"runtime,omitempty"` // box(default)|host — separate axis from Base
+	Box     BoxConfig         `json:"box,omitempty"`     // per-agent box image override
+}
+
+// RuntimePolicy returns the effective tier, defaulting to box. An empty value
+// means "use the default", never "unset" — containment must not be reachable by
+// omission.
+func (a AgentConfig) RuntimePolicy() string {
+	if a.Runtime == "" {
+		return RuntimeBox
+	}
+	return a.Runtime
 }
 
 // BasePolicy returns the effective base, defaulting to inherit (agents get the
@@ -98,6 +126,20 @@ type Config struct {
 	SecretSources    []SecretSource `json:"secret_sources,omitempty"`
 	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
+
+	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
+	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
+	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
+}
+
+// BoxIdleTTL is how long a box outlives its last session, so returning to a
+// project does not pay container start-up again. As with the upload caps, unset
+// means the default and never "forever".
+func (c Config) BoxIdleTTL() time.Duration {
+	if c.BoxIdleTTLSeconds <= 0 {
+		return 15 * time.Minute
+	}
+	return time.Duration(c.BoxIdleTTLSeconds) * time.Second
 }
 
 // Load reads and parses a JSON config file.
@@ -131,6 +173,11 @@ func (c Config) Validate() error {
 		case BaseClean, BaseLogin, BaseInherit:
 		default:
 			return fmt.Errorf("config: agent %q has invalid base %q (want clean|login|inherit)", a.Name, a.Base)
+		}
+		switch a.RuntimePolicy() {
+		case RuntimeBox, RuntimeHost:
+		default:
+			return fmt.Errorf("config: agent %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 		}
 	}
 	optDefs := map[string]OptionDef{}
@@ -204,6 +251,11 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	case BaseClean, BaseLogin, BaseInherit:
 	default:
 		return fmt.Errorf("profile %q has invalid base %q (want clean|login|inherit)", a.Name, a.Base)
+	}
+	switch a.RuntimePolicy() {
+	case RuntimeBox, RuntimeHost:
+	default:
+		return fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 	}
 	for k, v := range a.Options {
 		def, ok := optDefs[k]

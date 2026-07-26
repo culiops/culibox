@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 	"testing"
 )
 
@@ -220,5 +221,37 @@ func TestArchiveLimitsDefaults(t *testing.T) {
 	b, n = (Config{MaxArchiveBytes: 7, MaxArchiveFiles: 9}).ArchiveLimits()
 	if b != 7 || n != 9 {
 		t.Errorf("set = %d, %d; want 7, 9", b, n)
+	}
+}
+
+func TestRuntimePolicyDefaultsToBox(t *testing.T) {
+	if got := (AgentConfig{Name: "a", Bin: "b"}).RuntimePolicy(); got != RuntimeBox {
+		t.Fatalf("default runtime = %q, want %q", got, RuntimeBox)
+	}
+	if got := (AgentConfig{Name: "a", Bin: "b", Runtime: RuntimeHost}).RuntimePolicy(); got != RuntimeHost {
+		t.Fatalf("explicit runtime = %q, want %q", got, RuntimeHost)
+	}
+}
+
+func TestValidateRejectsUnknownRuntime(t *testing.T) {
+	c := Config{BindAddr: "127.0.0.1:1", Agents: []AgentConfig{{Name: "a", Bin: "b", Runtime: "vm"}}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected validation error for runtime \"vm\"")
+	}
+}
+
+func TestValidateProfileRejectsUnknownRuntime(t *testing.T) {
+	err := ValidateProfile(AgentConfig{Name: "p", Bin: "b", Runtime: "vm"}, map[string]OptionDef{})
+	if err == nil {
+		t.Fatal("profiles must not bypass runtime validation")
+	}
+}
+
+func TestBoxIdleTTLDefaults(t *testing.T) {
+	if got := (Config{}).BoxIdleTTL(); got != 15*time.Minute {
+		t.Fatalf("default ttl = %v, want 15m", got)
+	}
+	if got := (Config{BoxIdleTTLSeconds: 60}).BoxIdleTTL(); got != time.Minute {
+		t.Fatalf("ttl = %v, want 1m", got)
 	}
 }
