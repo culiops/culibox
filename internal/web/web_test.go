@@ -58,15 +58,31 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 	// The file endpoints read AND WRITE the user's home directory, so
 	// registering one on the wrong mux would expose it unauthenticated. Assert
 	// every one of them is gated, not just that they exist.
-	for _, probe := range []struct{ method, path string }{
-		{"GET", "/api/fs/search?q=x"},
-		{"GET", "/api/fs/archive?path=/tmp"},
-		{"POST", "/api/fs/upload?dir=/tmp"},
+	// Two assertions per endpoint, because BasicAuth wraps the whole mux: an
+	// unauthenticated 401 alone would also be returned for a route that was
+	// never registered. The authed probe pins that a real handler answers.
+	for _, probe := range []struct {
+		method, path string
+		authed       int
+	}{
+		{"GET", "/api/fs/search?q=x", http.StatusOK},
+		{"GET", "/api/fs/archive?path=/tmp", http.StatusForbidden}, // outside home
+		{"POST", "/api/fs/upload?dir=/tmp", http.StatusForbidden},  // outside home
+		{"GET", "/api/fs/upload?dir=/tmp", http.StatusMethodNotAllowed},
 	} {
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, nil))
 		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("%s %s without basic-auth: want 401, got %d", probe.method, probe.path, rec.Code)
+			t.Errorf("%s %s without basic-auth: want 401, got %d", probe.method, probe.path, rec.Code)
+		}
+
+		authedReq := httptest.NewRequest(probe.method, probe.path, nil)
+		authedReq.SetBasicAuth("u", "p")
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, authedReq)
+		if rec.Code != probe.authed {
+			t.Errorf("%s %s with basic-auth: want %d, got %d (route registered?)",
+				probe.method, probe.path, probe.authed, rec.Code)
 		}
 	}
 }

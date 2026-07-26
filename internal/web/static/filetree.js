@@ -26,7 +26,12 @@ async function ftRenderDir(path, container, depth) {
     const dl = document.createElement("button");
     dl.className = "ft-dl";
     dl.textContent = "⤓";
-    dl.title = ent.is_dir ? "Download " + ent.name + ".tar.gz" : "Download " + ent.name;
+    // The directory tooltip discloses the symlink-skip up front: a tarball
+    // quietly missing symlinked content is the kind of surprise you only find
+    // out about after you needed it.
+    dl.title = ent.is_dir
+      ? "Download " + ent.name + ".tar.gz (symlinks are skipped)"
+      : "Download " + ent.name;
     dl.onclick = (e) => { e.stopPropagation(); downloadPath(full, ent.is_dir); };
     row.append(dl);
     if (ent.is_dir) {

@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -163,5 +165,111 @@ func TestArchiveDoesNotDescendSymlinkedDir(t *testing.T) {
 	}
 	if !strings.Contains(joined, "own.txt") {
 		t.Fatalf("real file missing: %s", joined)
+	}
+}
+
+// tarEntriesStrict reads the whole archive and reports the first structural
+// error. tarNames stops at any error, so it cannot see a truncated member —
+// which is exactly the failure this guards.
+func tarEntriesStrict(t *testing.T, body []byte) ([]string, error) {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	tr := tar.NewReader(gz)
+	var names []string
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			return names, nil
+		}
+		if err != nil {
+			return names, err
+		}
+		if _, err := io.Copy(io.Discard, tr); err != nil {
+			return names, err
+		}
+		names = append(names, h.Name)
+	}
+}
+
+// A file that cannot be opened must be skipped ENTIRELY. Writing its header
+// first and discovering the failure afterwards leaves the tar writer expecting
+// a body that never arrives: the walk aborts, gzip flushes, and the client gets
+// 200 OK with an archive whose last member is unextractable.
+func TestArchiveSkipsUnreadableFileWithoutCorruptingTheStream(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "out")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("alpha"), 0o644)
+	locked := filepath.Join(root, "locked.bin")
+	os.WriteFile(locked, bytes.Repeat([]byte("x"), 2000), 0o000)
+	if f, err := os.Open(locked); err == nil {
+		f.Close()
+		t.Skip("running with rights that ignore file mode (root?)")
+	}
+	os.WriteFile(filepath.Join(root, "z.txt"), []byte("zulu"), 0o644)
+
+	s := &Server{Home: home, MaxArchiveBytes: 1 << 20, MaxArchiveFiles: 100}
+	w := httptest.NewRecorder()
+	s.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?path="+root, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	names, err := tarEntriesStrict(t, w.Body.Bytes())
+	if err != nil {
+		t.Fatalf("archive is structurally broken: %v (entries: %v)", err, names)
+	}
+	joined := strings.Join(names, ",")
+	if strings.Contains(joined, "locked.bin") {
+		t.Errorf("unreadable file got an entry: %v", names)
+	}
+	// The readable files on both sides of it must survive.
+	for _, want := range []string{"out/a.txt", "out/z.txt"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in %v", want, names)
+		}
+	}
+}
+
+// probe=1 answers with the measurement instead of the archive, so the UI can
+// report an over-cap directory. A plain <a download> navigation swallows the
+// error body, leaving the user with a failed download and no reason.
+func TestArchiveProbeReportsSizeAndRefusal(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "out")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "a.txt"), bytes.Repeat([]byte("x"), 500), 0o644)
+
+	ok := &Server{Home: home, MaxArchiveBytes: 1 << 20, MaxArchiveFiles: 100}
+	w := httptest.NewRecorder()
+	ok.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?probe=1&path="+root, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("probe code = %d, want 200", w.Code)
+	}
+	var got struct {
+		Bytes int64 `json:"bytes"`
+		Files int   `json:"files"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("probe body: %v (%s)", err, w.Body)
+	}
+	if got.Bytes != 500 || got.Files != 1 {
+		t.Fatalf("probe = %+v, want 500 bytes / 1 file", got)
+	}
+	if strings.HasPrefix(w.Body.String(), "\x1f\x8b") {
+		t.Fatal("probe streamed an archive")
+	}
+
+	small := &Server{Home: home, MaxArchiveBytes: 100, MaxArchiveFiles: 100}
+	w = httptest.NewRecorder()
+	small.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?probe=1&path="+root, nil))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over-cap probe code = %d, want 413", w.Code)
 	}
 }

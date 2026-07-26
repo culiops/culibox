@@ -71,10 +71,38 @@ function reportUpload(data, destDir) {
   }
 }
 
+function humanBytes(n) {
+  if (n >= (1 << 30)) return (n / (1 << 30)).toFixed(1) + " GB";
+  if (n >= (1 << 20)) return (n / (1 << 20)).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(1) + " KB";
+  return n + " bytes";
+}
+
 // downloadPath triggers a browser download. A same-origin navigation carries the
 // basic-auth credentials the page already holds, so no fetch/blob dance and no
 // second password prompt.
-function downloadPath(path, isDir) {
+//
+// A folder is probed first. An <a download> navigation swallows the body of an
+// error response, so without the probe an over-cap folder gives a failed
+// download and no reason for it anywhere in the UI.
+async function downloadPath(path, isDir) {
+  if (isDir) {
+    let probe;
+    try {
+      const r = await fetch("/api/fs/archive?probe=1&path=" + encodeURIComponent(path));
+      probe = await r.json().catch(() => null);
+      if (!r.ok) {
+        showToast("Cannot download that folder — " + ((probe && probe.error) || ("HTTP " + r.status)),
+          { error: true });
+        return;
+      }
+    } catch (e) {
+      showToast("Cannot download that folder — " + e.message, { error: true });
+      return;
+    }
+    showToast("Preparing " + (probe.files || 0) + " files (" + humanBytes(probe.bytes || 0) +
+      ") — symlinks are skipped");
+  }
   const url = isDir
     ? "/api/fs/archive?path=" + encodeURIComponent(path)
     : "/api/fs/read?download=1&path=" + encodeURIComponent(path);
@@ -101,13 +129,19 @@ function dragHasFiles(e) {
 // session both move while the page stays open.
 function makeDropZone(el, destFn, opts) {
   opts = opts || {};
+  // The element that lights up is not always the listener: a terminal pane
+  // listens on its tab body but must highlight the whole cell, which is what
+  // carries the border and is what reads as a target at 390px.
+  const hot = () => (opts.highlight ? opts.highlight() : el);
+  let lit = null;
   let depth = 0; // dragenter/leave also fire for descendants; count to avoid flicker
   el.addEventListener("dragenter", (e) => {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
     depth++;
-    el.classList.add("drop-hot");
+    lit = hot();
+    lit.classList.add("drop-hot");
   });
   el.addEventListener("dragover", (e) => {
     if (!dragHasFiles(e)) return;
@@ -118,17 +152,22 @@ function makeDropZone(el, destFn, opts) {
   el.addEventListener("dragleave", (e) => {
     if (!dragHasFiles(e)) return;
     depth = Math.max(0, depth - 1);
-    if (!depth) el.classList.remove("drop-hot");
+    if (!depth && lit) { lit.classList.remove("drop-hot"); lit = null; }
   });
   el.addEventListener("drop", (e) => {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
     e.stopPropagation();
     depth = 0;
-    el.classList.remove("drop-hot");
+    if (lit) { lit.classList.remove("drop-hot"); lit = null; }
     uploadFiles(e.dataTransfer.files, destFn(), { onDone: opts.onDone });
   });
 }
+
+// UNSAFE_TEXT matches anything that must never reach a PTY: C0 controls (\n
+// would submit the line), DEL, and C1 controls (parsed as escape sequences once
+// the shell echoes them back).
+const UNSAFE_TEXT = /[\x00-\x1f\x7f-\x9f]/;
 
 // shellQuote wraps a path for a prompt only when it needs it. Shells and agent
 // CLIs both accept a single-quoted path; leaving a spaced path bare would
@@ -143,6 +182,15 @@ function insertPathsIntoTerminal(term, data) {
   const ok = (data && data.uploaded) || [];
   if (!ok.length || !term || typeof term.sendText !== "function") return;
   const text = ok.map((u) => shellQuote(u.path)).join(" ") + " ";
+  // The uploaded FILE name is sanitized server-side, but the directory half of
+  // the path is not — a directory name may legally contain a newline on Linux,
+  // and that newline would submit the line the moment it was typed. Refuse
+  // rather than insert; the upload itself already succeeded.
+  if (UNSAFE_TEXT.test(text)) {
+    showToast("Uploaded, but that folder's name contains control characters — path not inserted",
+      { error: true });
+    return;
+  }
   if (!term.sendText(text)) {
     showToast("Uploaded, but this session is not connected — path not inserted", { error: true });
   }

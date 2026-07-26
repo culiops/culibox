@@ -29,11 +29,30 @@ func TestSafeName(t *testing.T) {
 			t.Errorf("safeName(%q) = %q, %v; want %q, nil", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", ".", "..", "/", "../..", "\x01evil", "nul\x00byte"} {
-		if got, err := safeName(bad); err == nil {
-			t.Errorf("safeName(%q) = %q, nil; want error", bad, got)
+	bad := []string{
+		"", ".", "..", "/", "../..",
+		"\x01evil", "nul\x00byte",
+		"submit\nnow.txt", "carriage\rreturn.txt", // would submit/corrupt the PTY line
+		"c\u009bsim.txt", "next\u0085line.txt", // C1 controls: escape sequences once echoed
+		"spoof\u202egnp.txt", // bidi override: renders as something it is not
+		strings.Repeat("a", 251) + ".txt",
+	}
+	for _, b := range bad {
+		if got, err := safeName(b); err == nil {
+			t.Errorf("safeName(%q) = %q, nil; want error", b, got)
 		}
 	}
+}
+
+// mustRoot opens dir as an os.Root for the write-path tests.
+func mustRoot(t *testing.T, dir string) *os.Root {
+	t.Helper()
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { root.Close() })
+	return root
 }
 
 func TestCreateExclusiveNeverOverwrites(t *testing.T) {
@@ -41,7 +60,8 @@ func TestCreateExclusiveNeverOverwrites(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "shot.png"), []byte("original"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	f, name, err := createExclusive(dir, "shot.png")
+	root := mustRoot(t, dir)
+	f, name, err := createExclusive(root, ".", "shot.png")
 	if err != nil {
 		t.Fatalf("createExclusive: %v", err)
 	}
@@ -54,7 +74,7 @@ func TestCreateExclusiveNeverOverwrites(t *testing.T) {
 		t.Fatalf("original file was modified: %q", got)
 	}
 
-	f2, name2, err := createExclusive(dir, "shot.png")
+	f2, name2, err := createExclusive(root, ".", "shot.png")
 	if err != nil {
 		t.Fatalf("createExclusive #2: %v", err)
 	}
@@ -75,7 +95,7 @@ func TestCreateExclusiveDoesNotFollowSymlink(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "bait.txt")); err != nil {
 		t.Fatal(err)
 	}
-	f, name, err := createExclusive(dir, "bait.txt")
+	f, name, err := createExclusive(mustRoot(t, dir), ".", "bait.txt")
 	if err != nil {
 		t.Fatalf("createExclusive: %v", err)
 	}
@@ -103,8 +123,39 @@ func TestCreateExclusiveGivesUpAfterManyCollisions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := createExclusive(dir, "x.txt"); !errors.Is(err, errTooManyCollisions) {
+	if _, _, err := createExclusive(mustRoot(t, dir), ".", "x.txt"); !errors.Is(err, errTooManyCollisions) {
 		t.Fatalf("err = %v, want errTooManyCollisions", err)
+	}
+}
+
+// The race O_EXCL alone cannot win: the destination directory is resolved and
+// validated, then swapped for a symlink pointing outside home before the write.
+// O_EXCL only guards the FINAL component — the new filename does not exist, so
+// a plain os.OpenFile would happily create it on the other side of the link.
+// Writing through an os.Root re-resolves every component with O_NOFOLLOW
+// semantics, so the swap cannot be exploited at all.
+func TestCreateExclusiveRefusesSymlinkedParent(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	work := filepath.Join(home, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := mustRoot(t, home) // opened while work is a real directory
+
+	// The swap an attacker with concurrent write access would perform.
+	if err := os.Remove(work); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, work); err != nil {
+		t.Skip("symlink not supported")
+	}
+
+	if _, _, err := createExclusive(root, "work", "pwned.txt"); err == nil {
+		t.Fatal("wrote through a symlinked parent directory")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "pwned.txt")); !os.IsNotExist(err) {
+		t.Fatal("file escaped home through the symlinked parent")
 	}
 }
 
@@ -278,5 +329,52 @@ func TestUploadRejectsGet(t *testing.T) {
 	s.handleFsUpload(w, httptest.NewRequest(http.MethodGet, "/api/fs/upload?dir="+home, nil))
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("code = %d, want 405", w.Code)
+	}
+}
+
+// renamed_from must mean "a collision forced a new name" and nothing else. A
+// Windows-style path or a name that merely had whitespace trimmed is sanitized,
+// not renamed — reporting those as renames makes the collision toast a lie.
+func TestUploadDoesNotReportSanitationAsRename(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, [][2]string{{`C:\Users\me\shot.png`, "x"}, {"  spaced.txt  ", "y"}}))
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Uploaded) != 2 {
+		t.Fatalf("uploaded = %+v", got.Uploaded)
+	}
+	for _, u := range got.Uploaded {
+		if u.RenamedFrom != "" {
+			t.Errorf("%s reported renamed_from=%q with no collision", u.Name, u.RenamedFrom)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "shot.png")); err != nil {
+		t.Errorf("windows path not stripped to a base name: %v", err)
+	}
+}
+
+// Per-file caps alone leave the file COUNT unbounded, which is a disk-fill in
+// slow motion. The part cap stops the loop and says so.
+func TestUploadRefusesTooManyParts(t *testing.T) {
+	home := t.TempDir()
+	s := &Server{Home: home, MaxUploadBytes: 1 << 20}
+	parts := make([][2]string, maxUploadParts+5)
+	for i := range parts {
+		parts[i] = [2]string{"f" + strconv.Itoa(i) + ".txt", "x"}
+	}
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, home, parts))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", w.Code)
+	}
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if len(got.Uploaded) != maxUploadParts {
+		t.Fatalf("uploaded %d files, want the cap of %d", len(got.Uploaded), maxUploadParts)
+	}
+	if len(got.Errors) != 1 || !strings.Contains(got.Errors[0].Error, "more than") {
+		t.Fatalf("errors = %+v, want one part-cap error", got.Errors)
 	}
 }

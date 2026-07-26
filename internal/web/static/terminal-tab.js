@@ -32,6 +32,7 @@ class TerminalTab {
     // is something you can see before letting go.
     if (typeof makeDropZone === "function") {
       makeDropZone(this.el, () => this.cwd, {
+        highlight: () => this.el.closest(".cell") || this.el,
         onDone: (data) => insertPathsIntoTerminal(this, data),
       });
     }
@@ -229,6 +230,10 @@ class TerminalTab {
   // say so instead of silently dropping the text.
   sendText(text) {
     if (!text) return false;
+    // Defense in depth for the "never auto-submit" guarantee: a \n anywhere in
+    // this string submits the line, and C1 bytes are read as escape sequences
+    // once echoed. Callers validate too; this is the last gate before the PTY.
+    if (typeof UNSAFE_TEXT !== "undefined" && UNSAFE_TEXT.test(text)) return false;
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     this.ws.send(enc.encode(text));
     return true;
