@@ -263,3 +263,48 @@ func TestHandleMetaNoShellProfile(t *testing.T) {
 		t.Fatalf("shell_profile = %q, want empty", got["shell_profile"])
 	}
 }
+
+// Basic-auth credentials are cached per origin and re-sent on cross-site
+// requests, with no SameSite equivalent to stop them. Today only the multipart
+// upload is reachable that way (JSON bodies force a preflight), but that is an
+// accident of content type, not a boundary — one handler switching to a
+// safelisted type would silently re-open it. So the guard belongs on the mux.
+func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
+	ca, _ := auth.NewCookieAuth("")
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
+		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
+	h := s.Handler("u", "p")
+
+	authed := func(method, path string, hdr [2]string) int {
+		r := httptest.NewRequest(method, path, nil)
+		r.SetBasicAuth("u", "p")
+		if hdr[0] != "" {
+			r.Header.Set(hdr[0], hdr[1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	for _, m := range []string{"POST", "DELETE", "PATCH", "PUT"} {
+		if got := authed(m, "/api/sessions", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusForbidden {
+			t.Errorf("%s cross-site: got %d, want 403", m, got)
+		}
+		if got := authed(m, "/api/sessions", [2]string{"Origin", "http://evil.example"}); got != http.StatusForbidden {
+			t.Errorf("%s foreign origin: got %d, want 403", m, got)
+		}
+	}
+
+	// Reads are not blocked: a cross-site GET cannot be used to change state, and
+	// blocking it would break nothing an attacker needs but might break a user.
+	if got := authed("GET", "/api/sessions", [2]string{"Sec-Fetch-Site", "cross-site"}); got == http.StatusForbidden {
+		t.Error("cross-site GET should not be blocked by the CSRF guard")
+	}
+	// The page's own requests must keep working.
+	if got := authed("POST", "/api/sessions", [2]string{"Sec-Fetch-Site", "same-origin"}); got == http.StatusForbidden {
+		t.Error("same-origin POST was blocked")
+	}
+	if got := authed("POST", "/api/sessions", [2]string{"", ""}); got == http.StatusForbidden {
+		t.Error("POST with no fetch-metadata headers (older browser) was blocked")
+	}
+}

@@ -307,3 +307,95 @@ func waitGone(pid int, d time.Duration) bool {
 	}
 	return !procExists(pid)
 }
+
+// procIsAttacher reports whether the process described by /proc entry procDir is
+// an abduco ATTACH client (`-a`) whose ABDUCO_SOCKET_DIR is exactly socketDir.
+//
+// Both halves matter, because this feeds a kill:
+//   - `-a` only. An abduco SERVER (`-n`) is the user's running agent; killing one
+//     would destroy the session that persistence exists to protect.
+//   - exact socket dir. Session ids are per-instance names like "zsh-1" and
+//     collide freely between dev, prod and any throwaway test instance, so the
+//     id is useless as an owner check. The socket dir is not.
+func procIsAttacher(procDir, socketDir string) bool {
+	argv, err := readNulFile(filepath.Join(procDir, "cmdline"))
+	if err != nil || len(argv) == 0 {
+		return false
+	}
+	if filepath.Base(argv[0]) != "abduco" {
+		return false
+	}
+	attach := false
+	for _, a := range argv[1:] {
+		switch a {
+		case "-n", "-c":
+			return false // a session server, not a client
+		case "-a", "-A":
+			attach = true
+		}
+	}
+	if !attach {
+		return false
+	}
+	env, err := readNulFile(filepath.Join(procDir, "environ"))
+	if err != nil {
+		return false
+	}
+	for _, e := range env {
+		if e == "ABDUCO_SOCKET_DIR="+socketDir {
+			return true
+		}
+	}
+	return false
+}
+
+// readNulFile reads a NUL-separated /proc file into its fields.
+func readNulFile(path string) ([]string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(b), "\x00")
+	out := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// SweepOrphanAttachers kills abduco attach clients left behind by a previous
+// daemon for THIS socket dir, and returns how many it killed.
+//
+// Call it at startup, before Reconcile creates this daemon's own clients — at
+// that moment every matching client is by definition an orphan. This is the only
+// cleanup that survives a daemon SIGKILL or panic, where no shutdown handler
+// ever runs; without it such an orphan spins at 100% CPU until the box is
+// rebooted or someone notices.
+func (a *Adapter) SweepOrphanAttachers() int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return 0
+	}
+	self := os.Getpid()
+	killed := 0
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == self {
+			continue
+		}
+		if !procIsAttacher(filepath.Join("/proc", e.Name()), a.SocketDir) {
+			continue
+		}
+		// SIGKILL directly: a spinning client is in a tight userspace loop and
+		// has nothing to flush, and this runs before any session is wired up.
+		if err := syscall.Kill(pid, syscall.SIGKILL); err == nil {
+			killed++
+		}
+	}
+	return killed
+}

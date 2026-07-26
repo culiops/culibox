@@ -331,7 +331,15 @@
       /* A DEFINITE height, not max-height: the panes below use a percentage
          flex-basis, which silently degrades to `auto` against a content-derived
          height — the drag ratio would be ignored on mobile. */
-      #sidebar { width: 100%; height: 46vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+      /* 52vh, not 46: inside a 46vh band the Files pane came to ~112px, which its
+         header + root picker consumed entirely, leaving the file tree computing
+         to ZERO height — the tree, and the folder-download button that lives in
+         it, were unreachable until you dragged the splitter. */
+      #sidebar { width: 100%; height: 52vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+      /* The absolute-path box is a desktop affordance — nobody types /home/…
+         on a phone, and the header's palette button already finds files. Its
+         ~36px is the rest of the difference between a tree with rows and none. */
+      .ft-row-path { display: none; }
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
          with it — otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
@@ -405,7 +413,7 @@
           <div class="ft-row">
             <select id="ft-root" title="Root folder"></select>
           </div>
-          <div class="ft-row">
+          <div class="ft-row ft-row-path">
             <input id="ft-path" type="text" placeholder="paste absolute path… (Enter)" autocomplete="off" spellcheck="false">
           </div>
           <div id="filetree"></div>

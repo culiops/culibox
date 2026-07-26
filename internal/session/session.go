@@ -481,6 +481,45 @@ func (m *Manager) Get(id string) (*Session, bool) {
 	return s, ok
 }
 
+// DetachAll releases every attach client the daemon owns, leaving the agents
+// running under the backend. It returns how many it released.
+//
+// This exists because the daemon must not rely on the kernel to clean up after
+// it. When the daemon exits, the PTY masters it holds close, and SIGHUP goes
+// only to each terminal's FOREGROUND process group. An attach client that is not
+// the foreground group at that instant gets no signal, keeps its now-hung-up
+// slave as stdin, and abduco's select/read loop then spins at 100% CPU forever —
+// observed in the wild as four orphans burning a core each for 11.5 hours.
+//
+// Without a backend there is nothing to detach FROM: cmd is the agent itself,
+// and killing it here would destroy the very thing a restart is meant to
+// preserve. So this is a no-op in that mode, by design.
+func (m *Manager) DetachAll() int {
+	if m.backend == nil {
+		return 0
+	}
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		sessions = append(sessions, s)
+	}
+	m.mu.Unlock()
+
+	n := 0
+	for _, s := range sessions {
+		if s.cmd == nil || s.cmd.Process == nil {
+			continue
+		}
+		// SIGKILL, not SIGTERM: this runs on the way out with no time to wait,
+		// and an attach client has no state worth flushing — the agent's state
+		// lives in the backend, on the other side of the socket.
+		if err := s.signal(syscall.SIGKILL); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
 // Kill terminates the session and removes it immediately (a user-initiated kill
 // needs no retention). With a backend, abduco.Kill tears down the agent group +
 // server (TERM→KILL inside the adapter) and we finalize DIRECTLY — never waiting
