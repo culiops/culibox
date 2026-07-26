@@ -162,7 +162,12 @@ class Cell {
 function setFocusedCell(cell) {
   if (focusedCell === cell) return;
   focusedCell = cell;
-  cells.forEach((c) => c.renderBar());
+  // Only the focus ring changes, so only the ring is touched. renderBar() here
+  // rebuilt every bar — including the button under the pointer — and this runs
+  // from the cell's mousedown, so mouseup landed on a fresh node and the click
+  // never fired: the first press of ⛶ / +sh / ✕ on an unfocused pane was eaten.
+  // renderBar keeps its own toggle, so a later rebuild still paints the ring.
+  cells.forEach((c) => c.el.classList.toggle("focused", c === focusedCell));
   syncFocusedTree(); // tree follows the focused session
   scheduleSaveLayout();
 }

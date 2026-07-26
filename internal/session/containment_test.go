@@ -32,7 +32,7 @@ func TestManager_CleanBaseContainsSecrets(t *testing.T) {
 	}
 	defer m.Kill(s.ID)
 
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 
 	var b strings.Builder

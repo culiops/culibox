@@ -45,7 +45,7 @@ func readUntil(out <-chan []byte, want string, d time.Duration) (string, bool) {
 
 func TestSession_OutputReachesSubscriber(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf HELLO; sleep 2")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	if _, ok := readUntil(out, "HELLO", 3*time.Second); !ok {
 		t.Fatal("did not receive HELLO")
@@ -54,13 +54,13 @@ func TestSession_OutputReachesSubscriber(t *testing.T) {
 
 func TestSession_ReplayOnResubscribe(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf HELLO; sleep 3")
-	out1, cancel1 := s.Subscribe()
+	out1, cancel1, _ := s.Subscribe()
 	if _, ok := readUntil(out1, "HELLO", 3*time.Second); !ok {
 		t.Fatal("first subscribe missed HELLO")
 	}
 	cancel1()
 	// A fresh subscriber must replay the ring (HELLO is still buffered).
-	out2, cancel2 := s.Subscribe()
+	out2, cancel2, _ := s.Subscribe()
 	defer cancel2()
 	if _, ok := readUntil(out2, "HELLO", 2*time.Second); !ok {
 		t.Fatal("resubscribe did not replay HELLO")
@@ -69,8 +69,8 @@ func TestSession_ReplayOnResubscribe(t *testing.T) {
 
 func TestSession_SecondSubscribeCancelsFirst(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
-	out1, _ := s.Subscribe()
-	out2, cancel2 := s.Subscribe()
+	out1, _, _ := s.Subscribe()
+	out2, cancel2, _ := s.Subscribe()
 	defer cancel2()
 	// out1 must close (its range ends) without panic.
 	select {
@@ -86,9 +86,105 @@ func TestSession_SecondSubscribeCancelsFirst(t *testing.T) {
 	_ = out2
 }
 
+// drain reads until the channel closes. Bounded on purpose: a regression that
+// stops closing it should fail here in seconds with a readable message, not hang
+// the package until the test binary's panic timeout.
+func drain(t *testing.T, out <-chan []byte, d time.Duration) {
+	t.Helper()
+	deadline := time.After(d)
+	for {
+		select {
+		case _, ok := <-out:
+			if !ok {
+				return
+			}
+		case <-deadline:
+			t.Fatal("subscription channel never closed")
+		}
+	}
+}
+
+// The evicted subscriber must be able to say WHY its channel closed: a viewer
+// that was taken over has to stop reconnecting, while one whose session ended or
+// whose server died must keep its existing behaviour.
+func TestSession_SupersededMarksOnlyTheEvictedSubscription(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	out1, _, superseded1 := s.Subscribe()
+	if superseded1() {
+		t.Fatal("a lone subscription reports itself superseded")
+	}
+	_, cancel2, superseded2 := s.Subscribe()
+	defer cancel2()
+	drain(t, out1, 2*time.Second)
+	if !superseded1() {
+		t.Fatal("the evicted subscription does not report superseded")
+	}
+	if superseded2() {
+		t.Fatal("the live subscription reports superseded")
+	}
+}
+
+// A → B → C: every viewer that was pushed out must know it, not just the last one.
+func TestSession_SupersededSurvivesAChainOfSubscribers(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	outA, _, supA := s.Subscribe()
+	outB, _, supB := s.Subscribe()
+	_, cancelC, supC := s.Subscribe()
+	defer cancelC()
+	drain(t, outA, 2*time.Second)
+	drain(t, outB, 2*time.Second)
+	if !supA() || !supB() {
+		t.Fatalf("evicted subscribers misreport: A=%v B=%v", supA(), supB())
+	}
+	if supC() {
+		t.Fatal("the surviving subscriber reports superseded")
+	}
+}
+
+func TestSession_CancelIsNotSuperseded(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	out, cancel, superseded := s.Subscribe()
+	cancel()
+	drain(t, out, 2*time.Second)
+	if superseded() {
+		t.Fatal("a subscription the client cancelled must not read as superseded")
+	}
+}
+
+// A finished subscription must stay finished. It is no longer the session's
+// current one, so a LATER Subscribe must not retro-mark it: a viewer whose
+// session merely ended would be told "another tab took over" and — because that
+// state deliberately stops reconnecting — would never learn the truth.
+func TestSession_ExitIsNotSuperseded(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "printf BYE")
+	out, cancel, superseded := s.Subscribe()
+	defer cancel()
+	drain(t, out, 3*time.Second) // the session exits, closing the channel
+	if superseded() {
+		t.Fatal("a subscription outliving its session must not read as superseded")
+	}
+	_, cancel2, _ := s.Subscribe() // someone opens the dead session elsewhere
+	defer cancel2()
+	if superseded() {
+		t.Fatal("a later Subscribe retro-marked an already-finished subscription")
+	}
+}
+
+func TestSession_CancelledIsNotRetroMarkedSuperseded(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 5")
+	out, cancel, superseded := s.Subscribe()
+	cancel()
+	drain(t, out, 2*time.Second)
+	_, cancel2, _ := s.Subscribe()
+	defer cancel2()
+	if superseded() {
+		t.Fatal("a later Subscribe retro-marked a cancelled subscription")
+	}
+}
+
 func TestSession_ExitClosesOutAndDone(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf BYE")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	got, ok := readUntil(out, "BYE", 3*time.Second)
 	if !ok {
@@ -109,7 +205,7 @@ func TestSession_ExitClosesOutAndDone(t *testing.T) {
 // (delivery terminates on pump-drained, not merely on process-reaped).
 func TestSession_FinalOutputDeliveredBeforeClose(t *testing.T) {
 	s := startProc(t, 1<<16, "sh", "-c", "printf FINAL_MARKER; exit 0")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	var b strings.Builder
 	deadline := time.After(3 * time.Second)
@@ -131,7 +227,7 @@ func TestSession_FinalOutputDeliveredBeforeClose(t *testing.T) {
 
 func TestSession_WriteReachesChild(t *testing.T) {
 	s := startProc(t, 1<<16, "cat")
-	out, cancel := s.Subscribe()
+	out, cancel, _ := s.Subscribe()
 	defer cancel()
 	if _, err := s.Write([]byte("ping\n")); err != nil {
 		t.Fatal(err)
