@@ -134,8 +134,10 @@
       .ft-dl { visibility: visible; padding: 4px 8px; font-size: 14px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
-    #ft-upload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
-    #ft-upload:hover { color: var(--fg); border-color: var(--accent); }
+    #ft-upload, #ft-refresh { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload:hover, #ft-refresh:hover { color: var(--fg); border-color: var(--accent); }
+    #ft-refresh { margin-right: 4px; }
+    #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
     /* Drop affordance — it has to read as a target at a glance, or the whole
        gesture is guesswork. The terminal-cell variant lives with the .cell
        rules below, where source order lets it beat the focus outline. */
@@ -352,7 +354,7 @@
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* ＋ is the ONLY upload route on a phone (no drag exists), so it cannot
          stay an 18px-tall desktop button sitting in a header. */
-      #ft-upload { min-height: 30px; min-width: 38px; font-size: 15px; }
+      #ft-upload, #ft-refresh { min-height: 30px; min-width: 38px; font-size: 15px; }
       #files-pane .pane-head { padding-top: 4px; padding-bottom: 4px; }
       /* Also size ⤓ by viewport, not only by (hover: none): the folder-download
          tooltip is unreachable on touch anyway, so the button IS the whole
@@ -406,6 +408,7 @@
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div id="files-pane">
         <div class="pane-head">Files<span class="spacer" style="flex:1"></span>
+          <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)">⟳</button>
           <button id="ft-upload" type="button" title="Upload files into the current folder">＋</button>
           <input id="ft-upload-input" type="file" multiple hidden>
         </div>

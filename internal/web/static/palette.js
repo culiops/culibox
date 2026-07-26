@@ -76,6 +76,7 @@ function paletteCommands() {
   cmds.push({ kind: "settings", label: "Settings · Profiles", hint: "", run: () => openSettings("manage") });
   cmds.push({ kind: "settings", label: "Settings · Font sizes", hint: "", run: () => openSettings("settings") });
   cmds.push({ kind: "view", label: "Toggle sidebar", hint: "", run: toggleSidebar });
+  cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
   cmds.push({ kind: "view", label: "Increase font size", hint: "Ctrl +", run: () => zoomFocused(+fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Decrease font size", hint: "Ctrl -", run: () => zoomFocused(-fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Reset font size", hint: "Ctrl 0", run: () => resetZoomFocused() });

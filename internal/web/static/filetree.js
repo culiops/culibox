@@ -119,6 +119,19 @@ async function initFileTree() {
   // A manual dropdown pick re-roots the tree but does NOT change which session
   // we're following, so it survives until a different session is focused.
   ftRootSel.onchange = ftLoadRoot;
+
+  // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
+  // writes — which is most of what changes in this app — is invisible until the
+  // root is re-listed. Without this the only ways were re-rooting or reloading
+  // the whole page. Disabled while in flight so an impatient double click cannot
+  // stack requests (ftLoadRoot's generation guard would drop one anyway).
+  const refresh = document.getElementById("ft-refresh");
+  if (refresh) {
+    refresh.onclick = async () => {
+      refresh.disabled = true;
+      try { await ftLoadRoot(); } finally { refresh.disabled = false; }
+    };
+  }
   pathInp.onkeydown = (e) => {
     if (e.key === "Enter") { e.preventDefault(); const v = pathInp.value.trim(); if (v) { openFile(v); pathInp.value = ""; } }
   };
