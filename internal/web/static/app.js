@@ -353,6 +353,7 @@ function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
+  if ($("pf-runtime")) $("pf-runtime").value = p.runtime || "";
   $("pf-args").value = (p.args || []).join("\n");
   $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
   $("pf-secrets").value = (p.secrets || []).join(", ");
@@ -366,6 +367,10 @@ function newProfile() {
 }
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
+  // Blank means "use the default tier", which the server resolves to box. Sending
+  // it explicitly would hard-code today's default into every stored profile.
+  const rt = $("pf-runtime") ? $("pf-runtime").value : "";
+  if (rt) p.runtime = rt;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (args.length) p.args = args;
   const env = {};

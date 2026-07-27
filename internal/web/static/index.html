@@ -88,6 +88,7 @@
     #spawn-menu .mono { font-family: ui-monospace, Menlo, monospace; }
     #spawn-menu .menu-head { font-size: 10px; letter-spacing: .4px; text-transform: uppercase; padding: 4px 10px 2px; opacity: .85; }
     #runtime-warn { margin-top: 6px; font-size: 12px; color: #fca5a5; }
+    .pf-hint, .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
     /* --- sidebar panes + splitter ---------------------------------------- */
     .pane-head {
@@ -455,6 +456,8 @@
         <div>
           <label for="agent">Profile</label>
           <select id="agent"></select>
+          <div class="form-hint">Defaults come from the profile (Settings ⚙). Anything
+            you change here applies to this run only.</div>
         </div>
         <div>
           <label for="sess-name">Name (optional)</label>
@@ -502,6 +505,14 @@
               <option value="login">login — source profile</option>
             </select>
           </div>
+          <div class="pf-row"><label>Runtime</label>
+            <select id="pf-runtime">
+              <option value="">box — contained (default)</option>
+              <option value="host">host — uncontained</option>
+            </select>
+          </div>
+          <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
+            defaults; the New-session form can override runtime and options for a single run.</div>
           <div id="pf-options"></div>
           <label class="pf-lbl">Args (one per line)</label>
           <textarea id="pf-args" rows="2" spellcheck="false" placeholder="--some-flag"></textarea>
