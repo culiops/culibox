@@ -121,6 +121,10 @@ type Session struct {
 	cmd  *exec.Cmd
 	ptmx *os.File
 
+	// trim removes abduco's attach preamble; nil for an ephemeral session,
+	// which has no abduco in front of it. Only pump touches it.
+	trim *preambleTrimmer
+
 	mu   sync.Mutex
 	cond *sync.Cond
 	rb   *ring
@@ -167,6 +171,9 @@ func newSession(id, agent, name, cwd string, created time.Time, cmd *exec.Cmd, p
 		name:    name,
 		backend: backend,
 	}
+	if backend != nil {
+		s.trim = &preambleTrimmer{}
+	}
 	s.cond = sync.NewCond(&s.mu)
 	go s.pump()
 	go s.reap()
@@ -181,6 +188,11 @@ func (s *Session) pump() {
 	// (cmd.Wait can return before the last PTY bytes are read).
 	defer func() {
 		s.mu.Lock()
+		if s.trim != nil {
+			if rest := s.trim.flush(); len(rest) > 0 {
+				s.rb.append(rest)
+			}
+		}
 		s.pumpFinished = true
 		s.cond.Broadcast()
 		s.mu.Unlock()
@@ -189,10 +201,16 @@ func (s *Session) pump() {
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
-			s.mu.Lock()
-			s.rb.append(buf[:n])
-			s.cond.Broadcast()
-			s.mu.Unlock()
+			chunk := buf[:n]
+			if s.trim != nil {
+				chunk = s.trim.filter(chunk)
+			}
+			if len(chunk) > 0 {
+				s.mu.Lock()
+				s.rb.append(chunk)
+				s.cond.Broadcast()
+				s.mu.Unlock()
+			}
 		}
 		if err != nil {
 			return
