@@ -23,6 +23,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/culiops/culiops-agent-console/internal/box"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 )
@@ -62,7 +63,7 @@ type Backend interface {
 // Kept as an interface here so the session package does not depend on the box
 // package and stays unit-testable with a fake.
 type Boxes interface {
-	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) (argvOut, envOut []string, boxName string, err error)
+	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
 	KillSession(ctx context.Context, boxName, sessionID string) error
@@ -73,6 +74,21 @@ type Boxes interface {
 // optional interface so existing fake builders keep compiling.
 type RuntimeResolver interface {
 	RuntimeFor(spec launcher.SpawnSpec) (string, error)
+}
+
+// BinResolver is implemented by launchers that can name an agent's binary, which
+// is how a config-bundle layout is chosen. Optional, like RuntimeResolver.
+type BinResolver interface {
+	BinFor(spec launcher.SpawnSpec) (string, error)
+}
+
+// Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
+// no bundle: sessions still run, just without user config.
+type Bundles interface {
+	// For returns the read-only mounts and the extra argv flags a boxed agent
+	// needs, plus the bundle hash for the log line. An empty bin match yields no
+	// mounts and no flags.
+	For(bin string) (mounts []box.Mount, flags []string, hash string, err error)
 }
 
 // Info is a read-only snapshot for listing.
@@ -384,7 +400,15 @@ type Manager struct {
 	counters  map[string]int
 	ringCap   int
 	retention time.Duration
-	boxes     Boxes // nil = containment unavailable; every spawn is host tier
+	boxes     Boxes   // nil = containment unavailable; every spawn is host tier
+	bundles   Bundles // nil = boxed sessions run without user config
+}
+
+// SetBundles installs the config-bundle provider. Call once at boot.
+func (m *Manager) SetBundles(b Bundles) {
+	m.mu.Lock()
+	m.bundles = b
+	m.mu.Unlock()
 }
 
 // SetBoxes installs the containment layer. Call once at boot, before Reconcile.
@@ -480,9 +504,27 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var boxName string
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
-		boxes := m.boxes
+		boxes, bundles := m.boxes, m.bundles
 		m.mu.Unlock()
-		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env)
+
+		// The bundle must be resolved BEFORE Wrap: Wrap is what starts the
+		// container, and its mounts are fixed at that moment.
+		var mounts []box.Mount
+		var bundleFlags []string
+		var bundleHash string
+		if bundles != nil {
+			if br, ok := m.launcher.(BinResolver); ok {
+				if bin, err := br.BinFor(spec); err == nil {
+					mounts, bundleFlags, bundleHash, err = bundles.For(bin)
+					if err != nil {
+						log.Printf("session %s: config bundle unavailable (%v); the box will run without user config", id, err)
+					}
+				}
+			}
+		}
+		argv = append(argv, bundleFlags...)
+
+		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
 		if err != nil {
 			// Name the way out: a silent failure here is what makes people
 			// disable containment entirely.
@@ -490,6 +532,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				spec.Cwd, err, config.RuntimeHost)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
+		if bundleHash != "" {
+			// Logged per spawn so a box still carrying an older bundle is
+			// visible rather than silent.
+			log.Printf("session %s: box %s, config bundle %s", id, boxName, bundleHash)
+		}
 	}
 
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)

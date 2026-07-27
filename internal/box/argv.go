@@ -26,7 +26,7 @@ var hostOnlyEnv = map[string]bool{
 // and never the docker socket, the host home, or ~/.ssh. The workspace mounts at
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
-func (m *Manager) runArgs(boxName, cwd string) []string {
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
 	args := []string{
 		"run", "-d", "--init",
 		"--name", boxName,
@@ -44,6 +44,10 @@ func (m *Manager) runArgs(boxName, cwd string) []string {
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
 		"-v", m.stateDir(boxName) + ":" + boxHome,
+	}
+	// Extra binds are always :ro. The caller chooses what, never whether.
+	for _, mt := range extraRO {
+		args = append(args, "-v", mt.Host+":"+mt.Box+":ro")
 	}
 	if m.runtime == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)

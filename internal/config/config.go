@@ -127,6 +127,7 @@ type Config struct {
 	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
 
+	BundleSource      string `json:"bundle_source,omitempty"`      // "" → auto-detect; "off" → no bundle
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup

@@ -40,6 +40,11 @@ const (
 	boxHome = "/home/agent"
 )
 
+// Mount is an extra read-only bind the caller wants in the box. Passed in rather
+// than discovered here, so this package keeps knowing nothing about agents or
+// config and the deny-by-default mount rule stays visible in one function.
+type Mount struct{ Host, Box string }
+
 // Client is the narrow slice of the docker CLI this package needs. A fake drives
 // every unit test, so none of them requires a running daemon.
 type Client interface {
@@ -151,7 +156,7 @@ func (m *Manager) ensureStateDir(boxName string) (string, error) {
 // from cwd. A workspace directory can be moved or deleted while its agent is
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
-func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) ([]string, []string, string, error) {
+func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
 	name, err := m.boxName(cwd)
 	if err != nil {
 		return nil, nil, "", err
@@ -160,7 +165,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []s
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
-	if err := m.ensure(ctx, name, real); err != nil {
+	if err := m.ensure(ctx, name, real, extraRO); err != nil {
 		return nil, nil, "", err
 	}
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
@@ -173,7 +178,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []s
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string) error {
+func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -194,7 +199,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string) error {
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)

@@ -97,7 +97,7 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 
 func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ac-box-abc", "/home/claude/proj")
+	got := m.runArgs("ac-box-abc", "/home/claude/proj", nil)
 	joined := strings.Join(got, " ")
 	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude:"} {
 		if strings.Contains(joined, forbidden) {
@@ -114,7 +114,7 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 
 func TestRunArgsAreHardened(t *testing.T) {
 	m := newTestManager(t)
-	joined := strings.Join(m.runArgs("ac-box-abc", "/tmp/p"), " ")
+	joined := strings.Join(m.runArgs("ac-box-abc", "/tmp/p", nil), " ")
 	for _, want := range []string{"--cap-drop=ALL", "no-new-privileges", "--read-only", "--pids-limit", "--init"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing hardening %q in %q", want, joined)
@@ -124,14 +124,14 @@ func TestRunArgsAreHardened(t *testing.T) {
 
 func TestSysboxRuntimeOnlyWhenDetected(t *testing.T) {
 	plain := newTestManager(t)
-	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p"), " "), "sysbox") {
+	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil), " "), "sysbox") {
 		t.Fatal("must not request sysbox when it is not installed")
 	}
 	if plain.Runtime() != runtimeRunc {
 		t.Fatalf("Runtime() = %q, want %q", plain.Runtime(), runtimeRunc)
 	}
 	withSysbox := newTestManagerWithSysbox(t)
-	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p"), " "), "--runtime="+runtimeSysbox) {
+	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil), " "), "--runtime="+runtimeSysbox) {
 		t.Fatal("expected --runtime=sysbox-runc when detected")
 	}
 	if withSysbox.Runtime() != runtimeSysbox {
@@ -145,7 +145,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -157,7 +157,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 func TestBoxStopsAfterIdleTTLWhenLastSessionReleases(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m.ReleaseBox(mustBoxName(t, m, dir))
@@ -168,7 +168,7 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -184,12 +184,12 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 func TestSpawnDuringIdleWindowCancelsTheStop(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 150*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m.ReleaseBox(mustBoxName(t, m, dir))
 	time.Sleep(30 * time.Millisecond)
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -212,7 +212,7 @@ func TestReconcileReapsBoxesWithNoSessions(t *testing.T) {
 func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	name, _ := m.boxName(dir)
@@ -261,7 +261,7 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	if _, err := m.ensureStateDir("ac-box-abc"); err != nil {
 		t.Fatal(err)
 	}
-	args := m.runArgs("ac-box-abc", "/w")
+	args := m.runArgs("ac-box-abc", "/w", nil)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "ac-state-") {
 		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)

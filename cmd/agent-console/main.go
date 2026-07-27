@@ -19,6 +19,7 @@ import (
 	"github.com/culiops/culiops-agent-console/internal/abduco"
 	"github.com/culiops/culiops-agent-console/internal/auth"
 	"github.com/culiops/culiops-agent-console/internal/box"
+	"github.com/culiops/culiops-agent-console/internal/bundle"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 	"github.com/culiops/culiops-agent-console/internal/secrets"
@@ -118,6 +119,7 @@ func main() {
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
 	// reaper never stops a container a live session is running inside.
 	boxRuntime := ""
+	boxDocker, _ := box.LookDocker(cfg.DockerBin)
 	boxes, err := newBoxes(cfg, dataDir)
 	switch {
 	case err != nil:
@@ -129,6 +131,26 @@ func main() {
 		boxRuntime = boxes.Runtime()
 		log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
 			boxImage(cfg), boxRuntime, cfg.BoxIdleTTL())
+	}
+
+	// Config bundle: what a boxed agent is allowed to see of the user's config.
+	if boxes != nil && cfg.BundleSource != "off" {
+		src := bundle.ExpandTilde(cfg.BundleSource)
+		if src == "" {
+			src = bundle.DefaultSource()
+		}
+		bm, err := bundle.New(bundle.Options{
+			Source:  src,
+			Root:    filepath.Join(dataDir, "bundle"),
+			MCPFile: bundle.DefaultMCPFile(src),
+			Prober:  bundle.ImageProber{Docker: boxDocker, Image: boxImage(cfg)},
+		})
+		if err != nil {
+			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
+		} else {
+			mgr.SetBundles(bundle.NewProvider(bm))
+			log.Printf("config bundle source: %s", src)
+		}
 	}
 
 	if err := mgr.Reconcile(); err != nil {

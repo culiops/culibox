@@ -106,6 +106,17 @@ func (l *AgentLauncher) RuntimeFor(spec SpawnSpec) (string, error) {
 	return cfg.RuntimePolicy(), nil
 }
 
+// BinFor reports the binary an agent profile runs. The session manager needs it
+// to choose a config-bundle layout; it deliberately does not parse argv, which
+// may be login-shell wrapped.
+func (l *AgentLauncher) BinFor(spec SpawnSpec) (string, error) {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return "", fmt.Errorf("launcher: unknown agent %q", spec.Agent)
+	}
+	return cfg.Bin, nil
+}
+
 // Build composes (argv, env) for the agent per its base policy + env + secrets.
 //
 // A boxed spawn overrides the base policy on purpose. base=inherit would hand

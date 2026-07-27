@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/culiops-agent-console/internal/box"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 )
@@ -19,6 +20,8 @@ type tieredLauncher struct {
 func (l tieredLauncher) Build(launcher.SpawnSpec) ([]string, []string, error) {
 	return l.argv, []string{"TERM=xterm"}, nil
 }
+
+func (l tieredLauncher) BinFor(launcher.SpawnSpec) (string, error) { return "claude", nil }
 
 func (l tieredLauncher) RuntimeFor(spec launcher.SpawnSpec) (string, error) {
 	if spec.Runtime != "" {
@@ -36,7 +39,7 @@ type fakeBoxes struct {
 	adopted  []string
 }
 
-func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []string) ([]string, []string, string, error) {
+func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []string, _ []box.Mount) ([]string, []string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
@@ -207,5 +210,53 @@ func TestKillingAHostSessionDoesNotTouchTheBoxLayer(t *testing.T) {
 	}
 	if got := boxes.killCount(); got != 0 {
 		t.Fatalf("host session triggered %d in-box kills, want 0", got)
+	}
+}
+
+// fakeBundles records what the session asked for.
+type fakeBundles struct {
+	askedBin string
+	mounts   []box.Mount
+	flags    []string
+}
+
+func (f *fakeBundles) For(bin string) ([]box.Mount, []string, string, error) {
+	f.askedBin = bin
+	return f.mounts, f.flags, "deadbeef", nil
+}
+
+// The bundle's flags must reach the agent, and its mounts must reach the box.
+func TestBoxedSpawnAppliesTheConfigBundle(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	bundles := &fakeBundles{
+		mounts: []box.Mount{{Host: "/b/skills", Box: "/home/agent/.claude/skills"}},
+		flags:  []string{"--strict-mcp-config"},
+	}
+	m.SetBundles(bundles)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if bundles.askedBin == "" {
+		t.Fatal("the session never asked the bundle layer which layout applies")
+	}
+	if wraps, _, _ := boxes.counts(); wraps != 1 {
+		t.Fatalf("expected one wrap, got %d", wraps)
+	}
+}
+
+// A host-tier session gets no bundle: there is no box to mount anything into.
+func TestHostSpawnDoesNotConsultTheBundle(t *testing.T) {
+	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	bundles := &fakeBundles{}
+	m.SetBundles(bundles)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if bundles.askedBin != "" {
+		t.Fatalf("host tier must not consult the bundle layer, asked for %q", bundles.askedBin)
 	}
 }
