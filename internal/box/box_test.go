@@ -457,3 +457,48 @@ func TestMountpointForAMissingHostPathIsAFileStub(t *testing.T) {
 		t.Fatalf("a mountpoint must exist even when the host side does not: %v", err)
 	}
 }
+
+// The marker records genuine use. It must be touched on a warm start too — a box
+// that stays up for weeks would otherwise look untouched to the reclaim sweep.
+func TestSpawnTouchesTheLastUsedMarker(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	marker := m.markerPath(mustBoxName(t, m, dir))
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(marker, old, old); err != nil {
+		t.Fatalf("the first spawn must create the marker: %v", err)
+	}
+	// Second spawn: the box is already running, so this is the warm path.
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-2", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(fi.ModTime()) > time.Minute {
+		t.Fatalf("a warm start left the marker stale: %v", fi.ModTime())
+	}
+}
+
+// The box home is mounted as the agent's $HOME. Bookkeeping the host's reclaim
+// depends on does not belong inside the blast radius of the contained thing.
+func TestTheMarkerLivesOutsideTheBoxHome(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	name := mustBoxName(t, m, dir)
+	home := m.stateDir(name)
+	marker := m.markerPath(name)
+	if strings.HasPrefix(marker, home+string(filepath.Separator)) {
+		t.Fatalf("marker %q is inside the box home %q", marker, home)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("marker not written: %v", err)
+	}
+}

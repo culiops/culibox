@@ -32,6 +32,9 @@ const (
 	LabelInstance  = "io.culiops.agent-console.instance"
 	namePrefix     = "ac-box-"
 	stateDirName   = "boxstate"
+	// lastUsedDirName holds one empty file per box whose mtime is the last-use
+	// signal. It is not a box name, so the reclaim sweep never considers it.
+	lastUsedDirName = ".lastused"
 
 	runtimeRunc   = "runc"
 	runtimeSysbox = "sysbox-runc"
@@ -143,6 +146,33 @@ func (m *Manager) boxName(cwd string) (string, error) {
 // by the running user by construction, so the box works for every uid.
 func (m *Manager) stateDir(boxName string) string {
 	return filepath.Join(m.opts.StateRoot, stateDirName, boxName)
+}
+
+// markerPath is where a box's last-use timestamp lives. Deliberately OUTSIDE the
+// box home: that directory is mounted as the agent's $HOME and the agent writes
+// there constantly, and bookkeeping the host's reclaim depends on must not sit
+// inside the blast radius of the thing being contained.
+func (m *Manager) markerPath(boxName string) string {
+	return filepath.Join(m.opts.StateRoot, stateDirName, lastUsedDirName, boxName)
+}
+
+// touchMarker records that a session used this box now. Best effort: a failure
+// here must never fail a spawn. The cost of losing it is a home that looks older
+// than it is, and the reclaim sweep refuses on two further grounds anyway.
+func (m *Manager) touchMarker(boxName string) {
+	p := m.markerPath(boxName)
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+		return
+	}
+	now := time.Now()
+	if err := os.Chtimes(p, now, now); err == nil {
+		return
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_ = f.Close()
 }
 
 // ensureStateDir creates the box's home directory before the box starts, owned
@@ -315,6 +345,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	// Count the session only once the box is genuinely usable, so a failed spawn
 	// cannot leak a reference that keeps the box alive forever.
 	m.acquire(name)
+	m.touchMarker(name)
 	return nil
 }
 
