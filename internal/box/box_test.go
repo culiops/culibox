@@ -259,7 +259,7 @@ func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
 // by the running user by construction, so the box works for every uid.
 func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	if _, err := m.ensureStateDir("ac-box-abc"); err != nil {
+	if _, err := m.ensureStateDir("ac-box-abc", nil); err != nil {
 		t.Fatal(err)
 	}
 	args := m.runArgs("ac-box-abc", "/w", nil)
@@ -333,7 +333,7 @@ func TestBoxingAnAncestorOfHomeIsRefused(t *testing.T) {
 // credentials, so seeding them is safe.
 func TestNewBoxStateIsSeededPastFirstRunOnboarding(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir, err := m.ensureStateDir("ac-box-seed")
+	dir, err := m.ensureStateDir("ac-box-seed", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,16 +353,107 @@ func TestNewBoxStateIsSeededPastFirstRunOnboarding(t *testing.T) {
 // Seeding must never clobber state a running agent has already written.
 func TestSeedingDoesNotOverwriteExistingState(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir, _ := m.ensureStateDir("ac-box-keep")
+	dir, _ := m.ensureStateDir("ac-box-keep", nil)
 	p := filepath.Join(dir, ".claude.json")
 	if err := os.WriteFile(p, []byte(`{"mine":"kept"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ensureStateDir("ac-box-keep"); err != nil {
+	if _, err := m.ensureStateDir("ac-box-keep", nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(p)
 	if !strings.Contains(string(raw), "kept") {
 		t.Fatalf("existing agent state was overwritten: %s", raw)
+	}
+}
+
+// Docker creates a missing bind target as root, and those stubs land inside the
+// box home where the daemon user can no longer unlink them. Pre-creating the
+// targets is what keeps the home reclaimable.
+func TestMountpointsInsideTheBoxHomeArePreCreated(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "CLAUDE.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mounts := []Mount{
+		{Host: filepath.Join(src, "skills"), Box: boxHome + "/.claude/skills"},
+		{Host: filepath.Join(src, "CLAUDE.md"), Box: boxHome + "/.claude/CLAUDE.md"},
+	}
+	dir, err := m.ensureStateDir("ac-box-aaaaaaaaaaaa", mounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(dir, ".claude/skills"))
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("a directory-typed mount needs a directory target: %v", err)
+	}
+	fi, err = os.Stat(filepath.Join(dir, ".claude/CLAUDE.md"))
+	if err != nil || fi.IsDir() {
+		t.Fatalf("a file-typed mount needs a regular-file target: %v", err)
+	}
+	if fi.Size() != 0 {
+		t.Fatalf("the mountpoint is a stub, not a copy: %d bytes", fi.Size())
+	}
+}
+
+// The bundle root mounts onto the box's read-only rootfs, not into the home.
+func TestMountpointsOutsideTheBoxHomeCreateNothing(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	src := t.TempDir()
+	dir, err := m.ensureStateDir("ac-box-bbbbbbbbbbbb",
+		[]Mount{{Host: src, Box: "/opt/agent-bundle"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != ".claude.json" {
+			t.Fatalf("state dir gained %q from a mount outside the box home", e.Name())
+		}
+	}
+}
+
+func TestExistingMountpointContentIsNeverClobbered(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "CLAUDE.md"), []byte("host"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mounts := []Mount{{Host: filepath.Join(src, "CLAUDE.md"), Box: boxHome + "/.claude/CLAUDE.md"}}
+	dir, err := m.ensureStateDir("ac-box-cccccccccccc", mounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, ".claude/CLAUDE.md")
+	if err := os.WriteFile(p, []byte("written by the agent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ensureStateDir("ac-box-cccccccccccc", mounts); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if string(raw) != "written by the agent" {
+		t.Fatalf("mountpoint content was clobbered: %q", raw)
+	}
+}
+
+// A host path that does not exist yields no mount from the bundle layer, but the
+// state dir must survive one arriving anyway rather than failing the spawn.
+func TestMountpointForAMissingHostPathIsAFileStub(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir, err := m.ensureStateDir("ac-box-dddddddddddd",
+		[]Mount{{Host: "/nonexistent/agents", Box: boxHome + "/.claude/agents"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude/agents")); err != nil {
+		t.Fatalf("a mountpoint must exist even when the host side does not: %v", err)
 	}
 }

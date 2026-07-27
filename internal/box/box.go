@@ -152,10 +152,13 @@ func (m *Manager) stateDir(boxName string) string {
 // otherwise meets an onboarding wizard rather than a prompt — the credential is
 // forwarded and valid, but the agent never gets far enough to use it. These
 // markers are configuration, not credentials.
-func (m *Manager) ensureStateDir(boxName string) (string, error) {
+func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error) {
 	dir := m.stateDir(boxName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("box: creating state dir %q: %w", dir, err)
+	}
+	if err := ensureMountpoints(dir, extraRO); err != nil {
+		return "", err
 	}
 	seed := filepath.Join(dir, ".claude.json")
 	if _, err := os.Stat(seed); err == nil {
@@ -166,6 +169,49 @@ func (m *Manager) ensureStateDir(boxName string) (string, error) {
 		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
 	}
 	return dir, nil
+}
+
+// ensureMountpoints pre-creates the host side of every bind whose target sits
+// inside the box home. Docker creates a missing bind target itself — as root,
+// because the daemon is root — and those stubs land in the state directory,
+// which the daemon user then cannot unlink or reclaim. Creating them here first
+// means Docker finds them present and creates nothing.
+//
+// The type must match: a file-typed bind onto a directory (or the reverse) is a
+// mount error, so the host side decides. Existing paths are left exactly as they
+// are — a running agent may have written there.
+func ensureMountpoints(stateDir string, mounts []Mount) error {
+	for _, mt := range mounts {
+		rel, err := filepath.Rel(boxHome, mt.Box)
+		if err != nil || rel == "." || rel == ".." ||
+			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue // outside the home: it lands on the read-only rootfs
+		}
+		target := filepath.Join(stateDir, rel)
+		if _, err := os.Lstat(target); err == nil {
+			continue
+		}
+		if fi, err := os.Stat(mt.Host); err == nil && fi.IsDir() {
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				return fmt.Errorf("box: creating mountpoint %q: %w", target, err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return fmt.Errorf("box: creating mountpoint parent of %q: %w", target, err)
+		}
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+		if err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return fmt.Errorf("box: creating mountpoint %q: %w", target, err)
+		}
+		if err := f.Close(); err != nil {
+			return fmt.Errorf("box: creating mountpoint %q: %w", target, err)
+		}
+	}
+	return nil
 }
 
 // unboxableWorkspace refuses a workspace whose mount would defeat the point.
@@ -255,7 +301,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
 	}
 	if !running {
-		if _, err := m.ensureStateDir(name); err != nil {
+		if _, err := m.ensureStateDir(name, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
