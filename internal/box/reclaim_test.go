@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -121,6 +122,103 @@ func TestReclaimSkipsABoxThatCameBackDuringTheSweep(t *testing.T) {
 	}
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("home of a box that came back was removed: %v", err)
+	}
+}
+
+// The age that admits a candidate is read before opMu. A spawn landing in that
+// window touches the marker, and if the container it started is then removed
+// from outside (docker rm -f), the Inspect re-check says "gone" and the sweep
+// would delete a home used seconds ago on a month-old reading. The age has to be
+// re-read under the lock, like `active` and Inspect already are.
+func TestReclaimRereadsTheAgeUnderTheLock(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	name := "ac-box-444444444444"
+	dir := seedHome(t, m, name, 90*24*time.Hour)
+	// Inspect runs inside reclaimOne, under opMu, after the snapshot: a spawn
+	// landing exactly here is what touching the marker stands for. It stays
+	// "not running", so nothing else stops the removal.
+	fake.inspectHook = func(n string) {
+		if n == name {
+			m.touchMarker(n)
+		}
+	}
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("reclaimed a home used during the sweep: %+v", done)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("home of a box used during the sweep was removed: %v", err)
+	}
+}
+
+// The removal must be serialized against `ensure`, which bind-mounts this exact
+// directory as a container's $HOME: a RemoveAll racing that mount deletes files
+// out from under a live box. Only opMu provides that, and only an ordering test
+// pins it — the Inspect re-check alone leaves the suite green when the lock is
+// deleted. Every wait is bounded, so a regression fails rather than hangs.
+func TestReclaimHoldsOpMuAgainstAConcurrentSpawn(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	ws := t.TempDir()
+	name := mustBoxName(t, m, ws)
+	seedHome(t, m, name, 90*24*time.Hour)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	// Only the sweep's own Inspect blocks. If the lock is missing, the spawn
+	// reaches Inspect too and must not be held up by this.
+	fake.inspectHook = func(string) {
+		first := false
+		once.Do(func() { first = true })
+		if first {
+			close(entered)
+			<-release
+		}
+	}
+
+	swept := make(chan error, 1)
+	go func() {
+		_, err := m.ReclaimState(context.Background(), DefaultStateTTL)
+		swept <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sweep never reached its re-check")
+	}
+
+	spawned := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.Wrap(context.Background(), ws, "bash-1", []string{"claude"}, nil, nil)
+		spawned <- err
+	}()
+	select {
+	case err := <-spawned:
+		close(release)
+		t.Fatalf("a spawn completed while the sweep was mid-removal (err=%v): "+
+			"reclaimOne is not serialized against ensure, so RemoveAll can race a live bind mount", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-spawned:
+		if err != nil {
+			t.Fatalf("spawn failed after the sweep released the lock: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the spawn never completed after the sweep released the lock")
+	}
+	select {
+	case err := <-swept:
+		if err != nil {
+			t.Fatalf("sweep failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the sweep never finished")
 	}
 }
 

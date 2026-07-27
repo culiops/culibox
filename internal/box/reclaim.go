@@ -85,14 +85,13 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl time.Duration) ([]Reclai
 		if live > 0 {
 			continue
 		}
-		age, ok := m.homeAge(name)
-		if !ok || age < ttl {
+		if age, ok := m.homeAge(name); !ok || age < ttl {
 			continue
 		}
 		dir := m.stateDir(name)
 		size := dirBytes(dir)
 
-		reclaimed, err := m.reclaimOne(ctx, name, dir, age, size)
+		reclaimed, err := m.reclaimOne(ctx, name, dir, ttl, size)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -106,9 +105,10 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl time.Duration) ([]Reclai
 }
 
 // reclaimOne re-checks a single candidate under opMu and removes its home if
-// it is still, in fact, unused. A nil, nil return means the box came back to
-// life since the snapshot and was correctly left alone — not an error.
-func (m *Manager) reclaimOne(ctx context.Context, name, dir string, age time.Duration, size int64) (*Reclaimed, error) {
+// it is still, in fact, unused. Every ground is re-read here rather than trusted
+// from the snapshot. A nil, nil return means the box came back to life since the
+// snapshot and was correctly left alone — not an error.
+func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Duration, size int64) (*Reclaimed, error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -124,6 +124,15 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, age time.Dur
 	// its idle timer. When Inspect cannot say for certain, do not delete.
 	running, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil || running {
+		return nil, nil
+	}
+	// The age from the snapshot is just as stale as the other two grounds were.
+	// A spawn landing in that window touches the marker, and its container can
+	// be gone again by the time Inspect runs — removed by hand, or stopped and
+	// removed — leaving a home used seconds ago condemned on a month-old
+	// reading. The marker is the record of that use, so read it again here.
+	age, ok := m.homeAge(name)
+	if !ok || age < ttl {
 		return nil, nil
 	}
 

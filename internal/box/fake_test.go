@@ -18,6 +18,11 @@ type fakeClient struct {
 	existing  []string // names ListByLabel reports
 	running   map[string]bool
 	sysbox    bool
+
+	// inspectHook runs inside Inspect, before it answers and with no lock held,
+	// so a test can land an event exactly in the window between the sweep's
+	// snapshot and its re-check without racing real goroutines.
+	inspectHook func(name string)
 }
 
 func newFake() *fakeClient { return &fakeClient{running: map[string]bool{}} }
@@ -36,6 +41,12 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 }
 
 func (f *fakeClient) Inspect(_ context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	hook := f.inspectHook
+	f.mu.Unlock()
+	if hook != nil {
+		hook(name)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.running[name], nil
