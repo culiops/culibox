@@ -121,10 +121,13 @@ function closeRowMenu() {
 }
 
 async function promptMkdir(dir) {
-  const raw = prompt("New folder name:");
-  if (raw === null) return;
-  const name = raw.trim();
-  if (!name) return;
+  const name = await askPrompt({
+    title: "New folder",
+    label: "Folder name",
+    placeholder: "new-folder",
+    confirmLabel: "Create",
+  });
+  if (name === null || !name) return;
   const res = await fsMkdir(dir, name);
   if (!res.ok) { showToast("Could not create: " + fsErrText(res), { error: true }); return; }
   showToast("Created " + name);
@@ -132,15 +135,26 @@ async function promptMkdir(dir) {
 }
 
 async function promptRename(path, name) {
-  const raw = prompt("Rename to:", name);
-  if (raw === null) return;
-  const next = raw.trim();
-  if (!next || next === name) return;
+  const next = await askPrompt({
+    title: "Rename",
+    label: "New name",
+    value: name,
+    confirmLabel: "Rename",
+  });
+  if (next === null || !next || next === name) return;
   let res = await fsRename(path, next);
-  // A protected folder must not be renamable around its delete gate.
+  // A protected folder must not be renamable around its delete gate. mustMatch
+  // keeps the confirm button disabled until the typed name is exactly right, so
+  // a confirmed dialog has already matched.
   if (res.status === 409 && res.data && res.data.confirm_name) {
-    const typed = prompt('This folder is protected. Type "' + res.data.confirm_name + '" to rename it:');
-    if (typed !== res.data.confirm_name) return;
+    const typed = await askPrompt({
+      title: "Protected folder",
+      body: 'This folder is protected. Type "' + res.data.confirm_name + '" to rename it.',
+      label: "Folder name",
+      confirmLabel: "Rename",
+      mustMatch: res.data.confirm_name,
+    });
+    if (typed === null) return;
     res = await fsRename(path, next, typed);
   }
   if (!res.ok) { showToast("Could not rename: " + fsErrText(res), { error: true }); return; }
@@ -159,13 +173,26 @@ async function confirmDelete(path, name, isDir) {
     // folders that earn this gate must not be the ones told the least.
     const d = res.data;
     const inside = deleteSummary(d);
-    const typed = prompt('Deleting "' + d.confirm_name + '"' + (inside ? " — " + inside : "") +
-      ". This cannot be undone.\n\nType the folder name to confirm:");
-    if (typed !== d.confirm_name) return;
+    const typed = await askPrompt({
+      title: "Delete protected folder",
+      body: 'Deleting "' + d.confirm_name + '"' + (inside ? ", " + inside : "") +
+        ". This cannot be undone.",
+      label: "Type the folder name to confirm",
+      confirmLabel: "Delete",
+      danger: true,
+      mustMatch: d.confirm_name,
+    });
+    if (typed === null) return;
     res = await fsDelete(path, { recursive: true, confirmName: typed, entries: d.entries || 0 });
   } else if (res.status === 409 && res.data) {
     const d = res.data;
-    if (!confirm(deleteConfirmText(name, isDir, d))) return;
+    const okDelete = await askConfirm({
+      title: "Delete",
+      body: deleteConfirmText(name, isDir, d),
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!okDelete) return;
     res = await fsDelete(path, { recursive: true, entries: d.entries || 0 });
   }
   if (!res.ok) { showToast("Could not delete: " + fsErrText(res), { error: true }); return; }
