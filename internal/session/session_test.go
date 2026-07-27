@@ -236,3 +236,44 @@ func TestSession_WriteReachesChild(t *testing.T) {
 		t.Fatal("input did not echo back through the child")
 	}
 }
+
+// An abduco-attached session must not hand the attach preamble to the browser:
+// it would park xterm in the alternate buffer for the session's whole life.
+func TestSession_StripsAbducoAttachPreamble(t *testing.T) {
+	cmd := exec.Command("sh", "-c", `printf '\033[?1049h\033[HREADY'; sleep 2`)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
+		t.Fatalf("start pty: %v", err)
+	}
+	t.Cleanup(func() { _ = ptmx.Close() })
+	s := newSession("s-1", "test", "s-1", "", time.Now(), cmd, ptmx, 1<<16, newFakeBackend())
+
+	out, cancel, _ := s.Subscribe()
+	defer cancel()
+	got, ok := readUntil(out, "READY", 3*time.Second)
+	if !ok {
+		t.Fatalf("did not receive READY, got %q", got)
+	}
+	if strings.Contains(got, attachPreamble) {
+		t.Fatalf("attach preamble survived: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[H") {
+		t.Fatalf("cursor-home after the preamble was dropped too: %q", got)
+	}
+}
+
+// A session whose PTY the daemon owns directly has no abduco in front of it, so
+// a leading alternate-screen switch is the agent's own and must survive.
+func TestSession_EphemeralKeepsLeadingAltScreen(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", `printf '\033[?1049hREADY'; sleep 2`)
+	out, cancel, _ := s.Subscribe()
+	defer cancel()
+	got, ok := readUntil(out, "READY", 3*time.Second)
+	if !ok {
+		t.Fatalf("did not receive READY, got %q", got)
+	}
+	if !strings.Contains(got, attachPreamble) {
+		t.Fatalf("ephemeral session lost its alt-screen switch: %q", got)
+	}
+}
