@@ -114,3 +114,30 @@ const { defaultWorkspace } = require("../static/tier.js");
 test("with nothing boxable the default is empty rather than a doomed pick", () => {
   assert.equal(defaultWorkspace([WS[0]], "box"), "");
 });
+
+// --- quick shell (+sh) -----------------------------------------------------
+
+const { shellSpawnPlan } = require("../static/tier.js");
+
+// "+sh" means "a shell right next to this". Its value is the inherited context,
+// so it must inherit the WHOLE context — inheriting the directory but not the
+// tier is the incoherent middle that produced a refused spawn.
+test("a shell beside a boxed session joins that session's tier and directory", () => {
+  const p = shellSpawnPlan({ cwd: "/home/u/proj", runtime: "box" });
+  assert.deepEqual(p, { mode: "spawn", cwd: "/home/u/proj", runtime: "box" });
+});
+
+// Beside an uncontained session in home, a boxed shell would be refused — and
+// the honest answer is to match the neighbour, whose tier the user already chose
+// deliberately and which the row badge still labels in red.
+test("a shell beside a trusted-host session is also trusted-host", () => {
+  const p = shellSpawnPlan({ cwd: "/home/u", runtime: "host" });
+  assert.deepEqual(p, { mode: "spawn", cwd: "/home/u", runtime: "host" });
+});
+
+// With nothing to sit beside, there is no context to inherit, so the quick path
+// has no meaning and the deliberate one takes over.
+test("with no neighbour the button falls back to the form", () => {
+  assert.deepEqual(shellSpawnPlan(null), { mode: "form" });
+  assert.deepEqual(shellSpawnPlan({ cwd: "" }), { mode: "form" });
+});

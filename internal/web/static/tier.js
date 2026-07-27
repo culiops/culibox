@@ -109,9 +109,22 @@ function defaultWorkspace(workspaces, runtime) {
   return usable.length ? usable[0].value : "";
 }
 
+// shellSpawnPlan decides what the per-pane "+sh" button does. A quick shell is
+// defined as "a shell beside this session", so it inherits the neighbour's
+// directory AND its tier: beside a boxed agent it joins the same box, beside an
+// uncontained session it is uncontained too. Inheriting only the directory made
+// a boxed shell inherit an uncontainable one and fail.
+//
+// With no neighbour there is no context to inherit, so the quick path has no
+// meaning and the caller should open the form instead.
+function shellSpawnPlan(neighbour) {
+  if (!neighbour || !neighbour.cwd) return { mode: "form" };
+  return { mode: "spawn", cwd: neighbour.cwd, runtime: neighbour.runtime || "" };
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     tierBadge, tierRuntimeLabel, spawnMenuEntries,
-    workspaceOptions, defaultWorkspace, TIER_BOX, TIER_HOST,
+    workspaceOptions, defaultWorkspace, shellSpawnPlan, TIER_BOX, TIER_HOST,
   };
 }

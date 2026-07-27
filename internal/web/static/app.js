@@ -536,10 +536,13 @@ function updateRuntimeWarning() {
 
 // openSpawnDialog preselects whatever the one-click button would have done, so
 // "Advanced…" elaborates the visible target instead of presenting a fresh form.
-function openSpawnDialog() {
+function openSpawnDialog(preselectAgent) {
   const last = loadLastSpawn();
-  if (last && last.agent && profiles.some((p) => p.name === last.agent)) {
-    $("agent").value = last.agent;
+  const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
+    ? preselectAgent
+    : (last && last.agent && profiles.some((p) => p.name === last.agent) ? last.agent : "");
+  if (want) {
+    $("agent").value = want;
     renderOptions();
   }
   // Tier first: it decides which workspaces are selectable at all.
@@ -612,14 +615,23 @@ async function spawnShellIn(cell) {
     // can be created after this page loaded.
     const profile = await currentShellProfile();
     if (!profile) { alert("No shell profile available — check the console log."); return; }
-    const cwd = await resolveCellCwd(cell);
+    const plan = shellSpawnPlan(await resolveCellNeighbour(cell));
+    if (plan.mode === "form") {
+      // Nothing to sit beside: there is no context to inherit, so let the user
+      // choose one rather than guessing a directory that may not be containable.
+      openSpawnDialog(profile);
+      return;
+    }
+    const cwd = plan.cwd;
     // Always prefix the label: with no cwd the server would name the session after
     // default_cwd's basename, which reads exactly like an agent session.
     const base = cwd.replace(/\/$/, "").split("/").pop();
+    const req = { agent: profile, cwd, name: "sh:" + (base || profile) };
+    if (plan.runtime) req.runtime = plan.runtime; // match the neighbour's tier
     const s = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: profile, cwd, name: "sh:" + (base || profile) }),
+      body: JSON.stringify(req),
     });
     await refreshSessions();
     // The cell can be destroyed while we await (applyCap collapses windows, a pane
@@ -634,13 +646,13 @@ async function spawnShellIn(cell) {
   }
 }
 
-// resolveCellCwd falls back to the server when a terminal tab exists but hasn't
+// resolveCellNeighbour falls back to the server when a terminal tab exists but hasn't
 // resolved its cwd yet (TerminalTab fetches it asynchronously). Without this, a
 // +sh right after opening a session silently lands in default_cwd instead of the
 // session's directory — the failure the feature exists to prevent.
-async function resolveCellCwd(cell) {
-  const known = cellCwd(cell);
-  if (known) return known;
+// resolveCellNeighbour returns the session a quick shell should sit beside —
+// the whole record, because "+sh" inherits the tier as well as the directory.
+async function resolveCellNeighbour(cell) {
   // Mirror cellCwd's precedence exactly — active tab first, then newest backwards.
   // Picking a different terminal here would open the shell in another session's
   // directory, which is the bug this function exists to prevent.
@@ -650,13 +662,12 @@ async function resolveCellCwd(cell) {
     const t = cell.tabs[i];
     if (t.kind === "terminal" && t.id) term = t;
   }
-  if (!term) return "";
+  if (!term) return null;
   try {
     const list = await api("/api/sessions");
-    const s = (list || []).find((x) => x.id === term.id);
-    return (s && s.cwd) || "";
+    return (list || []).find((x) => x.id === term.id) || null;
   } catch (_) {
-    return "";
+    return null;
   }
 }
 
