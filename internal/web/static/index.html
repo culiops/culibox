@@ -35,6 +35,7 @@
     #sidebar-toggle, #settings-open, #palette-open { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
     #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
+    #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
     #hint { display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }
@@ -291,6 +292,11 @@
        any padding there would leave a strip where scrolled tabs bleed through. The
        cluster carries that 5px itself. */
     .cell-bar { display: flex; align-items: center; gap: 3px; padding: 3px 0 3px 5px; background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto; }
+    /* An author `display` beats the UA sheet's [hidden] rule whatever the
+       specificity, so the attribute needs this companion to do anything. */
+    .cell-bar[hidden] { display: none; }
+    /* A pane with no tabs is empty, not a dead terminal: drop the black. */
+    .cell:has(.cell-bar[hidden]) { background: var(--bg); }
     .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
     .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
@@ -368,7 +374,12 @@
          with it — otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
       header { gap: 7px; padding: 8px 10px; }
-      header h1 { display: none; } /* the badge + dot carry identity in this width */
+      /* The heading used to be display:none here, on the grounds that the badge
+         and dot carry identity. They do not carry the product NAME, so it is back
+         — paid for by the palette button's shortcut label, which means nothing on
+         a device with no keyboard. */
+      #palette-open .pal-long { display: none; }
+      #palette-open .pal-short { display: inline; font-size: 15px; }
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
@@ -410,7 +421,7 @@
       <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
       <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
-    <button id="palette-open" title="Command palette" aria-label="Open command palette">^⇧K</button>
+    <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌕</span></button>
     <button id="settings-open" title="Settings — profiles and font sizes" aria-label="Settings">⚙</button>
   </header>
   <div id="layout">

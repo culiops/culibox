@@ -160,6 +160,12 @@ class Cell {
     ctl.className = "cell-ctl";
     ctl.append(sh, max, del);
     this.bar.replaceChildren(...tabs, spacer, ctl);
+    // An empty cell used to wear the full +sh / ⛶ / ✕ strip over a black
+    // rectangle, which reads as a broken terminal rather than an empty pane.
+    // Quick-shell stays reachable from the palette ("New shell here") and
+    // Ctrl+Shift+`. NOTE: .cell-bar carries an author `display: flex`, so the
+    // hidden attribute alone does nothing — see .cell-bar[hidden] in the stylesheet.
+    this.bar.hidden = this.tabs.length === 0;
     this.el.classList.toggle("focused", this === focusedCell);
   }
 
