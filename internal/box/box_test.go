@@ -458,6 +458,64 @@ func TestMountpointForAMissingHostPathIsAFileStub(t *testing.T) {
 	}
 }
 
+// The box owns every byte of its own home, so it can plant a symlink where the
+// NEXT spawn expects to create a mountpoint — a boxed shell needs no bundle
+// mounts, so it can cold-start the workspace's box, do exactly this, and idle
+// out before a boxed claude re-enters ensureStateDir. Resolving that path with
+// os.MkdirAll would have the daemon create directories at a host path the box
+// chose. Every write below the box home therefore goes through an os.Root
+// anchored at it, the same containment os.Root gives $HOME in internal/web:
+// nothing is created outside, and the spawn fails loudly instead.
+func TestMountpointIsNotCreatedThroughASymlinkOutOfTheBoxHome(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	name := "ac-box-555555555555"
+	dir := m.stateDir(name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir() // stands in for any daemon-writable host path
+	if err := os.Symlink(outside, filepath.Join(dir, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := m.ensureStateDir(name, []Mount{
+		{Host: filepath.Join(src, "skills"), Box: boxHome + "/.claude/skills"},
+	})
+	if err == nil {
+		t.Error("ensureStateDir walked a symlink out of the box home instead of refusing")
+	}
+	if _, err := os.Stat(filepath.Join(outside, "skills")); err == nil {
+		t.Fatal("a mountpoint was created outside the state root")
+	}
+}
+
+// Same defect on the seed path: a DANGLING symlink at .claude.json makes a
+// following Stat report "missing", and the write then lands on the symlink's
+// target. Nothing may be written outside the home; an existing name — symlink
+// included — is state the box already has, so it is left alone.
+func TestSeedIsNotWrittenThroughASymlinkOutOfTheBoxHome(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	name := "ac-box-666666666666"
+	dir := m.stateDir(name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	target := filepath.Join(outside, "stolen.json")
+	if err := os.Symlink(target, filepath.Join(dir, ".claude.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ensureStateDir(name, nil); err != nil {
+		t.Fatalf("an existing name is not an error, it is state to leave alone: %v", err)
+	}
+	if _, err := os.Stat(target); err == nil {
+		t.Fatal("the onboarding seed was written outside the state root")
+	}
+}
+
 // The marker records genuine use. It must be touched on a warm start too — a box
 // that stays up for weeks would otherwise look untouched to the reclaim sweep.
 func TestSpawnTouchesTheLastUsedMarker(t *testing.T) {

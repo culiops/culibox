@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,20 +183,41 @@ func (m *Manager) touchMarker(boxName string) {
 // otherwise meets an onboarding wizard rather than a prompt — the credential is
 // forwarded and valid, but the agent never gets far enough to use it. These
 // markers are configuration, not credentials.
+//
+// Everything BELOW the home is created through an os.Root anchored at it, never
+// through plain path joins. The box writes in this directory as the daemon user,
+// so between two spawns it can replace any path this function is about to create
+// with a symlink and steer the daemon's own MkdirAll/WriteFile at a host path of
+// its choosing. os.Root resolves each component with openat/O_NOFOLLOW
+// semantics, so a symlink out of the home fails instead of being followed —
+// the same boundary internal/web puts around $HOME for uploads and file ops.
 func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error) {
 	dir := m.stateDir(boxName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("box: creating state dir %q: %w", dir, err)
 	}
-	if err := ensureMountpoints(dir, extraRO); err != nil {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", fmt.Errorf("box: opening state dir %q: %w", dir, err)
+	}
+	defer root.Close()
+
+	if err := ensureMountpoints(root, extraRO); err != nil {
 		return "", err
 	}
-	seed := filepath.Join(dir, ".claude.json")
-	if _, err := os.Stat(seed); err == nil {
-		return dir, nil // never clobber what a running agent has written
-	}
+	// O_EXCL is the whole never-clobber rule: it fails when the name exists in
+	// any form, a symlink included, so there is no check-then-write window and
+	// no way for an existing name to redirect the write.
 	body := []byte("{\n  \"hasCompletedOnboarding\": true,\n  \"theme\": \"dark\"\n}\n")
-	if err := os.WriteFile(seed, body, 0o600); err != nil {
+	f, err := root.OpenFile(".claude.json", os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return dir, nil // state a running agent has already written
+		}
+		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
+	}
+	defer f.Close()
+	if _, err := f.Write(body); err != nil {
 		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
 	}
 	return dir, nil
@@ -210,35 +232,43 @@ func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error
 // The type must match: a file-typed bind onto a directory (or the reverse) is a
 // mount error, so the host side decides. Existing paths are left exactly as they
 // are — a running agent may have written there.
-func ensureMountpoints(stateDir string, mounts []Mount) error {
+//
+// root is the box home. A path that leaves it — the box planted a symlink where
+// a mountpoint belongs — is refused rather than followed or quietly skipped: a
+// home in that state is one the box has rigged, and creating its container
+// anyway would hand the same path to Docker, which resolves it as root.
+func ensureMountpoints(root *os.Root, mounts []Mount) error {
 	for _, mt := range mounts {
 		rel, err := filepath.Rel(boxHome, mt.Box)
 		if err != nil || rel == "." || rel == ".." ||
 			strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			continue // outside the home: it lands on the read-only rootfs
 		}
-		target := filepath.Join(stateDir, rel)
-		if _, err := os.Lstat(target); err == nil {
+		if _, err := root.Lstat(rel); err == nil {
 			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("box: checking mountpoint %q: %w", rel, err)
 		}
 		if fi, err := os.Stat(mt.Host); err == nil && fi.IsDir() {
-			if err := os.MkdirAll(target, 0o700); err != nil {
-				return fmt.Errorf("box: creating mountpoint %q: %w", target, err)
+			if err := root.MkdirAll(rel, 0o700); err != nil {
+				return fmt.Errorf("box: creating mountpoint %q: %w", rel, err)
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return fmt.Errorf("box: creating mountpoint parent of %q: %w", target, err)
+		if parent := filepath.Dir(rel); parent != "." {
+			if err := root.MkdirAll(parent, 0o700); err != nil {
+				return fmt.Errorf("box: creating mountpoint parent of %q: %w", rel, err)
+			}
 		}
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+		f, err := root.OpenFile(rel, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 		if err != nil {
 			if os.IsExist(err) {
 				continue
 			}
-			return fmt.Errorf("box: creating mountpoint %q: %w", target, err)
+			return fmt.Errorf("box: creating mountpoint %q: %w", rel, err)
 		}
 		if err := f.Close(); err != nil {
-			return fmt.Errorf("box: creating mountpoint %q: %w", target, err)
+			return fmt.Errorf("box: creating mountpoint %q: %w", rel, err)
 		}
 	}
 	return nil
