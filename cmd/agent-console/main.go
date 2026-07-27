@@ -163,6 +163,16 @@ func main() {
 		if err := boxes.Reconcile(context.Background()); err != nil {
 			log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
 		}
+		// After reconcile: that pass removes the containers, so what is left on
+		// disk belongs to boxes that are genuinely gone.
+		reclaimBoxState(boxes)
+		go func() {
+			t := time.NewTicker(24 * time.Hour)
+			defer t.Stop()
+			for range t.C {
+				reclaimBoxState(boxes)
+			}
+		}()
 	}
 
 	// Runtime profile store (config.Agents are read-only seeds; the store holds
@@ -259,6 +269,22 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("agent-console stopped")
+}
+
+// reclaimBoxState removes the host homes of boxes that are gone and unused, and
+// reports what it freed. internal/box returns results rather than logging so its
+// decisions stay testable without a daemon; the printing belongs here.
+func reclaimBoxState(boxes *box.Manager) {
+	done, err := boxes.ReclaimState(context.Background(), box.DefaultStateTTL)
+	for _, r := range done {
+		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
+			r.Box, int(r.Age.Hours()/24), r.Bytes/(1024*1024))
+	}
+	if err != nil {
+		log.Printf("box state reclaim: %v — the home stays; usually a directory a box "+
+			"left unwritable (chmod it back), otherwise an old root-owned stub that has "+
+			"to be removed as its owner. New boxes create neither.", err)
+	}
 }
 
 // boxImage picks the configured box image, falling back to the project default.
