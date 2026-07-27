@@ -252,7 +252,14 @@ function initPalette() {
     // The button is labelled with the shortcut itself rather than a magnifier
     // glyph: it doubles as the only always-visible place the combo is written
     // down (the hint bar can be dismissed for good).
-    openBtn.textContent = mac ? "⌘K" : "^⇧K";
+    //
+    // Write into .pal-long, NOT the button: the markup carries a second span
+    // (.pal-short) that the narrow breakpoint swaps in, because a keyboard
+    // shortcut means nothing on a phone and its width is what lets the product
+    // name stay in the header. Assigning textContent here would delete it.
+    const long = openBtn.querySelector(".pal-long");
+    if (long) long.textContent = mac ? "⌘K" : "^⇧K";
+    else openBtn.textContent = mac ? "⌘K" : "^⇧K";
     openBtn.title = "Command palette (" + combos + ")";
     openBtn.onclick = openPalette;
   }

@@ -373,11 +373,16 @@
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
          with it — otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
-      header { gap: 7px; padding: 8px 10px; }
+      header { gap: 6px; padding: 8px 10px; }
       /* The heading used to be display:none here, on the grounds that the badge
          and dot carry identity. They do not carry the product NAME, so it is back
          — paid for by the palette button's shortcut label, which means nothing on
-         a device with no keyboard. */
+         a device with no keyboard, and by a slightly smaller title. Both are
+         needed: with the label alone the name still truncated to "Agent Co…". */
+      /* The dot is decoration; the DEV/PROD badge beside it is the one that
+         carries meaning. Trading it buys the ~16px the full name needs. */
+      header .dot { display: none; }
+      header h1 { font-size: 14px; }
       #palette-open .pal-long { display: none; }
       #palette-open .pal-short { display: inline; font-size: 15px; }
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
