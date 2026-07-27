@@ -55,6 +55,24 @@ type AgentLauncher struct {
 	secrets    secrets.Resolver
 	shell      string
 	optionDefs map[string]config.OptionDef
+	// defaultRuntime is the instance-level tier for agents that name none. It
+	// lives here rather than being stamped onto each agent so that profiles
+	// added later through SetAgents pick it up too.
+	defaultRuntime string
+}
+
+// SetDefaultRuntime installs the instance-level tier default. Call once at boot.
+func (l *AgentLauncher) SetDefaultRuntime(rt string) {
+	l.mu.Lock()
+	l.defaultRuntime = rt
+	l.mu.Unlock()
+}
+
+func (l *AgentLauncher) tierOf(cfg config.AgentConfig) string {
+	l.mu.RLock()
+	def := l.defaultRuntime
+	l.mu.RUnlock()
+	return config.Config{DefaultRuntime: def}.RuntimeFor(cfg)
 }
 
 // SetAgents replaces the launchable profile set (config seeds merged with the
@@ -103,7 +121,7 @@ func (l *AgentLauncher) RuntimeFor(spec SpawnSpec) (string, error) {
 	if spec.Runtime != "" {
 		return spec.Runtime, nil
 	}
-	return cfg.RuntimePolicy(), nil
+	return l.tierOf(cfg), nil
 }
 
 // BinFor reports the binary an agent profile runs. The session manager needs it
@@ -131,7 +149,7 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 		return nil, nil, fmt.Errorf("launcher: unknown agent %q", spec.Agent)
 	}
 	boxed := spec.Runtime == config.RuntimeBox ||
-		(spec.Runtime == "" && cfg.RuntimePolicy() == config.RuntimeBox)
+		(spec.Runtime == "" && l.tierOf(cfg) == config.RuntimeBox)
 
 	basePolicy := cfg.BasePolicy()
 	if boxed {

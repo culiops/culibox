@@ -61,10 +61,11 @@ func main() {
 	// Surface each agent's effective base so the clean-by-default posture is
 	// visible at startup (an existing config's agents now default to clean).
 	for _, a := range agents {
-		log.Printf("agent %q: base=%s", a.Name, a.BasePolicy())
+		log.Printf("agent %q: base=%s runtime=%s", a.Name, a.BasePolicy(), cfg.RuntimeFor(a))
 	}
 
 	lnch := launcher.New(agents, resolver, cfg.Options)
+	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
 
 	// Default working dir: config value if set, else $HOME.
 	home, _ := os.UserHomeDir()
@@ -211,7 +212,7 @@ func main() {
 	if boxes != nil {
 		anyBoxed := false
 		for _, a := range agents {
-			if a.RuntimePolicy() == config.RuntimeBox {
+			if cfg.RuntimeFor(a) == config.RuntimeBox {
 				anyBoxed = true
 			}
 		}

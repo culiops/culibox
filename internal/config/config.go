@@ -127,10 +127,28 @@ type Config struct {
 	Options          []OptionDef    `json:"options,omitempty"`
 	Agents           []AgentConfig  `json:"agents"`
 
+	// DefaultRuntime is the tier for any agent that does not name one. It exists
+	// because the quick-shell profile is GENERATED, not configured, so no
+	// per-agent setting can reach it — without this, an instance whose every
+	// configured agent is host still had a boxed shell profile.
+	DefaultRuntime    string `json:"default_runtime,omitempty"` // box(default)|host
 	BundleSource      string `json:"bundle_source,omitempty"`      // "" → auto-detect; "off" → no bundle
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
+}
+
+// RuntimeFor resolves an agent's tier: its own setting when it has one, else
+// this instance's default, else box. Unset means contained at every level — the
+// safe tier is the one you get by omission.
+func (c Config) RuntimeFor(a AgentConfig) string {
+	if a.Runtime != "" {
+		return a.Runtime
+	}
+	if c.DefaultRuntime != "" {
+		return c.DefaultRuntime
+	}
+	return RuntimeBox
 }
 
 // BoxIdleTTL is how long a box outlives its last session, so returning to a
@@ -160,6 +178,11 @@ func Load(path string) (Config, error) {
 func (c Config) Validate() error {
 	if len(c.Agents) == 0 {
 		return errors.New("config: at least one agent required")
+	}
+	switch c.DefaultRuntime {
+	case "", RuntimeBox, RuntimeHost:
+	default:
+		return fmt.Errorf("config: invalid default_runtime %q (want box|host)", c.DefaultRuntime)
 	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {

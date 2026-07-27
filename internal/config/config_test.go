@@ -255,3 +255,32 @@ func TestBoxIdleTTLDefaults(t *testing.T) {
 		t.Fatalf("ttl = %v, want 1m", got)
 	}
 }
+
+// The auto-detected shell profile is generated, not configured, so no per-agent
+// setting can reach it. Without an instance-level default it is always boxed,
+// even on an instance whose every configured agent is host — which made the
+// startup warning fire on a correct configuration.
+func TestRuntimeDefaultAppliesToAgentsThatDoNotSetOne(t *testing.T) {
+	c := Config{DefaultRuntime: RuntimeHost}
+	if got := c.RuntimeFor(AgentConfig{Name: "generated"}); got != RuntimeHost {
+		t.Fatalf("an agent with no runtime must take the instance default, got %q", got)
+	}
+	if got := c.RuntimeFor(AgentConfig{Name: "pinned", Runtime: RuntimeBox}); got != RuntimeBox {
+		t.Fatalf("an agent that sets its own runtime must keep it, got %q", got)
+	}
+}
+
+// Unset must still mean contained: the safe tier is the one you get by omission.
+func TestRuntimeDefaultIsBoxWhenUnset(t *testing.T) {
+	if got := (Config{}).RuntimeFor(AgentConfig{Name: "a"}); got != RuntimeBox {
+		t.Fatalf("with no instance default the tier must be box, got %q", got)
+	}
+}
+
+func TestValidateRejectsUnknownDefaultRuntime(t *testing.T) {
+	c := Config{BindAddr: "127.0.0.1:1", DefaultRuntime: "vm",
+		Agents: []AgentConfig{{Name: "a", Bin: "b"}}}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected validation error for default_runtime \"vm\"")
+	}
+}
