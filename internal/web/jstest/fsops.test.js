@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { deleteConfirmText, deleteSummary, normalizePath } = require("../static/fsops.js");
+const { deleteConfirmText, deleteSummary, normalizePath, shortPath } = require("../static/fsops.js");
 
 // In the browser every static script shares one global scope and upload.js is
 // loaded first, so humanBytes is simply there. Reproduce that here rather than
@@ -73,6 +73,30 @@ test("normalizePath collapses the shapes the paste box can produce", () => {
   assert.strictEqual(normalizePath("/home/u/sub/../a.txt"), "/home/u/a.txt");
   assert.strictEqual(normalizePath("/home/u/"), "/home/u");
   assert.strictEqual(normalizePath("/home/u/a.txt"), "/home/u/a.txt");
+});
+
+// shortPath is called from three separate scripts (the spawn toast, the command
+// palette, the upload toasts). It lived in app.js, which no test can require, so
+// when a refactor deleted it the suite stayed green and every caller threw
+// ReferenceError at runtime. It lives in a required module now for that reason.
+test("shortPath abbreviates home to ~", () => {
+  assert.strictEqual(shortPath("/home/u/repo/a.txt", "/home/u"), "~/repo/a.txt");
+  assert.strictEqual(shortPath("/home/u", "/home/u"), "~");
+});
+
+test("shortPath leaves a path outside home alone", () => {
+  assert.strictEqual(shortPath("/srv/data", "/home/u"), "/srv/data");
+});
+
+// "/home/user2" starts with "/home/user" but is not inside it — a prefix test
+// alone would render it "~2" and point at the wrong directory.
+test("shortPath only matches whole path components", () => {
+  assert.strictEqual(shortPath("/home/u2/a.txt", "/home/u"), "/home/u2/a.txt");
+});
+
+test("shortPath is a no-op when home is unknown", () => {
+  assert.strictEqual(shortPath("/home/u/a.txt", ""), "/home/u/a.txt");
+  assert.strictEqual(shortPath("/home/u/a.txt", undefined), "/home/u/a.txt");
 });
 
 test("a file never reports contents, even if a measurement is passed", () => {
