@@ -36,6 +36,18 @@ type Reclaimed struct {
 //  3. no live session is counted against it,
 //  4. it is older than ttl.
 //
+// Grounds 2 and 3 are checked twice: once cheaply against a snapshot to decide
+// whether a candidate is worth walking and stat-ing at all, and again — for
+// real, under opMu — immediately before removal. Between the snapshot and the
+// removal a spawn can start: `ensure` (box.go) takes opMu to create the
+// container and bind-mount this exact directory as its $HOME, and a
+// RemoveAll racing that mount would delete files out from under a live
+// container. Holding opMu across the whole sweep would block every spawn for
+// as long as the slowest directory walk takes, so the lock is scoped to one
+// candidate's decide-and-remove instead. dirBytes runs BEFORE opMu is taken —
+// it is only a report number, and a slightly stale byte count is an acceptable
+// cost to keep the walk off the lock.
+//
 // A removal that fails is recorded and the sweep continues: one stubborn
 // directory — a root-owned leftover from before mountpoints were pre-created —
 // must not stop the rest. The failures come back joined so the caller can name
@@ -79,15 +91,47 @@ func (m *Manager) ReclaimState(ctx context.Context, ttl time.Duration) ([]Reclai
 		}
 		dir := m.stateDir(name)
 		size := dirBytes(dir)
-		if err := os.RemoveAll(dir); err != nil {
-			errs = append(errs, fmt.Errorf("box: reclaiming %s: %w", name, err))
+
+		reclaimed, err := m.reclaimOne(ctx, name, dir, age, size)
+		if err != nil {
+			errs = append(errs, err)
 			continue
 		}
-		_ = os.Remove(m.markerPath(name))
-		out = append(out, Reclaimed{Box: name, Age: age, Bytes: size})
+		if reclaimed != nil {
+			out = append(out, *reclaimed)
+		}
 	}
 	errs = append(errs, m.pruneOrphanMarkers()...)
 	return out, errors.Join(errs...)
+}
+
+// reclaimOne re-checks a single candidate under opMu and removes its home if
+// it is still, in fact, unused. A nil, nil return means the box came back to
+// life since the snapshot and was correctly left alone — not an error.
+func (m *Manager) reclaimOne(ctx context.Context, name, dir string, age time.Duration, size int64) (*Reclaimed, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+
+	m.mu.Lock()
+	live := m.active[name]
+	m.mu.Unlock()
+	if live > 0 {
+		return nil, nil
+	}
+	// Closes the hole the initial ListByLabel snapshot cannot: a session may
+	// have spawned and already released between the snapshot and here, leaving
+	// active back at 0 while the container it created is still up, awaiting
+	// its idle timer. When Inspect cannot say for certain, do not delete.
+	running, err := m.opts.Client.Inspect(ctx, name)
+	if err != nil || running {
+		return nil, nil
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		return nil, fmt.Errorf("box: reclaiming %s: %w", name, err)
+	}
+	_ = os.Remove(m.markerPath(name))
+	return &Reclaimed{Box: name, Age: age, Bytes: size}, nil
 }
 
 // isBoxName matches only what boxName produces: the prefix plus 12 hex digits.
@@ -142,7 +186,10 @@ func dirBytes(dir string) int64 {
 }
 
 // pruneOrphanMarkers drops markers whose home is gone, so the directory cannot
-// grow on its own after a home is removed by any other means.
+// grow on its own after a home is removed by any other means. Only entries
+// isBoxName recognizes are considered: this is the second directory this
+// package deletes from, and "only delete what this package itself generates"
+// has to hold for both.
 func (m *Manager) pruneOrphanMarkers() []error {
 	dir := filepath.Join(m.opts.StateRoot, stateDirName, lastUsedDirName)
 	entries, err := os.ReadDir(dir)
@@ -151,6 +198,9 @@ func (m *Manager) pruneOrphanMarkers() []error {
 	}
 	var errs []error
 	for _, e := range entries {
+		if !isBoxName(e.Name()) {
+			continue
+		}
 		if _, err := os.Stat(m.stateDir(e.Name())); err == nil {
 			continue
 		}

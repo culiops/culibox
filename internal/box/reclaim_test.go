@@ -103,6 +103,27 @@ func TestReclaimKeepsAHomeWhoseContainerStillExists(t *testing.T) {
 	}
 }
 
+// A box can spawn and release between the ListByLabel snapshot and the
+// removal, leaving `active` back at 0 while its container is still up
+// awaiting its idle timer. The Inspect re-check just before removal is what
+// catches that, not the earlier snapshot — this simulates it directly rather
+// than racing real goroutines, which would be flaky.
+func TestReclaimSkipsABoxThatCameBackDuringTheSweep(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	dir := seedHome(t, m, "ac-box-333333333333", 90*24*time.Hour)
+	fake.running["ac-box-333333333333"] = true // Inspect must say so; existing stays empty
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("reclaimed a box that came back during the sweep: %+v", done)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("home of a box that came back was removed: %v", err)
+	}
+}
+
 // The sweep must never generalise to "everything under boxstate".
 func TestReclaimIgnoresEntriesThatAreNotBoxHomes(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
