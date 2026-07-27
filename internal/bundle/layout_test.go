@@ -15,7 +15,11 @@ func TestClaudeLayoutFlags(t *testing.T) {
 	flags := l.Flags("/b")
 	joined := strings.Join(flags, " ")
 
-	for _, want := range []string{"--strict-mcp-config", "--setting-sources user", "--mcp-config /b/mcp.json"} {
+	// Flags run INSIDE the container, so they must name in-box paths; a host
+	// path here produces "Settings file not found" at spawn — something only a
+	// real container catches, so it is pinned here.
+	for _, want := range []string{"--strict-mcp-config", "--setting-sources user",
+		"--mcp-config " + BoxBundleDir + "/mcp.json", "--settings " + BoxBundleDir + "/settings.json"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %q", want, joined)
 		}
@@ -47,10 +51,14 @@ func TestMountsSkipAbsentSources(t *testing.T) {
 		_, err := os.Stat(p)
 		return err == nil
 	})
-	if len(got) != 1 {
-		t.Fatalf("expected only the existing entry, got %+v", got)
+	// The bundle root plus the one existing file.
+	if len(got) != 2 {
+		t.Fatalf("expected the bundle root and the existing entry, got %+v", got)
 	}
-	if !strings.HasSuffix(got[0].Box, "/.claude/CLAUDE.md") {
-		t.Fatalf("wrong mount target: %+v", got[0])
+	if got[0].Box != BoxBundleDir {
+		t.Fatalf("the bundle root must be mounted so the flags resolve: %+v", got[0])
+	}
+	if !strings.HasSuffix(got[1].Box, "/.claude/CLAUDE.md") {
+		t.Fatalf("wrong mount target: %+v", got[1])
 	}
 }

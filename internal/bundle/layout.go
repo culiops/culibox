@@ -15,8 +15,10 @@ type Layout struct {
 	Flags  func(dir string) []string
 }
 
-// claudeHome is where the agent's config directory lives inside the box.
-const claudeHome = "/home/agent/.claude"
+// BoxBundleDir is where the bundle itself is mounted inside the box. The flags
+// are executed IN the container, so they must name in-box paths — pointing them
+// at the host directory yields "Settings file not found" at spawn.
+const BoxBundleDir = "/opt/agent-bundle"
 
 // layouts is the registry. Only the Claude CLI is implemented; another agent
 // means another entry, not a redesign.
@@ -26,13 +28,15 @@ var layouts = []Layout{
 		Mounts: func(dir, home string) []Mount {
 			cfg := filepath.Join(home, ".claude")
 			return []Mount{
+				// The bundle root, so the flags below can name in-box paths.
+				{Host: dir, Box: BoxBundleDir},
 				{Host: filepath.Join(dir, "CLAUDE.md"), Box: filepath.Join(cfg, "CLAUDE.md")},
 				{Host: filepath.Join(dir, "skills"), Box: filepath.Join(cfg, "skills")},
 				{Host: filepath.Join(dir, "agents"), Box: filepath.Join(cfg, "agents")},
 				{Host: filepath.Join(dir, "commands"), Box: filepath.Join(cfg, "commands")},
 			}
 		},
-		Flags: func(dir string) []string {
+		Flags: func(_ string) []string {
 			// --mcp-config is variadic: it would swallow a following positional,
 			// so it must never be last. --strict-mcp-config confines MCP loading
 			// to the pinned file. --setting-sources user is the control that
@@ -40,8 +44,8 @@ var layouts = []Layout{
 			// hooks — arbitrary code from an untrusted repo, which matters more
 			// than the MCP listing does.
 			return []string{
-				"--mcp-config", filepath.Join(dir, mcpName),
-				"--settings", filepath.Join(dir, "settings.json"),
+				"--mcp-config", filepath.Join(BoxBundleDir, mcpName),
+				"--settings", filepath.Join(BoxBundleDir, "settings.json"),
 				"--setting-sources", "user",
 				"--strict-mcp-config",
 			}
