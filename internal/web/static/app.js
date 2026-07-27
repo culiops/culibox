@@ -155,6 +155,17 @@ function renderSession(s) {
     badge.textContent = "exited";
     li.appendChild(badge);
   }
+  // Containment tier. Shown for every live session, not only the risky one: a
+  // badge that appears only when something is wrong trains you to ignore its
+  // absence.
+  const tier = tierBadge(s, boxRuntime);
+  if (tier) {
+    const tb = document.createElement("span");
+    tb.className = "badge tier" + (tier.tone === "danger" ? " tier-danger" : "");
+    tb.textContent = tier.text;
+    tb.title = tier.title;
+    li.appendChild(tb);
+  }
   const kill = document.createElement("button");
   kill.className = "kill";
   kill.title = "Kill session";
@@ -247,9 +258,7 @@ async function loadProfiles(retry = true) {
     }));
     renderOptions();
     renderEditable();
-    updateSpawnTarget(); // the one-click button's caption depends on this list
   } catch (_) {
-    updateSpawnTarget();
     if (retry) setTimeout(() => loadProfiles(false), 2000);
   }
 }
@@ -344,6 +353,7 @@ function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
+  if ($("pf-runtime")) $("pf-runtime").value = p.runtime || "";
   $("pf-args").value = (p.args || []).join("\n");
   $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
   $("pf-secrets").value = (p.secrets || []).join(", ");
@@ -357,6 +367,10 @@ function newProfile() {
 }
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
+  // Blank means "use the default tier", which the server resolves to box. Sending
+  // it explicitly would hard-code today's default into every stored profile.
+  const rt = $("pf-runtime") ? $("pf-runtime").value : "";
+  if (rt) p.runtime = rt;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (args.length) p.args = args;
   const env = {};
@@ -412,19 +426,39 @@ $("pf-save").addEventListener("click", saveProfile);
 $("pf-new").addEventListener("click", newProfile);
 // Re-scope the option list when the agent binary changes.
 $("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
+// workspacesCache backs the tier-aware re-render: switching Runtime must be able
+// to re-evaluate which directories are selectable without another round trip.
+let workspacesCache = [];
+
 async function loadWorkspaces() {
   try {
-    const ws = await api("/api/workspaces"); // [{label, path}] = $HOME + its subfolders
-    const opts = (ws || []).map((w) => {
-      const o = document.createElement("option");
-      o.value = w.path; o.textContent = w.label;
-      return o;
-    });
-    const custom = document.createElement("option");
-    custom.value = "__custom__"; custom.textContent = "Custom path…";
-    opts.push(custom);
-    $("workspace").replaceChildren(...opts);
+    workspacesCache = (await api("/api/workspaces")) || [];
+    renderWorkspaceOptions();
   } catch (_) {}
+}
+
+// renderWorkspaceOptions rebuilds the picker for the tier currently selected.
+// On the boxed tier a directory that cannot be contained is disabled and shows
+// why, because choosing a workspace IS choosing the containment boundary.
+function renderWorkspaceOptions() {
+  const sel = $("workspace");
+  if (!sel) return;
+  const rt = ($("runtime-select") && $("runtime-select").value) || "";
+  const prev = sel.value;
+  const opts = workspaceOptions(workspacesCache, rt).map((o) => {
+    const el = document.createElement("option");
+    el.value = o.value; el.textContent = o.label; el.disabled = o.disabled;
+    return el;
+  });
+  const custom = document.createElement("option");
+  custom.value = "__custom__"; custom.textContent = "Custom path…";
+  opts.push(custom);
+  sel.replaceChildren(...opts);
+  // Keep the previous choice only if it is still usable on this tier; otherwise
+  // fall to the first usable one so the form never opens on a doomed default.
+  const stillOK = opts.some((o) => o.value === prev && !o.disabled);
+  sel.value = stillOK ? prev : (defaultWorkspace(workspacesCache, rt) || "__custom__");
+  $("cwd-custom").style.display = sel.value === "__custom__" ? "block" : "none";
 }
 $("workspace").addEventListener("change", () => {
   $("cwd-custom").style.display = $("workspace").value === "__custom__" ? "block" : "none";
@@ -434,64 +468,35 @@ function getCwd() {
   return w === "__custom__" ? $("cwd-custom").value.trim() : (w || "");
 }
 
-// --- the "+ New session" split button ----------------------------------------
-// Spawning is the most frequent action in this app, so the primary control does
-// it in one click using the last-used profile and working dir. The caption below
-// the button is the safety rail: an instant-spawn button whose target is
-// invisible is a trap, so what it will do is always written out.
-const LAST_SPAWN_KEY = "agent-console:lastSpawn";
+// boxRuntime is the isolation runtime the daemon detected ("runc"/"sysbox-runc"),
+// or "" when containment is unavailable. Empty means every session is host tier,
+// and the tier chooser is hidden rather than offering a choice that does nothing.
+let boxRuntime = "";
 
+// The last spawn is remembered only to PRE-FILL the form, never to act on its
+// own: the form is always shown, so a stale value can be seen and changed
+// before anything starts.
+const LAST_SPAWN_KEY = "agent-console:lastSpawn";
 function loadLastSpawn() {
   try {
     const v = JSON.parse(localStorage.getItem(LAST_SPAWN_KEY) || "null");
-    if (v && typeof v.agent === "string") return v;
-  } catch (_) {}
-  return null;
-}
-
-// spawnTarget resolves what a one-click spawn does right now. The stored profile
-// is validated against the live list, so one deleted from under the button can
-// never wedge it.
-function spawnTarget() {
-  const last = loadLastSpawn();
-  const valid = last && profiles.some((p) => p.name === last.agent);
-  return {
-    agent: valid ? last.agent : (profiles[0] && profiles[0].name) || "",
-    cwd: (valid && last.cwd) || "",
-    options: (valid && last.options) || {},
-  };
-}
-
-// shortPath renders an absolute path as ~/… when it sits under home.
-function shortPath(p) {
-  const home = window.HOME_DIR || "";
-  return home && p.indexOf(home) === 0 ? "~" + p.slice(home.length) : p;
-}
-
-function updateSpawnTarget() {
-  const el = $("spawn-target"), btn = $("spawn-go");
-  if (!el || !btn) return;
-  const t = spawnTarget();
-  if (!t.agent) {
-    // Never blame the config for a failed request — say which one it is.
-    el.textContent = profilesLoaded ? "no profiles configured" : "profiles unavailable — retrying";
-    el.title = "";
-    btn.disabled = true;
-    return;
+    return v && typeof v.agent === "string" ? v : null;
+  } catch (_) {
+    return null;
   }
-  // Stay disabled while a one-click spawn is in flight, so the button does not
-  // briefly look clickable while the guard silently swallows the click.
-  btn.disabled = quickSpawning;
-  const where = t.cwd ? (t.cwd.replace(/\/$/, "").split("/").pop() || t.cwd) : "default dir";
-  el.textContent = t.agent + " · " + where;
-  el.title = t.agent + " in " + (t.cwd ? shortPath(t.cwd) : "the server's default working dir");
-  btn.title = "Spawn " + el.title;
 }
 
-// spawnSession is the single POST path for every *agent* spawn entry point (one
-// click, the ▾ menu, the advanced form, the palette) so "last used" and the undo
-// toast are recorded in exactly one place. spawnShellIn deliberately does NOT
-// route through here: a quick shell must never become what "+ New session" does.
+// --- the "+ New session" button ----------------------------------------------
+// Spawning always goes through the form. Under containment the workspace is the
+// box's only writable mount, so choosing it IS choosing what the agent can
+// reach — a one-click spawn that picked a directory for you was choosing your
+// security boundary silently, and its default (home) could not be contained at
+// all. One deliberate choice per session is the honest cost of the model.
+
+// spawnSession is the single POST path for every agent spawn, so "last used"
+// and the undo toast are recorded in exactly one place. spawnShellIn
+// deliberately does NOT route through here: a quick shell must never become
+// what "+ New session" does.
 async function spawnSession(req, opts) {
   opts = opts || {};
   const s = await api("/api/sessions", {
@@ -504,13 +509,10 @@ async function spawnSession(req, opts) {
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
     }));
   } catch (_) {}
-  updateSpawnTarget();
   await refreshSessions();
   openTerminal(s.id, s.name);
   if (opts.toast !== false) {
-    // Report the directory the SERVER chose, not the one requested: a one-click
-    // spawn usually sends an empty cwd and lets default_cwd decide, and "the
-    // default dir" tells the user nothing about where their agent just landed.
+    // Report the directory the SERVER chose, not the one requested.
     const where = s.cwd || req.cwd;
     showToast('Spawned "' + (s.name || s.id) + '" in ' + (where ? shortPath(where) : "the default dir"),
       { undo: () => killSession(s.id) });
@@ -518,85 +520,59 @@ async function spawnSession(req, opts) {
   return s;
 }
 
-let quickSpawning = false;
-async function quickSpawn(agentName) {
-  if (quickSpawning) return;
-  const t = spawnTarget();
-  const agent = agentName || t.agent;
-  if (!agent) { showToast("No profiles configured", { error: true }); return; }
-  // Stored options belong to the profile they were captured from; carrying them
-  // onto a different profile would apply flags it never declared.
-  const options = agent === t.agent ? t.options : {};
-  quickSpawning = true;
-  $("spawn-go").disabled = true;
-  try {
-    await spawnSession({ agent, name: "", cwd: t.cwd, options });
-  } catch (e) {
-    showToast("Spawn failed: " + e.message, { error: true });
-  } finally {
-    quickSpawning = false;
-    updateSpawnTarget(); // re-enables the button
-  }
+// syncRuntimeField shows the tier chooser only when containment is actually
+// available. With no box layer every session is host tier anyway, and offering
+// a choice that changes nothing would be a lie.
+function syncRuntimeField() {
+  const row = $("runtime-row"), sel = $("runtime-select");
+  if (!row || !sel) return;
+  row.style.display = boxRuntime ? "" : "none";
+  if (!boxRuntime) { sel.value = ""; renderWorkspaceOptions(); return; }
+  sel.value = "box"; // default to contained on every open, never "sticky"
+  updateRuntimeWarning(); // also re-renders the workspace list for this tier
 }
 
-function closeSpawnMenu() { $("spawn-menu").classList.remove("open"); }
-
-function openSpawnMenu() {
-  const menu = $("spawn-menu"), anchor = $("spawn-more");
-  const rows = profiles.map((p) => {
-    const b = document.createElement("button");
-    b.type = "button"; b.className = "mono"; b.textContent = p.name;
-    b.onclick = () => { closeSpawnMenu(); quickSpawn(p.name); };
-    return b;
-  });
-  if (!rows.length) {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = "No profiles yet"; b.disabled = true;
-    rows.push(b);
-  }
-  const sep = document.createElement("div");
-  sep.className = "sep";
-  const adv = document.createElement("button");
-  adv.type = "button"; adv.textContent = "Advanced…";
-  adv.onclick = () => { closeSpawnMenu(); openSpawnDialog(); };
-  menu.replaceChildren(...rows, sep, adv);
-  menu.classList.add("open"); // must be visible before it can be measured
-  const r = anchor.getBoundingClientRect();
-  const w = menu.offsetWidth;
-  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
-  menu.style.top = (r.bottom + 6) + "px";
+function updateRuntimeWarning() {
+  const sel = $("runtime-select"), warn = $("runtime-warn");
+  if (!sel || !warn) return;
+  warn.hidden = sel.value !== "host";
+  renderWorkspaceOptions(); // selectable directories depend on the tier
 }
 
 // openSpawnDialog preselects whatever the one-click button would have done, so
 // "Advanced…" elaborates the visible target instead of presenting a fresh form.
-function openSpawnDialog() {
-  const t = spawnTarget();
-  if (t.agent) { $("agent").value = t.agent; renderOptions(); }
+function openSpawnDialog(preselectAgent) {
+  const last = loadLastSpawn();
+  const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
+    ? preselectAgent
+    : (last && last.agent && profiles.some((p) => p.name === last.agent) ? last.agent : "");
+  if (want) {
+    $("agent").value = want;
+    renderOptions();
+  }
+  // Tier first: it decides which workspaces are selectable at all.
+  syncRuntimeField();
   const ws = $("workspace");
-  if (t.cwd && Array.prototype.some.call(ws.options, (o) => o.value === t.cwd)) ws.value = t.cwd;
+  if (last && last.cwd) {
+    const usable = Array.prototype.some.call(ws.options, (o) => o.value === last.cwd && !o.disabled);
+    if (usable) ws.value = last.cwd;
+  }
   $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
   openDialog("spawn-modal");
   $("sess-name").focus();
 }
 
 function initSpawnControl() {
-  $("spawn-go").onclick = () => quickSpawn();
-  $("spawn-more").onclick = (e) => {
-    e.stopPropagation();
-    if ($("spawn-menu").classList.contains("open")) closeSpawnMenu();
-    else openSpawnMenu();
-  };
-  document.addEventListener("click", (e) => {
-    const menu = $("spawn-menu");
-    if (menu.classList.contains("open") && !menu.contains(e.target)) closeSpawnMenu();
-  });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSpawnMenu(); });
-  updateSpawnTarget();
+  const rt = $("runtime-select");
+  if (rt) rt.onchange = updateRuntimeWarning;
+  $("spawn-go").onclick = () => openSpawnDialog();
 }
 
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const req = { agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() };
+  const rt = $("runtime-select");
+  if (rt && rt.value) req.runtime = rt.value;
   // Close first: a fixed-position toast renders *beneath* a modal dialog's
   // backdrop, so an Undo offered while the dialog is still up is unreachable.
   closeDialog("spawn-modal");
@@ -644,14 +620,23 @@ async function spawnShellIn(cell) {
     // can be created after this page loaded.
     const profile = await currentShellProfile();
     if (!profile) { alert("No shell profile available — check the console log."); return; }
-    const cwd = await resolveCellCwd(cell);
+    const plan = shellSpawnPlan(await resolveCellNeighbour(cell));
+    if (plan.mode === "form") {
+      // Nothing to sit beside: there is no context to inherit, so let the user
+      // choose one rather than guessing a directory that may not be containable.
+      openSpawnDialog(profile);
+      return;
+    }
+    const cwd = plan.cwd;
     // Always prefix the label: with no cwd the server would name the session after
     // default_cwd's basename, which reads exactly like an agent session.
     const base = cwd.replace(/\/$/, "").split("/").pop();
+    const req = { agent: profile, cwd, name: "sh:" + (base || profile) };
+    if (plan.runtime) req.runtime = plan.runtime; // match the neighbour's tier
     const s = await api("/api/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agent: profile, cwd, name: "sh:" + (base || profile) }),
+      body: JSON.stringify(req),
     });
     await refreshSessions();
     // The cell can be destroyed while we await (applyCap collapses windows, a pane
@@ -666,13 +651,13 @@ async function spawnShellIn(cell) {
   }
 }
 
-// resolveCellCwd falls back to the server when a terminal tab exists but hasn't
+// resolveCellNeighbour falls back to the server when a terminal tab exists but hasn't
 // resolved its cwd yet (TerminalTab fetches it asynchronously). Without this, a
 // +sh right after opening a session silently lands in default_cwd instead of the
 // session's directory — the failure the feature exists to prevent.
-async function resolveCellCwd(cell) {
-  const known = cellCwd(cell);
-  if (known) return known;
+// resolveCellNeighbour returns the session a quick shell should sit beside —
+// the whole record, because "+sh" inherits the tier as well as the directory.
+async function resolveCellNeighbour(cell) {
   // Mirror cellCwd's precedence exactly — active tab first, then newest backwards.
   // Picking a different terminal here would open the shell in another session's
   // directory, which is the bug this function exists to prevent.
@@ -682,13 +667,12 @@ async function resolveCellCwd(cell) {
     const t = cell.tabs[i];
     if (t.kind === "terminal" && t.id) term = t;
   }
-  if (!term) return "";
+  if (!term) return null;
   try {
     const list = await api("/api/sessions");
-    const s = (list || []).find((x) => x.id === term.id);
-    return (s && s.cwd) || "";
+    return (list || []).find((x) => x.id === term.id) || null;
   } catch (_) {
-    return "";
+    return null;
   }
 }
 
@@ -698,6 +682,7 @@ async function currentShellProfile() {
   try {
     const meta = await api("/api/meta");
     window.shellProfile = (meta && meta.shell_profile) || "";
+    boxRuntime = (meta && meta.box_runtime) || "";
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
   return window.shellProfile;
@@ -766,6 +751,8 @@ initUpload();
     // Quick-shell profile first: it is independent of the env badge, so it must
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
+    boxRuntime = (meta && meta.box_runtime) || "";
+    refreshSessions(); // re-render rows now that the tier label is known
     if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");

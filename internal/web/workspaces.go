@@ -11,13 +11,54 @@ import (
 type Workspace struct {
 	Label string `json:"label"`
 	Path  string `json:"path"`
+	// Boxable reports whether this directory can be the workspace of a contained
+	// session. It is not decoration: the workspace is a box's only writable
+	// mount, so choosing one IS choosing the containment boundary. Offering a
+	// choice that always fails is what made the picker confusing.
+	Boxable bool   `json:"boxable"`
+	Reason  string `json:"reason,omitempty"` // why not, when Boxable is false
+}
+
+// UnboxableDefaultCwd reports why a directory cannot be a contained workspace.
+// It mirrors the daemon-side refusal in the box package so the UI and the
+// startup check can explain the same rule without importing it.
+func UnboxableDefaultCwd(dir, home string) (string, bool) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	h := filepath.Clean(home)
+	if real, err := filepath.EvalSymlinks(h); err == nil {
+		h = real
+	}
+	if abs == string(filepath.Separator) {
+		return "it is the filesystem root", true
+	}
+	if abs == h {
+		return "a box here would mount your whole home, including ~/.ssh and your secrets", true
+	}
+	if rel, err := filepath.Rel(abs, h); err == nil && rel != "." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+		return "it contains your home directory", true
+	}
+	return "", false
 }
 
 // listWorkspaces returns home first, then each non-hidden subdirectory of home
 // (depth 1, symlinked dirs included), sorted by name. Only home's children are
 // listed — no arbitrary path traversal is exposed.
 func listWorkspaces(home string) []Workspace {
-	out := []Workspace{{Label: "~ (home)", Path: home}}
+	// Home stays listed — it is a legitimate trusted-host workspace — but it can
+	// never be boxed, so it is labelled rather than silently offered.
+	out := []Workspace{{
+		Label:   "~ (home)",
+		Path:    home,
+		Boxable: false,
+		Reason:  "a box here would mount your whole home, including ~/.ssh and your secrets",
+	}}
 	entries, err := os.ReadDir(home)
 	if err != nil {
 		return out // still offer home even if it can't be listed
@@ -38,7 +79,8 @@ func listWorkspaces(home string) []Workspace {
 		if !isDir {
 			continue
 		}
-		dirs = append(dirs, Workspace{Label: name, Path: full})
+		reason, bad := UnboxableDefaultCwd(full, home)
+		dirs = append(dirs, Workspace{Label: name, Path: full, Boxable: !bad, Reason: reason})
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Label < dirs[j].Label })
 	return append(out, dirs...)

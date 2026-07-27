@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ type mockSvc struct {
 	spawnErr       error
 	spawnedCwd     string
 	spawnedOptions map[string]any
+	spawnedRuntime string
 	renamedID      string
 	renamedName    string
 	renameErr      error
@@ -28,6 +30,7 @@ func (m *mockSvc) List() []session.Info { return m.list }
 func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedCwd = s.Cwd
 	m.spawnedOptions = s.Options
+	m.spawnedRuntime = s.Runtime
 	if m.spawnErr != nil {
 		return session.Info{}, m.spawnErr
 	}
@@ -168,5 +171,31 @@ func TestAPI_SpawnErrorIsStructured(t *testing.T) {
 	var body map[string]string
 	if json.Unmarshal(rec.Body.Bytes(), &body); body["error"] == "" {
 		t.Fatalf("expected structured error body, got %s", rec.Body)
+	}
+}
+
+// An unrecognised tier must be rejected outright. Falling through to a default
+// would let a typo silently de-contain a session.
+func TestSpawnRejectsUnknownRuntime(t *testing.T) {
+	a := &API{Sessions: &mockSvc{spawnInfo: session.Info{ID: "x"}}, DefaultCwd: "/tmp"}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions",
+		strings.NewReader(`{"agent":"bash","runtime":"vm"}`)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body)
+	}
+}
+
+func TestSpawnAcceptsTheHostTierOverride(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc, DefaultCwd: "/tmp"}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions",
+		strings.NewReader(`{"agent":"bash","runtime":"host"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body)
+	}
+	if svc.spawnedRuntime != "host" {
+		t.Fatalf("spec.Runtime = %q, want host", svc.spawnedRuntime)
 	}
 }

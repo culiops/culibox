@@ -7,8 +7,10 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +23,8 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/culiops/culiops-agent-console/internal/box"
+	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 )
 
@@ -54,6 +58,39 @@ type Backend interface {
 	List() ([]string, error)
 }
 
+// Boxes is the optional containment layer. A nil Boxes means boxing is
+// unavailable (no docker, or no image) and every spawn runs on the host tier.
+// Kept as an interface here so the session package does not depend on the box
+// package and stays unit-testable with a fake.
+type Boxes interface {
+	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
+	AdoptBox(boxName string)
+	ReleaseBox(boxName string)
+	KillSession(ctx context.Context, boxName, sessionID string) error
+	Runtime() string
+}
+
+// RuntimeResolver is implemented by launchers that understand tiers. It is an
+// optional interface so existing fake builders keep compiling.
+type RuntimeResolver interface {
+	RuntimeFor(spec launcher.SpawnSpec) (string, error)
+}
+
+// BinResolver is implemented by launchers that can name an agent's binary, which
+// is how a config-bundle layout is chosen. Optional, like RuntimeResolver.
+type BinResolver interface {
+	BinFor(spec launcher.SpawnSpec) (string, error)
+}
+
+// Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
+// no bundle: sessions still run, just without user config.
+type Bundles interface {
+	// For returns the read-only mounts and the extra argv flags a boxed agent
+	// needs, plus the bundle hash for the log line. An empty bin match yields no
+	// mounts and no flags.
+	For(bin string) (mounts []box.Mount, flags []string, hash string, err error)
+}
+
 // Info is a read-only snapshot for listing.
 type Info struct {
 	ID      string    `json:"id"`
@@ -62,7 +99,8 @@ type Info struct {
 	Created time.Time `json:"created"`
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
-	Name    string    `json:"name"` // mutable display label (id is the stable key)
+	Name    string    `json:"name"`              // mutable display label (id is the stable key)
+	Runtime string    `json:"runtime,omitempty"` // box | host
 }
 
 // Session owns one agent child process and its PTY.
@@ -71,6 +109,14 @@ type Session struct {
 	Agent   string
 	Cwd     string
 	Created time.Time
+	Runtime string // box | host; immutable for the session's lifetime
+	Box     string // container name for a boxed session; "" on the host tier
+
+	// releaseOnce makes the box release idempotent. Two different paths finalize
+	// a session (the retention goroutine, and Kill), and a DETACHED session is
+	// abandoned by the retention goroutine entirely — so both must be able to
+	// release without the risk of double-counting.
+	releaseOnce sync.Once
 
 	cmd  *exec.Cmd
 	ptmx *os.File
@@ -324,7 +370,7 @@ func (s *Session) Exited() bool {
 func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name, Runtime: s.Runtime}
 }
 
 // SetName updates the mutable display label.
@@ -354,6 +400,42 @@ type Manager struct {
 	counters  map[string]int
 	ringCap   int
 	retention time.Duration
+	boxes     Boxes   // nil = containment unavailable; every spawn is host tier
+	bundles   Bundles // nil = boxed sessions run without user config
+}
+
+// SetBundles installs the config-bundle provider. Call once at boot.
+func (m *Manager) SetBundles(b Bundles) {
+	m.mu.Lock()
+	m.bundles = b
+	m.mu.Unlock()
+}
+
+// SetBoxes installs the containment layer. Call once at boot, before Reconcile.
+func (m *Manager) SetBoxes(b Boxes) {
+	m.mu.Lock()
+	m.boxes = b
+	m.mu.Unlock()
+}
+
+// runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
+// box layer the answer is host — containment is never assumed, only granted.
+func (m *Manager) runtimeFor(spec launcher.SpawnSpec) string {
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if boxes == nil {
+		return config.RuntimeHost
+	}
+	rr, ok := m.launcher.(RuntimeResolver)
+	if !ok {
+		return config.RuntimeHost
+	}
+	rt, err := rr.RuntimeFor(spec)
+	if err != nil || rt == "" {
+		return config.RuntimeHost
+	}
+	return rt
 }
 
 // SetSidecarPath enables metadata persistence + restart reconcile by loading the
@@ -392,6 +474,13 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 // Spawn builds the agent command and starts a session — under the persistence
 // backend (abduco) if present, else a daemon-owned PTY directly.
 func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
+	// Decide the tier FIRST and make it authoritative on the spec, so the
+	// launcher composes for the tier the session will actually run on. Deciding
+	// it in two places let a host-tier session be built with boxed semantics
+	// (curated env, no login wrap) whenever containment was unavailable.
+	runtime := m.runtimeFor(spec)
+	spec.Runtime = runtime
+
 	argv, env, err := m.launcher.Build(spec)
 	if err != nil {
 		return nil, err
@@ -406,12 +495,58 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		env = []string{}
 	}
 
+	// Containment is applied here, between the launcher and the process start,
+	// so abduco persistence and the whole session lifecycle stay untouched.
 	m.mu.Lock()
 	id := m.nextIDLocked(spec.Agent)
 	m.mu.Unlock()
 
+	var boxName string
+	if runtime == config.RuntimeBox {
+		m.mu.Lock()
+		boxes, bundles := m.boxes, m.bundles
+		m.mu.Unlock()
+
+		// The bundle must be resolved BEFORE Wrap: Wrap is what starts the
+		// container, and its mounts are fixed at that moment.
+		var mounts []box.Mount
+		var bundleFlags []string
+		var bundleHash string
+		if bundles != nil {
+			if br, ok := m.launcher.(BinResolver); ok {
+				if bin, err := br.BinFor(spec); err == nil {
+					mounts, bundleFlags, bundleHash, err = bundles.For(bin)
+					if err != nil {
+						log.Printf("session %s: config bundle unavailable (%v); the box will run without user config", id, err)
+					}
+				}
+			}
+		}
+		argv = append(argv, bundleFlags...)
+
+		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
+		if err != nil {
+			// A refusal already carries its own actionable message; wrapping it
+			// again would print the remedy twice.
+			if errors.Is(err, box.ErrUnboxableWorkspace) {
+				return nil, err
+			}
+			// Name the way out: a silent failure here is what makes people
+			// disable containment entirely.
+			return nil, fmt.Errorf("session: starting box for %q: %w — spawn with runtime %q to run on the host instead",
+				spec.Cwd, err, config.RuntimeHost)
+		}
+		argv, env, boxName = wrapped, wrappedEnv, name
+		if bundleHash != "" {
+			// Logged per spawn so a box still carrying an older bundle is
+			// visible rather than silent.
+			log.Printf("session %s: box %s, config bundle %s", id, boxName, bundleHash)
+		}
+	}
+
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
+		m.releaseBoxNamed(boxName) // never leak a box for a session that failed to start
 		return nil, err
 	}
 
@@ -419,15 +554,41 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	name := deriveName(spec.Name, spec.Cwd, id)
 	m.mu.Lock()
 	sess := newSession(id, spec.Agent, name, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	sess.Runtime = runtime
+	sess.Box = boxName
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// releaseBoxNamed tells the box layer one session for this box is gone. Safe
+// with an empty name (host tier) or no box layer.
+func (m *Manager) releaseBoxNamed(name string) {
+	if name == "" {
+		return
+	}
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if boxes != nil {
+		boxes.ReleaseBox(name)
+	}
+}
+
+// releaseSessionBox releases a session's box exactly once, however the session
+// ended. Both the retention goroutine and Kill call this; a detached session is
+// only ever released by Kill, because the retention goroutine has already left.
+func (m *Manager) releaseSessionBox(s *Session) {
+	if s.Runtime != config.RuntimeBox {
+		return
+	}
+	s.releaseOnce.Do(func() { m.releaseBoxNamed(s.Box) })
 }
 
 // startProcess creates the OS process + PTY for a session. With a backend the
@@ -467,6 +628,10 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 	go func() {
 		select {
 		case <-sess.Done(): // finalized (agent exited or killed) → retain then prune
+			// Release only on finalize. A DETACHED session's agent is still
+			// alive inside its box, so releasing there would arm the idle timer
+			// and stop the box under a session we intend to recover.
+			m.releaseSessionBox(sess)
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}
@@ -561,6 +726,19 @@ func (m *Manager) Kill(id string) error {
 	if !ok {
 		return ErrNotFound
 	}
+	// Signals do not cross `docker exec`: killing the host-side client leaves the
+	// agent running inside a box that other sessions keep alive. Reach the real
+	// process first, then tear down the host side.
+	if s.Runtime == config.RuntimeBox {
+		m.mu.Lock()
+		boxes := m.boxes
+		m.mu.Unlock()
+		if boxes != nil {
+			if err := boxes.KillSession(context.Background(), s.Box, id); err != nil {
+				log.Printf("session %s: killing agent inside its box: %v", id, err)
+			}
+		}
+	}
 	if m.backend != nil {
 		_ = m.backend.Kill(id)
 	} else {
@@ -582,6 +760,12 @@ func (m *Manager) Kill(id string) error {
 	}
 	s.finalize()                                  // close done uniformly (live/exited/detached)
 	s.removedOnce.Do(func() { close(s.removed) }) // let the retention goroutine exit now
+	// Release here too, not only from the retention goroutine: that goroutine
+	// RETURNS when a session goes detached, so for a detached-then-killed
+	// session nothing else would ever release the box and it would outlive its
+	// idle TTL forever. releaseSessionBox is once-guarded, so the common path
+	// (both here and there) still counts exactly one release.
+	m.releaseSessionBox(s)
 	return nil
 }
 
@@ -628,6 +812,13 @@ func (m *Manager) Reconcile() error {
 		}
 	}
 
+	// Adopt every surviving box BEFORE attaching anything. Attaching can fail,
+	// and Reconcile deliberately leaves such an abduco session running for a
+	// later restart — so its container must survive too. Adoption keyed on
+	// abduco liveness (the real source of truth for "the agent is alive"), never
+	// on whether re-attaching happened to work.
+	m.adoptSurvivingBoxes(aliveIDs, meta)
+
 	for _, id := range aliveIDs {
 		md, ok := meta[id]
 		if !ok { // orphan-adopt: recover the agent name from the id
@@ -659,6 +850,26 @@ func (m *Manager) Reconcile() error {
 	return nil
 }
 
+// adoptSurvivingBoxes re-registers the box of every alive boxed session, so the
+// box reaper cannot destroy a container whose agent is still running. It uses
+// the stored box name, so a workspace directory that has since been moved or
+// deleted cannot cost a live session its container.
+func (m *Manager) adoptSurvivingBoxes(aliveIDs []string, meta map[string]sessionMeta) {
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if boxes == nil {
+		return
+	}
+	for _, id := range aliveIDs {
+		md, ok := meta[id]
+		if !ok || md.Runtime != config.RuntimeBox || md.Box == "" {
+			continue
+		}
+		boxes.AdoptBox(md.Box)
+	}
+}
+
 // reattach connects a fresh attach PTY to a surviving abduco session and rebuilds
 // its Session, nudging a repaint (best-effort, no cross-restart scrollback).
 func (m *Manager) reattach(id string, md sessionMeta) error {
@@ -674,10 +885,18 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	if name == "" { // pre-existing sidecar entries predate the Name field
 		name = deriveName("", md.Cwd, id)
 	}
+	runtime := md.Runtime
+	if runtime == "" { // sidecar entries written before containment existed
+		runtime = config.RuntimeHost
+	}
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
+	sess.Runtime = runtime
+	sess.Box = md.Box
 	m.sessions[id] = sess
 	m.mu.Unlock()
+	// The box was already adopted by Reconcile, before this attach was even
+	// tried — see adoptSurvivingBoxes.
 	sess.ForceRedraw()
 	m.watchRetention(id, sess)
 	return nil

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/culiops/culiops-agent-console/internal/box"
+	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 	"github.com/culiops/culiops-agent-console/internal/session"
 )
@@ -50,9 +52,19 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Name    string         `json:"name"`
 			Cwd     string         `json:"cwd"`
 			Options map[string]any `json:"options"`
+			Runtime string         `json:"runtime"` // "" = the agent's default (box)
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
+			return
+		}
+		// Reject anything but the two known tiers. An unrecognised value must not
+		// fall through to a default — dropping to the host tier by typo is exactly
+		// the silent de-containment this design exists to prevent.
+		switch req.Runtime {
+		case "", config.RuntimeBox, config.RuntimeHost:
+		default:
+			writeErr(w, http.StatusBadRequest, "runtime must be box or host")
 			return
 		}
 		cwd := strings.TrimSpace(req.Cwd)
@@ -61,9 +73,19 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		// Name is a free-form display label (blank → working-dir default), so a
 		// spawn no longer fails on the name.
-		info, err := a.Sessions.Spawn(launcher.SpawnSpec{Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options})
+		info, err := a.Sessions.Spawn(launcher.SpawnSpec{
+			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
+		})
 		if err != nil {
 			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
+			// One exception to the generic message: a refusal to contain the
+			// chosen workspace is actionable and names only the path the caller
+			// just supplied. Hiding it behind "could not start session" is the
+			// silent failure that makes people give up on containment.
+			if errors.Is(err, box.ErrUnboxableWorkspace) {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			writeErr(w, http.StatusBadRequest, "could not start session")
 			return
 		}

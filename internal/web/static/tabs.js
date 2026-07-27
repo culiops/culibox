@@ -139,7 +139,7 @@ class Cell {
     spacer.className = "cell-sp";
     const sh = document.createElement("button");
     sh.className = "cell-sh"; sh.textContent = "+sh";
-    sh.title = "New shell here (Ctrl+Shift+`)";
+    sh.title = "New shell beside this session — same directory and tier (Ctrl+Shift+`)";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     // Disable while in flight so the ignored second click is visible, not silent.
     sh.onclick = (e) => {

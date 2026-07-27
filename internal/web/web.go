@@ -23,6 +23,9 @@ type Server struct {
 	Terminal http.Handler
 	EnvLabel string // shown as the UI env badge; empty → no badge
 	EnvColor string // CSS color for the env badge/strip
+	// BoxRuntime is the detected isolation runtime ("runc"/"sysbox-runc"), or ""
+	// when containment is unavailable and every session runs on the host tier.
+	BoxRuntime string
 	// ShellProfile is the profile the UI's quick-shell (+sh) button spawns —
 	// the auto-detected $SHELL seed, or the user's own profile for that binary.
 	// Empty → the UI offers no quick shell.
@@ -89,6 +92,7 @@ func (s *Server) Handler(user, pass string) http.Handler {
 			"env_label":     s.EnvLabel,
 			"env_color":     s.EnvColor,
 			"shell_profile": s.quickShell(),
+			"box_runtime":   s.BoxRuntime,
 		})
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
