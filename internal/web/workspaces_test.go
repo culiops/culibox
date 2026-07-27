@@ -39,3 +39,47 @@ func mustMkdir(t *testing.T, p string) {
 		t.Fatal(err)
 	}
 }
+
+// The workspace choice IS the containment boundary: it is the box's only
+// writable mount. Offering home as a choice leads straight into a refused spawn,
+// so the list has to say which entries can actually be contained.
+func TestHomeIsListedButNotBoxable(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, "project"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := listWorkspaces(home)
+	if len(got) < 2 {
+		t.Fatalf("expected home plus the project, got %+v", got)
+	}
+	if got[0].Path != home {
+		t.Fatalf("home should still be listed first for host-tier use: %+v", got[0])
+	}
+	if got[0].Boxable {
+		t.Fatal("home must be marked not boxable — a box there mounts the whole home")
+	}
+	if got[0].Reason == "" {
+		t.Fatal("a non-boxable entry must say why, or the UI cannot explain it")
+	}
+	for _, w := range got[1:] {
+		if !w.Boxable {
+			t.Fatalf("a project directory must be boxable: %+v", w)
+		}
+	}
+}
+
+// The console must fail at boot, not once per spawn, when its default workspace
+// can never be contained.
+func TestDefaultCwdIsCheckedForBoxability(t *testing.T) {
+	home := t.TempDir()
+	if reason, ok := UnboxableDefaultCwd(home, home); !ok || reason == "" {
+		t.Fatal("a default_cwd equal to home must be reported at startup")
+	}
+	proj := filepath.Join(home, "project")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := UnboxableDefaultCwd(proj, home); ok {
+		t.Fatal("a project directory must pass")
+	}
+}

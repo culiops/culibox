@@ -74,3 +74,43 @@ test("the trusted-host group is introduced by a heading", () => {
 test("no profiles yields no entries rather than a phantom host section", () => {
   assert.deepEqual(spawnMenuEntries([], "runc"), []);
 });
+
+// --- workspace options -----------------------------------------------------
+
+const { workspaceOptions } = require("../static/tier.js");
+
+const WS = [
+  { label: "~ (home)", path: "/home/u", boxable: false, reason: "would mount your whole home" },
+  { label: "proj-a", path: "/home/u/proj-a", boxable: true },
+  { label: "proj-b", path: "/home/u/proj-b", boxable: true },
+];
+
+// Choosing a workspace IS choosing the containment boundary, so an option that
+// cannot be contained must be visibly unusable — not silently offered and then
+// refused by the server.
+test("boxed tier disables the non-boxable entries and says why", () => {
+  const opts = workspaceOptions(WS, "box");
+  const home = opts.find((o) => o.value === "/home/u");
+  assert.equal(home.disabled, true);
+  assert.match(home.label, /whole home/);
+  assert.equal(opts.find((o) => o.value === "/home/u/proj-a").disabled, false);
+});
+
+// On the host tier nothing is contained, so home is a perfectly ordinary choice.
+test("host tier leaves every entry selectable", () => {
+  const opts = workspaceOptions(WS, "host");
+  assert.ok(opts.every((o) => !o.disabled));
+  assert.equal(opts.find((o) => o.value === "/home/u").label, "~ (home)");
+});
+
+// The default must never land on an option that cannot be used.
+test("the default selection is the first usable entry", () => {
+  assert.equal(defaultWorkspace(WS, "box"), "/home/u/proj-a");
+  assert.equal(defaultWorkspace(WS, "host"), "/home/u");
+});
+
+const { defaultWorkspace } = require("../static/tier.js");
+
+test("with nothing boxable the default is empty rather than a doomed pick", () => {
+  assert.equal(defaultWorkspace([WS[0]], "box"), "");
+});

@@ -84,6 +84,34 @@ function spawnMenuEntries(profiles, boxRuntime) {
   return entries;
 }
 
+// workspaceOptions renders the workspace picker for a tier. On the boxed tier a
+// directory that cannot be contained is disabled and carries its reason: the
+// workspace is the box's only writable mount, so this choice IS the containment
+// boundary, and offering one that always fails is what made the picker
+// confusing in the first place.
+function workspaceOptions(workspaces, runtime) {
+  const boxed = runtime === TIER_BOX;
+  return (workspaces || []).map((w) => {
+    const blocked = boxed && !w.boxable;
+    return {
+      value: w.path,
+      label: blocked ? w.label + " — " + (w.reason || "cannot be contained") : w.label,
+      disabled: blocked,
+    };
+  });
+}
+
+// defaultWorkspace picks the first entry usable on this tier, so the form never
+// opens pre-set to something the server will refuse. Empty when nothing
+// qualifies — better a blank the user must fill than a doomed default.
+function defaultWorkspace(workspaces, runtime) {
+  const usable = workspaceOptions(workspaces, runtime).filter((o) => !o.disabled);
+  return usable.length ? usable[0].value : "";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { tierBadge, tierRuntimeLabel, spawnMenuEntries, TIER_BOX, TIER_HOST };
+  module.exports = {
+    tierBadge, tierRuntimeLabel, spawnMenuEntries,
+    workspaceOptions, defaultWorkspace, TIER_BOX, TIER_HOST,
+  };
 }

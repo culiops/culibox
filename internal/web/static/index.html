@@ -67,11 +67,6 @@
     .split-btn button:disabled { opacity: .6; cursor: default; filter: none; }
     /* The instant-spawn target must never be invisible — this caption is the
        safety rail for a one-click action, not decoration. */
-    #spawn-target {
-      display: block; margin-top: 5px; color: var(--muted); font-size: 11px;
-      font-family: ui-monospace, Menlo, monospace; overflow: hidden;
-      text-overflow: ellipsis; white-space: nowrap;
-    }
     #spawn-menu {
       position: fixed; z-index: 40; min-width: 210px; max-height: 60vh; overflow-y: auto;
       background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
@@ -409,9 +404,8 @@
       <div id="spawn-bar">
         <div class="split-btn">
           <button id="spawn-go" type="button">+ New session</button>
-          <button id="spawn-more" type="button" title="Choose a profile, or open the full form" aria-label="More spawn options">▾</button>
+
         </div>
-        <span id="spawn-target">loading…</span>
       </div>
       <div id="sessions-pane">
         <div class="pane-head">Sessions<span class="spacer" style="flex:1"></span><span class="count" id="sessions-count">0</span></div>
@@ -442,7 +436,6 @@
   </div>
   <div id="hint"><span id="hint-text"></span><button id="hint-x" title="Dismiss">×</button></div>
 
-  <div id="spawn-menu"></div>
 
   <div id="toast">
     <span id="toast-msg"></span>

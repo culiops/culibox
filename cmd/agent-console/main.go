@@ -206,6 +206,24 @@ func main() {
 		MaxArchiveFiles: archiveFiles,
 	}
 
+	// A default workspace that can never be contained must fail at boot, not once
+	// per spawn: the spawn-time error is correct but arrives after every click.
+	if boxes != nil {
+		anyBoxed := false
+		for _, a := range agents {
+			if a.RuntimePolicy() == config.RuntimeBox {
+				anyBoxed = true
+			}
+		}
+		if anyBoxed {
+			if reason, bad := web.UnboxableDefaultCwd(defaultCwd, home); bad {
+				log.Printf("WARNING: default_cwd %q cannot host a contained session (%s). "+
+					"Boxed spawns must name a project directory; set default_cwd to one, "+
+					"or set runtime \"host\" on your agents.", defaultCwd, reason)
+			}
+		}
+	}
+
 	// Report what the console will actually offer. WithDetectedShell only sees the
 	// config seeds, so a STORED profile shadowing the seed name leaves shellProfile
 	// set here while every /api/meta answers "" — without this line the button just
