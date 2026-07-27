@@ -85,6 +85,18 @@ function normalizePath(p) {
   return (abs ? "/" : "") + out.join("/");
 }
 
+// shortPath renders an absolute path as ~/… when it sits under home. Callers in
+// three other scripts (the spawn toast, the command palette, the upload toasts)
+// rely on it through the shared global scope; it lives in this required module
+// so deleting it breaks the test suite instead of only the browser.
+function shortPath(p, home) {
+  if (home === undefined) home = (typeof window !== "undefined" && window.HOME_DIR) || "";
+  if (!home || !p) return p;
+  if (p === home) return "~";
+  // Compare whole components: "/home/user2" is not inside "/home/user".
+  return p.indexOf(home + "/") === 0 ? "~" + p.slice(home.length) : p;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText };
+  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath };
 }

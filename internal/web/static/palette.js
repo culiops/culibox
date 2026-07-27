@@ -77,10 +77,13 @@ function paletteSessions() {
 
 function paletteCommands() {
   const cmds = [];
+  // Every spawn goes through the form — under containment the workspace choice
+  // IS the security boundary, so the palette preselects the profile and lets
+  // the form ask the rest rather than starting an agent from a keystroke.
   for (const p of profiles) {
-    cmds.push({ kind: "new", label: "New session · " + p.name, hint: p.bin || "", run: () => quickSpawn(p.name) });
+    cmds.push({ kind: "new", label: "New session · " + p.name, hint: p.bin || "", run: () => openSpawnDialog(p.name) });
   }
-  cmds.push({ kind: "new", label: "New session (advanced)…", hint: "", run: openSpawnDialog });
+  cmds.push({ kind: "new", label: "New session…", hint: "", run: () => openSpawnDialog() });
   if (window.shellProfile) {
     cmds.push({ kind: "new", label: "New shell here", hint: "Ctrl+Shift+`", run: () => spawnShellIn(focusedCell) });
   }
