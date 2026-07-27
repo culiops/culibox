@@ -189,3 +189,42 @@ function initSplitter() {
   // that went wrong on a small screen.
   handle.addEventListener("dblclick", () => persistSidebarSplit(setSidebarSplit(45)));
 }
+
+// --- ask dialog --------------------------------------------------------------
+// One shared <dialog> answers every question the app used to hand to the
+// browser's alert/confirm/prompt. The decision logic is split out from the DOM
+// wiring because that is the part with teeth: a promise that never settles
+// hangs the caller forever, and a confirm button that unlocks on the wrong
+// input defeats the typed-name gate on protected folders.
+
+// A <dialog> reports returnValue "" for Esc, a backdrop click, and a bare
+// close(). Treat anything that is not the confirm button as a cancel, so an
+// unrecognised close path fails safe.
+function askOutcome(returnValue) {
+  return returnValue === "confirm" ? "confirm" : "cancel";
+}
+
+// matchesRequired gates the typed-name confirmations. An empty or missing
+// requirement matches nothing: it must never become a skeleton key.
+function matchesRequired(typed, required) {
+  if (typeof typed !== "string" || typeof required !== "string") return false;
+  if (required === "") return false;
+  return typed.trim() === required;
+}
+
+// null is "cancelled"; "" is "submitted, but blank". The callers rely on the
+// difference, so they are not collapsed.
+function promptValue(returnValue, rawInput) {
+  if (askOutcome(returnValue) !== "confirm") return null;
+  return typeof rawInput === "string" ? rawInput.trim() : "";
+}
+
+// See focusTerminal: a nested dialog closing must not hand focus to the pane
+// underneath while another dialog is still on screen.
+function shouldRefocusTerminal(openDialogCount) {
+  return openDialogCount === 0;
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal };
+}
