@@ -89,6 +89,8 @@ function selectSettingsTab(name) {
   for (const p of document.querySelectorAll("#settings-modal .tab-panel")) {
     p.hidden = p.id !== name;
   }
+  // The inline error belongs to the action that raised it, not to the dialog.
+  setDialogError("settings-modal", "");
 }
 
 function initDialogs() {

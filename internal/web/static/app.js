@@ -204,7 +204,7 @@ function startRename(li, span, s) {
           body: JSON.stringify({ name: v }),
         });
         retitleTerminal(s.id, v);
-      } catch (e) { alert("Rename failed: " + e.message); }
+      } catch (e) { showToast("Rename failed: " + e.message, { error: true }); }
     }
     refreshSessions();
   };
@@ -390,23 +390,38 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   return p;
 }
+// These three run while #settings-modal is open, so their errors go to the
+// dialog's own inline line. A toast is fixed-position and paints beneath a modal
+// backdrop, which would leave the failure invisible.
 async function saveProfile() {
   const p = readForm();
-  if (!p.name || !p.bin) { alert("Name and Command are required"); return; }
+  setDialogError("settings-modal", "");
+  if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
   const editing = profiles.some((x) => x.name === p.name && x.editable);
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-  } catch (e) { alert("Save failed: " + e.message); return; }
+  } catch (e) { setDialogError("settings-modal", "Save failed: " + e.message); return; }
   await loadProfiles();
 }
 async function editProfile(name) {
+  setDialogError("settings-modal", "");
   try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
-  catch (e) { alert("Load failed: " + e.message); }
+  catch (e) { setDialogError("settings-modal", "Load failed: " + e.message); }
 }
 async function deleteProfile(name) {
+  // The sibling destructive action (kill session) has always confirmed; this one
+  // used to delete on the first click.
+  const ok = await askConfirm({
+    title: "Delete profile",
+    body: 'Delete the profile "' + name + '"? This cannot be undone.',
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
+  setDialogError("settings-modal", "");
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
-  catch (e) { alert("Delete failed: " + e.message); return; }
+  catch (e) { setDialogError("settings-modal", "Delete failed: " + e.message); return; }
   await loadProfiles();
 }
 function renderEditable() {
@@ -584,8 +599,14 @@ $("spawn").addEventListener("submit", async (ev) => {
 // confirmKill is the guarded entry point (tab ⏻ button, command palette).
 // killSession itself stays unguarded: the sidebar × has always been immediate,
 // and Undo on a fresh spawn must not ask twice.
-function confirmKill(id, name) {
-  if (confirm('Kill session "' + (name || id) + '"? This cannot be undone.')) killSession(id);
+async function confirmKill(id, name) {
+  const ok = await askConfirm({
+    title: "Kill session",
+    body: 'Kill session "' + (name || id) + '"? This cannot be undone.',
+    confirmLabel: "Kill",
+    danger: true,
+  });
+  if (ok) killSession(id);
 }
 
 async function killSession(id) {
@@ -597,7 +618,7 @@ async function killSession(id) {
   } catch (e) {
     killing.delete(id);
     await refreshSessions();
-    alert("Kill failed: " + e.message);
+    showToast("Kill failed: " + e.message, { error: true });
     return;
   }
   killing.delete(id);
@@ -619,7 +640,7 @@ async function spawnShellIn(cell) {
     // withholds it once a stored profile takes over the seed's name, and profiles
     // can be created after this page loaded.
     const profile = await currentShellProfile();
-    if (!profile) { alert("No shell profile available — check the console log."); return; }
+    if (!profile) { showToast("No shell profile available, check the console log.", { error: true }); return; }
     const plan = shellSpawnPlan(await resolveCellNeighbour(cell));
     if (plan.mode === "form") {
       // Nothing to sit beside: there is no context to inherit, so let the user
@@ -645,7 +666,7 @@ async function spawnShellIn(cell) {
     if (cells.includes(cell)) setFocusedCell(cell);
     openTerminal(s.id, s.name);
   } catch (e) {
-    alert("Shell failed: " + e.message);
+    showToast("Shell failed: " + e.message, { error: true });
   } finally {
     shellSpawning.delete(cell);
   }

@@ -390,12 +390,19 @@ class TerminalTab {
 // than in the regex — OSC 8 text never passes through the regex. noopener denies
 // the opened page a handle back into the console; noreferrer keeps the console's
 // host out of a third party's logs.
-function openTerminalUrl(raw, opts) {
+async function openTerminalUrl(raw, opts) {
   if (!/^https?:\/\//i.test(raw)) return;
   const url = rewriteLocalhost(raw, location.hostname);
   // Only OSC 8 confirms. A plain-text URL is its own label — you read the target
   // and then clicked it — but an OSC 8 link's visible text can say anything.
-  if (opts && opts.confirm && !window.confirm("Open this link?\n\n" + url)) return;
+  //
+  // The await moves window.open out of the click's own task. It stays inside the
+  // transient activation the confirm button's click grants, so the popup blocker
+  // does not fire; the visual gate exercises this path to keep it honest.
+  if (opts && opts.confirm) {
+    const ok = await askConfirm({ title: "Open this link?", body: url, confirmLabel: "Open" });
+    if (!ok) return;
+  }
   window.open(url, "_blank", "noopener,noreferrer");
   // The toast is the ONLY signal that the URL opened differs from the one on
   // screen, so it is guarded by existence rather than wrapped in a catch that would

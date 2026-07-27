@@ -58,10 +58,14 @@ function closePalette() {
 // runItem closes the palette BEFORE acting. Several actions open another dialog
 // or raise the undo toast, and a fixed-position toast paints *beneath* a modal
 // dialog's backdrop — an Undo the user cannot click is worse than none.
-function runItem(item) {
+// Awaited via Promise.resolve because some actions are now async (confirmKill
+// opens a dialog). A bare try/catch around a promise-returning call would let a
+// throw escape as an unhandled rejection instead of reaching the toast.
+async function runItem(item) {
   if (!item) return;
   closePalette();
-  try { item.run(); } catch (e) { showToast("Failed: " + e.message, { error: true }); }
+  try { await Promise.resolve(item.run()); }
+  catch (e) { showToast("Failed: " + e.message, { error: true }); }
 }
 
 // --- item sources ------------------------------------------------------------
