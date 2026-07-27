@@ -231,11 +231,28 @@ function shouldRefocusTerminal(openDialogCount) {
   return openDialogCount === 0;
 }
 
+// askIsBusy refuses a second question while one is on screen. There is one
+// shared dialog, and a second askDialog() used to reconfigure it in place:
+// overwriting the title, clearing any mustMatch gate, and leaving both `close`
+// listeners attached, so a single click settled two promises. showModal() on an
+// already-open dialog is a no-op rather than a throw, so nothing surfaced it.
+//
+// Reachable with the keyboard, not just in theory: a confirm focuses its OK
+// button, which is not an <input>, so the palette hotkey still fires. Running
+// "Kill session" from the palette re-labelled the live "Open this link?" dialog,
+// and the next click both killed the session and opened the link.
+function askIsBusy(dialogIsOpen) {
+  return dialogIsOpen === true;
+}
+
 // askDialog is the single code path both public helpers use. Every close route
 // (OK, Cancel, ×, Esc, backdrop) resolves the promise exactly once: a caller
 // awaiting a dialog that never settles is stuck forever with no error to show.
 function askDialog(opts) {
   const d = document.getElementById("ask-modal");
+  // Refusing reads as a cancel, which is the safe answer: a question the user
+  // never saw must never come back "confirmed".
+  if (askIsBusy(d.open)) return Promise.resolve({ outcome: "cancel", value: "" });
   const input = document.getElementById("ask-input");
   const ok = document.getElementById("ask-ok");
   document.getElementById("ask-title").textContent = opts.title || "";
@@ -308,5 +325,5 @@ function setDialogError(dialogId, msg) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal };
+  module.exports = { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy };
 }

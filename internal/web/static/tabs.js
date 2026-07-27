@@ -4,10 +4,10 @@
 // window (grow 1→2→3→4, capped at `cap`); beyond the cap it stacks as a tab.
 // Opening a file always tabs into the focused cell. ⛶ maximizes one cell.
 let cells = [];
-// INVARIANT: the focus ring is painted by whoever last touched the model:
+// INVARIANT. The focus ring is painted by whoever last touched the model:
 // every path that assigns focusedCell must end in setFocusedCell (which toggles
 // the class itself) or in renderGrid (whose renderBar sweep toggles it). Several
-// places assign it directly: removeCell, applyCap, ensureFirstCell, applyPlan
+// places assign it directly (removeCell, applyCap, ensureFirstCell, applyPlan),
 // and each is safe only because it renders afterwards. Deliberately NOT routed
 // through setFocusedCell: that would fire syncFocusedTree and a layout save from
 // inside those mutations. Assign directly if you must, then render.

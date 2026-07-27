@@ -363,6 +363,7 @@ function fillForm(p) {
 // no-op; only grab focus when the dialog is actually on screen.
 function newProfile() {
   fillForm({ base: "inherit" });
+  setDialogError("settings-modal", "");
   if ($("settings-modal").open) $("pf-name").focus();
 }
 function readForm() {
@@ -676,7 +677,7 @@ async function spawnShellIn(cell) {
 // resolved its cwd yet (TerminalTab fetches it asynchronously). Without this, a
 // +sh right after opening a session silently lands in default_cwd instead of the
 // session's directory: the failure the feature exists to prevent.
-// resolveCellNeighbour returns the session a quick shell should sit beside
+// resolveCellNeighbour returns the session a quick shell should sit beside:
 // the whole record, because "+sh" inherits the tier as well as the directory.
 async function resolveCellNeighbour(cell) {
   // Mirror cellCwd's precedence exactly: active tab first, then newest backwards.
@@ -797,7 +798,7 @@ setInterval(refreshSessions, 3000);
 document.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
   if (e.code !== "Backquote") return; // .code is layout/shift independent
-  // Don't steal the combo from a real text field (session name, inline rename)
+  // Don't steal the combo from a real text field (session name, inline rename),
   // but xterm's own focus target IS a textarea, so exempt that one.
   const ae = document.activeElement;
   if (ae && (ae.tagName === "INPUT" ||

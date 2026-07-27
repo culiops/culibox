@@ -54,7 +54,7 @@ function reportUpload(data, destDir) {
     const first = bad[0];
     showToast(
       (ok.length ? ok.length + " uploaded · " : "") +
-      "failed: " + (first.name || "file") + ": " + first.error +
+      "failed on " + (first.name || "file") + ": " + first.error +
       (bad.length > 1 ? " (+" + (bad.length - 1) + " more)" : ""),
       { error: true });
     return;
@@ -127,7 +127,7 @@ async function downloadPath(path, isDir) {
     // menu says just "Download .tar.gz", so it has to read properly.
     const n = probe.files || 0;
     showToast("Preparing " + n + (n === 1 ? " file (" : " files (") + humanBytes(probe.bytes || 0) +
-      "), symlinks are skipped");
+      "); symlinks are skipped");
   }
   const a = document.createElement("a");
   a.style.display = "none";

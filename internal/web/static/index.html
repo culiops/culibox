@@ -133,12 +133,18 @@
     @media (hover: none) {
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
       /* Touch targets, at every width rather than only the narrow breakpoint:
-         a tablet has no hover either. Desktop keeps its denser header. */
-      header button, .layouts button { min-height: 36px; min-width: 36px; }
+         a tablet has no hover either. Desktop keeps its denser header.
+         HEIGHT ONLY, deliberately. These buttons are 29-40px wide already, so a
+         min-width buys ~3px each while costing the ~29px that lets the product
+         name fit at 390px: measured, it put the heading back to "Agent C…". The
+         height is where the real gain is, 22px to 36px. */
+      header button { min-height: 36px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
-    #ft-upload, #ft-refresh, #ft-newdir { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
-    #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { color: var(--fg); border-color: var(--accent); }
+    /* Same treatment as the header controls: these sit 40px below them, so a
+       muted pair next to a lifted pair reads as "one of these is disabled". */
+    #ft-upload, #ft-refresh, #ft-newdir { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { border-color: var(--accent); }
     #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
     /* Drop affordance: it has to read as a target at a glance, or the whole
@@ -434,7 +440,6 @@
       <div id="spawn-bar">
         <div class="split-btn">
           <button id="spawn-go" type="button">+ New session</button>
-
         </div>
       </div>
       <div id="sessions-pane">

@@ -1,6 +1,6 @@
 "use strict";
 
-// The session tier badge, i.e. which containment a session is actually running under.
+// The session tier badge: which containment a session is actually running under.
 //
 // This is a security signal, so it is deliberately fail-loud. An unknown or
 // missing tier reads as trusted-host, never as boxed: a badge that claims
@@ -46,7 +46,7 @@ function tierBadge(session, boxRuntime) {
 }
 
 // spawnMenuEntries describes the ▾ menu: every profile boxed, then, when
-// containment is actually available: the same profiles again as uncontained
+// containment is actually available, the same profiles again as uncontained
 // trusted-host spawns.
 //
 // Each entry carries its OWN agent. A single generic "run on trusted host" item

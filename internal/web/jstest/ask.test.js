@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal } =
+const { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy } =
   require("../static/shell.js");
 
 // A <dialog> closed by Esc, by a backdrop click, or by dialog.close() with no
@@ -39,6 +39,17 @@ test("a cancelled prompt yields null, a confirmed one yields trimmed text", () =
   assert.strictEqual(promptValue("confirm", "  notes.txt  "), "notes.txt");
   assert.strictEqual(promptValue("confirm", ""), "");
   assert.strictEqual(promptValue("confirm", undefined), "");
+});
+
+// A second askDialog() while one is open used to reconfigure the dialog in
+// place: it overwrote the title, cleared a mustMatch gate, and left BOTH close
+// listeners attached, so one click settled two promises. showModal() does not
+// throw on an already-open dialog, so nothing surfaced the collision. Reachable
+// with the keyboard: the confirm button is focused, so the palette hotkey still
+// opens, and running "Kill session" from there re-labelled the live dialog.
+test("a second ask is refused while one is already open", () => {
+  assert.strictEqual(askIsBusy(true), true);
+  assert.strictEqual(askIsBusy(false), false);
 });
 
 // focusTerminal runs on every dialog close. With a nested dialog still open it

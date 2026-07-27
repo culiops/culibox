@@ -3,7 +3,7 @@
 // Pure link tokenizing for terminal output: no DOM, no globals mutated, and the
 // only xterm contact is a duck-typed `term` with .cols and .buffer.active.getLine.
 // That is what makes the rule that matters: a URL outranks a file path over the
-// same characters: something a test can pin down instead of something to trust.
+// same characters, something a test can pin down instead of something to trust.
 //
 // Loaded as a classic script, so every top-level name here is a shared global.
 // Constants are LINK_-prefixed so a later file cannot collide: two classic scripts
@@ -59,7 +59,7 @@ function trimUrl(url) {
 
 // scanLinks returns every clickable token in `text`, sorted by position and never
 // overlapping. Two passes: URLs claim their span first, then any path match that
-// intersects a claimed span is dropped. That single rule is the whole bug fix
+// intersects a claimed span is dropped. That single rule is the whole bug fix:
 // `culiops.dev/learn/x.html` sits inside a URL and never becomes a path again.
 function scanLinks(text) {
   const out = [];

@@ -88,9 +88,9 @@ class TerminalTab {
       // Cost: Option+drag no longer does a column selection on macOS.
       macOptionClickForcesSelection: true,
       // OSC 8 hyperlinks already work in xterm; installing a linkHandler REPLACES
-      // its default, which confirms before opening. Keep that confirmation: an OSC
-      // 8 link's visible text is arbitrary and can point anywhere, and add what the
-      // default lacks: localhost rewriting and noreferrer.
+      // its default, which confirms before opening. Keep that confirmation (an OSC
+      // 8 link's visible text is arbitrary and can point anywhere) and add what
+      // the default lacks: localhost rewriting and noreferrer.
       linkHandler: { activate: (_e, text) => openTerminalUrl(text, { confirm: true }) },
     });
     this.fitAddon = new FitAddon.FitAddon();
@@ -134,9 +134,9 @@ class TerminalTab {
     }).catch(() => {});
 
     // Clickable tokens in terminal output. links.js decides what is a URL, what is
-    // a file path, which wins when they overlap: the bug that used to send
-    // `https://host/a.html` to the file viewer as a relative path, and which links
-    // may be returned for this row. Absolute paths open directly; relative paths
+    // a file path, which wins when they overlap (the bug that used to send
+    // `https://host/a.html` to the file viewer as a relative path), and which
+    // links may be returned for this row. Absolute paths open directly; relative paths
     // join the session's initial cwd (best-effort: may miss if the agent cd'd).
     // Guarded like the other cross-file collaborators in this file: without it a
     // missing /links.js would throw on every hover, not merely lose the feature.
