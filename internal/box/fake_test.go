@@ -161,3 +161,12 @@ func waitFor(t *testing.T, limit time.Duration, cond func() bool) {
 	}
 	t.Fatal("condition not met within " + limit.String())
 }
+
+func mustBoxName(t *testing.T, m *Manager, cwd string) string {
+	t.Helper()
+	n, err := m.boxName(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}

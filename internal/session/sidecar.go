@@ -23,6 +23,11 @@ type sessionMeta struct {
 	// under live sessions. An empty value means a pre-containment entry, which
 	// is host by definition.
 	Runtime string `json:"runtime,omitempty"`
+	// Box is the container name for a boxed session. Stored rather than
+	// recomputed: the workspace directory can be moved or deleted while the
+	// agent is still running, and a name that cannot be recomputed means a box
+	// that leaks or gets reaped out from under a live session.
+	Box string `json:"box,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries

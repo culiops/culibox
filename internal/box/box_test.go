@@ -143,7 +143,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -155,10 +155,10 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 func TestBoxStopsAfterIdleTTLWhenLastSessionReleases(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	m.Release(dir)
+	m.ReleaseBox(mustBoxName(t, m, dir))
 	waitFor(t, 2*time.Second, func() bool { return fake.stoppedAny(namePrefix) })
 }
 
@@ -166,11 +166,11 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	m.Release(dir)
+	m.ReleaseBox(mustBoxName(t, m, dir))
 	time.Sleep(200 * time.Millisecond)
 	if fake.stops() != 0 {
 		t.Fatalf("box stopped while a session was still live (stops=%d)", fake.stops())
@@ -182,12 +182,12 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 func TestSpawnDuringIdleWindowCancelsTheStop(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 150*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	m.Release(dir)
+	m.ReleaseBox(mustBoxName(t, m, dir))
 	time.Sleep(30 * time.Millisecond)
-	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -210,7 +210,7 @@ func TestReconcileReapsBoxesWithNoSessions(t *testing.T) {
 func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	if _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", []string{"claude"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	name, _ := m.boxName(dir)
@@ -237,9 +237,7 @@ func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := m.Adopt(dir); err != nil {
-		t.Fatal(err)
-	}
+	m.AdoptBox(name)
 	fake.existing = []string{name, "ac-box-orphan"}
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)

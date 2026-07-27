@@ -62,10 +62,10 @@ type Backend interface {
 // Kept as an interface here so the session package does not depend on the box
 // package and stays unit-testable with a fake.
 type Boxes interface {
-	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) ([]string, []string, error)
-	Adopt(cwd string) error
-	Release(cwd string)
-	KillSession(ctx context.Context, cwd, sessionID string) error
+	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) (argvOut, envOut []string, boxName string, err error)
+	AdoptBox(boxName string)
+	ReleaseBox(boxName string)
+	KillSession(ctx context.Context, boxName, sessionID string) error
 	Runtime() string
 }
 
@@ -94,6 +94,13 @@ type Session struct {
 	Cwd     string
 	Created time.Time
 	Runtime string // box | host; immutable for the session's lifetime
+	Box     string // container name for a boxed session; "" on the host tier
+
+	// releaseOnce makes the box release idempotent. Two different paths finalize
+	// a session (the retention goroutine, and Kill), and a DETACHED session is
+	// abandoned by the retention goroutine entirely — so both must be able to
+	// release without the risk of double-counting.
+	releaseOnce sync.Once
 
 	cmd  *exec.Cmd
 	ptmx *os.File
@@ -443,6 +450,13 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 // Spawn builds the agent command and starts a session — under the persistence
 // backend (abduco) if present, else a daemon-owned PTY directly.
 func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
+	// Decide the tier FIRST and make it authoritative on the spec, so the
+	// launcher composes for the tier the session will actually run on. Deciding
+	// it in two places let a host-tier session be built with boxed semantics
+	// (curated env, no login wrap) whenever containment was unavailable.
+	runtime := m.runtimeFor(spec)
+	spec.Runtime = runtime
+
 	argv, env, err := m.launcher.Build(spec)
 	if err != nil {
 		return nil, err
@@ -459,30 +473,28 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	// Containment is applied here, between the launcher and the process start,
 	// so abduco persistence and the whole session lifecycle stay untouched.
-	runtime := m.runtimeFor(spec)
 	m.mu.Lock()
 	id := m.nextIDLocked(spec.Agent)
 	m.mu.Unlock()
 
+	var boxName string
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		wrapped, wrappedEnv, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env)
+		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env)
 		if err != nil {
 			// Name the way out: a silent failure here is what makes people
 			// disable containment entirely.
 			return nil, fmt.Errorf("session: starting box for %q: %w — spawn with runtime %q to run on the host instead",
 				spec.Cwd, err, config.RuntimeHost)
 		}
-		argv, env = wrapped, wrappedEnv
+		argv, env, boxName = wrapped, wrappedEnv, name
 	}
 
 	cmd, ptmx, err := m.startProcess(id, spec, argv, env)
 	if err != nil {
-		if runtime == config.RuntimeBox {
-			m.releaseBox(spec.Cwd) // never leak a box for a session that failed to start
-		}
+		m.releaseBoxNamed(boxName) // never leak a box for a session that failed to start
 		return nil, err
 	}
 
@@ -491,25 +503,40 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	m.mu.Lock()
 	sess := newSession(id, spec.Agent, name, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
+	sess.Box = boxName
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
 }
 
-// releaseBox tells the box layer one session for this workspace is gone.
-func (m *Manager) releaseBox(cwd string) {
+// releaseBoxNamed tells the box layer one session for this box is gone. Safe
+// with an empty name (host tier) or no box layer.
+func (m *Manager) releaseBoxNamed(name string) {
+	if name == "" {
+		return
+	}
 	m.mu.Lock()
 	boxes := m.boxes
 	m.mu.Unlock()
 	if boxes != nil {
-		boxes.Release(cwd)
+		boxes.ReleaseBox(name)
 	}
+}
+
+// releaseSessionBox releases a session's box exactly once, however the session
+// ended. Both the retention goroutine and Kill call this; a detached session is
+// only ever released by Kill, because the retention goroutine has already left.
+func (m *Manager) releaseSessionBox(s *Session) {
+	if s.Runtime != config.RuntimeBox {
+		return
+	}
+	s.releaseOnce.Do(func() { m.releaseBoxNamed(s.Box) })
 }
 
 // startProcess creates the OS process + PTY for a session. With a backend the
@@ -552,9 +579,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			// Release only on finalize. A DETACHED session's agent is still
 			// alive inside its box, so releasing there would arm the idle timer
 			// and stop the box under a session we intend to recover.
-			if sess.Runtime == config.RuntimeBox {
-				m.releaseBox(sess.Cwd)
-			}
+			m.releaseSessionBox(sess)
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}
@@ -657,7 +682,7 @@ func (m *Manager) Kill(id string) error {
 		boxes := m.boxes
 		m.mu.Unlock()
 		if boxes != nil {
-			if err := boxes.KillSession(context.Background(), s.Cwd, id); err != nil {
+			if err := boxes.KillSession(context.Background(), s.Box, id); err != nil {
 				log.Printf("session %s: killing agent inside its box: %v", id, err)
 			}
 		}
@@ -683,6 +708,12 @@ func (m *Manager) Kill(id string) error {
 	}
 	s.finalize()                                  // close done uniformly (live/exited/detached)
 	s.removedOnce.Do(func() { close(s.removed) }) // let the retention goroutine exit now
+	// Release here too, not only from the retention goroutine: that goroutine
+	// RETURNS when a session goes detached, so for a detached-then-killed
+	// session nothing else would ever release the box and it would outlive its
+	// idle TTL forever. releaseSessionBox is once-guarded, so the common path
+	// (both here and there) still counts exactly one release.
+	m.releaseSessionBox(s)
 	return nil
 }
 
@@ -729,6 +760,13 @@ func (m *Manager) Reconcile() error {
 		}
 	}
 
+	// Adopt every surviving box BEFORE attaching anything. Attaching can fail,
+	// and Reconcile deliberately leaves such an abduco session running for a
+	// later restart — so its container must survive too. Adoption keyed on
+	// abduco liveness (the real source of truth for "the agent is alive"), never
+	// on whether re-attaching happened to work.
+	m.adoptSurvivingBoxes(aliveIDs, meta)
+
 	for _, id := range aliveIDs {
 		md, ok := meta[id]
 		if !ok { // orphan-adopt: recover the agent name from the id
@@ -760,6 +798,26 @@ func (m *Manager) Reconcile() error {
 	return nil
 }
 
+// adoptSurvivingBoxes re-registers the box of every alive boxed session, so the
+// box reaper cannot destroy a container whose agent is still running. It uses
+// the stored box name, so a workspace directory that has since been moved or
+// deleted cannot cost a live session its container.
+func (m *Manager) adoptSurvivingBoxes(aliveIDs []string, meta map[string]sessionMeta) {
+	m.mu.Lock()
+	boxes := m.boxes
+	m.mu.Unlock()
+	if boxes == nil {
+		return
+	}
+	for _, id := range aliveIDs {
+		md, ok := meta[id]
+		if !ok || md.Runtime != config.RuntimeBox || md.Box == "" {
+			continue
+		}
+		boxes.AdoptBox(md.Box)
+	}
+}
+
 // reattach connects a fresh attach PTY to a surviving abduco session and rebuilds
 // its Session, nudging a repaint (best-effort, no cross-restart scrollback).
 func (m *Manager) reattach(id string, md sessionMeta) error {
@@ -782,16 +840,11 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
+	sess.Box = md.Box
 	m.sessions[id] = sess
-	boxes := m.boxes
 	m.mu.Unlock()
-	// Re-register the box BEFORE the caller reconciles boxes, or the orphan
-	// reaper stops the container this session is running inside.
-	if runtime == config.RuntimeBox && boxes != nil {
-		if err := boxes.Adopt(md.Cwd); err != nil {
-			log.Printf("session %s: adopting box for %q: %v", id, md.Cwd, err)
-		}
-	}
+	// The box was already adopted by Reconcile, before this attach was even
+	// tried — see adoptSurvivingBoxes.
 	sess.ForceRedraw()
 	m.watchRetention(id, sess)
 	return nil

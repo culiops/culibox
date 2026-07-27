@@ -33,23 +33,24 @@ type fakeBoxes struct {
 	releases int
 	adopts   int
 	kills    int
+	adopted  []string
 }
 
-func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []string) ([]string, []string, error) {
+func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []string) ([]string, []string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
-	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, nil
+	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, "ac-box-test", nil
 }
 
-func (f *fakeBoxes) Adopt(string) error {
+func (f *fakeBoxes) AdoptBox(name string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.adopts++
-	return nil
+	f.adopted = append(f.adopted, name)
 }
 
-func (f *fakeBoxes) Release(string) {
+func (f *fakeBoxes) ReleaseBox(string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.releases++
@@ -68,6 +69,17 @@ func (f *fakeBoxes) counts() (int, int, int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.wraps, f.releases, f.adopts
+}
+
+func (f *fakeBoxes) adoptedBox(name string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, a := range f.adopted {
+		if a == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeBoxes) killCount() int {

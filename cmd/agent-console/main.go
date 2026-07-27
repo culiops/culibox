@@ -134,6 +134,8 @@ func main() {
 	if err := mgr.Reconcile(); err != nil {
 		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
 	}
+	// AFTER session reconcile: that pass adopts every surviving box, so what
+	// remains unclaimed here is genuinely orphaned.
 	if boxes != nil {
 		if err := boxes.Reconcile(context.Background()); err != nil {
 			log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)

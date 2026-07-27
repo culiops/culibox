@@ -128,19 +128,24 @@ func stateVolume(boxName string) string {
 // execute. The returned env is the caller's env unchanged: it stays on the
 // docker CLIENT process so `-e NAME` can forward values without ever putting
 // them in argv, which is world-readable through `ps` on the host.
-func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) ([]string, []string, error) {
+// It also returns the box name. That name is the box's identity from here on:
+// callers persist it and use it for adopt/release/kill instead of re-deriving it
+// from cwd. A workspace directory can be moved or deleted while its agent is
+// still running, and a name that cannot be recomputed is a box that leaks or,
+// worse, gets reaped out from under a live session.
+func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string) ([]string, []string, string, error) {
 	name, err := m.boxName(cwd)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
-		return nil, nil, fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
+		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
 	if err := m.ensure(ctx, name, real); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return m.execArgv(name, real, sessionID, argv, env), env, nil
+	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
 }
 
 // ensure starts the box if it is not already running, and registers the caller
@@ -197,10 +202,9 @@ func (m *Manager) rearmIfIdle(name string) {
 // KillSession terminates a session's process INSIDE the box. Signals do not
 // cross `docker exec`, so killing the host-side client would leave the agent
 // running — with box reuse, a "killed" runaway agent would keep going.
-func (m *Manager) KillSession(ctx context.Context, cwd, sessionID string) error {
-	name, err := m.boxName(cwd)
-	if err != nil {
-		return err
+func (m *Manager) KillSession(ctx context.Context, name, sessionID string) error {
+	if name == "" {
+		return nil
 	}
 	pf := pidFile(sessionID)
 	// TERM the recorded pid and any child it left behind, then remove the
@@ -208,7 +212,7 @@ func (m *Manager) KillSession(ctx context.Context, cwd, sessionID string) error 
 	// this runs on the teardown path and must be idempotent.
 	script := `p=$(cat "$1" 2>/dev/null) || exit 0; [ -n "$p" ] || exit 0; ` +
 		`kill -TERM "$p" 2>/dev/null; sleep 1; kill -KILL "$p" 2>/dev/null; rm -f "$1"; exit 0`
-	_, err = m.opts.Client.Run(ctx, []string{"exec", name, "sh", "-c", script, "sh", pf})
+	_, err := m.opts.Client.Run(ctx, []string{"exec", name, "sh", "-c", script, "sh", pf})
 	return err
 }
 
@@ -221,10 +225,9 @@ func (m *Manager) acquire(name string) {
 // Release records that a session for this workspace ended. On the last one it
 // arms the idle timer; the box outlives its sessions by IdleTTL so returning to
 // a project does not pay start-up again.
-func (m *Manager) Release(cwd string) {
-	name, err := m.boxName(cwd)
-	if err != nil {
-		return // an unresolvable path never produced a box
+func (m *Manager) ReleaseBox(name string) {
+	if name == "" {
+		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -259,16 +262,17 @@ func (m *Manager) stopIfIdle(name string) {
 	_ = m.opts.Client.Stop(context.Background(), name)
 }
 
-// Adopt re-registers a workspace whose session survived a daemon restart, so
-// the following Reconcile does not reap the box out from under a live session.
-// Callers MUST adopt every reattached boxed session before calling Reconcile.
-func (m *Manager) Adopt(cwd string) error {
-	name, err := m.boxName(cwd)
-	if err != nil {
-		return err
+// AdoptBox re-registers a box whose session survived a daemon restart, so the
+// following Reconcile does not reap it out from under a live agent. Takes the
+// stored name, never a path: it must not be able to fail, because the only
+// alternative to adopting is destroying a live session's container.
+//
+// Callers MUST adopt every surviving boxed session before calling Reconcile.
+func (m *Manager) AdoptBox(name string) {
+	if name == "" {
+		return
 	}
 	m.acquire(name)
-	return nil
 }
 
 // Reconcile adopts this instance's boxes after a daemon restart and stops the
