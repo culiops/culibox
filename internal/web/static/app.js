@@ -546,6 +546,7 @@ async function quickSpawn(agentName, opts) {
   try {
     const req = { agent, name: "", cwd: t.cwd, options };
     if (opts && opts.runtime) req.runtime = opts.runtime;
+
     await spawnSession(req);
   } catch (e) {
     showToast("Spawn failed: " + e.message, { error: true });
@@ -559,40 +560,61 @@ function closeSpawnMenu() { $("spawn-menu").classList.remove("open"); }
 
 function openSpawnMenu() {
   const menu = $("spawn-menu"), anchor = $("spawn-more");
-  const rows = profiles.map((p) => {
+  const nodes = [];
+  for (const e of spawnMenuEntries(profiles, boxRuntime)) {
+    if (e.kind === "heading") {
+      const sep = document.createElement("div");
+      sep.className = "sep";
+      const h = document.createElement("div");
+      h.className = "menu-head tier-danger-item";
+      h.textContent = e.text;
+      nodes.push(sep, h);
+      continue;
+    }
     const b = document.createElement("button");
-    b.type = "button"; b.className = "mono"; b.textContent = p.name;
-    b.onclick = () => { closeSpawnMenu(); quickSpawn(p.name); };
-    return b;
-  });
-  if (!rows.length) {
+    b.type = "button";
+    b.className = "mono" + (e.tone === "danger" ? " tier-danger-item" : "");
+    b.textContent = e.label;
+    if (e.title) b.title = e.title;
+    // Every entry names its own agent and its own tier — nothing is inferred
+    // from "whatever was spawned last".
+    b.onclick = () => { closeSpawnMenu(); quickSpawn(e.agent, { runtime: e.runtime }); };
+    nodes.push(b);
+  }
+  if (!nodes.length) {
     const b = document.createElement("button");
     b.type = "button"; b.textContent = "No profiles yet"; b.disabled = true;
-    rows.push(b);
+    nodes.push(b);
   }
   const sep = document.createElement("div");
   sep.className = "sep";
   const adv = document.createElement("button");
-  adv.type = "button"; adv.textContent = "Advanced…";
+  adv.type = "button"; adv.textContent = "Advanced\u2026";
   adv.onclick = () => { closeSpawnMenu(); openSpawnDialog(); };
-  const extra = [];
-  // The escape hatch is easy but loud. Making it HARD to reach would only breed
-  // workarounds; making it visible and clearly labelled keeps the choice honest.
-  if (boxRuntime) {
-    const host = document.createElement("button");
-    host.type = "button";
-    host.className = "tier-danger-item";
-    host.textContent = "Run on trusted host (uncontained)";
-    host.title = "Spawn outside the box: full access to your host, for work that needs it.";
-    host.onclick = () => { closeSpawnMenu(); quickSpawn(undefined, { runtime: "host" }); };
-    extra.push(host);
-  }
-  menu.replaceChildren(...rows, sep, adv, ...extra);
+  menu.replaceChildren(...nodes, sep, adv);
   menu.classList.add("open"); // must be visible before it can be measured
   const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
   menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
   menu.style.top = (r.bottom + 6) + "px";
+}
+
+// syncRuntimeField shows the tier chooser only when containment is actually
+// available. With no box layer every session is host tier anyway, and offering
+// a choice that changes nothing would be a lie.
+function syncRuntimeField() {
+  const row = $("runtime-row"), sel = $("runtime-select");
+  if (!row || !sel) return;
+  row.style.display = boxRuntime ? "" : "none";
+  if (!boxRuntime) { sel.value = ""; return; }
+  sel.value = "box"; // default to contained on every open, never "sticky"
+  updateRuntimeWarning();
+}
+
+function updateRuntimeWarning() {
+  const sel = $("runtime-select"), warn = $("runtime-warn");
+  if (!sel || !warn) return;
+  warn.hidden = sel.value !== "host";
 }
 
 // openSpawnDialog preselects whatever the one-click button would have done, so
@@ -603,11 +625,14 @@ function openSpawnDialog() {
   const ws = $("workspace");
   if (t.cwd && Array.prototype.some.call(ws.options, (o) => o.value === t.cwd)) ws.value = t.cwd;
   $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
+  syncRuntimeField();
   openDialog("spawn-modal");
   $("sess-name").focus();
 }
 
 function initSpawnControl() {
+  const rt = $("runtime-select");
+  if (rt) rt.onchange = updateRuntimeWarning;
   $("spawn-go").onclick = () => quickSpawn();
   $("spawn-more").onclick = (e) => {
     e.stopPropagation();
@@ -625,6 +650,8 @@ function initSpawnControl() {
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const req = { agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() };
+  const rt = $("runtime-select");
+  if (rt && rt.value) req.runtime = rt.value;
   // Close first: a fixed-position toast renders *beneath* a modal dialog's
   // backdrop, so an Undo offered while the dialog is still up is unreachable.
   closeDialog("spawn-modal");

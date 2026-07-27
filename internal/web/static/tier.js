@@ -45,6 +45,45 @@ function tierBadge(session, boxRuntime) {
   };
 }
 
+// spawnMenuEntries describes the ▾ menu: every profile boxed, then — when
+// containment is actually available — the same profiles again as uncontained
+// trusted-host spawns.
+//
+// Each entry carries its OWN agent. A single generic "run on trusted host" item
+// had to fall back to the default profile, so the one thing the escape hatch
+// exists for (running *claude* with host access to aws/ssh) was the one thing it
+// could not do; you got whichever profile happened to be first.
+function spawnMenuEntries(profiles, boxRuntime) {
+  const list = (profiles || []).filter((p) => p && p.name);
+  if (!list.length) return [];
+
+  const entries = list.map((p) => ({
+    kind: "item",
+    agent: p.name,
+    label: p.name,
+    runtime: TIER_BOX,
+    tone: "neutral",
+  }));
+  // No containment → every session is already host tier, so a "trusted host"
+  // section would be a distinction without a difference.
+  if (!boxRuntime) return entries;
+
+  entries.push({ kind: "heading", text: "Run on trusted host (uncontained)" });
+  for (const p of list) {
+    entries.push({
+      kind: "item",
+      agent: p.name,
+      label: p.name,
+      runtime: TIER_HOST,
+      tone: "danger",
+      title:
+        "Spawn " + p.name + " OUTSIDE the box: full access to your host — your files, " +
+        "keys and network. Use only for work that needs the host.",
+    });
+  }
+  return entries;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { tierBadge, tierRuntimeLabel, TIER_BOX, TIER_HOST };
+  module.exports = { tierBadge, tierRuntimeLabel, spawnMenuEntries, TIER_BOX, TIER_HOST };
 }

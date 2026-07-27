@@ -91,6 +91,8 @@
     #spawn-menu button:hover, #ft-menu button:hover { background: #1f6feb2e; }
     #spawn-menu .sep { height: 1px; background: var(--border); margin: 5px 2px; }
     #spawn-menu .mono { font-family: ui-monospace, Menlo, monospace; }
+    #spawn-menu .menu-head { font-size: 10px; letter-spacing: .4px; text-transform: uppercase; padding: 4px 10px 2px; opacity: .85; }
+    #runtime-warn { margin-top: 6px; font-size: 12px; color: #fca5a5; }
 
     /* --- sidebar panes + splitter ---------------------------------------- */
     .pane-head {
@@ -466,6 +468,14 @@
           <input id="sess-name" type="text" placeholder="auto: working dir name" autocomplete="off" spellcheck="false">
         </div>
         <div id="options"></div>
+        <div id="runtime-row" style="display:none">
+          <label for="runtime-select">Runtime</label>
+          <select id="runtime-select">
+            <option value="box">boxed — contained (recommended)</option>
+            <option value="host">trusted host — uncontained</option>
+          </select>
+          <div id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
+        </div>
         <div>
           <label for="workspace">Working dir</label>
           <select id="workspace"></select>
