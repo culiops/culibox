@@ -1,6 +1,7 @@
 package box
 
 import (
+	"encoding/json"
 	"context"
 	"strconv"
 	"syscall"
@@ -297,5 +298,71 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	}
 	if int(st.Uid) != os.Getuid() {
 		t.Fatalf("state dir owned by uid %d but the box runs as %d", st.Uid, os.Getuid())
+	}
+}
+
+// Containment is decided by what gets mounted, and the workspace is the one
+// writable mount. Boxing $HOME therefore hands the agent the entire home —
+// including ~/.ssh and any secrets file — which voids every other control in
+// this package. Refusing is the only correct answer; narrowing silently would
+// hide it.
+func TestBoxingTheHomeDirectoryIsRefused(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home dir")
+	}
+	_, _, _, err = m.Wrap(context.Background(), home, "s-1", []string{"claude"}, nil, nil)
+	if err == nil {
+		t.Fatal("boxing the home directory must be refused; it mounts the whole home into the box")
+	}
+	if !strings.Contains(err.Error(), "host") {
+		t.Fatalf("the error must name the way forward (trusted-host): %v", err)
+	}
+}
+
+func TestBoxingAnAncestorOfHomeIsRefused(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	if _, _, _, err := m.Wrap(context.Background(), "/", "s-1", []string{"claude"}, nil, nil); err == nil {
+		t.Fatal("boxing / must be refused")
+	}
+}
+
+// A fresh box home has no onboarding state, so an interactive agent meets a
+// first-run wizard instead of a prompt. The markers are configuration, not
+// credentials, so seeding them is safe.
+func TestNewBoxStateIsSeededPastFirstRunOnboarding(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir, err := m.ensureStateDir("ac-box-seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ".claude.json"))
+	if err != nil {
+		t.Fatalf("a new box needs seeded agent state: %v", err)
+	}
+	var d map[string]any
+	if err := json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d["hasCompletedOnboarding"] != true {
+		t.Fatalf("onboarding marker missing: %v", d)
+	}
+}
+
+// Seeding must never clobber state a running agent has already written.
+func TestSeedingDoesNotOverwriteExistingState(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	dir, _ := m.ensureStateDir("ac-box-keep")
+	p := filepath.Join(dir, ".claude.json")
+	if err := os.WriteFile(p, []byte(`{"mine":"kept"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ensureStateDir("ac-box-keep"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), "kept") {
+		t.Fatalf("existing agent state was overwritten: %s", raw)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/culiops/culiops-agent-console/internal/box"
 	"github.com/culiops/culiops-agent-console/internal/config"
 	"github.com/culiops/culiops-agent-console/internal/launcher"
 	"github.com/culiops/culiops-agent-console/internal/session"
@@ -77,6 +78,14 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
+			// One exception to the generic message: a refusal to contain the
+			// chosen workspace is actionable and names only the path the caller
+			// just supplied. Hiding it behind "could not start session" is the
+			// silent failure that makes people give up on containment.
+			if errors.Is(err, box.ErrUnboxableWorkspace) {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			writeErr(w, http.StatusBadRequest, "could not start session")
 			return
 		}

@@ -16,9 +16,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,6 +46,12 @@ const (
 // than discovered here, so this package keeps knowing nothing about agents or
 // config and the deny-by-default mount rule stays visible in one function.
 type Mount struct{ Host, Box string }
+
+// ErrUnboxableWorkspace marks a refusal the user can act on directly: the
+// workspace they picked cannot be contained. Its message names the path they
+// chose and nothing else, so it is safe to show them — unlike a generic spawn
+// failure, which must stay server-side.
+var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 
 // Client is the narrow slice of the docker CLI this package needs. A fake drives
 // every unit test, so none of them requires a running daemon.
@@ -139,12 +147,59 @@ func (m *Manager) stateDir(boxName string) string {
 
 // ensureStateDir creates the box's home directory before the box starts, owned
 // by whoever runs the daemon. 0700: it holds agent credentials and history.
+//
+// It also seeds first-run state. A box home is empty, so an interactive agent
+// otherwise meets an onboarding wizard rather than a prompt — the credential is
+// forwarded and valid, but the agent never gets far enough to use it. These
+// markers are configuration, not credentials.
 func (m *Manager) ensureStateDir(boxName string) (string, error) {
 	dir := m.stateDir(boxName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("box: creating state dir %q: %w", dir, err)
 	}
+	seed := filepath.Join(dir, ".claude.json")
+	if _, err := os.Stat(seed); err == nil {
+		return dir, nil // never clobber what a running agent has written
+	}
+	body := []byte("{\n  \"hasCompletedOnboarding\": true,\n  \"theme\": \"dark\"\n}\n")
+	if err := os.WriteFile(seed, body, 0o600); err != nil {
+		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
+	}
 	return dir, nil
+}
+
+// unboxableWorkspace refuses a workspace whose mount would defeat the point.
+// The workspace is the box's one writable mount, so containing $HOME hands the
+// agent the whole home — ~/.ssh, any secrets file, the agent's own config —
+// and every other control in this package becomes decoration. Refuse loudly
+// rather than narrow silently: a surprising mount is how containment dies.
+func unboxableWorkspace(cwd string) (string, bool) {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", false
+	}
+	if real, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = real
+	}
+	if abs == string(filepath.Separator) {
+		return "it is the filesystem root", true
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", false
+	}
+	if real, err := filepath.EvalSymlinks(home); err == nil {
+		home = real
+	}
+	if abs == filepath.Clean(home) {
+		return "it is your home directory, so the box would mount everything in it", true
+	}
+	// An ancestor of home is worse still.
+	if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+		return "it contains your home directory", true
+	}
+	return "", false
 }
 
 // Wrap ensures the workspace's box is running and returns the argv/env to
@@ -157,6 +212,11 @@ func (m *Manager) ensureStateDir(boxName string) (string, error) {
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
 func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
+	if reason, bad := unboxableWorkspace(cwd); bad {
+		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
+			"or choose \"Run on trusted host\" to run it uncontained on purpose",
+			ErrUnboxableWorkspace, cwd, reason)
+	}
 	name, err := m.boxName(cwd)
 	if err != nil {
 		return nil, nil, "", err
