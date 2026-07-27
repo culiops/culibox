@@ -17,8 +17,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -29,7 +29,7 @@ const (
 	LabelWorkspace = "io.culiops.agent-console.workspace"
 	LabelInstance  = "io.culiops.agent-console.instance"
 	namePrefix     = "ac-box-"
-	statePrefix    = "ac-state-"
+	stateDirName   = "boxstate"
 
 	runtimeRunc   = "runc"
 	runtimeSysbox = "sysbox-runc"
@@ -56,6 +56,7 @@ type Options struct {
 	Image     string
 	Instance  string // env label (DEV/PROD)
 	IdleTTL   time.Duration
+	StateRoot string // where per-box agent homes live (usually data_dir)
 	Client    Client
 }
 
@@ -86,6 +87,9 @@ func New(opts Options) (*Manager, error) {
 	}
 	if opts.IdleTTL <= 0 {
 		opts.IdleTTL = 15 * time.Minute
+	}
+	if opts.StateRoot == "" {
+		return nil, fmt.Errorf("box: a state root is required")
 	}
 	m := &Manager{
 		opts:    opts,
@@ -118,10 +122,24 @@ func (m *Manager) boxName(cwd string) (string, error) {
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
 }
 
-// stateVolume names the per-box volume holding the agent's ~/.claude. TrimPrefix
-// rather than a slice: a name shorter than the prefix must not panic.
-func stateVolume(boxName string) string {
-	return statePrefix + strings.TrimPrefix(boxName, namePrefix)
+// stateDir is the HOST directory holding a box's agent home. It is a plain
+// directory rather than a named volume on purpose: a named volume is seeded
+// from the image and inherits the image's ownership, so any host uid that
+// differs from the one baked at build time cannot write to its own home — no
+// auth, no resume, nothing persisted. A directory the daemon creates is owned
+// by the running user by construction, so the box works for every uid.
+func (m *Manager) stateDir(boxName string) string {
+	return filepath.Join(m.opts.StateRoot, stateDirName, boxName)
+}
+
+// ensureStateDir creates the box's home directory before the box starts, owned
+// by whoever runs the daemon. 0700: it holds agent credentials and history.
+func (m *Manager) ensureStateDir(boxName string) (string, error) {
+	dir := m.stateDir(boxName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("box: creating state dir %q: %w", dir, err)
+	}
+	return dir, nil
 }
 
 // Wrap ensures the workspace's box is running and returns the argv/env to
@@ -172,6 +190,10 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string) error {
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
 	}
 	if !running {
+		if _, err := m.ensureStateDir(name); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
 		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.

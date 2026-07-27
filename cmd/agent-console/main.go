@@ -118,7 +118,7 @@ func main() {
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
 	// reaper never stops a container a live session is running inside.
 	boxRuntime := ""
-	boxes, err := newBoxes(cfg)
+	boxes, err := newBoxes(cfg, dataDir)
 	switch {
 	case err != nil:
 		// Not fatal: without containment the console still runs, on the host
@@ -231,7 +231,7 @@ func boxImage(cfg config.Config) string {
 // newBoxes builds the containment layer, or reports why it is unavailable. A
 // missing docker or a missing image must degrade to the host tier loudly, never
 // silently pretend to contain.
-func newBoxes(cfg config.Config) (*box.Manager, error) {
+func newBoxes(cfg config.Config, dataDir string) (*box.Manager, error) {
 	bin, err := box.LookDocker(cfg.DockerBin)
 	if err != nil {
 		return nil, err
@@ -245,6 +245,7 @@ func newBoxes(cfg config.Config) (*box.Manager, error) {
 		Image:     boxImage(cfg),
 		Instance:  instance,
 		IdleTTL:   cfg.BoxIdleTTL(),
+		StateRoot: dataDir,
 		Client:    box.CLIClient{Bin: bin},
 	})
 }

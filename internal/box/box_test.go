@@ -2,6 +2,8 @@ package box
 
 import (
 	"context"
+	"strconv"
+	"syscall"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,5 +249,53 @@ func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
 	}
 	if fake.stops() != 1 {
 		t.Fatalf("expected exactly the orphan reaped, stops=%d", fake.stops())
+	}
+}
+
+// A named volume is seeded from the image, so it inherits the image's ownership
+// and any host uid that differs cannot write to its own home — no auth
+// persistence, no resume. A host-side directory created by the daemon is owned
+// by the running user by construction, so the box works for every uid.
+func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	if _, err := m.ensureStateDir("ac-box-abc"); err != nil {
+		t.Fatal(err)
+	}
+	args := m.runArgs("ac-box-abc", "/w")
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "ac-state-") {
+		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)
+	}
+	var stateMount string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-v" && strings.HasSuffix(args[i+1], ":"+boxHome) {
+			stateMount = args[i+1]
+		}
+	}
+	if stateMount == "" {
+		t.Fatalf("no state mount onto %s in %q", boxHome, joined)
+	}
+	host := strings.TrimSuffix(stateMount, ":"+boxHome)
+	if !strings.HasPrefix(host, "/") {
+		t.Fatalf("state source %q must be an absolute host path", host)
+	}
+	fi, err := os.Stat(host)
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("state dir %q must exist before the box starts: %v", host, err)
+	}
+	// The invariant that actually makes this uid-agnostic: the daemon creates
+	// the directory and passes its OWN uid to --user, so owner and runtime user
+	// match by construction on any machine. A named volume could not hold this,
+	// because its owner is fixed when the image is built.
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Skip("no syscall.Stat_t on this platform")
+	}
+	wantUser := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	if !containsPair(args, "--user", wantUser) {
+		t.Fatalf("--user must be the daemon's own uid %q: %q", wantUser, joined)
+	}
+	if int(st.Uid) != os.Getuid() {
+		t.Fatalf("state dir owned by uid %d but the box runs as %d", st.Uid, os.Getuid())
 	}
 }

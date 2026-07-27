@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g @anthropic-ai/claude-code
 
-# The workspace is bind-mounted from the host at its identical path, so files
-# must be owned by the host uid/gid or the agent cannot write to its own repo.
-# `docker run --user` overrides these at run time; the build args keep the image
-# usable standalone and make the intent explicit.
+# The console always runs the box with `--user <daemon uid>` and bind-mounts a
+# host-owned directory as the home, so ownership is correct on any machine and
+# these values never decide anything at run time. They exist only so the image
+# is usable standalone; do NOT rely on them matching your host user.
 ARG UID=1001
 ARG GID=1001
 RUN groupadd -g "$GID" agent \

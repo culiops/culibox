@@ -43,7 +43,7 @@ func (m *Manager) runArgs(boxName, cwd string) []string {
 		// $HOME/.claude.json, which sits beside that directory — with only
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
-		"-v", stateVolume(boxName) + ":" + boxHome,
+		"-v", m.stateDir(boxName) + ":" + boxHome,
 	}
 	if m.runtime == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)

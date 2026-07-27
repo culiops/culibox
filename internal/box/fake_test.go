@@ -91,6 +91,7 @@ func newTestManagerWithFakeTTL(t *testing.T, ttl time.Duration) (*Manager, *fake
 		Image:     "culiops/agent-box:base",
 		Instance:  "TEST",
 		IdleTTL:   ttl,
+		StateRoot: t.TempDir(),
 		Client:    f,
 	})
 	if err != nil {
@@ -113,7 +114,7 @@ func newTestManager(t *testing.T) *Manager {
 func newTestManagerWithInstance(t *testing.T, instance string) *Manager {
 	t.Helper()
 	f := newFake()
-	m, err := New(Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: instance, IdleTTL: time.Hour, Client: f})
+	m, err := New(Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: instance, IdleTTL: time.Hour, StateRoot: t.TempDir(), Client: f})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func newTestManagerWithSysbox(t *testing.T) *Manager {
 	t.Helper()
 	f := newFake()
 	f.sysbox = true
-	m, err := New(Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: "TEST", IdleTTL: time.Hour, Client: f})
+	m, err := New(Options{DockerBin: "/usr/bin/docker", Image: "img", Instance: "TEST", IdleTTL: time.Hour, StateRoot: t.TempDir(), Client: f})
 	if err != nil {
 		t.Fatal(err)
 	}
