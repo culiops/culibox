@@ -7,7 +7,7 @@
 //
 // Everything that decides *what* is stored or restored lives here as a pure
 // function, so it is testable under `node --test`; tabs.js only wires it to the
-// live model. Viewer tabs are deliberately absent — a stored path may no longer
+// live model. Viewer tabs are deliberately absent: a stored path may no longer
 // exist, and reopening a file costs one click in the tree.
 
 const LAYOUT_KEY = "agent-console:layout";
@@ -25,7 +25,7 @@ function clampCap(v) {
 
 // serializeLayout builds the snapshot from the live model. `model.cells` are the
 // grid cells, `model.focused` / `model.maximized` are cell references (or null).
-// Returns null when there is no terminal tab left to restore — the caller stores
+// Returns null when there is no terminal tab left to restore: the caller stores
 // that as "no snapshot", so closing the last session then reloading gives the
 // normal empty console instead of a stale grid.
 function serializeLayout(model) {
@@ -64,8 +64,8 @@ function runningIds(sessions) {
 
 // reconcileLayout filters a stored snapshot against the live session list and
 // returns a plan the grid can be rebuilt from, or null for "boot normally".
-// Null covers every unusable input — absent, corrupt, wrong version, or nothing
-// left after filtering — so a bad entry can never break boot.
+// Null covers every unusable input: absent, corrupt, wrong version, or nothing
+// left after filtering, so a bad entry can never break boot.
 function reconcileLayout(saved, sessions) {
   if (!saved || typeof saved !== "object" || saved.v !== LAYOUT_V) return null;
   if (!Array.isArray(saved.cells)) return null;

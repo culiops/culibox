@@ -9,7 +9,7 @@ For this to actually survive a container restart, two things must hold.
 
 ## 1. The image must bundle `abduco`
 
-abduco is a hard dependency — the daemon refuses to start without it. It is a tiny
+abduco is a hard dependency: the daemon refuses to start without it. It is a tiny
 C program (no runtime deps). Either install a packaged version or build v0.6 from
 source in the image:
 
@@ -30,7 +30,7 @@ abduco's control sockets live under `abduco_socket_dir` (default
 `<data_dir>/abduco`), and session metadata lives at `<data_dir>/sessions.json`
 with pidfiles under `<data_dir>/sessions/pids`. If `data_dir` is inside the
 container's ephemeral layer, a container replacement wipes the sockets and the
-surviving agents become unreachable — persistence is defeated.
+surviving agents become unreachable, and persistence is defeated.
 
 Mount `data_dir` on a named volume (or host bind mount):
 
@@ -50,7 +50,7 @@ volumes:
 - **Restarting the container process** (same container, e.g. `docker restart`)
   survives cleanly: the abduco servers are child processes of the container's PID 1
   namespace and keep running only if PID 1 stays up. A full container **stop**
-  tears down every process including the abduco servers — persistence covers the
+  tears down every process including the abduco servers, so persistence covers the
   *daemon* restarting, not the whole container being destroyed. For agents to
   survive the container itself stopping, run abduco servers under an init/PID-1 that
   keeps them alive, or keep the container up and restart only the daemon inside it.

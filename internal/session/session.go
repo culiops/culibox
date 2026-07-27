@@ -551,7 +551,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			}
 			// Name the way out: a silent failure here is what makes people
 			// disable containment entirely.
-			return nil, fmt.Errorf("session: starting box for %q: %w — spawn with runtime %q to run on the host instead",
+			return nil, fmt.Errorf("session: starting box for %q: %w (spawn with runtime %q to run on the host instead)",
 				spec.Cwd, err, config.RuntimeHost)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name

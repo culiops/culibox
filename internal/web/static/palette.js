@@ -2,7 +2,7 @@
 
 // Command palette. Sessions and commands are filtered locally from state the app
 // already polls; files come from /api/fs/search. Loaded before app.js, so this
-// file only DEFINES things — initPalette() is called from app.js boot.
+// file only DEFINES things: initPalette() is called from app.js boot.
 
 const PAL_DEBOUNCE_MS = 150;
 // Deadline as well as the supersede-abort: this page's fetches can wedge behind
@@ -20,14 +20,14 @@ let palAbort = null;
 // isPaletteHotkey matches the key events that open the palette.
 //
 // ⌘K is free on macOS, but on every other platform Ctrl+K is readline's
-// kill-to-end-of-line — which the shells and agent TUIs running in these panes
-// actually use — so the non-mac combo is Ctrl+Shift+K, matching the Ctrl+Shift+`
+// kill-to-end-of-line, which the shells and agent TUIs running in these panes
+// actually use, so the non-mac combo is Ctrl+Shift+K, matching the Ctrl+Shift+`
 // convention already used for the quick shell.
 //
 // Ctrl+Shift+Space is accepted everywhere as a second way in. A letter combo is
 // exactly what other desktop apps register as a SYSTEM-WIDE hotkey (Notion took
 // Ctrl+Shift+K on a Windows machine, so Chrome never received the keypress at
-// all — no page can defend against that). Space is a far less popular target,
+// all: no page can defend against that). Space is a far less popular target,
 // and it carries no meaning inside a terminal either.
 function isPaletteHotkey(e, mac) {
   if (e.altKey) return false;
@@ -57,7 +57,7 @@ function closePalette() {
 
 // runItem closes the palette BEFORE acting. Several actions open another dialog
 // or raise the undo toast, and a fixed-position toast paints *beneath* a modal
-// dialog's backdrop — an Undo the user cannot click is worse than none.
+// dialog's backdrop: an Undo the user cannot click is worse than none.
 // Awaited via Promise.resolve because some actions are now async (confirmKill
 // opens a dialog). A bare try/catch around a promise-returning call would let a
 // throw escape as an unhandled rejection instead of reaching the toast.
@@ -81,7 +81,7 @@ function paletteSessions() {
 
 function paletteCommands() {
   const cmds = [];
-  // Every spawn goes through the form — under containment the workspace choice
+  // Every spawn goes through the form: under containment the workspace choice
   // IS the security boundary, so the palette preselects the profile and lets
   // the form ask the rest rather than starting an agent from a keystroke.
   for (const p of profiles) {
@@ -110,7 +110,7 @@ function paletteCommands() {
 
 // --- local filtering ---------------------------------------------------------
 // Substring hits rank above scattered subsequence hits; earlier hits rank above
-// later ones. Deliberately simpler than the server-side file scorer — these
+// later ones. Deliberately simpler than the server-side file scorer: these
 // lists are dozens of items, not tens of thousands.
 function palMatch(text, q) {
   const t = text.toLowerCase();
@@ -168,7 +168,7 @@ async function palSearchFiles(q, seq, local) {
     clearTimeout(timer);
   }
   if (seq !== palSeq) return;   // a newer query already won
-  if (!paletteOpen()) return;   // closed while in flight — nothing to render into
+  if (!paletteOpen()) return;   // closed while in flight: nothing to render into
   palAbort = null;
   if (failed || !data) { palRender(local, "file search unavailable"); return; }
   // Basename in the label column, directory in the hint column. Showing the
@@ -184,7 +184,7 @@ async function palSearchFiles(q, seq, local) {
     };
   });
   palRender(local.concat(files),
-    data.truncated ? "index truncated — some files are not listed" : "");
+    data.truncated ? "index truncated: some files are not listed" : "");
 }
 
 // tailDirs keeps the last few components of a directory path. CSS would ellipsis
@@ -244,7 +244,7 @@ function initPalette() {
   const combo = mac ? "⌘K" : "Ctrl+Shift+K";
   // The fallback is written next to the primary everywhere the combo appears:
   // when another app has grabbed the primary system-wide, the user needs to be
-  // told a second one exists — they cannot guess it.
+  // told a second one exists: they cannot guess it.
   const combos = combo + " or Ctrl+Shift+Space";
 
   const openBtn = document.getElementById("palette-open");
@@ -277,14 +277,14 @@ function initPalette() {
     if (palAbort) { palAbort.abort(); palAbort = null; }
   });
 
-  // Hotkey — see isPaletteHotkey for which combos and why. The ⌕ header button
+  // Hotkey: see isPaletteHotkey for which combos and why. The ⌕ header button
   // is the mouse path, and the guaranteed one when something outside the page
   // claims a combo: a browser shortcut, or another app's system-wide hotkey.
   document.addEventListener("keydown", (e) => {
     if (!isPaletteHotkey(e, mac) || paletteOpen()) return;
     // Never steal the combo from a real text field (inline rename, path box,
     // profile editor). xterm's own focus target IS a textarea, so exempt that
-    // one — opening the palette over a terminal is the whole point.
+    // one: opening the palette over a terminal is the whole point.
     const ae = document.activeElement;
     if (ae && (ae.tagName === "INPUT" ||
         (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;

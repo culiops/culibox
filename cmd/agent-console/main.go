@@ -281,7 +281,7 @@ func reclaimBoxState(boxes *box.Manager) {
 			r.Box, int(r.Age.Hours()/24), r.Bytes/(1024*1024))
 	}
 	if err != nil {
-		log.Printf("box state reclaim: %v — the home stays; usually a directory a box "+
+		log.Printf("box state reclaim: %v. The home stays; usually a directory a box "+
 			"left unwritable (chmod it back), otherwise an old root-owned stub that has "+
 			"to be removed as its owner. New boxes create neither.", err)
 	}

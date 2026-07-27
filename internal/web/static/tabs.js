@@ -4,10 +4,10 @@
 // window (grow 1→2→3→4, capped at `cap`); beyond the cap it stacks as a tab.
 // Opening a file always tabs into the focused cell. ⛶ maximizes one cell.
 let cells = [];
-// INVARIANT — the focus ring is painted by whoever last touched the model:
+// INVARIANT: the focus ring is painted by whoever last touched the model:
 // every path that assigns focusedCell must end in setFocusedCell (which toggles
 // the class itself) or in renderGrid (whose renderBar sweep toggles it). Several
-// places assign it directly — removeCell, applyCap, ensureFirstCell, applyPlan —
+// places assign it directly: removeCell, applyCap, ensureFirstCell, applyPlan
 // and each is safe only because it renders afterwards. Deliberately NOT routed
 // through setFocusedCell: that would fire syncFocusedTree and a layout save from
 // inside those mutations. Assign directly if you must, then render.
@@ -139,7 +139,7 @@ class Cell {
     spacer.className = "cell-sp";
     const sh = document.createElement("button");
     sh.className = "cell-sh"; sh.textContent = "+sh";
-    sh.title = "New shell beside this session — same directory and tier (Ctrl+Shift+`)";
+    sh.title = "New shell beside this session, same directory and tier (Ctrl+Shift+`)";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     // Disable while in flight so the ignored second click is visible, not silent.
     sh.onclick = (e) => {
@@ -155,7 +155,7 @@ class Cell {
     del.className = "cell-del"; del.textContent = "✕"; del.title = "Remove pane";
     del.onclick = (e) => { e.stopPropagation(); removeCell(this); };
     // Controls live in one sticky cluster so they stay reachable when the tab
-    // strip overflows (a capped cell stacks many tabs — see openTerminal).
+    // strip overflows (a capped cell stacks many tabs: see openTerminal).
     const ctl = document.createElement("span");
     ctl.className = "cell-ctl";
     ctl.append(sh, max, del);
@@ -164,7 +164,7 @@ class Cell {
     // rectangle, which reads as a broken terminal rather than an empty pane.
     // Quick-shell stays reachable from the palette ("New shell here") and
     // Ctrl+Shift+`. NOTE: .cell-bar carries an author `display: flex`, so the
-    // hidden attribute alone does nothing — see .cell-bar[hidden] in the stylesheet.
+    // hidden attribute alone does nothing: see .cell-bar[hidden] in the stylesheet.
     this.bar.hidden = this.tabs.length === 0;
     this.el.classList.toggle("focused", this === focusedCell);
   }
@@ -176,7 +176,7 @@ function setFocusedCell(cell) {
   if (focusedCell === cell) return;
   focusedCell = cell;
   // Only the focus ring changes, so only the ring is touched. renderBar() here
-  // rebuilt every bar — including the button under the pointer — and this runs
+  // rebuilt every bar, including the button under the pointer, and this runs
   // from the cell's mousedown, so mouseup landed on a fresh node and the click
   // never fired: the first press of ⛶ / +sh / ✕ on an unfocused pane was eaten.
   // renderBar keeps its own toggle, so a later rebuild still paints the ring.
@@ -190,7 +190,7 @@ function focusedTerminal() {
   const t = focusedCell && focusedCell.activeTab;
   return t && t.kind === "terminal" ? t : null;
 }
-// eachTerminal / eachViewer iterate live tabs across all cells — used by fontPrefs
+// eachTerminal / eachViewer iterate live tabs across all cells: used by fontPrefs
 // to apply a changed default to every open terminal / viewer.
 function eachTerminal(cb) {
   for (const c of cells) for (const t of c.tabs) if (t.kind === "terminal") cb(t);
@@ -201,7 +201,7 @@ function eachViewer(cb) {
 // cellCwd → the working dir a new shell for this cell should start in: the active
 // terminal's cwd, else the most recent terminal tab in the cell that resolved one
 // (so a cell showing a file viewer still opens the shell where its agent lives),
-// else "" — the server falls back to default_cwd.
+// else "": the server falls back to default_cwd.
 function cellCwd(cell) {
   if (!cell) return "";
   const act = cell.activeTab;
@@ -278,7 +278,7 @@ function applyCap(n) {
     if (!keep.activeTab && keep.tabs.length) keep.activeTab = keep.tabs[0];
     if (maximized === extra) maximized = null;
     if (focusedCell === extra) focusedCell = keep;
-    extra.tabs = []; // detach — do NOT dispose (tabs live on in `keep`)
+    extra.tabs = []; // detach: do NOT dispose (tabs live on in `keep`)
   }
   if (!cells.includes(focusedCell)) focusedCell = cells[cells.length - 1] || null;
   ensureFirstCell();
@@ -290,7 +290,7 @@ function applyCap(n) {
 
 // openTerminal auto-splits a new window per session up to `cap`; beyond the cap
 // it stacks as a tab in the focused cell. (openFile always tabs into the focused
-// cell — files never create a window.)
+// cell: files never create a window.)
 function openTerminal(id, name) {
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);

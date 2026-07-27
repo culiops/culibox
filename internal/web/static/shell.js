@@ -1,7 +1,7 @@
 "use strict";
 
 // UI shell primitives: transient toast, <dialog> plumbing, and the sidebar
-// splitter. Deliberately free of app state and API calls — everything here is
+// splitter. Deliberately free of app state and API calls: everything here is
 // generic chrome that app.js and palette.js drive. Loaded before app.js, so it
 // only DEFINES functions; boot wiring happens from app.js.
 
@@ -11,7 +11,7 @@
 // terminal is noise.
 let toastTimer = null;
 
-// showToast(msg, {undo, ms, error}) — `undo` is a callback; supplying it reveals
+// showToast(msg, {undo, ms, error}): `undo` is a callback; supplying it reveals
 // the Undo button and clicking it dismisses the toast after running the callback.
 function showToast(msg, opts) {
   opts = opts || {};
@@ -52,7 +52,7 @@ function hideToast() {
 // --- dialogs -----------------------------------------------------------------
 // focusTerminal returns the caret to the focused pane. Every dialog close path
 // runs it: a native <dialog> restores focus to whatever opened it, which in this
-// app means keystrokes stop reaching the agent — the one thing that must not
+// app means keystrokes stop reaching the agent: the one thing that must not
 // happen after closing a modal.
 function focusTerminal() {
   // A nested dialog (a confirm raised from Settings) closes while its parent is
@@ -75,7 +75,7 @@ function closeDialog(id) {
 }
 
 // openSettings shows the settings dialog with one tab selected ("manage" =
-// profiles, "settings" = font sizes — the ids are the pre-existing panel ids,
+// profiles, "settings" = font sizes: the ids are the pre-existing panel ids,
 // kept so every handler that already targets them keeps working).
 function openSettings(tab) {
   selectSettingsTab(tab || "manage");
@@ -167,8 +167,8 @@ function initSplitter() {
       const a = top.getBoundingClientRect();
       const b = bottom.getBoundingClientRect();
       // The percentage is a flex-basis, so it resolves against the FLEX
-      // CONTAINER's content height — all of #sidebar, spawn bar and handle
-      // included — not against the two panes. Dividing by the panes alone made
+      // CONTAINER's content height (all of #sidebar, spawn bar and handle
+      // included), not against the two panes. Dividing by the panes alone made
       // the handle overshoot the pointer by ~12% on desktop and ~31% on mobile.
       const space = sidebar.clientHeight;
       if (space <= 0) return;
@@ -191,7 +191,7 @@ function initSplitter() {
     handle.addEventListener("pointercancel", up);
   });
 
-  // Double-click restores the default ratio — a cheap escape hatch from a drag
+  // Double-click restores the default ratio: a cheap escape hatch from a drag
   // that went wrong on a small screen.
   handle.addEventListener("dblclick", () => persistSidebarSplit(setSidebarSplit(45)));
 }

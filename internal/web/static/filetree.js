@@ -19,7 +19,7 @@ async function ftRenderDir(path, container, depth) {
     row.className = "ft-node";
     row.style.paddingLeft = (depth * 12 + 6) + "px";
     // The label lives in its own span so the row can also carry a download
-    // button — writing row.textContent would wipe any child element.
+    // button: writing row.textContent would wipe any child element.
     const label = document.createElement("span");
     label.className = "ft-name";
     label.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
@@ -68,8 +68,8 @@ async function ftRenderDir(path, container, depth) {
 }
 
 // ftLoadRoot renders off-DOM and swaps in only if it is still the newest load.
-// Two roots can be in flight at once — boot loads home while a session's cwd
-// arrives and re-roots — and ftRenderDir appends after its own await, so painting
+// Two roots can be in flight at once: boot loads home while a session's cwd
+// arrives and re-roots, and ftRenderDir appends after its own await, so painting
 // straight into the tree let a superseded load leave its rows behind (the tree
 // showed home while the picker said the session's directory).
 async function ftLoadRoot() {
@@ -77,7 +77,7 @@ async function ftLoadRoot() {
   const gen = ++ftGen;
   const box = document.createElement("div");
   await ftRenderDir(ftRootSel.value, box, 0);
-  if (gen !== ftGen) return; // a newer root started meanwhile — drop this render
+  if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
 }
 
@@ -202,7 +202,7 @@ async function confirmDelete(path, name, isDir) {
 }
 
 // syncTreeToSession re-roots the tree at a session's cwd, but ONLY when a
-// *different* session becomes focused (sessionId changes) — so a manual root
+// *different* session becomes focused (sessionId changes), so a manual root
 // pick survives until you focus another session. A cwd not already in the
 // dropdown is added as a transient option so any depth/custom cwd works.
 async function syncTreeToSession(cwd, sessionId) {
@@ -229,7 +229,7 @@ async function initFileTree() {
 
   try {
     const ws = (await api("/api/workspaces")) || [];
-    window.HOME_DIR = (ws[0] && ws[0].path) || ""; // first entry is "~ (home)" — used to expand ~/ in clicked links
+    window.HOME_DIR = (ws[0] && ws[0].path) || ""; // first entry is "~ (home)": used to expand ~/ in clicked links
     ftRootSel.replaceChildren(...ws.map((w) => {
       const o = document.createElement("option");
       o.value = w.path; o.textContent = w.label;
@@ -241,7 +241,7 @@ async function initFileTree() {
   // we're following, so it survives until a different session is focused.
   ftRootSel.onchange = ftLoadRoot;
 
-  // New folder in the root currently shown — no row can reach the root itself.
+  // New folder in the root currently shown: no row can reach the root itself.
   const newdir = document.getElementById("ft-newdir");
   if (newdir) newdir.onclick = () => promptMkdir(ftRootSel.value);
 
@@ -253,7 +253,7 @@ async function initFileTree() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRowMenu(); });
 
   // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
-  // writes — which is most of what changes in this app — is invisible until the
+  // writes, which is most of what changes in this app, is invisible until the
   // root is re-listed. Without this the only ways were re-rooting or reloading
   // the whole page. Disabled while in flight so an impatient double click cannot
   // stack requests (ftLoadRoot's generation guard would drop one anyway).

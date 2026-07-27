@@ -4,14 +4,14 @@
 // Every drop zone in the app is wired from here. Kept out of app.js, which is
 // already large; the only things needed from it are showToast and shortPath.
 
-// uploadFiles POSTs to /api/fs/upload with XHR rather than fetch — fetch cannot
+// uploadFiles POSTs to /api/fs/upload with XHR rather than fetch: fetch cannot
 // report upload progress, and progress is the point of the feedback here.
 function uploadFiles(files, destDir, opts) {
   opts = opts || {};
   const list = Array.from(files || []);
   if (!list.length) return Promise.resolve(null);
   if (!destDir) {
-    showToast("No destination folder yet — drop onto a folder in Files instead", { error: true });
+    showToast("No destination folder yet. Drop onto a folder in Files instead", { error: true });
     return Promise.resolve(null);
   }
   const fd = new FormData();
@@ -26,7 +26,7 @@ function uploadFiles(files, destDir, opts) {
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const frac = e.loaded / e.total;
-      showToast("Uploading " + label + " — " + Math.round(frac * 100) + "%",
+      showToast("Uploading " + label + ": " + Math.round(frac * 100) + "%",
         { progress: frac, ms: 60000 });
     };
     xhr.onload = () => {
@@ -41,7 +41,7 @@ function uploadFiles(files, destDir, opts) {
       if (opts.onDone) opts.onDone(data);
       resolve(data);
     };
-    xhr.onerror = () => { showToast("Upload failed — connection lost", { error: true }); resolve(null); };
+    xhr.onerror = () => { showToast("Upload failed: connection lost", { error: true }); resolve(null); };
     xhr.send(fd);
   });
 }
@@ -54,7 +54,7 @@ function reportUpload(data, destDir) {
     const first = bad[0];
     showToast(
       (ok.length ? ok.length + " uploaded · " : "") +
-      "failed: " + (first.name || "file") + " — " + first.error +
+      "failed: " + (first.name || "file") + ": " + first.error +
       (bad.length > 1 ? " (+" + (bad.length - 1) + " more)" : ""),
       { error: true });
     return;
@@ -63,7 +63,7 @@ function reportUpload(data, destDir) {
   if (ok.length === 1) {
     const u = ok[0];
     showToast(u.renamed_from
-      ? u.renamed_from + " already existed — saved as " + u.name + " in " + shortPath(destDir)
+      ? u.renamed_from + " already existed, saved as " + u.name + " in " + shortPath(destDir)
       : "Uploaded " + u.name + " to " + shortPath(destDir));
   } else {
     showToast("Uploaded " + ok.length + " files to " + shortPath(destDir) +
@@ -84,9 +84,9 @@ function shouldRefreshTree(destDir, treeRoot) {
 }
 
 // refreshTreeAfterUpload re-lists the tree when the upload changed what it shows.
-// The terminal-pane drop and the image paste both upload into the session's cwd —
+// The terminal-pane drop and the image paste both upload into the session's cwd
 // which is usually exactly the tree's root, since the tree follows the focused
-// session — and they were the only upload routes that never told the tree, so an
+// session, and they were the only upload routes that never told the tree, so an
 // uploaded file simply never appeared until something else re-rooted it.
 function refreshTreeAfterUpload(destDir) {
   if (typeof ftRootSel === "undefined" || !ftRootSel) return;
@@ -115,19 +115,19 @@ async function downloadPath(path, isDir) {
       const r = await fetch("/api/fs/archive?probe=1&path=" + encodeURIComponent(path));
       probe = await r.json().catch(() => null);
       if (!r.ok) {
-        showToast("Cannot download that folder — " + ((probe && probe.error) || ("HTTP " + r.status)),
+        showToast("Cannot download that folder: " + ((probe && probe.error) || ("HTTP " + r.status)),
           { error: true });
         return;
       }
     } catch (e) {
-      showToast("Cannot download that folder — " + e.message, { error: true });
+      showToast("Cannot download that folder: " + e.message, { error: true });
       return;
     }
-    // This toast is now the ONLY place the symlink-skip is disclosed — the row
-    // menu says just "Download .tar.gz" — so it has to read properly.
+    // This toast is now the ONLY place the symlink-skip is disclosed: the row
+    // menu says just "Download .tar.gz", so it has to read properly.
     const n = probe.files || 0;
     showToast("Preparing " + n + (n === 1 ? " file (" : " files (") + humanBytes(probe.bytes || 0) +
-      ") — symlinks are skipped");
+      "), symlinks are skipped");
   }
   const a = document.createElement("a");
   a.style.display = "none";
@@ -223,16 +223,16 @@ function insertPathsIntoTerminal(term, data) {
   if (!ok.length || !term || typeof term.sendText !== "function") return;
   const text = ok.map((u) => shellQuote(u.path)).join(" ") + " ";
   // The uploaded FILE name is sanitized server-side, but the directory half of
-  // the path is not — a directory name may legally contain a newline on Linux,
+  // the path is not: a directory name may legally contain a newline on Linux,
   // and that newline would submit the line the moment it was typed. Refuse
   // rather than insert; the upload itself already succeeded.
   if (UNSAFE_TEXT.test(text)) {
-    showToast("Uploaded, but that folder's name contains control characters — path not inserted",
+    showToast("Uploaded, but that folder's name contains control characters, so the path was not inserted",
       { error: true });
     return;
   }
   if (!term.sendText(text)) {
-    showToast("Uploaded, but this session is not connected — path not inserted", { error: true });
+    showToast("Uploaded, but this session is not connected, so the path was not inserted", { error: true });
   }
 }
 
@@ -250,7 +250,7 @@ if (typeof module !== "undefined" && module.exports) {
 
 // pasteFileName keeps the name the browser supplied and only invents one when
 // there is nothing usable. clipboardData.files is also non-empty for a copy from
-// the OS file manager, and those carry a real filename — renaming those to
+// the OS file manager, and those carry a real filename: renaming those to
 // paste-<timestamp> would throw away the only identifying information the file
 // had. "image.png" is the generic name browsers synthesise for a raw bitmap.
 function pasteFileName(file) {
@@ -283,7 +283,7 @@ function initUpload() {
     showToast("Drop onto a terminal pane, or onto a folder in Files", { error: true });
   });
 
-  // Files pane ＋ button — the only upload route on mobile, where drag does not
+  // Files pane ＋ button: the only upload route on mobile, where drag does not
   // exist at all.
   const picker = document.getElementById("ft-upload-input");
   const btn = document.getElementById("ft-upload");

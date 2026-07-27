@@ -128,7 +128,7 @@
     .ft-more:hover { color: var(--fg); }
     .ft-node:hover .ft-more { visibility: visible; }
     /* On touch there is no hover, and `visibility: hidden` also removes the
-       button from hit-testing — so without this the row's whole action menu,
+       button from hit-testing, so without this the row's whole action menu,
        download included, would be unreachable on a phone. */
     @media (hover: none) {
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
@@ -141,7 +141,7 @@
     #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { color: var(--fg); border-color: var(--accent); }
     #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
-    /* Drop affordance — it has to read as a target at a glance, or the whole
+    /* Drop affordance: it has to read as a target at a glance, or the whole
        gesture is guesswork. The terminal-cell variant lives with the .cell
        rules below, where source order lets it beat the focus outline. */
     .drop-hot { outline: 2px dashed var(--accent); outline-offset: -3px; background: #1f6feb1f; }
@@ -286,7 +286,7 @@
     /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
-       pane — the affordance existed in the DOM and not on screen. */
+       pane: the affordance existed in the DOM and not on screen. */
     .cell.drop-hot { outline: 2px dashed var(--accent); outline-offset: -2px; background: #1f6feb1f; }
     /* No right padding: the sticky control cluster pins to the scrollport edge, and
        any padding there would leave a strip where scrolled tabs bleed through. The
@@ -348,7 +348,7 @@
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2d1618; border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
-    /* Disconnected (recoverable) — amber, distinct from the red "ended" bar. */
+    /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
     .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2a2113; border-bottom: 1px solid #b45309; color: #fbbf24; font-size: 12px; }
     .pane-trouble.expired { background: #2d1618; border-bottom-color: var(--danger); color: var(--danger); }
     .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -360,23 +360,23 @@
       #layout { flex-direction: column; }
       /* A DEFINITE height, not max-height: the panes below use a percentage
          flex-basis, which silently degrades to `auto` against a content-derived
-         height — the drag ratio would be ignored on mobile. */
+         height: the drag ratio would be ignored on mobile. */
       /* 52vh, not 46: inside a 46vh band the Files pane came to ~112px, which its
          header + root picker consumed entirely, leaving the file tree computing
-         to ZERO height — the tree, and the folder-download button that lives in
+         to ZERO height: the tree, and the folder-download button that lives in
          it, were unreachable until you dragged the splitter. */
       #sidebar { width: 100%; height: 52vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
-      /* The absolute-path box is a desktop affordance — nobody types /home/…
+      /* The absolute-path box is a desktop affordance: nobody types /home/…
          on a phone, and the header's palette button already finds files. Its
          ~36px is the rest of the difference between a tree with rows and none. */
       .ft-row-path { display: none; }
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
-         with it — otherwise the splitter has nothing left to distribute. */
+         with it: otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
       header { gap: 6px; padding: 8px 10px; }
       /* The heading used to be display:none here, on the grounds that the badge
          and dot carry identity. They do not carry the product NAME, so it is back
-         — paid for by the palette button's shortcut label, which means nothing on
+        : paid for by the palette button's shortcut label, which means nothing on
          a device with no keyboard, and by a slightly smaller title. Both are
          needed: with the label alone the name still truncated to "Agent Co…". */
       /* The dot is decoration; the DEV/PROD badge beside it is the one that
@@ -427,7 +427,7 @@
       <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
     <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌕</span></button>
-    <button id="settings-open" title="Settings — profiles and font sizes" aria-label="Settings">⚙</button>
+    <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings">⚙</button>
   </header>
   <div id="layout">
     <aside id="sidebar">
@@ -461,7 +461,7 @@
       </div>
     </aside>
     <main id="grid" class="empty">
-      <div class="placeholder">Spawn or open a session — panes appear here</div>
+      <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
   </div>
   <div id="hint"><span id="hint-text"></span><button id="hint-x" title="Dismiss">×</button></div>
@@ -496,8 +496,8 @@
         <div id="runtime-row" style="display:none">
           <label for="runtime-select">Runtime</label>
           <select id="runtime-select">
-            <option value="box">boxed — contained (recommended)</option>
-            <option value="host">trusted host — uncontained</option>
+            <option value="box">boxed (contained, recommended)</option>
+            <option value="host">trusted host (uncontained)</option>
           </select>
           <div id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
         </div>
@@ -529,15 +529,15 @@
           <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
           <div class="pf-row"><label>Base</label>
             <select id="pf-base">
-              <option value="inherit">inherit — full env</option>
-              <option value="clean">clean — no secrets</option>
-              <option value="login">login — source profile</option>
+              <option value="inherit">inherit: full env</option>
+              <option value="clean">clean: no secrets</option>
+              <option value="login">login: source profile</option>
             </select>
           </div>
           <div class="pf-row"><label>Runtime</label>
             <select id="pf-runtime">
-              <option value="">box — contained (default)</option>
-              <option value="host">host — uncontained</option>
+              <option value="">box (contained, default)</option>
+              <option value="host">host (uncontained)</option>
             </select>
           </div>
           <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
@@ -571,7 +571,7 @@
 
   <dialog id="palette">
     <input id="pal-input" type="text" autocomplete="off" spellcheck="false"
-           placeholder="Search files and sessions — type &gt; for commands">
+           placeholder="Search files and sessions. Type &gt; for commands">
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span><span id="pal-note"></span></div>

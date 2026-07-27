@@ -3,7 +3,7 @@
 // Client-side font-size preferences. One source of truth in localStorage
 // (agent-console:fontPrefs), applied via CSS custom properties (code / markdown /
 // file tree) and xterm's fontSize (terminal, wired in terminal-tab.js). This is a
-// pure display preference — deliberately decoupled from the agent-profile /
+// pure display preference: deliberately decoupled from the agent-profile /
 // spawn-options pipeline (which maps to CLI flags / env vars).
 const fontPrefs = (function () {
   const KEY = "agent-console:fontPrefs";
