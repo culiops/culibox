@@ -175,6 +175,23 @@
 
     #settings-modal { width: 460px; }
     #spawn-modal { width: 420px; }
+    #ask-modal { width: 400px; }
+    /* overflow-wrap because the link confirm puts a raw URL in here, and a long
+       one offers no break opportunity. #toast-msg carries it for the same reason. */
+    #ask-modal #ask-body { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #ask-modal #ask-body:empty { display: none; }
+    #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+    .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+    .ask-actions button:hover { border-color: var(--accent); }
+    #ask-ok { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    #ask-ok:hover { filter: brightness(1.12); }
+    #ask-ok:disabled { opacity: .5; cursor: default; filter: none; }
+    #ask-modal.danger #ask-ok { background: var(--danger); border-color: var(--danger); }
+    /* An error raised while a dialog is open cannot use the toast: a fixed-position
+       toast paints beneath the modal backdrop, so it would be invisible. */
+    .dlg-err { color: #fca5a5; font-size: 12px; margin-top: 8px; line-height: 1.45; }
+    .dlg-err:empty { display: none; }
 
     /* --- spawn form (now inside the advanced dialog) ---------------------- */
     #spawn { display: grid; gap: 8px; }
@@ -545,6 +562,23 @@
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span><span id="pal-note"></span></div>
+  </dialog>
+
+  <dialog id="ask-modal">
+    <div class="dlg-head">
+      <h2 id="ask-title"></h2>
+      <span class="spacer"></span>
+      <button class="dlg-x" type="button" id="ask-x" title="Close">×</button>
+    </div>
+    <div class="dlg-body">
+      <p id="ask-body"></p>
+      <label id="ask-label" for="ask-input" class="pf-lbl" hidden></label>
+      <input id="ask-input" type="text" autocomplete="off" spellcheck="false" hidden>
+      <div class="ask-actions">
+        <button id="ask-cancel" type="button">Cancel</button>
+        <button id="ask-ok" type="button">OK</button>
+      </div>
+    </div>
   </dialog>
 
   <script src="/xterm/xterm.js"></script>
