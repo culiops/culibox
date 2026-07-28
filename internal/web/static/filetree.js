@@ -85,34 +85,87 @@ async function ftLoadRoot() {
 
 // openRowMenu shows what can be done to one entry, positioned under the ⋯ that
 // opened it (same placement maths as the spawn menu in app.js).
+//
+// The first line is the entry's full path, not a control. It is doing two jobs:
+// it is the only place a touch device can read a name the tree truncated (title
+// tooltips are unreachable there), and it shows what the copy items below are
+// about to put on the clipboard.
 function openRowMenu(anchor, path, name, isDir) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
-  const items = [];
-  // Download first (the one you reach for most), destructive last. The
-  // symlink-skip disclosure is NOT repeated here: downloadPath's probe toast
+  const nodes = [];
+
+  const head = document.createElement("div");
+  head.className = "ft-menu-path";
+  head.textContent = shortPath(path);
+  nodes.push(head);
+
+  // Path actions first: the terminal next door is where these paths are going,
+  // and inserting at the prompt is the shortest route there. Copy is second
+  // because composing a command by hand means typing `cat ` BEFORE the path.
+  const items = [
+    ["Insert path at prompt", () => insertPathAtPrompt(path)],
+    ["Copy path", () => copyPath(path)],
+    ["Copy relative path", () => copyPath(relativeTo(ftRootSel ? ftRootSel.value : "", path))],
+    null, // separator
+    [isDir ? "Download .tar.gz" : "Download", () => downloadPath(path, isDir)],
+  ];
+  // The symlink-skip disclosure is NOT repeated here: downloadPath's probe toast
   // already carries it on every folder download, and a toast is readable on a
   // phone where the old ⤓ tooltip never was.
-  items.push([isDir ? "Download .tar.gz" : "Download", () => downloadPath(path, isDir)]);
   if (isDir) items.push(["New folder here…", () => promptMkdir(path)]);
+  items.push(null); // destructive actions sit past a second rule
   items.push(["Rename…", () => promptRename(path, name)]);
   items.push(["Delete…", () => confirmDelete(path, name, isDir)]);
-  menu.replaceChildren(...items.map(([label, run]) => {
+
+  for (const it of items) {
+    if (!it) { nodes.push(document.createElement("hr")); continue; }
     const b = document.createElement("button");
     b.type = "button";
-    b.textContent = label;
-    b.onclick = () => { closeRowMenu(); run(); };
-    return b;
-  }));
+    b.textContent = it[0];
+    b.onclick = () => { closeRowMenu(); it[1](); };
+    nodes.push(b);
+  }
+  menu.replaceChildren(...nodes);
+
   menu.classList.add("open"); // must be visible before it can be measured
   const r = anchor.getBoundingClientRect();
   const w = menu.offsetWidth;
   menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
   // Rows sit anywhere in the viewport, unlike the spawn menu's header anchor, so
   // a menu opened near the bottom must flip above its row instead of clipping.
+  // The path header makes this menu taller and its height variable, so the
+  // measurement must stay AFTER replaceChildren, not before it.
   const h = menu.offsetHeight;
   const below = r.bottom + 4;
   menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
+}
+
+// insertPathAtPrompt types an entry's ABSOLUTE path at the focused prompt.
+// Absolute, not relative: it is correct no matter where the agent has cd'd,
+// whereas a relative path is silently wrong the moment the tree root and the
+// session's cwd diverge — which they do, because a manual root pick survives
+// until a DIFFERENT session is focused.
+function insertPathAtPrompt(path) {
+  const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const res = insertTextAtPrompt(term, shellQuote(path) + " ");
+  if (res.ok) return;
+  showToast(
+    res.reason === "noterm" ? "Focus a terminal first, then insert the path" :
+    res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
+    "That session is not connected, so the path was not inserted",
+    { error: true });
+}
+
+// copyPath copies and says so: a clipboard write is otherwise invisible, and on
+// this HTTP-only page copyText falls back to an off-screen textarea whose only
+// visible symptom of failure would be nothing happening.
+function copyPath(text) {
+  copyText(text, () => {
+    const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+    if (term && term.term) term.term.focus(); // the textarea fallback stole focus
+  });
+  showToast("Copied " + text);
 }
 
 function closeRowMenu() {
