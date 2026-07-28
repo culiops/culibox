@@ -180,6 +180,11 @@ function renderSession(s) {
     const ab = document.createElement("span");
     ab.className = "watching";
     ab.title = "Someone is viewing this session in another browser or device. Opening it here disconnects them.";
+    // An empty span's title is announced by nothing and shown on no touch
+    // device, which would make the whole mark sighted-mouse-only. Costs no
+    // layout.
+    ab.setAttribute("role", "img");
+    ab.setAttribute("aria-label", "Someone is viewing this session elsewhere");
     li.appendChild(ab);
   }
   const kill = document.createElement("button");
