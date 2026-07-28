@@ -170,12 +170,16 @@ function renderSession(s) {
   // before the click, not after. status() is the second half of the test on
   // purpose — an evicted tab is still open, and treating it as the holder would
   // hide the badge in exactly the case it exists for.
+  // A dot, not a worded badge. Measured at the real sidebar width (279px) with a
+  // real session name: a third text badge squeezed the name to 49px and broke it
+  // over five lines. The dot costs ~16px, so the row keeps the height it already
+  // had. Its meaning is learnable in one interaction — take the session over and
+  // the pane you evicted says "taken over".
   const tab = terminalTabFor(s.id);
   if (attachedElsewhere(s, !!tab && tab.status() === "connected")) {
     const ab = document.createElement("span");
-    ab.className = "badge elsewhere";
-    ab.textContent = "open elsewhere";
-    ab.title = "Attached in another browser or device. Opening it here disconnects that one.";
+    ab.className = "watching";
+    ab.title = "Someone is viewing this session in another browser or device. Opening it here disconnects them.";
     li.appendChild(ab);
   }
   const kill = document.createElement("button");
