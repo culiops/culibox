@@ -16,20 +16,35 @@ const path = require("node:path");
 const DIR = path.join(__dirname, "..", "static");
 const NATIVE = /(^|[^.\w])(alert|confirm|prompt)\s*\(|\bwindow\s*\.\s*(alert|confirm|prompt)\s*\(/;
 
+// scanSource reports offending lines in one file's worth of text. Line numbers
+// are absolute in the file, so an offender inside an inline <script> still points
+// at the line a human edits.
+function scanSource(name, src) {
+  const offenders = [];
+  src.split("\n").forEach((line, i) => {
+    // Stripping // also truncates at a URL or a regex literal containing //.
+    // That can only hide a call, never invent one: false negatives, never
+    // false positives.
+    const code = line.replace(/\/\/.*$/, "");
+    if (NATIVE.test(code)) offenders.push(name + ":" + (i + 1) + "  " + line.trim());
+  });
+  return offenders;
+}
+
 // scan is exported-by-reuse: the "guard bites" test calls it against a fixture
 // directory so a green result here is backed by a demonstrated red one.
+//
+// index.html is scanned as well as the .js files. Its inline <script> blocks are
+// real page code (the pre-paint layout restore among them) and were the one place
+// a native dialog could come back unnoticed. Scanning the whole file rather than
+// extracting the blocks keeps it simple; the cost is that a native call written
+// in markup or CSS would also be reported, which is not a false alarm worth
+// engineering around.
 function scan(dir) {
   const offenders = [];
   for (const f of fs.readdirSync(dir)) {
-    if (!f.endsWith(".js")) continue;
-    const src = fs.readFileSync(path.join(dir, f), "utf8");
-    src.split("\n").forEach((line, i) => {
-      // Stripping // also truncates at a URL or a regex literal containing //.
-      // That can only hide a call, never invent one: false negatives, never
-      // false positives.
-      const code = line.replace(/\/\/.*$/, "");
-      if (NATIVE.test(code)) offenders.push(f + ":" + (i + 1) + "  " + line.trim());
-    });
+    if (!f.endsWith(".js") && f !== "index.html") continue;
+    offenders.push(...scanSource(f, fs.readFileSync(path.join(dir, f), "utf8")));
   }
   return offenders;
 }
@@ -37,6 +52,17 @@ function scan(dir) {
 test("no page script calls a native dialog", () => {
   const offenders = scan(DIR);
   assert.deepStrictEqual(offenders, [], "native dialogs found:\n" + offenders.join("\n"));
+});
+
+// The four inline <script> blocks in index.html are page code too. They were
+// outside the guard until now, so pin that they are covered.
+test("inline scripts in index.html are covered", () => {
+  const html = fs.readFileSync(path.join(DIR, "index.html"), "utf8");
+  assert.ok(/<script>/.test(html), "expected inline <script> blocks to still exist");
+  const withCall = html.replace("<script>", '<script>\nif (!confirm("x")) { }\n');
+  const found = scanSource("index.html", withCall);
+  assert.strictEqual(found.length, 1, "a native call inside an inline script must be caught");
+  assert.match(found[0], /confirm/);
 });
 
 // A guard that has never been seen to fail proves nothing. Pin both spellings.
