@@ -762,6 +762,7 @@ $("layouts").addEventListener("click", (e) => {
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();
+initWidthSplitter();
 initSpawnControl();
 initPalette();
 loadProfiles();

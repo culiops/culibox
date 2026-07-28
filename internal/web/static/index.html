@@ -12,6 +12,7 @@
       --fg: #e6edf3; --muted: #8b949e; --accent: #2f81f7; --danger: #f85149;
       --fs-code: 12.5px; --fs-md: 14px; --fs-tree: 12px;
       --sidebar-split: 45%;
+      --sidebar-w: 280px;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
@@ -50,7 +51,7 @@
     .layouts button.active { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
     #layout { flex: 1; display: flex; min-height: 0; }
     #sidebar {
-      width: 280px; flex-shrink: 0; border-right: 1px solid var(--border);
+      width: var(--sidebar-w); flex-shrink: 0; border-right: 1px solid var(--border);
       background: var(--panel); display: flex; flex-direction: column; min-height: 0;
       /* The panes below are sized from a percentage basis; without this a pane
          at its min-height would paint over the terminal grid instead of clipping. */
@@ -110,6 +111,17 @@
       transform: translate(-50%, -50%); border-radius: 2px; background: var(--border);
     }
     #split-h:hover::after, #split-h.dragging::after { background: var(--accent); }
+    #split-v {
+      flex: none; width: 7px; cursor: col-resize; background: var(--bg);
+      border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+      position: relative; touch-action: none;
+    }
+    #split-v::after {
+      content: ""; position: absolute; top: 50%; left: 50%; width: 2px; height: 28px;
+      transform: translate(-50%, -50%); border-radius: 2px; background: var(--border);
+    }
+    #split-v:hover::after, #split-v.dragging::after { background: var(--accent); }
+    .sidebar-hidden #split-v { display: none; }
     #sessions { list-style: none; margin: 0; padding: 2px 8px 8px; overflow-y: auto; flex: 1; min-height: 0; }
     #sessions li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
     #sessions li:hover { background: #1f2630; }
@@ -397,6 +409,9 @@
          to ZERO height: the tree, and the folder-download button that lives in
          it, were unreachable until you dragged the splitter. */
       #sidebar { width: 100%; height: 52vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
+      /* #layout is a column here and #sidebar is full width, so a col-resize
+         handle would sit between two stacked panes and resize nothing. */
+      #split-v { display: none; }
       /* The absolute-path box is a desktop affordance: nobody types /home/…
          on a phone, and the header's palette button already finds files. Its
          ~36px is the rest of the difference between a tree with rows and none. */
@@ -443,6 +458,7 @@
   <script>/* apply persisted sidebar state before first paint (no flash) */try{if(localStorage.getItem('sidebarHidden')==='1')document.documentElement.classList.add('sidebar-hidden');}catch(e){}</script>
   <script>/* apply persisted font sizes before first paint (no flash) */try{var _fp=JSON.parse(localStorage.getItem('agent-console:fontPrefs')||'{}');var _d={code:['--fs-code',12.5],markdown:['--fs-md',14],filetree:['--fs-tree',12]};for(var _k in _d){var _v=Number(_fp[_k]);if(!isFinite(_v))_v=_d[_k][1];_v=Math.min(32,Math.max(8,_v));document.documentElement.style.setProperty(_d[_k][0],_v+'px');}}catch(e){}</script>
   <script>/* apply persisted sidebar split before first paint (no flash) */try{var _sp=Number(localStorage.getItem('agent-console:sidebarSplit'));if(isFinite(_sp)&&_sp>0)document.documentElement.style.setProperty('--sidebar-split',Math.min(85,Math.max(15,_sp))+'%');}catch(e){}</script>
+  <script>/* apply persisted sidebar width before first paint (no flash) */try{var _sw=Number(localStorage.getItem('agent-console:sidebarWidth'));if(isFinite(_sw)&&_sw>0)document.documentElement.style.setProperty('--sidebar-w',Math.min(560,Math.max(200,_sw))+'px');}catch(e){}</script>
 </head>
 <body>
   <div id="env-strip" hidden></div>
@@ -490,6 +506,7 @@
         </div>
       </div>
     </aside>
+    <div id="split-v" role="separator" aria-orientation="vertical" title="Drag to resize the sidebar"></div>
     <main id="grid" class="empty">
       <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>

@@ -23,6 +23,10 @@ async function ftRenderDir(path, container, depth) {
     const label = document.createElement("span");
     label.className = "ft-name";
     label.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
+    // The title goes on the LABEL, not the row: the ⋯ button carries its own
+    // title and must keep it. The full path rather than the bare name, because
+    // it also answers "which of the three index.html files is this one".
+    label.title = shortPath(full);
     row.append(label);
     // One affordance per row. Download used to sit here as a bare ⤓ and Rename /
     // Delete behind the menu; two controls squeezed the name column (badly at

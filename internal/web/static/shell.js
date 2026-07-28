@@ -139,6 +139,23 @@ function persistSidebarSplit(pct) {
   try { localStorage.setItem(SPLIT_KEY, String(pct)); } catch (_) {}
 }
 
+// --- sidebar width -----------------------------------------------------------
+// The sidebar was a hardcoded 280px, which at depth 3 left a file name ~230px
+// after indentation: truncation was structural, not incidental. Dragging is the
+// root-cause fix; the row tooltip covers whatever is still too long.
+const WIDTH_KEY = "agent-console:sidebarWidth";
+const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560; // also inlined in index.html's pre-paint script
+
+function setSidebarWidth(px) {
+  px = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px));
+  document.documentElement.style.setProperty("--sidebar-w", px + "px");
+  return px;
+}
+
+function persistSidebarWidth(px) {
+  try { localStorage.setItem(WIDTH_KEY, String(px)); } catch (_) {}
+}
+
 // minHeightOf reads the pane's CSS minimum rather than hardcoding it: the two
 // viewports use different values, and a constant here drifts from the stylesheet
 // silently (the JS would allow a drag that CSS then refuses to render, and the
@@ -194,6 +211,49 @@ function initSplitter() {
   // Double-click restores the default ratio: a cheap escape hatch from a drag
   // that went wrong on a small screen.
   handle.addEventListener("dblclick", () => persistSidebarSplit(setSidebarSplit(45)));
+}
+
+function initWidthSplitter() {
+  const sidebar = document.getElementById("sidebar");
+  const handle = document.getElementById("split-v");
+  if (!sidebar || !handle) return;
+
+  handle.addEventListener("pointerdown", (e) => {
+    // The handle is display:none under 700px, so a drag cannot start there and
+    // no viewport check is needed here.
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add("dragging");
+    let px = null;
+
+    const move = (ev) => {
+      // The sidebar starts at the viewport's left edge, so its width IS the
+      // pointer's x. No flex-basis arithmetic like the horizontal splitter's:
+      // this is a plain width on a flex-shrink:0 item.
+      px = setSidebarWidth(ev.clientX - sidebar.getBoundingClientRect().left);
+    };
+    const up = (ev) => {
+      handle.releasePointerCapture(ev.pointerId);
+      handle.classList.remove("dragging");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", up);
+      // Persist once per drag, not once per pointermove: a synchronous
+      // localStorage write per move is dozens of writes per drag.
+      if (px !== null) persistSidebarWidth(px);
+      // Unlike the horizontal splitter, this one changes the GRID's width, so
+      // every open terminal has to recompute its column count. On pointerup
+      // only: fitAll on every pointermove re-measures each xterm per pixel.
+      fitAll();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", up);
+  });
+
+  // Double-click restores the default, mirroring the horizontal handle's escape
+  // hatch from a drag that went wrong.
+  handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(280)); fitAll(); });
 }
 
 // --- ask dialog --------------------------------------------------------------
