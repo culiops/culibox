@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { deleteConfirmText, deleteSummary, normalizePath, shortPath } = require("../static/fsops.js");
+const { deleteConfirmText, deleteSummary, normalizePath, shortPath, relativeTo } = require("../static/fsops.js");
 
 // In the browser every static script shares one global scope and upload.js is
 // loaded first, so humanBytes is simply there. Reproduce that here rather than
@@ -103,4 +103,40 @@ test("a file never reports contents, even if a measurement is passed", () => {
   const s = deleteConfirmText("a.txt", false, { entries: 9, files: 9, bytes: 1024, capped: "" });
   assert.doesNotMatch(s, /9 files/);
   assert.doesNotMatch(s, /items/);
+});
+
+// relativeTo is the single definition of "relative path" in the app. The tree is
+// rooted at #ft-root's selection while /api/fs/search returns paths relative to
+// HOME, so without one shared rule the two surfaces would disagree.
+test("relativeTo strips the root", () => {
+  assert.strictEqual(relativeTo("/home/claude/proj", "/home/claude/proj/a/b.js"), "a/b.js");
+});
+
+test("relativeTo tolerates a trailing slash on the root", () => {
+  assert.strictEqual(relativeTo("/home/claude/proj/", "/home/claude/proj/a/b.js"), "a/b.js");
+});
+
+test("relativeTo handles the filesystem root", () => {
+  assert.strictEqual(relativeTo("/", "/etc/hosts"), "etc/hosts");
+});
+
+test("relativeTo calls the root itself dot", () => {
+  assert.strictEqual(relativeTo("/home/claude/proj", "/home/claude/proj"), ".");
+  assert.strictEqual(relativeTo("/home/claude/proj/", "/home/claude/proj"), ".");
+});
+
+// The trap shortPath already carries a comment about: a string prefix match puts
+// /home/claude/proj2 "inside" /home/claude/proj. Compare whole components.
+test("relativeTo does not treat a sibling with a shared prefix as inside", () => {
+  assert.strictEqual(
+    relativeTo("/home/claude/proj", "/home/claude/proj2/x", "/home/claude"),
+    "~/proj2/x");
+});
+
+test("relativeTo falls back to the absolute path when it is outside home too", () => {
+  assert.strictEqual(relativeTo("/home/claude/proj", "/etc/hosts", "/home/claude"), "/etc/hosts");
+});
+
+test("relativeTo returns the path unchanged when there is no root", () => {
+  assert.strictEqual(relativeTo("", "/etc/hosts", "/home/claude"), "/etc/hosts");
 });
