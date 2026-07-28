@@ -2,8 +2,8 @@
 
 // Pure link tokenizing for terminal output: no DOM, no globals mutated, and the
 // only xterm contact is a duck-typed `term` with .cols and .buffer.active.getLine.
-// That is what makes the rule that matters — a URL outranks a file path over the
-// same characters — something a test can pin down instead of something to trust.
+// That is what makes the rule that matters: a URL outranks a file path over the
+// same characters, something a test can pin down instead of something to trust.
 //
 // Loaded as a classic script, so every top-level name here is a shared global.
 // Constants are LINK_-prefixed so a later file cannot collide: two classic scripts
@@ -28,7 +28,7 @@ const LINK_HAS_HOST = /^https?:\/\/[^\s/]/i;
 
 // trimUrl strips characters that belong to the surrounding prose rather than to
 // the URL. A closing bracket is only dropped when it is unbalanced, so a URL that
-// genuinely ends in one — `.../Foo_(bar)` — survives.
+// genuinely ends in one (`.../Foo_(bar)`) survives.
 //
 // Bracket counts are taken ONCE and decremented as characters come off. Counting by
 // rescanning the string per stripped character is quadratic, and this runs on every
@@ -59,7 +59,7 @@ function trimUrl(url) {
 
 // scanLinks returns every clickable token in `text`, sorted by position and never
 // overlapping. Two passes: URLs claim their span first, then any path match that
-// intersects a claimed span is dropped. That single rule is the whole bug fix —
+// intersects a claimed span is dropped. That single rule is the whole bug fix:
 // `culiops.dev/learn/x.html` sits inside a URL and never becomes a path again.
 function scanLinks(text) {
   const out = [];
@@ -119,8 +119,8 @@ const LINK_MAX_WRAP_ROWS = 50;
 
 // readLogicalLine joins the wrapped rows around 1-based row `y` into one string,
 // and reports where each row's text begins (rowStarts). It does NOT assume a row
-// translates to exactly `cols` characters — it does not for double-width or
-// combining characters — which is why callers use rowStarts instead of dividing.
+// translates to exactly `cols` characters: it does not for double-width or
+// combining characters, which is why callers use rowStarts instead of dividing.
 function readLogicalLine(term, y, maxRows) {
   const max = maxRows || LINK_MAX_WRAP_ROWS;
   const buf = term.buffer.active;
@@ -147,7 +147,7 @@ function readLogicalLine(term, y, maxRows) {
     // Clamp to the terminal's CURRENT width. A BufferLine keeps its allocated
     // width after the terminal shrinks (a 51-column terminal was observed holding
     // 138-wide lines), and an unclamped translateToString returns that stale width
-    // space-padded — which splices a gap into the middle of the joined line and
+    // space-padded, which splices a gap into the middle of the joined line and
     // truncates any token spanning the wrap at that gap.
     text += line.translateToString(false, 0, cols);
     const next = buf.getLine(row);
@@ -173,7 +173,7 @@ function cellFromIndex(index, rowStarts, startY, cols) {
 // linksForRow is what the xterm provider asks for. The final filter is required by
 // xterm's contract: Linkifier._removeIntersectingLinks(y, ...) assumes every link
 // returned for row y intersects row y, and treats one lying above it as covering
-// columns 0..end.x OF row y — which then evicts a real link at those columns.
+// columns 0..end.x OF row y, which then evicts a real link at those columns.
 function linksForRow(term, y, maxRows) {
   const { text, startY, cols, rowStarts } = readLogicalLine(term, y, maxRows);
   return scanLinks(text)

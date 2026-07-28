@@ -1,7 +1,7 @@
 "use strict";
 
 // UI shell primitives: transient toast, <dialog> plumbing, and the sidebar
-// splitter. Deliberately free of app state and API calls — everything here is
+// splitter. Deliberately free of app state and API calls: everything here is
 // generic chrome that app.js and palette.js drive. Loaded before app.js, so it
 // only DEFINES functions; boot wiring happens from app.js.
 
@@ -11,7 +11,7 @@
 // terminal is noise.
 let toastTimer = null;
 
-// showToast(msg, {undo, ms, error}) — `undo` is a callback; supplying it reveals
+// showToast(msg, {undo, ms, error}): `undo` is a callback; supplying it reveals
 // the Undo button and clicking it dismisses the toast after running the callback.
 function showToast(msg, opts) {
   opts = opts || {};
@@ -52,9 +52,13 @@ function hideToast() {
 // --- dialogs -----------------------------------------------------------------
 // focusTerminal returns the caret to the focused pane. Every dialog close path
 // runs it: a native <dialog> restores focus to whatever opened it, which in this
-// app means keystrokes stop reaching the agent — the one thing that must not
+// app means keystrokes stop reaching the agent: the one thing that must not
 // happen after closing a modal.
 function focusTerminal() {
+  // A nested dialog (a confirm raised from Settings) closes while its parent is
+  // still on screen. Handing focus to the pane underneath there would silently
+  // stop keystrokes reaching the agent, with nothing visible to explain it.
+  if (!shouldRefocusTerminal(document.querySelectorAll("dialog[open]").length)) return;
   const tab = typeof focusedTerminal === "function" ? focusedTerminal() : null;
   if (tab && tab.term) tab.term.focus();
 }
@@ -71,7 +75,7 @@ function closeDialog(id) {
 }
 
 // openSettings shows the settings dialog with one tab selected ("manage" =
-// profiles, "settings" = font sizes — the ids are the pre-existing panel ids,
+// profiles, "settings" = font sizes: the ids are the pre-existing panel ids,
 // kept so every handler that already targets them keeps working).
 function openSettings(tab) {
   selectSettingsTab(tab || "manage");
@@ -85,6 +89,8 @@ function selectSettingsTab(name) {
   for (const p of document.querySelectorAll("#settings-modal .tab-panel")) {
     p.hidden = p.id !== name;
   }
+  // The inline error belongs to the action that raised it, not to the dialog.
+  setDialogError("settings-modal", "");
 }
 
 function initDialogs() {
@@ -161,8 +167,8 @@ function initSplitter() {
       const a = top.getBoundingClientRect();
       const b = bottom.getBoundingClientRect();
       // The percentage is a flex-basis, so it resolves against the FLEX
-      // CONTAINER's content height — all of #sidebar, spawn bar and handle
-      // included — not against the two panes. Dividing by the panes alone made
+      // CONTAINER's content height (all of #sidebar, spawn bar and handle
+      // included), not against the two panes. Dividing by the panes alone made
       // the handle overshoot the pointer by ~12% on desktop and ~31% on mobile.
       const space = sidebar.clientHeight;
       if (space <= 0) return;
@@ -185,7 +191,139 @@ function initSplitter() {
     handle.addEventListener("pointercancel", up);
   });
 
-  // Double-click restores the default ratio — a cheap escape hatch from a drag
+  // Double-click restores the default ratio: a cheap escape hatch from a drag
   // that went wrong on a small screen.
   handle.addEventListener("dblclick", () => persistSidebarSplit(setSidebarSplit(45)));
+}
+
+// --- ask dialog --------------------------------------------------------------
+// One shared <dialog> answers every question the app used to hand to the
+// browser's alert/confirm/prompt. The decision logic is split out from the DOM
+// wiring because that is the part with teeth: a promise that never settles
+// hangs the caller forever, and a confirm button that unlocks on the wrong
+// input defeats the typed-name gate on protected folders.
+
+// A <dialog> reports returnValue "" for Esc, a backdrop click, and a bare
+// close(). Treat anything that is not the confirm button as a cancel, so an
+// unrecognised close path fails safe.
+function askOutcome(returnValue) {
+  return returnValue === "confirm" ? "confirm" : "cancel";
+}
+
+// matchesRequired gates the typed-name confirmations. An empty or missing
+// requirement matches nothing: it must never become a skeleton key.
+function matchesRequired(typed, required) {
+  if (typeof typed !== "string" || typeof required !== "string") return false;
+  if (required === "") return false;
+  return typed.trim() === required;
+}
+
+// null is "cancelled"; "" is "submitted, but blank". The callers rely on the
+// difference, so they are not collapsed.
+function promptValue(returnValue, rawInput) {
+  if (askOutcome(returnValue) !== "confirm") return null;
+  return typeof rawInput === "string" ? rawInput.trim() : "";
+}
+
+// See focusTerminal: a nested dialog closing must not hand focus to the pane
+// underneath while another dialog is still on screen.
+function shouldRefocusTerminal(openDialogCount) {
+  return openDialogCount === 0;
+}
+
+// askIsBusy refuses a second question while one is on screen. There is one
+// shared dialog, and a second askDialog() used to reconfigure it in place:
+// overwriting the title, clearing any mustMatch gate, and leaving both `close`
+// listeners attached, so a single click settled two promises. showModal() on an
+// already-open dialog is a no-op rather than a throw, so nothing surfaced it.
+//
+// Reachable with the keyboard, not just in theory: a confirm focuses its OK
+// button, which is not an <input>, so the palette hotkey still fires. Running
+// "Kill session" from the palette re-labelled the live "Open this link?" dialog,
+// and the next click both killed the session and opened the link.
+function askIsBusy(dialogIsOpen) {
+  return dialogIsOpen === true;
+}
+
+// askDialog is the single code path both public helpers use. Every close route
+// (OK, Cancel, ×, Esc, backdrop) resolves the promise exactly once: a caller
+// awaiting a dialog that never settles is stuck forever with no error to show.
+function askDialog(opts) {
+  const d = document.getElementById("ask-modal");
+  // Refusing reads as a cancel, which is the safe answer: a question the user
+  // never saw must never come back "confirmed".
+  if (askIsBusy(d.open)) return Promise.resolve({ outcome: "cancel", value: "" });
+  const input = document.getElementById("ask-input");
+  const ok = document.getElementById("ask-ok");
+  document.getElementById("ask-title").textContent = opts.title || "";
+  document.getElementById("ask-body").textContent = opts.body || "";
+  ok.textContent = opts.confirmLabel || "OK";
+  d.classList.toggle("danger", !!opts.danger);
+
+  const label = document.getElementById("ask-label");
+  label.hidden = input.hidden = !opts.input;
+  label.textContent = opts.label || "";
+  input.value = opts.input ? (opts.value || "") : "";
+  input.placeholder = opts.placeholder || "";
+
+  // The gate on protected folders: OK stays disabled until the typed name is
+  // exactly right. Native prompt() could not do this, so the code it replaces
+  // could only compare after the dialog was already gone.
+  const gate = () => {
+    ok.disabled = opts.mustMatch ? !matchesRequired(input.value, opts.mustMatch) : false;
+  };
+  input.oninput = gate;
+  gate();
+
+  // The body is a plain <div>, not <form method="dialog">, so there is no
+  // implicit submission. Without this, Enter after typing a folder name does
+  // nothing: a regression against the native prompt() being replaced.
+  input.onkeydown = (e) => {
+    if (e.key === "Enter" && !ok.disabled) { e.preventDefault(); d.close("confirm"); }
+  };
+
+  return new Promise((resolve) => {
+    let done = false;
+    const settle = () => {
+      if (done) return;               // `close` also fires after a button closed it
+      done = true;
+      d.removeEventListener("close", settle);
+      input.oninput = null;
+      input.onkeydown = null;
+      resolve({ outcome: askOutcome(d.returnValue), value: input.value });
+    };
+    d.addEventListener("close", settle);
+    ok.onclick = () => d.close("confirm");
+    document.getElementById("ask-cancel").onclick = () => d.close("cancel");
+    document.getElementById("ask-x").onclick = () => d.close("cancel");
+    d.returnValue = "";               // clear the previous answer before showing
+    d.showModal();
+    // Focus explicitly: showModal() otherwise lands on the first focusable
+    // descendant, which is the ×, making Enter and Space a cancel.
+    if (opts.input) input.focus(); else ok.focus();
+  });
+}
+
+// askConfirm resolves true only on an explicit confirmation.
+async function askConfirm(opts) {
+  const r = await askDialog(Object.assign({}, opts, { input: false }));
+  return r.outcome === "confirm";
+}
+
+// askPrompt resolves the trimmed text, or null when dismissed. The two are
+// distinct: "" means the user submitted an empty box.
+async function askPrompt(opts) {
+  const r = await askDialog(Object.assign({}, opts, { input: true }));
+  return promptValue(r.outcome, r.value);
+}
+
+// setDialogError writes into a dialog's inline error line. Errors raised while a
+// dialog is open cannot use the toast, which paints beneath the backdrop.
+function setDialogError(dialogId, msg) {
+  const el = document.querySelector("#" + dialogId + " .dlg-err");
+  if (el) el.textContent = msg || "";
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy };
 }

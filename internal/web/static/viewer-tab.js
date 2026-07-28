@@ -35,8 +35,8 @@ class ViewerTab {
     reload.className = "viewer-reload"; reload.textContent = "⟳"; reload.title = "Reload";
     reload.onclick = () => this.load();
     this.toolbar.append(reload);
-    // Download works for files this viewer refuses to render — binaries and
-    // anything over the 2 MiB preview cap — which are exactly the ones worth
+    // Download works for files this viewer refuses to render: binaries and
+    // anything over the 2 MiB preview cap, which are exactly the ones worth
     // fetching, so the button is never conditional on the render succeeding.
     const dl = document.createElement("button");
     dl.className = "viewer-reload";
@@ -50,7 +50,7 @@ class ViewerTab {
       auto.onclick = () => this.toggleAuto(auto);
       this.toolbar.append(auto);
     }
-    if (this.zoomVar) { // text viewers only — images have nothing to size
+    if (this.zoomVar) { // text viewers only: images have nothing to size
       const zout = document.createElement("button");
       zout.className = "viewer-zoom zout"; zout.textContent = "A−"; zout.title = "Smaller (Ctrl+-)";
       zout.onclick = () => this.zoom(-fontPrefs.STEP);
@@ -147,7 +147,7 @@ class ViewerTab {
     try {
       marked.setOptions({ breaks: false, gfm: true }); // NOTE: marked v12 removed the `highlight` option
       // DOMPurify handles every XSS vector robustly (javascript:/data: schemes incl.
-      // control-char obfuscation, mXSS, on* handlers, svg/math) — a hand-rolled
+      // control-char obfuscation, mXSS, on* handlers, svg/math): a hand-rolled
       // strip-and-reserialize sanitizer is not safe against these.
       frag = DOMPurify.sanitize(marked.parse(text), { RETURN_DOM_FRAGMENT: true });
     } catch (_) { this.renderCode(text, "markdown"); return; }
@@ -156,7 +156,7 @@ class ViewerTab {
       const src = img.getAttribute("src") || "";
       if (!/^(https?:|data:|\/)/.test(src)) img.setAttribute("src", "/api/fs/read?path=" + encodeURIComponent(dir + src));
     });
-    // marked v12 dropped the highlight option — highlight fenced blocks here (hljs v11 API).
+    // marked v12 dropped the highlight option: highlight fenced blocks here (hljs v11 API).
     if (window.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });
     const wrap = document.createElement("div");
     wrap.className = "md-body";

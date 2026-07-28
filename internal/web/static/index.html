@@ -30,9 +30,12 @@
     #env-strip[hidden] { display: none; }
     #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: 6px; }
     #env-badge[hidden] { display: none; }
-    #sidebar-toggle, #settings-open, #palette-open { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
-    #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { color: var(--fg); border-color: var(--accent); }
+    /* --fg, not --muted: a muted label on a control that works reads as disabled,
+       and these are the only way to reach the sidebar, the palette and settings. */
+    #sidebar-toggle, #settings-open, #palette-open { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+    #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
+    #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
     #hint { display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }
@@ -41,7 +44,7 @@
     header .spacer { flex: 1; }
     .layouts { display: flex; gap: 4px; }
     .layouts button {
-      background: var(--bg); color: var(--muted); border: 1px solid var(--border);
+      background: #21262d; color: var(--fg); border: 1px solid var(--border);
       border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
     }
     .layouts button.active { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
@@ -54,39 +57,28 @@
       overflow: hidden;
     }
 
-    /* --- spawn split button --------------------------------------------- */
+    /* --- spawn button ---------------------------------------------------- */
     #spawn-bar { flex: none; padding: 12px 12px 10px; border-bottom: 1px solid var(--border); }
     .split-btn { display: flex; }
     .split-btn button {
       background: var(--accent); border: 1px solid var(--accent); color: #fff;
       font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 10px;
     }
-    #spawn-go { flex: 1; border-radius: 6px 0 0 6px; text-align: center; min-width: 0; }
-    #spawn-more { border-radius: 0 6px 6px 0; border-left: 1px solid #ffffff55; padding: 8px 10px; }
+    #spawn-go { flex: 1; border-radius: 6px; text-align: center; min-width: 0; }
     .split-btn button:hover { filter: brightness(1.12); }
     .split-btn button:disabled { opacity: .6; cursor: default; filter: none; }
-    /* The instant-spawn target must never be invisible — this caption is the
-       safety rail for a one-click action, not decoration. */
-    #spawn-menu {
-      position: fixed; z-index: 40; min-width: 210px; max-height: 60vh; overflow-y: auto;
-      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 10px 34px #000b; padding: 5px; display: none;
-    }
-    #spawn-menu.open, #ft-menu.open { display: block; }
     #ft-menu {
       position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
       background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
       box-shadow: 0 10px 34px #000b; padding: 5px; display: none;
     }
-    #ft-menu button, #spawn-menu button {
+    #ft-menu.open { display: block; }
+    #ft-menu button {
       display: block; width: 100%; text-align: left; background: none; border: none;
       color: var(--fg); font: inherit; font-size: 12.5px; padding: 6px 9px;
       border-radius: 5px; cursor: pointer;
     }
-    #spawn-menu button:hover, #ft-menu button:hover { background: #1f6feb2e; }
-    #spawn-menu .sep { height: 1px; background: var(--border); margin: 5px 2px; }
-    #spawn-menu .mono { font-family: ui-monospace, Menlo, monospace; }
-    #spawn-menu .menu-head { font-size: 10px; letter-spacing: .4px; text-transform: uppercase; padding: 4px 10px 2px; opacity: .85; }
+    #ft-menu button:hover { background: #1f6feb2e; }
     #runtime-warn { margin-top: 6px; font-size: 12px; color: #fca5a5; }
     .pf-hint, .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
@@ -118,7 +110,6 @@
        visual language means "you are somewhere with real consequences". */
     #sessions .tier { white-space: nowrap; }
     #sessions .tier-danger { color: #fca5a5; border-color: #b45309; background: #b4530922; font-weight: 600; }
-    #spawn-menu .tier-danger-item { color: #fca5a5; }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: 6px; padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
@@ -137,17 +128,26 @@
     .ft-more:hover { color: var(--fg); }
     .ft-node:hover .ft-more { visibility: visible; }
     /* On touch there is no hover, and `visibility: hidden` also removes the
-       button from hit-testing — so without this the row's whole action menu,
+       button from hit-testing, so without this the row's whole action menu,
        download included, would be unreachable on a phone. */
     @media (hover: none) {
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 14px; }
+      /* Touch targets, at every width rather than only the narrow breakpoint:
+         a tablet has no hover either. Desktop keeps its denser header.
+         HEIGHT ONLY, deliberately. These buttons are 29-40px wide already, so a
+         min-width buys ~3px each while costing the ~29px that lets the product
+         name fit at 390px: measured, it put the heading back to "Agent C…". The
+         height is where the real gain is, 22px to 36px. */
+      header button { min-height: 36px; }
     }
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
-    #ft-upload, #ft-refresh, #ft-newdir { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
-    #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { color: var(--fg); border-color: var(--accent); }
+    /* Same treatment as the header controls: these sit 40px below them, so a
+       muted pair next to a lifted pair reads as "one of these is disabled". */
+    #ft-upload, #ft-refresh, #ft-newdir { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { border-color: var(--accent); }
     #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
-    /* Drop affordance — it has to read as a target at a glance, or the whole
+    /* Drop affordance: it has to read as a target at a glance, or the whole
        gesture is guesswork. The terminal-cell variant lives with the .cell
        rules below, where source order lets it beat the focus outline. */
     .drop-hot { outline: 2px dashed var(--accent); outline-offset: -3px; background: #1f6feb1f; }
@@ -175,6 +175,23 @@
 
     #settings-modal { width: 460px; }
     #spawn-modal { width: 420px; }
+    #ask-modal { width: 400px; }
+    /* overflow-wrap because the link confirm puts a raw URL in here, and a long
+       one offers no break opportunity. #toast-msg carries it for the same reason. */
+    #ask-modal #ask-body { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #ask-modal #ask-body:empty { display: none; }
+    #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+    .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+    .ask-actions button:hover { border-color: var(--accent); }
+    #ask-ok { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    #ask-ok:hover { filter: brightness(1.12); }
+    #ask-ok:disabled { opacity: .5; cursor: default; filter: none; }
+    #ask-modal.danger #ask-ok { background: var(--danger); border-color: var(--danger); }
+    /* An error raised while a dialog is open cannot use the toast: a fixed-position
+       toast paints beneath the modal backdrop, so it would be invisible. */
+    .dlg-err { color: #fca5a5; font-size: 12px; margin-top: 8px; line-height: 1.45; }
+    .dlg-err:empty { display: none; }
 
     /* --- spawn form (now inside the advanced dialog) ---------------------- */
     #spawn { display: grid; gap: 8px; }
@@ -199,9 +216,12 @@
     .pf-lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
     .manage-body textarea, #pf-secrets { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 7px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; resize: vertical; box-sizing: border-box; }
     #pf-options { display: grid; gap: 6px; }
-    .pf-actions { display: flex; gap: 6px; margin-top: 2px; }
-    .pf-actions button { flex: 1; background: var(--accent); border: 1px solid var(--accent); color: #fff; border-radius: 6px; padding: 6px; cursor: pointer; font-weight: 600; }
-    .pf-actions button.ghost { background: var(--bg); color: var(--fg); border-color: var(--border); flex: 0 0 auto; padding: 6px 12px; font-weight: 400; }
+    /* Neither button stretches: a full-width Save next to a small New read as if
+       creating a profile were the lesser action. */
+    .pf-actions { display: flex; gap: 8px; margin-top: 2px; align-items: center; }
+    .pf-actions button { flex: 0 0 auto; background: var(--accent); border: 1px solid var(--accent); color: #fff; border-radius: 6px; padding: 7px 18px; cursor: pointer; font-weight: 600; }
+    .pf-actions button.ghost { background: #21262d; color: var(--fg); border-color: var(--border); padding: 7px 14px; font-weight: 400; }
+    .pf-actions button.ghost:hover { border-color: var(--accent); }
     #editable { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
     #editable li { display: flex; align-items: center; gap: 8px; }
     #editable .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
@@ -272,12 +292,22 @@
     /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
-       pane — the affordance existed in the DOM and not on screen. */
+       pane: the affordance existed in the DOM and not on screen. */
     .cell.drop-hot { outline: 2px dashed var(--accent); outline-offset: -2px; background: #1f6feb1f; }
     /* No right padding: the sticky control cluster pins to the scrollport edge, and
        any padding there would leave a strip where scrolled tabs bleed through. The
        cluster carries that 5px itself. */
     .cell-bar { display: flex; align-items: center; gap: 3px; padding: 3px 0 3px 5px; background: var(--panel); border-bottom: 1px solid var(--border); overflow-x: auto; }
+    /* An author `display` beats the UA sheet's [hidden] rule whatever the
+       specificity, so the attribute needs this companion to do anything. */
+    .cell-bar[hidden] { display: none; }
+    /* A pane with no tabs is empty, not a dead terminal: drop the black. */
+    /* :not(.drop-hot) is load-bearing, not decoration. This selector is (0,3,0)
+       and .cell.drop-hot is (0,2,0), so without the exclusion an empty pane would
+       outrank the drop tint and swallow it. Unreachable today (drop zones attach
+       to the terminal tab element, so a tabless cell is never a target) and cheap
+       insurance against a cell-level drop zone arriving later. */
+    .cell:has(.cell-bar[hidden]):not(.drop-hot) { background: var(--bg); }
     .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
     .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
@@ -329,7 +359,7 @@
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2d1618; border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
-    /* Disconnected (recoverable) — amber, distinct from the red "ended" bar. */
+    /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
     .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2a2113; border-bottom: 1px solid #b45309; color: #fbbf24; font-size: 12px; }
     .pane-trouble.expired { background: #2d1618; border-bottom-color: var(--danger); color: var(--danger); }
     .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -341,21 +371,31 @@
       #layout { flex-direction: column; }
       /* A DEFINITE height, not max-height: the panes below use a percentage
          flex-basis, which silently degrades to `auto` against a content-derived
-         height — the drag ratio would be ignored on mobile. */
+         height: the drag ratio would be ignored on mobile. */
       /* 52vh, not 46: inside a 46vh band the Files pane came to ~112px, which its
          header + root picker consumed entirely, leaving the file tree computing
-         to ZERO height — the tree, and the folder-download button that lives in
+         to ZERO height: the tree, and the folder-download button that lives in
          it, were unreachable until you dragged the splitter. */
       #sidebar { width: 100%; height: 52vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
-      /* The absolute-path box is a desktop affordance — nobody types /home/…
+      /* The absolute-path box is a desktop affordance: nobody types /home/…
          on a phone, and the header's palette button already finds files. Its
          ~36px is the rest of the difference between a tree with rows and none. */
       .ft-row-path { display: none; }
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
-         with it — otherwise the splitter has nothing left to distribute. */
+         with it: otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
-      header { gap: 7px; padding: 8px 10px; }
-      header h1 { display: none; } /* the badge + dot carry identity in this width */
+      header { gap: 6px; padding: 8px 10px; }
+      /* The heading used to be display:none here, on the grounds that the badge
+         and dot carry identity. They do not carry the product NAME, so it is back
+        : paid for by the palette button's shortcut label, which means nothing on
+         a device with no keyboard, and by a slightly smaller title. Both are
+         needed: with the label alone the name still truncated to "Agent Co…". */
+      /* The dot is decoration; the DEV/PROD badge beside it is the one that
+         carries meaning. Trading it buys the ~16px the full name needs. */
+      header .dot { display: none; }
+      header h1 { font-size: 14px; }
+      #palette-open .pal-long { display: none; }
+      #palette-open .pal-short { display: inline; font-size: 15px; }
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
@@ -393,19 +433,18 @@
     <span id="env-badge" hidden></span>
     <span class="spacer"></span>
     <div class="layouts" id="layouts">
-      <button data-cols="1">1</button>
-      <button data-cols="2">2</button>
-      <button data-cols="4" class="active">4</button>
+      <button data-cols="1" title="One pane" aria-label="One pane">1</button>
+      <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
+      <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
-    <button id="palette-open" title="Command palette" aria-label="Open command palette">^⇧K</button>
-    <button id="settings-open" title="Settings — profiles and font sizes" aria-label="Settings">⚙</button>
+    <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌕</span></button>
+    <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings">⚙</button>
   </header>
   <div id="layout">
     <aside id="sidebar">
       <div id="spawn-bar">
         <div class="split-btn">
           <button id="spawn-go" type="button">+ New session</button>
-
         </div>
       </div>
       <div id="sessions-pane">
@@ -432,7 +471,7 @@
       </div>
     </aside>
     <main id="grid" class="empty">
-      <div class="placeholder">Spawn or open a session — panes appear here</div>
+      <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
   </div>
   <div id="hint"><span id="hint-text"></span><button id="hint-x" title="Dismiss">×</button></div>
@@ -467,8 +506,8 @@
         <div id="runtime-row" style="display:none">
           <label for="runtime-select">Runtime</label>
           <select id="runtime-select">
-            <option value="box">boxed — contained (recommended)</option>
-            <option value="host">trusted host — uncontained</option>
+            <option value="box">boxed (contained, recommended)</option>
+            <option value="host">trusted host (uncontained)</option>
           </select>
           <div id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
         </div>
@@ -500,15 +539,15 @@
           <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
           <div class="pf-row"><label>Base</label>
             <select id="pf-base">
-              <option value="inherit">inherit — full env</option>
-              <option value="clean">clean — no secrets</option>
-              <option value="login">login — source profile</option>
+              <option value="inherit">inherit: full env</option>
+              <option value="clean">clean: no secrets</option>
+              <option value="login">login: source profile</option>
             </select>
           </div>
           <div class="pf-row"><label>Runtime</label>
             <select id="pf-runtime">
-              <option value="">box — contained (default)</option>
-              <option value="host">host — uncontained</option>
+              <option value="">box (contained, default)</option>
+              <option value="host">host (uncontained)</option>
             </select>
           </div>
           <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
@@ -520,9 +559,10 @@
           <textarea id="pf-env" rows="2" spellcheck="false" placeholder="FOO=bar"></textarea>
           <label class="pf-lbl">Secrets (comma-separated names)</label>
           <input id="pf-secrets" type="text" placeholder="CLAUDE_CODE_OAUTH_TOKEN">
+          <div class="dlg-err" id="settings-err"></div>
           <div class="pf-actions">
-            <button id="pf-save" type="button">Save profile</button>
-            <button id="pf-new" type="button" class="ghost">New</button>
+            <button id="pf-save" type="button">Save</button>
+            <button id="pf-new" type="button" class="ghost">+ New profile</button>
           </div>
           <ul id="editable"></ul>
         </div>
@@ -541,10 +581,27 @@
 
   <dialog id="palette">
     <input id="pal-input" type="text" autocomplete="off" spellcheck="false"
-           placeholder="Search files and sessions — type &gt; for commands">
+           placeholder="Search files and sessions. Type &gt; for commands">
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span><span id="pal-note"></span></div>
+  </dialog>
+
+  <dialog id="ask-modal">
+    <div class="dlg-head">
+      <h2 id="ask-title"></h2>
+      <span class="spacer"></span>
+      <button class="dlg-x" type="button" id="ask-x" title="Close">×</button>
+    </div>
+    <div class="dlg-body">
+      <p id="ask-body"></p>
+      <label id="ask-label" for="ask-input" class="pf-lbl" hidden></label>
+      <input id="ask-input" type="text" autocomplete="off" spellcheck="false" hidden>
+      <div class="ask-actions">
+        <button id="ask-cancel" type="button">Cancel</button>
+        <button id="ask-ok" type="button">OK</button>
+      </div>
+    </div>
   </dialog>
 
   <script src="/xterm/xterm.js"></script>

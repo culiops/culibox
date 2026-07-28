@@ -6,25 +6,25 @@
   "env_label": "DEV",
   "env_color": "#64748b",
 
-  "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns — define your own shell agent to override the detection.",
+  "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns; define your own shell agent to override the detection.",
 
-  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. All optional — sensible defaults under data_dir (default ~/.local/share/agent-console). abduco must be installed (the daemon fails fast if not).",
+  "comment_persistence": "Sessions run under abduco so they survive a daemon restart. All optional, with sensible defaults under data_dir (default ~/.local/share/agent-console). abduco must be installed (the daemon fails fast if not).",
   "data_dir": "/home/you/.local/share/agent-console",
   "abduco_bin": "abduco",
   "abduco_socket_dir": "/home/you/.local/share/agent-console/abduco",
 
-  "comment_transfer": "File transfer caps. All optional; omitting one uses the default shown. There is deliberately no way to express 'unlimited' — 0 or a negative number means 'use the default', so a typo cannot uncap the write path.",
+  "comment_transfer": "File transfer caps. All optional; omitting one uses the default shown. There is deliberately no way to express 'unlimited': 0 or a negative number means 'use the default', so a typo cannot uncap the write path.",
   "max_upload_bytes": 67108864,
   "max_archive_bytes": 536870912,
   "max_archive_files": 20000,
 
-  "comment_containment": "Sessions run contained ('box' tier) by default: a per-project Docker container with only that project directory mounted — no home, no ~/.ssh, no docker socket. 'host' is the uncontained tier, for work that genuinely needs the machine. default_runtime sets the tier for every agent that does not name its own, INCLUDING the auto-detected shell profile, which no per-agent setting can reach. Omitting it means box.",
+  "comment_containment": "Sessions run contained ('box' tier) by default: a per-project Docker container with only that project directory mounted (no home, no ~/.ssh, no docker socket). 'host' is the uncontained tier, for work that genuinely needs the machine. default_runtime sets the tier for every agent that does not name its own, INCLUDING the auto-detected shell profile, which no per-agent setting can reach. Omitting it means box.",
   "default_runtime": "box",
   "box_image": "culiops/agent-box:base",
   "box_idle_ttl_seconds": 900,
   "docker_bin": "docker",
 
-  "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only — CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",
+  "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only: CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",
   "bundle_source": "",
 
   "comment_workspace": "default_cwd cannot be your home directory when anything runs contained: the workspace is a box's only writable mount, so a box there would mount your whole home. Point it at a projects directory.",

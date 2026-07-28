@@ -101,7 +101,7 @@ func New(agents []config.AgentConfig, resolver secrets.Resolver, optionDefs []co
 		m[a.Name] = a
 		if a.BasePolicy() == config.BaseLogin && len(a.Secrets) > 0 {
 			log.Printf("config warning: agent %q is base=login and declares secrets; the login profile "+
-				"already exposes profile env and can override injected values — use base=clean for contained/authoritative secrets", a.Name)
+				"already exposes profile env and can override injected values; use base=clean for contained/authoritative secrets", a.Name)
 		}
 	}
 	defs := make(map[string]config.OptionDef, len(optionDefs))

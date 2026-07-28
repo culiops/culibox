@@ -34,13 +34,13 @@ function fsDelete(path, opts) {
   });
 }
 
-// fsErrText prefers the server's own sentence — it knows why it refused.
+// fsErrText prefers the server's own sentence: it knows why it refused.
 function fsErrText(res) {
   return (res && res.data && res.data.error) || ("HTTP " + (res && res.status));
 }
 
 // deleteSummary describes a measurement in one clause, leading with the ENTRY
-// count — everything the delete destroys, not just the regular files. Counting
+// count: everything the delete destroys, not just the regular files. Counting
 // files alone let a tree of folders and symlinks describe itself as empty.
 //
 // A capped measurement never states the capped total: past a short-circuit the
@@ -66,7 +66,7 @@ function deleteConfirmText(name, isDir, m) {
   const what = isDir ? "folder" : "file";
   const summary = isDir ? deleteSummary(m) : "";
   return "Delete the " + what + ' "' + name + '"' +
-    (summary ? " — " + summary : "") + "?\n\nThis cannot be undone.";
+    (summary ? " (" + summary + ")" : "") + "?\n\nThis cannot be undone.";
 }
 
 // normalizePath collapses "." segments and duplicate slashes so a path typed

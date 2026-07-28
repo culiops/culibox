@@ -9,7 +9,7 @@ const WS_SUPERSEDED = 4001;
 // (`ESC[<0;NaN;NaNm`). xterm derives those from the renderer's measured cell
 // size, and something upstream can leave that unmeasured at click time.
 //
-// The bug is not this app's — the same junk appears clicking a link in a
+// The bug is not this app's: the same junk appears clicking a link in a
 // terminal inside code-server, a different embedder of the same library. What IS
 // ours is the wire: a program like claude cannot parse the sequence, gives up
 // partway, and pastes the remainder into its prompt as "aN;NaNm" for the user to
@@ -61,7 +61,7 @@ class TerminalTab {
 
     // Image paste: upload and insert the path. Capture phase so it runs before
     // xterm's own paste handling, but only when the clipboard actually carries
-    // files — a text paste must reach xterm completely untouched.
+    // files: a text paste must reach xterm completely untouched.
     this.el.addEventListener("paste", (e) => {
       const files = (typeof clipboardFiles === "function") ? clipboardFiles(e) : [];
       if (!files.length) return;
@@ -84,13 +84,13 @@ class TerminalTab {
       // While the agent holds mouse tracking on (claude's fullscreen renderer),
       // xterm forwards drags to the app instead of selecting. The bypass key is
       // Shift on Windows/Linux but Option on macOS, and the macOS branch is gated
-      // on this option — without it, no modifier can select on a Mac at all.
+      // on this option: without it, no modifier can select on a Mac at all.
       // Cost: Option+drag no longer does a column selection on macOS.
       macOptionClickForcesSelection: true,
       // OSC 8 hyperlinks already work in xterm; installing a linkHandler REPLACES
-      // its default, which confirms before opening. Keep that confirmation — an OSC
-      // 8 link's visible text is arbitrary and can point anywhere — and add what the
-      // default lacks: localhost rewriting and noreferrer.
+      // its default, which confirms before opening. Keep that confirmation (an OSC
+      // 8 link's visible text is arbitrary and can point anywhere) and add what
+      // the default lacks: localhost rewriting and noreferrer.
       linkHandler: { activate: (_e, text) => openTerminalUrl(text, { confirm: true }) },
     });
     this.fitAddon = new FitAddon.FitAddon();
@@ -134,10 +134,10 @@ class TerminalTab {
     }).catch(() => {});
 
     // Clickable tokens in terminal output. links.js decides what is a URL, what is
-    // a file path, which wins when they overlap — the bug that used to send
-    // `https://host/a.html` to the file viewer as a relative path — and which links
-    // may be returned for this row. Absolute paths open directly; relative paths
-    // join the session's initial cwd (best-effort — may miss if the agent cd'd).
+    // a file path, which wins when they overlap (the bug that used to send
+    // `https://host/a.html` to the file viewer as a relative path), and which
+    // links may be returned for this row. Absolute paths open directly; relative paths
+    // join the session's initial cwd (best-effort: may miss if the agent cd'd).
     // Guarded like the other cross-file collaborators in this file: without it a
     // missing /links.js would throw on every hover, not merely lose the feature.
     if (this.term.registerLinkProvider && typeof linksForRow === "function") {
@@ -202,7 +202,7 @@ class TerminalTab {
     ws.onclose = (ev) => {
       // Ignore a close from a socket this tab has already replaced: only the
       // current one may drive the tab's state. Unreachable today (connect() runs
-      // only when no socket is live) — the guard makes it structural, not a
+      // only when no socket is live): the guard makes it structural, not a
       // property of the call graph.
       if (this.closed || this.ws !== ws) return;
       // A takeover is the one close the client cannot diagnose for itself, and
@@ -256,7 +256,7 @@ class TerminalTab {
     if (this.closed || !this.retryTimer) return;
     if (status === null || status === "exited") { this.clearRetry(); this.markEnded(); return; }
     if (status === "detached") { this.showTrouble("detached"); return; }
-    this.showTrouble("offline"); // server is up, socket is not — keep retrying
+    this.showTrouble("offline"); // server is up, socket is not: keep retrying
   }
 
   fit() { try { this.fitAddon.fit(); this.sendResize(); } catch (_) {} }
@@ -313,7 +313,7 @@ class TerminalTab {
     const expired = kind === "expired";
     const taken = kind === "taken-over";
     this.troubleMsg.textContent =
-      expired ? "Login session expired — the terminal cannot authenticate."
+      expired ? "Login session expired. The terminal cannot authenticate."
       : taken ? "Another tab or window took over this session."
       : kind === "detached" ? "Session detached from the daemon."
       : "Lost connection to the server.";
@@ -321,7 +321,7 @@ class TerminalTab {
     this.troubleBtn.textContent = expired ? "Reload page" : taken ? "Take back" : "Retry now";
     this.troubleBtn.onclick = () => (expired ? location.reload() : this.retryNow());
     // A timed-out probe cannot distinguish "server is down" from "the browser is
-    // waiting on a login prompt this page can't see" — both just never answer. So
+    // waiting on a login prompt this page can't see": both just never answer. So
     // after a few failures, offer the reload that fixes the second case too rather
     // than asserting a cause we do not actually know.
     // "stuck" is about not reaching the server. A takeover means we reached it
@@ -329,7 +329,7 @@ class TerminalTab {
     // the counter; !taken keeps that true no matter who else calls in here.
     const stuck = !expired && !taken && (this.probeFails || 0) >= 3;
     this.troubleAlt.hidden = !stuck;
-    if (stuck) this.troubleMsg.textContent = "Still cannot reach the server — your login may have expired.";
+    if (stuck) this.troubleMsg.textContent = "Still cannot reach the server. Your login may have expired.";
     this.tickTrouble();
     // The ticker exists to count a retry down. A parked pane (taken over) has no
     // retry, so arming it would spin at 2 Hz forever writing the same empty string.
@@ -349,7 +349,7 @@ class TerminalTab {
 
   // markTakenOver parks the pane instead of reconnecting: the session is alive
   // and well, it just belongs to another viewer now. "Take back" re-attaches,
-  // which evicts that viewer in turn — it will say the same thing, not fight.
+  // which evicts that viewer in turn: it will say the same thing, not fight.
   markTakenOver() {
     this.clearRetry();
     this.probeFails = 0;
@@ -387,15 +387,22 @@ class TerminalTab {
 // openTerminalUrl is the single gate for every URL a terminal can open: the regex
 // provider and the OSC 8 linkHandler both funnel through it. Terminal output is
 // semi-trusted (agent output, cloned repos), so the scheme check is here rather
-// than in the regex — OSC 8 text never passes through the regex. noopener denies
+// than in the regex: OSC 8 text never passes through the regex. noopener denies
 // the opened page a handle back into the console; noreferrer keeps the console's
 // host out of a third party's logs.
-function openTerminalUrl(raw, opts) {
+async function openTerminalUrl(raw, opts) {
   if (!/^https?:\/\//i.test(raw)) return;
   const url = rewriteLocalhost(raw, location.hostname);
-  // Only OSC 8 confirms. A plain-text URL is its own label — you read the target
-  // and then clicked it — but an OSC 8 link's visible text can say anything.
-  if (opts && opts.confirm && !window.confirm("Open this link?\n\n" + url)) return;
+  // Only OSC 8 confirms. A plain-text URL is its own label: you read the target
+  // and then clicked it, but an OSC 8 link's visible text can say anything.
+  //
+  // The await moves window.open out of the click's own task. It stays inside the
+  // transient activation the confirm button's click grants, so the popup blocker
+  // does not fire; the visual gate exercises this path to keep it honest.
+  if (opts && opts.confirm) {
+    const ok = await askConfirm({ title: "Open this link?", body: url, confirmLabel: "Open" });
+    if (!ok) return;
+  }
   window.open(url, "_blank", "noopener,noreferrer");
   // The toast is the ONLY signal that the URL opened differs from the one on
   // screen, so it is guarded by existence rather than wrapped in a catch that would

@@ -54,7 +54,10 @@ const names = [
   "Event", "CustomEvent", "KeyboardEvent", "MouseEvent", "DragEvent", "DataTransfer",
   "HTMLElement", "Element", "Node", "NodeList", "Image", "DOMParser",
   "ResizeObserver", "MutationObserver", "IntersectionObserver",
-  "alert", "confirm", "prompt", "getSelection",
+  // alert/confirm/prompt are deliberately absent: the page uses its own dialogs
+  // (shell.js askConfirm/askPrompt), so a bare call to one is now a no-undef
+  // error here as well as a failure in no-native-dialogs.test.js.
+  "getSelection",
   // vendored, loaded from their own <script> tags
   "Terminal", "FitAddon", "WebglAddon", "marked", "hljs", "DOMPurify",
   // the CommonJS guard each file ends with, so node --test can require it

@@ -15,7 +15,7 @@ const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
 
 // copyText copies to the clipboard. The app is served over HTTP (not a secure
-// context), so navigator.clipboard is usually unavailable — fall back to a
+// context), so navigator.clipboard is usually unavailable: fall back to a
 // hidden off-screen textarea + execCommand("copy"), which works over plain HTTP.
 // `done` restores terminal focus (the textarea steals it). window.__lastCopied
 // is a test hook.
@@ -70,7 +70,7 @@ async function sessionStatus(id) {
 }
 
 // probeServer classifies why we cannot reach the socket: "ok" (server answered),
-// "unauthorized" (the login/cookie is stale — a reload is the cure), "unreachable"
+// "unauthorized" (the login/cookie is stale: a reload is the cure), "unreachable"
 // (down, or this page's requests are wedged). A successful probe also re-mints the
 // WS cookie server-side, so a stale-cookie tab heals itself here.
 async function probeServer() {
@@ -98,7 +98,7 @@ function toggleSidebar() {
 }
 $("sidebar-toggle").onclick = toggleSidebar;
 
-// Copy/paste hint — platform-aware, dismissable (persisted). Lives outside the
+// Copy/paste hint: platform-aware, dismissable (persisted). Lives outside the
 // sidebar so it survives the sidebar-hide toggle.
 (function initHint() {
   const hint = $("hint");
@@ -138,7 +138,7 @@ function renderSession(s) {
   name.className = "name";
   name.textContent = s.name || s.id;
   if (killing.has(s.id)) {
-    // teardown in flight (can take a few seconds) — disabled row + "killing…"
+    // teardown in flight (can take a few seconds): disabled row + "killing…"
     li.classList.add("killing");
     const st = document.createElement("span");
     st.className = "badge";
@@ -204,7 +204,7 @@ function startRename(li, span, s) {
           body: JSON.stringify({ name: v }),
         });
         retitleTerminal(s.id, v);
-      } catch (e) { alert("Rename failed: " + e.message); }
+      } catch (e) { showToast("Rename failed: " + e.message, { error: true }); }
     }
     refreshSessions();
   };
@@ -222,7 +222,7 @@ function startRename(li, span, s) {
 // sessions without issuing its own request on every keystroke.
 let lastSessions = [];
 
-// Returns the live session list, or null if the request failed — the boot-time
+// Returns the live session list, or null if the request failed: the boot-time
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
 // yet). An empty array is the former.
@@ -244,7 +244,7 @@ async function refreshSessions() {
 let profiles = [];
 // profilesLoaded distinguishes "the server has no profiles" from "we could not
 // ask". Without it, one transient failure at boot leaves the primary spawn
-// button disabled under a caption that blames the config — and in dev, `air`
+// button disabled under a caption that blames the config, and in dev, `air`
 // restarts the daemon under an open tab routinely. Retries once, like initEnv.
 let profilesLoaded = false;
 async function loadProfiles(retry = true) {
@@ -363,6 +363,7 @@ function fillForm(p) {
 // no-op; only grab focus when the dialog is actually on screen.
 function newProfile() {
   fillForm({ base: "inherit" });
+  setDialogError("settings-modal", "");
   if ($("settings-modal").open) $("pf-name").focus();
 }
 function readForm() {
@@ -390,23 +391,38 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   return p;
 }
+// These three run while #settings-modal is open, so their errors go to the
+// dialog's own inline line. A toast is fixed-position and paints beneath a modal
+// backdrop, which would leave the failure invisible.
 async function saveProfile() {
   const p = readForm();
-  if (!p.name || !p.bin) { alert("Name and Command are required"); return; }
+  setDialogError("settings-modal", "");
+  if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
   const editing = profiles.some((x) => x.name === p.name && x.editable);
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-  } catch (e) { alert("Save failed: " + e.message); return; }
+  } catch (e) { setDialogError("settings-modal", "Save failed: " + e.message); return; }
   await loadProfiles();
 }
 async function editProfile(name) {
+  setDialogError("settings-modal", "");
   try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
-  catch (e) { alert("Load failed: " + e.message); }
+  catch (e) { setDialogError("settings-modal", "Load failed: " + e.message); }
 }
 async function deleteProfile(name) {
+  // The sibling destructive action (kill session) has always confirmed; this one
+  // used to delete on the first click.
+  const ok = await askConfirm({
+    title: "Delete profile",
+    body: 'Delete the profile "' + name + '"? This cannot be undone.',
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
+  setDialogError("settings-modal", "");
   try { await api("/api/profiles/" + encodeURIComponent(name), { method: "DELETE" }); }
-  catch (e) { alert("Delete failed: " + e.message); return; }
+  catch (e) { setDialogError("settings-modal", "Delete failed: " + e.message); return; }
   await loadProfiles();
 }
 function renderEditable() {
@@ -489,7 +505,7 @@ function loadLastSpawn() {
 // --- the "+ New session" button ----------------------------------------------
 // Spawning always goes through the form. Under containment the workspace is the
 // box's only writable mount, so choosing it IS choosing what the agent can
-// reach — a one-click spawn that picked a directory for you was choosing your
+// reach: a one-click spawn that picked a directory for you was choosing your
 // security boundary silently, and its default (home) could not be contained at
 // all. One deliberate choice per session is the honest cost of the model.
 
@@ -584,12 +600,18 @@ $("spawn").addEventListener("submit", async (ev) => {
 // confirmKill is the guarded entry point (tab ⏻ button, command palette).
 // killSession itself stays unguarded: the sidebar × has always been immediate,
 // and Undo on a fresh spawn must not ask twice.
-function confirmKill(id, name) {
-  if (confirm('Kill session "' + (name || id) + '"? This cannot be undone.')) killSession(id);
+async function confirmKill(id, name) {
+  const ok = await askConfirm({
+    title: "Kill session",
+    body: 'Kill session "' + (name || id) + '"? This cannot be undone.',
+    confirmLabel: "Kill",
+    danger: true,
+  });
+  if (ok) killSession(id);
 }
 
 async function killSession(id) {
-  if (killing.has(id)) return; // already tearing down — ignore repeat clicks
+  if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
   await refreshSessions(); // re-render → row shows "killing…"
   try {
@@ -597,7 +619,7 @@ async function killSession(id) {
   } catch (e) {
     killing.delete(id);
     await refreshSessions();
-    alert("Kill failed: " + e.message);
+    showToast("Kill failed: " + e.message, { error: true });
     return;
   }
   killing.delete(id);
@@ -619,7 +641,7 @@ async function spawnShellIn(cell) {
     // withholds it once a stored profile takes over the seed's name, and profiles
     // can be created after this page loaded.
     const profile = await currentShellProfile();
-    if (!profile) { alert("No shell profile available — check the console log."); return; }
+    if (!profile) { showToast("No shell profile available, check the console log.", { error: true }); return; }
     const plan = shellSpawnPlan(await resolveCellNeighbour(cell));
     if (plan.mode === "form") {
       // Nothing to sit beside: there is no context to inherit, so let the user
@@ -645,7 +667,7 @@ async function spawnShellIn(cell) {
     if (cells.includes(cell)) setFocusedCell(cell);
     openTerminal(s.id, s.name);
   } catch (e) {
-    alert("Shell failed: " + e.message);
+    showToast("Shell failed: " + e.message, { error: true });
   } finally {
     shellSpawning.delete(cell);
   }
@@ -654,11 +676,11 @@ async function spawnShellIn(cell) {
 // resolveCellNeighbour falls back to the server when a terminal tab exists but hasn't
 // resolved its cwd yet (TerminalTab fetches it asynchronously). Without this, a
 // +sh right after opening a session silently lands in default_cwd instead of the
-// session's directory — the failure the feature exists to prevent.
-// resolveCellNeighbour returns the session a quick shell should sit beside —
+// session's directory: the failure the feature exists to prevent.
+// resolveCellNeighbour returns the session a quick shell should sit beside:
 // the whole record, because "+sh" inherits the tier as well as the directory.
 async function resolveCellNeighbour(cell) {
-  // Mirror cellCwd's precedence exactly — active tab first, then newest backwards.
+  // Mirror cellCwd's precedence exactly: active tab first, then newest backwards.
   // Picking a different terminal here would open the shell in another session's
   // directory, which is the bug this function exists to prevent.
   const act = cell.activeTab;
@@ -776,7 +798,7 @@ setInterval(refreshSessions, 3000);
 document.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
   if (e.code !== "Backquote") return; // .code is layout/shift independent
-  // Don't steal the combo from a real text field (session name, inline rename) —
+  // Don't steal the combo from a real text field (session name, inline rename),
   // but xterm's own focus target IS a textarea, so exempt that one.
   const ae = document.activeElement;
   if (ae && (ae.tagName === "INPUT" ||
