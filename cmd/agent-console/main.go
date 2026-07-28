@@ -200,11 +200,11 @@ func main() {
 
 	archiveBytes, archiveFiles := cfg.ArchiveLimits()
 	srv := &web.Server{
-		API:      &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
-		Cookie:   cookie,
-		Profiles: pm,
-		Home:     home,
-		Terminal: terminal.NewAttachHandler(mgr.Get),
+		API:        &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
+		Cookie:     cookie,
+		Profiles:   pm,
+		Home:       home,
+		Terminal:   terminal.NewAttachHandler(mgr.Get),
 		EnvLabel:   cfg.EnvLabel,
 		EnvColor:   cfg.EnvColor,
 		BoxRuntime: boxRuntime,
