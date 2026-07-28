@@ -277,3 +277,52 @@ func TestSession_EphemeralKeepsLeadingAltScreen(t *testing.T) {
 		t.Fatalf("ephemeral session lost its alt-screen switch: %q", got)
 	}
 }
+
+// waitAttached polls because the subscriber slot is cleared by the delivery
+// goroutine's deferred cleanup, not by cancel() itself — a fixed sleep would
+// either flake or slow every run.
+func waitAttached(t *testing.T, s *Session, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.Info().Attached == want {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("Attached never became %v (still %v)", want, s.Info().Attached)
+}
+
+func TestInfoReportsWhetherAViewerIsAttached(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 3")
+	if s.Info().Attached {
+		t.Fatal("a session nobody has opened must not report a viewer")
+	}
+	_, cancel, _ := s.Subscribe()
+	if !s.Info().Attached {
+		t.Fatal("a subscribed session must report a viewer")
+	}
+	cancel()
+	waitAttached(t, s, false)
+}
+
+// The eviction path installs a replacement subscriber and then lets the evicted
+// delivery goroutine finish. That goroutine must not clear the slot it no longer
+// owns, or taking over a session would report it as unwatched.
+func TestAttachedStaysTrueWhenOneViewerEvictsAnother(t *testing.T) {
+	s := startProc(t, 1<<16, "sh", "-c", "sleep 3")
+	out1, cancel1, _ := s.Subscribe()
+	defer cancel1()
+	_, cancel2, _ := s.Subscribe() // evicts the first
+	defer cancel2()
+	// Drain the evicted subscriber to closure before asserting. Its channel is
+	// closed by the same deferred cleanup that decides whether to null the shared
+	// slot, so once this loop returns, the identity check has definitely run.
+	// Asserting without it proves nothing: Subscribe sets the slot synchronously,
+	// so Attached is already true before the race window has even opened.
+	for range out1 {
+	}
+	if !s.Info().Attached {
+		t.Fatal("the evicted viewer's cleanup cleared the replacement's slot")
+	}
+}

@@ -166,6 +166,27 @@ function renderSession(s) {
     tb.title = tier.title;
     li.appendChild(tb);
   }
+  // Attach is exclusive: opening a session disconnects whoever holds it. Say so
+  // before the click, not after. status() is the second half of the test on
+  // purpose — an evicted tab is still open, and treating it as the holder would
+  // hide the badge in exactly the case it exists for.
+  // A dot, not a worded badge. Measured at the real sidebar width (279px) with a
+  // real session name: a third text badge squeezed the name to 49px and broke it
+  // over five lines. The dot costs ~16px, so the row keeps the height it already
+  // had. Its meaning is learnable in one interaction — take the session over and
+  // the pane you evicted says "taken over".
+  const tab = terminalTabFor(s.id);
+  if (attachedElsewhere(s, !!tab && tab.status() === "connected")) {
+    const ab = document.createElement("span");
+    ab.className = "watching";
+    ab.title = "Someone is viewing this session in another browser or device. Opening it here disconnects them.";
+    // An empty span's title is announced by nothing and shown on no touch
+    // device, which would make the whole mark sighted-mouse-only. Costs no
+    // layout.
+    ab.setAttribute("role", "img");
+    ab.setAttribute("aria-label", "Someone is viewing this session elsewhere");
+    li.appendChild(ab);
+  }
   const kill = document.createElement("button");
   kill.className = "kill";
   kill.title = "Kill session";

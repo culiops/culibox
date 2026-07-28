@@ -329,8 +329,20 @@ function retitleTerminal(id, name) {
 }
 
 // terminalOpen(id) → is a session currently open in any cell (for the sidebar)?
+// terminalTabFor(id) → the TerminalTab showing a session, or null. terminalOpen
+// answers only "is it on screen"; callers that must know whether THIS page still
+// holds the session need the tab, because an evicted tab stays open while its
+// socket is gone.
+function terminalTabFor(id) {
+  for (const c of cells) {
+    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
+    if (t) return t;
+  }
+  return null;
+}
+
 function terminalOpen(id) {
-  return cells.some((c) => c.tabs.some((t) => t.kind === "terminal" && t.id === id));
+  return terminalTabFor(id) !== null;
 }
 
 // closeTerminal(id) → close a session's terminal tab wherever it is (used by kill).

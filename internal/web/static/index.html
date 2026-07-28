@@ -110,6 +110,13 @@
        visual language means "you are somewhere with real consequences". */
     #sessions .tier { white-space: nowrap; }
     #sessions .tier-danger { color: #fca5a5; border-color: #b45309; background: #b4530922; font-weight: 600; }
+    /* Someone is watching this session from somewhere else. A dot, not a worded
+       badge: measured at the real 279px sidebar with a real session name, a third
+       text badge squeezed the name to 49px over five lines. The dot costs 9px, so
+       the row keeps the height it already had. --fg rather than --muted or
+       --accent because the row this matters most on is your own evicted one,
+       which carries the blue .open tint that swallows both. */
+    #sessions .watching { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--fg); }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: 6px; padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
@@ -622,6 +629,7 @@
   <script src="/fsops.js"></script>
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
+  <script src="/sessionrow.js"></script>
   <script src="/palette.js"></script>
   <script src="/app.js"></script>
 </body>
