@@ -69,9 +69,22 @@ echo "building → $BIN"
 "$GO" build -o "$BIN" "$REPO/cmd/agent-console"
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
-# Record only after the service is up: a stamp written past a failed restart
-# would make the next deploy hide the very commits that broke it.
 sleep 1
-systemctl --user --no-pager --lines=0 status "$SERVICE" | head -5
+
+# Record only after the service is up: a stamp written past a failed restart
+# would make the next deploy hide the very commits that broke it. `is-active` is
+# that check — the status block below is for the operator's eyes only.
+if ! systemctl --user is-active --quiet "$SERVICE"; then
+  echo "deployed the binary, but $SERVICE is not active — not recording this commit." >&2
+  systemctl --user --no-pager --lines=20 status "$SERVICE" >&2 || true
+  exit 1
+fi
+
+# sed, not `head`: head closes the pipe early, systemctl dies of SIGPIPE, and
+# under `pipefail` that aborts the script. It cost this script its last two lines
+# on the first real deploy — the service was up, the stamp was never written, and
+# the run reported failure. sed reads its input to the end, so there is no pipe
+# to break.
+systemctl --user --no-pager --lines=0 status "$SERVICE" | sed -n '1,5p'
 git -C "$REPO" rev-parse HEAD > "$STAMP"
 echo "deployed $head → $STAMP"
