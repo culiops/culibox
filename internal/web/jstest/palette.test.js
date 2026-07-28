@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isPaletteHotkey } = require("../static/palette.js");
+const { isPaletteHotkey, isInsertHotkey } = require("../static/palette.js");
 
 // A KeyboardEvent stand-in: only the fields the matcher reads.
 const ev = (code, mods) => Object.assign(
@@ -49,4 +49,26 @@ test("adding Alt or the other platform modifier disqualifies the combo", () => {
 
 test("another key with the right modifiers is not the palette", () => {
   assert.strictEqual(isPaletteHotkey(ev("KeyJ", { ctrlKey: true, shiftKey: true }), false), false);
+});
+
+// Ctrl+Enter (⌘+Enter on mac) inserts the selected file's path at the prompt.
+// Plain Enter must keep opening the viewer, so the modifier is what separates
+// them and a bare Enter must never match.
+test("ctrl+enter is the insert hotkey off mac", () => {
+  assert.strictEqual(isInsertHotkey({ key: "Enter", ctrlKey: true }, false), true);
+  assert.strictEqual(isInsertHotkey({ key: "Enter", metaKey: true }, false), false);
+});
+
+test("cmd+enter is the insert hotkey on mac", () => {
+  assert.strictEqual(isInsertHotkey({ key: "Enter", metaKey: true }, true), true);
+  assert.strictEqual(isInsertHotkey({ key: "Enter", ctrlKey: true }, true), false);
+});
+
+test("a bare enter is never the insert hotkey", () => {
+  assert.strictEqual(isInsertHotkey({ key: "Enter" }, false), false);
+  assert.strictEqual(isInsertHotkey({ key: "Enter" }, true), false);
+});
+
+test("a modified non-enter key is never the insert hotkey", () => {
+  assert.strictEqual(isInsertHotkey({ key: "k", ctrlKey: true }, false), false);
 });

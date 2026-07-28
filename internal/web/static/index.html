@@ -270,6 +270,9 @@
     #pal-list .pal-kind { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; text-transform: uppercase; letter-spacing: .4px; }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+    #pal-list li.sel .pal-copy { display: block; }
+    #pal-list .pal-copy:hover { color: var(--fg); background: #1f6feb2e; }
     #pal-empty { color: var(--muted); font-size: 12.5px; padding: 14px; }
     #pal-foot { display: flex; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 
@@ -601,7 +604,7 @@
            placeholder="Search files and sessions. Type &gt; for commands">
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
-    <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span>esc close</span><span id="pal-note"></span></div>
+    <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span id="pal-insert-hint">^↵ insert path</span><span>esc close</span><span id="pal-note"></span></div>
   </dialog>
 
   <dialog id="ask-modal">
