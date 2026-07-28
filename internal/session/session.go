@@ -101,6 +101,11 @@ type Info struct {
 	Status  string    `json:"status"`
 	Name    string    `json:"name"`              // mutable display label (id is the stable key)
 	Runtime string    `json:"runtime,omitempty"` // box | host
+	// Attached reports that a viewer is subscribed right now. It says only THAT
+	// someone is watching, never who: every client authenticates with the same
+	// credentials, so the daemon has no identity to report and inventing one
+	// would be a lie.
+	Attached bool `json:"attached"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -388,7 +393,7 @@ func (s *Session) Exited() bool {
 func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name, Runtime: s.Runtime}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil}
 }
 
 // SetName updates the mutable display label.
