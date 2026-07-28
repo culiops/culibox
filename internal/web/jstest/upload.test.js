@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { shouldRefreshTree } = require("../static/upload.js");
+const { shouldRefreshTree, insertTextAtPrompt } = require("../static/upload.js");
 
 test("an upload into the directory the tree is showing refreshes it", () => {
   assert.strictEqual(shouldRefreshTree("/home/u/proj", "/home/u/proj"), true);
@@ -40,4 +40,35 @@ test("a missing destination or root never refreshes", () => {
 test("the filesystem root is not mistaken for an empty path", () => {
   assert.strictEqual(shouldRefreshTree("/", "/"), true);
   assert.strictEqual(shouldRefreshTree("/", "/home"), false);
+});
+
+// A fake terminal: sendText's real contract is "returns false when it refuses".
+const fakeTerm = (accept) => ({ sent: [], sendText(t) { if (!accept) return false; this.sent.push(t); return true; } });
+
+test("insertTextAtPrompt sends the text and reports success", () => {
+  const t = fakeTerm(true);
+  assert.deepStrictEqual(insertTextAtPrompt(t, "/tmp/a.js "), { ok: true, reason: "" });
+  assert.deepStrictEqual(t.sent, ["/tmp/a.js "]);
+});
+
+// The guarantee the whole feature rests on: nothing this app inserts may submit
+// a line. A directory name may legally contain a newline on Linux.
+test("insertTextAtPrompt refuses text carrying a newline", () => {
+  const t = fakeTerm(true);
+  assert.deepStrictEqual(insertTextAtPrompt(t, "/tmp/a\nrm -rf /"), { ok: false, reason: "unsafe" });
+  assert.deepStrictEqual(t.sent, []);
+});
+
+test("insertTextAtPrompt refuses C1 control bytes", () => {
+  const t = fakeTerm(true);
+  assert.strictEqual(insertTextAtPrompt(t, "/tmp/ax").reason, "unsafe");
+});
+
+test("insertTextAtPrompt reports a missing terminal", () => {
+  assert.deepStrictEqual(insertTextAtPrompt(null, "/tmp/a.js "), { ok: false, reason: "noterm" });
+  assert.deepStrictEqual(insertTextAtPrompt({}, "/tmp/a.js "), { ok: false, reason: "noterm" });
+});
+
+test("insertTextAtPrompt reports a refused send", () => {
+  assert.deepStrictEqual(insertTextAtPrompt(fakeTerm(false), "/tmp/a.js "), { ok: false, reason: "disconnected" });
 });

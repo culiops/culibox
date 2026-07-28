@@ -216,24 +216,34 @@ function shellQuote(p) {
   return /^[\w@%+=:,./-]+$/.test(p) ? p : "'" + p.replace(/'/g, "'\\''") + "'";
 }
 
+// insertTextAtPrompt types text into a session exactly as the user would, and
+// never a newline: the user stays the one who presses Enter. It reports WHY it
+// refused instead of raising its own message, because its two callers phrase
+// failure differently ("Uploaded, but…" against a plain "no session focused").
+//
+// The unsafe check is here as well as in sendText because a caller may want to
+// distinguish "this path can never be inserted" from "this socket is down".
+function insertTextAtPrompt(term, text) {
+  if (!term || typeof term.sendText !== "function") return { ok: false, reason: "noterm" };
+  // The uploaded FILE name is sanitized server-side, but the directory half of
+  // a path is not: a directory name may legally contain a newline on Linux, and
+  // that newline would submit the line the moment it was typed.
+  if (UNSAFE_TEXT.test(text)) return { ok: false, reason: "unsafe" };
+  if (!term.sendText(text)) return { ok: false, reason: "disconnected" };
+  return { ok: true, reason: "" };
+}
+
 // insertPathsIntoTerminal types the uploaded paths at the prompt, followed by a
 // space and never a newline, so the user sees them before anything runs.
 function insertPathsIntoTerminal(term, data) {
   const ok = (data && data.uploaded) || [];
-  if (!ok.length || !term || typeof term.sendText !== "function") return;
-  const text = ok.map((u) => shellQuote(u.path)).join(" ") + " ";
-  // The uploaded FILE name is sanitized server-side, but the directory half of
-  // the path is not: a directory name may legally contain a newline on Linux,
-  // and that newline would submit the line the moment it was typed. Refuse
-  // rather than insert; the upload itself already succeeded.
-  if (UNSAFE_TEXT.test(text)) {
-    showToast("Uploaded, but that folder's name contains control characters, so the path was not inserted",
-      { error: true });
-    return;
-  }
-  if (!term.sendText(text)) {
-    showToast("Uploaded, but this session is not connected, so the path was not inserted", { error: true });
-  }
+  if (!ok.length) return;
+  const res = insertTextAtPrompt(term, ok.map((u) => shellQuote(u.path)).join(" ") + " ");
+  if (res.ok || res.reason === "noterm") return;
+  showToast(res.reason === "unsafe"
+    ? "Uploaded, but that folder's name contains control characters, so the path was not inserted"
+    : "Uploaded, but this session is not connected, so the path was not inserted",
+    { error: true });
 }
 
 // clipboardFiles extracts real files from a paste. A text paste has no files and
@@ -245,7 +255,7 @@ function clipboardFiles(e) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes };
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when
