@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"time"
 	"testing"
+	"time"
 )
 
 func writeTemp(t *testing.T, content string) string {

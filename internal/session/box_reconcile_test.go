@@ -2,9 +2,9 @@ package session
 
 import (
 	"os"
-	"sync"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 

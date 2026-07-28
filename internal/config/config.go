@@ -131,8 +131,8 @@ type Config struct {
 	// because the quick-shell profile is GENERATED, not configured, so no
 	// per-agent setting can reach it — without this, an instance whose every
 	// configured agent is host still had a boxed shell profile.
-	DefaultRuntime    string `json:"default_runtime,omitempty"` // box(default)|host
-	BundleSource      string `json:"bundle_source,omitempty"`      // "" → auto-detect; "off" → no bundle
+	DefaultRuntime    string `json:"default_runtime,omitempty"`      // box(default)|host
+	BundleSource      string `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup

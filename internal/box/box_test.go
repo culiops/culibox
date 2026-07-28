@@ -1,13 +1,13 @@
 package box
 
 import (
-	"encoding/json"
 	"context"
-	"strconv"
-	"syscall"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
