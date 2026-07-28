@@ -166,6 +166,18 @@ function renderSession(s) {
     tb.title = tier.title;
     li.appendChild(tb);
   }
+  // Attach is exclusive: opening a session disconnects whoever holds it. Say so
+  // before the click, not after. status() is the second half of the test on
+  // purpose — an evicted tab is still open, and treating it as the holder would
+  // hide the badge in exactly the case it exists for.
+  const tab = terminalTabFor(s.id);
+  if (attachedElsewhere(s, !!tab && tab.status() === "connected")) {
+    const ab = document.createElement("span");
+    ab.className = "badge elsewhere";
+    ab.textContent = "open elsewhere";
+    ab.title = "Attached in another browser or device. Opening it here disconnects that one.";
+    li.appendChild(ab);
+  }
   const kill = document.createElement("button");
   kill.className = "kill";
   kill.title = "Kill session";
