@@ -74,7 +74,12 @@ class TerminalTab {
     }, true);
 
     this.term = new Terminal({
-      cursorBlink: true, fontFamily: "ui-monospace, Menlo, monospace",
+      // "Symbols Nerd Font" last: agent TUIs (claude, lazygit, starship) emit
+      // Nerd Font glyphs, and without a fallback here whether the user sees an
+      // icon or a tofu box depended on the machine they happened to browse
+      // from, not on this app. The Mono variant keeps every glyph one cell wide,
+      // so xterm's measurement is unaffected.
+      cursorBlink: true, fontFamily: 'ui-monospace, Menlo, monospace, "Symbols Nerd Font"',
       fontSize: (typeof fontPrefs !== "undefined" ? fontPrefs.get("terminal") : 13),
       scrollback: 5000, theme: { background: "#000000" },
       // xterm defaults to 1 line per wheel notch, which crawls over a 5000-line
