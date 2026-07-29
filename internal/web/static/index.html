@@ -48,8 +48,12 @@
       --background2: var(--border); --background3: #585b70;
       --foreground0: var(--fg); --foreground1: #bac2de; --foreground2: var(--muted);
       --box-border-color: var(--border);
+      /* No --font-size / --line-height here. WebTUI's base.css declares them for
+         its own components, but the two files vendored (box.css, badge.css) read
+         neither, and body sets 14px/1.5 directly — so a pair here was read by
+         nothing while contradicting what actually renders. If a future component
+         needs them, add them AND point body at them, or they will drift again. */
       --font-family: ui-monospace, "SF Mono", Menlo, monospace;
-      --font-size: 13px; --line-height: 1.6;
 
       --fs-code: 12.5px; --fs-md: 14px; --fs-tree: 12px;
       --sidebar-split: 45%;
