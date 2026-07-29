@@ -12,10 +12,14 @@
 //
 // EXACT wins over EXT because ".gitignore" has no extension in the ordinary
 // sense — splitting on the last dot would call it "gitignore".
-const ICON_EXACT = {
+// Object.create(null): a plain {} inherits from Object.prototype, so a file or
+// directory literally named "constructor" or "toString" would look up a real
+// method instead of undefined, and iconFor would hand the DOM a function or an
+// object to stringify into the icon column. Do not "simplify" this back to {}.
+const ICON_EXACT = Object.assign(Object.create(null), {
   ".gitignore": "", ".gitattributes": "", ".gitmodules": "",
-};
-const ICON_EXT = {
+});
+const ICON_EXT = Object.assign(Object.create(null), {
   go: "",
   js: "", mjs: "", cjs: "",
   md: "",
@@ -26,7 +30,7 @@ const ICON_EXT = {
   sh: "", bash: "", zsh: "",
   yml: "", yaml: "", toml: "", ini: "", conf: "",
   lock: "", sum: "",
-};
+});
 const ICON_DIR = "", ICON_DIR_OPEN = "", ICON_FILE = "";
 
 // iconFor picks one glyph for a tree row. Directories report their open state so

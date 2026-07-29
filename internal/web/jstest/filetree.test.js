@@ -51,3 +51,17 @@ test("every glyph is exactly one character", () => {
     assert.strictEqual(Array.from(iconFor(n, true, false)).length, 1, n);
   }
 });
+
+// A prototype-chain lookup returns a function or an object, and the DOM would
+// coerce either into a multi-character string that shifts the whole name column.
+test("names that collide with Object.prototype fall back to the file glyph", () => {
+  for (const n of ["constructor", "__proto__", "toString", "valueOf", "hasOwnProperty"]) {
+    assert.strictEqual(iconFor(n, false), FILE, n);
+    assert.strictEqual(Array.from(iconFor(n, false)).length, 1, n);
+  }
+});
+
+test("extensions that collide with Object.prototype fall back too", () => {
+  assert.strictEqual(iconFor("x.constructor", false), FILE);
+  assert.strictEqual(iconFor("x.toString", false), FILE);
+});
