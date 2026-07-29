@@ -111,6 +111,12 @@
       font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 10px;
     }
     #spawn-go { flex: 1; text-align: center; min-width: 0; }
+    /* Outlined, not filled: the approved design draws this as a bracketed TUI
+       control. WebTUI's button.css would do this via --mapped-primary, but that
+       file is not vendored — see Task 1 — and three declarations are cheaper than
+       4.5 KB of bare-element selectors. --accent on --panel measures 5.97, AA. */
+    #spawn-go { background: transparent; color: var(--accent); border-color: var(--accent); }
+    #spawn-go:hover { background: var(--sel); filter: none; }
     .split-btn button:hover { filter: brightness(1.12); }
     .split-btn button:disabled { opacity: .6; cursor: default; filter: none; }
     #ft-menu {
