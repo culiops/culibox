@@ -37,9 +37,12 @@ function isPaletteHotkey(e, mac) {
 
 // isInsertHotkey matches Ctrl+Enter (⌘+Enter on mac): insert the selected file's
 // path at the focused prompt instead of opening it in a viewer. Plain Enter must
-// stay the open action, so the modifier is the whole distinction.
+// stay the open action, so the modifier is the whole distinction. Alt is
+// excluded like in isPaletteHotkey: AltGr (common off-mac) reports as both
+// ctrlKey and altKey, and without the exclusion AltGr+Enter would insert a path
+// instead of opening the file it looks like it should open.
 function isInsertHotkey(e, mac) {
-  if (e.key !== "Enter") return false;
+  if (e.key !== "Enter" || e.altKey) return false;
   return mac ? !!e.metaKey && !e.ctrlKey : !!e.ctrlKey && !e.metaKey;
 }
 

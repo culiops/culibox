@@ -90,10 +90,12 @@ async function ftLoadRoot() {
 // openRowMenu shows what can be done to one entry, positioned under the ⋯ that
 // opened it (same placement maths as the spawn menu in app.js).
 //
-// The first line is the entry's full path, not a control. It is doing two jobs:
-// it is the only place a touch device can read a name the tree truncated (title
-// tooltips are unreachable there), and it shows what the copy items below are
-// about to put on the clipboard.
+// The first line is the entry's full path, not a control. It identifies which
+// row the menu belongs to, and it is the only place a touch device can read a
+// name the tree truncated (title tooltips are unreachable there). It does NOT
+// preview what the items below will put on the clipboard — "Copy path" copies
+// the absolute path and "Copy relative path" copies a third, different string,
+// so no single header could match all of them.
 function openRowMenu(anchor, path, name, isDir) {
   const menu = document.getElementById("ft-menu");
   if (!menu) return;
@@ -153,7 +155,7 @@ function openRowMenu(anchor, path, name, isDir) {
 function insertPathAtPrompt(path) {
   const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
-  if (res.ok) return;
+  if (res.ok) { focusTerminal(); return; } // closeRowMenu hid the button that had focus
   showToast(
     res.reason === "noterm" ? "Focus a terminal first, then insert the path" :
     res.reason === "unsafe" ? "That path contains control characters, so it was not inserted" :
@@ -163,13 +165,19 @@ function insertPathAtPrompt(path) {
 
 // copyPath copies and says so: a clipboard write is otherwise invisible, and on
 // this HTTP-only page copyText falls back to an off-screen textarea whose only
-// visible symptom of failure would be nothing happening.
+// visible symptom of failure would be nothing happening. Refused up front for
+// the same reason insertTextAtPrompt refuses one menu item up: a path may
+// legally contain a raw control character (e.g. a newline in a Linux filename),
+// and pasting that into a terminal would submit whatever line it landed on.
 function copyPath(text) {
-  copyText(text, () => {
-    const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
-    if (term && term.term) term.term.focus(); // the textarea fallback stole focus
+  if (UNSAFE_TEXT.test(text)) {
+    showToast("That path was NOT copied: it contains control characters", { error: true });
+    return;
+  }
+  copyText(text, (ok) => {
+    focusTerminal(); // the textarea fallback stole focus; shared with insertPathAtPrompt above
+    showToast(ok ? "Copied " + text : "Could not copy " + text + " to the clipboard", { error: !ok });
   });
-  showToast("Copied " + text);
 }
 
 function closeRowMenu() {

@@ -72,3 +72,14 @@ test("a bare enter is never the insert hotkey", () => {
 test("a modified non-enter key is never the insert hotkey", () => {
   assert.strictEqual(isInsertHotkey({ key: "k", ctrlKey: true }, false), false);
 });
+
+// AltGr (common on non-US keyboards off mac) reports as BOTH ctrlKey and
+// altKey, so AltGr+Enter would otherwise satisfy the off-mac Ctrl+Enter check
+// and insert a path when the user just meant to open the file.
+test("altgr+enter off mac is not the insert hotkey", () => {
+  assert.strictEqual(isInsertHotkey({ key: "Enter", ctrlKey: true, altKey: true }, false), false);
+});
+
+test("cmd+alt+enter on mac is not the insert hotkey", () => {
+  assert.strictEqual(isInsertHotkey({ key: "Enter", metaKey: true, altKey: true }, true), false);
+});
