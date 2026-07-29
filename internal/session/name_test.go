@@ -27,7 +27,7 @@ func TestCapName_RuneBoundary(t *testing.T) {
 
 func TestDeriveName(t *testing.T) {
 	cases := []struct{ custom, cwd, id, want string }{
-		{"", "/home/claude/culiops-agent-console", "bash-1", "culiops-agent-console"},
+		{"", "/home/claude/culiops-agent-box", "bash-1", "culiops-agent-box"},
 		{"  ", "/work/proj", "bash-1", "proj"},
 		{"myname", "/work/proj", "bash-1", "myname"},
 		{"", "/", "bash-1", "bash-1"},

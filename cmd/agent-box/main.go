@@ -78,7 +78,7 @@ func main() {
 	// daemon restart. abduco is a hard dependency — fail fast if it is missing.
 	dataDir := cfg.DataDir
 	if dataDir == "" {
-		dataDir = filepath.Join(home, ".local", "share", "agent-console")
+		dataDir = filepath.Join(home, ".local", "share", "agent-box")
 	}
 	// WS auth cookie secret, persisted under dataDir so a daemon restart does not
 	// invalidate live browsers' cookies (the /ws route is cookie-only gated; a
@@ -179,7 +179,7 @@ func main() {
 	// UI-created/edited profiles). The manager pushes the merged set to the launcher.
 	profilesPath := cfg.ProfilesPath
 	if profilesPath == "" {
-		profilesPath = filepath.Join(home, ".local", "share", "agent-console", "profiles.json")
+		profilesPath = filepath.Join(home, ".local", "share", "agent-box", "profiles.json")
 	}
 	if err := os.MkdirAll(filepath.Dir(profilesPath), 0o700); err != nil {
 		log.Fatalf("profiles dir: %v", err)
@@ -264,11 +264,11 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
-	log.Printf("agent-console listening on %s", cfg.BindAddr)
+	log.Printf("agent-box listening on %s", cfg.BindAddr)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-	log.Printf("agent-console stopped")
+	log.Printf("agent-box stopped")
 }
 
 // reclaimBoxState removes the host homes of boxes that are gone and unused, and

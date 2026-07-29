@@ -19,7 +19,7 @@ import (
 )
 
 // CookieName is the WS auth cookie.
-const CookieName = "ac_session"
+const CookieName = "ab_session"
 
 // ResolveCred reads the basic-auth credential; the password comes from the
 // configured env var and is never stored in config or logged.
@@ -41,7 +41,7 @@ func BasicAuth(user, pass string, next http.Handler) http.Handler {
 		if !ok ||
 			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
 			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="agent-console"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="agent-box"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

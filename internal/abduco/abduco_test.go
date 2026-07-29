@@ -201,7 +201,7 @@ func writeProc(t *testing.T, root, pid string, argv, env []string) string {
 // instances), and killing an abduco SERVER, which is the user's actual agent.
 func TestProcIsAttacher(t *testing.T) {
 	root := t.TempDir()
-	ours := "/home/u/.local/share/agent-console/abduco"
+	ours := "/home/u/.local/share/agent-box/abduco"
 	theirs := "/tmp/other-instance/abduco"
 
 	cases := []struct {
