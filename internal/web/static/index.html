@@ -19,26 +19,37 @@
       font-display: block;
     }
     :root {
-      --bg: #0d1117; --panel: #161b22; --border: #30363d;
-      --fg: #e6edf3; --muted: #8b949e; --accent: #2f81f7; --danger: #f85149;
-      --warn: #b45309; --warn-fg: #fca5a5;
-      /* Named here, DERIVED in Task 4. These three carry the literal values
-         they replace, exactly, because this task must not move a pixel:
-           - #1f6feb2e/#1f6feb1f are built on #1f6feb, which is NOT --accent
-             (#2f81f7). Two different blues have coexisted since the first
-             commit — index.html:139 uses them side by side, `outline: 1px solid
-             var(--accent)` over `background: #1f6feb2e`. Re-deriving the tint
-             from --accent here would shift it ~3/255 and fail the gate below.
-           - #21262d and #1f2630 collapse to one variable, but the 95%/5% mix
-             that reproduces them rounds ~1/255 off. Same reason.
-         Task 4 replaces all three with color-mix() formulas, where a deliberate
-         colour change belongs and gets reviewed as one. */
-      --sel: #1f6feb2e;
-      --sel-soft: #1f6feb1f;
-      --surface-2: #21262d;
-      --warn-bg: #b4530922;
-      --danger-tint: #2d1618;
-      --warn-tint: #2a2113;
+      /* Catppuccin Mocha. Chosen by measurement, not taste: Gruvbox and Nord
+         both fail WCAG AA here (Gruvbox 4.17/4.31/3.37, Nord 3.28/5.03/2.46 for
+         muted/accent/danger against their own panel; AA small text needs 4.5,
+         and --danger IS small text because .ft-err is 11px). Mocha passes at
+         5.65/5.97/5.43 and beats the palette it replaces on all three. */
+      --bg: #1e1e2e; --panel: #313244; --border: #45475a;
+      --fg: #cdd6f4; --muted: #a6adc8; --accent: #89b4fa; --danger: #f38ba8;
+      --warn: #fab387; --warn-fg: #f9e2af;
+
+      /* Now that the palette is Catppuccin, re-derive the three tints Task 3
+         had to freeze at their legacy literals. This is a deliberate colour
+         change: the selected-row tint stops being GitHub blue and starts
+         following whatever --accent is, which is the entire point of the
+         refactor. --surface-2 collapses #21262d and #1f2630, which solved to
+         94.7% and 94.6% panel — the same colour by accident. */
+      --sel: color-mix(in srgb, var(--accent) 18%, transparent);
+      --sel-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+      --surface-2: color-mix(in srgb, var(--panel) 95%, var(--fg));
+      --warn-bg: color-mix(in srgb, var(--warn) 14%, transparent);
+      --danger-tint: color-mix(in srgb, var(--danger) 12%, var(--bg));
+      --warn-tint: color-mix(in srgb, var(--warn) 12%, var(--bg));
+
+      /* WebTUI's layers read these names. Mapped onto ours rather than given
+         their own values, so there is one palette in this file, not two. */
+      --background0: var(--bg); --background1: var(--panel);
+      --background2: var(--border); --background3: #585b70;
+      --foreground0: var(--fg); --foreground1: #bac2de; --foreground2: var(--muted);
+      --box-border-color: var(--border);
+      --font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      --font-size: 13px; --line-height: 1.6;
+
       --fs-code: 12.5px; --fs-md: 14px; --fs-tree: 12px;
       --sidebar-split: 45%;
       --sidebar-w: 280px;
