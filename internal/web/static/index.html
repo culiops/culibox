@@ -140,8 +140,14 @@
 
     /* --- sidebar panes + splitter ---------------------------------------- */
     .pane-head {
-      flex: none; display: flex; align-items: center; gap: .95ch; padding: .5lh 2ch .25lh;
-      color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
+      flex: none; align-self: flex-start;
+      position: relative; top: calc(-.5lh - 1px);
+      margin-left: 1ch; padding: 0 1ch;
+      /* The panel's own background masks the rule running behind the label —
+         without it the border strikes through the text. */
+      background: var(--panel);
+      display: flex; align-items: center; gap: .5ch;
+      color: var(--muted); font-size: 10.5px; text-transform: none; letter-spacing: .5px;
     }
     .pane-head .count { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     #sessions-pane { flex: 0 1 var(--sidebar-split); display: flex; flex-direction: column; min-height: 76px; }
@@ -533,12 +539,12 @@
           <button id="spawn-go" type="button">[ + new session ]</button>
         </div>
       </div>
-      <div id="sessions-pane">
+      <div id="sessions-pane" box-="square" shear-="top">
         <div class="pane-head">sessions<span class="spacer" style="flex:1"></span><span class="count" id="sessions-count">0</span></div>
         <ul id="sessions"><li class="empty">Loading…</li></ul>
       </div>
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
-      <div id="files-pane">
+      <div id="files-pane" box-="square" shear-="top">
         <div class="pane-head">files<span class="spacer" style="flex:1"></span>
           <button id="ft-newdir" type="button" title="New folder in this folder">⊞</button>
           <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)">⟳</button>
