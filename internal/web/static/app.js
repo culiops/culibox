@@ -566,7 +566,7 @@ let boxRuntime = "";
 // The last spawn is remembered only to PRE-FILL the form, never to act on its
 // own: the form is always shown, so a stale value can be seen and changed
 // before anything starts.
-const LAST_SPAWN_KEY = "agent-console:lastSpawn";
+const LAST_SPAWN_KEY = "agent-box:lastSpawn";
 function loadLastSpawn() {
   try {
     const v = JSON.parse(localStorage.getItem(LAST_SPAWN_KEY) || "null");
@@ -858,7 +858,7 @@ initUpload();
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
     strip.hidden = false;
-    document.title = "[" + meta.env_label + "] Agent Console";
+    document.title = "[" + meta.env_label + "] Agent Box";
     updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/box"
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 // tieredLauncher is a builder that also answers RuntimeFor, like the real one.
@@ -43,7 +43,7 @@ func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []stri
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
-	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, "ac-box-test", nil
+	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, "ab-box-test", nil
 }
 
 func (f *fakeBoxes) AdoptBox(name string) {

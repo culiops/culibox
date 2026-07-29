@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 // failingAttachBackend is alive at the abduco layer but cannot produce an attach
@@ -36,7 +36,7 @@ func TestFailedReattachStillKeepsTheBox(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.sidecar.put("bash-1", sessionMeta{
-		Agent: "bash", Cwd: dir, Created: time.Now(), Runtime: config.RuntimeBox, Box: "ac-box-live",
+		Agent: "bash", Cwd: dir, Created: time.Now(), Runtime: config.RuntimeBox, Box: "ab-box-live",
 	})
 	boxes := &fakeBoxes{}
 	m.SetBoxes(boxes)
@@ -44,7 +44,7 @@ func TestFailedReattachStillKeepsTheBox(t *testing.T) {
 	if err := m.Reconcile(); err != nil {
 		t.Fatal(err)
 	}
-	if !boxes.adoptedBox("ac-box-live") {
+	if !boxes.adoptedBox("ab-box-live") {
 		t.Fatal("box layer never learned the box is live after a failed reattach; " +
 			"its reaper will destroy the container the surviving agent runs in")
 	}
@@ -70,7 +70,7 @@ func TestUnresolvableWorkspaceStillKeepsTheBox(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.sidecar.put("bash-1", sessionMeta{
-		Agent: "bash", Cwd: gone, Created: time.Now(), Runtime: config.RuntimeBox, Box: "ac-box-gonepath",
+		Agent: "bash", Cwd: gone, Created: time.Now(), Runtime: config.RuntimeBox, Box: "ab-box-gonepath",
 	})
 	boxes := &fakeBoxes{}
 	m.SetBoxes(boxes)
@@ -80,7 +80,7 @@ func TestUnresolvableWorkspaceStillKeepsTheBox(t *testing.T) {
 	}
 	// The box is claimed by its STORED name, so a workspace path that no longer
 	// resolves cannot cost a live session its container.
-	if !boxes.adoptedBox("ac-box-gonepath") {
+	if !boxes.adoptedBox("ab-box-gonepath") {
 		t.Fatal("an unresolvable workspace path left the box unclaimed; the reaper will " +
 			"destroy a container whose agent is still alive")
 	}

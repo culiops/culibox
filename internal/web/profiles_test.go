@@ -3,8 +3,8 @@ package web
 import (
 	"testing"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/store"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/store"
 )
 
 type fakeStore struct{ m map[string]config.AgentConfig }

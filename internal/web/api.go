@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/culiops/culiops-agent-console/internal/box"
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/session"
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 // SessionService is the subset of session.Manager the API needs (Info-based so

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // ErrNotFound is returned by Delete/Get for an unknown profile.

@@ -13,7 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/culiops/culiops-agent-console/internal/session"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 // wsSuperseded closes a socket that a newer attach evicted. It lives in the

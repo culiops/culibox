@@ -204,7 +204,7 @@ async function palSearchFiles(q, seq, local) {
 
 // tailDirs keeps the last few components of a directory path. CSS would ellipsis
 // the END of a long path, cutting exactly the part that identifies where a file
-// lives ("…/internal/web/static" is useful; "culiops-agent-console/inter…" is not).
+// lives ("…/internal/web/static" is useful; "culiops-agent-box/inter…" is not).
 function tailDirs(dir, keep) {
   const parts = dir.split("/");
   keep = keep || 3;

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Console</title>
+  <title>Agent Box</title>
   <link rel="stylesheet" href="/xterm/xterm.css">
   <link rel="stylesheet" href="/vendor/highlight-theme.css">
   <link rel="stylesheet" href="/vendor/webtui/box.css">
@@ -753,16 +753,16 @@
     }
   </style>
   <script>/* apply persisted sidebar state before first paint (no flash) */try{if(localStorage.getItem('sidebarHidden')==='1')document.documentElement.classList.add('sidebar-hidden');}catch(e){}</script>
-  <script>/* apply persisted font sizes before first paint (no flash) */try{var _fp=JSON.parse(localStorage.getItem('agent-console:fontPrefs')||'{}');var _d={code:['--fs-code',12.5],markdown:['--fs-md',14],filetree:['--fs-tree',12]};for(var _k in _d){var _v=Number(_fp[_k]);if(!isFinite(_v))_v=_d[_k][1];_v=Math.min(32,Math.max(8,_v));document.documentElement.style.setProperty(_d[_k][0],_v+'px');}}catch(e){}</script>
-  <script>/* apply persisted sidebar split before first paint (no flash) */try{var _sp=Number(localStorage.getItem('agent-console:sidebarSplit'));if(isFinite(_sp)&&_sp>0)document.documentElement.style.setProperty('--sidebar-split',Math.min(85,Math.max(15,_sp))+'%');}catch(e){}</script>
-  <script>/* apply persisted sidebar width before first paint (no flash) */try{var _sw=Number(localStorage.getItem('agent-console:sidebarWidth'));if(isFinite(_sw)&&_sw>0)document.documentElement.style.setProperty('--sidebar-w',Math.min(560,Math.max(200,_sw))+'px');}catch(e){}</script>
+  <script>/* apply persisted font sizes before first paint (no flash) */try{var _fp=JSON.parse(localStorage.getItem('agent-box:fontPrefs')||'{}');var _d={code:['--fs-code',12.5],markdown:['--fs-md',14],filetree:['--fs-tree',12]};for(var _k in _d){var _v=Number(_fp[_k]);if(!isFinite(_v))_v=_d[_k][1];_v=Math.min(32,Math.max(8,_v));document.documentElement.style.setProperty(_d[_k][0],_v+'px');}}catch(e){}</script>
+  <script>/* apply persisted sidebar split before first paint (no flash) */try{var _sp=Number(localStorage.getItem('agent-box:sidebarSplit'));if(isFinite(_sp)&&_sp>0)document.documentElement.style.setProperty('--sidebar-split',Math.min(85,Math.max(15,_sp))+'%');}catch(e){}</script>
+  <script>/* apply persisted sidebar width before first paint (no flash) */try{var _sw=Number(localStorage.getItem('agent-box:sidebarWidth'));if(isFinite(_sw)&&_sw>0)document.documentElement.style.setProperty('--sidebar-w',Math.min(560,Math.max(200,_sw))+'px');}catch(e){}</script>
 </head>
 <body>
   <div id="env-strip" hidden></div>
   <header>
     <button id="sidebar-toggle" title="Hide/show sidebar" aria-label="Toggle sidebar">☰</button>
     <span class="dot"></span>
-    <h1>agent-console</h1>
+    <h1>agent-box</h1>
     <span id="env-badge" hidden></span>
     <span class="spacer"></span>
     <div class="layouts" id="layouts">

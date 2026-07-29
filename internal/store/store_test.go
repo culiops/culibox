@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 func TestStore_CRUD_Persists(t *testing.T) {

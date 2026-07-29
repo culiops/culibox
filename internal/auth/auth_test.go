@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 func TestBasicAuth(t *testing.T) {
@@ -33,8 +33,8 @@ func TestBasicAuth(t *testing.T) {
 }
 
 func TestResolveCred(t *testing.T) {
-	t.Setenv("AC_PASS", "s3cr3t")
-	u, p, err := ResolveCred(config.Config{BasicAuthUser: "me", BasicAuthPassEnv: "AC_PASS"})
+	t.Setenv("AB_PASS", "s3cr3t")
+	u, p, err := ResolveCred(config.Config{BasicAuthUser: "me", BasicAuthPassEnv: "AB_PASS"})
 	if err != nil || u != "me" || p != "s3cr3t" {
 		t.Fatalf("resolve: %v %q %q", err, u, p)
 	}
@@ -128,5 +128,17 @@ func TestCookieAuthMalformedSecretRegenerated(t *testing.T) {
 	req.AddCookie(rec.Result().Cookies()[0])
 	if !ca.Valid(req) {
 		t.Fatal("regenerated secret should mint valid cookies")
+	}
+}
+
+func TestBasicAuthRealm(t *testing.T) {
+	h := BasicAuth("me", "secret", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Basic realm="agent-box"` {
+		t.Fatalf("realm = %q, want Basic realm=\"agent-box\"", got)
 	}
 }

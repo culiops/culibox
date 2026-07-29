@@ -2,7 +2,7 @@
 
 Sessions are made restart-proof by [abduco](https://www.brain-dump.org/projects/abduco/):
 each agent runs under an abduco server that outlives the daemon, so restarting the
-`agent-console` process (or its container) re-attaches to still-running agents
+`agent-box` process (or its container) re-attaches to still-running agents
 instead of killing them.
 
 For this to actually survive a container restart, two things must hold.
@@ -36,8 +36,8 @@ Mount `data_dir` on a named volume (or host bind mount):
 
 ```yaml
 services:
-  agent-console:
-    image: agent-console
+  agent-box:
+    image: agent-box
     volumes:
       - agent-data:/data
     # config.json → { "data_dir": "/data", ... }

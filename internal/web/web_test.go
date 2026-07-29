@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/culiops/culiops-agent-console/internal/auth"
-	"github.com/culiops/culiops-agent-console/internal/config"
+	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // TestWSRouteRequiresCookieNotBasicAuth verifies the B2 fix: the /ws/ route is

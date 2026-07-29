@@ -55,7 +55,7 @@ func TestBoxNameSeparatesInstances(t *testing.T) {
 func TestExecArgvForwardsEnvByNameOnly(t *testing.T) {
 	m := newTestManager(t)
 	env := []string{"ANTHROPIC_API_KEY=sk-super-secret", "TERM=xterm-256color"}
-	got := m.execArgv("ac-box-abc", "/home/claude/proj", "bash-1", []string{"claude", "--model", "opus"}, env)
+	got := m.execArgv("ab-box-abc", "/home/claude/proj", "bash-1", []string{"claude", "--model", "opus"}, env)
 	joined := strings.Join(got, " ")
 	if strings.Contains(joined, "sk-super-secret") {
 		t.Fatalf("secret VALUE leaked into argv: %q", joined)
@@ -98,7 +98,7 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 
 func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ac-box-abc", "/home/claude/proj", nil)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil)
 	joined := strings.Join(got, " ")
 	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude:"} {
 		if strings.Contains(joined, forbidden) {
@@ -115,7 +115,7 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 
 func TestRunArgsAreHardened(t *testing.T) {
 	m := newTestManager(t)
-	joined := strings.Join(m.runArgs("ac-box-abc", "/tmp/p", nil), " ")
+	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil), " ")
 	for _, want := range []string{"--cap-drop=ALL", "no-new-privileges", "--read-only", "--pids-limit", "--init"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing hardening %q in %q", want, joined)
@@ -201,7 +201,7 @@ func TestSpawnDuringIdleWindowCancelsTheStop(t *testing.T) {
 
 func TestReconcileReapsBoxesWithNoSessions(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
-	fake.existing = []string{"ac-box-dead1", "ac-box-dead2"}
+	fake.existing = []string{"ab-box-dead1", "ab-box-dead2"}
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	name, _ := m.boxName(dir)
-	fake.existing = []string{name, "ac-box-orphan"}
+	fake.existing = []string{name, "ab-box-orphan"}
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.AdoptBox(name)
-	fake.existing = []string{name, "ac-box-orphan"}
+	fake.existing = []string{name, "ab-box-orphan"}
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -259,12 +259,12 @@ func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
 // by the running user by construction, so the box works for every uid.
 func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	if _, err := m.ensureStateDir("ac-box-abc", nil); err != nil {
+	if _, err := m.ensureStateDir("ab-box-abc", nil); err != nil {
 		t.Fatal(err)
 	}
-	args := m.runArgs("ac-box-abc", "/w", nil)
+	args := m.runArgs("ab-box-abc", "/w", nil)
 	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "ac-state-") {
+	if strings.Contains(joined, "ab-state-") {
 		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)
 	}
 	var stateMount string
@@ -333,7 +333,7 @@ func TestBoxingAnAncestorOfHomeIsRefused(t *testing.T) {
 // credentials, so seeding them is safe.
 func TestNewBoxStateIsSeededPastFirstRunOnboarding(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir, err := m.ensureStateDir("ac-box-seed", nil)
+	dir, err := m.ensureStateDir("ab-box-seed", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,12 +353,12 @@ func TestNewBoxStateIsSeededPastFirstRunOnboarding(t *testing.T) {
 // Seeding must never clobber state a running agent has already written.
 func TestSeedingDoesNotOverwriteExistingState(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir, _ := m.ensureStateDir("ac-box-keep", nil)
+	dir, _ := m.ensureStateDir("ab-box-keep", nil)
 	p := filepath.Join(dir, ".claude.json")
 	if err := os.WriteFile(p, []byte(`{"mine":"kept"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ensureStateDir("ac-box-keep", nil); err != nil {
+	if _, err := m.ensureStateDir("ab-box-keep", nil); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(p)
@@ -383,7 +383,7 @@ func TestMountpointsInsideTheBoxHomeArePreCreated(t *testing.T) {
 		{Host: filepath.Join(src, "skills"), Box: boxHome + "/.claude/skills"},
 		{Host: filepath.Join(src, "CLAUDE.md"), Box: boxHome + "/.claude/CLAUDE.md"},
 	}
-	dir, err := m.ensureStateDir("ac-box-aaaaaaaaaaaa", mounts)
+	dir, err := m.ensureStateDir("ab-box-aaaaaaaaaaaa", mounts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,7 +404,7 @@ func TestMountpointsInsideTheBoxHomeArePreCreated(t *testing.T) {
 func TestMountpointsOutsideTheBoxHomeCreateNothing(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
 	src := t.TempDir()
-	dir, err := m.ensureStateDir("ac-box-bbbbbbbbbbbb",
+	dir, err := m.ensureStateDir("ab-box-bbbbbbbbbbbb",
 		[]Mount{{Host: src, Box: "/opt/agent-bundle"}})
 	if err != nil {
 		t.Fatal(err)
@@ -427,7 +427,7 @@ func TestExistingMountpointContentIsNeverClobbered(t *testing.T) {
 		t.Fatal(err)
 	}
 	mounts := []Mount{{Host: filepath.Join(src, "CLAUDE.md"), Box: boxHome + "/.claude/CLAUDE.md"}}
-	dir, err := m.ensureStateDir("ac-box-cccccccccccc", mounts)
+	dir, err := m.ensureStateDir("ab-box-cccccccccccc", mounts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestExistingMountpointContentIsNeverClobbered(t *testing.T) {
 	if err := os.WriteFile(p, []byte("written by the agent"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.ensureStateDir("ac-box-cccccccccccc", mounts); err != nil {
+	if _, err := m.ensureStateDir("ab-box-cccccccccccc", mounts); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(p)
@@ -448,7 +448,7 @@ func TestExistingMountpointContentIsNeverClobbered(t *testing.T) {
 // state dir must survive one arriving anyway rather than failing the spawn.
 func TestMountpointForAMissingHostPathIsAFileStub(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir, err := m.ensureStateDir("ac-box-dddddddddddd",
+	dir, err := m.ensureStateDir("ab-box-dddddddddddd",
 		[]Mount{{Host: "/nonexistent/agents", Box: boxHome + "/.claude/agents"}})
 	if err != nil {
 		t.Fatal(err)
@@ -468,7 +468,7 @@ func TestMountpointForAMissingHostPathIsAFileStub(t *testing.T) {
 // nothing is created outside, and the spawn fails loudly instead.
 func TestMountpointIsNotCreatedThroughASymlinkOutOfTheBoxHome(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	name := "ac-box-555555555555"
+	name := "ab-box-555555555555"
 	dir := m.stateDir(name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -498,7 +498,7 @@ func TestMountpointIsNotCreatedThroughASymlinkOutOfTheBoxHome(t *testing.T) {
 // included — is state the box already has, so it is left alone.
 func TestSeedIsNotWrittenThroughASymlinkOutOfTheBoxHome(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	name := "ac-box-666666666666"
+	name := "ab-box-666666666666"
 	dir := m.stateDir(name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)

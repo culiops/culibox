@@ -33,12 +33,12 @@ func seedHome(t *testing.T, m *Manager, name string, age time.Duration) string {
 
 func TestReclaimRemovesAnUnusedHomePastTheTTL(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir := seedHome(t, m, "ac-box-aaaaaaaaaaaa", 40*24*time.Hour)
+	dir := seedHome(t, m, "ab-box-aaaaaaaaaaaa", 40*24*time.Hour)
 	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(done) != 1 || done[0].Box != "ac-box-aaaaaaaaaaaa" {
+	if len(done) != 1 || done[0].Box != "ab-box-aaaaaaaaaaaa" {
 		t.Fatalf("expected one reclaim, got %+v", done)
 	}
 	if done[0].Bytes != 10 {
@@ -50,14 +50,14 @@ func TestReclaimRemovesAnUnusedHomePastTheTTL(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("home still present: %v", err)
 	}
-	if _, err := os.Stat(m.markerPath("ac-box-aaaaaaaaaaaa")); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.markerPath("ab-box-aaaaaaaaaaaa")); !os.IsNotExist(err) {
 		t.Fatalf("marker outlived its home: %v", err)
 	}
 }
 
 func TestReclaimKeepsAHomeYoungerThanTheTTL(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir := seedHome(t, m, "ac-box-bbbbbbbbbbbb", 3*24*time.Hour)
+	dir := seedHome(t, m, "ab-box-bbbbbbbbbbbb", 3*24*time.Hour)
 	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
 	if err != nil {
 		t.Fatal(err)
@@ -74,8 +74,8 @@ func TestReclaimKeepsAHomeYoungerThanTheTTL(t *testing.T) {
 // its marker is ancient — that is the case a wrong sweep destroys.
 func TestReclaimKeepsAHomeWithALiveSession(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	dir := seedHome(t, m, "ac-box-cccccccccccc", 90*24*time.Hour)
-	m.acquire("ac-box-cccccccccccc")
+	dir := seedHome(t, m, "ab-box-cccccccccccc", 90*24*time.Hour)
+	m.acquire("ab-box-cccccccccccc")
 	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
 	if err != nil {
 		t.Fatal(err)
@@ -90,8 +90,8 @@ func TestReclaimKeepsAHomeWithALiveSession(t *testing.T) {
 
 func TestReclaimKeepsAHomeWhoseContainerStillExists(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
-	dir := seedHome(t, m, "ac-box-dddddddddddd", 90*24*time.Hour)
-	fake.existing = []string{"ac-box-dddddddddddd"}
+	dir := seedHome(t, m, "ab-box-dddddddddddd", 90*24*time.Hour)
+	fake.existing = []string{"ab-box-dddddddddddd"}
 	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
 	if err != nil {
 		t.Fatal(err)
@@ -111,8 +111,8 @@ func TestReclaimKeepsAHomeWhoseContainerStillExists(t *testing.T) {
 // than racing real goroutines, which would be flaky.
 func TestReclaimSkipsABoxThatCameBackDuringTheSweep(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
-	dir := seedHome(t, m, "ac-box-333333333333", 90*24*time.Hour)
-	fake.running["ac-box-333333333333"] = true // Inspect must say so; existing stays empty
+	dir := seedHome(t, m, "ab-box-333333333333", 90*24*time.Hour)
+	fake.running["ab-box-333333333333"] = true // Inspect must say so; existing stays empty
 	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestReclaimSkipsABoxThatCameBackDuringTheSweep(t *testing.T) {
 // re-read under the lock, like `active` and Inspect already are.
 func TestReclaimRereadsTheAgeUnderTheLock(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
-	name := "ac-box-444444444444"
+	name := "ab-box-444444444444"
 	dir := seedHome(t, m, name, 90*24*time.Hour)
 	// Inspect runs inside reclaimOne, under opMu, after the snapshot: a spawn
 	// landing exactly here is what touching the marker stands for. It stays
@@ -226,7 +226,7 @@ func TestReclaimHoldsOpMuAgainstAConcurrentSpawn(t *testing.T) {
 func TestReclaimIgnoresEntriesThatAreNotBoxHomes(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
 	root := filepath.Join(m.opts.StateRoot, stateDirName)
-	for _, name := range []string{"notabox", "ac-box-short", "ac-box-zzzzzzzzzzzz", lastUsedDirName} {
+	for _, name := range []string{"notabox", "ab-box-short", "ab-box-zzzzzzzzzzzz", lastUsedDirName} {
 		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -242,7 +242,7 @@ func TestReclaimIgnoresEntriesThatAreNotBoxHomes(t *testing.T) {
 	if len(done) != 0 {
 		t.Fatalf("swept a non-box entry: %+v", done)
 	}
-	for _, name := range []string{"notabox", "ac-box-short", "ac-box-zzzzzzzzzzzz", lastUsedDirName} {
+	for _, name := range []string{"notabox", "ab-box-short", "ab-box-zzzzzzzzzzzz", lastUsedDirName} {
 		if _, err := os.Stat(filepath.Join(root, name)); err != nil {
 			t.Fatalf("%s was removed: %v", name, err)
 		}
@@ -252,7 +252,7 @@ func TestReclaimIgnoresEntriesThatAreNotBoxHomes(t *testing.T) {
 // Homes created before the marker existed still have to age out.
 func TestReclaimFallsBackToDirectoryMtimeWithNoMarker(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	name := "ac-box-eeeeeeeeeeee"
+	name := "ab-box-eeeeeeeeeeee"
 	dir := seedHome(t, m, name, 90*24*time.Hour)
 	if err := os.Remove(m.markerPath(name)); err != nil {
 		t.Fatal(err)
@@ -276,8 +276,8 @@ func TestOneUnremovableHomeDoesNotStopTheSweep(t *testing.T) {
 		t.Skip("running as root: permission failure cannot be simulated")
 	}
 	m, _ := newTestManagerWithFake(t)
-	stuck := seedHome(t, m, "ac-box-ffffffffffff", 90*24*time.Hour)
-	ok := seedHome(t, m, "ac-box-111111111111", 90*24*time.Hour)
+	stuck := seedHome(t, m, "ab-box-ffffffffffff", 90*24*time.Hour)
+	ok := seedHome(t, m, "ab-box-111111111111", 90*24*time.Hour)
 	locked := filepath.Join(stuck, ".npm")
 	if err := os.Chmod(locked, 0o500); err != nil {
 		t.Fatal(err)
@@ -288,10 +288,10 @@ func TestOneUnremovableHomeDoesNotStopTheSweep(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unremovable home must be reported")
 	}
-	if !strings.Contains(err.Error(), "ac-box-ffffffffffff") {
+	if !strings.Contains(err.Error(), "ab-box-ffffffffffff") {
 		t.Fatalf("the error must name the directory: %v", err)
 	}
-	if len(done) != 1 || done[0].Box != "ac-box-111111111111" {
+	if len(done) != 1 || done[0].Box != "ab-box-111111111111" {
 		t.Fatalf("the removable home was skipped: %+v", done)
 	}
 	if _, err := os.Stat(ok); !os.IsNotExist(err) {
@@ -301,11 +301,11 @@ func TestOneUnremovableHomeDoesNotStopTheSweep(t *testing.T) {
 
 func TestReclaimDropsMarkersWhoseHomeIsGone(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	m.touchMarker("ac-box-222222222222") // never had a home
+	m.touchMarker("ab-box-222222222222") // never had a home
 	if _, err := m.ReclaimState(context.Background(), DefaultStateTTL); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(m.markerPath("ac-box-222222222222")); !os.IsNotExist(err) {
+	if _, err := os.Stat(m.markerPath("ab-box-222222222222")); !os.IsNotExist(err) {
 		t.Fatalf("orphan marker kept: %v", err)
 	}
 }

@@ -3,7 +3,7 @@ package bundle
 import (
 	"os"
 
-	"github.com/culiops/culiops-agent-console/internal/box"
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // Provider adapts a Manager to what the session layer needs: for a given agent

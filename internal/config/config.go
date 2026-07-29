@@ -1,4 +1,4 @@
-// Package config loads and validates the agent-console configuration.
+// Package config loads and validates the agent-box configuration.
 package config
 
 import (
@@ -117,7 +117,7 @@ type Config struct {
 	EnvColor         string         `json:"env_color,omitempty"` // CSS color for the badge/strip
 	AllowPublic      bool           `json:"allow_public"`
 	ProfilesPath     string         `json:"profiles_path,omitempty"` // store for runtime profiles
-	DataDir          string         `json:"data_dir,omitempty"`      // default ~/.local/share/agent-console
+	DataDir          string         `json:"data_dir,omitempty"`      // default ~/.local/share/agent-box
 	AbducoBin        string         `json:"abduco_bin,omitempty"`    // default "abduco" on PATH
 	AbducoSocketDir  string         `json:"abduco_socket_dir,omitempty"`
 	MaxUploadBytes   int64          `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB

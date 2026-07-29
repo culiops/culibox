@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/store"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/store"
 )
 
 // handleProfiles serves GET (list views) and POST (create a runtime profile).

@@ -29,9 +29,9 @@ import (
 // Container labels. Instance keeps the DEV and PROD daemons from adopting or
 // reaping each other's boxes.
 const (
-	LabelWorkspace = "io.culiops.agent-console.workspace"
-	LabelInstance  = "io.culiops.agent-console.instance"
-	namePrefix     = "ac-box-"
+	LabelWorkspace = "io.culiops.agent-box.workspace"
+	LabelInstance  = "io.culiops.agent-box.instance"
+	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
 	// signal. It is not a box name, so the reclaim sweep never considers it.

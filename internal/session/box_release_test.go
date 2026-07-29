@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 // F1 PROBE: a boxed session that goes DETACHED (agent alive, attach pipe lost)

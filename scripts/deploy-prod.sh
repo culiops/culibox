@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build agent-console and (re)deploy the PRODUCTION systemd --user service.
+# Build agent-box and (re)deploy the PRODUCTION systemd --user service.
 # The prod service runs this pinned binary (never the dev `air` build), so dev
 # work can't affect prod until you deliberately run this.
 #
@@ -9,9 +9,9 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 GO="${GO:-$HOME/.local/bin/go}"
-BIN="${AC_PROD_BIN:-$HOME/bin/agent-console-prod}"
-SERVICE="${AC_PROD_SERVICE:-agent-console-prod}"
-RELEASE_BRANCH="${AC_PROD_BRANCH:-main}"
+BIN="${AB_PROD_BIN:-$HOME/bin/agent-box-prod}"
+SERVICE="${AB_PROD_SERVICE:-agent-box-prod}"
+RELEASE_BRANCH="${AB_PROD_BRANCH:-main}"
 STAMP="$BIN.deployed-sha"
 
 branch=$(git -C "$REPO" branch --show-current)
@@ -33,12 +33,12 @@ echo "about to build:  ${branch:-<detached HEAD>} @ $head  $subject"
 # unmerged commit on it, which is how a UI branch nearly reached production
 # while the approved change sat on main.
 if [ "$branch" != "$RELEASE_BRANCH" ]; then
-  if [ "${AC_PROD_ALLOW_BRANCH:-}" != "yes" ]; then
+  if [ "${AB_PROD_ALLOW_BRANCH:-}" != "yes" ]; then
     echo "refusing: production releases come from '$RELEASE_BRANCH', not '${branch:-<detached HEAD>}'." >&2
-    echo "  merge first, or set AC_PROD_ALLOW_BRANCH=yes if you mean to ship this branch." >&2
+    echo "  merge first, or set AB_PROD_ALLOW_BRANCH=yes if you mean to ship this branch." >&2
     exit 1
   fi
-  echo "WARNING: shipping '${branch:-<detached HEAD>}', not '$RELEASE_BRANCH' (AC_PROD_ALLOW_BRANCH=yes)"
+  echo "WARNING: shipping '${branch:-<detached HEAD>}', not '$RELEASE_BRANCH' (AB_PROD_ALLOW_BRANCH=yes)"
 fi
 
 # What this release actually carries. A deploy ships everything merged since the
@@ -57,16 +57,16 @@ fi
 
 # Rollout rule: dev auto-updates (air live-reload); PRODUCTION never auto-deploys.
 # A prod release requires explicit human approval — either type 'deploy' at the
-# prompt, or pass AC_PROD_CONFIRM=yes (only after a human has approved the
+# prompt, or pass AB_PROD_CONFIRM=yes (only after a human has approved the
 # release). That variable records an approval; it does not waive the checks above.
-if [ "${AC_PROD_CONFIRM:-}" != "yes" ]; then
+if [ "${AB_PROD_CONFIRM:-}" != "yes" ]; then
   read -r -p "Deploy to PRODUCTION ($SERVICE)? type 'deploy' to confirm: " ans
   [ "$ans" = "deploy" ] || { echo "aborted — production not deployed."; exit 1; }
 fi
 
 mkdir -p "$(dirname "$BIN")"
 echo "building → $BIN"
-"$GO" build -o "$BIN" "$REPO/cmd/agent-console"
+"$GO" build -o "$BIN" "$REPO/cmd/agent-box"
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
 sleep 1

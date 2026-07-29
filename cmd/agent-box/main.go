@@ -1,4 +1,4 @@
-// Command agent-console is a self-hosted web control-plane for managing
+// Command agent-box is a self-hosted web control-plane for managing
 // CLI agent sessions. It spawns and owns each agent process on its own PTY
 // (no tmux), and serves them in the browser via xterm.js over a WebSocket.
 package main
@@ -16,17 +16,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/abduco"
-	"github.com/culiops/culiops-agent-console/internal/auth"
-	"github.com/culiops/culiops-agent-console/internal/box"
-	"github.com/culiops/culiops-agent-console/internal/bundle"
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/secrets"
-	"github.com/culiops/culiops-agent-console/internal/session"
-	"github.com/culiops/culiops-agent-console/internal/store"
-	"github.com/culiops/culiops-agent-console/internal/terminal"
-	"github.com/culiops/culiops-agent-console/internal/web"
+	"github.com/culiops/agent-box/internal/abduco"
+	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/agent-box/internal/terminal"
+	"github.com/culiops/agent-box/internal/web"
 )
 
 func main() {
@@ -78,7 +78,7 @@ func main() {
 	// daemon restart. abduco is a hard dependency — fail fast if it is missing.
 	dataDir := cfg.DataDir
 	if dataDir == "" {
-		dataDir = filepath.Join(home, ".local", "share", "agent-console")
+		dataDir = filepath.Join(home, ".local", "share", "agent-box")
 	}
 	// WS auth cookie secret, persisted under dataDir so a daemon restart does not
 	// invalidate live browsers' cookies (the /ws route is cookie-only gated; a
@@ -179,7 +179,7 @@ func main() {
 	// UI-created/edited profiles). The manager pushes the merged set to the launcher.
 	profilesPath := cfg.ProfilesPath
 	if profilesPath == "" {
-		profilesPath = filepath.Join(home, ".local", "share", "agent-console", "profiles.json")
+		profilesPath = filepath.Join(home, ".local", "share", "agent-box", "profiles.json")
 	}
 	if err := os.MkdirAll(filepath.Dir(profilesPath), 0o700); err != nil {
 		log.Fatalf("profiles dir: %v", err)
@@ -264,11 +264,11 @@ func main() {
 		_ = httpSrv.Shutdown(ctx)
 	}()
 
-	log.Printf("agent-console listening on %s", cfg.BindAddr)
+	log.Printf("agent-box listening on %s", cfg.BindAddr)
 	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
-	log.Printf("agent-console stopped")
+	log.Printf("agent-box stopped")
 }
 
 // reclaimBoxState removes the host homes of boxes that are gone and unused, and
