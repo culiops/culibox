@@ -54,12 +54,19 @@ function iconFor(name, isDir, open) {
 // keeps it running (children get "│"). Get that wrong and deep trees grow
 // verticals that belong to branches which already ended.
 //
+// Two characters per level, not three: this matches WebTUI's own marker-="tree"
+// convention (`content: "├ "` — no dash), not an invention of ours. Note this
+// repo vendors only webtui's box.css/badge.css, not typography.css, so the tree
+// itself is hand-rolled to the same convention rather than consuming that CSS.
+// At the sidebar's 280px default (200px minimum), every character given to the
+// connector is a character taken from the filename.
+//
 // U+2500 Box Drawing, NOT the Private Use Area — these are in ordinary monospace
 // fonts and do not depend on the vendored subset.
 function treeBranch(prefix, isLast) {
   return {
-    rowPrefix: prefix + (isLast ? "└─ " : "├─ "),
-    childPrefix: prefix + (isLast ? "   " : "│  "),
+    rowPrefix: prefix + (isLast ? "└ " : "├ "),
+    childPrefix: prefix + (isLast ? "  " : "│ "),
   };
 }
 
