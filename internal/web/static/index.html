@@ -306,10 +306,23 @@
     #split-v:hover::after, #split-v.dragging::after { background: var(--accent); }
     .sidebar-hidden #split-v { display: none; }
     #sessions { list-style: none; margin: 0; padding: 2px 8px 8px; overflow-y: auto; flex: 1; min-height: 0; }
-    #sessions li { display: flex; align-items: center; gap: 1ch; padding: .5lh 1ch; cursor: pointer; }
+    /* The row wraps rather than crushing the name. badge.css gives every badge
+       two 1ch end-caps and #sessions .tier is nowrap, so a wide tier label used
+       to take what it wanted while .name — flex:1 with word-break:break-all and
+       no floor — surrendered everything and then broke at every character,
+       stacking the name vertically at a narrow sidebar. Wrapping drops the
+       badges to a second line instead. Nothing is hidden: the containment tier
+       is deliberately shown on every session. */
+    #sessions li { display: flex; flex-wrap: wrap; align-items: center; gap: 1ch; padding: .5lh 1ch; cursor: pointer; }
     #sessions li:hover { background: var(--surface-2); }
     #sessions li.open { background: var(--sel); outline: 1px solid var(--accent); }
-    #sessions .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
+    /* flex-basis 0, NOT auto. flex-wrap assigns items to lines using each item's
+       HYPOTHETICAL main size — flex-basis clamped by min/max — before any shrinking
+       happens. With `auto` that is the name's full max-content width (~157px for a
+       real session name), which pushes the badge onto a second line even at the
+       280px default where everything would otherwise fit. With 0 the hypothetical
+       size is min-width, so the floor protects the name without forcing a wrap. */
+    #sessions .name { flex: 1 1 0%; min-width: 12ch; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
     /* No `color:` here on purpose: WebTUI paints the badge body from
        --badge-color and the text from --badge-text (badge.css). A color set
        here is unlayered and would silently win over --badge-text again. */
@@ -412,7 +425,15 @@
        Encodes the sheared value directly (top: 0) rather than trusting
        box.css's own [shear-=top] rule to zero it — that rule is ALSO
        layered and would lose to this shorthand's padding-top the same way. */
-    dialog[box-] { padding: 0 1ch 1lh 1ch; display: flex; flex-direction: column; }
+    /* The display MUST be gated on [open]. An unqualified `display: flex` here is
+       an AUTHOR declaration and beats the UA sheet's `dialog:not([open]) {
+       display: none }`, so every boxed dialog rendered on top of the app from page
+       load — verified: all three laid out at full size with `open` false, while
+       #palette (no box-) stayed hidden. It survived a whole review round because
+       every verification screenshot was taken with a dialog deliberately open, so
+       the permanently-visible ones looked like the one under test. */
+    dialog[box-] { padding: 0 1ch 1lh 1ch; }
+    dialog[box-][open] { display: flex; flex-direction: column; }
     /* .dlg-title (the former .dlg-head h2) is now a direct child of the
        dialog, sitting BEFORE .dlg-head in markup — not nested inside it.
        That is what lets it reuse .pane-head's CSS verbatim: .pane-head's
