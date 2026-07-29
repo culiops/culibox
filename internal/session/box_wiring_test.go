@@ -43,7 +43,7 @@ func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []stri
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
-	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, "ac-box-test", nil
+	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, "ab-box-test", nil
 }
 
 func (f *fakeBoxes) AdoptBox(name string) {
