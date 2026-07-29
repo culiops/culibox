@@ -394,6 +394,20 @@
     #spawn-modal, #settings-modal, #ask-modal {
       border: none; position: fixed; inset: 0; margin: auto;
     }
+    /* box.css's own inset (`padding: 1lh 1ch`, sheared by [shear-=top] to
+       `0 1ch 1lh 1ch`) lives inside `@layer utils`. `dialog { padding: 0 }`
+       above does not — it's unlayered, and unlayered always beats layered
+       regardless of selector order or specificity. That means box-'s inset
+       never reached a <dialog> element at all: getComputedStyle(dialog)
+       .padding measured 0px on every side, so the frame's side and bottom
+       borders sat right where the content was painted, and only the top
+       rule (drawn by box.css's ::before, which isn't a padding-dependent
+       property) was ever visible. Restored here, unlayered, scoped to
+       dialogs that actually carry box- (not #palette, which has none).
+       Encodes the sheared value directly (top: 0) rather than trusting
+       box.css's own [shear-=top] rule to zero it — that rule is ALSO
+       layered and would lose to this shorthand's padding-top the same way. */
+    dialog[box-] { padding: 0 1ch 1lh 1ch; }
     /* .dlg-title (the former .dlg-head h2) is now a direct child of the
        dialog, sitting BEFORE .dlg-head in markup — not nested inside it.
        That is what lets it reuse .pane-head's CSS verbatim: .pane-head's
@@ -416,17 +430,11 @@
       margin-top: 0; margin-bottom: 0; font-weight: 400;
       max-width: calc(100% - 2ch); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .25lh 1ch .5lh; border-bottom: 1px solid var(--border); }
+    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .45lh 1ch .5lh; border-bottom: 1px solid var(--border); }
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dlg-x:hover { color: var(--fg); }
-    /* Left/right come down by the 1ch box- already adds on the dialog itself
-       (else the content gains a double gutter); bottom comes down by the 1lh
-       box- adds there too — 1lh (21px) exceeds the original 14px outright,
-       so it clamps to 0 rather than leaving a token remainder. Top is
-       unaffected: box-'s padding-top is sheared to 0, so .dlg-body's own
-       14px is still the only top gutter. */
-    .dlg-body { padding: 14px calc(14px - 1ch) 0; overflow-y: auto; max-height: calc(88vh - 73px); }
+    .dlg-body { padding: 14px; overflow-y: auto; max-height: calc(88vh - 73px); }
     .dlg-tabs { display: flex; gap: 4px; }
     .dlg-tabs button {
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
