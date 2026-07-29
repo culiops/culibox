@@ -308,6 +308,12 @@
        character cells or a wide glyph shifts every name in the column. */
     .ft-icon { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
     .ft-node.dir .ft-icon { color: var(--accent); }
+    /* Box-drawing, so it must sit on the character grid: no letter-spacing, no
+       ellipsis, never shrink. --border would measure 1.38 here and vanish (the
+       mistake the status-line separators made); full --muted at 5.65 competes
+       with the filenames it sits behind. 70% lands at 3.59, clearing WCAG
+       1.4.11's 3:1 for graphics that carry meaning. */
+    .ft-branch { flex: none; white-space: pre; color: color-mix(in srgb, var(--muted) 70%, var(--panel)); }
 
     /* Hidden until hover so the tree stays a tree, not a toolbar. */
     .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
