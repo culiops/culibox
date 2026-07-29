@@ -10,7 +10,7 @@
 // live model. Viewer tabs are deliberately absent: a stored path may no longer
 // exist, and reopening a file costs one click in the tree.
 
-const LAYOUT_KEY = "agent-console:layout";
+const LAYOUT_KEY = "agent-box:layout";
 const LAYOUT_V = 1;
 const LAYOUT_MAX_CAP = 4;
 

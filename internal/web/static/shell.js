@@ -124,7 +124,7 @@ function initDialogs() {
 // Drag height between the Sessions and Files panes. The ratio is a percentage on
 // --sidebar-split, persisted and re-applied pre-paint by the inline <head>
 // script so a reload does not flash the default split.
-const SPLIT_KEY = "agent-console:sidebarSplit";
+const SPLIT_KEY = "agent-box:sidebarSplit";
 
 // setSidebarSplit applies the ratio; persist() writes it. They are separate
 // because a drag calls this on every pointermove, and a synchronous
@@ -143,7 +143,7 @@ function persistSidebarSplit(pct) {
 // The sidebar was a hardcoded 280px, which at depth 3 left a file name ~230px
 // after indentation: truncation was structural, not incidental. Dragging is the
 // root-cause fix; the row tooltip covers whatever is still too long.
-const WIDTH_KEY = "agent-console:sidebarWidth";
+const WIDTH_KEY = "agent-box:sidebarWidth";
 const SIDEBAR_MIN = 200, SIDEBAR_MAX = 560; // also inlined in index.html's pre-paint script
 
 function setSidebarWidth(px) {
