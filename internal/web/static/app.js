@@ -159,11 +159,19 @@ const killing = new Set();
 // body with a linear-gradient and the two 1ch end-caps with background-color,
 // all reading --badge-color, so setting `background` directly would colour the
 // caps and leave the body untouched.
-function asBadge(el, color, text) {
+//
+// Most badges map onto one of WebTUI's own `variant-` values (pass it as
+// `variant`) so --badge-color/--badge-text come from badge.css's own rules.
+// A badge that needs a colour no variant covers (the danger tier's --warn)
+// passes an explicit { color, text } pair instead, set as inline properties.
+// Inline properties beat any selector, so the two modes are mutually
+// exclusive in practice — pass one or the other, not both.
+function asBadge(el, { variant, color, text } = {}) {
   el.setAttribute("is-", "badge");
-  el.setAttribute("cap-", "slant-top");
-  el.style.setProperty("--badge-color", color);
-  el.style.setProperty("--badge-text", text);
+  el.setAttribute("cap-", "triangle");
+  if (variant) el.setAttribute("variant-", variant);
+  if (color) el.style.setProperty("--badge-color", color);
+  if (text) el.style.setProperty("--badge-text", text);
   return el;
 }
 
@@ -180,7 +188,7 @@ function renderSession(s) {
     const st = document.createElement("span");
     st.className = "badge";
     st.textContent = "killing…";
-    asBadge(st, "var(--muted)", "var(--bg)");
+    asBadge(st, { variant: "foreground2" });
     li.append(name, st);
     return li;
   }
@@ -191,7 +199,7 @@ function renderSession(s) {
     const badge = document.createElement("span");
     badge.className = "badge";
     badge.textContent = "exited";
-    asBadge(badge, "var(--border)", "var(--fg)");
+    asBadge(badge, { variant: "background2" });
     li.appendChild(badge);
   }
   // Containment tier. Shown for every live session, not only the risky one: a
@@ -203,8 +211,11 @@ function renderSession(s) {
     tb.className = "badge tier" + (tier.tone === "danger" ? " tier-danger" : "");
     tb.textContent = tier.text;
     tb.title = tier.title;
-    asBadge(tb, tier.tone === "danger" ? "var(--warn)" : "var(--border)",
-                tier.tone === "danger" ? "var(--bg)" : "var(--fg)");
+    if (tier.tone === "danger") {
+      asBadge(tb, { color: "var(--warn)", text: "var(--bg)" });
+    } else {
+      asBadge(tb, { variant: "background2" });
+    }
     li.appendChild(tb);
   }
   // Attach is exclusive: opening a session disconnects whoever holds it. Say so
