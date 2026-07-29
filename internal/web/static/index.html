@@ -78,9 +78,11 @@
     /* Fields whose focused text is CONTENT, not a label (typed input, not a
        button caption): mark the field itself with a ring instead of restyling
        whatever is being typed. --accent measures 5.97 on --panel and 7.79 on
-       --bg, so the ring reads on either surface this shows up against. */
+       --bg, so the ring reads on either surface this shows up against. A
+       <select>'s chosen option is content by the same logic — its value, not
+       a caption — so it belongs in this group, not the bold+underline one. */
     input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus-visible,
-    textarea:focus-visible {
+    textarea:focus-visible, select:focus-visible {
       font-weight: normal; text-decoration: none;
       outline: 2px solid var(--accent); outline-offset: -1px;
     }
@@ -121,7 +123,19 @@
        bar; hint-text's own auto margin pushes it (and the dismiss button after
        it) to the far right, so the two groups read as two ends of one line. */
     #hint-text { margin-left: auto; }
-    #hint > span + span:not(:empty)::before { content: "· "; color: var(--border); }
+    /* Separator between the left-hand status fields only — three fixes in one
+       rule: (1) --border on --panel measures 1.38, effectively invisible;
+       color-mix(muted 50%, panel) measures 2.57, perceptible as a divider
+       without competing with the 5.65 field text. (2) span+span also matched
+       #hint-text (the right-pushed key hints), putting a stray dot in front
+       of it — excluded explicitly. (3) :not(:empty) alone only checks the
+       span getting the dot, not its predecessor, so a leading field left
+       empty (e.g. no env_label) produced an orphan "· 2 sessions" with
+       nothing before it — requiring the PRECEDING sibling be non-empty too
+       fixes that: the dot only appears between two fields that both render. */
+    #hint > span:not(:empty) + span:not(:empty):not(#hint-text)::before {
+      content: "· "; color: color-mix(in srgb, var(--muted) 50%, var(--panel));
+    }
     #hint button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
     header .spacer { flex: 1; }
@@ -142,9 +156,17 @@
 
     /* --- spawn button ---------------------------------------------------- */
     #spawn-bar { flex: none; padding: .75lh 2ch .5lh; border-bottom: 1px solid var(--border); }
+    /* .split-btn now wraps a single button — the caret it was named for is
+       long gone (Task 7). Kept rather than collapsed: #spawn-go's flex: 1
+       (below) only does anything as a flex ITEM of this flex container: it is
+       how the button fills #spawn-bar's width. Inlining #spawn-go directly
+       into #spawn-bar and dropping the wrapper would mean redoing that as a
+       width/display change on the button itself — more surface area than
+       this fix wave's finding (a dead class name) justifies, and a control
+       deliberately sized for touch (2026-07-27) is not where to risk it. */
     .split-btn { display: flex; }
     .split-btn button {
-      background: var(--accent); border: 1px solid var(--accent); color: #fff;
+      background: var(--accent); border: 1px solid var(--accent); color: var(--bg);
       font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 10px;
     }
     #spawn-go { flex: 1; text-align: center; min-width: 0; }
@@ -187,9 +209,31 @@
     .pf-hint, .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
     /* --- sidebar panes + splitter ---------------------------------------- */
+    /* box.css centres its frame's top rule using the PANE's own line-height
+       (body's 14px/1.5 = 21px), not the legend's 10.5px one — `lh` written
+       inside .pane-head itself would resolve against .pane-head's own
+       smaller font and land the legend off the rule. A typed custom property
+       resolves `1lh` in the pane's font context (same element the ::before
+       frame is computed on) and inherits the already-resolved pixel value
+       down to .pane-head, sidestepping that trap. Positioning at that offset
+       and then translateY(-50%) centres the legend on it regardless of the
+       legend's own rendered height, so no second lh/font approximation is
+       needed for the legend's side of the match either. */
+    @property --pane-rule-y {
+      syntax: "<length>";
+      inherits: true;
+      initial-value: 0px;
+    }
+    #sessions-pane, #files-pane {
+      --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
+    }
     .pane-head {
       flex: none; align-self: flex-start;
-      position: relative; top: calc(-.5lh - 1px);
+      position: relative; top: var(--pane-rule-y); transform: translateY(-50%);
+      /* The legend visually overlaps #split-h (see its comment below) on
+         #files-pane; pointer-events: none lets clicks fall through to
+         whatever is actually underneath, and the buttons opt back in. */
+      pointer-events: none;
       margin-left: 1ch; padding: 0 1ch;
       /* The panel's own background masks the rule running behind the label —
          without it the border strikes through the text. */
@@ -197,6 +241,7 @@
       display: flex; align-items: center; gap: .5ch;
       color: var(--muted); font-size: 10.5px; text-transform: none; letter-spacing: .5px;
     }
+    .pane-head button { pointer-events: auto; }
     .pane-head .count { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     #sessions-pane { flex: 0 1 var(--sidebar-split); display: flex; flex-direction: column; min-height: 76px; }
     #files-pane { flex: 1 1 0; display: flex; flex-direction: column; min-height: 76px; }
@@ -321,7 +366,7 @@
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
     .ask-actions button:hover { border-color: var(--accent); }
-    #ask-ok { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+    #ask-ok { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
     #ask-ok:hover { filter: brightness(1.12); }
     #ask-ok:disabled { opacity: .5; cursor: default; filter: none; }
     #ask-modal.danger #ask-ok { background: var(--danger); border-color: var(--danger); }
@@ -337,7 +382,7 @@
       background: var(--bg); color: var(--fg); border: 1px solid var(--border);
       padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
     }
-    #spawn button[type="submit"] { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; font-weight: 600; margin-top: 2px; }
+    #spawn button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--bg); cursor: pointer; font-weight: 600; margin-top: 2px; }
     #options { display: grid; gap: 8px; }
     #options .opt { display: flex; align-items: center; gap: 8px; }
     #options .opt > label { flex: 1; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 13px; }
@@ -356,7 +401,7 @@
     /* Neither button stretches: a full-width Save next to a small New read as if
        creating a profile were the lesser action. */
     .pf-actions { display: flex; gap: 8px; margin-top: 2px; align-items: center; }
-    .pf-actions button { flex: 0 0 auto; background: var(--accent); border: 1px solid var(--accent); color: #fff; padding: 7px 18px; cursor: pointer; font-weight: 600; }
+    .pf-actions button { flex: 0 0 auto; background: var(--accent); border: 1px solid var(--accent); color: var(--bg); padding: 7px 18px; cursor: pointer; font-weight: 600; }
     .pf-actions button.ghost { background: var(--surface-2); color: var(--fg); border-color: var(--border); padding: 7px 14px; font-weight: 400; }
     .pf-actions button.ghost:hover { border-color: var(--accent); }
     #editable { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
@@ -393,6 +438,9 @@
       cursor: pointer; font-size: 13px;
     }
     #pal-list li.sel { background: var(--sel); outline: 1px solid var(--accent); }
+    /* --muted on --sel measures 3.99 (fails AA) — the selected row is the one
+       row a user is actually reading. --fg on --sel measures 6.14. */
+    #pal-list li.sel .pal-kind, #pal-list li.sel .pal-hint { color: var(--fg); }
     #pal-list .pal-kind { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 5px; text-transform: uppercase; letter-spacing: .4px; }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -458,6 +506,10 @@
     .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: var(--sel); }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
+    /* Same --muted-on--sel failure as the palette above: the active tab sets
+       color: #fff on itself, but this child span re-asserts --muted, which
+       fails at 3.99 against the same --sel background. */
+    .cell-bar .tab.act .tab-st { color: var(--fg); }
     .cell-bar .tab-x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
     .cell-bar .tab-x:hover { color: var(--danger); }
     .cell-bar .tab-kill { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 12px; line-height: 1; }
@@ -504,12 +556,12 @@
     .md-body ul, .md-body ol { padding-left: 1.6em; }
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--danger-tint); border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
-    .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-ended button { margin-left: auto; background: var(--danger); color: var(--bg); border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
     /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
     .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--warn-tint); border-bottom: 1px solid var(--warn); color: #fbbf24; font-size: 12px; }
     .pane-trouble.expired { background: var(--danger-tint); border-bottom-color: var(--danger); color: var(--danger); }
     .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
-    .pane-trouble button { margin-left: auto; background: var(--warn); color: #fff; border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-trouble button { margin-left: auto; background: var(--warn); color: var(--bg); border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
     .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid var(--warn); color: #fbbf24; }
     .pane-trouble button.alt + button { margin-left: 6px; }
     .pane-trouble.expired button { background: var(--danger); }
@@ -594,7 +646,7 @@
     <aside id="sidebar">
       <div id="spawn-bar">
         <div class="split-btn">
-          <button id="spawn-go" type="button" box-="square">[ + new session ]</button>
+          <button id="spawn-go" type="button">[ + new session ]</button>
         </div>
       </div>
       <div id="sessions-pane" box-="square" shear-="top">
