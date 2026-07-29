@@ -57,8 +57,39 @@
     }
     /* WebTUI's focus and disabled treatments, adopted as our own. Bold plus an
        underline beats a coloured outline ring here: it carries no contrast risk
-       of its own, and it is what a TUI does. */
+       of its own, and it is what a TUI does. Restricted below to controls whose
+       focused text is a LABEL (buttons, links, list rows) — a control whose text
+       is user-typed CONTENT gets a ring on the field instead, further down,
+       because restyling what someone is typing reads as a broken hyperlink. */
     :focus-visible { outline: none; font-weight: 700; text-decoration: underline; }
+    /* Several buttons set their own resting font-weight: 600 at equal-or-higher
+       specificity than the rule above (two of these — #ask-ok and #spawn
+       button[type="submit"] — are ID selectors, so no amount of source-order
+       reshuffling would out-rank them). The bold focus cue silently lost to
+       those on exactly the controls most likely to receive focus; the underline
+       still came through, so this was polish, not a WCAG failure. Re-declaring
+       the same buttons with :focus-visible appended raises each selector's own
+       specificity past its resting-state twin and wins outright. */
+    .split-btn button:focus-visible, #ask-ok:focus-visible,
+    #spawn button[type="submit"]:focus-visible, .pf-actions button:focus-visible,
+    .dlg-head h2:focus-visible {
+      font-weight: 700;
+    }
+    /* Fields whose focused text is CONTENT, not a label (typed input, not a
+       button caption): mark the field itself with a ring instead of restyling
+       whatever is being typed. --accent measures 5.97 on --panel and 7.79 on
+       --bg, so the ring reads on either surface this shows up against. */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):focus-visible,
+    textarea:focus-visible {
+      font-weight: normal; text-decoration: none;
+      outline: 2px solid var(--accent); outline-offset: -1px;
+    }
+    /* Checkboxes/radios render no text of their own, so the label rule above is
+       a harmless no-op on them — but its outline: none still strips their only
+       focus cue, since a native checkbox draws no visible bold/underline. */
+    input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 2px;
+    }
     button:disabled, [disabled] { text-decoration: line-through; }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
@@ -350,6 +381,12 @@
       border-bottom: 1px solid var(--border);
       padding: 13px 15px; font-size: 14px; font-family: inherit; outline: none;
     }
+    /* #pal-input is an ID selector setting outline: none unconditionally (not
+       scoped to :focus-visible), so it always out-ranks a generic
+       input:focus-visible { outline: ... } rule regardless of focus state — the
+       ID component of specificity beats the other rule's extra pseudo-classes
+       no matter what. Mark focus on the field's own bottom border instead. */
+    #pal-input:focus-visible { border-bottom-color: var(--accent); }
     #pal-list { list-style: none; margin: 0; padding: 6px; max-height: 52vh; overflow-y: auto; }
     #pal-list li {
       display: flex; align-items: center; gap: 1.15ch; padding: .36lh 1.28ch;
