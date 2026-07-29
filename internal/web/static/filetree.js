@@ -5,6 +5,46 @@
 // The root auto-follows the focused session's cwd (see syncTreeToSession), while
 // a manual pick from the dropdown survives until a *different* session is focused.
 
+// Nerd Font glyphs for the tree. Every codepoint here was rendered and looked at
+// before being added; an absent codepoint subsets to nothing and ships a tofu
+// box that no test can see. Adding one means re-running the probe in
+// scripts/build-font-subset.sh's header, then regenerating the subset.
+//
+// EXACT wins over EXT because ".gitignore" has no extension in the ordinary
+// sense — splitting on the last dot would call it "gitignore".
+// Object.create(null): a plain {} inherits from Object.prototype, so a file or
+// directory literally named "constructor" or "toString" would look up a real
+// method instead of undefined, and iconFor would hand the DOM a function or an
+// object to stringify into the icon column. Do not "simplify" this back to {}.
+const ICON_EXACT = Object.assign(Object.create(null), {
+  ".gitignore": "", ".gitattributes": "", ".gitmodules": "",
+});
+const ICON_EXT = Object.assign(Object.create(null), {
+  go: "",
+  js: "", mjs: "", cjs: "",
+  md: "",
+  json: "",
+  html: "", htm: "",
+  css: "",
+  png: "", jpg: "", jpeg: "", gif: "", webp: "", svg: "",
+  sh: "", bash: "", zsh: "",
+  yml: "", yaml: "", toml: "", ini: "", conf: "",
+  lock: "", sum: "",
+});
+const ICON_DIR = "", ICON_DIR_OPEN = "", ICON_FILE = "";
+
+// iconFor picks one glyph for a tree row. Directories report their open state so
+// the icon agrees with the ▸/▾ next to it.
+function iconFor(name, isDir, open) {
+  if (isDir) return open ? ICON_DIR_OPEN : ICON_DIR;
+  const lower = String(name || "").toLowerCase();
+  if (ICON_EXACT[lower]) return ICON_EXACT[lower];
+  const cut = lower.lastIndexOf(".");
+  // cut <= 0 covers both "Makefile" (no dot) and ".env" (leading dot only).
+  if (cut <= 0) return ICON_FILE;
+  return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
+}
+
 let ftRootSel = null, ftTreeEl = null;
 let lastSyncedSessionId = null; // which session the tree is currently following
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
@@ -20,6 +60,13 @@ async function ftRenderDir(path, container, depth) {
     row.style.paddingLeft = (depth * 12 + 6) + "px";
     // The label lives in its own span so the row can also carry a download
     // button: writing row.textContent would wipe any child element.
+    // The icon is its own element, not part of the label's text: the label's
+    // textContent is rewritten on every directory toggle, and a glyph baked into
+    // that string would have to be re-derived there too.
+    const icon = document.createElement("span");
+    icon.className = "ft-icon";
+    icon.textContent = iconFor(ent.name, ent.is_dir, false);
+    icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
     const label = document.createElement("span");
     label.className = "ft-name";
     label.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
@@ -27,7 +74,7 @@ async function ftRenderDir(path, container, depth) {
     // title and must keep it. The full path rather than the bare name, because
     // it also answers "which of the three index.html files is this one".
     label.title = shortPath(full);
-    row.append(label);
+    row.append(icon, label);
     // One affordance per row. Download used to sit here as a bare ⤓ and Rename /
     // Delete behind the menu; two controls squeezed the name column (badly at
     // 390px) and put a destructive action a finger-width from a harmless one.
@@ -35,9 +82,14 @@ async function ftRenderDir(path, container, depth) {
     // symlink-skip finally reads as a visible label instead of a tooltip no
     // touch device can reach.
     const more = document.createElement("button");
-    more.className = "ft-more";
-    more.textContent = "⋯";
+    more.className = "ft-more nf";
+    more.textContent = "";
     more.title = "Actions";
+    // A button's accessible name comes from its TEXT CONTENT before its title,
+    // and the title is only consulted when that text is empty. This button's text
+    // is a Private Use Area glyph — non-empty, but with no Unicode name — so
+    // without this the control announces as nothing at all.
+    more.setAttribute("aria-label", "Actions");
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
     row.append(more);
     if (ent.is_dir) {
@@ -46,6 +98,7 @@ async function ftRenderDir(path, container, depth) {
       row.onclick = async () => {
         open = !open;
         label.textContent = (open ? "▾ " : "▸ ") + ent.name;
+        icon.textContent = iconFor(ent.name, true, open);
         if (open) {
           childBox = document.createElement("div");
           row.after(childBox);
@@ -337,4 +390,8 @@ async function initFileTree() {
   const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
   if (term && term.cwd) await syncTreeToSession(term.cwd, term.id);
   else if (ftRootSel.options.length) await ftLoadRoot();
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { iconFor };
 }

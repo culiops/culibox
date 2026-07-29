@@ -11,7 +11,22 @@ let cells = [];
 // and each is safe only because it renders afterwards. Deliberately NOT routed
 // through setFocusedCell: that would fire syncFocusedTree and a layout save from
 // inside those mutations. Assign directly if you must, then render.
+//
+// Every assignment — direct or via setFocusedCell — funnels through
+// setFocusedCellRaw below so the status line's cwd field never goes stale. That
+// funnel is intentionally the ONLY thing it adds: it must stay side-effect-free
+// (no syncFocusedTree, no scheduleSaveLayout) or the invariant above breaks.
 let focusedCell = null;
+
+// setFocusedCellRaw is the sole place `focusedCell` is written. Direct-assignment
+// call sites (removeCell, applyCap, ensureFirstCell, applyPlan) route through
+// this instead of `focusedCell = x` so a future assignment site can't forget to
+// keep the status line current — but it does none of setFocusedCell's other
+// work, so it stays safe to call from inside a mutation that renders afterwards.
+function setFocusedCellRaw(cell) {
+  focusedCell = cell;
+  if (typeof updateStatusLine === "function") updateStatusLine();
+}
 let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
 let maximized = null;
 
@@ -174,7 +189,7 @@ class Cell {
 
 function setFocusedCell(cell) {
   if (focusedCell === cell) return;
-  focusedCell = cell;
+  setFocusedCellRaw(cell);
   // Only the focus ring changes, so only the ring is touched. renderBar() here
   // rebuilt every bar, including the button under the pointer, and this runs
   // from the cell's mousedown, so mouseup landed on a fresh node and the click
@@ -223,7 +238,7 @@ function syncFocusedTree() {
 
 function ensureFirstCell() {
   if (cells.length === 0) cells.push(new Cell());
-  if (!focusedCell) focusedCell = cells[0];
+  if (!focusedCell) setFocusedCellRaw(cells[0]);
 }
 
 function focusedCellOrCreate() {
@@ -235,9 +250,9 @@ function removeCell(cell) {
   cell.dispose();
   cells = cells.filter((c) => c !== cell);
   if (maximized === cell) maximized = null;
-  if (focusedCell === cell) focusedCell = null;
+  if (focusedCell === cell) setFocusedCellRaw(null);
   if (cells.length === 0) ensureFirstCell();
-  if (!focusedCell) focusedCell = cells[cells.length - 1];
+  if (!focusedCell) setFocusedCellRaw(cells[cells.length - 1]);
   renderGrid();
   refreshSessions();
   scheduleSaveLayout();
@@ -277,10 +292,10 @@ function applyCap(n) {
     for (const t of extra.tabs) { t.onUpdate = () => keep.renderBar(); keep.tabs.push(t); }
     if (!keep.activeTab && keep.tabs.length) keep.activeTab = keep.tabs[0];
     if (maximized === extra) maximized = null;
-    if (focusedCell === extra) focusedCell = keep;
+    if (focusedCell === extra) setFocusedCellRaw(keep);
     extra.tabs = []; // detach: do NOT dispose (tabs live on in `keep`)
   }
-  if (!cells.includes(focusedCell)) focusedCell = cells[cells.length - 1] || null;
+  if (!cells.includes(focusedCell)) setFocusedCellRaw(cells[cells.length - 1] || null);
   ensureFirstCell();
   cells.forEach((c) => { c.renderBar(); c.renderBody(); });
   renderGrid();
@@ -376,7 +391,7 @@ function applyPlan(plan, sessions) {
   const nameOf = new Map((sessions || []).map((s) => [s.id, s.name || s.id]));
   cells.forEach((c) => c.dispose());
   cells = [];
-  focusedCell = null;
+  setFocusedCellRaw(null);
   maximized = null;
   for (const pc of plan.cells) {
     const cell = new Cell();
@@ -391,7 +406,7 @@ function applyPlan(plan, sessions) {
   // applyCap parks focus on the last cell, so clear it first: setFocusedCell
   // early-returns on an unchanged cell, and that would skip the tree sync.
   const target = cells[plan.focused] || cells[0];
-  focusedCell = null;
+  setFocusedCellRaw(null);
   setFocusedCell(target);
   target.activeTab?.onShow?.(); // fit + keyboard focus land on the restored pane
   const max = plan.maximized == null ? null : cells[plan.maximized];
