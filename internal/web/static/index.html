@@ -146,7 +146,12 @@
        by a selector. The second defect — a leading separator opening the bar
        when #status-env is empty (no env_label) — is fixed by hiding each
        separator when the field it would introduce is empty. */
-    #hint .status-sep { --separator-color: var(--rule); }
+    /* separator.css's [direction-=y] rule sets width but never height — it
+       relies on an align-items: stretch container to give it one. #hint uses
+       align-items: center (see above), so without an explicit height here the
+       element measures 0 tall and the gradient paints nothing: a fully
+       invisible separator, not just a wrong colour. */
+    #hint .status-sep { --separator-color: var(--rule); height: 1lh; }
     #status-env:empty + .status-sep,
     #hint .status-sep:has(+ #status-cwd:empty) {
       display: none;
@@ -407,7 +412,7 @@
        Encodes the sheared value directly (top: 0) rather than trusting
        box.css's own [shear-=top] rule to zero it — that rule is ALSO
        layered and would lose to this shorthand's padding-top the same way. */
-    dialog[box-] { padding: 0 1ch 1lh 1ch; }
+    dialog[box-] { padding: 0 1ch 1lh 1ch; display: flex; flex-direction: column; }
     /* .dlg-title (the former .dlg-head h2) is now a direct child of the
        dialog, sitting BEFORE .dlg-head in markup — not nested inside it.
        That is what lets it reuse .pane-head's CSS verbatim: .pane-head's
@@ -434,7 +439,15 @@
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dlg-x:hover { color: var(--fg); }
-    .dlg-body { padding: 14px; overflow-y: auto; max-height: calc(88vh - 73px); }
+    /* No fixed max-height: a magic constant here has twice under-reserved the
+       real chrome above/below .dlg-body (the head's height varies — e.g.
+       #settings-modal's tabs row — and so does the dialog's own padding).
+       dialog[box-] is a column flex container; flex: 1 + min-height: 0 lets
+       this pane take exactly the remaining space and lets its own overflow
+       scroll instead of pushing the dialog past the frame's bottom border.
+       min-height: 0 is required — a flex child won't shrink below its content
+       size without it, so the scrollbar would never engage. */
+    .dlg-body { padding: 14px; overflow-y: auto; flex: 1; min-height: 0; }
     .dlg-tabs { display: flex; gap: 4px; }
     .dlg-tabs button {
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
