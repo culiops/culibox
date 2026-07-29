@@ -135,6 +135,19 @@ function emptyLi(text) {
 // re-applied on every poll re-render (not just at click time).
 const killing = new Set();
 
+// asBadge gives one of the session-row badges WebTUI's shape. The colour pair
+// goes through ITS variables, not `color`/`background`: badge.css paints the
+// body with a linear-gradient and the two 1ch end-caps with background-color,
+// all reading --badge-color, so setting `background` directly would colour the
+// caps and leave the body untouched.
+function asBadge(el, color, text) {
+  el.setAttribute("is-", "badge");
+  el.setAttribute("cap-", "slant-top");
+  el.style.setProperty("--badge-color", color);
+  el.style.setProperty("--badge-text", text);
+  return el;
+}
+
 function renderSession(s) {
   const li = document.createElement("li");
   if (terminalOpen(s.id)) li.classList.add("open");
@@ -148,6 +161,7 @@ function renderSession(s) {
     const st = document.createElement("span");
     st.className = "badge";
     st.textContent = "killing…";
+    asBadge(st, "var(--muted)", "var(--bg)");
     li.append(name, st);
     return li;
   }
@@ -158,6 +172,7 @@ function renderSession(s) {
     const badge = document.createElement("span");
     badge.className = "badge";
     badge.textContent = "exited";
+    asBadge(badge, "var(--border)", "var(--fg)");
     li.appendChild(badge);
   }
   // Containment tier. Shown for every live session, not only the risky one: a
@@ -169,6 +184,8 @@ function renderSession(s) {
     tb.className = "badge tier" + (tier.tone === "danger" ? " tier-danger" : "");
     tb.textContent = tier.text;
     tb.title = tier.title;
+    asBadge(tb, tier.tone === "danger" ? "var(--warn)" : "var(--border)",
+                tier.tone === "danger" ? "var(--bg)" : "var(--fg)");
     li.appendChild(tb);
   }
   // Attach is exclusive: opening a session disconnects whoever holds it. Say so
