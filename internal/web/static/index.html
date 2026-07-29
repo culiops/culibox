@@ -513,12 +513,12 @@
       #palette { width: 96vw; margin-top: 4vh; }
       #settings-modal, #spawn-modal { width: 94vw; }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
-      /* ＋ is the ONLY upload route on a phone (no drag exists), so it cannot
-         stay an 18px-tall desktop button sitting in a header. */
+      /* The upload button is the ONLY upload route on a phone (no drag exists),
+         so it cannot stay an 18px-tall desktop button sitting in a header. */
       #ft-upload, #ft-refresh, #ft-newdir { min-height: 30px; min-width: 38px; font-size: 15px; }
       #files-pane .pane-head { padding-top: 4px; padding-bottom: 4px; }
-      /* Also size ⋯ by viewport, not only by (hover: none): it is the row's only
-         affordance, and an 11×12px target is not one. */
+      /* Also size the row's actions button by viewport, not only by (hover: none):
+         it is the row's only affordance, and an 11×12px target is not one. */
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }
       /* Bigger tap targets: three small controls sit next to the destructive ✕. */
       .cell-ctl { gap: 6px; }
@@ -567,9 +567,9 @@
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div id="files-pane" box-="square" shear-="top">
         <div class="pane-head">files<span class="spacer" style="flex:1"></span>
-          <button id="ft-newdir" type="button" title="New folder in this folder" class="nf">󰉗</button>
-          <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)" class="nf"></button>
-          <button id="ft-upload" type="button" title="Upload files into the current folder" class="nf"></button>
+          <button id="ft-newdir" type="button" title="New folder in this folder" aria-label="New folder" class="nf">󰉗</button>
+          <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)" aria-label="Refresh file tree" class="nf"></button>
+          <button id="ft-upload" type="button" title="Upload files into the current folder" aria-label="Upload files" class="nf"></button>
           <input id="ft-upload-input" type="file" multiple hidden>
         </div>
         <div class="files-body">

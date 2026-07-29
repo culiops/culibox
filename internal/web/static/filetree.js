@@ -85,6 +85,11 @@ async function ftRenderDir(path, container, depth) {
     more.className = "ft-more nf";
     more.textContent = "";
     more.title = "Actions";
+    // A button's accessible name comes from its TEXT CONTENT before its title,
+    // and the title is only consulted when that text is empty. This button's text
+    // is a Private Use Area glyph — non-empty, but with no Unicode name — so
+    // without this the control announces as nothing at all.
+    more.setAttribute("aria-label", "Actions");
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
     row.append(more);
     if (ent.is_dir) {
