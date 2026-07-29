@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/vendor/highlight-theme.css">
   <link rel="stylesheet" href="/vendor/webtui/box.css">
   <link rel="stylesheet" href="/vendor/webtui/badge.css">
+  <link rel="stylesheet" href="/vendor/webtui/separator.css">
   <style>
     /* Symbols only — no letterforms. It is a FALLBACK at the end of every font
        stack, so ordinary text never reaches it and only icon codepoints do.
@@ -48,6 +49,13 @@
       --background2: var(--border); --background3: #585b70;
       --foreground0: var(--fg); --foreground1: #bac2de; --foreground2: var(--muted);
       --box-border-color: var(--border);
+      /* One value for every hairline that is structure rather than text: the
+         tree's branches (.ft-branch) and the status line's separators. --border
+         is 1.38 on --panel and vanishes; this measures 3.59, clearing WCAG
+         1.4.11's 3:1 for graphics that carry meaning. Defined once so the two
+         cannot drift apart the way the status-line dot and the tree connectors
+         once did independently. */
+      --rule: color-mix(in srgb, var(--muted) 70%, var(--panel));
       /* No --font-size / --line-height here. WebTUI's base.css declares them for
          its own components, but the two files vendored (box.css, badge.css) read
          neither, and body sets 14px/1.5 directly — so a pair here was read by
@@ -127,18 +135,21 @@
        bar; hint-text's own auto margin pushes it (and the dismiss button after
        it) to the far right, so the two groups read as two ends of one line. */
     #hint-text { margin-left: auto; }
-    /* Separator between the left-hand status fields only — three fixes in one
-       rule: (1) --border on --panel measures 1.38, effectively invisible;
-       color-mix(muted 50%, panel) measures 2.57, perceptible as a divider
-       without competing with the 5.65 field text. (2) span+span also matched
-       #hint-text (the right-pushed key hints), putting a stray dot in front
-       of it — excluded explicitly. (3) :not(:empty) alone only checks the
-       span getting the dot, not its predecessor, so a leading field left
-       empty (e.g. no env_label) produced an orphan "· 2 sessions" with
-       nothing before it — requiring the PRECEDING sibling be non-empty too
-       fixes that: the dot only appears between two fields that both render. */
-    #hint > span:not(:empty) + span:not(:empty):not(#hint-text)::before {
-      content: "· "; color: color-mix(in srgb, var(--muted) 50%, var(--panel));
+    /* Real separator elements (vendored separator.css) between the left-hand
+       status fields only — replaces a `·` drawn by ::before, which measured
+       1.38 on --panel (the default --separator-color, inherited from
+       --box-border-color i.e. --border, would reproduce that exact defect;
+       overridden here to --rule instead, unlayered so it wins over the
+       @layer-wrapped component default). Two explicit spans, not a generic
+       sibling rule, so nothing ever matches #hint-text (the right-pushed key
+       hints) — the old rule's first defect is now structural, not excluded
+       by a selector. The second defect — a leading separator opening the bar
+       when #status-env is empty (no env_label) — is fixed by hiding each
+       separator when the field it would introduce is empty. */
+    #hint .status-sep { --separator-color: var(--rule); }
+    #status-env:empty + .status-sep,
+    #hint .status-sep:has(+ #status-cwd:empty) {
+      display: none;
     }
     #hint button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
@@ -311,9 +322,10 @@
     /* Box-drawing, so it must sit on the character grid: no letter-spacing, no
        ellipsis, never shrink. --border would measure 1.38 here and vanish (the
        mistake the status-line separators made); full --muted at 5.65 competes
-       with the filenames it sits behind. 70% lands at 3.59, clearing WCAG
-       1.4.11's 3:1 for graphics that carry meaning. */
-    .ft-branch { flex: none; white-space: pre; color: color-mix(in srgb, var(--muted) 70%, var(--panel)); }
+       with the filenames it sits behind. --rule (defined in :root, shared with
+       the status-line separators below) lands at 3.59, clearing WCAG 1.4.11's
+       3:1 for graphics that carry meaning. */
+    .ft-branch { flex: none; white-space: pre; color: var(--rule); }
 
     /* Hidden until hover so the tree stays a tree, not a toolbar. */
     .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
@@ -689,7 +701,9 @@
   </div>
   <div id="hint">
     <span id="status-env"></span>
+    <span class="status-sep" is-="separator" direction-="y"></span>
     <span id="status-sessions"></span>
+    <span class="status-sep" is-="separator" direction-="y"></span>
     <span id="status-cwd"></span>
     <span id="hint-text"></span>
     <button id="hint-x" title="Dismiss">×</button>
