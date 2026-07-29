@@ -84,7 +84,7 @@
        specificity past its resting-state twin and wins outright. */
     .split-btn button:focus-visible, #ask-ok:focus-visible,
     #spawn button[type="submit"]:focus-visible, .pf-actions button:focus-visible,
-    .dlg-head h2:focus-visible {
+    .dlg-title:focus-visible {
       font-weight: 700;
     }
     /* Fields whose focused text is CONTENT, not a label (typed input, not a
@@ -239,7 +239,14 @@
       inherits: true;
       initial-value: 0px;
     }
-    #sessions-pane, #files-pane {
+    /* Same geometry, reused for the three dialogs below (#spawn-modal,
+       #settings-modal, #ask-modal) — they carry box-="square" shear-="top"
+       too, and their legend (.dlg-title) is positioned exactly like
+       .pane-head. All five elements share the body's 14px/1.5 font, so 1lh
+       resolves identically, but the property is still declared per-element
+       (typed custom properties resolve in their own font context) rather
+       than assumed equal. */
+    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -253,6 +260,18 @@
       /* The panel's own background masks the rule running behind the label —
          without it the border strikes through the text. */
       background: var(--panel);
+      /* width: fit-content, not the block default of filling the container:
+         as a flex ITEM of #sessions-pane/#files-pane this changes nothing
+         (align-self: flex-start above already shrinks it to content there).
+         But as a plain flow child of `dialog` (not a flex container), a
+         block box's width:auto fills the whole dialog, and the legend's
+         masking background would blank the entire rule instead of just the
+         text behind it. `display: inline-flex` also shrinks it, but makes
+         the box inline-level and subject to baseline alignment in the
+         parent's line box, which measured a 4px vertical offset against the
+         rule — fit-content keeps it block-level (no baseline quirk) while
+         still sizing to content. */
+      width: fit-content;
       display: flex; align-items: center; gap: .5ch;
       color: var(--muted); font-size: 10.5px; text-transform: none; letter-spacing: .5px;
     }
@@ -363,12 +382,51 @@
       max-width: 94vw; max-height: 88vh;
     }
     dialog::backdrop { background: #000a; }
-    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .75lh 2ch; border-bottom: 1px solid var(--border); }
-    .dlg-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    /* box-="square" gives #spawn-modal/#settings-modal/#ask-modal their own
+       synthetic border (a ::before inset within a padding box.css adds), so
+       the real `border` above would double it. box.css also sets
+       position: relative, which stomps the UA's dialog:modal centring trick
+       (position: fixed; inset: 0; margin: auto) at equal specificity — since
+       this stylesheet is unlayered and box.css is @layer-wrapped, our
+       declaration wins outright and restores centring regardless of source
+       order. #palette is deliberately excluded (see its own comment below):
+       it keeps the plain border and the UA's native fixed positioning. */
+    #spawn-modal, #settings-modal, #ask-modal {
+      border: none; position: fixed; inset: 0; margin: auto;
+    }
+    /* .dlg-title (the former .dlg-head h2) is now a direct child of the
+       dialog, sitting BEFORE .dlg-head in markup — not nested inside it.
+       That is what lets it reuse .pane-head's CSS verbatim: .pane-head's
+       `top: var(--pane-rule-y)` only lands on the rule when the element's
+       *static* position is the box'd element's own top edge (see the
+       --pane-rule-y comment above). Nested one level deeper inside
+       .dlg-head, that static position would additionally include
+       .dlg-head's own padding-top, and the legend would float exactly that
+       far below the rule — the same 19px-class error the pane legends made
+       against the wrong lh, just from a different cause. Pulling it out
+       sidesteps re-deriving anything: it is the identical rule, unmodified. */
+    /* #ask-title's text is set by JS to an arbitrary confirm message. Left
+       to wrap, a long one grows the legend to 2-3 lines; since it's centred
+       ON the rule (translateY(-50%) against its own height), a tall enough
+       box pushes half its height above the rule and off the top of the
+       dialog entirely — measured clipping a 3-line title in testing. A
+       single-line ellipsis keeps the legend's height fixed regardless of
+       message length, which is what makes the rule-centring math hold. */
+    .dlg-title {
+      margin-top: 0; margin-bottom: 0; font-weight: 400;
+      max-width: calc(100% - 2ch); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .25lh 1ch .5lh; border-bottom: 1px solid var(--border); }
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dlg-x:hover { color: var(--fg); }
-    .dlg-body { padding: 14px; overflow-y: auto; max-height: calc(88vh - 52px); }
+    /* Left/right come down by the 1ch box- already adds on the dialog itself
+       (else the content gains a double gutter); bottom comes down by the 1lh
+       box- adds there too — 1lh (21px) exceeds the original 14px outright,
+       so it clamps to 0 rather than leaving a token remainder. Top is
+       unaffected: box-'s padding-top is sheared to 0, so .dlg-body's own
+       14px is still the only top gutter. */
+    .dlg-body { padding: 14px calc(14px - 1ch) 0; overflow-y: auto; max-height: calc(88vh - 73px); }
     .dlg-tabs { display: flex; gap: 4px; }
     .dlg-tabs button {
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
@@ -442,6 +500,15 @@
     #fs-reset:hover { border-color: var(--accent); }
 
     /* --- command palette --------------------------------------------------- */
+    /* No box-/shear- here, on purpose. Tried a `.pane-head` legend reading
+       "search" (task 5): it duplicated the placeholder text one line below
+       it ("Search files and sessions...") and, since #pal-input/#pal-list/
+       #pal-foot all bleed edge-to-edge by design, box-'s inset broke that
+       into a visibly segmented, slightly glitchy frame rather than a clean
+       one. A palette a power user opens with a keyboard shortcut and reads
+       via its own placeholder doesn't need a titled frame — the design rule
+       is box- only where a legend earns its place in the rule; here it
+       didn't, so this keeps the plain border it already had. */
     #palette { width: 620px; margin-top: 9vh; margin-bottom: auto; }
     #pal-input {
       width: 100%; background: var(--bg); color: var(--fg); border: none;
@@ -717,9 +784,9 @@
     <div id="toast-bar" hidden><i></i></div>
   </div>
 
-  <dialog id="spawn-modal">
+  <dialog id="spawn-modal" box-="square" shear-="top">
+    <h2 class="pane-head dlg-title">New session</h2>
     <div class="dlg-head">
-      <h2>New session</h2>
       <span class="spacer"></span>
       <button class="dlg-x" type="button" data-close="spawn-modal" title="Close">×</button>
     </div>
@@ -754,9 +821,9 @@
     </div>
   </dialog>
 
-  <dialog id="settings-modal">
+  <dialog id="settings-modal" box-="square" shear-="top">
+    <h2 class="pane-head dlg-title">Settings</h2>
     <div class="dlg-head">
-      <h2>Settings</h2>
       <div class="dlg-tabs" id="settings-tabs">
         <button type="button" data-tab="manage" class="act">Profiles</button>
         <button type="button" data-tab="settings">Font sizes</button>
@@ -820,9 +887,9 @@
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span id="pal-insert-hint">^↵ insert path</span><span>esc close</span><span id="pal-note"></span></div>
   </dialog>
 
-  <dialog id="ask-modal">
+  <dialog id="ask-modal" box-="square" shear-="top">
+    <h2 id="ask-title" class="pane-head dlg-title"></h2>
     <div class="dlg-head">
-      <h2 id="ask-title"></h2>
       <span class="spacer"></span>
       <button class="dlg-x" type="button" id="ask-x" title="Close">×</button>
     </div>
