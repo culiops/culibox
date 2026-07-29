@@ -124,6 +124,25 @@ $("sidebar-toggle").onclick = toggleSidebar;
   };
 })();
 
+// updateStatusLine keeps the bottom bar describing the current state. Everything
+// it shows duplicates something already on screen — the env badge, the sessions
+// count, the focused pane — which is why the bar stays dismissible: dismissing
+// it loses no unique information.
+function updateStatusLine() {
+  const env = $("status-env");
+  if (env && window.__envLabel) env.textContent = "[" + window.__envLabel.toLowerCase() + "]";
+  const s = $("status-sessions");
+  if (s) {
+    const n = lastSessions.length;
+    s.textContent = n === 1 ? "1 session" : n + " sessions";
+  }
+  const cwd = $("status-cwd");
+  if (cwd) {
+    const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+    cwd.textContent = t && t.cwd ? shortPath(t.cwd) : "";
+  }
+}
+
 // --- sidebar: session list ---------------------------------------------------
 function emptyLi(text) {
   const li = document.createElement("li");
@@ -278,6 +297,7 @@ async function refreshSessions() {
   lastSessions = sessions || [];
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
+  updateStatusLine();
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
   ul.replaceChildren(...lastSessions.map(renderSession));
   return lastSessions;
@@ -823,10 +843,12 @@ initUpload();
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
+    window.__envLabel = meta.env_label; // the status line's lowercase copy reads this
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
     strip.hidden = false;
     document.title = "[" + meta.env_label + "] Agent Console";
+    updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh
   }
