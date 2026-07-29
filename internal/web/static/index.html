@@ -21,6 +21,24 @@
     :root {
       --bg: #0d1117; --panel: #161b22; --border: #30363d;
       --fg: #e6edf3; --muted: #8b949e; --accent: #2f81f7; --danger: #f85149;
+      --warn: #b45309; --warn-fg: #fca5a5;
+      /* Named here, DERIVED in Task 4. These three carry the literal values
+         they replace, exactly, because this task must not move a pixel:
+           - #1f6feb2e/#1f6feb1f are built on #1f6feb, which is NOT --accent
+             (#2f81f7). Two different blues have coexisted since the first
+             commit — index.html:139 uses them side by side, `outline: 1px solid
+             var(--accent)` over `background: #1f6feb2e`. Re-deriving the tint
+             from --accent here would shift it ~3/255 and fail the gate below.
+           - #21262d and #1f2630 collapse to one variable, but the 95%/5% mix
+             that reproduces them rounds ~1/255 off. Same reason.
+         Task 4 replaces all three with color-mix() formulas, where a deliberate
+         colour change belongs and gets reviewed as one. */
+      --sel: #1f6feb2e;
+      --sel-soft: #1f6feb1f;
+      --surface-2: #21262d;
+      --warn-bg: #b4530922;
+      --danger-tint: #2d1618;
+      --warn-tint: #2a2113;
       --fs-code: 12.5px; --fs-md: 14px; --fs-tree: 12px;
       --sidebar-split: 45%;
       --sidebar-w: 280px;
@@ -44,7 +62,7 @@
     #env-badge[hidden] { display: none; }
     /* --fg, not --muted: a muted label on a control that works reads as disabled,
        and these are the only way to reach the sidebar, the palette and settings. */
-    #sidebar-toggle, #settings-open, #palette-open { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+    #sidebar-toggle, #settings-open, #palette-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
     #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
@@ -56,10 +74,10 @@
     header .spacer { flex: 1; }
     .layouts { display: flex; gap: 4px; }
     .layouts button {
-      background: #21262d; color: var(--fg); border: 1px solid var(--border);
+      background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
       border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
     }
-    .layouts button.active { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
+    .layouts button.active { color: #fff; border-color: var(--accent); background: var(--sel); }
     #layout { flex: 1; display: flex; min-height: 0; }
     #sidebar {
       width: var(--sidebar-w); flex-shrink: 0; border-right: 1px solid var(--border);
@@ -90,7 +108,7 @@
       color: var(--fg); font: inherit; font-size: 12.5px; padding: 6px 9px;
       border-radius: 5px; cursor: pointer;
     }
-    #ft-menu button:hover { background: #1f6feb2e; }
+    #ft-menu button:hover { background: var(--sel); }
     /* The header reveals a path the tree had to truncate, so it WRAPS inside
        #ft-menu's existing 320px bound rather than ellipsising — truncating a
        path in the one element whose job is to un-truncate it defeats it. */
@@ -101,7 +119,7 @@
       border-bottom: 1px solid var(--border); margin-bottom: 4px;
     }
     #ft-menu hr { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
-    #runtime-warn { margin-top: 6px; font-size: 12px; color: #fca5a5; }
+    #runtime-warn { margin-top: 6px; font-size: 12px; color: var(--warn-fg); }
     .pf-hint, .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
     /* --- sidebar panes + splitter ---------------------------------------- */
@@ -135,14 +153,14 @@
     .sidebar-hidden #split-v { display: none; }
     #sessions { list-style: none; margin: 0; padding: 2px 8px 8px; overflow-y: auto; flex: 1; min-height: 0; }
     #sessions li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
-    #sessions li:hover { background: #1f2630; }
-    #sessions li.open { background: #1f6feb2e; outline: 1px solid var(--accent); }
+    #sessions li:hover { background: var(--surface-2); }
+    #sessions li.open { background: var(--sel); outline: 1px solid var(--accent); }
     #sessions .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
     #sessions .badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
     /* Containment tier. The uncontained tier borrows the PROD badge's red so one
        visual language means "you are somewhere with real consequences". */
     #sessions .tier { white-space: nowrap; }
-    #sessions .tier-danger { color: #fca5a5; border-color: #b45309; background: #b4530922; font-weight: 600; }
+    #sessions .tier-danger { color: var(--warn-fg); border-color: var(--warn); background: var(--warn-bg); font-weight: 600; }
     /* Someone is watching this session from somewhere else. A dot, not a worded
        badge: measured at the real 279px sidebar with a real session name, a third
        text badge squeezed the name to 49px over five lines. The dot costs 9px, so
@@ -160,7 +178,7 @@
     .ft-row select, .ft-row input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; }
     #filetree { flex: 1; min-height: 0; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-tree); }
     .ft-node { display: flex; align-items: center; gap: 4px; padding: 2px 4px; white-space: nowrap; cursor: pointer; border-radius: 4px; color: var(--fg); }
-    .ft-node:hover { background: #1f2630; }
+    .ft-node:hover { background: var(--surface-2); }
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     /* 2ch, not em: the tree is character-aligned, so the icon must occupy whole
@@ -188,14 +206,14 @@
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
     /* Same treatment as the header controls: these sit 40px below them, so a
        muted pair next to a lifted pair reads as "one of these is disabled". */
-    #ft-upload, #ft-refresh, #ft-newdir { background: #21262d; color: var(--fg); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload, #ft-refresh, #ft-newdir { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
     #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { border-color: var(--accent); }
     #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
     /* Drop affordance: it has to read as a target at a glance, or the whole
        gesture is guesswork. The terminal-cell variant lives with the .cell
        rules below, where source order lets it beat the focus outline. */
-    .drop-hot { outline: 2px dashed var(--accent); outline-offset: -3px; background: #1f6feb1f; }
+    .drop-hot { outline: 2px dashed var(--accent); outline-offset: -3px; background: var(--sel-soft); }
 
     /* --- dialogs (settings / advanced spawn / palette) -------------------- */
     dialog {
@@ -215,7 +233,7 @@
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
       border-radius: 6px; padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
     }
-    .dlg-tabs button.act { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
+    .dlg-tabs button.act { color: #fff; border-color: var(--accent); background: var(--sel); }
     .tab-panel[hidden] { display: none; }
 
     #settings-modal { width: 460px; }
@@ -235,7 +253,7 @@
     #ask-modal.danger #ask-ok { background: var(--danger); border-color: var(--danger); }
     /* An error raised while a dialog is open cannot use the toast: a fixed-position
        toast paints beneath the modal backdrop, so it would be invisible. */
-    .dlg-err { color: #fca5a5; font-size: 12px; margin-top: 8px; line-height: 1.45; }
+    .dlg-err { color: var(--warn-fg); font-size: 12px; margin-top: 8px; line-height: 1.45; }
     .dlg-err:empty { display: none; }
 
     /* --- spawn form (now inside the advanced dialog) ---------------------- */
@@ -265,7 +283,7 @@
        creating a profile were the lesser action. */
     .pf-actions { display: flex; gap: 8px; margin-top: 2px; align-items: center; }
     .pf-actions button { flex: 0 0 auto; background: var(--accent); border: 1px solid var(--accent); color: #fff; border-radius: 6px; padding: 7px 18px; cursor: pointer; font-weight: 600; }
-    .pf-actions button.ghost { background: #21262d; color: var(--fg); border-color: var(--border); padding: 7px 14px; font-weight: 400; }
+    .pf-actions button.ghost { background: var(--surface-2); color: var(--fg); border-color: var(--border); padding: 7px 14px; font-weight: 400; }
     .pf-actions button.ghost:hover { border-color: var(--accent); }
     #editable { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
     #editable li { display: flex; align-items: center; gap: 8px; }
@@ -294,13 +312,13 @@
       display: flex; align-items: center; gap: 9px; padding: 7px 10px;
       border-radius: 6px; cursor: pointer; font-size: 13px;
     }
-    #pal-list li.sel { background: #1f6feb2e; outline: 1px solid var(--accent); }
+    #pal-list li.sel { background: var(--sel); outline: 1px solid var(--accent); }
     #pal-list .pal-kind { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; text-transform: uppercase; letter-spacing: .4px; }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
     #pal-list li.sel .pal-copy { display: block; }
-    #pal-list .pal-copy:hover { color: var(--fg); background: #1f6feb2e; }
+    #pal-list .pal-copy:hover { color: var(--fg); background: var(--sel); }
     #pal-empty { color: var(--muted); font-size: 12.5px; padding: 14px; }
     #pal-foot { display: flex; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 
@@ -341,7 +359,7 @@
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
        pane: the affordance existed in the DOM and not on screen. */
-    .cell.drop-hot { outline: 2px dashed var(--accent); outline-offset: -2px; background: #1f6feb1f; }
+    .cell.drop-hot { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--sel-soft); }
     /* No right padding: the sticky control cluster pins to the scrollport edge, and
        any padding there would leave a strip where scrolled tabs bleed through. The
        cluster carries that 5px itself. */
@@ -357,7 +375,7 @@
        insurance against a cell-level drop zone arriving later. */
     .cell:has(.cell-bar[hidden]):not(.drop-hot) { background: var(--bg); }
     .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
-    .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
+    .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: var(--sel); }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     .cell-bar .tab-x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
@@ -382,7 +400,7 @@
     .viewer-reload:hover { color: var(--fg); border-color: var(--accent); }
     .viewer-auto { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 1px 7px; font-size: 11px; }
     .viewer-auto:hover { color: var(--fg); border-color: var(--accent); }
-    .viewer-auto.on { color: #fff; border-color: var(--accent); background: #1f6feb2e; }
+    .viewer-auto.on { color: #fff; border-color: var(--accent); background: var(--sel); }
     .viewer-zoom { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 1px 7px; font-size: 11px; }
     .viewer-zoom:hover { color: var(--fg); border-color: var(--accent); }
     .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -392,7 +410,7 @@
     .viewer-msg { padding: 14px; color: var(--muted); font-size: 13px; }
     .viewer-msg.err { color: var(--danger); }
     .viewer-img { max-width: 100%; max-height: 100%; margin: auto; display: block; object-fit: contain; }
-    .viewer-content:has(.viewer-img) { display: flex; align-items: center; justify-content: center; padding: 10px; background: #0d1117; }
+    .viewer-content:has(.viewer-img) { display: flex; align-items: center; justify-content: center; padding: 10px; background: var(--bg); }
     /* markdown */
     .md-body { padding: 14px 18px; font-size: var(--fs-md); line-height: 1.6; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); max-width: 900px; }
     .md-body h1, .md-body h2, .md-body h3 { border-bottom: 1px solid var(--border); padding-bottom: .3em; margin: 1.2em 0 .6em; }
@@ -405,14 +423,14 @@
     .md-body table { border-collapse: collapse; } .md-body th, .md-body td { border: 1px solid var(--border); padding: 6px 10px; }
     .md-body ul, .md-body ol { padding-left: 1.6em; }
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
-    .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2d1618; border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
+    .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--danger-tint); border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
     .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
     /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
-    .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: #2a2113; border-bottom: 1px solid #b45309; color: #fbbf24; font-size: 12px; }
-    .pane-trouble.expired { background: #2d1618; border-bottom-color: var(--danger); color: var(--danger); }
+    .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--warn-tint); border-bottom: 1px solid var(--warn); color: #fbbf24; font-size: 12px; }
+    .pane-trouble.expired { background: var(--danger-tint); border-bottom-color: var(--danger); color: var(--danger); }
     .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
-    .pane-trouble button { margin-left: auto; background: #b45309; color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
-    .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid #b45309; color: #fbbf24; }
+    .pane-trouble button { margin-left: auto; background: var(--warn); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid var(--warn); color: #fbbf24; }
     .pane-trouble button.alt + button { margin-left: 6px; }
     .pane-trouble.expired button { background: var(--danger); }
     @media (max-width: 700px) {
