@@ -264,7 +264,7 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	}
 	args := m.runArgs("ab-box-abc", "/w", nil)
 	joined := strings.Join(args, " ")
-	if strings.Contains(joined, "ac-state-") {
+	if strings.Contains(joined, "ab-state-") {
 		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)
 	}
 	var stateMount string
