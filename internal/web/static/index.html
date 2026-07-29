@@ -116,7 +116,12 @@
        file is not vendored — see Task 1 — and three declarations are cheaper than
        4.5 KB of bare-element selectors. --accent on --panel measures 5.97, AA. */
     #spawn-go { background: transparent; color: var(--accent); border-color: var(--accent); }
-    #spawn-go:hover { background: var(--sel); filter: none; }
+    /* Inverse video on hover, which is both the terminal idiom and the only
+       high-contrast option: --sel is an 18% ACCENT tint, so accent text on it is
+       the same hue against itself and measures 4.22 — below AA. Inverting gives
+       7.79. filter:none because brightening a transparent background does nothing,
+       so the inherited hover would otherwise read as dead. */
+    #spawn-go:hover { background: var(--accent); color: var(--bg); filter: none; }
     .split-btn button:hover { filter: brightness(1.12); }
     .split-btn button:disabled { opacity: .6; cursor: default; filter: none; }
     #ft-menu {
