@@ -14,29 +14,34 @@ async function api(path, opts) {
 const $ = (id) => document.getElementById(id);
 const enc = new TextEncoder();
 
-// copyText copies to the clipboard. The app is served over HTTP (not a secure
-// context), so navigator.clipboard is usually unavailable: fall back to a
-// hidden off-screen textarea + execCommand("copy"), which works over plain HTTP.
-// `done` restores terminal focus (the textarea steals it). window.__lastCopied
-// is a test hook.
+// copyText copies to the clipboard and reports whether it actually worked via
+// done(ok). The app is served over HTTP (not a secure context), so
+// navigator.clipboard is usually unavailable: fall back to a hidden off-screen
+// textarea + execCommand("copy"), which works over plain HTTP but can itself
+// fail — its return value is what ok reports in that branch. `done` also
+// restores terminal focus (the textarea steals it). window.__lastCopied is a
+// test hook.
 function copyText(text, done) {
   window.__lastCopied = text;
-  const finish = () => { if (done) done(); };
+  const finish = (ok) => { if (done) done(ok); };
   if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(finish, () => { execCopy(text); finish(); });
+    navigator.clipboard.writeText(text).then(() => finish(true), () => finish(execCopy(text)));
     return;
   }
-  execCopy(text);
-  finish();
+  finish(execCopy(text));
 }
+// execCopy returns whether execCommand("copy") actually succeeded: it can
+// return false, or throw, with no other observable symptom.
 function execCopy(text) {
   const ta = document.createElement("textarea");
   ta.value = text;
   ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "0"; ta.style.opacity = "0";
   document.body.appendChild(ta);
   ta.focus(); ta.select();
-  try { document.execCommand("copy"); } catch (_) { /* best effort */ }
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (_) { /* best effort */ }
   document.body.removeChild(ta);
+  return ok;
 }
 
 // PROBE_MS bounds every request on the reconnect path. A page whose fetches are
@@ -762,6 +767,7 @@ $("layouts").addEventListener("click", (e) => {
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();
+initWidthSplitter();
 initSpawnControl();
 initPalette();
 loadProfiles();

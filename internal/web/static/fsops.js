@@ -97,6 +97,24 @@ function shortPath(p, home) {
   return p.indexOf(home + "/") === 0 ? "~" + p.slice(home.length) : p;
 }
 
+// relativeTo renders `path` relative to `root`. It is the ONE definition of
+// "relative path" in this app: the tree is rooted at whatever #ft-root has
+// selected, while /api/fs/search returns paths relative to HOME, so a second
+// definition anywhere would make two identically-labelled buttons disagree.
+//
+// A path outside the root falls back to shortPath's ~/… form rather than to the
+// bare absolute path: returning the same string as the "Copy path" button next
+// to it, with no explanation, is how a user stops trusting both.
+function relativeTo(root, path, home) {
+  if (!root || !path) return shortPath(path, home);
+  const r = root === "/" ? "/" : root.replace(/\/+$/, "");
+  if (path === r) return ".";
+  const prefix = r === "/" ? "/" : r + "/";
+  // Whole-component compare, like shortPath: "/home/user2" is not inside
+  // "/home/user".
+  return path.indexOf(prefix) === 0 ? path.slice(prefix.length) : shortPath(path, home);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath };
+  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath, relativeTo };
 }

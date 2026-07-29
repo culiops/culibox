@@ -35,6 +35,17 @@ function isPaletteHotkey(e, mac) {
   return !!(mac && e.metaKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyK");
 }
 
+// isInsertHotkey matches Ctrl+Enter (⌘+Enter on mac): insert the selected file's
+// path at the focused prompt instead of opening it in a viewer. Plain Enter must
+// stay the open action, so the modifier is the whole distinction. Alt is
+// excluded like in isPaletteHotkey: AltGr (common off-mac) reports as both
+// ctrlKey and altKey, and without the exclusion AltGr+Enter would insert a path
+// instead of opening the file it looks like it should open.
+function isInsertHotkey(e, mac) {
+  if (e.key !== "Enter" || e.altKey) return false;
+  return mac ? !!e.metaKey && !e.ctrlKey : !!e.ctrlKey && !e.metaKey;
+}
+
 function paletteOpen() {
   const d = document.getElementById("palette");
   return !!(d && d.open);
@@ -180,6 +191,10 @@ async function palSearchFiles(q, seq, local) {
       label: cut >= 0 ? r.rel.slice(cut + 1) : r.rel,
       hint: cut >= 0 ? tailDirs(r.rel.slice(0, cut)) : "",
       title: shortPath(r.path),
+      // The absolute path, so the copy button and Ctrl+Enter do not have to
+      // reconstruct it from the label and hint (both of which are truncated for
+      // display and cannot be reassembled).
+      path: r.path,
       run: () => openFile(r.path),
     };
   });
@@ -217,6 +232,26 @@ function palRender(items, note) {
       h.className = "pal-hint";
       h.textContent = it.hint;
       li.append(h);
+    }
+    if (it.path) {
+      // Only on the selected row. li.onmouseenter already selects the row under
+      // the pointer, so this needs no separate hover state — the button appears
+      // wherever the mouse is.
+      const cp = document.createElement("button");
+      cp.type = "button";
+      cp.className = "pal-copy";
+      cp.textContent = "⧉";
+      cp.title = "Copy path";
+      cp.setAttribute("aria-label", "Copy path");
+      cp.onclick = (e) => {
+        e.stopPropagation(); // must not also run the item
+        // Close FIRST: showModal() makes everything outside the dialog inert, so
+        // copyText's off-screen-textarea fallback (this page is plain HTTP, so
+        // navigator.clipboard is usually absent) cannot focus and copies nothing.
+        closePalette();
+        copyPath(it.path);
+      };
+      li.append(cp);
     }
     li.onmouseenter = () => palSelect(i);
     li.onclick = () => runItem(it);
@@ -264,10 +299,21 @@ function initPalette() {
     openBtn.onclick = openPalette;
   }
 
+  // ^ is wrong on mac, where the same binding is ⌘. The hint is the only place
+  // this shortcut is written down.
+  const insHint = document.getElementById("pal-insert-hint");
+  if (insHint) insHint.textContent = (mac ? "⌘↵" : "^↵") + " insert path";
+
   inp.addEventListener("input", palRefresh);
   inp.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); palSelect(palSel + 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); palSelect(palSel - 1); }
+    else if (isInsertHotkey(e, mac) && palItems[palSel] && palItems[palSel].path) {
+      e.preventDefault();
+      const p = palItems[palSel].path;
+      closePalette(); // see the copy button: a modal dialog makes the rest of the page inert
+      insertPathAtPrompt(p);
+    }
     else if (e.key === "Enter") { e.preventDefault(); runItem(palItems[palSel]); }
   });
   // Esc, backdrop click and programmatic close all land here: drop any in-flight
@@ -295,5 +341,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey };
+  module.exports = { isPaletteHotkey, isInsertHotkey };
 }
