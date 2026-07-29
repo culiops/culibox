@@ -178,7 +178,10 @@
     #sessions li:hover { background: var(--surface-2); }
     #sessions li.open { background: var(--sel); outline: 1px solid var(--accent); }
     #sessions .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
-    #sessions .badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 4px; }
+    /* No `color:` here on purpose: WebTUI paints the badge body from
+       --badge-color and the text from --badge-text (badge.css). A color set
+       here is unlayered and would silently win over --badge-text again. */
+    #sessions .badge { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     /* Containment tier. The uncontained tier borrows the PROD badge's red so one
        visual language means "you are somewhere with real consequences". */
     #sessions .tier { white-space: nowrap; }
@@ -193,7 +196,8 @@
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
-    #sessions li.killing .badge { color: var(--danger); border-color: var(--danger); }
+    /* Same reasoning: no color: here — --badge-text carries it. */
+    #sessions li.killing .badge { border-color: var(--danger); }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
