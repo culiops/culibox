@@ -45,6 +45,24 @@ function iconFor(name, isDir, open) {
   return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
 }
 
+// treeBranch builds the box-drawing prefix for one row and the prefix its own
+// children inherit. Depth used to be left padding; drawing it is what makes the
+// tree read as a TUI.
+//
+// The whole subtlety is the second return value: a row that is the last of its
+// siblings stops its vertical (children get spaces), while a row that is not
+// keeps it running (children get "│"). Get that wrong and deep trees grow
+// verticals that belong to branches which already ended.
+//
+// U+2500 Box Drawing, NOT the Private Use Area — these are in ordinary monospace
+// fonts and do not depend on the vendored subset.
+function treeBranch(prefix, isLast) {
+  return {
+    rowPrefix: prefix + (isLast ? "└─ " : "├─ "),
+    childPrefix: prefix + (isLast ? "   " : "│  "),
+  };
+}
+
 let ftRootSel = null, ftTreeEl = null;
 let lastSyncedSessionId = null; // which session the tree is currently following
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
@@ -393,5 +411,5 @@ async function initFileTree() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { iconFor };
+  module.exports = { iconFor, treeBranch };
 }
