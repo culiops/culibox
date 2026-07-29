@@ -579,7 +579,7 @@
     #grid .placeholder { color: var(--muted); }
     /* cells = grid slots; each holds a stack of tabs (terminal or viewer) */
     .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); overflow: hidden; background: #000; }
-    .cell.focused { outline: 1px solid var(--accent); }
+    .cell.focused { outline: 3px double var(--accent); outline-offset: -3px; }
     /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
