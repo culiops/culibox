@@ -163,6 +163,11 @@
     .ft-node:hover { background: #1f2630; }
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    /* 2ch, not em: the tree is character-aligned, so the icon must occupy whole
+       character cells or a wide glyph shifts every name in the column. */
+    .ft-icon { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
+    .ft-node.dir .ft-icon { color: var(--accent); }
+
     /* Hidden until hover so the tree stays a tree, not a toolbar. */
     .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
     .ft-more:hover { color: var(--fg); }
