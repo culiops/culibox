@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 func TestDeriveName_DotDot(t *testing.T) {

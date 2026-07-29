@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 // failingAttachBackend is alive at the abduco layer but cannot produce an attach

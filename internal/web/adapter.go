@@ -1,8 +1,8 @@
 package web
 
 import (
-	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/session"
+	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 // ManagerService adapts *session.Manager to the Info-based SessionService the

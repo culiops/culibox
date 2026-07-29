@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/culiops/culiops-agent-console/internal/auth"
+	"github.com/culiops/agent-box/internal/auth"
 )
 
 //go:embed static

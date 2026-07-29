@@ -10,7 +10,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/culiops/culiops-agent-console/internal/launcher"
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 // fakeBackend simulates abduco with real cheap processes on PTYs, so reap's

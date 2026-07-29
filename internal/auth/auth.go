@@ -15,7 +15,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // CookieName is the WS auth cookie.

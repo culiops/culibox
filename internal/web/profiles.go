@@ -4,8 +4,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/store"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/store"
 )
 
 // ProfileOption is one option a profile exposes, for the spawn-form UI. It

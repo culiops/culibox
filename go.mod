@@ -1,4 +1,4 @@
-module github.com/culiops/culiops-agent-console
+module github.com/culiops/agent-box
 
 go 1.26.5
 

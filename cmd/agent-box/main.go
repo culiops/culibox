@@ -1,4 +1,4 @@
-// Command agent-console is a self-hosted web control-plane for managing
+// Command agent-box is a self-hosted web control-plane for managing
 // CLI agent sessions. It spawns and owns each agent process on its own PTY
 // (no tmux), and serves them in the browser via xterm.js over a WebSocket.
 package main
@@ -16,17 +16,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/culiops-agent-console/internal/abduco"
-	"github.com/culiops/culiops-agent-console/internal/auth"
-	"github.com/culiops/culiops-agent-console/internal/box"
-	"github.com/culiops/culiops-agent-console/internal/bundle"
-	"github.com/culiops/culiops-agent-console/internal/config"
-	"github.com/culiops/culiops-agent-console/internal/launcher"
-	"github.com/culiops/culiops-agent-console/internal/secrets"
-	"github.com/culiops/culiops-agent-console/internal/session"
-	"github.com/culiops/culiops-agent-console/internal/store"
-	"github.com/culiops/culiops-agent-console/internal/terminal"
-	"github.com/culiops/culiops-agent-console/internal/web"
+	"github.com/culiops/agent-box/internal/abduco"
+	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/agent-box/internal/terminal"
+	"github.com/culiops/agent-box/internal/web"
 )
 
 func main() {
