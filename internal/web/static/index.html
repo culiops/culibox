@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/vendor/highlight-theme.css">
   <link rel="stylesheet" href="/vendor/webtui/box.css">
   <link rel="stylesheet" href="/vendor/webtui/badge.css">
+  <link rel="stylesheet" href="/vendor/webtui/separator.css">
   <style>
     /* Symbols only — no letterforms. It is a FALLBACK at the end of every font
        stack, so ordinary text never reaches it and only icon codepoints do.
@@ -48,6 +49,13 @@
       --background2: var(--border); --background3: #585b70;
       --foreground0: var(--fg); --foreground1: #bac2de; --foreground2: var(--muted);
       --box-border-color: var(--border);
+      /* One value for every hairline that is structure rather than text: the
+         tree's branches (.ft-branch) and the status line's separators. --border
+         is 1.38 on --panel and vanishes; this measures 3.59, clearing WCAG
+         1.4.11's 3:1 for graphics that carry meaning. Defined once so the two
+         cannot drift apart the way the status-line dot and the tree connectors
+         once did independently. */
+      --rule: color-mix(in srgb, var(--muted) 70%, var(--panel));
       /* No --font-size / --line-height here. WebTUI's base.css declares them for
          its own components, but the two files vendored (box.css, badge.css) read
          neither, and body sets 14px/1.5 directly — so a pair here was read by
@@ -76,7 +84,7 @@
        specificity past its resting-state twin and wins outright. */
     .split-btn button:focus-visible, #ask-ok:focus-visible,
     #spawn button[type="submit"]:focus-visible, .pf-actions button:focus-visible,
-    .dlg-head h2:focus-visible {
+    .dlg-title:focus-visible {
       font-weight: 700;
     }
     /* Fields whose focused text is CONTENT, not a label (typed input, not a
@@ -127,18 +135,26 @@
        bar; hint-text's own auto margin pushes it (and the dismiss button after
        it) to the far right, so the two groups read as two ends of one line. */
     #hint-text { margin-left: auto; }
-    /* Separator between the left-hand status fields only — three fixes in one
-       rule: (1) --border on --panel measures 1.38, effectively invisible;
-       color-mix(muted 50%, panel) measures 2.57, perceptible as a divider
-       without competing with the 5.65 field text. (2) span+span also matched
-       #hint-text (the right-pushed key hints), putting a stray dot in front
-       of it — excluded explicitly. (3) :not(:empty) alone only checks the
-       span getting the dot, not its predecessor, so a leading field left
-       empty (e.g. no env_label) produced an orphan "· 2 sessions" with
-       nothing before it — requiring the PRECEDING sibling be non-empty too
-       fixes that: the dot only appears between two fields that both render. */
-    #hint > span:not(:empty) + span:not(:empty):not(#hint-text)::before {
-      content: "· "; color: color-mix(in srgb, var(--muted) 50%, var(--panel));
+    /* Real separator elements (vendored separator.css) between the left-hand
+       status fields only — replaces a `·` drawn by ::before, which measured
+       1.38 on --panel (the default --separator-color, inherited from
+       --box-border-color i.e. --border, would reproduce that exact defect;
+       overridden here to --rule instead, unlayered so it wins over the
+       @layer-wrapped component default). Two explicit spans, not a generic
+       sibling rule, so nothing ever matches #hint-text (the right-pushed key
+       hints) — the old rule's first defect is now structural, not excluded
+       by a selector. The second defect — a leading separator opening the bar
+       when #status-env is empty (no env_label) — is fixed by hiding each
+       separator when the field it would introduce is empty. */
+    /* separator.css's [direction-=y] rule sets width but never height — it
+       relies on an align-items: stretch container to give it one. #hint uses
+       align-items: center (see above), so without an explicit height here the
+       element measures 0 tall and the gradient paints nothing: a fully
+       invisible separator, not just a wrong colour. */
+    #hint .status-sep { --separator-color: var(--rule); height: 1lh; }
+    #status-env:empty + .status-sep,
+    #hint .status-sep:has(+ #status-cwd:empty) {
+      display: none;
     }
     #hint button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
@@ -228,7 +244,14 @@
       inherits: true;
       initial-value: 0px;
     }
-    #sessions-pane, #files-pane {
+    /* Same geometry, reused for the three dialogs below (#spawn-modal,
+       #settings-modal, #ask-modal) — they carry box-="square" shear-="top"
+       too, and their legend (.dlg-title) is positioned exactly like
+       .pane-head. All five elements share the body's 14px/1.5 font, so 1lh
+       resolves identically, but the property is still declared per-element
+       (typed custom properties resolve in their own font context) rather
+       than assumed equal. */
+    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -242,6 +265,18 @@
       /* The panel's own background masks the rule running behind the label —
          without it the border strikes through the text. */
       background: var(--panel);
+      /* width: fit-content, not the block default of filling the container:
+         as a flex ITEM of #sessions-pane/#files-pane this changes nothing
+         (align-self: flex-start above already shrinks it to content there).
+         But as a plain flow child of `dialog` (not a flex container), a
+         block box's width:auto fills the whole dialog, and the legend's
+         masking background would blank the entire rule instead of just the
+         text behind it. `display: inline-flex` also shrinks it, but makes
+         the box inline-level and subject to baseline alignment in the
+         parent's line box, which measured a 4px vertical offset against the
+         rule — fit-content keeps it block-level (no baseline quirk) while
+         still sizing to content. */
+      width: fit-content;
       display: flex; align-items: center; gap: .5ch;
       color: var(--muted); font-size: 10.5px; text-transform: none; letter-spacing: .5px;
     }
@@ -308,6 +343,13 @@
        character cells or a wide glyph shifts every name in the column. */
     .ft-icon { flex: none; width: 2ch; text-align: center; font-family: "Symbols Nerd Font"; color: var(--muted); }
     .ft-node.dir .ft-icon { color: var(--accent); }
+    /* Box-drawing, so it must sit on the character grid: no letter-spacing, no
+       ellipsis, never shrink. --border would measure 1.38 here and vanish (the
+       mistake the status-line separators made); full --muted at 5.65 competes
+       with the filenames it sits behind. --rule (defined in :root, shared with
+       the status-line separators below) lands at 3.59, clearing WCAG 1.4.11's
+       3:1 for graphics that carry meaning. */
+    .ft-branch { flex: none; white-space: pre; color: var(--rule); }
 
     /* Hidden until hover so the tree stays a tree, not a toolbar. */
     .ft-more { flex: none; visibility: hidden; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; padding: 0 3px; }
@@ -345,12 +387,67 @@
       max-width: 94vw; max-height: 88vh;
     }
     dialog::backdrop { background: #000a; }
-    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .75lh 2ch; border-bottom: 1px solid var(--border); }
-    .dlg-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+    /* box-="square" gives #spawn-modal/#settings-modal/#ask-modal their own
+       synthetic border (a ::before inset within a padding box.css adds), so
+       the real `border` above would double it. box.css also sets
+       position: relative, which stomps the UA's dialog:modal centring trick
+       (position: fixed; inset: 0; margin: auto) at equal specificity — since
+       this stylesheet is unlayered and box.css is @layer-wrapped, our
+       declaration wins outright and restores centring regardless of source
+       order. #palette is deliberately excluded (see its own comment below):
+       it keeps the plain border and the UA's native fixed positioning. */
+    #spawn-modal, #settings-modal, #ask-modal {
+      border: none; position: fixed; inset: 0; margin: auto;
+    }
+    /* box.css's own inset (`padding: 1lh 1ch`, sheared by [shear-=top] to
+       `0 1ch 1lh 1ch`) lives inside `@layer utils`. `dialog { padding: 0 }`
+       above does not — it's unlayered, and unlayered always beats layered
+       regardless of selector order or specificity. That means box-'s inset
+       never reached a <dialog> element at all: getComputedStyle(dialog)
+       .padding measured 0px on every side, so the frame's side and bottom
+       borders sat right where the content was painted, and only the top
+       rule (drawn by box.css's ::before, which isn't a padding-dependent
+       property) was ever visible. Restored here, unlayered, scoped to
+       dialogs that actually carry box- (not #palette, which has none).
+       Encodes the sheared value directly (top: 0) rather than trusting
+       box.css's own [shear-=top] rule to zero it — that rule is ALSO
+       layered and would lose to this shorthand's padding-top the same way. */
+    dialog[box-] { padding: 0 1ch 1lh 1ch; display: flex; flex-direction: column; }
+    /* .dlg-title (the former .dlg-head h2) is now a direct child of the
+       dialog, sitting BEFORE .dlg-head in markup — not nested inside it.
+       That is what lets it reuse .pane-head's CSS verbatim: .pane-head's
+       `top: var(--pane-rule-y)` only lands on the rule when the element's
+       *static* position is the box'd element's own top edge (see the
+       --pane-rule-y comment above). Nested one level deeper inside
+       .dlg-head, that static position would additionally include
+       .dlg-head's own padding-top, and the legend would float exactly that
+       far below the rule — the same 19px-class error the pane legends made
+       against the wrong lh, just from a different cause. Pulling it out
+       sidesteps re-deriving anything: it is the identical rule, unmodified. */
+    /* #ask-title's text is set by JS to an arbitrary confirm message. Left
+       to wrap, a long one grows the legend to 2-3 lines; since it's centred
+       ON the rule (translateY(-50%) against its own height), a tall enough
+       box pushes half its height above the rule and off the top of the
+       dialog entirely — measured clipping a 3-line title in testing. A
+       single-line ellipsis keeps the legend's height fixed regardless of
+       message length, which is what makes the rule-centring math hold. */
+    .dlg-title {
+      margin-top: 0; margin-bottom: 0; font-weight: 400;
+      max-width: calc(100% - 2ch); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .45lh 1ch .5lh; border-bottom: 1px solid var(--border); }
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dlg-x:hover { color: var(--fg); }
-    .dlg-body { padding: 14px; overflow-y: auto; max-height: calc(88vh - 52px); }
+    /* No fixed max-height: a magic constant here has twice under-reserved the
+       real chrome above/below .dlg-body (the head's height varies — e.g.
+       #settings-modal's tabs row — and so does the dialog's own padding).
+       dialog[box-] is a column flex container; flex: 1 + min-height: 0 lets
+       this pane take exactly the remaining space and lets its own overflow
+       scroll instead of pushing the dialog past the frame's bottom border.
+       min-height: 0 is required — a flex child won't shrink below its content
+       size without it, so the scrollbar would never engage. */
+    .dlg-body { padding: 14px; overflow-y: auto; flex: 1; min-height: 0; }
     .dlg-tabs { display: flex; gap: 4px; }
     .dlg-tabs button {
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
@@ -424,6 +521,15 @@
     #fs-reset:hover { border-color: var(--accent); }
 
     /* --- command palette --------------------------------------------------- */
+    /* No box-/shear- here, on purpose. Tried a `.pane-head` legend reading
+       "search" (task 5): it duplicated the placeholder text one line below
+       it ("Search files and sessions...") and, since #pal-input/#pal-list/
+       #pal-foot all bleed edge-to-edge by design, box-'s inset broke that
+       into a visibly segmented, slightly glitchy frame rather than a clean
+       one. A palette a power user opens with a keyboard shortcut and reads
+       via its own placeholder doesn't need a titled frame — the design rule
+       is box- only where a legend earns its place in the rule; here it
+       didn't, so this keeps the plain border it already had. */
     #palette { width: 620px; margin-top: 9vh; margin-bottom: auto; }
     #pal-input {
       width: 100%; background: var(--bg); color: var(--fg); border: none;
@@ -486,7 +592,7 @@
     #grid .placeholder { color: var(--muted); }
     /* cells = grid slots; each holds a stack of tabs (terminal or viewer) */
     .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); overflow: hidden; background: #000; }
-    .cell.focused { outline: 1px solid var(--accent); }
+    .cell.focused { outline: 3px double var(--accent); outline-offset: -3px; }
     /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
@@ -683,7 +789,9 @@
   </div>
   <div id="hint">
     <span id="status-env"></span>
+    <span class="status-sep" is-="separator" direction-="y"></span>
     <span id="status-sessions"></span>
+    <span class="status-sep" is-="separator" direction-="y"></span>
     <span id="status-cwd"></span>
     <span id="hint-text"></span>
     <button id="hint-x" title="Dismiss">×</button>
@@ -697,9 +805,9 @@
     <div id="toast-bar" hidden><i></i></div>
   </div>
 
-  <dialog id="spawn-modal">
+  <dialog id="spawn-modal" box-="square" shear-="top">
+    <h2 class="pane-head dlg-title">New session</h2>
     <div class="dlg-head">
-      <h2>New session</h2>
       <span class="spacer"></span>
       <button class="dlg-x" type="button" data-close="spawn-modal" title="Close">×</button>
     </div>
@@ -734,9 +842,9 @@
     </div>
   </dialog>
 
-  <dialog id="settings-modal">
+  <dialog id="settings-modal" box-="square" shear-="top">
+    <h2 class="pane-head dlg-title">Settings</h2>
     <div class="dlg-head">
-      <h2>Settings</h2>
       <div class="dlg-tabs" id="settings-tabs">
         <button type="button" data-tab="manage" class="act">Profiles</button>
         <button type="button" data-tab="settings">Font sizes</button>
@@ -800,9 +908,9 @@
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span id="pal-insert-hint">^↵ insert path</span><span>esc close</span><span id="pal-note"></span></div>
   </dialog>
 
-  <dialog id="ask-modal">
+  <dialog id="ask-modal" box-="square" shear-="top">
+    <h2 id="ask-title" class="pane-head dlg-title"></h2>
     <div class="dlg-head">
-      <h2 id="ask-title"></h2>
       <span class="spacer"></span>
       <button class="dlg-x" type="button" id="ask-x" title="Close">×</button>
     </div>

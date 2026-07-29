@@ -45,19 +45,55 @@ function iconFor(name, isDir, open) {
   return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
 }
 
+// treeBranch builds the box-drawing prefix for one row and the prefix its own
+// children inherit. Depth used to be left padding; drawing it is what makes the
+// tree read as a TUI.
+//
+// The whole subtlety is the second return value: a row that is the last of its
+// siblings stops its vertical (children get spaces), while a row that is not
+// keeps it running (children get "│"). Get that wrong and deep trees grow
+// verticals that belong to branches which already ended.
+//
+// Two characters per level, not three: this matches WebTUI's own marker-="tree"
+// convention (`content: "├ "` — no dash), not an invention of ours. Note this
+// repo vendors only webtui's box.css/badge.css, not typography.css, so the tree
+// itself is hand-rolled to the same convention rather than consuming that CSS.
+// At the sidebar's 280px default (200px minimum), every character given to the
+// connector is a character taken from the filename.
+//
+// U+2500 Box Drawing, NOT the Private Use Area — these are in ordinary monospace
+// fonts and do not depend on the vendored subset.
+function treeBranch(prefix, isLast) {
+  return {
+    rowPrefix: prefix + (isLast ? "└ " : "├ "),
+    childPrefix: prefix + (isLast ? "  " : "│ "),
+  };
+}
+
 let ftRootSel = null, ftTreeEl = null;
 let lastSyncedSessionId = null; // which session the tree is currently following
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 
-async function ftRenderDir(path, container, depth) {
+async function ftRenderDir(path, container, prefix) {
+  prefix = prefix || "";
   let data;
   try { data = await api("/api/fs/list?path=" + encodeURIComponent(path)); }
   catch (e) { const d = document.createElement("div"); d.className = "ft-err"; d.textContent = e.message; container.append(d); return; }
-  for (const ent of data.entries) {
+  for (let i = 0; i < data.entries.length; i++) {
+    const ent = data.entries[i];
+    // Indexed, not for..of: a row cannot draw itself without knowing whether it
+    // is the last of its siblings — that is what decides └ against ├, and
+    // whether its own children keep the vertical running.
+    const b = treeBranch(prefix, i === data.entries.length - 1);
     const full = path.replace(/\/$/, "") + "/" + ent.name;
     const row = document.createElement("div");
     row.className = "ft-node";
-    row.style.paddingLeft = (depth * 12 + 6) + "px";
+    // Depth is drawn now, not padded. The branch is its own element for the same
+    // reason the icon is: the label's textContent is rewritten on every toggle.
+    const branch = document.createElement("span");
+    branch.className = "ft-branch";
+    branch.textContent = b.rowPrefix;
+    branch.setAttribute("aria-hidden", "true"); // decorative: indentation is not content
     // The label lives in its own span so the row can also carry a download
     // button: writing row.textContent would wipe any child element.
     // The icon is its own element, not part of the label's text: the label's
@@ -69,12 +105,12 @@ async function ftRenderDir(path, container, depth) {
     icon.setAttribute("aria-hidden", "true"); // decorative: the name is the label
     const label = document.createElement("span");
     label.className = "ft-name";
-    label.textContent = (ent.is_dir ? "▸ " : "  ") + ent.name;
+    label.textContent = ent.name;
     // The title goes on the LABEL, not the row: the ⋯ button carries its own
     // title and must keep it. The full path rather than the bare name, because
     // it also answers "which of the three index.html files is this one".
     label.title = shortPath(full);
-    row.append(icon, label);
+    row.append(branch, icon, label);
     // One affordance per row. Download used to sit here as a bare ⤓ and Rename /
     // Delete behind the menu; two controls squeezed the name column (badly at
     // 390px) and put a destructive action a finger-width from a harmless one.
@@ -97,12 +133,11 @@ async function ftRenderDir(path, container, depth) {
       row.classList.add("dir");
       row.onclick = async () => {
         open = !open;
-        label.textContent = (open ? "▾ " : "▸ ") + ent.name;
         icon.textContent = iconFor(ent.name, true, open);
         if (open) {
           childBox = document.createElement("div");
           row.after(childBox);
-          await ftRenderDir(full, childBox, depth + 1);
+          await ftRenderDir(full, childBox, b.childPrefix);
         } else if (childBox) { childBox.remove(); childBox = null; }
       };
       // Each directory row is its own drop target and stops propagation, so it
@@ -112,7 +147,7 @@ async function ftRenderDir(path, container, depth) {
           onDone: () => {
             if (!open || !childBox) return;
             childBox.replaceChildren();
-            ftRenderDir(full, childBox, depth + 1);
+            ftRenderDir(full, childBox, b.childPrefix);
           },
         });
       }
@@ -133,7 +168,7 @@ async function ftLoadRoot() {
   if (!ftRootSel || !ftTreeEl) return;
   const gen = ++ftGen;
   const box = document.createElement("div");
-  await ftRenderDir(ftRootSel.value, box, 0);
+  await ftRenderDir(ftRootSel.value, box);
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
 }
@@ -393,5 +428,5 @@ async function initFileTree() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { iconFor };
+  module.exports = { iconFor, treeBranch };
 }
