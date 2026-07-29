@@ -82,8 +82,8 @@ async function ftRenderDir(path, container, depth) {
     // symlink-skip finally reads as a visible label instead of a tooltip no
     // touch device can reach.
     const more = document.createElement("button");
-    more.className = "ft-more";
-    more.textContent = "⋯";
+    more.className = "ft-more nf";
+    more.textContent = "";
     more.title = "Actions";
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
     row.append(more);

@@ -18,6 +18,7 @@
       src: url("/vendor/symbols-nerd-font-subset.ttf") format("truetype");
       font-display: block;
     }
+    .nf { font-family: "Symbols Nerd Font"; font-size: 1em; line-height: 1; }
     :root {
       /* Catppuccin Mocha. Chosen by measurement, not taste: Gruvbox and Nord
          both fail WCAG AA here (Gruvbox 4.17/4.31/3.37, Nord 3.28/5.03/2.46 for
@@ -550,7 +551,7 @@
       <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
     <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌕</span></button>
-    <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings">⚙</button>
+    <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings" class="nf"></button>
   </header>
   <div id="layout">
     <aside id="sidebar">
@@ -566,9 +567,9 @@
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div id="files-pane" box-="square" shear-="top">
         <div class="pane-head">files<span class="spacer" style="flex:1"></span>
-          <button id="ft-newdir" type="button" title="New folder in this folder">⊞</button>
-          <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)">⟳</button>
-          <button id="ft-upload" type="button" title="Upload files into the current folder">＋</button>
+          <button id="ft-newdir" type="button" title="New folder in this folder" class="nf">󰉗</button>
+          <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)" class="nf"></button>
+          <button id="ft-upload" type="button" title="Upload files into the current folder" class="nf"></button>
           <input id="ft-upload-input" type="file" multiple hidden>
         </div>
         <div class="files-body">
