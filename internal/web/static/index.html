@@ -54,18 +54,23 @@
       --sidebar-split: 45%;
       --sidebar-w: 280px;
     }
+    /* WebTUI's focus and disabled treatments, adopted as our own. Bold plus an
+       underline beats a coloured outline ring here: it carries no contrast risk
+       of its own, and it is what a TUI does. */
+    :focus-visible { outline: none; font-weight: 700; text-decoration: underline; }
+    button:disabled, [disabled] { text-decoration: line-through; }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
       background: var(--bg); color: var(--fg);
-      font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font: 14px/1.5 var(--font-family);
       display: flex; flex-direction: column; height: 100vh;
     }
     header {
-      display: flex; align-items: center; gap: 10px;
-      padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+      display: flex; align-items: center; gap: 1ch;
+      padding: .5lh 2ch; border-bottom: 1px solid var(--border); background: var(--panel);
     }
-    header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+    header .dot { width: 10px; height: 10px; background: var(--accent); }
     header h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #env-strip { height: 3px; width: 100%; flex-shrink: 0; }
     #env-strip[hidden] { display: none; }
@@ -73,12 +78,12 @@
     #env-badge[hidden] { display: none; }
     /* --fg, not --muted: a muted label on a control that works reads as disabled,
        and these are the only way to reach the sidebar, the palette and settings. */
-    #sidebar-toggle, #settings-open, #palette-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+    #sidebar-toggle, #settings-open, #palette-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
     #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
-    #hint { display: flex; align-items: center; gap: 8px; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
+    #hint { display: flex; align-items: center; gap: 1ch; padding: .25lh 2ch; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }
     #hint button { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
@@ -86,7 +91,7 @@
     .layouts { display: flex; gap: 4px; }
     .layouts button {
       background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
-      border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer;
+      padding: 4px 10px; font-size: 12px; cursor: pointer;
     }
     .layouts button.active { color: #fff; border-color: var(--accent); background: var(--sel); }
     #layout { flex: 1; display: flex; min-height: 0; }
@@ -99,25 +104,25 @@
     }
 
     /* --- spawn button ---------------------------------------------------- */
-    #spawn-bar { flex: none; padding: 12px 12px 10px; border-bottom: 1px solid var(--border); }
+    #spawn-bar { flex: none; padding: .75lh 2ch .5lh; border-bottom: 1px solid var(--border); }
     .split-btn { display: flex; }
     .split-btn button {
       background: var(--accent); border: 1px solid var(--accent); color: #fff;
       font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 10px;
     }
-    #spawn-go { flex: 1; border-radius: 6px; text-align: center; min-width: 0; }
+    #spawn-go { flex: 1; text-align: center; min-width: 0; }
     .split-btn button:hover { filter: brightness(1.12); }
     .split-btn button:disabled { opacity: .6; cursor: default; filter: none; }
     #ft-menu {
       position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
-      background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel); border: 1px solid var(--border);
       box-shadow: 0 10px 34px #000b; padding: 5px; display: none;
     }
     #ft-menu.open { display: block; }
     #ft-menu button {
       display: block; width: 100%; text-align: left; background: none; border: none;
       color: var(--fg); font: inherit; font-size: 12.5px; padding: 6px 9px;
-      border-radius: 5px; cursor: pointer;
+      cursor: pointer;
     }
     #ft-menu button:hover { background: var(--sel); }
     /* The header reveals a path the tree had to truncate, so it WRAPS inside
@@ -135,10 +140,10 @@
 
     /* --- sidebar panes + splitter ---------------------------------------- */
     .pane-head {
-      flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 12px 5px;
+      flex: none; display: flex; align-items: center; gap: .5ch; padding: .5lh 2ch .25lh;
       color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px;
     }
-    .pane-head .count { font-size: 10px; border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+    .pane-head .count { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     #sessions-pane { flex: 0 1 var(--sidebar-split); display: flex; flex-direction: column; min-height: 76px; }
     #files-pane { flex: 1 1 0; display: flex; flex-direction: column; min-height: 76px; }
     #split-h {
@@ -148,7 +153,7 @@
     }
     #split-h::after {
       content: ""; position: absolute; left: 50%; top: 50%; width: 28px; height: 2px;
-      transform: translate(-50%, -50%); border-radius: 2px; background: var(--border);
+      transform: translate(-50%, -50%); background: var(--border);
     }
     #split-h:hover::after, #split-h.dragging::after { background: var(--accent); }
     #split-v {
@@ -158,16 +163,16 @@
     }
     #split-v::after {
       content: ""; position: absolute; top: 50%; left: 50%; width: 2px; height: 28px;
-      transform: translate(-50%, -50%); border-radius: 2px; background: var(--border);
+      transform: translate(-50%, -50%); background: var(--border);
     }
     #split-v:hover::after, #split-v.dragging::after { background: var(--accent); }
     .sidebar-hidden #split-v { display: none; }
     #sessions { list-style: none; margin: 0; padding: 2px 8px 8px; overflow-y: auto; flex: 1; min-height: 0; }
-    #sessions li { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+    #sessions li { display: flex; align-items: center; gap: 1ch; padding: .5lh 1ch; cursor: pointer; }
     #sessions li:hover { background: var(--surface-2); }
     #sessions li.open { background: var(--sel); outline: 1px solid var(--accent); }
     #sessions .name { flex: 1; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; }
-    #sessions .badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+    #sessions .badge { font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 4px; }
     /* Containment tier. The uncontained tier borrows the PROD badge's red so one
        visual language means "you are somewhere with real consequences". */
     #sessions .tier { white-space: nowrap; }
@@ -178,17 +183,17 @@
        the row keeps the height it already had. --fg rather than --muted or
        --accent because the row this matters most on is your own evicted one,
        which carries the blue .open tint that swallows both. */
-    #sessions .watching { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--fg); }
+    #sessions .watching { flex: none; width: 9px; height: 9px; background: var(--fg); }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
-    #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); border-radius: 6px; padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+    #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
     #sessions li.killing .badge { color: var(--danger); border-color: var(--danger); }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
-    .ft-row select, .ft-row input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12px; }
+    .ft-row select, .ft-row input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 5px 7px; font-size: 12px; }
     #filetree { flex: 1; min-height: 0; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-tree); }
-    .ft-node { display: flex; align-items: center; gap: 4px; padding: 2px 4px; white-space: nowrap; cursor: pointer; border-radius: 4px; color: var(--fg); }
+    .ft-node { display: flex; align-items: center; gap: .25ch; padding: .25lh .25ch; white-space: nowrap; cursor: pointer; color: var(--fg); }
     .ft-node:hover { background: var(--surface-2); }
     .ft-node.dir { color: var(--accent); }
     .ft-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -217,7 +222,7 @@
     .ft-err { color: var(--danger); font-size: 11px; padding: 4px; }
     /* Same treatment as the header controls: these sit 40px below them, so a
        muted pair next to a lifted pair reads as "one of these is disabled". */
-    #ft-upload, #ft-refresh, #ft-newdir { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
+    #ft-upload, #ft-refresh, #ft-newdir { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
     #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { border-color: var(--accent); }
     #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
@@ -229,11 +234,11 @@
     /* --- dialogs (settings / advanced spawn / palette) -------------------- */
     dialog {
       background: var(--panel); color: var(--fg); border: 1px solid var(--border);
-      border-radius: 10px; padding: 0; box-shadow: 0 18px 60px #000c; font: inherit;
+      padding: 0; box-shadow: 0 18px 60px #000c; font: inherit;
       max-width: 94vw; max-height: 88vh;
     }
     dialog::backdrop { background: #000a; }
-    .dlg-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+    .dlg-head { display: flex; align-items: center; gap: 1ch; padding: .75lh 2ch; border-bottom: 1px solid var(--border); }
     .dlg-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
@@ -242,7 +247,7 @@
     .dlg-tabs { display: flex; gap: 4px; }
     .dlg-tabs button {
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
-      border-radius: 6px; padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
+      padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
     }
     .dlg-tabs button.act { color: #fff; border-color: var(--accent); background: var(--sel); }
     .tab-panel[hidden] { display: none; }
@@ -254,9 +259,9 @@
        one offers no break opportunity. #toast-msg carries it for the same reason. */
     #ask-modal #ask-body { margin: 0 0 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
     #ask-modal #ask-body:empty { display: none; }
-    #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+    #ask-modal #ask-input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-    .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+    .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
     .ask-actions button:hover { border-color: var(--accent); }
     #ask-ok { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
     #ask-ok:hover { filter: brightness(1.12); }
@@ -272,7 +277,7 @@
     #spawn label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
     #spawn select, #spawn input, #spawn button[type="submit"] {
       background: var(--bg); color: var(--fg); border: 1px solid var(--border);
-      border-radius: 6px; padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
+      padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
     }
     #spawn button[type="submit"] { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; font-weight: 600; margin-top: 2px; }
     #options { display: grid; gap: 8px; }
@@ -285,15 +290,15 @@
     .manage-body { display: grid; gap: 8px; }
     .pf-row { display: flex; align-items: center; gap: 8px; }
     .pf-row > label { flex: 0 0 64px; color: var(--muted); font-size: 12px; text-transform: none; letter-spacing: 0; }
-    .pf-row input[type="text"], .pf-row select { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 7px; font-size: 12.5px; }
+    .pf-row input[type="text"], .pf-row select { flex: 1; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 5px 7px; font-size: 12.5px; }
     .pf-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
     .pf-lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
-    .manage-body textarea, #pf-secrets { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 7px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; resize: vertical; box-sizing: border-box; }
+    .manage-body textarea, #pf-secrets { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 7px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; resize: vertical; box-sizing: border-box; }
     #pf-options { display: grid; gap: 6px; }
     /* Neither button stretches: a full-width Save next to a small New read as if
        creating a profile were the lesser action. */
     .pf-actions { display: flex; gap: 8px; margin-top: 2px; align-items: center; }
-    .pf-actions button { flex: 0 0 auto; background: var(--accent); border: 1px solid var(--accent); color: #fff; border-radius: 6px; padding: 7px 18px; cursor: pointer; font-weight: 600; }
+    .pf-actions button { flex: 0 0 auto; background: var(--accent); border: 1px solid var(--accent); color: #fff; padding: 7px 18px; cursor: pointer; font-weight: 600; }
     .pf-actions button.ghost { background: var(--surface-2); color: var(--fg); border-color: var(--border); padding: 7px 14px; font-weight: 400; }
     .pf-actions button.ghost:hover { border-color: var(--accent); }
     #editable { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 4px; }
@@ -305,29 +310,29 @@
     .settings-body { display: grid; gap: 8px; }
     .fs-row { display: flex; align-items: center; gap: 6px; }
     .fs-row > label { flex: 1; color: var(--muted); font-size: 12px; }
-    .fs-val { width: 56px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; font-size: 12.5px; text-align: center; }
-    .fs-dec, .fs-inc { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; width: 28px; padding: 4px 0; cursor: pointer; font-size: 14px; line-height: 1; }
+    .fs-val { width: 56px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 4px 6px; font-size: 12.5px; text-align: center; }
+    .fs-dec, .fs-inc { background: var(--bg); color: var(--fg); border: 1px solid var(--border); width: 28px; padding: 4px 0; cursor: pointer; font-size: 14px; line-height: 1; }
     .fs-dec:hover, .fs-inc:hover { border-color: var(--accent); }
-    #fs-reset { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; cursor: pointer; }
+    #fs-reset { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px; cursor: pointer; }
     #fs-reset:hover { border-color: var(--accent); }
 
     /* --- command palette --------------------------------------------------- */
     #palette { width: 620px; margin-top: 9vh; margin-bottom: auto; }
     #pal-input {
       width: 100%; background: var(--bg); color: var(--fg); border: none;
-      border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0;
+      border-bottom: 1px solid var(--border);
       padding: 13px 15px; font-size: 14px; font-family: inherit; outline: none;
     }
     #pal-list { list-style: none; margin: 0; padding: 6px; max-height: 52vh; overflow-y: auto; }
     #pal-list li {
-      display: flex; align-items: center; gap: 9px; padding: 7px 10px;
-      border-radius: 6px; cursor: pointer; font-size: 13px;
+      display: flex; align-items: center; gap: 1ch; padding: .5lh 1ch;
+      cursor: pointer; font-size: 13px;
     }
     #pal-list li.sel { background: var(--sel); outline: 1px solid var(--accent); }
-    #pal-list .pal-kind { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; text-transform: uppercase; letter-spacing: .4px; }
+    #pal-list .pal-kind { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 5px; text-transform: uppercase; letter-spacing: .4px; }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+    #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
     #pal-list li.sel .pal-copy { display: block; }
     #pal-list .pal-copy:hover { color: var(--fg); background: var(--sel); }
     #pal-empty { color: var(--muted); font-size: 12.5px; padding: 14px; }
@@ -338,17 +343,17 @@
       position: fixed; right: 16px; bottom: 44px; z-index: 60; display: none;
       align-items: center; gap: 12px; max-width: min(440px, 92vw);
       background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-      border-radius: 8px; padding: 10px 12px; box-shadow: 0 10px 34px #000b; font-size: 12.5px;
+      padding: 10px 12px; box-shadow: 0 10px 34px #000b; font-size: 12.5px;
       flex-wrap: wrap; row-gap: 8px;
     }
     /* Full-width progress rail under the message; only shown while transferring. */
-    #toast-bar { flex: 0 0 100%; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+    #toast-bar { flex: 0 0 100%; height: 3px; background: var(--border); overflow: hidden; }
     #toast-bar[hidden] { display: none; }
     #toast-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
     #toast.show { display: flex; }
     #toast.err { border-left-color: var(--danger); }
     #toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-    #toast-undo { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 11px; cursor: pointer; font: inherit; font-size: 12px; }
+    #toast-undo { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 3px 11px; cursor: pointer; font: inherit; font-size: 12px; }
     #toast-undo:hover { border-color: var(--accent); color: #fff; }
     #toast-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 2px; }
     #toast-x:hover { color: var(--fg); }
@@ -364,7 +369,7 @@
     #grid.empty { display: flex; align-items: center; justify-content: center; }
     #grid .placeholder { color: var(--muted); }
     /* cells = grid slots; each holds a stack of tabs (terminal or viewer) */
-    .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: #000; }
+    .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; border: 1px solid var(--border); overflow: hidden; background: #000; }
     .cell.focused { outline: 1px solid var(--accent); }
     /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
@@ -385,7 +390,7 @@
        to the terminal tab element, so a tabless cell is never a target) and cheap
        insurance against a cell-level drop zone arriving later. */
     .cell:has(.cell-bar[hidden]):not(.drop-hot) { background: var(--bg); }
-    .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+    .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
     .cell-bar .tab.act { color: #fff; border-color: var(--accent); background: var(--sel); }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
@@ -395,7 +400,7 @@
     .cell-bar .tab-kill:hover { color: var(--danger); }
     .cell-sp { flex: 1; min-width: 4px; }
     .cell-ctl { position: sticky; right: 0; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 5px 0 4px; background: var(--panel); }
-    .cell-sh { flex: none; color: var(--muted); background: none; border: 1px solid var(--border); border-radius: 5px; cursor: pointer; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.4; padding: 1px 6px; }
+    .cell-sh { flex: none; color: var(--muted); background: none; border: 1px solid var(--border); cursor: pointer; font-family: ui-monospace, Menlo, monospace; font-size: 11px; line-height: 1.4; padding: 1px 6px; }
     .cell-sh:hover { color: var(--fg); border-color: var(--accent); }
     .cell-sh:disabled { opacity: .45; cursor: default; border-color: var(--border); }
     .cell-max, .cell-del { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 13px; padding: 0 4px; }
@@ -407,12 +412,12 @@
     /* viewer (code / markdown / image) */
     .viewer-body { background: var(--bg); }
     .viewer-tools { display: flex; align-items: center; gap: 8px; padding: 3px 8px; background: var(--panel); border-bottom: 1px solid var(--border); }
-    .viewer-reload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 1px 7px; }
+    .viewer-reload { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; }
     .viewer-reload:hover { color: var(--fg); border-color: var(--accent); }
-    .viewer-auto { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 1px 7px; font-size: 11px; }
+    .viewer-auto { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; font-size: 11px; }
     .viewer-auto:hover { color: var(--fg); border-color: var(--accent); }
     .viewer-auto.on { color: #fff; border-color: var(--accent); background: var(--sel); }
-    .viewer-zoom { background: var(--bg); color: var(--muted); border: 1px solid var(--border); border-radius: 5px; cursor: pointer; padding: 1px 7px; font-size: 11px; }
+    .viewer-zoom { background: var(--bg); color: var(--muted); border: 1px solid var(--border); cursor: pointer; padding: 1px 7px; font-size: 11px; }
     .viewer-zoom:hover { color: var(--fg); border-color: var(--accent); }
     .viewer-path { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .viewer-content { flex: 1; min-height: 0; overflow: auto; }
@@ -426,8 +431,8 @@
     .md-body { padding: 14px 18px; font-size: var(--fs-md); line-height: 1.6; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); max-width: 900px; }
     .md-body h1, .md-body h2, .md-body h3 { border-bottom: 1px solid var(--border); padding-bottom: .3em; margin: 1.2em 0 .6em; }
     .md-body h1 { font-size: 1.7em; } .md-body h2 { font-size: 1.4em; } .md-body h3 { font-size: 1.2em; }
-    .md-body code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: .1em .35em; font-family: ui-monospace, Menlo, monospace; font-size: .88em; }
-    .md-body pre { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow: auto; }
+    .md-body code { background: var(--panel); border: 1px solid var(--border); padding: .1em .35em; font-family: ui-monospace, Menlo, monospace; font-size: .88em; }
+    .md-body pre { background: var(--panel); border: 1px solid var(--border); padding: 12px; overflow: auto; }
     .md-body pre code { background: none; border: none; padding: 0; }
     .md-body a { color: var(--accent); } .md-body img { max-width: 100%; }
     .md-body blockquote { border-left: 3px solid var(--border); margin: 0; padding: 0 1em; color: var(--muted); }
@@ -435,12 +440,12 @@
     .md-body ul, .md-body ol { padding-left: 1.6em; }
     .pane-term { flex: 1; min-height: 0; padding: 4px; }
     .pane-ended { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--danger-tint); border-bottom: 1px solid var(--danger); color: var(--danger); font-size: 12px; }
-    .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-ended button { margin-left: auto; background: var(--danger); color: #fff; border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
     /* Disconnected (recoverable): amber, distinct from the red "ended" bar. */
     .pane-trouble { display: flex; align-items: center; gap: 10px; padding: 5px 10px; background: var(--warn-tint); border-bottom: 1px solid var(--warn); color: #fbbf24; font-size: 12px; }
     .pane-trouble.expired { background: var(--danger-tint); border-bottom-color: var(--danger); color: var(--danger); }
     .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
-    .pane-trouble button { margin-left: auto; background: var(--warn); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+    .pane-trouble button { margin-left: auto; background: var(--warn); color: #fff; border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
     .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid var(--warn); color: #fbbf24; }
     .pane-trouble button.alt + button { margin-left: 6px; }
     .pane-trouble.expired button { background: var(--danger); }
@@ -464,7 +469,7 @@
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
          with it: otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
-      header { gap: 6px; padding: 8px 10px; }
+      header { gap: .5ch; padding: .5lh 1ch; }
       /* The heading used to be display:none here, on the grounds that the badge
          and dot carry identity. They do not carry the product NAME, so it is back
         : paid for by the palette button's shortcut label, which means nothing on
@@ -510,7 +515,7 @@
   <header>
     <button id="sidebar-toggle" title="Hide/show sidebar" aria-label="Toggle sidebar">☰</button>
     <span class="dot"></span>
-    <h1>Agent Console</h1>
+    <h1>agent-console</h1>
     <span id="env-badge" hidden></span>
     <span class="spacer"></span>
     <div class="layouts" id="layouts">
@@ -525,16 +530,16 @@
     <aside id="sidebar">
       <div id="spawn-bar">
         <div class="split-btn">
-          <button id="spawn-go" type="button">+ New session</button>
+          <button id="spawn-go" type="button">[ + new session ]</button>
         </div>
       </div>
       <div id="sessions-pane">
-        <div class="pane-head">Sessions<span class="spacer" style="flex:1"></span><span class="count" id="sessions-count">0</span></div>
+        <div class="pane-head">sessions<span class="spacer" style="flex:1"></span><span class="count" id="sessions-count">0</span></div>
         <ul id="sessions"><li class="empty">Loading…</li></ul>
       </div>
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
       <div id="files-pane">
-        <div class="pane-head">Files<span class="spacer" style="flex:1"></span>
+        <div class="pane-head">files<span class="spacer" style="flex:1"></span>
           <button id="ft-newdir" type="button" title="New folder in this folder">⊞</button>
           <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)">⟳</button>
           <button id="ft-upload" type="button" title="Upload files into the current folder">＋</button>
