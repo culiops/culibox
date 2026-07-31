@@ -26,6 +26,7 @@ class ViewerTab {
     // alone cannot say: load() leaves it untouched for an image, for a binary,
     // for every HTTP error, and for the moment before the first load returns.
     this.copyRefusal = "loading";
+    this.showingMsg = false; // true while the pane shows a message, not the file
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
     const ext0 = extOf(path);
     // which CSS var this viewer's text reads (null for images → zoom is a no-op)
@@ -51,15 +52,13 @@ class ViewerTab {
     // A word, not a glyph: a button's accessible name comes from its text
     // content before its title, and an unprobed codepoint ships as a tofu box no
     // test catches. `viewer-auto` is the existing text-button style.
-    if (!IMAGE_EXTS.has(ext0)) { // an image has no text to copy
+    if (!IMAGE_EXTS.has(ext0)) { // an image has no text to copy and nothing to poll
       const cp = document.createElement("button");
       cp.className = "viewer-auto";
       cp.textContent = "Copy";
       cp.title = "Copy this file's contents";
       cp.onclick = () => this.copyContents(cp);
       this.toolbar.append(cp);
-    }
-    if (!IMAGE_EXTS.has(ext0)) { // auto-reload is pointless for images
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
       auto.onclick = () => this.toggleAuto(auto);
@@ -110,11 +109,15 @@ class ViewerTab {
   }
   setStatus(t) { this.statusText = t; this.onUpdate?.(); }
 
+  // showingMsg tracks whether the pane holds a MESSAGE rather than the file, so
+  // load() can tell "nothing changed, skip the re-render" from "the text is the
+  // same but an error is still on screen over it".
   msg(text, cls) {
     const d = document.createElement("div");
     d.className = "viewer-msg" + (cls ? " " + cls : "");
     d.textContent = text;
     this.content.replaceChildren(d);
+    this.showingMsg = true;
   }
 
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
@@ -134,22 +137,27 @@ class ViewerTab {
     const res = await fsRead(this.path);
     const plan = copyContentPlan(res);
     if (plan.action !== "copy") {
-      // Record WHY there is no text, so the Copy button can say something true
-      // instead of guessing "binary or too large" at a file that was deleted.
+      // A FAILED poll changes nothing. The screen still holds the text it had,
+      // so a dropped tick must not make Copy refuse what the user is looking at
+      // over an error the viewer never displayed.
       //
-      // Only on a real load. A failed auto-reload tick leaves the screen exactly
-      // as it was — same rendered body, same lastContent — so it must not change
-      // what Copy believes about that text. Otherwise one dropped poll makes the
-      // button refuse to copy what the user is looking at, citing an error the
-      // viewer never showed.
-      if (poll) return;
+      // A SUCCESSFUL one does. `empty` and `binary` are definitive answers about
+      // the file, not transport failures: truncating a log you are watching is
+      // the most ordinary thing that happens to it, and silently keeping the old
+      // text would have Copy hand over content the file no longer has.
+      if (poll && !res.ok) return;
       this.copyRefusal = plan.reason;
       if (plan.reason === "empty") {
         // A successful read of a file with nothing in it is not an error.
+        if (poll && this.lastContent === "") return; // already shown; don't churn
         this.lastContent = "";
         this.msg("empty file");
         this.setStatus("");
       } else if (plan.reason === "binary") {
+        // null, not the old text: leaving it would make the unchanged-check
+        // below suppress the re-render if the file turns back into that text.
+        if (poll && this.lastContent === null) return; // already shown
+        this.lastContent = null;
         this.msg(`binary file · ${(res.data && res.data.size) || 0} bytes`);
         this.setStatus("");
       } else {
@@ -165,7 +173,11 @@ class ViewerTab {
     }
     this.copyRefusal = null;
     if (!poll) this.setStatus("");
-    if (poll && plan.text === this.lastContent) return; // unchanged → no re-render
+    // Unchanged text still needs a re-render when a message is covering it:
+    // a file that went missing and came back identical otherwise leaves a red
+    // "not found" on screen while Copy quietly succeeds behind it.
+    if (poll && plan.text === this.lastContent && !this.showingMsg) return;
+    if (this.showingMsg) this.setStatus(""); // clear the error the message left
     this.lastContent = plan.text;
     const scroll = this.content.scrollTop;
     if (MD_EXTS.has(ext)) this.renderMarkdown(plan.text);
@@ -183,6 +195,7 @@ class ViewerTab {
       : { action: "copy", text: this.lastContent, lines: countLines(this.lastContent) };
     if (plan.action === "refuse") {
       const m = copyResultMessage(plan, this.name, false);
+      btn.focus(); // a refusal leaves focus where a success would, not on nothing
       showToast(m.text, { error: m.error });
       return;
     }
@@ -194,6 +207,7 @@ class ViewerTab {
   }
 
   renderCode(text, lang) {
+    this.showingMsg = false;
     const pre = document.createElement("pre");
     const code = document.createElement("code");
     let html;
@@ -210,6 +224,7 @@ class ViewerTab {
   }
 
   renderMarkdown(text) {
+    this.showingMsg = false;
     const dir = this.path.slice(0, this.path.lastIndexOf("/") + 1);
     // Markdown can be semi-untrusted (agent-written reports, cloned-repo READMEs),
     // so require DOMPurify to render HTML; without it, fall back to plain code.
@@ -236,6 +251,7 @@ class ViewerTab {
   }
 
   renderImage() {
+    this.showingMsg = false;
     const img = document.createElement("img");
     img.className = "viewer-img";
     img.alt = this.name;

@@ -46,14 +46,24 @@ function copyContentPlan(res) {
     if (res.status === 400 && res.data && res.data.error === "is a directory") {
       return { action: "refuse", reason: "isdir" };
     }
-    if (!res.status) return { action: "refuse", reason: "loading" }; // network/abort
+    // status 0 = fetch threw: daemon restarted, tunnel dropped, tab offline.
+    // Distinct from "loading", which is a viewer that has not answered yet —
+    // calling this loading describes a state that does not exist, and in the
+    // viewer it contradicts the pane, which already says the server is gone.
+    if (!res.status) return { action: "refuse", reason: "offline" };
     return {
       action: "refuse",
       reason: "unreadable",
       detail: (res.data && res.data.error) || ("HTTP " + res.status),
     };
   }
-  const data = res.data || {};
+  // An ok response whose body would not parse arrives as null. A genuinely
+  // empty text file never looks like this — it is always {kind,lang,size:0} —
+  // so treating null as empty would confidently describe a file never read.
+  // Reachable if IMAGE_EXTS ever drifts from the server's image map, since the
+  // image route answers 200 with raw bytes.
+  if (res.data == null) return { action: "refuse", reason: "unreadable", detail: "unreadable response" };
+  const data = res.data;
   if (data.kind === "binary") return { action: "refuse", reason: "binary" };
   // json:"content,omitempty" means a 0-byte file arrives with no content key at
   // all, so this must catch undefined as well as "".
@@ -77,6 +87,7 @@ function copyResultMessage(plan, name, ok) {
     isdir: '"' + name + '" is a directory — nothing to copy',
     image: '"' + name + '" is an image — nothing to copy',
     loading: '"' + name + '" is still loading — try again',
+    offline: 'Could not reach the server — "' + name + '" was not copied',
     unreadable: 'Could not read "' + name + '": ' + (plan.detail || "unknown error"),
   }[plan.reason] || ('Could not copy "' + name + '"');
   return { text: say, error: true };

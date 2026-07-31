@@ -289,6 +289,9 @@ async function copyContents(path, name) {
   const plan = copyContentPlan(await fsRead(path));
   if (plan.action === "refuse") {
     const m = copyResultMessage(plan, name, false);
+    // closeRowMenu already hid the button that had focus, so a refusal that
+    // returns here would leave the next keystroke going nowhere.
+    focusTerminal();
     showToast(m.text, { error: m.error });
     return;
   }

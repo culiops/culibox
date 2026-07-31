@@ -53,6 +53,32 @@ test("a 400 that is not is-a-directory stays unreadable", () => {
   }
 });
 
+// A 200 whose body would not parse arrives as data:null. A genuinely empty text
+// file NEVER looks like that — it is always the object {kind,lang,size:0} — so
+// calling this "empty" would be a confident lie about a file we never read.
+test("a 200 with an unparseable body is unreadable, not empty", () => {
+  const p = copyContentPlan({ ok: true, status: 200, data: null });
+  assert.equal(p.action, "refuse");
+  assert.equal(p.reason, "unreadable");
+});
+
+// status 0 means fetch threw: the daemon restarted, the tunnel dropped. Saying
+// "still loading" describes a state that does not exist, and in the viewer it
+// contradicts the pane, which already says the server could not be reached.
+test("an unreachable server is offline, not loading", () => {
+  assert.deepEqual(copyContentPlan({ ok: false, status: 0, data: null }),
+    { action: "refuse", reason: "offline" });
+  const m = copyResultMessage({ action: "refuse", reason: "offline" }, "a.txt", false);
+  assert.equal(m.error, true);
+  assert.match(m.text, /reach the server/i);
+});
+
+// The viewer's own pre-first-load state stays distinct from a dead socket.
+test("loading is still its own reason for a viewer that has not loaded yet", () => {
+  const m = copyResultMessage({ action: "refuse", reason: "loading" }, "a.txt", false);
+  assert.match(m.text, /still loading/i);
+});
+
 test("an image has no text and says so rather than blaming the clipboard", () => {
   const m = copyResultMessage({ action: "refuse", reason: "image" }, "photo.png", false);
   assert.equal(m.error, true);
@@ -66,9 +92,9 @@ test("any other failure is unreadable and keeps the server's sentence", () => {
   assert.equal(p.detail, "not found");
 });
 
-test("a viewer snapshot that has not loaded yet is refused as loading", () => {
-  assert.deepEqual(copyContentPlan({ ok: false, status: 0, data: null }), { action: "refuse", reason: "loading" });
-});
+// "loading" is a state the viewer holds about itself (copyRefusal before its
+// first load resolves), never something a response can say — a request that
+// came back at all has a real answer. See the offline test above for status 0.
 
 test("a successful copy reports the file and its line count", () => {
   const m = copyResultMessage({ action: "copy", text: "a\nb", lines: 2 }, "notes.md", true);
