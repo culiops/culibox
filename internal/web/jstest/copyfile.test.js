@@ -42,6 +42,23 @@ test("400 is-a-directory is refused as a directory", () => {
   assert.deepEqual(copyContentPlan(errRes(400, "is a directory")), { action: "refuse", reason: "isdir" });
 });
 
+// /api/fs/read has THREE different 400s: "is a directory" (fsapi.go:152),
+// "bad path" (:77, what the paste-path box produces for a relative path) and
+// "not a directory" (:81). Only the first is a directory.
+test("a 400 that is not is-a-directory stays unreadable", () => {
+  for (const msg of ["bad path", "not a directory"]) {
+    const p = copyContentPlan(errRes(400, msg));
+    assert.equal(p.reason, "unreadable", msg);
+    assert.equal(p.detail, msg);
+  }
+});
+
+test("an image has no text and says so rather than blaming the clipboard", () => {
+  const m = copyResultMessage({ action: "refuse", reason: "image" }, "photo.png", false);
+  assert.equal(m.error, true);
+  assert.match(m.text, /image/i);
+});
+
 test("any other failure is unreadable and keeps the server's sentence", () => {
   const p = copyContentPlan(errRes(404, "not found"));
   assert.equal(p.action, "refuse");

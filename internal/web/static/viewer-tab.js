@@ -121,15 +121,29 @@ class ViewerTab {
   // churn, skips re-render when the content is unchanged, and preserves scroll.
   async load(poll) {
     const ext = extOf(this.path);
-    if (IMAGE_EXTS.has(ext)) { if (!poll) { this.renderImage(); this.setStatus(""); } return; }
+    if (IMAGE_EXTS.has(ext)) {
+      // Stated, not implied. Copy has no button on an image today, so this is
+      // unreachable — but leaving the field at "loading" forever makes the
+      // button's absence load-bearing, and IMAGE_EXTS is exactly the kind of
+      // set that changes (see the SVG note in the design).
+      this.copyRefusal = "image";
+      if (!poll) { this.renderImage(); this.setStatus(""); }
+      return;
+    }
     if (!poll) this.setStatus("loading…");
     const res = await fsRead(this.path);
     const plan = copyContentPlan(res);
     if (plan.action !== "copy") {
       // Record WHY there is no text, so the Copy button can say something true
       // instead of guessing "binary or too large" at a file that was deleted.
-      this.copyRefusal = plan.reason;
+      //
+      // Only on a real load. A failed auto-reload tick leaves the screen exactly
+      // as it was — same rendered body, same lastContent — so it must not change
+      // what Copy believes about that text. Otherwise one dropped poll makes the
+      // button refuse to copy what the user is looking at, citing an error the
+      // viewer never showed.
       if (poll) return;
+      this.copyRefusal = plan.reason;
       if (plan.reason === "empty") {
         // A successful read of a file with nothing in it is not an error.
         this.lastContent = "";
@@ -139,7 +153,12 @@ class ViewerTab {
         this.msg(`binary file · ${(res.data && res.data.size) || 0} bytes`);
         this.setStatus("");
       } else {
-        this.msg(copyResultMessage(plan, this.name, false).text, "err");
+        // The server's own sentence, not the clipboard's. This pane is the
+        // RENDER failure surface: a 5 MB log opened here must read "file too
+        // large to preview", not "too large to copy — use Download instead".
+        this.msg(
+          (res.data && res.data.error) || (res.status ? "HTTP " + res.status : "could not reach the server"),
+          "err");
         this.setStatus("error");
       }
       return;

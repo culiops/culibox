@@ -39,7 +39,13 @@ function copyContentPlan(res) {
   if (!res) return { action: "refuse", reason: "loading" };
   if (!res.ok) {
     if (res.status === 413) return { action: "refuse", reason: "toolarge" };
-    if (res.status === 400) return { action: "refuse", reason: "isdir" };
+    // Only ONE of the three 400s means a directory. The others — "bad path"
+    // (any relative path, which the paste-path box accepts) and "not a
+    // directory" — must keep the server's own sentence instead of being
+    // relabelled into a confident lie.
+    if (res.status === 400 && res.data && res.data.error === "is a directory") {
+      return { action: "refuse", reason: "isdir" };
+    }
     if (!res.status) return { action: "refuse", reason: "loading" }; // network/abort
     return {
       action: "refuse",
@@ -69,6 +75,7 @@ function copyResultMessage(plan, name, ok) {
     binary: '"' + name + '" is a binary file — use Download instead',
     toolarge: '"' + name + '" is too large to copy — use Download instead',
     isdir: '"' + name + '" is a directory — nothing to copy',
+    image: '"' + name + '" is an image — nothing to copy',
     loading: '"' + name + '" is still loading — try again',
     unreadable: 'Could not read "' + name + '": ' + (plan.detail || "unknown error"),
   }[plan.reason] || ('Could not copy "' + name + '"');
