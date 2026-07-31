@@ -22,6 +22,10 @@ class ViewerTab {
     this.auto = false;      // auto-reload poll on/off (per viewer, opt-in)
     this.timer = null;
     this.lastContent = null; // last rendered text, to skip no-op re-renders
+    // Why Copy has nothing to give, or null once there is text. lastContent
+    // alone cannot say: load() leaves it untouched for an image, for a binary,
+    // for every HTTP error, and for the moment before the first load returns.
+    this.copyRefusal = "loading";
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
     const ext0 = extOf(path);
     // which CSS var this viewer's text reads (null for images → zoom is a no-op)
@@ -44,6 +48,17 @@ class ViewerTab {
     dl.title = "Download this file";
     dl.onclick = () => downloadPath(this.path, false);
     this.toolbar.append(dl);
+    // A word, not a glyph: a button's accessible name comes from its text
+    // content before its title, and an unprobed codepoint ships as a tofu box no
+    // test catches. `viewer-auto` is the existing text-button style.
+    if (!IMAGE_EXTS.has(ext0)) { // an image has no text to copy
+      const cp = document.createElement("button");
+      cp.className = "viewer-auto";
+      cp.textContent = "Copy";
+      cp.title = "Copy this file's contents";
+      cp.onclick = () => this.copyContents(cp);
+      this.toolbar.append(cp);
+    }
     if (!IMAGE_EXTS.has(ext0)) { // auto-reload is pointless for images
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
@@ -108,18 +123,55 @@ class ViewerTab {
     const ext = extOf(this.path);
     if (IMAGE_EXTS.has(ext)) { if (!poll) { this.renderImage(); this.setStatus(""); } return; }
     if (!poll) this.setStatus("loading…");
-    let data;
-    try {
-      data = await api("/api/fs/read?path=" + encodeURIComponent(this.path));
-    } catch (e) { if (!poll) { this.msg(e.message, "err"); this.setStatus("error"); } return; }
+    const res = await fsRead(this.path);
+    const plan = copyContentPlan(res);
+    if (plan.action !== "copy") {
+      // Record WHY there is no text, so the Copy button can say something true
+      // instead of guessing "binary or too large" at a file that was deleted.
+      this.copyRefusal = plan.reason;
+      if (poll) return;
+      if (plan.reason === "empty") {
+        // A successful read of a file with nothing in it is not an error.
+        this.lastContent = "";
+        this.msg("empty file");
+        this.setStatus("");
+      } else if (plan.reason === "binary") {
+        this.msg(`binary file · ${(res.data && res.data.size) || 0} bytes`);
+        this.setStatus("");
+      } else {
+        this.msg(copyResultMessage(plan, this.name, false).text, "err");
+        this.setStatus("error");
+      }
+      return;
+    }
+    this.copyRefusal = null;
     if (!poll) this.setStatus("");
-    if (data.kind === "binary") { if (!poll) this.msg(`binary file · ${data.size} bytes`); return; }
-    if (poll && data.content === this.lastContent) return; // unchanged → no re-render
-    this.lastContent = data.content;
+    if (poll && plan.text === this.lastContent) return; // unchanged → no re-render
+    this.lastContent = plan.text;
     const scroll = this.content.scrollTop;
-    if (MD_EXTS.has(ext)) this.renderMarkdown(data.content);
-    else this.renderCode(data.content, data.lang);
+    if (MD_EXTS.has(ext)) this.renderMarkdown(plan.text);
+    else this.renderCode(plan.text, res.data.lang);
     this.content.scrollTop = scroll; // preserve position across reload
+  }
+
+  // Copies exactly what is on screen — the raw source this viewer fetched, which
+  // for markdown is the markdown and not the rendered HTML. Focus returns to the
+  // button: copyText's textarea fallback leaves it on <body>, and pulling it into
+  // the terminal pane is not what someone working in this toolbar asked for.
+  copyContents(btn) {
+    const plan = this.copyRefusal
+      ? { action: "refuse", reason: this.copyRefusal }
+      : { action: "copy", text: this.lastContent, lines: countLines(this.lastContent) };
+    if (plan.action === "refuse") {
+      const m = copyResultMessage(plan, this.name, false);
+      showToast(m.text, { error: m.error });
+      return;
+    }
+    copyText(plan.text, (ok) => {
+      btn.focus();
+      const m = copyResultMessage(plan, this.name, ok);
+      showToast(m.text, { error: m.error });
+    });
   }
 
   renderCode(text, lang) {
