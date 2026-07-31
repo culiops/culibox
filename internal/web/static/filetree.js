@@ -201,9 +201,18 @@ function openRowMenu(anchor, path, name, isDir) {
     ["Insert path at prompt", () => insertPathAtPrompt(path)],
     ["Copy path", () => copyPath(path)],
     ["Copy relative path", () => copyPath(relativeTo(ftRootSel ? ftRootSel.value : "", path))],
-    null, // separator
-    [isDir ? "Download .tar.gz" : "Download", () => downloadPath(path, isDir)],
   ];
+  // Contents last in the clipboard group, and only where there is text to take.
+  // A directory has none, and an image is served as raw bytes rather than JSON,
+  // so asking for one would fail inside JSON.parse with nothing useful to say.
+  // A symlink TO a directory still gets the item — os.ReadDir reports lstat, so
+  // the tree cannot tell — and /api/fs/read answers "is a directory", which the
+  // toast repeats.
+  if (!isDir && !IMAGE_EXTS.has(extOf(name))) {
+    items.push(["Copy contents", () => copyContents(path, name)]);
+  }
+  items.push(null); // separator
+  items.push([isDir ? "Download .tar.gz" : "Download", () => downloadPath(path, isDir)]);
   // The symlink-skip disclosure is NOT repeated here: downloadPath's probe toast
   // already carries it on every folder download, and a toast is readable on a
   // phone where the old ⤓ tooltip never was.
@@ -265,6 +274,28 @@ function copyPath(text) {
   copyText(text, (ok) => {
     focusTerminal(); // the textarea fallback stole focus; shared with insertPathAtPrompt above
     showToast(ok ? "Copied " + text : "Could not copy " + text + " to the clipboard", { error: !ok });
+  });
+}
+
+// copyContents reads the file and copies its text. Unlike the viewer's button
+// there is nothing on screen to be faithful to, so it reads fresh.
+//
+// The clipboard write can fail here for an ordinary reason, not an exotic one:
+// this page is not a secure context, so copyText always lands in
+// execCommand("copy"), which needs a user activation that expires a few seconds
+// after the click that opened the menu. A slow read really can come back
+// ok=false, which is why the failure message says to try again.
+async function copyContents(path, name) {
+  const plan = copyContentPlan(await fsRead(path));
+  if (plan.action === "refuse") {
+    const m = copyResultMessage(plan, name, false);
+    showToast(m.text, { error: m.error });
+    return;
+  }
+  copyText(plan.text, (ok) => {
+    focusTerminal(); // the textarea fallback stole focus, as in copyPath above
+    const m = copyResultMessage(plan, name, ok);
+    showToast(m.text, { error: m.error });
   });
 }
 
