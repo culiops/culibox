@@ -18,6 +18,22 @@ async function fsPost(path, body) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// fsRead is GET /api/fs/read as the same envelope, for the same reason as
+// fsPost above: copying a file has to tell "too large" (413) from "is a
+// directory" (400) from "not found" (404), and api() keeps only a message
+// string. status 0 means the request never completed at all.
+async function fsRead(path) {
+  let res;
+  try {
+    res = await fetch("/api/fs/read?path=" + encodeURIComponent(path));
+  } catch (_) {
+    return { ok: false, status: 0, data: null };
+  }
+  let data = null;
+  try { data = await res.json(); } catch (_) {}
+  return { ok: res.ok, status: res.status, data };
+}
+
 function fsMkdir(dir, name) { return fsPost("/api/fs/mkdir", { dir, name }); }
 function fsRename(path, name, confirmName) {
   return fsPost("/api/fs/rename", { path, name, confirm_name: confirmName || "" });
