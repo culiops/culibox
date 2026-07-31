@@ -1,7 +1,32 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { tierBadge, tierRuntimeLabel } = require("../static/tier.js");
+const { tierBadge, tierRuntimeLabel, spawnRuntimeDefault } = require("../static/tier.js");
+
+// --- which tier the New-session form opens on ------------------------------
+// The form used to open on "box" unconditionally and always send that tier, so a
+// profile saved as host — and even an instance whose default_runtime is host —
+// was overridden on every spawn.
+
+test("the form opens on the tier the selected profile declares", () => {
+  assert.equal(spawnRuntimeDefault({ runtime: "host" }, "runc"), "host");
+  assert.equal(spawnRuntimeDefault({ runtime: "box" }, "runc"), "box");
+});
+
+// Same fail-loud posture as the badge: anything unrecognised resolves to the
+// contained tier, never to host.
+test("an unknown or missing profile tier falls back to box", () => {
+  for (const p of [null, undefined, {}, { runtime: "" }, { runtime: "vm" }]) {
+    assert.equal(spawnRuntimeDefault(p, "runc"), "box", JSON.stringify(p));
+  }
+});
+
+// With no box layer the tier row is hidden and no tier is sent, so the server
+// keeps resolving it from the profile.
+test("no tier is preselected when containment is unavailable", () => {
+  assert.equal(spawnRuntimeDefault({ runtime: "host" }, ""), "");
+  assert.equal(spawnRuntimeDefault({ runtime: "box" }, ""), "");
+});
 
 test("a boxed session reads as boxed, keeping the row narrow", () => {
   const b = tierBadge({ runtime: "box" }, "runc");

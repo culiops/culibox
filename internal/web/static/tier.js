@@ -45,6 +45,21 @@ function tierBadge(session, boxRuntime) {
   };
 }
 
+// spawnRuntimeDefault decides which tier the New-session form opens on: the one
+// the selected profile actually runs under, as resolved by the server (its own
+// setting, else the instance default). The form used to open on "box"
+// unconditionally and always send it, which overrode the profile's declared tier
+// on every spawn — the profile could never win.
+//
+// Same fail-loud posture as the badge: anything unrecognised resolves to box,
+// never host. Empty when there is no box layer, so the hidden row sends no tier
+// at all and the server keeps resolving it.
+function spawnRuntimeDefault(profile, boxRuntime) {
+  if (!boxRuntime) return "";
+  const rt = profile && profile.runtime;
+  return rt === TIER_HOST || rt === TIER_BOX ? rt : TIER_BOX;
+}
+
 // workspaceOptions renders the workspace picker for a tier. On the boxed tier a
 // directory that cannot be contained is disabled and carries its reason: the
 // workspace is the box's only writable mount, so this choice IS the containment
@@ -85,7 +100,7 @@ function shellSpawnPlan(neighbour) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    tierBadge, tierRuntimeLabel,
+    tierBadge, tierRuntimeLabel, spawnRuntimeDefault,
     workspaceOptions, defaultWorkspace, shellSpawnPlan, TIER_BOX, TIER_HOST,
   };
 }

@@ -378,7 +378,13 @@ function getOptions() {
   }
   return out;
 }
-$("agent").addEventListener("change", renderOptions);
+// Switching profile re-derives everything that profile owns: its options AND the
+// tier it runs under. Leaving the tier behind would show the previous profile's
+// containment while naming this one.
+$("agent").addEventListener("change", () => {
+  renderOptions();
+  syncRuntimeField();
+});
 
 // --- profile editor (structured create / edit / delete of runtime profiles) --
 let optionDefs = [];
@@ -613,12 +619,19 @@ async function spawnSession(req, opts) {
 // syncRuntimeField shows the tier chooser only when containment is actually
 // available. With no box layer every session is host tier anyway, and offering
 // a choice that changes nothing would be a lie.
+//
+// The chooser opens on the tier the SELECTED PROFILE runs under (server-resolved
+// in ProfileView.runtime), not on a fixed "box". It used to hard-code box on
+// every open and the submit always sent that value, so a profile saved as host —
+// and even an instance whose default_runtime is host — was overridden on every
+// spawn and the setting could never take effect. It is still not sticky: the
+// value comes from the profile each time, never from the last spawn, and a
+// profile that declares nothing still resolves to contained.
 function syncRuntimeField() {
   const row = $("runtime-row"), sel = $("runtime-select");
   if (!row || !sel) return;
   row.style.display = boxRuntime ? "" : "none";
-  if (!boxRuntime) { sel.value = ""; renderWorkspaceOptions(); return; }
-  sel.value = "box"; // default to contained on every open, never "sticky"
+  sel.value = spawnRuntimeDefault(currentProfile(), boxRuntime);
   updateRuntimeWarning(); // also re-renders the workspace list for this tier
 }
 

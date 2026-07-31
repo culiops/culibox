@@ -19,10 +19,13 @@ type ProfileOption struct {
 }
 
 // ProfileView is a profile for GET /api/profiles. Editable = came from the
-// runtime store (config seeds are read-only).
+// runtime store (config seeds are read-only). Runtime is the EFFECTIVE tier the
+// spawn form should open on — already resolved against the instance default, so
+// the client never has to re-derive containment policy.
 type ProfileView struct {
 	Name     string          `json:"name"`
 	Editable bool            `json:"editable"`
+	Runtime  string          `json:"runtime"`
 	Options  []ProfileOption `json:"options,omitempty"`
 }
 
@@ -44,16 +47,23 @@ type ProfileManager struct {
 	optDefs   map[string]config.OptionDef
 	store     profileStore
 	apply     func([]config.AgentConfig) // e.g. launcher.SetAgents
+	// defaultRuntime is the instance-level tier for profiles that name none. It
+	// is a constructor argument rather than a setter so that no construction
+	// site can leave the containment default implicit.
+	defaultRuntime string
 }
 
-// NewProfileManager wires seeds + store + launcher-apply and does the initial refresh.
-func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, st profileStore, apply func([]config.AgentConfig)) *ProfileManager {
+// NewProfileManager wires seeds + store + launcher-apply and does the initial
+// refresh. defaultRuntime is the instance tier (config.DefaultRuntime); "" means
+// box, matching config.AgentConfig.RuntimePolicy.
+func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, defaultRuntime string, st profileStore, apply func([]config.AgentConfig)) *ProfileManager {
 	m := &ProfileManager{
-		seeds:   map[string]config.AgentConfig{},
-		options: options,
-		optDefs: map[string]config.OptionDef{},
-		store:   st,
-		apply:   apply,
+		seeds:          map[string]config.AgentConfig{},
+		options:        options,
+		optDefs:        map[string]config.OptionDef{},
+		store:          st,
+		apply:          apply,
+		defaultRuntime: defaultRuntime,
 	}
 	for _, s := range seeds {
 		if _, dup := m.seeds[s.Name]; !dup {
@@ -127,7 +137,11 @@ func (m *ProfileManager) Views() []ProfileView {
 	merged := m.merged()
 	out := make([]ProfileView, 0, len(merged))
 	for _, a := range merged {
-		pv := ProfileView{Name: a.Name, Editable: editable[a.Name]}
+		pv := ProfileView{
+			Name:     a.Name,
+			Editable: editable[a.Name],
+			Runtime:  config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
+		}
 		for _, def := range m.options {
 			if v, ok := a.Options[def.Key]; ok && def.AppliesTo(a.Bin) {
 				pv.Options = append(pv.Options, ProfileOption{

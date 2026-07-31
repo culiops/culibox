@@ -196,7 +196,7 @@ func main() {
 			log.Fatalf("profiles store: %v", err)
 		}
 	}
-	pm := web.NewProfileManager(agents, cfg.Options, st, lnch.SetAgents)
+	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, st, lnch.SetAgents)
 
 	archiveBytes, archiveFiles := cfg.ArchiveLimits()
 	srv := &web.Server{

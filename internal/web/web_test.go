@@ -38,7 +38,7 @@ func TestWSRouteRequiresCookieNotBasicAuth(t *testing.T) {
 func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 	ca, _ := auth.NewCookieAuth("")
 	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler("u", "p")
 
 	rec := httptest.NewRecorder()
@@ -100,7 +100,7 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 func TestStaticNoCacheOnAppFiles(t *testing.T) {
 	ca, _ := auth.NewCookieAuth("")
 	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler("u", "p")
 
 	get := func(path string) *httptest.ResponseRecorder {
@@ -123,7 +123,7 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 func TestHandleMeta(t *testing.T) {
 	pm := NewProfileManager(
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, newFakeStore(), func([]config.AgentConfig) {},
+		nil, "", newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	h := s.Handler("admin", "pw")
@@ -157,7 +157,7 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 	}
 	pm := NewProfileManager(
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, fs, func([]config.AgentConfig) {},
+		nil, "", fs, func([]config.AgentConfig) {},
 	)
 	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	h := s.Handler("admin", "pw")
@@ -232,7 +232,7 @@ func TestHandleMetaFailsClosedWithoutProfiles(t *testing.T) {
 func TestHandleMetaShellProfileIntact(t *testing.T) {
 	pm := NewProfileManager(
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, newFakeStore(), func([]config.AgentConfig) {},
+		nil, "", newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	h := s.Handler("admin", "pw")
@@ -279,7 +279,7 @@ func TestHandleMetaNoShellProfile(t *testing.T) {
 func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 	ca, _ := auth.NewCookieAuth("")
 	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler("u", "p")
 
 	authed := func(method, path string, hdr [2]string) int {
