@@ -37,7 +37,7 @@ func TestProfileManager(t *testing.T) {
 	var lastApplied []config.AgentConfig
 	apply := func(a []config.AgentConfig) { lastApplied = a }
 
-	pm := NewProfileManager(seeds, opts, fs, apply)
+	pm := NewProfileManager(seeds, opts, "", fs, apply)
 	if len(lastApplied) != 2 {
 		t.Fatalf("init should push 2 seeds to the launcher, got %d", len(lastApplied))
 	}
@@ -86,6 +86,45 @@ func TestProfileManager(t *testing.T) {
 	}
 }
 
+// The New-session form preselects the tier a profile will actually run under, so
+// /api/profiles has to carry it. Resolution happens here, once, the same way the
+// launcher resolves it: the profile's own tier → the instance default → box.
+// Without it the client cannot tell a host profile from a boxed one and has to
+// guess, which is what silently overrode every profile's tier at spawn.
+func TestViewsExposeEffectiveRuntime(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "boxed", Bin: "claude", Runtime: config.RuntimeBox},
+		{Name: "unset", Bin: "claude"},
+	}
+	fs := newFakeStore()
+	fs.m["hosted"] = config.AgentConfig{Name: "hosted", Bin: "claude", Runtime: config.RuntimeHost}
+
+	m := NewProfileManager(seeds, nil, config.RuntimeHost, fs, func([]config.AgentConfig) {})
+
+	got := map[string]string{}
+	for _, v := range m.Views() {
+		got[v.Name] = v.Runtime
+	}
+	if got["hosted"] != config.RuntimeHost {
+		t.Errorf("a stored profile's own tier must win, got %q", got["hosted"])
+	}
+	if got["boxed"] != config.RuntimeBox {
+		t.Errorf("a seed's own tier must be reported, got %q", got["boxed"])
+	}
+	if got["unset"] != config.RuntimeHost {
+		t.Errorf("a profile naming no tier must report the instance default, got %q", got["unset"])
+	}
+}
+
+// Containment must not be reachable by omission: an instance that configures no
+// default_runtime still reports box, matching config.AgentConfig.RuntimePolicy.
+func TestViewsRuntimeFallsBackToBox(t *testing.T) {
+	m := NewProfileManager([]config.AgentConfig{{Name: "a", Bin: "claude"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
+	if rt := m.Views()[0].Runtime; rt != config.RuntimeBox {
+		t.Errorf("with no instance default the view must report box, got %q", rt)
+	}
+}
+
 func TestViewsFilterOptionsByBin(t *testing.T) {
 	opts := []config.OptionDef{
 		{Key: "model", Label: "Model", Type: config.OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},
@@ -96,7 +135,7 @@ func TestViewsFilterOptionsByBin(t *testing.T) {
 		{Name: "shell", Bin: "bash", Options: map[string]any{"model": "claude-opus-5"}},
 	}
 	fs := newFakeStore()
-	m := NewProfileManager(seeds, opts, fs, func([]config.AgentConfig) {})
+	m := NewProfileManager(seeds, opts, "", fs, func([]config.AgentConfig) {})
 	views := m.Views()
 	got := map[string]int{}
 	for _, v := range views {
@@ -126,7 +165,7 @@ func TestMergedStripsInapplicableOptions(t *testing.T) {
 
 	var applied []config.AgentConfig
 	apply := func(a []config.AgentConfig) { applied = a }
-	m := NewProfileManager(nil, opts, fs, apply)
+	m := NewProfileManager(nil, opts, "", fs, apply)
 
 	found := false
 	for _, a := range applied {

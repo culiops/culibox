@@ -10,7 +10,7 @@ import (
 
 func TestProfilesAPI_CreateListDelete(t *testing.T) {
 	pm := NewProfileManager(
-		[]config.AgentConfig{{Name: "bash", Bin: "bash"}}, nil, newFakeStore(), func([]config.AgentConfig) {},
+		[]config.AgentConfig{{Name: "bash", Bin: "bash"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{Profiles: pm}
 
