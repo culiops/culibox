@@ -1,8 +1,8 @@
 "use strict";
 
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+// IMAGE_EXTS and extOf live in copyfile.js: the copy paths need them too, and a
+// pure module there is reachable from `node --test`, which this file is not.
 const MD_EXTS = new Set(["md", "markdown"]);
-function extOf(path) { const b = path.split("/").pop() || ""; const i = b.lastIndexOf("."); return i < 0 ? "" : b.slice(i + 1).toLowerCase(); }
 
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
