@@ -384,7 +384,7 @@ function applyCap(n) {
   refreshSessions();
   scheduleSaveLayout();
   // Collapsing panes re-parks focus via setFocusedCellRaw, and the cell it lands
-  // on can show a different session than the one the tree is following.
+  // on can show a different tab than the one the tree is following.
   // Safe during restore, where applyPlan calls this before its own
   // setFocusedCell: a fresh TerminalTab has no cwd yet, and syncTreeToRoot
   // returns on !root BEFORE it writes lastSyncedKey, so it cannot poison

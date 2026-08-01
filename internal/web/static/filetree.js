@@ -409,7 +409,14 @@ function treeFollowTarget(tab, home) {
   // explicit argument for tests, window.HOME_DIR in the browser.
   if (home === undefined) home = (typeof window !== "undefined" && window.HOME_DIR) || "";
   if (!tab) return null;
-  // insideHome mirrors the SERVER's rule. /api/fs/list is confined to $HOME and
+  // insideHome APPROXIMATES the server's rule, textually. /api/fs/list resolves
+  // symlinks on both sides (containedUnder, fsapi.go:40-47); this cannot, so the
+  // two can disagree. It errs safe in one direction — textually-outside but
+  // resolving inside just holds the root — but a depth-1 symlink in $HOME that
+  // points OUT of it reads as inside here and would still earn the 403 below.
+  // listWorkspaces offers such symlinks as workspaces (workspaces.go:49), so the
+  // shape is legal; there are none on this host today.
+  // /api/fs/list is confined to $HOME and
   // answers 403 for anything outside it, so rooting there does not fail
   // gracefully: ftLoadRoot replaces the whole tree with one "forbidden" line,
   // the follow-key has already been recorded so re-focusing will not retry, and
@@ -528,11 +535,17 @@ async function initFileTree() {
   // home, leaving the painted tree and the picker disagreeing. Clearing the
   // guard makes this seeding authoritative so it re-asserts the root over the
   // fresh list. The cost is one redundant listing in the common case.
-  lastSyncedKey = null;
-  const t = (typeof focusedTab === "function") ? focusedTab() : null;
-  const target = treeFollowTarget(t);
-  if (target) await syncTreeToRoot(target.root, target.key);
-  else if (ftRootSel.options.length) await ftLoadRoot();
+  // Gated on a populated picker: if /api/workspaces threw above, HOME_DIR is
+  // unset, so the containment check is disabled and seeding could root outside
+  // home and paint ft-err. That state is already broken (empty picker); it
+  // should stay quiet rather than add an error to it.
+  if (ftRootSel.options.length) {
+    lastSyncedKey = null;
+    const t = (typeof focusedTab === "function") ? focusedTab() : null;
+    const target = treeFollowTarget(t);
+    if (target) await syncTreeToRoot(target.root, target.key);
+    else await ftLoadRoot();
+  }
 }
 
 if (typeof module !== "undefined" && module.exports) {

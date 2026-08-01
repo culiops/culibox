@@ -19,7 +19,8 @@ const TABS = path.join(__dirname, "..", "static", "tabs.js");
 
 // A mutation is any function body that re-points focus (setFocusedCellRaw) or
 // swaps which tab a cell shows (.activeTab =). Those are the two ways the
-// focused TERMINAL can change without setFocusedCell() being reached.
+// focused TAB can change without setFocusedCell() being reached — a tab, not a
+// terminal: since treeFollowTarget landed, a viewer is something to follow too.
 // [^=] so a comparison (`.activeTab === tab`) is not read as an assignment.
 const MUTATES = /setFocusedCellRaw\s*\(|\.activeTab\s*=[^=]/;
 // It discharges the duty by syncing itself, or by ending in setFocusedCell(),
