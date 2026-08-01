@@ -26,11 +26,15 @@ let cells = [];
 // internal/web/jstest/tree-follows-focus.test.js pins this at the source level;
 // if you add a mutation, it will tell you.
 //
-// The sync follows the focused TERMINAL, not the focused cell: syncFocusedTree()
-// reads focusedTerminal(), which is null whenever the focused cell's active tab
-// is a viewer. So a cell showing a file, not a session, is a no-op for this
-// invariant — the tree holds its last root rather than following anything. That
-// is deliberate: closing a session is not a reason to lose that project's files.
+// The sync follows the focused TAB: syncFocusedTree() reads focusedTab() and
+// hands it to treeFollowTarget(), so a terminal follows its cwd and a cell
+// showing a file follows that file's directory. The tree holds its last root
+// only when treeFollowTarget returns null — an unresolved cwd, a relative path,
+// or a directory outside $HOME, which the server refuses to list anyway.
+//
+// It used to read focusedTerminal(), which is null whenever the active tab is a
+// viewer; that left the tree showing project Y while the focused pane displayed
+// a file from project X.
 let focusedCell = null;
 
 // setFocusedCellRaw is the sole place `focusedCell` is written. Direct-assignment
@@ -140,7 +144,7 @@ class Cell {
       this.renderBody();
       tab.onShow?.();
     }
-    if (this === focusedCell) syncFocusedTree(); // tree follows the focused session
+    if (this === focusedCell) syncFocusedTree(); // tree follows the focused tab
     scheduleSaveLayout();
   }
 
@@ -253,7 +257,7 @@ function setFocusedCell(cell) {
   // never fired: the first press of ⛶ / +sh / ✕ on an unfocused pane was eaten.
   // renderBar keeps its own toggle, so a later rebuild still paints the ring.
   cells.forEach((c) => c.el.classList.toggle("focused", c === focusedCell));
-  syncFocusedTree(); // tree follows the focused session
+  syncFocusedTree(); // tree follows the focused tab
   scheduleSaveLayout();
 }
 
@@ -383,7 +387,7 @@ function applyCap(n) {
   // on can show a different session than the one the tree is following.
   // Safe during restore, where applyPlan calls this before its own
   // setFocusedCell: a fresh TerminalTab has no cwd yet, and syncTreeToRoot
-  // returns on !cwd BEFORE it writes lastSyncedSessionId, so it cannot poison
+  // returns on !root BEFORE it writes lastSyncedKey, so it cannot poison
   // the follow-guard.
   syncFocusedTree();
 }

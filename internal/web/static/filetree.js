@@ -249,7 +249,7 @@ function openRowMenu(anchor, path, name, isDir) {
 // Absolute, not relative: it is correct no matter where the agent has cd'd,
 // whereas a relative path is silently wrong the moment the tree root and the
 // session's cwd diverge — which they do, because a manual root pick survives
-// until a DIFFERENT session is focused.
+// until a DIFFERENT tab is focused.
 function insertPathAtPrompt(path) {
   const term = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
   const res = insertTextAtPrompt(term, shellQuote(path) + " ");
@@ -404,20 +404,45 @@ async function confirmDelete(path, name, isDir) {
 // TerminalTab.resolvePath while its cwd is still empty, and a restored snapshot
 // that only tested for a truthy string. A relative root reaches /api/fs/list,
 // earns a 400, and paints ft-err over a tree that had been fine.
-function treeFollowTarget(tab) {
+function treeFollowTarget(tab, home) {
+  // Same optional-home convention as shortPath/relativeTo in fsops.js: an
+  // explicit argument for tests, window.HOME_DIR in the browser.
+  if (home === undefined) home = (typeof window !== "undefined" && window.HOME_DIR) || "";
   if (!tab) return null;
+  // insideHome mirrors the SERVER's rule. /api/fs/list is confined to $HOME and
+  // answers 403 for anything outside it, so rooting there does not fail
+  // gracefully: ftLoadRoot replaces the whole tree with one "forbidden" line,
+  // the follow-key has already been recorded so re-focusing will not retry, and
+  // a junk transient option is left in the picker. Holding the previous root is
+  // the only sane answer.
+  //
+  // This is not hypothetical. LINK_PATH_RE (links.js) matches
+  // /etc/nginx/nginx.conf and /opt/culiops/staging/docker-compose.yml, and
+  // clicking such a link in a terminal opens it as a viewer
+  // (terminal-tab.js:156). A session whose cwd is outside home reaches it too —
+  // that path predates the viewer support and is covered by the same guard.
+  //
+  // With no home known yet (pre-/api/workspaces) the check cannot run, so it
+  // allows: initFileTree re-asserts the root once the list arrives.
+  const insideHome = (d) => !home || d === home || d.indexOf(home + "/") === 0;
   if (tab.kind === "terminal") {
     // cwd is "" until TerminalTab's fetch resolves it; rooting there would send
     // the server a request it must reject.
-    return tab.cwd ? { root: tab.cwd, key: "sess:" + tab.id } : null;
+    if (!tab.cwd || !insideHome(tab.cwd)) return null;
+    return { root: tab.cwd, key: "sess:" + tab.id };
   }
   if (tab.kind === "viewer") {
+    // Trailing slashes, "//" and "./" cannot arrive here: ViewerTab's
+    // constructor normalises through normalizePath (viewer-tab.js:15), as does
+    // openFile (tabs.js). The tests feed un-normalised input deliberately, so
+    // this function must not quietly depend on that beyond what it checks.
     const p = tab.path;
     if (!p || p[0] !== "/") return null;
     const cut = p.lastIndexOf("/");
     // A file directly under "/" has its slash at index 0: slice(0, 0) is "",
     // which is not a root anything can list.
     const dir = cut > 0 ? p.slice(0, cut) : "/";
+    if (!insideHome(dir)) return null;
     return { root: dir, key: "view:" + dir };
   }
   return null;
@@ -435,16 +460,15 @@ async function syncTreeToRoot(root, key) {
   if (!ftRootSel || !root) return;
   if (key && key === lastSyncedKey) return; // already following this tab (respect manual pick)
   lastSyncedKey = key || null;
-  const cwd = root;
   let has = false;
-  for (const o of ftRootSel.options) if (o.value === cwd) { has = true; break; }
+  for (const o of ftRootSel.options) if (o.value === root) { has = true; break; }
   if (!has) {
     const o = document.createElement("option");
-    o.value = cwd; o.textContent = "↳ " + (cwd.replace(/\/$/, "").split("/").pop() || cwd);
-    o.title = cwd;
+    o.value = root; o.textContent = "↳ " + (root.replace(/\/$/, "").split("/").pop() || root);
+    o.title = root;
     ftRootSel.appendChild(o);
   }
-  ftRootSel.value = cwd;
+  ftRootSel.value = root;
   await ftLoadRoot();
 }
 
@@ -464,8 +488,8 @@ async function initFileTree() {
     }));
   } catch (_) {}
 
-  // A manual dropdown pick re-roots the tree but does NOT change which session
-  // we're following, so it survives until a different session is focused.
+  // A manual dropdown pick re-roots the tree but does NOT change which TAB
+  // we're following, so it survives until a different tab is focused.
   ftRootSel.onchange = ftLoadRoot;
 
   // New folder in the root currently shown: no row can reach the root itself.
@@ -498,6 +522,13 @@ async function initFileTree() {
   // Initial root: whatever the focused TAB resolves to — a terminal's cwd or a
   // viewer's directory — else home. focusedTerminal() was wrong here: a layout
   // restored onto a viewer booted at home with the follow-guard unset.
+  // The option list was only just built, and a restore that won the race
+  // against /api/workspaces may already have rooted the tree against an EMPTY
+  // list — replaceChildren above then destroyed that option and reset .value to
+  // home, leaving the painted tree and the picker disagreeing. Clearing the
+  // guard makes this seeding authoritative so it re-asserts the root over the
+  // fresh list. The cost is one redundant listing in the common case.
+  lastSyncedKey = null;
   const t = (typeof focusedTab === "function") ? focusedTab() : null;
   const target = treeFollowTarget(t);
   if (target) await syncTreeToRoot(target.root, target.key);
