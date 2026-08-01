@@ -37,6 +37,12 @@ let maximized = null;
 const bootLayout = typeof readLayout === "function" ? readLayout() : null;
 let restoring = true;
 let saveTimer = null;
+// gaveUp latches when boot could not read the live session list twice over
+// (endRestore(false), from app.js's restoreBoot). That page-load never restored
+// anything, so its grid is the empty one applyCap(4) built, and serializing it
+// yields null — which would REMOVE the user's real snapshot. Never cleared:
+// nothing later in this page-load makes that grid trustworthy.
+let gaveUp = false;
 
 // scheduleSaveLayout debounces the write: applyCap collapses several cells in one
 // loop, and one user action should cost one write, not one per step.
@@ -47,14 +53,20 @@ function scheduleSaveLayout() {
 
 function saveLayoutNow() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  if (restoring || typeof writeLayout !== "function") return;
+  if (restoring || gaveUp || typeof writeLayout !== "function") return;
   writeLayout(serializeLayout({ cells, focused: focusedCell, maximized, cap }));
 }
 
-// Flush on unload: the last layout change before a reload is exactly the one the
+// Flush on unload: the last change before a reload is exactly the one the
 // restore needs, and it is the one most likely to still be inside the debounce.
 // pagehide (not unload) is the event that also fires for the bfcache path.
-window.addEventListener("pagehide", () => { if (saveTimer) saveLayoutNow(); });
+//
+// Unconditional, NOT `if (saveTimer)`: scrolling a file changes what has to be
+// stored but is not a layout change, so it schedules nothing and a conditional
+// flush would drop every scroll-only visit. What keeps a boot that learned
+// nothing from overwriting a real snapshot is saveLayoutNow's own
+// restoring/gaveUp guard, not the absence of a pending timer.
+window.addEventListener("pagehide", () => saveLayoutNow());
 
 // gridCols → columns/rows the grid uses, derived from the live cell count.
 function gridCols() { return Math.min(Math.max(cells.length, 1), 4); }
@@ -392,9 +404,10 @@ function closeViewersFor(path) {
 
 // --- restore (see layout.js) -------------------------------------------------
 
-// applyPlan rebuilds the grid from a reconciled snapshot. Session names come from
-// the live list, not the snapshot, so a session renamed since the last visit comes
-// back under its current name.
+// applyPlan rebuilds the grid from a reconciled snapshot: terminals and the
+// files that were open beside them. Session names come from the live list, not
+// the snapshot, so a session renamed since the last visit comes back under its
+// current name.
 function applyPlan(plan, sessions) {
   const nameOf = new Map((sessions || []).map((s) => [s.id, s.name || s.id]));
   cells.forEach((c) => c.dispose());
@@ -404,7 +417,12 @@ function applyPlan(plan, sessions) {
   for (const pc of plan.cells) {
     const cell = new Cell();
     cells.push(cell);
-    for (const t of pc.tabs) cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
+    for (const t of pc.tabs) {
+      // `restored: true` marks a tab nobody clicked for: see ViewerTab.load,
+      // which closes it rather than parking a red error on a deleted path.
+      if (t.path) cell.addTab(new ViewerTab(t.path, { scroll: t.scroll, restored: true }));
+      else cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
+    }
     cell.activate(cell.tabs[pc.active] || cell.tabs[0]);
   }
   // applyCap first: it is what collapses extra panes if a snapshot ever holds
@@ -439,5 +457,6 @@ function restoreLayout(sessions) {
 // never restored it, and persisting that would delete the user's real layout.
 function endRestore(save = true) {
   restoring = false;
-  if (save) scheduleSaveLayout(); // fold in whatever boot already built
+  if (!save) { gaveUp = true; return; }
+  scheduleSaveLayout(); // fold in whatever boot already built
 }

@@ -33,6 +33,10 @@ class ViewerTab {
     // document loses its layout box: scrollTop comes back 0. clampScroll is
     // layout.js's, which shares this scope (see the script order in index.html).
     this.scroll = clampScroll(opts && opts.scroll);
+    // A tab the layout restore rebuilt, not one anyone clicked. Only such a tab
+    // may close itself when its file turns out to be gone (see load).
+    this.restored = !!(opts && opts.restored);
+    this.firstLoad = true;
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
     const ext0 = extOf(path);
     // which CSS var this viewer's text reads (null for images → zoom is a no-op)
@@ -148,6 +152,10 @@ class ViewerTab {
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
   // churn, skips re-render when the content is unchanged, and preserves scroll.
   async load(poll) {
+    // Claimed synchronously so an auto-reload tick that overlaps the first read
+    // cannot also count as "first".
+    const first = this.firstLoad;
+    this.firstLoad = false;
     const ext = extOf(this.path);
     if (IMAGE_EXTS.has(ext)) {
       // Stated, not implied. Copy has no button on an image today, so this is
@@ -186,6 +194,19 @@ class ViewerTab {
         this.msg(`binary file · ${(res.data && res.data.size) || 0} bytes`);
         this.setStatus("");
       } else {
+        // A restored viewer was not asked for by anyone. If its very FIRST read
+        // says the file is gone, drop the tab instead of parking a red error on
+        // a path that no longer exists. Exactly 404 and nothing else: status 0
+        // is "the fetch never completed" (fsops.js), which the rule about failed
+        // polls says is not an answer about the file; and a 404 later in the
+        // tab's life is a file deleted while open, which closeViewersFor already
+        // handles for in-app deletes and which the user should see otherwise.
+        //
+        // Images never reach here — load() returns before any fsRead for them
+        // (see IMAGE_EXTS above) and img.onerror cannot tell 404 from a blip —
+        // so a restored image of a deleted file keeps its "could not load
+        // image" message and is closed by hand.
+        if (first && this.restored && res.status === 404) { closeTabEverywhere(this); return; }
         // The server's own sentence, not the clipboard's. This pane is the
         // RENDER failure surface: a 5 MB log opened here must read "file too
         // large to preview", not "too large to copy — use Download instead".
