@@ -1,7 +1,9 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { classifyPickerQuery, pickerRows } = require("../static/dirpicker.js");
+const {
+  classifyPickerQuery, pickerRows, pickerReopenMode, pickerShouldSelectAll,
+} = require("../static/dirpicker.js");
 
 // The picker has three input classes and they decide everything downstream:
 // what is fetched, what is rendered, and what Enter does.
@@ -67,4 +69,54 @@ test("a top-level fuzzy result has no parent to show", () => {
 test("path mode renders no rows — the server decides what that path is", () => {
   const rows = pickerRows({ mode: "path", workspaces: [{ label: "x", path: "/x" }], hits: [] });
   assert.deepStrictEqual(rows, []);
+});
+
+// Focus and click on the input both have to answer two questions, and getting
+// either wrong has broken this control repeatedly. Both answers are pure, so
+// they are pinned here rather than left to a browser pass to rediscover.
+
+test("reopening shows the workspace list for a blank value and for a settled path", () => {
+  // The steady state is a path: setFtRoot mirrors the picked root into the
+  // input, so "there is a path in the box" must still offer the workspaces.
+  assert.strictEqual(pickerReopenMode("", false), "empty");
+  assert.strictEqual(pickerReopenMode("   ", false), "empty");
+  assert.strictEqual(pickerReopenMode("/home/claude/culipulse", false), "empty");
+  // ...and it does not matter whether the list happened to be open already.
+  assert.strictEqual(pickerReopenMode("/home/claude/culipulse", true), "empty");
+});
+
+test("reopening onto a fuzzy value re-runs that search instead of the workspaces", () => {
+  // Type "culi", click the terminal (the list closes), click back: rendering
+  // the workspaces here would leave the list describing a different search
+  // from the text, and Enter would then re-root at whichever workspace is
+  // first while "culi" is still on screen.
+  assert.strictEqual(pickerReopenMode("culi", false), "search");
+  assert.strictEqual(pickerReopenMode("~/culipulse", false), "search");
+});
+
+test("reopening leaves an open fuzzy list alone", () => {
+  // Clicking to fix a typo mid-query must not refetch, rebuild the rows, or
+  // drop the highlight the user just arrowed onto.
+  assert.strictEqual(pickerReopenMode("culi", true), "none");
+});
+
+test("a plain click on a path selects all, so typing replaces it", () => {
+  // A click into an already-focused field fires no focus event; without this
+  // select-all, typing "XXXXX" spliced into the value:
+  // /home/claude/culipulse -> /home/claude/culXXXXXipulse.
+  assert.strictEqual(pickerShouldSelectAll("/home/claude/culipulse", true), true);
+  assert.strictEqual(pickerShouldSelectAll("", true), true);
+});
+
+test("a drag inside the input is never collapsed to select-all", () => {
+  // A range selection means the user picked a substring on purpose — even a
+  // 14px drag. Selecting all here makes no part of a path editable in place.
+  assert.strictEqual(pickerShouldSelectAll("/home/claude/culipulse", false), false);
+  assert.strictEqual(pickerShouldSelectAll("culi", false), false);
+});
+
+test("a click inside a live fuzzy query keeps the query", () => {
+  // Here a click is for moving the caret, not starting over; select-all would
+  // discard the search on the very next keystroke.
+  assert.strictEqual(pickerShouldSelectAll("culi", true), false);
 });

@@ -47,6 +47,47 @@ function pickerRows(state) {
   return [];
 }
 
+// pickerReopenMode answers the question both focus and click on the input ask:
+// "given the text that is in there RIGHT NOW, what should the list show?"
+//
+// Deriving it from the value is the whole point. A handler that unconditionally
+// renders the workspace list leaves the list disagreeing with the text beside
+// it — type "culi", click away, click back, and the workspaces reappear under a
+// query that still reads "culi"; Enter then has no highlight, classifies "culi"
+// as fuzzy rather than a path, falls through to "pick row 0" and re-roots at
+// whichever workspace happens to be first. The list and the value must never be
+// allowed to describe different searches.
+//
+//   "empty"  → render the workspace list. Covers a blank value AND a settled
+//              absolute path, which is the steady state: setFtRoot mirrors the
+//              picked root into the input, so re-focusing it must still offer
+//              the workspaces rather than re-deciding on a string that is
+//              already the answer.
+//   "search" → re-run the fuzzy search, because the list is not showing it.
+//   "none"   → the open list already IS this search. Leave it: a click to fix a
+//              typo mid-query must not refetch, re-create the rows, or drop the
+//              arrow-key highlight the user just moved.
+function pickerReopenMode(value, listOpen) {
+  if (classifyPickerQuery(value).mode !== "fuzzy") return "empty";
+  return listOpen ? "none" : "search";
+}
+
+// pickerShouldSelectAll answers the separate question a CLICK asks of the TEXT:
+// "is this click starting a new pick, or editing what is already there?"
+//
+//   collapsed caret ⇒ a plain click ⇒ start over, so select all and let the
+//     next keystroke replace the value. Without this, clicking back into a
+//     field already holding "/home/claude/culipulse" and typing splices into
+//     it — "/home/claude/culXXXXXipulse" — because a click into an
+//     already-focused input fires no focus event at all.
+//   a range ⇒ a drag ⇒ the user picked a substring on purpose; leave it, or no
+//     part of a path is ever editable in place.
+//   a fuzzy value ⇒ a live search the user is refining; a click is for moving
+//     the caret, and select-all would throw the query away on the next key.
+function pickerShouldSelectAll(value, collapsed) {
+  return collapsed && classifyPickerQuery(value).mode !== "fuzzy";
+}
+
 // Everything below touches the DOM and is covered by the behavioural pass, not
 // node --test. It mirrors palette.js:167-200's debounce + AbortController +
 // sequence guard rather than inventing a second version of the same pattern.
@@ -68,43 +109,44 @@ function initDirPicker(opts) {
   if (opts && opts.workspaces) dpWorkspaces = opts.workspaces;
   else api("/api/workspaces").then((ws) => { dpWorkspaces = ws || []; }).catch(() => {});
   dpInput.addEventListener("input", () => dpQuery(dpInput.value));
-  // setFtRoot writes the picked path into the input, so in steady state
-  // .value always starts with "/" — dpQuery on that classifies as "path" and
-  // closes immediately, making the workspace list unreachable on a re-focus.
-  // Rendering it here covers Tab/keyboard focus outright: the browser already
-  // select-alls a text input's value on keyboard focus, so nothing else is
-  // needed for that path.
-  dpInput.addEventListener("focus", () => {
-    dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
-  });
-  // Mouse selection is handled on click, not focus: on a click, caret
-  // placement (or, for a drag, a range selection) is part of mousedown's
-  // default action and runs AFTER focus is dispatched — a select() in the
-  // focus handler gets overwritten by it every time, which is what forced the
-  // previous fix into a setTimeout(0) workaround. click fires after that
-  // default action finishes, so by the time this runs the final selection is
-  // already known:
-  //   - a plain click leaves a COLLAPSED selection at the caret — treated as
-  //     "start a new pick", so select() replaces it with select-all.
-  //   - a drag leaves a RANGE selection — left alone, so a substring of an
-  //     already-picked path can be edited in place (a collapsed-only select()
-  //     would otherwise clobber every drag into select-all, DOM-verified).
-  // click also fires on a second click into an ALREADY-focused field, where
-  // no focus event fires at all — this is what makes clicking back into the
-  // input right after an Enter-driven pick (list already closed, nothing else
-  // pending) reopen it; typing from that state would otherwise insert at the
-  // caret into the old path instead of replacing it.
+  // Two jobs, split across the two events, because neither event can do both.
   //
-  // Guarded on the CURRENT value's mode, not unconditional: while the user is
-  // mid-typing a fuzzy query — the list already open on real search hits — a
-  // click is for repositioning the caret to fix a typo, not a restart, and
-  // must not select-all-and-reset the list out from under them.
-  // classifyPickerQuery is the same pure function every other consumer uses
-  // to answer exactly that question, so the gate is one call, not new state.
+  // REOPENING the list is dpReopen's, and runs on BOTH events unconditionally.
+  // It is derived from the value, so the list can never contradict the text.
+  // It is deliberately outside every guard below: Escape closes the list
+  // WITHOUT blurring, so no focus event follows and a click is the only way
+  // back in — gating this on anything made that click do visibly nothing.
+  //
+  // SELECTING the text is attempted on both events too, and the two attempts
+  // cover different focus sources:
+  //   - focus covers KEYBOARD (Tab) and programmatic focus, where no pointer
+  //     event ever arrives and this select() is the only one that runs. It is
+  //     an explicit mechanism rather than a bet on the browser select-alling a
+  //     text input on sequential focus navigation: if that bet were ever wrong,
+  //     Tab-then-type would splice into the path exactly like the click bug.
+  //   - for a POINTER focus this same select() is expected to be discarded a
+  //     moment later, because caret placement is part of mousedown's default
+  //     action and is dispatched AFTER the focus event. That discard is WANTED,
+  //     not tolerated — it is what leaves a drag's range selection alone. (It
+  //     is also the reason the classic select-on-focus idiom is famously
+  //     mouse-broken, and why an earlier round reached for setTimeout(0).)
+  //   - click runs after that default action, so it is the first moment the
+  //     pointer's FINAL selection is knowable; pickerShouldSelectAll reads it.
+  //
+  // The two overlap harmlessly when the ordering holds, and fail SAFE if it
+  // ever does not: the worst case is an extra select-all, which one more click
+  // undoes, instead of a silently spliced-into path, which corrupts the value.
+  dpInput.addEventListener("focus", () => {
+    dpInput.select();
+    dpReopen();
+  });
   dpInput.addEventListener("click", () => {
-    if (classifyPickerQuery(dpInput.value).mode === "fuzzy") return;
-    if (dpInput.selectionStart === dpInput.selectionEnd) dpInput.select();
-    dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
+    // click also fires on a click into an ALREADY-focused field, where no
+    // focus event fires at all — that is the case this select() exists for.
+    if (pickerShouldSelectAll(dpInput.value, dpInput.selectionStart === dpInput.selectionEnd)) {
+      dpInput.select();
+    }
+    dpReopen();
   });
   dpInput.addEventListener("keydown", dpKeydown);
   document.addEventListener("click", (e) => {
@@ -117,6 +159,16 @@ function initDirPicker(opts) {
   // else re-runs the placement. A splitter drag needs no listener here: it
   // ends in a click outside, which already closes the list via dpClose().
   window.addEventListener("resize", () => { if (!dpList.hidden) dpOpen(true); });
+}
+
+// dpReopen is the only thing focus and click do to the LIST. Both events route
+// through it so there is exactly one answer to "what should be on screen for
+// this value", rather than one answer per event that can drift apart.
+function dpReopen() {
+  const mode = pickerReopenMode(dpInput.value, !dpList.hidden);
+  if (mode === "empty") dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
+  else if (mode === "search") dpQuery(dpInput.value);
+  // "none": the open list already shows this search — see pickerReopenMode.
 }
 
 function dpQuery(raw) {
@@ -287,5 +339,5 @@ async function dpResolvePath(path) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { classifyPickerQuery, pickerRows };
+  module.exports = { classifyPickerQuery, pickerRows, pickerReopenMode, pickerShouldSelectAll };
 }
