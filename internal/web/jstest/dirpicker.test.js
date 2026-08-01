@@ -2,7 +2,8 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  classifyPickerQuery, pickerRows, pickerReopenMode, pickerShouldSelectAll,
+  classifyPickerQuery, pickerRows,
+  pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
 } = require("../static/dirpicker.js");
 
 // The picker has three input classes and they decide everything downstream:
@@ -119,4 +120,33 @@ test("a click inside a live fuzzy query keeps the query", () => {
   // Here a click is for moving the caret, not starting over; select-all would
   // discard the search on the very next keystroke.
   assert.strictEqual(pickerShouldSelectAll("culi", true), false);
+});
+
+// A drag can only carve out a substring if nothing is selected when it starts:
+// a mousedown inside a selection is read as grabbing that text, not as the
+// start of a new selection. Since a plain click deliberately leaves the whole
+// value selected, every following drag begins in exactly that trap unless the
+// selection is cleared first.
+
+test("a selection in the way is collapsed before a pointer gesture starts", () => {
+  // The steady state after any click on a 50-character path.
+  assert.strictEqual(pickerCollapseAt(0, 50), 50);
+  // A range left by an earlier drag is equally in the way.
+  assert.strictEqual(pickerCollapseAt(6, 14), 14);
+});
+
+test("collapsing lands on the end, so an overflowing field does not scroll", () => {
+  // select() scrolls an overflowing field to show its tail, so the end is
+  // already on screen. Collapsing to 0 would scroll the text under the pointer
+  // between the physical mousedown and the browser's hit-test, landing the
+  // caret on a different character than the one clicked.
+  assert.strictEqual(pickerCollapseAt(0, 50), 50);
+  assert.notStrictEqual(pickerCollapseAt(0, 50), 0);
+});
+
+test("an already-collapsed caret is left exactly where it is", () => {
+  // Nothing is in the way, so the gesture needs no help — and rewriting the
+  // selection here would move a caret the user placed on a previous click.
+  assert.strictEqual(pickerCollapseAt(17, 17), null);
+  assert.strictEqual(pickerCollapseAt(0, 0), null);
 });

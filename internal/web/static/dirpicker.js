@@ -88,6 +88,35 @@ function pickerShouldSelectAll(value, collapsed) {
   return collapsed && classifyPickerQuery(value).mode !== "fuzzy";
 }
 
+// pickerCollapseAt answers the question a pointer gesture has to ask BEFORE the
+// browser gets to interpret it: "is there a selection in the way?"
+//
+// Measured, not assumed (browser pass at df786d8): a mousedown that lands
+// INSIDE an existing selection is not read as "start selecting here" at all —
+// the browser treats it as grabbing the selected text, so no caret is placed,
+// mousemove extends nothing, and the selection comes out of the gesture exactly
+// as it went in. That was observed with no script touching the selection during
+// the gesture, which is what rules out "our select() broke it" as the real
+// cause: the field merely being fully selected at mousedown is enough on its
+// own. And the field is fully selected in steady state, because that is what
+// makes typing replace a path instead of splicing into it — so every first drag
+// after a click was landing in exactly that trap.
+//
+// Collapsing here removes the precondition, and the browser's own caret
+// placement (which runs later in the same default action) then puts the caret
+// where the user actually clicked.
+//
+// Returns the caret index to collapse to, or null if there is nothing in the
+// way. It collapses to the END, not the start: after select() an overflowing
+// field is scrolled to show the tail, so the end is already on screen and
+// moving the caret there scrolls nothing. Collapsing to 0 would scroll the
+// field under the pointer between the physical mousedown and the browser's
+// hit-test, which can land the caret on a different character than the one
+// clicked.
+function pickerCollapseAt(start, end) {
+  return start === end ? null : end;
+}
+
 // Everything below touches the DOM and is covered by the behavioural pass, not
 // node --test. It mirrors palette.js:167-200's debounce + AbortController +
 // sequence guard rather than inventing a second version of the same pattern.
@@ -95,6 +124,10 @@ function pickerShouldSelectAll(value, collapsed) {
 const DP_DEBOUNCE_MS = 120, DP_FETCH_MS = 4000;
 let dpInput = null, dpList = null, dpWorkspaces = [], dpRows = [], dpActive = -1;
 let dpSeq = 0, dpTimer = null, dpAbort = null, dpOnPick = null, dpOnOpenFile = null;
+// True from a primary-button mousedown on the input until the mouseup that ends
+// that gesture. It exists to tell the focus handler which kind of focus it is
+// looking at, since the focus event itself cannot say.
+let dpPointerGesture = false;
 
 function initDirPicker(opts) {
   dpInput = document.getElementById("ft-root-input");
@@ -109,40 +142,59 @@ function initDirPicker(opts) {
   if (opts && opts.workspaces) dpWorkspaces = opts.workspaces;
   else api("/api/workspaces").then((ws) => { dpWorkspaces = ws || []; }).catch(() => {});
   dpInput.addEventListener("input", () => dpQuery(dpInput.value));
-  // Two jobs, split across the two events, because neither event can do both.
+  // Two jobs across three events. The ordering they rely on was MEASURED in a
+  // browser, not reasoned about: mousedown fires first, then focus, then the
+  // browser's own caret placement, then mouseup, then click.
   //
-  // REOPENING the list is dpReopen's, and runs on BOTH events unconditionally.
-  // It is derived from the value, so the list can never contradict the text.
-  // It is deliberately outside every guard below: Escape closes the list
-  // WITHOUT blurring, so no focus event follows and a click is the only way
-  // back in — gating this on anything made that click do visibly nothing.
+  // REOPENING the list is dpReopen's, and runs on focus AND click,
+  // unconditionally. It is derived from the value, so the list can never
+  // contradict the text. It is deliberately outside every guard below: Escape
+  // closes the list WITHOUT blurring, so no focus event follows and a click is
+  // the only way back in — gating this made that click do visibly nothing.
   //
-  // SELECTING the text is attempted on both events too, and the two attempts
-  // cover different focus sources:
-  //   - focus covers KEYBOARD (Tab) and programmatic focus, where no pointer
-  //     event ever arrives and this select() is the only one that runs. It is
-  //     an explicit mechanism rather than a bet on the browser select-alling a
-  //     text input on sequential focus navigation: if that bet were ever wrong,
-  //     Tab-then-type would splice into the path exactly like the click bug.
-  //   - for a POINTER focus this same select() is expected to be discarded a
-  //     moment later, because caret placement is part of mousedown's default
-  //     action and is dispatched AFTER the focus event. That discard is WANTED,
-  //     not tolerated — it is what leaves a drag's range selection alone. (It
-  //     is also the reason the classic select-on-focus idiom is famously
-  //     mouse-broken, and why an earlier round reached for setTimeout(0).)
-  //   - click runs after that default action, so it is the first moment the
-  //     pointer's FINAL selection is knowable; pickerShouldSelectAll reads it.
-  //
-  // The two overlap harmlessly when the ordering holds, and fail SAFE if it
-  // ever does not: the worst case is an extra select-all, which one more click
-  // undoes, instead of a silently spliced-into path, which corrupts the value.
+  // SELECTING the text has to serve two demands that pull against each other:
+  //   A. after a plain click, the whole value must be selected, so typing
+  //      replaces the path instead of splicing into it.
+  //   B. a drag must be able to carve out a substring, so a path can be edited
+  //      in place.
+  // They conflict because A leaves the field fully selected, and a mousedown
+  // inside a full selection is read as grabbing the text rather than as the
+  // start of a new one (see pickerCollapseAt) — so A's end state poisons B's
+  // next gesture. Resolved by acting at both ends of the gesture:
+  //   - mousedown clears the selection out of the way, so the browser is free
+  //     to place a caret and extend from it. This is what makes a drag work,
+  //     and it is needed whether or not the gesture also changes focus — the
+  //     failure was reproduced on an already-focused field, where no focus
+  //     event fires at all.
+  //   - focus selects all ONLY when no pointer is involved. Keyboard (Tab) and
+  //     programmatic focus have no click coming to finish the job, so this is
+  //     their only chance; doing it for a pointer would immediately re-fill the
+  //     selection that mousedown just cleared and put demand B back in the trap.
+  //     This is an explicit mechanism rather than a bet on the browser
+  //     select-alling on sequential focus navigation: if that bet were wrong,
+  //     Tab-then-type would splice into the path like the click bug did.
+  //   - click is the first moment a pointer's FINAL selection is knowable, so
+  //     it decides between A and B by reading it: collapsed ⇒ a plain click ⇒
+  //     select all; a range ⇒ a drag ⇒ leave the substring alone. It also fires
+  //     on a click into an ALREADY-focused field, where focus does not.
+  dpInput.addEventListener("mousedown", (e) => {
+    // Primary button only: a right-click must keep the selection it was aimed
+    // at (so "Copy" copies it) and never claims the gesture flag.
+    if (e.button !== 0) return;
+    dpPointerGesture = true;
+    const at = pickerCollapseAt(dpInput.selectionStart, dpInput.selectionEnd);
+    if (at !== null) dpInput.setSelectionRange(at, at);
+  });
+  // On document, not the input: a mousedown that starts on the input can be
+  // released anywhere, and that release still has to end the gesture. Firing
+  // for every mouseup also clears a flag left behind by a gesture that never
+  // produced a click at all.
+  document.addEventListener("mouseup", () => { dpPointerGesture = false; });
   dpInput.addEventListener("focus", () => {
-    dpInput.select();
+    if (!dpPointerGesture) dpInput.select();
     dpReopen();
   });
   dpInput.addEventListener("click", () => {
-    // click also fires on a click into an ALREADY-focused field, where no
-    // focus event fires at all — that is the case this select() exists for.
     if (pickerShouldSelectAll(dpInput.value, dpInput.selectionStart === dpInput.selectionEnd)) {
       dpInput.select();
     }
@@ -339,5 +391,8 @@ async function dpResolvePath(path) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { classifyPickerQuery, pickerRows, pickerReopenMode, pickerShouldSelectAll };
+  module.exports = {
+    classifyPickerQuery, pickerRows,
+    pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
+  };
 }
