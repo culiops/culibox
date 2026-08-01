@@ -34,7 +34,15 @@ const SYNCS = /syncFocusedTree\s*\(|setFocusedCell\s*\(/;
 //   ensureFirstCell    a helper, never an entry point. Every caller (removeCell,
 //                      applyCap, focusedCellOrCreate) is covered here in its
 //                      own right, and a cell it has just created has no tabs.
-const EXEMPT = new Set(["setFocusedCellRaw", "ensureFirstCell"]);
+//   constructor        Cell's constructor sets this.activeTab = null as part of
+//                      initialising a brand-new cell: it has no tabs, is not yet
+//                      in `cells`, and cannot be the cell the tree is following.
+//                      There is nothing for syncFocusedTree() to re-root to.
+//
+// This is a text scan over function bodies, not a data-flow analysis: it proves
+// a mutation MENTIONS a sync call somewhere in its body, not that the sync runs
+// on every path through it. That is the bound of what this test buys.
+const EXEMPT = new Set(["setFocusedCellRaw", "ensureFirstCell", "constructor"]);
 
 // Every function the scan must see. Asserted below so a parser that quietly
 // stops finding bodies fails loudly instead of reporting a green empty set.
