@@ -72,6 +72,12 @@ function treeBranch(prefix, isLast) {
 }
 
 let ftRootSel = null, ftTreeEl = null;
+// ftRoot / setFtRoot are the ONLY way any other script reads or writes the
+// tree's root. They exist so the control underneath can change shape without
+// three other files reaching into its .value — upload.js did that in three
+// places, and filetree.js in three more.
+function ftRoot() { return (ftRootSel && ftRootSel.value) || ""; }
+function setFtRoot(path) { if (ftRootSel) ftRootSel.value = path; }
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 
@@ -169,7 +175,7 @@ async function ftLoadRoot() {
   if (!ftRootSel || !ftTreeEl) return;
   const gen = ++ftGen;
   const box = document.createElement("div");
-  await ftRenderDir(ftRootSel.value, box);
+  await ftRenderDir(ftRoot(), box);
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
 }
@@ -201,7 +207,7 @@ function openRowMenu(anchor, path, name, isDir) {
   const items = [
     ["Insert path at prompt", () => insertPathAtPrompt(path)],
     ["Copy path", () => copyPath(path)],
-    ["Copy relative path", () => copyPath(relativeTo(ftRootSel ? ftRootSel.value : "", path))],
+    ["Copy relative path", () => copyPath(relativeTo(ftRoot(), path))],
   ];
   // Contents last in the clipboard group, and only where there is text to take.
   // A directory has none, and an image is served as raw bytes rather than JSON,
@@ -475,7 +481,7 @@ async function syncTreeToRoot(root, key) {
     o.title = root;
     ftRootSel.appendChild(o);
   }
-  ftRootSel.value = root;
+  setFtRoot(root);
   await ftLoadRoot();
 }
 
@@ -501,7 +507,7 @@ async function initFileTree() {
 
   // New folder in the root currently shown: no row can reach the root itself.
   const newdir = document.getElementById("ft-newdir");
-  if (newdir) newdir.onclick = () => promptMkdir(ftRootSel.value);
+  if (newdir) newdir.onclick = () => promptMkdir(ftRoot());
 
   // One document-level closer for the row menu, like the spawn menu's.
   document.addEventListener("click", (e) => {

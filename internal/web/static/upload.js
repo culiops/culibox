@@ -89,8 +89,8 @@ function shouldRefreshTree(destDir, treeRoot) {
 // session, and they were the only upload routes that never told the tree, so an
 // uploaded file simply never appeared until something else re-rooted it.
 function refreshTreeAfterUpload(destDir) {
-  if (typeof ftRootSel === "undefined" || !ftRootSel) return;
-  if (!shouldRefreshTree(destDir, ftRootSel.value)) return;
+  if (typeof ftRoot === "undefined") return;
+  if (!shouldRefreshTree(destDir, ftRoot())) return;
   if (typeof ftLoadRoot === "function") ftLoadRoot();
 }
 
@@ -300,7 +300,7 @@ function initUpload() {
   if (btn && picker) {
     btn.onclick = () => picker.click();
     picker.onchange = () => {
-      uploadFiles(picker.files, ftRootSel && ftRootSel.value, { onDone: () => ftLoadRoot() });
+      uploadFiles(picker.files, ftRoot(), { onDone: () => ftLoadRoot() });
       picker.value = "";
     };
   }
@@ -308,5 +308,5 @@ function initUpload() {
   // The tree background is a drop zone rooted at the current root; individual
   // directory rows override it by stopping propagation (see filetree.js).
   const tree = document.getElementById("filetree");
-  if (tree) makeDropZone(tree, () => ftRootSel && ftRootSel.value, { onDone: () => ftLoadRoot() });
+  if (tree) makeDropZone(tree, () => ftRoot(), { onDone: () => ftLoadRoot() });
 }
