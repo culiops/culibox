@@ -470,7 +470,13 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		limit = searchMaxLimit
 	}
 
-	entries, truncated := s.searchIndex().snapshot(kindFiles)
+	// Anything that is not exactly "dir" means files. The command palette sends
+	// no kind at all and must keep getting byte-identical results.
+	kind := kindFiles
+	if r.URL.Query().Get("kind") == "dir" {
+		kind = kindDirs
+	}
+	entries, truncated := s.searchIndex().snapshot(kind)
 	lq := strings.ToLower(q)
 	hits := make([]searchHit, 0, limit)
 	for _, e := range entries {
@@ -506,7 +512,14 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		if info, err := os.Stat(resolved); err != nil || info.IsDir() {
+		info, err := os.Stat(resolved)
+		if err != nil {
+			continue
+		}
+		// The index says what it recorded; the stat says what is on disk NOW.
+		// They disagree whenever something was created, deleted or replaced
+		// since the last rebuild, which is exactly what the TTL allows.
+		if info.IsDir() != (kind == kindDirs) {
 			continue
 		}
 		h.Path = abs

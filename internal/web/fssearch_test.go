@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -451,6 +452,43 @@ func TestHandleFsSearchExcludesSymlinkEscape(t *testing.T) {
 	}
 	if len(out.Results) != 1 || !strings.Contains(out.Results[0].Rel, "escape-local") {
 		t.Fatalf("want only the in-home file, got %+v", out.Results)
+	}
+}
+
+func TestSearchKindDirReturnsOnlyDirectories(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, "static"))
+	mustWrite(t, filepath.Join(home, "static", "static.js"), "x")
+
+	s := &Server{Home: home}
+	_, resp := doSearch(t, s, "q=static&kind=dir")
+	if len(resp.Results) == 0 {
+		t.Fatal("kind=dir found no directories")
+	}
+	for _, r := range resp.Results {
+		if r.Rel == "static/static.js" {
+			t.Fatalf("a FILE was returned for kind=dir: %+v", resp.Results)
+		}
+	}
+}
+
+// The palette consumes this endpoint. An absent or unrecognised kind must be
+// byte-identical to today, or the palette silently starts listing folders.
+func TestSearchWithoutKindIsUnchanged(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, "static"))
+	mustWrite(t, filepath.Join(home, "static", "static.js"), "x")
+
+	s := &Server{Home: home}
+	_, plain := doSearch(t, s, "q=static")
+	_, bogus := doSearch(t, s, "q=static&kind=banana")
+	if !reflect.DeepEqual(plain.Results, bogus.Results) {
+		t.Fatalf("an unrecognised kind changed the result set: %+v vs %+v", plain.Results, bogus.Results)
+	}
+	for _, r := range plain.Results {
+		if r.Rel == "static" {
+			t.Fatalf("a DIRECTORY leaked into the default result set: %+v", plain.Results)
+		}
 	}
 }
 
