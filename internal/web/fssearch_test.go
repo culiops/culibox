@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -930,5 +931,72 @@ func TestDeadlineTruncatesBothSets(t *testing.T) {
 	_, dirsTrunc := ix.snapshot(kindDirs)
 	if !filesTrunc || !dirsTrunc {
 		t.Fatalf("budget exhaustion must truncate BOTH sets: filesTrunc=%v dirsTrunc=%v", filesTrunc, dirsTrunc)
+	}
+}
+
+// dpSkipWorkspaceNames in static/dirpicker.js is a hand-maintained literal copy
+// of skipDirRecord's keys — the picker filters its empty-state workspace list
+// with it, because /api/workspaces is deliberately unfiltered (it also feeds the
+// New-session form). Nothing at runtime compares the two, and one drift
+// direction is completely silent: a key added to the JS set that Go does not
+// have makes a real workspace vanish from the empty-state list with no error,
+// no empty result, and nothing in a log. The other direction is only slightly
+// louder — a key added to Go alone leaves the picker offering a directory that
+// its own fuzzy search can never find, the self-contradiction the JS set exists
+// to prevent.
+//
+// So the comparison is done here, by reading the source text. That is in idiom
+// for this repo: scripts/lint.sh already analyses static/*.js as text. Failing
+// in BOTH directions is the point; a one-way superset check would pass through
+// the silent case.
+func TestDirPickerSkipSetMatchesSkipDirRecord(t *testing.T) {
+	const jsPath = "static/dirpicker.js"
+	src, err := os.ReadFile(jsPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", jsPath, err)
+	}
+
+	// Anchored on the declaration, not on a bare list of strings, so a rename or
+	// a reformat fails here rather than silently comparing nothing.
+	decl := regexp.MustCompile(`dpSkipWorkspaceNames\s*=\s*new Set\(\[([^\]]*)\]`)
+	m := decl.FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("could not find the `dpSkipWorkspaceNames = new Set([...])` literal in %s — "+
+			"if it was renamed or restructured, update this test; it is the only thing "+
+			"holding that set and skipDirRecord together", jsPath)
+	}
+
+	js := map[string]bool{}
+	for _, q := range regexp.MustCompile(`"([^"]*)"`).FindAllStringSubmatch(string(m[1]), -1) {
+		js[q[1]] = true
+	}
+	if len(js) == 0 {
+		t.Fatalf("%s: dpSkipWorkspaceNames parsed as empty; the literal must use double-quoted strings", jsPath)
+	}
+
+	var missingInJS, missingInGo []string
+	for k := range skipDirRecord {
+		if !js[k] {
+			missingInJS = append(missingInJS, k)
+		}
+	}
+	for k := range js {
+		if !skipDirRecord[k] {
+			missingInGo = append(missingInGo, k)
+		}
+	}
+	sort.Strings(missingInJS)
+	sort.Strings(missingInGo)
+
+	if len(missingInJS) > 0 {
+		t.Errorf("%s is missing %v — skipDirRecord (fssearch.go) has these keys and the picker does not, "+
+			"so the empty-state list offers directories the fuzzy search can never find; add them to dpSkipWorkspaceNames",
+			jsPath, missingInJS)
+	}
+	if len(missingInGo) > 0 {
+		t.Errorf("skipDirRecord (fssearch.go) is missing %v — %s filters these out with no counterpart in Go, "+
+			"so a real workspace disappears from the picker's empty state with no signal at all; "+
+			"either add them to skipDirRecord or drop them from dpSkipWorkspaceNames",
+			missingInGo, jsPath)
 	}
 }
