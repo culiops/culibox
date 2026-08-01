@@ -351,7 +351,14 @@
     .ft-pick { position: relative; }
     #ft-root-input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--border); font: inherit; font-size: 12px; padding: 3px 6px; }
     #ft-root-input:focus { border-color: var(--accent); outline: none; }
-    #ft-root-list { position: absolute; left: 0; right: 0; top: 100%; z-index: 30; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); }
+    /* position: fixed, not absolute: .ft-pick sits inside #sidebar, which clips
+       overflow, and an absolutely-positioned child cannot escape a clipping
+       ancestor when its containing block is inside it — the list would be cut
+       at the sidebar's bottom edge, worst on the 52vh mobile layout. Fixed
+       positioning escapes that; left/top/width/max-height are set from
+       dpInput's rect in dpOpen(), so the values below are only the fallback
+       before that first runs. */
+    #ft-root-list { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); }
     #ft-root-list[hidden] { display: none; }
     .ft-opt { display: flex; align-items: baseline; gap: 1ch; padding: 3px 7px; cursor: pointer; font-size: 12px; color: var(--fg); }
     .ft-opt .hint { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

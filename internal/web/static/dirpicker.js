@@ -61,9 +61,22 @@ function initDirPicker(opts) {
   if (!dpInput || !dpList) return;
   dpOnPick = (opts && opts.onPick) || function () {};
   dpOnOpenFile = (opts && opts.onOpenFile) || function () {};
-  api("/api/workspaces").then((ws) => { dpWorkspaces = ws || []; }).catch(() => {});
+  // filetree.js already awaits /api/workspaces for HOME_DIR, so the caller
+  // can just hand the result over. The un-awaited fetch is only a fallback
+  // for a caller that doesn't have the list yet — otherwise a focus before it
+  // lands would render zero rows with no retry.
+  if (opts && opts.workspaces) dpWorkspaces = opts.workspaces;
+  else api("/api/workspaces").then((ws) => { dpWorkspaces = ws || []; }).catch(() => {});
   dpInput.addEventListener("input", () => dpQuery(dpInput.value));
-  dpInput.addEventListener("focus", () => dpQuery(dpInput.value));
+  // setFtRoot writes the picked path into the input, so in steady state
+  // .value always starts with "/" — dpQuery on that classifies as "path" and
+  // closes immediately, making the workspace list unreachable on a re-focus.
+  // select() + an explicit empty-mode render sidesteps that: typing replaces
+  // the selected path, and the list is always what a fresh focus shows.
+  dpInput.addEventListener("focus", () => {
+    dpInput.select();
+    dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
+  });
   dpInput.addEventListener("keydown", dpKeydown);
   document.addEventListener("click", (e) => {
     if (e.target !== dpInput && !dpList.contains(e.target)) dpClose();
@@ -97,6 +110,10 @@ async function dpSearch(q, seq) {
 
 function dpRender(rows) {
   dpRows = rows; dpActive = -1;
+  // A shorter or longer result set recycles ids: leaving a stale
+  // aria-activedescendant would either point at nothing or, worse, at a row
+  // the user never highlighted.
+  dpInput.removeAttribute("aria-activedescendant");
   dpList.replaceChildren(...rows.map((r, i) => {
     const el = document.createElement("div");
     el.className = "ft-opt";
@@ -117,10 +134,34 @@ function dpRender(rows) {
 }
 
 function dpOpen(show) {
-  dpList.hidden = !show;
   dpInput.setAttribute("aria-expanded", show ? "true" : "false");
+  if (show) {
+    // #ft-root-list is position: fixed (see index.html), so its box is
+    // computed from the viewport, not from .ft-pick — it has to be told where
+    // the input actually is, and clamped to whatever room is left below it.
+    const r = dpInput.getBoundingClientRect();
+    dpList.style.left = r.left + "px";
+    dpList.style.width = r.width + "px";
+    dpList.style.top = r.bottom + "px";
+    dpList.style.maxHeight = Math.max(80, window.innerHeight - r.bottom - 8) + "px";
+  }
+  dpList.hidden = !show;
 }
-function dpClose() { dpOpen(false); }
+
+function dpClose() {
+  dpOpen(false);
+  // Escape and an outside click both come straight here, bypassing dpQuery's
+  // own cancel-on-new-query logic — without this a debounced search or an
+  // in-flight fetch from the abandoned query lands after the fact and
+  // reopens a list the user just dismissed.
+  if (dpTimer) { clearTimeout(dpTimer); dpTimer = null; }
+  if (dpAbort) { dpAbort.abort(); dpAbort = null; }
+  dpSeq++;
+  // Also clears the highlight so a stale dpActive from a dismissed fuzzy
+  // search cannot win a later Enter that was meant for a freshly typed path.
+  dpRows = []; dpActive = -1;
+  dpInput.removeAttribute("aria-activedescendant");
+}
 
 function dpMove(delta) {
   if (!dpRows.length) return;

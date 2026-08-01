@@ -71,13 +71,22 @@ function treeBranch(prefix, isLast) {
   };
 }
 
-let ftRootSel = null, ftTreeEl = null;
+let ftRootSel = null, ftTreeEl = null, ftRootPath = "";
 // ftRoot / setFtRoot are the ONLY way any other script reads or writes the
 // tree's root. They exist so the control underneath can change shape without
 // three other files reaching into its .value — upload.js did that in three
 // places, and filetree.js in three more.
-function ftRoot() { return (ftRootSel && ftRootSel.value) || ""; }
-function setFtRoot(path) { if (ftRootSel) ftRootSel.value = path; }
+//
+// The root is stored in ftRootPath, NOT read back from the input's .value: the
+// input doubles as the picker's search box, and only a successful pick clears
+// it. Escape, an outside click, and a 404/403/500 on a typed path all leave
+// whatever the user was typing sitting in .value — reading the root from there
+// would silently re-root the tree at abandoned search text.
+function ftRoot() { return ftRootPath; }
+function setFtRoot(path) {
+  ftRootPath = path || "";
+  if (ftRootSel) { ftRootSel.value = ftRootPath; ftRootSel.title = ftRootPath; }
+}
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 
@@ -490,8 +499,12 @@ async function initFileTree() {
   } catch (_) {}
 
   // A picked directory re-roots the tree but does NOT change which TAB we're
-  // following, so it survives until a different tab is focused.
+  // following, so it survives until a different tab is focused. workspaces is
+  // passed in because this function already awaited /api/workspaces above —
+  // letting the picker fetch it again unawaited would leave a focus before
+  // that second fetch lands rendering zero rows with no retry.
   initDirPicker({
+    workspaces: ws,
     onPick: async (path) => { setFtRoot(path); await ftLoadRoot(); },
     onOpenFile: (path) => openFile(path),
   });
