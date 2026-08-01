@@ -16,6 +16,15 @@ let cells = [];
 // setFocusedCellRaw below so the status line's cwd field never goes stale. That
 // funnel is intentionally the ONLY thing it adds: it must stay side-effect-free
 // (no syncFocusedTree, no scheduleSaveLayout) or the invariant above breaks.
+//
+// SECOND INVARIANT. Every mutation that can change the focused cell OR its
+// active tab ends in syncFocusedTree(), at its TAIL, after the render. The tree
+// used to follow the *event* of focus changing rather than the *state* of what
+// the focused pane shows, so removeCell / closeTab / applyCap left it rooted at
+// a directory nobody was looking at — and setFocusedCell's equality guard then
+// swallowed every click that would have fixed it.
+// internal/web/jstest/tree-follows-focus.test.js pins this at the source level;
+// if you add a mutation, it will tell you.
 let focusedCell = null;
 
 // setFocusedCellRaw is the sole place `focusedCell` is written. Direct-assignment
@@ -143,6 +152,11 @@ class Cell {
     this.renderBody();
     refreshSessions();
     scheduleSaveLayout();
+    // The active tab changed without going through activate(), so if this cell
+    // holds focus the tree is still rooted at the session whose tab just closed.
+    // Gated like activate() for the same reason: an unfocused cell's close says
+    // nothing about where the tree belongs.
+    if (this === focusedCell) syncFocusedTree();
   }
 
   renderBody() {
@@ -293,6 +307,11 @@ function removeCell(cell) {
   renderGrid();
   refreshSessions();
   scheduleSaveLayout();
+  // Focus moved via setFocusedCellRaw, so nothing has re-rooted the tree — and
+  // because the surviving cell is ALREADY focused by the time the user clicks
+  // it, setFocusedCell's equality guard would eat the repair click too. This is
+  // the call that makes closing a pane leave a correct tree behind.
+  syncFocusedTree();
 }
 
 function toggleMax(cell) {
@@ -342,6 +361,13 @@ function applyCap(n) {
   renderGrid();
   refreshSessions();
   scheduleSaveLayout();
+  // Collapsing panes re-parks focus via setFocusedCellRaw, and the cell it lands
+  // on can show a different session than the one the tree is following.
+  // Safe during restore, where applyPlan calls this before its own
+  // setFocusedCell: a fresh TerminalTab has no cwd yet, and syncTreeToSession
+  // returns on !cwd BEFORE it writes lastSyncedSessionId, so it cannot poison
+  // the follow-guard.
+  syncFocusedTree();
 }
 
 // openTerminal auto-splits a new window per session up to `cap`; beyond the cap
