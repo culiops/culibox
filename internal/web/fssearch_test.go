@@ -492,6 +492,209 @@ func TestSearchWithoutKindIsUnchanged(t *testing.T) {
 	}
 }
 
+// indexDirs returns the directory set as slash-separated paths, which is how
+// every assertion below and the HTTP layer read them.
+func indexDirs(t *testing.T, ix *fileIndex) []string {
+	t.Helper()
+	dirs, _ := ix.snapshot(kindDirs)
+	out := rels(dirs)
+	for i, p := range out {
+		out[i] = filepath.ToSlash(p)
+	}
+	return out
+}
+
+// countOf reports how many times needle appears — the dedupe assertions need
+// "exactly once", which slices.Contains cannot express.
+func countOf(hay []string, needle string) int {
+	n := 0
+	for _, h := range hay {
+		if h == needle {
+			n++
+		}
+	}
+	return n
+}
+
+// ---------------------------------------------------------------------------
+// The project rule: a directory is offered as a workspace when it is a
+// non-hidden depth-1 child of $HOME (plus .config), or when it DIRECTLY
+// contains a marker file. skipDirRecord beats both.
+// ---------------------------------------------------------------------------
+
+// Every marker names its parent, at any depth, hidden or not. The fixture sits
+// at depth 3 so rule 1 cannot account for the result.
+func TestProjectMarkersRecordTheirParent(t *testing.T) {
+	for _, marker := range []string{".git", "go.mod", "package.json", "Cargo.toml", "pyproject.toml"} {
+		t.Run(marker, func(t *testing.T) {
+			home := t.TempDir()
+			mustWrite(t, filepath.Join(home, "top", "nest", "proj", marker), "{}")
+			got := indexDirs(t, newFileIndex(home))
+			if !slices.Contains(got, "top/nest/proj") {
+				t.Fatalf("%q did not name its parent a project: %v", marker, got)
+			}
+			// The directory between $HOME's child and the project carries no
+			// marker, so it is not offered.
+			if slices.Contains(got, "top/nest") {
+				t.Fatalf("a markerless directory was recorded: %v", got)
+			}
+		})
+	}
+}
+
+// .git is in skipDirs, so a marker test placed inside the d.IsDir() branch —
+// below its fs.SkipDir — would never observe the single most important marker.
+// Here .git is a real DIRECTORY, which is the shape that regresses.
+func TestProjectGitDirIsObservedDespiteSkipDirs(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, "top", "nest", "repo", ".git", "config"), "[core]")
+
+	got := indexDirs(t, newFileIndex(home))
+	if !slices.Contains(got, "top/nest/repo") {
+		t.Fatalf("a .git DIRECTORY must name its parent a project: %v", got)
+	}
+	if slices.Contains(got, "top/nest/repo/.git") {
+		t.Fatalf(".git is the marker, not the project: %v", got)
+	}
+}
+
+// Rule 1 mirrors listWorkspaces: the direct, non-hidden children of $HOME are
+// offered with no marker at all. The tree here is deliberately MARKERLESS —
+// on a real home ~/.claude carries its own .git and rule 2 admits it, so a test
+// asserting "hidden is never offered" against a real home would be false.
+func TestProjectDepth1ChildrenNeedNoMarker(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, "notes", "deeper"))
+	mustMkdirAll(t, filepath.Join(home, ".hidden", "inner"))
+	mustMkdirAll(t, filepath.Join(home, ".config", "nvim"))
+
+	got := indexDirs(t, newFileIndex(home))
+	if !slices.Contains(got, "notes") {
+		t.Fatalf("a non-hidden depth-1 child must be offered without a marker: %v", got)
+	}
+	// .config is the one hidden name on the allowlist: it is where a user's own
+	// configuration lives, and it carries no marker of its own.
+	if !slices.Contains(got, ".config") {
+		t.Fatalf(".config must be admitted by name: %v", got)
+	}
+	for _, bad := range []string{".hidden", ".hidden/inner", "notes/deeper", ".config/nvim"} {
+		if slices.Contains(got, bad) {
+			t.Fatalf("markerless directory %q must not be offered: %v", bad, got)
+		}
+	}
+}
+
+// One directory, several markers — and the rule-1 × rule-2 collision, which is
+// the common case: EVERY top-level repo is admitted once as a depth-1 child and
+// again when its .git is visited (~30 of them on a real home). One shared
+// dedupe set, not one per rule.
+func TestProjectRecordsEachDirectoryOnce(t *testing.T) {
+	home := t.TempDir()
+	// Three markers, one directory, below depth 1 so only rule 2 applies.
+	deep := filepath.Join(home, "top", "poly")
+	mustWrite(t, filepath.Join(deep, "go.mod"), "module poly")
+	mustWrite(t, filepath.Join(deep, "package.json"), "{}")
+	mustWrite(t, filepath.Join(deep, ".git", "config"), "[core]")
+	// A depth-1 repo: rule 1 and rule 2 both admit it.
+	mustWrite(t, filepath.Join(home, "repo", ".git", "config"), "[core]")
+	mustWrite(t, filepath.Join(home, "repo", "go.mod"), "module repo")
+
+	got := indexDirs(t, newFileIndex(home))
+	if n := countOf(got, "top/poly"); n != 1 {
+		t.Fatalf("three markers recorded the directory %d times: %v", n, got)
+	}
+	if n := countOf(got, "repo"); n != 1 {
+		t.Fatalf("rule 1 × rule 2 recorded the directory %d times: %v", n, got)
+	}
+}
+
+// skipDirRecord beats BOTH rules, over the whole subtree — while the files
+// underneath stay in the palette, which is the entire reason these names are
+// not in skipDirs.
+func TestProjectSkipDirRecordBeatsBothRules(t *testing.T) {
+	home := t.TempDir()
+	// A depth-1 child, so rule 1 would offer it but for the skip.
+	mustWrite(t, filepath.Join(home, "sdk", "go1.26", "src", "internal", "go.mod"), "module std")
+	mustWrite(t, filepath.Join(home, "code-server", "extensions", "ms-x", "package.json"), "{}")
+	mustMkdirAll(t, filepath.Join(home, "worktrees", "feat-a"))
+	mustWrite(t, filepath.Join(home, "worktrees", "feat-a", "go.mod"), "module w")
+	// And below depth 1, where only rule 2 could fire.
+	mustWrite(t, filepath.Join(home, "app", ".open-next", "server", "package.json"), "{}")
+	mustWrite(t, filepath.Join(home, ".zinit", "plugins", "p", ".git", "config"), "[core]")
+	mustWrite(t, filepath.Join(home, ".tmux", "plugins", "q", ".git", "config"), "[core]")
+	mustWrite(t, filepath.Join(home, "repo", ".worktrees", "wt", "go.mod"), "module wt")
+
+	ix := newFileIndex(home)
+	got := indexDirs(t, ix)
+	for _, bad := range []string{
+		"sdk", "sdk/go1.26/src/internal",
+		"code-server", "code-server/extensions/ms-x",
+		"worktrees", "worktrees/feat-a",
+		"app/.open-next/server",
+		".zinit/plugins/p", ".tmux/plugins/q",
+		"repo/.worktrees/wt",
+	} {
+		if slices.Contains(got, bad) {
+			t.Fatalf("skipDirRecord did not suppress %q: %v", bad, got)
+		}
+	}
+	// The parents that are not themselves skipped stay offered.
+	for _, want := range []string{"app", "repo"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("%q must still be offered: %v", want, got)
+		}
+	}
+	// The file index is untouched by skipDirRecord — that is the whole point.
+	files := rels(mustSnapshot(t, ix))
+	for _, want := range []string{
+		filepath.Join("sdk", "go1.26", "src", "internal", "go.mod"),
+		filepath.Join("code-server", "extensions", "ms-x", "package.json"),
+	} {
+		if !slices.Contains(files, want) {
+			t.Fatalf("file %q must stay in the palette: %v", want, files)
+		}
+	}
+}
+
+// A marker in $HOME itself names $HOME — which is the index root, not a project
+// inside it. Emitting "." would put a bare dot in the picker.
+func TestProjectMarkerInHomeItselfIsNotRecorded(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, "go.mod"), "module home")
+	mustWrite(t, filepath.Join(home, ".git", "config"), "[core]")
+	mustMkdirAll(t, filepath.Join(home, "proj"))
+
+	got := indexDirs(t, newFileIndex(home))
+	for _, bad := range []string{".", "", ".git"} {
+		if slices.Contains(got, bad) {
+			t.Fatalf("a marker in $HOME emitted %q: %v", bad, got)
+		}
+	}
+	if !slices.Contains(got, "proj") {
+		t.Fatalf("the rest of the walk must be unaffected: %v", got)
+	}
+}
+
+// maxDirs bounds rule-2 emissions too, and sets dirsTrunc when it bites — the
+// bound lives in emit, so it cannot be bypassed by the rule that admitted the
+// directory.
+func TestProjectMaxDirsBoundsMarkerEmissions(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 12; i++ {
+		mustWrite(t, filepath.Join(home, "big", fmt.Sprintf("p%02d", i), "go.mod"), "module p")
+	}
+	ix := newFileIndex(home)
+	ix.maxDirs = 4
+
+	dirs, dirsTrunc := ix.snapshot(kindDirs)
+	if len(dirs) != 4 {
+		t.Fatalf("maxDirs did not bound the marker rule: got %d dirs (%v)", len(dirs), rels(dirs))
+	}
+	if !dirsTrunc {
+		t.Fatal("hitting maxDirs must report the DIRECTORY set truncated")
+	}
+}
+
 func contains(hay []string, needle string) bool {
 	for _, h := range hay {
 		if h == needle {
@@ -504,63 +707,96 @@ func contains(hay []string, needle string) bool {
 // The directory set is collected by the SAME walk as the files, with its own
 // bounds and its own truncation flag. These pin the three things that separate
 // it from "just index directories too".
+//
+// The marker sits at DEPTH 2 on purpose. The obvious fixture home/repo/.git
+// proves nothing: "repo" is a non-hidden depth-1 child, so rule 1 records it
+// whether or not the marker rule works at all.
 func TestIndexCollectsDirectories(t *testing.T) {
 	home := t.TempDir()
-	mustMkdirAll(t, filepath.Join(home, "repo", "internal", "web"))
-	mustWrite(t, filepath.Join(home, "repo", "internal", "web", "a.go"), "package web")
+	mustMkdirAll(t, filepath.Join(home, "top", "repo", ".git"))
+	mustMkdirAll(t, filepath.Join(home, "top", "repo", "sub"))
+	mustWrite(t, filepath.Join(home, "top", "repo", "sub", "a.go"), "package web")
 
 	ix := newFileIndex(home)
-	dirs, _ := ix.snapshot(kindDirs)
-	got := rels(dirs)
-	for _, want := range []string{"repo", "repo/internal", "repo/internal/web"} {
+	got := indexDirs(t, ix)
+	for _, want := range []string{"top", "top/repo"} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("directory %q missing from %v", want, got)
 		}
 	}
+	// The tree goes deeper than the picker: a markerless child of a project is
+	// reached by clicking down, not by searching for it.
+	if slices.Contains(got, "top/repo/sub") {
+		t.Fatalf("a markerless directory was recorded: %v", got)
+	}
 	// The file set must not have gained directories.
 	files, _ := ix.snapshot(kindFiles)
-	if slices.Contains(rels(files), "repo/internal") {
+	if slices.Contains(rels(files), filepath.Join("top", "repo", "sub")) {
 		t.Fatalf("a directory leaked into the file set: %v", rels(files))
 	}
 }
 
 // vendor/ is pruned from RECORDING only. Adding it to skipDirs would delete
 // every file under it from the palette, which is a regression, not a benefit.
+//
+// The marker inside vendor/ is what keeps this test honest: without it,
+// app/vendor/lib is unrecorded merely because nothing there is a project, and
+// the test would pass with skipDirRecord deleted entirely. package.json is used
+// rather than composer.json — the natural choice for a vendor/ — because
+// composer.json was dropped from the marker set, which would make the fixture
+// vacuous for a new reason.
 func TestVendorIsNotRecordedButItsFilesAre(t *testing.T) {
 	home := t.TempDir()
 	mustMkdirAll(t, filepath.Join(home, "app", "vendor", "lib"))
 	mustWrite(t, filepath.Join(home, "app", "vendor", "lib", "x.php"), "<?php")
+	mustWrite(t, filepath.Join(home, "app", "vendor", "lib", "package.json"), "{}")
 
 	ix := newFileIndex(home)
-	dirs, _ := ix.snapshot(kindDirs)
-	for _, d := range rels(dirs) {
+	got := indexDirs(t, ix)
+	for _, d := range got {
 		if d == "app/vendor" || d == "app/vendor/lib" {
-			t.Fatalf("vendor directory was recorded: %v", rels(dirs))
+			t.Fatalf("vendor directory was recorded: %v", got)
 		}
 	}
 	files, _ := ix.snapshot(kindFiles)
-	if !slices.Contains(rels(files), "app/vendor/lib/x.php") {
-		t.Fatalf("a file under vendor must still be findable: %v", rels(files))
+	for _, want := range []string{
+		filepath.Join("app", "vendor", "lib", "x.php"),
+		filepath.Join("app", "vendor", "lib", "package.json"),
+	} {
+		if !slices.Contains(rels(files), want) {
+			t.Fatalf("a file under vendor must still be findable: %v", rels(files))
+		}
 	}
 }
 
 // The fairness prune is a CONJUNCTION. A subtree that has spent its file budget
 // must keep yielding directories, or the biggest repos — exactly the ones worth
 // searching — go missing.
+//
+// With maxPerRoot = 3 the marker files are themselves past the per-root FILE
+// cap, so this also proves the marker check sits ABOVE that cap in the walk: if
+// it sat below, every project after the third file in "big" would be lost.
 func TestFileBudgetExhaustionStillYieldsDirectories(t *testing.T) {
 	home := t.TempDir()
 	for i := 0; i < 12; i++ {
 		d := filepath.Join(home, "big", fmt.Sprintf("d%02d", i))
 		mustMkdirAll(t, d)
+		mustWrite(t, filepath.Join(d, "go.mod"), "module d")
 		mustWrite(t, filepath.Join(d, "f.txt"), "x")
 	}
 	ix := newFileIndex(home)
 	ix.maxPerRoot = 3 // file budget for "big" is spent almost immediately
 	ix.maxPerRootDirs = 100
 
-	dirs, _ := ix.snapshot(kindDirs)
-	if n := len(rels(dirs)); n < 12 {
-		t.Fatalf("file-budget exhaustion pruned the directory set: got %d, want >= 12 (%v)", n, rels(dirs))
+	got := indexDirs(t, ix)
+	if len(got) < 12 {
+		t.Fatalf("file-budget exhaustion pruned the directory set: got %d, want >= 12 (%v)", len(got), got)
+	}
+	for i := 0; i < 12; i++ {
+		want := fmt.Sprintf("big/d%02d", i)
+		if !slices.Contains(got, want) {
+			t.Fatalf("project %q was lost to the spent file budget: %v", want, got)
+		}
 	}
 }
 

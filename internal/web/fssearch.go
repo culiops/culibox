@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -29,18 +30,24 @@ const (
 	// single one of the user's repos.
 	maxPerRootPaths = 10000
 
-	// Directory bounds are separate from the file bounds on purpose. Measured on
-	// a real home directory: 16 567 directories survive the skip rules at depth
-	// 12, of which 6 520 sit under a vendor/ and are suppressed by
-	// skipDirRecord, leaving 10 047 actually recorded, against ~60 000 files.
-	// Sharing one budget would let the files starve the directories.
+	// Directory bounds are separate from the file bounds on purpose: sharing one
+	// budget would let the files starve the directories. The directory index
+	// records PROJECT ROOTS, not every folder (see markerFiles), so the set
+	// these bound is small — measured on a real home directory, 91 directories
+	// against ~60 000 files.
+	//
+	// Both caps are therefore RETAINED BUT VESTIGIAL. Do NOT lower them to
+	// "fit" the new size. Lowering makes dirBudgetSpent reachable, and a spent
+	// directory budget contributes to the fairness prune's fs.SkipDir below —
+	// which stops the walk VISITING markers deeper in that subtree and so
+	// silently loses whole projects, in an order that depends on lexical DFS.
+	// That order-dependent project loss is the exact failure this design exists
+	// to eliminate.
 	maxIndexDirs = 20000
-	// maxPerRootDirs is the directory twin of maxPerRootPaths. On the same
-	// measurement the largest top-level subtree records 2 556 directories —
-	// nowhere near this cap, so today it is headroom rather than a binding
-	// limit. It still exists for the same reason maxPerRootPaths does: the
-	// walk is a lexical DFS, so without a per-root cap one huge subtree that
-	// sorts first can crowd out everything after it.
+	// maxPerRootDirs is the directory twin of maxPerRootPaths, and carries the
+	// same warning: headroom, not a binding limit. It exists for the reason
+	// maxPerRootPaths does — the walk is a lexical DFS, so without a per-root
+	// cap one huge subtree that sorts first can crowd out everything after it.
 	maxPerRootDirs = 4000
 
 	searchDefaultLimit = 50
@@ -124,16 +131,57 @@ const (
 	kindDirs
 )
 
+// markerFiles name a directory as a project root: a directory that DIRECTLY
+// contains one of these is recorded in the directory index whatever its depth
+// and whether or not it is hidden. The picker answers "which project am I in";
+// the file TREE goes deeper, so `<repo>/internal` is reached by picking the
+// repo and clicking down, not by searching for it. Measured on a real home
+// directory, this takes the offered set from 10 049 directories to 91.
+//
+// composer.json is deliberately absent: it accounts for zero directories here —
+// every Composer project also carries .git, and the rest sit inside a vendor/,
+// already suppressed by skipDirRecord.
+var markerFiles = map[string]bool{
+	".git":           true,
+	"go.mod":         true,
+	"package.json":   true,
+	"Cargo.toml":     true,
+	"pyproject.toml": true,
+}
+
 // skipDirRecord names a directory whose ENTIRE SUBTREE is never worth
 // offering as a workspace — the match suppresses recording for it and every
 // directory nested inside it, not just the named directory itself — but whose
 // FILES must stay findable. It gates recording only; the walk still descends.
 // Putting these in skipDirs instead would delete every file under a Laravel
-// vendor/ from the command palette. Adding a common segment name here is not
-// free: "vendor" alone suppresses 6 520 of 16 567 candidate directories
-// (39%) on a real home directory — measure before adding another.
+// vendor/ from the command palette — or, for "sdk", 14 854 Go stdlib files.
+//
+// EVERY KEY IS A SINGLE PATH ELEMENT. The match runs one segment at a time
+// (see the underSkipRecord loop in emit), so a multi-segment key such as
+// "code-server/config/extensions" can never fire — it is dead config that
+// reads as a working rule.
+//
+// The counts below are directories removed AFTER the project rule, measured on
+// a real home directory. Measure before adding another key.
 var skipDirRecord = map[string]bool{
 	"vendor": true,
+	// The retired code-server install (2026-07-26). 26 rows — 20% of the
+	// result set, and the whole of what `q=static` used to return.
+	"code-server": true,
+	// Go SDK trees: the toolchain ships 21 go.mod files, so without this the
+	// project rule reintroduces the stdlib paths that made `q=internal`
+	// useless. A future <repo>/sdk/ package becomes unpickable; zero
+	// collateral today, and accepted over skipRelPaths, which would have
+	// deleted the stdlib files from the palette as well. 22 rows.
+	"sdk": true,
+	// Shell/tmux plugin checkouts — each plugin is its own git clone. 9 rows.
+	".zinit": true,
+	".tmux":  true,
+	// OpenNext build output; the bundles carry their own package.json. 7 rows.
+	".open-next": true,
+	// Worktrees are alternate checkouts of a repo already listed. 6 rows.
+	".worktrees": true,
+	"worktrees":  true,
 }
 
 // indexEntry caches the lowercased path and basename offset alongside the path.
@@ -265,7 +313,48 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 	dirs = make([]indexEntry, 0, 256)
 	perRoot := make(map[string]int)
 	perRootDirs := make(map[string]int)
+	seenDirs := make(map[string]bool)
 	n := 0
+
+	// emit records one directory (slash-separated, relative to root) and owns
+	// EVERY bound the directory set has. Both admission rules funnel through it,
+	// so the two call sites cannot drift on the bounds — and, crucially, so the
+	// dedupe set is shared. The common collision is rule 1 × rule 2: every
+	// top-level repo is admitted once as a non-hidden depth-1 child and again
+	// when its .git is visited (~30 directories on a real home). Two separate
+	// sets would list each of them twice.
+	emit := func(slashRel string) {
+		if seenDirs[slashRel] {
+			return
+		}
+		parts := strings.Split(slashRel, "/")
+		// skipDirRecord is keyed on a single path element, so a directory
+		// nested under a skip-recorded ancestor (app/vendor/lib under "vendor")
+		// is checked by walking every segment, not just the last — otherwise
+		// only the named directory itself would be suppressed and its subtree
+		// would leak back in one level down.
+		for _, part := range parts {
+			if skipDirRecord[part] {
+				return
+			}
+		}
+		if len(parts) >= b.maxDepth {
+			return
+		}
+		top := parts[0]
+		if perRootDirs[top] >= b.maxPerRootDirs {
+			dirsTrunc = true
+			return
+		}
+		if len(dirs) >= b.maxDirs {
+			dirsTrunc = true
+			return
+		}
+		seenDirs[slashRel] = true
+		perRootDirs[top]++
+		lower := strings.ToLower(slashRel)
+		dirs = append(dirs, indexEntry{rel: filepath.FromSlash(slashRel), lower: lower, baseStart: baseStartOf(lower)})
+	}
 
 	filepath.WalkDir(b.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -291,6 +380,30 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 		parts := strings.Split(slash, "/")
 		top := parts[0]
 
+		// Rule 2: a marker names its PARENT a project root. This sits above the
+		// d.IsDir() split deliberately — .git is in skipDirs, so below the
+		// fs.SkipDir return in that branch the single most important marker
+		// would never be observed at all. The same one position is also above
+		// the depth return and above the per-root FILE cap, either of which
+		// would otherwise swallow a marker in a big or deep subtree. One
+		// insertion, not three constraints.
+		//
+		// Emitting the PARENT rather than deciding a directory's project-ness
+		// when the directory itself is visited is forced by WalkDir's order,
+		// which fully descends a subtree before reaching a later sibling:
+		// repo → repo/aaa → repo/aaa/deep → repo/go.mod → repo/zzz. Deciding at
+		// visit time is impossible; deferring the decision to the end of the
+		// subtree loses the repo whenever a budget abort fires mid-subtree,
+		// worst for the 41% of the set that are package.json-only, since "p"
+		// sorts late.
+		if markerFiles[d.Name()] {
+			// A marker in $HOME itself would emit ".", which is the root, not a
+			// project inside it.
+			if parent := path.Dir(slash); parent != "." {
+				emit(parent)
+			}
+		}
+
 		if d.IsDir() {
 			if skipDirs[d.Name()] || skipRelPaths[slash] || len(parts) >= b.maxDepth {
 				return fs.SkipDir
@@ -311,26 +424,14 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			if fileBudgetSpent && dirBudgetSpent {
 				return fs.SkipDir
 			}
-			// skipDirRecord is keyed on a single path element, so a directory
-			// nested under a skip-recorded ancestor (app/vendor/lib under
-			// "vendor") is checked by walking every segment, not just d.Name() —
-			// otherwise only the named directory itself would be suppressed and
-			// its subtree would leak back in one level down.
-			underSkipRecord := false
-			for _, part := range parts {
-				if skipDirRecord[part] {
-					underSkipRecord = true
-					break
-				}
-			}
-			if !dirBudgetSpent && !underSkipRecord {
-				if len(dirs) >= b.maxDirs {
-					dirsTrunc = true
-				} else {
-					perRootDirs[top]++
-					lower := strings.ToLower(slash)
-					dirs = append(dirs, indexEntry{rel: rel, lower: lower, baseStart: baseStartOf(lower)})
-				}
+			// Rule 1: a direct, NON-HIDDEN child of $HOME is offered without
+			// needing a marker, mirroring listWorkspaces — plus .config by
+			// name, which is hidden but is where a user's own configuration
+			// lives. Rule 2 deliberately overrides this hidden filter for
+			// everything else: a hidden directory carrying a marker is
+			// recorded, which is how ~/.claude (its own git checkout) arrives.
+			if len(parts) == 1 && (!strings.HasPrefix(slash, ".") || slash == ".config") {
+				emit(slash)
 			}
 			return nil
 		}
