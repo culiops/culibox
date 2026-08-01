@@ -644,6 +644,12 @@
        tab became bare text on the bar. Hover puts "this is a control" back
        without spending a stroke. :not(.act) so the active tab keeps its fill. */
     .cell-bar .tab:not(.act):hover { background: var(--surface-2); }
+    /* On touch there is no hover, and hover is the only affordance an inactive
+       tab has, so without this it is bare text on the bar with nothing marking
+       it as a control. Same fill as the pointer hover state, not a new colour. */
+    @media (hover: none) {
+      .cell-bar .tab:not(.act) { background: var(--surface-2); }
+    }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     /* Same --muted-on--sel failure as the palette above: the active tab sets

@@ -31,17 +31,32 @@ const SYNCS = /syncFocusedTree\s*\(|setFocusedCell\s*\(/;
 // omission:
 //   setFocusedCellRaw  the funnel itself. It is called from inside mutations
 //                      that render afterwards, so it MUST stay side-effect-free.
-//   ensureFirstCell    a helper, never an entry point. Every caller (removeCell,
-//                      applyCap, focusedCellOrCreate) is covered here in its
-//                      own right, and a cell it has just created has no tabs.
-//   constructor        Cell's constructor sets this.activeTab = null as part of
-//                      initialising a brand-new cell: it has no tabs, is not yet
-//                      in `cells`, and cannot be the cell the tree is following.
-//                      There is nothing for syncFocusedTree() to re-root to.
+//   ensureFirstCell    a helper, never an entry point: every caller (removeCell,
+//                      applyCap, focusedCellOrCreate) is itself covered by this
+//                      scan, in its own right. (Not "the cell is always
+//                      tabless" — focusedCellOrCreate calls it with `cells`
+//                      non-empty, so setFocusedCellRaw(cells[0]) can land on a
+//                      cell that already has tabs.)
+//   constructor        belt-and-braces, not load-bearing. Cell's constructor
+//                      already satisfies SYNCS via the setFocusedCell(this)
+//                      inside its mousedown listener, so this exemption pins a
+//                      pass that currently happens for an unrelated reason —
+//                      it changes no test result today, but it means moving
+//                      that listener out of line can't silently turn the
+//                      constructor into a false positive.
 //
 // This is a text scan over function bodies, not a data-flow analysis: it proves
 // a mutation MENTIONS a sync call somewhere in its body, not that the sync runs
-// on every path through it. That is the bound of what this test buys.
+// on every path through it. That is the bound of what this test buys. Three more
+// edges worth knowing:
+//   - namedBodies' regex requires `name(...) {` at the start of a line, so an
+//     arrow-function mutator (`const swapTabs = (a, b) => {`, or one nested
+//     inside another body) is invisible to the scan and the test stays green.
+//   - MUTATES and SYNCS both match text inside comments, so a comment reading
+//     `// TODO: call syncFocusedTree()` would discharge the duty.
+//   - The scan covers tabs.js only. Verified today that `activeTab =`,
+//     `setFocusedCellRaw` and `focusedCell =` appear in no other file under
+//     internal/web/static/, but nothing enforces that scope going forward.
 const EXEMPT = new Set(["setFocusedCellRaw", "ensureFirstCell", "constructor"]);
 
 // Every function the scan must see. Asserted below so a parser that quietly

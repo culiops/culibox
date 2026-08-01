@@ -25,6 +25,12 @@ let cells = [];
 // swallowed every click that would have fixed it.
 // internal/web/jstest/tree-follows-focus.test.js pins this at the source level;
 // if you add a mutation, it will tell you.
+//
+// The sync follows the focused TERMINAL, not the focused cell: syncFocusedTree()
+// reads focusedTerminal(), which is null whenever the focused cell's active tab
+// is a viewer. So a cell showing a file, not a session, is a no-op for this
+// invariant — the tree holds its last root rather than following anything. That
+// is deliberate: closing a session is not a reason to lose that project's files.
 let focusedCell = null;
 
 // setFocusedCellRaw is the sole place `focusedCell` is written. Direct-assignment
