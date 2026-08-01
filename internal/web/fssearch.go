@@ -29,6 +29,20 @@ const (
 	// single one of the user's repos.
 	maxPerRootPaths = 10000
 
+	// Directory bounds are separate from the file bounds on purpose. Measured on
+	// a real home directory: 16 567 directories survive the skip rules at depth
+	// 12, of which 6 520 sit under a vendor/ and are suppressed by
+	// skipDirRecord, leaving 10 047 actually recorded, against ~60 000 files.
+	// Sharing one budget would let the files starve the directories.
+	maxIndexDirs = 20000
+	// maxPerRootDirs is the directory twin of maxPerRootPaths. On the same
+	// measurement the largest top-level subtree records 2 556 directories —
+	// nowhere near this cap, so today it is headroom rather than a binding
+	// limit. It still exists for the same reason maxPerRootPaths does: the
+	// walk is a lexical DFS, so without a per-root cap one huge subtree that
+	// sorts first can crowd out everything after it.
+	maxPerRootDirs = 4000
+
 	searchDefaultLimit = 50
 	searchMaxLimit     = 200
 )
@@ -102,6 +116,26 @@ var skipRelPaths = map[string]bool{
 	".config/rclone":          true, // useful, indexed directory
 }
 
+// searchKind selects which of the index's two result sets a caller wants.
+type searchKind int
+
+const (
+	kindFiles searchKind = iota
+	kindDirs
+)
+
+// skipDirRecord names a directory whose ENTIRE SUBTREE is never worth
+// offering as a workspace — the match suppresses recording for it and every
+// directory nested inside it, not just the named directory itself — but whose
+// FILES must stay findable. It gates recording only; the walk still descends.
+// Putting these in skipDirs instead would delete every file under a Laravel
+// vendor/ from the command palette. Adding a common segment name here is not
+// free: "vendor" alone suppresses 6 520 of 16 567 candidate directories
+// (39%) on a real home directory — measure before adding another.
+var skipDirRecord = map[string]bool{
+	"vendor": true,
+}
+
 // indexEntry caches the lowercased path and basename offset alongside the path.
 // Lowercasing 60k paths on every keystroke was the dominant cost otherwise.
 type indexEntry struct {
@@ -113,28 +147,34 @@ type indexEntry struct {
 // fileIndex is a TTL-cached, bounded list of files under root. The bounds are
 // fields rather than constants so tests can shrink them.
 type fileIndex struct {
-	root       string
-	mu         sync.Mutex
-	ttl        time.Duration
-	maxPaths   int
-	maxPerRoot int
-	maxDepth   int
-	budget     time.Duration
+	root           string
+	mu             sync.Mutex
+	ttl            time.Duration
+	maxPaths       int
+	maxPerRoot     int
+	maxDirs        int
+	maxPerRootDirs int
+	maxDepth       int
+	budget         time.Duration
 
-	entries   []indexEntry
-	truncated bool
-	built     time.Time
-	building  bool
+	entries       []indexEntry
+	truncated     bool
+	dirs          []indexEntry
+	dirsTruncated bool
+	built         time.Time
+	building      bool
 }
 
 func newFileIndex(root string) *fileIndex {
 	return &fileIndex{
-		root:       root,
-		ttl:        indexTTL,
-		maxPaths:   maxIndexPaths,
-		maxPerRoot: maxPerRootPaths,
-		maxDepth:   maxIndexDepth,
-		budget:     indexBudget,
+		root:           root,
+		ttl:            indexTTL,
+		maxPaths:       maxIndexPaths,
+		maxPerRoot:     maxPerRootPaths,
+		maxDirs:        maxIndexDirs,
+		maxPerRootDirs: maxPerRootDirs,
+		maxDepth:       maxIndexDepth,
+		budget:         indexBudget,
 	}
 }
 
@@ -154,7 +194,7 @@ func (ix *fileIndex) setTTL(d time.Duration) {
 //
 // The returned slice is replaced wholesale by a rebuild, never mutated, so
 // callers may read it after releasing the lock.
-func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
+func (ix *fileIndex) snapshot(k searchKind) ([]indexEntry, bool) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 
@@ -165,8 +205,11 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 		// truncated=false, which reads as "no such file" — exactly the confusion
 		// that field exists to prevent. Costs one stall per process, on the very
 		// first search. The deferred Unlock also covers a panic in the walk.
-		ix.entries, ix.truncated = walkTree(ix.bounds())
+		ix.entries, ix.truncated, ix.dirs, ix.dirsTruncated = walkTree(ix.bounds())
 		ix.built = time.Now()
+		if k == kindDirs {
+			return ix.dirs, ix.dirsTruncated
+		}
 		return ix.entries, ix.truncated
 	}
 
@@ -181,11 +224,14 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 				ix.building = false
 				ix.mu.Unlock()
 			}()
-			entries, truncated := walkTree(b)
+			entries, truncated, dirs, dirsTruncated := walkTree(b)
 			ix.mu.Lock()
-			ix.entries, ix.truncated, ix.built = entries, truncated, time.Now()
+			ix.entries, ix.truncated, ix.dirs, ix.dirsTruncated, ix.built = entries, truncated, dirs, dirsTruncated, time.Now()
 			ix.mu.Unlock()
 		}()
+	}
+	if k == kindDirs {
+		return ix.dirs, ix.dirsTruncated
 	}
 	return ix.entries, ix.truncated
 }
@@ -193,27 +239,32 @@ func (ix *fileIndex) snapshot() ([]indexEntry, bool) {
 // bounds snapshots the limits for a walk. Caller holds mu, so the background
 // rebuild never reads a field another goroutine is writing.
 func (ix *fileIndex) bounds() walkBounds {
-	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDepth, ix.budget}
+	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDirs, ix.maxPerRootDirs, ix.maxDepth, ix.budget}
 }
 
 // walkBounds is every limit a walk honours, captured under the index lock so the
 // background rebuild never reads a field that a test (or a future setter) is
 // concurrently writing.
 type walkBounds struct {
-	root       string
-	maxPaths   int
-	maxPerRoot int
-	maxDepth   int
-	budget     time.Duration
+	root           string
+	maxPaths       int
+	maxPerRoot     int
+	maxDirs        int
+	maxPerRootDirs int
+	maxDepth       int
+	budget         time.Duration
 }
 
-// walkTree collects files under root, honouring every bound. Returns the entries
-// and whether a bound cut the walk short.
-func walkTree(b walkBounds) ([]indexEntry, bool) {
+// walkTree collects files AND directories under root in one pass, each with its
+// own bounds and its own truncation flag. One walk, two result sets: the walk
+// already visits every directory, so recording them costs no extra I/O — but
+// descending past the file fairness prune does make the walk itself longer.
+func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEntry, dirsTrunc bool) {
 	deadline := time.Now().Add(b.budget)
-	entries := make([]indexEntry, 0, 1024)
+	files = make([]indexEntry, 0, 1024)
+	dirs = make([]indexEntry, 0, 256)
 	perRoot := make(map[string]int)
-	truncated := false
+	perRootDirs := make(map[string]int)
 	n := 0
 
 	filepath.WalkDir(b.root, func(p string, d fs.DirEntry, err error) error {
@@ -229,7 +280,7 @@ func walkTree(b walkBounds) ([]indexEntry, bool) {
 		}
 		// Check the clock every so often rather than on every entry.
 		if n++; n%512 == 0 && time.Now().After(deadline) {
-			truncated = true
+			filesTrunc, dirsTrunc = true, true
 			return filepath.SkipAll
 		}
 		rel, relErr := filepath.Rel(b.root, p)
@@ -244,11 +295,42 @@ func walkTree(b walkBounds) ([]indexEntry, bool) {
 			if skipDirs[d.Name()] || skipRelPaths[slash] || len(parts) >= b.maxDepth {
 				return fs.SkipDir
 			}
-			// This subtree has had its share; skip the rest of it rather than
-			// letting it crowd out everything that sorts after it.
-			if perRoot[top] >= b.maxPerRoot {
-				truncated = true
+			// A CONJUNCTION, not the old single test: skip the subtree only once
+			// BOTH budgets for this top-level are spent. Pruning on the file
+			// budget alone would take the directories with it, and the subtrees
+			// that spend their file budget are the big repos — the ones most
+			// worth searching.
+			fileBudgetSpent := perRoot[top] >= b.maxPerRoot
+			dirBudgetSpent := perRootDirs[top] >= b.maxPerRootDirs
+			if fileBudgetSpent {
+				filesTrunc = true
+			}
+			if dirBudgetSpent {
+				dirsTrunc = true
+			}
+			if fileBudgetSpent && dirBudgetSpent {
 				return fs.SkipDir
+			}
+			// skipDirRecord is keyed on a single path element, so a directory
+			// nested under a skip-recorded ancestor (app/vendor/lib under
+			// "vendor") is checked by walking every segment, not just d.Name() —
+			// otherwise only the named directory itself would be suppressed and
+			// its subtree would leak back in one level down.
+			underSkipRecord := false
+			for _, part := range parts {
+				if skipDirRecord[part] {
+					underSkipRecord = true
+					break
+				}
+			}
+			if !dirBudgetSpent && !underSkipRecord {
+				if len(dirs) >= b.maxDirs {
+					dirsTrunc = true
+				} else {
+					perRootDirs[top]++
+					lower := strings.ToLower(slash)
+					dirs = append(dirs, indexEntry{rel: rel, lower: lower, baseStart: baseStartOf(lower)})
+				}
 			}
 			return nil
 		}
@@ -260,20 +342,23 @@ func walkTree(b walkBounds) ([]indexEntry, bool) {
 		if !d.Type().IsRegular() && d.Type()&fs.ModeSymlink == 0 {
 			return nil
 		}
-		if len(entries) >= b.maxPaths {
-			truncated = true
+		if len(files) >= b.maxPaths {
+			// SkipAll ends the WalkDir call outright — the directory walk dies
+			// with it. Flagging only filesTrunc here would leave dirsTrunc false
+			// while every directory lexically after this point is silently gone.
+			filesTrunc, dirsTrunc = true, true
 			return filepath.SkipAll
 		}
 		if perRoot[top] >= b.maxPerRoot {
-			truncated = true
+			filesTrunc = true
 			return nil
 		}
 		perRoot[top]++
 		lower := strings.ToLower(slash)
-		entries = append(entries, indexEntry{rel: rel, lower: lower, baseStart: baseStartOf(lower)})
+		files = append(files, indexEntry{rel: rel, lower: lower, baseStart: baseStartOf(lower)})
 		return nil
 	})
-	return entries, truncated
+	return
 }
 
 // baseStartOf returns the byte offset of the basename within a slash-separated path.
@@ -385,7 +470,13 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		limit = searchMaxLimit
 	}
 
-	entries, truncated := s.searchIndex().snapshot()
+	// Anything that is not exactly "dir" means files. The command palette sends
+	// no kind at all and must keep getting byte-identical results.
+	kind := kindFiles
+	if r.URL.Query().Get("kind") == "dir" {
+		kind = kindDirs
+	}
+	entries, truncated := s.searchIndex().snapshot(kind)
 	lq := strings.ToLower(q)
 	hits := make([]searchHit, 0, limit)
 	for _, e := range entries {
@@ -421,7 +512,14 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		if info, err := os.Stat(resolved); err != nil || info.IsDir() {
+		info, err := os.Stat(resolved)
+		if err != nil {
+			continue
+		}
+		// The index says what it recorded; the stat says what is on disk NOW.
+		// They disagree whenever something was created, deleted or replaced
+		// since the last rebuild, which is exactly what the TTL allows.
+		if info.IsDir() != (kind == kindDirs) {
 			continue
 		}
 		h.Path = abs

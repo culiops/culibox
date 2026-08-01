@@ -346,7 +346,27 @@
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
-    .ft-row select, .ft-row input { width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 5px 7px; font-size: 12px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+    #ft-root-input { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--fg); border: 1px solid var(--border); font: inherit; font-size: 12px; padding: 3px 6px; }
+    #ft-root-input:focus { border-color: var(--accent); outline: none; }
+    /* position: fixed, not absolute: .ft-pick sits inside #sidebar, which clips
+       overflow, and an absolutely-positioned child cannot escape a clipping
+       ancestor when its containing block is inside it — the list would be cut
+       at the sidebar's bottom edge, worst on the 52vh mobile layout. Fixed
+       positioning escapes that; left/top/width/max-height are set from
+       dpInput's rect in dpOpen(), so the values below are only the fallback
+       before that first runs. This is also why .ft-pick carries no
+       `position` of its own: nothing here resolves against it. */
+    #ft-root-list { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); }
+    #ft-root-list[hidden] { display: none; }
+    .ft-opt { display: flex; align-items: baseline; gap: 1ch; padding: 3px 7px; cursor: pointer; font-size: 12px; color: var(--fg); }
+    .ft-opt .hint { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ft-opt:hover, .ft-opt[aria-selected="true"] { background: var(--sel); }
+    /* The picker's "why is there no list" row. Muted and cursor: default so it
+       reads as a message rather than a folder you failed to click — it is not
+       in dpRows, so arrows skip it and Enter cannot pick it. No :hover rule for
+       the same reason. */
+    .ft-note { padding: 3px 7px; color: var(--muted); font-size: 11px; cursor: default; }
     #filetree { flex: 1; min-height: 0; overflow: auto; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-tree); }
     .ft-node { display: flex; align-items: center; gap: .55ch; padding: .11lh .55ch; white-space: nowrap; cursor: pointer; color: var(--fg); }
     .ft-node:hover { background: var(--surface-2); }
@@ -724,10 +744,6 @@
       /* #layout is a column here and #sidebar is full width, so a col-resize
          handle would sit between two stacked panes and resize nothing. */
       #split-v { display: none; }
-      /* The absolute-path box is a desktop affordance: nobody types /home/…
-         on a phone, and the header's palette button already finds files. Its
-         ~36px is the rest of the difference between a tree with rows and none. */
-      .ft-row-path { display: none; }
       /* Both panes must stay usable inside a 46vh band, so the minimums shrink
          with it: otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
@@ -808,11 +824,12 @@
           <input id="ft-upload-input" type="file" multiple hidden>
         </div>
         <div class="files-body">
-          <div class="ft-row">
-            <select id="ft-root" title="Root folder"></select>
-          </div>
-          <div class="ft-row ft-row-path">
-            <input id="ft-path" type="text" placeholder="paste absolute path… (Enter)" autocomplete="off" spellcheck="false">
+          <div class="ft-row ft-pick">
+            <label class="sr-only" for="ft-root-input">Root folder</label>
+            <input id="ft-root-input" type="text" role="combobox" autocomplete="off"
+                   spellcheck="false" aria-expanded="false" aria-controls="ft-root-list"
+                   aria-autocomplete="list" placeholder="root folder — type to search, or paste a path">
+            <div id="ft-root-list" role="listbox" aria-label="Directories" hidden></div>
           </div>
           <div id="filetree"></div>
         </div>
@@ -978,6 +995,7 @@
   <script src="/tabs.js"></script>
   <script src="/upload.js"></script>
   <script src="/fsops.js"></script>
+  <script src="/dirpicker.js"></script>
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
   <script src="/sessionrow.js"></script>

@@ -1,7 +1,9 @@
 "use strict";
 
 // File tree: lazy directory browser rooted at a workspace. Clicking a file opens
-// it in the focused cell (openFile). A paste-path input opens any absolute path.
+// it in the focused cell (openFile). One searchable control picks the root —
+// fuzzy-search a directory or paste an absolute path into the same box (see
+// dirpicker.js); a pasted path that turns out to be a FILE is opened.
 // The root auto-follows the focused TAB — a terminal's cwd or the directory of
 // the file a viewer is showing (see treeFollowTarget / syncTreeToRoot) — while a
 // manual pick from the dropdown survives until a *different* tab is focused.
@@ -71,7 +73,22 @@ function treeBranch(prefix, isLast) {
   };
 }
 
-let ftRootSel = null, ftTreeEl = null;
+let ftRootSel = null, ftTreeEl = null, ftRootPath = "";
+// ftRoot / setFtRoot are the ONLY way any other script reads or writes the
+// tree's root. They exist so the control underneath can change shape without
+// three other files reaching into its .value — upload.js did that in three
+// places, and filetree.js in three more.
+//
+// The root is stored in ftRootPath, NOT read back from the input's .value: the
+// input doubles as the picker's search box, and only a successful pick clears
+// it. Escape, an outside click, and a 404/403/500 on a typed path all leave
+// whatever the user was typing sitting in .value — reading the root from there
+// would silently re-root the tree at abandoned search text.
+function ftRoot() { return ftRootPath; }
+function setFtRoot(path) {
+  ftRootPath = path || "";
+  if (ftRootSel) { ftRootSel.value = ftRootPath; ftRootSel.title = ftRootPath; }
+}
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 
@@ -169,7 +186,7 @@ async function ftLoadRoot() {
   if (!ftRootSel || !ftTreeEl) return;
   const gen = ++ftGen;
   const box = document.createElement("div");
-  await ftRenderDir(ftRootSel.value, box);
+  await ftRenderDir(ftRoot(), box);
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
 }
@@ -201,7 +218,7 @@ function openRowMenu(anchor, path, name, isDir) {
   const items = [
     ["Insert path at prompt", () => insertPathAtPrompt(path)],
     ["Copy path", () => copyPath(path)],
-    ["Copy relative path", () => copyPath(relativeTo(ftRootSel ? ftRootSel.value : "", path))],
+    ["Copy relative path", () => copyPath(relativeTo(ftRoot(), path))],
   ];
   // Contents last in the clipboard group, and only where there is text to take.
   // A directory has none, and an image is served as raw bytes rather than JSON,
@@ -456,8 +473,9 @@ function treeFollowTarget(tab, home) {
 }
 
 // syncTreeToRoot re-roots the tree, but ONLY when the follow KEY changes — so a
-// manual root pick survives until a different tab is focused. A root not already
-// in the dropdown is added as a transient option so any depth/custom path works.
+// manual root pick survives until a different tab is focused. The root is a
+// plain input now, so any path just overwrites it; there is no option list to
+// maintain.
 //
 // The `!ftRootSel || !root` early return is load-bearing and must stay AHEAD of
 // the key write: during boot restore a fresh TerminalTab has no cwd yet, and
@@ -467,41 +485,55 @@ async function syncTreeToRoot(root, key) {
   if (!ftRootSel || !root) return;
   if (key && key === lastSyncedKey) return; // already following this tab (respect manual pick)
   lastSyncedKey = key || null;
-  let has = false;
-  for (const o of ftRootSel.options) if (o.value === root) { has = true; break; }
-  if (!has) {
-    const o = document.createElement("option");
-    o.value = root; o.textContent = "↳ " + (root.replace(/\/$/, "").split("/").pop() || root);
-    o.title = root;
-    ftRootSel.appendChild(o);
-  }
-  ftRootSel.value = root;
+  setFtRoot(root);
+  // setFtRoot writes the input's value programmatically, which fires no "input"
+  // event — so nothing bumps dpSeq or clears dpTimer, and a fuzzy search
+  // scheduled just before this tab-focus change lands AFTERWARDS and renders
+  // hits underneath a path value. Enter then finds rows, no highlight and a
+  // non-fuzzy value, and re-roots at whatever that stale search returned.
+  //
+  // Not inside setFtRoot: initFileTree calls that before initDirPicker, when
+  // dpInput is still null. Here it can ALSO run pre-init — tabs.js's
+  // syncFocusedTree reaches this during initFileTree's await, the same restore
+  // race the seeding block at the foot of initFileTree exists to repair — so
+  // dpClose carries its own uninitialised guard rather than this call site
+  // pretending the ordering is guaranteed.
+  dpClose();
   await ftLoadRoot();
 }
 
 async function initFileTree() {
-  ftRootSel = document.getElementById("ft-root");
-  const pathInp = document.getElementById("ft-path");
+  ftRootSel = document.getElementById("ft-root-input");
   ftTreeEl = document.getElementById("filetree");
-  if (!ftRootSel || !pathInp || !ftTreeEl) return;
+  if (!ftRootSel || !ftTreeEl) return;
 
+  let ws = [];
   try {
-    const ws = (await api("/api/workspaces")) || [];
+    ws = (await api("/api/workspaces")) || [];
     window.HOME_DIR = (ws[0] && ws[0].path) || ""; // first entry is "~ (home)": used to expand ~/ in clicked links
-    ftRootSel.replaceChildren(...ws.map((w) => {
-      const o = document.createElement("option");
-      o.value = w.path; o.textContent = w.label;
-      return o;
-    }));
+    // Before Task 5 the <select>'s first <option> (built from this same
+    // response) was implicitly its value, so the tree defaulted to home. That
+    // building was deleted along with the <select>, and nothing replaced the
+    // default it produced as a side effect — leaving ftRootPath "" until a
+    // followed tab or a manual pick set it, which paints .ft-err on any first
+    // load that has neither (a fresh page, or a boot that loses the cwd race).
+    if (window.HOME_DIR) setFtRoot(window.HOME_DIR);
   } catch (_) {}
 
-  // A manual dropdown pick re-roots the tree but does NOT change which TAB
-  // we're following, so it survives until a different tab is focused.
-  ftRootSel.onchange = ftLoadRoot;
+  // A picked directory re-roots the tree but does NOT change which TAB we're
+  // following, so it survives until a different tab is focused. workspaces is
+  // passed in because this function already awaited /api/workspaces above —
+  // letting the picker fetch it again unawaited would leave a focus before
+  // that second fetch lands rendering zero rows with no retry.
+  initDirPicker({
+    workspaces: ws,
+    onPick: async (path) => { setFtRoot(path); await ftLoadRoot(); },
+    onOpenFile: (path) => openFile(path),
+  });
 
   // New folder in the root currently shown: no row can reach the root itself.
   const newdir = document.getElementById("ft-newdir");
-  if (newdir) newdir.onclick = () => promptMkdir(ftRootSel.value);
+  if (newdir) newdir.onclick = () => promptMkdir(ftRoot());
 
   // One document-level closer for the row menu, like the spawn menu's.
   document.addEventListener("click", (e) => {
@@ -522,24 +554,18 @@ async function initFileTree() {
       try { await ftLoadRoot(); } finally { refresh.disabled = false; }
     };
   }
-  pathInp.onkeydown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); const v = pathInp.value.trim(); if (v) { openFile(v); pathInp.value = ""; } }
-  };
-
   // Initial root: whatever the focused TAB resolves to — a terminal's cwd or a
   // viewer's directory — else home. focusedTerminal() was wrong here: a layout
   // restored onto a viewer booted at home with the follow-guard unset.
-  // The option list was only just built, and a restore that won the race
-  // against /api/workspaces may already have rooted the tree against an EMPTY
-  // list — replaceChildren above then destroyed that option and reset .value to
-  // home, leaving the painted tree and the picker disagreeing. Clearing the
-  // guard makes this seeding authoritative so it re-asserts the root over the
-  // fresh list. The cost is one redundant listing in the common case.
-  // Gated on a populated picker: if /api/workspaces threw above, HOME_DIR is
-  // unset, so the containment check is disabled and seeding could root outside
-  // home and paint ft-err. That state is already broken (empty picker); it
+  // A restore that won the race against /api/workspaces above may already have
+  // rooted the tree against an empty HOME_DIR. Clearing the guard makes this
+  // seeding authoritative so it re-asserts the root once workspaces are known.
+  // The cost is one redundant listing in the common case.
+  // Gated on a non-empty workspace list: if /api/workspaces threw above,
+  // HOME_DIR is unset, so the containment check is disabled and seeding could
+  // root outside home and paint ft-err. That state is already broken; it
   // should stay quiet rather than add an error to it.
-  if (ftRootSel.options.length) {
+  if (ws.length) {
     lastSyncedKey = null;
     const t = (typeof focusedTab === "function") ? focusedTab() : null;
     const target = treeFollowTarget(t);
