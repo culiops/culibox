@@ -37,24 +37,57 @@ let maximized = null;
 const bootLayout = typeof readLayout === "function" ? readLayout() : null;
 let restoring = true;
 let saveTimer = null;
+// gaveUp latches when boot could not read the live session list twice over
+// (endRestore(false), from app.js's restoreBoot). Such a page-load never
+// restored anything, so its grid is the empty one applyCap(4) built, and
+// serializing THAT yields null — which would REMOVE the user's real snapshot.
+//
+// It suppresses only the null write, not every write: once the user has opened
+// something by hand the grid is theirs and is worth storing, whatever boot did
+// or did not learn. Latching writes off for the whole page-load would silently
+// discard hours of layout after one transient blip at boot.
+let gaveUp = false;
+// unsaved = this page-load holds a change it has not written yet. pagehide
+// consults it so an idle tab that has nothing new to say cannot overwrite the
+// snapshot a DIFFERENT, still-open tab wrote. Scrolling a file sets it directly:
+// it changes what must be stored but is not a layout change, so unlike every
+// other edit it schedules no write of its own.
+let unsaved = false;
+function markLayoutUnsaved() { unsaved = true; }
 
 // scheduleSaveLayout debounces the write: applyCap collapses several cells in one
 // loop, and one user action should cost one write, not one per step.
 function scheduleSaveLayout() {
-  if (restoring || saveTimer) return;
+  if (restoring) return;
+  unsaved = true;
+  if (saveTimer) return;
   saveTimer = setTimeout(saveLayoutNow, 200);
 }
 
 function saveLayoutNow() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   if (restoring || typeof writeLayout !== "function") return;
-  writeLayout(serializeLayout({ cells, focused: focusedCell, maximized, cap }));
+  const snapshot = serializeLayout({ cells, focused: focusedCell, maximized, cap });
+  // A boot that never learned the session list may not DELETE the snapshot: its
+  // empty grid says nothing about what the user had. It may still write a real
+  // one — see gaveUp.
+  if (gaveUp && !snapshot) return;
+  writeLayout(snapshot);
+  unsaved = false;
 }
 
-// Flush on unload: the last layout change before a reload is exactly the one the
+// Flush on unload: the last change before a reload is exactly the one the
 // restore needs, and it is the one most likely to still be inside the debounce.
 // pagehide (not unload) is the event that also fires for the bfcache path.
-window.addEventListener("pagehide", () => { if (saveTimer) saveLayoutNow(); });
+//
+// Gated on `unsaved`, not on `saveTimer`. The timer alone was too narrow —
+// scrolling a file changes what must be stored but schedules no write, so a
+// scroll-only visit persisted nothing. Flushing UNCONDITIONALLY is too wide in
+// the other direction: a tab left open since morning would, on being closed,
+// serialize its own stale grid over the layout another live tab had just
+// written. `unsaved` restores the property that made the old guard right — a
+// page with nothing new to say writes nothing — while covering scroll.
+window.addEventListener("pagehide", () => { if (unsaved) saveLayoutNow(); });
 
 // gridCols → columns/rows the grid uses, derived from the live cell count.
 function gridCols() { return Math.min(Math.max(cells.length, 1), 4); }
@@ -113,8 +146,12 @@ class Cell {
   }
 
   renderBody() {
-    if (this.activeTab) this.body.replaceChildren(this.activeTab.el);
-    else {
+    if (this.activeTab) {
+      this.body.replaceChildren(this.activeTab.el);
+      // The element just lost and regained its layout box, so anything inside it
+      // that scrolls is back at the top: let the tab put its position back.
+      this.activeTab.onAttach?.();
+    } else {
       const ph = document.createElement("div");
       ph.className = "cell-empty";
       ph.textContent = "Click a session or a file to open it here";
@@ -269,6 +306,10 @@ function renderGrid() {
   grid.className = "cols-" + gridCols() + (maximized ? " maximized" : "");
   const show = maximized ? [maximized] : cells;
   grid.replaceChildren(...show.map((c) => c.el));
+  // `show`, not `cells`: with a pane maximized the others are NOT in the
+  // document, and the renderBar sweep on the next line is a trap to copy —
+  // restoring scroll on a detached element is a silent no-op.
+  show.forEach((c) => c.activeTab?.onAttach?.());
   cells.forEach((c) => c.renderBar());
   requestAnimationFrame(fitAll);
 }
@@ -323,6 +364,11 @@ function openTerminal(id, name) {
 }
 
 function openFile(path) {
+  // Normalise BEFORE matching, on the same rule ViewerTab's constructor uses.
+  // Comparing the raw argument meant "/home/u/./a.md" missed the tab already
+  // showing "/home/u/a.md" and opened a second one carrying an identical path —
+  // which the snapshot then stored twice and the next boot silently collapsed.
+  if (typeof normalizePath === "function") path = normalizePath(path);
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "viewer" && t.path === path);
     if (t) { setFocusedCell(c); c.activate(t); return; }
@@ -384,9 +430,10 @@ function closeViewersFor(path) {
 
 // --- restore (see layout.js) -------------------------------------------------
 
-// applyPlan rebuilds the grid from a reconciled snapshot. Session names come from
-// the live list, not the snapshot, so a session renamed since the last visit comes
-// back under its current name.
+// applyPlan rebuilds the grid from a reconciled snapshot: terminals and the
+// files that were open beside them. Session names come from the live list, not
+// the snapshot, so a session renamed since the last visit comes back under its
+// current name.
 function applyPlan(plan, sessions) {
   const nameOf = new Map((sessions || []).map((s) => [s.id, s.name || s.id]));
   cells.forEach((c) => c.dispose());
@@ -396,7 +443,12 @@ function applyPlan(plan, sessions) {
   for (const pc of plan.cells) {
     const cell = new Cell();
     cells.push(cell);
-    for (const t of pc.tabs) cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
+    for (const t of pc.tabs) {
+      // `restored: true` marks a tab nobody clicked for: see ViewerTab.load,
+      // which closes it rather than parking a red error on a deleted path.
+      if (t.path) cell.addTab(new ViewerTab(t.path, { scroll: t.scroll, restored: true }));
+      else cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
+    }
     cell.activate(cell.tabs[pc.active] || cell.tabs[0]);
   }
   // applyCap first: it is what collapses extra panes if a snapshot ever holds
@@ -431,5 +483,6 @@ function restoreLayout(sessions) {
 // never restored it, and persisting that would delete the user's real layout.
 function endRestore(save = true) {
   restoring = false;
-  if (save) scheduleSaveLayout(); // fold in whatever boot already built
+  if (!save) { gaveUp = true; return; }
+  scheduleSaveLayout(); // fold in whatever boot already built
 }

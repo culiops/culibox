@@ -7,7 +7,7 @@ const MD_EXTS = new Set(["md", "markdown"]);
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
 class ViewerTab {
-  constructor(path) {
+  constructor(path, opts) {
     // Normalise once, here: tabs are keyed and matched by this string, and the
     // paste-path box hands over whatever was typed. "/home/u/./a.txt" would
     // otherwise open a second tab for a file already open, and survive that
@@ -27,6 +27,17 @@ class ViewerTab {
     // for every HTTP error, and for the moment before the first load returns.
     this.copyRefusal = "loading";
     this.showingMsg = false; // true while the pane shows a message, not the file
+    // How far down this file was read, in px. It lives here and not in the DOM
+    // because every tab switch (Cell.renderBody) and every grid re-render
+    // (renderGrid) detaches this element, and an element removed from the
+    // document loses its layout box: scrollTop comes back 0. clampScroll is
+    // layout.js's, which shares this scope (see the script order in index.html).
+    this.scroll = clampScroll(opts && opts.scroll);
+    // A tab the layout restore rebuilt, not one anyone clicked. Only such a tab
+    // may close itself when its file turns out to be gone (see load).
+    this.restored = !!(opts && opts.restored);
+    this.firstLoad = true;
+    this.applying = false;  // true while applyScroll's own assignment is echoing back
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
     const ext0 = extOf(path);
     // which CSS var this viewer's text reads (null for images → zoom is a no-op)
@@ -78,6 +89,25 @@ class ViewerTab {
     this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
+    // Three things have to be excluded here, because scrollTop cannot say which
+    // of them moved it — only this listener knows:
+    //
+    // 1. isConnected — a scroll event queued just before a detach is dispatched
+    //    AFTER it, against an element that now reads 0. Without this, scrolling
+    //    and switching tab in the same frame saves the top of the file.
+    // 2. showingMsg — msg() replaces the scroller's children with one line, so
+    //    the browser CLAMPS the offset to 0 and reports it as a scroll. A poll
+    //    that catches a file mid-rewrite ("empty file"), or one failed ⟳, would
+    //    otherwise throw away the position the file comes back to.
+    // 3. applying — applyScroll's own assignment is echoed back as a scroll
+    //    event, and it is clamped when the content is not yet its final height
+    //    (markdown whose images have not loaded). Recording the clamp would
+    //    ratchet a restored position toward the top on every reload.
+    this.content.addEventListener("scroll", () => {
+      if (this.applying || this.showingMsg || !this.el.isConnected) return;
+      this.scroll = this.content.scrollTop;
+      markLayoutUnsaved(); // scrolling schedules no layout write; pagehide needs to know
+    }, { passive: true });
     this.el.append(this.toolbar, this.content);
     this.load();
   }
@@ -86,6 +116,24 @@ class ViewerTab {
   status() { return this.statusText; }
   onShow() {}
   onHide() {}
+  // onAttach: the element was just (re)inserted, so the browser has reset the
+  // scroller to the top. Idempotent and NON-CONSUMING — it never clears
+  // this.scroll and never reads the applied value back — because it also fires
+  // on elements that are still detached: openFile's early return activates a
+  // tab in a cell that is out of the document while another pane is maximized,
+  // where assigning scrollTop is a silent no-op and the next real attach is
+  // what has to restore.
+  onAttach() { this.applyScroll(); }
+  // `applying` is cleared on the next frame, not synchronously: a scroll event
+  // caused by this assignment is dispatched during that frame's scroll steps,
+  // which run BEFORE animation-frame callbacks. Clearing it any sooner would
+  // let the echo through.
+  applyScroll() {
+    if (this.content.scrollTop === this.scroll) return;
+    this.applying = true;
+    this.content.scrollTop = this.scroll;
+    requestAnimationFrame(() => { this.applying = false; });
+  }
   dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
   toggleAuto(btn) {
     this.auto = !this.auto;
@@ -121,8 +169,13 @@ class ViewerTab {
   }
 
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
-  // churn, skips re-render when the content is unchanged, and preserves scroll.
+  // churn and skips the re-render when the content is unchanged. Scroll is no
+  // longer its business: every render path ends in applyScroll().
   async load(poll) {
+    // Claimed synchronously so an auto-reload tick that overlaps the first read
+    // cannot also count as "first".
+    const first = this.firstLoad;
+    this.firstLoad = false;
     const ext = extOf(this.path);
     if (IMAGE_EXTS.has(ext)) {
       // Stated, not implied. Copy has no button on an image today, so this is
@@ -161,6 +214,19 @@ class ViewerTab {
         this.msg(`binary file · ${(res.data && res.data.size) || 0} bytes`);
         this.setStatus("");
       } else {
+        // A restored viewer was not asked for by anyone. If its very FIRST read
+        // says the file is gone, drop the tab instead of parking a red error on
+        // a path that no longer exists. Exactly 404 and nothing else: status 0
+        // is "the fetch never completed" (fsops.js), which the rule about failed
+        // polls says is not an answer about the file; and a 404 later in the
+        // tab's life is a file deleted while open, which closeViewersFor already
+        // handles for in-app deletes and which the user should see otherwise.
+        //
+        // Images never reach here — load() returns before any fsRead for them
+        // (see IMAGE_EXTS above) and img.onerror cannot tell 404 from a blip —
+        // so a restored image of a deleted file keeps its "could not load
+        // image" message and is closed by hand.
+        if (first && this.restored && res.status === 404) { closeTabEverywhere(this); return; }
         // The server's own sentence, not the clipboard's. This pane is the
         // RENDER failure surface: a 5 MB log opened here must read "file too
         // large to preview", not "too large to copy — use Download instead".
@@ -179,10 +245,12 @@ class ViewerTab {
     if (poll && plan.text === this.lastContent && !this.showingMsg) return;
     if (this.showingMsg) this.setStatus(""); // clear the error the message left
     this.lastContent = plan.text;
-    const scroll = this.content.scrollTop;
     if (MD_EXTS.has(ext)) this.renderMarkdown(plan.text);
     else this.renderCode(plan.text, res.data.lang);
-    this.content.scrollTop = scroll; // preserve position across reload
+    // Replacing the scroller's children resets it. The field is already current
+    // (the listener keeps it so), and this is also the path that lands a
+    // restored offset, since the first read completes long after the attach.
+    this.applyScroll();
   }
 
   // Copies exactly what is on screen — the raw source this viewer fetched, which
@@ -241,6 +309,12 @@ class ViewerTab {
     frag.querySelectorAll("img").forEach((img) => {
       const src = img.getAttribute("src") || "";
       if (!/^(https?:|data:|\/)/.test(src)) img.setAttribute("src", "/api/fs/read?path=" + encodeURIComponent(dir + src));
+      // An <img> here reserves no height until it loads, so the document is
+      // shorter than its final self when load() applies the offset and the
+      // browser clamps it. Re-apply as each image settles. Safe to repeat: if
+      // the reader has scrolled since, this.scroll is already where they are and
+      // applyScroll does nothing.
+      img.addEventListener("load", () => this.applyScroll());
     });
     // marked v12 dropped the highlight option: highlight fenced blocks here (hljs v11 API).
     if (window.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });

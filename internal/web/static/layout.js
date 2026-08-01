@@ -1,14 +1,16 @@
 "use strict";
 
-// Layout persistence: the grid (panes, their terminal tabs, the active tab per
-// pane, focus, cap, maximized) is snapshotted to localStorage on every layout
-// change and replayed on the next boot, so a refresh brings the console back
-// as it was instead of an empty cell.
+// Layout persistence: the grid (panes, the tabs in them — sessions and open
+// files alike — the active tab per pane, focus, cap, maximized) is snapshotted
+// to localStorage on every layout change and replayed on the next boot, so a
+// refresh brings the console back as it was instead of an empty cell.
 //
 // Everything that decides *what* is stored or restored lives here as a pure
 // function, so it is testable under `node --test`; tabs.js only wires it to the
-// live model. Viewer tabs are deliberately absent: a stored path may no longer
-// exist, and reopening a file costs one click in the tree.
+// live model. Viewer tabs are stored too, with the offset they were read to, so
+// a reload comes back to the same place in the same file. A path that no longer
+// exists is not filtered here — it cannot be, this file does no I/O — the
+// restored tab discovers it on its first read and closes itself.
 
 const LAYOUT_KEY = "agent-box:layout";
 const LAYOUT_V = 1;
@@ -23,20 +25,54 @@ function clampCap(v) {
   return LAYOUT_CAPS.includes(n) ? n : LAYOUT_MAX_CAP;
 }
 
+// A stored tab is either a terminal (its session id) or a viewer (its path plus
+// how far down the file was read).
+//
+// tabKey identifies one across the snapshot: `t:<id>` or `v:<path>`. Paths
+// compare as plain strings, which is safe only because ViewerTab normalizes its
+// path in its constructor long before serializeLayout ever sees one — do NOT
+// pull normalizePath in here, it would cost this file the purity that makes it
+// testable under `node --test`.
+function tabKey(t) {
+  if (!t || typeof t !== "object") return null;
+  if (typeof t.path === "string" && t.path) return "v:" + t.path;
+  if (typeof t.id === "string" && t.id) return "t:" + t.id;
+  return null;
+}
+
+// clampScroll keeps a stored offset to a finite, non-negative whole number of
+// pixels: a snapshot is user-editable text, and NaN or -1 goes straight into
+// scrollTop on the next boot. Also used by viewer-tab.js, which shares this
+// scope — see the script order in index.html.
+function clampScroll(v) {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+// storedTab → the entry written for a live tab, or null if it cannot be restored.
+function storedTab(t) {
+  if (!t) return null;
+  if (t.kind === "viewer" && t.path) return { path: t.path, scroll: clampScroll(t.scroll) };
+  if (t.kind === "terminal" && t.id) return { id: t.id };
+  return null;
+}
+
 // serializeLayout builds the snapshot from the live model. `model.cells` are the
 // grid cells, `model.focused` / `model.maximized` are cell references (or null).
-// Returns null when there is no terminal tab left to restore: the caller stores
-// that as "no snapshot", so closing the last session then reloading gives the
-// normal empty console instead of a stale grid.
+// Returns null when nothing restorable is left — no session AND no open file:
+// the caller stores that as "no snapshot", so an emptied console reloads empty
+// instead of into a stale grid.
 function serializeLayout(model) {
   const cells = [];
   const newIndex = new Map(); // live cell -> index in the snapshot
   for (const c of model.cells || []) {
-    const terms = (c.tabs || []).filter((t) => t && t.kind === "terminal" && t.id);
-    if (!terms.length) continue;
-    const active = Math.max(0, terms.indexOf(c.activeTab));
+    // Keep the live tabs, not their stored form: the active index is found by
+    // identity against the objects the grid holds.
+    const kept = (c.tabs || []).filter((t) => storedTab(t) !== null);
+    if (!kept.length) continue;
+    const active = Math.max(0, kept.indexOf(c.activeTab));
     newIndex.set(c, cells.length);
-    cells.push({ tabs: terms.map((t) => ({ id: t.id })), active });
+    cells.push({ tabs: kept.map(storedTab), active });
   }
   if (!cells.length) return null;
   return {
@@ -65,28 +101,40 @@ function runningIds(sessions) {
 // reconcileLayout filters a stored snapshot against the live session list and
 // returns a plan the grid can be rebuilt from, or null for "boot normally".
 // Null covers every unusable input: absent, corrupt, wrong version, or nothing
-// left after filtering, so a bad entry can never break boot.
+// left after filtering. A malformed ENTRY is dropped rather than returned, so
+// boot survives a hand-edited or half-written snapshot — which is only true as
+// long as every entry leaves here in the shape its tabKey classification
+// promised; see the note at the push below.
 function reconcileLayout(saved, sessions) {
   if (!saved || typeof saved !== "object" || saved.v !== LAYOUT_V) return null;
   if (!Array.isArray(saved.cells)) return null;
   const live = runningIds(sessions);
-  const seen = new Set(); // one session cannot be open in two panes
+  const seen = new Set(); // one session — or one file — cannot be open in two panes
   const cells = [];
   const kept = [];        // original index of each surviving cell
   saved.cells.forEach((c, i) => {
     if (!c || !Array.isArray(c.tabs)) return;
-    const activeId = (c.tabs[c.active] || {}).id;
+    const activeKey = tabKey(c.tabs[c.active]);
     const tabs = [];
     for (const t of c.tabs) {
-      const id = t && typeof t.id === "string" ? t.id : null;
-      if (!id || seen.has(id) || !live.has(id)) continue;
-      seen.add(id);
-      tabs.push({ id });
+      const key = tabKey(t);
+      if (!key || seen.has(key)) continue;
+      // A terminal is restorable only while its session runs. A viewer has
+      // nothing to check here — a path is not in the session list — so a file
+      // deleted since the last visit is caught by the tab's own first read.
+      if (key[0] === "t" && !live.has(t.id)) continue;
+      seen.add(key);
+      // Emit on the SAME discriminator tabKey classified with. Testing `t.path`
+      // for truthiness here instead would let a corrupt entry carrying both keys
+      // — `{id: "sess-1", path: 42}` — pass the terminal liveness check above and
+      // then be emitted as a viewer, which applyPlan hands to `new ViewerTab(42)`
+      // and which throws out of the restore, half-building the grid.
+      tabs.push(key[0] === "v" ? { path: t.path, scroll: clampScroll(t.scroll) } : { id: t.id });
     }
     if (!tabs.length) return;
     // Follow the active tab by identity: after dropping dead tabs its old index
-    // points at a different session. A dead active tab falls back to the first.
-    const active = Math.max(0, tabs.findIndex((t) => t.id === activeId));
+    // points at a different tab. A dead active tab falls back to the first.
+    const active = Math.max(0, tabs.findIndex((x) => tabKey(x) === activeKey));
     kept.push(i);
     cells.push({ tabs, active });
   });
@@ -115,5 +163,5 @@ function writeLayout(snapshot) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { serializeLayout, reconcileLayout, readLayout, writeLayout, clampCap, LAYOUT_KEY };
+  module.exports = { serializeLayout, reconcileLayout, readLayout, writeLayout, clampCap, clampScroll, tabKey, LAYOUT_KEY };
 }
