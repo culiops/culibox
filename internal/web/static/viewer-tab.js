@@ -7,7 +7,7 @@ const MD_EXTS = new Set(["md", "markdown"]);
 // ViewerTab renders one file read-only: code (highlight.js), markdown (marked),
 // or image (<img>). It is a Cell tab (body-only); the Cell owns the tab bar.
 class ViewerTab {
-  constructor(path) {
+  constructor(path, opts) {
     // Normalise once, here: tabs are keyed and matched by this string, and the
     // paste-path box hands over whatever was typed. "/home/u/./a.txt" would
     // otherwise open a second tab for a file already open, and survive that
@@ -27,6 +27,12 @@ class ViewerTab {
     // for every HTTP error, and for the moment before the first load returns.
     this.copyRefusal = "loading";
     this.showingMsg = false; // true while the pane shows a message, not the file
+    // How far down this file was read, in px. It lives here and not in the DOM
+    // because every tab switch (Cell.renderBody) and every grid re-render
+    // (renderGrid) detaches this element, and an element removed from the
+    // document loses its layout box: scrollTop comes back 0. clampScroll is
+    // layout.js's, which shares this scope (see the script order in index.html).
+    this.scroll = clampScroll(opts && opts.scroll);
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
     const ext0 = extOf(path);
     // which CSS var this viewer's text reads (null for images → zoom is a no-op)
@@ -78,6 +84,14 @@ class ViewerTab {
     this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
+    // isConnected is what makes this correct, not an optimisation. A scroll
+    // event queued just before a detach is dispatched AFTER it, against an
+    // element that now reads scrollTop 0 — so an unguarded listener would
+    // overwrite the position with the top exactly when the user scrolls and
+    // switches tab in the same frame.
+    this.content.addEventListener("scroll", () => {
+      if (this.el.isConnected) this.scroll = this.content.scrollTop;
+    }, { passive: true });
     this.el.append(this.toolbar, this.content);
     this.load();
   }
@@ -86,6 +100,17 @@ class ViewerTab {
   status() { return this.statusText; }
   onShow() {}
   onHide() {}
+  // onAttach: the element was just (re)inserted, so the browser has reset the
+  // scroller to the top. Idempotent and NON-CONSUMING — it never clears
+  // this.scroll and never reads the applied value back — because it also fires
+  // on elements that are still detached: openFile's early return activates a
+  // tab in a cell that is out of the document while another pane is maximized,
+  // where assigning scrollTop is a silent no-op and the next real attach is
+  // what has to restore.
+  onAttach() { this.applyScroll(); }
+  applyScroll() {
+    if (this.content.scrollTop !== this.scroll) this.content.scrollTop = this.scroll;
+  }
   dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
   toggleAuto(btn) {
     this.auto = !this.auto;
@@ -179,10 +204,12 @@ class ViewerTab {
     if (poll && plan.text === this.lastContent && !this.showingMsg) return;
     if (this.showingMsg) this.setStatus(""); // clear the error the message left
     this.lastContent = plan.text;
-    const scroll = this.content.scrollTop;
     if (MD_EXTS.has(ext)) this.renderMarkdown(plan.text);
     else this.renderCode(plan.text, res.data.lang);
-    this.content.scrollTop = scroll; // preserve position across reload
+    // Replacing the scroller's children resets it. The field is already current
+    // (the listener keeps it so), and this is also the path that lands a
+    // restored offset, since the first read completes long after the attach.
+    this.applyScroll();
   }
 
   // Copies exactly what is on screen — the raw source this viewer fetched, which

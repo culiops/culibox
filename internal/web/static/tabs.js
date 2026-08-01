@@ -113,8 +113,12 @@ class Cell {
   }
 
   renderBody() {
-    if (this.activeTab) this.body.replaceChildren(this.activeTab.el);
-    else {
+    if (this.activeTab) {
+      this.body.replaceChildren(this.activeTab.el);
+      // The element just lost and regained its layout box, so anything inside it
+      // that scrolls is back at the top: let the tab put its position back.
+      this.activeTab.onAttach?.();
+    } else {
       const ph = document.createElement("div");
       ph.className = "cell-empty";
       ph.textContent = "Click a session or a file to open it here";
@@ -269,6 +273,10 @@ function renderGrid() {
   grid.className = "cols-" + gridCols() + (maximized ? " maximized" : "");
   const show = maximized ? [maximized] : cells;
   grid.replaceChildren(...show.map((c) => c.el));
+  // `show`, not `cells`: with a pane maximized the others are NOT in the
+  // document, and the renderBar sweep on the next line is a trap to copy —
+  // restoring scroll on a detached element is a silent no-op.
+  show.forEach((c) => c.activeTab?.onAttach?.());
   cells.forEach((c) => c.renderBar());
   requestAnimationFrame(fitAll);
 }
