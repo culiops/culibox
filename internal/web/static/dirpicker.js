@@ -73,14 +73,30 @@ function initDirPicker(opts) {
   // closes immediately, making the workspace list unreachable on a re-focus.
   // select() + an explicit empty-mode render sidesteps that: typing replaces
   // the selected path, and the list is always what a fresh focus shows.
+  //
+  // The select() is deferred a tick: on a mouse click, caret placement is
+  // part of mousedown's default action and runs AFTER focus is dispatched, so
+  // a synchronous select() here gets undone immediately and the click leaves
+  // the text unselected. Typing `d` into an unselected "/home/…" value still
+  // starts with "/", so dpQuery reclassifies it as a path and dpClose()s the
+  // very list this handler just opened — the exact failure this was meant to
+  // fix, re-entering through the mouse. Keyboard/Tab focus has no mousedown
+  // and was never affected.
   dpInput.addEventListener("focus", () => {
-    dpInput.select();
+    setTimeout(() => dpInput.select(), 0);
     dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
   });
   dpInput.addEventListener("keydown", dpKeydown);
   document.addEventListener("click", (e) => {
     if (e.target !== dpInput && !dpList.contains(e.target)) dpClose();
   });
+  // dpOpen(true) snapshots the input's rect once, on open. A mobile on-screen
+  // keyboard (raised by the very focus that opens the list) shrinks
+  // innerHeight after that snapshot, as does an ordinary window resize or
+  // crossing the 700px breakpoint — none of those fire a click, so nothing
+  // else re-runs the placement. A splitter drag needs no listener here: it
+  // ends in a click outside, which already closes the list via dpClose().
+  window.addEventListener("resize", () => { if (!dpList.hidden) dpOpen(true); });
 }
 
 function dpQuery(raw) {
@@ -138,12 +154,26 @@ function dpOpen(show) {
   if (show) {
     // #ft-root-list is position: fixed (see index.html), so its box is
     // computed from the viewport, not from .ft-pick — it has to be told where
-    // the input actually is, and clamped to whatever room is left below it.
+    // the input actually is. Recomputed on every call, not cached: the resize
+    // listener above re-runs this exact code when the viewport changes under
+    // an already-open list.
     const r = dpInput.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom;
     dpList.style.left = r.left + "px";
     dpList.style.width = r.width + "px";
-    dpList.style.top = r.bottom + "px";
-    dpList.style.maxHeight = Math.max(80, window.innerHeight - r.bottom - 8) + "px";
+    if (below < 120 && r.top > below) {
+      // Flip above when there is more room there: without this, an input near
+      // the bottom of the viewport clamps maxHeight to a sliver while `top`
+      // stays at r.bottom, forcing the list off-screen below the fold instead
+      // of merely short.
+      dpList.style.top = "";
+      dpList.style.bottom = (window.innerHeight - r.top) + "px";
+      dpList.style.maxHeight = Math.max(80, r.top - 8) + "px";
+    } else {
+      dpList.style.bottom = "";
+      dpList.style.top = r.bottom + "px";
+      dpList.style.maxHeight = Math.max(80, below - 8) + "px";
+    }
   }
   dpList.hidden = !show;
 }

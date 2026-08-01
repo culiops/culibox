@@ -496,6 +496,13 @@ async function initFileTree() {
   try {
     ws = (await api("/api/workspaces")) || [];
     window.HOME_DIR = (ws[0] && ws[0].path) || ""; // first entry is "~ (home)": used to expand ~/ in clicked links
+    // Before Task 5 the <select>'s first <option> (built from this same
+    // response) was implicitly its value, so the tree defaulted to home. That
+    // building was deleted along with the <select>, and nothing replaced the
+    // default it produced as a side effect — leaving ftRootPath "" until a
+    // followed tab or a manual pick set it, which paints .ft-err on any first
+    // load that has neither (a fresh page, or a boot that loses the cwd race).
+    if (window.HOME_DIR) setFtRoot(window.HOME_DIR);
   } catch (_) {}
 
   // A picked directory re-roots the tree but does NOT change which TAB we're
