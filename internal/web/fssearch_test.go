@@ -2,10 +2,12 @@ package web
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,12 +16,25 @@ import (
 	"time"
 )
 
-func mustWrite(t *testing.T, p string) {
+// mustWrite writes p with the given content, defaulting to "x" when the
+// caller doesn't care what's inside the file.
+func mustWrite(t *testing.T, p string, content ...string) {
 	t.Helper()
+	body := "x"
+	if len(content) > 0 {
+		body = content[0]
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustMkdirAll(t *testing.T, p string) {
+	t.Helper()
+	if err := os.MkdirAll(p, 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -219,7 +234,7 @@ func TestFileIndexFirstBuildBlocksConcurrentCallers(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			entries, _ := ix.snapshot()
+			entries, _ := ix.snapshot(kindFiles)
 			counts[i] = len(entries)
 		}(i)
 	}
@@ -279,7 +294,7 @@ func TestFileIndexTruncatesAtMaxPaths(t *testing.T) {
 	}
 	ix := newFileIndex(home)
 	ix.maxPaths = 5
-	entries, truncated := ix.snapshot()
+	entries, truncated := ix.snapshot(kindFiles)
 
 	if len(entries) != 5 {
 		t.Fatalf("want 5 paths, got %d", len(entries))
@@ -292,7 +307,7 @@ func TestFileIndexTruncatesAtMaxPaths(t *testing.T) {
 // mustSnapshot returns the first snapshot, which always builds synchronously.
 func mustSnapshot(t *testing.T, ix *fileIndex) []indexEntry {
 	t.Helper()
-	entries, _ := ix.snapshot()
+	entries, _ := ix.snapshot(kindFiles)
 	return entries
 }
 
@@ -308,19 +323,19 @@ func TestFileIndexServesStaleAndRefreshesInBackground(t *testing.T) {
 	mustWrite(t, filepath.Join(home, "two.txt"))
 
 	// Inside the TTL the new file must NOT appear (that is the documented trade).
-	if entries, _ := ix.snapshot(); len(entries) != 1 {
+	if entries, _ := ix.snapshot(kindFiles); len(entries) != 1 {
 		t.Fatalf("cached snapshot should still hold 1 path, got %v", rels(entries))
 	}
 
 	// Once stale, the request is still answered immediately from the old cache —
 	// never blocked on the walk — and a background rebuild lands shortly after.
 	ix.setTTL(time.Nanosecond)
-	if entries, _ := ix.snapshot(); len(entries) != 1 {
+	if entries, _ := ix.snapshot(kindFiles); len(entries) != 1 {
 		t.Fatalf("stale snapshot must be served as is, got %v", rels(entries))
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		entries, _ := ix.snapshot()
+		entries, _ := ix.snapshot(kindFiles)
 		if len(entries) == 2 {
 			break
 		}
@@ -446,4 +461,88 @@ func contains(hay []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// The directory set is collected by the SAME walk as the files, with its own
+// bounds and its own truncation flag. These pin the three things that separate
+// it from "just index directories too".
+func TestIndexCollectsDirectories(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, "repo", "internal", "web"))
+	mustWrite(t, filepath.Join(home, "repo", "internal", "web", "a.go"), "package web")
+
+	ix := newFileIndex(home)
+	dirs, _ := ix.snapshot(kindDirs)
+	got := rels(dirs)
+	for _, want := range []string{"repo", "repo/internal", "repo/internal/web"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("directory %q missing from %v", want, got)
+		}
+	}
+	// The file set must not have gained directories.
+	files, _ := ix.snapshot(kindFiles)
+	if slices.Contains(rels(files), "repo/internal") {
+		t.Fatalf("a directory leaked into the file set: %v", rels(files))
+	}
+}
+
+// vendor/ is pruned from RECORDING only. Adding it to skipDirs would delete
+// every file under it from the palette, which is a regression, not a benefit.
+func TestVendorIsNotRecordedButItsFilesAre(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, "app", "vendor", "lib"))
+	mustWrite(t, filepath.Join(home, "app", "vendor", "lib", "x.php"), "<?php")
+
+	ix := newFileIndex(home)
+	dirs, _ := ix.snapshot(kindDirs)
+	for _, d := range rels(dirs) {
+		if d == "app/vendor" || d == "app/vendor/lib" {
+			t.Fatalf("vendor directory was recorded: %v", rels(dirs))
+		}
+	}
+	files, _ := ix.snapshot(kindFiles)
+	if !slices.Contains(rels(files), "app/vendor/lib/x.php") {
+		t.Fatalf("a file under vendor must still be findable: %v", rels(files))
+	}
+}
+
+// The fairness prune is a CONJUNCTION. A subtree that has spent its file budget
+// must keep yielding directories, or the biggest repos — exactly the ones worth
+// searching — go missing.
+func TestFileBudgetExhaustionStillYieldsDirectories(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 12; i++ {
+		d := filepath.Join(home, "big", fmt.Sprintf("d%02d", i))
+		mustMkdirAll(t, d)
+		mustWrite(t, filepath.Join(d, "f.txt"), "x")
+	}
+	ix := newFileIndex(home)
+	ix.maxPerRoot = 3 // file budget for "big" is spent almost immediately
+	ix.maxPerRootDirs = 100
+
+	dirs, _ := ix.snapshot(kindDirs)
+	if n := len(rels(dirs)); n < 12 {
+		t.Fatalf("file-budget exhaustion pruned the directory set: got %d, want >= 12 (%v)", n, rels(dirs))
+	}
+}
+
+// Two caps, two flags. One shared bool would make the palette claim FILES are
+// missing when only the directory cap tripped.
+func TestTruncationFlagsAreIndependent(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 30; i++ {
+		d := filepath.Join(home, fmt.Sprintf("d%02d", i))
+		mustMkdirAll(t, d)
+	}
+	mustWrite(t, filepath.Join(home, "one.txt"), "x")
+
+	ix := newFileIndex(home)
+	ix.maxDirs = 5 // only the directory cap is tight
+
+	if _, dirsTrunc := ix.snapshot(kindDirs); !dirsTrunc {
+		t.Fatal("hitting maxDirs must report the DIRECTORY set truncated")
+	}
+	if _, filesTrunc := ix.snapshot(kindFiles); filesTrunc {
+		t.Fatal("the directory cap must not mark the FILE set truncated")
+	}
 }
