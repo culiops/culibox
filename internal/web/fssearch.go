@@ -444,11 +444,27 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			return nil
 		}
 		if len(files) >= b.maxPaths {
-			// SkipAll ends the WalkDir call outright — the directory walk dies
-			// with it. Flagging only filesTrunc here would leave dirsTrunc false
-			// while every directory lexically after this point is silently gone.
-			filesTrunc, dirsTrunc = true, true
-			return filepath.SkipAll
+			// A full file index stops RECORDING FILES; it does not end the walk.
+			// This branch used to return filepath.SkipAll, which ends the WalkDir
+			// call outright and took the DIRECTORY walk down with it — so it also
+			// had to set dirsTrunc, because every directory lexically after the
+			// abort really was gone. That re-coupled two result sets given
+			// separate budgets and separate flags precisely so one could not
+			// starve the other, and it was not theoretical: on a real home the
+			// walk died around ~/my-assistant and the picker lost tech-advisor, a
+			// genuine project root, over the 247 files past the ceiling.
+			//
+			// Returning nil instead costs nothing — the remaining entries are
+			// still stat'ed by WalkDir either way — and leaves the directory set
+			// complete, so dirsTrunc must NOT be set here. Only the deadline
+			// above still ends everything, and only it still flags both.
+			//
+			// The test is self-latching: files never shrinks, so once it reaches
+			// maxPaths this branch returns for every later file. A separate
+			// "filesFull" flag would be a second source of truth for the same
+			// fact.
+			filesTrunc = true
+			return nil
 		}
 		if perRoot[top] >= b.maxPerRoot {
 			filesTrunc = true

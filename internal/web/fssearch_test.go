@@ -821,30 +821,66 @@ func TestTruncationFlagsAreIndependent(t *testing.T) {
 	}
 }
 
-// Hitting the global file ceiling returns filepath.SkipAll, which ends the
-// WalkDir call outright — the directory walk dies with it, mid-tree. Flagging
-// only filesTrunc there would leave dirsTrunc false while directories
-// lexically after the abort point are silently missing: a truncated list
-// presented as complete.
-func TestMaxPathsAbortAlsoTruncatesDirectories(t *testing.T) {
+// The two result sets have independent budgets and independent truncation flags
+// so that one cannot starve the other. Ending the walk with filepath.SkipAll at
+// the file ceiling re-coupled them: on a real home the walk died at ~my-assistant
+// and the picker lost tech-advisor — a genuine project root — for the sake of
+// 247 files it had no room for anyway.
+//
+// So the file ceiling now stops RECORDING FILES and lets the walk continue. The
+// directory set is complete, and dirsTruncated must say so.
+func TestFileCapDoesNotTruncateDirectories(t *testing.T) {
 	home := t.TempDir()
-	for i := 0; i < 6; i++ {
-		d := filepath.Join(home, fmt.Sprintf("a%02d", i))
-		mustMkdirAll(t, d)
-		mustWrite(t, filepath.Join(d, "f.txt"), "x")
+	// Sorts first, and spends the whole file budget before anything else is
+	// reached — the lexical-DFS shape that made this a real defect.
+	for i := 0; i < 10; i++ {
+		mustWrite(t, filepath.Join(home, "aaa-noise", fmt.Sprintf("f%02d.txt", i)), "x")
+	}
+	// Projects lexically AFTER the cap is hit. Under SkipAll they were never
+	// visited at all, so no marker of theirs was ever observed.
+	mustWrite(t, filepath.Join(home, "zzz-outer", "zzz-one", "go.mod"), "module one")
+	mustWrite(t, filepath.Join(home, "zzz-outer", "zzz-two", ".git", "config"), "[core]")
+
+	ix := newFileIndex(home)
+	ix.maxPaths = 3
+
+	files, filesTrunc := ix.snapshot(kindFiles)
+	if len(files) != 3 {
+		t.Fatalf("the file cap must still bound the file set: got %d (%v)", len(files), rels(files))
+	}
+	if !filesTrunc {
+		t.Fatal("hitting maxPaths must still report the FILE set truncated")
+	}
+
+	dirs, dirsTrunc := ix.snapshot(kindDirs)
+	got := indexDirs(t, ix)
+	for _, want := range []string{"zzz-outer", "zzz-outer/zzz-one", "zzz-outer/zzz-two"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("the file cap killed the directory walk: %q missing from %v", want, got)
+		}
+	}
+	if dirsTrunc {
+		t.Fatalf("the FILE cap must not report the DIRECTORY set truncated (got dirs=%v)", rels(dirs))
+	}
+}
+
+// The deadline is the other kind of stop, and the distinction is the whole
+// point: budget exhaustion ends the walk outright, so both sets really ARE cut
+// short mid-tree and both flags must say so. A truncated list presented as
+// complete is the failure this pins.
+func TestDeadlineTruncatesBothSets(t *testing.T) {
+	home := t.TempDir()
+	// The clock is only checked every 512 entries, so the fixture must exceed
+	// that or the deadline is never observed.
+	for i := 0; i < 600; i++ {
+		mustWrite(t, filepath.Join(home, "d", fmt.Sprintf("f%03d.txt", i)), "x")
 	}
 	ix := newFileIndex(home)
-	ix.maxPaths = 2 // hit well before the walk would otherwise finish
+	ix.budget = -time.Second // already expired when the walk starts
 
 	_, filesTrunc := ix.snapshot(kindFiles)
-	if !filesTrunc {
-		t.Fatal("hitting maxPaths must report the FILE set truncated")
-	}
-	dirs, dirsTrunc := ix.snapshot(kindDirs)
-	if !dirsTrunc {
-		t.Fatalf("hitting maxPaths must also report the DIRECTORY set truncated (got dirs=%v)", rels(dirs))
-	}
-	if len(dirs) >= 6 {
-		t.Fatalf("test setup did not actually lose any directories to the abort: got %v", rels(dirs))
+	_, dirsTrunc := ix.snapshot(kindDirs)
+	if !filesTrunc || !dirsTrunc {
+		t.Fatalf("budget exhaustion must truncate BOTH sets: filesTrunc=%v dirsTrunc=%v", filesTrunc, dirsTrunc)
 	}
 }
