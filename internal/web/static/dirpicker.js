@@ -71,19 +71,39 @@ function initDirPicker(opts) {
   // setFtRoot writes the picked path into the input, so in steady state
   // .value always starts with "/" — dpQuery on that classifies as "path" and
   // closes immediately, making the workspace list unreachable on a re-focus.
-  // select() + an explicit empty-mode render sidesteps that: typing replaces
-  // the selected path, and the list is always what a fresh focus shows.
-  //
-  // The select() is deferred a tick: on a mouse click, caret placement is
-  // part of mousedown's default action and runs AFTER focus is dispatched, so
-  // a synchronous select() here gets undone immediately and the click leaves
-  // the text unselected. Typing `d` into an unselected "/home/…" value still
-  // starts with "/", so dpQuery reclassifies it as a path and dpClose()s the
-  // very list this handler just opened — the exact failure this was meant to
-  // fix, re-entering through the mouse. Keyboard/Tab focus has no mousedown
-  // and was never affected.
+  // Rendering it here covers Tab/keyboard focus outright: the browser already
+  // select-alls a text input's value on keyboard focus, so nothing else is
+  // needed for that path.
   dpInput.addEventListener("focus", () => {
-    setTimeout(() => dpInput.select(), 0);
+    dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
+  });
+  // Mouse selection is handled on click, not focus: on a click, caret
+  // placement (or, for a drag, a range selection) is part of mousedown's
+  // default action and runs AFTER focus is dispatched — a select() in the
+  // focus handler gets overwritten by it every time, which is what forced the
+  // previous fix into a setTimeout(0) workaround. click fires after that
+  // default action finishes, so by the time this runs the final selection is
+  // already known:
+  //   - a plain click leaves a COLLAPSED selection at the caret — treated as
+  //     "start a new pick", so select() replaces it with select-all.
+  //   - a drag leaves a RANGE selection — left alone, so a substring of an
+  //     already-picked path can be edited in place (a collapsed-only select()
+  //     would otherwise clobber every drag into select-all, DOM-verified).
+  // click also fires on a second click into an ALREADY-focused field, where
+  // no focus event fires at all — this is what makes clicking back into the
+  // input right after an Enter-driven pick (list already closed, nothing else
+  // pending) reopen it; typing from that state would otherwise insert at the
+  // caret into the old path instead of replacing it.
+  //
+  // Guarded on the CURRENT value's mode, not unconditional: while the user is
+  // mid-typing a fuzzy query — the list already open on real search hits — a
+  // click is for repositioning the caret to fix a typo, not a restart, and
+  // must not select-all-and-reset the list out from under them.
+  // classifyPickerQuery is the same pure function every other consumer uses
+  // to answer exactly that question, so the gate is one call, not new state.
+  dpInput.addEventListener("click", () => {
+    if (classifyPickerQuery(dpInput.value).mode === "fuzzy") return;
+    if (dpInput.selectionStart === dpInput.selectionEnd) dpInput.select();
     dpRender(pickerRows({ mode: "empty", workspaces: dpWorkspaces }));
   });
   dpInput.addEventListener("keydown", dpKeydown);
