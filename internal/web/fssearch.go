@@ -413,13 +413,18 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			// budget alone would take the directories with it, and the subtrees
 			// that spend their file budget are the big repos — the ones most
 			// worth searching.
+			//
+			// dirsTrunc is deliberately NOT set here, though filesTrunc is:
+			// emit owns dirsTrunc. This branch fires for every directory
+			// visited under a spent top-level, including ones that are not
+			// candidates under the project rules at all — flagging here would
+			// report the directory set truncated because of a folder that would
+			// never have been offered. emit already flags it when a real
+			// candidate is dropped.
 			fileBudgetSpent := perRoot[top] >= b.maxPerRoot
 			dirBudgetSpent := perRootDirs[top] >= b.maxPerRootDirs
 			if fileBudgetSpent {
 				filesTrunc = true
-			}
-			if dirBudgetSpent {
-				dirsTrunc = true
 			}
 			if fileBudgetSpent && dirBudgetSpent {
 				return fs.SkipDir
@@ -454,8 +459,10 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			// walk died around ~/my-assistant and the picker lost tech-advisor, a
 			// genuine project root, over the 247 files past the ceiling.
 			//
-			// Returning nil instead costs nothing — the remaining entries are
-			// still stat'ed by WalkDir either way — and leaves the directory set
+			// Past the ceiling the walk keeps traversing, so the remaining cost
+			// is bounded by indexBudget, not by maxPaths. That is never worse
+			// for the directory set than the old SkipAll, which cut it at the
+			// same point or earlier. Returning nil leaves the directory set
 			// complete, so dirsTrunc must NOT be set here. Only the deadline
 			// above still ends everything, and only it still flags both.
 			//

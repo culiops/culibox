@@ -864,6 +864,27 @@ func TestFileCapDoesNotTruncateDirectories(t *testing.T) {
 	}
 }
 
+// emit is the ONLY writer of dirsTrunc for a dropped candidate — the fairness
+// prune deliberately no longer flags it, because that branch fires for every
+// directory under a spent top-level, including ones the project rules would
+// never have offered. This pins the writer that remains.
+func TestPerRootDirCapReportsTruncation(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 8; i++ {
+		mustWrite(t, filepath.Join(home, "big", fmt.Sprintf("p%02d", i), "go.mod"), "module p")
+	}
+	ix := newFileIndex(home)
+	ix.maxPerRootDirs = 3 // "big" itself plus two of its projects
+
+	dirs, dirsTrunc := ix.snapshot(kindDirs)
+	if len(dirs) != 3 {
+		t.Fatalf("the per-root directory cap must bound the set: got %d (%v)", len(dirs), rels(dirs))
+	}
+	if !dirsTrunc {
+		t.Fatal("dropping a real candidate to the per-root cap must report the DIRECTORY set truncated")
+	}
+}
+
 // The deadline is the other kind of stop, and the distinction is the whole
 // point: budget exhaustion ends the walk outright, so both sets really ARE cut
 // short mid-tree and both flags must say so. A truncated list presented as
