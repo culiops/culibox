@@ -462,8 +462,9 @@ function treeFollowTarget(tab, home) {
 }
 
 // syncTreeToRoot re-roots the tree, but ONLY when the follow KEY changes — so a
-// manual root pick survives until a different tab is focused. A root not already
-// in the dropdown is added as a transient option so any depth/custom path works.
+// manual root pick survives until a different tab is focused. The root is a
+// plain input now, so any path just overwrites it; there is no option list to
+// maintain.
 //
 // The `!ftRootSel || !root` early return is load-bearing and must stay AHEAD of
 // the key write: during boot restore a fresh TerminalTab has no cwd yet, and
@@ -473,37 +474,27 @@ async function syncTreeToRoot(root, key) {
   if (!ftRootSel || !root) return;
   if (key && key === lastSyncedKey) return; // already following this tab (respect manual pick)
   lastSyncedKey = key || null;
-  let has = false;
-  for (const o of ftRootSel.options) if (o.value === root) { has = true; break; }
-  if (!has) {
-    const o = document.createElement("option");
-    o.value = root; o.textContent = "↳ " + (root.replace(/\/$/, "").split("/").pop() || root);
-    o.title = root;
-    ftRootSel.appendChild(o);
-  }
   setFtRoot(root);
   await ftLoadRoot();
 }
 
 async function initFileTree() {
-  ftRootSel = document.getElementById("ft-root");
-  const pathInp = document.getElementById("ft-path");
+  ftRootSel = document.getElementById("ft-root-input");
   ftTreeEl = document.getElementById("filetree");
-  if (!ftRootSel || !pathInp || !ftTreeEl) return;
+  if (!ftRootSel || !ftTreeEl) return;
 
+  let ws = [];
   try {
-    const ws = (await api("/api/workspaces")) || [];
+    ws = (await api("/api/workspaces")) || [];
     window.HOME_DIR = (ws[0] && ws[0].path) || ""; // first entry is "~ (home)": used to expand ~/ in clicked links
-    ftRootSel.replaceChildren(...ws.map((w) => {
-      const o = document.createElement("option");
-      o.value = w.path; o.textContent = w.label;
-      return o;
-    }));
   } catch (_) {}
 
-  // A manual dropdown pick re-roots the tree but does NOT change which TAB
-  // we're following, so it survives until a different tab is focused.
-  ftRootSel.onchange = ftLoadRoot;
+  // A picked directory re-roots the tree but does NOT change which TAB we're
+  // following, so it survives until a different tab is focused.
+  initDirPicker({
+    onPick: async (path) => { setFtRoot(path); await ftLoadRoot(); },
+    onOpenFile: (path) => openFile(path),
+  });
 
   // New folder in the root currently shown: no row can reach the root itself.
   const newdir = document.getElementById("ft-newdir");
@@ -528,24 +519,18 @@ async function initFileTree() {
       try { await ftLoadRoot(); } finally { refresh.disabled = false; }
     };
   }
-  pathInp.onkeydown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); const v = pathInp.value.trim(); if (v) { openFile(v); pathInp.value = ""; } }
-  };
-
   // Initial root: whatever the focused TAB resolves to — a terminal's cwd or a
   // viewer's directory — else home. focusedTerminal() was wrong here: a layout
   // restored onto a viewer booted at home with the follow-guard unset.
-  // The option list was only just built, and a restore that won the race
-  // against /api/workspaces may already have rooted the tree against an EMPTY
-  // list — replaceChildren above then destroyed that option and reset .value to
-  // home, leaving the painted tree and the picker disagreeing. Clearing the
-  // guard makes this seeding authoritative so it re-asserts the root over the
-  // fresh list. The cost is one redundant listing in the common case.
-  // Gated on a populated picker: if /api/workspaces threw above, HOME_DIR is
-  // unset, so the containment check is disabled and seeding could root outside
-  // home and paint ft-err. That state is already broken (empty picker); it
+  // A restore that won the race against /api/workspaces above may already have
+  // rooted the tree against an empty HOME_DIR. Clearing the guard makes this
+  // seeding authoritative so it re-asserts the root once workspaces are known.
+  // The cost is one redundant listing in the common case.
+  // Gated on a non-empty workspace list: if /api/workspaces threw above,
+  // HOME_DIR is unset, so the containment check is disabled and seeding could
+  // root outside home and paint ft-err. That state is already broken; it
   // should stay quiet rather than add an error to it.
-  if (ftRootSel.options.length) {
+  if (ws.length) {
     lastSyncedKey = null;
     const t = (typeof focusedTab === "function") ? focusedTab() : null;
     const target = treeFollowTarget(t);
