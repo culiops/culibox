@@ -546,3 +546,31 @@ func TestTruncationFlagsAreIndependent(t *testing.T) {
 		t.Fatal("the directory cap must not mark the FILE set truncated")
 	}
 }
+
+// Hitting the global file ceiling returns filepath.SkipAll, which ends the
+// WalkDir call outright — the directory walk dies with it, mid-tree. Flagging
+// only filesTrunc there would leave dirsTrunc false while directories
+// lexically after the abort point are silently missing: a truncated list
+// presented as complete.
+func TestMaxPathsAbortAlsoTruncatesDirectories(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 6; i++ {
+		d := filepath.Join(home, fmt.Sprintf("a%02d", i))
+		mustMkdirAll(t, d)
+		mustWrite(t, filepath.Join(d, "f.txt"), "x")
+	}
+	ix := newFileIndex(home)
+	ix.maxPaths = 2 // hit well before the walk would otherwise finish
+
+	_, filesTrunc := ix.snapshot(kindFiles)
+	if !filesTrunc {
+		t.Fatal("hitting maxPaths must report the FILE set truncated")
+	}
+	dirs, dirsTrunc := ix.snapshot(kindDirs)
+	if !dirsTrunc {
+		t.Fatalf("hitting maxPaths must also report the DIRECTORY set truncated (got dirs=%v)", rels(dirs))
+	}
+	if len(dirs) >= 6 {
+		t.Fatalf("test setup did not actually lose any directories to the abort: got %v", rels(dirs))
+	}
+}

@@ -30,13 +30,17 @@ const (
 	maxPerRootPaths = 10000
 
 	// Directory bounds are separate from the file bounds on purpose. Measured on
-	// a real home directory: 16 566 directories at depth 12, against ~60 000
-	// files. Sharing one budget would let the files starve the directories.
+	// a real home directory: 16 567 directories survive the skip rules at depth
+	// 12, of which 6 520 sit under a vendor/ and are suppressed by
+	// skipDirRecord, leaving 10 047 actually recorded, against ~60 000 files.
+	// Sharing one budget would let the files starve the directories.
 	maxIndexDirs = 20000
-	// maxPerRootDirs is the directory twin of maxPerRootPaths, and it binds: one
-	// repo on the author's box holds 7 741 directories. Without it a global cap
-	// degrades alphabetically, because the walk is a lexical DFS — the exact
-	// unfairness maxPerRootPaths exists to prevent.
+	// maxPerRootDirs is the directory twin of maxPerRootPaths. On the same
+	// measurement the largest top-level subtree records 2 556 directories —
+	// nowhere near this cap, so today it is headroom rather than a binding
+	// limit. It still exists for the same reason maxPerRootPaths does: the
+	// walk is a lexical DFS, so without a per-root cap one huge subtree that
+	// sorts first can crowd out everything after it.
 	maxPerRootDirs = 4000
 
 	searchDefaultLimit = 50
@@ -120,10 +124,14 @@ const (
 	kindDirs
 )
 
-// skipDirRecord names directories that are never worth offering as a workspace
-// but whose FILES must stay findable. It gates recording only — the walk still
-// descends. Putting these in skipDirs instead would delete every file under a
-// Laravel vendor/ from the command palette.
+// skipDirRecord names a directory whose ENTIRE SUBTREE is never worth
+// offering as a workspace — the match suppresses recording for it and every
+// directory nested inside it, not just the named directory itself — but whose
+// FILES must stay findable. It gates recording only; the walk still descends.
+// Putting these in skipDirs instead would delete every file under a Laravel
+// vendor/ from the command palette. Adding a common segment name here is not
+// free: "vendor" alone suppresses 6 520 of 16 567 candidate directories
+// (39%) on a real home directory — measure before adding another.
 var skipDirRecord = map[string]bool{
 	"vendor": true,
 }
@@ -335,7 +343,10 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			return nil
 		}
 		if len(files) >= b.maxPaths {
-			filesTrunc = true
+			// SkipAll ends the WalkDir call outright — the directory walk dies
+			// with it. Flagging only filesTrunc here would leave dirsTrunc false
+			// while every directory lexically after this point is silently gone.
+			filesTrunc, dirsTrunc = true, true
 			return filepath.SkipAll
 		}
 		if perRoot[top] >= b.maxPerRoot {
