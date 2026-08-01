@@ -27,12 +27,40 @@ test("anything else is a fuzzy search", () => {
   assert.deepStrictEqual(classifyPickerQuery("~/culipulse"), { mode: "fuzzy", value: "~/culipulse" });
 });
 
-test("the empty state lists workspaces, unfiltered and in order", () => {
+test("the empty state lists workspaces, in order", () => {
   const rows = pickerRows({
     mode: "empty",
     workspaces: [
       { label: "~ (home)", path: "/home/claude" },
       { label: "culipulse", path: "/home/claude/culipulse" },
+    ],
+    hits: [],
+  });
+  assert.deepStrictEqual(rows, [
+    { label: "~ (home)", hint: "", path: "/home/claude", kind: "workspace" },
+    { label: "culipulse", hint: "", path: "/home/claude/culipulse", kind: "workspace" },
+  ]);
+});
+
+// listWorkspaces (server) offers every non-hidden depth-1 directory of $HOME —
+// it was NOT changed by the project-root filtering, because it also feeds the
+// New-session working-dir form, which is out of scope here (brain #77). So
+// without this filter the picker contradicts itself: open it and "sdk" is on
+// screen; type "sdk" and dirPickerNote says "no matching folders" because the
+// dir index only records project roots. Filtered here, not server-side.
+test("the empty state list is filtered by the same names skipDirRecord suppresses", () => {
+  const rows = pickerRows({
+    mode: "empty",
+    workspaces: [
+      { label: "~ (home)", path: "/home/claude" },
+      { label: "code-server", path: "/home/claude/code-server" },
+      { label: "culipulse", path: "/home/claude/culipulse" },
+      { label: "sdk", path: "/home/claude/sdk" },
+      { label: "worktrees", path: "/home/claude/worktrees" },
+      { label: ".zinit", path: "/home/claude/.zinit" },
+      { label: ".tmux", path: "/home/claude/.tmux" },
+      { label: ".open-next", path: "/home/claude/.open-next" },
+      { label: ".worktrees", path: "/home/claude/.worktrees" },
     ],
     hits: [],
   });
@@ -210,11 +238,23 @@ test("Enter on a blank box does NOT re-root at the first workspace", () => {
 });
 
 // The picker must never answer "no matches", "search broke" and "offline" with
-// the same silent disappearance — especially since the index suppresses vendor/
-// subtrees (~39% of directories), making zero hits a NORMAL outcome.
+// the same silent disappearance. After Task 1 the dir index records project
+// ROOTS only (10,049 directories -> 91 on a real home), so "I typed a real,
+// visible directory that just isn't a project root" is now the dominant way
+// to get zero rows — the note has to name that rule and the escape hatch
+// (a full path), not just say "no matching folders" as if the search failed.
 
-test("no matches says so instead of closing the list", () => {
-  assert.strictEqual(dirPickerNote(0, false, false), "no matching folders");
+test("no matches names the rule and the escape hatch", () => {
+  const note = dirPickerNote(0, false, false);
+  assert.match(note, /project folder/i);
+  assert.match(note, /full path/i);
+});
+
+test("no matches while truncated still reads as the project-root rule, not as a broken index", () => {
+  // Same zero-count copy whether or not the walk was truncated: truncation
+  // does not explain a real, visible directory being absent — only "it is not
+  // a project root" does.
+  assert.strictEqual(dirPickerNote(0, true, false), dirPickerNote(0, false, false));
 });
 
 test("a failed search is distinguishable from an empty one", () => {

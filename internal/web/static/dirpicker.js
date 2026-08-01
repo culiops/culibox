@@ -20,6 +20,24 @@ function classifyPickerQuery(q) {
   return { mode: "fuzzy", value: v };
 }
 
+// dpSkipWorkspaceNames mirrors skipDirRecord (fssearch.go) — the directories
+// the dir index refuses to record as project roots, regardless of what marker
+// file sits inside them. listWorkspaces (workspaces.go) was NOT given the same
+// filter: it also feeds the New-session working-dir form, which is out of
+// scope here (that form's own regression trap is around spawning outside
+// $HOME). So without filtering here, the picker contradicts itself — open it
+// with a blank query and "code-server" or "sdk" is on screen; type either name
+// and dirPickerNote says "no matching folders", because the index that powers
+// the fuzzy search never recorded them. For "sdk" that would be a regression
+// against the picker's behaviour before Task 1.
+//
+// Hidden entries (leading ".") never reach here at all — listWorkspaces itself
+// skips them — but they are kept in this set anyway so it stays a literal copy
+// of skipDirRecord's keys, not a hand-trimmed subset someone has to re-derive.
+const dpSkipWorkspaceNames = new Set([
+  "code-server", "sdk", ".zinit", ".tmux", ".open-next", ".worktrees", "worktrees",
+]);
+
 // pickerRows turns state into the rows to render. Basename in the label column
 // and parent in the hint column: showing the whole relative path in both
 // truncated the part that identifies the directory, which is the lesson
@@ -27,9 +45,11 @@ function classifyPickerQuery(q) {
 function pickerRows(state) {
   const s = state || {};
   if (s.mode === "empty") {
-    return (s.workspaces || []).map((w) => ({
-      label: w.label, hint: "", path: w.path, kind: "workspace",
-    }));
+    return (s.workspaces || [])
+      .filter((w) => !dpSkipWorkspaceNames.has(w.label))
+      .map((w) => ({
+        label: w.label, hint: "", path: w.path, kind: "workspace",
+      }));
   }
   if (s.mode === "fuzzy") {
     return (s.hits || []).map((h) => {
@@ -165,14 +185,22 @@ function pickerEnterAction(mode, rowCount) {
 // identically — the dropdown simply vanished — and the user could not tell "no
 // such folder" from "search is broken".
 //
-// It is not a hypothetical: the index deliberately suppresses vendor/ subtrees,
-// measured at 6,520 of 16,567 directories (~39%), so typing the name of such a
-// folder is a NORMAL way to get zero rows. `truncated` is the same signal
-// palette.js already surfaces for files, and the server has been computing it
-// for directories all along.
+// It is not a hypothetical: the dir index records project ROOTS only — a
+// directory holding .git/go.mod/package.json/Cargo.toml/pyproject.toml, plus
+// $HOME's own non-hidden children — which took the offered set from 10,049
+// directories to 91 on a real home (fssearch.go markerFiles). So typing the
+// name of a real, VISIBLE directory that just isn't a project root is now the
+// NORMAL way to land on zero rows, and "no matching folders" reads as a broken
+// search rather than as that rule. The zero-row copy has to name the rule
+// (only project folders are listed) and the escape hatch (a full path reaches
+// anything else) instead. `truncated` is the same signal palette.js already
+// surfaces for files, and the server has been computing it for directories all
+// along — though on a real home it measures false (the file-cap bug that used
+// to abort the directory walk early is fixed), so it is trustworthy: zero rows
+// means "not a project root", not "the index gave up".
 function dirPickerNote(count, truncated, failed) {
   if (failed) return "folder search unavailable";
-  if (!count) return "no matching folders";
+  if (!count) return "only project folders are listed — type a full path";
   return truncated ? "index truncated: some folders are not listed" : "";
 }
 
