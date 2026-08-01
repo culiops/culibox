@@ -4,6 +4,7 @@ const assert = require("node:assert");
 const {
   classifyPickerQuery, pickerRows,
   pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
+  pickerNextIndex, pickerEnterAction, dirPickerNote,
 } = require("../static/dirpicker.js");
 
 // The picker has three input classes and they decide everything downstream:
@@ -135,11 +136,16 @@ test("a selection in the way is collapsed before a pointer gesture starts", () =
   assert.strictEqual(pickerCollapseAt(6, 14), 14);
 });
 
-test("collapsing lands on the end, so an overflowing field does not scroll", () => {
-  // select() scrolls an overflowing field to show its tail, so the end is
-  // already on screen. Collapsing to 0 would scroll the text under the pointer
-  // between the physical mousedown and the browser's hit-test, landing the
-  // caret on a different character than the one clicked.
+test("collapsing lands on the end, which cannot scroll the field under the pointer", () => {
+  // The end is where select() already left the caret, so moving it there asks
+  // the field to scroll nowhere. Collapsing to 0 asks it to jump to its head,
+  // and a field that scrolls between the physical mousedown and the browser's
+  // hit-test lands the caret on a different character than the one clicked.
+  //
+  // What was NOT observed: the browser pass measured scrollLeft = 0 throughout
+  // on a 50-character value in a ~242px box, so that field never auto-scrolled
+  // to its tail and the hazard was not reproduced there. The end is pinned here
+  // because it is the free choice, not because the scroll was seen.
   assert.strictEqual(pickerCollapseAt(0, 50), 50);
   assert.notStrictEqual(pickerCollapseAt(0, 50), 0);
 });
@@ -149,4 +155,81 @@ test("an already-collapsed caret is left exactly where it is", () => {
   // selection here would move a caret the user placed on a previous click.
   assert.strictEqual(pickerCollapseAt(17, 17), null);
   assert.strictEqual(pickerCollapseAt(0, 0), null);
+});
+
+// Arrow-key wrapping. Every fresh render leaves the highlight at -1, so "no
+// highlight yet" is the COMMON starting state here, not an edge case.
+
+test("the first ArrowUp lands on the last row, not the second-to-last", () => {
+  // The naive (from + delta + n) % n reads -1 as a real position: (-1-1+5)%5
+  // is 3, which silently skipped the last row on every fresh list.
+  assert.strictEqual(pickerNextIndex(-1, -1, 5), 4);
+  assert.strictEqual(pickerNextIndex(-1, -1, 1), 0);
+});
+
+test("the first ArrowDown still lands on the first row", () => {
+  assert.strictEqual(pickerNextIndex(-1, 1, 5), 0);
+  assert.strictEqual(pickerNextIndex(-1, 1, 1), 0);
+});
+
+test("wrapping from a real position is unchanged in both directions", () => {
+  assert.strictEqual(pickerNextIndex(0, 1, 5), 1);
+  assert.strictEqual(pickerNextIndex(4, 1, 5), 0);
+  assert.strictEqual(pickerNextIndex(0, -1, 5), 4);
+  assert.strictEqual(pickerNextIndex(3, -1, 5), 2);
+});
+
+test("an empty list has nothing to highlight", () => {
+  assert.strictEqual(pickerNextIndex(-1, 1, 0), -1);
+  assert.strictEqual(pickerNextIndex(-1, -1, 0), -1);
+});
+
+// Enter with NO row highlighted. "Take row 0" is only defensible when row 0 is
+// the best match for something the user actually typed.
+
+test("Enter on a typed absolute path asks the server what it is", () => {
+  assert.strictEqual(pickerEnterAction("path", 0), "resolve");
+  // Even with rows on screen, a path outranks them.
+  assert.strictEqual(pickerEnterAction("path", 7), "resolve");
+});
+
+test("Enter on a fuzzy query takes the best match", () => {
+  assert.strictEqual(pickerEnterAction("fuzzy", 3), "first");
+});
+
+test("Enter on a fuzzy query with no hits does nothing", () => {
+  assert.strictEqual(pickerEnterAction("fuzzy", 0), "none");
+});
+
+test("Enter on a blank box does NOT re-root at the first workspace", () => {
+  // "empty" mode renders the workspace list, which the user never searched
+  // for. Falling through to row 0 there re-rooted at home the instant Enter
+  // was pressed on an empty box, with nothing highlighted to explain the jump.
+  assert.strictEqual(pickerEnterAction("empty", 4), "none");
+  assert.strictEqual(pickerEnterAction("empty", 0), "none");
+});
+
+// The picker must never answer "no matches", "search broke" and "offline" with
+// the same silent disappearance — especially since the index suppresses vendor/
+// subtrees (~39% of directories), making zero hits a NORMAL outcome.
+
+test("no matches says so instead of closing the list", () => {
+  assert.strictEqual(dirPickerNote(0, false, false), "no matching folders");
+});
+
+test("a failed search is distinguishable from an empty one", () => {
+  assert.strictEqual(dirPickerNote(0, false, true), "folder search unavailable");
+  // Failure wins even if the walk had reported truncation earlier.
+  assert.strictEqual(dirPickerNote(0, true, true), "folder search unavailable");
+});
+
+test("a truncated index is surfaced alongside real hits", () => {
+  // dirsTruncated was computed, bug-fixed and unit-tested server-side, then
+  // discarded by the client. Hits plus a warning, not hits alone.
+  assert.strictEqual(dirPickerNote(12, true, false),
+    "index truncated: some folders are not listed");
+});
+
+test("a complete result set carries no note at all", () => {
+  assert.strictEqual(dirPickerNote(12, false, false), "");
 });

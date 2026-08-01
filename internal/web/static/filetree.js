@@ -1,7 +1,9 @@
 "use strict";
 
 // File tree: lazy directory browser rooted at a workspace. Clicking a file opens
-// it in the focused cell (openFile). A paste-path input opens any absolute path.
+// it in the focused cell (openFile). One searchable control picks the root —
+// fuzzy-search a directory or paste an absolute path into the same box (see
+// dirpicker.js); a pasted path that turns out to be a FILE is opened.
 // The root auto-follows the focused TAB — a terminal's cwd or the directory of
 // the file a viewer is showing (see treeFollowTarget / syncTreeToRoot) — while a
 // manual pick from the dropdown survives until a *different* tab is focused.
@@ -484,6 +486,19 @@ async function syncTreeToRoot(root, key) {
   if (key && key === lastSyncedKey) return; // already following this tab (respect manual pick)
   lastSyncedKey = key || null;
   setFtRoot(root);
+  // setFtRoot writes the input's value programmatically, which fires no "input"
+  // event — so nothing bumps dpSeq or clears dpTimer, and a fuzzy search
+  // scheduled just before this tab-focus change lands AFTERWARDS and renders
+  // hits underneath a path value. Enter then finds rows, no highlight and a
+  // non-fuzzy value, and re-roots at whatever that stale search returned.
+  //
+  // Not inside setFtRoot: initFileTree calls that before initDirPicker, when
+  // dpInput is still null. Here it can ALSO run pre-init — tabs.js's
+  // syncFocusedTree reaches this during initFileTree's await, the same restore
+  // race the seeding block at the foot of initFileTree exists to repair — so
+  // dpClose carries its own uninitialised guard rather than this call site
+  // pretending the ordering is guaranteed.
+  dpClose();
   await ftLoadRoot();
 }
 

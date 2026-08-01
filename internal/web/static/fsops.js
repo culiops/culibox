@@ -114,9 +114,10 @@ function shortPath(p, home) {
 }
 
 // relativeTo renders `path` relative to `root`. It is the ONE definition of
-// "relative path" in this app: the tree is rooted at whatever #ft-root has
-// selected, while /api/fs/search returns paths relative to HOME, so a second
-// definition anywhere would make two identically-labelled buttons disagree.
+// "relative path" in this app: the tree is rooted at whatever directory the
+// root picker (#ft-root-input) last resolved to, while /api/fs/search returns
+// paths relative to HOME, so a second definition anywhere would make two
+// identically-labelled buttons disagree.
 //
 // A path outside the root falls back to shortPath's ~/… form rather than to the
 // bare absolute path: returning the same string as the "Copy path" button next

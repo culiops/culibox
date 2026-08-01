@@ -106,8 +106,9 @@ test("a file never reports contents, even if a measurement is passed", () => {
 });
 
 // relativeTo is the single definition of "relative path" in the app. The tree is
-// rooted at #ft-root's selection while /api/fs/search returns paths relative to
-// HOME, so without one shared rule the two surfaces would disagree.
+// rooted at whatever the root picker (#ft-root-input) last resolved to, while
+// /api/fs/search returns paths relative to HOME, so without one shared rule the
+// two surfaces would disagree.
 test("relativeTo strips the root", () => {
   assert.strictEqual(relativeTo("/home/claude/proj", "/home/claude/proj/a/b.js"), "a/b.js");
 });

@@ -91,30 +91,89 @@ function pickerShouldSelectAll(value, collapsed) {
 // pickerCollapseAt answers the question a pointer gesture has to ask BEFORE the
 // browser gets to interpret it: "is there a selection in the way?"
 //
-// Measured, not assumed (browser pass at df786d8): a mousedown that lands
-// INSIDE an existing selection is not read as "start selecting here" at all —
-// the browser treats it as grabbing the selected text, so no caret is placed,
-// mousemove extends nothing, and the selection comes out of the gesture exactly
-// as it went in. That was observed with no script touching the selection during
-// the gesture, which is what rules out "our select() broke it" as the real
-// cause: the field merely being fully selected at mousedown is enough on its
-// own. And the field is fully selected in steady state, because that is what
-// makes typing replace a path instead of splicing into it — so every first drag
-// after a click was landing in exactly that trap.
+// Measured, not assumed. The decisive measurement is Probe 1 of the browser
+// pass at 4a3bd92 — a capture-phase trace of one drag over an already-fully-
+// selected field, which recorded mousedown at offsets 0,50 (the full selection,
+// untouched), then mouseup at 16,16 and click at 16,16. So the drag extended
+// NOTHING: the browser collapsed the selection to a caret at the release point
+// and reported a plain click. (The earlier pass at df786d8 saw only the
+// symptom — "the drag selects nothing" — not which event the selection
+// survived to.) That trace was taken with no script touching the selection
+// during the gesture, which is what rules out "our select() broke it": the
+// field merely being fully selected at mousedown is enough on its own. It is
+// also documented Chrome/Firefox behaviour — a mousedown inside a selection
+// initiates a text-DRAG of that selection rather than a new selection, which is
+// precisely why the gesture cannot extend anything.
+//
+// And the field is fully selected in steady state, because that is what makes
+// typing replace a path instead of splicing into it — so every first drag after
+// a click was landing in exactly that trap.
 //
 // Collapsing here removes the precondition, and the browser's own caret
 // placement (which runs later in the same default action) then puts the caret
 // where the user actually clicked.
 //
 // Returns the caret index to collapse to, or null if there is nothing in the
-// way. It collapses to the END, not the start: after select() an overflowing
-// field is scrolled to show the tail, so the end is already on screen and
-// moving the caret there scrolls nothing. Collapsing to 0 would scroll the
-// field under the pointer between the physical mousedown and the browser's
-// hit-test, which can land the caret on a different character than the one
-// clicked.
+// way. It collapses to the END, not the start, because the end is the one
+// choice that CANNOT scroll the box between the physical mousedown and the
+// browser's hit-test: setSelectionRange(end, end) leaves the caret where
+// select() already left it, whereas collapsing to 0 asks the field to jump to
+// its head, and a field that scrolls under a pointer mid-gesture lands the
+// caret on a different character than the one clicked.
+//
+// Note what was NOT observed: the browser pass measured scrollLeft = 0
+// throughout, on a 50-character value in a ~242px box — so in the one
+// environment measured the field did not auto-scroll to its tail after select()
+// and the hazard above was never reproduced. The choice stands because it is
+// free and cannot make things worse, not because the scroll was seen.
 function pickerCollapseAt(start, end) {
   return start === end ? null : end;
+}
+
+// pickerNextIndex wraps the arrow-key highlight. `from` is -1 whenever nothing
+// is highlighted, which is the state EVERY fresh render leaves — so -1 is the
+// common case here, not an edge one.
+//
+// It has to be special-cased. The naive (from + delta + n) % n reads -1 as a
+// real position and sends the first ArrowUp to (n - 2), the second-to-last row,
+// skipping the last one entirely. ArrowDown got away with it by arithmetic
+// accident: (-1 + 1 + n) % n is 0, the answer we wanted anyway.
+function pickerNextIndex(from, delta, n) {
+  if (n <= 0) return -1;
+  if (from < 0) return delta > 0 ? 0 : n - 1;
+  return (from + delta + n) % n;
+}
+
+// pickerEnterAction decides what Enter does when NO row is highlighted. (With a
+// highlight the answer is never in doubt: take that row.)
+//
+//   "resolve" → a typed absolute path; only the server can say what it is.
+//   "first"   → the top fuzzy hit. This is a defensible guess ONLY in fuzzy
+//               mode, where row 0 is the best match for what was typed.
+//   "none"    → do nothing. In "empty" mode the rows are the workspace list,
+//               which the user never searched for: taking row 0 there re-roots
+//               at home the instant Enter is pressed on a blank box, with
+//               nothing visibly highlighted to explain why the tree moved.
+function pickerEnterAction(mode, rowCount) {
+  if (mode === "path") return "resolve";
+  if (mode === "fuzzy" && rowCount > 0) return "first";
+  return "none";
+}
+
+// dirPickerNote is the picker's answer to "why is this list not a list of
+// folders?". Without it, no-matches / HTTP-error / offline all rendered
+// identically — the dropdown simply vanished — and the user could not tell "no
+// such folder" from "search is broken".
+//
+// It is not a hypothetical: the index deliberately suppresses vendor/ subtrees,
+// measured at 6,520 of 16,567 directories (~39%), so typing the name of such a
+// folder is a NORMAL way to get zero rows. `truncated` is the same signal
+// palette.js already surfaces for files, and the server has been computing it
+// for directories all along.
+function dirPickerNote(count, truncated, failed) {
+  if (failed) return "folder search unavailable";
+  if (!count) return "no matching folders";
+  return truncated ? "index truncated: some folders are not listed" : "";
 }
 
 // Everything below touches the DOM and is covered by the behavioural pass, not
@@ -188,10 +247,20 @@ function initDirPicker(opts) {
   // On document, not the input: a mousedown that starts on the input can be
   // released anywhere, and that release still has to end the gesture. Firing
   // for every mouseup also clears a flag left behind by a gesture that never
-  // produced a click at all.
+  // produced a click at all. Belt-and-braces only — the focus handler below is
+  // what actually guarantees the flag cannot outlive one gesture.
   document.addEventListener("mouseup", () => { dpPointerGesture = false; });
   dpInput.addEventListener("focus", () => {
-    if (!dpPointerGesture) dpInput.select();
+    // Read AND clear, because the flag has exactly one consumer: this line.
+    // Leaving the clearing to the document mouseup alone stranded it — a press
+    // released outside the window delivers no mouseup, so the flag stayed true
+    // and the NEXT focus (a Tab, which has no click coming to finish the job)
+    // skipped select(); typing then spliced into the path, which is the exact
+    // defect this control spent five rounds closing. Nothing else reads the
+    // flag, so consuming it here is complete.
+    const pointer = dpPointerGesture;
+    dpPointerGesture = false;
+    if (!pointer) dpInput.select();
     dpReopen();
   });
   dpInput.addEventListener("click", () => {
@@ -237,18 +306,30 @@ async function dpSearch(q, seq) {
   const ac = new AbortController();
   dpAbort = ac;
   const timer = setTimeout(() => ac.abort(), DP_FETCH_MS);
-  let data = null;
+  let data = null, failed = false;
   try {
     const res = await fetch("/api/fs/search?kind=dir&limit=40&q=" + encodeURIComponent(q), { signal: ac.signal });
     if (res.ok) data = await res.json();
-  } catch (_) { /* aborted or offline: fall through to the empty render */ }
-  finally { clearTimeout(timer); }
+    else failed = true;
+  } catch (_) {
+    // Offline, or the DP_FETCH_MS timeout fired. An abort from dpQuery or
+    // dpClose also lands here, but both bump dpSeq first, so the guard below
+    // returns before this ever reaches the screen as a failure.
+    failed = true;
+  } finally { clearTimeout(timer); }
   if (seq !== dpSeq) return;  // a newer query already won
   dpAbort = null;
-  dpRender(pickerRows({ mode: "fuzzy", hits: (data && data.results) || [] }));
+  const broke = failed || !data;
+  const rows = broke ? [] : pickerRows({ mode: "fuzzy", hits: data.results || [] });
+  dpRender(rows, dirPickerNote(rows.length, !!(data && data.truncated), broke));
 }
 
-function dpRender(rows) {
+// `note`, when non-empty, renders one extra row that is NOT in dpRows — so
+// dpMove cannot arrow onto it and dpChoose cannot pick it (see dirPickerNote).
+// It is appended LAST for a reason: dpMove reaches its element by
+// dpList.children[dpActive], so anything ahead of the rows would shift every
+// index by one.
+function dpRender(rows, note) {
   dpRows = rows; dpActive = -1;
   // A shorter or longer result set recycles ids: leaving a stale
   // aria-activedescendant would either point at nothing or, worse, at a row
@@ -270,7 +351,19 @@ function dpRender(rows) {
     el.onclick = () => dpChoose(i);
     return el;
   }));
-  dpOpen(rows.length > 0);
+  if (note) {
+    const el = document.createElement("div");
+    el.className = "ft-note";
+    // role="option" + aria-disabled keeps the listbox's children all options
+    // (a bare <div> in a listbox is invalid ARIA) while still telling assistive
+    // tech this one cannot be chosen. Deliberately no id: aria-activedescendant
+    // is only ever set from dpMove, so it can never point here.
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-disabled", "true");
+    el.textContent = note;
+    dpList.append(el);
+  }
+  dpOpen(rows.length > 0 || !!note);
 }
 
 function dpOpen(show) {
@@ -303,6 +396,14 @@ function dpOpen(show) {
 }
 
 function dpClose() {
+  // Callable before initDirPicker has run. syncTreeToRoot calls this, and
+  // tabs.js's syncFocusedTree can reach syncTreeToRoot during initFileTree's
+  // `await api("/api/workspaces")` — ftRootSel is already assigned by then but
+  // initDirPicker is not, which is the boot-restore race filetree.js documents
+  // where it re-asserts the root. There is nothing open to close in that
+  // window, so returning is the whole correct behaviour; without it dpOpen
+  // throws on a null dpInput and takes the restore down with it.
+  if (!dpInput || !dpList) return;
   dpOpen(false);
   // Escape and an outside click both come straight here, bypassing dpQuery's
   // own cancel-on-new-query logic — without this a debounced search or an
@@ -321,7 +422,7 @@ function dpMove(delta) {
   if (!dpRows.length) return;
   const prev = dpList.children[dpActive];
   if (prev) prev.setAttribute("aria-selected", "false");
-  dpActive = (dpActive + delta + dpRows.length) % dpRows.length;
+  dpActive = pickerNextIndex(dpActive, delta, dpRows.length);
   const el = dpList.children[dpActive];
   if (el) {
     el.setAttribute("aria-selected", "true");
@@ -346,8 +447,9 @@ function dpKeydown(e) {
   e.preventDefault();
   if (dpActive >= 0) { dpChoose(dpActive); return; }
   const c = classifyPickerQuery(dpInput.value);
-  if (c.mode === "path") dpResolvePath(c.value);
-  else if (dpRows.length) dpChoose(0);
+  const act = pickerEnterAction(c.mode, dpRows.length);
+  if (act === "resolve") dpResolvePath(c.value);
+  else if (act === "first") dpChoose(0);
 }
 
 // A typed absolute path is resolved by /api/fs/list, which already answers this
@@ -394,5 +496,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     classifyPickerQuery, pickerRows,
     pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
+    pickerNextIndex, pickerEnterAction, dirPickerNote,
   };
 }
