@@ -121,21 +121,22 @@ test("serializeLayout captures panes, active tab, focus and cap", () => {
   );
 });
 
-test("serializeLayout skips viewer tabs and cells that hold only viewers", () => {
-  const viewer = { kind: "viewer", path: "/x" };
+test("serializeLayout keeps viewer-only cells, so pane indexes do not shift", () => {
+  const viewer = { kind: "viewer", path: "/x", scroll: 0 };
   const a = { kind: "terminal", id: "a" };
   const b = { kind: "terminal", id: "b" };
   const c0 = { tabs: [a], activeTab: a };
-  const c1 = { tabs: [viewer], activeTab: viewer };   // dropped — no terminal in it
+  const c1 = { tabs: [viewer], activeTab: viewer };
   const c2 = { tabs: [viewer, b], activeTab: b };
   const out = serializeLayout({ cells: [c0, c1, c2], focused: c2, maximized: c2, cap: 4 });
   assert.deepStrictEqual(out.cells, [
     { tabs: [{ id: "a" }], active: 0 },
-    { tabs: [{ id: "b" }], active: 0 },
+    { tabs: [{ path: "/x", scroll: 0 }], active: 0 },
+    { tabs: [{ path: "/x", scroll: 0 }, { id: "b" }], active: 1 },
   ]);
-  // The viewer-only cell is gone, so the focused/maximized cell moved 2 → 1.
-  assert.strictEqual(out.focused, 1);
-  assert.strictEqual(out.maximized, 1);
+  // No cell is dropped now, so the focused/maximized pane keeps index 2.
+  assert.strictEqual(out.focused, 2);
+  assert.strictEqual(out.maximized, 2);
 });
 
 test("serializeLayout records a maximized pane, and reconcile brings it back", () => {
@@ -161,10 +162,7 @@ test("a serialized layout round-trips through reconcile unchanged", () => {
   });
 });
 
-test("serializeLayout returns null when no terminal is open", () => {
-  const viewer = { kind: "viewer", path: "/x" };
-  const c0 = { tabs: [viewer], activeTab: viewer };
-  assert.strictEqual(serializeLayout({ cells: [c0], focused: c0, maximized: null, cap: 4 }), null);
+test("serializeLayout returns null for an empty grid", () => {
   assert.strictEqual(serializeLayout({ cells: [], focused: null, maximized: null, cap: 4 }), null);
 });
 
@@ -194,4 +192,103 @@ test("a corrupt stored value reads as null instead of throwing", () => {
 test("an absent key reads as null", () => {
   fakeStorage();
   assert.strictEqual(readLayout(), null);
+});
+
+// --- viewer tabs in the snapshot ---------------------------------------------
+//
+// A viewer is stored as its path plus how far down the file was read, so a
+// reload comes back to the same place in the same file. Unlike a terminal it has
+// nothing to reconcile against — a path is not in the session list — so a file
+// deleted since the last visit is caught by the restored tab's own first read.
+
+const view = (path, scroll) => ({ kind: "viewer", path, scroll });
+const term = (id) => ({ kind: "terminal", id });
+
+test("serializeLayout stores a viewer as its path and how far it was read", () => {
+  const v = view("/home/u/a.md", 420);
+  const t = term("a");
+  const c0 = { tabs: [t, v], activeTab: v };
+  const out = serializeLayout({ cells: [c0], focused: c0, maximized: null, cap: 4 });
+  assert.deepStrictEqual(out.cells, [
+    { tabs: [{ id: "a" }, { path: "/home/u/a.md", scroll: 420 }], active: 1 },
+  ]);
+});
+
+test("a cell holding only viewers is kept, and so is a grid with no session", () => {
+  const v = view("/x.md", 10);
+  const c0 = { tabs: [v], activeTab: v };
+  const out = serializeLayout({ cells: [c0], focused: c0, maximized: null, cap: 4 });
+  assert.deepStrictEqual(out.cells, [{ tabs: [{ path: "/x.md", scroll: 10 }], active: 0 }]);
+  assert.strictEqual(out.focused, 0);
+});
+
+test("serializeLayout returns null only when nothing at all is restorable", () => {
+  const junk = { kind: "viewer", path: "" }; // a viewer with no path
+  const c0 = { tabs: [junk], activeTab: junk };
+  assert.strictEqual(serializeLayout({ cells: [c0], focused: c0, maximized: null, cap: 4 }), null);
+});
+
+test("a stored scroll offset is coerced to a sane pixel count", () => {
+  const mk = (scroll) => {
+    const v = view("/x.md", scroll);
+    return serializeLayout({ cells: [{ tabs: [v], activeTab: v }], focused: null, maximized: null, cap: 4 })
+      .cells[0].tabs[0].scroll;
+  };
+  assert.strictEqual(mk(undefined), 0);
+  assert.strictEqual(mk(NaN), 0);
+  assert.strictEqual(mk(-5), 0);
+  assert.strictEqual(mk("nope"), 0);
+  assert.strictEqual(mk(12.7), 13);
+  assert.strictEqual(mk("300"), 300);
+});
+
+test("reconcile keeps a viewer without consulting the session list", () => {
+  const plan = reconcileLayout(
+    snap([{ tabs: [{ id: "gone" }, { path: "/x.md", scroll: 7 }], active: 0 }]),
+    live("other"),
+  );
+  assert.deepStrictEqual(plan.cells, [{ tabs: [{ path: "/x.md", scroll: 7 }], active: 0 }]);
+});
+
+test("reconcile drops a viewer entry with no usable path", () => {
+  const plan = reconcileLayout(
+    snap([{ tabs: [{ path: "" }, { path: 42 }, { id: "a" }], active: 0 }]),
+    live("a"),
+  );
+  assert.deepStrictEqual(plan.cells, [{ tabs: [{ id: "a" }], active: 0 }]);
+});
+
+test("the same file open in two panes is kept once, like a session", () => {
+  const plan = reconcileLayout(
+    snap([{ tabs: [{ path: "/x.md", scroll: 3 }], active: 0 },
+      { tabs: [{ path: "/x.md", scroll: 9 }, { id: "a" }], active: 0 }]),
+    live("a"),
+  );
+  assert.deepStrictEqual(plan.cells, [
+    { tabs: [{ path: "/x.md", scroll: 3 }], active: 0 },
+    { tabs: [{ id: "a" }], active: 0 },
+  ]);
+});
+
+test("the active tab follows identity across a mixed cell whose session died", () => {
+  const plan = reconcileLayout(
+    snap([{ tabs: [{ id: "gone" }, { path: "/a.md", scroll: 1 }, { path: "/b.md", scroll: 2 }], active: 2 }]),
+    live("x"),
+  );
+  assert.strictEqual(plan.cells[0].active, 1); // /b.md, now at index 1
+});
+
+test("a viewer scroll offset survives a serialize/reconcile round trip", () => {
+  const v = view("/deep.md", 1234);
+  const t = term("a");
+  const c0 = { tabs: [t, v], activeTab: v };
+  const out = serializeLayout({ cells: [c0], focused: c0, maximized: null, cap: 2 });
+  const plan = reconcileLayout(out, live("a"));
+  assert.deepStrictEqual(plan.cells, out.cells);
+  assert.strictEqual(plan.cells[0].tabs[1].scroll, 1234);
+});
+
+test("a v1 snapshot written before viewers existed still restores", () => {
+  const plan = reconcileLayout(snap([cell(["a", "b"], 1)]), live("a", "b"));
+  assert.deepStrictEqual(plan.cells, [{ tabs: [{ id: "a" }, { id: "b" }], active: 1 }]);
 });
