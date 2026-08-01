@@ -885,6 +885,33 @@ func TestPerRootDirCapReportsTruncation(t *testing.T) {
 	}
 }
 
+// The other half of the same flag, and the one emit CANNOT cover. When both
+// budgets for a top-level are spent the conjunction prunes the subtree
+// UNVISITED, so a marker inside it is never observed and emit is never called
+// for that candidate at all — a refusal flag cannot report what it never
+// received.
+//
+// The sibling above leaves maxPerRoot at its default, so the conjunction never
+// fires there and it exercises emit's refusal path only. That gap is exactly how
+// this false negative slipped through review.
+func TestPrunedSubtreeReportsTruncation(t *testing.T) {
+	home := t.TempDir()
+	for i := 0; i < 8; i++ {
+		mustWrite(t, filepath.Join(home, "big", fmt.Sprintf("p%02d", i), "go.mod"), "module p")
+	}
+	ix := newFileIndex(home)
+	ix.maxPerRootDirs = 3
+	ix.maxPerRoot = 1 // both budgets spend, so the conjunction prunes
+
+	dirs, dirsTrunc := ix.snapshot(kindDirs)
+	if len(dirs) >= 9 {
+		t.Fatalf("setup did not actually prune anything: %v", rels(dirs))
+	}
+	if !dirsTrunc {
+		t.Fatalf("a project pruned UNVISITED must report the DIRECTORY set truncated (got dirs=%v)", rels(dirs))
+	}
+}
+
 // The deadline is the other kind of stop, and the distinction is the whole
 // point: budget exhaustion ends the walk outright, so both sets really ARE cut
 // short mid-tree and both flags must say so. A truncated list presented as

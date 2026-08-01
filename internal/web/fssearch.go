@@ -414,19 +414,36 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			// that spend their file budget are the big repos — the ones most
 			// worth searching.
 			//
-			// dirsTrunc is deliberately NOT set here, though filesTrunc is:
-			// emit owns dirsTrunc. This branch fires for every directory
-			// visited under a spent top-level, including ones that are not
-			// candidates under the project rules at all — flagging here would
-			// report the directory set truncated because of a folder that would
-			// never have been offered. emit already flags it when a real
-			// candidate is dropped.
+			// The per-visit tests below flag filesTrunc but NOT dirsTrunc:
+			// emit owns dirsTrunc for a REFUSED CANDIDATE. Merely visiting a
+			// directory under a top-level whose directory budget is spent says
+			// nothing — this branch is reached for every directory down there,
+			// including ones the project rules would never have offered, so
+			// flagging per visit reports the set truncated because of a folder
+			// that was never a candidate.
+			//
+			// The conjunction below is the exception, and it is not the same
+			// claim. See there.
 			fileBudgetSpent := perRoot[top] >= b.maxPerRoot
 			dirBudgetSpent := perRootDirs[top] >= b.maxPerRootDirs
 			if fileBudgetSpent {
 				filesTrunc = true
 			}
 			if fileBudgetSpent && dirBudgetSpent {
+				// This subtree is pruned UNVISITED, so any marker inside it is
+				// never observed and emit is never called for that candidate at
+				// all. "emit flags it when a candidate is dropped" holds only
+				// for candidates that REACH emit — which is exactly what this
+				// prune prevents, so a refusal flag cannot report what it never
+				// received.
+				//
+				// This is the one other place directories genuinely disappear,
+				// so it flags here, exactly as the deadline does and for the
+				// same reason: both destroy candidates outside emit's sight. A
+				// truncated list presented as complete is the failure this file
+				// exists to prevent, and it is strictly worse than the opposite
+				// error.
+				dirsTrunc = true
 				return fs.SkipDir
 			}
 			// Rule 1: a direct, NON-HIDDEN child of $HOME is offered without
