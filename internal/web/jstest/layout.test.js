@@ -288,6 +288,31 @@ test("a viewer scroll offset survives a serialize/reconcile round trip", () => {
   assert.strictEqual(plan.cells[0].tabs[1].scroll, 1234);
 });
 
+test("an entry carrying BOTH keys leaves in the shape it was classified as", () => {
+  // tabKey reads `path` first, so {id, path} is a viewer and must not be
+  // liveness-checked as a terminal. The inverse — a non-string path — is a
+  // terminal, and must NOT come back out as {path: 42}: applyPlan would hand
+  // that to new ViewerTab(42) and the restore would throw half-built.
+  const plan = reconcileLayout(
+    snap([{ tabs: [{ id: "gone", path: 42 }, { id: "dead", path: "/v.md", scroll: 5 }], active: 0 }]),
+    live("a"),
+  );
+  assert.deepStrictEqual(plan.cells, [{ tabs: [{ path: "/v.md", scroll: 5 }], active: 0 }]);
+});
+
+test("a hand-edited scroll offset is coerced on the way OUT of reconcile too", () => {
+  // The reconcile side is the one that reads user-editable localStorage, so it
+  // is the side that actually has to defend scrollTop.
+  const mk = (scroll) => reconcileLayout(
+    snap([{ tabs: [{ path: "/x.md", scroll }], active: 0 }]), live("a"),
+  ).cells[0].tabs[0].scroll;
+  assert.strictEqual(mk(-1), 0);
+  assert.strictEqual(mk("1e999"), 0);   // Infinity is not a pixel count
+  assert.strictEqual(mk(null), 0);
+  assert.strictEqual(mk({}), 0);
+  assert.strictEqual(mk(19.4), 19);
+});
+
 test("a v1 snapshot written before viewers existed still restores", () => {
   const plan = reconcileLayout(snap([cell(["a", "b"], 1)]), live("a", "b"));
   assert.deepStrictEqual(plan.cells, [{ tabs: [{ id: "a" }, { id: "b" }], active: 1 }]);

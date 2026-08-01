@@ -37,6 +37,7 @@ class ViewerTab {
     // may close itself when its file turns out to be gone (see load).
     this.restored = !!(opts && opts.restored);
     this.firstLoad = true;
+    this.applying = false;  // true while applyScroll's own assignment is echoing back
     this.fontPx = null;     // transient live-zoom size (null = follow the global default)
     const ext0 = extOf(path);
     // which CSS var this viewer's text reads (null for images → zoom is a no-op)
@@ -88,13 +89,24 @@ class ViewerTab {
     this.toolbar.append(pathLbl);
     this.content = document.createElement("div");
     this.content.className = "viewer-content";
-    // isConnected is what makes this correct, not an optimisation. A scroll
-    // event queued just before a detach is dispatched AFTER it, against an
-    // element that now reads scrollTop 0 — so an unguarded listener would
-    // overwrite the position with the top exactly when the user scrolls and
-    // switches tab in the same frame.
+    // Three things have to be excluded here, because scrollTop cannot say which
+    // of them moved it — only this listener knows:
+    //
+    // 1. isConnected — a scroll event queued just before a detach is dispatched
+    //    AFTER it, against an element that now reads 0. Without this, scrolling
+    //    and switching tab in the same frame saves the top of the file.
+    // 2. showingMsg — msg() replaces the scroller's children with one line, so
+    //    the browser CLAMPS the offset to 0 and reports it as a scroll. A poll
+    //    that catches a file mid-rewrite ("empty file"), or one failed ⟳, would
+    //    otherwise throw away the position the file comes back to.
+    // 3. applying — applyScroll's own assignment is echoed back as a scroll
+    //    event, and it is clamped when the content is not yet its final height
+    //    (markdown whose images have not loaded). Recording the clamp would
+    //    ratchet a restored position toward the top on every reload.
     this.content.addEventListener("scroll", () => {
-      if (this.el.isConnected) this.scroll = this.content.scrollTop;
+      if (this.applying || this.showingMsg || !this.el.isConnected) return;
+      this.scroll = this.content.scrollTop;
+      markLayoutUnsaved(); // scrolling schedules no layout write; pagehide needs to know
     }, { passive: true });
     this.el.append(this.toolbar, this.content);
     this.load();
@@ -112,8 +124,15 @@ class ViewerTab {
   // where assigning scrollTop is a silent no-op and the next real attach is
   // what has to restore.
   onAttach() { this.applyScroll(); }
+  // `applying` is cleared on the next frame, not synchronously: a scroll event
+  // caused by this assignment is dispatched during that frame's scroll steps,
+  // which run BEFORE animation-frame callbacks. Clearing it any sooner would
+  // let the echo through.
   applyScroll() {
-    if (this.content.scrollTop !== this.scroll) this.content.scrollTop = this.scroll;
+    if (this.content.scrollTop === this.scroll) return;
+    this.applying = true;
+    this.content.scrollTop = this.scroll;
+    requestAnimationFrame(() => { this.applying = false; });
   }
   dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
   toggleAuto(btn) {
@@ -150,7 +169,8 @@ class ViewerTab {
   }
 
   // load fetches + renders the file. `poll` (auto-reload tick) suppresses status
-  // churn, skips re-render when the content is unchanged, and preserves scroll.
+  // churn and skips the re-render when the content is unchanged. Scroll is no
+  // longer its business: every render path ends in applyScroll().
   async load(poll) {
     // Claimed synchronously so an auto-reload tick that overlaps the first read
     // cannot also count as "first".
@@ -289,6 +309,12 @@ class ViewerTab {
     frag.querySelectorAll("img").forEach((img) => {
       const src = img.getAttribute("src") || "";
       if (!/^(https?:|data:|\/)/.test(src)) img.setAttribute("src", "/api/fs/read?path=" + encodeURIComponent(dir + src));
+      // An <img> here reserves no height until it loads, so the document is
+      // shorter than its final self when load() applies the offset and the
+      // browser clamps it. Re-apply as each image settles. Safe to repeat: if
+      // the reader has scrolled since, this.scroll is already where they are and
+      // applyScroll does nothing.
+      img.addEventListener("load", () => this.applyScroll());
     });
     // marked v12 dropped the highlight option: highlight fenced blocks here (hljs v11 API).
     if (window.hljs) frag.querySelectorAll("pre code").forEach((el) => { try { hljs.highlightElement(el); } catch (_) {} });

@@ -1,9 +1,9 @@
 "use strict";
 
-// Layout persistence: the grid (panes, their terminal tabs, the active tab per
-// pane, focus, cap, maximized) is snapshotted to localStorage on every layout
-// change and replayed on the next boot, so a refresh brings the console back
-// as it was instead of an empty cell.
+// Layout persistence: the grid (panes, the tabs in them — sessions and open
+// files alike — the active tab per pane, focus, cap, maximized) is snapshotted
+// to localStorage on every layout change and replayed on the next boot, so a
+// refresh brings the console back as it was instead of an empty cell.
 //
 // Everything that decides *what* is stored or restored lives here as a pure
 // function, so it is testable under `node --test`; tabs.js only wires it to the
@@ -101,7 +101,10 @@ function runningIds(sessions) {
 // reconcileLayout filters a stored snapshot against the live session list and
 // returns a plan the grid can be rebuilt from, or null for "boot normally".
 // Null covers every unusable input: absent, corrupt, wrong version, or nothing
-// left after filtering, so a bad entry can never break boot.
+// left after filtering. A malformed ENTRY is dropped rather than returned, so
+// boot survives a hand-edited or half-written snapshot — which is only true as
+// long as every entry leaves here in the shape its tabKey classification
+// promised; see the note at the push below.
 function reconcileLayout(saved, sessions) {
   if (!saved || typeof saved !== "object" || saved.v !== LAYOUT_V) return null;
   if (!Array.isArray(saved.cells)) return null;
@@ -121,7 +124,12 @@ function reconcileLayout(saved, sessions) {
       // deleted since the last visit is caught by the tab's own first read.
       if (key[0] === "t" && !live.has(t.id)) continue;
       seen.add(key);
-      tabs.push(t.path ? { path: t.path, scroll: clampScroll(t.scroll) } : { id: t.id });
+      // Emit on the SAME discriminator tabKey classified with. Testing `t.path`
+      // for truthiness here instead would let a corrupt entry carrying both keys
+      // — `{id: "sess-1", path: 42}` — pass the terminal liveness check above and
+      // then be emitted as a viewer, which applyPlan hands to `new ViewerTab(42)`
+      // and which throws out of the restore, half-building the grid.
+      tabs.push(key[0] === "v" ? { path: t.path, scroll: clampScroll(t.scroll) } : { id: t.id });
     }
     if (!tabs.length) return;
     // Follow the active tab by identity: after dropping dead tabs its old index
