@@ -976,10 +976,21 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	if runtime == "" { // sidecar entries written before containment existed
 		runtime = config.RuntimeHost
 	}
+	// Re-resolve the agent bin from its name: the sidecar does not store it, and
+	// without this a session that survived a daemon restart would have an empty
+	// Bin — disabling claude-only features (usage) for every reconciled session,
+	// i.e. almost all of them under abduco persistence.
+	bin := ""
+	if br, ok := m.launcher.(BinResolver); ok {
+		if b, err := br.BinFor(launcher.SpawnSpec{Agent: md.Agent}); err == nil {
+			bin = b
+		}
+	}
 	m.mu.Lock()
 	sess := newSession(id, md.Agent, name, md.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
 	sess.Box = md.Box
+	sess.Bin = bin
 	m.sessions[id] = sess
 	m.mu.Unlock()
 	// The box was already adopted by Reconcile, before this attach was even

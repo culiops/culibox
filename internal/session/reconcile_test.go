@@ -29,6 +29,32 @@ func newReconcileManager(t *testing.T, fb *fakeBackend, sidecarPath string) *Man
 	return m
 }
 
+// TestReconcileResolvesBin: a reconciled session re-resolves its agent bin from
+// the name (the sidecar doesn't store it), so claude-only features like usage keep
+// working after a daemon restart. tieredLauncher.BinFor returns "claude".
+func TestReconcileResolvesBin(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/work/proj", Created: time.Now()},
+	})
+	m := NewManager(tieredLauncher{}, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	s, ok := m.Get("claude-2")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
+	if s.Bin != "claude" {
+		t.Fatalf("Bin=%q, want claude (reconcile must re-resolve it)", s.Bin)
+	}
+}
+
 // TestReconcileReattachesLiveSurvivor: a live socket + matching sidecar entry is
 // re-attached, listed live, and keeps its original created time and cwd.
 func TestReconcileReattachesLiveSurvivor(t *testing.T) {
