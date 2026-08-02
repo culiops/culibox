@@ -160,6 +160,11 @@
     #hint .status-sep:has(+ #status-cwd:empty) {
       display: none;
     }
+    /* Account limits (global, once): hide each field and its leading separator
+       when there's no data, so the bar shows nothing rather than empty gaps. */
+    #status-5h:empty, #status-week:empty { display: none; }
+    #hint .status-sep:has(+ #status-5h:empty),
+    #hint .status-sep:has(+ #status-week:empty) { display: none; }
     #hint button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
     header .spacer { flex: 1; }
@@ -861,6 +866,10 @@
     <span id="status-sessions"></span>
     <span class="status-sep" is-="separator" direction-="y"></span>
     <span id="status-cwd"></span>
+    <span class="status-sep" is-="separator" direction-="y"></span>
+    <span id="status-5h"></span>
+    <span class="status-sep" is-="separator" direction-="y"></span>
+    <span id="status-week"></span>
     <span id="hint-text"></span>
     <button id="hint-x" title="Dismiss">×</button>
   </div>

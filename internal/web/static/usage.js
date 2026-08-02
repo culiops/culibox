@@ -37,6 +37,26 @@ function usageTitle(u) {
   return parts.join(" · ");
 }
 
+// fmtCountdown: seconds-until-reset (resetsAt - now) as "5d 7h" / "2h 50m" /
+// "13m" / "now". nowSec is passed in so the pure fn is testable without a clock.
+function fmtCountdown(resetsAtSec, nowSec) {
+  let d = (resetsAtSec || 0) - (nowSec || 0);
+  if (d <= 0) return "now";
+  const days = Math.floor(d / 86400); d -= days * 86400;
+  const hours = Math.floor(d / 3600); d -= hours * 3600;
+  const mins = Math.floor(d / 60);
+  if (days > 0) return days + "d " + hours + "h";
+  if (hours > 0) return hours + "h " + mins + "m";
+  return mins + "m";
+}
+
+// rateLimitText: one account window as "<label> <pct>% · <countdown>", or "" when
+// the window is absent (so the bottom bar renders nothing).
+function rateLimitText(label, win, nowSec) {
+  if (!win || typeof win.used_percentage !== "number") return "";
+  return label + " " + win.used_percentage + "% · " + fmtCountdown(win.resets_at, nowSec);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtTokens, usageTab, usageTitle };
+  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, rateLimitText };
 }
