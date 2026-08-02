@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/culiops/agent-box/internal/auth"
@@ -143,6 +145,45 @@ func TestHandleMeta(t *testing.T) {
 	}
 	if got["shell_profile"] != "zsh" {
 		t.Fatalf("shell_profile = %q, want zsh", got["shell_profile"])
+	}
+}
+
+func TestHandleMetaRateLimits(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "rl.json")
+	os.WriteFile(f, []byte(`{"five_hour":{"used_percentage":80,"resets_at":1785654600},"seven_day":{"used_percentage":42,"resets_at":1786107600}}`), 0o644)
+	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm, RateLimitsFile: f}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d", rec.Code)
+	}
+	var got struct {
+		RateLimits *RateLimits `json:"rate_limits"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.RateLimits == nil || got.RateLimits.FiveHour == nil || got.RateLimits.FiveHour.UsedPercentage != 80 {
+		t.Fatalf("rate_limits missing/wrong: %+v", got.RateLimits)
+	}
+}
+
+func TestHandleMetaNoRateLimitsFile(t *testing.T) {
+	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm, RateLimitsFile: filepath.Join(t.TempDir(), "absent.json")}
+	h := s.Handler("admin", "pw")
+	req := httptest.NewRequest("GET", "/api/meta", nil)
+	req.SetBasicAuth("admin", "pw")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var got map[string]any
+	json.NewDecoder(rec.Body).Decode(&got)
+	if _, present := got["rate_limits"]; present {
+		t.Fatal("rate_limits must be omitted when the file is absent")
 	}
 }
 

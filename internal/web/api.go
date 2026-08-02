@@ -23,6 +23,7 @@ type SessionService interface {
 	Kill(id string) error
 	Rename(id, name string) error
 	Get(id string) (session.Info, bool)
+	UsageFor(id string) (session.Usage, bool)
 }
 
 // API holds the HTTP handlers for sessions.
@@ -98,6 +99,21 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 // handleSession serves DELETE (kill) on /api/sessions/{id}.
 func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/api/sessions/")
+	// GET /api/sessions/{id}/usage — per-window context/model/effort. 204 when the
+	// session isn't claude or has no locatable transcript (a normal, quiet miss).
+	if strings.HasSuffix(id, "/usage") {
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		sid := strings.TrimSuffix(id, "/usage")
+		if u, ok := a.Sessions.UsageFor(sid); ok {
+			writeJSON(w, http.StatusOK, u)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
 	if id == "" {
 		writeErr(w, http.StatusBadRequest, "id required")
 		return

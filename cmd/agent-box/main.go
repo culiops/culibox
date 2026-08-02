@@ -112,6 +112,7 @@ func main() {
 	}
 
 	mgr := session.NewManager(lnch, adapter, 128*1024, 5*time.Minute)
+	mgr.SetPaths(home, dataDir) // where transcripts live: host ~/.claude, boxed <dataDir>/boxstate/<box>
 	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
 		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
 	}
@@ -199,6 +200,10 @@ func main() {
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, st, lnch.SetAgents)
 
 	archiveBytes, archiveFiles := cfg.ArchiveLimits()
+	rateLimitsFile := cfg.RateLimitsFile
+	if rateLimitsFile == "" {
+		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
+	}
 	srv := &web.Server{
 		API:        &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Cookie:     cookie,
@@ -215,6 +220,7 @@ func main() {
 		MaxUploadBytes:  cfg.UploadLimit(),
 		MaxArchiveBytes: archiveBytes,
 		MaxArchiveFiles: archiveFiles,
+		RateLimitsFile:  rateLimitsFile,
 	}
 
 	// A default workspace that can never be contained must fail at boot, not once

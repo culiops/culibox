@@ -143,6 +143,16 @@ function updateStatusLine() {
   }
 }
 
+// renderRateLimits paints the account 5h/weekly usage into the bottom bar (once,
+// globally). null/absent → both fields blank, and the CSS hides them + their
+// separators. The countdown is recomputed from resets_at against the live clock.
+function renderRateLimits(rl) {
+  const now = Math.floor(Date.now() / 1000);
+  const el5 = $("status-5h"), elW = $("status-week");
+  if (el5) el5.textContent = rl ? rateLimitText("5h", rl.five_hour, now) : "";
+  if (elW) elW.textContent = rl ? rateLimitText("week", rl.seven_day, now) : "";
+}
+
 // --- sidebar: session list ---------------------------------------------------
 function emptyLi(text) {
   const li = document.createElement("li");
@@ -334,6 +344,17 @@ async function refreshSessions() {
   // A tab whose session has left the list (killed/pruned) would otherwise keep
   // its last dot — a stale green "working" on a dead agent. Fall back to "done".
   eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
+  // Per-window usage: fetch only for open terminal tabs whose session is still
+  // listed (alive), and only when visible. 204 (non-claude / no transcript) →
+  // null → no readout. A gone session keeps its last usage rather than blanking.
+  if (!document.hidden) {
+    eachTerminal((t) => {
+      if (!actById.has(t.id)) return;
+      api("/api/sessions/" + encodeURIComponent(t.id) + "/usage")
+        .then((u) => t.setUsage(u))
+        .catch(() => {});
+    });
+  }
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();
@@ -890,6 +911,7 @@ initUpload();
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
+    renderRateLimits(meta && meta.rate_limits); // account 5h/weekly in the bottom bar
     refreshSessions(); // re-render rows now that the tier label is known
     if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
     if (!meta || !meta.env_label) return;
@@ -909,6 +931,13 @@ initUpload();
 fontPrefs.applyCssVars();
 initSettings();
 setInterval(refreshSessions, 3000);
+// Account limits change slowly and the file only updates when a claude statusLine
+// renders — a 30s refresh keeps the % fresh and the countdown ticking without
+// hammering /api/meta. Skipped while hidden.
+setInterval(async () => {
+  if (document.hidden) return;
+  try { const m = await api("/api/meta"); renderRateLimits(m && m.rate_limits); } catch (_) {}
+}, 30000);
 
 // Ctrl+Shift+` → new shell in the focused window. Capture phase + stopPropagation
 // for the same reason as the zoom handler below: xterm listens on its textarea and

@@ -35,6 +35,10 @@ type Server struct {
 	// is re-checked against this on every /api/meta rather than trusted from boot.
 	ShellBin string
 
+	// RateLimitsFile is the account 5h/weekly usage snapshot (produced by a
+	// statusLine hook); read fresh on every /api/meta. Empty → no limits in the UI.
+	RateLimitsFile string
+
 	// MaxUploadBytes caps a single uploaded file; MaxArchiveBytes/Files cap a
 	// directory download. Zero means the built-in default in every case — unset
 	// must never be read as "unlimited".
@@ -88,12 +92,18 @@ func (s *Server) Handler(user, pass string) http.Handler {
 		if s.Cookie != nil {
 			s.Cookie.Issue(w)
 		}
-		writeJSON(w, http.StatusOK, map[string]string{
+		meta := map[string]any{
 			"env_label":     s.EnvLabel,
 			"env_color":     s.EnvColor,
 			"shell_profile": s.quickShell(),
 			"box_runtime":   s.BoxRuntime,
-		})
+		}
+		// Account 5h/weekly usage, read fresh (tiny file). Omitted when absent so
+		// the client shows nothing rather than an empty widget.
+		if rl, ok := readRateLimits(s.RateLimitsFile); ok {
+			meta["rate_limits"] = rl
+		}
+		writeJSON(w, http.StatusOK, meta)
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))

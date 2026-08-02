@@ -116,9 +116,10 @@ type Config struct {
 	EnvLabel         string         `json:"env_label,omitempty"` // e.g. "PROD"/"DEV"; empty → no UI badge
 	EnvColor         string         `json:"env_color,omitempty"` // CSS color for the badge/strip
 	AllowPublic      bool           `json:"allow_public"`
-	ProfilesPath     string         `json:"profiles_path,omitempty"` // store for runtime profiles
-	DataDir          string         `json:"data_dir,omitempty"`      // default ~/.local/share/agent-box
-	AbducoBin        string         `json:"abduco_bin,omitempty"`    // default "abduco" on PATH
+	ProfilesPath     string         `json:"profiles_path,omitempty"`    // store for runtime profiles
+	DataDir          string         `json:"data_dir,omitempty"`         // default ~/.local/share/agent-box
+	RateLimitsFile   string         `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
+	AbducoBin        string         `json:"abduco_bin,omitempty"`       // default "abduco" on PATH
 	AbducoSocketDir  string         `json:"abduco_socket_dir,omitempty"`
 	MaxUploadBytes   int64          `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB
 	MaxArchiveBytes  int64          `json:"max_archive_bytes,omitempty"` // per directory download; 0 → 512 MiB

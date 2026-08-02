@@ -42,6 +42,8 @@ class TerminalTab {
     this.troubleTimer = null;
     this.statusText = "…";
     this.activityState = ""; // server-computed activity (a separate axis from status)
+    this.usageData = null;   // per-window transcript usage (claude only)
+    this._usageKey = "";     // change-detect key so setUsage doesn't churn renders
     this.onUpdate = null;
 
     this.el = document.createElement("div");
@@ -171,6 +173,13 @@ class TerminalTab {
   setStatus(t) { this.statusText = t; this.onUpdate?.(); }
   activity() { return this.activityState; }
   setActivity(a) { if (a !== this.activityState) { this.activityState = a; this.onUpdate?.(); } }
+  usage() { return this.usageData; }
+  setUsage(u) {
+    // Re-render only when the readout actually moved, so a poll that returns the
+    // same numbers doesn't rebuild the tab strip.
+    const key = u ? `${u.contextTokens}|${u.pct ?? ""}|${u.model}|${u.effort}` : "";
+    if (key !== this._usageKey) { this._usageKey = key; this.usageData = u; this.onUpdate?.(); }
+  }
 
   onShow() { this.fit(); this.term.focus(); }
   onHide() {}
