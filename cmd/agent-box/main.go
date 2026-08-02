@@ -198,6 +198,10 @@ func main() {
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, st, lnch.SetAgents)
+	// Profiles are now registered with the launcher; backfill Bin for sessions
+	// reconciled at startup (before profiles were known) so per-window usage works
+	// for profile-based claude sessions that survived a daemon restart.
+	mgr.ResolveBins()
 
 	archiveBytes, archiveFiles := cfg.ArchiveLimits()
 	rateLimitsFile := cfg.RateLimitsFile

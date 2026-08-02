@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/culiops/agent-box/internal/launcher"
 )
 
 // Usage is a per-session snapshot read from the agent's JSONL transcript.
@@ -135,21 +137,29 @@ func contextMax(model string) (int, bool) {
 // tail carries no usage line. Immutable session fields (Cwd/Box/Created/Bin) are
 // read without the lock; only the map lookup and paths are guarded.
 func (m *Manager) UsageFor(id string) (Usage, bool) {
+	// Capture everything under the lock: Bin can be filled in post-reconcile by
+	// ResolveBins (a locked write), so reading it lock-free would race. Cwd/Box/
+	// Created are immutable but captured here too for one clean critical section.
 	m.mu.Lock()
 	s := m.sessions[id]
 	home, stateDir := m.home, m.stateDir
+	var bin, cwd, box string
+	var created time.Time
+	if s != nil {
+		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
+	}
 	m.mu.Unlock()
-	if s == nil || !isClaudeBin(s.Bin) {
+	if s == nil || !isClaudeBin(bin) {
 		return Usage{}, false
 	}
 	base := home
-	if s.Box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", s.Box)
+	if box != "" && stateDir != "" {
+		base = filepath.Join(stateDir, "boxstate", box)
 	}
 	if base == "" {
 		return Usage{}, false
 	}
-	p, ok := transcriptPath(s.Cwd, base, s.Created)
+	p, ok := transcriptPath(cwd, base, created)
 	if !ok {
 		return Usage{}, false
 	}
@@ -167,6 +177,28 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 		u.Pct = &pctv
 	}
 	return u, true
+}
+
+// ResolveBins fills in Bin for any session that still lacks it. Reconcile runs at
+// startup BEFORE runtime profiles are registered with the launcher, so a
+// profile-based session (e.g. a custom "my-project" agent) reattaches with an
+// empty Bin and BinFor(name) would have failed. Call this once profiles are
+// loaded so claude-only features (usage) work for reconciled profile sessions.
+func (m *Manager) ResolveBins() {
+	br, ok := m.launcher.(BinResolver)
+	if !ok {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sessions {
+		if s.Bin != "" {
+			continue
+		}
+		if b, err := br.BinFor(launcher.SpawnSpec{Agent: s.Agent}); err == nil {
+			s.Bin = b
+		}
+	}
 }
 
 // readUsageTail reads the last usageTailBytes of a file (or the whole file if

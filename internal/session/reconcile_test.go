@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -27,6 +28,52 @@ func newReconcileManager(t *testing.T, fb *fakeBackend, sidecarPath string) *Man
 		t.Fatal(err)
 	}
 	return m
+}
+
+// regLauncher only knows agents that have been "registered" — mirroring how
+// runtime profiles reach the launcher only after startup, AFTER Reconcile.
+type regLauncher struct{ known map[string]string }
+
+func (l *regLauncher) Build(launcher.SpawnSpec) ([]string, []string, error) {
+	return []string{"x"}, []string{}, nil
+}
+func (l *regLauncher) BinFor(s launcher.SpawnSpec) (string, error) {
+	if b, ok := l.known[s.Agent]; ok {
+		return b, nil
+	}
+	return "", fmt.Errorf("unknown agent %q", s.Agent)
+}
+
+// TestResolveBinsAfterProfilesRegistered: a profile-based session reconciled
+// before its profile is registered reattaches with an empty Bin; ResolveBins,
+// called once the profile is known, backfills it so usage works after a restart.
+func TestResolveBinsAfterProfilesRegistered(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("proj-1")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"proj-1": {Agent: "proj", Cwd: "/w", Created: time.Now()},
+	})
+	lnch := &regLauncher{known: map[string]string{}} // "proj" not registered yet
+	m := NewManager(lnch, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("proj-1") })
+	s, ok := m.Get("proj-1")
+	if !ok {
+		t.Fatal("not reattached")
+	}
+	if s.Bin != "" {
+		t.Fatalf("Bin=%q, want empty before the profile is registered", s.Bin)
+	}
+	lnch.known["proj"] = "claude" // profiles now loaded into the launcher
+	m.ResolveBins()
+	if s.Bin != "claude" {
+		t.Fatalf("Bin=%q after ResolveBins, want claude", s.Bin)
+	}
 }
 
 // TestReconcileResolvesBin: a reconciled session re-resolves its agent bin from
