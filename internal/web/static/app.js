@@ -179,6 +179,17 @@ function renderSession(s) {
   const li = document.createElement("li");
   if (terminalOpen(s.id)) li.classList.add("open");
   li.title = s.id; // tiebreaker when two labels match
+  // Activity dot leads the row: working/waiting/done/crashed at a glance. Server-
+  // computed (Info.activity); unknown/missing degrades to a muted dot, never a throw.
+  const adot = document.createElement("span");
+  const act = activityClass(s.activity);
+  adot.className = "act-dot " + act.cls;
+  if (act.title) {
+    adot.title = act.title;
+    adot.setAttribute("role", "img");
+    adot.setAttribute("aria-label", act.title);
+  }
+  li.appendChild(adot);
   const name = document.createElement("span");
   name.className = "name";
   name.textContent = s.name || s.id;
@@ -316,6 +327,13 @@ async function refreshSessions() {
   try { sessions = await api("/api/sessions"); }
   catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return null; }
   lastSessions = sessions || [];
+  // Push each session's activity onto its open terminal tab (a different axis
+  // from the tab's connection status). setActivity is a no-op when unchanged, so
+  // this only re-renders a bar whose dot actually moved.
+  const actById = new Map(lastSessions.map((s) => [s.id, s.activity]));
+  // A tab whose session has left the list (killed/pruned) would otherwise keep
+  // its last dot — a stale green "working" on a dead agent. Fall back to "done".
+  eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();
