@@ -187,6 +187,15 @@ class Cell {
     const tabs = this.tabs.map((t) => {
       const b = document.createElement("div");
       b.className = "tab" + (t === this.activeTab ? " act" : "");
+      // Activity dot leads a terminal tab (viewer tabs have no activity). Re-
+      // emitted here every rebuild, so it survives renderBar wiping the strip.
+      if (t.kind === "terminal" && typeof t.activity === "function") {
+        const a = activityClass(t.activity());
+        const dot = document.createElement("span");
+        dot.className = "act-dot " + a.cls;
+        if (a.title) { dot.title = a.title; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", a.title); }
+        b.append(dot);
+      }
       const label = document.createElement("span");
       label.className = "tab-label";
       label.textContent = t.title();

@@ -327,6 +327,11 @@ async function refreshSessions() {
   try { sessions = await api("/api/sessions"); }
   catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return null; }
   lastSessions = sessions || [];
+  // Push each session's activity onto its open terminal tab (a different axis
+  // from the tab's connection status). setActivity is a no-op when unchanged, so
+  // this only re-renders a bar whose dot actually moved.
+  const actById = new Map(lastSessions.map((s) => [s.id, s.activity]));
+  eachTerminal((t) => { if (actById.has(t.id)) t.setActivity(actById.get(t.id)); });
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();

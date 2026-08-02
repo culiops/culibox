@@ -41,6 +41,7 @@ class TerminalTab {
     this.troubleEl = null;
     this.troubleTimer = null;
     this.statusText = "…";
+    this.activityState = ""; // server-computed activity (a separate axis from status)
     this.onUpdate = null;
 
     this.el = document.createElement("div");
@@ -168,6 +169,8 @@ class TerminalTab {
   status() { return this.statusText; }
   setTitle(name) { this.name = name || this.id; this.onUpdate?.(); }
   setStatus(t) { this.statusText = t; this.onUpdate?.(); }
+  activity() { return this.activityState; }
+  setActivity(a) { if (a !== this.activityState) { this.activityState = a; this.onUpdate?.(); } }
 
   onShow() { this.fit(); this.term.focus(); }
   onHide() {}
