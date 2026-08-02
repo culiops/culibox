@@ -200,6 +200,10 @@ func main() {
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, st, lnch.SetAgents)
 
 	archiveBytes, archiveFiles := cfg.ArchiveLimits()
+	rateLimitsFile := cfg.RateLimitsFile
+	if rateLimitsFile == "" {
+		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
+	}
 	srv := &web.Server{
 		API:        &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Cookie:     cookie,
@@ -216,6 +220,7 @@ func main() {
 		MaxUploadBytes:  cfg.UploadLimit(),
 		MaxArchiveBytes: archiveBytes,
 		MaxArchiveFiles: archiveFiles,
+		RateLimitsFile:  rateLimitsFile,
 	}
 
 	// A default workspace that can never be contained must fail at boot, not once
