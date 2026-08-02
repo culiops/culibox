@@ -7,15 +7,17 @@ import (
 
 func TestAttributeTools(t *testing.T) {
 	big := strings.Repeat("x", 70000) // > bufio.Scanner's 64KiB cap — long-line safety
-	lines := `{"message":{"role":"assistant","usage":{"output_tokens":10,"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1}},"content":[{"type":"tool_use","id":"a","name":"Read"},{"type":"tool_use","id":"b","name":"mcp__playwright__browser_evaluate"},{"type":"tool_use","id":"c","name":"Skill"}]}}
+	// Note: no trailing newline on the last line — it must still be counted.
+	lines := `{"message":{"role":"assistant","usage":{"output_tokens":10},"content":[{"type":"tool_use","id":"a","name":"Read"},{"type":"tool_use","id":"b","name":"mcp__playwright__browser_evaluate"},{"type":"tool_use","id":"c","name":"Skill"}]}}
 {"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"a","content":"` + big + `"},{"type":"tool_result","tool_use_id":"b","content":"hi"},{"type":"tool_result","tool_use_id":"c","content":"yo"}]}}
 {"message":{"role":"assistant","content":[{"type":"tool_use","id":"d","name":"mcp__playwright__browser_navigate"}]}}
-{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"d","content":"nav"}]}}
-`
+{"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"d","content":"nav"}]}}`
 	a := attributeTools(strings.NewReader(lines))
-	if a.WebSearch != 2 || a.WebFetch != 1 || a.OutputTokens != 10 {
-		t.Fatalf("counts %+v", a)
+	if a.OutputTokens != 10 {
+		t.Fatalf("output tokens %+v", a)
 	}
+	// The final line (playwright navigate, no trailing newline) must be counted:
+	// 2 playwright sub-tools grouped → 2 calls.
 	if len(a.Tools) < 3 || a.Tools[0].Name != "Read" || a.Tools[0].Kind != "tool" || a.Tools[0].Calls != 1 {
 		t.Fatalf("read row %+v", a.Tools)
 	}

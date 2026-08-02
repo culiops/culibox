@@ -20,11 +20,12 @@ type ToolStat struct {
 	CtxBytes int64  `json:"ctxBytes"` // cumulative tool_result payload bytes (a proxy)
 }
 
-// Attribution is the whole breakdown for one session.
+// Attribution is the whole breakdown for one session. Web search/fetch are NOT
+// tracked here: in Claude Code they are client-side tools that appear as ordinary
+// tool_use rows (WebSearch/WebFetch), so they already show in Tools — a separate
+// server_tool_use counter reads 0 and would be misleading.
 type Attribution struct {
 	Tools        []ToolStat `json:"tools"` // sorted by CtxBytes desc, capped
-	WebSearch    int        `json:"webSearch"`
-	WebFetch     int        `json:"webFetch"`
 	OutputTokens int        `json:"outputTokens"`
 }
 
@@ -62,11 +63,7 @@ func attributeTools(r io.Reader) Attribution {
 				Message struct {
 					Role  string `json:"role"`
 					Usage struct {
-						OutputTokens  int `json:"output_tokens"`
-						ServerToolUse struct {
-							WebSearch int `json:"web_search_requests"`
-							WebFetch  int `json:"web_fetch_requests"`
-						} `json:"server_tool_use"`
+						OutputTokens int `json:"output_tokens"`
 					} `json:"usage"`
 					Content []struct {
 						Type      string          `json:"type"`
@@ -79,8 +76,6 @@ func attributeTools(r io.Reader) Attribution {
 			}
 			if json.Unmarshal(line, &rec) == nil {
 				a.OutputTokens += rec.Message.Usage.OutputTokens
-				a.WebSearch += rec.Message.Usage.ServerToolUse.WebSearch
-				a.WebFetch += rec.Message.Usage.ServerToolUse.WebFetch
 				for _, b := range rec.Message.Content {
 					switch b.Type {
 					case "tool_use":

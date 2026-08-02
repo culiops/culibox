@@ -69,8 +69,8 @@ func (m *mockSvc) AttributionFor(id string) (session.Attribution, bool) {
 
 func TestAPI_Attribution(t *testing.T) {
 	svc := &mockSvc{attrOK: true, attr: session.Attribution{
-		Tools:     []session.ToolStat{{Name: "Read", Kind: "tool", Calls: 33, CtxBytes: 1614490}},
-		WebSearch: 3, OutputTokens: 41000,
+		Tools:        []session.ToolStat{{Name: "Read", Kind: "tool", Calls: 33, CtxBytes: 1614490}},
+		OutputTokens: 41000,
 	}}
 	a := &API{Sessions: svc}
 	rec := httptest.NewRecorder()
@@ -80,7 +80,7 @@ func TestAPI_Attribution(t *testing.T) {
 	}
 	var at session.Attribution
 	_ = json.NewDecoder(rec.Body).Decode(&at)
-	if len(at.Tools) != 1 || at.Tools[0].Name != "Read" || at.Tools[0].CtxBytes != 1614490 || at.WebSearch != 3 {
+	if len(at.Tools) != 1 || at.Tools[0].Name != "Read" || at.Tools[0].CtxBytes != 1614490 || at.OutputTokens != 41000 {
 		t.Fatalf("body %+v", at)
 	}
 }

@@ -167,7 +167,7 @@ async function openAttribution(id) {
   if (!rows.length) {
     const p = document.createElement("p");
     p.className = "attr-empty";
-    p.textContent = "No tool data for this session (not a Claude session, or no transcript yet).";
+    p.textContent = "No tool activity recorded for this session.";
     body.appendChild(p);
     return;
   }
@@ -209,11 +209,7 @@ async function openAttribution(id) {
     s.appendChild(b);
     return s;
   };
-  foot.append(
-    mk("web search", String(attr.webSearch || 0)),
-    mk("web fetch", String(attr.webFetch || 0)),
-    mk("output", fmtTokens(attr.outputTokens || 0)),
-  );
+  foot.append(mk("output", fmtTokens(attr.outputTokens || 0) + " tokens"));
 }
 
 // --- sidebar: session list ---------------------------------------------------
