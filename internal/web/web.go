@@ -35,6 +35,10 @@ type Server struct {
 	// is re-checked against this on every /api/meta rather than trusted from boot.
 	ShellBin string
 
+	// RateLimitsFile is the account 5h/weekly usage snapshot (produced by a
+	// statusLine hook); read fresh on every /api/meta. Empty → no limits in the UI.
+	RateLimitsFile string
+
 	// MaxUploadBytes caps a single uploaded file; MaxArchiveBytes/Files cap a
 	// directory download. Zero means the built-in default in every case — unset
 	// must never be read as "unlimited".
