@@ -334,6 +334,17 @@ async function refreshSessions() {
   // A tab whose session has left the list (killed/pruned) would otherwise keep
   // its last dot — a stale green "working" on a dead agent. Fall back to "done".
   eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
+  // Per-window usage: fetch only for open terminal tabs whose session is still
+  // listed (alive), and only when visible. 204 (non-claude / no transcript) →
+  // null → no readout. A gone session keeps its last usage rather than blanking.
+  if (!document.hidden) {
+    eachTerminal((t) => {
+      if (!actById.has(t.id)) return;
+      api("/api/sessions/" + encodeURIComponent(t.id) + "/usage")
+        .then((u) => t.setUsage(u))
+        .catch(() => {});
+    });
+  }
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();

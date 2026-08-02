@@ -208,6 +208,19 @@ class Cell {
       x.className = "tab-x"; x.textContent = "×"; x.title = "Close tab";
       x.onclick = (e) => { e.stopPropagation(); this.closeTab(t); };
       b.append(label, st);
+      // Per-window context readout (claude only; usageTab is "" otherwise). Re-
+      // emitted every rebuild from the tab's stored usage, like the dot above.
+      if (t.kind === "terminal" && typeof t.usage === "function") {
+        const ustr = usageTab(t.usage());
+        if (ustr) {
+          const us = document.createElement("span");
+          us.className = "tab-usage";
+          us.textContent = ustr;
+          const title = usageTitle(t.usage());
+          if (title) us.title = title;
+          b.append(us);
+        }
+      }
       // Kill lives on the TAB, not the cell: a cell can hold several session tabs
       // and killing is per-session. ⏻ ends the session, × only closes the view.
       if (t.kind === "terminal") {

@@ -685,6 +685,8 @@
     }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
+    /* Per-window context readout on the tab: muted, tabular so digits don't jitter. */
+    .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
     /* Same --muted-on--sel failure as the palette above: the active tab sets
        color: #fff on itself, but this child span re-asserts --muted, which
        fails at 3.99 against the same --sel background. */
@@ -1002,6 +1004,7 @@
   <script src="/links.js"></script>
   <script src="/tier.js"></script>
   <script src="/activity.js"></script>
+  <script src="/usage.js"></script>
   <script src="/layout.js"></script>
   <script src="/treestate.js"></script>
   <script src="/terminal-tab.js"></script>
