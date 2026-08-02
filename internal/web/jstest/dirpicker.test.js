@@ -27,12 +27,47 @@ test("anything else is a fuzzy search", () => {
   assert.deepStrictEqual(classifyPickerQuery("~/culipulse"), { mode: "fuzzy", value: "~/culipulse" });
 });
 
-test("the empty state lists workspaces, unfiltered and in order", () => {
+test("the empty state lists workspaces, in order", () => {
   const rows = pickerRows({
     mode: "empty",
     workspaces: [
       { label: "~ (home)", path: "/home/claude" },
       { label: "culipulse", path: "/home/claude/culipulse" },
+    ],
+    hits: [],
+  });
+  assert.deepStrictEqual(rows, [
+    { label: "~ (home)", hint: "", path: "/home/claude", kind: "workspace" },
+    { label: "culipulse", hint: "", path: "/home/claude/culipulse", kind: "workspace" },
+  ]);
+});
+
+// listWorkspaces (server) offers every non-hidden depth-1 directory of $HOME —
+// it was NOT changed by the project-root filtering, because it also feeds the
+// New-session working-dir form, which is out of scope here (brain #77). So
+// without this filter the picker contradicts itself: open it and "sdk" is on
+// screen; type "sdk" and dirPickerNote reports nothing found, because the dir
+// index doesn't record it. Filtered here, not server-side.
+//
+// "vendor" is included even though it never appears on THIS box's $HOME
+// (no ~/vendor here): dpSkipWorkspaceNames is meant to be a superset of
+// skipDirRecord's full key set, not just the names Task 1 introduced, so a
+// literal $HOME/vendor doesn't reproduce the identical sdk/code-server
+// self-contradiction this test exists to close.
+test("the empty state list is filtered by the same names skipDirRecord suppresses", () => {
+  const rows = pickerRows({
+    mode: "empty",
+    workspaces: [
+      { label: "~ (home)", path: "/home/claude" },
+      { label: "code-server", path: "/home/claude/code-server" },
+      { label: "culipulse", path: "/home/claude/culipulse" },
+      { label: "sdk", path: "/home/claude/sdk" },
+      { label: "vendor", path: "/home/claude/vendor" },
+      { label: "worktrees", path: "/home/claude/worktrees" },
+      { label: ".zinit", path: "/home/claude/.zinit" },
+      { label: ".tmux", path: "/home/claude/.tmux" },
+      { label: ".open-next", path: "/home/claude/.open-next" },
+      { label: ".worktrees", path: "/home/claude/.worktrees" },
     ],
     hits: [],
   });
@@ -210,11 +245,28 @@ test("Enter on a blank box does NOT re-root at the first workspace", () => {
 });
 
 // The picker must never answer "no matches", "search broke" and "offline" with
-// the same silent disappearance — especially since the index suppresses vendor/
-// subtrees (~39% of directories), making zero hits a NORMAL outcome.
+// the same silent disappearance. After Task 1 the dir index admits only two
+// kinds of directory (10,049 -> 91 on a real home): a PROJECT ROOT anywhere
+// under $HOME, or a direct, non-hidden CHILD of $HOME regardless of what it
+// contains (Rule 1, mirroring listWorkspaces). So "I typed a real, visible
+// directory that is neither" — two levels deep and not a project — is now the
+// dominant way to get zero rows. The note has to name BOTH admitted kinds, not
+// just "project folders" (that wording is false for ~/bin or ~/Downloads, a
+// bug caught in review — it understates what the index actually offers), plus
+// the escape hatch (a full path).
 
-test("no matches says so instead of closing the list", () => {
-  assert.strictEqual(dirPickerNote(0, false, false), "no matching folders");
+test("no matches names both admitted kinds and the escape hatch", () => {
+  const note = dirPickerNote(0, false, false);
+  assert.match(note, /project/i);
+  assert.match(note, /top-level/i);
+  assert.match(note, /full path/i);
+});
+
+test("no matches while truncated still reads as the admission rule, not as a broken index", () => {
+  // Same zero-count copy whether or not the walk was truncated: truncation
+  // does not explain a real, visible directory being absent — only "neither
+  // admission rule matched it" does.
+  assert.strictEqual(dirPickerNote(0, true, false), dirPickerNote(0, false, false));
 });
 
 test("a failed search is distinguishable from an empty one", () => {

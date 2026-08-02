@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -29,18 +30,25 @@ const (
 	// single one of the user's repos.
 	maxPerRootPaths = 10000
 
-	// Directory bounds are separate from the file bounds on purpose. Measured on
-	// a real home directory: 16 567 directories survive the skip rules at depth
-	// 12, of which 6 520 sit under a vendor/ and are suppressed by
-	// skipDirRecord, leaving 10 047 actually recorded, against ~60 000 files.
-	// Sharing one budget would let the files starve the directories.
+	// Directory bounds are separate from the file bounds on purpose: sharing one
+	// budget would let the files starve the directories. The directory index
+	// records PROJECT ROOTS, not every folder (see markerFiles), so the set
+	// these bound is small — measured on a real home directory, 91 directories
+	// against ~60 000 files.
+	//
+	// Both caps are therefore RETAINED BUT VESTIGIAL. Do NOT lower them to
+	// "fit" the new size. Lowering makes dirBudgetSpent reachable, and a spent
+	// directory budget contributes to the fairness prune's fs.SkipDir below —
+	// which stops the walk VISITING markers deeper in that subtree and so
+	// loses whole projects — reported via dirsTruncated, but lost all the
+	// same — in an order that depends on lexical DFS.
+	// That order-dependent project loss is the exact failure this design exists
+	// to eliminate.
 	maxIndexDirs = 20000
-	// maxPerRootDirs is the directory twin of maxPerRootPaths. On the same
-	// measurement the largest top-level subtree records 2 556 directories —
-	// nowhere near this cap, so today it is headroom rather than a binding
-	// limit. It still exists for the same reason maxPerRootPaths does: the
-	// walk is a lexical DFS, so without a per-root cap one huge subtree that
-	// sorts first can crowd out everything after it.
+	// maxPerRootDirs is the directory twin of maxPerRootPaths, and carries the
+	// same warning: headroom, not a binding limit. It exists for the reason
+	// maxPerRootPaths does — the walk is a lexical DFS, so without a per-root
+	// cap one huge subtree that sorts first can crowd out everything after it.
 	maxPerRootDirs = 4000
 
 	searchDefaultLimit = 50
@@ -124,16 +132,57 @@ const (
 	kindDirs
 )
 
+// markerFiles name a directory as a project root: a directory that DIRECTLY
+// contains one of these is recorded in the directory index whatever its depth
+// and whether or not it is hidden. The picker answers "which project am I in";
+// the file TREE goes deeper, so `<repo>/internal` is reached by picking the
+// repo and clicking down, not by searching for it. Measured on a real home
+// directory, this takes the offered set from 10 049 directories to 91.
+//
+// composer.json is deliberately absent: it accounts for zero directories here —
+// every Composer project also carries .git, and the rest sit inside a vendor/,
+// already suppressed by skipDirRecord.
+var markerFiles = map[string]bool{
+	".git":           true,
+	"go.mod":         true,
+	"package.json":   true,
+	"Cargo.toml":     true,
+	"pyproject.toml": true,
+}
+
 // skipDirRecord names a directory whose ENTIRE SUBTREE is never worth
 // offering as a workspace — the match suppresses recording for it and every
 // directory nested inside it, not just the named directory itself — but whose
 // FILES must stay findable. It gates recording only; the walk still descends.
 // Putting these in skipDirs instead would delete every file under a Laravel
-// vendor/ from the command palette. Adding a common segment name here is not
-// free: "vendor" alone suppresses 6 520 of 16 567 candidate directories
-// (39%) on a real home directory — measure before adding another.
+// vendor/ from the command palette — or, for "sdk", 14 854 Go stdlib files.
+//
+// EVERY KEY IS A SINGLE PATH ELEMENT. The match runs one segment at a time
+// (see the per-segment loop at the top of emit), so a multi-segment key such as
+// "code-server/config/extensions" can never fire — it is dead config that
+// reads as a working rule.
+//
+// The counts below are directories removed AFTER the project rule, measured on
+// a real home directory. Measure before adding another key.
 var skipDirRecord = map[string]bool{
 	"vendor": true,
+	// The retired code-server install (2026-07-26). 26 rows — 20% of the
+	// result set, and the whole of what `q=static` used to return.
+	"code-server": true,
+	// Go SDK trees: the toolchain ships 21 go.mod files, so without this the
+	// project rule reintroduces the stdlib paths that made `q=internal`
+	// useless. A future <repo>/sdk/ package becomes unpickable; zero
+	// collateral today, and accepted over skipRelPaths, which would have
+	// deleted the stdlib files from the palette as well. 22 rows.
+	"sdk": true,
+	// Shell/tmux plugin checkouts — each plugin is its own git clone. 9 rows.
+	".zinit": true,
+	".tmux":  true,
+	// OpenNext build output; the bundles carry their own package.json. 7 rows.
+	".open-next": true,
+	// Worktrees are alternate checkouts of a repo already listed. 6 rows.
+	".worktrees": true,
+	"worktrees":  true,
 }
 
 // indexEntry caches the lowercased path and basename offset alongside the path.
@@ -259,13 +308,107 @@ type walkBounds struct {
 // own bounds and its own truncation flag. One walk, two result sets: the walk
 // already visits every directory, so recording them costs no extra I/O — but
 // descending past the file fairness prune does make the walk itself longer.
+//
+// # Truncation-flag ownership map
+//
+// filesTrunc and dirsTrunc are written from SEVEN statements (eight flag
+// assignments — the deadline writes both in one statement) spread across TWO
+// lexical scopes, the emit closure and the WalkDir callback. No site can see
+// the others. Every one carries a `[trunc-writer]` tag, so
+//
+//	grep -n 'trunc-writer' internal/web/fssearch.go
+//
+// settles any ownership question on one screen instead of re-deriving control
+// flow through four early returns. The sites, in source order:
+//
+//  1. emit — this top-level's per-root DIRECTORY cap is spent → dirsTrunc.
+//     A candidate reached emit and was refused.
+//  2. emit — the global directory cap (len(dirs) >= maxDirs) → dirsTrunc.
+//     Same shape: a refused candidate.
+//  3. walk — the deadline expired → filesTrunc AND dirsTrunc, together.
+//     Returns filepath.SkipAll, and is the only site that ends the whole walk,
+//     so both sets really are cut short mid-tree.
+//  4. walk, directory branch — this top-level's per-root FILE budget is spent
+//     → filesTrunc. Deliberately not dirsTrunc: the branch is reached for
+//     every directory under that top-level, including ones the project rules
+//     would never have offered.
+//  5. walk, directory branch — the conjunction prune (this top-level's file
+//     AND directory budgets both spent) → dirsTrunc, and fs.SkipDir on that
+//     ONE top-level. Site 4's condition is a precondition of this one, so by
+//     the time it fires filesTrunc is already set: the prune flags both too,
+//     but only for the subtree it skips, not for the walk.
+//  6. walk, file branch — the global file cap (len(files) >= maxPaths) →
+//     filesTrunc. Recording stops; traversal continues, so the directory set
+//     is unaffected.
+//  7. walk, file branch — this top-level's per-root file cap → filesTrunc.
+//     Same: recording stops, traversal does not.
+//
+// Facts that follow, stated once here where they can actually be checked: the
+// deadline (3) is the only site that ends the whole walk; directory candidates
+// are destroyed in four places, emit's two refusals plus — outside emit's
+// sight — the deadline and the prune, which skip subtrees whose markers are
+// therefore never observed; no site in the file branch ever writes dirsTrunc,
+// and emit never writes filesTrunc.
+//
+// RULE: that inventory — which sites write which flag, which end the walk,
+// which set both — is global, and it is stated ONCE, here. No `only` / `every`
+// / `never` claim about a truncation flag may appear at a write site. A local
+// comment says what its own site does and why ("this branch does not set
+// dirsTrunc, because merely visiting a directory says nothing"), which stays
+// true regardless of what the other six sites do, and points here for the rest.
+// A global claim parked at a local site cannot be checked from there: four
+// comments in this file went stale exactly that way, each true when written and
+// falsified by a later edit somewhere else.
 func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEntry, dirsTrunc bool) {
 	deadline := time.Now().Add(b.budget)
 	files = make([]indexEntry, 0, 1024)
 	dirs = make([]indexEntry, 0, 256)
 	perRoot := make(map[string]int)
 	perRootDirs := make(map[string]int)
+	seenDirs := make(map[string]bool)
 	n := 0
+
+	// emit records one directory (slash-separated, relative to root) and owns
+	// every bound applied to a candidate that REACHES it. Candidates are also
+	// destroyed before they ever get here — see the ownership map on walkTree.
+	// Both admission rules funnel
+	// through it, so the two call sites cannot drift on the bounds — and,
+	// crucially, so the dedupe set is shared. The common collision is rule 1 × rule 2: every
+	// top-level repo is admitted once as a non-hidden depth-1 child and again
+	// when its .git is visited (~30 directories on a real home). Two separate
+	// sets would list each of them twice.
+	emit := func(slashRel string) {
+		if seenDirs[slashRel] {
+			return
+		}
+		parts := strings.Split(slashRel, "/")
+		// skipDirRecord is keyed on a single path element, so a directory
+		// nested under a skip-recorded ancestor (app/vendor/lib under "vendor")
+		// is checked by walking every segment, not just the last — otherwise
+		// only the named directory itself would be suppressed and its subtree
+		// would leak back in one level down.
+		for _, part := range parts {
+			if skipDirRecord[part] {
+				return
+			}
+		}
+		if len(parts) >= b.maxDepth {
+			return
+		}
+		top := parts[0]
+		if perRootDirs[top] >= b.maxPerRootDirs {
+			dirsTrunc = true // [trunc-writer] site 1 — per-root directory cap
+			return
+		}
+		if len(dirs) >= b.maxDirs {
+			dirsTrunc = true // [trunc-writer] site 2 — global directory cap
+			return
+		}
+		seenDirs[slashRel] = true
+		perRootDirs[top]++
+		lower := strings.ToLower(slashRel)
+		dirs = append(dirs, indexEntry{rel: filepath.FromSlash(slashRel), lower: lower, baseStart: baseStartOf(lower)})
+	}
 
 	filepath.WalkDir(b.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -280,7 +423,7 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 		}
 		// Check the clock every so often rather than on every entry.
 		if n++; n%512 == 0 && time.Now().After(deadline) {
-			filesTrunc, dirsTrunc = true, true
+			filesTrunc, dirsTrunc = true, true // [trunc-writer] site 3 — deadline
 			return filepath.SkipAll
 		}
 		rel, relErr := filepath.Rel(b.root, p)
@@ -291,6 +434,30 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 		parts := strings.Split(slash, "/")
 		top := parts[0]
 
+		// Rule 2: a marker names its PARENT a project root. This sits above the
+		// d.IsDir() split deliberately — .git is in skipDirs, so below the
+		// fs.SkipDir return in that branch the single most important marker
+		// would never be observed at all. The same one position is also above
+		// the depth return and above the per-root FILE cap, either of which
+		// would otherwise swallow a marker in a big or deep subtree. One
+		// insertion, not three constraints.
+		//
+		// Emitting the PARENT rather than deciding a directory's project-ness
+		// when the directory itself is visited is forced by WalkDir's order,
+		// which fully descends a subtree before reaching a later sibling:
+		// repo → repo/aaa → repo/aaa/deep → repo/go.mod → repo/zzz. Deciding at
+		// visit time is impossible; deferring the decision to the end of the
+		// subtree loses the repo whenever a budget abort fires mid-subtree,
+		// worst for the 41% of the set that are package.json-only, since "p"
+		// sorts late.
+		if markerFiles[d.Name()] {
+			// A marker in $HOME itself would emit ".", which is the root, not a
+			// project inside it.
+			if parent := path.Dir(slash); parent != "." {
+				emit(parent)
+			}
+		}
+
 		if d.IsDir() {
 			if skipDirs[d.Name()] || skipRelPaths[slash] || len(parts) >= b.maxDepth {
 				return fs.SkipDir
@@ -300,37 +467,45 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			// budget alone would take the directories with it, and the subtrees
 			// that spend their file budget are the big repos — the ones most
 			// worth searching.
+			//
+			// The per-visit test below flags filesTrunc but NOT dirsTrunc,
+			// because merely VISITING a directory under a top-level whose
+			// directory budget is spent says nothing: this branch is reached
+			// for every directory down there, including ones the project rules
+			// would never have offered, so flagging per visit would report the
+			// set truncated because of a folder that was never a candidate.
+			//
+			// The conjunction below is a different claim — see there, and the
+			// ownership map on walkTree.
 			fileBudgetSpent := perRoot[top] >= b.maxPerRoot
 			dirBudgetSpent := perRootDirs[top] >= b.maxPerRootDirs
 			if fileBudgetSpent {
-				filesTrunc = true
-			}
-			if dirBudgetSpent {
-				dirsTrunc = true
+				filesTrunc = true // [trunc-writer] site 4 — per-root file budget spent
 			}
 			if fileBudgetSpent && dirBudgetSpent {
+				// This subtree is pruned UNVISITED, so any marker inside it is
+				// never observed and emit is never called for that candidate at
+				// all — a refusal flag cannot report what it never received.
+				// That is why the flag is set HERE rather than left to emit:
+				// directories genuinely disappear at this line, outside emit's
+				// sight. A truncated list presented as complete is the failure
+				// this file exists to prevent, and it is strictly worse than
+				// the opposite error. For how this site relates to the other
+				// six, see the ownership map on walkTree.
+				dirsTrunc = true // [trunc-writer] site 5 — conjunction prune
 				return fs.SkipDir
 			}
-			// skipDirRecord is keyed on a single path element, so a directory
-			// nested under a skip-recorded ancestor (app/vendor/lib under
-			// "vendor") is checked by walking every segment, not just d.Name() —
-			// otherwise only the named directory itself would be suppressed and
-			// its subtree would leak back in one level down.
-			underSkipRecord := false
-			for _, part := range parts {
-				if skipDirRecord[part] {
-					underSkipRecord = true
-					break
-				}
-			}
-			if !dirBudgetSpent && !underSkipRecord {
-				if len(dirs) >= b.maxDirs {
-					dirsTrunc = true
-				} else {
-					perRootDirs[top]++
-					lower := strings.ToLower(slash)
-					dirs = append(dirs, indexEntry{rel: rel, lower: lower, baseStart: baseStartOf(lower)})
-				}
+			// Rule 1: a direct, NON-HIDDEN child of $HOME is offered without
+			// needing a marker — the non-hidden depth-1 children listWorkspaces
+			// offers, minus symlinks, which WalkDir does not follow (a symlinked
+			// ~/foo -> /elsewhere has d.IsDir() false and lands in the file
+			// branch below, while listWorkspaces resolves and offers it) — plus
+			// .config by name, which is hidden but is where a user's own
+			// configuration lives. Rule 2 deliberately overrides the hidden filter for
+			// everything else: a hidden directory carrying a marker is
+			// recorded, which is how ~/.claude (its own git checkout) arrives.
+			if len(parts) == 1 && (!strings.HasPrefix(slash, ".") || slash == ".config") {
+				emit(slash)
 			}
 			return nil
 		}
@@ -343,14 +518,35 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 			return nil
 		}
 		if len(files) >= b.maxPaths {
-			// SkipAll ends the WalkDir call outright — the directory walk dies
-			// with it. Flagging only filesTrunc here would leave dirsTrunc false
-			// while every directory lexically after this point is silently gone.
-			filesTrunc, dirsTrunc = true, true
-			return filepath.SkipAll
+			// A full file index stops RECORDING FILES; it does not end the walk.
+			// This branch used to return filepath.SkipAll, which ends the WalkDir
+			// call outright and took the DIRECTORY walk down with it — so it also
+			// had to set dirsTrunc, because every directory lexically after the
+			// abort really was gone. That re-coupled two result sets given
+			// separate budgets and separate flags precisely so one could not
+			// starve the other, and it was not theoretical: on a real home the
+			// walk died around ~/my-assistant and the picker lost tech-advisor, a
+			// genuine project root, over the 247 files past the ceiling.
+			//
+			// Past the ceiling the walk keeps traversing, so the remaining cost
+			// is bounded by indexBudget, not by maxPaths. That is never worse
+			// for the directory set than the old SkipAll, which cut it at the
+			// same point or earlier. Returning nil leaves the directory set
+			// complete, so dirsTrunc must NOT be set here. Which sites DO end
+			// the walk, and which set both flags, is the ownership map's job —
+			// see walkTree. That inventory cannot be checked from this line,
+			// which is precisely how the sentence that used to sit here went
+			// stale.
+			//
+			// The test is self-latching: files never shrinks, so once it reaches
+			// maxPaths this branch returns for every later file. A separate
+			// "filesFull" flag would be a second source of truth for the same
+			// fact.
+			filesTrunc = true // [trunc-writer] site 6 — global file cap
+			return nil
 		}
 		if perRoot[top] >= b.maxPerRoot {
-			filesTrunc = true
+			filesTrunc = true // [trunc-writer] site 7 — per-root file cap
 			return nil
 		}
 		perRoot[top]++
