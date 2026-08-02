@@ -24,6 +24,8 @@ type mockSvc struct {
 	renamedID      string
 	renamedName    string
 	renameErr      error
+	usage          session.Usage
+	usageOK        bool
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -57,6 +59,32 @@ func (m *mockSvc) Get(id string) (session.Info, bool) {
 func (m *mockSvc) Rename(id, name string) error {
 	m.renamedID, m.renamedName = id, name
 	return m.renameErr
+}
+func (m *mockSvc) UsageFor(id string) (session.Usage, bool) { return m.usage, m.usageOK }
+
+func TestAPI_Usage(t *testing.T) {
+	svc := &mockSvc{usageOK: true, usage: session.Usage{Model: "claude-opus-4-8", ContextTokens: 597348}}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/usage", nil))
+	if rec.Code != 200 {
+		t.Fatalf("code %d want 200", rec.Code)
+	}
+	var u session.Usage
+	_ = json.NewDecoder(rec.Body).Decode(&u)
+	if u.ContextTokens != 597348 || u.Model != "claude-opus-4-8" {
+		t.Fatalf("body %+v", u)
+	}
+}
+
+func TestAPI_UsageMiss(t *testing.T) {
+	svc := &mockSvc{usageOK: false} // non-claude / no transcript
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/usage", nil))
+	if rec.Code != 204 {
+		t.Fatalf("code %d want 204", rec.Code)
+	}
 }
 
 func TestAPI_Rename(t *testing.T) {

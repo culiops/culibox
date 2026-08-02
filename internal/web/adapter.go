@@ -30,3 +30,5 @@ func (a ManagerService) Get(id string) (session.Info, bool) {
 	}
 	return sess.Info(), true
 }
+
+func (a ManagerService) UsageFor(id string) (session.Usage, bool) { return a.M.UsageFor(id) }
