@@ -123,8 +123,8 @@ type Info struct {
 	Status  string    `json:"status"`
 	// Activity is a UI-facing classification: working|waiting|done|crashed|detached.
 	Activity string `json:"activity"`
-	Name    string    `json:"name"`              // mutable display label (id is the stable key)
-	Runtime string    `json:"runtime,omitempty"` // box | host
+	Name     string `json:"name"`              // mutable display label (id is the stable key)
+	Runtime  string `json:"runtime,omitempty"` // box | host
 	// Attached reports that a viewer is subscribed right now. It says only THAT
 	// someone is watching, never who: every client authenticates with the same
 	// credentials, so the daemon has no identity to report and inventing one
@@ -171,10 +171,10 @@ type Session struct {
 	lastActivityAt time.Time // last non-empty PTY output (guarded by mu)
 	exitCode       int       // agent exit code; meaningful only when exitCodeKnown
 	exitCodeKnown  bool      // true only for ephemeral sessions (cmd IS the agent)
-	removed      chan struct{}
-	removedOnce  sync.Once
-	detachedCh   chan struct{} // closed when the session goes detached (agent alive, pipe lost)
-	detachedOnce sync.Once
+	removed        chan struct{}
+	removedOnce    sync.Once
+	detachedCh     chan struct{} // closed when the session goes detached (agent alive, pipe lost)
+	detachedOnce   sync.Once
 
 	backend Backend       // nil for an ephemeral (daemon-owned-PTY) session
 	sub     *subscription // current subscriber (at most one)
