@@ -179,6 +179,17 @@ function renderSession(s) {
   const li = document.createElement("li");
   if (terminalOpen(s.id)) li.classList.add("open");
   li.title = s.id; // tiebreaker when two labels match
+  // Activity dot leads the row: working/waiting/done/crashed at a glance. Server-
+  // computed (Info.activity); unknown/missing degrades to a muted dot, never a throw.
+  const adot = document.createElement("span");
+  const act = activityClass(s.activity);
+  adot.className = "act-dot " + act.cls;
+  if (act.title) {
+    adot.title = act.title;
+    adot.setAttribute("role", "img");
+    adot.setAttribute("aria-label", act.title);
+  }
+  li.appendChild(adot);
   const name = document.createElement("span");
   name.className = "name";
   name.textContent = s.name || s.id;

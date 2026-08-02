@@ -29,6 +29,10 @@
       --bg: #1e1e2e; --panel: #313244; --border: #45475a;
       --fg: #cdd6f4; --muted: #a6adc8; --accent: #89b4fa; --danger: #f38ba8;
       --warn: #fab387; --warn-fg: #f9e2af;
+      /* Activity "working". The palette had no "good/active" hue; this is
+         Catppuccin green, measured 8.46 on --panel and 11.0 on --bg — well past
+         WCAG 1.4.11's 3:1 for a meaningful graphic (the activity dot). */
+      --ok: #a6e3a1;
 
       /* Now that the palette is Catppuccin, re-derive the three tints Task 3
          had to freeze at their legacy literals. This is a deliberate colour
@@ -338,6 +342,13 @@
        --accent because the row this matters most on is your own evicted one,
        which carries the blue .open tint that swallows both. */
     #sessions .watching { flex: none; width: 9px; height: 9px; background: var(--fg); }
+    /* Activity dot: square, matching .watching / header .dot (the app's idiom).
+       Leads each row. Colours are semantic, separate from the accent. */
+    #sessions .act-dot { flex: none; width: 9px; height: 9px; }
+    .act-working { background: var(--ok); }
+    .act-waiting { background: var(--warn-fg); }
+    .act-crashed { background: var(--danger); }
+    .act-done, .act-detached, .act-unknown { background: var(--muted); }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
@@ -988,6 +999,7 @@
   <script src="/fontprefs.js"></script>
   <script src="/links.js"></script>
   <script src="/tier.js"></script>
+  <script src="/activity.js"></script>
   <script src="/layout.js"></script>
   <script src="/treestate.js"></script>
   <script src="/terminal-tab.js"></script>
