@@ -331,7 +331,9 @@ async function refreshSessions() {
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.
   const actById = new Map(lastSessions.map((s) => [s.id, s.activity]));
-  eachTerminal((t) => { if (actById.has(t.id)) t.setActivity(actById.get(t.id)); });
+  // A tab whose session has left the list (killed/pruned) would otherwise keep
+  // its last dot — a stale green "working" on a dead agent. Fall back to "done".
+  eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();
