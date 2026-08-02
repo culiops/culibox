@@ -153,6 +153,69 @@ function renderRateLimits(rl) {
   if (elW) elW.textContent = rl ? rateLimitText("week", rl.seven_day, now) : "";
 }
 
+// openAttribution shows the context-by-tool dialog for a session. Rows are built
+// with textContent (never innerHTML): tool names come from the transcript.
+async function openAttribution(id) {
+  const body = $("attr-body"), foot = $("attr-foot");
+  if (!body) return;
+  body.replaceChildren();
+  foot.replaceChildren();
+  openDialog("attr-modal");
+  let attr = null;
+  try { attr = await api("/api/sessions/" + encodeURIComponent(id) + "/attribution"); } catch (_) {}
+  const rows = attributionRows(attr);
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "attr-empty";
+    p.textContent = "No tool data for this session (not a Claude session, or no transcript yet).";
+    body.appendChild(p);
+    return;
+  }
+  const head = document.createElement("div");
+  head.className = "attr-row attr-head";
+  for (const [t, cls] of [["tool", "a-name"], ["calls", "a-calls"], ["≈ context", "a-ctx"]]) {
+    const c = document.createElement("span");
+    c.className = cls;
+    c.textContent = t;
+    head.appendChild(c);
+  }
+  body.appendChild(head);
+  for (const r of rows) {
+    const row = document.createElement("div");
+    row.className = "attr-row";
+    const name = document.createElement("span");
+    name.className = "a-name";
+    name.textContent = r.name;
+    if (r.kind === "mcp" || r.kind === "skill") {
+      const badge = document.createElement("span");
+      badge.className = "a-badge " + r.kind;
+      badge.textContent = r.kind === "mcp" ? "MCP" : "SKILL";
+      name.appendChild(badge);
+    }
+    const calls = document.createElement("span");
+    calls.className = "a-calls";
+    calls.textContent = String(r.calls);
+    const ctx = document.createElement("span");
+    ctx.className = "a-ctx";
+    ctx.textContent = r.ctx;
+    row.append(name, calls, ctx);
+    body.appendChild(row);
+  }
+  const mk = (label, val) => {
+    const s = document.createElement("span");
+    s.append(label + " ");
+    const b = document.createElement("b");
+    b.textContent = val;
+    s.appendChild(b);
+    return s;
+  };
+  foot.append(
+    mk("web search", String(attr.webSearch || 0)),
+    mk("web fetch", String(attr.webFetch || 0)),
+    mk("output", fmtTokens(attr.outputTokens || 0)),
+  );
+}
+
 // --- sidebar: session list ---------------------------------------------------
 function emptyLi(text) {
   const li = document.createElement("li");

@@ -517,6 +517,19 @@
 
     #settings-modal { width: 460px; }
     #spawn-modal { width: 420px; }
+    #attr-modal { width: 460px; }
+    /* Attribution rows: tool name (+kind badge) · calls · ≈ctx. */
+    .attr-row { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 14px; align-items: center; padding: 4px 0; font-size: 12.5px; }
+    .attr-row .a-name { font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attr-row .a-badge { font-size: 9.5px; font-weight: 700; padding: 1px 5px; border: 1px solid var(--border); margin-left: 6px; vertical-align: 1px; }
+    .a-badge.mcp { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+    .a-badge.skill { color: var(--warn-fg); border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); }
+    .attr-row .a-calls, .attr-row .a-ctx { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+    .attr-head { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-bottom: 2px; }
+    #attr-foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+    #attr-foot b { color: var(--fg); }
+    .attr-note { color: var(--muted); font-size: 11px; margin: 12px 0 0; line-height: 1.45; }
+    .attr-empty { color: var(--muted); font-size: 13px; }
     #ask-modal { width: 400px; }
     /* overflow-wrap because the link confirm puts a raw URL in here, and a long
        one offers no break opportunity. #toast-msg carries it for the same reason. */
@@ -691,7 +704,9 @@
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     /* Per-window context readout on the tab: muted, tabular so digits don't jitter. */
-    .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    /* Context readout doubles as the trigger for the attribution dialog. */
+    .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; background: none; border: none; cursor: pointer; padding: 0 2px; font-family: inherit; }
+    .cell-bar .tab-usage:hover { color: var(--fg); text-decoration: underline; }
     /* Same --muted-on--sel failure as the palette above: the active tab sets
        color: #fff on itself, but this child span re-asserts --muted, which
        fails at 3.99 against the same --sel background. */
@@ -1007,6 +1022,20 @@
     </div>
   </dialog>
 
+  <dialog id="attr-modal" box-="square" shear-="top">
+    <h2 class="pane-head dlg-title">Context by tool</h2>
+    <div class="dlg-head">
+      <span class="spacer"></span>
+      <button class="dlg-x" type="button" data-close="attr-modal" title="Close">×</button>
+    </div>
+    <div class="dlg-body">
+      <div id="attr-body"></div>
+      <div id="attr-foot"></div>
+      <p class="attr-note">Cumulative output each tool has added to the conversation — a proxy
+        for context pressure (result-payload size, not per-tool billing).</p>
+    </div>
+  </dialog>
+
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/addon-fit.js"></script>
   <script src="/xterm/addon-webgl.js"></script>
@@ -1019,6 +1048,7 @@
   <script src="/tier.js"></script>
   <script src="/activity.js"></script>
   <script src="/usage.js"></script>
+  <script src="/attribution.js"></script>
   <script src="/layout.js"></script>
   <script src="/treestate.js"></script>
   <script src="/terminal-tab.js"></script>
