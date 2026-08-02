@@ -260,7 +260,7 @@
        resolves identically, but the property is still declared per-element
        (typed custom properties resolve in their own font context) rather
        than assumed equal. */
-    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal {
+    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal, #attr-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -447,7 +447,7 @@
        declaration wins outright and restores centring regardless of source
        order. #palette is deliberately excluded (see its own comment below):
        it keeps the plain border and the UA's native fixed positioning. */
-    #spawn-modal, #settings-modal, #ask-modal {
+    #spawn-modal, #settings-modal, #ask-modal, #attr-modal {
       border: none; position: fixed; inset: 0; margin: auto;
     }
     /* box.css's own inset (`padding: 1lh 1ch`, sheared by [shear-=top] to
@@ -802,7 +802,7 @@
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
-      #settings-modal, #spawn-modal { width: 94vw; }
+      #settings-modal, #spawn-modal, #attr-modal { width: 94vw; }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* The upload button is the ONLY upload route on a phone (no drag exists),
          so it cannot stay an 18px-tall desktop button sitting in a header. */
