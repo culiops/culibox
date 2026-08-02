@@ -213,11 +213,13 @@ class Cell {
       if (t.kind === "terminal" && typeof t.usage === "function") {
         const ustr = usageTab(t.usage());
         if (ustr) {
-          const us = document.createElement("span");
+          const us = document.createElement("button");
+          us.type = "button";
           us.className = "tab-usage";
           us.textContent = ustr;
           const title = usageTitle(t.usage());
-          if (title) us.title = title;
+          us.title = (title ? title + " — " : "") + "click for context by tool";
+          us.onclick = (e) => { e.stopPropagation(); openAttribution(t.id); };
           b.append(us);
         }
       }

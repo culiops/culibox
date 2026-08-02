@@ -24,6 +24,7 @@ type SessionService interface {
 	Rename(id, name string) error
 	Get(id string) (session.Info, bool)
 	UsageFor(id string) (session.Usage, bool)
+	AttributionFor(id string) (session.Attribution, bool)
 }
 
 // API holds the HTTP handlers for sessions.
@@ -109,6 +110,21 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		sid := strings.TrimSuffix(id, "/usage")
 		if u, ok := a.Sessions.UsageFor(sid); ok {
 			writeJSON(w, http.StatusOK, u)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+	// GET /api/sessions/{id}/attribution — context-by-tool breakdown (full-transcript
+	// scan, on demand). 204 for non-claude / no transcript.
+	if strings.HasSuffix(id, "/attribution") {
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		sid := strings.TrimSuffix(id, "/attribution")
+		if at, ok := a.Sessions.AttributionFor(sid); ok {
+			writeJSON(w, http.StatusOK, at)
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}
