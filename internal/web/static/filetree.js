@@ -193,9 +193,16 @@ async function ftRenderDir(path, container, prefix) {
       // Auto-open on render if this directory was open before. This is what
       // restores the tree after a refresh or a re-root: rendering the root opens
       // each remembered child, whose own render opens ITS remembered children, so
-      // the whole previously-open subtree comes back. Runs inside ftLoadRoot's
-      // ftGen guard, so a superseded render is still dropped whole. It does NOT
-      // re-persist: it only reflects state already stored.
+      // the whole previously-open subtree comes back. It does NOT re-persist: it
+      // only reflects state already stored.
+      //
+      // The await is deliberate, and it is what makes the ftGen guard sound: the
+      // ENTIRE remembered subtree renders into ftLoadRoot's off-DOM box before the
+      // atomic replaceChildren, so a superseded load is dropped whole with nothing
+      // half-painted into the live tree. The cost is first paint — the root shows
+      // only after the remembered folders' /api/fs/list calls resolve (one per
+      // open folder, in series). Bounded by what the user actually expanded; a
+      // handful of folders is imperceptible on a local server.
       if (shouldAutoOpen(ftExpanded, full)) {
         open = true;
         icon.textContent = iconFor(ent.name, true, true);

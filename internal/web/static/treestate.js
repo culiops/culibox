@@ -54,8 +54,12 @@ function loadExpanded() {
     const raw = JSON.parse(localStorage.getItem(TREESTATE_KEY) || "null");
     if (!raw || raw.v !== TREESTATE_V || !Array.isArray(raw.paths)) return new Set();
     // A stored snapshot is user-editable text: keep only strings, drop the rest,
-    // so one hand-edited number cannot poison membership tests downstream.
-    return new Set(raw.paths.filter((p) => typeof p === "string"));
+    // so one hand-edited number cannot poison membership tests downstream. Enforce
+    // the cap here too — a normal save never exceeds it, but a hand-edited store
+    // could, and nothing else trims on load. slice(-CAP) keeps the newest, which
+    // matches addExpanded dropping the oldest first.
+    const paths = raw.paths.filter((p) => typeof p === "string");
+    return new Set(paths.slice(-TREESTATE_CAP));
   } catch (_) { return new Set(); }
 }
 

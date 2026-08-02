@@ -73,6 +73,18 @@ test("loadExpanded returns an empty set for absent, corrupt, or wrong-version da
   assert.deepStrictEqual([...loadExpanded()], ["/a", "/b"]); // non-strings dropped
 });
 
+test("loadExpanded enforces the cap against an oversized stored array", () => {
+  const map = fakeStorage();
+  const many = Array.from({ length: 505 }, (_, i) => "/d/" + i);
+  map.set(TREESTATE_KEY, JSON.stringify({ v: 1, paths: many }));
+  const s = loadExpanded();
+  assert.strictEqual(s.size, 500);
+  assert.ok(!s.has("/d/0"), "oldest hand-edited entry dropped");
+  assert.ok(!s.has("/d/4"), "five oldest dropped");
+  assert.ok(s.has("/d/5"), "sixth oldest kept");
+  assert.ok(s.has("/d/504"), "newest kept");
+});
+
 test("saveExpanded and loadExpanded swallow a thrown storage backend", () => {
   global.localStorage = {
     getItem() { throw new Error("blocked"); },
