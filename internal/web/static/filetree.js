@@ -91,6 +91,7 @@ function setFtRoot(path) {
 }
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
+let ftExpanded = new Set();     // absolute dir paths the user has opened; see treestate.js
 
 async function ftRenderDir(path, container, prefix) {
   prefix = prefix || "";
@@ -146,17 +147,37 @@ async function ftRenderDir(path, container, prefix) {
     more.setAttribute("aria-label", "Actions");
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
     row.append(more);
+    // Appended BEFORE the directory branch, not after it: auto-open below calls
+    // row.after(childBox), and ChildNode.after() is a silent no-op while the node
+    // has no parent — so an orphaned row would render its restored subtree into a
+    // box that is never inserted. Nothing between here and the branch touches
+    // container, and a click's row.after() still lands correctly.
+    container.append(row);
     if (ent.is_dir) {
       let open = false, childBox = null;
       row.classList.add("dir");
+      // openChildren renders this directory's contents into a fresh box right
+      // after its row. Shared by the click toggle and the auto-open on render so
+      // the two cannot drift in how the subtree is built.
+      const openChildren = async () => {
+        childBox = document.createElement("div");
+        row.after(childBox);
+        await ftRenderDir(full, childBox, b.childPrefix);
+      };
       row.onclick = async () => {
         open = !open;
         icon.textContent = iconFor(ent.name, true, open);
         if (open) {
-          childBox = document.createElement("div");
-          row.after(childBox);
-          await ftRenderDir(full, childBox, b.childPrefix);
-        } else if (childBox) { childBox.remove(); childBox = null; }
+          // Persist BEFORE the await: a second click that closes the row toggles
+          // `open` synchronously, so the stored state must already reflect open.
+          addExpanded(ftExpanded, full);
+          saveExpanded(ftExpanded);
+          await openChildren();
+        } else {
+          removeExpanded(ftExpanded, full);
+          saveExpanded(ftExpanded);
+          if (childBox) { childBox.remove(); childBox = null; }
+        }
       };
       // Each directory row is its own drop target and stops propagation, so it
       // wins over the whole-tree zone underneath it.
@@ -169,11 +190,28 @@ async function ftRenderDir(path, container, prefix) {
           },
         });
       }
+      // Auto-open on render if this directory was open before. This is what
+      // restores the tree after a refresh or a re-root: rendering the root opens
+      // each remembered child, whose own render opens ITS remembered children, so
+      // the whole previously-open subtree comes back. It does NOT re-persist: it
+      // only reflects state already stored.
+      //
+      // The await is deliberate, and it is what makes the ftGen guard sound: the
+      // ENTIRE remembered subtree renders into ftLoadRoot's off-DOM box before the
+      // atomic replaceChildren, so a superseded load is dropped whole with nothing
+      // half-painted into the live tree. The cost is first paint — the root shows
+      // only after the remembered folders' /api/fs/list calls resolve (one per
+      // open folder, in series). Bounded by what the user actually expanded; a
+      // handful of folders is imperceptible on a local server.
+      if (shouldAutoOpen(ftExpanded, full)) {
+        open = true;
+        icon.textContent = iconFor(ent.name, true, true);
+        await openChildren();
+      }
     } else {
       row.classList.add("file");
       row.onclick = () => openFile(full);
     }
-    container.append(row);
   }
 }
 
@@ -363,8 +401,11 @@ async function promptRename(path, name) {
     res = await fsRename(path, next, typed);
   }
   if (!res.ok) { showToast("Could not rename: " + fsErrText(res), { error: true }); return; }
-  // The old path is gone either way, so any viewer tab on it is stale.
+  // The old path is gone either way, so any viewer tab on it is stale, and its
+  // expand entries would be re-applied by a later render or linger in the cap.
   if (typeof closeViewersFor === "function") closeViewersFor(path);
+  forgetSubtree(ftExpanded, path);
+  saveExpanded(ftExpanded);
   showToast("Renamed to " + next);
   ftLoadRoot();
 }
@@ -402,6 +443,8 @@ async function confirmDelete(path, name, isDir) {
   }
   if (!res.ok) { showToast("Could not delete: " + fsErrText(res), { error: true }); return; }
   if (typeof closeViewersFor === "function") closeViewersFor(path);
+  forgetSubtree(ftExpanded, path); // the path and its children are gone; drop their expand state
+  saveExpanded(ftExpanded);
   showToast("Deleted " + name);
   ftLoadRoot();
 }
@@ -506,6 +549,8 @@ async function initFileTree() {
   ftRootSel = document.getElementById("ft-root-input");
   ftTreeEl = document.getElementById("filetree");
   if (!ftRootSel || !ftTreeEl) return;
+
+  ftExpanded = loadExpanded(); // which folders to auto-open as the tree renders
 
   let ws = [];
   try {
