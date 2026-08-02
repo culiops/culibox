@@ -15,6 +15,9 @@
 #
 # OUTPUT: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/agent-box-rate-limits.json
 #   {"updated_at":<epoch>,"five_hour":{"used_percentage":N,"resets_at":E},"seven_day":{...}}
+# THEN point agent-box at it — the default rate_limits_file is abtop's path, not
+# this one — in the agent-box config:
+#   { "rate_limits_file": "/home/you/.claude/agent-box-rate-limits.json" }
 # A statusLine command must also PRINT the status line itself; this one prints a
 # tiny summary so wiring it doesn't blank your status line.
 set -euo pipefail

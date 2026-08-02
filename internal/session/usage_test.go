@@ -8,8 +8,15 @@ import (
 )
 
 func TestProjectSlug(t *testing.T) {
-	if got := projectSlug("/home/claude/culiops-agent-box"); got != "-home-claude-culiops-agent-box" {
-		t.Fatalf("slug=%q", got)
+	cases := map[string]string{
+		"/home/claude/culiops-agent-box": "-home-claude-culiops-agent-box",
+		"/home/x/my.app_v2":              "-home-x-my-app-v2", // "." and "_" also become "-"
+		"/tmp/a.b/c_d":                   "-tmp-a-b-c-d",
+	}
+	for in, want := range cases {
+		if got := projectSlug(in); got != want {
+			t.Errorf("projectSlug(%q)=%q want %q", in, got, want)
+		}
 	}
 }
 

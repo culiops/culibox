@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -20,9 +21,15 @@ type Usage struct {
 
 const usageTailBytes = 256 << 10
 
-// projectSlug mirrors Claude Code's transcript dir naming: every "/" becomes "-".
-// (A leading "/" yields a leading "-", matching ~/.claude/projects/-home-...)
-func projectSlug(cwd string) string { return strings.ReplaceAll(cwd, "/", "-") }
+// slugNonAlnum matches Claude Code's transcript-dir encoder: every non-alphanumeric
+// character (including "/", ".", "_") becomes "-". An earlier version replaced only
+// "/", so a cwd like /home/x/my.app_v2 produced "-home-x-my.app_v2" while Claude's
+// real dir is "-home-x-my-app-v2" — the transcript was never found and usage silently
+// stayed blank. Existing "-" chars are non-alnum too and map to themselves.
+var slugNonAlnum = regexp.MustCompile(`[^a-zA-Z0-9]`)
+
+// projectSlug mirrors Claude Code's ~/.claude/projects/<slug> naming.
+func projectSlug(cwd string) string { return slugNonAlnum.ReplaceAllString(cwd, "-") }
 
 // isClaudeBin reports whether a resolved agent binary is Claude Code — the only
 // agent that writes the ~/.claude/projects transcripts this reads. Gating on it
