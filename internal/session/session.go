@@ -45,6 +45,28 @@ const (
 	statusDetached = "detached"
 )
 
+// idleThreshold: a live session with no PTY output for this long reads as
+// "waiting" (a proxy for "wants your input") rather than "working".
+const idleThreshold = 10 * time.Second
+
+// activityOf classifies a session for the UI. Pure: no locks, no clock — the
+// caller passes `now`. Exit dominates the idle test because a just-exited
+// session's lastActivity is stale. exitKnown gates crashed: for abduco/boxed
+// sessions the reaped code is the attach process's, not the agent's, so it must
+// not be trusted into a red "crashed".
+func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Time, idle time.Duration) string {
+	if exited {
+		if exitKnown && exitCode != 0 {
+			return "crashed"
+		}
+		return "done"
+	}
+	if now.Sub(lastActivity) < idle {
+		return "working"
+	}
+	return "waiting"
+}
+
 // Backend is an optional session-persistence layer (abduco). When a Manager has
 // one, sessions run under it and survive a daemon restart; the daemon holds a
 // replaceable attach process. When nil, the Manager owns the agent PTY directly
@@ -99,6 +121,8 @@ type Info struct {
 	Created time.Time `json:"created"`
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
+	// Activity is a UI-facing classification: working|waiting|done|crashed|detached.
+	Activity string `json:"activity"`
 	Name    string    `json:"name"`              // mutable display label (id is the stable key)
 	Runtime string    `json:"runtime,omitempty"` // box | host
 	// Attached reports that a viewer is subscribed right now. It says only THAT
@@ -143,6 +167,10 @@ type Session struct {
 	name         string // mutable display label (guarded by mu)
 	exitAt       time.Time
 	pumpFinished bool // pump drained the PTY fully (ring is complete)
+
+	lastActivityAt time.Time // last non-empty PTY output (guarded by mu)
+	exitCode       int       // agent exit code; meaningful only when exitCodeKnown
+	exitCodeKnown  bool      // true only for ephemeral sessions (cmd IS the agent)
 	removed      chan struct{}
 	removedOnce  sync.Once
 	detachedCh   chan struct{} // closed when the session goes detached (agent alive, pipe lost)
@@ -172,9 +200,10 @@ func newSession(id, agent, name, cwd string, created time.Time, cmd *exec.Cmd, p
 		removed:    make(chan struct{}),
 		detachedCh: make(chan struct{}),
 		rows:       24, cols: 80,
-		status:  statusLive,
-		name:    name,
-		backend: backend,
+		status:         statusLive,
+		name:           name,
+		backend:        backend,
+		lastActivityAt: created,
 	}
 	if backend != nil {
 		s.trim = &preambleTrimmer{}
@@ -213,6 +242,7 @@ func (s *Session) pump() {
 			if len(chunk) > 0 {
 				s.mu.Lock()
 				s.rb.append(chunk)
+				s.lastActivityAt = time.Now()
 				s.cond.Broadcast()
 				s.mu.Unlock()
 			}
@@ -229,7 +259,7 @@ func (s *Session) pump() {
 // is still alive we mark the session `detached` and do NOT finalize — it survives
 // for the next-boot reconcile. Only a genuine agent exit finalizes.
 func (s *Session) reap() {
-	_ = s.cmd.Wait()
+	err := s.cmd.Wait()
 	detached := s.backend != nil && s.backend.InnerAlive(s.ID)
 	s.mu.Lock()
 	if detached {
@@ -238,6 +268,16 @@ func (s *Session) reap() {
 		s.status = statusExited
 		s.exited = true
 		s.exitAt = time.Now()
+		if s.backend == nil { // ephemeral: cmd IS the agent, so its code is real
+			s.exitCodeKnown = true
+			if err == nil {
+				s.exitCode = 0
+			} else if ee, ok := err.(*exec.ExitError); ok {
+				s.exitCode = ee.ExitCode()
+			} else {
+				s.exitCodeKnown = false
+			}
+		}
 	}
 	s.cond.Broadcast()
 	s.mu.Unlock()
@@ -393,7 +433,11 @@ func (s *Session) Exited() bool {
 func (s *Session) Info() Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil}
+	activity := statusDetached
+	if s.status != statusDetached {
+		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold)
+	}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil}
 }
 
 // SetName updates the mutable display label.
