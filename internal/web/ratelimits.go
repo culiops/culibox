@@ -6,9 +6,12 @@ import (
 )
 
 // RateLimitWindow is one rolling usage window (Claude's 5-hour or 7-day).
+// UsedPercentage is a float: the producer (abtop) emits fractional values like
+// 7.000000000000001, which an int field would refuse to unmarshal — dropping the
+// whole snapshot. The client rounds it for display.
 type RateLimitWindow struct {
-	UsedPercentage int   `json:"used_percentage"`
-	ResetsAt       int64 `json:"resets_at"` // unix seconds
+	UsedPercentage float64 `json:"used_percentage"`
+	ResetsAt       int64   `json:"resets_at"` // unix seconds
 }
 
 // RateLimits is the account-global usage snapshot produced by a statusLine hook

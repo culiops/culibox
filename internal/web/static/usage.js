@@ -54,7 +54,8 @@ function fmtCountdown(resetsAtSec, nowSec) {
 // the window is absent (so the bottom bar renders nothing).
 function rateLimitText(label, win, nowSec) {
   if (!win || typeof win.used_percentage !== "number") return "";
-  return label + " " + win.used_percentage + "% · " + fmtCountdown(win.resets_at, nowSec);
+  // The producer can emit a fractional percentage (e.g. 7.000000000000001) — round.
+  return label + " " + Math.round(win.used_percentage) + "% · " + fmtCountdown(win.resets_at, nowSec);
 }
 
 if (typeof module !== "undefined" && module.exports) {

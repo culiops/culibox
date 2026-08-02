@@ -777,6 +777,11 @@
          carries meaning. Trading it buys the ~16px the full name needs. */
       header .dot { display: none; }
       header h1 { font-size: 14px; }
+      /* On touch the #hint keyboard shortcuts are noise, and with the account
+         5h/weekly fields added they made the status bar wrap to ~147px. Hide the
+         shortcut text on mobile so the status fields (env · sessions · cwd · 5h ·
+         week) stay a compact line; the bar is still dismissable via ×. */
+      #hint-text { display: none; }
       #palette-open .pal-long { display: none; }
       #palette-open .pal-short { display: inline; font-size: 15px; }
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
