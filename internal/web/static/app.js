@@ -241,9 +241,19 @@ function renderSession(s) {
   }
   const kill = document.createElement("button");
   kill.className = "kill";
-  kill.title = "Kill session";
-  kill.textContent = "×";
-  kill.onclick = (ev) => { ev.stopPropagation(); killSession(s.id); };
+  kill.title = "Kill session (ends the agent)";
+  // ⏻, not ×: the × in a tab means "close the view, session keeps running", so
+  // the same glyph here — where the button ENDS the session — trained the eye to
+  // read an irreversible kill as the safe close. ⏻ matches the tab's kill button.
+  kill.textContent = "⏻";
+  // A glyph-only button has no accessible name from its text (⏻ is not announced
+  // as an action), so name it explicitly, as the file-tree actions button does.
+  kill.setAttribute("aria-label", "Kill session");
+  // Guarded like the tab ⏻ and the palette: this × used to kill immediately, but
+  // it is the riskiest path (a small control packed against other rows) and the
+  // kill "cannot be undone". Undo-on-spawn still calls killSession directly, so
+  // it is not double-prompted. See confirmKill.
+  kill.onclick = (ev) => { ev.stopPropagation(); confirmKill(s.id, s.name || s.id); };
   li.appendChild(kill);
   return li;
 }
