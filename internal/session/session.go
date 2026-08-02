@@ -140,6 +140,7 @@ type Session struct {
 	Created time.Time
 	Runtime string // box | host; immutable for the session's lifetime
 	Box     string // container name for a boxed session; "" on the host tier
+	Bin     string // resolved agent binary (for claude-only features like usage)
 
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
@@ -469,6 +470,17 @@ type Manager struct {
 	retention time.Duration
 	boxes     Boxes   // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles // nil = boxed sessions run without user config
+	home      string  // daemon user's home; where a host session's ~/.claude lives
+	stateDir  string  // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+}
+
+// SetPaths records where transcripts live: the daemon home (host-tier sessions)
+// and the data dir (boxed sessions, under boxstate/<box>). Optional — unset
+// leaves UsageFor unable to locate transcripts, which it reports as "no usage".
+func (m *Manager) SetPaths(home, stateDir string) {
+	m.mu.Lock()
+	m.home, m.stateDir = home, stateDir
+	m.mu.Unlock()
 }
 
 // SetBundles installs the config-bundle provider. Call once at boot.
@@ -562,6 +574,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		env = []string{}
 	}
 
+	// Resolve the agent binary once, up front: it gates claude-only features
+	// (usage) and feeds the boxed config bundle below. Best-effort — an
+	// unresolvable bin just means no usage and no bundle.
+	bin := ""
+	if br, ok := m.launcher.(BinResolver); ok {
+		if b, err := br.BinFor(spec); err == nil {
+			bin = b
+		}
+	}
+
 	// Containment is applied here, between the launcher and the process start,
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	m.mu.Lock()
@@ -579,14 +601,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		var mounts []box.Mount
 		var bundleFlags []string
 		var bundleHash string
-		if bundles != nil {
-			if br, ok := m.launcher.(BinResolver); ok {
-				if bin, err := br.BinFor(spec); err == nil {
-					mounts, bundleFlags, bundleHash, err = bundles.For(bin)
-					if err != nil {
-						log.Printf("session %s: config bundle unavailable (%v); the box will run without user config", id, err)
-					}
-				}
+		if bundles != nil && bin != "" {
+			var err error
+			mounts, bundleFlags, bundleHash, err = bundles.For(bin)
+			if err != nil {
+				log.Printf("session %s: config bundle unavailable (%v); the box will run without user config", id, err)
 			}
 		}
 		argv = append(argv, bundleFlags...)
@@ -623,6 +642,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess := newSession(id, spec.Agent, name, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
 	sess.Box = boxName
+	sess.Bin = bin
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()

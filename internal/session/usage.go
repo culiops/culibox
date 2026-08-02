@@ -123,6 +123,45 @@ func contextMax(model string) (int, bool) {
 	}
 }
 
+// UsageFor reads the latest transcript usage for a claude session. ok=false for
+// a non-claude session, one whose transcript can't be located/read, or one whose
+// tail carries no usage line. Immutable session fields (Cwd/Box/Created/Bin) are
+// read without the lock; only the map lookup and paths are guarded.
+func (m *Manager) UsageFor(id string) (Usage, bool) {
+	m.mu.Lock()
+	s := m.sessions[id]
+	home, stateDir := m.home, m.stateDir
+	m.mu.Unlock()
+	if s == nil || !isClaudeBin(s.Bin) {
+		return Usage{}, false
+	}
+	base := home
+	if s.Box != "" && stateDir != "" {
+		base = filepath.Join(stateDir, "boxstate", s.Box)
+	}
+	if base == "" {
+		return Usage{}, false
+	}
+	p, ok := transcriptPath(s.Cwd, base, s.Created)
+	if !ok {
+		return Usage{}, false
+	}
+	b, err := readUsageTail(p)
+	if err != nil {
+		return Usage{}, false
+	}
+	u, ok := parseUsageTail(b)
+	if !ok {
+		return Usage{}, false
+	}
+	if max, ok := contextMax(u.Model); ok && u.ContextTokens <= max {
+		u.ContextMax = max
+		pctv := u.ContextTokens * 100 / max
+		u.Pct = &pctv
+	}
+	return u, true
+}
+
 // readUsageTail reads the last usageTailBytes of a file (or the whole file if
 // smaller) — never the whole of a multi-MB transcript.
 func readUsageTail(path string) ([]byte, error) {

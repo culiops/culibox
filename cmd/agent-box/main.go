@@ -112,6 +112,7 @@ func main() {
 	}
 
 	mgr := session.NewManager(lnch, adapter, 128*1024, 5*time.Minute)
+	mgr.SetPaths(home, dataDir) // where transcripts live: host ~/.claude, boxed <dataDir>/boxstate/<box>
 	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
 		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
 	}
