@@ -94,6 +94,23 @@ func TestTokensPerPrompt(t *testing.T) {
 	}
 }
 
+// Ingest must refuse to run concurrently — two overlapping passes would read the
+// same offset and additively double-count. Holding the lock simulates a pass in
+// flight (e.g. the startup scan) while a "Re-scan" click calls Ingest.
+func TestIngestRefusesConcurrent(t *testing.T) {
+	svc := &Service{store: openTemp(t), roots: nil}
+	svc.mu.Lock() // pretend a pass is running
+	_, err := svc.Ingest()
+	svc.mu.Unlock()
+	if err != ErrIngestBusy {
+		t.Fatalf("concurrent Ingest err = %v, want ErrIngestBusy", err)
+	}
+	// Once free, it runs normally.
+	if _, err := svc.Ingest(); err != nil {
+		t.Fatalf("Ingest after unlock: %v", err)
+	}
+}
+
 func TestToolsAggregate(t *testing.T) {
 	s := openTemp(t)
 	p := newParsed()

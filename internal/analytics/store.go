@@ -51,22 +51,19 @@ CREATE INDEX IF NOT EXISTS idx_attr_day ON attribution_rollup(day);
 `
 
 // Open opens (creating if needed) the analytics DB at path and ensures the schema.
+//
+// Pragmas go in the DSN, not a post-open Exec: database/sql pools connections and
+// an Exec'd PRAGMA binds only the one connection that served it, so a lazily-opened
+// connection serving a concurrent HTTP read would miss busy_timeout and fail with
+// SQLITE_BUSY instead of waiting. In the DSN, modernc applies them to every
+// connection the pool opens. (journal_mode=WAL persists in the file header, but the
+// others do not — hence the DSN for all three.)
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := "file:" + path +
+		"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
-	}
-	// One writer at a time (the ingester); WAL + a busy timeout keep concurrent
-	// reads (the API) from tripping "database is locked".
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA busy_timeout=5000",
-		"PRAGMA synchronous=NORMAL",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("pragma %q: %w", pragma, err)
-		}
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

@@ -1,9 +1,12 @@
 package web
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/culiops/agent-box/internal/analytics"
 )
 
 // Analytics endpoints. All are registered only when s.Analytics != nil (the
@@ -112,6 +115,10 @@ func (s *Server) handleAnalyticsIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats, err := s.Analytics.Ingest()
+	if errors.Is(err, analytics.ErrIngestBusy) {
+		writeErr(w, http.StatusConflict, "a scan is already running; try again shortly")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "ingest failed")
 		return

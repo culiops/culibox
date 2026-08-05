@@ -77,7 +77,9 @@ func ingestFile(s *Store, path, project string, st *IngestStats) error {
 		sessionID = stemSessionID(path)
 	}
 	st.BytesRead += consumed
-	st.Files++
+	if consumed > 0 { // a size bump that was only a partial trailing line isn't a "file ingested"
+		st.Files++
+	}
 	return s.Apply(sessionID, project, path, parsed, size, offset+consumed, mtime)
 }
 

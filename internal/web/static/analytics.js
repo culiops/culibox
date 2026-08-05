@@ -113,10 +113,13 @@ function anTotals(t) {
   const sec = anSection("Totals (window)");
   const row = document.createElement("div");
   row.className = "an-totals";
+  // output/prompt is the efficiency signal, not all-tokens/prompt: cache_read
+  // (context re-read every turn) dwarfs everything, so total/prompt mostly tracks
+  // context size, whereas output/prompt tracks what the model actually produced.
   const items = [
     ["input", t.input], ["output", t.output], ["cache read", t.cacheRead],
     ["cache write", t.cacheCreation], ["all tokens", t.tokens],
-    ["prompts", t.prompts], ["tokens / prompt", tokensPerPrompt(t.tokens, t.prompts)],
+    ["prompts", t.prompts], ["output / prompt", tokensPerPrompt(t.output, t.prompts)],
   ];
   for (const [label, val] of items) {
     const cell = document.createElement("div");
@@ -195,7 +198,7 @@ function anSessions(rows) {
   }
   const table = document.createElement("table");
   table.className = "an-table";
-  table.appendChild(anHead(["day", "project", "model", "tokens", "prompts", "tok/prompt"]));
+  table.appendChild(anHead(["day", "project", "model", "tokens", "prompts", "out/prompt"]));
   for (const r of rows) {
     const tr = document.createElement("tr");
     const total = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
@@ -205,7 +208,7 @@ function anSessions(rows) {
       anTd(r.model || "(unknown)", "mono"),
       anTd(fmtCompact(total)),
       anTd(String(r.prompts || 0)),
-      anTd(fmtCompact(Math.round(r.tokensPerPrompt || 0))),
+      anTd(fmtCompact(tokensPerPrompt(r.output, r.prompts))),
     );
     table.appendChild(tr);
   }

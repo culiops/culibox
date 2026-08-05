@@ -2,9 +2,17 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"log"
+	"sync"
 	"time"
 )
+
+// ErrIngestBusy is returned by Ingest when a pass is already running. Ingestion
+// MUST be serialized: the read offset is loaded outside the write transaction, so
+// two overlapping passes would both start from the same offset and additively
+// upsert the same bytes twice — silent, irreversible double-counting.
+var ErrIngestBusy = errors.New("analytics: ingest already running")
 
 // Service ties the store, the transcript roots, and the ingest schedule together.
 // It is the only type the web/main layers touch.
@@ -12,6 +20,7 @@ type Service struct {
 	store    *Store
 	roots    []string
 	interval time.Duration
+	mu       sync.Mutex // held for the duration of one Ingest pass
 }
 
 // New opens the analytics DB at dbPath and returns a Service over the given
@@ -27,9 +36,16 @@ func New(dbPath string, roots []string, interval time.Duration) (*Service, error
 	return &Service{store: st, roots: roots, interval: interval}, nil
 }
 
-// Ingest runs one full pass over all roots. Safe to call concurrently with reads
-// (SQLite WAL); callers should avoid overlapping Ingest calls (Start does not).
+// Ingest runs one full pass over all roots. It is serialized: a call made while
+// another pass is running returns ErrIngestBusy immediately rather than racing it
+// (which would double-count — see ErrIngestBusy). Concurrent READS are unaffected
+// (SQLite WAL). Both the daily ticker and the POST /ingest handler funnel here, so
+// a "Re-scan" click during the multi-minute startup scan is refused, not raced.
 func (s *Service) Ingest() (IngestStats, error) {
+	if !s.mu.TryLock() {
+		return IngestStats{}, ErrIngestBusy
+	}
+	defer s.mu.Unlock()
 	var st IngestStats
 	for _, root := range s.roots {
 		ingestRoot(s.store, root, &st)
@@ -50,7 +66,11 @@ func (s *Service) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			stats, _ := s.Ingest()
+			stats, err := s.Ingest()
+			if err != nil {
+				log.Printf("analytics: scheduled ingest skipped: %v", err)
+				continue
+			}
 			log.Printf("analytics: ingest — %d files, %d bytes, %d errors",
 				stats.Files, stats.BytesRead, stats.Errors)
 		}
