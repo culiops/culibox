@@ -209,7 +209,7 @@ async function openAttribution(id) {
     s.appendChild(b);
     return s;
   };
-  foot.append(mk("output", fmtTokens(attr.outputTokens || 0) + " tokens"));
+  foot.append(mk("session output", fmtTokens(attr.outputTokens || 0) + " tokens"));
 }
 
 // --- sidebar: session list ---------------------------------------------------
