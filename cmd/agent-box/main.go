@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/abduco"
+	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
@@ -227,6 +228,38 @@ func main() {
 		RateLimitsFile:  rateLimitsFile,
 	}
 
+	// Analytics: durable token/prompt rollups mined from the Claude Code
+	// transcripts. Enabled by default; only an explicit config false turns it off.
+	// Roots default to ~/.claude/projects (all host + direct usage — the bulk) plus
+	// this instance's boxed-session transcript dirs.
+	var analyticsSvc *analytics.Service
+	if cfg.Analytics.On() {
+		dbPath := cfg.Analytics.DBPath
+		if dbPath == "" {
+			dbPath = filepath.Join(dataDir, "analytics.db")
+		}
+		roots := cfg.Analytics.Roots
+		if len(roots) == 0 {
+			roots = []string{filepath.Join(home, ".claude", "projects")}
+			if boxed, _ := filepath.Glob(filepath.Join(dataDir, "boxstate", "*", ".claude", "projects")); len(boxed) > 0 {
+				roots = append(roots, boxed...)
+			}
+		}
+		interval := 24 * time.Hour
+		if cfg.Analytics.IngestInterval != "" {
+			if d, perr := time.ParseDuration(cfg.Analytics.IngestInterval); perr == nil && d > 0 {
+				interval = d
+			}
+		}
+		if svc, aerr := analytics.New(dbPath, roots, interval); aerr != nil {
+			log.Printf("analytics disabled: %v", aerr)
+		} else {
+			analyticsSvc = svc
+			srv.Analytics = svc
+			log.Printf("analytics: db %s, %d root(s), ingest every %s", dbPath, len(roots), interval)
+		}
+	}
+
 	// A default workspace that can never be contained must fail at boot, not once
 	// per spawn: the spawn-time error is correct but arrives after every click.
 	if boxes != nil {
@@ -256,6 +289,14 @@ func main() {
 		log.Printf("quick shell: profile %q → %s", effective, config.DetectShell())
 	}
 
+	// Start the analytics ingester (initial pass + daily ticker) in the background;
+	// its context is cancelled on shutdown below.
+	analyticsCtx, analyticsCancel := context.WithCancel(context.Background())
+	defer analyticsCancel()
+	if analyticsSvc != nil {
+		go analyticsSvc.Start(analyticsCtx)
+	}
+
 	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler(user, pass)}
 
 	// Release attach clients on the way out instead of leaving it to SIGHUP.
@@ -269,6 +310,10 @@ func main() {
 		sig := <-stop
 		log.Printf("received %v: releasing %d attach client(s), agents stay running",
 			sig, mgr.DetachAll())
+		analyticsCancel()
+		if analyticsSvc != nil {
+			_ = analyticsSvc.Close()
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = httpSrv.Shutdown(ctx)

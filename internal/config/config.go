@@ -137,7 +137,23 @@ type Config struct {
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
+
+	Analytics AnalyticsConfig `json:"analytics,omitempty"`
 }
+
+// AnalyticsConfig configures the token/prompt analytics store + ingester. The
+// zero value is "enabled with defaults": Enabled is a *bool so an omitted field
+// means on, and only an explicit false turns the feature (store, routes, ticker)
+// off.
+type AnalyticsConfig struct {
+	Enabled        *bool    `json:"enabled,omitempty"`         // nil/true → on; false → off
+	Roots          []string `json:"roots,omitempty"`           // transcript roots; empty → defaults (see main)
+	IngestInterval string   `json:"ingest_interval,omitempty"` // e.g. "24h"; empty/invalid → 24h
+	DBPath         string   `json:"db_path,omitempty"`         // empty → <dataDir>/analytics.db
+}
+
+// On reports whether analytics is enabled (the default when unset).
+func (a AnalyticsConfig) On() bool { return a.Enabled == nil || *a.Enabled }
 
 // RuntimeFor resolves an agent's tier: its own setting when it has one, else
 // this instance's default, else box. Unset means contained at every level — the

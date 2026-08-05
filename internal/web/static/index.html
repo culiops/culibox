@@ -260,7 +260,7 @@
        resolves identically, but the property is still declared per-element
        (typed custom properties resolve in their own font context) rather
        than assumed equal. */
-    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal, #attr-modal {
+    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal, #attr-modal, #analytics-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -447,7 +447,7 @@
        declaration wins outright and restores centring regardless of source
        order. #palette is deliberately excluded (see its own comment below):
        it keeps the plain border and the UA's native fixed positioning. */
-    #spawn-modal, #settings-modal, #ask-modal, #attr-modal {
+    #spawn-modal, #settings-modal, #ask-modal, #attr-modal, #analytics-modal {
       border: none; position: fixed; inset: 0; margin: auto;
     }
     /* box.css's own inset (`padding: 1lh 1ch`, sheared by [shear-=top] to
@@ -518,6 +518,32 @@
     #settings-modal { width: 460px; }
     #spawn-modal { width: 420px; }
     #attr-modal { width: 460px; }
+    #analytics-modal { width: 820px; max-width: 96vw; }
+
+    /* Analytics view */
+    .an-caption { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0 0 12px; }
+    .an-section { margin: 0 0 18px; }
+    .an-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+    .an-totals { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 4px; }
+    .an-tot { display: flex; flex-direction: column; }
+    .an-tot .v { font-size: 16px; font-variant-numeric: tabular-nums; }
+    .an-tot .l { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .an-bars { display: flex; align-items: flex-end; gap: 3px; height: 120px; overflow-x: auto; padding-bottom: 2px; }
+    .an-bar { display: flex; flex-direction: column; justify-content: flex-end; min-width: 14px; flex: 1; height: 100%; }
+    .an-bar .seg { width: 100%; }
+    .an-bar .cap { font-size: 9px; color: var(--muted); text-align: center; margin-top: 2px; white-space: nowrap; transform: rotate(-45deg); transform-origin: center; height: 1.4em; }
+    .an-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .an-legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .an-legend i { width: 10px; height: 10px; display: inline-block; }
+    .an-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .an-table th { text-align: right; color: var(--muted); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; padding: 3px 8px; border-bottom: 1px solid var(--border); }
+    .an-table th:first-child, .an-table td:first-child { text-align: left; }
+    .an-table td { padding: 3px 8px; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+    .an-table td.mono { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .an-badge { font-size: 9px; padding: 0 5px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; }
+    .an-empty { color: var(--muted); font-size: 12.5px; }
+    #analytics-refresh { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+    #analytics-refresh:hover { color: var(--fg); }
     /* Attribution rows: tool name (+kind badge) · calls · ≈ctx. */
     .attr-row { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 14px; align-items: center; padding: 4px 0; font-size: 12.5px; }
     .attr-row .a-name { font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -802,7 +828,7 @@
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
-      #settings-modal, #spawn-modal, #attr-modal { width: 94vw; }
+      #settings-modal, #spawn-modal, #attr-modal, #analytics-modal { width: 94vw; }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* The upload button is the ONLY upload route on a phone (no drag exists),
          so it cannot stay an 18px-tall desktop button sitting in a header. */
@@ -842,6 +868,7 @@
       <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
     <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌕</span></button>
+    <button id="analytics-open" title="Token &amp; prompt analytics" aria-label="Analytics" hidden>📊</button>
     <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings" class="nf"></button>
   </header>
   <div id="layout">
@@ -1037,6 +1064,21 @@
     </div>
   </dialog>
 
+  <dialog id="analytics-modal" box-="square" shear-="top">
+    <h2 class="pane-head dlg-title">Analytics</h2>
+    <div class="dlg-head">
+      <span id="analytics-range" class="an-caption" style="margin:0;flex:1"></span>
+      <button id="analytics-refresh" type="button" title="Re-scan transcripts now">Re-scan</button>
+      <button class="dlg-x" type="button" data-close="analytics-modal" title="Close">×</button>
+    </div>
+    <div class="dlg-body">
+      <div id="analytics-body"></div>
+      <p class="an-caption">Trends only — cross-model comparison is <b>directional, not causal</b>:
+        token/prompt volume depends mostly on the task, not the model. Skill/plugin/MCP
+        attribution is recorded only on recent transcripts.</p>
+    </div>
+  </dialog>
+
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/addon-fit.js"></script>
   <script src="/xterm/addon-webgl.js"></script>
@@ -1050,6 +1092,7 @@
   <script src="/activity.js"></script>
   <script src="/usage.js"></script>
   <script src="/attribution.js"></script>
+  <script src="/analytics.js"></script>
   <script src="/layout.js"></script>
   <script src="/treestate.js"></script>
   <script src="/terminal-tab.js"></script>

@@ -929,6 +929,18 @@ function initSettings() {
 
 // --- boot --------------------------------------------------------------------
 window.addEventListener("resize", fitAll);
+// Analytics view (button revealed by initEnv only when the feature is enabled).
+$("analytics-open").addEventListener("click", openAnalytics);
+{
+  const anRefresh = $("analytics-refresh");
+  if (anRefresh) anRefresh.addEventListener("click", async () => {
+    anRefresh.disabled = true;
+    anRefresh.textContent = "Scanning…";
+    try { await api("/api/analytics/ingest", { method: "POST" }); await renderAnalytics(); }
+    catch (_) { /* leave the current view; the range line still shows */ }
+    finally { anRefresh.disabled = false; anRefresh.textContent = "Re-scan"; }
+  });
+}
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
 $("layouts").addEventListener("click", (e) => {
   if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
@@ -970,6 +982,8 @@ initUpload();
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
+    const anBtn = $("analytics-open");
+    if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     renderRateLimits(meta && meta.rate_limits); // account 5h/weekly in the bottom bar
     refreshSessions(); // re-render rows now that the tier label is known
     if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 )
 
@@ -38,6 +39,10 @@ type Server struct {
 	// RateLimitsFile is the account 5h/weekly usage snapshot (produced by a
 	// statusLine hook); read fresh on every /api/meta. Empty → no limits in the UI.
 	RateLimitsFile string
+
+	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
+	// feature is disabled: no routes registered, no data shown.
+	Analytics *analytics.Service
 
 	// MaxUploadBytes caps a single uploaded file; MaxArchiveBytes/Files cap a
 	// directory download. Zero means the built-in default in every case — unset
@@ -97,6 +102,7 @@ func (s *Server) Handler(user, pass string) http.Handler {
 			"env_color":     s.EnvColor,
 			"shell_profile": s.quickShell(),
 			"box_runtime":   s.BoxRuntime,
+			"analytics":     s.Analytics != nil,
 		}
 		// Account 5h/weekly usage, read fresh (tiny file). Omitted when absent so
 		// the client shows nothing rather than an empty widget.
@@ -116,6 +122,15 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)
 	protected.HandleFunc("/api/fs/rename", s.handleFsRename)
 	protected.HandleFunc("/api/fs/delete", s.handleFsDelete)
+
+	// Analytics routes only exist when the feature is enabled; the POST /ingest
+	// inherits csrfGuard's same-origin check like every other state-changing call.
+	if s.Analytics != nil {
+		protected.HandleFunc("/api/analytics/summary", s.handleAnalyticsSummary)
+		protected.HandleFunc("/api/analytics/sessions", s.handleAnalyticsSessions)
+		protected.HandleFunc("/api/analytics/tools", s.handleAnalyticsTools)
+		protected.HandleFunc("/api/analytics/ingest", s.handleAnalyticsIngest)
+	}
 
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))

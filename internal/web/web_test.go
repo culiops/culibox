@@ -136,7 +136,7 @@ func TestHandleMeta(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("status %d", rec.Code)
 	}
-	var got map[string]string
+	var got map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 	req.SetBasicAuth("admin", "pw")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	var got map[string]string
+	var got map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestHandleMetaFailsClosedWithoutProfiles(t *testing.T) {
 	req.SetBasicAuth("admin", "pw")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	var got map[string]string
+	var got map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestHandleMetaShellProfileIntact(t *testing.T) {
 	req.SetBasicAuth("admin", "pw")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	var got map[string]string
+	var got map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -300,7 +300,7 @@ func TestHandleMetaNoShellProfile(t *testing.T) {
 	req.SetBasicAuth("admin", "pw")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	var got map[string]string
+	var got map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
