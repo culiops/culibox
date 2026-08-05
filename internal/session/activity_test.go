@@ -62,6 +62,55 @@ func TestInfoActivity(t *testing.T) {
 	})
 }
 
+func TestRecordActivity(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name       string
+		mutedUntil time.Time
+		want       bool
+	}{
+		{"never muted (zero value)", time.Time{}, true},
+		{"inside the muted window", now.Add(500 * time.Millisecond), false},
+		{"exactly at the window edge", now, false}, // After() is strict; == is still muted
+		{"past the muted window", now.Add(-time.Millisecond), true},
+	}
+	for _, c := range cases {
+		if got := recordActivity(now, c.mutedUntil); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNoteOutputRespectsMute(t *testing.T) {
+	base := time.Now()
+	t.Run("muted output does not bump lastActivityAt", func(t *testing.T) {
+		s := &Session{lastActivityAt: base}
+		s.muteActivity(base) // mutes until base+grace
+		s.noteOutput(base.Add(100 * time.Millisecond))
+		if !s.lastActivityAt.Equal(base) {
+			t.Fatalf("lastActivityAt moved during grace: got %v want %v", s.lastActivityAt, base)
+		}
+	})
+	t.Run("output after the grace bumps lastActivityAt", func(t *testing.T) {
+		s := &Session{lastActivityAt: base}
+		s.muteActivity(base)
+		later := base.Add(attachRepaintGrace + time.Millisecond)
+		s.noteOutput(later)
+		if !s.lastActivityAt.Equal(later) {
+			t.Fatalf("lastActivityAt not updated after grace: got %v want %v", s.lastActivityAt, later)
+		}
+	})
+}
+
+func TestMuteActivitySetsWindow(t *testing.T) {
+	base := time.Now()
+	s := &Session{}
+	s.muteActivity(base)
+	if want := base.Add(attachRepaintGrace); !s.activityMutedUntil.Equal(want) {
+		t.Fatalf("activityMutedUntil: got %v want %v", s.activityMutedUntil, want)
+	}
+}
+
 // TestReapExitCodeActivity exercises the REAL reap() exit-code path (not hand-set
 // fields): an ephemeral (nil-backend) session's cmd IS the agent, so its exit
 // code is trusted. This is the only runtime path that sets exitCodeKnown, so

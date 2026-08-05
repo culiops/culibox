@@ -49,6 +49,13 @@ const (
 // "waiting" (a proxy for "wants your input") rather than "working".
 const idleThreshold = 10 * time.Second
 
+// attachRepaintGrace: output produced within this window after a resize or a
+// forced redraw is a repaint WE triggered by attaching a viewer, not the agent
+// working — so it must not count toward activity. A SIGWINCH repaint finishes in
+// well under this window; only a burst that both starts and ends inside it is
+// hidden, which in practice is only the repaint.
+const attachRepaintGrace = 1 * time.Second
+
 // activityOf classifies a session for the UI. Pure: no locks, no clock — the
 // caller passes `now`. Exit dominates the idle test because a just-exited
 // session's lastActivity is stale. exitKnown gates crashed: for abduco/boxed
@@ -65,6 +72,28 @@ func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Tim
 		return "working"
 	}
 	return "waiting"
+}
+
+// recordActivity reports whether output observed at `now` should count as agent
+// activity: it does, unless `now` is still at or inside the muted window set by a
+// control-action repaint (see muteActivity).
+func recordActivity(now, mutedUntil time.Time) bool {
+	return now.After(mutedUntil)
+}
+
+// noteOutput records PTY output as agent activity unless we are inside the
+// post-control-action grace window. Caller holds s.mu.
+func (s *Session) noteOutput(now time.Time) {
+	if recordActivity(now, s.activityMutedUntil) {
+		s.lastActivityAt = now
+	}
+}
+
+// muteActivity suppresses activity attribution for the next attachRepaintGrace,
+// so a repaint triggered by our own resize/forced-redraw is not read as work.
+// Caller holds s.mu.
+func (s *Session) muteActivity(now time.Time) {
+	s.activityMutedUntil = now.Add(attachRepaintGrace)
 }
 
 // Backend is an optional session-persistence layer (abduco). When a Manager has
@@ -170,12 +199,16 @@ type Session struct {
 	pumpFinished bool // pump drained the PTY fully (ring is complete)
 
 	lastActivityAt time.Time // last non-empty PTY output (guarded by mu)
-	exitCode       int       // agent exit code; meaningful only when exitCodeKnown
-	exitCodeKnown  bool      // true only for ephemeral sessions (cmd IS the agent)
-	removed        chan struct{}
-	removedOnce    sync.Once
-	detachedCh     chan struct{} // closed when the session goes detached (agent alive, pipe lost)
-	detachedOnce   sync.Once
+	// activityMutedUntil: output before this instant is a control-action repaint
+	// (resize/forced-redraw on attach), not agent work, so it must not count as
+	// activity. Guarded by mu.
+	activityMutedUntil time.Time
+	exitCode           int  // agent exit code; meaningful only when exitCodeKnown
+	exitCodeKnown      bool // true only for ephemeral sessions (cmd IS the agent)
+	removed            chan struct{}
+	removedOnce        sync.Once
+	detachedCh         chan struct{} // closed when the session goes detached (agent alive, pipe lost)
+	detachedOnce       sync.Once
 
 	backend Backend       // nil for an ephemeral (daemon-owned-PTY) session
 	sub     *subscription // current subscriber (at most one)
@@ -243,7 +276,7 @@ func (s *Session) pump() {
 			if len(chunk) > 0 {
 				s.mu.Lock()
 				s.rb.append(chunk)
-				s.lastActivityAt = time.Now()
+				s.noteOutput(time.Now())
 				s.cond.Broadcast()
 				s.mu.Unlock()
 			}
@@ -403,6 +436,7 @@ func (s *Session) Write(p []byte) (int, error) { return s.ptmx.Write(p) }
 func (s *Session) Resize(rows, cols uint16) error {
 	s.mu.Lock()
 	s.rows, s.cols = rows, cols
+	s.muteActivity(time.Now())
 	s.mu.Unlock()
 	return pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows, Cols: cols})
 }
@@ -412,6 +446,7 @@ func (s *Session) Resize(rows, cols uint16) error {
 func (s *Session) ForceRedraw() {
 	s.mu.Lock()
 	r, c := s.rows, s.cols
+	s.muteActivity(time.Now())
 	s.mu.Unlock()
 	if c == 0 {
 		return
