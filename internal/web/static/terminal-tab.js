@@ -22,6 +22,13 @@ function isBrokenMouseReport(data) {
   return typeof data === "string" && data.startsWith("\x1b[<") && data.includes("NaN");
 }
 
+// hasSize reports whether an element has a real box to fit into. A zero-size
+// element is hidden (an inactive tab) or not yet attached to the document; fitting
+// it measures nothing and would send a bogus resize, so callers skip it.
+function hasSize(w, h) {
+  return w > 0 && h > 0;
+}
+
 // TerminalTab is one agent session as a tab body: an xterm.js terminal bound to
 // /ws/{id}, with self-healing reconnect and copy-on-select / clean-paste. The
 // terminal + WebSocket + reconnect logic is unchanged from the original Pane;
@@ -51,6 +58,7 @@ class TerminalTab {
     const termEl = document.createElement("div");
     termEl.className = "pane-term";
     this.el.append(termEl);
+    this.termEl = termEl;
 
     // Drop a file on the pane → upload into this session's cwd, then type the
     // path at the prompt. The cell outlines while dragging, so the destination
@@ -105,7 +113,20 @@ class TerminalTab {
     this.term.loadAddon(this.fitAddon);
     this.term.open(termEl);
     try { this.term.loadAddon(new WebglAddon.WebglAddon()); } catch (_) {}
-    this.fitAddon.fit();
+    this._fitRaf = 0;
+    this.fit(); // best-effort now; skipped by the guard until the element is sized
+    // Re-fit once the block-display font has loaded — cell metrics can shift.
+    if (typeof document !== "undefined" && document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => this.fit()).catch(() => {});
+    }
+    // Auto-refit whenever the container settles or changes size. This is the fix
+    // for the post-refresh "broken until you resize" race: previously a fit that
+    // ran before the grid/sidebar layout settled was never corrected on its own —
+    // only window-resize or the sidebar splitter (the two fitAll triggers) fixed it.
+    if (typeof ResizeObserver === "function") {
+      this.resizeObserver = new ResizeObserver(() => this._scheduleFit());
+      this.resizeObserver.observe(termEl);
+    }
     this.term.onData((d) => {
       if (isBrokenMouseReport(d)) {
         // Once per tab: enough to diagnose later, not enough to spam.
@@ -276,7 +297,20 @@ class TerminalTab {
     this.showTrouble("offline"); // server is up, socket is not: keep retrying
   }
 
-  fit() { try { this.fitAddon.fit(); this.sendResize(); } catch (_) {} }
+  // _scheduleFit coalesces a burst of ResizeObserver callbacks (e.g. a splitter
+  // drag) into one fit per animation frame.
+  _scheduleFit() {
+    if (this._fitRaf) return;
+    this._fitRaf = requestAnimationFrame(() => { this._fitRaf = 0; this.fit(); });
+  }
+
+  fit() {
+    // A zero-size element (hidden/inactive tab, or not yet attached) has nothing
+    // to fit; measuring it would send a bogus resize. The observer re-fires once
+    // it gains a real size.
+    if (!hasSize(this.termEl.clientWidth, this.termEl.clientHeight)) return;
+    try { this.fitAddon.fit(); this.sendResize(); } catch (_) {}
+  }
 
   // Font size: setFontSize applies a size and re-fits (xterm recomputes cell
   // geometry from options.fontSize). zoom/resetZoom drive transient live zoom.
@@ -395,6 +429,8 @@ class TerminalTab {
   dispose() {
     this.closed = true;
     this.clearRetry();
+    if (this.resizeObserver) { try { this.resizeObserver.disconnect(); } catch (_) {} }
+    if (this._fitRaf) { try { cancelAnimationFrame(this._fitRaf); } catch (_) {} this._fitRaf = 0; }
     this.hideTrouble();
     try { this.ws && this.ws.close(); } catch (_) {}
     try { this.term.dispose(); } catch (_) {}
@@ -431,5 +467,5 @@ async function openTerminalUrl(raw, opts) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport };
+  module.exports = { isBrokenMouseReport, hasSize };
 }

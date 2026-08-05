@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isBrokenMouseReport } = require("../static/terminal-tab.js");
+const { isBrokenMouseReport, hasSize } = require("../static/terminal-tab.js");
 
 test("an SGR mouse report with NaN coordinates is dropped", () => {
   assert.strictEqual(isBrokenMouseReport("\x1b[<0;NaN;NaNm"), true);
@@ -30,4 +30,16 @@ test("another escape sequence carrying NaN is not touched", () => {
 test("non-strings never match", () => {
   assert.strictEqual(isBrokenMouseReport(null), false);
   assert.strictEqual(isBrokenMouseReport(undefined), false);
+});
+
+test("hasSize is true only for positive width AND height", () => {
+  assert.strictEqual(hasSize(100, 40), true);
+});
+
+test("hasSize is false when either dimension is zero or negative", () => {
+  assert.strictEqual(hasSize(0, 40), false);
+  assert.strictEqual(hasSize(100, 0), false);
+  assert.strictEqual(hasSize(0, 0), false);
+  assert.strictEqual(hasSize(-5, 40), false);
+  assert.strictEqual(hasSize(100, -1), false);
 });
