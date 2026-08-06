@@ -59,7 +59,7 @@ const names = [
   // error here as well as a failure in no-native-dialogs.test.js.
   "getSelection",
   // vendored, loaded from their own <script> tags
-  "Terminal", "FitAddon", "WebglAddon", "marked", "hljs", "DOMPurify",
+  "Terminal", "FitAddon", "WebglAddon", "marked", "hljs", "DOMPurify", "CodeMirror",
   // the CommonJS guard each file ends with, so node --test can require it
   "module", "exports", "require",
 ];

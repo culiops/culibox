@@ -22,6 +22,10 @@ class ViewerTab {
     this.auto = false;      // auto-reload poll on/off (per viewer, opt-in)
     this.timer = null;
     this.lastContent = null; // last rendered text, to skip no-op re-renders
+    this.version = null;    // sha256 of the last-read text, the save's base_version
+    this.editing = false;   // true while a CodeMirror editor replaces the read view
+    this.cm = null;         // the live CodeMirror instance, only while editing
+    this.baseVersion = "";  // version this edit started from (what conflict is checked against)
     // Why Copy has nothing to give, or null once there is text. lastContent
     // alone cannot say: load() leaves it untouched for an image, for a binary,
     // for every HTTP error, and for the moment before the first load returns.
@@ -70,6 +74,12 @@ class ViewerTab {
       cp.title = "Copy this file's contents";
       cp.onclick = () => this.copyContents(cp);
       this.toolbar.append(cp);
+      const edit = document.createElement("button");
+      edit.className = "viewer-auto";
+      edit.textContent = "Edit";
+      edit.title = "Edit this file";
+      edit.onclick = () => this.enterEdit();
+      this.toolbar.append(edit);
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
       auto.onclick = () => this.toggleAuto(auto);
@@ -245,6 +255,7 @@ class ViewerTab {
     if (poll && plan.text === this.lastContent && !this.showingMsg) return;
     if (this.showingMsg) this.setStatus(""); // clear the error the message left
     this.lastContent = plan.text;
+    this.version = res.data && res.data.version;
     if (MD_EXTS.has(ext)) this.renderMarkdown(plan.text);
     else this.renderCode(plan.text, res.data.lang);
     // Replacing the scroller's children resets it. The field is already current
@@ -273,6 +284,136 @@ class ViewerTab {
       showToast(m.text, { error: m.error });
     });
   }
+
+  // --- edit mode -------------------------------------------------------------
+  // Swaps the read view for a CodeMirror 5 editor. Entered only from the Edit
+  // button (text files, and only once a load has actually resolved — copyRefusal
+  // starts at "loading" and stays truthy for images/binaries/empty files, which
+  // makes it double as "is there editable text here").
+  enterEdit() {
+    if (this.editing || this.copyRefusal) return;
+    this.editing = true;
+    this.baseVersion = this.version || "";
+    const holder = document.createElement("div");
+    holder.className = "viewer-edit";
+    this.content.replaceChildren(holder);
+    this.showingMsg = false;
+    const modeInfo = (window.CodeMirror && CodeMirror.findModeByExtension)
+      ? CodeMirror.findModeByExtension(extOf(this.path)) : null;
+    this.cm = CodeMirror(holder, {
+      value: this.lastContent || "",
+      mode: modeInfo ? modeInfo.mode : "text/plain",
+      lineNumbers: true,
+      autofocus: true,
+    });
+    // Returning false stops CodeMirror's own key handling from also inserting
+    // whatever the browser would (nothing, normally, but this is belt-and-braces).
+    this.cm.setOption("extraKeys", {
+      "Ctrl-S": () => { this.save(false); return false; },
+      "Cmd-S": () => { this.save(false); return false; },
+    });
+    this.renderEditBar();
+  }
+
+  // renderEditBar builds the action row above the editor: Save · Cancel, plus a
+  // status/conflict message that showConflict() fills in and adds Reload /
+  // Overwrite anyway to. It is appended as holder's sibling inside `content`
+  // (not inside holder itself) so CodeMirror's own sizing is undisturbed.
+  renderEditBar() {
+    const bar = document.createElement("div");
+    bar.className = "viewer-editbar";
+    const save = document.createElement("button");
+    save.className = "viewer-auto";
+    save.textContent = "Save";
+    save.title = "Save (Ctrl/Cmd-S)";
+    save.onclick = () => this.save(false);
+    const cancel = document.createElement("button");
+    cancel.className = "viewer-auto";
+    cancel.textContent = "Cancel";
+    cancel.title = "Discard changes and return to the read view";
+    cancel.onclick = () => this.cancelEdit();
+    const msg = document.createElement("span");
+    msg.className = "viewer-edit-msg";
+    bar.append(save, cancel, msg);
+    this.editBar = bar;
+    this.editMsg = msg;
+    this.conflictBtns = null;
+    this.content.prepend(bar);
+  }
+
+  // showConflict renders once the server has told us the file moved out from
+  // under this edit (409). It never touches the editor's text — the user's
+  // draft stays exactly as typed until they pick Reload or Overwrite anyway.
+  showConflict() {
+    if (!this.editBar) return;
+    this.editMsg.textContent = "File changed on disk since you started editing.";
+    this.editMsg.classList.add("err");
+    // Idempotent: a second conflict (an Overwrite that itself races another
+    // writer) must replace the pair, not stack a second one behind it.
+    if (this.conflictBtns) this.conflictBtns.forEach((b) => b.remove());
+    const reload = document.createElement("button");
+    reload.className = "viewer-auto";
+    reload.textContent = "Reload";
+    reload.title = "Discard your edits and load the current file";
+    reload.onclick = () => this.exitEdit();
+    const overwrite = document.createElement("button");
+    overwrite.className = "viewer-auto";
+    overwrite.textContent = "Overwrite anyway";
+    overwrite.title = "Save your edits, replacing what's on disk";
+    overwrite.onclick = () => this.save(true);
+    this.conflictBtns = [reload, overwrite];
+    this.editBar.append(reload, overwrite);
+  }
+
+  async save(overwrite) {
+    if (!this.editing) return;
+    const content = this.cm.getValue();
+    const res = await fsWrite(this.path, saveBody(this.path, content, this.baseVersion, overwrite));
+    const decision = classifySave(res);
+    if (decision.outcome === "saved") {
+      this.baseVersion = decision.version || "";
+      this.version = this.baseVersion;
+      this.setStatus("saved");
+      this.exitEdit(content); // back to read view showing the saved text
+    } else if (decision.outcome === "conflict") {
+      this.baseVersion = decision.currentVersion || this.baseVersion;
+      this.showConflict(); // offer Reload / Overwrite anyway
+    } else {
+      this.setStatus("error");
+      showToast(decision.message, { error: true });
+    }
+  }
+
+  // exitEdit leaves edit mode. With text, that text becomes the new read view
+  // (a save, no re-fetch needed); with nothing, it's a discard and load()
+  // re-fetches from disk — the one path that also recovers from a Reload after
+  // a conflict, since the disk copy is exactly what a fresh load() shows.
+  exitEdit(savedText) {
+    this.editing = false;
+    this.cm = null;
+    this.editBar = null;
+    this.editMsg = null;
+    this.conflictBtns = null;
+    if (typeof savedText === "string") {
+      this.lastContent = savedText;
+      this.renderCode(savedText, undefined);
+      this.applyScroll();
+    } else {
+      this.load();
+    }
+  }
+
+  async cancelEdit() {
+    if (this.dirty() && !(await askConfirm({
+      title: "Discard unsaved changes?",
+      body: "Your edits to " + this.name + " have not been saved.",
+      confirmLabel: "Discard",
+      danger: true,
+    }))) return;
+    this.exitEdit();
+  }
+
+  dirty() { return this.editing && this.cm && this.cm.getValue() !== this.lastContent; }
 
   renderCode(text, lang) {
     this.showingMsg = false;
@@ -338,3 +479,13 @@ class ViewerTab {
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+
+// Dirty guard for a page reload/close: `cells` (tabs.js) is the one registry of
+// every open tab in every pane. This file loads before tabs.js in index.html,
+// but the reference below only ever runs on the beforeunload event — long after
+// every page script has finished — so the forward reference is safe (the same
+// pattern load() already relies on for closeTabEverywhere).
+window.addEventListener("beforeunload", (e) => {
+  const anyDirty = cells.some((c) => c.tabs.some((t) => t.kind === "viewer" && t.dirty && t.dirty()));
+  if (anyDirty) { e.preventDefault(); e.returnValue = ""; }
+});

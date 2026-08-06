@@ -34,6 +34,19 @@ async function fsRead(path) {
   return { ok: res.ok, status: res.status, data };
 }
 
+// fsWrite is POST /api/fs/write as the same envelope. Wrapped in its own
+// try/catch (unlike fsPost, which does not guard the transport error) for the
+// same reason fsRead is: a save has to tell a genuine 409 conflict from a
+// fetch that never completed (status 0), and the caller (viewer-tab.js's
+// save()) routes those two very differently via classifySave.
+async function fsWrite(path, body) {
+  try {
+    return await fsPost("/api/fs/write", body);
+  } catch (_) {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
 function fsMkdir(dir, name) { return fsPost("/api/fs/mkdir", { dir, name }); }
 function fsRename(path, name, confirmName) {
   return fsPost("/api/fs/rename", { path, name, confirm_name: confirmName || "" });
