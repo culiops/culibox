@@ -56,6 +56,15 @@ func wantsLoginRedirect(r *http.Request) bool {
 		strings.Contains(r.Header.Get("Accept"), "text/html")
 }
 
+// wantsHTMLResponse reports whether the caller is a browser expecting HTML (a
+// form submit or navigation), as opposed to a fetch/XHR client. Unlike
+// wantsLoginRedirect it is not method-gated: a login form POST failure should
+// bounce back to the HTML form, while an XHR login gets a JSON/plain 401.
+func wantsHTMLResponse(r *http.Request) bool {
+	return r.Header.Get("Sec-Fetch-Mode") == "navigate" ||
+		strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
 // authGuard admits a request bearing EITHER a valid session cookie OR a valid
 // bearer token, tags it with the credential kind, and slides the cookie forward
 // when it is old enough. It never sets WWW-Authenticate.
