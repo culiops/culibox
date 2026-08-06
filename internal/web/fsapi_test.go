@@ -2,6 +2,8 @@ package web
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -218,5 +220,28 @@ func TestReadDownloadStillContained(t *testing.T) {
 	s.handleFsRead(w, httptest.NewRequest(http.MethodGet, "/api/fs/read?download=1&path="+outside, nil))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("code = %d, want 403", w.Code)
+	}
+}
+
+func TestFsReadReturnsVersionForText(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "a.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Home: home}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/fs/read?path="+url.QueryEscape(filepath.Join(home, "a.txt")), nil)
+	s.handleFsRead(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var got fsRead
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("hello\n"))
+	want := hex.EncodeToString(sum[:])
+	if got.Version != want {
+		t.Fatalf("version = %q, want %q", got.Version, want)
 	}
 }

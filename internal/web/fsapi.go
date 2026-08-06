@@ -132,6 +132,7 @@ type fsRead struct {
 	Lang    string `json:"lang,omitempty"` // highlight.js hint (bare extension)
 	Size    int64  `json:"size"`
 	Content string `json:"content,omitempty"`
+	Version string `json:"version,omitempty"` // sha256 of Content; text only, for edit locking
 }
 
 // handleFsRead serves GET /api/fs/read?path=<abs-file>. Images are streamed raw
@@ -205,7 +206,8 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, fsRead{
-		Kind: "text", Lang: strings.TrimPrefix(ext, "."), Size: info.Size(), Content: string(content),
+		Kind: "text", Lang: strings.TrimPrefix(ext, "."), Size: info.Size(),
+		Content: string(content), Version: hashText(content),
 	})
 }
 
