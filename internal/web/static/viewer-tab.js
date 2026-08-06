@@ -329,11 +329,15 @@ class ViewerTab {
     holder.className = "viewer-edit";
     this.content.replaceChildren(holder);
     this.showingMsg = false;
-    const modeInfo = (window.CodeMirror && CodeMirror.findModeByExtension)
-      ? CodeMirror.findModeByExtension(extOf(this.path)) : null;
+    let mode = "text/plain";
+    if (window.CodeMirror) {
+      mode = resolveEditorMode(this.path)
+        || (CodeMirror.findModeByExtension && CodeMirror.findModeByExtension(extOf(this.path)) || {}).mode
+        || "text/plain";
+    }
     this.cm = CodeMirror(holder, {
       value: this.lastContent || "",
-      mode: modeInfo ? modeInfo.mode : "text/plain",
+      mode: mode,
       lineNumbers: true,
       autofocus: true,
     });
