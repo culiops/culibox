@@ -26,13 +26,16 @@ const (
 	deleteMeasureMaxFiles = 100000
 )
 
-// decodeOpBody applies the guards every mutation shares and decodes the body.
-// It writes the response itself on failure and reports whether to continue.
+// checkMutationGuard applies the method + CSRF checks every mutation endpoint
+// shares (decodeOpBody's small-body mutations and fswrite.go's write, which
+// needs a much larger body cap and so cannot share decodeOpBody's
+// MaxBytesReader call). It writes the response itself on failure and reports
+// whether to continue.
 //
 // sameOrigin is checked here even though csrfGuard already covers the mux: the
 // same belt-and-braces handleFsUpload uses, so a future routing mistake
 // downgrades the guard instead of removing it.
-func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+func checkMutationGuard(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return false
@@ -42,6 +45,16 @@ func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	// still require same-origin.
 	if credKindOf(r) != credBearer && !sameOrigin(r) {
 		writeErr(w, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
+// decodeOpBody applies checkMutationGuard, then bounds and decodes the body for
+// the small JSON mutations (mkdir/rename/delete). Write's own decode lives in
+// fswrite.go's decodeWriteBody, which needs a much larger body cap.
+func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if !checkMutationGuard(w, r) {
 		return false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxOpBody)

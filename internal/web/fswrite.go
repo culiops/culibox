@@ -24,19 +24,13 @@ type writeReqBody struct {
 // maxTextBytes-sized save is never rejected before its own over-cap check runs.
 const maxWriteBody = maxTextBytes*6 + 4096
 
-// decodeWriteBody applies the same method/CSRF guards as decodeOpBody (fsops.go)
-// but with a body-size cap sized for file content instead of the tiny JSON
-// mutation bodies. Kept local to this file rather than widening maxOpBody, which
-// other, unrelated small-body handlers share.
+// decodeWriteBody applies the shared checkMutationGuard (fsops.go) — the same
+// method/CSRF checks decodeOpBody uses — then bounds and decodes the body with
+// a cap sized for file content instead of the tiny JSON mutation bodies. Only
+// the size cap is local to this file; the guard logic lives in exactly one
+// place so it cannot drift between the two decoders.
 func decodeWriteBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if r.Method != http.MethodPost {
-		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		return false
-	}
-	// Bearer credentials are never auto-attached by a browser, so they carry no
-	// CSRF risk and skip the same-origin check (mirrors decodeOpBody/csrfGuard).
-	if credKindOf(r) != credBearer && !sameOrigin(r) {
-		writeErr(w, http.StatusForbidden, "forbidden")
+	if !checkMutationGuard(w, r) {
 		return false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxWriteBody)
