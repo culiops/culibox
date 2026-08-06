@@ -125,6 +125,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/fs/mkdir", s.handleFsMkdir)
 	protected.HandleFunc("/api/fs/rename", s.handleFsRename)
 	protected.HandleFunc("/api/fs/delete", s.handleFsDelete)
+	protected.HandleFunc("/api/fs/write", s.handleFsWrite)
 
 	// Analytics routes only exist when the feature is enabled; the POST /ingest
 	// inherits csrfGuard's same-origin check like every other state-changing call.
