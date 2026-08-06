@@ -20,6 +20,13 @@ type Server struct {
 	API      *API
 	Cookie   *auth.CookieAuth
 	Profiles *ProfileManager
+	// Session issues/verifies the browser session cookie; Tokens holds bearer
+	// access tokens. Together they back authGuard, which replaces basic-auth.
+	Session *auth.Session
+	Tokens  *auth.TokenStore
+	// Password is the master password checked at /login (single operator; sourced
+	// from BasicAuthPassEnv). Never logged.
+	Password string
 	Home     string // for the workspace picker ($HOME + subfolders)
 	Terminal http.Handler
 	EnvLabel string // shown as the UI env badge; empty → no badge
