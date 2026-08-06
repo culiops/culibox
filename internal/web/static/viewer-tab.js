@@ -236,6 +236,8 @@ class ViewerTab {
         // A successful read of a file with nothing in it is not an error.
         if (poll && this.lastContent === "") return; // already shown; don't churn
         this.lastContent = "";
+        this.version = res.data && res.data.version;
+        this.lang = res.data && res.data.lang;
         this.msg("empty file");
         this.setStatus("");
       } else if (plan.reason === "binary") {
@@ -278,6 +280,7 @@ class ViewerTab {
     if (this.showingMsg) this.setStatus(""); // clear the error the message left
     this.lastContent = plan.text;
     this.version = res.data && res.data.version;
+    this.lang = res.data && res.data.lang;
     if (MD_EXTS.has(ext)) this.renderMarkdown(plan.text);
     else this.renderCode(plan.text, res.data.lang);
     // Replacing the scroller's children resets it. The field is already current
@@ -310,10 +313,12 @@ class ViewerTab {
   // --- edit mode -------------------------------------------------------------
   // Swaps the read view for a CodeMirror 5 editor. Entered only from the Edit
   // button (text files, and only once a load has actually resolved — copyRefusal
-  // starts at "loading" and stays truthy for images/binaries/empty files, which
-  // makes it double as "is there editable text here").
+  // starts at "loading" and stays truthy for images/binaries/errors, which keeps
+  // those non-editable; "empty" is the one refusal reason that is still editable,
+  // since Step 1 above seeds an empty buffer with a real version).
   enterEdit() {
-    if (this.editing || this.copyRefusal) return;
+    if (this.editing) return;
+    if (this.copyRefusal && this.copyRefusal !== "empty") return; // image/binary/loading/error stay non-editable
     // The vendor bundle can fail to reach the browser (blocked, offline, a
     // hiccup loading /vendor/codemirror.min.js). Checked before any state
     // change — mirrors renderMarkdown()'s fallback-before-mutating pattern —
@@ -431,7 +436,7 @@ class ViewerTab {
     this.conflictBtns = null;
     if (typeof savedText === "string") {
       this.lastContent = savedText;
-      this.renderCode(savedText, undefined);
+      this.renderCode(savedText, this.lang);
       this.applyScroll();
     } else {
       this.load();
