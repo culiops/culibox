@@ -100,6 +100,9 @@ func (s *TokenStore) Create(name string) (string, TokenInfo, error) {
 	s.mu.Lock()
 	s.m[id] = rec
 	err = s.flushLocked()
+	if err != nil {
+		delete(s.m, id) // don't leave a live token the caller was told failed
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return "", TokenInfo{}, err
@@ -123,11 +126,16 @@ func (s *TokenStore) List() []TokenInfo {
 func (s *TokenStore) Revoke(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.m[id]; !ok {
+	rec, ok := s.m[id]
+	if !ok {
 		return ErrTokenNotFound
 	}
 	delete(s.m, id)
-	return s.flushLocked()
+	if err := s.flushLocked(); err != nil {
+		s.m[id] = rec // roll back: still live until the delete can be persisted
+		return err
+	}
+	return nil
 }
 
 // Verify hashes the presented token and returns its info if live. It bumps
@@ -138,8 +146,14 @@ func (s *TokenStore) Verify(presented string) (TokenInfo, bool) {
 	defer s.mu.Unlock()
 	for _, r := range s.m {
 		if subtle.ConstantTimeCompare([]byte(r.Hash), []byte(want)) == 1 {
-			r.LastUsedAt = s.now().Unix()
-			_ = s.flushLocked() // best-effort
+			// Bump LastUsedAt at most once per second. Bearer tokens are the
+			// high-frequency path and flushLocked rewrites+fsyncs the whole file
+			// under the lock, so persisting on every request would be a
+			// throughput footgun for exactly the clients bearer tokens serve.
+			if now := s.now().Unix(); r.LastUsedAt != now {
+				r.LastUsedAt = now
+				_ = s.flushLocked() // best-effort
+			}
 			return r.TokenInfo, true
 		}
 	}

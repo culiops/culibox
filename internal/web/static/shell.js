@@ -91,6 +91,8 @@ function selectSettingsTab(name) {
   }
   // The inline error belongs to the action that raised it, not to the dialog.
   setDialogError("settings-modal", "");
+  // The Access-tokens tab loads its list lazily whenever it is shown.
+  if (name === "tokens" && typeof loadTokens === "function") loadTokens();
 }
 
 function initDialogs() {

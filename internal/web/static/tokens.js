@@ -20,6 +20,10 @@ async function loadTokens() {
   const list = document.getElementById("tok-list");
   if (!list) return;
   setTokErr("");
+  // Hide any one-time reveal from a previous create: the secret must not linger
+  // in the DOM once the user has moved on (reopened the tab, refreshed the list).
+  const reveal = document.getElementById("tok-reveal");
+  if (reveal) reveal.hidden = true;
   let items;
   try {
     items = await api("/api/tokens");
@@ -115,11 +119,9 @@ async function logout() {
 }
 
 function initTokens() {
-  const tab = document.querySelector('#settings-tabs button[data-tab="tokens"]');
-  // Load the list whenever the tab is shown (in addition to selectSettingsTab's
-  // own handler; both onclick and addEventListener fire).
-  if (tab) tab.addEventListener("click", loadTokens);
-
+  // The list is (re)loaded whenever the Access-tokens tab is shown — that hook
+  // lives in selectSettingsTab (shell.js), so it fires however the tab is
+  // reached (button click or openSettings("tokens")), not just on a click here.
   const newBtn = document.getElementById("tok-new");
   if (newBtn) newBtn.onclick = createToken;
 

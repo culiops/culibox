@@ -16,11 +16,13 @@ import (
 // CookieName is the WS auth cookie.
 const CookieName = "ab_session"
 
-// ResolveCred reads the basic-auth credential; the password comes from the
-// configured env var and is never stored in config or logged.
+// ResolveCred reads the master login password from the configured env var; it
+// is never stored in config or logged. The username field is retained for
+// backward compatibility but no longer used for auth (login is password-only),
+// so an empty basic_auth_user is not an error.
 func ResolveCred(c config.Config) (user, pass string, err error) {
-	if c.BasicAuthUser == "" {
-		return "", "", errors.New("auth: basic_auth_user not set")
+	if c.BasicAuthPassEnv == "" {
+		return "", "", errors.New("auth: basic_auth_pass_env not set")
 	}
 	pass = os.Getenv(c.BasicAuthPassEnv)
 	if pass == "" {

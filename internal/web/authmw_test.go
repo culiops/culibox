@@ -1,8 +1,12 @@
 package web
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -96,6 +100,44 @@ func TestAuthGuard_WSUpgradeNotRedirected(t *testing.T) {
 	s.authGuard(okHandler()).ServeHTTP(w, r)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("ws upgrade anon: code=%d want 401 (not a redirect)", w.Code)
+	}
+}
+
+// An aged-but-valid cookie run through authGuard must re-emit a fresh Set-Cookie
+// (the sliding-renewal wiring — the integration point most likely to regress).
+// The cookie is crafted directly (valid HMAC over an exp whose implied issue
+// time is well past the 24h refresh threshold) since the Session clock is not
+// injectable from this package.
+func agedSessionCookie(secret []byte, exp int64) *http.Cookie {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(strconv.FormatInt(exp, 10)))
+	val := strconv.FormatInt(exp, 10) + "." + hex.EncodeToString(mac.Sum(nil))
+	return &http.Cookie{Name: auth.CookieName, Value: val}
+}
+
+func TestAuthGuard_SlidingRefreshEmitsCookie(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	ts, _ := auth.OpenTokenStore(t.TempDir() + "/tokens.json")
+	s := &Server{Session: auth.NewSession(secret, 30*24*time.Hour), Tokens: ts}
+
+	// exp = now + 10d, so with a 30d TTL the implied issue time is ~20d ago —
+	// valid (not expired) but well past the 24h refresh threshold.
+	exp := time.Now().Add(10 * 24 * time.Hour).Unix()
+	r := httptest.NewRequest("GET", "/api/sessions", nil)
+	r.AddCookie(agedSessionCookie(secret, exp))
+	w := httptest.NewRecorder()
+	s.authGuard(okHandler()).ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("aged valid cookie: code=%d want 200", w.Code)
+	}
+	var reissued *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == auth.CookieName {
+			reissued = c
+		}
+	}
+	if reissued == nil {
+		t.Fatal("authGuard did not re-issue the cookie past the refresh threshold")
 	}
 }
 

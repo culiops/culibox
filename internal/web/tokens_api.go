@@ -2,24 +2,29 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/auth"
 )
 
-// handleTokens lists (GET) or creates (POST) access tokens. Creation requires a
-// session credential: a bearer token must not be able to mint more tokens.
+// handleTokens lists (GET) or creates (POST) access tokens. Both require a
+// session credential: token management is the master surface, so a bearer token
+// can neither mint more tokens nor enumerate the others' metadata.
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
+	if credKindOf(r) != credCookie {
+		writeErr(w, http.StatusForbidden, "token management requires a session")
+		return
+	}
 	switch r.Method {
 	case http.MethodGet:
 		writeJSON(w, http.StatusOK, s.Tokens.List())
 	case http.MethodPost:
-		if credKindOf(r) != credCookie {
-			writeErr(w, http.StatusForbidden, "token creation requires a session")
-			return
-		}
 		var body struct {
 			Name string `json:"name"`
 		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxOpBody)
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
 			writeErr(w, http.StatusBadRequest, "name required")
 			return
@@ -52,7 +57,11 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Tokens.Revoke(id); err != nil {
-		writeErr(w, http.StatusNotFound, "token not found")
+		if errors.Is(err, auth.ErrTokenNotFound) {
+			writeErr(w, http.StatusNotFound, "token not found")
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, "could not revoke token")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

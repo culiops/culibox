@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,14 +24,16 @@ func routedServer(t *testing.T) (*Server, string) {
 	return s, plain
 }
 
-// GET /login must be reachable unauthenticated (it 404s until Task 7 ships the
-// static form, but 404 != gated — the point is no 401/redirect).
+// GET /login must be reachable unauthenticated and serve the actual form.
 func TestRouter_LoginPageIsPublic(t *testing.T) {
 	s, _ := routedServer(t)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/login", nil))
-	if w.Code == http.StatusUnauthorized || w.Code == http.StatusSeeOther {
-		t.Fatalf("/login must be reachable unauthenticated, got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /login want 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `name="password"`) {
+		t.Fatal("/login did not serve the login form")
 	}
 }
 
