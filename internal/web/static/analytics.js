@@ -1,241 +1,710 @@
 "use strict";
 
-// analytics.js renders the token/prompt Analytics view (fed by /api/analytics/*).
-// The pure transforms at the top are unit-tested (node --test); the render below
-// builds DOM with textContent only and depends on the global api() from app.js.
+// analytics.js renders the token/cost Analytics view (fed by /api/analytics/*).
+// The pure transforms at the top are unit-tested (node --test); the render code
+// below builds DOM with textContent only and depends on the global api() from
+// app.js. $-first: dollars are the primary number, tokens the detail. The panel
+// is DESCRIPTIVE — "what did I spend, on what, over time" — never "which model is
+// better" (token/prompt volume tracks the task, not model quality).
 
-// fmtCompact: 0..999 as-is, thousands as "Nk", millions as "N.NM". Mirrors the
-// terminal usage readout so the two never disagree on how a number looks.
+// ---- pure formatters --------------------------------------------------------
+
+// fmtCompact: 0..999 as-is, then k / M / B. Mirrors the terminal usage readout.
 function fmtCompact(n) {
   n = Number(n) || 0;
   if (n < 1000) return String(n);
   if (n < 1_000_000) return Math.round(n / 1000) + "k";
-  return (n / 1_000_000).toFixed(1) + "M";
+  if (n < 1_000_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  return (n / 1_000_000_000).toFixed(1) + "B";
 }
 
-// tokensPerPrompt: total tokens divided by prompts, or 0 when there are none (so
-// a prompt-free day never shows Infinity/NaN).
+// usd: compact dollars. <$100 keeps cents; larger rounds; ≥$1k uses "k".
+function usd(n) {
+  n = Number(n) || 0;
+  if (n >= 1000) return "$" + (n / 1000).toFixed(1) + "k";
+  if (n >= 100) return "$" + Math.round(n);
+  return "$" + n.toFixed(2);
+}
+
+// tokensPerPrompt: total tokens / prompts, or 0 when there are none.
 function tokensPerPrompt(totalTokens, prompts) {
   return prompts > 0 ? Math.round(totalTokens / prompts) : 0;
 }
 
-// dayTotals folds per-(day,model) rows into per-day stacks plus window totals.
-// Returned shapes are plain arrays/objects (no Maps) so they assert cleanly.
-function dayTotals(rows) {
+// ---- pure transforms (raw API rows → render-ready shapes) --------------------
+
+// modelsByCost: ordered list of model ids, most expensive first, from any rows
+// that carry {model, costUsd}.
+function modelsByCost(rows) {
+  const c = new Map();
+  for (const r of rows || []) c.set(r.model, (c.get(r.model) || 0) + (r.costUsd || 0));
+  return [...c.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
+}
+
+// foldCostByDay: /summary byDayModel rows → per-day cost stacks + window totals.
+function foldCostByDay(rows) {
   const byDay = new Map();
-  const models = [];
-  const totals = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, prompts: 0, tokens: 0 };
+  const totals = { cost: 0, tokens: 0, prompts: 0, input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
   for (const r of rows || []) {
-    const t = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
+    const tok = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
+    totals.cost += r.costUsd || 0;
+    totals.tokens += tok;
+    totals.prompts += r.prompts || 0;
     totals.input += r.input || 0;
     totals.output += r.output || 0;
     totals.cacheRead += r.cacheRead || 0;
     totals.cacheCreation += r.cacheCreation || 0;
-    totals.prompts += r.prompts || 0;
-    totals.tokens += t;
-    if (!models.includes(r.model)) models.push(r.model);
     let d = byDay.get(r.day);
-    if (!d) { d = { day: r.day, total: 0, segs: {} }; byDay.set(r.day, d); }
-    d.total += t;
-    d.segs[r.model] = (d.segs[r.model] || 0) + t;
+    if (!d) { d = { day: r.day, cost: 0, segs: {} }; byDay.set(r.day, d); }
+    d.cost += r.costUsd || 0;
+    d.segs[r.model] = (d.segs[r.model] || 0) + (r.costUsd || 0);
   }
   const days = [...byDay.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
-  const maxTotal = days.reduce((m, d) => Math.max(m, d.total), 0);
-  return { days, models, maxTotal, totals };
+  const maxCost = days.reduce((m, d) => Math.max(m, d.cost), 0);
+  return { days, models: modelsByCost(rows), maxCost, totals };
 }
 
-// modelColor assigns a stable colour per model by its index in the model list.
-const AN_COLORS = ["#6ea8fe", "#7ee787", "#f0883e", "#d2a8ff", "#ff7b72", "#79c0ff", "#e3b341"];
+// normModels: /models byModel rows → render rows with derived tokens + out/prompt,
+// cost-descending.
+function normModels(rows) {
+  return (rows || [])
+    .map((r) => {
+      const tokens = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
+      return {
+        model: r.model,
+        input: r.input || 0, output: r.output || 0,
+        cacheRead: r.cacheRead || 0, cacheCreation: r.cacheCreation || 0,
+        tokens, prompts: r.prompts || 0, sessions: r.sessions || 0,
+        cost: r.costUsd || 0,
+        outPerPrompt: r.prompts ? Math.round((r.output || 0) / r.prompts) : 0,
+      };
+    })
+    .sort((a, b) => b.cost - a.cost);
+}
+
+// foldProjects: /projects per-(project,model) rows → per-project totals + model
+// mix, cost-descending, capped at topN (0 = all).
+function foldProjects(rows, topN) {
+  const byProj = new Map();
+  for (const r of rows || []) {
+    let p = byProj.get(r.project);
+    if (!p) { p = { project: r.project, cost: 0, tokens: 0, prompts: 0, byModel: {} }; byProj.set(r.project, p); }
+    const tok = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
+    p.cost += r.costUsd || 0;
+    p.tokens += tok;
+    p.prompts += r.prompts || 0;
+    p.byModel[r.model] = (p.byModel[r.model] || 0) + (r.costUsd || 0);
+  }
+  let list = [...byProj.values()].sort((a, b) => b.cost - a.cost);
+  if (topN && list.length > topN) list = list.slice(0, topN);
+  return list;
+}
+
+// sessionCostBuckets: /sessions rows → a fixed cost histogram (one row per
+// distinct session, summed across its day/model rows).
+function sessionCostBuckets(rows) {
+  const perSession = new Map();
+  for (const r of rows || []) {
+    const k = (r.sessionId || "") + "" + (r.project || "");
+    perSession.set(k, (perSession.get(k) || 0) + (r.costUsd || 0));
+  }
+  const buckets = [
+    { label: "<$1", lo: 0, hi: 1 },
+    { label: "$1–5", lo: 1, hi: 5 },
+    { label: "$5–15", lo: 5, hi: 15 },
+    { label: "$15–40", lo: 15, hi: 40 },
+    { label: "$40+", lo: 40, hi: Infinity },
+  ];
+  const out = buckets.map((b) => ({ label: b.label, count: 0 }));
+  for (const cost of perSession.values()) {
+    const i = buckets.findIndex((b) => cost >= b.lo && cost < b.hi);
+    if (i >= 0) out[i].count++;
+  }
+  return out;
+}
+
+// topSessionsByCost: /sessions rows → sessions aggregated across their day/model
+// rows, most expensive first, limited to `limit`.
+function topSessionsByCost(rows, limit) {
+  const agg = new Map();
+  for (const r of rows || []) {
+    const k = (r.sessionId || "") + "" + (r.project || "");
+    let s = agg.get(k);
+    if (!s) { s = { sid: (r.sessionId || "").slice(0, 8), day: "", project: r.project || "", models: new Set(), tokens: 0, cost: 0, prompts: 0 }; agg.set(k, s); }
+    s.day = s.day > r.day ? s.day : r.day;
+    s.models.add(r.model);
+    s.tokens += (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
+    s.cost += r.costUsd || 0;
+    s.prompts += r.prompts || 0;
+  }
+  return [...agg.values()]
+    .map((s) => ({ ...s, model: s.models.size === 1 ? [...s.models][0] : "mixed" }))
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, limit || 20);
+}
+
+// distinctSessions: count of distinct (sessionId, project) pairs in /sessions rows.
+function distinctSessions(rows) {
+  const s = new Set();
+  for (const r of rows || []) s.add((r.sessionId || "") + "" + (r.project || ""));
+  return s.size;
+}
+
+// prevWindow: the equal-length window immediately before [from,to] (inclusive
+// YYYY-MM-DD). Used for period-over-period comparison.
+function prevWindow(from, to) {
+  const DAY = 86400000;
+  const f = Date.parse(from + "T00:00:00Z"), t = Date.parse(to + "T00:00:00Z");
+  const len = Math.round((t - f) / DAY) + 1; // inclusive day count
+  const prevTo = new Date(f - DAY), prevFrom = new Date(f - DAY * len);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { from: iso(prevFrom), to: iso(prevTo) };
+}
+
+// pctDelta: integer percent change cur vs prev; null when prev is 0 (no baseline).
+function pctDelta(cur, prev) {
+  if (!prev) return null;
+  return Math.round((cur - prev) / prev * 100);
+}
+
+// dowBuckets: /summary byDayModel rows → cost per weekday, Mon..Sun (index 0..6).
+function dowBuckets(rows) {
+  const out = [0, 0, 0, 0, 0, 0, 0];
+  for (const r of rows || []) {
+    const d = new Date(r.day + "T00:00:00Z").getUTCDay(); // 0=Sun..6=Sat
+    const idx = (d + 6) % 7; // → 0=Mon..6=Sun
+    out[idx] += r.costUsd || 0;
+  }
+  return out;
+}
+
+// ---- model colour (Catppuccin categorical, stable per index) ----------------
+const AN_COLORS = ["#89b4fa", "#a6e3a1", "#fab387", "#cba6f7", "#f38ba8", "#94e2d5", "#f9e2af"];
 function modelColor(models, model) {
-  const i = models.indexOf(model);
+  const i = (models || []).indexOf(model);
   return AN_COLORS[(i < 0 ? 0 : i) % AN_COLORS.length];
 }
-
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtCompact, tokensPerPrompt, dayTotals, modelColor };
-}
-
-// ---- rendering (browser only) -----------------------------------------------
-
-// openAnalytics opens the dialog and (re)renders it from the API.
-async function openAnalytics() {
-  if (typeof openDialog === "function") openDialog("analytics-modal");
-  await renderAnalytics();
-}
-
-async function renderAnalytics() {
-  const body = document.getElementById("analytics-body");
-  if (!body) return;
-  body.replaceChildren(anEmpty("Loading…"));
-  let summary = null, sessions = null, tools = null;
-  try {
-    [summary, tools, sessions] = await Promise.all([
-      api("/api/analytics/summary"),
-      api("/api/analytics/tools"),
-      api("/api/analytics/sessions?limit=200"),
-    ]);
-  } catch (_) {
-    body.replaceChildren(anEmpty("Could not load analytics."));
-    return;
-  }
-  const range = document.getElementById("analytics-range");
-  if (range && summary) range.textContent = `${summary.from} → ${summary.to} (UTC)`;
-
-  const agg = dayTotals(summary && summary.byDayModel);
-  body.replaceChildren();
-  if (!agg.days.length) {
-    body.appendChild(anEmpty("No usage recorded yet in this window. Try Re-scan."));
-    return;
-  }
-  body.appendChild(anTotals(agg.totals));
-  body.appendChild(anChart(agg));
-  body.appendChild(anTools(tools && tools.tools));
-  body.appendChild(anSessions(sessions && sessions.sessions));
-}
-
-function anEmpty(text) {
-  const p = document.createElement("p");
-  p.className = "an-empty";
-  p.textContent = text;
-  return p;
-}
-
-function anSection(title) {
-  const s = document.createElement("div");
-  s.className = "an-section";
-  const h = document.createElement("h3");
-  h.textContent = title;
-  s.appendChild(h);
-  return s;
-}
-
-function anTotals(t) {
-  const sec = anSection("Totals (window)");
-  const row = document.createElement("div");
-  row.className = "an-totals";
-  // output/prompt is the efficiency signal, not all-tokens/prompt: cache_read
-  // (context re-read every turn) dwarfs everything, so total/prompt mostly tracks
-  // context size, whereas output/prompt tracks what the model actually produced.
-  const items = [
-    ["input", t.input], ["output", t.output], ["cache read", t.cacheRead],
-    ["cache write", t.cacheCreation], ["all tokens", t.tokens],
-    ["prompts", t.prompts], ["output / prompt", tokensPerPrompt(t.output, t.prompts)],
-  ];
-  for (const [label, val] of items) {
-    const cell = document.createElement("div");
-    cell.className = "an-tot";
-    const v = document.createElement("span"); v.className = "v"; v.textContent = fmtCompact(val);
-    const l = document.createElement("span"); l.className = "l"; l.textContent = label;
-    cell.append(v, l);
-    row.appendChild(cell);
-  }
-  sec.appendChild(row);
-  return sec;
-}
-
-function anChart(agg) {
-  const sec = anSection("Tokens per day (stacked by model)");
-  const bars = document.createElement("div");
-  bars.className = "an-bars";
-  for (const d of agg.days) {
-    const bar = document.createElement("div");
-    bar.className = "an-bar";
-    bar.title = `${d.day}: ${fmtCompact(d.total)} tokens`;
-    // Segments, tallest models first, sized as a share of the max day total.
-    const segs = Object.entries(d.segs).sort((a, b) => b[1] - a[1]);
-    for (const [model, tok] of segs) {
-      const seg = document.createElement("div");
-      seg.className = "seg";
-      const pct = agg.maxTotal ? (tok / agg.maxTotal) * 100 : 0;
-      seg.style.height = pct.toFixed(2) + "%";
-      seg.style.background = modelColor(agg.models, model);
-      bar.appendChild(seg);
-    }
-    const cap = document.createElement("div");
-    cap.className = "cap";
-    cap.textContent = d.day.slice(5); // MM-DD
-    bar.appendChild(cap);
-    bars.appendChild(bar);
-  }
-  sec.appendChild(bars);
-  // Legend.
-  const legend = document.createElement("div");
-  legend.className = "an-legend";
-  for (const m of agg.models) {
-    const span = document.createElement("span");
-    const i = document.createElement("i"); i.style.background = modelColor(agg.models, m);
-    const t = document.createElement("span"); t.textContent = m || "(unknown)";
-    span.append(i, t);
-    legend.appendChild(span);
-  }
-  sec.appendChild(legend);
-  return sec;
-}
-
-function anTools(rows) {
-  const sec = anSection("Skills · plugins · MCP (by records)");
-  if (!rows || !rows.length) {
-    sec.appendChild(anEmpty("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."));
-    return sec;
-  }
-  const table = document.createElement("table");
-  table.className = "an-table";
-  table.appendChild(anHead(["name", "kind", "records"]));
-  for (const r of rows) {
-    const tr = document.createElement("tr");
-    tr.append(anTd(r.name, "mono"), anTd(r.kind), anTd(fmtCompact(r.records)));
-    table.appendChild(tr);
-  }
-  sec.appendChild(table);
-  return sec;
-}
-
-function anSessions(rows) {
-  const sec = anSection("Sessions (tokens · prompts · tokens/prompt)");
-  if (!rows || !rows.length) {
-    sec.appendChild(anEmpty("No sessions in this window."));
-    return sec;
-  }
-  const table = document.createElement("table");
-  table.className = "an-table";
-  table.appendChild(anHead(["day", "project", "model", "tokens", "prompts", "out/prompt"]));
-  for (const r of rows) {
-    const tr = document.createElement("tr");
-    const total = (r.input || 0) + (r.output || 0) + (r.cacheRead || 0) + (r.cacheCreation || 0);
-    tr.append(
-      anTd(r.day),
-      anTd(projShort(r.project), "mono"),
-      anTd(r.model || "(unknown)", "mono"),
-      anTd(fmtCompact(total)),
-      anTd(String(r.prompts || 0)),
-      anTd(fmtCompact(tokensPerPrompt(r.output, r.prompts))),
-    );
-    table.appendChild(tr);
-  }
-  sec.appendChild(table);
-  return sec;
-}
-
-// projShort trims the leading "-home-<user>-" a Claude Code slug carries, so the
-// project column shows the recognisable tail (e.g. "culiops-agent-box").
+function shortModel(m) { return (m || "(unknown)").replace(/^claude-/, "").replace(/-20\d{6}$/, ""); }
 function projShort(p) {
   if (!p) return "";
   return p.replace(/^-home-[^-]+-/, "").replace(/^-/, "");
 }
 
-function anHead(cols) {
-  const tr = document.createElement("tr");
-  for (const c of cols) {
-    const th = document.createElement("th");
-    th.textContent = c;
-    tr.appendChild(th);
-  }
-  return tr;
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
+    foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
+    prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
+  };
 }
 
-function anTd(text, cls) {
-  const td = document.createElement("td");
-  if (cls) td.className = cls;
-  td.textContent = text;
-  return td;
+// ---- rendering (browser only) -----------------------------------------------
+
+const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, data: null };
+
+// summaryRowsCache holds the current window's byDayModel rows so the compare pass
+// can bucket the current period by day-of-week without re-fetching.
+let summaryRowsCache = [];
+
+const RANGES = { "7d": 6, "30d": 29, "90d": 89, all: null };
+
+function anTodayUTC() { return new Date().toISOString().slice(0, 10); }
+function anRangeFrom(key) {
+  if (key === "all") return "2000-01-01";
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - RANGES[key]);
+  return d.toISOString().slice(0, 10);
+}
+
+async function openAnalytics() {
+  if (typeof openDialog === "function") openDialog("analytics-modal");
+  AN.range = "30d";
+  AN.compare = false;
+  AN.tab = "overview";
+  AN.to = anTodayUTC();
+  AN.from = anRangeFrom("30d");
+  syncTabButtons();
+  await anLoad();
+}
+
+function syncTabButtons() {
+  for (const b of document.querySelectorAll("#an-tabs button")) {
+    b.classList.toggle("act", b.dataset.antab === AN.tab);
+  }
+}
+
+async function anLoad() {
+  const body = document.getElementById("analytics-body");
+  if (!body) return;
+  body.replaceChildren(anEmpty("Loading…"));
+  const q = `from=${AN.from}&to=${AN.to}`;
+  let summary, models, projects, sessions, tools;
+  try {
+    [summary, models, projects, sessions, tools] = await Promise.all([
+      api(`/api/analytics/summary?${q}`),
+      api(`/api/analytics/models?${q}`),
+      api(`/api/analytics/projects?${q}`),
+      api(`/api/analytics/sessions?${q}&limit=2000`),
+      api(`/api/analytics/tools?${q}`),
+    ]);
+  } catch (_) {
+    body.replaceChildren(anEmpty("Could not load analytics."));
+    return;
+  }
+  const byDayModel = (summary && summary.byDayModel) || [];
+  summaryRowsCache = byDayModel; // current window rows, for the compare pass's day-of-week
+  const sessRows = (sessions && sessions.sessions) || [];
+  AN.data = {
+    from: summary ? summary.from : AN.from,
+    to: summary ? summary.to : AN.to,
+    costByDay: foldCostByDay(byDayModel),
+    byModel: normModels((models && models.byModel) || []),
+    byProject: foldProjects((projects && projects.byProject) || [], 14),
+    sessions: sessRows,
+    sessionHist: sessionCostBuckets(sessRows),
+    topSessions: topSessionsByCost(sessRows, 18),
+    sessionCount: distinctSessions(sessRows),
+    tools: (tools && tools.tools) || [],
+    cmp: null,
+  };
+  AN.data.models = AN.data.costByDay.models;
+  if (AN.compare) await anLoadCompare();
+  anRender();
+}
+
+async function anLoadCompare() {
+  const pw = prevWindow(AN.from, AN.to);
+  const q = `from=${pw.from}&to=${pw.to}`;
+  let ps, pm, pp, psess;
+  try {
+    [ps, pm, pp, psess] = await Promise.all([
+      api(`/api/analytics/summary?${q}`),
+      api(`/api/analytics/models?${q}`),
+      api(`/api/analytics/projects?${q}`),
+      api(`/api/analytics/sessions?${q}&limit=2000`),
+    ]);
+  } catch (_) {
+    return; // comparison is best-effort; leave cmp null
+  }
+  const curTotals = AN.data.costByDay.totals;
+  const prevFold = foldCostByDay((ps && ps.byDayModel) || []);
+  const curModels = new Map(AN.data.byModel.map((m) => [m.model, m]));
+  const prevModels = normModels((pm && pm.byModel) || []);
+  const prevModelMap = new Map(prevModels.map((m) => [m.model, m]));
+  const allModels = AN.data.models.slice();
+  for (const m of prevModels) if (!allModels.includes(m.model)) allModels.push(m.model);
+  const byModel = allModels.map((m) => {
+    const c = curModels.get(m), p = prevModelMap.get(m);
+    return {
+      model: m,
+      curCost: c ? c.cost : 0, prevCost: p ? p.cost : 0,
+      curTok: c ? c.tokens : 0, prevTok: p ? p.tokens : 0,
+    };
+  });
+  const curProj = new Map(AN.data.byProject.map((x) => [x.project, x.cost]));
+  const prevProjList = foldProjects((pp && pp.byProject) || [], 0);
+  const prevProj = new Map(prevProjList.map((x) => [x.project, x.cost]));
+  const projKeys = new Set([...curProj.keys(), ...prevProj.keys()]);
+  const byProject = [...projKeys]
+    .map((k) => ({ project: k, curCost: curProj.get(k) || 0, prevCost: prevProj.get(k) || 0 }))
+    .sort((a, b) => (b.curCost + b.prevCost) - (a.curCost + a.prevCost))
+    .slice(0, 12);
+  const curDow = dowBuckets(summaryRowsCache);
+  const prevDow = dowBuckets((ps && ps.byDayModel) || []);
+  const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const dow = DOW.map((d, i) => ({ day: d, cur: curDow[i], prev: prevDow[i] }));
+  AN.data.cmp = {
+    curFrom: AN.from, curTo: AN.to, prevFrom: pw.from, prevTo: pw.to,
+    cur: { cost: curTotals.cost, tokens: curTotals.tokens, prompts: curTotals.prompts, sessions: AN.data.sessionCount },
+    prev: {
+      cost: prevFold.totals.cost, tokens: prevFold.totals.tokens, prompts: prevFold.totals.prompts,
+      sessions: psess ? distinctSessions(psess.sessions || []) : 0,
+    },
+    byModel, byProject, dow,
+  };
+}
+
+function anRender() {
+  const body = document.getElementById("analytics-body");
+  if (!body) return;
+  const range = document.getElementById("analytics-range");
+  if (range && AN.data) range.textContent = `${AN.data.from} → ${AN.data.to} (UTC)`;
+  body.replaceChildren();
+  body.appendChild(anControls());
+  const d = AN.data;
+  if (!d || !d.costByDay.days.length) {
+    body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
+    return;
+  }
+  const R = { overview: anOverview, models: anModels, projects: anProjects, sessions: anSessions, tools: anTools };
+  (R[AN.tab] || anOverview)(body);
+}
+
+// control strip: range presets + compare toggle
+function anControls() {
+  const wrap = el("div", "an-controls");
+  const lbl = el("span", "an-clabel", "Range");
+  wrap.appendChild(lbl);
+  for (const key of ["7d", "30d", "90d", "all"]) {
+    const b = el("button", "an-chip" + (AN.range === key ? " on" : ""), key === "all" ? "All" : key);
+    b.type = "button";
+    b.onclick = () => { AN.range = key; AN.from = anRangeFrom(key); AN.to = anTodayUTC(); anLoad(); };
+    wrap.appendChild(b);
+  }
+  const spacer = el("span"); spacer.style.width = "12px"; wrap.appendChild(spacer);
+  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), "⇄ Compare vs prev period");
+  cmp.type = "button";
+  cmp.title = "Compare this window to the equal-length window immediately before it";
+  cmp.onclick = () => { AN.compare = !AN.compare; anLoad(); };
+  wrap.appendChild(cmp);
+  return wrap;
+}
+
+// ---- Overview ---------------------------------------------------------------
+function anOverview(root) {
+  const d = AN.data, t = d.costByDay.totals;
+  const kpis = el("div", "an-kpis");
+  const tiles = [
+    ["cost", usd(t.cost), "total cost"],
+    ["", fmtCompact(t.tokens), "tokens"],
+    ["", String(d.sessionCount), "sessions"],
+    ["", String(t.prompts), "prompts"],
+    ["cost", usd(d.sessionCount ? t.cost / d.sessionCount : 0), "avg / session"],
+  ];
+  for (const [cls, v, l] of tiles) kpis.appendChild(anKpi(cls, v, l));
+  root.appendChild(kpis);
+
+  const sec = anSection("Cost over time", "Stacked by model · daily");
+  const box = el("div", "an-box");
+  box.appendChild(anStackedTime(d.costByDay));
+  anLegend(box, d.models);
+  sec.appendChild(box);
+  root.appendChild(sec);
+
+  const g = el("div", "an-grid2");
+  const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, "Cost by model"));
+  const maxM = Math.max(1, ...d.byModel.map((x) => x.cost));
+  for (const x of d.byModel) anHbar(b1, shortModel(x.model), x.cost, maxM, modelColor(d.models, x.model), usd);
+  const b2 = el("div", "an-box"); b2.appendChild(el("h4", null, "Cost by project (top)"));
+  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
+  for (const p of d.byProject.slice(0, 10)) {
+    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
+    anHbarSegs(b2, projShort(p.project), p.cost, maxP, segs, usd);
+  }
+  g.append(b1, b2);
+  const sec2 = anSection("Where the money goes"); sec2.appendChild(g);
+  root.appendChild(sec2);
+
+  if (d.cmp) root.appendChild(anCompareBlock());
+
+  root.appendChild(anNote("Descriptive only. Cross-model differences reflect the <b>task</b> you gave each model, not model quality — this panel answers <i>“what did I spend”</i>, not <i>“which model is better”</i>."));
+}
+
+// ---- Models -----------------------------------------------------------------
+function anModels(root) {
+  const d = AN.data;
+  const sec = anSection("Per-model breakdown", "Cost, volume & efficiency · window");
+  const box = el("div", "an-box");
+  const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"]));
+  const totalCost = d.byModel.reduce((s, x) => s + x.cost, 0) || 1;
+  for (const x of d.byModel) {
+    const tr = el("tr");
+    const nm = el("td", "mono");
+    const sw = el("span", "an-swatch"); sw.style.background = modelColor(d.models, x.model);
+    nm.append(sw, document.createTextNode(shortModel(x.model)));
+    const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
+    tr.append(nm, anTd(usd(x.cost)), anTd(Math.round(x.cost / totalCost * 100) + "%", "dim"),
+      anTd(fmtCompact(x.tokens), "dim"), anTd(String(x.prompts), "dim"),
+      anTd(fmtCompact(x.outPerPrompt), "dim"), anTd(crShare + "%", "dim"));
+    tbl.appendChild(tr);
+  }
+  box.appendChild(tbl); sec.appendChild(box); root.appendChild(sec);
+
+  const g = el("div", "an-grid2");
+  const totTok = d.byModel.reduce((s, x) => s + x.tokens, 0) || 1;
+  const bt = el("div", "an-box"); bt.appendChild(el("h4", null, "Share of tokens"));
+  const maxTok = Math.max(1, ...d.byModel.map((x) => x.tokens));
+  for (const x of d.byModel) anHbar(bt, shortModel(x.model), x.tokens, maxTok, modelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
+  const bc = el("div", "an-box"); bc.appendChild(el("h4", null, "Share of cost"));
+  const maxC = Math.max(1, ...d.byModel.map((x) => x.cost));
+  for (const x of d.byModel) anHbar(bc, shortModel(x.model), x.cost, maxC, modelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
+  g.append(bt, bc);
+  const s2 = anSection("Why $ ≠ token count", "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree");
+  s2.appendChild(g); root.appendChild(s2);
+}
+
+// ---- Projects ---------------------------------------------------------------
+function anProjects(root) {
+  const d = AN.data;
+  const sec = anSection("Cost by project", "Bar split shows the model mix inside each project · window");
+  const box = el("div", "an-box");
+  const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
+  for (const p of d.byProject) {
+    const segs = Object.entries(p.byModel).sort((a, b) => b[1] - a[1]).map(([m, v]) => ({ v, c: modelColor(d.models, m), t: shortModel(m) + " " + usd(v) }));
+    anHbarSegs(box, projShort(p.project), p.cost, maxP, segs, usd);
+  }
+  anLegend(box, d.models);
+  sec.appendChild(box); root.appendChild(sec);
+
+  const s2 = anSection("Detail");
+  const box2 = el("div", "an-box"); const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(["project", "cost", "tokens", "prompts"]));
+  for (const p of d.byProject) {
+    const tr = el("tr");
+    tr.append(anTd(projShort(p.project), "mono"), anTd(usd(p.cost)), anTd(fmtCompact(p.tokens), "dim"), anTd(String(p.prompts), "dim"));
+    tbl.appendChild(tr);
+  }
+  box2.appendChild(tbl); s2.appendChild(box2); root.appendChild(s2);
+}
+
+// ---- Sessions ---------------------------------------------------------------
+function anSessions(root) {
+  const d = AN.data;
+  const g = el("div", "an-grid2");
+  const bh = el("div", "an-box"); bh.appendChild(el("h4", null, "Session cost distribution"));
+  const maxH = Math.max(1, ...d.sessionHist.map((b) => b.count));
+  for (const b of d.sessionHist) anHbar(bh, b.label, b.count, maxH, "var(--accent)", (v) => String(v));
+  const bk = el("div", "an-box"); bk.appendChild(el("h4", null, "Fleet at a glance"));
+  const heavy = d.topSessions[0];
+  const info = el("div", "an-fleet");
+  // Build with textContent (project names are filesystem-derived — never innerHTML).
+  const fleetLine = (label, value) => {
+    const row = el("div"); row.append(document.createTextNode(label + " "));
+    const b = el("b", null, value); row.appendChild(b); return row;
+  };
+  info.appendChild(fleetLine("Sessions (window):", String(d.sessionCount)));
+  if (heavy) {
+    const row = fleetLine("Costliest session:", usd(heavy.cost));
+    row.append(document.createTextNode(" (" + projShort(heavy.project) + ")"));
+    info.appendChild(row);
+  }
+  if (d.byProject[0]) info.appendChild(fleetLine("Costliest project:", projShort(d.byProject[0].project)));
+  bk.appendChild(info);
+  g.append(bh, bk);
+  const s1 = anSection("Session shape"); s1.appendChild(g); root.appendChild(s1);
+
+  const sec = anSection("Top sessions by cost", "Spot the runaway session burning the budget. Counts include subagent / synthetic transcripts.");
+  const box = el("div", "an-box"); const tbl = el("table", "an-table");
+  tbl.appendChild(anHead(["session", "day", "project", "model", "tokens", "prompts", "cost"]));
+  for (const s of d.topSessions) {
+    const tr = el("tr");
+    tr.append(anTd(s.sid, "mono"), anTd(s.day, "dim"), anTd(projShort(s.project), "mono"),
+      anTd(shortModel(s.model), "dim"), anTd(fmtCompact(s.tokens), "dim"), anTd(String(s.prompts), "dim"), anTd(usd(s.cost)));
+    tbl.appendChild(tr);
+  }
+  box.appendChild(tbl); sec.appendChild(box); root.appendChild(sec);
+}
+
+// ---- Tools ------------------------------------------------------------------
+function anTools(root) {
+  const d = AN.data;
+  const sec = anSection("Skills · plugins · MCP", "What the agents actually invoked · by records");
+  if (!d.tools.length) {
+    sec.appendChild(anEmpty("No skill/plugin/MCP attribution in this window (recorded only on recent transcripts)."));
+    root.appendChild(sec); return;
+  }
+  const kinds = {};
+  for (const t of d.tools) (kinds[t.kind] = kinds[t.kind] || []).push(t);
+  const kc = { skill: "#a6e3a1", plugin: "#cba6f7", mcp_server: "#fab387", mcp_tool: "#89b4fa" };
+  const g = el("div", "an-grid2");
+  for (const kind of Object.keys(kinds)) {
+    const box = el("div", "an-box"); box.appendChild(el("h4", null, kind));
+    const items = kinds[kind].slice(0, 10);
+    const max = Math.max(1, ...items.map((t) => t.records));
+    for (const t of items) anHbar(box, t.name, t.records, max, kc[kind] || "var(--accent)", fmtCompact);
+    g.appendChild(box);
+  }
+  sec.appendChild(g); root.appendChild(sec);
+}
+
+// ---- comparison block -------------------------------------------------------
+function anDelta(cur, prev, costLike) {
+  const p = pctDelta(cur, prev);
+  if (p === null) return { txt: cur ? "new" : "—", cls: costLike ? "an-up" : "an-up good" };
+  const up = p >= 0;
+  const cls = costLike ? (up ? "an-up" : "an-down") : (up ? "an-up good" : "an-down bad");
+  return { txt: (up ? "▲" : "▼") + Math.abs(p) + "% vs prev", cls };
+}
+
+function anCompareBlock() {
+  const C = AN.data.cmp;
+  const sec = anSection("Change · this window vs previous", `${C.curFrom} → ${C.curTo}  vs  ${C.prevFrom} → ${C.prevTo}`);
+  const kpis = el("div", "an-kpis");
+  const tiles = [
+    ["cost", usd(C.cur.cost), "cost", anDelta(C.cur.cost, C.prev.cost, true)],
+    ["", fmtCompact(C.cur.tokens), "tokens", anDelta(C.cur.tokens, C.prev.tokens, true)],
+    ["", String(C.cur.prompts), "prompts", anDelta(C.cur.prompts, C.prev.prompts, false)],
+    ["", String(C.cur.sessions), "sessions", anDelta(C.cur.sessions, C.prev.sessions, false)],
+  ];
+  for (const [cls, v, l, d] of tiles) {
+    const c = anKpi(cls, v, l);
+    const dd = el("div", "an-kdelta " + d.cls, d.txt);
+    c.appendChild(dd);
+    kpis.appendChild(c);
+  }
+  sec.appendChild(kpis);
+
+  const g = el("div", "an-grid2");
+  g.append(
+    anDiverging("Cost change by model", C.byModel.map((x) => ({ name: shortModel(x.model), cur: x.curCost, prev: x.prevCost }))),
+    anDiverging("Cost change by project", C.byProject.map((x) => ({ name: projShort(x.project), cur: x.curCost, prev: x.prevCost }))),
+  );
+  sec.appendChild(g);
+
+  const g2 = el("div", "an-grid2");
+  g2.append(anMixShift(), anDowOverlay());
+  sec.appendChild(g2);
+
+  sec.appendChild(anNote("Read <b>mix-shift</b> and <b>day-of-week</b> with the deltas: a jump in absolute tokens can just mean you worked more — the <i>share</i> shift is what shows you changed which model you reach for. Short windows are noisy (one big session skews a week)."));
+  return sec;
+}
+
+function anDiverging(title, items) {
+  const box = el("div", "an-box"); box.appendChild(el("h4", null, title));
+  const rows = items.map((it) => ({ ...it, d: it.cur - it.prev })).sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+  const max = Math.max(0.01, ...rows.map((r) => Math.abs(r.d)));
+  for (const r of rows) {
+    if (Math.abs(r.d) < 0.01) continue;
+    const row = el("div", "an-divrow");
+    const nm = el("div", "nm", r.name); nm.title = r.name; row.appendChild(nm);
+    const track = el("div", "an-divtrack"); track.appendChild(el("div", "mid"));
+    const fill = el("div", "fill");
+    fill.style.width = (Math.abs(r.d) / max * 50) + "%";
+    fill.style.background = r.d >= 0 ? "var(--danger)" : "var(--ok)";
+    if (r.d >= 0) fill.style.left = "50%"; else fill.style.right = "50%";
+    track.appendChild(fill); row.appendChild(track);
+    row.appendChild(el("div", "val " + (r.d >= 0 ? "an-up" : "an-down"), (r.d >= 0 ? "+" : "−") + usd(Math.abs(r.d))));
+    box.appendChild(row);
+  }
+  return box;
+}
+
+function anMixShift() {
+  const C = AN.data.cmp, box = el("div", "an-box");
+  box.appendChild(el("h4", null, "Model mix shift (share of tokens)"));
+  const rows = C.byModel;
+  const curTot = rows.reduce((s, x) => s + x.curTok, 0) || 1;
+  const prevTot = rows.reduce((s, x) => s + x.prevTok, 0) || 1;
+  const stack = (label, total, key) => {
+    const wrap = el("div", "an-mix");
+    wrap.appendChild(el("div", "an-mixlabel", label));
+    const bar = el("div", "an-mixbar");
+    for (const x of rows) {
+      const v = x[key]; if (!v) continue;
+      const seg = el("div"); seg.style.width = (v / total * 100) + "%";
+      seg.style.background = modelColor(AN.data.models, x.model);
+      seg.title = shortModel(x.model) + " " + Math.round(v / total * 100) + "%";
+      bar.appendChild(seg);
+    }
+    wrap.appendChild(bar); return wrap;
+  };
+  box.appendChild(stack("previous", prevTot, "prevTok"));
+  box.appendChild(stack("current", curTot, "curTok"));
+  anLegend(box, AN.data.models);
+  return box;
+}
+
+function anDowOverlay() {
+  const C = AN.data.cmp, d = C.dow, box = el("div", "an-box");
+  box.appendChild(el("h4", null, "Cost by day-of-week (this vs prev)"));
+  const W = 380, H = 150, pad = 26;
+  const max = Math.max(1, ...d.map((x) => Math.max(x.cur, x.prev)));
+  const svg = anSvg(W, H);
+  for (let i = 0; i <= 2; i++) {
+    const y = pad + (H - 2 * pad) * i / 2;
+    svg.appendChild(anLine(pad, y, W - 6, y, "var(--rule)", 0.5));
+    svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 2)), "start"));
+  }
+  const xs = (i) => pad + i * ((W - 2 * pad) / 6);
+  const ys = (v) => H - pad - (v / max) * (H - 2 * pad);
+  const line = (key, color, dash) => {
+    let dd = "";
+    d.forEach((x, i) => { dd += (i ? "L" : "M") + xs(i).toFixed(1) + " " + ys(x[key]).toFixed(1) + " "; });
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", dd); p.setAttribute("fill", "none");
+    p.setAttribute("stroke", color); p.setAttribute("stroke-width", "1.6");
+    if (dash) p.setAttribute("stroke-dasharray", "3 3");
+    svg.appendChild(p);
+    d.forEach((x, i) => { const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", xs(i)); c.setAttribute("cy", ys(x[key])); c.setAttribute("r", "2.2"); c.setAttribute("fill", color); svg.appendChild(c); });
+  };
+  line("prev", "var(--muted)", true);
+  line("cur", "var(--accent)", false);
+  d.forEach((x, i) => svg.appendChild(anText(xs(i), H - pad + 11, x.day, "middle")));
+  box.appendChild(anWrapSvg(svg));
+  const lg = el("div", "an-legend");
+  const mk = (c, t, dash) => { const s = el("span"); const i = el("i"); i.style.background = c; if (dash) i.style.opacity = ".6"; s.append(i, el("span", null, t)); return s; };
+  lg.append(mk("var(--accent)", "current", false), mk("var(--muted)", "previous", true));
+  box.appendChild(lg);
+  return box;
+}
+
+// ---- small builders ---------------------------------------------------------
+function el(t, c, txt) { const e = document.createElement(t); if (c) e.className = c; if (txt != null) e.textContent = txt; return e; }
+function anEmpty(text) { const p = el("p", "an-empty"); p.textContent = text; return p; }
+function anSection(title, hint) {
+  const s = el("div", "an-section");
+  s.appendChild(el("h3", null, title));
+  if (hint) s.appendChild(el("p", "an-hint", hint));
+  return s;
+}
+function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
+function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
+function anHead(cols) { const tr = el("tr"); for (const c of cols) tr.appendChild(el("th", null, c)); return tr; }
+function anTd(text, cls) { const td = el("td", cls); td.textContent = text; return td; }
+function anLegend(parent, models) {
+  const lg = el("div", "an-legend");
+  for (const m of models) { const s = el("span"); const i = el("i"); i.style.background = modelColor(models, m); s.append(i, el("span", null, shortModel(m))); lg.appendChild(s); }
+  parent.appendChild(lg);
+}
+function anHbar(parent, name, v, max, color, fmtVal) {
+  const row = el("div", "an-hbar");
+  const nm = el("div", "nm", name); nm.title = name; row.appendChild(nm);
+  const track = el("div", "track"); const fill = el("div", "fill");
+  fill.style.width = (v / max * 100) + "%"; fill.style.background = color; track.appendChild(fill);
+  row.appendChild(track); row.appendChild(el("div", "val", fmtVal(v)));
+  parent.appendChild(row);
+}
+function anHbarSegs(parent, name, total, max, segs, fmtVal) {
+  const row = el("div", "an-hbar");
+  const nm = el("div", "nm", name); nm.title = name; row.appendChild(nm);
+  const track = el("div", "track");
+  for (const s of segs) { const f = el("div", "fill"); f.style.width = (s.v / max * 100) + "%"; f.style.background = s.c; f.title = s.t || ""; track.appendChild(f); }
+  row.appendChild(track); row.appendChild(el("div", "val", fmtVal(total)));
+  parent.appendChild(row);
+}
+
+// SVG helpers
+const NS = "http://www.w3.org/2000/svg";
+function anSvg(w, h) { const s = document.createElementNS(NS, "svg"); s.setAttribute("viewBox", "0 0 " + w + " " + h); s.setAttribute("width", w); s.setAttribute("height", h); s.setAttribute("class", "an-axis"); return s; }
+function anWrapSvg(s) { const d = el("div", "an-svgwrap"); d.appendChild(s); return d; }
+function anRect(x, y, w, h, f) { const r = document.createElementNS(NS, "rect"); r.setAttribute("x", x); r.setAttribute("y", y); r.setAttribute("width", w); r.setAttribute("height", Math.max(h, 0)); r.setAttribute("fill", f); return r; }
+function anLine(x1, y1, x2, y2, st, sw) { const l = document.createElementNS(NS, "line"); l.setAttribute("x1", x1); l.setAttribute("y1", y1); l.setAttribute("x2", x2); l.setAttribute("y2", y2); l.setAttribute("stroke", st); l.setAttribute("stroke-width", sw); return l; }
+function anText(x, y, t, anchor) { const e = document.createElementNS(NS, "text"); e.setAttribute("x", x); e.setAttribute("y", y); e.setAttribute("text-anchor", anchor); e.textContent = t; return e; }
+function anTitle(t) { const e = document.createElementNS(NS, "title"); e.textContent = t; return e; }
+
+// stacked daily cost bars
+function anStackedTime(agg) {
+  const days = agg.days, W = Math.max(days.length * 22, 720), H = 170, pad = 24;
+  const max = Math.max(1, agg.maxCost);
+  const bw = Math.min(16, (W - 2 * pad) / days.length - 3);
+  const svg = anSvg(W, H);
+  for (let i = 0; i <= 3; i++) {
+    const y = pad + (H - 2 * pad) * i / 3;
+    svg.appendChild(anLine(pad, y, W - 4, y, "var(--rule)", 0.5));
+    svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 3)), "start"));
+  }
+  days.forEach((d, ix) => {
+    const x = pad + ix * ((W - 2 * pad) / days.length);
+    let yb = H - pad;
+    const segs = Object.entries(d.segs).sort((a, b) => a[1] - b[1]);
+    for (const [m, c] of segs) {
+      const h = (c / max) * (H - 2 * pad); yb -= h;
+      const r = anRect(x, yb, bw, h, modelColor(agg.models, m));
+      r.appendChild(anTitle(d.day + " · " + shortModel(m) + " " + usd(c)));
+      svg.appendChild(r);
+    }
+    if (ix % 5 === 0) svg.appendChild(anText(x + bw / 2, H - pad + 11, d.day.slice(5), "middle"));
+  });
+  return anWrapSvg(svg);
 }

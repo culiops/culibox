@@ -936,9 +936,19 @@ $("analytics-open").addEventListener("click", openAnalytics);
   if (anRefresh) anRefresh.addEventListener("click", async () => {
     anRefresh.disabled = true;
     anRefresh.textContent = "Scanning…";
-    try { await api("/api/analytics/ingest", { method: "POST" }); await renderAnalytics(); }
+    try { await api("/api/analytics/ingest", { method: "POST" }); await anLoad(); }
     catch (_) { /* leave the current view; the range line still shows */ }
     finally { anRefresh.disabled = false; anRefresh.textContent = "Re-scan"; }
+  });
+  // Tab bar: switch the active analytics tab and re-render from cached data
+  // (no refetch — the window data is already loaded).
+  const anTabs = $("an-tabs");
+  if (anTabs) anTabs.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-antab]");
+    if (!b) return;
+    AN.tab = b.dataset.antab;
+    syncTabButtons();
+    anRender();
   });
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).

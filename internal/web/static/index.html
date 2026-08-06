@@ -519,7 +519,8 @@
     #settings-modal { width: 460px; }
     #spawn-modal { width: 420px; }
     #attr-modal { width: 460px; }
-    #analytics-modal { width: 820px; max-width: 96vw; }
+    #analytics-modal { width: 960px; max-width: 96vw; }
+    #an-tabs { flex-wrap: wrap; }
 
     /* Analytics view */
     .an-caption { color: var(--muted); font-size: 11px; line-height: 1.45; margin: 0 0 12px; }
@@ -543,6 +544,49 @@
     .an-table td.mono { max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .an-badge { font-size: 9px; padding: 0 5px; border: 1px solid var(--border); color: var(--muted); margin-left: 6px; }
     .an-empty { color: var(--muted); font-size: 12.5px; }
+    /* Analytics v2 (tabbed cost view) */
+    .an-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 16px; }
+    .an-clabel { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-right: 2px; }
+    .an-chip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 11px; font: inherit; font-size: 11.5px; cursor: pointer; border-radius: 2px; }
+    .an-chip:hover { border-color: var(--accent); color: var(--fg); }
+    .an-chip.on { color: #fff; border-color: var(--accent); background: var(--sel); }
+    .an-hint { font-size: 10.5px; color: var(--muted); margin: 0 0 12px; }
+    .an-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px; }
+    .an-kpi { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; }
+    .an-kpi .v { font-size: 20px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+    .an-kpi .v.cost { color: var(--ok); }
+    .an-kpi .l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-top: 5px; }
+    .an-kdelta { font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .an-up { color: var(--danger); } .an-down { color: var(--ok); }
+    .an-up.good { color: var(--ok); } .an-down.bad { color: var(--danger); }
+    .an-box { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; margin-bottom: 4px; }
+    .an-box h4 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 0 0 12px; font-weight: 600; }
+    .an-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .an-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+    .an-hbar { display: grid; grid-template-columns: 140px 1fr 74px; align-items: center; gap: 10px; margin: 7px 0; font-size: 11.5px; }
+    .an-hbar .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .an-hbar .track { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); height: 16px; border-radius: 2px; overflow: hidden; display: flex; }
+    .an-hbar .fill { height: 100%; }
+    .an-hbar .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+    .an-divrow { display: grid; grid-template-columns: 140px 1fr 92px; align-items: center; gap: 10px; margin: 7px 0; font-size: 11.5px; }
+    .an-divrow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .an-divtrack { position: relative; height: 16px; }
+    .an-divtrack .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--rule); }
+    .an-divtrack .fill { position: absolute; top: 2px; height: 12px; border-radius: 2px; }
+    .an-divrow .val { text-align: right; font-variant-numeric: tabular-nums; }
+    .an-mix { margin: 8px 0; }
+    .an-mixlabel { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
+    .an-mixbar { display: flex; height: 18px; border-radius: 2px; overflow: hidden; background: var(--panel); }
+    .an-fleet { font-size: 11.5px; color: var(--muted); line-height: 1.9; }
+    .an-fleet b { color: var(--fg); }
+    .an-cmpnote { font-size: 10.5px; color: var(--muted); border-left: 2px solid var(--warn); padding: 6px 10px; background: color-mix(in srgb, var(--warn) 8%, transparent); margin: 14px 0 0; border-radius: 0 3px 3px 0; }
+    .an-svgwrap { overflow-x: auto; }
+    .an-axis text { fill: var(--muted); font-size: 9px; }
+    @media (max-width: 820px) {
+      .an-kpis { grid-template-columns: repeat(2, 1fr); }
+      .an-grid2 { grid-template-columns: 1fr; }
+      .an-hbar, .an-divrow { grid-template-columns: 104px 1fr 60px; }
+    }
     #analytics-refresh { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
     #analytics-refresh:hover { color: var(--fg); }
     /* Attribution rows: tool name (+kind badge) · calls · ≈ctx. */
@@ -1111,15 +1155,20 @@
   <dialog id="analytics-modal" box-="square" shear-="top">
     <h2 class="pane-head dlg-title">Analytics</h2>
     <div class="dlg-head">
-      <span id="analytics-range" class="an-caption" style="margin:0;flex:1"></span>
+      <div class="dlg-tabs" id="an-tabs">
+        <button type="button" data-antab="overview" class="act">Overview · Cost</button>
+        <button type="button" data-antab="models">Models</button>
+        <button type="button" data-antab="projects">Projects</button>
+        <button type="button" data-antab="sessions">Sessions</button>
+        <button type="button" data-antab="tools">Tools</button>
+      </div>
+      <span class="spacer"></span>
+      <span id="analytics-range" class="an-caption" style="margin:0"></span>
       <button id="analytics-refresh" type="button" title="Re-scan transcripts now">Re-scan</button>
       <button class="dlg-x" type="button" data-close="analytics-modal" title="Close">×</button>
     </div>
     <div class="dlg-body">
       <div id="analytics-body"></div>
-      <p class="an-caption">Trends only — cross-model comparison is <b>directional, not causal</b>:
-        token/prompt volume depends mostly on the task, not the model. Skill/plugin/MCP
-        attribution is recorded only on recent transcripts.</p>
     </div>
   </dialog>
 
