@@ -164,6 +164,21 @@ func TestByModel(t *testing.T) {
 	}
 }
 
+// ByModel's distinct-session count keys on (session_id, project): the same UUID
+// under two project slugs is two sessions (the rename case the PK guards).
+func TestByModelSessionsCountAcrossProjects(t *testing.T) {
+	s := openTemp(t)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	rows, err := s.ByModel("2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Sessions != 2 {
+		t.Fatalf("same id under two projects → want 1 model row with 2 sessions, got %+v", rows)
+	}
+}
+
 // ByProject returns per-(project,model) rows with cost, so the frontend can build
 // project totals and the per-project model mix in one call.
 func TestByProject(t *testing.T) {
@@ -188,6 +203,50 @@ func TestByProject(t *testing.T) {
 	// alpha = opus $5 + sonnet $3 = $8.
 	if !approx(alphaCost, 8) {
 		t.Errorf("alpha total cost = %v, want 8", alphaCost)
+	}
+}
+
+// SessionCosts folds every (day,model) row of a session into one per-session
+// aggregate with a dollar cost — the complete set, NOT a day-ordered cap — so
+// the Sessions view's count/histogram/top-by-cost stay correct on wide windows.
+func TestSessionCosts(t *testing.T) {
+	s := openTemp(t)
+	// One session spanning two days and two models → one aggregate, cost summed,
+	// model "mixed", day = the later one.
+	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
+	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	// A cheaper single-model session.
+	s.Apply("S2", "p", "/t/c.jsonl", delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("session aggregates = %d, want 2", len(rows))
+	}
+	// Sorted by cost descending → S1 first ($5 opus + $3 sonnet = $8).
+	if rows[0].SessionID != "S1" || !approx(rows[0].Cost, 8) || rows[0].Model != "mixed" ||
+		rows[0].Day != "2026-08-06" || rows[0].Prompts != 5 {
+		t.Errorf("S1 aggregate wrong: %+v", rows[0])
+	}
+	if rows[1].Model != "claude-haiku-4-5" {
+		t.Errorf("single-model session should keep its model: %+v", rows[1])
+	}
+}
+
+// The same session UUID under two project slugs is TWO sessions (the
+// agent-console → agent-box rename produced exactly this) — the aggregate must
+// keep them separate, matching the rollup PK.
+func TestSessionCostsProjectDisambiguates(t *testing.T) {
+	s := openTemp(t)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("same session id under two projects = %d rows, want 2", len(rows))
 	}
 }
 

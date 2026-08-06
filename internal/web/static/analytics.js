@@ -105,7 +105,7 @@ function foldProjects(rows, topN) {
 function sessionCostBuckets(rows) {
   const perSession = new Map();
   for (const r of rows || []) {
-    const k = (r.sessionId || "") + "" + (r.project || "");
+    const k = (r.sessionId || "") + String.fromCharCode(31) + (r.project || "");
     perSession.set(k, (perSession.get(k) || 0) + (r.costUsd || 0));
   }
   const buckets = [
@@ -128,7 +128,7 @@ function sessionCostBuckets(rows) {
 function topSessionsByCost(rows, limit) {
   const agg = new Map();
   for (const r of rows || []) {
-    const k = (r.sessionId || "") + "" + (r.project || "");
+    const k = (r.sessionId || "") + String.fromCharCode(31) + (r.project || "");
     let s = agg.get(k);
     if (!s) { s = { sid: (r.sessionId || "").slice(0, 8), day: "", project: r.project || "", models: new Set(), tokens: 0, cost: 0, prompts: 0 }; agg.set(k, s); }
     s.day = s.day > r.day ? s.day : r.day;
@@ -146,7 +146,7 @@ function topSessionsByCost(rows, limit) {
 // distinctSessions: count of distinct (sessionId, project) pairs in /sessions rows.
 function distinctSessions(rows) {
   const s = new Set();
-  for (const r of rows || []) s.add((r.sessionId || "") + "" + (r.project || ""));
+  for (const r of rows || []) s.add((r.sessionId || "") + String.fromCharCode(31) + (r.project || ""));
   return s.size;
 }
 
@@ -244,7 +244,7 @@ async function anLoad() {
       api(`/api/analytics/summary?${q}`),
       api(`/api/analytics/models?${q}`),
       api(`/api/analytics/projects?${q}`),
-      api(`/api/analytics/sessions?${q}&limit=2000`),
+      api(`/api/analytics/session-costs?${q}`),
       api(`/api/analytics/tools?${q}`),
     ]);
   } catch (_) {
@@ -281,7 +281,7 @@ async function anLoadCompare() {
       api(`/api/analytics/summary?${q}`),
       api(`/api/analytics/models?${q}`),
       api(`/api/analytics/projects?${q}`),
-      api(`/api/analytics/sessions?${q}&limit=2000`),
+      api(`/api/analytics/session-costs?${q}`),
     ]);
   } catch (_) {
     return; // comparison is best-effort; leave cmp null
@@ -315,6 +315,7 @@ async function anLoadCompare() {
   const dow = DOW.map((d, i) => ({ day: d, cur: curDow[i], prev: prevDow[i] }));
   AN.data.cmp = {
     curFrom: AN.from, curTo: AN.to, prevFrom: pw.from, prevTo: pw.to,
+    models: allModels, // union of current+previous, so prev-only models get a distinct colour
     cur: { cost: curTotals.cost, tokens: curTotals.tokens, prompts: curTotals.prompts, sessions: AN.data.sessionCount },
     prev: {
       cost: prevFold.totals.cost, tokens: prevFold.totals.tokens, prompts: prevFold.totals.prompts,
@@ -586,6 +587,7 @@ function anMixShift() {
   const rows = C.byModel;
   const curTot = rows.reduce((s, x) => s + x.curTok, 0) || 1;
   const prevTot = rows.reduce((s, x) => s + x.prevTok, 0) || 1;
+  const cmodels = C.models || AN.data.models; // union of cur+prev for stable colours
   const stack = (label, total, key) => {
     const wrap = el("div", "an-mix");
     wrap.appendChild(el("div", "an-mixlabel", label));
@@ -593,7 +595,7 @@ function anMixShift() {
     for (const x of rows) {
       const v = x[key]; if (!v) continue;
       const seg = el("div"); seg.style.width = (v / total * 100) + "%";
-      seg.style.background = modelColor(AN.data.models, x.model);
+      seg.style.background = modelColor(cmodels, x.model);
       seg.title = shortModel(x.model) + " " + Math.round(v / total * 100) + "%";
       bar.appendChild(seg);
     }
@@ -601,7 +603,7 @@ function anMixShift() {
   };
   box.appendChild(stack("previous", prevTot, "prevTok"));
   box.appendChild(stack("current", curTot, "curTok"));
-  anLegend(box, AN.data.models);
+  anLegend(box, cmodels);
   return box;
 }
 

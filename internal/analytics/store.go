@@ -191,6 +191,21 @@ type SessionRow struct {
 	Cost            float64 `json:"costUsd"`
 }
 
+// SessionAggRow is one session (session_id, project) folded across all its
+// day/model rows, with a dollar cost. Model is the single model used, or "mixed".
+type SessionAggRow struct {
+	SessionID     string  `json:"sessionId"`
+	Project       string  `json:"project"`
+	Day           string  `json:"day"` // latest active day
+	Model         string  `json:"model"`
+	Input         int64   `json:"input"`
+	Output        int64   `json:"output"`
+	CacheRead     int64   `json:"cacheRead"`
+	CacheCreation int64   `json:"cacheCreation"`
+	Prompts       int64   `json:"prompts"`
+	Cost          float64 `json:"costUsd"`
+}
+
 // ToolRow is one attribution aggregate across the window.
 type ToolRow struct {
 	Kind    string `json:"kind"`
@@ -303,6 +318,71 @@ LIMIT ?`, from, to, limit)
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// SessionCosts folds every (day,model) row of a session (session identity is
+// (session_id, project), matching the rollup PK) into one per-session aggregate
+// with a dollar cost, cost-descending. Unlike Sessions, this is the COMPLETE set
+// (no day-ordered LIMIT), so the Sessions view's distinct count, cost histogram,
+// and top-by-cost list stay correct on wide windows. Bounded by fleet size
+// (one grouped row per session/model), so it does not need a cap.
+func (s *Store) SessionCosts(from, to string) ([]SessionAggRow, error) {
+	rows, err := s.db.Query(`
+SELECT session_id, project, model, MAX(day),
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts)
+FROM session_rollup WHERE day BETWEEN ? AND ?
+GROUP BY session_id, project, model`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type acc struct {
+		row    SessionAggRow
+		models map[string]struct{}
+	}
+	byKey := make(map[string]*acc)
+	order := []string{}
+	for rows.Next() {
+		var sid, project, model, day string
+		var in, out, cr, cc, prompts int64
+		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts); err != nil {
+			return nil, err
+		}
+		k := sid + "\x1f" + project
+		a := byKey[k]
+		if a == nil {
+			a = &acc{row: SessionAggRow{SessionID: sid, Project: project}, models: map[string]struct{}{}}
+			byKey[k] = a
+			order = append(order, k)
+		}
+		a.row.Input += in
+		a.row.Output += out
+		a.row.CacheRead += cr
+		a.row.CacheCreation += cc
+		a.row.Prompts += prompts
+		a.row.Cost += CostUSD(model, in, out, cr, cc)
+		if day > a.row.Day {
+			a.row.Day = day
+		}
+		a.models[model] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]SessionAggRow, 0, len(order))
+	for _, k := range order {
+		a := byKey[k]
+		if len(a.models) == 1 {
+			for m := range a.models {
+				a.row.Model = m
+			}
+		} else {
+			a.row.Model = "mixed"
+		}
+		out = append(out, a.row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Cost > out[j].Cost })
+	return out, nil
 }
 
 // Tools returns attribution aggregates (skill/plugin/mcp) in [from,to], busiest first.

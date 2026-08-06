@@ -134,6 +134,7 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/analytics/models", s.handleAnalyticsModels)
 		protected.HandleFunc("/api/analytics/projects", s.handleAnalyticsProjects)
 		protected.HandleFunc("/api/analytics/sessions", s.handleAnalyticsSessions)
+		protected.HandleFunc("/api/analytics/session-costs", s.handleAnalyticsSessionCosts)
 		protected.HandleFunc("/api/analytics/tools", s.handleAnalyticsTools)
 		protected.HandleFunc("/api/analytics/ingest", s.handleAnalyticsIngest)
 	}

@@ -93,6 +93,9 @@ func (s *Service) ByProject(from, to string) ([]ProjectRow, error) {
 func (s *Service) Sessions(from, to string, limit int) ([]SessionRow, error) {
 	return s.store.Sessions(from, to, limit)
 }
+func (s *Service) SessionCosts(from, to string) ([]SessionAggRow, error) {
+	return s.store.SessionCosts(from, to)
+}
 func (s *Service) Tools(from, to string, limit int) ([]ToolRow, error) {
 	return s.store.Tools(from, to, limit)
 }

@@ -123,6 +123,23 @@ func (s *Server) handleAnalyticsSessions(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "sessions": rows})
 }
 
+// handleAnalyticsSessionCosts → per-session cost aggregates (complete set, no
+// day-ordered cap) so the session count, histogram and top-by-cost are correct
+// on wide windows.
+func (s *Server) handleAnalyticsSessionCosts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	from, to := analyticsWindow(r)
+	rows, err := s.Analytics.SessionCosts(from, to)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "sessions": rows})
+}
+
 // handleAnalyticsTools → skill/plugin/MCP attribution aggregates.
 func (s *Server) handleAnalyticsTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
