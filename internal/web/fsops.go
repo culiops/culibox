@@ -37,7 +37,10 @@ func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return false
 	}
-	if !sameOrigin(r) {
+	// Bearer credentials are never auto-attached by a browser, so they carry no
+	// CSRF risk and skip the same-origin check (mirrors csrfGuard). Cookie/none
+	// still require same-origin.
+	if credKindOf(r) != credBearer && !sameOrigin(r) {
 		writeErr(w, http.StatusForbidden, "forbidden")
 		return false
 	}

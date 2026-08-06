@@ -42,7 +42,10 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	user, pass, err := auth.ResolveCred(cfg)
+	// Master password (single operator) still comes from the configured env var.
+	// The username field is retained in config for validation but no longer used
+	// for auth (login is password-only).
+	_, pass, err := auth.ResolveCred(cfg)
 	if err != nil {
 		log.Fatalf("auth: %v", err)
 	}
@@ -81,13 +84,20 @@ func main() {
 	if dataDir == "" {
 		dataDir = filepath.Join(home, ".local", "share", "agent-box")
 	}
-	// WS auth cookie secret, persisted under dataDir so a daemon restart does not
-	// invalidate live browsers' cookies (the /ws route is cookie-only gated; a
-	// per-process secret would 401 the client's auto-reconnect forever).
+	// Cookie-signing secret, persisted under dataDir so a daemon restart does not
+	// invalidate live sessions (the session cookie is signed with it; rotating
+	// the file is "log out everywhere").
 	cookie, err := auth.NewCookieAuth(filepath.Join(dataDir, "cookie.secret"))
 	if err != nil {
 		log.Fatalf("auth: %v", err)
 	}
+	// Bearer access tokens (named, revocable) for programmatic/native clients.
+	tokens, err := auth.OpenTokenStore(filepath.Join(dataDir, "tokens.json"))
+	if err != nil {
+		log.Fatalf("auth: %v", err)
+	}
+	// Browser session cookie, signed with the persisted secret. 30-day sliding.
+	sess := auth.NewSession(cookie.Secret(), 30*24*time.Hour)
 	abducoBin := cfg.AbducoBin
 	if abducoBin == "" {
 		abducoBin = "abduco"
@@ -211,7 +221,9 @@ func main() {
 	}
 	srv := &web.Server{
 		API:        &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
-		Cookie:     cookie,
+		Session:    sess,
+		Tokens:     tokens,
+		Password:   pass,
 		Profiles:   pm,
 		Home:       home,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
@@ -297,7 +309,7 @@ func main() {
 		go analyticsSvc.Start(analyticsCtx)
 	}
 
-	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler(user, pass)}
+	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler()}
 
 	// Release attach clients on the way out instead of leaving it to SIGHUP.
 	// SIGHUP on a closing PTY master reaches only that terminal's foreground

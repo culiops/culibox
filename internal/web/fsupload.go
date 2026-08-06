@@ -172,7 +172,9 @@ func (s *Server) handleFsUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if !sameOrigin(r) {
+	// Bearer credentials carry no CSRF risk (never browser-auto-attached), so they
+	// skip same-origin like csrfGuard does; cookie/none still require it.
+	if credKindOf(r) != credBearer && !sameOrigin(r) {
 		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}

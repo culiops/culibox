@@ -1,17 +1,12 @@
-// Package auth provides basic-auth for HTTP routes and a signed-cookie
-// mechanism for the WebSocket route (browsers cannot set an Authorization
-// header on new WebSocket()).
+// Package auth provides the credential primitives for the box: the master
+// password (ResolveCred), the persisted cookie-signing secret (CookieAuth), the
+// session cookie (session.go), and bearer access tokens (tokens.go).
 package auth
 
 import (
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 
@@ -34,22 +29,8 @@ func ResolveCred(c config.Config) (user, pass string, err error) {
 	return c.BasicAuthUser, pass, nil
 }
 
-// BasicAuth wraps next with HTTP Basic authentication (constant-time compare).
-func BasicAuth(user, pass string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		if !ok ||
-			subtle.ConstantTimeCompare([]byte(u), []byte(user)) != 1 ||
-			subtle.ConstantTimeCompare([]byte(p), []byte(pass)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="agent-box"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// CookieAuth mints and validates a signed cookie for the WebSocket route.
+// CookieAuth loads and persists the 32-byte signing secret shared by the
+// session cookie (see session.go). It no longer issues cookies itself.
 type CookieAuth struct{ secret []byte }
 
 // NewCookieAuth returns a CookieAuth backed by a 32-byte signing secret loaded
@@ -103,29 +84,3 @@ func newEphemeral() (*CookieAuth, error) {
 // Secret returns the persisted signing secret, so a Session can be built from
 // the same key that the WS cookie already uses.
 func (c *CookieAuth) Secret() []byte { return c.secret }
-
-func (c *CookieAuth) token() string {
-	mac := hmac.New(sha256.New, c.secret)
-	mac.Write([]byte("authenticated"))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// Issue sets the signed cookie (called on the authed dashboard load).
-func (c *CookieAuth) Issue(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    c.token(),
-		Path:     "/",
-		HttpOnly: true,
-		SameSite: http.SameSiteStrictMode,
-	})
-}
-
-// Valid reports whether the request carries the correct signed cookie.
-func (c *CookieAuth) Valid(r *http.Request) bool {
-	ck, err := r.Cookie(CookieName)
-	if err != nil {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(ck.Value), []byte(c.token())) == 1
-}

@@ -18,7 +18,6 @@ var staticFS embed.FS
 // Server wires the API, dashboard, and terminal WebSocket.
 type Server struct {
 	API      *API
-	Cookie   *auth.CookieAuth
 	Profiles *ProfileManager
 	// Session issues/verifies the browser session cookie; Tokens holds bearer
 	// access tokens. Together they back authGuard, which replaces basic-auth.
@@ -86,24 +85,21 @@ func (s *Server) quickShell() string {
 	return s.ShellProfile
 }
 
-// Handler builds the root handler. Everything except /ws/ sits behind
-// basic-auth; /ws/ is gated by the signed cookie instead, because browsers
-// cannot set an Authorization header on new WebSocket().
-func (s *Server) Handler(user, pass string) http.Handler {
+// Handler builds the root handler. Every route except /login sits behind
+// authGuard, which accepts EITHER a valid session cookie OR a valid bearer
+// token. /ws/ uses the same guard (browsers present the cookie; native clients
+// present a bearer token). /login is the only public route.
+func (s *Server) Handler() http.Handler {
 	protected := http.NewServeMux()
 	protected.HandleFunc("/api/sessions", s.API.handleSessions)
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
 	protected.HandleFunc("/api/options", s.handleOptions)
+	protected.HandleFunc("/api/tokens", s.handleTokens)
+	protected.HandleFunc("/api/tokens/", s.handleToken)
+	protected.HandleFunc("/logout", s.handleLogout)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
-		// Re-mint the WS cookie here too, not just on the dashboard load. /ws is
-		// cookie-only gated, so a live tab whose cookie went stale (regenerated
-		// secret) could otherwise never reconnect without a manual page reload.
-		// Same basic-auth gate as "/", so this is not a wider trust boundary.
-		if s.Cookie != nil {
-			s.Cookie.Issue(w)
-		}
 		meta := map[string]any{
 			"env_label":     s.EnvLabel,
 			"env_color":     s.EnvColor,
@@ -142,14 +138,8 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
 	protected.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Mint the WS auth cookie on the authed dashboard load.
-		if r.URL.Path == "/" && s.Cookie != nil {
-			s.Cookie.Issue(w)
-		}
-		// The app's own files change on every rebuild, so force revalidation —
-		// otherwise browsers serve stale JS/HTML until a manual hard-refresh. The
-		// vendored /xterm/* bundle is immutable and left cacheable.
-		// App HTML/JS change on every rebuild → force revalidation. The vendored
+		// App HTML/JS change on every rebuild → force revalidation, otherwise
+		// browsers serve stale JS/HTML until a manual hard-refresh. The vendored
 		// /xterm/* and /vendor/* bundles are immutable and stay cacheable.
 		pth := r.URL.Path
 		if pth == "/" || (strings.HasSuffix(pth, ".js") &&
@@ -160,26 +150,32 @@ func (s *Server) Handler(user, pass string) http.Handler {
 	})
 
 	root := http.NewServeMux()
-	root.Handle("/", auth.BasicAuth(user, pass, csrfGuard(protected)))
-	root.HandleFunc("/ws/", func(w http.ResponseWriter, r *http.Request) {
-		if s.Cookie != nil && !s.Cookie.Valid(r) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+	// Public login surface. GET serves the static form; POST verifies the
+	// password. The exact "/login" pattern wins over the "/" subtree for both.
+	root.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.ServeFileFS(w, r, staticFS, "static/login.html")
 			return
 		}
-		s.Terminal.ServeHTTP(w, r)
+		s.handleLogin(w, r)
 	})
+	root.Handle("/ws/", s.authGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.Terminal.ServeHTTP(w, r)
+	})))
+	root.Handle("/", s.authGuard(csrfGuard(protected)))
 	return root
 }
 
 // csrfGuard rejects cross-site requests that could change state.
 //
-// Basic-auth credentials are cached per origin by the browser and re-attached to
-// cross-site requests; unlike cookies there is no SameSite to opt out of that.
-// Most of this API is incidentally safe because a JSON content type forces a
-// CORS preflight the attacker cannot satisfy — but that is a property of the
-// body encoding, not a boundary, and multipart/form-data (the upload) is
-// safelisted and needs no preflight. Guarding every unsafe method here means a
-// future handler cannot re-open the hole by changing content type.
+// A session cookie is auto-attached by the browser on cross-site requests, and
+// unlike a token there is no header the attacker must forge — so cookie-auth
+// writes need a same-origin check. Bearer-token writes carry no CSRF risk (the
+// browser never auto-attaches an Authorization header), so they are exempt;
+// this is what lets a native client POST without a matching Origin. Most of the
+// JSON API is also incidentally safe because a JSON content type forces a CORS
+// preflight, but multipart/form-data (the upload) is safelisted and needs none,
+// so the guard belongs on the mux regardless of content type.
 //
 // Reads are deliberately not blocked: a cross-site GET cannot change state, and
 // the response is opaque to the caller anyway.
@@ -187,6 +183,10 @@ func csrfGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if credKindOf(r) == credBearer {
 			next.ServeHTTP(w, r)
 			return
 		}

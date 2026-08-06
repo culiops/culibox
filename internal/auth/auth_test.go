@@ -1,36 +1,13 @@
 package auth
 
 import (
-	"net/http"
-	"net/http/httptest"
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/culiops/agent-box/internal/config"
 )
-
-func TestBasicAuth(t *testing.T) {
-	called := false
-	h := BasicAuth("me", "secret", http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("me", "secret")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if !called || rec.Code != 200 {
-		t.Fatalf("correct creds failed: code=%d called=%v", rec.Code, called)
-	}
-
-	called = false
-	req = httptest.NewRequest("GET", "/", nil)
-	req.SetBasicAuth("me", "wrong")
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if called || rec.Code != 401 {
-		t.Fatalf("wrong creds: code=%d called=%v", rec.Code, called)
-	}
-}
 
 func TestResolveCred(t *testing.T) {
 	t.Setenv("AB_PASS", "s3cr3t")
@@ -43,32 +20,10 @@ func TestResolveCred(t *testing.T) {
 	}
 }
 
-func TestCookieAuth(t *testing.T) {
-	ca, err := NewCookieAuth("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := httptest.NewRecorder()
-	ca.Issue(rec)
-	cookies := rec.Result().Cookies()
-	if len(cookies) == 0 {
-		t.Fatal("no cookie issued")
-	}
-
-	req := httptest.NewRequest("GET", "/ws/x", nil)
-	req.AddCookie(cookies[0])
-	if !ca.Valid(req) {
-		t.Fatal("issued cookie should be valid")
-	}
-	if ca.Valid(httptest.NewRequest("GET", "/ws/x", nil)) {
-		t.Fatal("no cookie should be invalid")
-	}
-}
-
-// A cookie minted before a daemon restart must stay valid after it: the WS
-// route is cookie-only gated, so an ephemeral per-process secret would 401 the
-// auto-reconnect forever. A persisted secret (same path across "processes")
-// fixes it.
+// A secret persisted before a daemon restart must load identically after it: the
+// session cookie and WS route both sign with this secret, so a fresh per-process
+// secret would 401 every live cookie. A persisted secret (same path across
+// "processes") fixes it; a different path yields a different secret.
 func TestCookieAuthPersistedSecretSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cookie.secret")
 
@@ -76,10 +31,6 @@ func TestCookieAuthPersistedSecretSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := httptest.NewRecorder()
-	ca1.Issue(rec)
-	cookie := rec.Result().Cookies()[0]
-
 	if fi, err := os.Stat(path); err != nil {
 		t.Fatalf("secret not persisted: %v", err)
 	} else if fi.Mode().Perm() != 0o600 {
@@ -90,26 +41,21 @@ func TestCookieAuthPersistedSecretSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest("GET", "/ws/x", nil)
-	req.AddCookie(cookie)
-	if !ca2.Valid(req) {
-		t.Fatal("cookie minted before restart should stay valid after restart (persisted secret)")
+	if !bytes.Equal(ca1.Secret(), ca2.Secret()) {
+		t.Fatal("secret changed across restart despite same path")
 	}
 
-	// A different secret must not validate the cookie.
 	other, err := NewCookieAuth(filepath.Join(t.TempDir(), "cookie.secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	req2 := httptest.NewRequest("GET", "/ws/x", nil)
-	req2.AddCookie(cookie)
-	if other.Valid(req2) {
-		t.Fatal("a different secret must not validate the cookie")
+	if bytes.Equal(ca1.Secret(), other.Secret()) {
+		t.Fatal("a different path must yield a different secret")
 	}
 }
 
-// A present-but-malformed secret file (torn write / hand-edit) is regenerated
-// to a working 32-byte secret rather than bricking startup.
+// A present-but-malformed secret file (torn write / hand-edit) is regenerated to
+// a working 32-byte secret rather than bricking startup.
 func TestCookieAuthMalformedSecretRegenerated(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cookie.secret")
 	if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
@@ -122,23 +68,7 @@ func TestCookieAuthMalformedSecretRegenerated(t *testing.T) {
 	if b, err := os.ReadFile(path); err != nil || len(b) != 32 {
 		t.Fatalf("secret not regenerated to 32 bytes: len=%d err=%v", len(b), err)
 	}
-	rec := httptest.NewRecorder()
-	ca.Issue(rec)
-	req := httptest.NewRequest("GET", "/ws/x", nil)
-	req.AddCookie(rec.Result().Cookies()[0])
-	if !ca.Valid(req) {
-		t.Fatal("regenerated secret should mint valid cookies")
-	}
-}
-
-func TestBasicAuthRealm(t *testing.T) {
-	h := BasicAuth("me", "secret", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if got := rec.Header().Get("WWW-Authenticate"); got != `Basic realm="agent-box"` {
-		t.Fatalf("realm = %q, want Basic realm=\"agent-box\"", got)
+	if len(ca.Secret()) != 32 {
+		t.Fatalf("in-memory secret len=%d, want 32", len(ca.Secret()))
 	}
 }

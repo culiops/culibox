@@ -7,62 +7,80 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/config"
 )
 
-// TestWSRouteRequiresCookieNotBasicAuth verifies the B2 fix: the /ws/ route is
-// NOT behind basic-auth (browsers can't set Authorization on a WebSocket) and
-// instead requires the signed cookie. Without the cookie it must 401 before
-// touching the terminal handler.
-func TestWSRouteRequiresCookieNotBasicAuth(t *testing.T) {
-	ca, _ := auth.NewCookieAuth("")
+// issueCookie ensures s has a Session and returns a valid session cookie for it.
+// Call before s.Handler() so the handler captures the Session.
+func issueCookie(t *testing.T, s *Server) *http.Cookie {
+	t.Helper()
+	if s.Session == nil {
+		s.Session = auth.NewSession([]byte("0123456789abcdef0123456789abcdef"), 30*24*time.Hour)
+	}
+	iw := httptest.NewRecorder()
+	s.Session.Issue(iw, false)
+	return iw.Result().Cookies()[0]
+}
+
+// TestWSRouteRejectsAnonAcceptsCred: /ws/ is behind authGuard — no credential
+// 401s before the terminal runs; a valid session cookie reaches it.
+func TestWSRouteRejectsAnonAcceptsCred(t *testing.T) {
 	termHit := false
 	s := &Server{
 		API:      &API{Sessions: &mockSvc{}},
-		Cookie:   ca,
 		Terminal: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { termHit = true }),
 	}
-	h := s.Handler("u", "p")
+	ck := issueCookie(t, s)
+	h := s.Handler()
 
-	// No cookie, no basic-auth (the browser WS case) -> 401, terminal untouched.
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/ws/demo", nil))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("ws without cookie: want 401, got %d", rec.Code)
+		t.Fatalf("ws without credential: want 401, got %d", rec.Code)
 	}
 	if termHit {
-		t.Fatal("terminal handler must not run without a valid cookie")
+		t.Fatal("terminal handler must not run without a credential")
+	}
+
+	req := httptest.NewRequest("GET", "/ws/demo", nil)
+	req.AddCookie(ck)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !termHit {
+		t.Fatal("terminal handler should run with a valid session cookie")
 	}
 }
 
-func TestAPIRouteRequiresBasicAuth(t *testing.T) {
-	ca, _ := auth.NewCookieAuth("")
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
+func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
-	h := s.Handler("u", "p")
+	ck := issueCookie(t, s)
+	h := s.Handler()
 
+	// No credential → 401, and never a basic-auth challenge.
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/profiles", nil))
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("api without basic-auth: want 401, got %d", rec.Code)
+		t.Fatalf("api without credential: want 401, got %d", rec.Code)
+	}
+	if rec.Header().Get("WWW-Authenticate") != "" {
+		t.Fatal("WWW-Authenticate must never be set")
 	}
 
 	req := httptest.NewRequest("GET", "/api/profiles", nil)
-	req.SetBasicAuth("u", "p")
+	req.AddCookie(ck)
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("api with basic-auth: want 200, got %d", rec.Code)
+		t.Fatalf("api with session cookie: want 200, got %d", rec.Code)
 	}
 
-	// The file endpoints read AND WRITE the user's home directory, so
-	// registering one on the wrong mux would expose it unauthenticated. Assert
-	// every one of them is gated, not just that they exist.
-	// Two assertions per endpoint, because BasicAuth wraps the whole mux: an
-	// unauthenticated 401 alone would also be returned for a route that was
-	// never registered. The authed probe pins that a real handler answers.
+	// The file endpoints read AND WRITE the user's home, so a route on the wrong
+	// mux would be unauthenticated. Assert each is gated (401 anon) AND that a
+	// real handler answers when authed (not a mux 404).
 	for _, probe := range []struct {
 		method, path string
 		authed       int
@@ -71,9 +89,6 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 		{"GET", "/api/fs/archive?path=/tmp", http.StatusForbidden}, // outside home
 		{"POST", "/api/fs/upload?dir=/tmp", http.StatusForbidden},  // outside home
 		{"GET", "/api/fs/upload?dir=/tmp", http.StatusMethodNotAllowed},
-		// The mutation routes. These carry no body, so a registered handler
-		// answers 400 at the decode step — which is exactly what pins that a real
-		// handler answered rather than the mux 404ing.
 		{"POST", "/api/fs/mkdir", http.StatusBadRequest},
 		{"POST", "/api/fs/rename", http.StatusBadRequest},
 		{"POST", "/api/fs/delete", http.StatusBadRequest},
@@ -82,32 +97,31 @@ func TestAPIRouteRequiresBasicAuth(t *testing.T) {
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, nil))
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("%s %s without basic-auth: want 401, got %d", probe.method, probe.path, rec.Code)
+			t.Errorf("%s %s without credential: want 401, got %d", probe.method, probe.path, rec.Code)
 		}
 
 		authedReq := httptest.NewRequest(probe.method, probe.path, nil)
-		authedReq.SetBasicAuth("u", "p")
+		authedReq.AddCookie(ck)
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, authedReq)
 		if rec.Code != probe.authed {
-			t.Errorf("%s %s with basic-auth: want %d, got %d (route registered?)",
+			t.Errorf("%s %s authed: want %d, got %d (route registered?)",
 				probe.method, probe.path, probe.authed, rec.Code)
 		}
 	}
 }
 
 // TestStaticNoCacheOnAppFiles: the app's own files (index.html, app.js) must
-// carry Cache-Control: no-cache so a normal reload always shows the latest;
-// the vendored /xterm/* bundle stays cacheable.
+// carry Cache-Control: no-cache; the vendored /xterm/* bundle stays cacheable.
 func TestStaticNoCacheOnAppFiles(t *testing.T) {
-	ca, _ := auth.NewCookieAuth("")
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
-	h := s.Handler("u", "p")
+	ck := issueCookie(t, s)
+	h := s.Handler()
 
 	get := func(path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", path, nil)
-		req.SetBasicAuth("u", "p")
+		req.AddCookie(ck)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		return rec
@@ -122,15 +136,14 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 	}
 }
 
-func TestHandleMeta(t *testing.T) {
-	pm := NewProfileManager(
-		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, "", newFakeStore(), func([]config.AgentConfig) {},
-	)
-	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
-	h := s.Handler("admin", "pw")
+// metaGet builds a Server with the given fields, issues a session cookie, and
+// returns the decoded /api/meta body.
+func metaGet(t *testing.T, s *Server) map[string]any {
+	t.Helper()
+	ck := issueCookie(t, s)
+	h := s.Handler()
 	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
+	req.AddCookie(ck)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -140,6 +153,16 @@ func TestHandleMeta(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	return got
+}
+
+func TestHandleMeta(t *testing.T) {
+	pm := NewProfileManager(
+		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
+		nil, "", newFakeStore(), func([]config.AgentConfig) {},
+	)
+	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	got := metaGet(t, s)
 	if got["env_label"] != "PROD" || got["env_color"] != "#b45309" {
 		t.Fatalf("got %v", got)
 	}
@@ -153,9 +176,10 @@ func TestHandleMetaRateLimits(t *testing.T) {
 	os.WriteFile(f, []byte(`{"five_hour":{"used_percentage":80,"resets_at":1785654600},"seven_day":{"used_percentage":42,"resets_at":1786107600}}`), 0o644)
 	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
 	s := &Server{Profiles: pm, RateLimitsFile: f}
-	h := s.Handler("admin", "pw")
+	ck := issueCookie(t, s)
+	h := s.Handler()
 	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
+	req.AddCookie(ck)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -175,22 +199,15 @@ func TestHandleMetaRateLimits(t *testing.T) {
 func TestHandleMetaNoRateLimitsFile(t *testing.T) {
 	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
 	s := &Server{Profiles: pm, RateLimitsFile: filepath.Join(t.TempDir(), "absent.json")}
-	h := s.Handler("admin", "pw")
-	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	var got map[string]any
-	json.NewDecoder(rec.Body).Decode(&got)
+	got := metaGet(t, s)
 	if _, present := got["rate_limits"]; present {
 		t.Fatal("rate_limits must be omitted when the file is absent")
 	}
 }
 
-// A stored profile overrides a same-named seed (see ProfileManager.merged), so the
-// quick-shell name alone is not a guarantee. If the name no longer resolves to the
-// detected shell binary the console must offer no quick shell rather than silently
-// launching whatever took the name.
+// A stored profile overrides a same-named seed, so the quick-shell name alone is
+// not a guarantee; if it no longer resolves to the detected shell binary, offer
+// no quick shell rather than launching whatever took the name.
 func TestHandleMetaShellProfileShadowed(t *testing.T) {
 	fs := newFakeStore()
 	if err := fs.Save(config.AgentConfig{Name: "zsh", Bin: "python3"}); err != nil {
@@ -201,53 +218,8 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 		nil, "", fs, func([]config.AgentConfig) {},
 	)
 	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
-	h := s.Handler("admin", "pw")
-	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	var got map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got["shell_profile"] != "" {
+	if got := metaGet(t, s); got["shell_profile"] != "" {
 		t.Fatalf("shell_profile = %q, want empty (shadowed by a profile running python3)", got["shell_profile"])
-	}
-}
-
-// /api/meta re-issues the WS cookie. The /ws route is cookie-only gated and the
-// cookie was previously minted only on a full dashboard load, so a tab whose cookie
-// went stale (regenerated secret) could never reconnect — it retried forever with no
-// way back short of a manual reload. /api/meta is behind the same basic auth as "/",
-// so minting here is the same trust level and lets a live tab self-heal.
-func TestHandleMetaReissuesWSCookie(t *testing.T) {
-	ca, err := auth.NewCookieAuth("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &Server{Cookie: ca}
-	h := s.Handler("admin", "pw")
-	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("status %d", rec.Code)
-	}
-	var got *http.Cookie
-	for _, c := range rec.Result().Cookies() {
-		if c.Name == auth.CookieName {
-			got = c
-		}
-	}
-	if got == nil {
-		t.Fatalf("no %s cookie set; cookies = %v", auth.CookieName, rec.Result().Cookies())
-	}
-	// The minted cookie must actually authenticate /ws.
-	probe := httptest.NewRequest("GET", "/ws/x", nil)
-	probe.AddCookie(got)
-	if !ca.Valid(probe) {
-		t.Fatal("the cookie issued by /api/meta does not validate")
 	}
 }
 
@@ -255,16 +227,7 @@ func TestHandleMetaReissuesWSCookie(t *testing.T) {
 // shell" — never an unverified name.
 func TestHandleMetaFailsClosedWithoutProfiles(t *testing.T) {
 	s := &Server{ShellProfile: "zsh"} // no Profiles, no ShellBin
-	h := s.Handler("admin", "pw")
-	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	var got map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got["shell_profile"] != "" {
+	if got := metaGet(t, s); got["shell_profile"] != "" {
 		t.Fatalf("shell_profile = %q, want empty (unverifiable)", got["shell_profile"])
 	}
 }
@@ -276,34 +239,16 @@ func TestHandleMetaShellProfileIntact(t *testing.T) {
 		nil, "", newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
-	h := s.Handler("admin", "pw")
-	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	var got map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if got["shell_profile"] != "zsh" {
+	if got := metaGet(t, s); got["shell_profile"] != "zsh" {
 		t.Fatalf("shell_profile = %q, want zsh", got["shell_profile"])
 	}
 }
 
 // The key must always be present: the frontend treats an empty shell_profile as
-// "no quick shell available" and hides the +sh button, so a missing key (rather
-// than an empty one) would be an ambiguous signal.
+// "no quick shell available" and hides the +sh button, so a missing key would be
+// ambiguous.
 func TestHandleMetaNoShellProfile(t *testing.T) {
-	s := &Server{}
-	h := s.Handler("admin", "pw")
-	req := httptest.NewRequest("GET", "/api/meta", nil)
-	req.SetBasicAuth("admin", "pw")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	var got map[string]any
-	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	got := metaGet(t, &Server{})
 	if _, ok := got["shell_profile"]; !ok {
 		t.Fatal("shell_profile key must always be present (empty = no quick shell)")
 	}
@@ -312,20 +257,20 @@ func TestHandleMetaNoShellProfile(t *testing.T) {
 	}
 }
 
-// Basic-auth credentials are cached per origin and re-sent on cross-site
-// requests, with no SameSite equivalent to stop them. Today only the multipart
-// upload is reachable that way (JSON bodies force a preflight), but that is an
-// accident of content type, not a boundary — one handler switching to a
-// safelisted type would silently re-open it. So the guard belongs on the mux.
+// Cookie-authenticated writes require same-origin (a session cookie is
+// auto-attached cross-site). Bearer-authenticated writes are exempt (no
+// auto-attach). Reads are never blocked.
 func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
-	ca, _ := auth.NewCookieAuth("")
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Cookie: ca, Terminal: http.NotFoundHandler(),
+	ts, _ := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
+	tok, _, _ := ts.Create("cli")
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(), Tokens: ts,
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
-	h := s.Handler("u", "p")
+	ck := issueCookie(t, s)
+	h := s.Handler()
 
-	authed := func(method, path string, hdr [2]string) int {
+	cookieReq := func(method, path string, hdr [2]string) int {
 		r := httptest.NewRequest(method, path, nil)
-		r.SetBasicAuth("u", "p")
+		r.AddCookie(ck)
 		if hdr[0] != "" {
 			r.Header.Set(hdr[0], hdr[1])
 		}
@@ -335,24 +280,32 @@ func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 	}
 
 	for _, m := range []string{"POST", "DELETE", "PATCH", "PUT"} {
-		if got := authed(m, "/api/sessions", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusForbidden {
-			t.Errorf("%s cross-site: got %d, want 403", m, got)
+		if got := cookieReq(m, "/api/sessions", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusForbidden {
+			t.Errorf("%s cross-site cookie: got %d, want 403", m, got)
 		}
-		if got := authed(m, "/api/sessions", [2]string{"Origin", "http://evil.example"}); got != http.StatusForbidden {
-			t.Errorf("%s foreign origin: got %d, want 403", m, got)
+		if got := cookieReq(m, "/api/sessions", [2]string{"Origin", "http://evil.example"}); got != http.StatusForbidden {
+			t.Errorf("%s foreign-origin cookie: got %d, want 403", m, got)
 		}
 	}
 
-	// Reads are not blocked: a cross-site GET cannot be used to change state, and
-	// blocking it would break nothing an attacker needs but might break a user.
-	if got := authed("GET", "/api/sessions", [2]string{"Sec-Fetch-Site", "cross-site"}); got == http.StatusForbidden {
+	// A bearer client may POST cross-site — no CSRF vector.
+	br := httptest.NewRequest("POST", "/api/sessions", nil)
+	br.Header.Set("Authorization", "Bearer "+tok)
+	br.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, br)
+	if rec.Code == http.StatusForbidden {
+		t.Error("bearer cross-site POST wrongly blocked by CSRF guard")
+	}
+
+	// Reads are not blocked, and the page's own same-origin requests work.
+	if got := cookieReq("GET", "/api/sessions", [2]string{"Sec-Fetch-Site", "cross-site"}); got == http.StatusForbidden {
 		t.Error("cross-site GET should not be blocked by the CSRF guard")
 	}
-	// The page's own requests must keep working.
-	if got := authed("POST", "/api/sessions", [2]string{"Sec-Fetch-Site", "same-origin"}); got == http.StatusForbidden {
+	if got := cookieReq("POST", "/api/sessions", [2]string{"Sec-Fetch-Site", "same-origin"}); got == http.StatusForbidden {
 		t.Error("same-origin POST was blocked")
 	}
-	if got := authed("POST", "/api/sessions", [2]string{"", ""}); got == http.StatusForbidden {
+	if got := cookieReq("POST", "/api/sessions", [2]string{"", ""}); got == http.StatusForbidden {
 		t.Error("POST with no fetch-metadata headers (older browser) was blocked")
 	}
 }
