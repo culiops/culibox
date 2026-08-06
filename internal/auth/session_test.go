@@ -44,7 +44,15 @@ func TestSession_Expired(t *testing.T) {
 func TestSession_Tampered(t *testing.T) {
 	s := testSession()
 	ck := issued(s, false)
-	ck.Value = ck.Value[:len(ck.Value)-1] + "0" // flip last sig char
+	// Deterministic same-length tamper: flip the last signature char to a
+	// guaranteed-different value (appending would test length-mismatch instead).
+	b := []byte(ck.Value)
+	if last := len(b) - 1; b[last] == '0' {
+		b[last] = '1'
+	} else {
+		b[last] = '0'
+	}
+	ck.Value = string(b)
 	r := httptest.NewRequest("GET", "/", nil)
 	r.AddCookie(ck)
 	if ok, _ := s.Verify(r); ok {
