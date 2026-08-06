@@ -109,24 +109,23 @@ func (a AgentConfig) BasePolicy() string {
 
 // Config is the top-level app configuration.
 type Config struct {
-	BindAddr         string         `json:"bind_addr"`
-	BasicAuthUser    string         `json:"basic_auth_user"`
-	BasicAuthPassEnv string         `json:"basic_auth_pass_env"`
-	DefaultCwd       string         `json:"default_cwd"`
-	EnvLabel         string         `json:"env_label,omitempty"` // e.g. "PROD"/"DEV"; empty → no UI badge
-	EnvColor         string         `json:"env_color,omitempty"` // CSS color for the badge/strip
-	AllowPublic      bool           `json:"allow_public"`
-	ProfilesPath     string         `json:"profiles_path,omitempty"`    // store for runtime profiles
-	DataDir          string         `json:"data_dir,omitempty"`         // default ~/.local/share/agent-box
-	RateLimitsFile   string         `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
-	AbducoBin        string         `json:"abduco_bin,omitempty"`       // default "abduco" on PATH
-	AbducoSocketDir  string         `json:"abduco_socket_dir,omitempty"`
-	MaxUploadBytes   int64          `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB
-	MaxArchiveBytes  int64          `json:"max_archive_bytes,omitempty"` // per directory download; 0 → 512 MiB
-	MaxArchiveFiles  int            `json:"max_archive_files,omitempty"` // per directory download; 0 → 20000
-	SecretSources    []SecretSource `json:"secret_sources,omitempty"`
-	Options          []OptionDef    `json:"options,omitempty"`
-	Agents           []AgentConfig  `json:"agents"`
+	BindAddr        string         `json:"bind_addr"`
+	PasswordEnv     string         `json:"password_env"` // env var holding the master login password
+	DefaultCwd      string         `json:"default_cwd"`
+	EnvLabel        string         `json:"env_label,omitempty"` // e.g. "PROD"/"DEV"; empty → no UI badge
+	EnvColor        string         `json:"env_color,omitempty"` // CSS color for the badge/strip
+	AllowPublic     bool           `json:"allow_public"`
+	ProfilesPath    string         `json:"profiles_path,omitempty"`    // store for runtime profiles
+	DataDir         string         `json:"data_dir,omitempty"`         // default ~/.local/share/agent-box
+	RateLimitsFile  string         `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
+	AbducoBin       string         `json:"abduco_bin,omitempty"`       // default "abduco" on PATH
+	AbducoSocketDir string         `json:"abduco_socket_dir,omitempty"`
+	MaxUploadBytes  int64          `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB
+	MaxArchiveBytes int64          `json:"max_archive_bytes,omitempty"` // per directory download; 0 → 512 MiB
+	MaxArchiveFiles int            `json:"max_archive_files,omitempty"` // per directory download; 0 → 20000
+	SecretSources   []SecretSource `json:"secret_sources,omitempty"`
+	Options         []OptionDef    `json:"options,omitempty"`
+	Agents          []AgentConfig  `json:"agents"`
 
 	// DefaultRuntime is the tier for any agent that does not name one. It exists
 	// because the quick-shell profile is GENERATED, not configured, so no

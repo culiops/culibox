@@ -24,7 +24,7 @@ type Server struct {
 	Session *auth.Session
 	Tokens  *auth.TokenStore
 	// Password is the master password checked at /login (single operator; sourced
-	// from BasicAuthPassEnv). Never logged.
+	// from the env var named by config's password_env). Never logged.
 	Password string
 	Home     string // for the workspace picker ($HOME + subfolders)
 	Terminal http.Handler

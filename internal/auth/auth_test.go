@@ -11,12 +11,15 @@ import (
 
 func TestResolveCred(t *testing.T) {
 	t.Setenv("AB_PASS", "s3cr3t")
-	u, p, err := ResolveCred(config.Config{BasicAuthUser: "me", BasicAuthPassEnv: "AB_PASS"})
-	if err != nil || u != "me" || p != "s3cr3t" {
-		t.Fatalf("resolve: %v %q %q", err, u, p)
+	p, err := ResolveCred(config.Config{PasswordEnv: "AB_PASS"})
+	if err != nil || p != "s3cr3t" {
+		t.Fatalf("resolve: %v %q", err, p)
 	}
-	if _, _, err := ResolveCred(config.Config{BasicAuthUser: "me", BasicAuthPassEnv: "MISSING_VAR_XYZ"}); err == nil {
+	if _, err := ResolveCred(config.Config{PasswordEnv: "MISSING_VAR_XYZ"}); err == nil {
 		t.Fatal("missing env should error")
+	}
+	if _, err := ResolveCred(config.Config{}); err == nil {
+		t.Fatal("empty password_env should error")
 	}
 }
 

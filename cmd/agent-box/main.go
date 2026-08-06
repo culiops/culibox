@@ -42,10 +42,9 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	// Master password (single operator) still comes from the configured env var.
-	// The username field is retained in config for validation but no longer used
-	// for auth (login is password-only).
-	_, pass, err := auth.ResolveCred(cfg)
+	// Master password (single operator), read from the env var named by
+	// password_env. Login is password-only — there is no username.
+	pass, err := auth.ResolveCred(cfg)
 	if err != nil {
 		log.Fatalf("auth: %v", err)
 	}

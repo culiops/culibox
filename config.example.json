@@ -1,7 +1,6 @@
 {
   "bind_addr": "127.0.0.1:8899",
-  "basic_auth_user": "admin",
-  "basic_auth_pass_env": "AB_PASS",
+  "password_env": "AB_PASS",
   "default_cwd": "/home/you",
   "env_label": "DEV",
   "env_color": "#64748b",

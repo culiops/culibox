@@ -18,12 +18,12 @@ func writeTemp(t *testing.T, content string) string {
 }
 
 func TestLoad(t *testing.T) {
-	p := writeTemp(t, `{"bind_addr":"127.0.0.1:8080","basic_auth_user":"me","basic_auth_pass_env":"AB_PASS","agents":[{"name":"claude","bin":"claude","args":["--foo"]}]}`)
+	p := writeTemp(t, `{"bind_addr":"127.0.0.1:8080","password_env":"AB_PASS","agents":[{"name":"claude","bin":"claude","args":["--foo"]}]}`)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BindAddr != "127.0.0.1:8080" || c.BasicAuthUser != "me" || c.BasicAuthPassEnv != "AB_PASS" {
+	if c.BindAddr != "127.0.0.1:8080" || c.PasswordEnv != "AB_PASS" {
 		t.Fatalf("unexpected config: %+v", c)
 	}
 	if len(c.Agents) != 1 || c.Agents[0].Bin != "claude" || c.Agents[0].Args[0] != "--foo" {
@@ -60,7 +60,7 @@ func TestValidate_RequiresAgent(t *testing.T) {
 
 func TestLoad_EnvModelFields(t *testing.T) {
 	p := writeTemp(t, `{
-      "bind_addr":"127.0.0.1:8080","basic_auth_user":"me","basic_auth_pass_env":"AB_PASS",
+      "bind_addr":"127.0.0.1:8080","password_env":"AB_PASS",
       "secret_sources":[{"type":"env"},{"type":"file","path":"/x/secrets.env"}],
       "agents":[
         {"name":"claude","bin":"claude","base":"login","env":{"ANTHROPIC_MODEL":"m"}},
@@ -83,7 +83,7 @@ func TestLoad_EnvModelFields(t *testing.T) {
 
 func TestLoad_AbducoFields(t *testing.T) {
 	p := writeTemp(t, `{
-      "bind_addr":"127.0.0.1:8080","basic_auth_user":"me","basic_auth_pass_env":"AB_PASS",
+      "bind_addr":"127.0.0.1:8080","password_env":"AB_PASS",
       "data_dir":"/var/lib/agent-box","abduco_bin":"/usr/local/bin/abduco",
       "abduco_socket_dir":"/run/agent-box/abduco",
       "agents":[{"name":"claude","bin":"claude"}]}`)
