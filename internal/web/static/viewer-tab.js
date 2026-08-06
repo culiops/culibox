@@ -182,6 +182,28 @@ class ViewerTab {
   // churn and skips the re-render when the content is unchanged. Scroll is no
   // longer its business: every render path ends in applyScroll().
   async load(poll) {
+    // A poll tick or the manual ⟳ must never silently replace a live edit: the
+    // success path below ends in renderCode()/renderMarkdown(), both of which
+    // call content.replaceChildren(...) and would tear the CodeMirror editor +
+    // its Save/Cancel bar out from under a mid-keystroke user with no warning —
+    // and, since only exitEdit() resets editing/cm, leave both pointing at a
+    // detached editor forever (the Edit button's own guard then permanently
+    // no-ops, bricking the tab).
+    if (this.editing) {
+      if (poll) return; // background tick: leave the live edit untouched, full stop
+      // Manual reload: don't discard silently. Ask only when there is
+      // something to lose; either way, route through exitEdit() — the only
+      // place that resets editing/cm/editBar — which itself reloads from disk
+      // once it has cleared edit state.
+      if (this.dirty() && !(await askConfirm({
+        title: "Discard unsaved changes?",
+        body: "Reloading " + this.name + " will discard your unsaved edits.",
+        confirmLabel: "Discard & reload",
+        danger: true,
+      }))) return;
+      this.exitEdit();
+      return;
+    }
     // Claimed synchronously so an auto-reload tick that overlaps the first read
     // cannot also count as "first".
     const first = this.firstLoad;
@@ -292,6 +314,15 @@ class ViewerTab {
   // makes it double as "is there editable text here").
   enterEdit() {
     if (this.editing || this.copyRefusal) return;
+    // The vendor bundle can fail to reach the browser (blocked, offline, a
+    // hiccup loading /vendor/codemirror.min.js). Checked before any state
+    // change — mirrors renderMarkdown()'s fallback-before-mutating pattern —
+    // so a failed attempt leaves editing/cm/the read view exactly as they
+    // were, and the Edit button clickable again on the next try.
+    if (!window.CodeMirror) {
+      showToast("Editor unavailable — CodeMirror failed to load", { error: true });
+      return;
+    }
     this.editing = true;
     this.baseVersion = this.version || "";
     const holder = document.createElement("div");
