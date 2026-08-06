@@ -152,6 +152,15 @@ func writeTemp(root *os.Root, relParent, content string, perm os.FileMode) (stri
 		_ = root.Remove(tmpRel)
 		return "", err
 	}
+	// OpenFile's create mode is subject to the process umask, so the file on
+	// disk can end up with FEWER bits than perm (e.g. a group-writable 0664
+	// original becomes 0644 under umask 022). f.Chmod operates on the open fd
+	// and bypasses the umask, forcing the exact original mode.
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		_ = root.Remove(tmpRel)
+		return "", err
+	}
 	if err := f.Close(); err != nil {
 		_ = root.Remove(tmpRel)
 		return "", err

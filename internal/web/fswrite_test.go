@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -50,6 +51,43 @@ func TestFsWriteSuccessIsAtomicAndKeepsMode(t *testing.T) {
 	json.Unmarshal(rr.Body.Bytes(), &resp)
 	if resp.Version != hashText([]byte("new\n")) {
 		t.Fatalf("returned version mismatch")
+	}
+}
+
+// A group/other-writable original (0664) is the case 0640 cannot catch: under a
+// standard umask (022), 0640 already lacks the bits umask would strip, so a
+// save that silently loses them still reports mode 0640 as "unchanged". This
+// pins the process umask deterministically so the test fails without an
+// explicit Chmod in writeTemp (OpenFile's create mode is subject to umask;
+// os.File.Chmod is not).
+func TestFsWriteSuccessPreservesGroupWritableModeUnderUmask(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+
+	home := t.TempDir()
+	p := filepath.Join(home, "c.conf")
+	if err := os.WriteFile(p, []byte("old\n"), 0o664); err != nil {
+		t.Fatal(err)
+	}
+	// os.WriteFile's own create is likewise subject to umask, so force the
+	// exact starting mode with an explicit Chmod (unaffected by umask) rather
+	// than trusting the WriteFile call to have produced 0664.
+	if err := os.Chmod(p, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	base := hashText([]byte("old\n"))
+	s := &Server{Home: home}
+	body := fmt.Sprintf(`{"path":%q,"content":"new\n","base_version":%q}`, p, base)
+	rr := writeReq(t, s, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+	info, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o664 {
+		t.Fatalf("mode = %o, want 664 — the umask must not strip the original's group/other write bits", info.Mode().Perm())
 	}
 }
 
