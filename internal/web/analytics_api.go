@@ -77,6 +77,37 @@ func (s *Server) handleAnalyticsSummary(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "byDayModel": rows})
 }
 
+// handleAnalyticsModels → per-model aggregates ($, tokens, prompts, sessions) for the window.
+func (s *Server) handleAnalyticsModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	from, to := analyticsWindow(r)
+	rows, err := s.Analytics.ByModel(from, to)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "byModel": rows})
+}
+
+// handleAnalyticsProjects → per-(project,model) aggregates for the window (the
+// frontend derives project totals and the per-project model mix).
+func (s *Server) handleAnalyticsProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	from, to := analyticsWindow(r)
+	rows, err := s.Analytics.ByProject(from, to)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "byProject": rows})
+}
+
 // handleAnalyticsSessions → per-session rows (tokens, prompts, tokens/prompt).
 func (s *Server) handleAnalyticsSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

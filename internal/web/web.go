@@ -131,6 +131,8 @@ func (s *Server) Handler() http.Handler {
 	// inherits csrfGuard's same-origin check like every other state-changing call.
 	if s.Analytics != nil {
 		protected.HandleFunc("/api/analytics/summary", s.handleAnalyticsSummary)
+		protected.HandleFunc("/api/analytics/models", s.handleAnalyticsModels)
+		protected.HandleFunc("/api/analytics/projects", s.handleAnalyticsProjects)
 		protected.HandleFunc("/api/analytics/sessions", s.handleAnalyticsSessions)
 		protected.HandleFunc("/api/analytics/tools", s.handleAnalyticsTools)
 		protected.HandleFunc("/api/analytics/ingest", s.handleAnalyticsIngest)

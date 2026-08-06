@@ -84,6 +84,12 @@ func (s *Service) Close() error { return s.store.Close() }
 func (s *Service) ByDayModel(from, to string) ([]DayModelRow, error) {
 	return s.store.ByDayModel(from, to)
 }
+func (s *Service) ByModel(from, to string) ([]ModelRow, error) {
+	return s.store.ByModel(from, to)
+}
+func (s *Service) ByProject(from, to string) ([]ProjectRow, error) {
+	return s.store.ByProject(from, to)
+}
 func (s *Service) Sessions(from, to string, limit int) ([]SessionRow, error) {
 	return s.store.Sessions(from, to, limit)
 }

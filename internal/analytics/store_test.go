@@ -111,6 +111,86 @@ func TestIngestRefusesConcurrent(t *testing.T) {
 	}
 }
 
+// ByDayModel and Sessions attach a dollar cost derived from CostUSD.
+func TestRowsCarryCost(t *testing.T) {
+	s := openTemp(t)
+	// 1,000,000 opus input tokens = $5 exactly.
+	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	dm, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	if err != nil || len(dm) != 1 {
+		t.Fatalf("ByDayModel err=%v rows=%d", err, len(dm))
+	}
+	if !approx(dm[0].Cost, 5) {
+		t.Errorf("ByDayModel cost = %v, want 5", dm[0].Cost)
+	}
+	ss, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	if err != nil || len(ss) != 1 {
+		t.Fatalf("Sessions err=%v rows=%d", err, len(ss))
+	}
+	if !approx(ss[0].Cost, 5) {
+		t.Errorf("Sessions cost = %v, want 5", ss[0].Cost)
+	}
+}
+
+// ByModel aggregates across days/projects/sessions per model, counts distinct
+// sessions, and attaches cost.
+func TestByModel(t *testing.T) {
+	s := openTemp(t)
+	// Two sessions, same model, different days → 1 model row, 2 sessions.
+	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
+	s.Apply("S2", "p", "/t/b.jsonl", delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	// A different model.
+	s.Apply("S3", "p", "/t/c.jsonl", delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	rows, err := s.ByModel("2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("model rows = %d, want 2", len(rows))
+	}
+	var opus *ModelRow
+	for i := range rows {
+		if rows[i].Model == "claude-opus-5" {
+			opus = &rows[i]
+		}
+	}
+	if opus == nil {
+		t.Fatal("no opus row")
+	}
+	if opus.Input != 2_000_000 || opus.Prompts != 5 || opus.Sessions != 2 || !approx(opus.Cost, 10) {
+		t.Errorf("opus row wrong: %+v", opus)
+	}
+}
+
+// ByProject returns per-(project,model) rows with cost, so the frontend can build
+// project totals and the per-project model mix in one call.
+func TestByProject(t *testing.T) {
+	s := openTemp(t)
+	s.Apply("S1", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S3", "beta", "/t/c.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	rows, err := s.ByProject("2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// alpha has two models, beta one → 3 rows.
+	if len(rows) != 3 {
+		t.Fatalf("project rows = %d, want 3", len(rows))
+	}
+	var alphaCost float64
+	for _, r := range rows {
+		if r.Project == "alpha" {
+			alphaCost += r.Cost
+		}
+	}
+	// alpha = opus $5 + sonnet $3 = $8.
+	if !approx(alphaCost, 8) {
+		t.Errorf("alpha total cost = %v, want 8", alphaCost)
+	}
+}
+
 func TestToolsAggregate(t *testing.T) {
 	s := openTemp(t)
 	p := newParsed()

@@ -3,6 +3,7 @@ package analytics
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite" (no CGO)
 )
@@ -138,13 +139,41 @@ ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_of
 
 // DayModelRow is one (day, model) aggregate across all sessions/projects.
 type DayModelRow struct {
-	Day           string `json:"day"`
-	Model         string `json:"model"`
-	Input         int64  `json:"input"`
-	Output        int64  `json:"output"`
-	CacheRead     int64  `json:"cacheRead"`
-	CacheCreation int64  `json:"cacheCreation"`
-	Prompts       int64  `json:"prompts"`
+	Day           string  `json:"day"`
+	Model         string  `json:"model"`
+	Input         int64   `json:"input"`
+	Output        int64   `json:"output"`
+	CacheRead     int64   `json:"cacheRead"`
+	CacheCreation int64   `json:"cacheCreation"`
+	Prompts       int64   `json:"prompts"`
+	Cost          float64 `json:"costUsd"`
+}
+
+// ModelRow aggregates one model across the whole window (all days/projects),
+// with a distinct-session count and a dollar cost.
+type ModelRow struct {
+	Model         string  `json:"model"`
+	Input         int64   `json:"input"`
+	Output        int64   `json:"output"`
+	CacheRead     int64   `json:"cacheRead"`
+	CacheCreation int64   `json:"cacheCreation"`
+	Prompts       int64   `json:"prompts"`
+	Sessions      int64   `json:"sessions"`
+	Cost          float64 `json:"costUsd"`
+}
+
+// ProjectRow is one (project, model) aggregate over the window. Returning the
+// model breakdown lets the frontend build both a project total and the
+// per-project model-mix from a single query.
+type ProjectRow struct {
+	Project       string  `json:"project"`
+	Model         string  `json:"model"`
+	Input         int64   `json:"input"`
+	Output        int64   `json:"output"`
+	CacheRead     int64   `json:"cacheRead"`
+	CacheCreation int64   `json:"cacheCreation"`
+	Prompts       int64   `json:"prompts"`
+	Cost          float64 `json:"costUsd"`
 }
 
 // SessionRow is one (day, session, project, model) row with a derived tokens/prompt.
@@ -159,6 +188,7 @@ type SessionRow struct {
 	CacheCreation   int64   `json:"cacheCreation"`
 	Prompts         int64   `json:"prompts"`
 	TokensPerPrompt float64 `json:"tokensPerPrompt"`
+	Cost            float64 `json:"costUsd"`
 }
 
 // ToolRow is one attribution aggregate across the window.
@@ -185,6 +215,62 @@ GROUP BY day, model ORDER BY day, model`, from, to)
 		if err := rows.Scan(&r.Day, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts); err != nil {
 			return nil, err
 		}
+		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ByModel returns one row per model across the whole window, with a
+// distinct-session count (session identity is (session_id, project), matching
+// the rollup PK) and a dollar cost. Ordered by cost descending.
+func (s *Store) ByModel(from, to string) ([]ModelRow, error) {
+	rows, err := s.db.Query(`
+SELECT model,
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts),
+  COUNT(DISTINCT session_id || char(31) || project)
+FROM session_rollup WHERE day BETWEEN ? AND ?
+GROUP BY model`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ModelRow
+	for rows.Next() {
+		var r ModelRow
+		if err := rows.Scan(&r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts, &r.Sessions); err != nil {
+			return nil, err
+		}
+		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Cost > out[j].Cost })
+	return out, nil
+}
+
+// ByProject returns per-(project, model) aggregates over the window, each with a
+// dollar cost. The frontend sums rows for a project total and uses the per-model
+// split for the mix. Ordered by cost descending.
+func (s *Store) ByProject(from, to string) ([]ProjectRow, error) {
+	rows, err := s.db.Query(`
+SELECT project, model,
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts)
+FROM session_rollup WHERE day BETWEEN ? AND ?
+GROUP BY project, model`, from, to)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProjectRow
+	for rows.Next() {
+		var r ProjectRow
+		if err := rows.Scan(&r.Project, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts); err != nil {
+			return nil, err
+		}
+		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -213,6 +299,7 @@ LIMIT ?`, from, to, limit)
 			total := r.Input + r.Output + r.CacheRead + r.CacheCreation
 			r.TokensPerPrompt = float64(total) / float64(r.Prompts)
 		}
+		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
 		out = append(out, r)
 	}
 	return out, rows.Err()
