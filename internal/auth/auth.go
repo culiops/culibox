@@ -100,6 +100,10 @@ func newEphemeral() (*CookieAuth, error) {
 	return &CookieAuth{secret: s}, nil
 }
 
+// Secret returns the persisted signing secret, so a Session can be built from
+// the same key that the WS cookie already uses.
+func (c *CookieAuth) Secret() []byte { return c.secret }
+
 func (c *CookieAuth) token() string {
 	mac := hmac.New(sha256.New, c.secret)
 	mac.Write([]byte("authenticated"))
