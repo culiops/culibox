@@ -82,6 +82,33 @@ function normModels(rows) {
     .sort((a, b) => b.cost - a.cost);
 }
 
+// collapseZeroCost: fold every $0-cost model (unknown/synthetic families — they
+// price to exactly 0) into a single "other (unpriced)" row, so the model views
+// aren't cluttered with rows that cost nothing. Activity is annotated, not hidden:
+// the other row keeps the summed tokens/prompts/sessions. Input is normModels output.
+function collapseZeroCost(rows) {
+  const priced = [], zero = [];
+  for (const r of rows || []) (r.cost > 0 ? priced : zero).push(r);
+  if (!zero.length) return priced;
+  const other = {
+    model: "other (unpriced)", cost: 0,
+    input: 0, output: 0, cacheRead: 0, cacheCreation: 0,
+    tokens: 0, prompts: 0, sessions: 0, outPerPrompt: 0,
+  };
+  for (const z of zero) {
+    other.input += z.input || 0; other.output += z.output || 0;
+    other.cacheRead += z.cacheRead || 0; other.cacheCreation += z.cacheCreation || 0;
+    other.tokens += z.tokens || 0; other.prompts += z.prompts || 0; other.sessions += z.sessions || 0;
+  }
+  return [...priced, other];
+}
+
+// pricedModelIds: model ids that actually cost money, order preserved — used for
+// legends and colour assignment so unpriced models don't take a colour slot.
+function pricedModelIds(rows) {
+  return (rows || []).filter((r) => r.cost > 0).map((r) => r.model);
+}
+
 // foldProjects: /projects per-(project,model) rows → per-project totals + model
 // mix, cost-descending, capped at topN (0 = all).
 function foldProjects(rows, topN) {
@@ -195,6 +222,7 @@ if (typeof module !== "undefined" && module.exports) {
     fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
     foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
     prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
+    collapseZeroCost, pricedModelIds,
   };
 }
 
@@ -268,6 +296,7 @@ async function anLoad() {
     cmp: null,
   };
   AN.data.models = AN.data.costByDay.models;
+  AN.data.pricedModels = pricedModelIds(AN.data.byModel); // for legends: drop $0 models
   if (AN.compare) await anLoadCompare();
   anRender();
 }
@@ -378,14 +407,15 @@ function anOverview(root) {
   const sec = anSection("Cost over time", "Stacked by model · daily");
   const box = el("div", "an-box");
   box.appendChild(anStackedTime(d.costByDay));
-  anLegend(box, d.models);
+  anLegend(box, d.pricedModels, d.models);
   sec.appendChild(box);
   root.appendChild(sec);
 
   const g = el("div", "an-grid2");
   const b1 = el("div", "an-box"); b1.appendChild(el("h4", null, "Cost by model"));
-  const maxM = Math.max(1, ...d.byModel.map((x) => x.cost));
-  for (const x of d.byModel) anHbar(b1, shortModel(x.model), x.cost, maxM, modelColor(d.models, x.model), usd);
+  const modelsC = collapseZeroCost(d.byModel);
+  const maxM = Math.max(1, ...modelsC.map((x) => x.cost));
+  for (const x of modelsC) anHbar(b1, shortModel(x.model), x.cost, maxM, anModelColor(d.models, x.model), usd);
   const b2 = el("div", "an-box"); b2.appendChild(el("h4", null, "Cost by project (top)"));
   const maxP = Math.max(1, ...d.byProject.map((x) => x.cost));
   for (const p of d.byProject.slice(0, 10)) {
@@ -405,14 +435,15 @@ function anOverview(root) {
 function anModels(root) {
   const d = AN.data;
   const sec = anSection("Per-model breakdown", "Cost, volume & efficiency · window");
+  const mc = collapseZeroCost(d.byModel); // fold $0 (unpriced) models into "other"
   const box = el("div", "an-box");
   const tbl = el("table", "an-table");
   tbl.appendChild(anHead(["model", "cost", "% cost", "tokens", "prompts", "out/prompt", "cache-read"]));
-  const totalCost = d.byModel.reduce((s, x) => s + x.cost, 0) || 1;
-  for (const x of d.byModel) {
+  const totalCost = mc.reduce((s, x) => s + x.cost, 0) || 1;
+  for (const x of mc) {
     const tr = el("tr");
     const nm = el("td", "mono");
-    const sw = el("span", "an-swatch"); sw.style.background = modelColor(d.models, x.model);
+    const sw = el("span", "an-swatch"); sw.style.background = anModelColor(d.models, x.model);
     nm.append(sw, document.createTextNode(shortModel(x.model)));
     const crShare = x.tokens ? Math.round(x.cacheRead / x.tokens * 100) : 0;
     tr.append(nm, anTd(usd(x.cost)), anTd(Math.round(x.cost / totalCost * 100) + "%", "dim"),
@@ -420,16 +451,16 @@ function anModels(root) {
       anTd(fmtCompact(x.outPerPrompt), "dim"), anTd(crShare + "%", "dim"));
     tbl.appendChild(tr);
   }
-  box.appendChild(tbl); sec.appendChild(box); root.appendChild(sec);
+  box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 
   const g = el("div", "an-grid2");
-  const totTok = d.byModel.reduce((s, x) => s + x.tokens, 0) || 1;
+  const totTok = mc.reduce((s, x) => s + x.tokens, 0) || 1;
   const bt = el("div", "an-box"); bt.appendChild(el("h4", null, "Share of tokens"));
-  const maxTok = Math.max(1, ...d.byModel.map((x) => x.tokens));
-  for (const x of d.byModel) anHbar(bt, shortModel(x.model), x.tokens, maxTok, modelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
+  const maxTok = Math.max(1, ...mc.map((x) => x.tokens));
+  for (const x of mc) anHbar(bt, shortModel(x.model), x.tokens, maxTok, anModelColor(d.models, x.model), (v) => Math.round(v / totTok * 100) + "%");
   const bc = el("div", "an-box"); bc.appendChild(el("h4", null, "Share of cost"));
-  const maxC = Math.max(1, ...d.byModel.map((x) => x.cost));
-  for (const x of d.byModel) anHbar(bc, shortModel(x.model), x.cost, maxC, modelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
+  const maxC = Math.max(1, ...mc.map((x) => x.cost));
+  for (const x of mc) anHbar(bc, shortModel(x.model), x.cost, maxC, anModelColor(d.models, x.model), (v) => Math.round(v / totalCost * 100) + "%");
   g.append(bt, bc);
   const s2 = anSection("Why $ ≠ token count", "cache-read dominates tokens but is cheap; output is tiny but expensive — the two rankings disagree");
   s2.appendChild(g); root.appendChild(s2);
@@ -456,7 +487,7 @@ function anProjects(root) {
     tr.append(anTd(projShort(p.project), "mono"), anTd(usd(p.cost)), anTd(fmtCompact(p.tokens), "dim"), anTd(String(p.prompts), "dim"));
     tbl.appendChild(tr);
   }
-  box2.appendChild(tbl); s2.appendChild(box2); root.appendChild(s2);
+  box2.appendChild(anTableWrap(tbl)); s2.appendChild(box2); root.appendChild(s2);
 }
 
 // ---- Sessions ---------------------------------------------------------------
@@ -494,7 +525,7 @@ function anSessions(root) {
       anTd(shortModel(s.model), "dim"), anTd(fmtCompact(s.tokens), "dim"), anTd(String(s.prompts), "dim"), anTd(usd(s.cost)));
     tbl.appendChild(tr);
   }
-  box.appendChild(tbl); sec.appendChild(box); root.appendChild(sec);
+  box.appendChild(anTableWrap(tbl)); sec.appendChild(box); root.appendChild(sec);
 }
 
 // ---- Tools ------------------------------------------------------------------
@@ -653,11 +684,23 @@ function anSection(title, hint) {
 function anKpi(cls, v, l) { const c = el("div", "an-kpi"); c.append(el("div", "v " + (cls || ""), v), el("div", "l", l)); return c; }
 function anNote(html) { const n = el("div", "an-cmpnote"); n.innerHTML = html; return n; }
 function anHead(cols) { const tr = el("tr"); for (const c of cols) tr.appendChild(el("th", null, c)); return tr; }
+// anTableWrap keeps a wide table scrollable on its own on narrow viewports, so
+// the dialog body never scrolls horizontally.
+function anTableWrap(tbl) { const d = el("div", "an-tablewrap"); d.appendChild(tbl); return d; }
 function anTd(text, cls) { const td = el("td", cls); td.textContent = text; return td; }
-function anLegend(parent, models) {
+// anLegend shows `models`, but colours each by its index in `colorModels` (the
+// canonical list) so legend swatches match chart/bar colours even when the
+// legend displays only a subset (e.g. priced models).
+function anLegend(parent, models, colorModels) {
+  const key = colorModels || models;
   const lg = el("div", "an-legend");
-  for (const m of models) { const s = el("span"); const i = el("i"); i.style.background = modelColor(models, m); s.append(i, el("span", null, shortModel(m))); lg.appendChild(s); }
+  for (const m of models) { const s = el("span"); const i = el("i"); i.style.background = modelColor(key, m); s.append(i, el("span", null, shortModel(m))); lg.appendChild(s); }
   parent.appendChild(lg);
+}
+// anModelColor colours a model bar, with a neutral grey for the collapsed
+// "other (unpriced)" row.
+function anModelColor(models, model) {
+  return model === "other (unpriced)" ? "var(--muted)" : modelColor(models, model);
 }
 function anHbar(parent, name, v, max, color, fmtVal) {
   const row = el("div", "an-hbar");

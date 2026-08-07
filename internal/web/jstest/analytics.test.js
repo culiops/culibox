@@ -5,7 +5,7 @@ const assert = require("node:assert");
 const {
   fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
   foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
-  prevWindow, pctDelta, dowBuckets, modelColor,
+  prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -139,6 +139,36 @@ test("dowBuckets: sums cost per weekday Mon..Sun", () => {
   assert.equal(d[0], 3);
   assert.equal(d[6], 4);
   assert.equal(d[3], 0);
+});
+
+test("collapseZeroCost: folds $0 models into one 'other (unpriced)' row, keeps prompts", () => {
+  const rows = [
+    { model: "claude-opus-5", cost: 9, tokens: 100, prompts: 4, sessions: 2 },
+    { model: "", cost: 0, tokens: 0, prompts: 27, sessions: 1 },
+    { model: "<synthetic>", cost: 0, tokens: 0, prompts: 41, sessions: 3 },
+  ];
+  const out = collapseZeroCost(rows);
+  assert.equal(out.length, 2); // opus + one "other"
+  assert.equal(out[0].model, "claude-opus-5");
+  const other = out[1];
+  assert.equal(other.model, "other (unpriced)");
+  assert.equal(other.cost, 0);
+  assert.equal(other.prompts, 68); // 27 + 41 — activity preserved, not hidden
+  assert.equal(other.sessions, 4);
+});
+
+test("collapseZeroCost: no $0 models → unchanged, no 'other' row", () => {
+  const rows = [{ model: "a", cost: 5, tokens: 1, prompts: 1, sessions: 1 }];
+  const out = collapseZeroCost(rows);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].model, "a");
+});
+
+test("pricedModelIds: only models with cost > 0, order preserved", () => {
+  const rows = [
+    { model: "a", cost: 5 }, { model: "", cost: 0 }, { model: "b", cost: 1 },
+  ];
+  assert.deepEqual(pricedModelIds(rows), ["a", "b"]);
 });
 
 test("modelColor: stable per model index, wraps the palette", () => {
