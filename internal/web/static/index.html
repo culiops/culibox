@@ -1067,7 +1067,12 @@
               <option value="host">host (uncontained)</option>
             </select>
           </div>
-          <div class="pf-row"><label>Working dir</label><input id="pf-cwd" type="text" placeholder="(optional) default e.g. /home/claude/culipulse" autocomplete="off"></div>
+          <div class="pf-row"><label>Working dir</label>
+            <div style="flex:1; display:flex; flex-direction:column;">
+              <select id="pf-cwd"></select>
+              <input id="pf-cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
+            </div>
+          </div>
           <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
             defaults; the New-session form can override runtime and options for a single run.</div>
           <div id="pf-options"></div>

@@ -162,3 +162,18 @@ test("with no neighbour the button falls back to the form", () => {
   assert.deepEqual(shellSpawnPlan(null), { mode: "form" });
   assert.deepEqual(shellSpawnPlan({ cwd: "" }), { mode: "form" });
 });
+
+// --- profile editor working-dir picker (pfCwdValue) -------------------------
+
+const { pfCwdValue } = require("../static/tier.js");
+
+test("pfCwdValue: (no default) option yields empty", () => {
+  assert.equal(pfCwdValue("", "/ignored"), "");
+});
+test("pfCwdValue: custom option yields the trimmed typed path", () => {
+  assert.equal(pfCwdValue("__custom__", "  /home/u/proj  "), "/home/u/proj");
+  assert.equal(pfCwdValue("__custom__", ""), "");
+});
+test("pfCwdValue: a selected root yields that root", () => {
+  assert.equal(pfCwdValue("/home/u/proj-a", "whatever"), "/home/u/proj-a");
+});

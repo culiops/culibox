@@ -98,6 +98,15 @@ function workspaceSelectionForCwd(workspaces, runtime, cwd) {
   return match ? { value: cwd, custom: "" } : { value: "__custom__", custom: cwd };
 }
 
+// pfCwdValue reads the profile editor's working-dir controls into a cwd string:
+// "" (no default) when the picker is on the "(no default)" option, the typed
+// custom path when on "Custom path…", else the selected workspace root.
+function pfCwdValue(selectValue, customText) {
+  if (selectValue === "") return "";
+  if (selectValue === "__custom__") return (customText || "").trim();
+  return selectValue;
+}
+
 // shellSpawnPlan decides what the per-pane "+sh" button does. A quick shell is
 // defined as "a shell beside this session", so it inherits the neighbour's
 // directory AND its tier: beside a boxed agent it joins the same box, beside an
@@ -114,6 +123,6 @@ function shellSpawnPlan(neighbour) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     tierBadge, tierRuntimeLabel, spawnRuntimeDefault,
-    workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, shellSpawnPlan, TIER_BOX, TIER_HOST,
+    workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, pfCwdValue, shellSpawnPlan, TIER_BOX, TIER_HOST,
   };
 }

@@ -509,6 +509,39 @@ function applyProfileCwd() {
   $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
 }
 
+// renderPfWorkspaceOptions builds the profile-editor working-dir picker for the
+// profile's tier: a "(no default)" entry, the tier-filtered workspace roots, then
+// a Custom-path escape hatch. `cwd` is the value to preselect (a profile's stored
+// default_cwd, or the current pick when re-rendering after a Runtime change).
+function renderPfWorkspaceOptions(cwd) {
+  const sel = $("pf-cwd");
+  if (!sel) return;
+  const tier = $("pf-runtime") && $("pf-runtime").value === "host" ? "host" : "box";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "(no default)";
+  const opts = [none, ...workspaceOptions(workspacesCache, tier).map((o) => {
+    const el = document.createElement("option");
+    el.value = o.value; el.textContent = o.label; el.disabled = o.disabled;
+    return el;
+  })];
+  const custom = document.createElement("option");
+  custom.value = "__custom__"; custom.textContent = "Custom path…";
+  opts.push(custom);
+  sel.replaceChildren(...opts);
+
+  // Place the value: workspaceSelectionForCwd returns null for empty -> "(no default)".
+  const pick = workspaceSelectionForCwd(workspacesCache, tier, cwd);
+  const customInput = $("pf-cwd-custom");
+  if (!pick) {
+    sel.value = "";
+    customInput.value = "";
+  } else {
+    sel.value = pick.value;
+    customInput.value = pick.custom;
+  }
+  customInput.style.display = sel.value === "__custom__" ? "block" : "none";
+}
+
 // --- profile editor (structured create / edit / delete of runtime profiles) --
 let optionDefs = [];
 async function loadOptionDefs() {
@@ -560,7 +593,7 @@ function fillForm(p) {
   $("pf-args").value = (p.args || []).join("\n");
   $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
   $("pf-secrets").value = (p.secrets || []).join(", ");
-  $("pf-cwd").value = p.default_cwd || "";
+  renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
@@ -593,7 +626,7 @@ function readForm() {
     else if (ctrl.value) opts[ctrl.dataset.optkey] = ctrl.value;
   }
   if (Object.keys(opts).length) p.options = opts;
-  const cwd = $("pf-cwd").value.trim();
+  const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
   if (cwd) p.default_cwd = cwd;
   return p;
 }
@@ -648,6 +681,12 @@ $("pf-save").addEventListener("click", saveProfile);
 $("pf-new").addEventListener("click", newProfile);
 // Re-scope the option list when the agent binary changes.
 $("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
+$("pf-cwd").addEventListener("change", () => {
+  $("pf-cwd-custom").style.display = $("pf-cwd").value === "__custom__" ? "block" : "none";
+});
+if ($("pf-runtime")) {
+  $("pf-runtime").addEventListener("change", () => renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)));
+}
 // workspacesCache backs the tier-aware re-render: switching Runtime must be able
 // to re-evaluate which directories are selectable without another round trip.
 let workspacesCache = [];
