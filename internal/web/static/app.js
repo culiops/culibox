@@ -492,7 +492,22 @@ function getOptions() {
 $("agent").addEventListener("change", () => {
   renderOptions();
   syncRuntimeField();
+  applyProfileCwd();
 });
+
+// applyProfileCwd overwrites the workspace picker with the selected profile's
+// stored default_cwd. A profile without one leaves the picker untouched (there
+// is nothing to overwrite with), preserving the keep-previous behavior.
+function applyProfileCwd() {
+  const p = currentProfile();
+  const rt = ($("runtime-select") && $("runtime-select").value) || "";
+  const sel = workspaceSelectionForCwd(workspacesCache, rt, p && p.default_cwd);
+  if (!sel) return;
+  const ws = $("workspace");
+  ws.value = sel.value;
+  $("cwd-custom").value = sel.custom;
+  $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
+}
 
 // --- profile editor (structured create / edit / delete of runtime profiles) --
 let optionDefs = [];
@@ -545,6 +560,7 @@ function fillForm(p) {
   $("pf-args").value = (p.args || []).join("\n");
   $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
   $("pf-secrets").value = (p.secrets || []).join(", ");
+  $("pf-cwd").value = p.default_cwd || "";
   renderPfOptions(p.options || {});
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
@@ -577,6 +593,8 @@ function readForm() {
     else if (ctrl.value) opts[ctrl.dataset.optkey] = ctrl.value;
   }
   if (Object.keys(opts).length) p.options = opts;
+  const cwd = $("pf-cwd").value.trim();
+  if (cwd) p.default_cwd = cwd;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
