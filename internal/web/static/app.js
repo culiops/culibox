@@ -781,8 +781,14 @@ function openSpawnDialog(preselectAgent) {
   }
   // Tier first: it decides which workspaces are selectable at all.
   syncRuntimeField();
+  // Profile default_cwd wins over the last spawn's cwd — applyProfileCwd()
+  // pre-fills from the (possibly programmatically) preselected profile, and
+  // last.cwd only kicks in as a fallback when that profile has none set
+  // (applyProfileCwd() is then a no-op, leaving the picker untouched).
+  applyProfileCwd();
   const ws = $("workspace");
-  if (last && last.cwd) {
+  const profile = currentProfile();
+  if (last && last.cwd && !(profile && profile.default_cwd)) {
     const usable = Array.prototype.some.call(ws.options, (o) => o.value === last.cwd && !o.disabled);
     if (usable) ws.value = last.cwd;
   }
