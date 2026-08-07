@@ -188,6 +188,32 @@ function prevWindow(from, to) {
   return { from: iso(prevFrom), to: iso(prevTo) };
 }
 
+// daysBetween: inclusive count of days from `from` to `to` (YYYY-MM-DD, UTC).
+function daysBetween(from, to) {
+  const DAY = 86400000;
+  return Math.round((Date.parse(to + "T00:00:00Z") - Date.parse(from + "T00:00:00Z")) / DAY) + 1;
+}
+
+// clampRange: return {from,to} ordered so from ≤ to (swap a reversed custom range).
+function clampRange(a, b) {
+  return a <= b ? { from: a, to: b } : { from: b, to: a };
+}
+
+// stackedLayout: position daily cost bars. In "date mode" (span ≤ 120 days) each
+// bar sits at its true date offset within [from,to], so empty days show as gaps
+// rather than being collapsed. For very wide spans (e.g. "All") it falls back to
+// sequential index positioning, since date offsets would compress bars to nothing.
+function stackedLayout(days, from, to) {
+  const MAX_DATE_SPAN = 120;
+  const span = from && to ? daysBetween(from, to) : 0;
+  const dateMode = span > 0 && span <= MAX_DATE_SPAN;
+  const bars = (days || []).map((d, i) => ({
+    day: d.day, segs: d.segs, cost: d.cost,
+    slot: dateMode ? daysBetween(from, d.day) - 1 : i,
+  }));
+  return { dateMode, slots: dateMode ? span : (days || []).length, bars };
+}
+
 // pctDelta: integer percent change cur vs prev; null when prev is 0 (no baseline).
 function pctDelta(cur, prev) {
   if (!prev) return null;
@@ -222,13 +248,13 @@ if (typeof module !== "undefined" && module.exports) {
     fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
     foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
     prevWindow, pctDelta, dowBuckets, modelColor, shortModel, projShort,
-    collapseZeroCost, pricedModelIds,
+    collapseZeroCost, pricedModelIds, daysBetween, clampRange, stackedLayout,
   };
 }
 
 // ---- rendering (browser only) -----------------------------------------------
 
-const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, data: null };
+const AN = { tab: "overview", from: null, to: null, range: "30d", compare: false, customOpen: false, data: null };
 
 // summaryRowsCache holds the current window's byDayModel rows so the compare pass
 // can bucket the current period by day-of-week without re-fetching.
@@ -248,6 +274,7 @@ async function openAnalytics() {
   if (typeof openDialog === "function") openDialog("analytics-modal");
   AN.range = "30d";
   AN.compare = false;
+  AN.customOpen = false;
   AN.tab = "overview";
   AN.to = anTodayUTC();
   AN.from = anRangeFrom("30d");
@@ -368,6 +395,10 @@ function anRender() {
   }
   const R = { overview: anOverview, models: anModels, projects: anProjects, sessions: anSessions, tools: anTools };
   (R[AN.tab] || anOverview)(body);
+  // Time-series charts read left→right oldest→newest; open scrolled to the most
+  // recent day so a window with a leading empty gap doesn't render blank.
+  const tw = body.querySelector(".an-timewrap");
+  if (tw) tw.scrollLeft = tw.scrollWidth;
 }
 
 // control strip: range presets + compare toggle
@@ -378,8 +409,26 @@ function anControls() {
   for (const key of ["7d", "30d", "90d", "all"]) {
     const b = el("button", "an-chip" + (AN.range === key ? " on" : ""), key === "all" ? "All" : key);
     b.type = "button";
-    b.onclick = () => { AN.range = key; AN.from = anRangeFrom(key); AN.to = anTodayUTC(); anLoad(); };
+    b.onclick = () => { AN.range = key; AN.customOpen = false; AN.from = anRangeFrom(key); AN.to = anTodayUTC(); anLoad(); };
     wrap.appendChild(b);
+  }
+  // Custom range: a chip that reveals two date inputs + Apply.
+  const custom = el("button", "an-chip" + (AN.range === "custom" ? " on" : ""), "Custom…");
+  custom.type = "button";
+  custom.onclick = () => { AN.customOpen = !AN.customOpen; anRender(); };
+  wrap.appendChild(custom);
+  if (AN.customOpen || AN.range === "custom") {
+    const from = el("input", "an-date"); from.type = "date"; from.value = AN.from || "";
+    const to = el("input", "an-date"); to.type = "date"; to.value = AN.to || "";
+    const dash = el("span", "an-clabel", "→");
+    const apply = el("button", "an-chip", "Apply");
+    apply.type = "button";
+    apply.onclick = () => {
+      if (!from.value || !to.value) return;
+      const r = clampRange(from.value, to.value);
+      AN.range = "custom"; AN.from = r.from; AN.to = r.to; anLoad();
+    };
+    wrap.append(from, dash, to, apply);
   }
   const spacer = el("span"); spacer.style.width = "12px"; wrap.appendChild(spacer);
   const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), "⇄ Compare vs prev period");
@@ -406,7 +455,7 @@ function anOverview(root) {
 
   const sec = anSection("Cost over time", "Stacked by model · daily");
   const box = el("div", "an-box");
-  box.appendChild(anStackedTime(d.costByDay));
+  box.appendChild(anStackedTime(d.costByDay, d.from, d.to));
   anLegend(box, d.pricedModels, d.models);
   sec.appendChild(box);
   root.appendChild(sec);
@@ -728,28 +777,36 @@ function anLine(x1, y1, x2, y2, st, sw) { const l = document.createElementNS(NS,
 function anText(x, y, t, anchor) { const e = document.createElementNS(NS, "text"); e.setAttribute("x", x); e.setAttribute("y", y); e.setAttribute("text-anchor", anchor); e.textContent = t; return e; }
 function anTitle(t) { const e = document.createElementNS(NS, "title"); e.textContent = t; return e; }
 
-// stacked daily cost bars
-function anStackedTime(agg) {
-  const days = agg.days, W = Math.max(days.length * 22, 720), H = 170, pad = 24;
+// stacked daily cost bars. Bars sit at their true date offset within [from,to]
+// (empty days show as gaps) unless the span is very wide, where stackedLayout
+// falls back to sequential positioning.
+function anStackedTime(agg, from, to) {
+  const lay = stackedLayout(agg.days, from, to);
+  const slots = Math.max(1, lay.slots);
+  const H = 170, pad = 24, W = Math.max(slots * 22, 720);
   const max = Math.max(1, agg.maxCost);
-  const bw = Math.min(16, (W - 2 * pad) / days.length - 3);
+  const slotW = (W - 2 * pad) / slots;
+  const bw = Math.min(16, Math.max(2, slotW - 3));
   const svg = anSvg(W, H);
   for (let i = 0; i <= 3; i++) {
     const y = pad + (H - 2 * pad) * i / 3;
     svg.appendChild(anLine(pad, y, W - 4, y, "var(--rule)", 0.5));
     svg.appendChild(anText(2, y + 3, usd(max * (1 - i / 3)), "start"));
   }
-  days.forEach((d, ix) => {
-    const x = pad + ix * ((W - 2 * pad) / days.length);
+  const labelEvery = Math.max(1, Math.round(slots / 12)); // ~12 date labels max
+  for (const b of lay.bars) {
+    const x = pad + b.slot * slotW;
     let yb = H - pad;
-    const segs = Object.entries(d.segs).sort((a, b) => a[1] - b[1]);
+    const segs = Object.entries(b.segs).sort((a, c) => a[1] - c[1]);
     for (const [m, c] of segs) {
       const h = (c / max) * (H - 2 * pad); yb -= h;
       const r = anRect(x, yb, bw, h, modelColor(agg.models, m));
-      r.appendChild(anTitle(d.day + " · " + shortModel(m) + " " + usd(c)));
+      r.appendChild(anTitle(b.day + " · " + shortModel(m) + " " + usd(c)));
       svg.appendChild(r);
     }
-    if (ix % 5 === 0) svg.appendChild(anText(x + bw / 2, H - pad + 11, d.day.slice(5), "middle"));
-  });
-  return anWrapSvg(svg);
+    if (b.slot % labelEvery === 0) svg.appendChild(anText(x + bw / 2, H - pad + 11, b.day.slice(5), "middle"));
+  }
+  const wrap = anWrapSvg(svg);
+  wrap.classList.add("an-timewrap"); // marked so anRender scrolls it to the latest day
+  return wrap;
 }

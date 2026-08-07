@@ -6,6 +6,7 @@ const {
   fmtCompact, usd, tokensPerPrompt, modelsByCost, foldCostByDay, normModels,
   foldProjects, sessionCostBuckets, topSessionsByCost, distinctSessions,
   prevWindow, pctDelta, dowBuckets, modelColor, collapseZeroCost, pricedModelIds,
+  daysBetween, clampRange, stackedLayout,
 } = require("../static/analytics.js");
 
 test("fmtCompact: units at the right thresholds", () => {
@@ -169,6 +170,41 @@ test("pricedModelIds: only models with cost > 0, order preserved", () => {
     { model: "a", cost: 5 }, { model: "", cost: 0 }, { model: "b", cost: 1 },
   ];
   assert.deepEqual(pricedModelIds(rows), ["a", "b"]);
+});
+
+test("daysBetween: inclusive day count", () => {
+  assert.equal(daysBetween("2026-08-01", "2026-08-07"), 7);
+  assert.equal(daysBetween("2026-08-06", "2026-08-06"), 1);
+});
+
+test("clampRange: orders from ≤ to, swapping if reversed", () => {
+  assert.deepEqual(clampRange("2026-08-01", "2026-08-10"), { from: "2026-08-01", to: "2026-08-10" });
+  assert.deepEqual(clampRange("2026-08-10", "2026-08-01"), { from: "2026-08-01", to: "2026-08-10" });
+});
+
+test("stackedLayout: date-mode positions bars by real date offset (gaps show)", () => {
+  const days = [
+    { day: "2026-08-01", cost: 5, segs: { a: 5 } },
+    { day: "2026-08-05", cost: 3, segs: { a: 3 } },
+  ];
+  const lay = stackedLayout(days, "2026-08-01", "2026-08-07");
+  assert.equal(lay.dateMode, true);
+  assert.equal(lay.slots, 7);
+  assert.equal(lay.bars[0].slot, 0); // Aug 1 → offset 0
+  assert.equal(lay.bars[1].slot, 4); // Aug 5 → offset 4 (gap of 3 empty days shows)
+  assert.equal(lay.bars[1].cost, 3);
+});
+
+test("stackedLayout: huge span falls back to index mode (no absurd compression)", () => {
+  const days = [
+    { day: "2000-06-01", cost: 1, segs: {} },
+    { day: "2026-08-05", cost: 2, segs: {} },
+  ];
+  const lay = stackedLayout(days, "2000-01-01", "2026-08-07");
+  assert.equal(lay.dateMode, false);
+  assert.equal(lay.slots, 2);
+  assert.equal(lay.bars[0].slot, 0);
+  assert.equal(lay.bars[1].slot, 1);
 });
 
 test("modelColor: stable per model index, wraps the palette", () => {
