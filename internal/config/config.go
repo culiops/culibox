@@ -76,15 +76,16 @@ func (o OptionDef) AppliesTo(bin string) bool {
 
 // AgentConfig describes one launchable agent CLI and its environment policy.
 type AgentConfig struct {
-	Name    string            `json:"name"`
-	Bin     string            `json:"bin"`
-	Args    []string          `json:"args,omitempty"`
-	Base    string            `json:"base,omitempty"`    // inherit(default)|clean|login
-	Env     map[string]string `json:"env,omitempty"`     // static per-agent overrides
-	Secrets []string          `json:"secrets,omitempty"` // names resolved via SecretSources
-	Options map[string]any    `json:"options,omitempty"` // option key → default value (bool/enum)
-	Runtime string            `json:"runtime,omitempty"` // box(default)|host — separate axis from Base
-	Box     BoxConfig         `json:"box,omitempty"`     // per-agent box image override
+	Name       string            `json:"name"`
+	Bin        string            `json:"bin"`
+	Args       []string          `json:"args,omitempty"`
+	Base       string            `json:"base,omitempty"`        // inherit(default)|clean|login
+	Env        map[string]string `json:"env,omitempty"`         // static per-agent overrides
+	Secrets    []string          `json:"secrets,omitempty"`     // names resolved via SecretSources
+	Options    map[string]any    `json:"options,omitempty"`     // option key → default value (bool/enum)
+	Runtime    string            `json:"runtime,omitempty"`     // box(default)|host — separate axis from Base
+	Box        BoxConfig         `json:"box,omitempty"`         // per-agent box image override
+	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
 }
 
 // RuntimePolicy returns the effective tier, defaulting to box. An empty value

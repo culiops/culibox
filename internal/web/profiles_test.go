@@ -189,3 +189,19 @@ func TestMergedStripsInapplicableOptions(t *testing.T) {
 		t.Fatal("inapplicable option 'model' must be stripped from Get() as well")
 	}
 }
+
+func TestViewsEmitDefaultCwd(t *testing.T) {
+	fs := newFakeStore()
+	_ = fs.Save(config.AgentConfig{Name: "p", Bin: "claude", DefaultCwd: "/home/me/proj"})
+	pm := NewProfileManager(nil, nil, config.RuntimeHost, fs, func([]config.AgentConfig) {})
+
+	var got string
+	for _, v := range pm.Views() {
+		if v.Name == "p" {
+			got = v.DefaultCwd
+		}
+	}
+	if got != "/home/me/proj" {
+		t.Fatalf("Views should propagate default_cwd, got %q", got)
+	}
+}

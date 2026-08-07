@@ -23,10 +23,11 @@ type ProfileOption struct {
 // spawn form should open on — already resolved against the instance default, so
 // the client never has to re-derive containment policy.
 type ProfileView struct {
-	Name     string          `json:"name"`
-	Editable bool            `json:"editable"`
-	Runtime  string          `json:"runtime"`
-	Options  []ProfileOption `json:"options,omitempty"`
+	Name       string          `json:"name"`
+	Editable   bool            `json:"editable"`
+	Runtime    string          `json:"runtime"`
+	DefaultCwd string          `json:"default_cwd,omitempty"`
+	Options    []ProfileOption `json:"options,omitempty"`
 }
 
 // profileStore is the subset of *store.Store the manager needs (injectable).
@@ -138,9 +139,10 @@ func (m *ProfileManager) Views() []ProfileView {
 	out := make([]ProfileView, 0, len(merged))
 	for _, a := range merged {
 		pv := ProfileView{
-			Name:     a.Name,
-			Editable: editable[a.Name],
-			Runtime:  config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
+			Name:       a.Name,
+			Editable:   editable[a.Name],
+			Runtime:    config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
+			DefaultCwd: a.DefaultCwd,
 		}
 		for _, def := range m.options {
 			if v, ok := a.Options[def.Key]; ok && def.AppliesTo(a.Bin) {
