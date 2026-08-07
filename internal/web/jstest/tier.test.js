@@ -102,6 +102,40 @@ test("with nothing boxable the default is empty rather than a doomed pick", () =
   assert.equal(defaultWorkspace([WS[0]], "box"), "");
 });
 
+// --- workspace picker initialization via default_cwd -------------------------
+
+const { workspaceSelectionForCwd } = require("../static/tier.js");
+
+test("empty/blank cwd leaves the picker untouched", () => {
+  assert.equal(workspaceSelectionForCwd(WS, "box", ""), null);
+  assert.equal(workspaceSelectionForCwd(WS, "box", "   "), null);
+  assert.equal(workspaceSelectionForCwd(WS, "box", undefined), null);
+});
+
+test("a path matching a usable option selects it, no custom", () => {
+  assert.deepEqual(workspaceSelectionForCwd(WS, "box", "/home/u/proj-a"), {
+    value: "/home/u/proj-a",
+    custom: "",
+  });
+});
+
+test("a path not offered on this tier falls to custom", () => {
+  assert.deepEqual(workspaceSelectionForCwd(WS, "box", "/home/u/other"), {
+    value: "__custom__",
+    custom: "/home/u/other",
+  });
+  // home is present but disabled on the box tier → not a usable match → custom.
+  assert.deepEqual(workspaceSelectionForCwd(WS, "box", "/home/u"), {
+    value: "__custom__",
+    custom: "/home/u",
+  });
+  // on the host tier home IS usable → selects it.
+  assert.deepEqual(workspaceSelectionForCwd(WS, "host", "/home/u"), {
+    value: "/home/u",
+    custom: "",
+  });
+});
+
 // --- quick shell (+sh) -----------------------------------------------------
 
 const { shellSpawnPlan } = require("../static/tier.js");

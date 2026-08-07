@@ -85,6 +85,19 @@ function defaultWorkspace(workspaces, runtime) {
   return usable.length ? usable[0].value : "";
 }
 
+// workspaceSelectionForCwd maps a concrete path (a profile's default_cwd) onto
+// how the spawn form's picker should show it: the matching option when the tier
+// offers a usable one, else the custom path. Returns null for an empty cwd,
+// signalling the caller to leave the picker as-is.
+function workspaceSelectionForCwd(workspaces, runtime, cwd) {
+  cwd = (cwd || "").trim();
+  if (!cwd) return null;
+  const match = workspaceOptions(workspaces, runtime).find(
+    (o) => o.value === cwd && !o.disabled,
+  );
+  return match ? { value: cwd, custom: "" } : { value: "__custom__", custom: cwd };
+}
+
 // shellSpawnPlan decides what the per-pane "+sh" button does. A quick shell is
 // defined as "a shell beside this session", so it inherits the neighbour's
 // directory AND its tier: beside a boxed agent it joins the same box, beside an
@@ -101,6 +114,6 @@ function shellSpawnPlan(neighbour) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     tierBadge, tierRuntimeLabel, spawnRuntimeDefault,
-    workspaceOptions, defaultWorkspace, shellSpawnPlan, TIER_BOX, TIER_HOST,
+    workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, shellSpawnPlan, TIER_BOX, TIER_HOST,
   };
 }
