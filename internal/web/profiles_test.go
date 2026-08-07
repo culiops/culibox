@@ -1,6 +1,8 @@
 package web
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/culiops/agent-box/internal/config"
@@ -203,5 +205,36 @@ func TestViewsEmitDefaultCwd(t *testing.T) {
 	}
 	if got != "/home/me/proj" {
 		t.Fatalf("Views should propagate default_cwd, got %q", got)
+	}
+}
+
+func TestSaveRejectsUnboxableDefaultCwd(t *testing.T) {
+	home := t.TempDir()
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = home
+
+	// cwd == home is un-boxable for a box-tier profile → reject.
+	if err := pm.Save(config.AgentConfig{Name: "p", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: home}); err == nil {
+		t.Fatal("expected rejection: home as a boxed default_cwd")
+	}
+
+	// A subdirectory is boxable → accept.
+	sub := filepath.Join(home, "proj")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := pm.Save(config.AgentConfig{Name: "p", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: sub}); err != nil {
+		t.Fatalf("boxable subdir should save: %v", err)
+	}
+}
+
+func TestSaveAllowsHomeCwdForHostTier(t *testing.T) {
+	home := t.TempDir()
+	pm := NewProfileManager(nil, nil, config.RuntimeHost, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = home
+
+	// Host tier is uncontained; any path is fine, including home.
+	if err := pm.Save(config.AgentConfig{Name: "p", Bin: "bash", Runtime: config.RuntimeHost, DefaultCwd: home}); err != nil {
+		t.Fatalf("host tier should accept any default_cwd: %v", err)
 	}
 }

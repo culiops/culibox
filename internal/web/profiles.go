@@ -1,6 +1,8 @@
 package web
 
 import (
+	"fmt"
+	"os"
 	"sort"
 	"sync"
 
@@ -52,6 +54,7 @@ type ProfileManager struct {
 	// is a constructor argument rather than a setter so that no construction
 	// site can leave the containment default implicit.
 	defaultRuntime string
+	home           string // for save-time boxability checks on default_cwd
 }
 
 // NewProfileManager wires seeds + store + launcher-apply and does the initial
@@ -75,6 +78,7 @@ func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, d
 	for _, o := range options {
 		m.optDefs[o.Key] = o
 	}
+	m.home, _ = os.UserHomeDir()
 	m.apply(m.merged())
 	return m
 }
@@ -175,6 +179,14 @@ func (m *ProfileManager) Get(name string) (config.AgentConfig, bool) {
 func (m *ProfileManager) Save(p config.AgentConfig) error {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {
 		return err
+	}
+	if p.DefaultCwd != "" {
+		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(p)
+		if rt == config.RuntimeBox {
+			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home); bad {
+				return fmt.Errorf("default working dir cannot be contained: %s", reason)
+			}
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
