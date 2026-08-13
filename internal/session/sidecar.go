@@ -28,6 +28,12 @@ type sessionMeta struct {
 	// agent is still running, and a name that cannot be recomputed means a box
 	// that leaks or gets reaped out from under a live session.
 	Box string `json:"box,omitempty"`
+	// Replyable is the operator's opt-in to accepting messages from the peek
+	// panel. It is agent-box's own permission, not a flag passed to the agent,
+	// and it defaults to false — including for a record written before this
+	// field existed. A session must never become repliable by surviving a
+	// restart.
+	Replyable bool `json:"replyable,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
@@ -91,6 +97,19 @@ func (sc *sidecar) rename(id, name string) {
 		return
 	}
 	md.Name = name
+	sc.m[id] = md
+	_ = sc.flushLocked()
+}
+
+// setReplyable updates an entry's opt-in. No-op if the id is absent.
+func (sc *sidecar) setReplyable(id string, v bool) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	md, ok := sc.m[id]
+	if !ok {
+		return
+	}
+	md.Replyable = v
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }

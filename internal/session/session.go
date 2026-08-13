@@ -162,7 +162,8 @@ type Info struct {
 	// Summary is the first line of the agent's last message, elided to
 	// summaryMax runes. Empty for a non-claude session or one whose transcript
 	// cannot be read — the client tells those apart via the /peek endpoint.
-	Summary string `json:"summary,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Replyable bool   `json:"replyable"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -174,6 +175,10 @@ type Session struct {
 	Runtime string // box | host; immutable for the session's lifetime
 	Box     string // container name for a boxed session; "" on the host tier
 	Bin     string // resolved agent binary (for claude-only features like usage)
+
+	// Replyable is guarded by s.mu: unlike Runtime it changes during the
+	// session's life, from the peek panel's toggle.
+	replyable bool
 
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
@@ -477,7 +482,7 @@ func (s *Session) Info() Info {
 	if s.status != statusDetached {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold)
 	}
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable}
 }
 
 // SetName updates the mutable display label.
@@ -485,6 +490,26 @@ func (s *Session) SetName(name string) {
 	s.mu.Lock()
 	s.name = name
 	s.mu.Unlock()
+}
+
+// SetReplyable flips the operator's opt-in and persists it. Reports whether the
+// session exists. Turning it OFF must always work for a live session; turning
+// it ON is the act that carries risk, and is deliberate.
+func (m *Manager) SetReplyable(id string, v bool) bool {
+	m.mu.Lock()
+	s := m.sessions[id]
+	sc := m.sidecar
+	m.mu.Unlock()
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	s.replyable = v
+	s.mu.Unlock()
+	if sc != nil {
+		sc.setReplyable(id, v)
+	}
+	return true
 }
 
 // signal sends sig to the child's whole process group (negative pid). creack/pty
@@ -693,7 +718,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName, Replyable: false})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1044,6 +1069,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Runtime = runtime
 	sess.Box = md.Box
 	sess.Bin = bin
+	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
+	// to false (its zero value), so a session can never become repliable by
+	// merely surviving a restart.
+	sess.replyable = md.Replyable
 	m.sessions[id] = sess
 	m.mu.Unlock()
 	// The box was already adopted by Reconcile, before this attach was even

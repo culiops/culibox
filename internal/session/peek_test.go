@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -215,5 +216,41 @@ func TestListFillsSummaryWithoutDeadlock(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("List() deadlocked: PeekFor takes m.mu, so it cannot be called while List holds it")
+	}
+}
+
+func TestSessionMetaWithoutReplyableDefaultsToFalse(t *testing.T) {
+	// A sidecar written before this feature has no "replyable" key. It must
+	// decode to false: a session must never become repliable by surviving a
+	// daemon restart.
+	var md sessionMeta
+	old := `{"agent":"claude","cwd":"/tmp/proj","created":"2026-08-01T00:00:00Z","runtime":"host"}`
+	if err := json.Unmarshal([]byte(old), &md); err != nil {
+		t.Fatal(err)
+	}
+	if md.Replyable {
+		t.Error("Replyable=true from a pre-feature record, want false")
+	}
+}
+
+func TestSetReplyableRoundTrips(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	if m.List()[0].Replyable {
+		t.Fatal("Replyable defaults to true, want false")
+	}
+	if !m.SetReplyable("s1", true) {
+		t.Fatal("SetReplyable returned false for a live session")
+	}
+	if !m.List()[0].Replyable {
+		t.Error("Replyable=false after SetReplyable(true)")
+	}
+	if !m.SetReplyable("s1", false) {
+		t.Fatal("SetReplyable(false) returned false")
+	}
+	if m.List()[0].Replyable {
+		t.Error("Replyable=true after SetReplyable(false)")
+	}
+	if m.SetReplyable("nope", true) {
+		t.Error("SetReplyable returned true for an unknown id")
 	}
 }
