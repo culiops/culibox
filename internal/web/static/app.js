@@ -269,6 +269,16 @@ async function togglePeek(li, s) {
   const existing = li.querySelector(".peek-body");
   if (existing) {
     existing.remove();
+    // The opt-in, reply form and status line are also per-open elements
+    // (added below, once expand succeeds) — collapsing must remove all of
+    // them, or a stale checkbox/input/message is left showing under what
+    // looks like a closed row.
+    const staleOptin = li.querySelector(".peek-optin");
+    if (staleOptin) staleOptin.remove();
+    const staleForm = li.querySelector(".peek-reply");
+    if (staleForm) staleForm.remove();
+    const staleWhy = li.querySelector(".peek-why");
+    if (staleWhy) staleWhy.remove();
     openPeekId = null;
     lastPeek = null;
     replyDraft = null; // collapsing must not let a later session inherit this draft
@@ -334,15 +344,27 @@ async function togglePeek(li, s) {
     caretStart = replyDraft.selStart;
     caretEnd = replyDraft.selEnd;
   }
-  input.oninput = () => {
-    replyDraft = {
-      id: s.id,
-      text: input.value,
-      focused: document.activeElement === input,
-      selStart: input.selectionStart,
-      selEnd: input.selectionEnd,
-    };
+  // ensureDraft gets-or-starts the draft object for this session without
+  // clobbering fields the current event doesn't own.
+  const ensureDraft = () => {
+    if (!replyDraft || replyDraft.id !== s.id) {
+      replyDraft = { id: s.id, text: input.value, focused: false, selStart: input.selectionStart, selEnd: input.selectionEnd };
+    }
+    return replyDraft;
   };
+  input.oninput = () => {
+    const d = ensureDraft();
+    d.text = input.value;
+    d.selStart = input.selectionStart;
+    d.selEnd = input.selectionEnd;
+  };
+  // Focus is tracked separately from typing: the operator can move focus
+  // without another keystroke (click the opt-in checkbox, tab to Send), and
+  // an oninput-only "focused" flag would then stay stale at true — so the
+  // next poll's rebuild would yank focus back into this box on top of
+  // whatever the operator clicked next. onfocus/onblur are the real signal.
+  input.onfocus = () => { ensureDraft().focused = true; };
+  input.onblur = () => { ensureDraft().focused = false; };
   if (hadFocus) {
     input.focus();
     try { input.setSelectionRange(caretStart, caretEnd); } catch (_) { /* ignore */ }
@@ -398,14 +420,22 @@ async function togglePeek(li, s) {
         return;
       }
       // Distinct statuses carry distinct meanings — say which one happened.
-      why.textContent =
+      // Routed through showToast, not just why.textContent: a poll can rebuild
+      // this row (and detach `why` from the page) while the request is still
+      // in flight, the same reason cb.onchange's failure path already toasts
+      // instead of relying solely on an in-row element.
+      const msg =
         res.status === 403 ? "Replies are not enabled for this session." :
         res.status === 409 ? "Session is not ready for a message right now." :
         res.status === 410 ? "That session is gone." :
         res.status === 400 ? "That text was rejected." :
         "Send failed (" + res.status + ").";
+      why.textContent = msg;
+      showToast(msg, { error: true });
     } catch (_) {
-      why.textContent = "Send failed: no connection.";
+      const msg = "Send failed: no connection.";
+      why.textContent = msg;
+      showToast(msg, { error: true });
     } finally {
       refresh();
     }
