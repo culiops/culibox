@@ -255,13 +255,29 @@ let openPeekId = null;
 // different session never shows a stale row's text.
 let lastPeek = null;
 // replyDraft holds the in-progress reply text ({ id, text }) across a poll
-// re-render. togglePeek is re-invoked every few seconds to keep an open peek
-// expanded (see lastPeek above), and each invocation rebuilds the row's DOM
-// from scratch — including the reply <input>. Without this cache, a poll
-// landing mid-sentence would wipe whatever the operator was typing and steal
-// focus out from under them, which makes a one-line reply box unusable in
-// practice since composing a reply routinely outlasts one poll interval.
+// re-render for the case where the reply <input> is NOT focused when a poll
+// lands (e.g. right after the operator clicks the opt-in checkbox) — without
+// it, that rebuild would silently drop whatever had been typed.
+//
+// It does NOT try to reconstruct focus or caret position. An earlier version
+// did (tracking a "focused" flag and calling input.focus() on the new node),
+// but removing a focused element from the DOM fires a native, synchronous
+// blur on it — so by the time togglePeek's rebuild ran, the flag it read had
+// already been set back to false by that blur, and the reconstruction never
+// fired. Net effect measured live: the cursor silently dropped out of the
+// reply box every ~3s while the operator was still typing, and never came
+// back — worse than the bug this mechanism exists to prevent. Reconstructing
+// focus across a real node swap is not reliable, so replyFocused (below)
+// takes the other approach: stop the swap from happening at all while the
+// input is focused, the same way `editing` (below, for inline rename)
+// already stops the poll from destroying an in-progress rename.
 let replyDraft = null;
+// replyFocused mirrors `editing`'s guard shape (see refreshSessions): while
+// true, the background poll must not rebuild the session list, because that
+// would destroy the focused reply <input> out from under the operator. Set
+// by the input's own focus/blur, so it cannot latch on past the operator
+// actually leaving the field.
+let replyFocused = false;
 
 // togglePeek expands or collapses the full peek under a session row. The fetch
 // happens on expand only — the listing carries just the one-line summary.
@@ -282,6 +298,7 @@ async function togglePeek(li, s) {
     openPeekId = null;
     lastPeek = null;
     replyDraft = null; // collapsing must not let a later session inherit this draft
+    replyFocused = false; // defensive: the input is gone, so nothing should stay guarded
     return;
   }
   openPeekId = s.id;
@@ -335,40 +352,17 @@ async function togglePeek(li, s) {
   why.className = "peek-why";
   li.append(form, why);
 
-  // Restore an in-progress draft (and focus/caret) across the poll re-render
-  // that just rebuilt this input from scratch. See replyDraft's declaration.
-  const hadFocus = replyDraft && replyDraft.id === s.id && replyDraft.focused;
-  let caretStart = 0, caretEnd = 0;
-  if (replyDraft && replyDraft.id === s.id) {
-    input.value = replyDraft.text;
-    caretStart = replyDraft.selStart;
-    caretEnd = replyDraft.selEnd;
-  }
-  // ensureDraft gets-or-starts the draft object for this session without
-  // clobbering fields the current event doesn't own.
-  const ensureDraft = () => {
-    if (!replyDraft || replyDraft.id !== s.id) {
-      replyDraft = { id: s.id, text: input.value, focused: false, selStart: input.selectionStart, selEnd: input.selectionEnd };
-    }
-    return replyDraft;
-  };
-  input.oninput = () => {
-    const d = ensureDraft();
-    d.text = input.value;
-    d.selStart = input.selectionStart;
-    d.selEnd = input.selectionEnd;
-  };
-  // Focus is tracked separately from typing: the operator can move focus
-  // without another keystroke (click the opt-in checkbox, tab to Send), and
-  // an oninput-only "focused" flag would then stay stale at true — so the
-  // next poll's rebuild would yank focus back into this box on top of
-  // whatever the operator clicked next. onfocus/onblur are the real signal.
-  input.onfocus = () => { ensureDraft().focused = true; };
-  input.onblur = () => { ensureDraft().focused = false; };
-  if (hadFocus) {
-    input.focus();
-    try { input.setSelectionRange(caretStart, caretEnd); } catch (_) { /* ignore */ }
-  }
+  // Restore an in-progress draft's TEXT across the poll re-render that just
+  // rebuilt this input from scratch. This only matters when the input is not
+  // currently focused — while it is, replyFocused (set just below) stops the
+  // rebuild from happening in the first place. See replyDraft's declaration
+  // for why there is no matching focus/caret restore here.
+  if (replyDraft && replyDraft.id === s.id) input.value = replyDraft.text;
+  input.oninput = () => { replyDraft = { id: s.id, text: input.value }; };
+  // See replyFocused's declaration: this is what keeps the background poll
+  // from tearing this input out from under an in-progress keystroke.
+  input.onfocus = () => { replyFocused = true; };
+  input.onblur = () => { replyFocused = false; };
 
   const refresh = () => {
     const st2 = sendState({
@@ -605,7 +599,9 @@ let lastSessions = [];
 // restore nothing) from "the server could not be asked" (retry, restore nothing
 // yet). An empty array is the former.
 async function refreshSessions() {
-  if (editing) return lastSessions; // don't clobber an in-progress inline rename
+  // Don't clobber an in-progress inline rename, or a focused peek reply — both
+  // are a live <input> that a rebuild would destroy mid-keystroke.
+  if (editing || replyFocused) return lastSessions;
   const ul = $("sessions");
   let sessions;
   try { sessions = await api("/api/sessions"); }
