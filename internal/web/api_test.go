@@ -225,21 +225,27 @@ func TestReplyableEndpoint(t *testing.T) {
 		t.Fatalf("malformed body: code %d want 400, body %s", rec.Code, rec.Body)
 	}
 
-	// 403 on a cross-origin POST with cookie credentials. Unlike the cases
-	// above, this must exercise checkMutationGuard's real same-origin check, so
-	// it goes through the full router (session cookie issued, no bearer token)
-	// rather than calling handleSession directly — mirrors
-	// TestRouter_CookiePostCrossSiteBlocked in router_test.go.
-	rs, _ := routedServer(t)
-	rs.API = &API{Sessions: &mockSvc{setReplyableOK: true}}
-	iw := httptest.NewRecorder()
-	rs.Session.Issue(iw, false)
+	// 403 on a cross-origin POST with cookie credentials. This must call
+	// handleSession DIRECTLY — the same way the other four cases do, bypassing
+	// authGuard/csrfGuard entirely — so the rejection is produced by the
+	// handler's own checkMutationGuard(w, r) call (api.go), not by the outer
+	// router middleware. Going through the full router (as an earlier version
+	// of this test did) reaches csrfGuard first: it rejects a non-bearer,
+	// non-same-origin POST before the request ever hits the mux entry for
+	// /api/sessions/, so the inline guard would never execute and the test
+	// would still pass even if it were deleted from the handler. A direct
+	// handleSession call has no authGuard-set credential in its context, so
+	// credKindOf(r) reads credNone (not credBearer) exactly like an
+	// unauthenticated-context cookie request would — checkMutationGuard's
+	// sameOrigin(r) branch is what has to reject the cross-site header.
+	svc = &mockSvc{setReplyableOK: true}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
 	cross := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/replyable", strings.NewReader(`{"replyable":true}`))
 	cross.Header.Set("Content-Type", "application/json")
-	cross.AddCookie(iw.Result().Cookies()[0])
+	cross.AddCookie(&http.Cookie{Name: "session", Value: "irrelevant-to-the-inline-guard"})
 	cross.Header.Set("Sec-Fetch-Site", "cross-site")
-	rec = httptest.NewRecorder()
-	rs.Handler().ServeHTTP(rec, cross)
+	a.handleSession(rec, cross)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("cross-site cookie POST: code %d want 403, body %s", rec.Code, rec.Body)
 	}
