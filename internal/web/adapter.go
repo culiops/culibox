@@ -40,3 +40,5 @@ func (a ManagerService) AttributionFor(id string) (session.Attribution, bool) {
 }
 
 func (a ManagerService) SetReplyable(id string, v bool) bool { return a.M.SetReplyable(id, v) }
+
+func (a ManagerService) SendMessage(id, text string) error { return a.M.SendMessage(id, text) }

@@ -2,10 +2,19 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+)
+
+var (
+	ErrNoSession    = errors.New("no such session")
+	ErrNotReplyable = errors.New("session has not opted in to messages")
+	ErrNotWaiting   = errors.New("session is not waiting for input")
+	ErrPending      = errors.New("session is inside a tool call")
+	ErrBadText      = errors.New("message text is empty, multi-line, or contains control characters")
 )
 
 // Peek is a per-session snapshot of what the agent last said, read from the
@@ -136,6 +145,23 @@ func canReply(replyable bool, activity string, pending bool) (bool, string) {
 	return true, ""
 }
 
+// validReplyText accepts exactly one line of printable text. Single-line is
+// what keeps bracketed paste (\x1b[200~ … \x1b[201~ plus a separate \r) out of
+// this feature entirely. Every C0 control is rejected, not only newline: a tab
+// triggers completion in a TUI and an escape sequence is a loss of control over
+// the session.
+func validReplyText(s string) error {
+	if strings.TrimSpace(s) == "" {
+		return ErrBadText
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return ErrBadText
+		}
+	}
+	return nil
+}
+
 // peekEntry is one cached parse, valid while the transcript's mtime is unchanged.
 type peekEntry struct {
 	mtime time.Time
@@ -214,4 +240,42 @@ func (m *Manager) PeekFor(id string) (Peek, bool) {
 	}
 	m.peekStore(id, fi.ModTime(), p)
 	return p, true
+}
+
+// SendMessage types one line into a session's PTY, followed by Enter.
+//
+// Text is validated FIRST, before any guard, so a malformed payload cannot be
+// used to probe which sessions exist or what state they are in.
+//
+// There is a small TOCTOU window between the guards and the Write. It is
+// accepted: the window is narrow and the worst outcome is a line arriving one
+// beat late. No acknowledgement is produced — when the message lands, the agent
+// writes a user record, the transcript's mtime moves, and the next poll shows a
+// changed summary. That is the confirmation.
+func (m *Manager) SendMessage(id, text string) error {
+	if err := validReplyText(text); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	s := m.sessions[id]
+	m.mu.Unlock()
+	if s == nil {
+		return ErrNoSession
+	}
+	info := s.Info()
+	p, _ := m.PeekFor(id) // a miss yields the zero Peek: pending=false
+	if ok, why := canReply(info.Replyable, info.Activity, p.Pending); !ok {
+		switch why {
+		case "not_replyable":
+			return ErrNotReplyable
+		case "not_waiting":
+			return ErrNotWaiting
+		default:
+			return ErrPending
+		}
+	}
+	if _, err := s.Write([]byte(text + "\r")); err != nil {
+		return err
+	}
+	return nil
 }

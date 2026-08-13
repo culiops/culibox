@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -257,6 +258,49 @@ func TestCanReply(t *testing.T) {
 			t.Errorf("canReply(%v,%q,%v)=(%v,%q) want (%v,%q)",
 				c.replyable, c.activity, c.pending, ok, why, c.wantOK, c.wantWhy)
 		}
+	}
+}
+
+func TestValidReplyText(t *testing.T) {
+	if err := validReplyText("do the thing"); err != nil {
+		t.Errorf("rejected a plain line: %v", err)
+	}
+	for _, bad := range []string{"", "   ", "two\nlines", "carriage\rreturn", "bell\a", "esc\x1b[31m", "tab\there", "del\x7f"} {
+		if err := validReplyText(bad); err == nil {
+			t.Errorf("accepted %q, want an error", bad)
+		}
+	}
+	// A long-but-clean line is fine; only shape is checked, not length.
+	long := strings.Repeat("a", 4000)
+	if err := validReplyText(long); err != nil {
+		t.Errorf("rejected a long clean line: %v", err)
+	}
+}
+
+func TestSendMessageRefusesWhenGuardsFail(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"which file?"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+
+	// Not opted in.
+	if err := m.SendMessage("s1", "hello"); err != ErrNotReplyable {
+		t.Errorf("err=%v want ErrNotReplyable", err)
+	}
+	// Unknown session.
+	if err := m.SendMessage("nope", "hello"); err != ErrNoSession {
+		t.Errorf("err=%v want ErrNoSession", err)
+	}
+	// Bad text is rejected before any guard, so it cannot leak session state.
+	if err := m.SendMessage("s1", "two\nlines"); err != ErrBadText {
+		t.Errorf("err=%v want ErrBadText", err)
+	}
+}
+
+func TestSendMessageRefusesWhenPending(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"checking"},{"type":"tool_use","name":"Bash"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+	m.SetReplyable("s1", true)
+	if err := m.SendMessage("s1", "yes"); err != ErrPending {
+		t.Errorf("err=%v want ErrPending", err)
 	}
 }
 

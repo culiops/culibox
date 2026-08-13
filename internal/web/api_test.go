@@ -33,6 +33,9 @@ type mockSvc struct {
 	setReplyableID string
 	setReplyableV  bool
 	setReplyableOK bool
+	sendMessageID  string
+	sendMessageV   string
+	sendMessageErr error
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -75,6 +78,10 @@ func (m *mockSvc) PeekFor(id string) (session.Peek, bool) { return m.peek, m.pee
 func (m *mockSvc) SetReplyable(id string, v bool) bool {
 	m.setReplyableID, m.setReplyableV = id, v
 	return m.setReplyableOK
+}
+func (m *mockSvc) SendMessage(id, text string) error {
+	m.sendMessageID, m.sendMessageV = id, text
+	return m.sendMessageErr
 }
 
 func TestAPI_Attribution(t *testing.T) {
@@ -242,6 +249,120 @@ func TestReplyableEndpoint(t *testing.T) {
 	a = &API{Sessions: svc}
 	rec = httptest.NewRecorder()
 	cross := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/replyable", strings.NewReader(`{"replyable":true}`))
+	cross.Header.Set("Content-Type", "application/json")
+	cross.AddCookie(&http.Cookie{Name: "session", Value: "irrelevant-to-the-inline-guard"})
+	cross.Header.Set("Sec-Fetch-Site", "cross-site")
+	a.handleSession(rec, cross)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site cookie POST: code %d want 403, body %s", rec.Code, rec.Body)
+	}
+}
+
+// messageReq builds a same-origin JSON POST the /message handler accepts.
+func messageReq(body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/message", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	return r
+}
+
+func TestMessageEndpoint(t *testing.T) {
+	// 204 on success.
+	svc := &mockSvc{}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"hello"}`))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("success: code %d want 204, body %s", rec.Code, rec.Body)
+	}
+	if svc.sendMessageID != "x-1" || svc.sendMessageV != "hello" {
+		t.Fatalf("not forwarded: id=%q text=%q", svc.sendMessageID, svc.sendMessageV)
+	}
+
+	// 400: malformed JSON body.
+	svc = &mockSvc{}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{not json`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed body: code %d want 400, body %s", rec.Code, rec.Body)
+	}
+
+	// 400: ErrBadText mapping.
+	svc = &mockSvc{sendMessageErr: session.ErrBadText}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"two\nlines"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("ErrBadText: code %d want 400, body %s", rec.Code, rec.Body)
+	}
+
+	// 403: ErrNotReplyable mapping.
+	svc = &mockSvc{sendMessageErr: session.ErrNotReplyable}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"hello"}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("ErrNotReplyable: code %d want 403, body %s", rec.Code, rec.Body)
+	}
+
+	// 404: ErrNoSession mapping.
+	svc = &mockSvc{sendMessageErr: session.ErrNoSession}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"hello"}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("ErrNoSession: code %d want 404, body %s", rec.Code, rec.Body)
+	}
+
+	// 409: ErrNotWaiting and ErrPending are two distinct reasons collapsing to
+	// the same status — assert both separately so neither being dropped or
+	// swapped for the other slips past.
+	svc = &mockSvc{sendMessageErr: session.ErrNotWaiting}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"hello"}`))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("ErrNotWaiting: code %d want 409, body %s", rec.Code, rec.Body)
+	}
+
+	svc = &mockSvc{sendMessageErr: session.ErrPending}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"hello"}`))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("ErrPending: code %d want 409, body %s", rec.Code, rec.Body)
+	}
+
+	// 410: any other error (e.g. the PTY write failed — the session died
+	// between the guard check and the write).
+	svc = &mockSvc{sendMessageErr: errors.New("write failed")}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, messageReq(`{"text":"hello"}`))
+	if rec.Code != http.StatusGone {
+		t.Fatalf("write failure: code %d want 410, body %s", rec.Code, rec.Body)
+	}
+
+	// 405 on GET.
+	svc = &mockSvc{}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/api/sessions/x-1/message", nil)
+	a.handleSession(rec, getReq)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: code %d want 405, body %s", rec.Code, rec.Body)
+	}
+
+	// 403 on a cross-origin POST with cookie credentials — same constraint as
+	// the /replyable cross-origin case: call handleSession directly so the
+	// rejection comes from checkMutationGuard inside the handler, not from
+	// the outer router's csrfGuard (which would reject the request before it
+	// ever reaches this branch and mask a deleted inline guard).
+	svc = &mockSvc{}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	cross := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/message", strings.NewReader(`{"text":"hello"}`))
 	cross.Header.Set("Content-Type", "application/json")
 	cross.AddCookie(&http.Cookie{Name: "session", Value: "irrelevant-to-the-inline-guard"})
 	cross.Header.Set("Sec-Fetch-Site", "cross-site")

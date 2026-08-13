@@ -27,6 +27,7 @@ type SessionService interface {
 	AttributionFor(id string) (session.Attribution, bool)
 	PeekFor(id string) (session.Peek, bool)
 	SetReplyable(id string, v bool) bool
+	SendMessage(id, text string) error
 }
 
 // API holds the HTTP handlers for sessions.
@@ -167,6 +168,40 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// POST /api/sessions/{id}/message — type one line into a waiting session.
+	// Every guard is re-checked in the session layer; the client's disabled
+	// button is UX, not the control.
+	if strings.HasSuffix(id, "/message") {
+		if !checkMutationGuard(w, r) {
+			return
+		}
+		var body struct {
+			Text string `json:"text"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad body")
+			return
+		}
+		sid := strings.TrimSuffix(id, "/message")
+		err := a.Sessions.SendMessage(sid, body.Text)
+		switch {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, session.ErrBadText):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, session.ErrNoSession):
+			writeErr(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, session.ErrNotReplyable):
+			writeErr(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, session.ErrNotWaiting), errors.Is(err, session.ErrPending):
+			writeErr(w, http.StatusConflict, err.Error())
+		default:
+			// The session died between the guard and the write.
+			writeErr(w, http.StatusGone, "session is gone")
+		}
 		return
 	}
 	if id == "" {
