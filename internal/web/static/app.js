@@ -322,7 +322,7 @@ async function togglePeek(li, s) {
     status = 0;
   }
   if (!li.isConnected || openPeekId !== s.id) return; // a poll re-rendered the row
-  const st = peekState(s.agent, status, payload);
+  const st = peekState(!!s.claude, status, payload);
   body.textContent = st.text;
   body.classList.toggle("muted", st.kind !== "text");
   li.dataset.peekPending = payload && payload.pending ? "1" : "";
@@ -529,11 +529,32 @@ function renderSession(s) {
   li.appendChild(kill);
   // Summary line: what this agent last said. Server-truncated to one line
   // (Info.summary); clicking it expands the full text in place.
-  if (s.summary) {
+  //
+  // Rendered for EVERY claude session, not only ones that have something to
+  // say. Gating on s.summary made the peek unreachable in exactly the cases
+  // worth explaining — an unlocatable or unreadable transcript, or an agent
+  // that has not spoken yet — so the panel's empty states could never render,
+  // and the whole mitigation for the "silent blank summary" risk was dead.
+  // It also hid the opt-in checkbox, which lives INSIDE the panel: a session
+  // that had been opted in and whose transcript later broke was stuck opted
+  // in with no way to revoke it from the UI.
+  //
+  // s.claude is the server's isClaudeBin verdict, not the profile name: the
+  // send path is scoped by the binary, so the affordance must be too.
+  if (s.claude) {
     const sum = document.createElement("span");
     sum.className = "summary";
-    sum.textContent = s.summary;
-    sum.title = "Show the full message";
+    if (s.summary) {
+      sum.textContent = s.summary;
+      sum.title = "Show the full message";
+    } else {
+      // Quiet, not loud: a session with nothing to say must not shout. The
+      // placeholder states only that there is nothing, never a guess at why —
+      // the panel says why, on demand.
+      sum.textContent = "No summary";
+      sum.classList.add("placeholder");
+      sum.title = "Show why there is no summary";
+    }
     sum.setAttribute("role", "button");
     sum.setAttribute("tabindex", "0");
     const toggle = (e) => { e.stopPropagation(); togglePeek(li, s); };
@@ -599,13 +620,35 @@ let lastSessions = [];
 // restore nothing) from "the server could not be asked" (retry, restore nothing
 // yet). An empty array is the former.
 async function refreshSessions() {
-  // Don't clobber an in-progress inline rename, or a focused peek reply — both
-  // are a live <input> that a rebuild would destroy mid-keystroke.
-  if (editing || replyFocused) return lastSessions;
   const ul = $("sessions");
+  // holdList: an in-progress inline rename or a focused peek reply is a live
+  // <input> INSIDE this list, and rebuilding the list removes that node from
+  // the document — which fires a native, synchronous blur and drops the
+  // operator's cursor mid-keystroke.
+  //
+  // The guard used to sit at the top of this function and skip the whole poll.
+  // That protected the input, but it also froze every other thing the poll
+  // drives — activity dots, per-tab usage, the session count, the status line,
+  // and lastSessions (which the palette reads) — with nothing on screen saying
+  // the control plane had stopped. A rename commits within seconds; a reply box
+  // can hold focus for as long as the operator thinks, or walks away. A frozen
+  // green "working" dot on a crashed agent is a defect this codebase has fixed
+  // once already, so it must not come back through the reply box.
+  //
+  // So: always fetch, always push activity/usage/count/status, and skip ONLY
+  // the DOM rebuild. Every replaceChildren on `ul` below is guarded, and each
+  // is checked SYNCHRONOUSLY at the moment of the rebuild — after the await,
+  // never before it. Nothing but a rebuild can clear replyFocused (it is set
+  // and cleared by the input's own focus/blur), so the flag cannot have gone
+  // stale between the check and the call: the check and the call are adjacent
+  // statements with no await between them.
+  const holdList = () => editing || replyFocused;
   let sessions;
   try { sessions = await api("/api/sessions"); }
-  catch (e) { ul.replaceChildren(emptyLi("Error: " + e.message)); return null; }
+  catch (e) {
+    if (!holdList()) ul.replaceChildren(emptyLi("Error: " + e.message));
+    return null;
+  }
   lastSessions = sessions || [];
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
@@ -628,6 +671,8 @@ async function refreshSessions() {
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();
+  // Everything above has already been pushed. Only the list rebuild waits.
+  if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
   ul.replaceChildren(...lastSessions.map(renderSession));
   return lastSessions;

@@ -370,6 +370,12 @@
       text-overflow: ellipsis;
       cursor: pointer;
     }
+    /* A claude session with nothing to say still carries the row (that is how
+       the empty states and the opt-in stay reachable), so the placeholder must
+       be quiet. Italic only — the same idiom .peek-body.muted already uses. No
+       opacity: --muted measures 5.65 on --panel and fading it toward the panel
+       would drop this under the 4.5 AA floor. */
+    #sessions li .summary.placeholder { font-style: italic; }
     /* The expander is a real button, not a hover affordance: a hover-only control
        is invisible and unreachable on touch. */
     #sessions li .peek-body {
