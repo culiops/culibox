@@ -15,6 +15,16 @@ var (
 	ErrNotWaiting   = errors.New("session is not waiting for input")
 	ErrPending      = errors.New("session is inside a tool call")
 	ErrBadText      = errors.New("message text is empty, multi-line, or contains control characters")
+	// ErrNotClaude is the isClaudeBin seam the design names, enforced here in
+	// the session layer rather than in the HTTP handler or the UI: the reply
+	// path is the one place in this daemon that types into a live agent's
+	// terminal, so its scope must not depend on which caller reached it.
+	ErrNotClaude = errors.New("only claude sessions accept messages")
+	// ErrNoTranscript is the fail-closed answer when PeekFor misses. The
+	// pending guard's ground truth lives in the transcript; with no transcript
+	// there is no way to know whether the agent is sitting on a permission
+	// prompt, and "unknown" must not read as "not pending".
+	ErrNoTranscript = errors.New("session transcript is not readable, so a message cannot be authorized")
 )
 
 // Peek is a per-session snapshot of what the agent last said, read from the
@@ -132,15 +142,23 @@ func summaryLine(text string) string {
 // The pending refusal is deliberate and counter-intuitive: a session sitting on
 // a permission prompt is the one an operator most wants to answer, and the one
 // where typing text is most dangerous, because that dialog reads single keys.
+//
+// Order matters for the WORDS, never for the outcome: pending refuses either
+// way. It is tested before activity because a permission prompt redraws itself,
+// which keeps resetting activityOf's idle timer — so the session that is most
+// often pending reads as `working`, and testing activity first meant the
+// operator was told "wait until it stops" about a session that had already
+// stopped and was waiting on them. peek.js's sendState carries the same order;
+// the two must not drift or the client's explanation contradicts the server's.
 func canReply(replyable bool, activity string, pending bool) (bool, string) {
 	if !replyable {
 		return false, "not_replyable"
 	}
-	if activity != "waiting" {
-		return false, "not_waiting"
-	}
 	if pending {
 		return false, "pending"
+	}
+	if activity != "waiting" {
+		return false, "not_waiting"
 	}
 	return true, ""
 }
@@ -186,6 +204,21 @@ func (m *Manager) peekStore(id string, mtime time.Time, p Peek) {
 		m.peekCache = map[string]peekEntry{}
 	}
 	m.peekCache[id] = peekEntry{mtime: mtime, peek: p}
+}
+
+// peekForget drops a dead session's cached parse. Called beside every
+// delete(m.sessions, id): without it the cache holds a full assistant message
+// per session that ever existed, for the daemon's whole lifetime. Nothing stale
+// is ever SERVED (ids are monotonic within a run), so this is purely about not
+// growing forever — the same shape as the boxstate leak.
+//
+// Takes only peekMu, and never while m.mu is held: callers do this after
+// releasing m.mu, which keeps the two locks unordered with respect to each
+// other.
+func (m *Manager) peekForget(id string) {
+	m.peekMu.Lock()
+	defer m.peekMu.Unlock()
+	delete(m.peekCache, id)
 }
 
 // PeekFor reads the latest transcript peek for a claude session. ok=false for a
@@ -258,20 +291,43 @@ func (m *Manager) SendMessage(id, text string) error {
 	}
 	m.mu.Lock()
 	s := m.sessions[id]
+	var bin string
+	if s != nil {
+		bin = s.Bin // guarded by m.mu: ResolveBins backfills it post-reconcile
+	}
 	m.mu.Unlock()
 	if s == nil {
 		return ErrNoSession
 	}
+	// Claude-only, enforced here rather than at the HTTP layer or in the UI.
+	// Every guard below is derived from a claude transcript; a raw $SHELL
+	// session has none, so without this gate the pending guard could not fail
+	// closed and the whole authorization reduced to the opt-in flag.
+	if !isClaudeBin(bin) {
+		return ErrNotClaude
+	}
 	info := s.Info()
-	p, _ := m.PeekFor(id) // a miss yields the zero Peek: pending=false
+	// Fail CLOSED on a PeekFor miss. A miss used to yield the zero Peek, whose
+	// pending=false PASSED the third guard — so the one state the guard exists
+	// to catch (no ground truth about the agent's turn) was also the state that
+	// waved the message through.
+	p, havePeek := m.PeekFor(id)
+	if !havePeek {
+		return ErrNoTranscript
+	}
 	if ok, why := canReply(info.Replyable, info.Activity, p.Pending); !ok {
 		switch why {
 		case "not_replyable":
 			return ErrNotReplyable
 		case "not_waiting":
 			return ErrNotWaiting
-		default:
+		case "pending":
 			return ErrPending
+		default:
+			// An authorization reason this switch does not know about is a
+			// refusal, not a pass: a future fourth reason must not inherit
+			// whichever error happened to sit in the default arm.
+			return ErrNotReplyable
 		}
 	}
 	if _, err := s.Write([]byte(text + "\r")); err != nil {

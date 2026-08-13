@@ -249,6 +249,12 @@ func TestCanReply(t *testing.T) {
 		{true, "crashed", false, false, "not_waiting"},
 		{true, "detached", false, false, "not_waiting"},
 		{true, "waiting", true, false, "pending"},
+		// pending is checked BEFORE activity. A session sitting on a permission
+		// prompt redraws it, which keeps resetting the idle timer, so it reads
+		// as `working` — the one case the pending branch exists for was also
+		// the case activity-first never reached. The refusal is identical
+		// either way; only the words the operator sees change.
+		{true, "working", true, false, "pending"},
 		// replyable is checked first so the most actionable reason wins.
 		{false, "working", true, false, "not_replyable"},
 	}
@@ -298,9 +304,67 @@ func TestSendMessageRefusesWhenGuardsFail(t *testing.T) {
 func TestSendMessageRefusesWhenPending(t *testing.T) {
 	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"checking"},{"type":"tool_use","name":"Bash"}]}}` + "\n"
 	m, _ := newPeekTestManager(t, "/tmp/proj", body)
-	m.SetReplyable("s1", true)
+	if err := m.SetReplyable("s1", true); err != nil {
+		t.Fatal(err)
+	}
 	if err := m.SendMessage("s1", "yes"); err != ErrPending {
 		t.Errorf("err=%v want ErrPending", err)
+	}
+}
+
+// The pending guard's ground truth is the transcript. When PeekFor misses there
+// IS no ground truth — and a miss used to yield the zero Peek, whose
+// pending=false PASSED the guard. Fail closed instead.
+func TestSendMessageFailsClosedWhenTheTranscriptIsUnreadable(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"which file?"}]}}` + "\n"
+	m, path := newPeekTestManager(t, "/tmp/proj", body)
+	if err := m.SetReplyable("s1", true); err != nil {
+		t.Fatal(err)
+	}
+	// Make the session look maximally sendable to every OTHER guard: opted in,
+	// idle long enough that activityOf reads `waiting` (a zero lastActivityAt
+	// already does), and holding a real writable fd so the send can complete.
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devnull.Close() })
+	m.sessions["s1"].ptmx = devnull
+	if err := m.SendMessage("s1", "the second one"); err != nil {
+		t.Fatalf("precondition: a readable transcript must send, got %v", err)
+	}
+	// Now remove the transcript: PeekFor misses and the third guard has nothing
+	// to test. That must refuse, not wave the message through.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SendMessage("s1", "still there?"); err != ErrNoTranscript {
+		t.Errorf("err=%v want ErrNoTranscript", err)
+	}
+}
+
+// A raw $SHELL session has no transcript, so every transcript-derived guard is
+// vacuous on it and the opt-in would be the only thing standing between an API
+// call and a line typed into a shell. isClaudeBin is the seam; enforce it in
+// the session layer so no caller can reach the write without crossing it.
+func TestSendMessageRefusesANonClaudeSession(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+	if err := m.SetReplyable("s1", true); err != nil {
+		t.Fatal(err)
+	}
+	// A real writable fd, so that without the gate this test reports err=nil —
+	// i.e. the line was actually typed at the shell — rather than an incidental
+	// error from a nil PTY.
+	devnull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devnull.Close() })
+	m.sessions["s1"].ptmx = devnull
+	m.sessions["s1"].Bin = "/bin/zsh"
+	if err := m.SendMessage("s1", "rm -rf /"); err != ErrNotClaude {
+		t.Errorf("err=%v want ErrNotClaude", err)
 	}
 }
 
@@ -309,19 +373,63 @@ func TestSetReplyableRoundTrips(t *testing.T) {
 	if m.List()[0].Replyable {
 		t.Fatal("Replyable defaults to true, want false")
 	}
-	if !m.SetReplyable("s1", true) {
-		t.Fatal("SetReplyable returned false for a live session")
+	if err := m.SetReplyable("s1", true); err != nil {
+		t.Fatalf("SetReplyable(true) on a live claude session: %v", err)
 	}
 	if !m.List()[0].Replyable {
 		t.Error("Replyable=false after SetReplyable(true)")
 	}
-	if !m.SetReplyable("s1", false) {
-		t.Fatal("SetReplyable(false) returned false")
+	if err := m.SetReplyable("s1", false); err != nil {
+		t.Fatalf("SetReplyable(false): %v", err)
 	}
 	if m.List()[0].Replyable {
 		t.Error("Replyable=true after SetReplyable(false)")
 	}
-	if m.SetReplyable("nope", true) {
-		t.Error("SetReplyable returned true for an unknown id")
+	if err := m.SetReplyable("nope", true); err != ErrNoSession {
+		t.Errorf("err=%v for an unknown id, want ErrNoSession", err)
+	}
+}
+
+// The opt-in is the whole control on a path that types into a live terminal.
+// It must be scoped by the same isClaudeBin seam SendMessage enforces, in the
+// session layer — where no future caller can go around it — and not by which
+// rows the sidebar happens to draw a checkbox on.
+func TestSetReplyableRefusesToGrantOnANonClaudeSession(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	m.sessions["s1"].Bin = "/bin/zsh"
+	if err := m.SetReplyable("s1", true); err != ErrNotClaude {
+		t.Fatalf("err=%v want ErrNotClaude", err)
+	}
+	if m.List()[0].Replyable {
+		t.Error("Replyable=true on a shell session after a refused grant")
+	}
+}
+
+// Revoking is never gated: a session that holds the flag (restored from a
+// sidecar, or whose Bin resolved differently later) must always be able to
+// give it up, or the UI's only off switch stops working on exactly the
+// sessions an operator most wants to shut.
+func TestSetReplyableAlwaysAllowsRevoking(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	if err := m.SetReplyable("s1", true); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["s1"].Bin = "/bin/zsh" // no longer resolves as claude
+	if err := m.SetReplyable("s1", false); err != nil {
+		t.Fatalf("revoke refused: %v", err)
+	}
+	if m.List()[0].Replyable {
+		t.Error("Replyable=true after a revoke")
+	}
+}
+
+func TestListReportsClaude(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	if !m.List()[0].Claude {
+		t.Error("Claude=false for a claude bin")
+	}
+	m.sessions["s1"].Bin = "/bin/zsh"
+	if m.List()[0].Claude {
+		t.Error("Claude=true for a shell bin")
 	}
 }

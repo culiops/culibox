@@ -164,6 +164,15 @@ type Info struct {
 	// cannot be read — the client tells those apart via the /peek endpoint.
 	Summary   string `json:"summary,omitempty"`
 	Replyable bool   `json:"replyable"`
+	// Claude reports isClaudeBin(Bin) — the seam every peek/reply feature is
+	// scoped by. The client needs it to decide whether a session HAS a peek at
+	// all, which it cannot infer from Summary (empty also means "transcript
+	// unreadable") nor from Agent (a profile name, which may be anything).
+	// Filled by List, the only caller that reads Bin under m.mu — the Spawn and
+	// Get responses leave it false. That is safe only because the client always
+	// re-lists after a spawn and never renders a row from those responses; a
+	// new surface that needs it must go through List or take m.mu itself.
+	Claude bool `json:"claude"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -492,16 +501,29 @@ func (s *Session) SetName(name string) {
 	s.mu.Unlock()
 }
 
-// SetReplyable flips the operator's opt-in and persists it. Reports whether the
-// session exists. Turning it OFF must always work for a live session; turning
-// it ON is the act that carries risk, and is deliberate.
-func (m *Manager) SetReplyable(id string, v bool) bool {
+// SetReplyable flips the operator's opt-in and persists it. Turning it OFF must
+// always work for a live session; turning it ON is the act that carries risk,
+// and is deliberate.
+//
+// Granting is gated on isClaudeBin — the same seam SendMessage enforces, so the
+// UI cannot offer an opt-in the send path would then refuse, and no future
+// caller can grant it by going around the handler. REVOKING is never gated: a
+// session that somehow holds the flag (restored from a sidecar, or whose Bin
+// resolved differently later) must always be able to give it up.
+func (m *Manager) SetReplyable(id string, v bool) error {
 	m.mu.Lock()
 	s := m.sessions[id]
 	sc := m.sidecar
+	var bin string
+	if s != nil {
+		bin = s.Bin // guarded by m.mu: ResolveBins backfills it post-reconcile
+	}
 	m.mu.Unlock()
 	if s == nil {
-		return false
+		return ErrNoSession
+	}
+	if v && !isClaudeBin(bin) {
+		return ErrNotClaude
 	}
 	s.mu.Lock()
 	s.replyable = v
@@ -509,7 +531,7 @@ func (m *Manager) SetReplyable(id string, v bool) bool {
 	if sc != nil {
 		sc.setReplyable(id, v)
 	}
-	return true
+	return nil
 }
 
 // signal sends sig to the child's whole process group (negative pid). creack/pty
@@ -803,6 +825,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		sc := m.sidecar
 		backend := m.backend
 		m.mu.Unlock()
+		m.peekForget(id) // the cached transcript parse dies with the session
 		if sc != nil {
 			sc.remove(id) // a naturally-exited session is gone for good
 		}
@@ -814,12 +837,25 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 
 // List returns all sessions, oldest first.
 func (m *Manager) List() []Info {
-	m.mu.Lock()
-	out := make([]Info, 0, len(m.sessions))
-	for _, s := range m.sessions {
-		out = append(out, s.Info())
-	}
-	m.mu.Unlock()
+	// The critical section is a closure so the unlock is a defer again: it used
+	// to be an explicit Unlock (so PeekFor, which takes the same non-reentrant
+	// mutex, could run after it), which meant a panic inside s.Info() would
+	// leave m.mu held forever and wedge every spawn, kill, get and list for the
+	// process lifetime. The closure keeps BOTH properties, and makes "no early
+	// return between Lock and Unlock" structural rather than a rule to remember.
+	out := func() []Info {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		o := make([]Info, 0, len(m.sessions))
+		for _, s := range m.sessions {
+			i := s.Info()
+			// Bin is written under m.mu (ResolveBins), so this is the one place
+			// it can be read without racing.
+			i.Claude = isClaudeBin(s.Bin)
+			o = append(o, i)
+		}
+		return o
+	}()
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
 	// Summaries are filled AFTER m.mu is released. PeekFor takes the same
 	// non-reentrant mutex, so filling them inside the loop above deadlocks the
@@ -920,6 +956,7 @@ func (m *Manager) Kill(id string) error {
 	delete(m.sessions, id)
 	sc := m.sidecar
 	m.mu.Unlock()
+	m.peekForget(id) // the cached transcript parse dies with the session
 	if sc != nil {
 		sc.remove(id)
 	}

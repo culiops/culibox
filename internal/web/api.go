@@ -26,7 +26,7 @@ type SessionService interface {
 	UsageFor(id string) (session.Usage, bool)
 	AttributionFor(id string) (session.Attribution, bool)
 	PeekFor(id string) (session.Peek, bool)
-	SetReplyable(id string, v bool) bool
+	SetReplyable(id string, v bool) error
 	SendMessage(id, text string) error
 }
 
@@ -163,11 +163,20 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		sid := strings.TrimSuffix(id, "/replyable")
-		if !a.Sessions.SetReplyable(sid, body.Replyable) {
+		// The claude-only scope is enforced in the session layer, not here —
+		// this just names which refusal happened. 403, not 404: the session
+		// exists, it simply cannot be granted this.
+		switch err := a.Sessions.SetReplyable(sid, body.Replyable); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, session.ErrNoSession):
 			writeErr(w, http.StatusNotFound, "no such session")
-			return
+		default:
+			// ErrNotClaude and anything a future revision adds: a refusal to
+			// grant, on a session that exists. 403 fails closed for a reason
+			// this handler does not recognise.
+			writeErr(w, http.StatusForbidden, err.Error())
 		}
-		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	// POST /api/sessions/{id}/message — type one line into a waiting session.
@@ -194,9 +203,12 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, session.ErrNoSession):
 			writeErr(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, session.ErrNotReplyable):
+		case errors.Is(err, session.ErrNotReplyable), errors.Is(err, session.ErrNotClaude):
 			writeErr(w, http.StatusForbidden, err.Error())
-		case errors.Is(err, session.ErrNotWaiting), errors.Is(err, session.ErrPending):
+		// ErrNoTranscript joins the two "not right now" reasons rather than the
+		// "never" ones: the transcript may well become readable on the next poll.
+		case errors.Is(err, session.ErrNotWaiting), errors.Is(err, session.ErrPending),
+			errors.Is(err, session.ErrNoTranscript):
 			writeErr(w, http.StatusConflict, err.Error())
 		default:
 			// The session died between the guard and the write.

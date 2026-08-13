@@ -13,29 +13,29 @@ import (
 )
 
 type mockSvc struct {
-	list           []session.Info
-	getOK          bool
-	killed         string
-	spawnInfo      session.Info
-	spawnErr       error
-	spawnedCwd     string
-	spawnedOptions map[string]any
-	spawnedRuntime string
-	renamedID      string
-	renamedName    string
-	renameErr      error
-	usage          session.Usage
-	usageOK        bool
-	attr           session.Attribution
-	attrOK         bool
-	peek           session.Peek
-	peekOK         bool
-	setReplyableID string
-	setReplyableV  bool
-	setReplyableOK bool
-	sendMessageID  string
-	sendMessageV   string
-	sendMessageErr error
+	list            []session.Info
+	getOK           bool
+	killed          string
+	spawnInfo       session.Info
+	spawnErr        error
+	spawnedCwd      string
+	spawnedOptions  map[string]any
+	spawnedRuntime  string
+	renamedID       string
+	renamedName     string
+	renameErr       error
+	usage           session.Usage
+	usageOK         bool
+	attr            session.Attribution
+	attrOK          bool
+	peek            session.Peek
+	peekOK          bool
+	setReplyableID  string
+	setReplyableV   bool
+	setReplyableErr error
+	sendMessageID   string
+	sendMessageV    string
+	sendMessageErr  error
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -75,9 +75,9 @@ func (m *mockSvc) AttributionFor(id string) (session.Attribution, bool) {
 	return m.attr, m.attrOK
 }
 func (m *mockSvc) PeekFor(id string) (session.Peek, bool) { return m.peek, m.peekOK }
-func (m *mockSvc) SetReplyable(id string, v bool) bool {
+func (m *mockSvc) SetReplyable(id string, v bool) error {
 	m.setReplyableID, m.setReplyableV = id, v
-	return m.setReplyableOK
+	return m.setReplyableErr
 }
 func (m *mockSvc) SendMessage(id, text string) error {
 	m.sendMessageID, m.sendMessageV = id, text
@@ -195,7 +195,7 @@ func replyableReq(body string) *http.Request {
 
 func TestReplyableEndpoint(t *testing.T) {
 	// 204 on success.
-	svc := &mockSvc{setReplyableOK: true}
+	svc := &mockSvc{}
 	a := &API{Sessions: svc}
 	rec := httptest.NewRecorder()
 	a.handleSession(rec, replyableReq(`{"replyable":true}`))
@@ -207,7 +207,7 @@ func TestReplyableEndpoint(t *testing.T) {
 	}
 
 	// 404 for an unknown id.
-	svc = &mockSvc{setReplyableOK: false}
+	svc = &mockSvc{setReplyableErr: session.ErrNoSession}
 	a = &API{Sessions: svc}
 	rec = httptest.NewRecorder()
 	a.handleSession(rec, replyableReq(`{"replyable":true}`))
@@ -215,8 +215,19 @@ func TestReplyableEndpoint(t *testing.T) {
 		t.Fatalf("unknown id: code %d want 404, body %s", rec.Code, rec.Body)
 	}
 
+	// 403 for a non-claude session: the opt-in is scoped by isClaudeBin in the
+	// session layer, and "no such session" would be a lie about a session that
+	// is right there in the list.
+	svc = &mockSvc{setReplyableErr: session.ErrNotClaude}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, replyableReq(`{"replyable":true}`))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("non-claude: code %d want 403, body %s", rec.Code, rec.Body)
+	}
+
 	// 405 on GET.
-	svc = &mockSvc{setReplyableOK: true}
+	svc = &mockSvc{}
 	a = &API{Sessions: svc}
 	rec = httptest.NewRecorder()
 	getReq := httptest.NewRequest(http.MethodGet, "/api/sessions/x-1/replyable", nil)
@@ -245,7 +256,7 @@ func TestReplyableEndpoint(t *testing.T) {
 	// credKindOf(r) reads credNone (not credBearer) exactly like an
 	// unauthenticated-context cookie request would — checkMutationGuard's
 	// sameOrigin(r) branch is what has to reject the cross-site header.
-	svc = &mockSvc{setReplyableOK: true}
+	svc = &mockSvc{}
 	a = &API{Sessions: svc}
 	rec = httptest.NewRecorder()
 	cross := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/replyable", strings.NewReader(`{"replyable":true}`))
@@ -286,6 +297,12 @@ func TestMessageEndpoint(t *testing.T) {
 	a.handleSession(rec, messageReq(`{not json`))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("malformed body: code %d want 400, body %s", rec.Code, rec.Body)
+	}
+	// The status alone would still pass if a refactor moved the guard BELOW the
+	// dispatch — on the one endpoint in this daemon that writes into a live
+	// agent's terminal. Assert the side effect never happened.
+	if svc.sendMessageID != "" {
+		t.Fatalf("malformed body reached the session layer: id=%q text=%q", svc.sendMessageID, svc.sendMessageV)
 	}
 
 	// 400: ErrBadText mapping.
@@ -353,6 +370,9 @@ func TestMessageEndpoint(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET: code %d want 405, body %s", rec.Code, rec.Body)
 	}
+	if svc.sendMessageID != "" {
+		t.Fatalf("GET reached the session layer: id=%q text=%q", svc.sendMessageID, svc.sendMessageV)
+	}
 
 	// 403 on a cross-origin POST with cookie credentials — same constraint as
 	// the /replyable cross-origin case: call handleSession directly so the
@@ -369,6 +389,9 @@ func TestMessageEndpoint(t *testing.T) {
 	a.handleSession(rec, cross)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("cross-site cookie POST: code %d want 403, body %s", rec.Code, rec.Body)
+	}
+	if svc.sendMessageID != "" {
+		t.Fatalf("cross-site POST reached the session layer: id=%q text=%q", svc.sendMessageID, svc.sendMessageV)
 	}
 }
 
