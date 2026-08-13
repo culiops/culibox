@@ -159,6 +159,10 @@ type Info struct {
 	// credentials, so the daemon has no identity to report and inventing one
 	// would be a lie.
 	Attached bool `json:"attached"`
+	// Summary is the first line of the agent's last message, elided to
+	// summaryMax runes. Empty for a non-claude session or one whose transcript
+	// cannot be read — the client tells those apart via the /peek endpoint.
+	Summary string `json:"summary,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -786,12 +790,20 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 // List returns all sessions, oldest first.
 func (m *Manager) List() []Info {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	out := make([]Info, 0, len(m.sessions))
 	for _, s := range m.sessions {
 		out = append(out, s.Info())
 	}
+	m.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
+	// Summaries are filled AFTER m.mu is released. PeekFor takes the same
+	// non-reentrant mutex, so filling them inside the loop above deadlocks the
+	// daemon on the first poll.
+	for i := range out {
+		if p, ok := m.PeekFor(out[i].ID); ok {
+			out[i].Summary = summaryLine(p.Text)
+		}
+	}
 	return out
 }
 

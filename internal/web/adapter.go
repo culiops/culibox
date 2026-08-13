@@ -33,6 +33,8 @@ func (a ManagerService) Get(id string) (session.Info, bool) {
 
 func (a ManagerService) UsageFor(id string) (session.Usage, bool) { return a.M.UsageFor(id) }
 
+func (a ManagerService) PeekFor(id string) (session.Peek, bool) { return a.M.PeekFor(id) }
+
 func (a ManagerService) AttributionFor(id string) (session.Attribution, bool) {
 	return a.M.AttributionFor(id)
 }

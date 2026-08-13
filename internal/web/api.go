@@ -25,6 +25,7 @@ type SessionService interface {
 	Get(id string) (session.Info, bool)
 	UsageFor(id string) (session.Usage, bool)
 	AttributionFor(id string) (session.Attribution, bool)
+	PeekFor(id string) (session.Peek, bool)
 }
 
 // API holds the HTTP handlers for sessions.
@@ -110,6 +111,22 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		sid := strings.TrimSuffix(id, "/usage")
 		if u, ok := a.Sessions.UsageFor(sid); ok {
 			writeJSON(w, http.StatusOK, u)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+	// GET /api/sessions/{id}/peek — the agent's last message plus the mid-tool
+	// flag. 204 when the session isn't claude or has no readable transcript;
+	// the client distinguishes those two using Info.agent.
+	if strings.HasSuffix(id, "/peek") {
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		sid := strings.TrimSuffix(id, "/peek")
+		if p, ok := a.Sessions.PeekFor(sid); ok {
+			writeJSON(w, http.StatusOK, p)
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}

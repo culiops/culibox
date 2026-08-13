@@ -197,3 +197,23 @@ func TestPeekForCachesUntilMtimeChanges(t *testing.T) {
 		t.Errorf("Text=%q want re-read %q", p.Text, "second")
 	}
 }
+
+func TestListFillsSummaryWithoutDeadlock(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"line one\nline two"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+
+	// A deadlock here hangs the whole test binary, so bound it.
+	done := make(chan []Info, 1)
+	go func() { done <- m.List() }()
+	select {
+	case out := <-done:
+		if len(out) != 1 {
+			t.Fatalf("len(List())=%d want 1", len(out))
+		}
+		if out[0].Summary != "line one" {
+			t.Errorf("Summary=%q want %q", out[0].Summary, "line one")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("List() deadlocked: PeekFor takes m.mu, so it cannot be called while List holds it")
+	}
+}

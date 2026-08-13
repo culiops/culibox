@@ -28,6 +28,8 @@ type mockSvc struct {
 	usageOK        bool
 	attr           session.Attribution
 	attrOK         bool
+	peek           session.Peek
+	peekOK         bool
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -66,6 +68,7 @@ func (m *mockSvc) UsageFor(id string) (session.Usage, bool) { return m.usage, m.
 func (m *mockSvc) AttributionFor(id string) (session.Attribution, bool) {
 	return m.attr, m.attrOK
 }
+func (m *mockSvc) PeekFor(id string) (session.Peek, bool) { return m.peek, m.peekOK }
 
 func TestAPI_Attribution(t *testing.T) {
 	svc := &mockSvc{attrOK: true, attr: session.Attribution{
@@ -117,6 +120,54 @@ func TestAPI_UsageMiss(t *testing.T) {
 	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/usage", nil))
 	if rec.Code != 204 {
 		t.Fatalf("code %d want 204", rec.Code)
+	}
+}
+
+func TestPeekEndpoint(t *testing.T) {
+	// 200 with the payload when PeekFor hits.
+	svc := &mockSvc{peekOK: true, peek: session.Peek{Text: "line one", Pending: true}}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/peek", nil))
+	if rec.Code != 200 {
+		t.Fatalf("code %d want 200", rec.Code)
+	}
+	var p session.Peek
+	_ = json.NewDecoder(rec.Body).Decode(&p)
+	if p.Text != "line one" || !p.Pending {
+		t.Fatalf("body %+v", p)
+	}
+
+	// 204 when PeekFor misses.
+	svc = &mockSvc{peekOK: false}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/peek", nil))
+	if rec.Code != 204 {
+		t.Fatalf("code %d want 204", rec.Code)
+	}
+
+	// 405 on a non-GET method.
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("POST", "/api/sessions/x-1/peek", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code %d want 405", rec.Code)
+	}
+
+	// The path-suffix routing must not collide with the existing /usage and
+	// /attribution branches: a peek-only fake should still 204 (not error) on
+	// those routes, and a usage/attribution-only fake should still 204 on peek.
+	svc = &mockSvc{peekOK: true, peek: session.Peek{Text: "x"}}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/usage", nil))
+	if rec.Code != 204 {
+		t.Fatalf("usage route code %d want 204 (peek must not have intercepted it)", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/attribution", nil))
+	if rec.Code != 204 {
+		t.Fatalf("attribution route code %d want 204 (peek must not have intercepted it)", rec.Code)
 	}
 }
 
