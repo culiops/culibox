@@ -30,6 +30,9 @@ type mockSvc struct {
 	attrOK         bool
 	peek           session.Peek
 	peekOK         bool
+	setReplyableID string
+	setReplyableV  bool
+	setReplyableOK bool
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -69,6 +72,10 @@ func (m *mockSvc) AttributionFor(id string) (session.Attribution, bool) {
 	return m.attr, m.attrOK
 }
 func (m *mockSvc) PeekFor(id string) (session.Peek, bool) { return m.peek, m.peekOK }
+func (m *mockSvc) SetReplyable(id string, v bool) bool {
+	m.setReplyableID, m.setReplyableV = id, v
+	return m.setReplyableOK
+}
 
 func TestAPI_Attribution(t *testing.T) {
 	svc := &mockSvc{attrOK: true, attr: session.Attribution{
@@ -168,6 +175,73 @@ func TestPeekEndpoint(t *testing.T) {
 	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/x-1/attribution", nil))
 	if rec.Code != 204 {
 		t.Fatalf("attribution route code %d want 204 (peek must not have intercepted it)", rec.Code)
+	}
+}
+
+// replyableReq builds a same-origin JSON POST the /replyable handler accepts.
+func replyableReq(body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/replyable", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	return r
+}
+
+func TestReplyableEndpoint(t *testing.T) {
+	// 204 on success.
+	svc := &mockSvc{setReplyableOK: true}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, replyableReq(`{"replyable":true}`))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("success: code %d want 204, body %s", rec.Code, rec.Body)
+	}
+	if svc.setReplyableID != "x-1" || svc.setReplyableV != true {
+		t.Fatalf("not forwarded: id=%q v=%v", svc.setReplyableID, svc.setReplyableV)
+	}
+
+	// 404 for an unknown id.
+	svc = &mockSvc{setReplyableOK: false}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, replyableReq(`{"replyable":true}`))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown id: code %d want 404, body %s", rec.Code, rec.Body)
+	}
+
+	// 405 on GET.
+	svc = &mockSvc{setReplyableOK: true}
+	a = &API{Sessions: svc}
+	rec = httptest.NewRecorder()
+	getReq := httptest.NewRequest(http.MethodGet, "/api/sessions/x-1/replyable", nil)
+	a.handleSession(rec, getReq)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: code %d want 405, body %s", rec.Code, rec.Body)
+	}
+
+	// 400 on a malformed body.
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, replyableReq(`{not json`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("malformed body: code %d want 400, body %s", rec.Code, rec.Body)
+	}
+
+	// 403 on a cross-origin POST with cookie credentials. Unlike the cases
+	// above, this must exercise checkMutationGuard's real same-origin check, so
+	// it goes through the full router (session cookie issued, no bearer token)
+	// rather than calling handleSession directly — mirrors
+	// TestRouter_CookiePostCrossSiteBlocked in router_test.go.
+	rs, _ := routedServer(t)
+	rs.API = &API{Sessions: &mockSvc{setReplyableOK: true}}
+	iw := httptest.NewRecorder()
+	rs.Session.Issue(iw, false)
+	cross := httptest.NewRequest(http.MethodPost, "/api/sessions/x-1/replyable", strings.NewReader(`{"replyable":true}`))
+	cross.Header.Set("Content-Type", "application/json")
+	cross.AddCookie(iw.Result().Cookies()[0])
+	cross.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec = httptest.NewRecorder()
+	rs.Handler().ServeHTTP(rec, cross)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site cookie POST: code %d want 403, body %s", rec.Code, rec.Body)
 	}
 }
 

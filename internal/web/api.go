@@ -26,6 +26,7 @@ type SessionService interface {
 	UsageFor(id string) (session.Usage, bool)
 	AttributionFor(id string) (session.Attribution, bool)
 	PeekFor(id string) (session.Peek, bool)
+	SetReplyable(id string, v bool) bool
 }
 
 // API holds the HTTP handlers for sessions.
@@ -145,6 +146,27 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}
+		return
+	}
+	// POST /api/sessions/{id}/replyable — operator opt-in for accepting messages.
+	if strings.HasSuffix(id, "/replyable") {
+		if !checkMutationGuard(w, r) {
+			return
+		}
+		var body struct {
+			Replyable bool `json:"replyable"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeErr(w, http.StatusBadRequest, "bad body")
+			return
+		}
+		sid := strings.TrimSuffix(id, "/replyable")
+		if !a.Sessions.SetReplyable(sid, body.Replyable) {
+			writeErr(w, http.StatusNotFound, "no such session")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if id == "" {

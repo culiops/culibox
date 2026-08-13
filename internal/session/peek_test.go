@@ -233,6 +233,33 @@ func TestSessionMetaWithoutReplyableDefaultsToFalse(t *testing.T) {
 	}
 }
 
+func TestCanReply(t *testing.T) {
+	cases := []struct {
+		replyable bool
+		activity  string
+		pending   bool
+		wantOK    bool
+		wantWhy   string
+	}{
+		{true, "waiting", false, true, ""},
+		{false, "waiting", false, false, "not_replyable"},
+		{true, "working", false, false, "not_waiting"},
+		{true, "done", false, false, "not_waiting"},
+		{true, "crashed", false, false, "not_waiting"},
+		{true, "detached", false, false, "not_waiting"},
+		{true, "waiting", true, false, "pending"},
+		// replyable is checked first so the most actionable reason wins.
+		{false, "working", true, false, "not_replyable"},
+	}
+	for _, c := range cases {
+		ok, why := canReply(c.replyable, c.activity, c.pending)
+		if ok != c.wantOK || why != c.wantWhy {
+			t.Errorf("canReply(%v,%q,%v)=(%v,%q) want (%v,%q)",
+				c.replyable, c.activity, c.pending, ok, why, c.wantOK, c.wantWhy)
+		}
+	}
+}
+
 func TestSetReplyableRoundTrips(t *testing.T) {
 	m, _ := newPeekTestManager(t, "/tmp/proj", "")
 	if m.List()[0].Replyable {

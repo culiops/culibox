@@ -38,3 +38,5 @@ func (a ManagerService) PeekFor(id string) (session.Peek, bool) { return a.M.Pee
 func (a ManagerService) AttributionFor(id string) (session.Attribution, bool) {
 	return a.M.AttributionFor(id)
 }
+
+func (a ManagerService) SetReplyable(id string, v bool) bool { return a.M.SetReplyable(id, v) }

@@ -115,6 +115,27 @@ func summaryLine(text string) string {
 	return ""
 }
 
+// canReply is the whole authorization decision for sending a message into a
+// session, extracted so the handler stays a thin caller and every combination
+// is table-testable. The reasons are codes; the HTTP layer maps them to
+// statuses and the UI phrases them.
+//
+// The pending refusal is deliberate and counter-intuitive: a session sitting on
+// a permission prompt is the one an operator most wants to answer, and the one
+// where typing text is most dangerous, because that dialog reads single keys.
+func canReply(replyable bool, activity string, pending bool) (bool, string) {
+	if !replyable {
+		return false, "not_replyable"
+	}
+	if activity != "waiting" {
+		return false, "not_waiting"
+	}
+	if pending {
+		return false, "pending"
+	}
+	return true, ""
+}
+
 // peekEntry is one cached parse, valid while the transcript's mtime is unchanged.
 type peekEntry struct {
 	mtime time.Time
