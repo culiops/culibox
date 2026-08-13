@@ -134,6 +134,33 @@ func TestReconcileReattachesLiveSurvivor(t *testing.T) {
 	}
 }
 
+// TestReconcileRestoresReplyable: an operator's opt-in must survive a daemon
+// restart, not just a decode-into-a-bare-struct check. A sidecar entry written
+// with Replyable: true must come back true after Reconcile re-attaches it —
+// the actual cross-restart path the task exists to deliver, not merely the
+// zero-value default the other Replyable tests pin.
+func TestReconcileRestoresReplyable(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/work/proj", Created: time.Now(), Replyable: true},
+	})
+	m := newReconcileManager(t, fb, path)
+
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+
+	s, ok := m.Get("claude-2")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
+	if !s.Info().Replyable {
+		t.Fatal("Replyable=false after Reconcile, want true: the sidecar said true and must be restored, not silently reverted")
+	}
+}
+
 // TestReconcileDropsDeadSidecarEntry: a sidecar entry with no live socket (agent
 // died during downtime) is dropped and not listed.
 func TestReconcileDropsDeadSidecarEntry(t *testing.T) {
