@@ -385,6 +385,13 @@
       border-left: 2px solid var(--muted);
     }
     #sessions li .peek-body.muted { font-style: italic; color: var(--muted); }
+    #sessions li .peek-reply { display: flex; gap: 0.35em; margin-top: 0.35em; width: 100%; }
+    #sessions li .peek-reply input { flex: 1 1 auto; min-width: 0; font-size: 0.85em; }
+    #sessions li .peek-reply button { flex: 0 0 auto; }
+    #sessions li .peek-why { display: block; font-size: 0.8em; margin-top: 0.25em; color: var(--muted); }
+    /* The opt-in is a checkbox with a real label: this control grants a session the
+       ability to be driven from the sidebar, so it must never be a bare glyph. */
+    #sessions li .peek-optin { display: flex; align-items: center; gap: 0.35em; margin-top: 0.35em; font-size: 0.8em; }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }

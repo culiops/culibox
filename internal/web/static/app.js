@@ -254,6 +254,14 @@ let openPeekId = null;
 // flight, flashing in the reader's face. Cleared on collapse so opening a
 // different session never shows a stale row's text.
 let lastPeek = null;
+// replyDraft holds the in-progress reply text ({ id, text }) across a poll
+// re-render. togglePeek is re-invoked every few seconds to keep an open peek
+// expanded (see lastPeek above), and each invocation rebuilds the row's DOM
+// from scratch — including the reply <input>. Without this cache, a poll
+// landing mid-sentence would wipe whatever the operator was typing and steal
+// focus out from under them, which makes a one-line reply box unusable in
+// practice since composing a reply routinely outlasts one poll interval.
+let replyDraft = null;
 
 // togglePeek expands or collapses the full peek under a session row. The fetch
 // happens on expand only — the listing carries just the one-line summary.
@@ -263,6 +271,7 @@ async function togglePeek(li, s) {
     existing.remove();
     openPeekId = null;
     lastPeek = null;
+    replyDraft = null; // collapsing must not let a later session inherit this draft
     return;
   }
   openPeekId = s.id;
@@ -291,6 +300,116 @@ async function togglePeek(li, s) {
   body.classList.toggle("muted", st.kind !== "text");
   li.dataset.peekPending = payload && payload.pending ? "1" : "";
   lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: !!(payload && payload.pending) };
+
+  // Opt-in toggle. Named in full, never a glyph: this grants a session the
+  // ability to be driven from the sidebar without opening it.
+  const optin = document.createElement("label");
+  optin.className = "peek-optin";
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = !!s.replyable;
+  const optinText = document.createElement("span");
+  optinText.textContent = "Allow replies from here";
+  optin.append(cb, optinText);
+  li.appendChild(optin);
+
+  const form = document.createElement("div");
+  form.className = "peek-reply";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.placeholder = "Reply (one line)";
+  const send = document.createElement("button");
+  send.textContent = "Send";
+  form.append(input, send);
+  const why = document.createElement("span");
+  why.className = "peek-why";
+  li.append(form, why);
+
+  // Restore an in-progress draft (and focus/caret) across the poll re-render
+  // that just rebuilt this input from scratch. See replyDraft's declaration.
+  const hadFocus = replyDraft && replyDraft.id === s.id && replyDraft.focused;
+  let caretStart = 0, caretEnd = 0;
+  if (replyDraft && replyDraft.id === s.id) {
+    input.value = replyDraft.text;
+    caretStart = replyDraft.selStart;
+    caretEnd = replyDraft.selEnd;
+  }
+  input.oninput = () => {
+    replyDraft = {
+      id: s.id,
+      text: input.value,
+      focused: document.activeElement === input,
+      selStart: input.selectionStart,
+      selEnd: input.selectionEnd,
+    };
+  };
+  if (hadFocus) {
+    input.focus();
+    try { input.setSelectionRange(caretStart, caretEnd); } catch (_) { /* ignore */ }
+  }
+
+  const refresh = () => {
+    const st2 = sendState({
+      replyable: cb.checked,
+      activity: s.activity,
+      pending: li.dataset.peekPending === "1",
+    });
+    send.disabled = !st2.enabled;
+    why.textContent = st2.reason;
+  };
+  refresh();
+
+  cb.onchange = async () => {
+    const want = cb.checked;
+    try {
+      const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ replyable: want }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      s.replyable = want;
+    } catch (_) {
+      cb.checked = !want; // the server is the truth; put the box back
+      showToast("Could not change the reply setting", { error: true });
+    }
+    refresh();
+  };
+
+  send.onclick = async () => {
+    const err = replyTextError(input.value);
+    if (err) {
+      why.textContent = err === "empty" ? "Type something first."
+        : err === "newline" ? "One line only — newlines are not sent."
+        : "That text contains control characters and was not sent.";
+      return;
+    }
+    send.disabled = true;
+    try {
+      const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: input.value }),
+      });
+      if (res.status === 204) {
+        input.value = "";
+        if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
+        showToast("Sent");
+        return;
+      }
+      // Distinct statuses carry distinct meanings — say which one happened.
+      why.textContent =
+        res.status === 403 ? "Replies are not enabled for this session." :
+        res.status === 409 ? "Session is not ready for a message right now." :
+        res.status === 410 ? "That session is gone." :
+        res.status === 400 ? "That text was rejected." :
+        "Send failed (" + res.status + ").";
+    } catch (_) {
+      why.textContent = "Send failed: no connection.";
+    } finally {
+      refresh();
+    }
+  };
 }
 
 function renderSession(s) {
