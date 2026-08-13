@@ -357,6 +357,34 @@
     .act-done, .act-detached, .act-unknown { background: var(--muted); }
     /* Slightly smaller on a tab than in the sidebar, matching the denser strip. */
     .cell-bar .act-dot { flex: none; width: 8px; height: 8px; }
+    /* Session summary: a second line under the row's name. Muted and clipped to a
+       single line — at the real 279px sidebar width a wrapping summary pushes the
+       list into a scroll on every poll. */
+    #sessions li .summary {
+      display: block;
+      width: 100%;
+      font-size: 0.85em;
+      color: var(--fg-muted, #888);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      cursor: pointer;
+    }
+    /* The expander is a real button, not a hover affordance: a hover-only control
+       is invisible and unreachable on touch. */
+    #sessions li .peek-body {
+      display: block;
+      width: 100%;
+      max-height: 12em;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.85em;
+      margin-top: 0.25em;
+      padding: 0.35em 0.5em;
+      border-left: 2px solid var(--fg-muted, #888);
+    }
+    #sessions li .peek-body.muted { font-style: italic; color: var(--fg-muted, #888); }
     #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
@@ -1223,6 +1251,7 @@
   <script src="/links.js"></script>
   <script src="/tier.js"></script>
   <script src="/activity.js"></script>
+  <script src="/peek.js"></script>
   <script src="/usage.js"></script>
   <script src="/attribution.js"></script>
   <script src="/analytics.js"></script>

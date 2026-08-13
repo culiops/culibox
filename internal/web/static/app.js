@@ -244,6 +244,55 @@ function asBadge(el, { variant, color, text } = {}) {
   return el;
 }
 
+// openPeekId is the one expanded row. One at a time: the sidebar is 279px wide
+// and several open bodies turn the session list into a scroll.
+let openPeekId = null;
+// lastPeek caches the most recently fetched peek ({ id, text, pending }). The
+// sidebar re-renders the whole list on every poll and re-invokes togglePeek to
+// keep an open row expanded (Step 4 below); without a cache that re-invocation
+// would blank the body to "Loading…" every few seconds while the fetch is in
+// flight, flashing in the reader's face. Cleared on collapse so opening a
+// different session never shows a stale row's text.
+let lastPeek = null;
+
+// togglePeek expands or collapses the full peek under a session row. The fetch
+// happens on expand only — the listing carries just the one-line summary.
+async function togglePeek(li, s) {
+  const existing = li.querySelector(".peek-body");
+  if (existing) {
+    existing.remove();
+    openPeekId = null;
+    lastPeek = null;
+    return;
+  }
+  openPeekId = s.id;
+  const body = document.createElement("div");
+  body.className = "peek-body muted";
+  if (lastPeek && lastPeek.id === s.id) {
+    body.textContent = lastPeek.text;
+    body.classList.toggle("muted", lastPeek.muted);
+    li.dataset.peekPending = lastPeek.pending ? "1" : "";
+  } else {
+    body.textContent = "Loading…";
+  }
+  li.appendChild(body);
+  let status = 0;
+  let payload = null;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/peek");
+    status = res.status;
+    if (status === 200) payload = await res.json();
+  } catch (_) {
+    status = 0;
+  }
+  if (!li.isConnected || openPeekId !== s.id) return; // a poll re-rendered the row
+  const st = peekState(s.agent, status, payload);
+  body.textContent = st.text;
+  body.classList.toggle("muted", st.kind !== "text");
+  li.dataset.peekPending = payload && payload.pending ? "1" : "";
+  lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: !!(payload && payload.pending) };
+}
+
 function renderSession(s) {
   const li = document.createElement("li");
   if (terminalOpen(s.id)) li.classList.add("open");
@@ -335,6 +384,23 @@ function renderSession(s) {
   // it is not double-prompted. See confirmKill.
   kill.onclick = (ev) => { ev.stopPropagation(); confirmKill(s.id, s.name || s.id); };
   li.appendChild(kill);
+  // Summary line: what this agent last said. Server-truncated to one line
+  // (Info.summary); clicking it expands the full text in place.
+  if (s.summary) {
+    const sum = document.createElement("span");
+    sum.className = "summary";
+    sum.textContent = s.summary;
+    sum.title = "Show the full message";
+    sum.setAttribute("role", "button");
+    sum.setAttribute("tabindex", "0");
+    const toggle = (e) => { e.stopPropagation(); togglePeek(li, s); };
+    sum.onclick = toggle;
+    sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") toggle(e); };
+    li.appendChild(sum);
+  }
+  // The list re-renders on every poll. Without this, an open peek collapses
+  // under the reader every few seconds.
+  if (openPeekId === s.id) togglePeek(li, s);
   return li;
 }
 // editing guards the inline rename: while true, the background poll must NOT
