@@ -507,6 +507,12 @@ type Manager struct {
 	bundles   Bundles // nil = boxed sessions run without user config
 	home      string  // daemon user's home; where a host session's ~/.claude lives
 	stateDir  string  // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+
+	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
+	// called from List after m.mu is released, and sharing the mutex would make
+	// that ordering fragile.
+	peekMu    sync.Mutex
+	peekCache map[string]peekEntry
 }
 
 // SetPaths records where transcripts live: the daemon home (host-tier sessions)

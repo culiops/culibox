@@ -2,7 +2,10 @@ package session
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Peek is a per-session snapshot of what the agent last said, read from the
@@ -110,4 +113,84 @@ func summaryLine(text string) string {
 		return string(r[:summaryMax-1]) + "…"
 	}
 	return ""
+}
+
+// peekEntry is one cached parse, valid while the transcript's mtime is unchanged.
+type peekEntry struct {
+	mtime time.Time
+	peek  Peek
+}
+
+// peekCached returns the cached parse when it still matches mtime.
+func (m *Manager) peekCached(id string, mtime time.Time) (Peek, bool) {
+	m.peekMu.Lock()
+	defer m.peekMu.Unlock()
+	e, ok := m.peekCache[id]
+	if !ok || !e.mtime.Equal(mtime) {
+		return Peek{}, false
+	}
+	return e.peek, true
+}
+
+func (m *Manager) peekStore(id string, mtime time.Time, p Peek) {
+	m.peekMu.Lock()
+	defer m.peekMu.Unlock()
+	if m.peekCache == nil {
+		m.peekCache = map[string]peekEntry{}
+	}
+	m.peekCache[id] = peekEntry{mtime: mtime, peek: p}
+}
+
+// PeekFor reads the latest transcript peek for a claude session. ok=false for a
+// non-claude session, one whose transcript cannot be located or read, or one
+// whose tail holds no parseable record.
+//
+// The sidebar polls this for every session, so the hot path is one os.Stat: the
+// tail is re-read only when mtime moved. A waiting session's transcript is
+// static, so the sessions whose summaries anyone reads are served from cache.
+//
+// Locking mirrors UsageFor: capture Bin/Cwd/Box/Created in one critical section
+// (Bin is backfilled post-reconcile by ResolveBins, so a lock-free read races),
+// then work without the lock.
+func (m *Manager) PeekFor(id string) (Peek, bool) {
+	m.mu.Lock()
+	s := m.sessions[id]
+	home, stateDir := m.home, m.stateDir
+	var bin, cwd, box string
+	var created time.Time
+	if s != nil {
+		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
+	}
+	m.mu.Unlock()
+	if s == nil || !isClaudeBin(bin) {
+		return Peek{}, false
+	}
+	base := home
+	if box != "" && stateDir != "" {
+		base = filepath.Join(stateDir, "boxstate", box)
+	}
+	if base == "" {
+		return Peek{}, false
+	}
+	path, ok := transcriptPath(cwd, base, created)
+	if !ok {
+		return Peek{}, false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return Peek{}, false
+	}
+	if p, ok := m.peekCached(id, fi.ModTime()); ok {
+		return p, true
+	}
+	b, err := readUsageTail(path)
+	if err != nil {
+		return Peek{}, false
+	}
+	p, ok := parsePeekTail(b)
+	if !ok {
+		return Peek{}, false
+	}
+	m.peekStore(id, fi.ModTime(), p)
+	return p, true
 }

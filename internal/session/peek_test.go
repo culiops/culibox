@@ -1,6 +1,11 @@
 package session
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
 
 func TestParsePeekTailFindsLastAssistantText(t *testing.T) {
 	tail := `{"message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]}}
@@ -109,5 +114,86 @@ func TestSummaryLineTruncatesByRune(t *testing.T) {
 	got := summaryLine(in)
 	if r := []rune(got); len(r) != summaryMax {
 		t.Errorf("len=%d runes want %d (%q)", len(r), summaryMax, got)
+	}
+}
+
+// newPeekTestManager builds a Manager with one claude session whose transcript
+// lives under home/.claude/projects/<slug>/. Returns the transcript path.
+func newPeekTestManager(t *testing.T, cwd, body string) (*Manager, string) {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".claude", "projects", projectSlug(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{
+		home:     home,
+		sessions: map[string]*Session{},
+	}
+	m.sessions["s1"] = &Session{
+		ID: "s1", Agent: "claude", Cwd: cwd, Bin: "/usr/local/bin/claude",
+		Created: time.Now().Add(-time.Hour),
+	}
+	return m, p
+}
+
+func TestPeekForReadsTranscript(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+	p, ok := m.PeekFor("s1")
+	if !ok || p.Text != "done" {
+		t.Fatalf("PeekFor = %+v, %v; want text %q, true", p, ok, "done")
+	}
+}
+
+func TestPeekForRejectsNonClaudeBin(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+	m.sessions["s1"].Bin = "/usr/local/bin/codex"
+	if _, ok := m.PeekFor("s1"); ok {
+		t.Error("ok=true for a non-claude bin, want false")
+	}
+}
+
+func TestPeekForUnknownSession(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	if _, ok := m.PeekFor("nope"); ok {
+		t.Error("ok=true for an unknown id, want false")
+	}
+}
+
+func TestPeekForCachesUntilMtimeChanges(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"first"}]}}` + "\n"
+	m, path := newPeekTestManager(t, "/tmp/proj", body)
+	if p, _ := m.PeekFor("s1"); p.Text != "first" {
+		t.Fatalf("Text=%q want %q", p.Text, "first")
+	}
+	// Rewrite the content but pin the OLD mtime: a cache keyed on mtime must
+	// still serve the first read.
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := `{"message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := m.PeekFor("s1"); p.Text != "first" {
+		t.Errorf("Text=%q want cached %q", p.Text, "first")
+	}
+	// Now advance mtime: the cache must miss and re-read.
+	later := fi.ModTime().Add(2 * time.Second)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := m.PeekFor("s1"); p.Text != "second" {
+		t.Errorf("Text=%q want re-read %q", p.Text, "second")
 	}
 }
