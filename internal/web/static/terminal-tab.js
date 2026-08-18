@@ -29,6 +29,111 @@ function hasSize(w, h) {
   return w > 0 && h > 0;
 }
 
+// TOUCH_SLOP_PX is how far a finger has to travel before the gesture counts as a
+// scroll rather than a tap. Under it the touch belongs to the browser: a tap is
+// what focuses the terminal and raises the on-screen keyboard.
+const TOUCH_SLOP_PX = 8;
+
+// cellHeightOf turns a screen box and its row count into the height of one line.
+// 0 means "unmeasurable" — a terminal that has not been rendered yet.
+function cellHeightOf(screenPx, rows) {
+  if (!(screenPx > 0) || !(rows > 0)) return 0;
+  return screenPx / rows;
+}
+
+// measureCellHeight reads that line height off the DOM instead of xterm's private
+// render service: .xterm-screen is exactly `rows` lines tall by construction, and
+// unlike term._core it is not going to move in a version bump.
+function measureCellHeight(term) {
+  const root = term && term.element;
+  const screen = root && root.querySelector ? root.querySelector(".xterm-screen") : null;
+  return cellHeightOf(screen ? screen.clientHeight : 0, term ? term.rows : 0);
+}
+
+// touchScrollStep converts the distance a finger has dragged (px, positive =
+// downward) into whole lines for term.scrollLines, plus the sub-line remainder to
+// carry into the next move — without that carry a slow drag rounds to zero
+// forever and the terminal never moves. Dragging DOWN drags the content down,
+// i.e. back through history, which is scrollLines' negative direction.
+function touchScrollStep(dragPx, cellHeight) {
+  if (!(cellHeight > 0)) return { lines: 0, rest: dragPx };
+  const lines = Math.trunc(dragPx / cellHeight);
+  return { lines: -lines, rest: dragPx - lines * cellHeight };
+}
+
+// installTouchScroll gives the terminal the one gesture a phone has and xterm
+// does not: drag to scroll.
+//
+// xterm.js registers no touch handler at all, and there is no scrollable box for
+// the browser to scroll on its own — its scroller (.xterm-scrollable-element) is
+// synthetic, so the element under a finger in the middle of the terminal
+// (.xterm-link-layer, MEASURED on a live session) has NO scrollable ancestor: not
+// .xterm, not .pane-term, not the cell. The mouse wheel works only because xterm
+// listens for `wheel` and scrolls the buffer itself. This is the same thing for a
+// finger, and the reason the terminal was frozen on mobile while the sidebar and
+// the file tree — ordinary overflow:auto boxes — scrolled fine.
+//
+// Deliberately NOT done here: translating the drag into arrow keys when the
+// buffer has no scrollback (an alt-screen app like vim or less). The wheel does
+// that, and it is how `^[[B` ended up typed into a terraform prompt — see the
+// preambleTrimmer work. A gesture that types into the agent is worse than one
+// that does nothing.
+function installTouchScroll(term, el, opts) {
+  if (!el || typeof el.addEventListener !== "function") return () => {};
+  const measure = (opts && opts.cellHeight) || (() => measureCellHeight(term));
+  let tracking = false;  // a single finger is down and this gesture is a candidate
+  let scrolling = false; // it has passed the slop, so the gesture is ours
+  let startY = 0, lastY = 0, carry = 0;
+  let cell = 0;          // line height, measured once per gesture (see onMove)
+
+  const onStart = (e) => {
+    const t = e.touches;
+    if (!t || t.length !== 1) { tracking = false; return; }
+    tracking = true;
+    scrolling = false;
+    carry = 0;
+    cell = 0;
+    startY = lastY = t[0].clientY;
+  };
+  const onMove = (e) => {
+    if (!tracking) return;
+    const t = e.touches;
+    // A second finger means a pinch: hand the whole gesture back rather than
+    // fighting the browser's zoom for it.
+    if (!t || t.length !== 1) { tracking = false; return; }
+    const y = t[0].clientY;
+    carry += y - lastY;
+    lastY = y;
+    // Measured from the touchstart point, not from the last event: a slow drag
+    // arrives as many sub-slop moves and would otherwise never start.
+    if (!scrolling && Math.abs(y - startY) < TOUCH_SLOP_PX) return;
+    scrolling = true;
+    // Once per gesture: clientHeight forces a layout flush and touchmove fires at
+    // frame rate. A pane cannot be resized mid-drag, so one measurement holds.
+    if (!cell) cell = measure();
+    // Nothing can be scrolled without a line height, so swallowing the gesture
+    // would only break the page's own behaviour for no gain.
+    if (!(cell > 0)) return;
+    const step = touchScrollStep(carry, cell);
+    carry = step.rest;
+    if (step.lines) term.scrollLines(step.lines);
+    if (e.cancelable !== false) e.preventDefault();
+  };
+  const onEnd = () => { tracking = false; scrolling = false; };
+
+  el.addEventListener("touchstart", onStart, { passive: true });
+  // passive:false, or preventDefault is ignored and the page keeps the gesture.
+  el.addEventListener("touchmove", onMove, { passive: false });
+  el.addEventListener("touchend", onEnd, { passive: true });
+  el.addEventListener("touchcancel", onEnd, { passive: true });
+  return () => {
+    el.removeEventListener("touchstart", onStart);
+    el.removeEventListener("touchmove", onMove);
+    el.removeEventListener("touchend", onEnd);
+    el.removeEventListener("touchcancel", onEnd);
+  };
+}
+
 // TerminalTab is one agent session as a tab body: an xterm.js terminal bound to
 // /ws/{id}, with self-healing reconnect and copy-on-select / clean-paste. The
 // terminal + WebSocket + reconnect logic is unchanged from the original Pane;
@@ -113,6 +218,7 @@ class TerminalTab {
     this.term.loadAddon(this.fitAddon);
     this.term.open(termEl);
     try { this.term.loadAddon(new WebglAddon.WebglAddon()); } catch (_) {}
+    this.disposeTouchScroll = installTouchScroll(this.term, termEl);
     this._fitRaf = 0;
     this.fit(); // best-effort now; skipped by the guard until the element is sized
     // Re-fit once the block-display font has loaded — cell metrics can shift.
@@ -433,6 +539,7 @@ class TerminalTab {
     if (this._fitRaf) { try { cancelAnimationFrame(this._fitRaf); } catch (_) {} this._fitRaf = 0; }
     this.hideTrouble();
     try { this.ws && this.ws.close(); } catch (_) {}
+    if (this.disposeTouchScroll) { try { this.disposeTouchScroll(); } catch (_) {} }
     try { this.term.dispose(); } catch (_) {}
   }
 }
@@ -467,5 +574,5 @@ async function openTerminalUrl(raw, opts) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport, hasSize };
+  module.exports = { isBrokenMouseReport, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll };
 }
