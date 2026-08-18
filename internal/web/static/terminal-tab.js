@@ -61,6 +61,45 @@ function touchScrollStep(dragPx, cellHeight) {
   return { lines: -lines, rest: dragPx - lines * cellHeight };
 }
 
+// WHEEL_NOTCH_PX is one wheel detent. xterm's mouse path reports one wheel event
+// as one button-64/65 report regardless of the delta, so the magnitude only has
+// to look like a real notch.
+const WHEEL_NOTCH_PX = 120;
+// MAX_WHEEL_NOTCHES caps what a single move can put on the wire: one touchmove
+// reporting a huge jump (a fling, or events the browser coalesced) must not turn
+// into a hundred escape sequences at once.
+const MAX_WHEEL_NOTCHES = 20;
+
+// appOwnsMouse reports whether the running program asked for mouse reporting.
+// MEASURED on a live claude session: modes.mouseTrackingMode === "any", the
+// buffer is "alternate" and buffer.length === rows — there is no scrollback for
+// scrollLines to move. The wheel appears to work only because xterm forwards it
+// to the app, which scrolls itself.
+function appOwnsMouse(term) {
+  const m = term && term.modes && term.modes.mouseTrackingMode;
+  return !!m && m !== "none";
+}
+
+// emitWheel hands the app the same wheel it would get from a mouse: a synthetic
+// `wheel` event on the screen element, one per line, which xterm then encodes.
+//
+// Synthesising the escape sequence here instead would mean reimplementing which
+// encoding is active (SGR / X10 / URXVT), the button codes and the cell
+// coordinates — the exact surface that produced the NaN mouse report this file
+// already has to filter. Let xterm own it.
+function emitWheel(term, lines, x, y) {
+  const root = term && term.element;
+  const screen = root && root.querySelector ? root.querySelector(".xterm-screen") : null;
+  if (!screen || typeof WheelEvent !== "function") return;
+  const deltaY = lines < 0 ? -WHEEL_NOTCH_PX : WHEEL_NOTCH_PX;
+  const n = Math.min(Math.abs(lines), MAX_WHEEL_NOTCHES);
+  for (let i = 0; i < n; i++) {
+    screen.dispatchEvent(new WheelEvent("wheel", {
+      deltaY, deltaMode: 0, clientX: x, clientY: y, bubbles: true, cancelable: true,
+    }));
+  }
+}
+
 // installTouchScroll gives the terminal the one gesture a phone has and xterm
 // does not: drag to scroll.
 //
@@ -73,14 +112,21 @@ function touchScrollStep(dragPx, cellHeight) {
 // finger, and the reason the terminal was frozen on mobile while the sidebar and
 // the file tree — ordinary overflow:auto boxes — scrolled fine.
 //
-// Deliberately NOT done here: translating the drag into arrow keys when the
-// buffer has no scrollback (an alt-screen app like vim or less). The wheel does
+// Where the drag goes depends on who owns the screen. A shell scrolls xterm's
+// own buffer. An agent TUI (claude) runs in the alternate buffer with mouse
+// tracking on and no scrollback at all, and scrolls ITSELF in response to wheel
+// reports — so the drag has to become wheel notches or nothing happens, which is
+// exactly how this fix first shipped half-working.
+//
+// Deliberately NOT done here: translating the drag into arrow keys for an
+// alt-screen app that did NOT ask for the mouse (vim, less). The wheel does
 // that, and it is how `^[[B` ended up typed into a terraform prompt — see the
 // preambleTrimmer work. A gesture that types into the agent is worse than one
 // that does nothing.
 function installTouchScroll(term, el, opts) {
   if (!el || typeof el.addEventListener !== "function") return () => {};
   const measure = (opts && opts.cellHeight) || (() => measureCellHeight(term));
+  const wheel = (opts && opts.wheel) || ((lines, x, y) => emitWheel(term, lines, x, y));
   let tracking = false;  // a single finger is down and this gesture is a candidate
   let scrolling = false; // it has passed the slop, so the gesture is ours
   let startY = 0, lastY = 0, carry = 0;
@@ -116,7 +162,10 @@ function installTouchScroll(term, el, opts) {
     if (!(cell > 0)) return;
     const step = touchScrollStep(carry, cell);
     carry = step.rest;
-    if (step.lines) term.scrollLines(step.lines);
+    if (step.lines) {
+      if (appOwnsMouse(term)) wheel(step.lines, t[0].clientX, y);
+      else term.scrollLines(step.lines);
+    }
     if (e.cancelable !== false) e.preventDefault();
   };
   const onEnd = () => { tracking = false; scrolling = false; };
@@ -574,5 +623,5 @@ async function openTerminalUrl(raw, opts) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll };
+  module.exports = { isBrokenMouseReport, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel };
 }

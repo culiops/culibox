@@ -50,7 +50,7 @@ test("hasSize is false when either dimension is zero or negative", () => {
 // the middle of the terminal is .xterm-link-layer and NOTHING in its ancestor
 // chain is a scrollable box. So a drag has nothing to scroll and the terminal is
 // frozen on a phone. These cover the gesture that replaces it.
-const { cellHeightOf, touchScrollStep, installTouchScroll } =
+const { cellHeightOf, touchScrollStep, installTouchScroll, emitWheel } =
   require("../static/terminal-tab.js");
 
 function fakeEl() {
@@ -184,4 +184,65 @@ test("the line height is measured once per gesture, not on every move", () => {
   assert.strictEqual(calls, 1);
   drag(el, [300, 240]);
   assert.strictEqual(calls, 2, "a new gesture measures again — the pane may have been resized");
+});
+
+// --- apps that own the mouse ----------------------------------------------
+// MEASURED on a live claude session: buffer.type === "alternate", length ===
+// rows (zero scrollback), modes.mouseTrackingMode === "any". scrollLines() has
+// nothing to scroll there. The wheel works because xterm turns it into
+// ESC[<64;x;yM and the APP scrolls itself — verified: 6 notches moved claude's
+// transcript from line 172 to 165. A finger has to do the same.
+function trackingTerm() {
+  const t = fakeTerm();
+  t.modes = { mouseTrackingMode: "any" };
+  return t;
+}
+
+test("a mouse-tracking app is sent wheel notches instead of a buffer scroll", () => {
+  const el = fakeEl(), term = trackingTerm(), wheels = [];
+  installTouchScroll(term, el, { cellHeight: () => 17, wheel: (lines) => wheels.push(lines) });
+  drag(el, [300, 360]); // 60px down = 3 lines back
+  assert.deepEqual(wheels, [-3]);
+  assert.deepEqual(term.scrolled, [], "the alternate buffer has nothing to scroll");
+});
+
+test("a terminal whose app ignores the mouse still scrolls its own buffer", () => {
+  const el = fakeEl(), term = fakeTerm(), wheels = [];
+  term.modes = { mouseTrackingMode: "none" };
+  installTouchScroll(term, el, { cellHeight: () => 17, wheel: (lines) => wheels.push(lines) });
+  drag(el, [300, 360]);
+  assert.deepEqual(term.scrolled, [-3]);
+  assert.deepEqual(wheels, []);
+});
+
+test("wheel notches carry the drag direction", () => {
+  const el = fakeEl(), term = trackingTerm(), wheels = [];
+  installTouchScroll(term, el, { cellHeight: () => 17, wheel: (lines) => wheels.push(lines) });
+  drag(el, [300, 240]); // dragging up = forward
+  assert.deepEqual(wheels, [3]);
+});
+
+// node has no WheelEvent; emitWheel builds real ones in the browser. The shim
+// only has to carry deltaY — what is under test is the count and the direction.
+if (typeof globalThis.WheelEvent !== "function") {
+  globalThis.WheelEvent = class WheelEvent { constructor(type, init) { Object.assign(this, { type }, init); } };
+}
+
+test("emitWheel sends one notch per line, in the drag's direction", () => {
+  const sent = [];
+  const term = { element: { querySelector: () => ({ dispatchEvent: (e) => sent.push(e.deltaY) }) } };
+  emitWheel(term, -3, 10, 20);
+  assert.deepEqual(sent, [-120, -120, -120]);
+  sent.length = 0;
+  emitWheel(term, 2, 10, 20);
+  assert.deepEqual(sent, [120, 120]);
+});
+
+// A single touchmove reporting a huge jump (a fling, or a coalesced event) must
+// not turn into a hundred escape sequences on the wire at once.
+test("emitWheel caps the notches one move can produce", () => {
+  const sent = [];
+  const term = { element: { querySelector: () => ({ dispatchEvent: (e) => sent.push(e.deltaY) }) } };
+  emitWheel(term, -500, 0, 0);
+  assert.strictEqual(sent.length, 20);
 });

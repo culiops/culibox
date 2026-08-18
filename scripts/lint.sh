@@ -51,7 +51,7 @@ const names = [
   "fetch", "WebSocket", "XMLHttpRequest", "FormData", "Headers", "Request", "Response",
   "Blob", "File", "FileReader", "URL", "URLSearchParams", "AbortController", "AbortSignal",
   "TextEncoder", "TextDecoder", "atob", "btoa", "structuredClone", "performance",
-  "Event", "CustomEvent", "KeyboardEvent", "MouseEvent", "DragEvent", "DataTransfer",
+  "Event", "CustomEvent", "KeyboardEvent", "MouseEvent", "WheelEvent", "DragEvent", "DataTransfer",
   "HTMLElement", "Element", "Node", "NodeList", "Image", "DOMParser",
   "ResizeObserver", "MutationObserver", "IntersectionObserver",
   // alert/confirm/prompt are deliberately absent: the page uses its own dialogs
