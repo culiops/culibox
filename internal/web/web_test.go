@@ -126,13 +126,38 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		return rec
 	}
-	for _, p := range []string{"/", "/app.js", "/links.js"} {
+	for _, p := range []string{"/", "/app.js", "/links.js", "/app.css"} {
 		if cc := get(p).Header().Get("Cache-Control"); cc != "no-cache" {
 			t.Fatalf("%s Cache-Control=%q, want no-cache", p, cc)
 		}
 	}
 	if cc := get("/xterm/xterm.js").Header().Get("Cache-Control"); cc == "no-cache" {
 		t.Fatal("/xterm/xterm.js should stay cacheable, got no-cache")
+	}
+}
+
+// TestSharedStylesheetsArePublic: login.html is served unauthenticated, so the
+// stylesheets it links must be reachable unauthenticated too — otherwise
+// authGuard answers the <link> with a redirect and the page renders unstyled.
+// Only tokens.css and primitives.css are exposed: a colour palette, which the
+// login page's own appearance already reveals. app.css stays protected.
+func TestSharedStylesheetsArePublic(t *testing.T) {
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
+	h := s.Handler()
+
+	for _, p := range []string{"/tokens.css", "/primitives.css"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil)) // no cookie
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: got %d, want 200 — the login page cannot style itself", p, rec.Code)
+		}
+	}
+	// app.css is not part of the login page and must stay behind the guard.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/app.css", nil))
+	if rec.Code == http.StatusOK {
+		t.Fatal("/app.css served without a cookie; it should stay protected")
 	}
 }
 

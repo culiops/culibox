@@ -142,11 +142,12 @@ func (s *Server) Handler() http.Handler {
 	sub, _ := fs.Sub(staticFS, "static")
 	fileServer := http.FileServer(http.FS(sub))
 	protected.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// App HTML/JS change on every rebuild → force revalidation, otherwise
-		// browsers serve stale JS/HTML until a manual hard-refresh. The vendored
+		// App HTML/CSS/JS change on every rebuild → force revalidation, otherwise
+		// browsers serve stale assets until a manual hard-refresh. The vendored
 		// /xterm/* and /vendor/* bundles are immutable and stay cacheable.
 		pth := r.URL.Path
-		if pth == "/" || (strings.HasSuffix(pth, ".js") &&
+		app := strings.HasSuffix(pth, ".js") || strings.HasSuffix(pth, ".css")
+		if pth == "/" || (app &&
 			!strings.HasPrefix(pth, "/xterm/") && !strings.HasPrefix(pth, "/vendor/")) {
 			w.Header().Set("Cache-Control", "no-cache")
 		}
@@ -163,6 +164,16 @@ func (s *Server) Handler() http.Handler {
 		}
 		s.handleLogin(w, r)
 	})
+	// The login page is public, so the stylesheets it links must be too, or the
+	// <link> is answered by authGuard's redirect and the page renders unstyled.
+	// Only tokens.css and primitives.css are exposed: a colour palette, which the
+	// login page's own appearance already reveals. app.css stays protected.
+	for _, name := range []string{"tokens.css", "primitives.css"} {
+		root.HandleFunc("/"+name, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache")
+			http.ServeFileFS(w, r, staticFS, "static/"+name)
+		})
+	}
 	root.Handle("/ws/", s.authGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.Terminal.ServeHTTP(w, r)
 	})))
