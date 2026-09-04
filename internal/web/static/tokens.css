@@ -59,7 +59,7 @@
 
       --fs-code: 12.5px; --fs-md: 14px; --fs-tree: 12px;
       --sidebar-split: 45%;
-      --sidebar-w: 280px;
+      --sidebar-w: 322px;
 
       /* DECISION: radius is 0 everywhere, with no current exemptions. The app
          shell already is; login.html and the analytics-v2 widgets were the

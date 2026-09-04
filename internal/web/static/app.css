@@ -164,14 +164,15 @@
       inherits: true;
       initial-value: 0px;
     }
-    /* Same geometry, reused for the three dialogs below (#spawn-modal,
-       #settings-modal, #ask-modal) — they carry box-="square" shear-="top"
-       too, and their legend (.dlg-title) is positioned exactly like
-       .pane-head. All five elements share the body's 14px/1.5 font, so 1lh
-       resolves identically, but the property is still declared per-element
-       (typed custom properties resolve in their own font context) rather
-       than assumed equal. */
-    #sessions-pane, #files-pane, #spawn-modal, #settings-modal, #ask-modal, #attr-modal, #analytics-modal {
+    /* Same geometry, now serving only the five dialogs below (#spawn-modal,
+       #settings-modal, #ask-modal, #attr-modal, #analytics-modal) — they
+       carry box-="square" shear-="top", and their legend (.dlg-title) is
+       positioned exactly like .pane-head. All five share the body's 14px/1.5
+       font, so 1lh resolves identically, but the property is still declared
+       per-element (typed custom properties resolve in their own font
+       context) rather than assumed equal. The sidebar panes used to be in
+       this list too; they left it once they stopped being shear-boxes. */
+    #spawn-modal, #settings-modal, #ask-modal, #attr-modal, #analytics-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -858,7 +859,6 @@
       /* The upload button is the ONLY upload route on a phone (no drag exists),
          so it cannot stay an 18px-tall desktop button sitting in a header. */
       #ft-upload, #ft-refresh, #ft-newdir { min-height: 30px; min-width: 38px; font-size: 15px; }
-      #files-pane .pane-head { padding-top: 4px; padding-bottom: 4px; }
       /* Also size the row's actions button by viewport, not only by (hover: none):
          it is the row's only affordance, and an 11×12px target is not one. */
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }

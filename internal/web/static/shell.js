@@ -254,8 +254,9 @@ function initWidthSplitter() {
   });
 
   // Double-click restores the default, mirroring the horizontal handle's escape
-  // hatch from a drag that went wrong.
-  handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(280)); fitAll(); });
+  // hatch from a drag that went wrong. 322 mirrors tokens.css's --sidebar-w
+  // default; the two must move together.
+  handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(322)); fitAll(); });
 }
 
 // --- ask dialog --------------------------------------------------------------

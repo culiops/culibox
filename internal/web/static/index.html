@@ -43,13 +43,22 @@
           <button id="spawn-go" type="button">[ + new session ]</button>
         </div>
       </div>
-      <div id="sessions-pane" box-="square" shear-="top">
-        <div class="pane-head">sessions<span class="spacer" style="flex:1"></span><span class="count" id="sessions-count">0</span></div>
+      <div id="sessions-pane">
+        <div class="phd" id="sessions-phd">
+          <button class="cv" id="sessions-cv" type="button" aria-expanded="true" aria-controls="sessions" title="Collapse sessions">&#9662;</button>
+          <span>Sessions</span><span class="count" id="sessions-count">0</span>
+          <span class="grow"></span>
+          <span class="pip" id="sessions-pip" hidden><span class="dot waiting"></span><span id="sessions-pip-text"></span></span>
+        </div>
         <ul id="sessions"><li class="empty">Loading…</li></ul>
       </div>
       <div id="split-h" role="separator" aria-orientation="horizontal" title="Drag to resize"></div>
-      <div id="files-pane" box-="square" shear-="top">
-        <div class="pane-head">files<span class="spacer" style="flex:1"></span>
+      <div id="files-pane">
+        <div class="phd" id="files-phd">
+          <button class="cv" id="files-cv" type="button" aria-expanded="true" aria-controls="filetree" title="Collapse files">&#9662;</button>
+          <span>Files</span>
+          <span class="grow"></span>
+          <span class="path" id="files-path" hidden></span>
           <button id="ft-newdir" type="button" title="New folder in this folder" aria-label="New folder" class="nf">󰉗</button>
           <button id="ft-refresh" type="button" title="Re-read this folder (open folders collapse)" aria-label="Refresh file tree" class="nf"></button>
           <button id="ft-upload" type="button" title="Upload files into the current folder" aria-label="Upload files" class="nf"></button>
@@ -319,6 +328,7 @@
   <script src="/analytics.js"></script>
   <script src="/layout.js"></script>
   <script src="/treestate.js"></script>
+  <script src="/panes.js"></script>
   <script src="/terminal-tab.js"></script>
   <script src="/copyfile.js"></script>
   <script src="/viewer-tab.js"></script>
