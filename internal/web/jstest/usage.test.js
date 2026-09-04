@@ -69,6 +69,19 @@ test("meterModel clamps the bar width to 0..100", () => {
   const now = 1_700_000_000;
   assert.equal(meterModel("5h", { used_percentage: 140, resets_at: now }, now).width, "100%");
   assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now }, now).width, "0%");
+  // The LABEL is deliberately not clamped: an out-of-range percentage means the
+  // producer is wrong, and showing 100% would hide that. Only the bar is clamped,
+  // because a bar cannot be drawn wider than its track.
+  assert.equal(meterModel("5h", { used_percentage: 140, resets_at: now }, now).pct, 140);
+  assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now }, now).pct, -3);
+});
+
+test("meterModel words an expired reset as a state, not a duration", () => {
+  const now = 1_700_000_000;
+  assert.equal(meterModel("5h", { used_percentage: 40, resets_at: now - 60 }, now).reset, "resets now");
+  assert.equal(meterModel("5h", { used_percentage: 40, resets_at: now }, now).reset, "resets now");
+  // resets_at has no omitempty server-side, so a hook that omits it sends 0.
+  assert.equal(meterModel("5h", { used_percentage: 40, resets_at: 0 }, now).reset, "resets now");
 });
 
 // An absent window renders no meter at all, never a 0% bar that would read as

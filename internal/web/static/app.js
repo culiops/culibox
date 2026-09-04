@@ -160,7 +160,8 @@ function renderRateLimits(rl) {
     const m = meterModel(label, win, now);
     if (!m) continue;
     const el = document.createElement("div");
-    el.className = m.hot ? "mtr hot" : "mtr";
+    el.className = "mtr";
+    if (m.hot) el.classList.add("hot");
     const name = document.createElement("span");
     name.textContent = m.label;
     const bar = document.createElement("span");

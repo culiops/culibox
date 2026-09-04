@@ -73,6 +73,12 @@
        source order. Same specificity means the later rule (the mobile one)
        wins there, and this one wins everywhere above the breakpoint. */
     #limits { display: flex; align-items: center; gap: 14px; }
+    /* The meters cost ~376px of header that cannot shrink — the bar is flex:none
+       and the reset text does not wrap — so below this width the header can only
+       pay for them out of the app title, and further down it overflows and pushes
+       the settings button off-screen. Measured: the title is intact at 834px,
+       clipped at 800px, and the header overflows by 38px at 701px. */
+    @media (max-width: 900px) { #limits { display: none; } }
     .layouts { display: flex; gap: 4px; }
     .layouts button {
       background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
@@ -838,10 +844,9 @@
          carries meaning. Trading it buys the ~16px the full name needs. */
       header .dot { display: none; }
       header h1 { font-size: 14px; }
-      /* On touch the #hint keyboard shortcuts are noise, and with the account
-         5h/weekly fields added they made the status bar wrap to ~147px. Hide the
-         shortcut text on mobile so the status fields (env · sessions · cwd · 5h ·
-         week) stay a compact line; the bar is still dismissable via ×. */
+      /* On a device with no keyboard the #hint shortcut text is noise. Hide it
+         so the status fields (env · sessions · cwd) stay a compact line; the
+         bar is still dismissable via ×. */
       #hint-text { display: none; }
       #palette-open .pal-long { display: none; }
       #palette-open .pal-short { display: inline; font-size: 15px; }

@@ -69,12 +69,17 @@ function meterModel(label, win, nowSec) {
   if (!win || typeof win.used_percentage !== "number") return null;
   const raw = win.used_percentage;
   const clamped = Math.min(100, Math.max(0, raw));
+  // fmtCountdown returns the word "now" (not a duration) once the reset time has
+  // passed or is missing — resets_at has no omitempty server-side, and the
+  // snapshot file can also simply go stale for hours between statusLine writes.
+  // Appending " left" to that word would read as the nonsensical "now left".
+  const c = fmtCountdown(win.resets_at, nowSec);
   return {
     label: label,
     pct: Math.round(raw),
     width: clamped + "%",
     hot: raw > METER_HOT_PCT,
-    reset: fmtCountdown(win.resets_at, nowSec) + " left",
+    reset: c === "now" ? "resets now" : c + " left",
   };
 }
 
