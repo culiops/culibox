@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,11 +147,30 @@ func TestSharedStylesheetsArePublic(t *testing.T) {
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler()
 
+	// A per-file sentinel unique to that file's body, so this test also
+	// catches the two routes accidentally serving the same file (still 200).
+	sentinels := map[string]string{
+		"/tokens.css":     "--bg:",
+		"/primitives.css": ":focus-visible",
+	}
 	for _, p := range []string{"/tokens.css", "/primitives.css"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil)) // no cookie
 		if rec.Code != http.StatusOK {
 			t.Fatalf("%s: got %d, want 200 — the login page cannot style itself", p, rec.Code)
+		}
+		// A strict browser refuses to apply a stylesheet served with the
+		// wrong Content-Type, so a wrong MIME type breaks the login page
+		// just as much as a wrong status code would.
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
+			t.Fatalf("%s: Content-Type=%q, want text/css", p, ct)
+		}
+		if want := sentinels[p]; !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("%s: body missing %q — wrong file served", p, want)
+		}
+		// The palette must not cache indefinitely — see TestStaticNoCacheOnAppFiles.
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Fatalf("%s: Cache-Control=%q, want no-cache", p, cc)
 		}
 	}
 	// app.css is not part of the login page and must stay behind the guard.

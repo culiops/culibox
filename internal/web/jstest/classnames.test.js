@@ -105,7 +105,7 @@ function usedClasses() {
     for (const m of src.matchAll(/classList\.(?:toggle|contains)\(\s*["']([^"']+)["']/g)) {
       add(m[1]);
     }
-    // { cls: "act-working" } — a class handed back as a plain object property,
+    // { cls: "dot working" } — a class handed back as a plain object property,
     // consumed elsewhere as `act.cls` (activity.js:8-13, app.js:447, tabs.js:195)
     // or `d.cls` (analytics.js). `cls:` as a key appears in exactly these two
     // files under static/*.js, both genuine class-value maps.
