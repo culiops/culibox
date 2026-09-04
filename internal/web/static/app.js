@@ -491,23 +491,32 @@ async function togglePeek(li, s) {
   input.onfocus = () => { replyFocused = true; };
   input.onblur = () => { replyFocused = false; };
 
+  // sending latches for the duration of one send, and it feeds refresh()
+  // rather than setting send.disabled directly: refresh() writes the disabled
+  // flags from the gate every time it runs, so anything set behind its back
+  // is undone by the next call. It closes every control, not only send — the
+  // three quick replies are what an operator taps fast, and a double-tapped
+  // "2" answers two different questions on a numbered prompt. The server does
+  // not dedupe.
+  let sending = false;
   const refresh = () => {
     const st2 = sendState({
       replyable: cb.checked,
       activity: s.activity,
       pending: li.dataset.peekPending === "1",
     });
+    const closed = !st2.enabled || sending;
     // Three things move together, deliberately. The dimmed look says closed,
     // the caption says why, and the real disabled attribute makes it true —
     // a control that looks closed but still takes a keystroke is a control
     // whose caption lies, and a keyboard user is the one who finds out.
-    send.disabled = !st2.enabled;
-    input.disabled = !st2.enabled;
-    send.classList.toggle("off", !st2.enabled);
-    input.classList.toggle("off", !st2.enabled);
+    send.disabled = closed;
+    input.disabled = closed;
+    send.classList.toggle("off", closed);
+    input.classList.toggle("off", closed);
     for (const b of qk.querySelectorAll(".btn")) {
-      b.disabled = !st2.enabled;
-      b.classList.toggle("off", !st2.enabled);
+      b.disabled = closed;
+      b.classList.toggle("off", closed);
     }
     why.textContent = st2.reason;
   };
@@ -533,6 +542,7 @@ async function togglePeek(li, s) {
   // sendReply is shared by the composer's Send button and the three quick
   // replies: one send path, one error mapping, one refresh().
   async function sendReply(text) {
+    if (sending) return; // a second tap while the first is still in flight
     const err = replyTextError(text);
     if (err) {
       why.textContent = err === "empty" ? "Type something first."
@@ -540,7 +550,8 @@ async function togglePeek(li, s) {
         : "That text contains control characters and was not sent.";
       return;
     }
-    send.disabled = true;
+    sending = true;
+    refresh();
     try {
       const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
         method: "POST",
@@ -571,6 +582,7 @@ async function togglePeek(li, s) {
       why.textContent = msg;
       showToast(msg, { error: true });
     } finally {
+      sending = false;
       refresh();
     }
   }

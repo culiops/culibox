@@ -383,29 +383,60 @@ function buildReplyStrip(tab) {
   // attribute, the .off look, and the reason in the title. The pane has no
   // room for a caption line, so the title carries the reason — a closed
   // control with no reason anywhere is worse than a missing one.
+  //
+  // sending latches for the duration of one send, and paint folds it in. It has
+  // to go through paint rather than set send.disabled directly, because
+  // repaintReply() runs paint() from the 3s poll and paint writes the disabled
+  // flags UNCONDITIONALLY from the gate: a poll landing mid-send (activity is
+  // still "waiting", so the gate is still open) would re-enable the very
+  // controls the send had just closed. It closes every control, not only send —
+  // the three quick replies are the ones an operator taps fast, and a
+  // double-tapped "2" answers two different questions on a numbered prompt.
+  // The server does not dedupe.
+  let sending = false;
   const paint = () => {
     const s = lastSessions.find((x) => x.id === tab.id);
     const st = sendState(s ? { replyable: s.replyable, activity: s.activity, pending: knownPending } : null);
-    fld.disabled = !st.enabled;
-    send.disabled = !st.enabled;
-    fld.classList.toggle("off", !st.enabled);
-    send.classList.toggle("off", !st.enabled);
+    // st is the GATE's verdict and is what post() checks; `closed` is what the
+    // controls wear. They differ only while a send is in flight.
+    const closed = !st.enabled || sending;
+    fld.disabled = closed;
+    send.disabled = closed;
+    fld.classList.toggle("off", closed);
+    send.classList.toggle("off", closed);
     send.title = st.reason;
     for (const b of digitBtns) {
-      b.disabled = !st.enabled;
-      b.classList.toggle("off", !st.enabled);
+      b.disabled = closed;
+      b.classList.toggle("off", closed);
       b.title = st.enabled ? "Send " + b.textContent : st.reason;
     }
     return st;
   };
 
   // post is shared by the composer's Send button and the three quick replies:
-  // one send path, one error mapping, one gate — fails closed. It re-fetches
-  // /peek for the CURRENT pending flag and re-reads the CURRENT session
-  // record from lastSessions rather than trusting anything captured when the
-  // strip was built: lastSessions refreshes every 3s, and a value from build
-  // time goes stale within one poll.
+  // one send path, one error mapping, one gate — fails closed. It is the
+  // re-entrancy wrapper; postOnce below does the work.
   const post = async (text) => {
+    // Latched FIRST, before the /peek await below: two taps a few milliseconds
+    // apart both reach this line before either has finished awaiting anything,
+    // so a flag set any later would not stop the second one.
+    if (sending) return;
+    sending = true;
+    paint();
+    try {
+      await postOnce(text);
+    } finally {
+      sending = false;
+      paint();
+    }
+  };
+
+  // postOnce re-fetches /peek for the CURRENT pending flag and re-reads the
+  // CURRENT session record from lastSessions rather than trusting anything
+  // captured when the strip was built: lastSessions refreshes every 3s, and a
+  // value from build time goes stale within one poll. It does not repaint on
+  // its way out — post's finally does that once the in-flight flag is clear.
+  const postOnce = async (text) => {
     try {
       const res = await fetch("/api/sessions/" + encodeURIComponent(tab.id) + "/peek");
       knownPending = res.status === 200 && !!(await res.json()).pending;
@@ -424,7 +455,9 @@ function buildReplyStrip(tab) {
       );
       return;
     }
-    send.disabled = true;
+    // No direct send.disabled here: the in-flight flag above already closed
+    // every control through paint(), and a direct set would be undone by the
+    // next poll's repaint.
     try {
       const res = await fetch("/api/sessions/" + encodeURIComponent(tab.id) + "/message", {
         method: "POST",
@@ -448,8 +481,6 @@ function buildReplyStrip(tab) {
       showToast(msg, { error: true });
     } catch (_) {
       showToast("Send failed: no connection.", { error: true });
-    } finally {
-      paint();
     }
   };
 
