@@ -20,3 +20,22 @@
     .dot.waiting { background: var(--warn-fg); }
     .dot.crashed { background: var(--danger); }
     .dot.done, .dot.detached, .dot.unknown { background: var(--muted); }
+    /* Rate-limit meter. The reset figure is TIME REMAINING, not a wall-clock time:
+       the question a meter answers is "how much longer can I keep going", and a
+       clock forces the reader to subtract.
+
+       The hot state uses --warn (peach), NEVER --warn-fg (yellow). Yellow means "an
+       agent needs you" and nothing else may borrow it — spending it on a quota
+       threshold makes the header cry wolf and sends you hunting for a waiting
+       session that does not exist. Peach measures 7.10:1 on --panel, so the hot
+       state loses nothing on legibility.
+
+       The threshold itself lives in usage.js, not here: this file says what hot
+       LOOKS like, never when it fires. */
+    .mtr { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); }
+    .mtr .bar { width: 54px; height: 6px; background: var(--surface-2); display: block; position: relative; flex: none; }
+    .mtr .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); display: block; }
+    .mtr .pc { font-variant-numeric: tabular-nums; }
+    .mtr .rs { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .mtr.hot .bar i { background: var(--warn); }
+    .mtr.hot .pc, .mtr.hot .rs { color: var(--warn); }
