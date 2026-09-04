@@ -268,9 +268,153 @@ class Cell {
     // hidden attribute alone does nothing: see .cell-bar[hidden] in the stylesheet.
     this.bar.hidden = this.tabs.length === 0;
     this.el.classList.toggle("focus", this === focusedCell);
+    this.syncNeeds();
+  }
+
+  // syncNeeds paints the pane's "this agent needs you" state: an amber frame,
+  // and an answer strip so the question can be answered without leaving the
+  // wall. Driven by the same activity push that moves the tab's dot.
+  //
+  // The strip is rebuilt only when the state or the session changes, never on
+  // every render — it holds a text field, and rebuilding it under a typing
+  // operator drops the caret.
+  syncNeeds() {
+    const t = this.activeTab;
+    const needs = !!(t && t.kind === "terminal" && typeof t.activity === "function" && t.activity() === "waiting");
+    this.el.classList.toggle("needs", needs);
+    const key = needs ? String(t.id) : "";
+    if (key === this._needsKey) return;
+    this._needsKey = key;
+    if (this._strip) { this._strip.remove(); this._strip = null; }
+    if (needs) {
+      // buildReplyStrip returns null for a non-claude session: it can still be
+      // seen to be waiting (the frame), it just cannot be answered this way.
+      const strip = buildReplyStrip(t);
+      if (strip) { this._strip = strip; this.el.appendChild(this._strip); }
+    }
   }
 
   dispose() { this.tabs.forEach((t) => t.dispose?.()); }
+}
+
+// buildReplyStrip: the answer strip under a waiting pane. Three quick replies,
+// a field and send. It reuses the sidebar's gating functions (peek.js) rather
+// than restating them: their order mirrors the server's own guard, and a
+// second copy would drift from it. Returns null when the session behind `tab`
+// is not a claude session (no /peek, /message or /replyable for it), or is
+// not found at all.
+function buildReplyStrip(tab) {
+  const rec = lastSessions.find((x) => x.id === tab.id);
+  if (!rec || !rec.claude) return null;
+
+  const strip = document.createElement("div");
+  strip.className = "replystrip";
+  const digitBtns = [];
+  for (const d of ["1", "2", "3"]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn";
+    b.textContent = d;
+    b.title = "Send " + d;
+    digitBtns.push(b);
+    strip.appendChild(b);
+  }
+  const fld = document.createElement("input");
+  fld.type = "text";
+  fld.className = "fld";
+  fld.placeholder = "Reply (one line)";
+  const send = document.createElement("button");
+  send.type = "button";
+  send.className = "btn pri";
+  send.textContent = "send";
+  strip.append(fld, send);
+
+  // knownPending tracks the most recently observed /peek "pending" flag (a
+  // tool call in flight). It starts false — the common case — and is
+  // refreshed by post() below. It only feeds the PAINTED state; post() always
+  // re-fetches /peek right before it actually sends, so a stale value here
+  // can make a control look more open than the real gate, never send while
+  // the session is genuinely closed.
+  let knownPending = false;
+
+  // paint applies sendState's verdict to every control: the real disabled
+  // attribute, the .off look, and the reason in the title. The pane has no
+  // room for a caption line, so the title carries the reason — a closed
+  // control with no reason anywhere is worse than a missing one.
+  const paint = () => {
+    const s = lastSessions.find((x) => x.id === tab.id);
+    const st = sendState(s ? { replyable: s.replyable, activity: s.activity, pending: knownPending } : null);
+    fld.disabled = !st.enabled;
+    send.disabled = !st.enabled;
+    fld.classList.toggle("off", !st.enabled);
+    send.classList.toggle("off", !st.enabled);
+    send.title = st.reason;
+    for (const b of digitBtns) {
+      b.disabled = !st.enabled;
+      b.classList.toggle("off", !st.enabled);
+      b.title = st.enabled ? "Send " + b.textContent : st.reason;
+    }
+    return st;
+  };
+
+  // post is shared by the composer's Send button and the three quick replies:
+  // one send path, one error mapping, one gate — fails closed. It re-fetches
+  // /peek for the CURRENT pending flag and re-reads the CURRENT session
+  // record from lastSessions rather than trusting anything captured when the
+  // strip was built: lastSessions refreshes every 3s, and a value from build
+  // time goes stale within one poll.
+  const post = async (text) => {
+    try {
+      const res = await fetch("/api/sessions/" + encodeURIComponent(tab.id) + "/peek");
+      knownPending = res.status === 200 && !!(await res.json()).pending;
+    } catch (_) {
+      knownPending = false;
+    }
+    const st = paint();
+    if (!st.enabled) { showToast(st.reason, { error: true }); return; }
+    const err = replyTextError(text);
+    if (err) {
+      showToast(
+        err === "empty" ? "Type something first."
+          : err === "newline" ? "One line only — newlines are not sent."
+          : "That text contains control characters and was not sent.",
+        { error: true },
+      );
+      return;
+    }
+    send.disabled = true;
+    try {
+      const res = await fetch("/api/sessions/" + encodeURIComponent(tab.id) + "/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text }),
+      });
+      if (res.status === 204) {
+        fld.value = "";
+        showToast("Sent");
+        return;
+      }
+      // Same mapping as the sidebar composer's sendReply (app.js): distinct
+      // statuses carry distinct meanings, and two composers with two
+      // paraphrases of the same failure is exactly what this reuse avoids.
+      const msg =
+        res.status === 403 ? "Replies are not enabled for this session." :
+        res.status === 409 ? "Session is not ready for a message right now." :
+        res.status === 410 ? "That session is gone." :
+        res.status === 400 ? "That text was rejected." :
+        "Send failed (" + res.status + ").";
+      showToast(msg, { error: true });
+    } catch (_) {
+      showToast("Send failed: no connection.", { error: true });
+    } finally {
+      paint();
+    }
+  };
+
+  for (const b of digitBtns) { const d = b.textContent; b.onclick = () => post(d); }
+  send.onclick = () => post(fld.value);
+  paint();
+  return strip;
 }
 
 function setFocusedCell(cell) {

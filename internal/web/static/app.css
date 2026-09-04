@@ -770,7 +770,7 @@
        it is what tells you where your keystrokes are going, so it is reduced
        and relocated, never removed. It used to be `3px double` ON TOP OF a 1px
        cell border, which is three strokes for one fact. */
-    .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #000; }
+    .cell { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #000; }
     /* The one deliberate exception to --focus-off: a pane's outline at a positive
        offset is clipped by the grid cell that contains it, so it draws inward.
        Same width and colour as everywhere else. */
@@ -780,6 +780,25 @@
        by the 1px focus outline and the drop target looked like every other
        pane: the affordance existed in the DOM and not on screen. */
     .cell.drop-hot { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--sel-soft); }
+    /* This agent needs you. An overlay, not an inset shadow: the pane's own tab
+       bar and its answer strip carry opaque backgrounds and are painted over
+       their parent's box, so a shadow came out as two side strips instead of a
+       frame. An ::after paints above the children.
+       .cell is positioned for this — it sets no position of its own otherwise,
+       and inset: 0 would then resolve against the page and draw a ring the size
+       of the window. */
+    .cell.needs::after {
+      content: ""; position: absolute; inset: 0;
+      border: 2px solid var(--warn-fg); pointer-events: none; z-index: 4;
+    }
+    /* The pane's answer strip. Amber-tinted with an amber top rule, so the
+       frame and the strip read as one signal rather than two. */
+    .replystrip {
+      flex: none; display: flex; gap: 7px; align-items: center;
+      padding: 8px 10px; background: var(--warn-tint);
+      border-top: 1px solid var(--warn-fg);
+    }
+    .replystrip .fld { flex: 1; min-width: 0; }
     /* No right padding: the sticky control cluster pins to the scrollport edge, and
        any padding there would leave a strip where scrolled tabs bleed through. The
        cluster carries that 5px itself. */
