@@ -1,7 +1,7 @@
 /* agent-box design tokens — ONE source of truth.
    Extracted from index.html's inline <style> 2026-09-04. login.html previously
    kept its own unsynced copy of the palette; it now links this file.
-   Mirrors tokens.css in the Claude Design project (c95340dd). */
+   Mirrors tokens.css in the Claude Design project. */
     :root {
       /* Catppuccin Mocha. Chosen by measurement, not taste: Gruvbox and Nord
          both fail WCAG AA here (Gruvbox 4.17/4.31/3.37, Nord 3.28/5.03/2.46 for
@@ -61,10 +61,10 @@
       --sidebar-split: 45%;
       --sidebar-w: 280px;
 
-      /* DECISION: radius is 0 everywhere. The app shell already is; login.html
-         and the analytics-v2 widgets were the deviation and are corrected, not
-         blessed. Two shapes are exempt because they are shapes, not corners:
-         .dot (a circle) and the sheet grab handle. */
+      /* DECISION: radius is 0 everywhere, with no current exemptions. The app
+         shell already is; login.html and the analytics-v2 widgets were the
+         deviation and are corrected, not blessed. The canvas draws .dot round;
+         that difference is reconciled when the session row is rebuilt. */
       --radius: 0px;
       /* DECISION: ONE focus idiom. This file previously shipped four —
          bold+underline, a -1px inset outline on fields, a +2px outline on

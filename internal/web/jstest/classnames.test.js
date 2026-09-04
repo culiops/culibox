@@ -50,9 +50,9 @@ function scanCssInto(out, css) {
   }
 }
 
-// login.html carries its own inline <style> block (self-contained: it's served
-// unauthenticated, before /tokens.css or /primitives.css would help it) — a
-// real stylesheet CSS_FILES can't list because it isn't a standalone file.
+// login.html links tokens.css and primitives.css but also keeps a small
+// page-specific layout <style> block of its own — not a standalone file
+// CSS_FILES can list. Classes defined there must still count as defined.
 // Without this, .card and .sub read as undefined forever, which isn't the
 // failure this guard exists to catch.
 const HTML_FILES = ["index.html", "login.html"];

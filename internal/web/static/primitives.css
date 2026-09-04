@@ -14,8 +14,8 @@
     button:disabled, [disabled] { text-decoration: line-through; }
     /* Activity dot. Kept square here to match the app's existing .watching marker and
        header dot; the canvas draws this control round (border-radius:50%, 8px) and adds a
-       hollow .detached ring. Slice 1 is a mechanical rename only — the shape and the
-       detached state are reconciled with the canvas in slice 4a, per spec §5.2. */
+       hollow, detached ring. The app keeps it square for now — that difference is
+       reconciled when the session row is rebuilt. */
     .dot.working { background: var(--ok); }
     .dot.waiting { background: var(--warn-fg); }
     .dot.crashed { background: var(--danger); }
