@@ -694,7 +694,10 @@
        and relocated, never removed. It used to be `3px double` ON TOP OF a 1px
        cell border, which is three strokes for one fact. */
     .cell { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #000; }
-    .cell.focused { outline: 1px solid var(--accent); outline-offset: 1px; }
+    /* The one deliberate exception to --focus-off: a pane's outline at a positive
+       offset is clipped by the grid cell that contains it, so it draws inward.
+       Same width and colour as everywhere else. */
+    .cell.focused { outline: var(--focus); outline-offset: -2px; }
     /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
