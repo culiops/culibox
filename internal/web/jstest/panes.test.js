@@ -1,11 +1,23 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
 const { PANES_KEY, loadCollapsed, saveCollapsed, collapsedSummary, splitterLive } =
   require("../static/panes.js");
 
 test("PANES_KEY is the stored key", () => {
   assert.equal(PANES_KEY, "agent-box:panesCollapsed");
+});
+
+// index.html's pre-paint <script> hand-mirrors loadCollapsed's parse, because
+// it runs before panes.js has loaded and cannot call in here. A key rename on
+// one side and not the other would silently split the boot-time class from
+// the runtime one — this catches that at the one point they can still be
+// compared: the literal key string.
+test("index.html's pre-paint script uses the same storage key", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  assert.ok(html.includes(PANES_KEY), "index.html does not reference " + PANES_KEY);
 });
 
 // Storage is a hostile input: a hand-edited value, a value from an older
@@ -39,20 +51,22 @@ test("saveCollapsed round-trips through loadCollapsed", () => {
   assert.deepEqual(loadCollapsed(saveCollapsed(both)), both);
 });
 
-// The collapsed Sessions bar keeps its live summary: the count it showed when
-// open, plus a waiting indicator. Dropping the count is the easy mistake.
+// The collapsed Sessions bar's summary is only the waiting count: the total
+// session count lives in #sessions-count, which #sessions-phd keeps on screen
+// (it isn't one of the elements a collapsed pane hides), so collapsedSummary
+// has no reason to carry it too.
 test("collapsedSummary describes a collapsed Sessions bar", () => {
-  assert.deepEqual(collapsedSummary("sessions", { count: 5, waiting: 1 }),
+  assert.deepEqual(collapsedSummary("sessions", { waiting: 1 }),
     { text: "1 waiting", dot: true });
-  assert.deepEqual(collapsedSummary("sessions", { count: 5, waiting: 3 }),
+  assert.deepEqual(collapsedSummary("sessions", { waiting: 3 }),
     { text: "3 waiting", dot: true });
 });
 
 // No agent is waiting: the pip would be a yellow dot announcing nothing.
 test("collapsedSummary shows no pip when nothing is waiting", () => {
-  assert.deepEqual(collapsedSummary("sessions", { count: 5, waiting: 0 }),
+  assert.deepEqual(collapsedSummary("sessions", { waiting: 0 }),
     { text: "", dot: false });
-  assert.deepEqual(collapsedSummary("sessions", { count: 0, waiting: 0 }),
+  assert.deepEqual(collapsedSummary("sessions", {}),
     { text: "", dot: false });
 });
 
