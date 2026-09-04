@@ -325,7 +325,7 @@
     #sessions .srow.killing .bdg { border-color: var(--danger); }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
-    /* Session summary: a second line under the row's name. Muted and clipped to a
+    /* Session summary: the row's third line, under the name and the meta. Muted and clipped to a
        single line — at the real 279px sidebar width a wrapping summary pushes the
        list into a scroll on every poll. */
     #sessions .summary {
@@ -345,14 +345,21 @@
        would drop this under the 4.5 AA floor. */
     #sessions .summary.placeholder { font-style: italic; }
     /* The answer block. A sibling of its row rather than a child, so its own
-       3px amber border continues the row's without doubling it, and the two
-       read as one column from the question down to the reply. The row's bottom
-       rule is transparent while it is waiting for exactly this reason. */
+       3px border continues the row's without doubling it, and the two read as
+       one column from the question down to the reply. The row's bottom rule is
+       transparent while it is waiting for exactly this reason.
+       The AMBER is the .needs case only. This block is reachable on every claude
+       session — that is what keeps its empty states and the reply opt-in
+       reachable — and yellow says one thing here: this agent needs you. Hanging
+       an amber panel under a row that is not amber says it about a session that
+       is quietly working. Everything but the two colours is shared, so the
+       block keeps its geometry in either state. */
     #sessions .peek {
-      background: var(--warn-tint); border-left: 3px solid var(--warn-fg);
+      background: var(--surface-2); border-left: 3px solid var(--border);
       padding: 0 12px 13px 28px;
       border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
     }
+    #sessions .peek.needs { background: var(--warn-tint); border-left-color: var(--warn-fg); }
     /* pre-wrap, not normal: an agent's question carries its own line breaks and
        collapsing them changes what it says. */
     #sessions .peektxt {
@@ -974,4 +981,14 @@
       .menu .mi { min-height: var(--tap); display: flex; align-items: center; }
       /* The quick replies are the whole point of answering from a phone. */
       #sessions .qk .btn, .replystrip .btn { min-height: var(--tap); }
+      /* Both composers' text fields, on both surfaces. The reply field is the
+         headline control of the rail and of the pane strip, and at its desktop
+         size it lands around 29px — under the floor on the one device where
+         answering from the rail matters most. */
+      #sessions .rep .fld, .replystrip .fld { min-height: var(--tap); }
+      /* The name is the row's primary action: it is what opens the session. Its
+         box was only as tall as its 13px text, so the row was tall enough to
+         tap and the control inside it was not. Height only — what is clickable
+         in the row is unchanged. */
+      #sessions .sname .nm { min-height: var(--tap); }
     }

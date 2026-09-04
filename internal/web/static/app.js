@@ -403,7 +403,10 @@ async function togglePeek(li, s) {
   }
   openPeekId = s.id;
   const peek = document.createElement("li");
-  peek.className = "peek";
+  // The block is rendered for every claude session, so it only wears the amber
+  // when the row does. Same condition rowClasses uses for the row's own "needs
+  // you" class: yellow means an agent is waiting on you and nothing else.
+  peek.className = s.activity === "waiting" ? "peek needs" : "peek";
   li.after(peek);
 
   const body = document.createElement("div");

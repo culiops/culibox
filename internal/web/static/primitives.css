@@ -27,7 +27,15 @@
     .dot.crashed { background: var(--danger); }
     .dot.done, .dot.unknown { background: var(--muted); }
     .dot.detached { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
-    .dot.watching { outline: 2px solid var(--sel); outline-offset: 1px; }
+    /* Someone else is holding this session, drawn as a ring around the activity
+       dot. --fg, not a tint and not --muted or --accent: the row this matters
+       most on is your own evicted one, which is already carrying a background
+       tint of its own, and a mark drawn over a tinted row has to survive it.
+       A translucent stroke composites against that tint down to about 1.4:1,
+       under the 3:1 a non-text mark needs, which leaves the warning readable
+       only to a screen reader. Full-strength foreground is the one value that
+       holds on every row state. */
+    .dot.watching { outline: 2px solid var(--fg); outline-offset: 1px; }
     /* Buttons and fields. Three button weights: the default is quiet, .pri is
        the primary action and carries a 1px accent BORDER (never the 2px accent
        OUTLINE, which is spoken for by keyboard focus — see the top of this
@@ -49,7 +57,6 @@
            border: 1px solid var(--border); padding: 6px 8px; width: 100%; }
     .fld::placeholder { color: var(--muted); }
     .fld.off { opacity: .42; cursor: not-allowed; }
-    .ring { outline: var(--focus); outline-offset: var(--focus-off); }
     /* Rate-limit meter. The reset figure is TIME REMAINING, not a wall-clock time:
        the question a meter answers is "how much longer can I keep going", and a
        clock forces the reader to subtract.
