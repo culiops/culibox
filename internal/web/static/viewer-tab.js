@@ -87,10 +87,10 @@ class ViewerTab {
     }
     if (this.zoomVar) { // text viewers only: images have nothing to size
       const zout = document.createElement("button");
-      zout.className = "viewer-zoom zout"; zout.textContent = "A−"; zout.title = "Smaller (Ctrl+-)";
+      zout.className = "viewer-zoom"; zout.textContent = "A−"; zout.title = "Smaller (Ctrl+-)";
       zout.onclick = () => this.zoom(-fontPrefs.STEP);
       const zin = document.createElement("button");
-      zin.className = "viewer-zoom zin"; zin.textContent = "A+"; zin.title = "Bigger (Ctrl+=)";
+      zin.className = "viewer-zoom"; zin.textContent = "A+"; zin.title = "Bigger (Ctrl+=)";
       zin.onclick = () => this.zoom(+fontPrefs.STEP);
       this.toolbar.append(zout, zin);
     }

@@ -208,7 +208,7 @@ class TerminalTab {
     this.onUpdate = null;
 
     this.el = document.createElement("div");
-    this.el.className = "tab-body term-body";
+    this.el.className = "tab-body";
     const termEl = document.createElement("div");
     termEl.className = "pane-term";
     this.el.append(termEl);

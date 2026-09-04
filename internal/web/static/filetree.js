@@ -209,7 +209,6 @@ async function ftRenderDir(path, container, prefix) {
         await openChildren();
       }
     } else {
-      row.classList.add("file");
       row.onclick = () => openFile(full);
     }
   }
