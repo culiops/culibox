@@ -77,8 +77,9 @@ test("meterModel clamps the bar width to 0..100", () => {
   assert.equal(meterModel("5h", { used_percentage: -3, resets_at: now }, now).width, "0%");
 });
 
-// D6: the meters must disappear cleanly rather than render 0%. Applied per window,
-// because five_hour and seven_day are independently nullable.
+// An absent window renders no meter at all, never a 0% bar that would read as
+// "plenty left" when the truth is "unknown" — applied per window, because
+// five_hour and seven_day are independently nullable.
 test("meterModel returns null for an absent or malformed window", () => {
   const now = 1_700_000_000;
   assert.equal(meterModel("5h", null, now), null);
