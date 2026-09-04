@@ -62,6 +62,17 @@
     #hint button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
     header .spacer { flex: 1; }
+    /* The two meters sit side by side in the header's own rhythm. Without a
+       layout of its own this container is block-level, and the meters — each a
+       flex container, but still a block-level box — stack vertically and push
+       the header taller.
+       Selector stays a bare #limits (specificity 0,1,0,0), matching the
+       #limits { display: none; } rule inside the 700px media query below: an
+       ID-plus-element selector here would out-specify that rule and win even
+       under the media query, re-showing the meters on mobile regardless of
+       source order. Same specificity means the later rule (the mobile one)
+       wins there, and this one wins everywhere above the breakpoint. */
+    #limits { display: flex; align-items: center; gap: 1ch; }
     .layouts { display: flex; gap: 4px; }
     .layouts button {
       background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
