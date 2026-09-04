@@ -380,22 +380,21 @@ let replyDraft = null;
 // actually leaving the field.
 let replyFocused = false;
 
-// togglePeek expands or collapses the full peek under a session row. The fetch
-// happens on expand only — the listing carries just the one-line summary.
+// peekRowFor: the answer block belonging to a row, if it is open. A sibling,
+// not a child — see the stylesheet for why the amber column needs it there.
+function peekRowFor(li) {
+  const n = li && li.nextElementSibling;
+  return n && n.classList && n.classList.contains("peek") ? n : null;
+}
+
+// togglePeek expands or collapses the answer block under a session row. The
+// fetch happens on expand only — the listing carries just the one-line
+// summary. The block is a sibling `<li class="peek">`, not a set of children
+// inside the row, so collapsing is a single removal.
 async function togglePeek(li, s) {
-  const existing = li.querySelector(".peek-body");
-  if (existing) {
-    existing.remove();
-    // The opt-in, reply form and status line are also per-open elements
-    // (added below, once expand succeeds) — collapsing must remove all of
-    // them, or a stale checkbox/input/message is left showing under what
-    // looks like a closed row.
-    const staleOptin = li.querySelector(".peek-optin");
-    if (staleOptin) staleOptin.remove();
-    const staleForm = li.querySelector(".peek-reply");
-    if (staleForm) staleForm.remove();
-    const staleWhy = li.querySelector(".peek-why");
-    if (staleWhy) staleWhy.remove();
+  const open = peekRowFor(li);
+  if (open) {
+    open.remove();
     openPeekId = null;
     lastPeek = null;
     replyDraft = null; // collapsing must not let a later session inherit this draft
@@ -403,8 +402,12 @@ async function togglePeek(li, s) {
     return;
   }
   openPeekId = s.id;
+  const peek = document.createElement("li");
+  peek.className = "peek";
+  li.after(peek);
+
   const body = document.createElement("div");
-  body.className = "peek-body muted";
+  body.className = "peektxt muted";
   if (lastPeek && lastPeek.id === s.id) {
     body.textContent = lastPeek.text;
     body.classList.toggle("muted", lastPeek.muted);
@@ -412,7 +415,7 @@ async function togglePeek(li, s) {
   } else {
     body.textContent = "Loading…";
   }
-  li.appendChild(body);
+  peek.appendChild(body);
   let status = 0;
   let payload = null;
   try {
@@ -422,15 +425,35 @@ async function togglePeek(li, s) {
   } catch (_) {
     status = 0;
   }
-  if (!li.isConnected || openPeekId !== s.id) return; // a poll re-rendered the row
+  if (!li.isConnected || openPeekId !== s.id || !peek.isConnected) return; // a poll re-rendered the row
   const st = peekState(!!s.claude, status, payload);
   body.textContent = st.text;
   body.classList.toggle("muted", st.kind !== "text");
   li.dataset.peekPending = payload && payload.pending ? "1" : "";
   lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: !!(payload && payload.pending) };
 
+  // Quick replies. A waiting agent is almost always on a numbered prompt, and
+  // the whole point of answering from the rail is not having to open a pane to
+  // type one character. Each button sends its own digit and nothing else.
+  const qk = document.createElement("div");
+  qk.className = "qk";
+  for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn";
+    b.textContent = digit + " " + word;
+    b.title = "Send " + digit;
+    b.onclick = () => sendReply(digit);
+    qk.appendChild(b);
+  }
+  peek.appendChild(qk);
+
   // Opt-in toggle. Named in full, never a glyph: this grants a session the
-  // ability to be driven from the sidebar without opening it.
+  // ability to be driven from the sidebar without opening it. It has no
+  // counterpart in the design — see the stylesheet comment above its rule —
+  // and is kept because it is the only control that grants or revokes a
+  // session's reply permission; without it the composer would be permanently
+  // closed with no way to open it.
   const optin = document.createElement("label");
   optin.className = "peek-optin";
   const cb = document.createElement("input");
@@ -439,19 +462,22 @@ async function togglePeek(li, s) {
   const optinText = document.createElement("span");
   optinText.textContent = "Allow replies from here";
   optin.append(cb, optinText);
-  li.appendChild(optin);
+  peek.appendChild(optin);
 
   const form = document.createElement("div");
-  form.className = "peek-reply";
+  form.className = "rep";
   const input = document.createElement("input");
   input.type = "text";
+  input.className = "fld";
   input.placeholder = "Reply (one line)";
   const send = document.createElement("button");
-  send.textContent = "Send";
+  send.type = "button";
+  send.className = "btn pri";
+  send.textContent = "send";
   form.append(input, send);
   const why = document.createElement("span");
   why.className = "peek-why";
-  li.append(form, why);
+  peek.append(form, why);
 
   // Restore an in-progress draft's TEXT across the poll re-render that just
   // rebuilt this input from scratch. This only matters when the input is not
@@ -471,7 +497,18 @@ async function togglePeek(li, s) {
       activity: s.activity,
       pending: li.dataset.peekPending === "1",
     });
+    // Three things move together, deliberately. The dimmed look says closed,
+    // the caption says why, and the real disabled attribute makes it true —
+    // a control that looks closed but still takes a keystroke is a control
+    // whose caption lies, and a keyboard user is the one who finds out.
     send.disabled = !st2.enabled;
+    input.disabled = !st2.enabled;
+    send.classList.toggle("off", !st2.enabled);
+    input.classList.toggle("off", !st2.enabled);
+    for (const b of qk.querySelectorAll(".btn")) {
+      b.disabled = !st2.enabled;
+      b.classList.toggle("off", !st2.enabled);
+    }
     why.textContent = st2.reason;
   };
   refresh();
@@ -493,8 +530,10 @@ async function togglePeek(li, s) {
     refresh();
   };
 
-  send.onclick = async () => {
-    const err = replyTextError(input.value);
+  // sendReply is shared by the composer's Send button and the three quick
+  // replies: one send path, one error mapping, one refresh().
+  async function sendReply(text) {
+    const err = replyTextError(text);
     if (err) {
       why.textContent = err === "empty" ? "Type something first."
         : err === "newline" ? "One line only — newlines are not sent."
@@ -506,7 +545,7 @@ async function togglePeek(li, s) {
       const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: input.value }),
+        body: JSON.stringify({ text: text }),
       });
       if (res.status === 204) {
         input.value = "";
@@ -534,7 +573,9 @@ async function togglePeek(li, s) {
     } finally {
       refresh();
     }
-  };
+  }
+
+  send.onclick = () => sendReply(input.value);
 }
 
 function renderSession(s) {
@@ -658,7 +699,6 @@ function renderSession(s) {
     sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") toggle(e); };
     grow.appendChild(sum);
   }
-  if (openPeekId === s.id) togglePeek(li, s);
   return li;
 }
 // editing guards the inline rename: while true, the background poll must NOT
@@ -809,7 +849,16 @@ async function refreshSessions() {
   // Everything above has already been pushed. Only the list rebuild waits.
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
-  ul.replaceChildren(...lastSessions.map(renderSession));
+  const rows = lastSessions.map(renderSession);
+  ul.replaceChildren(...rows);
+  // The answer block is a sibling, so it can only be inserted once its row is
+  // in the document. Re-opening after the attach also keeps the open panel from
+  // collapsing under the reader every few seconds.
+  const reopen = lastSessions.find((s) => s.id === openPeekId);
+  if (reopen) {
+    const li = rows[lastSessions.indexOf(reopen)];
+    if (li && !peekRowFor(li)) togglePeek(li, reopen);
+  }
   syncSelectedRow();
   return lastSessions;
 }
