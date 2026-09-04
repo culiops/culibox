@@ -791,6 +791,15 @@
       content: ""; position: absolute; inset: 0;
       border: 2px solid var(--warn-fg); pointer-events: none; z-index: 4;
     }
+    /* A pane can both need you and hold your keystrokes. At inset: 0 the amber
+       frame and .cell.focus's outline occupy the exact same 2px band, and the
+       positioned ::after paints over the outline — the ring vanishes under the
+       amber. They mean different things (this agent needs you; your keystrokes
+       land here) and must stay two separately readable strokes, so once a
+       waiting pane is also focused the amber steps in by the ring's own width,
+       leaving the ring the pane's outer edge and the amber just inside it. An
+       unfocused waiting pane keeps the frame at inset: 0 above. */
+    .cell.needs.focus::after { inset: 2px; }
     /* The pane's answer strip. Amber-tinted with an amber top rule, so the
        frame and the strip read as one signal rather than two. */
     .replystrip {

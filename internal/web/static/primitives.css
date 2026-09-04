@@ -14,8 +14,10 @@
     button:disabled, [disabled] { text-decoration: line-through; }
     /* Activity dot. Round, and the one deliberate exemption to the zero-radius
        rule: this is a status LIGHT, not a surface, and every other status light
-       a reader has ever seen is a circle. Every other corner in the app is
-       square and stays square.
+       a reader has ever seen is a circle. The same shape rule covers the
+       header's small decorative dot beside the wordmark — it carries no status
+       of its own, but a small solid dot reads as a dot in either role. Every
+       other corner in the app is square and stays square.
        The detached state is hollow rather than filled — the session is still
        there but nothing is flowing, and an outline says "present but not live"
        without spending a fourth colour on it. */

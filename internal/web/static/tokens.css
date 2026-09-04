@@ -66,8 +66,9 @@
       --sidebar-w: 322px;
 
       /* DECISION: radius is 0 everywhere, with ONE recorded exemption — the
-         activity dot is round, because a status light reads as a light and not
-         as a tiny square panel. login.html and the analytics-v2 widgets were
+         dot shape (the activity lights and the header's small decorative dot
+         alike) is round, because a small solid dot reads as a dot and not as
+         a tiny square panel. login.html and the analytics-v2 widgets were
          deviations and are corrected, not blessed. */
       --radius: 0px;
       /* DECISION: ONE focus idiom. This file previously shipped four —
