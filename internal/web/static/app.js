@@ -1708,6 +1708,39 @@ document.addEventListener("keydown", (e) => {
   hit();
 }, true);
 
+// Jump to the Nth session. Capture phase with stopPropagation, like every other
+// global shortcut here, because xterm forwards any combination it does not
+// recognise straight into the running agent: without it, this types a digit into
+// whatever is in the focused pane.
+//
+// The number addresses the SIDEBAR list, which is the numbered thing on screen.
+// The grid's panes are not a usable index — there can be fewer panes than
+// sessions, and one pane can stack several.
+//
+// Alt+digit, not Ctrl/Cmd+digit: Ctrl+1…8 switches browser tabs in Chrome and
+// Firefox on Linux/Windows, and Cmd+1…9 does the same in Chrome, Safari and
+// Firefox on macOS — a page cannot take that back. Alt+digit is free in
+// Chrome/Chromium on Linux/Windows and in Safari, and Option+digit is not a
+// browser accelerator on macOS; its one known conflict is Firefox on
+// Linux/Windows, where Alt+digit also switches tabs.
+const JUMP_MOD = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+document.addEventListener("keydown", (e) => {
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" ||
+      (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+  if (!JUMP_MOD(e)) return;
+  const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
+  if (!m) return;
+  const s = jumpTarget(Number(m[1]), lastSessions);
+  e.preventDefault();
+  e.stopPropagation();
+  // Out of range is a deliberate no-op, not a wrap-around: pressing 7 with four
+  // sessions open must not land somewhere arbitrary. preventDefault/stopPropagation
+  // above still run first, so the digit is swallowed either way, not left to fall
+  // through to the agent.
+  if (s) openTerminal(s.id, s.name);
+}, true);
+
 // zoomFocused / resetZoomFocused are the named zoom path, shared by the keyboard
 // handler above and the command palette. Return false when the focused tab has
 // nothing to zoom, so the caller can leave the key event alone.

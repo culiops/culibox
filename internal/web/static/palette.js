@@ -80,19 +80,27 @@ async function runItem(item) {
 }
 
 // --- item sources ------------------------------------------------------------
-function paletteSessions() {
-  return lastSessions.map((s) => {
+// The first nine rows carry their jump shortcut instead of the cwd: past nine
+// there is no key to advertise, and a hint that names a key nothing is bound
+// to is worse than no hint. mac is threaded in from the caller (palRefresh)
+// rather than computed again here — see the mac note on paletteCommands.
+function paletteSessions(mac) {
+  return lastSessions.map((s, i) => {
     const name = s.name || s.id;
+    const jumpHint = i < 9 ? (mac ? "⌥" + (i + 1) : "Alt+" + (i + 1)) : "";
     return {
-      kind: "session", label: name, hint: s.cwd ? shortPath(s.cwd) : "",
+      kind: "session", label: name, hint: jumpHint || (s.cwd ? shortPath(s.cwd) : ""),
       run: () => openTerminal(s.id, name),
     };
   });
 }
 
-function paletteCommands() {
+// mac is computed once by the caller (palRefresh) and threaded through here
+// and into paletteSessions(), instead of adding another copy of this regex
+// alongside the ones already in app.js (twice) and palette.js's shortcut-hint
+// block below.
+function paletteCommands(mac) {
   const cmds = [];
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   // Every spawn goes through the form: under containment the workspace choice
   // IS the security boundary, so the palette preselects the profile and lets
   // the form ask the rest rather than starting an agent from a keystroke.
@@ -151,18 +159,21 @@ function palRefresh() {
   palSel = 0;
   clearTimeout(palTimer);
   if (palAbort) { palAbort.abort(); palAbort = null; }
+  // Computed once here and threaded into paletteSessions()/paletteCommands()
+  // rather than each recomputing it.
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 
   if (raw.charAt(0) === ">") { // VS Code convention: > means commands only
-    palRender(palFilter(paletteCommands(), raw.slice(1).trim().toLowerCase()), "");
+    palRender(palFilter(paletteCommands(mac), raw.slice(1).trim().toLowerCase()), "");
     return;
   }
   const q = raw.trim();
   if (!q) {
-    palRender(paletteSessions().concat(paletteCommands()), "");
+    palRender(paletteSessions(mac).concat(paletteCommands(mac)), "");
     return;
   }
   const lq = q.toLowerCase();
-  const local = palFilter(paletteSessions(), lq).concat(palFilter(paletteCommands(), lq));
+  const local = palFilter(paletteSessions(mac), lq).concat(palFilter(paletteCommands(mac), lq));
   palRender(local, "searching files…");
   palTimer = setTimeout(() => palSearchFiles(q, seq, local), PAL_DEBOUNCE_MS);
 }
