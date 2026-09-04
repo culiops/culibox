@@ -687,6 +687,13 @@ function moveToOwnPane(from, tab) {
     showToast("Pane limit reached: the tab stays where it is.");
     return;
   }
+  // renderGrid shows only the maximized cell (`show = maximized ? [maximized]
+  // : cells`), so a cell created while one is maximized never enters the
+  // document — the tab this action just gave "its own pane" would disappear,
+  // focused but unrendered. Giving the tab a pane of its own is the point of
+  // this action, so drop out of maximized rather than block the request or
+  // silently lose the tab; the operator can re-maximize afterwards.
+  maximized = null;
   const cell = new Cell();
   cells.push(cell);
   from.detachTab(tab);
