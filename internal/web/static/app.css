@@ -955,4 +955,14 @@
       .cell-bar .tab { gap: 8px; }
       .cell-bar .tab-kill, .cell-bar .tab-x { min-width: 28px; min-height: 28px; font-size: 15px; }
       #split-h { height: 12px; }
+      /* Two controls this rail gained are new, so they meet the floor now
+         rather than in a later pass — a small target that ships once tends to
+         ship for good. The row is already tall enough to hold a full-height
+         trigger; the trigger's own box was the part that was not.
+         The menu item becomes a flex row so a taller box centres its label
+         instead of stranding it at the top. */
+      #sessions .kbtn { min-width: var(--tap); min-height: var(--tap); padding: 0 12px; font-size: 17px; }
+      .menu .mi { min-height: var(--tap); display: flex; align-items: center; }
+      /* The quick replies are the whole point of answering from a phone. */
+      #sessions .qk .btn, .replystrip .btn { min-height: var(--tap); }
     }
