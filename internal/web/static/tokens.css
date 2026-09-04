@@ -1,0 +1,55 @@
+/* agent-box design tokens — ONE source of truth.
+   Extracted from index.html's inline <style> 2026-09-04. login.html previously
+   kept its own unsynced copy of the palette; it now links this file.
+   Mirrors tokens.css in the Claude Design project (c95340dd). */
+    :root {
+      /* Catppuccin Mocha. Chosen by measurement, not taste: Gruvbox and Nord
+         both fail WCAG AA here (Gruvbox 4.17/4.31/3.37, Nord 3.28/5.03/2.46 for
+         muted/accent/danger against their own panel; AA small text needs 4.5,
+         and --danger IS small text because .ft-err is 11px). Mocha passes at
+         5.65/5.97/5.43 and beats the palette it replaces on all three. */
+      --bg: #1e1e2e; --panel: #313244; --border: #45475a;
+      --fg: #cdd6f4; --muted: #a6adc8; --accent: #89b4fa; --danger: #f38ba8;
+      --warn: #fab387; --warn-fg: #f9e2af;
+      /* Activity "working". The palette had no "good/active" hue; this is
+         Catppuccin green, measured 8.46 on --panel and 11.0 on --bg — well past
+         WCAG 1.4.11's 3:1 for a meaningful graphic (the activity dot). */
+      --ok: #a6e3a1;
+
+      /* Now that the palette is Catppuccin, re-derive the three tints Task 3
+         had to freeze at their legacy literals. This is a deliberate colour
+         change: the selected-row tint stops being GitHub blue and starts
+         following whatever --accent is, which is the entire point of the
+         refactor. --surface-2 collapses #21262d and #1f2630, which solved to
+         94.7% and 94.6% panel — the same colour by accident. */
+      --sel: color-mix(in srgb, var(--accent) 18%, transparent);
+      --sel-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+      --surface-2: color-mix(in srgb, var(--panel) 95%, var(--fg));
+      --warn-bg: color-mix(in srgb, var(--warn) 14%, transparent);
+      --danger-tint: color-mix(in srgb, var(--danger) 12%, var(--bg));
+      --warn-tint: color-mix(in srgb, var(--warn) 12%, var(--bg));
+
+      /* WebTUI's layers read these names. Mapped onto ours rather than given
+         their own values, so there is one palette in this file, not two. */
+      --background0: var(--bg); --background1: var(--panel);
+      --background2: var(--border); --background3: #585b70;
+      --foreground0: var(--fg); --foreground1: #bac2de; --foreground2: var(--muted);
+      --box-border-color: var(--border);
+      /* One value for every hairline that is structure rather than text: the
+         tree's branches (.ft-branch) and the status line's separators. --border
+         is 1.38 on --panel and vanishes; this measures 3.59, clearing WCAG
+         1.4.11's 3:1 for graphics that carry meaning. Defined once so the two
+         cannot drift apart the way the status-line dot and the tree connectors
+         once did independently. */
+      --rule: color-mix(in srgb, var(--muted) 70%, var(--panel));
+      /* No --font-size / --line-height here. WebTUI's base.css declares them for
+         its own components, but the two files vendored (box.css, badge.css) read
+         neither, and body sets 14px/1.5 directly — so a pair here was read by
+         nothing while contradicting what actually renders. If a future component
+         needs them, add them AND point body at them, or they will drift again. */
+      --font-family: ui-monospace, "SF Mono", Menlo, monospace;
+
+      --fs-code: 12.5px; --fs-md: 14px; --fs-tree: 12px;
+      --sidebar-split: 45%;
+      --sidebar-w: 280px;
+    }
