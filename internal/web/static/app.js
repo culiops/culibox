@@ -628,13 +628,17 @@ function renderSession(s) {
     pct.title = usageTitle(u);
     right.appendChild(pct);
   }
-  const kill = document.createElement("button");
-  kill.className = "kill";
-  kill.title = "Kill session (ends the agent)";
-  kill.textContent = "⏻";
-  kill.setAttribute("aria-label", "Kill session");
-  kill.onclick = (ev) => { ev.stopPropagation(); confirmKill(s.id, s.name || s.id); };
-  right.appendChild(kill);
+  const kb = document.createElement("button");
+  kb.type = "button";
+  kb.className = "kbtn";
+  // ⋯ (U+22EF), not three periods and not the ellipsis character.
+  kb.textContent = "⋯";
+  // A glyph has no accessible name from its own text, so it gets one explicitly.
+  kb.setAttribute("aria-label", "Session actions");
+  kb.setAttribute("aria-haspopup", "menu");
+  kb.title = "Session actions";
+  kb.onclick = (ev) => { ev.stopPropagation(); openSessionMenu(kb, s); };
+  right.appendChild(kb);
   li.appendChild(right);
 
   if (s.claude) {
@@ -797,6 +801,11 @@ async function refreshSessions() {
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();
   renderCollapsedSummaries();
+  // A menu whose session has left the list would act on a dead id. Only that
+  // case closes it: the list is replaced under the menu constantly, and the
+  // menu is built to survive exactly that.
+  const openSid = sessionMenuId();
+  if (openSid && !lastSessions.some((s) => s.id === openSid)) closeSessionMenu(false);
   // Everything above has already been pushed. Only the list rebuild waits.
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
@@ -1238,9 +1247,104 @@ $("spawn").addEventListener("submit", async (ev) => {
     await spawnSession(req);
   } catch (e) { showToast("Spawn failed: " + e.message, { error: true }); }
 });
-// confirmKill is the guarded entry point (tab ⏻ button, command palette).
-// killSession itself stays unguarded: the sidebar × has always been immediate,
-// and Undo on a fresh spawn must not ask twice.
+// The row's actions menu. One persistent node outside the list, rebuilt on
+// every open — the list is replaced wholesale every few seconds, so a menu
+// nested in a row would be torn out from under the pointer. Items close over
+// the session id and name, never over a row element, so a rebuild underneath an
+// open menu changes nothing.
+let sessionMenuSid = null;
+let sessionMenuAnchor = null;
+
+function sessionMenuId() { return sessionMenuSid; }
+
+function closeSessionMenu(restoreFocus) {
+  const menu = $("session-menu");
+  if (menu) menu.classList.remove("open");
+  const a = sessionMenuAnchor;
+  sessionMenuSid = null;
+  sessionMenuAnchor = null;
+  // Focus goes back where it came from, but only when the trigger is still on
+  // the page: a poll may have replaced the row while the menu was open.
+  if (restoreFocus && a && a.isConnected) a.focus();
+}
+
+function openSessionMenu(anchor, s) {
+  const menu = $("session-menu");
+  if (!menu) return;
+  const name = s.name || s.id;
+  const run = {
+    rename: () => { const li = anchorRow(anchor); const nm = li && li.querySelector(".nm"); if (li && nm) startRename(li, nm, s); },
+    files: async () => { setFtRoot(s.cwd); await ftLoadRoot(); },
+    attribution: () => openAttribution(s.id),
+    copycwd: () => copyPath(s.cwd),
+    newpane: () => openTerminal(s.id, name, { newPane: true }),
+    end: () => confirmKill(s.id, name),
+  };
+  const nodes = menuItems(s).map((it) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = it.danger ? "mi dgr" : "mi";
+    b.setAttribute("role", "menuitem");
+    b.textContent = it.label;
+    // Close first, then act: an action that opens a dialog would otherwise
+    // leave the menu floating over it.
+    b.onclick = () => { closeSessionMenu(false); const fn = run[it.id]; if (fn) fn(); };
+    return b;
+  });
+  menu.replaceChildren(...nodes);
+  sessionMenuSid = s.id;
+  sessionMenuAnchor = anchor;
+
+  menu.classList.add("open"); // must be visible before it can be measured
+  const r = anchor.getBoundingClientRect();
+  const w = menu.offsetWidth;
+  menu.style.left = Math.max(8, Math.min(window.innerWidth - w - 8, r.right - w)) + "px";
+  // Rows sit anywhere down the rail, so a menu opened near the bottom flips
+  // above its row rather than clipping. The height has to be measured AFTER the
+  // items are in, because the item list varies per session.
+  const h = menu.offsetHeight;
+  const below = r.bottom + 4;
+  menu.style.top = (below + h <= window.innerHeight - 8 ? below : Math.max(8, r.top - h - 4)) + "px";
+  // Focus lands on the first item. The precedent popover in this app leaves
+  // focus on the trigger, which puts its own items somewhere unpredictable in
+  // the tab order — acceptable for a menu of file actions, not for one whose
+  // last item ends a running agent.
+  const first = menu.querySelector(".mi");
+  if (first) first.focus();
+}
+
+// anchorRow: the row a trigger belongs to, resolved at click time rather than
+// captured at open time, because the list may have been rebuilt in between.
+function anchorRow(anchor) {
+  return anchor && anchor.closest ? anchor.closest(".srow") : null;
+}
+
+document.addEventListener("click", (e) => {
+  const menu = $("session-menu");
+  if (!menu || !menu.classList.contains("open")) return;
+  if (!menu.contains(e.target) && e.target !== sessionMenuAnchor) closeSessionMenu(false);
+});
+document.addEventListener("keydown", (e) => {
+  const menu = $("session-menu");
+  if (!menu || !menu.classList.contains("open")) return;
+  if (e.key === "Escape") { e.preventDefault(); closeSessionMenu(true); return; }
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  // Arrow navigation, which the app's other popover does not have. Same reason
+  // as the focus move above: reaching a destructive item must not depend on
+  // tabbing blindly through the document.
+  const items = Array.from(menu.querySelectorAll(".mi"));
+  if (items.length === 0) return;
+  e.preventDefault();
+  const at = items.indexOf(document.activeElement);
+  const next = e.key === "ArrowDown"
+    ? (at < 0 ? 0 : (at + 1) % items.length)
+    : (at < 0 ? items.length - 1 : (at - 1 + items.length) % items.length);
+  items[next].focus();
+});
+
+// confirmKill is the guarded entry point (the tab strip's kill button, the
+// command palette, and the row menu's End session… item). killSession itself
+// stays unguarded: Undo on a fresh spawn must not ask twice.
 async function confirmKill(id, name) {
   const ok = await askConfirm({
     title: "Kill session",

@@ -421,14 +421,25 @@ function applyCap(n) {
 // openTerminal auto-splits a new window per session up to `cap`; beyond the cap
 // it stacks as a tab in the focused cell. (openFile always tabs into the focused
 // cell: files never create a window.)
-function openTerminal(id, name) {
-  for (const c of cells) {
-    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
-    if (t) { setFocusedCell(c); c.activate(t); return; }
+//
+// opts.newPane skips the "already open somewhere" lookup below — the point of
+// the option is a second tab for a session that may already have one — and
+// always tries to open a fresh Cell. At the cap it falls back to the same
+// stack-as-a-tab behaviour the uncapped path uses; there is no third outcome.
+function openTerminal(id, name, opts) {
+  opts = opts || {};
+  if (!opts.newPane) {
+    for (const c of cells) {
+      const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
+      if (t) { setFocusedCell(c); c.activate(t); return; }
+    }
   }
   ensureFirstCell();
   let cell;
-  if (focusedCell && focusedCell.tabs.length === 0) cell = focusedCell; // fill the empty focused cell
+  if (opts.newPane) {
+    if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // new pane, as asked
+    else { cell = focusedCell; showToast("Pane limit reached — opened alongside the current tabs"); }
+  } else if (focusedCell && focusedCell.tabs.length === 0) cell = focusedCell; // fill the empty focused cell
   else if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // auto-split a new window
   else cell = focusedCell;                                              // capped → stack as a tab
   setFocusedCell(cell);
@@ -463,21 +474,15 @@ function retitleTerminal(id, name) {
   }
 }
 
-// terminalOpen(id) → is a session currently open in any cell (for the sidebar)?
-// terminalTabFor(id) → the TerminalTab showing a session, or null. terminalOpen
-// answers only "is it on screen"; callers that must know whether THIS page still
-// holds the session need the tab, because an evicted tab stays open while its
-// socket is gone.
+// terminalTabFor(id) → the TerminalTab showing a session, or null. Callers
+// that must know whether THIS page still holds the session need the tab
+// itself, because an evicted tab stays open while its socket is gone.
 function terminalTabFor(id) {
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) return t;
   }
   return null;
-}
-
-function terminalOpen(id) {
-  return terminalTabFor(id) !== null;
 }
 
 // closeTerminal(id) → close a session's terminal tab wherever it is (used by kill).

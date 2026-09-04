@@ -145,6 +145,33 @@
       border-bottom: 1px solid var(--border); margin-bottom: 4px;
     }
     #ft-menu hr { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
+    /* The row's actions trigger. Muted, not the hairline rule colour: the rule
+       colour measures 3.59:1 here and fails AA for something you have to find
+       and click. */
+    #sessions .kbtn {
+      font: 400 14px var(--font-family); background: transparent; border: 0;
+      color: var(--muted); cursor: pointer; padding: 0 4px; line-height: 1;
+    }
+    #sessions .kbtn:hover { color: var(--fg); }
+    /* The row's actions menu. An accent border rather than the usual hairline:
+       this popover is summoned, so it says which control it belongs to. */
+    .menu {
+      position: fixed; z-index: 40; width: 232px;
+      background: var(--panel); border: 1px solid var(--accent);
+      display: none;
+    }
+    .menu.open { display: block; }
+    .mi {
+      display: block; width: 100%; text-align: left; background: none; border: 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+      color: var(--fg); font: inherit; font-size: 12.5px; padding: 10px 13px; cursor: pointer;
+    }
+    .mi:last-child { border-bottom: 0; }
+    .mi:hover { background: var(--surface-2); }
+    /* The destructive item is last and coloured, and nothing else in the menu
+       is. The rule above it is the same hairline that separates every other
+       pair — the position and the colour carry the weight, not a heavier line. */
+    .mi.dgr { color: var(--danger); }
     #runtime-warn { margin-top: 6px; font-size: 12px; color: var(--warn-fg); }
     .pf-hint, .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
@@ -339,7 +366,6 @@
     /* The opt-in is a checkbox with a real label: this control grants a session the
        ability to be driven from the sidebar, so it must never be a bare glyph. */
     #sessions .peek-optin { display: flex; align-items: center; gap: 0.35em; margin-top: 0.35em; font-size: 0.8em; }
-    #sessions .kill { color: var(--danger); border: none; background: none; cursor: pointer; font-size: 16px; padding: 2px 6px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
