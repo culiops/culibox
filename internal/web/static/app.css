@@ -991,4 +991,9 @@
          tap and the control inside it was not. Height only — what is clickable
          in the row is unchanged. */
       #sessions .sname .nm { min-height: var(--tap); }
+      /* The name's box just grew to the tap floor above, and `.sname` centres
+         its children — so the dot's fixed 6px nudge (sized for the untouched
+         13px text line) now floats above the name instead of sitting on it.
+         Re-centre it on the taller line: (name's tap floor - dot's own 8px) / 2. */
+      #sessions .dot { margin-top: calc((var(--tap) - 8px) / 2); }
     }

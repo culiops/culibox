@@ -379,6 +379,18 @@ let replyDraft = null;
 // by the input's own focus/blur, so it cannot latch on past the operator
 // actually leaving the field.
 let replyFocused = false;
+// pendingSends: session ids with a message request currently in flight, kept
+// at module scope like openPeekId / lastPeek / replyDraft above — NOT as a
+// local `sending` inside togglePeek's closure, because that closure does not
+// reliably outlive one send. refresh() (below) writes `input.disabled =
+// closed` on every call, and disabling a focused field blurs it; the blur
+// handler clears replyFocused, which is the one thing holding refreshSessions
+// back from rebuilding the row (see holdList). So the very next 3s poll can
+// tear down this composer and build a fresh one — with its own local
+// `sending` starting back at `false` — while the original request is still
+// in flight. A flag that must survive a rebuild the poll can trigger has to
+// live somewhere the rebuild does not reach.
+let pendingSends = new Set();
 
 // peekRowFor: the answer block belonging to a row, if it is open. A sibling,
 // not a child — see the stylesheet for why the amber column needs it there.
@@ -494,21 +506,22 @@ async function togglePeek(li, s) {
   input.onfocus = () => { replyFocused = true; };
   input.onblur = () => { replyFocused = false; };
 
-  // sending latches for the duration of one send, and it feeds refresh()
-  // rather than setting send.disabled directly: refresh() writes the disabled
-  // flags from the gate every time it runs, so anything set behind its back
-  // is undone by the next call. It closes every control, not only send — the
-  // three quick replies are what an operator taps fast, and a double-tapped
-  // "2" answers two different questions on a numbered prompt. The server does
-  // not dedupe.
-  let sending = false;
+  // The in-flight latch is pendingSends (module-level, see its declaration) —
+  // not a local `sending` here — because this composer's own closure can be
+  // torn down and rebuilt by the 3s poll while a send is still outstanding.
+  // refresh() feeds off it rather than setting send.disabled directly:
+  // refresh() writes the disabled flags from the gate every time it runs, so
+  // anything set behind its back is undone by the next call. It closes every
+  // control, not only send — the three quick replies are what an operator
+  // taps fast, and a double-tapped "2" answers two different questions on a
+  // numbered prompt. The server does not dedupe.
   const refresh = () => {
     const st2 = sendState({
       replyable: cb.checked,
       activity: s.activity,
       pending: li.dataset.peekPending === "1",
     });
-    const closed = !st2.enabled || sending;
+    const closed = !st2.enabled || pendingSends.has(s.id);
     // Three things move together, deliberately. The dimmed look says closed,
     // the caption says why, and the real disabled attribute makes it true —
     // a control that looks closed but still takes a keystroke is a control
@@ -545,7 +558,7 @@ async function togglePeek(li, s) {
   // sendReply is shared by the composer's Send button and the three quick
   // replies: one send path, one error mapping, one refresh().
   async function sendReply(text) {
-    if (sending) return; // a second tap while the first is still in flight
+    if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
     const err = replyTextError(text);
     if (err) {
       why.textContent = err === "empty" ? "Type something first."
@@ -553,7 +566,7 @@ async function togglePeek(li, s) {
         : "That text contains control characters and was not sent.";
       return;
     }
-    sending = true;
+    pendingSends.add(s.id);
     refresh();
     try {
       const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
@@ -585,7 +598,10 @@ async function togglePeek(li, s) {
       why.textContent = msg;
       showToast(msg, { error: true });
     } finally {
-      sending = false;
+      // Runs whether the send succeeded, was rejected, or threw — including
+      // when the session has since left the list — so the latch never
+      // outlives the request that set it.
+      pendingSends.delete(s.id);
       refresh();
     }
   }
