@@ -110,6 +110,11 @@ $("sidebar-toggle").onclick = toggleSidebar;
 // the sidebar only, and the terminal grid's width is unchanged. Hiding the
 // whole sidebar does change that width, which is why toggleSidebar() refits
 // and this does not.
+// readCollapsed is the STORAGE read: boot's seed value, and togglePane's
+// "what was it before this click" base. Anything that instead needs "what is
+// collapsed right now" — a repaint, a guard — must read collapsedFromDOM()
+// (shell.js) instead: storage is a snapshot another tab can move past, and a
+// throwing write leaves it stale even in one tab.
 function readCollapsed() {
   let raw = null;
   try { raw = localStorage.getItem(PANES_KEY); } catch (_) {}
@@ -140,7 +145,7 @@ function applyCollapsed(state) {
 // have to keep updating while collapsed — this is called from the same places
 // that repaint the session list and the tree root, not only on toggle.
 function renderCollapsedSummaries(state) {
-  const st = state || readCollapsed();
+  const st = state || collapsedFromDOM();
   const pip = $("sessions-pip"), pipText = $("sessions-pip-text");
   if (pip && pipText) {
     const s = collapsedSummary("sessions", { waiting: waitingCount() });

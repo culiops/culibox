@@ -122,6 +122,22 @@ function initDialogs() {
   if (toastX) toastX.onclick = hideToast;
 }
 
+// collapsedFromDOM reads the pane-collapse state off the root element's own
+// classes, which is what the CSS is actually keyed on and what is actually
+// rendered right now. localStorage (panes.js's readCollapsed) is only the
+// restore seed for boot and the value togglePane writes back — it is a
+// snapshot, and snapshots go stale: a second tab can collapse a pane and
+// write its own storage entry while this tab's DOM (and this tab's next
+// localStorage read, if it raced the write or the write itself threw) still
+// disagrees. Anything that needs to know "is a pane collapsed right now" —
+// the splitter guards below and app.js's renderCollapsedSummaries — should
+// read the DOM, not storage.
+function collapsedFromDOM() {
+  const root = document.documentElement;
+  return { sessions: root.classList.contains("sessions-collapsed"),
+           files: root.classList.contains("files-collapsed") };
+}
+
 // --- sidebar splitter --------------------------------------------------------
 // Drag height between the Sessions and Files panes. The ratio is a percentage on
 // --sidebar-split, persisted and re-applied pre-paint by the inline <head>
@@ -179,8 +195,7 @@ function initSplitter() {
     // the clamp below would invert. The CSS hides the handle too — this guard
     // covers the case where a drag is already in flight when a pane collapses.
     if (typeof splitterLive === "function" &&
-        !splitterLive({ sessions: document.documentElement.classList.contains("sessions-collapsed"),
-                        files: document.documentElement.classList.contains("files-collapsed") })) return;
+        !splitterLive(collapsedFromDOM())) return;
     // Pointer events (not mouse) so the drag also works under touch; the handle
     // sets touch-action:none so the browser does not scroll instead.
     e.preventDefault();
@@ -222,8 +237,7 @@ function initSplitter() {
     // Same guard as pointerdown above: a double-click on a hidden handle must
     // not reset the split either.
     if (typeof splitterLive === "function" &&
-        !splitterLive({ sessions: document.documentElement.classList.contains("sessions-collapsed"),
-                        files: document.documentElement.classList.contains("files-collapsed") })) return;
+        !splitterLive(collapsedFromDOM())) return;
     persistSidebarSplit(setSidebarSplit(45));
   });
 }
