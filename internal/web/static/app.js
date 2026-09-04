@@ -1473,6 +1473,27 @@ document.addEventListener("keydown", (e) => {
   e.stopPropagation();
 }, true);
 
+// Sidebar shortcuts. Capture phase with stopPropagation, not because the
+// palette needs it but because the terminal does: xterm forwards every
+// combination it does not recognise into the running process, so a handler
+// that lets these bubble types them into the agent instead of toggling a pane.
+document.addEventListener("keydown", (e) => {
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" ||
+      (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const code = e.code;
+  let hit = null;
+  if (e.altKey && code === "KeyS") hit = () => togglePane("sessions");
+  else if (e.altKey && code === "KeyF") hit = () => togglePane("files");
+  else if (!e.altKey && !e.shiftKey && code === "KeyB") hit = toggleSidebar;
+  if (!hit) return;
+  e.preventDefault();
+  e.stopPropagation();
+  hit();
+}, true);
+
 // zoomFocused / resetZoomFocused are the named zoom path, shared by the keyboard
 // handler above and the command palette. Return false when the focused tab has
 // nothing to zoom, so the caller can leave the key event alone.
