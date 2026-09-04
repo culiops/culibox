@@ -174,6 +174,27 @@ class Cell {
     if (this === focusedCell) syncFocusedTree();
   }
 
+  // detachTab takes a tab OUT of this cell without ending it: same bookkeeping
+  // as closeTab, minus tab.dispose(). Moving a terminal tab between panes must
+  // NOT dispose it — dispose tears down the socket, and a session admits one
+  // subscriber, so a "move" that closed and reopened would evict itself.
+  // The emptied-cell case routes through the same removeCell closeTab uses, so
+  // a move can never leave a stray empty pane behind.
+  detachTab(tab) {
+    const i = this.tabs.indexOf(tab);
+    if (i < 0) return;
+    this.tabs.splice(i, 1);
+    if (this.tabs.length === 0 && cells.length > 1) { removeCell(this); return; } // reflow: drop the emptied window
+    if (this.activeTab === tab) {
+      this.activeTab = this.tabs[Math.min(i, this.tabs.length - 1)] || null;
+      if (this.activeTab) this.activeTab.onShow?.();
+    }
+    this.renderBar();
+    this.renderBody();
+    scheduleSaveLayout();
+    if (this === focusedCell) syncFocusedTree();
+  }
+
   renderBody() {
     if (this.activeTab) {
       this.body.replaceChildren(this.activeTab.el);
@@ -590,28 +611,56 @@ function applyCap(n) {
 // it stacks as a tab in the focused cell. (openFile always tabs into the focused
 // cell: files never create a window.)
 //
-// opts.newPane skips the "already open somewhere" lookup below — the point of
-// the option is a second tab for a session that may already have one — and
-// always tries to open a fresh Cell. At the cap it falls back to the same
-// stack-as-a-tab behaviour the uncapped path uses; there is no third outcome.
+// opts.newPane means "give this session a pane of its own". A session already on
+// screen is MOVED into a fresh window, tab and socket intact — never opened a
+// second time. Two tabs for one session cannot both live: the server admits one
+// subscriber and marks the older one superseded, so the pair would sit there
+// evicting each other, and the lookups below (which stop at their first match)
+// could only ever reach one of them. moveToOwnPane owns that path.
 function openTerminal(id, name, opts) {
   opts = opts || {};
-  if (!opts.newPane) {
-    for (const c of cells) {
-      const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
-      if (t) { setFocusedCell(c); c.activate(t); return; }
+  for (const c of cells) {
+    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
+    if (t) {
+      if (opts.newPane) { moveToOwnPane(c, t); return; }
+      setFocusedCell(c); c.activate(t); return;
     }
   }
   ensureFirstCell();
   let cell;
   if (opts.newPane) {
     if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // new pane, as asked
-    else { cell = focusedCell; showToast("Pane limit reached — opened alongside the current tabs"); }
+    else { cell = focusedCell; showToast("Pane limit reached: opened alongside the current tabs."); }
   } else if (focusedCell && focusedCell.tabs.length === 0) cell = focusedCell; // fill the empty focused cell
   else if (cells.length < cap) { cell = new Cell(); cells.push(cell); } // auto-split a new window
   else cell = focusedCell;                                              // capped → stack as a tab
   setFocusedCell(cell);
   cell.addTab(new TerminalTab(id, name));
+  renderGrid();
+  refreshSessions();
+}
+
+// moveToOwnPane moves an already-open terminal tab out of the cell it shares
+// into a window of its own. The tab object is carried across untouched, so its
+// WebSocket, scrollback and usage all survive the move.
+//
+// Two cases end without a new window, and neither is a failure worth inventing
+// a new noise for: a tab that is alone in its cell already HAS its own pane, and
+// at the pane cap there is no window to move into. Both leave the tab where it
+// is and focus it, which is the honest outcome; only the capped one says so out
+// loud, because that is the one the operator asked for and did not get.
+function moveToOwnPane(from, tab) {
+  if (from.tabs.length === 1) { setFocusedCell(from); from.activate(tab); return; }
+  if (cells.length >= cap) {
+    setFocusedCell(from); from.activate(tab);
+    showToast("Pane limit reached: the tab stays where it is.");
+    return;
+  }
+  const cell = new Cell();
+  cells.push(cell);
+  from.detachTab(tab);
+  cell.addTab(tab); // re-points tab.onUpdate at its new cell
+  setFocusedCell(cell);
   renderGrid();
   refreshSessions();
 }
