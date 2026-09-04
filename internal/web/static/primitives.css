@@ -39,3 +39,42 @@
     .mtr .rs { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
     .mtr.hot .bar i { background: var(--warn); }
     .mtr.hot .pc, .mtr.hot .rs { color: var(--warn); }
+    /* Sidebar pane header bar. A solid full-width row, not a legend floated onto
+       the pane's border — the collapsed state needs its own background across the
+       whole width, which a fit-content legend cannot have.
+
+       The uppercase here INHERITS to every descendant, which is why .path and .pip
+       below reset it explicitly. Those two carry a filesystem path and a live
+       count: shouting a path changes what it means, and both must render exactly
+       as the data reads. Porting the uppercase without the two resets is the
+       defect this pairing exists to prevent — keep them together. */
+    .phd {
+      height: 36px; flex: none; display: flex; align-items: center; gap: 9px;
+      padding: 0 12px; font-size: 10.5px; letter-spacing: .09em; color: var(--muted);
+      text-transform: uppercase; border-bottom: 1px solid var(--border);
+    }
+    /* Collapsed: the bar is the whole pane, so it lifts onto its own surface and
+       its text goes to full strength — a collapsed pane is still live, not
+       disabled. */
+    .phd.closed { background: var(--surface-2); color: var(--fg); }
+    .phd .grow { flex: 1; }
+    .phd .path {
+      letter-spacing: 0; text-transform: none; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* Yellow, not peach. Yellow means an agent needs you, which is exactly what a
+       waiting count says; peach is spoken for by quota heat. The two look alike
+       and are not interchangeable. */
+    .phd .pip {
+      display: inline-flex; align-items: center; gap: 6px; color: var(--warn-fg);
+      letter-spacing: 0; text-transform: none; font-size: 11px;
+    }
+    /* The caret is a real button: the bar carries its own action buttons, so a
+       bar-wide click target would swallow clicks meant for them, and a div with a
+       click handler cannot be reached from the keyboard. */
+    .phd .cv {
+      width: 11px; flex: none; padding: 0; background: none; border: none;
+      color: var(--muted); font-size: 11px; letter-spacing: 0; line-height: 1;
+      text-align: center; cursor: pointer;
+    }
+    .phd .cv:hover { color: var(--fg); }
