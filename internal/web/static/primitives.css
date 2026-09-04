@@ -12,14 +12,42 @@
        Left as-is here; later slices reconcile them when those controls are rewritten. */
     :focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
     button:disabled, [disabled] { text-decoration: line-through; }
-    /* Activity dot. Kept square here to match the app's existing .watching marker and
-       header dot; the canvas draws this control round (border-radius:50%, 8px) and adds a
-       hollow, detached ring. The app keeps it square for now — that difference is
-       reconciled when the session row is rebuilt. */
+    /* Activity dot. Round, and the one deliberate exemption to the zero-radius
+       rule: this is a status LIGHT, not a surface, and every other status light
+       a reader has ever seen is a circle. Every other corner in the app is
+       square and stays square.
+       The detached state is hollow rather than filled — the session is still
+       there but nothing is flowing, and an outline says "present but not live"
+       without spending a fourth colour on it. */
+    .dot { width: 8px; height: 8px; flex: none; display: inline-block; border-radius: 50%; }
     .dot.working { background: var(--ok); }
     .dot.waiting { background: var(--warn-fg); }
     .dot.crashed { background: var(--danger); }
-    .dot.done, .dot.detached, .dot.unknown { background: var(--muted); }
+    .dot.done, .dot.unknown { background: var(--muted); }
+    .dot.detached { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+    .dot.watching { outline: 2px solid var(--sel); outline-offset: 1px; }
+    /* Buttons and fields. Three button weights: the default is quiet, .pri is
+       the primary action and carries a 1px accent BORDER (never the 2px accent
+       OUTLINE, which is spoken for by keyboard focus — see the top of this
+       file), and .gh is ghost, text until you point at it.
+
+       .off is the closed state, and it is only half the mechanism: it dims the
+       control and changes the cursor, but a dimmed control that still accepts a
+       click and a keystroke is a control whose caption lies. Whoever applies
+       .off must also set the real disabled attribute. */
+    .btn { font: 400 12px var(--font-family); color: var(--fg); background: transparent; white-space: nowrap;
+           border: 1px solid var(--border); padding: 4px 9px; cursor: pointer; }
+    .btn:hover { background: var(--surface-2); }
+    .btn.pri { border-color: var(--accent); color: var(--accent); }
+    .btn.pri:hover { background: var(--sel); }
+    .btn.gh { border-color: transparent; color: var(--muted); }
+    .btn.gh:hover { color: var(--fg); background: var(--surface-2); }
+    .btn.off { opacity: .42; cursor: not-allowed; }
+    .fld { font: 400 12px var(--font-family); color: var(--fg); background: var(--bg);
+           border: 1px solid var(--border); padding: 6px 8px; width: 100%; }
+    .fld::placeholder { color: var(--muted); }
+    .fld.off { opacity: .42; cursor: not-allowed; }
+    .ring { outline: var(--focus); outline-offset: var(--focus-off); }
     /* Rate-limit meter. The reset figure is TIME REMAINING, not a wall-clock time:
        the question a meter answers is "how much longer can I keep going", and a
        clock forces the reader to subtract.

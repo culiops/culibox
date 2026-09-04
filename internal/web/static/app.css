@@ -279,11 +279,11 @@
        --accent because the row this matters most on is your own evicted one,
        which carries the blue .open tint that swallows both. */
     #sessions .watching { flex: none; width: 9px; height: 9px; background: var(--fg); }
-    /* Activity dot: square, matching .watching / header .dot (the app's idiom).
-       Leads each row. Colours are semantic, separate from the accent. */
-    #sessions .dot { flex: none; width: 9px; height: 9px; }
+    /* Activity dot. Leads each row; size/shape/colour come from the base .dot
+       rule in primitives.css. */
+    #sessions .dot { margin-top: 6px; }
     /* Slightly smaller on a tab than in the sidebar, matching the denser strip. */
-    .cell-bar .dot { flex: none; width: 8px; height: 8px; }
+    .cell-bar .dot { }
     /* Session summary: a second line under the row's name. Muted and clipped to a
        single line — at the real 279px sidebar width a wrapping summary pushes the
        list into a scroll on every poll. */
