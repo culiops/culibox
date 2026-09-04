@@ -711,6 +711,12 @@ let editing = false;
 // and Esc+blur commit-on-cancel.
 function startRename(li, span, s) {
   if (editing) return;
+  // A detached row must not proceed: setting `editing` below freezes the
+  // poll's list rebuild (see the comment on `editing`), and an input swapped
+  // into a subtree nobody can see can never fire the blur/Enter/Escape that
+  // would clear the flag again. Silent bail, not an error — the row can
+  // legitimately be gone by the time a caller reaches this.
+  if (!li.isConnected) return;
   editing = true;
   const cur = s.name || s.id;
   const input = document.createElement("input");
@@ -1322,7 +1328,12 @@ function openSessionMenu(anchor, s) {
   if (!menu) return;
   const name = s.name || s.id;
   const run = {
-    rename: () => { const li = anchorRow(anchor); const nm = li && li.querySelector(".nm"); if (li && nm) startRename(li, nm, s); },
+    // Resolved from the session id at click time, never from `anchor`: the
+    // list rebuilds under the menu every few seconds (the menu is
+    // deliberately not in holdList()), so by the time an item is chosen the
+    // trigger that opened the menu may already be sitting in a detached
+    // subtree. `sessionRowFor` looks up whatever row is live right now.
+    rename: () => { const li = sessionRowFor(s.id); const nm = li && li.querySelector(".nm"); if (li && nm) startRename(li, nm, s); },
     files: async () => { setFtRoot(s.cwd); await ftLoadRoot(); },
     attribution: () => openAttribution(s.id),
     copycwd: () => copyPath(s.cwd),
@@ -1362,10 +1373,19 @@ function openSessionMenu(anchor, s) {
   if (first) first.focus();
 }
 
-// anchorRow: the row a trigger belongs to, resolved at click time rather than
-// captured at open time, because the list may have been rebuilt in between.
-function anchorRow(anchor) {
-  return anchor && anchor.closest ? anchor.closest(".srow") : null;
+// sessionRowFor(id): the live row for a session id, or null if none is on
+// screen right now (killed, exited, or a poll rebuilt without it). Looked up
+// by data-sid rather than captured as a DOM reference, on the same grounds
+// syncSelectedRow already does its own scan this way: the list is replaced
+// wholesale every few seconds, independently of anything holding onto a node
+// from an earlier render.
+function sessionRowFor(id) {
+  const ul = $("sessions");
+  if (!ul) return null;
+  for (const li of ul.children) {
+    if (li.classList && li.classList.contains("srow") && li.dataset.sid === id) return li;
+  }
+  return null;
 }
 
 document.addEventListener("click", (e) => {
