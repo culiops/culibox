@@ -444,7 +444,7 @@ function renderSession(s) {
   // computed (Info.activity); unknown/missing degrades to a muted dot, never a throw.
   const adot = document.createElement("span");
   const act = activityClass(s.activity);
-  adot.className = "act-dot " + act.cls;
+  adot.className = act.cls;
   if (act.title) {
     adot.title = act.title;
     adot.setAttribute("role", "img");
@@ -458,7 +458,7 @@ function renderSession(s) {
     // teardown in flight (can take a few seconds): disabled row + "killing…"
     li.classList.add("killing");
     const st = document.createElement("span");
-    st.className = "badge";
+    st.className = "bdg";
     st.textContent = "killing…";
     asBadge(st, { variant: "foreground2" });
     li.append(name, st);
@@ -469,7 +469,7 @@ function renderSession(s) {
   li.appendChild(name);
   if (s.exited) {
     const badge = document.createElement("span");
-    badge.className = "badge";
+    badge.className = "bdg";
     badge.textContent = "exited";
     asBadge(badge, { variant: "background2" });
     li.appendChild(badge);
@@ -480,7 +480,7 @@ function renderSession(s) {
   const tier = tierBadge(s, boxRuntime);
   if (tier) {
     const tb = document.createElement("span");
-    tb.className = "badge tier" + (tier.tone === "danger" ? " tier-danger" : "");
+    tb.className = "bdg tier" + (tier.tone === "danger" ? " tier-danger" : "");
     tb.textContent = tier.text;
     tb.title = tier.title;
     if (tier.tone === "danger") {

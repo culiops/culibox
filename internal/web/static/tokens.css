@@ -68,8 +68,8 @@
       --radius: 0px;
       /* DECISION: ONE focus idiom. This file previously shipped four —
          bold+underline, a -1px inset outline on fields, a +2px outline on
-         checkboxes, and .cell.focused at 1px/offset 1. This is the survivor.
-         EXCEPTION, deliberate: .cell.focused uses outline-offset:-2px, because a
+         checkboxes, and .cell.focus at 1px/offset 1. This is the survivor.
+         EXCEPTION, deliberate: .cell.focus uses outline-offset:-2px, because a
          pane's outline at a positive offset is clipped by its container. That is
          one documented exception, not the fourth idiom coming back. */
       --focus: 2px solid var(--accent);

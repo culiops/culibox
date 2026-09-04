@@ -12,8 +12,11 @@
        Left as-is here; later slices reconcile them when those controls are rewritten. */
     :focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
     button:disabled, [disabled] { text-decoration: line-through; }
-    /* Shared activity-dot colours. Sizing is scoped per surface (see app.css). */
-    .act-working { background: var(--ok); }
-    .act-waiting { background: var(--warn-fg); }
-    .act-crashed { background: var(--danger); }
-    .act-done, .act-detached, .act-unknown { background: var(--muted); }
+    /* Activity dot. Kept square here to match the app's existing .watching marker and
+       header dot; the canvas draws this control round (border-radius:50%, 8px) and adds a
+       hollow .detached ring. Slice 1 is a mechanical rename only — the shape and the
+       detached state are reconciled with the canvas in slice 4a, per spec §5.2. */
+    .dot.working { background: var(--ok); }
+    .dot.waiting { background: var(--warn-fg); }
+    .dot.crashed { background: var(--danger); }
+    .dot.done, .dot.detached, .dot.unknown { background: var(--muted); }

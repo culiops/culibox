@@ -234,7 +234,7 @@
     /* No `color:` here on purpose: WebTUI paints the badge body from
        --badge-color and the text from --badge-text (badge.css). A color set
        here is unlayered and would silently win over --badge-text again. */
-    #sessions .badge { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
+    #sessions .bdg { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     /* Containment tier. The uncontained tier borrows the PROD badge's red so one
        visual language means "you are somewhere with real consequences". */
     #sessions .tier { white-space: nowrap; }
@@ -248,9 +248,9 @@
     #sessions .watching { flex: none; width: 9px; height: 9px; background: var(--fg); }
     /* Activity dot: square, matching .watching / header .dot (the app's idiom).
        Leads each row. Colours are semantic, separate from the accent. */
-    #sessions .act-dot { flex: none; width: 9px; height: 9px; }
+    #sessions .dot { flex: none; width: 9px; height: 9px; }
     /* Slightly smaller on a tab than in the sidebar, matching the denser strip. */
-    .cell-bar .act-dot { flex: none; width: 8px; height: 8px; }
+    .cell-bar .dot { flex: none; width: 8px; height: 8px; }
     /* Session summary: a second line under the row's name. Muted and clipped to a
        single line — at the real 279px sidebar width a wrapping summary pushes the
        list into a scroll on every poll. */
@@ -296,7 +296,7 @@
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
     #sessions li.killing { opacity: 0.55; pointer-events: none; }
     /* Same reasoning: no color: here — --badge-text carries it. */
-    #sessions li.killing .badge { border-color: var(--danger); }
+    #sessions li.killing .bdg { border-color: var(--danger); }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
@@ -697,8 +697,8 @@
     /* The one deliberate exception to --focus-off: a pane's outline at a positive
        offset is clipped by the grid cell that contains it, so it draws inward.
        Same width and colour as everywhere else. */
-    .cell.focused { outline: var(--focus); outline-offset: -2px; }
-    /* Must come AFTER .cell.focused: both are (0,2,0), so source order decides.
+    .cell.focus { outline: var(--focus); outline-offset: -2px; }
+    /* Must come AFTER .cell.focus: both are (0,2,0), so source order decides.
        Placed before it, the drag highlight on the focused cell was painted over
        by the 1px focus outline and the drop target looked like every other
        pane: the affordance existed in the DOM and not on screen. */

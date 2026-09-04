@@ -192,7 +192,7 @@ class Cell {
       if (t.kind === "terminal" && typeof t.activity === "function") {
         const a = activityClass(t.activity());
         const dot = document.createElement("span");
-        dot.className = "act-dot " + a.cls;
+        dot.className = a.cls;
         if (a.title) { dot.title = a.title; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", a.title); }
         b.append(dot);
       }
@@ -266,7 +266,7 @@ class Cell {
     // Ctrl+Shift+`. NOTE: .cell-bar carries an author `display: flex`, so the
     // hidden attribute alone does nothing: see .cell-bar[hidden] in the stylesheet.
     this.bar.hidden = this.tabs.length === 0;
-    this.el.classList.toggle("focused", this === focusedCell);
+    this.el.classList.toggle("focus", this === focusedCell);
   }
 
   dispose() { this.tabs.forEach((t) => t.dispose?.()); }
@@ -280,7 +280,7 @@ function setFocusedCell(cell) {
   // from the cell's mousedown, so mouseup landed on a fresh node and the click
   // never fired: the first press of ⛶ / +sh / ✕ on an unfocused pane was eaten.
   // renderBar keeps its own toggle, so a later rebuild still paints the ring.
-  cells.forEach((c) => c.el.classList.toggle("focused", c === focusedCell));
+  cells.forEach((c) => c.el.classList.toggle("focus", c === focusedCell));
   syncFocusedTree(); // tree follows the focused tab
   scheduleSaveLayout();
 }
