@@ -1491,6 +1491,8 @@ document.addEventListener("keydown", (e) => {
 // palette needs it but because the terminal does: xterm forwards every
 // combination it does not recognise into the running process, so a handler
 // that lets these bubble types them into the agent instead of toggling a pane.
+const SIDEBAR_SHORTCUT_MAC =
+  /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 document.addEventListener("keydown", (e) => {
   const ae = document.activeElement;
   if (ae && (ae.tagName === "INPUT" ||
@@ -1501,7 +1503,14 @@ document.addEventListener("keydown", (e) => {
   let hit = null;
   if (e.altKey && code === "KeyS") hit = () => togglePane("sessions");
   else if (e.altKey && code === "KeyF") hit = () => togglePane("files");
-  else if (!e.altKey && !e.shiftKey && code === "KeyB") hit = toggleSidebar;
+  // Toggle sidebar: ⌘B is free on macOS, but the unshifted Ctrl+B belongs to
+  // the shells and TUIs these panes host — backward-char in readline, page-up
+  // in vim, tmux's default prefix — so on every other platform the binding
+  // carries Shift to stay off it, the same reasoning that already keeps
+  // Ctrl+K clear of the command palette.
+  else if (!e.altKey && code === "KeyB" &&
+      (SIDEBAR_SHORTCUT_MAC ? (e.metaKey && !e.ctrlKey && !e.shiftKey)
+                             : (e.ctrlKey && !e.metaKey && e.shiftKey))) hit = toggleSidebar;
   if (!hit) return;
   e.preventDefault();
   e.stopPropagation();
