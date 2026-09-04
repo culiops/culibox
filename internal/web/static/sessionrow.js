@@ -55,7 +55,7 @@ function sessionMeta(s, cwdText, statusTitle) {
 
 // menuItems: what the row's actions menu offers for THIS session.
 //
-// Two items need a claude transcript and one pair needs a working directory, so
+// One item needs a claude transcript and one pair needs a working directory, so
 // each is dropped where it would open onto nothing — a menu item that always
 // fails is worse than an absent one.
 //

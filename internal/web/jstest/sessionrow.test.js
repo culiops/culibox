@@ -88,9 +88,9 @@ test("sessionMeta drops empty segments instead of leaving separators", () => {
   assert.equal(sessionMeta(null, null, null), "");
 });
 
-// The menu's contents are fixed, but two items are meaningless on a non-claude
-// session and one is meaningless without a working directory. "End session…" is
-// always last and always the only dangerous one.
+// The menu's contents are fixed, but one item is meaningless on a non-claude
+// session and a pair of them is meaningless without a working directory.
+// "End session…" is always last and always the only dangerous one.
 test("menuItems offers the full list for a claude session with a cwd", () => {
   const ids = menuItems({ claude: true, cwd: "/home/x" }).map((i) => i.id);
   assert.deepEqual(ids, ["rename", "files", "attribution", "copycwd", "newpane", "end"]);
