@@ -178,9 +178,14 @@
     .pane-head {
       flex: none; align-self: flex-start;
       position: relative; top: var(--pane-rule-y); transform: translateY(-50%);
-      /* The legend visually overlaps #split-h (see its comment below) on
-         #files-pane; pointer-events: none lets clicks fall through to
-         whatever is actually underneath, and the buttons opt back in. */
+      /* The legend sits inside the same thin border gap that runs around
+         every edge of a box-="square" dialog — click anywhere in that gap
+         and, since nothing else covers it, the click hits the dialog element
+         itself, which the backdrop-click handler in shell.js treats as a
+         close, same as a true outside click. Without pointer-events: none
+         here, the legend text would be the one stretch of that gap that
+         swallows the click instead of passing it through, going dead where
+         the other three edges still close the dialog. */
       pointer-events: none;
       margin-left: 1ch; padding: 0 1ch;
       /* The panel's own background masks the rule running behind the label —
@@ -201,8 +206,6 @@
       display: flex; align-items: center; gap: .5ch;
       color: var(--muted); font-size: 10.5px; text-transform: none; letter-spacing: .5px;
     }
-    .pane-head button { pointer-events: auto; }
-    .pane-head .count { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     #sessions-pane { flex: 0 1 var(--sidebar-split); display: flex; flex-direction: column; min-height: 76px; }
     #files-pane { flex: 1 1 0; display: flex; flex-direction: column; min-height: 76px; }
     /* A collapsed pane is its header bar and nothing else: the flex basis and
@@ -649,7 +652,7 @@
 
     /* --- command palette --------------------------------------------------- */
     /* No box-/shear- here, on purpose. Tried a `.pane-head` legend reading
-       "search" (task 5): it duplicated the placeholder text one line below
+       "search" once: it duplicated the placeholder text one line below
        it ("Search files and sessions...") and, since #pal-input/#pal-list/
        #pal-foot all bleed edge-to-edge by design, box-'s inset broke that
        into a visibly segmented, slightly glitchy frame rather than a clean

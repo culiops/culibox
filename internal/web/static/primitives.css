@@ -58,6 +58,11 @@
        disabled. */
     .phd.closed { background: var(--surface-2); color: var(--fg); }
     .phd .grow { flex: 1; }
+    /* The count is a plain digit, not a path or a live phrase like the pip
+       text, so it takes the bar's own type as-is — muted, same size — rather
+       than the bordered chip #sessions-count wore before the pane grew a
+       header bar. No border, no background: that chip look is retired. */
+    .phd .count { color: var(--muted); }
     .phd .path {
       letter-spacing: 0; text-transform: none; color: var(--muted);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
