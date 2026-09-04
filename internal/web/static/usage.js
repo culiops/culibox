@@ -58,6 +58,34 @@ function rateLimitText(label, win, nowSec) {
   return label + " " + Math.round(win.used_percentage) + "% · " + fmtCountdown(win.resets_at, nowSec);
 }
 
+// meterModel turns one account window into everything the header meter needs.
+// Returns null when the window is absent — the caller then renders nothing at
+// all, rather than a 0% bar that reads as "plenty left" when the truth is
+// "unknown". The design board states that rule for the whole block; applying it
+// per window is OUR decision, since five_hour and seven_day are independently
+// nullable and the board does not cover the one-present-one-absent case.
+//
+// pct is rounded for the label but the bar keeps the precise value: rounding the
+// bar too would redraw a 42.5% bar at 43% for no reason.
+//
+// HOT is "past 75", so exactly 75 is not hot. Hot is peach (--warn), never the
+// yellow reserved for "an agent needs you" — a quota threshold borrowing that
+// yellow makes the header cry wolf.
+const METER_HOT_PCT = 75;
+
+function meterModel(label, win, nowSec) {
+  if (!win || typeof win.used_percentage !== "number") return null;
+  const raw = win.used_percentage;
+  const clamped = Math.min(100, Math.max(0, raw));
+  return {
+    label: label,
+    pct: Math.round(raw),
+    width: clamped + "%",
+    hot: raw > METER_HOT_PCT,
+    reset: fmtCountdown(win.resets_at, nowSec) + " left",
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, rateLimitText };
+  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, rateLimitText, meterModel };
 }
