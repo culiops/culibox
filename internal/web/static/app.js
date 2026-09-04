@@ -103,6 +103,69 @@ function toggleSidebar() {
 }
 $("sidebar-toggle").onclick = toggleSidebar;
 
+// Per-pane collapse. The state is two independent booleans and both collapsed
+// at once is legal — you get two header bars and an empty rail.
+//
+// This does NOT call renderGrid(): collapsing a pane rearranges space inside
+// the sidebar only, and the terminal grid's width is unchanged. Hiding the
+// whole sidebar does change that width, which is why toggleSidebar() refits
+// and this does not.
+function readCollapsed() {
+  let raw = null;
+  try { raw = localStorage.getItem(PANES_KEY); } catch (_) {}
+  return loadCollapsed(raw);
+}
+
+function applyCollapsed(state) {
+  const root = document.documentElement;
+  root.classList.toggle("sessions-collapsed", state.sessions);
+  root.classList.toggle("files-collapsed", state.files);
+  const cv5 = $("sessions-cv"), cvF = $("files-cv");
+  if (cv5) {
+    cv5.textContent = state.sessions ? "▸" : "▾";
+    cv5.setAttribute("aria-expanded", state.sessions ? "false" : "true");
+    cv5.title = state.sessions ? "Expand sessions" : "Collapse sessions";
+  }
+  if (cvF) {
+    cvF.textContent = state.files ? "▸" : "▾";
+    cvF.setAttribute("aria-expanded", state.files ? "false" : "true");
+    cvF.title = state.files ? "Expand files" : "Collapse files";
+  }
+  $("sessions-phd") && $("sessions-phd").classList.toggle("closed", state.sessions);
+  $("files-phd") && $("files-phd").classList.toggle("closed", state.files);
+  renderCollapsedSummaries(state);
+}
+
+// The summaries are what make a collapsed pane still worth looking at, so they
+// have to keep updating while collapsed — this is called from the same places
+// that repaint the session list and the tree root, not only on toggle.
+function renderCollapsedSummaries(state) {
+  const st = state || readCollapsed();
+  const pip = $("sessions-pip"), pipText = $("sessions-pip-text");
+  if (pip && pipText) {
+    const s = collapsedSummary("sessions", { waiting: waitingCount() });
+    pipText.textContent = s.text;
+    pip.hidden = !(st.sessions && s.dot);
+  }
+  const path = $("files-path");
+  if (path) {
+    const f = collapsedSummary("files", { root: ftRoot() });
+    path.textContent = f.text;
+    path.hidden = !(st.files && f.text);
+  }
+}
+
+function togglePane(kind) {
+  const state = readCollapsed();
+  state[kind] = !state[kind];
+  try { localStorage.setItem(PANES_KEY, saveCollapsed(state)); } catch (_) {}
+  applyCollapsed(state);
+}
+
+$("sessions-cv") && ($("sessions-cv").onclick = () => togglePane("sessions"));
+$("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
+applyCollapsed(readCollapsed());
+
 // Copy/paste hint: platform-aware, dismissable (persisted). Lives outside the
 // sidebar so it survives the sidebar-hide toggle.
 (function initHint() {
@@ -645,6 +708,13 @@ function startRename(li, span, s) {
 // sessions without issuing its own request on every keystroke.
 let lastSessions = [];
 
+// The collapsed Sessions bar's pip: how many of the cached sessions are
+// waiting for input right now. Derived from lastSessions rather than a
+// separate count so it can never drift from what the list itself would show.
+function waitingCount() {
+  return lastSessions.reduce((n, s) => n + (s.activity === "waiting" ? 1 : 0), 0);
+}
+
 // Returns the live session list, or null if the request failed: the boot-time
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
@@ -701,6 +771,7 @@ async function refreshSessions() {
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   updateStatusLine();
+  renderCollapsedSummaries();
   // Everything above has already been pushed. Only the list rebuild waits.
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }

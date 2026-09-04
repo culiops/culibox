@@ -205,6 +205,23 @@
     .pane-head .count { font-size: 10px; border: 1px solid var(--border); padding: 0 4px; }
     #sessions-pane { flex: 0 1 var(--sidebar-split); display: flex; flex-direction: column; min-height: 76px; }
     #files-pane { flex: 1 1 0; display: flex; flex-direction: column; min-height: 76px; }
+    /* A collapsed pane is its header bar and nothing else: the flex basis and
+       the min-height floor both have to go, or the pane keeps reserving the
+       space it had when open. */
+    .sessions-collapsed #sessions-pane, .files-collapsed #files-pane {
+      flex: none; min-height: 0;
+    }
+    .sessions-collapsed #sessions-pane > :not(.phd),
+    .files-collapsed #files-pane > :not(.phd) { display: none; }
+    /* With either pane fixed at its bar height there is nothing left to size
+       against, and the drag math would clamp between a degenerate rect and
+       itself. Hiding the handle and gating the pointer handler are two halves
+       of the same rule — neither alone is enough. */
+    .sessions-collapsed #split-h, .files-collapsed #split-h { display: none; }
+    /* Both collapsed: two bars at the top and an empty rail below them. The
+       open pane normally absorbs the slack; with neither open, nothing does. */
+    .sessions-collapsed.files-collapsed #files-pane { flex: 1 1 auto; }
+    .sessions-collapsed.files-collapsed #files-pane > .phd { flex: none; }
     #split-h {
       flex: none; height: 7px; cursor: row-resize; background: var(--bg);
       border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);

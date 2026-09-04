@@ -17,6 +17,7 @@
   <script>/* apply persisted font sizes before first paint (no flash) */try{var _fp=JSON.parse(localStorage.getItem('agent-box:fontPrefs')||'{}');var _d={code:['--fs-code',12.5],markdown:['--fs-md',14],filetree:['--fs-tree',12]};for(var _k in _d){var _v=Number(_fp[_k]);if(!isFinite(_v))_v=_d[_k][1];_v=Math.min(32,Math.max(8,_v));document.documentElement.style.setProperty(_d[_k][0],_v+'px');}}catch(e){}</script>
   <script>/* apply persisted sidebar split before first paint (no flash) */try{var _sp=Number(localStorage.getItem('agent-box:sidebarSplit'));if(isFinite(_sp)&&_sp>0)document.documentElement.style.setProperty('--sidebar-split',Math.min(85,Math.max(15,_sp))+'%');}catch(e){}</script>
   <script>/* apply persisted sidebar width before first paint (no flash) */try{var _sw=Number(localStorage.getItem('agent-box:sidebarWidth'));if(isFinite(_sw)&&_sw>0)document.documentElement.style.setProperty('--sidebar-w',Math.min(560,Math.max(200,_sw))+'px');}catch(e){}</script>
+  <script>/* apply persisted pane collapse before first paint (no flash) */try{var _pc=JSON.parse(localStorage.getItem('agent-box:panesCollapsed')||'{}')||{};if(_pc.sessions)document.documentElement.classList.add('sessions-collapsed');if(_pc.files)document.documentElement.classList.add('files-collapsed');}catch(e){}</script>
 </head>
 <body>
   <div id="env-strip" hidden></div>

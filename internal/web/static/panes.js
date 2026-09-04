@@ -15,6 +15,9 @@ const PANES_KEY = "agent-box:panesCollapsed";
 // or truncated by a full quota. Anything unreadable degrades to "nothing
 // collapsed" rather than throwing: this runs in the pre-paint script, where an
 // exception would block the rest of head parsing.
+//
+// index.html's pre-paint <script> mirrors this parse by hand (it runs before
+// any <script src> has loaded, so it cannot call in here) — keep the two in step.
 function loadCollapsed(raw) {
   const out = { sessions: false, files: false };
   if (!raw) return out;

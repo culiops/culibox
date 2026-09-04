@@ -175,6 +175,12 @@ function initSplitter() {
   if (!sidebar || !handle || !top || !bottom) return;
 
   handle.addEventListener("pointerdown", (e) => {
+    // A collapsed pane is a fixed bar; there is nothing to size against, and
+    // the clamp below would invert. The CSS hides the handle too — this guard
+    // covers the case where a drag is already in flight when a pane collapses.
+    if (typeof splitterLive === "function" &&
+        !splitterLive({ sessions: document.documentElement.classList.contains("sessions-collapsed"),
+                        files: document.documentElement.classList.contains("files-collapsed") })) return;
     // Pointer events (not mouse) so the drag also works under touch; the handle
     // sets touch-action:none so the browser does not scroll instead.
     e.preventDefault();
@@ -212,7 +218,14 @@ function initSplitter() {
 
   // Double-click restores the default ratio: a cheap escape hatch from a drag
   // that went wrong on a small screen.
-  handle.addEventListener("dblclick", () => persistSidebarSplit(setSidebarSplit(45)));
+  handle.addEventListener("dblclick", () => {
+    // Same guard as pointerdown above: a double-click on a hidden handle must
+    // not reset the split either.
+    if (typeof splitterLive === "function" &&
+        !splitterLive({ sessions: document.documentElement.classList.contains("sessions-collapsed"),
+                        files: document.documentElement.classList.contains("files-collapsed") })) return;
+    persistSidebarSplit(setSidebarSplit(45));
+  });
 }
 
 function initWidthSplitter() {

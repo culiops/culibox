@@ -88,6 +88,9 @@ function ftRoot() { return ftRootPath; }
 function setFtRoot(path) {
   ftRootPath = path || "";
   if (ftRootSel) { ftRootSel.value = ftRootPath; ftRootSel.title = ftRootPath; }
+  // Keep a collapsed Files bar's root readout live even though the tree
+  // itself may be hidden — this is the one place the root actually changes.
+  if (typeof renderCollapsedSummaries === "function") renderCollapsedSummaries();
 }
 let lastSyncedKey = null;       // which tab the tree is currently following (see treeFollowTarget)
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
