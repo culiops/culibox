@@ -145,6 +145,7 @@ class Cell {
       tab.onShow?.();
     }
     if (this === focusedCell) syncFocusedTree(); // tree follows the focused tab
+    if (typeof syncSelectedRow === "function") syncSelectedRow();
     scheduleSaveLayout();
   }
 
@@ -282,6 +283,7 @@ function setFocusedCell(cell) {
   // renderBar keeps its own toggle, so a later rebuild still paints the ring.
   cells.forEach((c) => c.el.classList.toggle("focus", c === focusedCell));
   syncFocusedTree(); // tree follows the focused tab
+  if (typeof syncSelectedRow === "function") syncSelectedRow();
   scheduleSaveLayout();
 }
 

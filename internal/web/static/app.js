@@ -539,132 +539,121 @@ async function togglePeek(li, s) {
 
 function renderSession(s) {
   const li = document.createElement("li");
-  if (terminalOpen(s.id)) li.classList.add("open");
+  // rowClasses decides the state; this function only paints it. Selected and
+  // needs-you are separate axes and a row can carry both.
+  li.className = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) }).join(" ");
+  li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
-  // Activity dot leads the row: working/waiting/done/crashed at a glance. Server-
-  // computed (Info.activity); unknown/missing degrades to a muted dot, never a throw.
-  const adot = document.createElement("span");
+
   const act = activityClass(s.activity);
+  const adot = document.createElement("span");
   adot.className = act.cls;
-  if (act.title) {
-    adot.title = act.title;
+  // Someone else is holding this session from another browser. It rides ON the
+  // activity dot as an outline rather than as a second marker: the row has one
+  // status light, and a second square beside it read as a second state.
+  const tab = terminalTabFor(s.id);
+  const elsewhere = attachedElsewhere(s, !!tab && tab.status() === "connected");
+  if (elsewhere) adot.classList.add("watching");
+  const label = elsewhere
+    ? (act.title ? act.title + "; someone is viewing this session elsewhere"
+                 : "Someone is viewing this session elsewhere")
+    : act.title;
+  if (label) {
+    adot.title = elsewhere
+      ? "Someone is viewing this session in another browser or device. Opening it here disconnects them."
+      : act.title;
     adot.setAttribute("role", "img");
-    adot.setAttribute("aria-label", act.title);
+    adot.setAttribute("aria-label", label);
   }
   li.appendChild(adot);
-  const name = document.createElement("span");
-  name.className = "name";
-  name.textContent = s.name || s.id;
+
+  const grow = document.createElement("div");
+  grow.className = "grow";
+  const sname = document.createElement("div");
+  sname.className = "sname";
+  // A real button, not a span with a click handler: this is the control that
+  // opens the session, so it has to be reachable from the keyboard and carry
+  // the app's one focus ring without any extra wiring.
+  const nm = document.createElement("button");
+  nm.type = "button";
+  nm.className = "nm";
+  nm.textContent = s.name || s.id;
+  sname.appendChild(nm);
+  grow.appendChild(sname);
+
+  const smeta = document.createElement("div");
+  smeta.className = "smeta";
+  smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", act.title);
+  grow.appendChild(smeta);
+  li.appendChild(grow);
+
   if (killing.has(s.id)) {
-    // teardown in flight (can take a few seconds): disabled row + "killing…"
-    li.classList.add("killing");
     const st = document.createElement("span");
     st.className = "bdg";
     st.textContent = "killing…";
     asBadge(st, { variant: "foreground2" });
-    li.append(name, st);
+    sname.appendChild(st);
     return li;
   }
-  name.onclick = () => openTerminal(s.id, s.name);
-  name.ondblclick = (e) => { e.stopPropagation(); startRename(li, name, s); };
-  li.appendChild(name);
-  if (s.exited) {
-    const badge = document.createElement("span");
-    badge.className = "bdg";
-    badge.textContent = "exited";
-    asBadge(badge, { variant: "background2" });
-    li.appendChild(badge);
-  }
+
+  nm.onclick = () => openTerminal(s.id, s.name);
+  nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
+
   // Containment tier. Shown for every live session, not only the risky one: a
   // badge that appears only when something is wrong trains you to ignore its
   // absence.
   const tier = tierBadge(s, boxRuntime);
   if (tier) {
     const tb = document.createElement("span");
-    tb.className = "bdg tier" + (tier.tone === "danger" ? " tier-danger" : "");
+    tb.className = "bdg tier";
+    if (tier.tone === "danger") tb.classList.add("tier-danger");
     tb.textContent = tier.text;
     tb.title = tier.title;
-    if (tier.tone === "danger") {
-      asBadge(tb, { color: "var(--warn)", text: "var(--bg)" });
-    } else {
-      asBadge(tb, { variant: "background2" });
-    }
-    li.appendChild(tb);
+    if (tier.tone === "danger") asBadge(tb, { color: "var(--warn)", text: "var(--bg)" });
+    else asBadge(tb, { variant: "background2" });
+    sname.appendChild(tb);
   }
-  // Attach is exclusive: opening a session disconnects whoever holds it. Say so
-  // before the click, not after. status() is the second half of the test on
-  // purpose — an evicted tab is still open, and treating it as the holder would
-  // hide the badge in exactly the case it exists for.
-  // A dot, not a worded badge. Measured at the real sidebar width (279px) with a
-  // real session name: a third text badge squeezed the name to 49px and broke it
-  // over five lines. The dot costs ~16px, so the row keeps the height it already
-  // had. Its meaning is learnable in one interaction — take the session over and
-  // the pane you evicted says "taken over".
-  const tab = terminalTabFor(s.id);
-  if (attachedElsewhere(s, !!tab && tab.status() === "connected")) {
-    const ab = document.createElement("span");
-    ab.className = "watching";
-    ab.title = "Someone is viewing this session in another browser or device. Opening it here disconnects them.";
-    // An empty span's title is announced by nothing and shown on no touch
-    // device, which would make the whole mark sighted-mouse-only. Costs no
-    // layout.
-    ab.setAttribute("role", "img");
-    ab.setAttribute("aria-label", "Someone is viewing this session elsewhere");
-    li.appendChild(ab);
+
+  const right = document.createElement("div");
+  right.className = "sright";
+  // Context percentage, when there is one to show. This reads the usage already
+  // fetched for an open terminal tab; there is deliberately no per-row request,
+  // because a fetch per session per poll is a lot of traffic for two characters.
+  // No placeholder when it is absent — a dash would read as "zero".
+  const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
+  if (u && typeof u.pct === "number") {
+    const pct = document.createElement("span");
+    pct.className = "pct";
+    pct.textContent = u.pct + "%";
+    pct.title = usageTitle(u);
+    right.appendChild(pct);
   }
   const kill = document.createElement("button");
   kill.className = "kill";
   kill.title = "Kill session (ends the agent)";
-  // ⏻, not ×: the × in a tab means "close the view, session keeps running", so
-  // the same glyph here — where the button ENDS the session — trained the eye to
-  // read an irreversible kill as the safe close. ⏻ matches the tab's kill button.
   kill.textContent = "⏻";
-  // A glyph-only button has no accessible name from its text (⏻ is not announced
-  // as an action), so name it explicitly, as the file-tree actions button does.
   kill.setAttribute("aria-label", "Kill session");
-  // Guarded like the tab ⏻ and the palette: this × used to kill immediately, but
-  // it is the riskiest path (a small control packed against other rows) and the
-  // kill "cannot be undone". Undo-on-spawn still calls killSession directly, so
-  // it is not double-prompted. See confirmKill.
   kill.onclick = (ev) => { ev.stopPropagation(); confirmKill(s.id, s.name || s.id); };
-  li.appendChild(kill);
-  // Summary line: what this agent last said. Server-truncated to one line
-  // (Info.summary); clicking it expands the full text in place.
-  //
-  // Rendered for EVERY claude session, not only ones that have something to
-  // say. Gating on s.summary made the peek unreachable in exactly the cases
-  // worth explaining — an unlocatable or unreadable transcript, or an agent
-  // that has not spoken yet — so the panel's empty states could never render,
-  // and the whole mitigation for the "silent blank summary" risk was dead.
-  // It also hid the opt-in checkbox, which lives INSIDE the panel: a session
-  // that had been opted in and whose transcript later broke was stuck opted
-  // in with no way to revoke it from the UI.
-  //
-  // s.claude is the server's isClaudeBin verdict, not the profile name: the
-  // send path is scoped by the binary, so the affordance must be too.
+  right.appendChild(kill);
+  li.appendChild(right);
+
   if (s.claude) {
+    // Summary line: what this agent last said. Rendered for EVERY claude
+    // session, not only ones with something to say — gating on the text made
+    // the panel's empty states and the reply opt-in unreachable in exactly the
+    // cases worth explaining. s.claude is the server's own verdict on the
+    // binary, not the profile name, because the send path is scoped that way.
     const sum = document.createElement("span");
     sum.className = "summary";
-    if (s.summary) {
-      sum.textContent = s.summary;
-      sum.title = "Show the full message";
-    } else {
-      // Quiet, not loud: a session with nothing to say must not shout. The
-      // placeholder states only that there is nothing, never a guess at why —
-      // the panel says why, on demand.
-      sum.textContent = "No summary";
-      sum.classList.add("placeholder");
-      sum.title = "Show why there is no summary";
-    }
+    if (s.summary) { sum.textContent = s.summary; sum.title = "Show the full message"; }
+    else { sum.textContent = "No summary"; sum.classList.add("placeholder"); sum.title = "Show why there is no summary"; }
     sum.setAttribute("role", "button");
     sum.setAttribute("tabindex", "0");
     const toggle = (e) => { e.stopPropagation(); togglePeek(li, s); };
     sum.onclick = toggle;
     sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") toggle(e); };
-    li.appendChild(sum);
+    grow.appendChild(sum);
   }
-  // The list re-renders on every poll. Without this, an open peek collapses
-  // under the reader every few seconds.
   if (openPeekId === s.id) togglePeek(li, s);
   return li;
 }
@@ -684,6 +673,9 @@ function startRename(li, span, s) {
   input.type = "text";
   input.className = "ren-input";
   input.value = cur;
+  // span's parent is .sname now, not li directly (the row grew a .grow/.sname
+  // wrapper) — swap it out of its real parent, not the row.
+  const parent = span.parentNode;
   let finished = false;
   const finish = async (commit) => {
     if (finished) return;
@@ -707,7 +699,7 @@ function startRename(li, span, s) {
     else if (e.key === "Escape") { e.preventDefault(); finish(false); }
   };
   input.onblur = () => finish(true);
-  li.replaceChild(input, span);
+  parent.replaceChild(input, span);
   input.focus();
   input.select();
 }
@@ -721,6 +713,31 @@ let lastSessions = [];
 // separate count so it can never drift from what the list itself would show.
 function waitingCount() {
   return lastSessions.reduce((n, s) => n + (s.activity === "waiting" ? 1 : 0), 0);
+}
+
+// selectedSessionId: which row is "selected". Selected means the focused pane
+// is showing THIS session's terminal — not "has a tab open somewhere", which is
+// a different question and is answered by the tab strip.
+//
+// null is a real answer, not a missing one: when the focused pane shows a file
+// viewer or holds no tabs at all, no agent is receiving your keystrokes, and
+// lighting up whichever row was last selected would say otherwise.
+function selectedSessionId() {
+  const t = typeof focusedTerminal === "function" ? focusedTerminal() : null;
+  return t ? t.id : null;
+}
+
+// syncSelectedRow repaints just the selection, without rebuilding the list. The
+// focus ring moves on mousedown; the list rebuilds every three seconds. Waiting
+// for the poll would leave the highlight visibly behind the click.
+function syncSelectedRow() {
+  const id = selectedSessionId();
+  const ul = $("sessions");
+  if (!ul) return;
+  for (const li of ul.children) {
+    if (!li.classList || !li.classList.contains("srow")) continue;
+    li.classList.toggle("sel", !!id && li.dataset.sid === id);
+  }
 }
 
 // Returns the live session list, or null if the request failed: the boot-time
@@ -784,6 +801,7 @@ async function refreshSessions() {
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
   ul.replaceChildren(...lastSessions.map(renderSession));
+  syncSelectedRow();
   return lastSessions;
 }
 
