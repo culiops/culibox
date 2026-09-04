@@ -59,11 +59,6 @@
     #hint .status-sep:has(+ #status-cwd:empty) {
       display: none;
     }
-    /* Account limits (global, once): hide each field and its leading separator
-       when there's no data, so the bar shows nothing rather than empty gaps. */
-    #status-5h:empty, #status-week:empty { display: none; }
-    #hint .status-sep:has(+ #status-5h:empty),
-    #hint .status-sep:has(+ #status-week:empty) { display: none; }
     #hint button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 2px; }
     #hint button:hover { color: var(--fg); }
     header .spacer { flex: 1; }
@@ -818,6 +813,11 @@
          with it: otherwise the splitter has nothing left to distribute. */
       #sessions-pane, #files-pane { min-height: 56px; }
       header { gap: .5ch; padding: .5lh 1ch; }
+      /* The header has no room for two meters at this width, and the mobile
+         layout gives usage its own row below the header instead — built with the
+         rest of the mobile shell. Until then the meters are desktop-only rather
+         than overflowing a 390px header. */
+      #limits { display: none; }
       /* The heading used to be display:none here, on the grounds that the badge
          and dot carry identity. They do not carry the product NAME, so it is back
         : paid for by the palette button's shortcut label, which means nothing on

@@ -50,14 +50,6 @@ function fmtCountdown(resetsAtSec, nowSec) {
   return mins + "m";
 }
 
-// rateLimitText: one account window as "<label> <pct>% · <countdown>", or "" when
-// the window is absent (so the bottom bar renders nothing).
-function rateLimitText(label, win, nowSec) {
-  if (!win || typeof win.used_percentage !== "number") return "";
-  // The producer can emit a fractional percentage (e.g. 7.000000000000001) — round.
-  return label + " " + Math.round(win.used_percentage) + "% · " + fmtCountdown(win.resets_at, nowSec);
-}
-
 // meterModel turns one account window into everything the header meter needs.
 // Returns null when the window is absent — the caller then renders nothing at
 // all, rather than a 0% bar that reads as "plenty left" when the truth is
@@ -87,5 +79,5 @@ function meterModel(label, win, nowSec) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, rateLimitText, meterModel };
+  module.exports = { fmtTokens, usageTab, usageTitle, fmtCountdown, meterModel };
 }

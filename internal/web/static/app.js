@@ -143,14 +143,43 @@ function updateStatusLine() {
   }
 }
 
-// renderRateLimits paints the account 5h/weekly usage into the bottom bar (once,
-// globally). null/absent → both fields blank, and the CSS hides them + their
-// separators. The countdown is recomputed from resets_at against the live clock.
+// renderRateLimits paints the account 5h/weekly usage into the header (once,
+// globally). Each window renders independently: an absent one contributes no
+// meter at all, and if neither is present the container ends up empty and
+// occupies no space, so the header closes up rather than showing a gap.
+//
+// Built with createElement and textContent, never innerHTML — these values come
+// from a file on disk written by an external hook.
 function renderRateLimits(rl) {
+  const host = $("limits");
+  if (!host) return;
+  host.replaceChildren();
   const now = Math.floor(Date.now() / 1000);
-  const el5 = $("status-5h"), elW = $("status-week");
-  if (el5) el5.textContent = rl ? rateLimitText("5h", rl.five_hour, now) : "";
-  if (elW) elW.textContent = rl ? rateLimitText("week", rl.seven_day, now) : "";
+  const windows = [["5h", rl && rl.five_hour], ["wk", rl && rl.seven_day]];
+  for (const [label, win] of windows) {
+    const m = meterModel(label, win, now);
+    if (!m) continue;
+    const el = document.createElement("div");
+    el.className = m.hot ? "mtr hot" : "mtr";
+    const name = document.createElement("span");
+    name.textContent = m.label;
+    const bar = document.createElement("span");
+    bar.className = "bar";
+    const fill = document.createElement("i");
+    fill.style.width = m.width;
+    bar.appendChild(fill);
+    const pc = document.createElement("span");
+    pc.className = "pc";
+    pc.textContent = m.pct + "%";
+    const rs = document.createElement("span");
+    rs.className = "rs";
+    rs.textContent = m.reset;
+    el.append(name, bar, pc, rs);
+    // The bar carries no text, so the meter needs an accessible name of its own.
+    el.setAttribute("role", "img");
+    el.setAttribute("aria-label", m.label + " usage " + m.pct + "%, " + m.reset);
+    host.appendChild(el);
+  }
 }
 
 // openAttribution shows the context-by-tool dialog for a session. Rows are built
@@ -1313,7 +1342,7 @@ initUpload();
     boxRuntime = (meta && meta.box_runtime) || "";
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
-    renderRateLimits(meta && meta.rate_limits); // account 5h/weekly in the bottom bar
+    renderRateLimits(meta && meta.rate_limits); // account 5h/weekly meters in the header
     refreshSessions(); // re-render rows now that the tier label is known
     if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
     if (!meta || !meta.env_label) return;
