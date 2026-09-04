@@ -832,6 +832,18 @@ async function refreshSessions() {
   // A tab whose session has left the list (killed/pruned) would otherwise keep
   // its last dot — a stale green "working" on a dead agent. Fall back to "done".
   eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
+  // Repaint every open pane's answer-strip control state (disabled/.off/title)
+  // against the session list this poll just refreshed. setActivity above is a
+  // no-op when activity is unchanged, so a pane whose replyable flag was
+  // revoked (or that entered a tool call) while its activity stayed "waiting"
+  // would otherwise never repaint until activity next moves — the strip would
+  // keep looking answerable after the real gate had already closed. This is
+  // paint-only (see Cell.repaintReply): it never rebuilds the strip or touches
+  // the field's value, so a caret mid-reply is untouched. It intentionally does
+  // NOT re-fetch /peek's pending flag — post() always re-fetches that itself
+  // immediately before it actually sends, so a stale pending here only ever
+  // makes a control look more open than it is, never less closed than reality.
+  cells.forEach((c) => c.repaintReply());
   // Per-window usage: fetch only for open terminal tabs whose session is still
   // listed (alive), and only when visible. 204 (non-claude / no transcript) →
   // null → no readout. A gone session keeps its last usage rather than blanking.

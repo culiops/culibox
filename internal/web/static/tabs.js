@@ -123,6 +123,10 @@ class Cell {
     this.body.className = "cell-body";
     this.el.append(this.bar, this.body);
     this.el.addEventListener("mousedown", () => setFocusedCell(this), true);
+    // Explicit so the sentinel is deliberate, not an implicit `undefined`
+    // that syncNeeds' first call happens to treat correctly.
+    this._needsKey = "";
+    this._strip = null;
     this.renderBar();
     this.renderBody();
   }
@@ -294,6 +298,23 @@ class Cell {
     }
   }
 
+  // repaintReply refreshes the answer strip's disabled/.off/title state in
+  // place, if this pane currently has one — otherwise a no-op. Driven once
+  // per poll from refreshSessions (app.js), because syncNeeds only rebuilds
+  // on an activity transition (setActivity is a no-op when the value is
+  // unchanged), so a session whose replyable flag is revoked, or that enters
+  // a tool call, while its activity stays "waiting" would otherwise never
+  // repaint until activity next moves — the strip would keep looking
+  // answerable after the real gate had already closed.
+  //
+  // Never rebuilds the strip, never replaces a DOM node, never touches the
+  // field's value: it calls the strip's own paint() (see buildReplyStrip),
+  // which only sets disabled/class/title on existing elements. A caret
+  // mid-reply is untouched.
+  repaintReply() {
+    this._strip?._paint();
+  }
+
   dispose() { this.tabs.forEach((t) => t.dispose?.()); }
 }
 
@@ -413,6 +434,9 @@ function buildReplyStrip(tab) {
 
   for (const b of digitBtns) { const d = b.textContent; b.onclick = () => post(d); }
   send.onclick = () => post(fld.value);
+  // Exposed so Cell.repaintReply() can re-run the same paint from the poll,
+  // without rebuilding this strip or reaching into its closure any other way.
+  strip._paint = paint;
   paint();
   return strip;
 }
