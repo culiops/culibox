@@ -105,6 +105,16 @@ function usedClasses() {
     for (const m of src.matchAll(/classList\.(?:toggle|contains)\(\s*["']([^"']+)["']/g)) {
       add(m[1]);
     }
+    // { cls: "act-working" } — a class handed back as a plain object property,
+    // consumed elsewhere as `act.cls` (activity.js:8-13, app.js:447, tabs.js:195)
+    // or `d.cls` (analytics.js). `cls:` as a key appears in exactly these two
+    // files under static/*.js, both genuine class-value maps.
+    for (const m of src.matchAll(/\bcls\s*:\s*["']([^"']+)["']/g)) add(m[1]);
+    // setAttribute("class", "a b") — a plain literal none of the shapes above
+    // match. analytics.js:773 is the only call site.
+    for (const m of src.matchAll(/setAttribute\(\s*["']class["']\s*,\s*["']([^"']*)["']/g)) {
+      add(m[1]);
+    }
   }
   return out;
 }
