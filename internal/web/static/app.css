@@ -798,7 +798,7 @@
     .pane-trouble.expired { background: var(--danger-tint); border-bottom-color: var(--danger); color: var(--danger); }
     .pane-trouble-count { color: var(--muted); font-variant-numeric: tabular-nums; }
     .pane-trouble button { margin-left: auto; background: var(--warn); color: var(--bg); border: none; padding: 3px 12px; cursor: pointer; font-size: 12px; }
-    .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid var(--warn); color: #fbbf24; }
+    .pane-trouble button.alt { margin-left: auto; background: none; border: 1px solid var(--warn); color: var(--warn); }
     .pane-trouble button.alt + button { margin-left: 6px; }
     .pane-trouble.expired button { background: var(--danger); }
     @media (max-width: 700px) {
