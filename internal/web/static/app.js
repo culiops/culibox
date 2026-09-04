@@ -164,7 +164,10 @@ function togglePane(kind) {
 
 $("sessions-cv") && ($("sessions-cv").onclick = () => togglePane("sessions"));
 $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
-applyCollapsed(readCollapsed());
+// Applying the collapsed state at boot happens later, in the boot sequence
+// near initFileTree() — see the comment there. Assigning these two onclick
+// handlers is safe here: it only creates closures, it does not call
+// togglePane (and therefore does not touch lastSessions) until a real click.
 
 // Copy/paste hint: platform-aware, dismissable (persisted). Lives outside the
 // sidebar so it survives the sidebar-hide toggle.
@@ -1379,6 +1382,12 @@ applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();
 initWidthSplitter();
+// Pane collapse state reads live session state (waitingCount, via
+// renderCollapsedSummaries) for the Sessions bar's pip, so it cannot run
+// until lastSessions is initialized — this is why the call lives down here
+// in the boot sequence rather than up near the sidebar-toggle wiring, where
+// lastSessions's declaration has not been reached yet.
+applyCollapsed(readCollapsed());
 initSpawnControl();
 initPalette();
 loadProfiles();
