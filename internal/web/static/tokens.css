@@ -31,10 +31,11 @@
          over --bg reproduces it — the color-mix this replaced read lighter and
          more purple than the intended amber wash. */
       --warn-tint: #2c2a30;
-      /* Unlike its two neighbours above, this is the canvas literal, taken
-         verbatim and NOT derived: measured against every color-mix(--ok N%,
-         --bg) percentage, the closest solve is off by 3.7% / 8.6% / -1.7% per
-         channel, so it is hand-picked rather than a formula. */
+      /* Like --warn-tint above, this is the canvas literal, taken verbatim and
+         NOT derived: measured against every color-mix(--ok N%, --bg)
+         percentage, the closest solve is off by 3.7% / 8.6% / -1.7% per
+         channel, so it is hand-picked rather than a formula. --danger-tint is
+         the one tint above that IS still a clean color-mix derivation. */
       --ok-tint: #232f2c;
 
       /* WebTUI's layers read these names. Mapped onto ours rather than given

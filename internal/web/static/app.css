@@ -282,8 +282,6 @@
     /* Activity dot. Leads each row; size/shape/colour come from the base .dot
        rule in primitives.css. */
     #sessions .dot { margin-top: 6px; }
-    /* Slightly smaller on a tab than in the sidebar, matching the denser strip. */
-    .cell-bar .dot { }
     /* Session summary: a second line under the row's name. Muted and clipped to a
        single line — at the real 279px sidebar width a wrapping summary pushes the
        list into a scroll on every poll. */
