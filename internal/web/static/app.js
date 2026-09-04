@@ -690,7 +690,12 @@ function renderSession(s) {
   kb.setAttribute("aria-label", "Session actions");
   kb.setAttribute("aria-haspopup", "menu");
   kb.title = "Session actions";
-  kb.onclick = (ev) => { ev.stopPropagation(); openSessionMenu(kb, s); };
+  // No stopPropagation: the directory picker and the file tree's row menu both
+  // close on a bubble-phase document click, so stopping this one here left them
+  // open behind the menu. Letting it through is safe — openSessionMenu has
+  // already recorded this button as the menu's anchor by the time the document
+  // listener runs, and that listener ignores a click on the anchor.
+  kb.onclick = () => openSessionMenu(kb, s);
   right.appendChild(kb);
   li.appendChild(right);
 
@@ -1358,7 +1363,17 @@ function openSessionMenu(anchor, s) {
     // trigger that opened the menu may already be sitting in a detached
     // subtree. `sessionRowFor` looks up whatever row is live right now.
     rename: () => { const li = sessionRowFor(s.id); const nm = li && li.querySelector(".nm"); if (li && nm) startRename(li, nm, s); },
-    files: async () => { setFtRoot(s.cwd); await ftLoadRoot(); },
+    // Through syncTreeToRoot, not a setFtRoot + ftLoadRoot pair of its own: that
+    // pair is missing the dpClose() the real re-root does, and that close is
+    // load-bearing. setFtRoot writes the root input's value programmatically and
+    // fires no "input" event, so a fuzzy search debounced a moment earlier lands
+    // AFTER the re-root and renders its hits underneath a path value.
+    //
+    // No follow-key: this is an explicit request and must re-root even when the
+    // tree is already following this session, and passing none also clears the
+    // guard, so the tree resumes following the focused tab at the next focus
+    // change. Unawaited from a click handler, hence the catch.
+    files: () => { syncTreeToRoot(s.cwd).catch(() => {}); },
     attribution: () => openAttribution(s.id),
     copycwd: () => copyPath(s.cwd),
     newpane: () => openTerminal(s.id, name, { newPane: true }),
