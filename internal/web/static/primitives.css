@@ -1,10 +1,15 @@
-    /* ONE focus idiom, everywhere: a 2px accent outline at offset 1.
+    /* ONE focus idiom: a 2px accent outline at offset 1.
        Accent has two jobs and they are told apart by TREATMENT, never by hue:
          primary action = a 1px accent BORDER
          keyboard focus = a 2px accent OUTLINE at offset 1
        Do not merge them, and do not give a focused primary button only one.
        --accent measures 5.97:1 on --panel and 7.79:1 on --bg, so the ring reads on
-       either surface it lands against. */
+       either surface it lands against.
+       Not actually everywhere yet: three pre-existing controls opt out with
+       outline: none and substitute a 1px accent border instead —
+       #ft-root-input:focus (app.css:305), .an-date:focus (app.css:489) and
+       #pal-input (app.css:634, paired with a :focus-visible border-bottom cue).
+       Left as-is here; later slices reconcile them when those controls are rewritten. */
     :focus-visible { outline: var(--focus); outline-offset: var(--focus-off); }
     button:disabled, [disabled] { text-decoration: line-through; }
     /* Shared activity-dot colours. Sizing is scoped per surface (see app.css). */

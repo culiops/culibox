@@ -23,7 +23,7 @@
     header h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #env-strip { height: 3px; width: 100%; flex-shrink: 0; }
     #env-strip[hidden] { display: none; }
-    #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: 6px; }
+    #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: var(--radius); }
     #env-badge[hidden] { display: none; }
     /* --fg, not --muted: a muted label on a control that works reads as disabled,
        and these are the only way to reach the sidebar, the palette and settings. */
@@ -482,41 +482,41 @@
     /* Analytics v2 (tabbed cost view) */
     .an-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 16px; }
     .an-clabel { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-right: 2px; }
-    .an-chip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 11px; font: inherit; font-size: 11.5px; cursor: pointer; border-radius: 2px; }
+    .an-chip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 11px; font: inherit; font-size: 11.5px; cursor: pointer; border-radius: var(--radius); }
     .an-chip:hover { border-color: var(--accent); color: var(--fg); }
     .an-chip.on { color: #fff; border-color: var(--accent); background: var(--sel); }
-    .an-date { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px; padding: 2px 6px; font: inherit; font-size: 11.5px; color-scheme: dark; }
+    .an-date { background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); padding: 2px 6px; font: inherit; font-size: 11.5px; color-scheme: dark; }
     .an-date:focus { outline: none; border-color: var(--accent); }
     .an-hint { font-size: 10.5px; color: var(--muted); margin: 0 0 12px; }
     .an-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 22px; }
-    .an-kpi { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border: 1px solid var(--border); border-radius: 4px; padding: 12px 14px; }
+    .an-kpi { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
     .an-kpi .v { font-size: 20px; font-variant-numeric: tabular-nums; line-height: 1.1; }
     .an-kpi .v.cost { color: var(--ok); }
     .an-kpi .l { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-top: 5px; }
     .an-kdelta { font-size: 11px; margin-top: 3px; font-variant-numeric: tabular-nums; }
     .an-up { color: var(--danger); } .an-down { color: var(--ok); }
     .an-up.good { color: var(--ok); } .an-down.bad { color: var(--danger); }
-    .an-box { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border: 1px solid var(--border); border-radius: 4px; padding: 14px 16px; margin-bottom: 4px; }
+    .an-box { background: color-mix(in srgb, var(--panel) 70%, var(--bg)); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 4px; }
     .an-box h4 { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin: 0 0 12px; font-weight: 600; }
     .an-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
-    .an-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+    .an-swatch { display: inline-block; width: 8px; height: 8px; border-radius: var(--radius); margin-right: 6px; vertical-align: middle; }
     .an-hbar { display: grid; grid-template-columns: 140px 1fr 74px; align-items: center; gap: 10px; margin: 7px 0; font-size: 11.5px; }
     .an-hbar .nm { color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .an-hbar .track { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); height: 16px; border-radius: 2px; overflow: hidden; display: flex; }
+    .an-hbar .track { background: color-mix(in srgb, var(--panel) 80%, var(--bg)); height: 16px; border-radius: var(--radius); overflow: hidden; display: flex; }
     .an-hbar .fill { height: 100%; }
     .an-hbar .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
     .an-divrow { display: grid; grid-template-columns: 140px 1fr 92px; align-items: center; gap: 10px; margin: 7px 0; font-size: 11.5px; }
     .an-divrow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .an-divtrack { position: relative; height: 16px; }
     .an-divtrack .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--rule); }
-    .an-divtrack .fill { position: absolute; top: 2px; height: 12px; border-radius: 2px; }
+    .an-divtrack .fill { position: absolute; top: 2px; height: 12px; border-radius: var(--radius); }
     .an-divrow .val { text-align: right; font-variant-numeric: tabular-nums; }
     .an-mix { margin: 8px 0; }
     .an-mixlabel { font-size: 10px; color: var(--muted); margin-bottom: 3px; }
-    .an-mixbar { display: flex; height: 18px; border-radius: 2px; overflow: hidden; background: var(--panel); }
+    .an-mixbar { display: flex; height: 18px; border-radius: var(--radius); overflow: hidden; background: var(--panel); }
     .an-fleet { font-size: 11.5px; color: var(--muted); line-height: 1.9; }
     .an-fleet b { color: var(--fg); }
-    .an-cmpnote { font-size: 10.5px; color: var(--muted); border-left: 2px solid var(--warn); padding: 6px 10px; background: color-mix(in srgb, var(--warn) 8%, transparent); margin: 14px 0 0; border-radius: 0 3px 3px 0; }
+    .an-cmpnote { font-size: 10.5px; color: var(--muted); border-left: 2px solid var(--warn); padding: 6px 10px; background: color-mix(in srgb, var(--warn) 8%, transparent); margin: 14px 0 0; border-radius: var(--radius); }
     .an-svgwrap { overflow-x: auto; }
     .an-tablewrap { overflow-x: auto; }
     .an-tablewrap .an-table { min-width: 480px; }
@@ -594,16 +594,16 @@
 
     /* --- access tokens (a settings tab) ----------------------------------- */
     .tok-intro { color: var(--muted); font-size: 12px; line-height: 1.55; margin: 0 0 4px; }
-    .tok-intro code { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--fg); }
-    .tok-reveal { background: rgba(166,227,161,.10); border: 1px solid var(--ok); border-radius: 6px; padding: 8px 10px; }
+    .tok-intro code { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 0 4px; color: var(--fg); }
+    .tok-reveal { background: rgba(166,227,161,.10); border: 1px solid var(--ok); border-radius: var(--radius); padding: 8px 10px; }
     .tok-reveal-head { font-size: 12px; color: var(--ok); margin-bottom: 6px; }
     .tok-reveal-row { display: flex; gap: 6px; align-items: center; }
-    .tok-reveal-row code { flex: 1; overflow-x: auto; white-space: nowrap; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: 12.5px; color: var(--fg); }
+    .tok-reveal-row code { flex: 1; overflow-x: auto; white-space: nowrap; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; font-size: 12.5px; color: var(--fg); }
     .tok-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-    .tok-item { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; }
+    .tok-item { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; }
     .tok-item .tok-name { flex: 1; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .tok-item .tok-meta { color: var(--muted); font-size: 11px; flex: none; }
-    .tok-item .tok-revoke { flex: none; background: transparent; color: var(--danger); border: 1px solid var(--border); border-radius: 4px; padding: 3px 8px; font-size: 11.5px; cursor: pointer; }
+    .tok-item .tok-revoke { flex: none; background: transparent; color: var(--danger); border: 1px solid var(--border); border-radius: var(--radius); padding: 3px 8px; font-size: 11.5px; cursor: pointer; }
     .tok-item .tok-revoke:hover { border-color: var(--danger); }
     .tok-empty { color: var(--muted); font-size: 12px; padding: 2px; }
     .tok-foot { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; }
