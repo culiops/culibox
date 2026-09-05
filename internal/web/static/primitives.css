@@ -88,7 +88,11 @@
        .off is the closed state, and it is only half the mechanism: it dims the
        control and changes the cursor, but a dimmed control that still accepts a
        click and a keystroke is a control whose caption lies. Whoever applies
-       .off must also set the real disabled attribute. */
+       .off must also set the real disabled attribute. A segmented control's
+       buttons take the same class for the same reason — a locked profile's
+       containment or option .seg has to read as closed the same way a locked
+       text field does, not as a fourth, differently-drawn "disabled" that
+       happens to sit beside them. */
     .btn { font: 400 12px var(--font-family); color: var(--fg); background: transparent; white-space: nowrap;
            border: 1px solid var(--border); padding: 4px 9px; cursor: pointer; }
     .btn:hover { background: var(--surface-2); }
@@ -96,14 +100,14 @@
     .btn.pri:hover { background: var(--sel); }
     .btn.gh { border-color: transparent; color: var(--muted); }
     .btn.gh:hover { color: var(--fg); background: var(--surface-2); }
-    .btn.off { opacity: .42; cursor: not-allowed; }
+    .btn.off, .seg button.off { opacity: .42; cursor: not-allowed; }
     .btn.dgr { border-color: var(--danger); color: var(--danger); }
     /* .off dims; the disabled attribute it is paired with brings a
        strike-through from the rule at the top of this file. That rule earns its
        keep on a control that is disabled with nothing else to say so, but on a
        control already dimmed and re-cursored it reads as damage rather than as
        "closed". Suppressed here, kept everywhere else. */
-    .btn.off, .fld.off { text-decoration: none; }
+    .btn.off, .fld.off, .seg button.off { text-decoration: none; }
     .fld { font: 400 12px var(--font-family); color: var(--fg); background: var(--bg);
            border: 1px solid var(--border); padding: 6px 8px; width: 100%; }
     .fld::placeholder { color: var(--muted); }

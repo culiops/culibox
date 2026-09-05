@@ -1168,7 +1168,12 @@ function syncEditorActions() {
     b.classList.toggle("off", state === "off");
     b.disabled = state === "off";
   }
-  for (const f of $("manage").querySelectorAll(".ped .fld, .ped .seg button")) {
+  // Every interactive control the editor pane holds: a locked profile's fields
+  // (.fld), its containment/option .seg buttons, its bare bool checkboxes (no
+  // class of their own), and the allowlist's row buttons and "+ add" triggers
+  // (.btn) — a read-only profile that still lets a row be added or removed is
+  // the exact thing #pf-lock's caption is promising will not happen.
+  for (const f of $("manage").querySelectorAll(".ped .fld, .ped .seg button, .ped .btn, .ped input[type=checkbox]")) {
     f.classList.toggle("off", st.locked);
     f.disabled = st.locked;
   }
