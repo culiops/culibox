@@ -219,21 +219,30 @@ $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
 // handlers is safe here: it only creates closures, it does not call
 // togglePane (and therefore does not touch lastSessions) until a real click.
 
-// Copy/paste hint: platform-aware, dismissable (persisted). Lives outside the
-// sidebar so it survives the sidebar-hide toggle.
+// Shortcut hint: platform-aware, dismissable (persisted). Lives outside the
+// sidebar so it survives the sidebar-hide toggle. The runtime tag ("runc" /
+// "sysbox") depends on boxRuntime, which is only known once /api/meta answers
+// (initHint runs at parse time, before that), so the text is recomputed from
+// updateStatusLine too — see hintShortcuts below.
+function hintShortcuts() {
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  // Reuse tier.js's own runtime label (the same string the sidebar's tier
+  // badge tooltip uses) rather than re-deriving "runc"/"sysbox" here.
+  const runc = tierRuntimeLabel(boxRuntime);
+  // Palette and sidebar combos match paletteCommands' own hints (⌘K/⌘B on
+  // macOS, Ctrl+Shift+K/Ctrl+Shift+B elsewhere). Session-jump is genuinely
+  // Option/Alt+digit on every platform (see JUMP_MOD) — paletteCommands
+  // already labels that "⌥" on macOS, so this uses the same symbol rather
+  // than "⌘", which is not the key that actually jumps sessions.
+  return mac
+    ? `${runc} · ⌘K palette · ⌘B sidebar · ⌥1-9 session`
+    : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
+}
 (function initHint() {
   const hint = $("hint");
   if (!hint) return;
   if (localStorage.getItem("hintDismissed") === "1") { hint.classList.add("hidden"); return; }
-  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
-  // The select-inside-a-TUI bypass key is platform-specific: Option on macOS,
-  // Shift elsewhere (see macOptionClickForcesSelection in terminal-tab.js).
-  // Non-mac uses Ctrl+Shift+K, not Ctrl+K: Ctrl+K is readline's kill-to-end-of-line
-  // inside the shells and TUIs these panes host (see initPalette).
-  // Both palette combos are named: another desktop app can hold the primary one
-  // system-wide (Notion grabs Ctrl+Shift+K on Windows), and a shortcut that does
-  // nothing with no alternative in sight reads as a broken app.
-  $("hint-text").textContent = `${mac ? "⌘K" : "Ctrl+Shift+K"} or Ctrl+Shift+Space for commands · Select text to copy · ${mac ? "⌘V" : "Ctrl+V"} to paste · ${mac ? "⌥+drag" : "Shift+drag"} to select inside TUIs (e.g. claude)`;
+  $("hint-text").textContent = hintShortcuts();
   $("hint-x").onclick = () => {
     hint.classList.add("hidden");
     try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}
@@ -246,17 +255,29 @@ $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
 // it loses no unique information.
 function updateStatusLine() {
   const env = $("status-env");
-  if (env && window.__envLabel) env.textContent = "[" + window.__envLabel.toLowerCase() + "]";
+  if (env && window.__envLabel) env.textContent = window.__envLabel.toUpperCase();
   const s = $("status-sessions");
   if (s) {
     const n = lastSessions.length;
     s.textContent = n === 1 ? "1 session" : n + " sessions";
+  }
+  const boxed = $("status-boxed");
+  if (boxed) {
+    // Same boxed-determination the sidebar tier badge uses — do not
+    // re-derive it here.
+    const m = lastSessions.filter((sess) => {
+      const t = tierBadge(sess, boxRuntime);
+      return t && t.text === TIER_BOX;
+    }).length;
+    boxed.textContent = m === 1 ? "1 boxed" : m + " boxed";
   }
   const cwd = $("status-cwd");
   if (cwd) {
     const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
     cwd.textContent = t && t.cwd ? shortPath(t.cwd) : "";
   }
+  const hintText = $("hint-text");
+  if (hintText) hintText.textContent = hintShortcuts();
 }
 
 // renderRateLimits paints the account 5h/weekly usage into the header (once,
