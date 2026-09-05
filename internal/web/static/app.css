@@ -1324,15 +1324,15 @@
          type selector), and apply unconditionally rather than only when
          collapsed: the natural, uncollapsed display of both is already
          block/flex, so this is a no-op when the pane was never collapsed. */
-      html.mobile-screen-sessions #sessions-pane > .sessions { display: block; }
+      html.mobile-screen-sessions #sessions-pane > #sessions { display: block; }
       html.mobile-screen-files #files-pane > .files-body { display: flex; }
       /* The header bar itself must stop advertising a collapsed state it no
          longer has: .phd.closed (primitives.css) lifts onto --surface-2 and
-         hides the header's own action button, and the caret prints ▸ instead
-         of ▾ — real text set by applyCollapsed() in app.js, not CSS content,
-         so a stylesheet cannot change the character. Hide the printed glyph
-         and paint the "expanded" one (the same ▾ the markup ships by default)
-         over the same 11×11px box instead. */
+         hides the header's own action button. The mockup (M6) carries no
+         collapse caret at all, so rather than reproduce it in an "expanded"
+         state, the caret is simply hidden on the active mobile screen — which
+         also drops it from the a11y tree, so its now-stale aria-expanded
+         value is moot. */
       html.mobile-screen-sessions #sessions-phd.closed,
       html.mobile-screen-files #files-phd.closed { background: var(--panel); color: var(--muted); }
       html.mobile-screen-sessions #sessions-phd.closed #spawn-go { display: inline-block; }
@@ -1340,11 +1340,7 @@
       html.mobile-screen-files #files-phd.closed #ft-refresh,
       html.mobile-screen-files #files-phd.closed #ft-upload { display: inline-block; }
       html.mobile-screen-sessions #sessions-phd.closed .cv,
-      html.mobile-screen-files #files-phd.closed .cv { color: transparent; position: relative; }
-      html.mobile-screen-sessions #sessions-phd.closed .cv::before,
-      html.mobile-screen-files #files-phd.closed .cv::before {
-        content: "▾"; position: absolute; inset: 0; color: var(--muted);
-      }
+      html.mobile-screen-files #files-phd.closed .cv { display: none; }
 
       /* The bottom nav: 60px, three equal items, active gets an inset top rule +
          soft fill (matches M1). The waiting pip is amber (an agent needs you). */
