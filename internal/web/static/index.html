@@ -284,10 +284,13 @@
       <span id="pal-prompt" aria-hidden="true">&gt;</span>
       <input id="pal-input" type="text" autocomplete="off" spellcheck="false"
              placeholder="Search files and sessions. Type &gt; for commands">
+      <div id="pal-hints">
+        <span id="pal-note"></span>
+        <span>↵ run</span><span aria-hidden="true">·</span><span id="pal-insert-hint">^↵ insert path</span><span aria-hidden="true">·</span><span>esc close</span>
+      </div>
     </div>
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
-    <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span id="pal-insert-hint">^↵ insert path</span><span>esc close</span><span id="pal-note"></span></div>
   </dialog>
 
   <dialog id="ask-modal" box-="square" shear-="top">

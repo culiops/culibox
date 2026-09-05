@@ -948,13 +948,13 @@
     /* --- command palette --------------------------------------------------- */
     /* No box-/shear- here, on purpose. Tried a `.pane-head` legend reading
        "search" once: it duplicated the placeholder text one line below
-       it ("Search files and sessions...") and, since #pal-input/#pal-list/
-       #pal-foot all bleed edge-to-edge by design, box-'s inset broke that
-       into a visibly segmented, slightly glitchy frame rather than a clean
-       one. A palette a power user opens with a keyboard shortcut and reads
-       via its own placeholder doesn't need a titled frame — the design rule
-       is box- only where a legend earns its place in the rule; here it
-       didn't, so this keeps the plain border it already had. */
+       it ("Search files and sessions...") and, since #pal-input/#pal-list
+       bleed edge-to-edge by design, box-'s inset broke that into a visibly
+       segmented, slightly glitchy frame rather than a clean one. A palette
+       a power user opens with a keyboard shortcut and reads via its own
+       placeholder doesn't need a titled frame — the design rule is box-
+       only where a legend earns its place in the rule; here it didn't, so
+       this keeps the plain border it already had. */
     #palette { width: 620px; margin-top: 9vh; margin-bottom: auto; }
     /* The prompt glyph sits in its own column so it never becomes part of the
        input's value or selection range — a sibling span, not a ::before on the
@@ -971,8 +971,24 @@
     }
     #pal-input {
       flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: none;
-      padding: 13px 15px 13px 8px; font-size: 14px; font-family: inherit; outline: none;
+      padding: 13px 8px; font-size: 14px; font-family: inherit; outline: none;
     }
+    /* Mockup D4: the keybinding hints (formerly a bottom bar, #pal-foot) sit
+       inline at the top-right of the search row instead. #pal-input's flex:1
+       above is what pushes this flex:none group to the end — no margin-left
+       needed. "·" separators are literal spans (aria-hidden), not a ::before
+       trick: #pal-note sits in the same group but is a transient status
+       string ("searching files…"), not a keybinding, so it must not gain a
+       dot of its own — a generated-separator rule would put one in front of
+       it whenever it's non-empty. */
+    #pal-hints {
+      flex: none; display: flex; align-items: center; gap: 6px;
+      padding-right: 15px; color: var(--muted); font-size: 11px; white-space: nowrap;
+    }
+    /* Empty most of the time (see palRender) — collapse instead of leaving a
+       gap where nothing renders. */
+    #pal-note:empty { display: none; }
+    #pal-note { margin-right: 4px; }
     #pal-list { list-style: none; margin: 0; padding: 6px; max-height: 52vh; overflow-y: auto; }
     /* Section headings (SESSIONS/FILES/COMMANDS) replace the old per-row
        `.pal-kind` chip. Not selectable — palRender never gives one a "sel"
@@ -1013,7 +1029,6 @@
     #pal-list li.pal-row.sel .pal-copy { display: block; }
     #pal-list .pal-copy:hover { color: var(--fg); background: var(--sel); }
     #pal-empty { color: var(--muted); font-size: 12.5px; padding: 14px; }
-    #pal-foot { display: flex; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
 
     /* --- toast ------------------------------------------------------------- */
     #toast {
@@ -1227,6 +1242,12 @@
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
+      /* Desktop-scoped slice (T14): the hints only need to not regress here.
+         The row has no room for glyph + input + hints on one line at 390px,
+         so the hints group drops to its own right-aligned line under the
+         input rather than squeezing the input to near-zero width. */
+      #pal-inputwrap { flex-wrap: wrap; }
+      #pal-hints { flex-basis: 100%; justify-content: flex-end; padding: 2px 15px 8px; }
       #spawn-modal, #analytics-modal { width: 94vw; }
       /* Desktop stacks a seg-type option's label above its control to give
          it the full row (see #options .opt.opt-seg above); that is a known
