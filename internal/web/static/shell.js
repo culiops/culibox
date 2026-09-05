@@ -99,6 +99,11 @@ function selectSettingsTab(name) {
   // The profile editor is the only tab with two columns to fill; the other two
   // are a single column and a taller box would just be empty at the bottom.
   document.getElementById("settings-modal").classList.toggle("tall", name === "manage");
+  // Deliberately left alone: on a narrow screen the profile list and its editor
+  // are two views gated by an "editing" class, not two columns, and switching
+  // to another tab and back must not silently reset that view. Losing an
+  // in-progress edit because someone glanced at Appearance is the worse
+  // surprise, and the way back to the list is one tap away either way.
   // The inline error belongs to the action that raised it, not to the dialog.
   setDialogError("settings-modal", "");
   // The Access-tokens tab loads its list lazily whenever it is shown.

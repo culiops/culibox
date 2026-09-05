@@ -1189,6 +1189,14 @@
          (app.css above) outranks a bare .kvrow .rm on specificity alone and
          would otherwise leave the button exactly as wide as its × glyph. */
       #pf-env-block .kvrow .rm { width: var(--tap); height: var(--tap); padding: 0; }
+      /* The editor's own text entry: name, binary, base environment, workspace,
+         args, and the allowlist's name/value inputs (.kvrow .k/.v are .fld too)
+         all render at their unscaled ~28-30px height otherwise — the drill-down
+         is built around these fields, so they cannot be the one thing on the
+         screen still sized for a mouse. Raising .kvrow .v to the same floor as
+         its neighbouring .rm only improves that row's alignment: before this,
+         .rm was already at 44px and .v sat shorter beside it. */
+      #settings-modal .fld { min-height: var(--tap); }
       .pitem { min-height: var(--tap); }
       .plist-foot .btn, #pf-env-add, #pf-secret-add { min-height: var(--tap); }
       /* The containment segments and the token row's own buttons are controls
