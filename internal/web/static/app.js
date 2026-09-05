@@ -913,9 +913,11 @@ function currentProfile() {
   return profiles.find((p) => p.name === $("agent").value);
 }
 // renderOptions builds a toggle per option the selected profile exposes:
-// checkbox for bool, a .seg for a <=4-choice enum (mirrors renderPfOptions —
-// seeing the alternatives beats saving the space a select would), a plain
-// select for anything wider. Pre-set to the profile's default.
+// checkbox for bool, a .seg for a <=5-choice enum (mirrors renderPfOptions,
+// which stops at <=4 — the spawn dialog's own enums, notably Effort's five
+// choices, are one wider on purpose; seeing the alternatives beats saving the
+// space a select would), a plain select for anything wider. Pre-set to the
+// profile's default.
 function renderOptions() {
   const p = currentProfile();
   const opts = (p && p.options) || [];
@@ -932,10 +934,13 @@ function renderOptions() {
       lbl.htmlFor = "opt-" + o.key;
     } else {
       const choices = o.choices || [];
-      if (choices.length > 0 && choices.length <= 4) {
+      if (choices.length > 0 && choices.length <= 5) {
         ctrl = document.createElement("div");
         ctrl.className = "seg";
         buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), o.value || "");
+        // A seg needs the row's full width, not half of it beside a label —
+        // see #options .opt.opt-seg in app.css.
+        row.className = "opt opt-seg";
       } else {
         ctrl = document.createElement("select");
         for (const c of choices) {
