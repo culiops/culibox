@@ -65,6 +65,14 @@
        session in this state IS that condition. The 3px inset is the project's
        own convention — amber signals take the wider rule, blue the 2px. */
     .ri.alert { background: var(--warn-tint); box-shadow: inset 3px 0 0 var(--warn-fg); }
+    /* box-shadow does not stack across selectors of equal specificity, so a
+       session that is both focused (.on) and waiting (.alert) would otherwise
+       show only the alert's stripe — the common case, since the session you're
+       looking at is often the one waiting on you. Keep the alert's own stripe
+       byte-for-byte (never weaken that signal) and add the focus mark on the
+       opposite edge so both read at once. Higher specificity (three classes)
+       wins over .ri.alert regardless of source order. */
+    .ri.on.alert { box-shadow: inset 3px 0 0 var(--warn-fg), inset -2px 0 0 var(--accent); }
     .ri.add { color: var(--accent); font-size: 16px; }
     #hint { display: flex; align-items: center; gap: 1.16ch; padding: .23lh 1.73ch; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }

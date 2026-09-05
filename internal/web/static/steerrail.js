@@ -348,7 +348,7 @@ function renderAttrSection(s, attr) {
   note.className = "tiny mut";
   note.textContent = attr && attr !== "loading"
     ? "Result-payload bytes — a proxy for context pressure, not billing. Re-scanned on demand."
-    : "Result-payload bytes over the whole session — a proxy for context pressure, not billing.";
+    : "Result-payload bytes over the whole session — a proxy for context pressure, not billing. Re-scanned on demand.";
   kids.push(note);
   el.replaceChildren(...kids);
 }

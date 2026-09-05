@@ -38,7 +38,7 @@ function containmentConfirm(tier, name) {
   return {
     title: "Save as host",
     body: 'Sessions from "' + name + '" will run with no container, as your user, ' +
-          "with everything you can reach: your whole home directory, your keys, " +
+          "with everything you can reach: your whole home directory, your SSH keys, " +
           "your Docker socket. Save it that way?",
     confirmLabel: "Save as host",
     danger: true,

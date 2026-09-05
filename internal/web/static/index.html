@@ -175,21 +175,21 @@
         </div>
         <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
         <div class="frow">
+          <div class="fcol" id="pf-runtime-col">
+            <span class="flab">Default containment</span>
+            <div class="seg" id="pf-runtime" data-value="" role="group" aria-label="Default containment"></div>
+            <div class="warnbox" id="pf-runtime-warn" hidden>
+              <b>No container.</b> Every session from this profile runs as your user
+              with everything you can reach — your whole home, your SSH keys, the Docker
+              socket. Use it only where a box genuinely cannot work.
+            </div>
+          </div>
           <div class="fcol"><label class="flab" for="pf-base">Base environment</label>
             <select id="pf-base" class="fld">
               <option value="inherit">inherit: full env</option>
               <option value="clean">clean: no secrets</option>
               <option value="login">login: source profile</option>
             </select></div>
-          <div class="fcol" id="pf-runtime-col">
-            <span class="flab">Default containment</span>
-            <div class="seg" id="pf-runtime" data-value="" role="group" aria-label="Default containment"></div>
-            <div class="warnbox" id="pf-runtime-warn" hidden>
-              <b>No container.</b> Every session from this profile runs as your user
-              with everything you can reach — your whole home, your keys, the Docker
-              socket. Use it only where a box genuinely cannot work.
-            </div>
-          </div>
         </div>
         <div class="frow">
           <div class="fcol"><label class="flab" for="pf-cwd">Default workspace</label>
