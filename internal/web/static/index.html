@@ -124,9 +124,12 @@
           <input id="sess-name" type="text" placeholder="auto: working dir name" autocomplete="off" spellcheck="false">
         </div>
         <div class="span2">
-          <label for="workspace">Working dir</label>
-          <select id="workspace"></select>
-          <input id="cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
+          <label for="spawn-ws-input">Workspace</label>
+          <input id="spawn-ws-input" type="text" role="combobox" autocomplete="off"
+                 spellcheck="false" aria-expanded="false" aria-controls="spawn-ws-list"
+                 aria-autocomplete="list" placeholder="~/project">
+          <div id="spawn-ws-list" role="listbox" aria-label="Directories" hidden></div>
+          <div class="form-hint" id="spawn-ws-note"></div>
         </div>
         <div id="runtime-row" style="display:none">
           <label>Containment</label>

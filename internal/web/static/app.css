@@ -806,6 +806,13 @@
       padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
     }
     #spawn button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--bg); cursor: pointer; font-weight: 600; margin-top: 2px; }
+    /* Workspace (D5): a dialog-local mirror of #ft-root-input/#ft-root-list
+       (see dirpicker.js) — its own instance, its own state, but the same
+       fixed-position dropdown escaping .dlg-body's overflow:auto clip, and the
+       same .ft-opt/.ft-note row styling, reused rather than redefined. */
+    #spawn-ws-input:focus { border-color: var(--accent); outline: none; }
+    #spawn-ws-list { position: fixed; z-index: 30; max-height: 260px; overflow-y: auto; background: var(--panel); border: 1px solid var(--border); }
+    #spawn-ws-list[hidden] { display: none; }
     /* Cancel sits beside Spawn rather than under it: the row overrides the
        generic select/input/submit 100%-width rule above for just its two
        buttons, sized to content like every other .btn. */

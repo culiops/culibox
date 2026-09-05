@@ -136,6 +136,38 @@ test("a path not offered on this tier falls to custom", () => {
   });
 });
 
+// --- unboxableCwdReason (spawn dialog's client-side echo of the server's
+// unboxable-workspace refusal, for a path outside workspacesCache) -----------
+
+const { unboxableCwdReason } = require("../static/tier.js");
+const HOME = "/home/u";
+
+test("unboxableCwdReason: home itself cannot be boxed", () => {
+  assert.match(unboxableCwdReason(HOME, HOME), /whole home/);
+});
+
+test("unboxableCwdReason: an ancestor of home cannot be boxed", () => {
+  assert.match(unboxableCwdReason("/home", HOME), /contains your home/);
+  assert.match(unboxableCwdReason("/", HOME), /filesystem root/);
+});
+
+test("unboxableCwdReason: a project directory under home is fine", () => {
+  assert.equal(unboxableCwdReason("/home/u/proj-a", HOME), null);
+});
+
+test("unboxableCwdReason: a sibling directory that merely shares a prefix is fine", () => {
+  // "/home/u2" is not inside "/home/u" — a naive startsWith(home) would say
+  // otherwise, which is exactly the whole-component-comparison bug shortPath
+  // (fsops.js) already had to guard against.
+  assert.equal(unboxableCwdReason("/home/u2", HOME), null);
+});
+
+test("unboxableCwdReason: empty input or unknown home judges nothing", () => {
+  assert.equal(unboxableCwdReason("", HOME), null);
+  assert.equal(unboxableCwdReason("   ", HOME), null);
+  assert.equal(unboxableCwdReason("/home/u/proj-a", ""), null);
+});
+
 // --- quick shell (+sh) -----------------------------------------------------
 
 const { shellSpawnPlan } = require("../static/tier.js");

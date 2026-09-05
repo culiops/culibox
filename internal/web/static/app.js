@@ -1042,17 +1042,14 @@ $("agent").addEventListener("change", () => {
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
 // stored default_cwd. A profile without one leaves the picker untouched (there
-// is nothing to overwrite with), preserving the keep-previous behavior.
+// is nothing to overwrite with), preserving the keep-previous behavior. Unlike
+// the old <select>-backed version, there is no tier-aware matching to do here
+// any more: the field is free text, so the profile's path is simply the value.
 function applyProfileCwd() {
   const p = currentProfile();
-  const rt = segValue($("runtime-seg"));
-  const sel = workspaceSelectionForCwd(workspacesCache, rt, p && p.default_cwd);
-  if (!sel) return;
-  const ws = $("workspace");
-  ws.value = sel.value;
-  $("cwd-custom").value = sel.custom;
-  $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
-  updateTierExplain();
+  if (!p || !p.default_cwd) return;
+  setSwsCwd(p.default_cwd);
+  onSwsCwdChanged();
 }
 
 // renderPfWorkspaceOptions builds the profile-editor working-dir picker for the
@@ -1397,52 +1394,318 @@ let workspacesCache = [];
 async function loadWorkspaces() {
   try {
     workspacesCache = (await api("/api/workspaces")) || [];
-    renderWorkspaceOptions();
+    // Refresh whatever depends on it: the idle rows/caption — but only when
+    // nothing is actively being searched, so a fuzzy query in flight is never
+    // clobbered by a background workspaces refresh — and the unboxable-
+    // workspace warning, which looks workspacesCache up by path.
+    if (swsInput && classifyPickerQuery(swsInput.value).mode !== "fuzzy") {
+      const rows = swsIdleRows();
+      if (swsList && !swsList.hidden) swsRender(rows);
+      swsSetCaption(spawnWsIdleNote(rows.length));
+    }
+    updateRuntimeWarning();
   } catch (_) {}
 }
 
-// renderWorkspaceOptions rebuilds the picker for the tier currently selected.
-// On the boxed tier a directory that cannot be contained is disabled and shows
-// why, because choosing a workspace IS choosing the containment boundary.
-function renderWorkspaceOptions() {
-  const sel = $("workspace");
-  if (!sel) return;
-  const rt = segValue($("runtime-seg"));
-  const prev = sel.value;
-  const opts = workspaceOptions(workspacesCache, rt).map((o) => {
-    const el = document.createElement("option");
-    el.value = o.value; el.textContent = o.label; el.disabled = o.disabled;
-    return el;
+// --- spawn workspace picker (D5) --------------------------------------------
+// A dialog-local mirror of dirpicker.js's dpX behaviour: same backend
+// (GET /api/fs/search?kind=dir, GET /api/workspaces — already cached above in
+// workspacesCache), same exported PURE functions (classifyPickerQuery,
+// pickerRows, pickerCollapseAt, pickerShouldSelectAll, pickerReopenMode,
+// pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote), same
+// debounce + AbortController + sequence-guard shape and the same "note row
+// appended LAST so index math holds" — but its OWN DOM (#spawn-ws-input/
+// #spawn-ws-list) and OWN local state (sws*), not a second caller of
+// initDirPicker.
+//
+// That control's dpInput/dpList/dpSeq/... are MODULE-GLOBAL and bound to
+// #ft-root-input, with a measured mousedown->focus->click ordering and a
+// documented boot-restore race (dirpicker.js). Routing this dialog through
+// that same state would mean the file tree and the spawn dialog fight over
+// one dpActive/dpRows/dpAbort — whichever opened last would silently steal
+// the other's search. A second, independent instance costs ~150 lines of
+// mirrored wiring; sharing costs a control that intermittently reroots the
+// file tree when a session is spawned, or vice versa.
+//
+// swsCwd is the actual, resolved candidate cwd — deliberately NOT read back
+// from swsInput.value, for the same reason ftRootPath isn't (filetree.js):
+// the input doubles as the picker's live search box, and only a successful
+// pick, an absolute-path resolve, or a literal typed "/..." path updates it.
+// Escape, an outside click, or a half-typed fuzzy query left sitting in
+// .value must never itself become the spawn cwd — this is a form that starts
+// real agent sessions, unlike the file tree's read-only re-root.
+const SWS_DEBOUNCE_MS = 120, SWS_FETCH_MS = 4000;
+let swsInput = null, swsList = null, swsRows = [], swsActive = -1;
+let swsSeq = 0, swsTimer = null, swsAbort = null, swsCwd = "";
+let swsPointerGesture = false;
+
+function initSpawnWsPicker() {
+  swsInput = $("spawn-ws-input");
+  swsList = $("spawn-ws-list");
+  if (!swsInput || !swsList) return;
+  swsInput.addEventListener("input", () => {
+    // A typed absolute path is a valid cwd candidate immediately — no pick or
+    // Enter required — exactly like the old #cwd-custom field it replaces.
+    // A fuzzy query is NOT: a live search string must never itself become the
+    // spawn cwd, so swsCwd is left at whatever was last resolved/picked.
+    const c = classifyPickerQuery(swsInput.value);
+    if (c.mode === "path") swsCwd = c.value;
+    else if (c.mode === "empty") swsCwd = "";
+    swsQuery(swsInput.value);
+    onSwsCwdChanged();
   });
-  const custom = document.createElement("option");
-  custom.value = "__custom__"; custom.textContent = "Custom path…";
-  opts.push(custom);
-  sel.replaceChildren(...opts);
-  // Keep the previous choice only if it is still usable on this tier; otherwise
-  // fall to the first usable one so the form never opens on a doomed default.
-  const stillOK = opts.some((o) => o.value === prev && !o.disabled);
-  sel.value = stillOK ? prev : (defaultWorkspace(workspacesCache, rt) || "__custom__");
-  $("cwd-custom").style.display = sel.value === "__custom__" ? "block" : "none";
-  updateTierExplain();
+  // Mirrors dirpicker.js's mousedown/focus/click choreography verbatim (same
+  // pure functions, same measured ordering) so a click into an already-filled
+  // field selects the whole path instead of splicing into it — the exact bug
+  // that control spent five rounds closing.
+  swsInput.addEventListener("mousedown", (e) => {
+    if (e.button !== 0) return;
+    swsPointerGesture = true;
+    const at = pickerCollapseAt(swsInput.selectionStart, swsInput.selectionEnd);
+    if (at !== null) swsInput.setSelectionRange(at, at);
+  });
+  document.addEventListener("mouseup", () => { swsPointerGesture = false; });
+  swsInput.addEventListener("focus", () => {
+    const pointer = swsPointerGesture;
+    swsPointerGesture = false;
+    if (!pointer) swsInput.select();
+    swsReopen();
+  });
+  swsInput.addEventListener("click", () => {
+    if (pickerShouldSelectAll(swsInput.value, swsInput.selectionStart === swsInput.selectionEnd)) {
+      swsInput.select();
+    }
+    swsReopen();
+  });
+  swsInput.addEventListener("keydown", swsKeydown);
+  document.addEventListener("click", (e) => {
+    if (e.target !== swsInput && !swsList.contains(e.target)) swsClose();
+  });
+  window.addEventListener("resize", () => { if (!swsList.hidden) swsOpen(true); });
 }
-$("workspace").addEventListener("change", () => {
-  $("cwd-custom").style.display = $("workspace").value === "__custom__" ? "block" : "none";
+
+// setSwsCwd is the ONE place that both the canonical cwd and the field's
+// displayed value are written together — a pick, a resolved path, a profile's
+// default_cwd, or the last-spawn fallback. Live typing (above) updates swsCwd
+// alone, since the input already shows what was typed.
+function setSwsCwd(path) {
+  swsCwd = path || "";
+  if (swsInput) swsInput.value = swsCwd;
+}
+function getCwd() { return swsCwd; }
+// Called on every cwd change (typing an absolute path, a pick, a resolve, a
+// profile default, the last-spawn fallback) so the box/host copy and the
+// unboxable-workspace warning never lag behind what will actually be spawned.
+function onSwsCwdChanged() {
   updateTierExplain();
-});
-// A typed custom path is the one cwd change renderWorkspaceOptions/
-// applyProfileCwd never see (they only touch the <select>), so the D5
-// box/host explainer needs its own listener to keep naming the real cwd
-// while the user is still typing it.
-$("cwd-custom").addEventListener("input", updateTierExplain);
-function getCwd() {
-  const w = $("workspace").value;
-  return w === "__custom__" ? $("cwd-custom").value.trim() : (w || "");
+  updateRuntimeWarning();
+}
+
+function swsSetCaption(text) {
+  const el = $("spawn-ws-note");
+  if (el) el.textContent = text || "";
+}
+function swsIdleRows() {
+  return pickerRows({ mode: "empty", workspaces: workspacesCache });
+}
+
+function swsReopen() {
+  const mode = pickerReopenMode(swsInput.value, !swsList.hidden);
+  if (mode === "empty") {
+    const rows = swsIdleRows();
+    swsRender(rows);
+    swsSetCaption(spawnWsIdleNote(rows.length));
+  } else if (mode === "search") swsQuery(swsInput.value);
+  // "none": the open list already shows this search — see pickerReopenMode.
+}
+
+function swsQuery(raw) {
+  const c = classifyPickerQuery(raw);
+  const seq = ++swsSeq;
+  if (swsTimer) { clearTimeout(swsTimer); swsTimer = null; }
+  if (swsAbort) { swsAbort.abort(); swsAbort = null; }
+  if (c.mode === "path") {
+    // Only the server can say whether this is a real directory — Enter asks
+    // it (swsResolvePath) — but the caption still reads as steady-state, not
+    // as an active search, matching pickerReopenMode's own path/empty split.
+    swsClose();
+    swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
+    return;
+  }
+  if (c.mode === "empty") {
+    const rows = swsIdleRows();
+    swsRender(rows);
+    swsSetCaption(spawnWsIdleNote(rows.length));
+    return;
+  }
+  swsTimer = setTimeout(() => swsSearch(c.value, seq), SWS_DEBOUNCE_MS);
+}
+
+async function swsSearch(q, seq) {
+  const ac = new AbortController();
+  swsAbort = ac;
+  const timer = setTimeout(() => ac.abort(), SWS_FETCH_MS);
+  let data = null, failed = false;
+  try {
+    const res = await fetch("/api/fs/search?kind=dir&limit=40&q=" + encodeURIComponent(q), { signal: ac.signal });
+    if (res.ok) data = await res.json();
+    else failed = true;
+  } catch (_) {
+    // Offline, or the SWS_FETCH_MS timeout fired. An abort from swsQuery or
+    // swsClose also lands here, but both bump swsSeq first, so the guard
+    // below returns before this ever reaches the screen as a failure.
+    failed = true;
+  } finally { clearTimeout(timer); }
+  if (seq !== swsSeq) return; // a newer query already won
+  swsAbort = null;
+  const broke = failed || !data;
+  const rows = broke ? [] : pickerRows({ mode: "fuzzy", hits: data.results || [] });
+  const note = dirPickerNote(rows.length, !!(data && data.truncated), broke);
+  swsRender(rows, note);
+  swsSetCaption(note);
+}
+
+// `note`, when non-empty, renders one extra row that is NOT in swsRows — so
+// swsMove cannot arrow onto it and swsChoose cannot pick it — appended LAST so
+// swsMove's dpList.children[swsActive] lookup isn't shifted by it.
+function swsRender(rows, note) {
+  swsRows = rows; swsActive = -1;
+  swsInput.removeAttribute("aria-activedescendant");
+  swsList.replaceChildren(...rows.map((r, i) => {
+    const el = document.createElement("div");
+    el.className = "ft-opt";
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-selected", "false");
+    el.id = "sws-opt-" + i;
+    const lab = document.createElement("span");
+    lab.textContent = r.label;
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = r.hint;
+    el.append(lab, hint);
+    el.title = r.path;
+    el.onclick = () => swsChoose(i);
+    return el;
+  }));
+  if (note) {
+    const el = document.createElement("div");
+    el.className = "ft-note";
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-disabled", "true");
+    el.textContent = note;
+    swsList.append(el);
+  }
+  swsOpen(rows.length > 0 || !!note);
+}
+
+function swsOpen(show) {
+  swsInput.setAttribute("aria-expanded", show ? "true" : "false");
+  if (show) {
+    // #spawn-ws-list is position: fixed, computed from swsInput's rect, not
+    // from an ancestor — .dlg-body clips overflow, and fixed positioning is
+    // how the dropdown escapes that (see #ft-root-list's identical comment).
+    const r = swsInput.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom;
+    swsList.style.left = r.left + "px";
+    swsList.style.width = r.width + "px";
+    if (below < 120 && r.top > below) {
+      swsList.style.top = "";
+      swsList.style.bottom = (window.innerHeight - r.top) + "px";
+      swsList.style.maxHeight = Math.max(80, r.top - 8) + "px";
+    } else {
+      swsList.style.bottom = "";
+      swsList.style.top = r.bottom + "px";
+      swsList.style.maxHeight = Math.max(80, below - 8) + "px";
+    }
+  }
+  swsList.hidden = !show;
+}
+
+function swsClose() {
+  if (!swsInput || !swsList) return;
+  swsOpen(false);
+  if (swsTimer) { clearTimeout(swsTimer); swsTimer = null; }
+  if (swsAbort) { swsAbort.abort(); swsAbort = null; }
+  swsSeq++;
+  swsRows = []; swsActive = -1;
+  swsInput.removeAttribute("aria-activedescendant");
+}
+
+function swsMove(delta) {
+  if (!swsRows.length) return;
+  const prev = swsList.children[swsActive];
+  if (prev) prev.setAttribute("aria-selected", "false");
+  swsActive = pickerNextIndex(swsActive, delta, swsRows.length);
+  const el = swsList.children[swsActive];
+  if (el) {
+    el.setAttribute("aria-selected", "true");
+    el.scrollIntoView({ block: "nearest" });
+    swsInput.setAttribute("aria-activedescendant", el.id);
+  }
+}
+
+function swsChoose(i) {
+  const r = swsRows[i];
+  if (!r) return;
+  swsClose();
+  setSwsCwd(r.path);
+  swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
+  onSwsCwdChanged();
+}
+
+function swsKeydown(e) {
+  if (e.key === "ArrowDown") { e.preventDefault(); swsMove(1); return; }
+  if (e.key === "ArrowUp") { e.preventDefault(); swsMove(-1); return; }
+  if (e.key === "Escape") { swsClose(); return; }
+  if (e.key !== "Enter") return;
+  // Prevented unconditionally: this field lives inside the #spawn form, and
+  // Enter's default action there is submitting it — the caption's own "↵ to
+  // pick" promise would be a lie if Enter here silently spawned the session
+  // instead of resolving the field.
+  e.preventDefault();
+  if (swsActive >= 0) { swsChoose(swsActive); return; }
+  const c = classifyPickerQuery(swsInput.value);
+  const act = pickerEnterAction(c.mode, swsRows.length);
+  if (act === "resolve") swsResolvePath(c.value);
+  else if (act === "first") swsChoose(0);
+}
+
+// A typed absolute path is resolved by /api/fs/list — see dpResolvePath's
+// identical five-outcome breakdown in dirpicker.js. The one difference: on a
+// non-directory (400) there is nothing to fall through to opening as a file
+// (dpOnOpenFile) — a spawn cwd is a directory or it's an error.
+async function swsResolvePath(path) {
+  let res;
+  try {
+    res = await fetch("/api/fs/list?path=" + encodeURIComponent(path));
+  } catch (_) {
+    showToast("Could not reach the server", { error: true });
+    return;
+  }
+  if (res.ok) {
+    let data = null;
+    try { data = await res.json(); } catch (_) {}
+    swsClose();
+    setSwsCwd((data && data.path) || path);
+    swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
+    onSwsCwdChanged();
+    return;
+  }
+  if (res.status === 400) {
+    showToast("Not a directory: " + path, { error: true });
+    return;
+  }
+  showToast(
+    res.status === 404 ? "No such file or directory: " + path :
+    res.status === 403 ? "That path is outside your home directory" :
+    "Could not read " + path,
+    { error: true });
 }
 // updateTierExplain names the ACTUAL working dir in the box/host copy line
 // (D5: "box — the agent sees only ~/culishop."), not a generic placeholder.
-// Called everywhere the cwd can change: workspace picks, custom-path typing,
-// a profile's default_cwd landing (applyProfileCwd), and a tier switch, which
-// can silently change the picker's own selection (renderWorkspaceOptions).
+// Called everywhere the cwd can change: typing an absolute path, a pick, a
+// resolve, a profile's default_cwd landing (applyProfileCwd), and a tier
+// switch (both via onSwsCwdChanged/updateRuntimeWarning).
 function updateTierExplain() {
   const cwdEl = $("tier-explain-cwd");
   if (!cwdEl) return;
@@ -1528,14 +1791,43 @@ function syncRuntimeField() {
     { value: "", label: "box" },
     { value: "host", label: "host", danger: true },
   ], value, updateRuntimeWarning);
-  updateRuntimeWarning(); // also re-renders the workspace list for this tier
+  updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
 
+// updateRuntimeWarning covers two DIFFERENT reasons #runtime-warn can be
+// showing, and they are mutually exclusive:
+//   host  — the generic "runs on your host" notice. Unrelated to which
+//           directory is picked, since host is uncontained regardless.
+//   box   — the picked workspace itself cannot be the box's one writable
+//           mount (home, an ancestor of home, or "/"). The old <select>
+//           simply disabled these entries so this state was unreachable; the
+//           free-text field can no longer prevent typing/picking one, so this
+//           is the reactive replacement — named after the fact, not blocked.
+// Either way this is advisory only: the actual gate is the server's own
+// refusal (box.ErrUnboxableWorkspace, surfaced by handleSessions in api.go),
+// which still runs regardless of what this function decides to show.
 function updateRuntimeWarning() {
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
-  warn.hidden = segValue(seg) !== "host";
-  renderWorkspaceOptions(); // selectable directories depend on the tier
+  if (segValue(seg) === "host") {
+    warn.hidden = false;
+    warn.textContent = "Runs on your host with your user's full access: files, keys, network.";
+    return;
+  }
+  const cwd = getCwd();
+  // A cwd matching one of the depth-1 entries /api/workspaces enumerates
+  // already carries the server's own boxable/reason (see workspaceOptions) —
+  // prefer that over the heuristic, which knows nothing about, say, a
+  // symlinked child of home the server resolved differently.
+  const known = cwd ? workspacesCache.find((w) => w.path === cwd) : null;
+  const reason = known ? (!known.boxable && known.reason) : (cwd ? unboxableCwdReason(cwd, window.HOME_DIR || "") : null);
+  if (reason) {
+    const label = known ? known.label : shortPath(cwd);
+    warn.textContent = "⚠ " + label + " cannot be boxed — " + reason + ". Pick a project root, or choose host deliberately.";
+    warn.hidden = false;
+  } else {
+    warn.hidden = true;
+  }
 }
 
 // openSpawnDialog preselects whatever the one-click button would have done, so
@@ -1553,21 +1845,28 @@ function openSpawnDialog(preselectAgent) {
   // might), but rebuilding against the just-set #agent.value is simplest and
   // cheap — a handful of DOM nodes, rebuilt on every dialog open already.
   renderProfileSeg();
-  // Tier first: it decides which workspaces are selectable at all.
+  // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
-  // Profile default_cwd wins over the last spawn's cwd — applyProfileCwd()
-  // pre-fills from the (possibly programmatically) preselected profile, and
-  // last.cwd only kicks in as a fallback when that profile has none set
-  // (applyProfileCwd() is then a no-op, leaving the picker untouched).
-  applyProfileCwd();
-  const ws = $("workspace");
+  // Fresh open: don't carry a stale pick across dialog sessions. Then, in
+  // priority order — profile default_cwd wins over the last spawn's cwd,
+  // which wins over a sane tier-appropriate default (mirrors the old
+  // <select>'s implicit first-usable-option default, now that nothing does
+  // that automatically for a free-text field):
+  setSwsCwd("");
+  applyProfileCwd(); // sets swsCwd from the profile, if it declares one
   const profile = currentProfile();
-  if (last && last.cwd && !(profile && profile.default_cwd)) {
-    const usable = Array.prototype.some.call(ws.options, (o) => o.value === last.cwd && !o.disabled);
-    if (usable) ws.value = last.cwd;
+  if (!swsCwd) {
+    if (last && last.cwd && !(profile && profile.default_cwd)) {
+      // Unlike the old <select>, an unusable-on-this-tier last cwd is no
+      // longer silently dropped — it's restored and the warning below names
+      // why, so choosing box vs. host stays the user's call, not a discard.
+      setSwsCwd(last.cwd);
+    } else {
+      setSwsCwd(defaultWorkspace(workspacesCache, segValue($("runtime-seg"))));
+    }
   }
-  $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
-  updateTierExplain();
+  onSwsCwdChanged();
+  swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   openDialog("spawn-modal");
   $("sess-name").focus();
 }
@@ -1906,6 +2205,7 @@ try { steerRestore = localStorage.getItem(STEER_KEY) === "1"; } catch (_) {}
 // would present as "the rail just doesn't restore", with nothing in the console.
 if (steerRestore) setSteerOpen(true);
 initSpawnControl();
+initSpawnWsPicker();
 initPalette();
 loadProfiles();
 loadWorkspaces();

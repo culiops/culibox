@@ -217,6 +217,23 @@ function dirPickerNote(count, truncated, failed) {
   return truncated ? "index truncated: some folders are not listed" : "";
 }
 
+// spawnWsIdleNote is the spawn dialog's own steady-state caption (D5): "N
+// project roots · type to filter · ↵ to pick", shown under its workspace field
+// whenever there is nothing wrong to report (see dirPickerNote, which only
+// speaks up for the zero-hit/truncated/failed cases a live search can hit).
+// The file-tree picker has no room for an always-on caption and needs none —
+// the tree itself shows what is rooted — but the spawn dialog's wider layout
+// has space to say what the field does before a single keystroke.
+//
+// `count` is meant to be pickerRows({mode:"empty", workspaces}).length — the
+// same dpSkipWorkspaceNames-filtered set the picker itself renders when
+// opened blank — so the number on screen always matches what the dropdown
+// shows if it's opened right now, rather than a raw, unfiltered tally.
+function spawnWsIdleNote(count) {
+  const n = count || 0;
+  return n + (n === 1 ? " project root" : " project roots") + " · type to filter · ↵ to pick";
+}
+
 // Everything below touches the DOM and is covered by the behavioural pass, not
 // node --test. It mirrors palette.js:167-200's debounce + AbortController +
 // sequence guard rather than inventing a second version of the same pattern.
@@ -537,6 +554,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     classifyPickerQuery, pickerRows,
     pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
-    pickerNextIndex, pickerEnterAction, dirPickerNote,
+    pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote,
   };
 }

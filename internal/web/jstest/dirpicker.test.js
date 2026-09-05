@@ -4,7 +4,7 @@ const assert = require("node:assert");
 const {
   classifyPickerQuery, pickerRows,
   pickerReopenMode, pickerShouldSelectAll, pickerCollapseAt,
-  pickerNextIndex, pickerEnterAction, dirPickerNote,
+  pickerNextIndex, pickerEnterAction, dirPickerNote, spawnWsIdleNote,
 } = require("../static/dirpicker.js");
 
 // The picker has three input classes and they decide everything downstream:
@@ -284,4 +284,17 @@ test("a truncated index is surfaced alongside real hits", () => {
 
 test("a complete result set carries no note at all", () => {
   assert.strictEqual(dirPickerNote(12, false, false), "");
+});
+
+// --- spawn dialog's idle caption (D5: "N project roots · type to filter ·
+// ↵ to pick") -----------------------------------------------------------
+
+test("spawnWsIdleNote pluralizes on the count", () => {
+  assert.strictEqual(spawnWsIdleNote(92), "92 project roots · type to filter · ↵ to pick");
+  assert.strictEqual(spawnWsIdleNote(1), "1 project root · type to filter · ↵ to pick");
+  assert.strictEqual(spawnWsIdleNote(0), "0 project roots · type to filter · ↵ to pick");
+});
+
+test("spawnWsIdleNote treats a missing count as zero rather than throwing", () => {
+  assert.strictEqual(spawnWsIdleNote(undefined), "0 project roots · type to filter · ↵ to pick");
 });

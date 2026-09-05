@@ -98,6 +98,32 @@ function workspaceSelectionForCwd(workspaces, runtime, cwd) {
   return match ? { value: cwd, custom: "" } : { value: "__custom__", custom: cwd };
 }
 
+// unboxableCwdReason is the spawn dialog's own client-side echo of the
+// server's refusal rule (box.go's unboxableWorkspace / workspaces.go's
+// UnboxableDefaultCwd): home itself, an ancestor of home, or the filesystem
+// root can never be a box's one writable mount. It exists because the spawn
+// dialog's WORKSPACE field (D5) is now free text fed by a fuzzy project-root
+// search, not a <select> whose disabled options already carried this — a path
+// the search resolves can be anywhere under $HOME, not just one of the
+// depth-1 entries /api/workspaces enumerates with its own boxable/reason.
+//
+// This is a HEURISTIC, not the safety boundary: it does not resolve symlinks
+// (impure — the server does, via filepath.EvalSymlinks) and it does not know
+// about any workspace the caller already has richer data for (see
+// updateRuntimeWarning, which checks workspacesCache first and only falls
+// back to this for a path outside that list). The real gate is still
+// box.ErrUnboxableWorkspace at spawn time — this only lets the dialog warn
+// before the round trip.
+function unboxableCwdReason(cwd, home) {
+  const c = (cwd || "").trim();
+  if (!c) return null;
+  if (c === "/") return "it is the filesystem root";
+  if (!home) return null;
+  if (c === home) return "a box here would mount your whole home, including ~/.ssh and your secrets";
+  if (home.indexOf(c + "/") === 0) return "it contains your home directory";
+  return null;
+}
+
 // pfCwdValue reads the profile editor's working-dir controls into a cwd string:
 // "" (no default) when the picker is on the "(no default)" option, the typed
 // custom path when on "Custom path…", else the selected workspace root.
@@ -135,7 +161,8 @@ function shellSpawnPlan(neighbour) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     tierBadge, tierRuntimeLabel, spawnRuntimeDefault,
-    workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, pfCwdValue, shellSpawnPlan, TIER_BOX, TIER_HOST,
+    workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, unboxableCwdReason,
+    pfCwdValue, shellSpawnPlan, TIER_BOX, TIER_HOST,
     profileFitsAsSeg, PROFILE_SEG_MAX,
   };
 }
