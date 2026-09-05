@@ -316,18 +316,17 @@ const killing = new Set();
 // all reading --badge-color, so setting `background` directly would colour the
 // caps and leave the body untouched.
 //
-// Most badges map onto one of WebTUI's own `variant-` values (pass it as
-// `variant`) so --badge-color/--badge-text come from badge.css's own rules.
-// A badge that needs a colour no variant covers (the danger tier's --warn)
-// passes an explicit { color, text } pair instead, set as inline properties.
-// Inline properties beat any selector, so the two modes are mutually
-// exclusive in practice — pass one or the other, not both.
-function asBadge(el, { variant, color, text } = {}) {
+// Every badge here maps onto one of WebTUI's own `variant-` values, so
+// --badge-color/--badge-text come from badge.css's own rules. The danger
+// tier badge (below) used to pass an explicit inline { color, text } pair
+// instead — but #sessions .tier-danger sets its own `color`/`background`
+// unlayered, which wins over badge.css's layered rule regardless of what
+// this function sets, so that pair was silently discarded. Deleted rather
+// than kept as a second, ignored source of truth.
+function asBadge(el, { variant } = {}) {
   el.setAttribute("is-", "badge");
   el.setAttribute("cap-", "triangle");
   if (variant) el.setAttribute("variant-", variant);
-  if (color) el.style.setProperty("--badge-color", color);
-  if (text) el.style.setProperty("--badge-text", text);
   return el;
 }
 
@@ -667,8 +666,9 @@ function renderSession(s) {
     if (tier.tone === "danger") tb.classList.add("tier-danger");
     tb.textContent = tier.text;
     tb.title = tier.title;
-    if (tier.tone === "danger") asBadge(tb, { color: "var(--warn)", text: "var(--bg)" });
-    else asBadge(tb, { variant: "background2" });
+    // #sessions .tier-danger owns the danger tier's colour and background
+    // (see the CSS); the variant here only supplies the neutral case's.
+    asBadge(tb, { variant: "background2" });
     sname.appendChild(tb);
   }
 

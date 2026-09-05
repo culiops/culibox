@@ -425,7 +425,11 @@
     #sessions .sright { display: flex; align-items: center; gap: 8px; flex: none; margin-top: 2px; }
     #sessions .pct { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
     #sessions .tier { white-space: nowrap; }
-    #sessions .tier-danger { color: var(--warn-fg); border-color: var(--warn); background: var(--warn-bg); font-weight: 600; }
+    /* An uncontained session is a containment danger, not an agent waiting on
+       you — --warn-fg is reserved for the latter, so this reads with the same
+       --danger family the steer rail's own tier badge already uses for the
+       identical session (.bdg.dgr in primitives.css). */
+    #sessions .tier-danger { color: var(--danger); border-color: var(--danger); background: var(--danger-tint); font-weight: 600; }
     #sessions .srow.killing .bdg { border-color: var(--danger); }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
