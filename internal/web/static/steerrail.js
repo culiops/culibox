@@ -18,8 +18,12 @@ function railItems(sessions, ctx) {
     out.push({
       kind: "session",
       id: s && s.id,
-      // The state is in the name, not only in the colour: the whole reason this
-      // rail exists is to say "this one needs you" with the sidebar shut.
+      // name is the session's own name, undecorated: it is what a newly-opened
+      // tab gets titled, and a tab title is permanent until the operator renames
+      // it by hand — nothing re-syncs it from a later poll. label carries the
+      // "— waiting for you" suffix for the button's accessible name and tooltip
+      // only; it must never reach a tab title.
+      name: name,
       label: waiting ? name + " — waiting for you" : name,
       activity: (s && s.activity) || "",
       on: !!c.focusedId && !!s && s.id === c.focusedId,

@@ -46,6 +46,12 @@ test("an unnamed session falls back to its id, and a waiting one says so", () =>
   assert.strictEqual(b.label, "drain");
 });
 
+test("a waiting session's name stays undecorated even though its label carries the suffix", () => {
+  const [, a] = railItems([{ id: "abc123", name: "review", activity: "waiting" }], {});
+  assert.strictEqual(a.name, "review");
+  assert.strictEqual(a.label, "review — waiting for you");
+});
+
 test("an absent list is empty, never a throw", () => {
   assert.deepStrictEqual(railItems(null, null).map((i) => i.kind), ["toggle", "new"]);
 });

@@ -127,7 +127,10 @@ function renderRail48() {
       const d = document.createElement("span");
       d.className = activityClass(it.activity).cls;
       b.appendChild(d);
-      b.onclick = () => openTerminal(it.id, it.label);
+      // it.name, not it.label: label carries "— waiting for you" for the
+      // button's accessible name, and a freshly-opened tab is titled from this
+      // argument permanently (nothing re-syncs a tab title from a later poll).
+      b.onclick = () => openTerminal(it.id, it.name);
     } else {
       b.textContent = it.glyph;
       b.onclick = it.kind === "toggle" ? toggleSidebar : () => openSpawnDialog();
