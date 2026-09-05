@@ -16,6 +16,12 @@ let palSel = 0;
 let palSeq = 0;   // guards against an older file response overwriting a newer one
 let palTimer = null;
 let palAbort = null;
+// Parallel to palItems: the actual <li> DOM node rendered for each row, in the
+// same order. palSelect and palRender read/write selection through this array
+// rather than `ul.children[i]` — the <ul> also holds non-selectable heading
+// <li>s (see palSection/palRender), so a plain child index would drift off the
+// real rows the moment a heading is inserted ahead of it.
+let palRowEls = [];
 
 // isPaletteHotkey matches the key events that open the palette.
 //
@@ -227,61 +233,102 @@ function tailDirs(dir, keep) {
 }
 
 // --- rendering ---------------------------------------------------------------
+// palSection maps an item's kind to the heading it renders under. Sessions and
+// files each get their own named section; every other kind (the "new"/"kill"/
+// "layout"/"settings"/"view" commands) shares one COMMANDS section — that chip
+// text is gone from the row, so the heading is the only thing that used to say
+// what a command row was.
+const PAL_SECTIONS = ["SESSIONS", "FILES", "COMMANDS"];
+function palSection(kind) {
+  if (kind === "session") return "SESSIONS";
+  if (kind === "file") return "FILES";
+  return "COMMANDS";
+}
+
+// palGroup buckets items by section, preserving each item's relative order
+// within its bucket, then concatenates the buckets in the fixed section order
+// above. The caller's own order (sessions/commands interleaved, files appended
+// once the async search returns) does not need to already match — this is
+// what makes SESSIONS/FILES/COMMANDS render in that order regardless of when
+// each list was produced.
+function palGroup(items) {
+  const buckets = { SESSIONS: [], FILES: [], COMMANDS: [] };
+  for (const it of items) buckets[palSection(it.kind)].push(it);
+  return PAL_SECTIONS.flatMap((s) => buckets[s].map((it) => ({ it, section: s })));
+}
+
+function palBuildRow(it, idx, selected) {
+  const li = document.createElement("li");
+  li.className = "pal-row" + (selected ? " sel" : "");
+  const label = document.createElement("span");
+  label.className = "pal-label";
+  label.textContent = it.label;
+  label.title = it.title || it.label;
+  li.append(label);
+  if (it.hint) {
+    const h = document.createElement("span");
+    h.className = "pal-hint";
+    h.textContent = it.hint;
+    li.append(h);
+  }
+  if (it.path) {
+    // Only on the selected row. li.onmouseenter already selects the row under
+    // the pointer, so this needs no separate hover state — the button appears
+    // wherever the mouse is.
+    const cp = document.createElement("button");
+    cp.type = "button";
+    cp.className = "pal-copy";
+    cp.textContent = "⧉";
+    cp.title = "Copy path";
+    cp.setAttribute("aria-label", "Copy path");
+    cp.onclick = (e) => {
+      e.stopPropagation(); // must not also run the item
+      // Close FIRST: showModal() makes everything outside the dialog inert, so
+      // copyText's off-screen-textarea fallback (this page is plain HTTP, so
+      // navigator.clipboard is usually absent) cannot focus and copies nothing.
+      closePalette();
+      copyPath(it.path);
+    };
+    li.append(cp);
+  }
+  li.onmouseenter = () => palSelect(idx);
+  li.onclick = () => runItem(it);
+  return li;
+}
+
 function palRender(items, note) {
-  palItems = items;
-  if (palSel >= items.length) palSel = 0;
+  const grouped = palGroup(items);
+  palItems = grouped.map((g) => g.it);
+  if (palSel >= palItems.length) palSel = 0;
+
   const ul = document.getElementById("pal-list");
-  ul.replaceChildren(...items.map((it, i) => {
-    const li = document.createElement("li");
-    if (i === palSel) li.className = "sel";
-    const kind = document.createElement("span");
-    kind.className = "pal-kind";
-    kind.textContent = it.kind;
-    const label = document.createElement("span");
-    label.className = "pal-label";
-    label.textContent = it.label;
-    label.title = it.title || it.label;
-    li.append(kind, label);
-    if (it.hint) {
-      const h = document.createElement("span");
-      h.className = "pal-hint";
-      h.textContent = it.hint;
-      li.append(h);
+  const children = [];
+  const rowEls = [];
+  let section = null;
+  grouped.forEach(({ it, section: s }, idx) => {
+    if (s !== section) {
+      section = s;
+      const head = document.createElement("li");
+      head.className = "pal-head";
+      head.textContent = s;
+      children.push(head);
     }
-    if (it.path) {
-      // Only on the selected row. li.onmouseenter already selects the row under
-      // the pointer, so this needs no separate hover state — the button appears
-      // wherever the mouse is.
-      const cp = document.createElement("button");
-      cp.type = "button";
-      cp.className = "pal-copy";
-      cp.textContent = "⧉";
-      cp.title = "Copy path";
-      cp.setAttribute("aria-label", "Copy path");
-      cp.onclick = (e) => {
-        e.stopPropagation(); // must not also run the item
-        // Close FIRST: showModal() makes everything outside the dialog inert, so
-        // copyText's off-screen-textarea fallback (this page is plain HTTP, so
-        // navigator.clipboard is usually absent) cannot focus and copies nothing.
-        closePalette();
-        copyPath(it.path);
-      };
-      li.append(cp);
-    }
-    li.onmouseenter = () => palSelect(i);
-    li.onclick = () => runItem(it);
-    return li;
-  }));
-  document.getElementById("pal-empty").hidden = items.length > 0;
+    const li = palBuildRow(it, idx, idx === palSel);
+    children.push(li);
+    rowEls.push(li);
+  });
+  ul.replaceChildren(...children);
+  palRowEls = rowEls;
+
+  document.getElementById("pal-empty").hidden = palItems.length > 0;
   document.getElementById("pal-note").textContent = note || "";
 }
 
 function palSelect(i) {
   if (!palItems.length) return;
-  const ul = document.getElementById("pal-list");
   palSel = (i + palItems.length) % palItems.length;
-  for (let k = 0; k < ul.children.length; k++) ul.children[k].classList.toggle("sel", k === palSel);
-  const el = ul.children[palSel];
+  for (let k = 0; k < palRowEls.length; k++) palRowEls[k].classList.toggle("sel", k === palSel);
+  const el = palRowEls[palSel];
   if (el) el.scrollIntoView({ block: "nearest" });
 }
 
@@ -356,5 +403,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup };
 }

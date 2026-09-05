@@ -279,8 +279,11 @@
   </dialog>
 
   <dialog id="palette">
-    <input id="pal-input" type="text" autocomplete="off" spellcheck="false"
-           placeholder="Search files and sessions. Type &gt; for commands">
+    <div id="pal-inputwrap">
+      <span id="pal-prompt" aria-hidden="true">&gt;</span>
+      <input id="pal-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Search files and sessions. Type &gt; for commands">
+    </div>
     <ul id="pal-list"></ul>
     <div id="pal-empty" hidden>No matches</div>
     <div id="pal-foot"><span>↑↓ navigate</span><span>↵ run</span><span id="pal-insert-hint">^↵ insert path</span><span>esc close</span><span id="pal-note"></span></div>

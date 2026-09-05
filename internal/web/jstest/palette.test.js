@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isPaletteHotkey, isInsertHotkey } = require("../static/palette.js");
+const { isPaletteHotkey, isInsertHotkey, palSection, palGroup } = require("../static/palette.js");
 
 // A KeyboardEvent stand-in: only the fields the matcher reads.
 const ev = (code, mods) => Object.assign(
@@ -82,4 +82,40 @@ test("altgr+enter off mac is not the insert hotkey", () => {
 
 test("cmd+alt+enter on mac is not the insert hotkey", () => {
   assert.strictEqual(isInsertHotkey({ key: "Enter", metaKey: true, altKey: true }, true), false);
+});
+
+// --- palSection / palGroup (kind -> D4 section heading) ---------------------
+
+test("palSection maps session and file to their own headings, everything else to COMMANDS", () => {
+  assert.strictEqual(palSection("session"), "SESSIONS");
+  assert.strictEqual(palSection("file"), "FILES");
+  for (const kind of ["new", "kill", "layout", "settings", "view"]) {
+    assert.strictEqual(palSection(kind), "COMMANDS");
+  }
+});
+
+// The regroup must not silently drop or duplicate rows regardless of the
+// caller's original order (sessions/commands interleaved, files appended
+// later by the async search) — palRender trusts palGroup's output 1:1 as the
+// new palItems/selection order.
+test("palGroup renders SESSIONS, then FILES, then COMMANDS, regardless of input order", () => {
+  const items = [
+    { kind: "new", label: "New session…" },
+    { kind: "session", label: "agent-box" },
+    { kind: "file", label: "peek.go" },
+    { kind: "view", label: "Toggle sidebar" },
+    { kind: "session", label: "culipulse" },
+  ];
+  const grouped = palGroup(items);
+  assert.deepStrictEqual(grouped.map((g) => g.section),
+    ["SESSIONS", "SESSIONS", "FILES", "COMMANDS", "COMMANDS"]);
+  // Order WITHIN a section is preserved from the input.
+  assert.deepStrictEqual(grouped.map((g) => g.it.label),
+    ["agent-box", "culipulse", "peek.go", "New session…", "Toggle sidebar"]);
+});
+
+test("palGroup omits a section entirely when it has no rows (commands-only mode)", () => {
+  const items = [{ kind: "new", label: "New session…" }, { kind: "view", label: "Toggle sidebar" }];
+  const grouped = palGroup(items);
+  assert.deepStrictEqual(grouped.map((g) => g.section), ["COMMANDS", "COMMANDS"]);
 });

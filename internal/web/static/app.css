@@ -953,31 +953,48 @@
        is box- only where a legend earns its place in the rule; here it
        didn't, so this keeps the plain border it already had. */
     #palette { width: 620px; margin-top: 9vh; margin-bottom: auto; }
-    #pal-input {
-      width: 100%; background: var(--bg); color: var(--fg); border: none;
-      border-bottom: 1px solid var(--border);
-      padding: 13px 15px; font-size: 14px; font-family: inherit; outline: none;
+    /* The prompt glyph sits in its own column so it never becomes part of the
+       input's value or selection range — a sibling span, not a ::before on the
+       input (an <input> can't render pseudo-content inside its own box). Border
+       moves here from #pal-input so the glyph and the typed text share one
+       focus rule. */
+    #pal-inputwrap {
+      display: flex; align-items: center; border-bottom: 1px solid var(--border);
     }
-    /* #pal-input is an ID selector setting outline: none unconditionally (not
-       scoped to :focus-visible), so it always out-ranks a generic
-       input:focus-visible { outline: ... } rule regardless of focus state — the
-       ID component of specificity beats the other rule's extra pseudo-classes
-       no matter what. Mark focus on the field's own bottom border instead. */
-    #pal-input:focus-visible { border-bottom-color: var(--accent); }
+    #pal-inputwrap:focus-within { border-bottom-color: var(--accent); }
+    #pal-prompt {
+      flex: none; padding-left: 15px; color: var(--accent); font-size: 14px;
+      font-family: inherit; user-select: none;
+    }
+    #pal-input {
+      flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: none;
+      padding: 13px 15px 13px 8px; font-size: 14px; font-family: inherit; outline: none;
+    }
     #pal-list { list-style: none; margin: 0; padding: 6px; max-height: 52vh; overflow-y: auto; }
-    #pal-list li {
+    /* Section headings (SESSIONS/FILES/COMMANDS) replace the old per-row
+       `.pal-kind` chip. Not selectable — palRender never gives one a "sel"
+       class and palSelect's row list skips them entirely (see palette.js). */
+    #pal-list .pal-head {
+      padding: 10px 1.28ch 4px; font-size: 10px; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .4px; cursor: default;
+    }
+    #pal-list .pal-head:first-child { padding-top: 4px; }
+    #pal-list li.pal-row {
       display: flex; align-items: center; gap: 1.15ch; padding: .36lh 1.28ch;
+      /* Transparent 3px left border reserves the accent bar's own space on
+         EVERY row, selected or not, so gaining the accent colour on .sel never
+         shifts the row's content sideways (the pixel trap). */
+      border-left: 3px solid transparent;
       cursor: pointer; font-size: 13px;
     }
-    #pal-list li.sel { background: var(--sel); outline: 1px solid var(--accent); }
+    #pal-list li.pal-row.sel { background: var(--sel); border-left-color: var(--accent); }
     /* --muted on --sel measures 3.99 (fails AA) — the selected row is the one
        row a user is actually reading. --fg on --sel measures 6.14. */
-    #pal-list li.sel .pal-kind, #pal-list li.sel .pal-hint { color: var(--fg); }
-    #pal-list .pal-kind { flex: none; font-size: 10px; color: var(--muted); border: 1px solid var(--border); padding: 0 5px; text-transform: uppercase; letter-spacing: .4px; }
+    #pal-list li.pal-row.sel .pal-hint { color: var(--fg); }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
-    #pal-list li.sel .pal-copy { display: block; }
+    #pal-list li.pal-row.sel .pal-copy { display: block; }
     #pal-list .pal-copy:hover { color: var(--fg); background: var(--sel); }
     #pal-empty { color: var(--muted); font-size: 12.5px; padding: 14px; }
     #pal-foot { display: flex; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 11px; }
