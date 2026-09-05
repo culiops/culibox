@@ -242,20 +242,17 @@
         dialog are already using them. A stored size wins over the default.</p>
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
-      <div class="settings-body">
-        <p class="tok-intro">Access tokens let a client app or CLI connect to
-          this box with <code>Authorization: Bearer&nbsp;…</code> — no password
-          prompt. Create one per device; revoke any at any time.</p>
-        <div id="tok-reveal" class="tok-reveal" hidden>
-          <div class="tok-reveal-head">Copy it now — you won't see it again:</div>
-          <div class="tok-reveal-row">
-            <code id="tok-reveal-val"></code>
-            <button id="tok-copy" type="button" class="ghost">Copy</button>
-          </div>
-        </div>
-        <ul id="tok-list" class="tok-list"></ul>
-        <div class="dlg-err" id="tok-err"></div>
+      <p class="hint">An access token lets a client app or CLI connect to this box
+        with <code>Authorization: Bearer&nbsp;…</code>, with no password prompt.
+        One per device; revoke any at any time.</p>
+      <div id="tok-reveal" class="reveal" hidden>
+        <div>⚠ Copy this now — it is shown once and never again.</div>
+        <div class="tk" id="tok-reveal-val"></div>
+        <button id="tok-copy" type="button" class="btn">Copy</button>
+        <button id="tok-done" type="button" class="btn gh">Done</button>
       </div>
+      <ul id="tok-list"></ul>
+      <div class="dlg-err" id="tok-err"></div>
     </div>
 
     <div class="dft" id="foot-manage">
