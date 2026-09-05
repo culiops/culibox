@@ -107,6 +107,18 @@ function pfCwdValue(selectValue, customText) {
   return selectValue;
 }
 
+// profileFitsAsSeg decides whether the spawn dialog's Profile control (D5)
+// renders as a segmented row or falls back to the plain <select>: a handful
+// of names reads as a row of buttons, but past PROFILE_SEG_MAX the same row
+// either overflows the dialog or wraps into an ugly multi-line block — the
+// product-owner call was "segmented + dropdown fallback", not "segmented no
+// matter how many". Mirrors the profile editor's own <=4 seg threshold for
+// enum options (renderPfOptions).
+const PROFILE_SEG_MAX = 4;
+function profileFitsAsSeg(count) {
+  return count > 0 && count <= PROFILE_SEG_MAX;
+}
+
 // shellSpawnPlan decides what the per-pane "+sh" button does. A quick shell is
 // defined as "a shell beside this session", so it inherits the neighbour's
 // directory AND its tier: beside a boxed agent it joins the same box, beside an
@@ -124,5 +136,6 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     tierBadge, tierRuntimeLabel, spawnRuntimeDefault,
     workspaceOptions, defaultWorkspace, workspaceSelectionForCwd, pfCwdValue, shellSpawnPlan, TIER_BOX, TIER_HOST,
+    profileFitsAsSeg, PROFILE_SEG_MAX,
   };
 }

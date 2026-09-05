@@ -920,6 +920,7 @@ async function loadProfiles(retry = true) {
       o.value = p.name; o.textContent = p.name;
       return o;
     }));
+    renderProfileSeg();
     renderOptions();
     renderProfileList();
   } catch (_) {
@@ -929,16 +930,49 @@ async function loadProfiles(retry = true) {
 function currentProfile() {
   return profiles.find((p) => p.name === $("agent").value);
 }
+// renderProfileSeg keeps the segmented Profile control (D5) in sync with the
+// canonical <select id="agent">: every other reader (currentProfile, the
+// spawn request's own req.agent, syncRuntimeField/applyProfileCwd) still goes
+// through #agent unchanged, so the seg only ever WRITES agent.value and
+// dispatches 'change' — it never becomes a second source of truth. Above
+// profileFitsAsSeg's threshold (tier.js) the seg would wrap or overflow the
+// 580px dialog, so the fallback is the plain <select>, matching the profile
+// editor's own <=4 seg threshold (renderPfOptions) — a product-owner decision,
+// not a graceful-degradation afterthought.
+function renderProfileSeg() {
+  const seg = $("agent-seg"), sel = $("agent");
+  if (!seg || !sel) return;
+  seg.hidden = !profileFitsAsSeg(profiles.length);
+  sel.hidden = !seg.hidden;
+  if (!seg.hidden) {
+    buildSeg(seg, profiles.map((p) => ({ value: p.name, label: p.name })), sel.value, (v) => {
+      sel.value = v;
+      sel.dispatchEvent(new Event("change"));
+    });
+  }
+}
+// D5 routes the Effort enum into its own slot beside Containment; every other
+// profile option (Model, Bypass permissions) stays in the Advanced group
+// below. Matched by key, not position, so a profile that reorders its options
+// still lands Effort in the right slot — "effortLevel" covers the same key
+// bundle/settings.go's allowlist already reads under that spelling.
+function isEffortOptionKey(key) {
+  return key === "effort" || key === "effortLevel";
+}
 // renderOptions builds a toggle per option the selected profile exposes:
 // checkbox for bool, a .seg for a <=5-choice enum (mirrors renderPfOptions,
 // which stops at <=4 — the spawn dialog's own enums, notably Effort's five
 // choices, are one wider on purpose; seeing the alternatives beats saving the
 // space a select would), a plain select for anything wider. Pre-set to the
-// profile's default.
+// profile's default. Effort's row goes into #effort-slot (D5's row beside
+// Containment); every other option's row goes into #options (the Advanced
+// group) — getOptions() below reads both by [data-key], not by container, so
+// nothing is lost by living in a different slot.
 function renderOptions() {
   const p = currentProfile();
   const opts = (p && p.options) || [];
-  $("options").replaceChildren(...opts.map((o) => {
+  const effortRows = [], advRows = [];
+  for (const o of opts) {
     const row = document.createElement("div");
     row.className = "opt";
     const lbl = document.createElement("label");
@@ -973,12 +1007,24 @@ function renderOptions() {
     ctrl.dataset.key = o.key;
     ctrl.dataset.type = o.type;
     row.append(lbl, ctrl);
-    return row;
-  }));
+    (isEffortOptionKey(o.key) ? effortRows : advRows).push(row);
+  }
+  const effortSlot = $("effort-slot"), effortRow = $("effort-row");
+  if (effortSlot) effortSlot.replaceChildren(...effortRows);
+  // A profile without an Effort option (e.g. bash) leaves an empty grid cell
+  // beside Containment otherwise — hide the row rather than show a gap. Same
+  // reasoning for the Advanced group when a profile has no other options.
+  if (effortRow) effortRow.style.display = effortRows.length ? "" : "none";
+  $("options").replaceChildren(...advRows);
+  const advGroup = $("spawn-adv");
+  if (advGroup) advGroup.style.display = advRows.length ? "" : "none";
 }
+// getOptions reads every option's control by [data-key] across the WHOLE
+// form, not just #options — Effort now lives in #effort-slot instead, and a
+// control this stops reading from is a silently-dropped spawn field.
 function getOptions() {
   const out = {};
-  for (const ctrl of $("options").querySelectorAll("[data-key]")) {
+  for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
     if (ctrl.dataset.type === "bool") out[ctrl.dataset.key] = ctrl.checked;
     else if (ctrl.classList.contains("seg")) out[ctrl.dataset.key] = segValue(ctrl);
     else out[ctrl.dataset.key] = ctrl.value;
@@ -1006,6 +1052,7 @@ function applyProfileCwd() {
   ws.value = sel.value;
   $("cwd-custom").value = sel.custom;
   $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
+  updateTierExplain();
 }
 
 // renderPfWorkspaceOptions builds the profile-editor working-dir picker for the
@@ -1371,13 +1418,31 @@ function renderWorkspaceOptions() {
   const stillOK = opts.some((o) => o.value === prev && !o.disabled);
   sel.value = stillOK ? prev : (defaultWorkspace(workspacesCache, rt) || "__custom__");
   $("cwd-custom").style.display = sel.value === "__custom__" ? "block" : "none";
+  updateTierExplain();
 }
 $("workspace").addEventListener("change", () => {
   $("cwd-custom").style.display = $("workspace").value === "__custom__" ? "block" : "none";
+  updateTierExplain();
 });
+// A typed custom path is the one cwd change renderWorkspaceOptions/
+// applyProfileCwd never see (they only touch the <select>), so the D5
+// box/host explainer needs its own listener to keep naming the real cwd
+// while the user is still typing it.
+$("cwd-custom").addEventListener("input", updateTierExplain);
 function getCwd() {
   const w = $("workspace").value;
   return w === "__custom__" ? $("cwd-custom").value.trim() : (w || "");
+}
+// updateTierExplain names the ACTUAL working dir in the box/host copy line
+// (D5: "box — the agent sees only ~/culishop."), not a generic placeholder.
+// Called everywhere the cwd can change: workspace picks, custom-path typing,
+// a profile's default_cwd landing (applyProfileCwd), and a tier switch, which
+// can silently change the picker's own selection (renderWorkspaceOptions).
+function updateTierExplain() {
+  const cwdEl = $("tier-explain-cwd");
+  if (!cwdEl) return;
+  const cwd = getCwd();
+  cwdEl.textContent = cwd ? shortPath(cwd) : "the working dir";
 }
 
 // boxRuntime is the isolation runtime the daemon detected ("runc"/"sysbox-runc"),
@@ -1446,7 +1511,13 @@ async function spawnSession(req, opts) {
 function syncRuntimeField() {
   const row = $("runtime-row"), seg = $("runtime-seg");
   if (!row || !seg) return;
-  row.style.display = boxRuntime ? "" : "none";
+  const shown = boxRuntime ? "" : "none";
+  row.style.display = shown;
+  // The box/host explainer only makes sense alongside an actual choice —
+  // with no box layer every session is host tier anyway (see the comment
+  // above), so it is hidden together with the row that offers the choice.
+  const explain = $("tier-explain");
+  if (explain) explain.style.display = shown;
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
   buildSeg(seg, [
     { value: "", label: "box" },
@@ -1473,6 +1544,10 @@ function openSpawnDialog(preselectAgent) {
     $("agent").value = want;
     renderOptions();
   }
+  // The seg's own list never changes here (only which button is active
+  // might), but rebuilding against the just-set #agent.value is simplest and
+  // cheap — a handful of DOM nodes, rebuilt on every dialog open already.
+  renderProfileSeg();
   // Tier first: it decides which workspaces are selectable at all.
   syncRuntimeField();
   // Profile default_cwd wins over the last spawn's cwd — applyProfileCwd()
@@ -1487,6 +1562,7 @@ function openSpawnDialog(preselectAgent) {
     if (usable) ws.value = last.cwd;
   }
   $("cwd-custom").style.display = ws.value === "__custom__" ? "block" : "none";
+  updateTierExplain();
   openDialog("spawn-modal");
   $("sess-name").focus();
 }

@@ -114,6 +114,7 @@
       <form id="spawn">
         <div>
           <label for="agent">Profile</label>
+          <div class="seg" id="agent-seg" data-value="" role="group" aria-label="Profile" hidden></div>
           <select id="agent"></select>
           <div class="form-hint">Defaults come from the profile (Settings ⚙). Anything
             you change here applies to this run only.</div>
@@ -122,18 +123,30 @@
           <label for="sess-name">Name (optional)</label>
           <input id="sess-name" type="text" placeholder="auto: working dir name" autocomplete="off" spellcheck="false">
         </div>
-        <div id="options"></div>
-        <div id="runtime-row" style="display:none">
-          <label>Containment</label>
-          <div class="seg" id="runtime-seg" data-value="" role="group" aria-label="Containment"></div>
-          <div class="warnbox" id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
-        </div>
-        <div>
+        <div class="span2">
           <label for="workspace">Working dir</label>
           <select id="workspace"></select>
           <input id="cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
         </div>
-        <div class="spawn-actions">
+        <div id="runtime-row" style="display:none">
+          <label>Containment</label>
+          <div class="seg" id="runtime-seg" data-value="" role="group" aria-label="Containment"></div>
+        </div>
+        <div id="effort-row">
+          <div id="effort-slot"></div>
+        </div>
+        <div class="span2 form-hint" id="tier-explain" style="display:none">
+          <div><b>box</b> — the agent sees only <span id="tier-explain-cwd"></span>.</div>
+          <div><b class="dgr">host</b> — the agent has your whole account.</div>
+        </div>
+        <div class="span2">
+          <div class="warnbox" id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
+        </div>
+        <div class="span2 spawn-adv" id="spawn-adv">
+          <span class="spawn-adv-label">Advanced</span>
+          <div id="options"></div>
+        </div>
+        <div class="spawn-actions span2">
           <button type="button" class="btn gh" data-close="spawn-modal">Cancel</button>
           <button type="submit" class="btn pri">Spawn ⏎</button>
         </div>

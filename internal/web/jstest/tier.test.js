@@ -177,3 +177,21 @@ test("pfCwdValue: custom option yields the trimmed typed path", () => {
 test("pfCwdValue: a selected root yields that root", () => {
   assert.equal(pfCwdValue("/home/u/proj-a", "whatever"), "/home/u/proj-a");
 });
+
+// --- spawn dialog: segmented Profile vs. dropdown fallback (D5) -------------
+
+const { profileFitsAsSeg } = require("../static/tier.js");
+
+test("profileFitsAsSeg: a handful of profiles renders as a seg", () => {
+  assert.equal(profileFitsAsSeg(1), true);
+  assert.equal(profileFitsAsSeg(4), true);
+});
+
+test("profileFitsAsSeg: past the threshold falls back to the plain select", () => {
+  assert.equal(profileFitsAsSeg(5), false);
+  assert.equal(profileFitsAsSeg(12), false);
+});
+
+test("profileFitsAsSeg: zero profiles is also the select (nothing to segment)", () => {
+  assert.equal(profileFitsAsSeg(0), false);
+});

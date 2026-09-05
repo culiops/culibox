@@ -687,7 +687,7 @@
        hidden attribute silently does nothing and all three panels stack. */
     .dbd[hidden], .dft[hidden] { display: none; }
 
-    #spawn-modal { width: 420px; }
+    #spawn-modal { width: 580px; }
     #analytics-modal { width: 960px; max-width: 96vw; }
     #an-tabs { flex-wrap: wrap; }
 
@@ -780,14 +780,18 @@
     .dlg-err:empty { display: none; }
 
     /* --- spawn form (now inside the advanced dialog) ---------------------- */
-    #spawn { display: grid; gap: 8px; }
+    /* D5's 2-column layout: Profile|Name, Working dir (full row), Containment|
+       Effort, then three full-row blocks (the box/host explainer, the host
+       warning, and the Advanced group), then the footer. Rows pair up
+       left-to-right in DOM order — see .span2 below for the full-row items. */
+    #spawn { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
     #spawn label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
     /* Every other row's label stacks above its control because the control
        is width:100% (a <select> or <input>) and simply doesn't fit beside it.
        #runtime-seg is a content-width .seg, so without this it would sit
        beside "Containment" on one line instead of below it like the mockup
        (and like Effort/Model) — a label is inline by default. */
-    #runtime-row label { display: block; margin-bottom: 4px; }
+    #runtime-row > label { display: block; margin-bottom: 4px; }
     #spawn select, #spawn input, #spawn button[type="submit"] {
       background: var(--bg); color: var(--fg); border: 1px solid var(--border);
       padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
@@ -798,19 +802,26 @@
        buttons, sized to content like every other .btn. */
     #spawn .spawn-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 2px; }
     #spawn .spawn-actions button[type="submit"] { width: auto; margin-top: 0; }
-    /* #spawn is a single-column grid; a grid item's default min-width is its
-       content's own min-content size (not 0), so a wide, non-wrapping child —
-       an enum .seg with long values, e.g. the "model" option's claude-opus-4-8
-       — pushes the WHOLE grid track past the dialog's fixed 420px width
-       instead of wrapping inside it. min-width:0 lets every row shrink to the
-       dialog's real width; the unconditional (not mobile-only) wrap on .seg
-       below is what then lets the row's own buttons wrap to fit it. */
+    /* #spawn is a 2-col grid now (was 1); a grid item's default min-width is
+       its content's own min-content size (not 0), so a wide, non-wrapping
+       child — an enum .seg with long values, e.g. the "model" option's
+       claude-opus-4-8 — pushes the WHOLE grid track past the dialog's fixed
+       580px width instead of wrapping inside it. min-width:0 lets every row
+       shrink to its column's real (now half) width; the unconditional (not
+       mobile-only) wrap on .seg below is what then lets the row's own
+       buttons wrap to fit it — this is why Effort's 5 buttons, which fit
+       unwrapped in the old full-width column, now wrap to two lines in the
+       narrower Effort column. That is expected, not an overflow. */
     #spawn > div { min-width: 0; }
+    /* A full-width row: Working dir, the box/host explainer, the host
+       warning, the Advanced group, and the footer. Everything else (Profile,
+       Name, Containment, Effort) stays in its own half. */
+    #spawn > div.span2 { grid-column: 1 / -1; }
     #spawn .seg { flex-wrap: wrap; }
-    #options { display: grid; gap: 8px; }
-    #options .opt { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    #options .opt > * { min-width: 0; }
-    #options .opt > label { flex: 1; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 13px; }
+    #options, #effort-slot { display: grid; gap: 8px; }
+    #options .opt, #effort-slot .opt { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    #options .opt > *, #effort-slot .opt > * { min-width: 0; }
+    #options .opt > label, #effort-slot .opt > label { flex: 1; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 13px; }
     #options .opt input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
     #options .opt select { width: auto; }
     /* A seg-type option gets the whole row instead of splitting it with the
@@ -818,7 +829,33 @@
        control), which is why its segs already fit their dialog. A <=5-choice
        enum with long values needs every pixel of row width before wrap even
        helps. Mobile keeps the pre-existing label-beside-seg look (below). */
-    #options .opt.opt-seg { flex-direction: column; align-items: stretch; gap: 4px; }
+    #options .opt.opt-seg, #effort-slot .opt.opt-seg { flex-direction: column; align-items: stretch; gap: 4px; }
+    /* The segmented Profile control writes into the hidden canonical <select
+       id="agent"> (renderProfileSeg in app.js) instead of replacing it, so
+       every other reader (currentProfile, req.agent, syncRuntimeField) still
+       goes through #agent unchanged. Above ~4 profiles the seg is hidden and
+       the plain <select> takes back over — but `.seg { display: inline-flex }`
+       (primitives.css) ties [hidden]'s specificity, and author beats UA
+       regardless of specificity, so the hidden ATTRIBUTE alone would not
+       actually hide it without this override; see .warnbox[hidden] above for
+       the identical pattern. */
+    #agent-seg[hidden] { display: none; }
+    /* Plain copy, not a control — same muted look as .form-hint (reused as a
+       base class in the markup), but "host" carries the same --danger tone
+       as the Containment seg's own host button (.seg button.dgr) so the two
+       agree instead of inventing a second danger colour. */
+    #tier-explain { line-height: 1.5; }
+    #tier-explain div + div { margin-top: 2px; }
+    #tier-explain b.dgr { color: var(--danger); font-weight: 600; }
+    /* The Advanced group (Model + Bypass permissions): per-run overrides D5
+       doesn't draw but the product owner kept. The rule + caption are the
+       only things marking it as the secondary controls below the primary D5
+       fields above. */
+    .spawn-adv { border-top: 1px solid var(--border); padding-top: 10px; }
+    .spawn-adv-label {
+      display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+      color: var(--muted); margin-bottom: 8px;
+    }
 
     /* --- profile editor (now a settings tab) ------------------------------ */
     .pf-lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
@@ -1249,12 +1286,16 @@
       #pal-inputwrap { flex-wrap: wrap; }
       #pal-hints { flex-basis: 100%; justify-content: flex-end; padding: 2px 15px 8px; }
       #spawn-modal, #analytics-modal { width: 94vw; }
+      /* D5's 2-column grid collapses to one column: Profile, Name, Working
+         dir, Containment, Effort, the explainer, the warning, and Advanced
+         all stack in DOM order instead of pairing left/right. */
+      #spawn { grid-template-columns: 1fr; }
       /* Desktop stacks a seg-type option's label above its control to give
          it the full row (see #options .opt.opt-seg above); that is a known
          deferred cosmetic on mobile (a tall wrapped seg beside a vertically
          centred label), left exactly as it already was rather than changed
          here alongside an unrelated fix. */
-      #options .opt.opt-seg { flex-direction: row; align-items: center; }
+      #options .opt.opt-seg, #effort-slot .opt.opt-seg { flex-direction: row; align-items: center; }
       /* The desktop heights are the design's frame sizes; on a phone the dialog
          is the screen and takes what there is. */
       #settings-modal, #settings-modal.tall { width: 94vw; height: auto; max-height: calc(100vh - 24px); }
