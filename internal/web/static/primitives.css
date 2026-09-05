@@ -36,6 +36,50 @@
        only to a screen reader. Full-strength foreground is the one value that
        holds on every row state. */
     .dot.watching { outline: 2px solid var(--fg); outline-offset: 1px; }
+    /* Small bordered label. Two jobs: the containment tier a session runs
+       under, and the environment banner. Both are read at a glance next to a
+       name, so they take the border colour of what they mean rather than a
+       fill — a filled chip beside a status dot reads as a second dot. */
+    .bdg { font-size: 10px; padding: 1px 5px; border: 1px solid var(--border);
+           color: var(--muted); line-height: 16px; white-space: nowrap; }
+    .bdg.box { color: var(--ok); border-color: var(--ok); }
+    .bdg.host { color: var(--warn); border-color: var(--warn); }
+    .bdg.env { color: var(--accent); border-color: var(--accent); font-weight: 700; }
+    .bdg.env.prod { color: var(--danger); border-color: var(--danger); }
+    /* Layout atoms the design uses everywhere. .grow is the flex spacer; the
+       two type helpers exist so a secondary line does not need a bespoke class
+       every time it appears. */
+    .grow { flex: 1 1 auto; }
+    .tiny { font-size: 11px; }
+    .mut { color: var(--muted); }
+    /* Segmented control: a small closed set of choices where seeing the
+       alternatives matters more than saving the space a select would. The
+       danger weight is carried BEFORE selection, not after — a choice that
+       gives away containment should look like one while you are still deciding,
+       not only once you have taken it. Selected-and-dangerous adds an inner
+       1px ring: it sits inside the button's own border, so the two read as two
+       adjacent strokes rather than one thick one. */
+    .seg { display: inline-flex; border: 1px solid var(--border); }
+    .seg button { font: 400 12.5px var(--font-family); background: transparent; border: 0;
+                  color: var(--muted); padding: 7px 15px; cursor: pointer;
+                  border-right: 1px solid var(--border); white-space: nowrap; }
+    .seg button:last-child { border-right: 0; }
+    .seg button:hover { background: var(--surface-2); }
+    .seg button.on { background: var(--sel); color: var(--accent); font-weight: 700; }
+    .seg button.dgr { color: var(--danger); }
+    .seg button.dgr.on { background: var(--danger-tint); color: var(--danger);
+                         font-weight: 700; box-shadow: inset 0 0 0 1px var(--danger); }
+    /* Number stepper. 40px square on a pointer, --tap square on touch (the
+       mobile rule lives with the rest of the breakpoint). The value is a real
+       field, not a label: typing a size is faster than clicking to it. */
+    .stepper { display: flex; border: 1px solid var(--border); width: fit-content; flex: none; }
+    .stepper button { width: 40px; height: 40px; font: 400 15px var(--font-family);
+                      background: transparent; border: 0; color: var(--fg); cursor: pointer; }
+    .stepper button:hover { background: var(--surface-2); }
+    .stepper .val { width: 68px; text-align: center; font-size: 13px; color: var(--fg);
+                    background: var(--bg); border: 0;
+                    border-left: 1px solid var(--border); border-right: 1px solid var(--border);
+                    line-height: 40px; font-variant-numeric: tabular-nums; }
     /* Buttons and fields. Three button weights: the default is quiet, .pri is
        the primary action and carries a 1px accent BORDER (never the 2px accent
        OUTLINE, which is spoken for by keyboard focus — see the top of this
@@ -53,6 +97,13 @@
     .btn.gh { border-color: transparent; color: var(--muted); }
     .btn.gh:hover { color: var(--fg); background: var(--surface-2); }
     .btn.off { opacity: .42; cursor: not-allowed; }
+    .btn.dgr { border-color: var(--danger); color: var(--danger); }
+    /* .off dims; the disabled attribute it is paired with brings a
+       strike-through from the rule at the top of this file. That rule earns its
+       keep on a control that is disabled with nothing else to say so, but on a
+       control already dimmed and re-cursored it reads as damage rather than as
+       "closed". Suppressed here, kept everywhere else. */
+    .btn.off, .fld.off { text-decoration: none; }
     .fld { font: 400 12px var(--font-family); color: var(--fg); background: var(--bg);
            border: 1px solid var(--border); padding: 6px 8px; width: 100%; }
     .fld::placeholder { color: var(--muted); }
@@ -94,7 +145,6 @@
        its text goes to full strength — a collapsed pane is still live, not
        disabled. */
     .phd.closed { background: var(--surface-2); color: var(--fg); }
-    .phd .grow { flex: 1; }
     /* The count is a plain digit, not a path or a live phrase like the pip
        text, so it takes the bar's own type as-is — muted, same size — rather
        than the bordered chip #sessions-count wore before the pane grew a
