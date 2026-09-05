@@ -137,88 +137,98 @@
     </div>
   </dialog>
 
-  <dialog id="settings-modal" box-="square" shear-="top">
-    <h2 class="pane-head dlg-title">Settings</h2>
-    <div class="dlg-head">
-      <div class="dlg-tabs" id="settings-tabs">
-        <button type="button" data-tab="manage" class="act">Profiles</button>
-        <button type="button" data-tab="settings">Font sizes</button>
-        <button type="button" data-tab="tokens">Access tokens</button>
-      </div>
-      <span class="spacer"></span>
-      <button class="dlg-x" type="button" data-close="settings-modal" title="Close">×</button>
+  <dialog id="settings-modal">
+    <div class="dhd">
+      <span class="grow">Settings</span>
+      <button type="button" class="btn gh" data-close="settings-modal">esc</button>
     </div>
-    <div class="dlg-body">
-      <div id="manage" class="tab-panel">
-        <div class="manage-body">
-          <div class="pf-row"><label>Name</label><input id="pf-name" type="text" placeholder="my-profile"></div>
-          <div class="pf-row"><label>Command</label><input id="pf-bin" type="text" list="pf-bins" placeholder="claude"></div>
-          <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
-          <div class="pf-row"><label>Base</label>
-            <select id="pf-base">
-              <option value="inherit">inherit: full env</option>
-              <option value="clean">clean: no secrets</option>
-              <option value="login">login: source profile</option>
-            </select>
-          </div>
-          <div class="pf-row"><label>Runtime</label>
-            <select id="pf-runtime">
-              <option value="">box (contained, default)</option>
-              <option value="host">host (uncontained)</option>
-            </select>
-          </div>
-          <div class="pf-row"><label>Working dir</label>
-            <div style="flex:1; display:flex; flex-direction:column;">
-              <select id="pf-cwd"></select>
-              <input id="pf-cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
-            </div>
-          </div>
-          <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
-            defaults; the New-session form can override runtime and options for a single run.</div>
-          <div id="pf-options"></div>
-          <label class="pf-lbl">Args (one per line)</label>
-          <textarea id="pf-args" rows="2" spellcheck="false" placeholder="--some-flag"></textarea>
-          <label class="pf-lbl">Env (KEY=VALUE per line)</label>
-          <textarea id="pf-env" rows="2" spellcheck="false" placeholder="FOO=bar"></textarea>
-          <label class="pf-lbl">Secrets (comma-separated names)</label>
-          <input id="pf-secrets" type="text" placeholder="CLAUDE_CODE_OAUTH_TOKEN">
-          <div class="dlg-err" id="settings-err"></div>
-          <div class="pf-actions">
-            <button id="pf-save" type="button">Save</button>
-            <button id="pf-new" type="button" class="ghost">+ New profile</button>
-          </div>
-          <ul id="editable"></ul>
+    <div class="tabs" id="settings-tabs" role="tablist">
+      <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
+      <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
+      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Access tokens</button>
+    </div>
+
+    <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
+      <div class="manage-body">
+        <div class="pf-row"><label>Name</label><input id="pf-name" type="text" placeholder="my-profile"></div>
+        <div class="pf-row"><label>Command</label><input id="pf-bin" type="text" list="pf-bins" placeholder="claude"></div>
+        <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
+        <div class="pf-row"><label>Base</label>
+          <select id="pf-base">
+            <option value="inherit">inherit: full env</option>
+            <option value="clean">clean: no secrets</option>
+            <option value="login">login: source profile</option>
+          </select>
         </div>
-      </div>
-      <div id="settings" class="tab-panel" hidden>
-        <div class="settings-body">
-          <div class="fs-row"><label>Terminal</label><button type="button" class="fs-dec" data-fs="terminal">−</button><input class="fs-val" data-fs="terminal" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="terminal">+</button></div>
-          <div class="fs-row"><label>Code</label><button type="button" class="fs-dec" data-fs="code">−</button><input class="fs-val" data-fs="code" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="code">+</button></div>
-          <div class="fs-row"><label>Markdown</label><button type="button" class="fs-dec" data-fs="markdown">−</button><input class="fs-val" data-fs="markdown" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="markdown">+</button></div>
-          <div class="fs-row"><label>File tree</label><button type="button" class="fs-dec" data-fs="filetree">−</button><input class="fs-val" data-fs="filetree" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="filetree">+</button></div>
-          <button id="fs-reset" type="button">Reset defaults</button>
+        <div class="pf-row"><label>Runtime</label>
+          <select id="pf-runtime">
+            <option value="">box (contained, default)</option>
+            <option value="host">host (uncontained)</option>
+          </select>
         </div>
-      </div>
-      <div id="tokens" class="tab-panel" hidden>
-        <div class="settings-body">
-          <p class="tok-intro">Access tokens let a client app or CLI connect to
-            this box with <code>Authorization: Bearer&nbsp;…</code> — no password
-            prompt. Create one per device; revoke any at any time.</p>
-          <button id="tok-new" type="button">+ New token</button>
-          <div id="tok-reveal" class="tok-reveal" hidden>
-            <div class="tok-reveal-head">Copy it now — you won't see it again:</div>
-            <div class="tok-reveal-row">
-              <code id="tok-reveal-val"></code>
-              <button id="tok-copy" type="button" class="ghost">Copy</button>
-            </div>
-          </div>
-          <ul id="tok-list" class="tok-list"></ul>
-          <div class="dlg-err" id="tok-err"></div>
-          <div class="tok-foot">
-            <button id="tok-logout" type="button" class="ghost">Log out of this box</button>
+        <div class="pf-row"><label>Working dir</label>
+          <div style="flex:1; display:flex; flex-direction:column;">
+            <select id="pf-cwd"></select>
+            <input id="pf-cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
           </div>
         </div>
+        <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
+          defaults; the New-session form can override runtime and options for a single run.</div>
+        <div id="pf-options"></div>
+        <label class="pf-lbl">Args (one per line)</label>
+        <textarea id="pf-args" rows="2" spellcheck="false" placeholder="--some-flag"></textarea>
+        <label class="pf-lbl">Env (KEY=VALUE per line)</label>
+        <textarea id="pf-env" rows="2" spellcheck="false" placeholder="FOO=bar"></textarea>
+        <label class="pf-lbl">Secrets (comma-separated names)</label>
+        <input id="pf-secrets" type="text" placeholder="CLAUDE_CODE_OAUTH_TOKEN">
+        <div class="dlg-err" id="settings-err"></div>
+        <div class="pf-actions">
+          <button id="pf-new" type="button" class="ghost">+ New profile</button>
+        </div>
+        <ul id="editable"></ul>
       </div>
+    </div>
+    <div class="dbd pad" id="settings" role="tabpanel" hidden>
+      <div class="settings-body">
+        <div class="fs-row"><label>Terminal</label><button type="button" class="fs-dec" data-fs="terminal">−</button><input class="fs-val" data-fs="terminal" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="terminal">+</button></div>
+        <div class="fs-row"><label>Code</label><button type="button" class="fs-dec" data-fs="code">−</button><input class="fs-val" data-fs="code" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="code">+</button></div>
+        <div class="fs-row"><label>Markdown</label><button type="button" class="fs-dec" data-fs="markdown">−</button><input class="fs-val" data-fs="markdown" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="markdown">+</button></div>
+        <div class="fs-row"><label>File tree</label><button type="button" class="fs-dec" data-fs="filetree">−</button><input class="fs-val" data-fs="filetree" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="filetree">+</button></div>
+      </div>
+    </div>
+    <div class="dbd pad" id="tokens" role="tabpanel" hidden>
+      <div class="settings-body">
+        <p class="tok-intro">Access tokens let a client app or CLI connect to
+          this box with <code>Authorization: Bearer&nbsp;…</code> — no password
+          prompt. Create one per device; revoke any at any time.</p>
+        <div id="tok-reveal" class="tok-reveal" hidden>
+          <div class="tok-reveal-head">Copy it now — you won't see it again:</div>
+          <div class="tok-reveal-row">
+            <code id="tok-reveal-val"></code>
+            <button id="tok-copy" type="button" class="ghost">Copy</button>
+          </div>
+        </div>
+        <ul id="tok-list" class="tok-list"></ul>
+        <div class="dlg-err" id="tok-err"></div>
+      </div>
+    </div>
+
+    <div class="dft" id="foot-manage">
+      <button id="pf-delete" type="button" class="btn dgr" disabled title="Arrives with the profile list">Delete…</button>
+      <span class="grow"></span>
+      <button id="pf-duplicate" type="button" class="btn" disabled title="Arrives with the profile list">Duplicate</button>
+      <button id="pf-save" type="button" class="btn pri">Save</button>
+    </div>
+    <div class="dft" id="foot-settings" hidden>
+      <button id="fs-reset" type="button" class="btn">Reset to defaults</button>
+      <span class="grow"></span>
+      <button type="button" class="btn pri" data-close="settings-modal">Done</button>
+    </div>
+    <div class="dft" id="foot-tokens" hidden>
+      <button id="tok-logout" type="button" class="btn dgr">Sign out of this box…</button>
+      <span class="grow"></span>
+      <button id="tok-new" type="button" class="btn">+ new token</button>
+      <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
   </dialog>
 

@@ -83,12 +83,22 @@ function openSettings(tab) {
 }
 
 function selectSettingsTab(name) {
-  for (const b of document.querySelectorAll("#settings-tabs button")) {
-    b.classList.toggle("act", b.dataset.tab === name);
+  for (const b of document.querySelectorAll("#settings-tabs .t")) {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
   }
-  for (const p of document.querySelectorAll("#settings-modal .tab-panel")) {
+  for (const p of document.querySelectorAll("#settings-modal .dbd")) {
     p.hidden = p.id !== name;
   }
+  // Each tab owns its own actions, so each has its own footer rather than one
+  // footer rebuilt three ways — the buttons keep their ids and their listeners.
+  for (const f of document.querySelectorAll("#settings-modal .dft")) {
+    f.hidden = f.id !== "foot-" + name;
+  }
+  // The profile editor is the only tab with two columns to fill; the other two
+  // are a single column and a taller box would just be empty at the bottom.
+  document.getElementById("settings-modal").classList.toggle("tall", name === "manage");
   // The inline error belongs to the action that raised it, not to the dialog.
   setDialogError("settings-modal", "");
   // The Access-tokens tab loads its list lazily whenever it is shown.

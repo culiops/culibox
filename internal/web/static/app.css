@@ -191,15 +191,15 @@
       inherits: true;
       initial-value: 0px;
     }
-    /* Same geometry, now serving only the five dialogs below (#spawn-modal,
-       #settings-modal, #ask-modal, #attr-modal, #analytics-modal) — they
+    /* Same geometry, now serving only the four dialogs below (#spawn-modal,
+       #ask-modal, #attr-modal, #analytics-modal) — they
        carry box-="square" shear-="top", and their legend (.dlg-title) is
-       positioned exactly like .pane-head. All five share the body's 14px/1.5
+       positioned exactly like .pane-head. All four share the body's 14px/1.5
        font, so 1lh resolves identically, but the property is still declared
        per-element (typed custom properties resolve in their own font
        context) rather than assumed equal. The sidebar panes used to be in
        this list too; they left it once they stopped being shear-boxes. */
-    #spawn-modal, #settings-modal, #ask-modal, #attr-modal, #analytics-modal {
+    #spawn-modal, #ask-modal, #attr-modal, #analytics-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -466,7 +466,7 @@
        declaration wins outright and restores centring regardless of source
        order. #palette is deliberately excluded (see its own comment below):
        it keeps the plain border and the UA's native fixed positioning. */
-    #spawn-modal, #settings-modal, #ask-modal, #attr-modal, #analytics-modal {
+    #spawn-modal, #ask-modal, #attr-modal, #analytics-modal {
       border: none; position: fixed; inset: 0; margin: auto;
     }
     /* box.css's own inset (`padding: 1lh 1ch`, sheared by [shear-=top] to
@@ -526,15 +526,64 @@
        min-height: 0 is required — a flex child won't shrink below its content
        size without it, so the scrollbar would never engage. */
     .dlg-body { padding: 14px; overflow-y: auto; flex: 1; min-height: 0; }
+    /* Still used by #an-tabs in the Analytics dialog, which keeps the box
+       treatment — #settings-modal's own tab strip is `.tabs`/`.t` below. */
     .dlg-tabs { display: flex; gap: 4px; }
     .dlg-tabs button {
       background: var(--bg); color: var(--muted); border: 1px solid var(--border);
       padding: 4px 12px; font: inherit; font-size: 12.5px; cursor: pointer;
     }
     .dlg-tabs button.act { color: #fff; border-color: var(--accent); background: var(--sel); }
-    .tab-panel[hidden] { display: none; }
+    /* The settings dialog is the one dialog with its own chrome: a full-bleed
+       header row, a tab strip, a body that fills, and a footer whose buttons
+       differ per tab. Everything here is fixed-height except the body, which is
+       the only part that may grow or scroll.
 
-    #settings-modal { width: 460px; }
+       The two heights are the design's, and the max-height is not a round
+       number by accident: the frames leave 20px of margin above and below, so
+       calc(100vh - 40px) reproduces the intended size exactly at the height the
+       design is drawn for and degrades correctly on anything shorter. The
+       height goes on the dialog, never on the body — a fixed max-height on the
+       body has twice under-reserved the real chrome (see .dlg-body above). */
+    #settings-modal { width: 940px; height: 660px; max-height: calc(100vh - 40px); }
+    #settings-modal.tall { height: 860px; }
+    #settings-modal[open] { display: flex; flex-direction: column; }
+
+    .dhd {
+      height: 52px; flex: none; display: flex; align-items: center; gap: 14px;
+      padding: 0 18px; border-bottom: 1px solid var(--border); font-size: 14.5px;
+    }
+    .tabs { display: flex; flex: none; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .tabs .t {
+      padding: 12px 18px; font: inherit; font-size: 12.5px; color: var(--muted);
+      background: transparent; border: 0; border-right: 1px solid var(--border); cursor: pointer;
+    }
+    .tabs .t:hover { background: var(--surface-2); }
+    /* The active tab lifts onto the body's own surface and carries an inset
+       accent rule along its top edge, so the strip reads as folders in front of
+       the panel rather than as three buttons where one is highlighted. */
+    .tabs .t.on { color: var(--accent); background: var(--panel); box-shadow: inset 0 2px 0 var(--accent); }
+
+    /* The body has no padding of its own: the two tab shapes want different
+       insets — a split pane whose divider must reach both edges, and a single
+       padded column — so each says which it is instead of every consumer
+       carrying an inline style. */
+    .dbd { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+    /* .split keeps the row-flex layout .dbd already sets — a divider reaching
+       both edges needs the two columns to stretch full height, which a row
+       flex container already gives its children by default. The columns and
+       the divider itself belong to the Profiles panel's own content. */
+    .dbd.split { align-items: stretch; }
+    .dbd.pad { display: block; padding: 20px 22px; overflow-y: auto; }
+    .dft {
+      height: 62px; flex: none; display: flex; align-items: center; gap: 9px;
+      padding: 0 18px; border-top: 1px solid var(--border);
+    }
+    /* Both of these carry their own display, which beats the UA sheet's
+       [hidden] { display: none } at any specificity. Without these two rules the
+       hidden attribute silently does nothing and all three panels stack. */
+    .dbd[hidden], .dft[hidden] { display: none; }
+
     #spawn-modal { width: 420px; }
     #attr-modal { width: 460px; }
     #analytics-modal { width: 960px; max-width: 96vw; }
