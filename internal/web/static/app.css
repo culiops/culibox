@@ -1215,10 +1215,14 @@
       /* The tool-breakdown scan button is this rail's own trigger, sized like
          every other new rail control on a phone. */
       #steer-attr .rttl .btn { min-height: var(--tap); }
-      /* Header rail toggle: new with this slice, unlike its three siblings on
-         the same shared rule, which are a pre-existing pattern left for a
-         separate pass. */
-      #steer-toggle { min-width: var(--tap); min-height: var(--tap); }
+      /* The four header icon buttons share one rule (app.css:30); raising
+         #steer-toggle alone left it visibly bigger than its three siblings
+         in the same row. header itself sets no height, so this row already
+         grew to fit #steer-toggle — putting its siblings on the same floor
+         costs nothing further, measured below rather than assumed. */
+      #sidebar-toggle, #steer-toggle, #settings-open, #palette-open {
+        min-width: var(--tap); min-height: var(--tap);
+      }
       /* The name is the row's primary action: it is what opens the session. Its
          box was only as tall as its 13px text, so the row was tall enough to
          tap and the control inside it was not. Height only — what is clickable
