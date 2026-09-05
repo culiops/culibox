@@ -149,43 +149,59 @@
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
-      <div class="manage-body">
-        <div class="pf-row"><label>Name</label><input id="pf-name" type="text" placeholder="my-profile"></div>
-        <div class="pf-row"><label>Command</label><input id="pf-bin" type="text" list="pf-bins" placeholder="claude"></div>
+      <div class="plist">
+        <ul id="pf-list"></ul>
+        <span class="grow"></span>
+        <div class="plist-foot">
+          <button id="pf-new" type="button" class="btn pri">+ new profile</button>
+        </div>
+      </div>
+      <div class="ped">
+        <div class="frow">
+          <div class="fcol"><label class="flab" for="pf-name">Profile name</label>
+            <input id="pf-name" class="fld" type="text" placeholder="my-profile"></div>
+          <div class="fcol"><label class="flab" for="pf-bin">Binary</label>
+            <input id="pf-bin" class="fld" type="text" list="pf-bins" placeholder="claude"></div>
+        </div>
         <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
-        <div class="pf-row"><label>Base</label>
-          <select id="pf-base">
-            <option value="inherit">inherit: full env</option>
-            <option value="clean">clean: no secrets</option>
-            <option value="login">login: source profile</option>
-          </select>
-        </div>
-        <div class="pf-row"><label>Runtime</label>
-          <select id="pf-runtime">
-            <option value="">box (contained, default)</option>
-            <option value="host">host (uncontained)</option>
-          </select>
-        </div>
-        <div class="pf-row"><label>Working dir</label>
-          <div style="flex:1; display:flex; flex-direction:column;">
-            <select id="pf-cwd"></select>
-            <input id="pf-cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
+        <div class="frow">
+          <div class="fcol"><label class="flab" for="pf-base">Base environment</label>
+            <select id="pf-base" class="fld">
+              <option value="inherit">inherit: full env</option>
+              <option value="clean">clean: no secrets</option>
+              <option value="login">login: source profile</option>
+            </select></div>
+          <div class="fcol" id="pf-runtime-col">
+            <!-- Task 5 puts the containment .seg here. Until then the existing
+                 <select id="pf-runtime"> lives here unchanged. -->
+            <label>Runtime</label>
+            <select id="pf-runtime">
+              <option value="">box (contained, default)</option>
+              <option value="host">host (uncontained)</option>
+            </select>
           </div>
         </div>
-        <div class="pf-hint">A profile is what the agent <em>is</em>. These are its
-          defaults; the New-session form can override runtime and options for a single run.</div>
-        <div id="pf-options"></div>
-        <label class="pf-lbl">Args (one per line)</label>
-        <textarea id="pf-args" rows="2" spellcheck="false" placeholder="--some-flag"></textarea>
-        <label class="pf-lbl">Env (KEY=VALUE per line)</label>
-        <textarea id="pf-env" rows="2" spellcheck="false" placeholder="FOO=bar"></textarea>
-        <label class="pf-lbl">Secrets (comma-separated names)</label>
-        <input id="pf-secrets" type="text" placeholder="CLAUDE_CODE_OAUTH_TOKEN">
-        <div class="dlg-err" id="settings-err"></div>
-        <div class="pf-actions">
-          <button id="pf-new" type="button" class="ghost">+ New profile</button>
+        <div class="frow">
+          <div class="fcol"><label class="flab" for="pf-cwd">Default workspace</label>
+            <select id="pf-cwd" class="fld"></select>
+            <input id="pf-cwd-custom" class="fld" type="text" placeholder="/custom/path" autocomplete="off" hidden></div>
         </div>
-        <ul id="editable"></ul>
+        <div id="pf-options"></div>
+        <div class="frow">
+          <div class="fcol"><label class="flab" for="pf-args">Args (one per line)</label>
+            <textarea id="pf-args" class="fld" rows="2" spellcheck="false" placeholder="--some-flag"></textarea></div>
+        </div>
+        <div id="pf-env-block">
+          <!-- Task 6 puts the allowlist table here. Until then the existing
+               #pf-env textarea and #pf-secrets input live here unchanged. -->
+          <label class="pf-lbl">Env (KEY=VALUE per line)</label>
+          <textarea id="pf-env" rows="2" spellcheck="false" placeholder="FOO=bar"></textarea>
+          <label class="pf-lbl">Secrets (comma-separated names)</label>
+          <input id="pf-secrets" type="text" placeholder="CLAUDE_CODE_OAUTH_TOKEN">
+        </div>
+        <p class="hint">A profile is what the agent <em>is</em>. These are its defaults;
+          the New-session form can override containment and options for a single run.</p>
+        <div class="dlg-err" id="settings-err"></div>
       </div>
     </div>
     <div class="dbd pad" id="settings" role="tabpanel" hidden>

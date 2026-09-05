@@ -938,7 +938,7 @@ async function loadProfiles(retry = true) {
       return o;
     }));
     renderOptions();
-    renderEditable();
+    renderProfileList();
   } catch (_) {
     if (retry) setTimeout(() => loadProfiles(false), 2000);
   }
@@ -1038,7 +1038,7 @@ function renderPfWorkspaceOptions(cwd) {
     sel.value = pick.value;
     customInput.value = pick.custom;
   }
-  customInput.style.display = sel.value === "__custom__" ? "block" : "none";
+  customInput.hidden = sel.value !== "__custom__";
 }
 
 // --- profile editor (structured create / edit / delete of runtime profiles) --
@@ -1053,21 +1053,31 @@ function optApplies(o, bin) {
   const base = (bin || "").split("/").pop();
   return o.bins.includes(bin) || o.bins.includes(base);
 }
+// Enum options stay on a plain <select>: Task 5 owns branching a <=4-choice
+// enum onto the .seg segmented control, and that call signature does not
+// exist yet — landing half of it here would only leave a value that saves
+// silently dropped.
 function renderPfOptions(current) {
   current = current || {};
   const bin = $("pf-bin").value.trim();
   $("pf-options").replaceChildren(...optionDefs.filter((o) => optApplies(o, bin)).map((o) => {
     const row = document.createElement("div");
-    row.className = "pf-row";
+    row.className = "frow";
+    const col = document.createElement("div");
+    col.className = "fcol";
     const lbl = document.createElement("label");
-    lbl.textContent = o.label || o.key;
     let ctrl;
     if (o.type === "bool") {
+      // A checkbox is its own label; it does not get a .flab above it.
       ctrl = document.createElement("input");
       ctrl.type = "checkbox";
       ctrl.checked = current[o.key] === true;
+      lbl.textContent = o.label || o.key;
     } else {
+      lbl.className = "flab";
+      lbl.textContent = o.label || o.key;
       ctrl = document.createElement("select");
+      ctrl.className = "fld";
       const none = document.createElement("option");
       none.value = ""; none.textContent = "(not set)";
       ctrl.appendChild(none);
@@ -1080,7 +1090,8 @@ function renderPfOptions(current) {
     }
     ctrl.dataset.optkey = o.key;
     ctrl.dataset.opttype = o.type;
-    row.append(lbl, ctrl);
+    col.append(lbl, ctrl);
+    row.appendChild(col);
     return row;
   }));
 }
@@ -1098,8 +1109,10 @@ function fillForm(p) {
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
 // no-op; only grab focus when the dialog is actually on screen.
 function newProfile() {
+  selectedProfile = "";
   fillForm({ base: "inherit" });
   setDialogError("settings-modal", "");
+  renderProfileList();
   if ($("settings-modal").open) $("pf-name").focus();
 }
 function readForm() {
@@ -1145,8 +1158,10 @@ async function saveProfile() {
 }
 async function editProfile(name) {
   setDialogError("settings-modal", "");
+  selectedProfile = name;
   try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
   catch (e) { setDialogError("settings-modal", "Load failed: " + e.message); }
+  renderProfileList();
 }
 async function deleteProfile(name) {
   // The sibling destructive action (kill session) has always confirmed; this one
@@ -1163,16 +1178,30 @@ async function deleteProfile(name) {
   catch (e) { setDialogError("settings-modal", "Delete failed: " + e.message); return; }
   await loadProfiles();
 }
-function renderEditable() {
-  $("editable").replaceChildren(...profiles.filter((p) => p.editable).map((p) => {
+// The list shows every profile, built-ins included: a built-in is a thing you
+// can read and duplicate, not a thing that should be invisible. `editable` is
+// the server's own verdict (a profile is read-only precisely because it exists
+// only as a code-level seed and has never been written to the store), so the
+// marker is not inferred from the name.
+let selectedProfile = "";
+function selectedProfileName() { return selectedProfile; }
+function renderProfileList() {
+  $("pf-list").replaceChildren(...profiles.map((p) => {
     const li = document.createElement("li");
-    const name = document.createElement("span");
-    name.className = "name"; name.textContent = p.name; name.title = "Edit"; name.style.cursor = "pointer";
-    name.onclick = () => editProfile(p.name);
-    const del = document.createElement("button");
-    del.className = "del"; del.textContent = "×"; del.title = "Delete profile";
-    del.onclick = () => deleteProfile(p.name);
-    li.append(name, del);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "pitem" + (p.name === selectedProfile ? " on" : "");
+    const nm = document.createElement("span");
+    nm.textContent = p.name;
+    b.appendChild(nm);
+    if (!p.editable) {
+      const lk = document.createElement("span");
+      lk.className = "lk";
+      lk.textContent = "built-in";
+      b.appendChild(lk);
+    }
+    b.onclick = () => editProfile(p.name);
+    li.appendChild(b);
     return li;
   }));
 }
@@ -1181,7 +1210,7 @@ $("pf-new").addEventListener("click", newProfile);
 // Re-scope the option list when the agent binary changes.
 $("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
 $("pf-cwd").addEventListener("change", () => {
-  $("pf-cwd-custom").style.display = $("pf-cwd").value === "__custom__" ? "block" : "none";
+  $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });
 if ($("pf-runtime")) {
   $("pf-runtime").addEventListener("change", () => renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)));
