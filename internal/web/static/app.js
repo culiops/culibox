@@ -219,16 +219,17 @@ $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
 // handlers is safe here: it only creates closures, it does not call
 // togglePane (and therefore does not touch lastSessions) until a real click.
 
-// Shortcut hint: platform-aware, dismissable (persisted). Lives outside the
-// sidebar so it survives the sidebar-hide toggle. The runtime tag ("runc" /
-// "sysbox") depends on boxRuntime, which is only known once /api/meta answers.
-// initHint's IIFE runs at PARSE TIME (before boxRuntime — a `let` declared far
-// below — is even initialized), so it must NOT call this: reading a later
-// `let` before its declaration line executes throws a TDZ ReferenceError that
-// aborts the rest of app.js (blank footer AND no sidebar/sessions/terminals —
-// caught in review, since app.js isn't executed under node --test). Only
-// updateStatusLine() (which runs post-boot, and again whenever sessions/meta
-// refresh) calls this.
+// Shortcut hint: the right-hand half of the permanent #hint status bar
+// (mockup D1 — no dismiss; a status bar you can't turn off, unlike the old
+// tips bar it replaced). The runtime tag ("runc"/"sysbox") depends on
+// boxRuntime, which is only known once /api/meta answers, so this must only
+// ever be called from updateStatusLine() (runs post-boot, and again whenever
+// sessions/meta refresh) — never at parse time: boxRuntime is a `let`
+// declared far below in this file, and calling this before that declaration
+// line has executed throws a TDZ ReferenceError that aborts the rest of
+// app.js (blank footer AND no sidebar/sessions/terminals — this exact bug
+// shipped once when an earlier IIFE called it at parse time; caught in
+// review, since app.js isn't executed under node --test).
 function hintShortcuts() {
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   // Reuse tier.js's own runtime label (the same string the sidebar's tier
@@ -243,18 +244,6 @@ function hintShortcuts() {
     ? `${runc} · ⌘K palette · ⌘B sidebar · ⌥1-9 session`
     : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
 }
-(function initHint() {
-  const hint = $("hint");
-  if (!hint) return;
-  if (localStorage.getItem("hintDismissed") === "1") { hint.classList.add("hidden"); return; }
-  // Deliberately no #hint-text assignment here — see hintShortcuts' comment.
-  // updateStatusLine() fills it in once boxRuntime is real; the brief
-  // pre-first-render blank is the same one #status-sessions already had.
-  $("hint-x").onclick = () => {
-    hint.classList.add("hidden");
-    try { localStorage.setItem("hintDismissed", "1"); } catch (_) {}
-  };
-})();
 
 // updateStatusLine keeps the bottom bar describing the current state. Everything
 // it shows duplicates something already on screen — the env badge, the sessions
