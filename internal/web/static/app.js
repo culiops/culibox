@@ -329,19 +329,19 @@ function updateStatusLine() {
   if (hintText) hintText.textContent = hintShortcuts();
 }
 
-// renderRateLimits paints the account 5h/weekly usage into the header (once,
-// globally). Each window renders independently: an absent one contributes no
-// meter at all, and if neither is present the container ends up empty and
-// occupies no space, so the header closes up rather than showing a gap.
+// renderRateLimitsInto paints the account 5h/weekly usage meters into a given
+// host element (replacing its previous children) and returns how many meters
+// it appended. Each window renders independently: an absent one contributes
+// no meter at all, and if neither is present the host ends up empty (count
+// 0) so a caller can hide its container rather than showing a 0% row.
 //
-// Built with createElement and textContent, never innerHTML — these values come
-// from a file on disk written by an external hook.
-function renderRateLimits(rl) {
-  const host = $("limits");
-  if (!host) return;
+// Built with createElement and textContent, never innerHTML — these values
+// come from a file on disk written by an external hook.
+function renderRateLimitsInto(host, rl) {
   host.replaceChildren();
   const now = Math.floor(Date.now() / 1000);
   const windows = [["5h", rl && rl.five_hour], ["wk", rl && rl.seven_day]];
+  let count = 0;
   for (const [label, win] of windows) {
     const m = meterModel(label, win, now);
     if (!m) continue;
@@ -366,6 +366,24 @@ function renderRateLimits(rl) {
     el.setAttribute("role", "img");
     el.setAttribute("aria-label", m.label + " usage " + m.pct + "%, " + m.reset);
     host.appendChild(el);
+    count++;
+  }
+  return count;
+}
+
+// renderRateLimits paints the account 5h/weekly usage into the header (once,
+// globally) and, when present, mirrors the same meters into the mobile
+// Sessions-screen band (#limits-mobile, slice 5a). The mobile slot is hidden
+// by count rather than by html-string truthiness (there is no html string —
+// renderRateLimitsInto builds DOM nodes) so an absent rate_limits vanishes
+// the band cleanly instead of leaving an empty 0% row.
+function renderRateLimits(rl) {
+  const host = $("limits");
+  if (host) renderRateLimitsInto(host, rl);
+  const lm = document.getElementById("limits-mobile");
+  if (lm) {
+    const count = renderRateLimitsInto(lm, rl);
+    lm.hidden = count === 0;
   }
 }
 

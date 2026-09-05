@@ -134,6 +134,11 @@
        the settings button off-screen. Measured: the title is intact at 834px,
        clipped at 800px, and the header overflows by 38px at 701px. */
     @media (max-width: 900px) { #limits { display: none; } }
+    /* The mobile Sessions-screen band (#limits-mobile, slice 5a) is the
+       ≤700px replacement for the header meters above — off by default so it
+       never appears above that breakpoint; the 700px block below turns it
+       on and hides the header copy instead. */
+    #limits-mobile { display: none; }
     .layouts { display: flex; gap: 4px; }
     .layouts button {
       background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
@@ -1364,11 +1369,14 @@
       }
       #mobile-nav .mn-pip[hidden] { display: none; }
       header { gap: .5ch; padding: .5lh 1ch; }
-      /* The header has no room for two meters at this width, and the mobile
-         layout gives usage its own row below the header instead — built with the
-         rest of the mobile shell. Until then the meters are desktop-only rather
-         than overflowing a 390px header. */
+      /* The header has no room for two meters at this width; #limits-mobile
+         below shows them as a top band on the Sessions screen instead (M1). */
       #limits { display: none; }
+      /* [hidden] wins over the block display above when renderRateLimits
+         finds no rate_limits — the band disappears rather than showing a
+         0%-filled row. */
+      #limits-mobile { display: block; padding: 11px 13px; border-bottom: 1px solid var(--border); }
+      #limits-mobile[hidden] { display: none; }
       /* The heading used to be display:none here, on the grounds that the badge
          and dot carry identity. They do not carry the product NAME, so it is back
         : paid for by the palette button's shortcut label, which means nothing on
