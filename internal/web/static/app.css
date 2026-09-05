@@ -791,7 +791,7 @@
        #runtime-seg is a content-width .seg, so without this it would sit
        beside "Containment" on one line instead of below it like the mockup
        (and like Effort/Model) — a label is inline by default. */
-    #runtime-row > label { display: block; margin-bottom: 4px; }
+    #runtime-row > label, #effort-row > label { display: block; margin-bottom: 4px; }
     #spawn select, #spawn input, #spawn button[type="submit"] {
       background: var(--bg); color: var(--fg); border: 1px solid var(--border);
       padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
@@ -830,6 +830,16 @@
        enum with long values needs every pixel of row width before wrap even
        helps. Mobile keeps the pre-existing label-beside-seg look (below). */
     #options .opt.opt-seg, #effort-slot .opt.opt-seg { flex-direction: column; align-items: stretch; gap: 4px; }
+    /* D5 draws "CONTAINMENT" and "EFFORT" as identical section labels
+       (uppercase, small, muted). Containment's is the static <label> above
+       (styled by the generic #spawn label rule); Effort's matching static
+       <label> is right beside it in the markup. renderOptions() still builds
+       a per-option <label> here too (shared code path with the Advanced
+       group, where that label IS the only one), which would duplicate
+       "Effort" in the mixed-case/brighter/larger style from the rule above —
+       hidden rather than shown twice. Purely cosmetic: the control it labels
+       (dataset.key/type, getOptions' round-trip) is untouched. */
+    #effort-slot .opt > label { display: none; }
     /* The segmented Profile control writes into the hidden canonical <select
        id="agent"> (renderProfileSeg in app.js) instead of replacing it, so
        every other reader (currentProfile, req.agent, syncRuntimeField) still
