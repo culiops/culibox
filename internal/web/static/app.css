@@ -1350,6 +1350,12 @@
          block/flex, so this is a no-op when the pane was never collapsed. */
       html.mobile-screen-sessions #sessions-pane > #sessions { display: block; }
       html.mobile-screen-files #files-pane > .files-body { display: flex; }
+      /* The collapse rule (app.css:369, 1id/2class) also swallows the meters
+         band and the full-width spawn CTA on the active mobile Sessions
+         screen — these two outrank it (2id/2class/1type) so both survive
+         whatever the desktop toggle last recorded (I1). */
+      html.mobile-screen-sessions #sessions-pane > #limits-mobile:not([hidden]) { display: block; }
+      html.mobile-screen-sessions #sessions-pane > #spawn-go-mobile { display: block; }
       /* The header bar itself must stop advertising a collapsed state it no
          longer has: .phd.closed (primitives.css) lifts onto --surface-2 and
          hides the header's own action button. The mockup (M6) carries no
@@ -1359,12 +1365,15 @@
          value is moot. */
       html.mobile-screen-sessions #sessions-phd.closed,
       html.mobile-screen-files #files-phd.closed { background: var(--panel); color: var(--muted); }
-      html.mobile-screen-sessions #sessions-phd.closed #spawn-go { display: inline-block; }
       html.mobile-screen-files #files-phd.closed #ft-newdir,
       html.mobile-screen-files #files-phd.closed #ft-refresh,
       html.mobile-screen-files #files-phd.closed #ft-upload { display: inline-block; }
-      html.mobile-screen-sessions #sessions-phd.closed .cv,
-      html.mobile-screen-files #files-phd.closed .cv { display: none; }
+      html.mobile-screen-sessions #sessions-phd .cv,
+      html.mobile-screen-files #files-phd .cv { display: none; }
+      /* The full-width #spawn-go-mobile below the list is the spawn trigger
+         on this screen; the compact header "+ new" is a duplicate action, so
+         it stays hidden in every state (not just collapsed). */
+      html.mobile-screen-sessions #sessions-phd #spawn-go { display: none; }
 
       /* The bottom nav: 60px, three equal items, active gets an inset top rule +
          soft fill (matches M1). The waiting pip is amber (an agent needs you). */
@@ -1396,6 +1405,9 @@
          0%-filled row. */
       #limits-mobile { display: block; padding: 11px 13px; border-bottom: 1px solid var(--border); }
       #limits-mobile[hidden] { display: none; }
+      /* .mtr is already a flex row (primitives.css); push the reset-time to
+         the row's right edge to match M1. */
+      #limits-mobile .mtr .rs { margin-left: auto; }
       /* The heading used to be display:none here, on the grounds that the badge
          and dot carry identity. They do not carry the product NAME, so it is back
         : paid for by the palette button's shortcut label, which means nothing on

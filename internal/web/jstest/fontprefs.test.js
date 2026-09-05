@@ -30,3 +30,21 @@ test("a stored value wins over either default set", () => {
   assert.equal(fontPrefs.load(false).terminal, 20);
   global.localStorage._v = null;
 });
+
+test("reset() picks mobile or desktop defaults by current window width", () => {
+  global.window = { innerWidth: 390 };
+  fontPrefs.reset();
+  assert.equal(fontPrefs.get("terminal"), 15);
+  assert.equal(fontPrefs.get("code"), 13);
+  assert.equal(fontPrefs.get("markdown"), 15);
+  assert.equal(fontPrefs.get("filetree"), 14);
+
+  global.window.innerWidth = 1440;
+  fontPrefs.reset();
+  assert.equal(fontPrefs.get("terminal"), 13);
+  assert.equal(fontPrefs.get("code"), 12.5);
+  assert.equal(fontPrefs.get("markdown"), 14);
+  assert.equal(fontPrefs.get("filetree"), 12);
+
+  delete global.window;
+});

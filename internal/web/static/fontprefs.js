@@ -72,7 +72,7 @@ const fontPrefs = (function () {
   }
 
   function reset() {
-    prefs = Object.assign({}, DEFAULTS);
+    prefs = Object.assign({}, (typeof window !== "undefined" && window.innerWidth <= 700) ? MOBILE_DEFAULTS : DEFAULTS);
     save();
     applyCssVars();
     applyTerminals();
