@@ -1192,8 +1192,8 @@
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     /* Per-window context readout on the tab: muted, tabular so digits don't jitter. */
     /* Context readout doubles as the trigger for the session detail rail. */
-    .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; background: none; border: none; cursor: pointer; padding: 0 2px; font-family: inherit; }
-    .cell-bar .tab-usage:hover { color: var(--fg); text-decoration: underline; }
+    .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; padding: 0 4px; font-family: inherit; }
+    .cell-bar .tab-usage:hover { color: var(--fg); border-color: var(--accent); }
     /* Same --muted-on--sel failure as the palette above: the active tab sets
        color: #fff on itself, but this child span re-asserts --muted, which
        fails at 3.99 against the same --sel background. */
@@ -1327,7 +1327,7 @@
       /* Also size the row's actions button by viewport, not only by (hover: none):
          it is the row's only affordance, and an 11×12px target is not one. */
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }
-      /* Bigger tap targets: three small controls sit next to the destructive ✕. */
+      /* Bigger tap targets: three small controls sit next to the destructive ×. */
       .cell-ctl { gap: 6px; }
       .cell-ctl button { min-height: 28px; }
       .cell-max, .cell-del { font-size: 15px; padding: 0 8px; }

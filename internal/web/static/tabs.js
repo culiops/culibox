@@ -279,11 +279,11 @@ class Cell {
       Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
     };
     const max = document.createElement("button");
-    max.className = "cell-max"; max.textContent = maximized === this ? "🗗" : "⛶";
+    max.className = "cell-max"; max.textContent = maximized === this ? "❐" : "⛶";
     max.title = "Maximize / restore";
     max.onclick = (e) => { e.stopPropagation(); toggleMax(this); };
     const del = document.createElement("button");
-    del.className = "cell-del"; del.textContent = "✕"; del.title = "Remove pane";
+    del.className = "cell-del"; del.textContent = "×"; del.title = "Remove pane";
     del.onclick = (e) => { e.stopPropagation(); removeCell(this); };
     // Controls live in one sticky cluster so they stay reachable when the tab
     // strip overflows (a capped cell stacks many tabs: see openTerminal).
@@ -291,7 +291,7 @@ class Cell {
     ctl.className = "cell-ctl";
     ctl.append(sh, max, del);
     this.bar.replaceChildren(...tabs, spacer, ctl);
-    // An empty cell used to wear the full +sh / ⛶ / ✕ strip over a black
+    // An empty cell used to wear the full +sh / ⛶ / × strip over a black
     // rectangle, which reads as a broken terminal rather than an empty pane.
     // Quick-shell stays reachable from the palette ("New shell here") and
     // Ctrl+Shift+`. NOTE: .cell-bar carries an author `display: flex`, so the
@@ -504,7 +504,7 @@ function setFocusedCell(cell) {
   // Only the focus ring changes, so only the ring is touched. renderBar() here
   // rebuilt every bar, including the button under the pointer, and this runs
   // from the cell's mousedown, so mouseup landed on a fresh node and the click
-  // never fired: the first press of ⛶ / +sh / ✕ on an unfocused pane was eaten.
+  // never fired: the first press of ⛶ / +sh / × on an unfocused pane was eaten.
   // renderBar keeps its own toggle, so a later rebuild still paints the ring.
   cells.forEach((c) => c.el.classList.toggle("focus", c === focusedCell));
   syncFocusedTree(); // tree follows the focused tab
