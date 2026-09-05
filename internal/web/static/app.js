@@ -310,19 +310,28 @@ function emptyLi(text) {
 // re-applied on every poll re-render (not just at click time).
 const killing = new Set();
 
-// asBadge gives one of the session-row badges WebTUI's shape. The colour pair
-// goes through ITS variables, not `color`/`background`: badge.css paints the
-// body with a linear-gradient and the two 1ch end-caps with background-color,
-// all reading --badge-color, so setting `background` directly would colour the
-// caps and leave the body untouched.
+// asBadge gives one of the session-row badges WebTUI's shape. Recolour the
+// FILL through --badge-color, not `background` on the badge element itself:
+// badge.css paints the body band from --badge-color (a linear-gradient), but
+// the two 1ch end-caps are separate ::before/::after elements whose own
+// background-color also reads --badge-color directly — a rule that sets
+// `background` on the main element only ever reaches the body band, never
+// those pseudo-elements, so it repaints the middle and leaves the caps
+// exactly the grey (or whatever) they were. --badge-color reaches the body
+// AND both caps, because all three read the same variable.
 //
-// Every badge here maps onto one of WebTUI's own `variant-` values, so
-// --badge-color/--badge-text come from badge.css's own rules. The danger
-// tier badge (below) used to pass an explicit inline { color, text } pair
-// instead — but #sessions .tier-danger sets its own `color`/`background`
-// unlayered, which wins over badge.css's layered rule regardless of what
-// this function sets, so that pair was silently discarded. Deleted rather
-// than kept as a second, ignored source of truth.
+// The LABEL is a different story: badge.css nominally reads --badge-text for
+// it, but .bdg's own `color: var(--muted)` (primitives.css) is unlayered and
+// always outranks that layered rule, so every badge here renders muted text
+// regardless of --badge-text — a badge that needs its own label colour has
+// to set `color` directly, at higher specificity than `.bdg`, same as
+// #sessions .tier-danger does below.
+//
+// Most badges map onto one of WebTUI's own `variant-` values, so their fill
+// comes from badge.css's own rules. The danger tier badge instead gets
+// --badge-color from #sessions .tier-danger (a plain class rule can set a
+// custom property just as well as an inline style), which is unlayered and
+// so wins over the variant this function also sets.
 function asBadge(el, { variant } = {}) {
   el.setAttribute("is-", "badge");
   el.setAttribute("cap-", "triangle");
@@ -666,8 +675,9 @@ function renderSession(s) {
     if (tier.tone === "danger") tb.classList.add("tier-danger");
     tb.textContent = tier.text;
     tb.title = tier.title;
-    // #sessions .tier-danger owns the danger tier's colour and background
-    // (see the CSS); the variant here only supplies the neutral case's.
+    // #sessions .tier-danger overrides --badge-color and color for the
+    // danger case (see the CSS); the variant here only supplies the neutral
+    // case's.
     asBadge(tb, { variant: "background2" });
     sname.appendChild(tb);
   }

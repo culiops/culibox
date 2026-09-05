@@ -428,8 +428,20 @@
     /* An uncontained session is a containment danger, not an agent waiting on
        you — --warn-fg is reserved for the latter, so this reads with the same
        --danger family the steer rail's own tier badge already uses for the
-       identical session (.bdg.dgr in primitives.css). */
-    #sessions .tier-danger { color: var(--danger); border-color: var(--danger); background: var(--danger-tint); font-weight: 600; }
+       identical session (.bdg.dgr in primitives.css).
+       The fill goes through --badge-color, not `background`: that variable is
+       what both the body band AND the ::before/::after endcaps read (see
+       asBadge's comment), so it is the only thing that recolours the whole
+       shape instead of just the middle. The label, though, is NOT
+       --badge-text: .bdg's own `color: var(--muted)` (primitives.css) is
+       unlayered, same as this rule, and beats
+       badge.css's layered `color: var(--badge-text)` regardless of what
+       --badge-text resolves to — measured live, --badge-text here is
+       inert. `color` set directly, at this rule's higher specificity, is
+       the only property that actually reaches the rendered label; --danger
+       is a light pink, so it goes dark (--bg) to stay readable — measured
+       ~7.1:1, comfortably past AA. */
+    #sessions .tier-danger { --badge-color: var(--danger); color: var(--bg); font-weight: 600; }
     #sessions .srow.killing .bdg { border-color: var(--danger); }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
