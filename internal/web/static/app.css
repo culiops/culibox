@@ -985,13 +985,13 @@
     /* --- command palette --------------------------------------------------- */
     /* No box-/shear- here, on purpose. Tried a `.pane-head` legend reading
        "search" once: it duplicated the placeholder text one line below
-       it ("Search files and sessions...") and, since #pal-input/#pal-list
-       bleed edge-to-edge by design, box-'s inset broke that into a visibly
-       segmented, slightly glitchy frame rather than a clean one. A palette
-       a power user opens with a keyboard shortcut and reads via its own
-       placeholder doesn't need a titled frame — the design rule is box-
-       only where a legend earns its place in the rule; here it didn't, so
-       this keeps the plain border it already had. */
+       it ("Search, or type > for commands...") and, since #pal-input/
+       #pal-list bleed edge-to-edge by design, box-'s inset broke that into
+       a visibly segmented, slightly glitchy frame rather than a clean one.
+       A palette a power user opens with a keyboard shortcut and reads via
+       its own placeholder doesn't need a titled frame — the design rule is
+       box- only where a legend earns its place in the rule; here it
+       didn't, so this keeps the plain border it already had. */
     #palette { width: 620px; margin-top: 9vh; margin-bottom: auto; }
     /* The prompt glyph sits in its own column so it never becomes part of the
        input's value or selection range — a sibling span, not a ::before on the
@@ -999,7 +999,14 @@
        moves here from #pal-input so the glyph and the typed text share one
        focus rule. */
     #pal-inputwrap {
-      display: flex; align-items: center; border-bottom: 1px solid var(--border);
+      /* gap is the fix-round-1 bug: at 620px, the long empty-state
+         placeholder ("Search files and sessions. Type > for commands")
+         ran text right up against #pal-hints with no visible seam — an
+         8px right-padding on #pal-input alone read as zero once the glyphs
+         on both sides sat this close together. A real gap between the two
+         flex items guarantees separation regardless of placeholder length
+         or hint-text width. */
+      display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--border);
     }
     #pal-inputwrap:focus-within { border-bottom-color: var(--accent); }
     #pal-prompt {
@@ -1008,7 +1015,11 @@
     }
     #pal-input {
       flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: none;
-      padding: 13px 8px; font-size: 14px; font-family: inherit; outline: none;
+      padding: 13px 0 13px 8px; font-size: 14px; font-family: inherit; outline: none;
+      /* Belt-and-suspenders alongside the shortened placeholder: if the typed
+         query (or a future longer placeholder) still doesn't fit this box,
+         truncate with an ellipsis instead of an abrupt hard clip mid-word. */
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     /* Mockup D4: the keybinding hints (formerly a bottom bar, #pal-foot) sit
        inline at the top-right of the search row instead. #pal-input's flex:1
