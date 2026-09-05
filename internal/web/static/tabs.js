@@ -656,13 +656,27 @@ function applyCap(n) {
 // subscriber and marks the older one superseded, so the pair would sit there
 // evicting each other, and the lookups below (which stop at their first match)
 // could only ever reach one of them. moveToOwnPane owns that path.
+// openTerminal is the single chokepoint every "open or focus this session"
+// caller funnels through (row tap, spawn success, "open in new pane"), so the
+// mobile guard lives here — once — covering all three of its return points,
+// rather than at each call site. It naturally excludes openFile: a viewer tab
+// never goes through openTerminal, so opening a file into a pane never
+// switches screens, matching the "viewer stays put" rule for free.
+// typeof-guarded because tabs.js is a classic script loaded before the mobile
+// globals (mobileActive/setMobileScreen live in mobileshell.js/app.js).
 function openTerminal(id, name, opts) {
   opts = opts || {};
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) {
-      if (opts.newPane) { moveToOwnPane(c, t); return; }
-      setFocusedCell(c); c.activate(t); return;
+      if (opts.newPane) {
+        moveToOwnPane(c, t);
+        if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+        return;
+      }
+      setFocusedCell(c); c.activate(t);
+      if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+      return;
     }
   }
   ensureFirstCell();
@@ -677,6 +691,7 @@ function openTerminal(id, name, opts) {
   cell.addTab(new TerminalTab(id, name));
   renderGrid();
   refreshSessions();
+  if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
 }
 
 // moveToOwnPane moves an already-open terminal tab out of the cell it shares

@@ -1986,7 +1986,10 @@ function openSessionMenu(anchor, s) {
     // tree is already following this session, and passing none also clears the
     // guard, so the tree resumes following the focused tab at the next focus
     // change. Unawaited from a click handler, hence the catch.
-    files: () => { syncTreeToRoot(s.cwd).catch(() => {}); },
+    files: () => {
+      syncTreeToRoot(s.cwd).catch(() => {});
+      if (mobileActive(window.innerWidth)) setMobileScreen("files");
+    },
     attribution: () => openSteerFor(s.id),
     copycwd: () => copyPath(s.cwd),
     newpane: () => openTerminal(s.id, name, { newPane: true }),
