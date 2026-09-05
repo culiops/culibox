@@ -157,6 +157,7 @@
         </div>
       </div>
       <div class="ped">
+        <div class="lockbar" id="pf-lock" hidden>Built-in profile — read only. Duplicate it to make one you own.</div>
         <div class="frow">
           <div class="fcol"><label class="flab" for="pf-name">Profile name</label>
             <input id="pf-name" class="fld" type="text" placeholder="my-profile"></div>
@@ -172,13 +173,13 @@
               <option value="login">login: source profile</option>
             </select></div>
           <div class="fcol" id="pf-runtime-col">
-            <!-- Task 5 puts the containment .seg here. Until then the existing
-                 <select id="pf-runtime"> lives here unchanged. -->
-            <label>Runtime</label>
-            <select id="pf-runtime">
-              <option value="">box (contained, default)</option>
-              <option value="host">host (uncontained)</option>
-            </select>
+            <span class="flab">Default containment</span>
+            <div class="seg" id="pf-runtime" data-value="" role="group" aria-label="Default containment"></div>
+            <div class="warnbox" id="pf-runtime-warn" hidden>
+              <b>No container.</b> Every session from this profile runs as your user
+              with everything you can reach — your whole home, your keys, the Docker
+              socket. Use it only where a box genuinely cannot work.
+            </div>
           </div>
         </div>
         <div class="frow">
@@ -230,9 +231,9 @@
     </div>
 
     <div class="dft" id="foot-manage">
-      <button id="pf-delete" type="button" class="btn dgr" disabled title="Arrives with the profile list">Delete…</button>
+      <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
-      <button id="pf-duplicate" type="button" class="btn" disabled title="Arrives with the profile list">Duplicate</button>
+      <button id="pf-duplicate" type="button" class="btn" disabled>Duplicate</button>
       <button id="pf-save" type="button" class="btn pri">Save</button>
     </div>
     <div class="dft" id="foot-settings" hidden>
@@ -368,6 +369,7 @@
   <script src="/shell.js"></script>
   <script src="/tokens.js"></script>
   <script src="/sessionrow.js"></script>
+  <script src="/profileform.js"></script>
   <script src="/palette.js"></script>
   <script src="/app.js"></script>
 </body>

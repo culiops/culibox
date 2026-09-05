@@ -172,7 +172,16 @@
        is. The rule above it is the same hairline that separates every other
        pair — the position and the colour carry the weight, not a heavier line. */
     .mi.dgr { color: var(--danger); }
-    #runtime-warn { margin-top: 6px; font-size: 12px; color: var(--warn-fg); }
+    /* Containment warning. Danger, not the "an agent needs you" yellow it used
+       to borrow: this is about what a session can reach, not about a session
+       waiting on a person. Bordered rather than a bare line, because it appears
+       the moment the choice is made and has to be seen without being hunted. */
+    .warnbox {
+      border: 1px solid var(--danger); background: var(--danger-tint); color: var(--danger);
+      font-size: 11.5px; padding: 11px 12px; line-height: 1.6; margin-top: 14px;
+    }
+    .warnbox[hidden] { display: none; }
+    #runtime-warn { margin-top: 6px; font-size: 12px; color: var(--danger); }
     .form-hint { margin-top: 6px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
 
     /* --- sidebar panes + splitter ---------------------------------------- */
@@ -730,6 +739,15 @@
     .pitem .lk { margin-left: auto; color: var(--muted); font-size: 11px; }
 
     .ped { flex: 1; min-width: 0; padding: 20px 22px; overflow-y: auto; }
+    /* A built-in profile, seen from the editor. Accent rather than danger: it
+       is not a warning, it is a fact about what you are looking at, and the way
+       forward is right there in the footer. */
+    .lockbar {
+      border: 1px solid var(--accent); background: var(--sel-soft); color: var(--accent);
+      font-size: 11.5px; padding: 10px 12px; margin-bottom: 18px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .lockbar[hidden] { display: none; }
     .frow { display: flex; gap: 18px; margin-bottom: 18px; }
     .fcol { flex: 1; min-width: 0; }
     .flab {

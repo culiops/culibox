@@ -1015,7 +1015,7 @@ function applyProfileCwd() {
 function renderPfWorkspaceOptions(cwd) {
   const sel = $("pf-cwd");
   if (!sel) return;
-  const tier = $("pf-runtime") && $("pf-runtime").value === "host" ? "host" : "box";
+  const tier = segValue($("pf-runtime")) === "host" ? "host" : "box";
   const none = document.createElement("option");
   none.value = ""; none.textContent = "(no default)";
   const opts = [none, ...workspaceOptions(workspacesCache, tier).map((o) => {
@@ -1053,10 +1053,29 @@ function optApplies(o, bin) {
   const base = (bin || "").split("/").pop();
   return o.bins.includes(bin) || o.bins.includes(base);
 }
-// Enum options stay on a plain <select>: Task 5 owns branching a <=4-choice
-// enum onto the .seg segmented control, and that call signature does not
-// exist yet — landing half of it here would only leave a value that saves
-// silently dropped.
+// buildSeg renders a segmented control into a container that already carries
+// the .seg class, and reports the new value through onChange. The value lives
+// on the container (see profileform.js) because buttons have no value of
+// their own, and every reader goes through segValue rather than reaching for
+// a button's class.
+function buildSeg(el, choices, value, onChange) {
+  el.replaceChildren(...choices.map((c) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.segvalue = c.value;
+    b.className = c.danger ? "dgr" : "";
+    b.textContent = c.label;
+    b.onclick = () => { setSegValue(el, c.value); if (onChange) onChange(c.value); };
+    return b;
+  }));
+  setSegValue(el, value);
+  return el;
+}
+// Option definitions come from the daemon's config (GET /api/options), so the
+// choice count is runtime data, not something knowable at build time. A <=4
+// choice enum renders as a .seg — seeing the alternatives beats saving the
+// space a select would — and anything wider stays a plain <select> so it
+// cannot overflow a narrow column. A bool option is always a checkbox.
 function renderPfOptions(current) {
   current = current || {};
   const bin = $("pf-bin").value.trim();
@@ -1076,16 +1095,23 @@ function renderPfOptions(current) {
     } else {
       lbl.className = "flab";
       lbl.textContent = o.label || o.key;
-      ctrl = document.createElement("select");
-      ctrl.className = "fld";
-      const none = document.createElement("option");
-      none.value = ""; none.textContent = "(not set)";
-      ctrl.appendChild(none);
-      for (const c of o.choices || []) {
-        const co = document.createElement("option");
-        co.value = c; co.textContent = c;
-        if (current[o.key] === c) co.selected = true;
-        ctrl.appendChild(co);
+      const choices = o.choices || [];
+      if (choices.length > 0 && choices.length <= 4) {
+        ctrl = document.createElement("div");
+        ctrl.className = "seg";
+        buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), current[o.key] || "");
+      } else {
+        ctrl = document.createElement("select");
+        ctrl.className = "fld";
+        const none = document.createElement("option");
+        none.value = ""; none.textContent = "(not set)";
+        ctrl.appendChild(none);
+        for (const c of choices) {
+          const co = document.createElement("option");
+          co.value = c; co.textContent = c;
+          if (current[o.key] === c) co.selected = true;
+          ctrl.appendChild(co);
+        }
       }
     }
     ctrl.dataset.optkey = o.key;
@@ -1095,16 +1121,54 @@ function renderPfOptions(current) {
     return row;
   }));
 }
+// renderPfRuntime builds the containment .seg. Which directories are
+// selectable depends on the tier, and Save's caption depends on it too (see
+// profileform.js's saveLabel), so both are re-derived the moment it changes —
+// leaving either behind is how a workspace that voids the box, or a stale
+// Save caption, gets left on screen.
+function renderPfRuntime(value) {
+  const el = $("pf-runtime");
+  buildSeg(el, [
+    { value: "", label: "box" },
+    { value: "host", label: "host", danger: true },
+  ], value || "", (v) => {
+    $("pf-runtime-warn").hidden = v !== "host";
+    renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value));
+    syncEditorActions();
+  });
+  $("pf-runtime-warn").hidden = (value || "") !== "host";
+}
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
-  if ($("pf-runtime")) $("pf-runtime").value = p.runtime || "";
+  renderPfRuntime(p.runtime || "");
   $("pf-args").value = (p.args || []).join("\n");
   $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
   $("pf-secrets").value = (p.secrets || []).join(", ");
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
+  syncEditorActions();
+}
+// syncEditorActions is the single place that decides what the editor may do,
+// so a dimmed button and the reason it is dimmed can never disagree. .off is
+// only the look; the real disabled attribute is what actually closes a
+// control, and without it a dimmed button still takes a click and a
+// keystroke.
+function syncEditorActions() {
+  const view = profiles.find((p) => p.name === selectedProfileName()) || null;
+  const st = editorState(view);
+  $("pf-lock").hidden = !st.locked;
+  for (const [id, state] of [["pf-save", st.save], ["pf-delete", st.delete], ["pf-duplicate", st.duplicate]]) {
+    const b = $(id);
+    b.classList.toggle("off", state === "off");
+    b.disabled = state === "off";
+  }
+  for (const f of $("manage").querySelectorAll(".ped .fld, .ped .seg button")) {
+    f.classList.toggle("off", st.locked);
+    f.disabled = st.locked;
+  }
+  $("pf-save").textContent = saveLabel(segValue($("pf-runtime")));
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
 // no-op; only grab focus when the dialog is actually on screen.
@@ -1113,13 +1177,14 @@ function newProfile() {
   fillForm({ base: "inherit" });
   setDialogError("settings-modal", "");
   renderProfileList();
+  syncEditorActions();
   if ($("settings-modal").open) $("pf-name").focus();
 }
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
   // Blank means "use the default tier", which the server resolves to box. Sending
   // it explicitly would hard-code today's default into every stored profile.
-  const rt = $("pf-runtime") ? $("pf-runtime").value : "";
+  const rt = segValue($("pf-runtime"));
   if (rt) p.runtime = rt;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (args.length) p.args = args;
@@ -1135,7 +1200,12 @@ function readForm() {
   const opts = {};
   for (const ctrl of $("pf-options").querySelectorAll("[data-optkey]")) {
     if (ctrl.dataset.opttype === "bool") opts[ctrl.dataset.optkey] = ctrl.checked;
-    else if (ctrl.value) opts[ctrl.dataset.optkey] = ctrl.value;
+    // A <=4-choice enum renders as a .seg (see renderPfOptions): its value
+    // lives in data-value on the container, not in a form control's .value.
+    else if (ctrl.classList.contains("seg")) {
+      const v = segValue(ctrl);
+      if (v) opts[ctrl.dataset.optkey] = v;
+    } else if (ctrl.value) opts[ctrl.dataset.optkey] = ctrl.value;
   }
   if (Object.keys(opts).length) p.options = opts;
   const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
@@ -1149,12 +1219,31 @@ async function saveProfile() {
   const p = readForm();
   setDialogError("settings-modal", "");
   if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
+  // Containment is the one field whose consequence is worth naming before it is
+  // written. box needs no question; host gives up the whole point of the box.
+  const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
+  if (ask && !(await askConfirm(ask))) return;
   const editing = profiles.some((x) => x.name === p.name && x.editable);
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) { setDialogError("settings-modal", "Save failed: " + e.message); return; }
   await loadProfiles();
+}
+// Duplicate is what makes a read-only built-in useful: a copy you own, seeded
+// with what it does. It reads the editor exactly as Save would, only the name
+// changes and the destination is always a new profile (POST, never PUT).
+async function duplicateProfile() {
+  const name = selectedProfileName();
+  if (!name) return;
+  setDialogError("settings-modal", "");
+  const p = readForm();
+  p.name = duplicateName(name, profiles.map((x) => x.name));
+  try {
+    await api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+  } catch (e) { setDialogError("settings-modal", "Duplicate failed: " + e.message); return; }
+  await loadProfiles();
+  await editProfile(p.name);
 }
 async function editProfile(name) {
   setDialogError("settings-modal", "");
@@ -1207,14 +1296,15 @@ function renderProfileList() {
 }
 $("pf-save").addEventListener("click", saveProfile);
 $("pf-new").addEventListener("click", newProfile);
+$("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
+$("pf-duplicate").addEventListener("click", duplicateProfile);
 // Re-scope the option list when the agent binary changes.
 $("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
 $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });
-if ($("pf-runtime")) {
-  $("pf-runtime").addEventListener("change", () => renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)));
-}
+// pf-runtime's own change is handled by renderPfRuntime's buildSeg onChange —
+// a .seg is buttons, not a form control, so it has no native "change" event.
 // workspacesCache backs the tier-aware re-render: switching Runtime must be able
 // to re-evaluate which directories are selectable without another round trip.
 let workspacesCache = [];
