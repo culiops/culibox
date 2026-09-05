@@ -1287,21 +1287,52 @@
     .pane-trouble button.alt + button { margin-left: 6px; }
     .pane-trouble.expired button { background: var(--danger); }
     @media (max-width: 700px) {
+      /* --- mobile IA: one screen at a time (slice 5a) ---------------------- */
+      /* The desktop stacks the sidebar above the terminal grid; the phone shows
+         a single full-height screen and switches with #mobile-nav. The active
+         screen is chosen by one class on <html>; everything else is hidden so
+         only one scroll region is ever live. */
       #layout { flex-direction: column; }
-      /* A DEFINITE height, not max-height: the panes below use a percentage
-         flex-basis, which silently degrades to `auto` against a content-derived
-         height: the drag ratio would be ignored on mobile. */
-      /* 52vh, not 46: inside a 46vh band the Files pane came to ~112px, which its
-         header + root picker consumed entirely, leaving the file tree computing
-         to ZERO height: the tree, and the folder-download button that lives in
-         it, were unreachable until you dragged the splitter. */
-      #sidebar { width: 100%; height: 52vh; flex: none; border-right: none; border-bottom: 1px solid var(--border); }
-      /* #layout is a column here and #sidebar is full width, so a col-resize
-         handle would sit between two stacked panes and resize nothing. */
-      #split-v { display: none; }
-      /* Both panes must stay usable inside a 46vh band, so the minimums shrink
-         with it: otherwise the splitter has nothing left to distribute. */
-      #sessions-pane, #files-pane { min-height: 56px; }
+      #sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border-right: none; border-bottom: none; }
+      #split-v, #split-h { display: none; }              /* nothing to resize when one pane fills the screen */
+      #hint { display: none; }                            /* the bottom nav replaces the desktop status bar */
+
+      /* Sessions screen: the session list fills the screen; grid + files hidden. */
+      html.mobile-screen-sessions #files-pane,
+      html.mobile-screen-sessions #grid,
+      html.mobile-screen-sessions #steer-rail { display: none; }
+      html.mobile-screen-sessions #sessions-pane { flex: 1 1 auto; min-height: 0; }
+
+      /* Files screen: the tree fills the screen; grid + sessions hidden. */
+      html.mobile-screen-files #sessions-pane,
+      html.mobile-screen-files #grid,
+      html.mobile-screen-files #steer-rail { display: none; }
+      html.mobile-screen-files #files-pane { flex: 1 1 auto; min-height: 0; }
+
+      /* Terminal screen: the pane grid fills the screen; the sidebar is hidden. */
+      html.mobile-screen-terminal #sidebar { display: none; }
+
+      /* The bottom nav: 60px, three equal items, active gets an inset top rule +
+         soft fill (matches M1). The waiting pip is amber (an agent needs you). */
+      #mobile-nav {
+        display: flex; flex: none; height: 60px; gap: 4px;
+        background: var(--panel); border-top: 1px solid var(--border);
+      }
+      #mobile-nav button {
+        flex: 1; min-height: var(--tap); position: relative; display: flex;
+        flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+        background: transparent; border: 0; color: var(--muted);
+        font: 11px/1 var(--font-family); cursor: pointer;
+      }
+      #mobile-nav button .mn-glyph { font-size: 18px; line-height: 1; }
+      #mobile-nav button.on { color: var(--accent); background: var(--sel-soft); box-shadow: inset 0 2px 0 var(--accent); }
+      #mobile-nav .mn-pip {
+        position: absolute; top: 10px; left: 50%; margin-left: 9px;
+        min-width: 16px; height: 16px; padding: 0 3px; box-sizing: border-box;
+        background: var(--warn-fg); color: #11111b; font-size: 10px; font-weight: 700;
+        line-height: 16px; text-align: center;
+      }
+      #mobile-nav .mn-pip[hidden] { display: none; }
       header { gap: .5ch; padding: .5lh 1ch; }
       /* The header has no room for two meters at this width, and the mobile
          layout gives usage its own row below the header instead — built with the
@@ -1361,7 +1392,6 @@
          destructive one is not mis-tapped. */
       .cell-bar .tab { gap: 8px; }
       .cell-bar .tab-kill, .cell-bar .tab-x { min-width: 28px; min-height: 28px; font-size: 15px; }
-      #split-h { height: 12px; }
       /* Two controls this rail gained are new, so they meet the floor now
          rather than in a later pass — a small target that ships once tends to
          ship for good. The row is already tall enough to hold a full-height
