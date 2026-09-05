@@ -747,6 +747,11 @@
        never reflows when a longer profile name arrives; the selected row is
        marked with an inset rule rather than a real border so the row's height
        does not change when it lights up. */
+    /* The drill-down's own way out. Desktop shows both columns side by side and
+       never needs it — the mobile media query is the only place that shows it
+       back, so it must be hidden here unconditionally rather than folded into
+       that query's own not-editing rule (see the comment there). */
+    #pf-back { display: none; }
     .plist { width: 236px; flex: none; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
     .plist ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; }
     .plist-foot { flex: none; border-top: 1px solid var(--border); padding: 9px 15px; }
@@ -1084,7 +1089,10 @@
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
-      #settings-modal, #spawn-modal, #attr-modal, #analytics-modal { width: 94vw; }
+      #spawn-modal, #attr-modal, #analytics-modal { width: 94vw; }
+      /* The desktop heights are the design's frame sizes; on a phone the dialog
+         is the screen and takes what there is. */
+      #settings-modal, #settings-modal.tall { width: 94vw; height: auto; max-height: calc(100vh - 24px); }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* The upload button is the ONLY upload route on a phone (no drag exists),
          so it cannot stay an 18px-tall desktop button sitting in a header. */
@@ -1127,8 +1135,70 @@
          13px text line) now floats above the name instead of sitting on it.
          Re-centre it on the taller line: (name's tap floor - dot's own 8px) / 2. */
       #sessions .dot { margin-top: calc((var(--tap) - 8px) / 2); }
+      /* --- the settings dialog on a phone ---------------------------------- */
+      .tabs .t { flex: 1; min-height: var(--tap); display: flex; align-items: center;
+                 justify-content: center; padding: 0 8px; }
+      .dft { height: 66px; padding: 0 13px; }
+      .dft .btn { flex: 1; min-height: var(--tap); display: inline-flex;
+                  align-items: center; justify-content: center; font-size: 13px; }
+      /* .grow is a spacer everywhere else (it pushes the destructive button to
+         one end and the primary to the other); at this width there is no room
+         for that split, so the footer's buttons share the row evenly and the
+         destructive one stays first, where its own colour separates it. */
+      .dft .grow { display: none; }
+      .stepper button { width: var(--tap); height: var(--tap); font-size: 16px; }
+      .stepper .val { width: 56px; line-height: var(--tap); }
       /* The allowlist's remove button is the smallest control the settings
          dialog adds: a bare × with no padding on a pointer. On touch it takes
          the same floor as every other new control here. */
-      .kvrow .rm { min-width: var(--tap); min-height: var(--tap); }
+      /* #pf-env-block scoped: #pf-env-block .btn's width: fit-content
+         (app.css above) outranks a bare .kvrow .rm on specificity alone and
+         would otherwise leave the button exactly as wide as its × glyph. */
+      #pf-env-block .kvrow .rm { width: var(--tap); height: var(--tap); padding: 0; }
+      .pitem { min-height: var(--tap); }
+      .plist-foot .btn, #pf-env-add, #pf-secret-add { min-height: var(--tap); }
+      /* The containment segments and the token row's own buttons are controls
+         this slice added too; nothing else sizes them for a finger. A profile
+         option can offer up to four choices (see renderPfOptions) and an
+         inline-flex row of four does not fit 340px; without the wrap it forced
+         its grid row wider than the dialog and scrolled sideways inside .ped. */
+      .seg { flex-wrap: wrap; }
+      .seg button { min-height: var(--tap); }
+      .tokrow button, .reveal button { min-height: var(--tap); }
+      /* The name column is as fixed as .kvrow .k, and for the same reason it
+         cannot share a row with the confirm sentence and two buttons at this
+         width — it wraps to its own line first. */
+      .tokrow { flex-wrap: wrap; }
+      .tokrow .nm { width: 100%; }
+
+      /* Two columns will not fit, so they become two views: the list, then the
+         profile you picked. The header's back control is the way out, and it is
+         the only control that appears only in this state. */
+      .dbd.split { flex-direction: column; }
+      /* flex: 1 + min-height: 0 so whichever view is showing takes .dbd's own
+         bounded height and scrolls its own content — without it each view sizes
+         to its content and .dbd's overflow: hidden clips the rest with no
+         scrollbar to reach it. */
+      .plist { width: auto; border-right: 0; border-bottom: 1px solid var(--border); flex: 1; min-height: 0; }
+      .ped { flex: 1; min-height: 0; }
+      #settings-modal:not(.editing) .ped { display: none; }
+      #settings-modal.editing .plist { display: none; }
+      #settings-modal:not(.editing) #pf-back { display: none; }
+      /* The base rule (outside this query) hides #pf-back for every desktop
+         width regardless of .editing; this is the one place that wins it back,
+         and only inside the breakpoint. */
+      #settings-modal.editing #pf-back { display: inline-flex; align-items: center;
+        justify-content: center; min-width: var(--tap); min-height: var(--tap); }
+      #settings-modal:not(.editing) #foot-manage { display: none; }
+
+      /* A 186px name column and a value box do not both fit in 340px, so the
+         row wraps: name on its own line, then value and remove. */
+      .kvrow { flex-wrap: wrap; }
+      .kvrow .k { width: 100%; }
+      .kvrow.hdr { display: none; }
+      .fsrow { flex-wrap: wrap; gap: 12px; }
+      .fsrow .lbl { width: auto; flex: 1; }
+      .sample { flex: 1 0 100%; }
+      .frow { flex-direction: column; gap: 0; margin-bottom: 0; }
+      .fcol { margin-bottom: 13px; }
     }

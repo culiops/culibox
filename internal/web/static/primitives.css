@@ -77,7 +77,7 @@
                       background: transparent; border: 0; color: var(--fg); cursor: pointer; }
     .stepper button:hover { background: var(--surface-2); }
     .stepper .val { width: 68px; text-align: center; font-size: 13px; color: var(--fg);
-                    background: var(--bg); border: 0;
+                    background: var(--bg); border: 0; padding: 0;
                     border-left: 1px solid var(--border); border-right: 1px solid var(--border);
                     line-height: 40px; font-variant-numeric: tabular-nums; }
     /* Buttons and fields. Three button weights: the default is quiet, .pri is

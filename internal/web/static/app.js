@@ -1253,6 +1253,9 @@ async function duplicateProfile() {
 async function editProfile(name) {
   setDialogError("settings-modal", "");
   selectedProfile = name;
+  // Same drill-down as newProfile(); inert above 700px, where both columns
+  // are already on screen.
+  $("settings-modal").classList.add("editing");
   try { fillForm(await api("/api/profiles/" + encodeURIComponent(name))); openSettings("manage"); }
   catch (e) { setDialogError("settings-modal", "Load failed: " + e.message); }
   renderProfileList();
@@ -1300,7 +1303,20 @@ function renderProfileList() {
   }));
 }
 $("pf-save").addEventListener("click", saveProfile);
-$("pf-new").addEventListener("click", newProfile);
+// newProfile() also runs once at boot (below) to seed the editor pane with a
+// blank form before any profile is loaded — that call must NOT drill into the
+// mobile editor view, so the class is added here, at the actual button press,
+// rather than inside newProfile() itself.
+$("pf-new").addEventListener("click", () => {
+  newProfile();
+  $("settings-modal").classList.add("editing");
+});
+// The drill-down's only way back to the list; inert above 700px, where the
+// button itself stays hidden.
+$("pf-back").addEventListener("click", () => {
+  $("settings-modal").classList.remove("editing");
+  renderProfileList();
+});
 $("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
 $("pf-duplicate").addEventListener("click", duplicateProfile);
 // The two "+ add" buttons append a blank row of the matching kind and hand
