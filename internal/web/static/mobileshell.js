@@ -45,9 +45,28 @@ function navModel(activeScreen, waitingCount) {
   });
 }
 
+// Group the session list the way the mobile Sessions screen shows it: the ones
+// that need a person first, then the ones doing work, then everything at rest.
+// "waiting" is the only needs-you state; "working" is running; anything else
+// (idle/done/detached/crashed/unknown) is at rest. Empty groups are dropped so
+// no header ever sits above nothing.
+function sessionGroups(sessions, statusFn) {
+  const buckets = { "needs-you": [], running: [], idle: [] };
+  for (const s of sessions || []) {
+    const st = statusFn ? statusFn(s) : s.status;
+    if (st === "waiting") buckets["needs-you"].push(s);
+    else if (st === "working") buckets.running.push(s);
+    else buckets.idle.push(s);
+  }
+  const labels = { "needs-you": "Needs you", running: "Running", idle: "Idle" };
+  return ["needs-you", "running", "idle"]
+    .filter((k) => buckets[k].length)
+    .map((k) => ({ key: k, label: labels[k], count: buckets[k].length, sessions: buckets[k] }));
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     MOBILE_MAX_PX, MOBILESHELL_KEY, MOBILE_SCREENS,
-    mobileActive, loadScreen, saveScreen, screenClass, navModel,
+    mobileActive, loadScreen, saveScreen, screenClass, navModel, sessionGroups,
   };
 }

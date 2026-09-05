@@ -270,6 +270,11 @@ function initMobileShell() {
     const btn = e.target.closest("[data-screen]");
     if (btn) setMobileScreen(btn.dataset.screen);
   });
+  // The mobile Sessions screen draws its own full-width "+ new session" (M1)
+  // below the list; it delegates to the existing spawn trigger rather than
+  // binding a second spawn handler.
+  const sgm = document.getElementById("spawn-go-mobile");
+  if (sgm) sgm.addEventListener("click", () => { const g = document.getElementById("spawn-go"); if (g) g.click(); });
   setMobileScreen(_mobileScreen); // applies class + paints nav on boot
 }
 
@@ -962,7 +967,24 @@ async function refreshSessions() {
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
   const rows = lastSessions.map(renderSession);
-  ul.replaceChildren(...rows);
+  if (mobileActive(window.innerWidth)) {
+    // Mobile groups the same rows under "Needs you"/"Running"/"Idle" headers
+    // (M1); `rows` stays indexed by ORIGINAL session order below so the
+    // reopen-peek block's `rows[lastSessions.indexOf(reopen)]` lookup keeps
+    // working — this only reorders what's appended to `ul`, never `rows`.
+    const rowBySid = new Map(lastSessions.map((s, i) => [s.id, rows[i]]));
+    const nodes = [];
+    for (const g of sessionGroups(lastSessions, (s) => s.activity)) {
+      const h = document.createElement("li");
+      h.className = g.key === "needs-you" ? "mhd needs" : "mhd";
+      h.innerHTML = '<span>' + g.label + '</span><span class="count">' + g.count + '</span>';
+      nodes.push(h);
+      for (const s of g.sessions) nodes.push(rowBySid.get(s.id));
+    }
+    ul.replaceChildren(...nodes);
+  } else {
+    ul.replaceChildren(...rows); // desktop: flat list, unchanged
+  }
   // The answer block is a sibling, so it can only be inserted once its row is
   // in the document. Re-opening after the attach also keeps the open panel from
   // collapsing under the reader every few seconds.

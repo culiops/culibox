@@ -228,6 +228,10 @@
        here the same way .count/.path/.pip already do for their own content. */
     #sessions-phd #spawn-go { text-transform: none; letter-spacing: 0; }
     #sessions-phd.closed #spawn-go { display: none; }
+    /* Full-width mobile-only spawn trigger (M1); desktop keeps the compact
+       header "+ new" above and never shows this one. Shown only inside the
+       700px block below. */
+    #spawn-go-mobile { display: none; }
     /* Mirrors the rule above for the Files header (T11): its three action
        icons (#ft-newdir/#ft-refresh/#ft-upload) no longer carry a shared
        class — T16 dropped .nf when it switched them to ASCII glyphs — so
@@ -1301,6 +1305,21 @@
       #sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border-right: none; border-bottom: none; }
       #split-v, #split-h { display: none; }              /* nothing to resize when one pane fills the screen */
       #hint { display: none; }                            /* the bottom nav replaces the desktop status bar */
+
+      /* Session-list group headers (M1): "Needs you" / "Running" / "Idle"
+         above their rows, uppercase and muted like other section labels.
+         "Needs you" is amber — the same --warn-fg the waiting pip/dot use —
+         because it means the same thing: an agent needs you. Nothing else on
+         this screen borrows that color. */
+      .mhd { display: flex; align-items: baseline; gap: 8px; padding: 16px 13px 7px;
+             font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+      .mhd .count { color: var(--muted); }
+      .mhd.needs { color: var(--warn-fg); }        /* "an agent needs you" — the one amber label */
+      .mhd.needs .count { color: var(--warn-fg); }
+      /* Full-width primary spawn trigger below the list (M1), replacing the
+         compact header "+ new" as the tappable action on this screen. */
+      #spawn-go-mobile { display: block; margin: 16px 13px; min-height: var(--tap);
+                         font-size: 13.5px; text-align: center; }
 
       /* Sessions screen: the session list fills the screen; grid + files hidden. */
       html.mobile-screen-sessions #files-pane,

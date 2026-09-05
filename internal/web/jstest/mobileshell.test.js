@@ -43,3 +43,24 @@ test("navModel shows no pip at zero waiting (a dot announcing zero is worse than
   const nav = m.navModel("sessions", 0);
   assert.equal(nav.find((n) => n.screen === "sessions").pip, 0);
 });
+
+test("sessionGroups partitions into needs-you / running / idle and drops empties", () => {
+  const statusFn = (s) => s.status;
+  const sessions = [
+    { id: "a", status: "waiting" },
+    { id: "b", status: "working" },
+    { id: "c", status: "working" },
+    { id: "d", status: "detached" },
+    { id: "e", status: "crashed" },
+  ];
+  const g = m.sessionGroups(sessions, statusFn);
+  assert.deepEqual(g.map((x) => x.key), ["needs-you", "running", "idle"]);
+  assert.equal(g.find((x) => x.key === "needs-you").count, 1);
+  assert.equal(g.find((x) => x.key === "running").count, 2);
+  assert.equal(g.find((x) => x.key === "idle").count, 2); // detached + crashed
+});
+
+test("sessionGroups omits a group with no members", () => {
+  const g = m.sessionGroups([{ id: "a", status: "working" }], (s) => s.status);
+  assert.deepEqual(g.map((x) => x.key), ["running"]);
+});
