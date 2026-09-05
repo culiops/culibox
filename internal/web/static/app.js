@@ -100,8 +100,45 @@ function toggleSidebar() {
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
+  renderRail48(); // the rail has just appeared or gone
 }
 $("sidebar-toggle").onclick = toggleSidebar;
+
+// renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
+// signature: the session list is replaced every three seconds, and a rebuild
+// under the pointer swallows a click — the same trap setFocusedCell's comment
+// in tabs.js records, where a full renderBar() ate the first press of every
+// pane button. Nothing here holds a value, so a signature is all it needs.
+let rail48Key = "";
+function renderRail48() {
+  const rail = $("rail48");
+  if (!rail) return;
+  const items = railItems(lastSessions, { focusedId: selectedSessionId() });
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0].join(":")).join("|");
+  if (key === rail48Key) return;
+  rail48Key = key;
+  const mk = (it) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.kind === "new" ? " add" : "");
+    b.setAttribute("aria-label", it.label);
+    b.title = it.label;
+    if (it.kind === "session") {
+      const d = document.createElement("span");
+      d.className = activityClass(it.activity).cls;
+      b.appendChild(d);
+      b.onclick = () => openTerminal(it.id, it.label);
+    } else {
+      b.textContent = it.glyph;
+      b.onclick = it.kind === "toggle" ? toggleSidebar : () => openSpawnDialog();
+    }
+    return b;
+  };
+  const mid = document.createElement("div");
+  mid.className = "rin";
+  mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
+  rail.replaceChildren(mk(items[0]), mid, mk(items[items.length - 1]));
+}
 
 // Live count of open dialogs, for shortcutsBlocked (shell.js): the same source
 // shouldRefocusTerminal already reads from.
@@ -828,6 +865,7 @@ function syncSelectedRow() {
     if (!li.classList || !li.classList.contains("srow")) continue;
     li.classList.toggle("sel", !!id && li.dataset.sid === id);
   }
+  renderRail48(); // the focus ring moved, so .ri.on must move with it
 }
 
 // Returns the live session list, or null if the request failed: the boot-time
@@ -897,6 +935,7 @@ async function refreshSessions() {
   }
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
+  renderRail48(); // the list changed
   updateStatusLine();
   renderCollapsedSummaries();
   // A menu whose session has left the list would act on a dead id. Only that

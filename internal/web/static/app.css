@@ -32,6 +32,40 @@
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
+    /* The icon rail. It is not a second sidebar: it is what the sidebar
+       BECOMES when it is hidden, so the shell keeps one column of "which
+       session needs me" instead of an empty edge. Driven by the same class the
+       pre-paint script already applies, so hiding the sidebar cannot flash a
+       gap between the two states.
+
+       Geometry, because a 40px control in a 52px column is tight: the rail
+       centres its children, so 40px leaves 6px each side, and the focus ring is
+       2px drawn 1px outside the border box — 46px of paint inside 52px, 3px of
+       clearance. There is deliberately no overflow: hidden here, so nothing can
+       start clipping that ring later. */
+    .rail48 { display: none; }
+    .sidebar-hidden .rail48 {
+      display: flex; width: 52px; flex: none; flex-direction: column; align-items: center;
+      padding: 9px 0; gap: 3px; background: var(--panel); border-right: 1px solid var(--border);
+    }
+    /* The middle region scrolls rather than the whole rail: the toggle must stay
+       reachable at the top and the add button at the bottom no matter how many
+       sessions are running. The design draws five and a spacer; a spacer alone
+       pushes the add button off-screen at twenty. */
+    .rin { flex: 1 1 auto; min-height: 0; overflow-y: auto; display: flex; flex-direction: column;
+           align-items: center; gap: 3px; width: 100%; }
+    .ri {
+      width: 40px; height: 40px; flex: none; display: flex; align-items: center;
+      justify-content: center; position: relative; background: transparent; border: 0;
+      color: var(--muted); font-family: inherit; font-size: 14px; cursor: pointer;
+    }
+    .ri:hover { background: var(--surface-2); color: var(--fg); }
+    .ri.on { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+    /* Yellow, and only here in this slice: a session in this state IS an agent
+       needing you, which is the one thing that token means. The 3px inset is the
+       project's own convention — amber signals take the wider rule, blue the 2px. */
+    .ri.alert { background: var(--warn-tint); box-shadow: inset 3px 0 0 var(--warn-fg); }
+    .ri.add { color: var(--accent); font-size: 16px; }
     #hint { display: flex; align-items: center; gap: 1.16ch; padding: .23lh 1.73ch; background: var(--panel); border-top: 1px solid var(--border); color: var(--muted); font-size: 11.5px; flex-shrink: 0; }
     #hint.hidden { display: none; }
     /* Left-hand status fields (env / session count / cwd) sit at the start of the
