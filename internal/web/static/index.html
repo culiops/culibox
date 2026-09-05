@@ -193,12 +193,11 @@
             <textarea id="pf-args" class="fld" rows="2" spellcheck="false" placeholder="--some-flag"></textarea></div>
         </div>
         <div id="pf-env-block">
-          <!-- Task 6 puts the allowlist table here. Until then the existing
-               #pf-env textarea and #pf-secrets input live here unchanged. -->
-          <label class="pf-lbl">Env (KEY=VALUE per line)</label>
-          <textarea id="pf-env" rows="2" spellcheck="false" placeholder="FOO=bar"></textarea>
-          <label class="pf-lbl">Secrets (comma-separated names)</label>
-          <input id="pf-secrets" type="text" placeholder="CLAUDE_CODE_OAUTH_TOKEN">
+          <span class="flab">Environment allowlist</span>
+          <div class="kvrow hdr"><span class="k">variable</span><span class="v">value</span><span class="rm" aria-hidden="true"></span></div>
+          <div id="pf-env-rows"></div>
+          <button id="pf-env-add" type="button" class="btn">+ add variable</button>
+          <button id="pf-secret-add" type="button" class="btn">+ add secret</button>
         </div>
         <p class="hint">A profile is what the agent <em>is</em>. These are its defaults;
           the New-session form can override containment and options for a single run.</p>
@@ -370,6 +369,7 @@
   <script src="/tokens.js"></script>
   <script src="/sessionrow.js"></script>
   <script src="/profileform.js"></script>
+  <script src="/envrows.js"></script>
   <script src="/palette.js"></script>
   <script src="/app.js"></script>
 </body>

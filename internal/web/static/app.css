@@ -715,10 +715,33 @@
     /* --- profile editor (now a settings tab) ------------------------------ */
     .pf-lbl { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
     #pf-options { display: grid; gap: 6px; }
-    /* #pf-env-block is the pre-Task-6 allowlist placeholder: its label/textarea/
-       input previously stacked for free as rows of .manage-body's own grid; that
-       container is gone, so this keeps them stacked without it. */
+    /* #pf-env-block stacks the allowlist's own label, header row, variable
+       rows and two add buttons; that stacking used to come free from
+       .manage-body's own grid, which is gone. */
     #pf-env-block { display: grid; gap: 6px; margin-bottom: 18px; }
+    #pf-env-block .btn { width: fit-content; }
+
+    /* The allowlist. A header row so the two columns are named, then one row per
+       variable. A row is either a literal pair or a name whose value the box
+       resolves at spawn time — the second kind deliberately has no value box,
+       because an editable box would say the secret is stored here. */
+    .kvrow {
+      display: flex; align-items: center; gap: 9px; padding: 8px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+      font-size: 12.5px;
+    }
+    /* --rule is a hairline colour: 3.59 on this surface, which clears the 3:1
+       for a graphic that carries meaning and fails the 4.5 for text. It is the
+       header's BORDER here and never its type. */
+    .kvrow.hdr {
+      border-bottom-color: var(--rule); font-size: 10px; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--muted); padding-bottom: 5px;
+    }
+    .kvrow .k { width: 186px; flex: none; color: var(--fg); }
+    .kvrow .v { flex: 1; min-width: 0; color: var(--muted); }
+    .kvrow .v.ref { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kvrow .rm { flex: none; }
+    .kvempty { font-size: 11.5px; color: var(--muted); padding: 10px 0; line-height: 1.6; }
 
     /* The profile list and the editor. The list is a fixed column so the editor
        never reflows when a longer profile name arrives; the selected row is
@@ -1083,4 +1106,8 @@
          13px text line) now floats above the name instead of sitting on it.
          Re-centre it on the taller line: (name's tap floor - dot's own 8px) / 2. */
       #sessions .dot { margin-top: calc((var(--tap) - 8px) / 2); }
+      /* The allowlist's remove button is the smallest control the settings
+         dialog adds: a bare × with no padding on a pointer. On touch it takes
+         the same floor as every other new control here. */
+      .kvrow .rm { min-width: var(--tap); min-height: var(--tap); }
     }

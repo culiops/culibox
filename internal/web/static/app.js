@@ -1138,14 +1138,18 @@ function renderPfRuntime(value) {
   });
   $("pf-runtime-warn").hidden = (value || "") !== "host";
 }
+// The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
+// saved profile into rows, the table renders and edits them in place, and
+// rowsToConfig turns them back into the two fields the server stores.
+let pfEnvRows = [];
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
   renderPfRuntime(p.runtime || "");
   $("pf-args").value = (p.args || []).join("\n");
-  $("pf-env").value = Object.entries(p.env || {}).map(([k, v]) => k + "=" + v).join("\n");
-  $("pf-secrets").value = (p.secrets || []).join(", ");
+  pfEnvRows = envRows(p);
+  renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
   syncEditorActions();
@@ -1188,14 +1192,8 @@ function readForm() {
   if (rt) p.runtime = rt;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (args.length) p.args = args;
-  const env = {};
-  for (const line of $("pf-env").value.split("\n")) {
-    const t = line.trim(); if (!t) continue;
-    const i = t.indexOf("="); if (i < 0) continue;
-    env[t.slice(0, i).trim()] = t.slice(i + 1).trim();
-  }
+  const { env, secrets } = rowsToConfig(pfEnvRows);
   if (Object.keys(env).length) p.env = env;
-  const secrets = $("pf-secrets").value.split(",").map((s) => s.trim()).filter(Boolean);
   if (secrets.length) p.secrets = secrets;
   const opts = {};
   for (const ctrl of $("pf-options").querySelectorAll("[data-optkey]")) {
@@ -1219,6 +1217,8 @@ async function saveProfile() {
   const p = readForm();
   setDialogError("settings-modal", "");
   if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
+  const rowsErr = rowError(pfEnvRows);
+  if (rowsErr) { setDialogError("settings-modal", rowsErr); return; }
   // Containment is the one field whose consequence is worth naming before it is
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
@@ -1298,6 +1298,18 @@ $("pf-save").addEventListener("click", saveProfile);
 $("pf-new").addEventListener("click", newProfile);
 $("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
 $("pf-duplicate").addEventListener("click", duplicateProfile);
+// The two "+ add" buttons append a blank row of the matching kind and hand
+// focus to its name field, so typing the variable name is the very next thing
+// that happens.
+function addEnvRow(kind) {
+  pfEnvRows.push({ key: "", value: "", kind });
+  renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
+  const rows = $("pf-env-rows").querySelectorAll(".kvrow");
+  const last = rows[rows.length - 1];
+  if (last) last.querySelector(".k").focus();
+}
+$("pf-env-add").addEventListener("click", () => addEnvRow("literal"));
+$("pf-secret-add").addEventListener("click", () => addEnvRow("secret"));
 // Re-scope the option list when the agent binary changes.
 $("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
 $("pf-cwd").addEventListener("change", () => {
