@@ -1212,6 +1212,13 @@
          its desktop size it lands around 29px — under the floor on the one
          device where answering from a panel matters most. */
       #sessions .rep .fld, .replystrip .fld, .rail .rep .fld { min-height: var(--tap); }
+      /* The tool-breakdown scan button is this rail's own trigger, sized like
+         every other new rail control on a phone. */
+      #steer-attr .rttl .btn { min-height: var(--tap); }
+      /* Header rail toggle: new with this slice, unlike its three siblings on
+         the same shared rule, which are a pre-existing pattern left for a
+         separate pass. */
+      #steer-toggle { min-width: var(--tap); min-height: var(--tap); }
       /* The name is the row's primary action: it is what opens the session. Its
          box was only as tall as its 13px text, so the row was tall enough to
          tap and the control inside it was not. Height only — what is clickable
@@ -1256,6 +1263,13 @@
          its neighbouring .rm only improves that row's alignment: before this,
          .rm was already at 44px and .v sat shorter beside it. */
       #settings-modal .fld { min-height: var(--tap); }
+      /* The "Bypass permissions" checkbox is pre-existing markup, but this
+         drill-down at phone width is the surface that first makes it
+         reachable by touch. A native checkbox sized straight to the floor
+         would sit at its own top-aligned default beside the label; the row
+         is made a centred flex pair instead so the two stay aligned. */
+      #pf-options .fcol:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+      #pf-options input[type="checkbox"] { width: var(--tap); height: var(--tap); margin: 0; flex: none; }
       .pitem { min-height: var(--tap); }
       .plist-foot .btn, #pf-env-add, #pf-secret-add { min-height: var(--tap); }
       /* The containment segments and the token row's own buttons are controls
