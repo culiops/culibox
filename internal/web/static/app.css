@@ -26,9 +26,14 @@
     #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: var(--radius); }
     #env-badge[hidden] { display: none; }
     /* --fg, not --muted: a muted label on a control that works reads as disabled,
-       and these are the only way to reach the sidebar, the palette and settings. */
-    #sidebar-toggle, #steer-toggle, #settings-open, #palette-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
-    #sidebar-toggle:hover, #steer-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
+       and these are the only way to reach the sidebar, the palette and settings.
+       #analytics-open joins this rule (it used to have no CSS of its own,
+       relying on default button chrome + the colourful 📊 emoji, which read as
+       a heavier/more-saturated outlier next to its flat siblings) so its
+       monochrome glyph gets the same dark surface + border as the rest of the
+       row instead of standing out. */
+    #sidebar-toggle, #steer-toggle, #settings-open, #palette-open, #analytics-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+    #sidebar-toggle:hover, #steer-toggle:hover, #settings-open:hover, #palette-open:hover, #analytics-open:hover { border-color: var(--accent); }
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
@@ -1272,12 +1277,14 @@
       /* The tool-breakdown scan button is this rail's own trigger, sized like
          every other new rail control on a phone. */
       #steer-attr .rttl .btn { min-height: var(--tap); }
-      /* The four header icon buttons share one rule (app.css:30); raising
+      /* The header icon buttons share one rule (app.css:30); raising
          #steer-toggle alone left it visibly bigger than its three siblings
          in the same row. header itself sets no height, so this row already
          grew to fit #steer-toggle — putting its siblings on the same floor
-         costs nothing further, measured below rather than assumed. */
-      #sidebar-toggle, #steer-toggle, #settings-open, #palette-open {
+         costs nothing further, measured below rather than assumed.
+         #analytics-open joins here too: it is hidden until there is data, but
+         once visible on a phone it is a real header button like the rest. */
+      #sidebar-toggle, #steer-toggle, #settings-open, #palette-open, #analytics-open {
         min-width: var(--tap); min-height: var(--tap);
       }
       /* The name is the row's primary action: it is what opens the session. Its
