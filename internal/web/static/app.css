@@ -1170,6 +1170,12 @@
          Re-centre it on the taller line: (name's tap floor - dot's own 8px) / 2. */
       #sessions .dot { margin-top: calc((var(--tap) - 8px) / 2); }
       /* --- the settings dialog on a phone ---------------------------------- */
+      /* The esc close button is this dialog's own header control (added with
+         this dialog's own chrome), not a generic .btn.gh — scoped to .dhd so
+         no other ghost button in the app is touched. .dhd keeps its fixed
+         52px height regardless: raising a centred flex child that still fits
+         inside it does not grow the row or move the title beside it. */
+      .dhd .btn { min-width: var(--tap); min-height: var(--tap); }
       .tabs .t { flex: 1; min-height: var(--tap); display: flex; align-items: center;
                  justify-content: center; padding: 0 8px; }
       .dft { height: 66px; padding: 0 13px; }
