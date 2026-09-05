@@ -103,6 +103,7 @@ function toggleSidebar() {
   renderRail48(); // the rail has just appeared or gone
 }
 $("sidebar-toggle").onclick = toggleSidebar;
+$("steer-toggle").onclick = toggleSteerRail;
 
 // renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
 // signature: the session list is replaced every three seconds, and a rebuild
@@ -296,65 +297,6 @@ function renderRateLimits(rl) {
     el.setAttribute("aria-label", m.label + " usage " + m.pct + "%, " + m.reset);
     host.appendChild(el);
   }
-}
-
-// openAttribution shows the context-by-tool dialog for a session. Rows are built
-// with textContent (never innerHTML): tool names come from the transcript.
-async function openAttribution(id) {
-  const body = $("attr-body"), foot = $("attr-foot");
-  if (!body) return;
-  body.replaceChildren();
-  foot.replaceChildren();
-  openDialog("attr-modal");
-  let attr = null;
-  try { attr = await api("/api/sessions/" + encodeURIComponent(id) + "/attribution"); } catch (_) {}
-  const rows = attributionRows(attr);
-  if (!rows.length) {
-    const p = document.createElement("p");
-    p.className = "attr-empty";
-    p.textContent = "No tool activity recorded for this session.";
-    body.appendChild(p);
-    return;
-  }
-  const head = document.createElement("div");
-  head.className = "attr-row attr-head";
-  for (const [t, cls] of [["tool", "a-name"], ["calls", "a-calls"], ["≈ context", "a-ctx"]]) {
-    const c = document.createElement("span");
-    c.className = cls;
-    c.textContent = t;
-    head.appendChild(c);
-  }
-  body.appendChild(head);
-  for (const r of rows) {
-    const row = document.createElement("div");
-    row.className = "attr-row";
-    const name = document.createElement("span");
-    name.className = "a-name";
-    name.textContent = r.name;
-    if (r.kind === "mcp" || r.kind === "skill") {
-      const badge = document.createElement("span");
-      badge.className = "a-badge " + r.kind;
-      badge.textContent = r.kind === "mcp" ? "MCP" : "SKILL";
-      name.appendChild(badge);
-    }
-    const calls = document.createElement("span");
-    calls.className = "a-calls";
-    calls.textContent = String(r.calls);
-    const ctx = document.createElement("span");
-    ctx.className = "a-ctx";
-    ctx.textContent = r.ctx;
-    row.append(name, calls, ctx);
-    body.appendChild(row);
-  }
-  const mk = (label, val) => {
-    const s = document.createElement("span");
-    s.append(label + " ");
-    const b = document.createElement("b");
-    b.textContent = val;
-    s.appendChild(b);
-    return s;
-  };
-  foot.append(mk("session output", fmtTokens(attr.outputTokens || 0) + " tokens"));
 }
 
 // --- sidebar: session list ---------------------------------------------------
@@ -925,6 +867,9 @@ async function refreshSessions() {
   // immediately before it actually sends, so a stale pending here only ever
   // makes a control look more open than it is, never less closed than reality.
   cells.forEach((c) => c.repaintReply());
+  // Same treatment for the steer rail's composer, and for the same reason: it
+  // re-gates, it never rebuilds, so a half-typed reply keeps its caret.
+  if (typeof repaintSteerRail === "function") repaintSteerRail();
   // Per-window usage: fetch only for open terminal tabs whose session is still
   // listed (alive), and only when visible. 204 (non-claude / no transcript) →
   // null → no readout. A gone session keeps its last usage rather than blanking.
@@ -1591,7 +1536,7 @@ function openSessionMenu(anchor, s) {
     // guard, so the tree resumes following the focused tab at the next focus
     // change. Unawaited from a click handler, hence the catch.
     files: () => { syncTreeToRoot(s.cwd).catch(() => {}); },
-    attribution: () => openAttribution(s.id),
+    attribution: () => openSteerFor(s.id),
     copycwd: () => copyPath(s.cwd),
     newpane: () => openTerminal(s.id, name, { newPane: true }),
     end: () => confirmKill(s.id, name),
@@ -1849,6 +1794,13 @@ initWidthSplitter();
 // in the boot sequence rather than up near the sidebar-toggle wiring, where
 // lastSessions's declaration has not been reached yet.
 applyCollapsed(readCollapsed());
+// The steer rail's own persisted state. It lives down here for the same reason
+// applyCollapsed does — opening the rail paints it, which reads lastSessions,
+// whose declaration is not reached until this point in the boot sequence — and
+// it is deliberately NOT a pre-paint <head> script: the rail is a right-hand
+// panel, so arriving a frame late shifts nothing, and the four hand-mirrored
+// parses already in <head> are enough to keep in step.
+try { if (localStorage.getItem(STEER_KEY) === "1") setSteerOpen(true); } catch (_) {}
 initSpawnControl();
 initPalette();
 loadProfiles();

@@ -148,7 +148,7 @@ class Cell {
       this.renderBody();
       tab.onShow?.();
     }
-    if (this === focusedCell) syncFocusedTree(); // tree follows the focused tab
+    if (this === focusedCell) { syncFocusedTree(); renderSteerRail(); } // tree and rail follow the focused tab
     if (typeof syncSelectedRow === "function") syncSelectedRow();
     scheduleSaveLayout();
   }
@@ -171,7 +171,7 @@ class Cell {
     // holds focus the tree is still rooted at the session whose tab just closed.
     // Gated like activate() for the same reason: an unfocused cell's close says
     // nothing about where the tree belongs.
-    if (this === focusedCell) syncFocusedTree();
+    if (this === focusedCell) { syncFocusedTree(); renderSteerRail(); }
   }
 
   // detachTab takes a tab OUT of this cell without ending it: same bookkeeping
@@ -192,7 +192,7 @@ class Cell {
     this.renderBar();
     this.renderBody();
     scheduleSaveLayout();
-    if (this === focusedCell) syncFocusedTree();
+    if (this === focusedCell) { syncFocusedTree(); renderSteerRail(); }
   }
 
   renderBody() {
@@ -245,7 +245,7 @@ class Cell {
           us.textContent = ustr;
           const title = usageTitle(t.usage());
           us.title = (title ? title + " — " : "") + "click for context by tool";
-          us.onclick = (e) => { e.stopPropagation(); openAttribution(t.id); };
+          us.onclick = (e) => { e.stopPropagation(); openSteerFor(t.id); };
           b.append(us);
         }
       }
@@ -503,6 +503,7 @@ function setFocusedCell(cell) {
   // renderBar keeps its own toggle, so a later rebuild still paints the ring.
   cells.forEach((c) => c.el.classList.toggle("focus", c === focusedCell));
   syncFocusedTree(); // tree follows the focused tab
+  renderSteerRail(); // and so does the rail: it describes the focused session
   if (typeof syncSelectedRow === "function") syncSelectedRow();
   scheduleSaveLayout();
 }
@@ -580,6 +581,7 @@ function removeCell(cell) {
   // it, setFocusedCell's equality guard would eat the repair click too. This is
   // the call that makes closing a pane leave a correct tree behind.
   syncFocusedTree();
+  renderSteerRail();
 }
 
 function toggleMax(cell) {
@@ -636,6 +638,7 @@ function applyCap(n) {
   // returns on !root BEFORE it writes lastSyncedKey, so it cannot poison
   // the follow-guard.
   syncFocusedTree();
+  renderSteerRail();
 }
 
 // openTerminal auto-splits a new window per session up to `cap`; beyond the cap

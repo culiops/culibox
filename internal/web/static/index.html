@@ -34,6 +34,7 @@
       <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
     </div>
     <button id="palette-open" title="Command palette" aria-label="Open command palette"><span class="pal-long">^⇧K</span><span class="pal-short">⌕</span></button>
+    <button id="steer-toggle" type="button" title="Session detail rail" aria-label="Toggle the session detail rail" aria-pressed="false">◧</button>
     <button id="analytics-open" title="Token &amp; prompt analytics" aria-label="Analytics" hidden>📊</button>
     <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings" class="nf"></button>
   </header>
@@ -82,6 +83,12 @@
     <main id="grid" class="empty">
       <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
+    <aside id="steer-rail" class="rail" aria-label="Session detail" hidden>
+      <div class="rsec" id="steer-head"></div>
+      <div class="rsec" id="steer-ctx"></div>
+      <div class="rsec" id="steer-attr"></div>
+      <div class="rsec grow" id="steer-msg"></div>
+    </aside>
   </div>
   <div id="hint">
     <span id="status-env"></span>
@@ -298,21 +305,6 @@
         <button id="ask-cancel" type="button">Cancel</button>
         <button id="ask-ok" type="button">OK</button>
       </div>
-    </div>
-  </dialog>
-
-  <dialog id="attr-modal" box-="square" shear-="top">
-    <h2 class="pane-head dlg-title">Context by tool</h2>
-    <div class="dlg-head">
-      <span class="spacer"></span>
-      <button class="dlg-x" type="button" data-close="attr-modal" title="Close">×</button>
-    </div>
-    <div class="dlg-body">
-      <div id="attr-body"></div>
-      <div id="attr-foot"></div>
-      <p class="attr-note">Totals accumulated over the whole session — a proxy for context
-        pressure (result-payload size, not per-tool billing). Not the current context size
-        shown on the tab.</p>
     </div>
   </dialog>
 

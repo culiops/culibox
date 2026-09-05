@@ -308,12 +308,16 @@ class TerminalTab {
     });
 
     // cwd: used to resolve relative clicked paths AND to root the file tree.
-    // Fetched async, so re-sync the tree once it arrives (if this is the focused session).
+    // Fetched async, so re-sync the tree once it arrives (if this is the focused
+    // session). The steer rail draws the same cwd, so it is repainted here too —
+    // without this a freshly opened session shows an empty cwd row in the rail
+    // until some later focus change happens to rebuild it.
     api("/api/sessions").then((list) => {
       const s = (list || []).find((x) => x.id === id);
       if (s && s.cwd) {
         this.cwd = s.cwd;
         if (typeof syncFocusedTree === "function") syncFocusedTree();
+        if (typeof renderSteerRail === "function") renderSteerRail();
       }
     }).catch(() => {});
 

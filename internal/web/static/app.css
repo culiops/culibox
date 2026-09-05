@@ -27,8 +27,8 @@
     #env-badge[hidden] { display: none; }
     /* --fg, not --muted: a muted label on a control that works reads as disabled,
        and these are the only way to reach the sidebar, the palette and settings. */
-    #sidebar-toggle, #settings-open, #palette-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
-    #sidebar-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
+    #sidebar-toggle, #steer-toggle, #settings-open, #palette-open { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); padding: 3px 9px; font-size: 14px; line-height: 1; cursor: pointer; flex: none; }
+    #sidebar-toggle:hover, #steer-toggle:hover, #settings-open:hover, #palette-open:hover { border-color: var(--accent); }
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
@@ -119,13 +119,75 @@
       padding: 4px 10px; font-size: 12px; cursor: pointer;
     }
     .layouts button.active { color: #fff; border-color: var(--accent); background: var(--sel); }
-    #layout { flex: 1; display: flex; min-height: 0; }
+    /* position: relative is what the steer rail's narrow-width overlay anchors
+       to (see .rail's breakpoint below). It changes nothing on its own: every
+       absolutely-positioned descendant in this stylesheet already has a nearer
+       positioned ancestor of its own. */
+    #layout { flex: 1; display: flex; min-height: 0; position: relative; }
     #sidebar {
       width: var(--sidebar-w); flex-shrink: 0; border-right: 1px solid var(--border);
       background: var(--panel); display: flex; flex-direction: column; min-height: 0;
       /* The panes below are sized from a percentage basis; without this a pane
          at its min-height would paint over the terminal grid instead of clipping. */
       overflow: hidden;
+    }
+
+    /* The steer rail: what ONE session is doing, beside that session. It is not
+       a second sidebar — the sidebar lists every session; this describes the one
+       in front of you.
+
+       Every section here is a field the daemon really returns. There is no cost
+       line because no session endpoint carries a cost, no history because the
+       activity is a single recomputed word with nothing behind it, and no live
+       tool feed because nothing streams one. The tool breakdown is a
+       retrospective scan of the transcript and says so where it is drawn. */
+    .rail {
+      width: 322px; flex: none; background: var(--panel); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; min-height: 0; overflow-y: auto;
+    }
+    /* The author display above beats the UA sheet's [hidden] { display: none }
+       at any specificity, so the hidden attribute needs this partner to do
+       anything at all. */
+    .rail[hidden] { display: none; }
+    .rsec { padding: 13px 14px; border-bottom: 1px solid var(--border); }
+    .rsec.grow { display: flex; flex-direction: column; min-height: 0; border-bottom: 0; }
+    .rttl {
+      font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
+      margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+    }
+    .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; padding: 3px 0; }
+    .kv .v { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
+    .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }
+    .attr { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 4px 0; }
+    /* One neutral kind badge for every kind. The dialog this replaces coloured
+       the skill badge with the reserved yellow, which is the token that means an
+       agent is waiting for a person; a tool's category is not that. */
+    .attr .kind { font-size: 9.5px; border: 1px solid var(--border); color: var(--muted); padding: 0 4px; flex: none; }
+    .attr .an { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attr .ac, .attr .ax { color: var(--muted); flex: none; font-variant-numeric: tabular-nums; }
+    .rail .peektxt {
+      font-size: 12px; color: var(--fg); line-height: 1.55; white-space: pre-wrap;
+      overflow-y: auto; min-height: 0; flex: 1 1 auto;
+    }
+    /* The rail's composer is a second instance of the sidebar's, not a shared
+       rule: the sidebar's is scoped to #sessions and unifying two components
+       that happen to agree today is how they stop agreeing quietly. */
+    .rail .rep { display: flex; gap: 7px; margin-top: 9px; flex: none; }
+    .rail .rep .fld { flex: 1; min-width: 0; }
+    .rail .note { color: var(--warn); font-size: 11px; margin-top: 7px; line-height: 1.5; }
+    /* Below this width a third fixed column squeezes the grid past useful, so
+       the rail stops being a column and becomes a panel over the panes. It does
+       NOT disappear: it is now the only place the tool breakdown is drawn, and a
+       panel that deletes a feature at a width is worse than one that covers a
+       pane until you close it again.
+
+       Absolute inside #layout rather than fixed to the viewport: the header is
+       sized in lh and has no literal height, so a viewport-fixed panel has no
+       correct `top` to anchor to and would either cover the header's own
+       controls or need a magic number that goes stale with the font size. */
+    @media (max-width: 1100px) {
+      .rail { position: absolute; top: 0; right: 0; bottom: 0; z-index: 5; max-width: 94vw; }
     }
 
     /* --- spawn button ---------------------------------------------------- */
@@ -234,15 +296,15 @@
       inherits: true;
       initial-value: 0px;
     }
-    /* Same geometry, now serving only the four dialogs below (#spawn-modal,
-       #ask-modal, #attr-modal, #analytics-modal) — they
-       carry box-="square" shear-="top", and their legend (.dlg-title) is
-       positioned exactly like .pane-head. All four share the body's 14px/1.5
+    /* Same geometry, now serving only the three dialogs below (#spawn-modal,
+       #ask-modal, #analytics-modal) — they carry box-="square" shear-="top",
+       and their legend (.dlg-title) is positioned exactly like .pane-head.
+       All three share the body's 14px/1.5
        font, so 1lh resolves identically, but the property is still declared
        per-element (typed custom properties resolve in their own font
        context) rather than assumed equal. The sidebar panes used to be in
        this list too; they left it once they stopped being shear-boxes. */
-    #spawn-modal, #ask-modal, #attr-modal, #analytics-modal {
+    #spawn-modal, #ask-modal, #analytics-modal {
       --pane-rule-y: calc(.5 * (1lh + var(--box-border-width)));
     }
     .pane-head {
@@ -509,7 +571,7 @@
        declaration wins outright and restores centring regardless of source
        order. #palette is deliberately excluded (see its own comment below):
        it keeps the plain border and the UA's native fixed positioning. */
-    #spawn-modal, #ask-modal, #attr-modal, #analytics-modal {
+    #spawn-modal, #ask-modal, #analytics-modal {
       border: none; position: fixed; inset: 0; margin: auto;
     }
     /* box.css's own inset (`padding: 1lh 1ch`, sheared by [shear-=top] to
@@ -628,7 +690,6 @@
     .dbd[hidden], .dft[hidden] { display: none; }
 
     #spawn-modal { width: 420px; }
-    #attr-modal { width: 460px; }
     #analytics-modal { width: 960px; max-width: 96vw; }
     #an-tabs { flex-wrap: wrap; }
 
@@ -702,18 +763,6 @@
     }
     #analytics-refresh { background: var(--bg); color: var(--muted); border: 1px solid var(--border); padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
     #analytics-refresh:hover { color: var(--fg); }
-    /* Attribution rows: tool name (+kind badge) · calls · ≈ctx. */
-    .attr-row { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 14px; align-items: center; padding: 4px 0; font-size: 12.5px; }
-    .attr-row .a-name { font-family: ui-monospace, Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .attr-row .a-badge { font-size: 9.5px; font-weight: 700; padding: 1px 5px; border: 1px solid var(--border); margin-left: 6px; vertical-align: 1px; }
-    .a-badge.mcp { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
-    .a-badge.skill { color: var(--warn-fg); border-color: color-mix(in srgb, var(--warn) 50%, var(--border)); }
-    .attr-row .a-calls, .attr-row .a-ctx { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
-    .attr-head { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-bottom: 2px; }
-    #attr-foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-    #attr-foot b { color: var(--fg); }
-    .attr-note { color: var(--muted); font-size: 11px; margin: 12px 0 0; line-height: 1.45; }
-    .attr-empty { color: var(--muted); font-size: 13px; }
     #ask-modal { width: 400px; }
     /* overflow-wrap because the link confirm puts a raw URL in here, and a long
        one offers no break opportunity. #toast-msg carries it for the same reason. */
@@ -1014,7 +1063,7 @@
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     /* Per-window context readout on the tab: muted, tabular so digits don't jitter. */
-    /* Context readout doubles as the trigger for the attribution dialog. */
+    /* Context readout doubles as the trigger for the session detail rail. */
     .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; background: none; border: none; cursor: pointer; padding: 0 2px; font-family: inherit; }
     .cell-bar .tab-usage:hover { color: var(--fg); text-decoration: underline; }
     /* Same --muted-on--sel failure as the palette above: the active tab sets
@@ -1123,7 +1172,7 @@
       #grid, #grid.cols-2, #grid.cols-3, #grid.cols-4 { grid-template-columns: 1fr; grid-template-rows: none; }
       #grid.cols-3 > .cell:nth-child(3) { grid-column: auto; }
       #palette { width: 96vw; margin-top: 4vh; }
-      #spawn-modal, #attr-modal, #analytics-modal { width: 94vw; }
+      #spawn-modal, #analytics-modal { width: 94vw; }
       /* The desktop heights are the design's frame sizes; on a phone the dialog
          is the screen and takes what there is. */
       #settings-modal, #settings-modal.tall { width: 94vw; height: auto; max-height: calc(100vh - 24px); }
@@ -1154,11 +1203,11 @@
       .menu .mi { min-height: var(--tap); display: flex; align-items: center; }
       /* The quick replies are the whole point of answering from a phone. */
       #sessions .qk .btn, .replystrip .btn { min-height: var(--tap); }
-      /* Both composers' text fields, on both surfaces. The reply field is the
-         headline control of the rail and of the pane strip, and at its desktop
-         size it lands around 29px — under the floor on the one device where
-         answering from the rail matters most. */
-      #sessions .rep .fld, .replystrip .fld { min-height: var(--tap); }
+      /* All three composers' text fields. The reply field is the headline
+         control of the sidebar, of the pane strip and of the steer rail, and at
+         its desktop size it lands around 29px — under the floor on the one
+         device where answering from a panel matters most. */
+      #sessions .rep .fld, .replystrip .fld, .rail .rep .fld { min-height: var(--tap); }
       /* The name is the row's primary action: it is what opens the session. Its
          box was only as tall as its 13px text, so the row was tall enough to
          tap and the control inside it was not. Height only — what is clickable
