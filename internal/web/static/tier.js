@@ -30,7 +30,7 @@ function tierBadge(session, boxRuntime) {
     // fact, identical for every session, so spending scarce sidebar width on it
     // just wraps the session name: it lives in the tooltip instead.
     return {
-      text: "boxed",
+      text: TIER_BOX,
       tone: "neutral",
       title:
         "Contained (" + tierRuntimeLabel(boxRuntime) + "): only this project directory is mounted. " +
@@ -38,7 +38,7 @@ function tierBadge(session, boxRuntime) {
     };
   }
   return {
-    text: "trusted-host",
+    text: TIER_HOST,
     tone: "danger",
     title:
       "NOT contained: this session runs on the host with your user's access. Use only for work that needs the host.",

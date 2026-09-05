@@ -51,7 +51,7 @@
          once did independently. */
       --rule: color-mix(in srgb, var(--muted) 70%, var(--panel));
       /* No --font-size / --line-height here. WebTUI's base.css declares them for
-         its own components, but the two files vendored (box.css, badge.css) read
+         its own components, but the files vendored (box.css, separator.css) read
          neither, and body sets 14px/1.5 directly — so a pair here was read by
          nothing while contradicting what actually renders. If a future component
          needs them, add them AND point body at them, or they will drift again. */

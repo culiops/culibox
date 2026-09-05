@@ -59,7 +59,7 @@ function iconFor(name, isDir, open) {
 //
 // Two characters per level, not three: this matches WebTUI's own marker-="tree"
 // convention (`content: "├ "` — no dash), not an invention of ours. Note this
-// repo vendors only webtui's box.css/badge.css, not typography.css, so the tree
+// repo vendors only webtui's box.css/separator.css, not typography.css, so the tree
 // itself is hand-rolled to the same convention rather than consuming that CSS.
 // At the sidebar's 280px default (200px minimum), every character given to the
 // connector is a character taken from the filename.

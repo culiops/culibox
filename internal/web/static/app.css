@@ -432,29 +432,14 @@
     }
     #sessions .sright { display: flex; align-items: center; gap: 8px; flex: none; margin-top: 2px; }
     #sessions .pct { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    /* The tier badge is a plain .bdg chip (primitives.css) — .bdg.box /
+       .bdg.host already carry the right colour and border per the canvas.
+       This rule only stops it wrapping. An uncontained session is a
+       containment danger, not an agent waiting on you — --warn-fg is
+       reserved for the latter — but the canvas draws the uncontained/host
+       tone in var(--warn), not var(--danger), so app.js adds "host" rather
+       than a bespoke danger class here. */
     #sessions .tier { white-space: nowrap; }
-    /* An uncontained session is a containment danger, not an agent waiting on
-       you — --warn-fg is reserved for the latter, so this reads with the same
-       --danger family the steer rail's own tier badge already uses for the
-       identical session (.bdg.dgr in primitives.css).
-       The fill goes through --badge-color, not `background`: that variable is
-       what both the body band AND the ::before/::after endcaps read (see
-       asBadge's comment), so it is the only thing that recolours the whole
-       shape instead of just the middle. The label, though, is NOT
-       --badge-text: .bdg's own `color: var(--muted)` (primitives.css) is
-       unlayered, same as this rule, and beats
-       badge.css's layered `color: var(--badge-text)` regardless of what
-       --badge-text resolves to — measured live, --badge-text here is
-       inert. `color` set directly, at this rule's higher specificity, is
-       the only property that actually reaches the rendered label; --danger
-       is a light pink, so it goes dark (--bg) to stay readable — measured
-       ~7.1:1, comfortably past AA. The border is a fourth, separate property
-       again (.bdg's own `border: 1px solid var(--border)`, grey): set
-       border-color here too, the same way the boxed badge's border already
-       matches its own fill, and the killing badge right below sets its own
-       border-color for the same reason. */
-    #sessions .tier-danger { --badge-color: var(--danger); color: var(--bg); border-color: var(--danger); font-weight: 600; }
-    #sessions .srow.killing .bdg { border-color: var(--danger); }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     /* Session summary: the row's third line, under the name and the meta. Muted and clipped to a

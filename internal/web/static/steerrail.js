@@ -76,15 +76,16 @@ function railMeta(s, usage, cwdText, nowMs, badge) {
   if (cwdText) rows.push({ k: "cwd", v: String(cwdText) });
   const st = startedText(s.created, nowMs);
   if (st) rows.push({ k: "started", v: st });
-  // tierBadge already decided the wording, the severity and the one case that
-  // shows nothing (an exited session). All this does is dress it: a danger tone
-  // takes the danger border, anything else takes .bdg's own neutral. An unknown
-  // or absent runtime therefore reads as trusted-host here exactly as it does
-  // in the sidebar, never as "no tier at all" — an absent badge on the surface
-  // you steer from reads as "nothing to worry about", which is the inversion
-  // this must not make.
+  // tierBadge already decided the wording and the severity; this only dresses
+  // it as the same flat .bdg.box / .bdg.host chip the sidebar draws for the
+  // identical session — a danger tone takes the host tier's warn colour (per
+  // the canvas — the host tier is NOT --danger pink), anything else takes the
+  // box tier's ok colour. An unknown or absent runtime therefore reads as host
+  // here exactly as it does in the sidebar, never as "no tier at all" — an
+  // absent badge on the surface you steer from reads as "nothing to worry
+  // about", which is the inversion this must not make.
   const tier = badge
-    ? { label: badge.text, cls: "bdg" + (badge.tone === "danger" ? " dgr" : ""), title: badge.title || "" }
+    ? { label: badge.text, cls: "bdg " + (badge.tone === "danger" ? "host" : "box"), title: badge.title || "" }
     : null;
   return { id: s.id, name: s.name || s.id, activity: s.activity || "", tier, rows };
 }
@@ -228,6 +229,7 @@ function renderSteerFacts(s) {
   if (meta.tier) {
     const b = document.createElement("span");
     b.className = meta.tier.cls;
+    b.style.textTransform = "none"; // .rttl is a small-caps label; "box"/"host" is not
     b.textContent = meta.tier.label;
     // The sentence that says what the tier actually means, the same one the
     // sidebar's badge carries.

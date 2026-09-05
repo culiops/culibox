@@ -28,9 +28,9 @@ test("no tier is preselected when containment is unavailable", () => {
   assert.equal(spawnRuntimeDefault({ runtime: "box" }, ""), "");
 });
 
-test("a boxed session reads as boxed, keeping the row narrow", () => {
+test("a boxed session reads as box, keeping the row narrow", () => {
   const b = tierBadge({ runtime: "box" }, "runc");
-  assert.equal(b.text, "boxed");
+  assert.equal(b.text, "box");
   assert.equal(b.tone, "neutral");
 });
 
@@ -38,13 +38,13 @@ test("a boxed session reads as boxed, keeping the row narrow", () => {
 // sidebar width and wrapping the session name.
 test("the isolation runtime is carried in the tooltip, not the label", () => {
   assert.match(tierBadge({ runtime: "box" }, "sysbox-runc").title, /sysbox/);
-  assert.equal(tierBadge({ runtime: "box" }, "sysbox-runc").text, "boxed");
+  assert.equal(tierBadge({ runtime: "box" }, "sysbox-runc").text, "box");
   assert.equal(tierRuntimeLabel("sysbox-runc"), "sysbox");
 });
 
-test("a host session reads as trusted-host in the danger tone", () => {
+test("a host session reads as host in the danger tone", () => {
   const b = tierBadge({ runtime: "host" }, "runc");
-  assert.equal(b.text, "trusted-host");
+  assert.equal(b.text, "host");
   assert.equal(b.tone, "danger");
 });
 
@@ -53,7 +53,7 @@ test("a host session reads as trusted-host in the danger tone", () => {
 // to be wrong in.
 test("an unknown or missing tier never claims containment", () => {
   for (const s of [{}, { runtime: "" }, { runtime: "vm" }, { runtime: undefined }]) {
-    assert.equal(tierBadge(s, "runc").text, "trusted-host", JSON.stringify(s));
+    assert.equal(tierBadge(s, "runc").text, "host", JSON.stringify(s));
   }
 });
 
@@ -150,7 +150,7 @@ test("a shell beside a boxed session joins that session's tier and directory", (
 
 // Beside an uncontained session in home, a boxed shell would be refused — and
 // the honest answer is to match the neighbour, whose tier the user already chose
-// deliberately and which the row badge still labels in red.
+// deliberately and which the row badge still labels host.
 test("a shell beside a trusted-host session is also trusted-host", () => {
   const p = shellSpawnPlan({ cwd: "/home/u", runtime: "host" });
   assert.deepEqual(p, { mode: "spawn", cwd: "/home/u", runtime: "host" });

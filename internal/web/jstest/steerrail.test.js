@@ -75,10 +75,10 @@ test("the rail shows a row only for a field that has a value", () => {
     { k: "cwd", v: "~/culiops-agent-box" },
     { k: "started", v: "3h 12m ago" },
   ]);
-  // A contained session takes .bdg's own neutral, matching tierBadge's neutral
-  // tone — the danger border is reserved for the tier that has none.
-  assert.strictEqual(m.tier.label, "boxed");
-  assert.strictEqual(m.tier.cls, "bdg");
+  // A contained session takes .bdg.box, matching tierBadge's neutral tone —
+  // the host colour is reserved for the tier that has none.
+  assert.strictEqual(m.tier.label, "box");
+  assert.strictEqual(m.tier.cls, "bdg box");
   assert.match(m.tier.title, /Contained \(runc\)/);
   assert.strictEqual(m.name, "review");
 });
@@ -93,19 +93,19 @@ test("no usage, no cwd, no created — the rail renders no rows, and invents non
 test("an uncontained session is drawn in tier.js's words, at tier.js's severity", () => {
   const s = { id: "a", runtime: "host" };
   const t = railMeta(s, null, "", 0, tierBadge(s, "runc")).tier;
-  assert.strictEqual(t.label, "trusted-host");
-  assert.strictEqual(t.cls, "bdg dgr"); // danger tone, not the peach the canvas drew
+  assert.strictEqual(t.label, "host");
+  assert.strictEqual(t.cls, "bdg host"); // danger tone reads as the canvas's warn-coloured host chip
   assert.match(t.title, /NOT contained/);
 });
 
-test("an unknown or absent runtime reads as trusted-host, never as no tier at all", () => {
+test("an unknown or absent runtime reads as host, never as no tier at all", () => {
   // The fail-loud fallback. A rail that draws nothing here would tell the
   // operator there is nothing to worry about, on the surface they steer from,
   // while the sidebar shouts danger about the same session.
   for (const s of [{ id: "a" }, { id: "b", runtime: "" }, { id: "c", runtime: "mystery" }]) {
     const t = railMeta(s, null, "", 0, tierBadge(s, "runc")).tier;
-    assert.strictEqual(t.label, "trusted-host", JSON.stringify(s));
-    assert.strictEqual(t.cls, "bdg dgr", JSON.stringify(s));
+    assert.strictEqual(t.label, "host", JSON.stringify(s));
+    assert.strictEqual(t.cls, "bdg host", JSON.stringify(s));
   }
 });
 

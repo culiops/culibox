@@ -310,35 +310,6 @@ function emptyLi(text) {
 // re-applied on every poll re-render (not just at click time).
 const killing = new Set();
 
-// asBadge gives one of the session-row badges WebTUI's shape. Recolour the
-// FILL through --badge-color, not `background` on the badge element itself:
-// badge.css paints the body band from --badge-color (a linear-gradient), but
-// the two 1ch end-caps are separate ::before/::after elements whose own
-// background-color also reads --badge-color directly — a rule that sets
-// `background` on the main element only ever reaches the body band, never
-// those pseudo-elements, so it repaints the middle and leaves the caps
-// exactly the grey (or whatever) they were. --badge-color reaches the body
-// AND both caps, because all three read the same variable.
-//
-// The LABEL is a different story: badge.css nominally reads --badge-text for
-// it, but .bdg's own `color: var(--muted)` (primitives.css) is unlayered and
-// always outranks that layered rule, so every badge here renders muted text
-// regardless of --badge-text — a badge that needs its own label colour has
-// to set `color` directly, at higher specificity than `.bdg`, same as
-// #sessions .tier-danger does below.
-//
-// Most badges map onto one of WebTUI's own `variant-` values, so their fill
-// comes from badge.css's own rules. The danger tier badge instead gets
-// --badge-color from #sessions .tier-danger (a plain class rule can set a
-// custom property just as well as an inline style), which is unlayered and
-// so wins over the variant this function also sets.
-function asBadge(el, { variant } = {}) {
-  el.setAttribute("is-", "badge");
-  el.setAttribute("cap-", "triangle");
-  if (variant) el.setAttribute("variant-", variant);
-  return el;
-}
-
 // openPeekId is the one expanded row. One at a time: the sidebar is 279px wide
 // and several open bodies turn the session list into a scroll.
 let openPeekId = null;
@@ -657,7 +628,6 @@ function renderSession(s) {
     const st = document.createElement("span");
     st.className = "bdg";
     st.textContent = "killing…";
-    asBadge(st, { variant: "foreground2" });
     sname.appendChild(st);
     return li;
   }
@@ -671,14 +641,13 @@ function renderSession(s) {
   const tier = tierBadge(s, boxRuntime);
   if (tier) {
     const tb = document.createElement("span");
-    tb.className = "bdg tier";
-    if (tier.tone === "danger") tb.classList.add("tier-danger");
+    // .bdg.box (var(--ok)) / .bdg.host (var(--warn)) are primitives.css's own
+    // flat chip colours — the danger tone reads as host, matching the canvas
+    // (the uncontained tier is drawn in warn, not the --warn-fg "needs you"
+    // colour, and not --danger).
+    tb.className = "bdg tier " + (tier.tone === "danger" ? "host" : "box");
     tb.textContent = tier.text;
     tb.title = tier.title;
-    // #sessions .tier-danger overrides --badge-color and color for the
-    // danger case (see the CSS); the variant here only supplies the neutral
-    // case's.
-    asBadge(tb, { variant: "background2" });
     sname.appendChild(tb);
   }
 
