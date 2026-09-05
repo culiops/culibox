@@ -123,11 +123,8 @@
         </div>
         <div id="options"></div>
         <div id="runtime-row" style="display:none">
-          <label for="runtime-select">Runtime</label>
-          <select id="runtime-select">
-            <option value="box">boxed (contained, recommended)</option>
-            <option value="host">trusted host (uncontained)</option>
-          </select>
+          <label>Runtime</label>
+          <div class="seg" id="runtime-seg" data-value="" role="group" aria-label="Runtime"></div>
           <div id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
         </div>
         <div>
@@ -135,7 +132,10 @@
           <select id="workspace"></select>
           <input id="cwd-custom" type="text" placeholder="/custom/path" autocomplete="off" style="display:none; margin-top:6px;">
         </div>
-        <button type="submit">Spawn session</button>
+        <div class="spawn-actions">
+          <button type="button" class="btn gh" data-close="spawn-modal">Cancel</button>
+          <button type="submit" class="btn pri">Spawn ⏎</button>
+        </div>
       </form>
     </div>
   </dialog>

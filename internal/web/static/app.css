@@ -785,6 +785,11 @@
       padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
     }
     #spawn button[type="submit"] { background: var(--accent); border-color: var(--accent); color: var(--bg); cursor: pointer; font-weight: 600; margin-top: 2px; }
+    /* Cancel sits beside Spawn rather than under it: the row overrides the
+       generic select/input/submit 100%-width rule above for just its two
+       buttons, sized to content like every other .btn. */
+    #spawn .spawn-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 2px; }
+    #spawn .spawn-actions button[type="submit"] { width: auto; margin-top: 0; }
     #options { display: grid; gap: 8px; }
     #options .opt { display: flex; align-items: center; gap: 8px; }
     #options .opt > label { flex: 1; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 13px; }

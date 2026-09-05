@@ -912,8 +912,10 @@ async function loadProfiles(retry = true) {
 function currentProfile() {
   return profiles.find((p) => p.name === $("agent").value);
 }
-// renderOptions builds a toggle per option the selected profile exposes
-// (checkbox for bool, select for enum), pre-set to the profile's default.
+// renderOptions builds a toggle per option the selected profile exposes:
+// checkbox for bool, a .seg for a <=4-choice enum (mirrors renderPfOptions —
+// seeing the alternatives beats saving the space a select would), a plain
+// select for anything wider. Pre-set to the profile's default.
 function renderOptions() {
   const p = currentProfile();
   const opts = (p && p.options) || [];
@@ -922,19 +924,27 @@ function renderOptions() {
     row.className = "opt";
     const lbl = document.createElement("label");
     lbl.textContent = o.label || o.key;
-    lbl.htmlFor = "opt-" + o.key;
     let ctrl;
     if (o.type === "bool") {
       ctrl = document.createElement("input");
       ctrl.type = "checkbox";
       ctrl.checked = o.value === true;
+      lbl.htmlFor = "opt-" + o.key;
     } else {
-      ctrl = document.createElement("select");
-      for (const c of o.choices || []) {
-        const co = document.createElement("option");
-        co.value = c; co.textContent = c;
-        if (c === o.value) co.selected = true;
-        ctrl.appendChild(co);
+      const choices = o.choices || [];
+      if (choices.length > 0 && choices.length <= 4) {
+        ctrl = document.createElement("div");
+        ctrl.className = "seg";
+        buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), o.value || "");
+      } else {
+        ctrl = document.createElement("select");
+        for (const c of choices) {
+          const co = document.createElement("option");
+          co.value = c; co.textContent = c;
+          if (c === o.value) co.selected = true;
+          ctrl.appendChild(co);
+        }
+        lbl.htmlFor = "opt-" + o.key;
       }
     }
     ctrl.id = "opt-" + o.key;
@@ -947,7 +957,9 @@ function renderOptions() {
 function getOptions() {
   const out = {};
   for (const ctrl of $("options").querySelectorAll("[data-key]")) {
-    out[ctrl.dataset.key] = ctrl.dataset.type === "bool" ? ctrl.checked : ctrl.value;
+    if (ctrl.dataset.type === "bool") out[ctrl.dataset.key] = ctrl.checked;
+    else if (ctrl.classList.contains("seg")) out[ctrl.dataset.key] = segValue(ctrl);
+    else out[ctrl.dataset.key] = ctrl.value;
   }
   return out;
 }
@@ -965,7 +977,7 @@ $("agent").addEventListener("change", () => {
 // is nothing to overwrite with), preserving the keep-previous behavior.
 function applyProfileCwd() {
   const p = currentProfile();
-  const rt = ($("runtime-select") && $("runtime-select").value) || "";
+  const rt = segValue($("runtime-seg"));
   const sel = workspaceSelectionForCwd(workspacesCache, rt, p && p.default_cwd);
   if (!sel) return;
   const ws = $("workspace");
@@ -1321,7 +1333,7 @@ async function loadWorkspaces() {
 function renderWorkspaceOptions() {
   const sel = $("workspace");
   if (!sel) return;
-  const rt = ($("runtime-select") && $("runtime-select").value) || "";
+  const rt = segValue($("runtime-seg"));
   const prev = sel.value;
   const opts = workspaceOptions(workspacesCache, rt).map((o) => {
     const el = document.createElement("option");
@@ -1410,17 +1422,21 @@ async function spawnSession(req, opts) {
 // value comes from the profile each time, never from the last spawn, and a
 // profile that declares nothing still resolves to contained.
 function syncRuntimeField() {
-  const row = $("runtime-row"), sel = $("runtime-select");
-  if (!row || !sel) return;
+  const row = $("runtime-row"), seg = $("runtime-seg");
+  if (!row || !seg) return;
   row.style.display = boxRuntime ? "" : "none";
-  sel.value = spawnRuntimeDefault(currentProfile(), boxRuntime);
+  const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
+  buildSeg(seg, [
+    { value: "", label: "box" },
+    { value: "host", label: "host", danger: true },
+  ], value, updateRuntimeWarning);
   updateRuntimeWarning(); // also re-renders the workspace list for this tier
 }
 
 function updateRuntimeWarning() {
-  const sel = $("runtime-select"), warn = $("runtime-warn");
-  if (!sel || !warn) return;
-  warn.hidden = sel.value !== "host";
+  const seg = $("runtime-seg"), warn = $("runtime-warn");
+  if (!seg || !warn) return;
+  warn.hidden = segValue(seg) !== "host";
   renderWorkspaceOptions(); // selectable directories depend on the tier
 }
 
@@ -1454,16 +1470,17 @@ function openSpawnDialog(preselectAgent) {
 }
 
 function initSpawnControl() {
-  const rt = $("runtime-select");
-  if (rt) rt.onchange = updateRuntimeWarning;
+  // The .seg's own buildSeg onChange (wired in syncRuntimeField) already calls
+  // updateRuntimeWarning on every click — a .seg is buttons, not a form
+  // control, so there is no native "change" event to hook here.
   $("spawn-go").onclick = () => openSpawnDialog();
 }
 
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const req = { agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() };
-  const rt = $("runtime-select");
-  if (rt && rt.value) req.runtime = rt.value;
+  const rt = segValue($("runtime-seg"));
+  if (rt) req.runtime = rt;
   // Close first: a fixed-position toast renders *beneath* a modal dialog's
   // backdrop, so an Undo offered while the dialog is still up is unreachable.
   closeDialog("spawn-modal");
