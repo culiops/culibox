@@ -977,6 +977,10 @@
     #pal-list .pal-head {
       padding: 10px 1.28ch 4px; font-size: 10px; color: var(--muted);
       text-transform: uppercase; letter-spacing: .4px; cursor: default;
+      /* Same transparent 3px left border the rows below carry (see .pal-row),
+         so a heading's text lines up with the row labels under it instead of
+         sitting ~3px further left. */
+      border-left: 3px solid transparent;
     }
     #pal-list .pal-head:first-child { padding-top: 4px; }
     #pal-list li.pal-row {
@@ -991,6 +995,15 @@
     /* --muted on --sel measures 3.99 (fails AA) — the selected row is the one
        row a user is actually reading. --fg on --sel measures 6.14. */
     #pal-list li.pal-row.sel .pal-hint { color: var(--fg); }
+    /* Leading per-row glyph (D4): a session's activity dot, a file's ▸, or a
+       command's >. Fixed width regardless of which of the three renders, so
+       every row's label starts at the same x — a dot (a nested .dot span) and
+       a text glyph do not occupy the same intrinsic width otherwise. */
+    #pal-list .pal-glyph {
+      flex: none; width: 1.6ch; display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 12px; line-height: 1;
+    }
+    #pal-list li.pal-row.sel .pal-glyph { color: var(--fg); }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }

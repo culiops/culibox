@@ -94,8 +94,13 @@ function paletteSessions(mac) {
   return lastSessions.map((s, i) => {
     const name = s.name || s.id;
     const jumpHint = i < 9 ? (mac ? "⌥" + (i + 1) : "Alt+" + (i + 1)) : "";
+    // Reuses the same activityClass() the sidebar's own status dot is built
+    // from (activity.js), so a session row here and its sidebar row always
+    // agree on colour/label for the same state.
+    const act = activityClass(s.activity);
     return {
       kind: "session", label: name, hint: jumpHint || (s.cwd ? shortPath(s.cwd) : ""),
+      dotCls: act.cls, dotTitle: act.title,
       run: () => openTerminal(s.id, name),
     };
   });
@@ -257,9 +262,35 @@ function palGroup(items) {
   return PAL_SECTIONS.flatMap((s) => buckets[s].map((it) => ({ it, section: s })));
 }
 
+// palGlyph builds the leading per-row marker (mockup D4): a session's own
+// activity dot (the exact <span class="dot ..."> the sidebar renders, built
+// from the same activityClass() classes — paletteSessions already attached
+// dotCls/dotTitle for this), a file's ▸, or a command's >. The > here is a
+// separate, decorative glyph from the ">" the user can TYPE into #pal-input
+// to switch to commands-only filtering (see palRefresh's `raw.charAt(0) ===
+// ">"` check) — one lives in the search field, this one in a COMMANDS row, so
+// neither is "the same >" doing two jobs.
+function palGlyph(it) {
+  const g = document.createElement("span");
+  g.className = "pal-glyph";
+  g.setAttribute("aria-hidden", "true"); // decorative; the row's own label/hint carry the meaning
+  if (it.kind === "session") {
+    const dot = document.createElement("span");
+    dot.className = it.dotCls || "dot unknown";
+    if (it.dotTitle) dot.title = it.dotTitle; // mouse-hover only; the glyph column itself is aria-hidden
+    g.append(dot);
+  } else if (it.kind === "file") {
+    g.textContent = "▸";
+  } else {
+    g.textContent = ">";
+  }
+  return g;
+}
+
 function palBuildRow(it, idx, selected) {
   const li = document.createElement("li");
   li.className = "pal-row" + (selected ? " sel" : "");
+  li.append(palGlyph(it));
   const label = document.createElement("span");
   label.className = "pal-label";
   label.textContent = it.label;
