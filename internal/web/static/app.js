@@ -103,6 +103,10 @@ function toggleSidebar() {
 }
 $("sidebar-toggle").onclick = toggleSidebar;
 
+// Live count of open dialogs, for shortcutsBlocked (shell.js): the same source
+// shouldRefocusTerminal already reads from.
+const dialogsOpen = () => document.querySelectorAll("dialog[open]").length;
+
 // Per-pane collapse. The state is two independent booleans and both collapsed
 // at once is legal — you get two header bars and an empty rail.
 //
@@ -1711,11 +1715,7 @@ setInterval(async () => {
 document.addEventListener("keydown", (e) => {
   if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
   if (e.code !== "Backquote") return; // .code is layout/shift independent
-  // Don't steal the combo from a real text field (session name, inline rename),
-  // but xterm's own focus target IS a textarea, so exempt that one.
-  const ae = document.activeElement;
-  if (ae && (ae.tagName === "INPUT" ||
-      (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   e.preventDefault();
   e.stopPropagation();
   spawnShellIn(focusedCell);
@@ -1726,6 +1726,7 @@ document.addEventListener("keydown", (e) => {
 // sees the combo; preventDefault stops the browser's own page zoom.
 document.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   let delta = null, doReset = false;
   if (e.key === "=" || e.key === "+") delta = +fontPrefs.STEP;
   else if (e.key === "-") delta = -fontPrefs.STEP; // not "_": Ctrl+_ is readline undo in terminals
@@ -1743,9 +1744,7 @@ document.addEventListener("keydown", (e) => {
 const SIDEBAR_SHORTCUT_MAC =
   /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
 document.addEventListener("keydown", (e) => {
-  const ae = document.activeElement;
-  if (ae && (ae.tagName === "INPUT" ||
-      (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   const mod = e.metaKey || e.ctrlKey;
   if (!mod) return;
   const code = e.code;
@@ -1783,9 +1782,7 @@ document.addEventListener("keydown", (e) => {
 // Linux/Windows, where Alt+digit also switches tabs.
 const JUMP_MOD = (e) => e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey;
 document.addEventListener("keydown", (e) => {
-  const ae = document.activeElement;
-  if (ae && (ae.tagName === "INPUT" ||
-      (ae.tagName === "TEXTAREA" && !ae.classList.contains("xterm-helper-textarea")))) return;
+  if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   if (!JUMP_MOD(e)) return;
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return;
