@@ -37,6 +37,16 @@
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
+    /* The mobile bottom nav is invisible above the mobile breakpoint; the 700px
+       block below turns it on. It is the ONLY screen switcher on a phone. */
+    #mobile-nav { display: none; }
+    /* Placeholder only — real mobile-nav styling (icon size, active state, the
+       pip badge) belongs to the @media (max-width:700px) block a later task
+       adds. This exists solely so classnames.test.js (every class used has
+       SOME stylesheet definition) does not fail while the markup ships ahead
+       of that CSS; #mobile-nav stays display:none until then, so nothing here
+       is ever visible in this task's state. */
+    #mobile-nav .mn-glyph, #mobile-nav .mn-lbl, #mobile-nav .mn-pip { display: inline; }
     /* The icon rail. It is not a second sidebar: it is what the sidebar
        BECOMES when it is hidden, so the shell keeps one column of "which
        session needs me" instead of an empty edge. Driven by the same class the

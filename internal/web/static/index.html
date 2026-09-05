@@ -17,6 +17,7 @@
   <script>/* apply persisted sidebar split before first paint (no flash) */try{var _sp=Number(localStorage.getItem('agent-box:sidebarSplit'));if(isFinite(_sp)&&_sp>0)document.documentElement.style.setProperty('--sidebar-split',Math.min(85,Math.max(15,_sp))+'%');}catch(e){}</script>
   <script>/* apply persisted sidebar width before first paint (no flash) */try{var _sw=Number(localStorage.getItem('agent-box:sidebarWidth'));if(isFinite(_sw)&&_sw>0)document.documentElement.style.setProperty('--sidebar-w',Math.min(560,Math.max(200,_sw))+'px');}catch(e){}</script>
   <script>/* apply persisted pane collapse before first paint (no flash) — mirrors loadCollapsed() in panes.js by hand, since this runs before that file loads; keep the two parses in step */try{var _pc=JSON.parse(localStorage.getItem('agent-box:panesCollapsed')||'{}')||{};if(_pc.sessions)document.documentElement.classList.add('sessions-collapsed');if(_pc.files)document.documentElement.classList.add('files-collapsed');}catch(e){}</script>
+  <script>/* apply persisted mobile screen before first paint (no flash) — mirrors loadScreen() in mobileshell.js by hand; keep the two in step */try{if(window.innerWidth<=700){var _ms=localStorage.getItem('agent-box:mobileScreen');if(['sessions','terminal','files'].indexOf(_ms)<0)_ms='sessions';document.documentElement.classList.add('mobile-screen-'+_ms);}}catch(e){}</script>
 </head>
 <body>
   <div id="env-strip" hidden></div>
@@ -96,6 +97,18 @@
     <span id="hint-text"></span>
   </div>
 
+  <nav id="mobile-nav" aria-label="Screens">
+    <button type="button" data-screen="sessions" aria-label="Sessions">
+      <span class="mn-glyph" aria-hidden="true">&#9776;</span><span class="mn-lbl">Sessions</span>
+      <span class="mn-pip" hidden></span>
+    </button>
+    <button type="button" data-screen="terminal" aria-label="Terminal">
+      <span class="mn-glyph" aria-hidden="true">&#9646;</span><span class="mn-lbl">Terminal</span>
+    </button>
+    <button type="button" data-screen="files" aria-label="Files">
+      <span class="mn-glyph" aria-hidden="true">&#9707;</span><span class="mn-lbl">Files</span>
+    </button>
+  </nav>
 
   <div id="toast">
     <span id="toast-msg"></span>
@@ -410,6 +423,7 @@
   <script src="/profileform.js"></script>
   <script src="/steerrail.js"></script>
   <script src="/envrows.js"></script>
+  <script src="/mobileshell.js"></script>
   <script src="/palette.js"></script>
   <script src="/app.js"></script>
 </body>

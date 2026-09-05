@@ -203,6 +203,12 @@ function renderCollapsedSummaries(state) {
     path.textContent = f.text;
     path.hidden = !(st.files && f.text);
   }
+  // The mobile nav's Sessions pip tracks the same waiting count as the
+  // collapsed sidebar's pip, refreshed on the same call rather than a
+  // separate poll. renderMobileNav is a function declaration further down
+  // this file, hoisted like waitingCount() above; it no-ops safely before
+  // #mobile-nav exists in the DOM or on desktop (where it stays hidden).
+  renderMobileNav();
 }
 
 function togglePane(kind) {
@@ -218,6 +224,54 @@ $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
 // near initFileTree() — see the comment there. Assigning these two onclick
 // handlers is safe here: it only creates closures, it does not call
 // togglePane (and therefore does not touch lastSessions) until a real click.
+
+// --- mobile shell -----------------------------------------------------------
+// At <=700px the app is one screen at a time (Sessions / Terminal / Files),
+// switched by #mobile-nav. Desktop is untouched: the class does nothing above
+// the 700px breakpoint because every rule keyed off it lives inside that query.
+//
+// Defining this block here (rather than calling initMobileShell() here) is
+// safe for the same reason applyCollapsed's boot-sequence comment below gives
+// for itself: renderMobileNav() reads waitingCount(), which reads lastSessions
+// — a `let` not yet initialized this early in the script. Only the CALL to
+// initMobileShell() has to wait; the function declarations can live anywhere.
+let _mobileScreen = loadScreen((() => { try { return localStorage.getItem(MOBILESHELL_KEY); } catch (_) { return null; } })());
+
+function currentMobileScreen() { return _mobileScreen; }
+
+function setMobileScreen(screen) {
+  _mobileScreen = loadScreen(screen);
+  const root = document.documentElement;
+  for (const s of MOBILE_SCREENS) root.classList.toggle("mobile-screen-" + s, s === _mobileScreen);
+  try { localStorage.setItem(MOBILESHELL_KEY, saveScreen(_mobileScreen)); } catch (_) {}
+  renderMobileNav();
+}
+
+// The pip reuses waitingCount() — the SAME count the collapsed Sessions bar's
+// pip uses (see renderCollapsedSummaries) — so the two can never drift and
+// there is no second poll.
+function renderMobileNav() {
+  const nav = document.getElementById("mobile-nav");
+  if (!nav) return;
+  const model = navModel(_mobileScreen, waitingCount());
+  for (const item of model) {
+    const btn = nav.querySelector('[data-screen="' + item.screen + '"]');
+    if (!btn) continue;
+    btn.classList.toggle("on", item.active);
+    btn.setAttribute("aria-current", item.active ? "page" : "false");
+    const pip = btn.querySelector(".mn-pip");
+    if (pip) { pip.hidden = item.pip <= 0; pip.textContent = item.pip > 0 ? String(item.pip) : ""; }
+  }
+}
+
+function initMobileShell() {
+  const nav = document.getElementById("mobile-nav");
+  if (nav) nav.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-screen]");
+    if (btn) setMobileScreen(btn.dataset.screen);
+  });
+  setMobileScreen(_mobileScreen); // applies class + paints nav on boot
+}
 
 // Shortcut hint: the right-hand half of the permanent #hint status bar
 // (mockup D1 — no dismiss; a status bar you can't turn off, unlike the old
@@ -2224,6 +2278,11 @@ loadOptionDefs().then(newProfile);
 })();
 initFileTree();
 initUpload();
+// initMobileShell() lives down here, not up near where it's defined, for the
+// same reason applyCollapsed does above: renderMobileNav() reads
+// waitingCount(), which reads lastSessions — safe to touch only once the DOM
+// is up and the first session poll (restoreBoot, just above) has been wired.
+initMobileShell();
 
 // Env signal: show a colored DEV/PROD badge + top strip + tab title, so the
 // active environment is unmistakable. Config-driven via /api/meta; empty label
