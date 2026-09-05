@@ -229,7 +229,12 @@ class Cell {
       b.onclick = () => this.activate(t);
       const st = document.createElement("span");
       st.className = "tab-st";
-      st.textContent = t.status();
+      // The healthy steady state ("connected") is the common case and carries no
+      // information beyond "this tab works" — the mockup (D1) shows just the name
+      // + context%, so suppress that one word. Every other status ("connecting…",
+      // "reconnecting…", "error", "taken over", "ended", …) is a real signal and
+      // still renders.
+      st.textContent = t.status() === "connected" ? "" : t.status();
       const x = document.createElement("button");
       x.className = "tab-x"; x.textContent = "×"; x.title = "Close tab";
       x.onclick = (e) => { e.stopPropagation(); this.closeTab(t); };
