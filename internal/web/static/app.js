@@ -1317,7 +1317,7 @@ async function deleteProfile(name) {
   // used to delete on the first click.
   const ok = await askConfirm({
     title: "Delete profile",
-    body: 'Delete the profile "' + name + '"? This cannot be undone.',
+    body: 'Delete the profile "' + name + '"? Running sessions are unaffected. The profile\'s saved workspace default and environment allowlist will be lost. This cannot be undone.',
     confirmLabel: "Delete",
     danger: true,
   });
