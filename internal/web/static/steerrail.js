@@ -61,8 +61,13 @@ function startedText(created, nowMs) {
 
 // railMeta: the header and the four-row block. cwdText is passed in already
 // shortened, the way sessionMeta takes its own strings, so this file needs no
-// opinion about what home is.
-function railMeta(s, usage, cwdText, nowMs) {
+// opinion about what home is — and `badge` is tierBadge()'s verdict, passed in
+// for the same reason: the containment tier is a fail-loud SECURITY signal with
+// exactly one owner (tier.js), and a second derivation here is how the sidebar
+// and this panel would come to disagree about whether a session is contained.
+// Passed as an argument rather than read as a global so this file stays pure
+// and node --test can still require it.
+function railMeta(s, usage, cwdText, nowMs, badge) {
   if (!s) return null;
   const u = usage || {};
   const rows = [];
@@ -71,12 +76,16 @@ function railMeta(s, usage, cwdText, nowMs) {
   if (cwdText) rows.push({ k: "cwd", v: String(cwdText) });
   const st = startedText(s.created, nowMs);
   if (st) rows.push({ k: "started", v: st });
-  // Only the two tiers the daemon actually reports. An omitted runtime is not
-  // "box" — a badge claiming containment that was never claimed by the server
-  // is the one lie this panel must not tell.
-  const tier = s.runtime === "host" ? { label: "host", cls: "bdg host" }
-    : s.runtime === "box" ? { label: "box", cls: "bdg box" }
-      : null;
+  // tierBadge already decided the wording, the severity and the one case that
+  // shows nothing (an exited session). All this does is dress it: a danger tone
+  // takes the danger border, anything else takes .bdg's own neutral. An unknown
+  // or absent runtime therefore reads as trusted-host here exactly as it does
+  // in the sidebar, never as "no tier at all" — an absent badge on the surface
+  // you steer from reads as "nothing to worry about", which is the inversion
+  // this must not make.
+  const tier = badge
+    ? { label: badge.text, cls: "bdg" + (badge.tone === "danger" ? " dgr" : ""), title: badge.title || "" }
+    : null;
   return { id: s.id, name: s.name || s.id, activity: s.activity || "", tier, rows };
 }
 
@@ -192,9 +201,11 @@ function renderSteerFacts(s) {
   if (!head || !ctx) return;
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
-  const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now());
+  const badge = tierBadge(s, boxRuntime);
+  const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge);
   const f = ctxFill(usage);
-  const key = [s.id, meta.name, meta.activity, meta.tier ? meta.tier.label : "",
+  const key = [s.id, meta.name, meta.activity,
+    meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
     meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0].join("|");
   if (key === steerFactsKey) return;
   steerFactsKey = key;
@@ -218,6 +229,9 @@ function renderSteerFacts(s) {
     const b = document.createElement("span");
     b.className = meta.tier.cls;
     b.textContent = meta.tier.label;
+    // The sentence that says what the tier actually means, the same one the
+    // sidebar's badge carries.
+    if (meta.tier.title) b.title = meta.tier.title;
     hrow.appendChild(b);
   }
   head.replaceChildren(hrow, ...meta.rows.map((r) => kvRow(r.k, r.v)));
@@ -278,6 +292,16 @@ function renderAttrSection(s, attr) {
   const el = document.getElementById("steer-attr");
   if (!el) return;
   const title = railTitle("Context by tool");
+  // Only a claude session has a transcript to scan. Offering the button on a
+  // shell would put a control here whose only possible answer contradicts the
+  // section directly above it, which already says there is no context to report.
+  if (!s.claude) {
+    const p = document.createElement("p");
+    p.className = "tiny mut";
+    p.textContent = "Not a Claude session — no tool breakdown.";
+    el.replaceChildren(title, p);
+    return;
+  }
   const scan = document.createElement("button");
   scan.type = "button";
   scan.className = "btn";
@@ -331,7 +355,9 @@ function renderAttrSection(s, attr) {
 
 async function scanAttribution(id) {
   const s = (lastSessions || []).find((x) => x.id === id);
-  if (!s) return;
+  // Same gate as the button: a non-claude session has no transcript, so the
+  // request would be spent to be told what the section already says.
+  if (!s || !s.claude) return;
   renderAttrSection(s, "loading");
   let attr = null;
   try { attr = await api("/api/sessions/" + encodeURIComponent(id) + "/attribution"); } catch (_) { attr = null; }
@@ -381,6 +407,17 @@ function renderMsgSection(s) {
   // The id the poll's repaint checks before it re-gates these controls.
   el.dataset.sid = s.id;
 
+  // Restore an in-progress reply across a rebuild. The poll never rebuilds this
+  // composer, but a focus event does — and clicking the ALREADY-active tab of
+  // the focused session still runs Cell.activate, so "type a reply, click the
+  // usage chip, lose the reply" was a reachable sequence. replyDraft is the
+  // sidebar's existing per-session draft, reused rather than duplicated: one
+  // unsent reply per session, wherever it was typed. Like the sidebar's, this
+  // restores the TEXT only and never tries to reconstruct focus or the caret —
+  // see replyDraft's declaration for the measured reason.
+  if (typeof replyDraft !== "undefined" && replyDraft && replyDraft.id === s.id) input.value = replyDraft.text;
+  input.oninput = () => { replyDraft = { id: s.id, text: input.value }; };
+
   // `cur` is the session as the latest poll describes it. Without it the gate
   // would read the object captured when this composer was built, and a session
   // that stopped working three seconds ago would keep a closed reply box.
@@ -419,7 +456,12 @@ function renderMsgSection(s) {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: input.value }),
       });
-      if (res.status === 204) { input.value = ""; showToast("Sent"); return; }
+      if (res.status === 204) {
+        input.value = "";
+        if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
+        showToast("Sent");
+        return;
+      }
       // The same four statuses the sidebar's composer maps, with the same
       // meanings. Carried by the toast alone: the finally below re-runs the
       // gate, and the gate owns this note's text — anything written here would

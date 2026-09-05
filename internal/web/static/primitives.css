@@ -44,6 +44,10 @@
            color: var(--muted); line-height: 16px; white-space: nowrap; }
     .bdg.box { color: var(--ok); border-color: var(--ok); }
     .bdg.host { color: var(--warn); border-color: var(--warn); }
+    /* The tier badge on a session panel takes its severity from tierBadge()'s
+       tone, which is the one owner of that verdict: danger for an uncontained
+       session, .bdg's own neutral for a contained one. Named like .btn.dgr. */
+    .bdg.dgr { color: var(--danger); border-color: var(--danger); }
     .bdg.env { color: var(--accent); border-color: var(--accent); font-weight: 700; }
     .bdg.env.prod { color: var(--danger); border-color: var(--danger); }
     /* Layout atoms the design uses everywhere. .grow is the flex spacer; the

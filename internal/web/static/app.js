@@ -1800,7 +1800,12 @@ applyCollapsed(readCollapsed());
 // it is deliberately NOT a pre-paint <head> script: the rail is a right-hand
 // panel, so arriving a frame late shifts nothing, and the four hand-mirrored
 // parses already in <head> are enough to keep in step.
-try { if (localStorage.getItem(STEER_KEY) === "1") setSteerOpen(true); } catch (_) {}
+let steerRestore = false;
+try { steerRestore = localStorage.getItem(STEER_KEY) === "1"; } catch (_) {}
+// Outside the catch on purpose: the try is there for a storage backend that
+// throws, and opening the rail paints it. A rendering failure swallowed here
+// would present as "the rail just doesn't restore", with nothing in the console.
+if (steerRestore) setSteerOpen(true);
 initSpawnControl();
 initPalette();
 loadProfiles();

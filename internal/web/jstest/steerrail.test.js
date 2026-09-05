@@ -5,6 +5,11 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { railItems, railMeta, startedText, ctxFill } = require("../static/steerrail.js");
+// The real tierBadge, not a hand-written stand-in: the point of the change these
+// tests cover is that the rail consumes tier.js's verdict rather than deriving a
+// second one, so a fixture that agreed with the rail but not with tier.js would
+// pass while the two surfaces disagreed on screen.
+const { tierBadge } = require("../static/tier.js");
 
 test("the toggle leads and the add trails, even with no sessions", () => {
   const items = railItems([], {});
@@ -61,32 +66,57 @@ test("an absent list is empty, never a throw", () => {
 // row it cannot fill is a row it does not draw.
 
 test("the rail shows a row only for a field that has a value", () => {
-  const m = railMeta({ id: "a", name: "review", activity: "working", runtime: "box", created: "2026-09-05T10:00:00Z" },
-    { model: "opus-5", effort: "high" }, "~/culiops-agent-box", Date.parse("2026-09-05T13:12:00Z"));
+  const s = { id: "a", name: "review", activity: "working", runtime: "box", created: "2026-09-05T10:00:00Z" };
+  const m = railMeta(s, { model: "opus-5", effort: "high" }, "~/culiops-agent-box",
+    Date.parse("2026-09-05T13:12:00Z"), tierBadge(s, "runc"));
   assert.deepStrictEqual(m.rows, [
     { k: "model", v: "opus-5" },
     { k: "effort", v: "high" },
     { k: "cwd", v: "~/culiops-agent-box" },
     { k: "started", v: "3h 12m ago" },
   ]);
-  assert.deepStrictEqual(m.tier, { label: "box", cls: "bdg box" });
+  // A contained session takes .bdg's own neutral, matching tierBadge's neutral
+  // tone — the danger border is reserved for the tier that has none.
+  assert.strictEqual(m.tier.label, "boxed");
+  assert.strictEqual(m.tier.cls, "bdg");
+  assert.match(m.tier.title, /Contained \(runc\)/);
   assert.strictEqual(m.name, "review");
 });
 
 test("no usage, no cwd, no created — the rail renders no rows, and invents none", () => {
-  const m = railMeta({ id: "a", activity: "done" }, null, "", 0);
+  const m = railMeta({ id: "a", activity: "done" }, null, "", 0, null);
   assert.deepStrictEqual(m.rows, []);
   assert.strictEqual(m.name, "a");
-  assert.strictEqual(m.tier, null); // an absent runtime is not "box"
+  assert.strictEqual(m.tier, null); // no badge from the caller, no badge drawn
 });
 
-test("host is drawn as host", () => {
-  assert.deepStrictEqual(railMeta({ id: "a", runtime: "host" }, null, "", 0).tier,
-    { label: "host", cls: "bdg host" });
+test("an uncontained session is drawn in tier.js's words, at tier.js's severity", () => {
+  const s = { id: "a", runtime: "host" };
+  const t = railMeta(s, null, "", 0, tierBadge(s, "runc")).tier;
+  assert.strictEqual(t.label, "trusted-host");
+  assert.strictEqual(t.cls, "bdg dgr"); // danger tone, not the peach the canvas drew
+  assert.match(t.title, /NOT contained/);
+});
+
+test("an unknown or absent runtime reads as trusted-host, never as no tier at all", () => {
+  // The fail-loud fallback. A rail that draws nothing here would tell the
+  // operator there is nothing to worry about, on the surface they steer from,
+  // while the sidebar shouts danger about the same session.
+  for (const s of [{ id: "a" }, { id: "b", runtime: "" }, { id: "c", runtime: "mystery" }]) {
+    const t = railMeta(s, null, "", 0, tierBadge(s, "runc")).tier;
+    assert.strictEqual(t.label, "trusted-host", JSON.stringify(s));
+    assert.strictEqual(t.cls, "bdg dgr", JSON.stringify(s));
+  }
+});
+
+test("an exited session shows no tier row: a dead session's containment is not actionable", () => {
+  const s = { id: "a", runtime: "host", exited: true };
+  assert.strictEqual(tierBadge(s, "runc"), null); // tier.js's decision...
+  assert.strictEqual(railMeta(s, null, "", 0, tierBadge(s, "runc")).tier, null); // ...carried through
 });
 
 test("an absent session is null, never a throw", () => {
-  assert.strictEqual(railMeta(null, null, "", 0), null);
+  assert.strictEqual(railMeta(null, null, "", 0, null), null);
 });
 
 test("started is relative, and degrades rather than lying", () => {
