@@ -247,8 +247,7 @@ function hintShortcuts() {
 
 // updateStatusLine keeps the bottom bar describing the current state. Everything
 // it shows duplicates something already on screen — the env badge, the sessions
-// count, the focused pane — which is why the bar stays dismissible: dismissing
-// it loses no unique information.
+// count, the focused pane. The bar is now a permanent status bar with no dismiss.
 function updateStatusLine() {
   const env = $("status-env");
   if (env && window.__envLabel) env.textContent = window.__envLabel.toUpperCase();

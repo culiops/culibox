@@ -22,7 +22,7 @@ const STATIC = path.join(__dirname, "..", "static");
 const CSS_FILES = [
   "tokens.css", "primitives.css", "app.css",
   "xterm/xterm.css", "vendor/highlight-theme.css", "vendor/codemirror.min.css",
-  "vendor/webtui/box.css", "vendor/webtui/badge.css", "vendor/webtui/separator.css",
+  "vendor/webtui/box.css", "vendor/webtui/separator.css",
 ];
 
 // Classes carried by an element purely so JS can find it again — never styled,

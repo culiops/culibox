@@ -1308,8 +1308,7 @@
       header .dot { display: none; }
       header h1 { font-size: 14px; }
       /* On a device with no keyboard the #hint shortcut text is noise. Hide it
-         so the status fields (env · sessions · cwd) stay a compact line; the
-         bar is still dismissable via ×. */
+         so the status fields (env · sessions · cwd) stay a compact line. */
       #hint-text { display: none; }
       #palette-open .pal-long { display: none; }
       #palette-open .pal-short { display: inline; font-size: 15px; }
