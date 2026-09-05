@@ -11,6 +11,14 @@ const { railItems, railMeta, startedText, ctxFill } = require("../static/steerra
 // pass while the two surfaces disagreed on screen.
 const { tierBadge } = require("../static/tier.js");
 
+// startedText prepends a clock read in the machine's own local time (same as
+// the rest of the app), so the expected clock half is computed the same way
+// here rather than hard-coded — that keeps the test passing under any TZ.
+function hhmm(iso) {
+  const d = new Date(Date.parse(iso));
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
 test("the toggle leads and the add trails, even with no sessions", () => {
   const items = railItems([], {});
   assert.deepStrictEqual(items.map((i) => i.kind), ["toggle", "new"]);
@@ -73,7 +81,7 @@ test("the rail shows a row only for a field that has a value", () => {
     { k: "model", v: "opus-5" },
     { k: "effort", v: "high" },
     { k: "cwd", v: "~/culiops-agent-box" },
-    { k: "started", v: "3h 12m ago" },
+    { k: "started", v: hhmm("2026-09-05T10:00:00Z") + " · 3h 12m ago" },
   ]);
   // A contained session takes .bdg.box, matching tierBadge's neutral tone —
   // the host colour is reserved for the tier that has none.
@@ -120,14 +128,28 @@ test("an absent session is null, never a throw", () => {
 });
 
 test("started is relative, and degrades rather than lying", () => {
-  const t0 = Date.parse("2026-09-05T10:00:00Z");
-  assert.strictEqual(startedText("2026-09-05T10:00:00Z", t0 + 30_000), "just now");
-  assert.strictEqual(startedText("2026-09-05T10:00:00Z", t0 + 9 * 60_000), "9m ago");
-  assert.strictEqual(startedText("2026-09-05T10:00:00Z", t0 + 3 * 3600_000 + 12 * 60_000), "3h 12m ago");
-  assert.strictEqual(startedText("2026-09-05T10:00:00Z", t0 + 2 * 86400_000 + 4 * 3600_000), "2d 4h ago");
-  assert.strictEqual(startedText("2026-09-05T10:00:00Z", t0 - 5000), "just now"); // clock skew is not "-1m ago"
+  const created = "2026-09-05T10:00:00Z";
+  const t0 = Date.parse(created);
+  const clock = hhmm(created);
+  assert.strictEqual(startedText(created, t0 + 30_000), clock + " · just now");
+  assert.strictEqual(startedText(created, t0 + 9 * 60_000), clock + " · 9m ago");
+  assert.strictEqual(startedText(created, t0 + 3 * 3600_000 + 12 * 60_000), clock + " · 3h 12m ago");
+  assert.strictEqual(startedText(created, t0 + 2 * 86400_000 + 4 * 3600_000), clock + " · 2d 4h ago");
+  assert.strictEqual(startedText(created, t0 - 5000), clock + " · just now"); // clock skew is not "-1m ago"
   assert.strictEqual(startedText("", t0), "");
   assert.strictEqual(startedText("not a date", t0), "");
+});
+
+test("started leads with a zero-padded HH:MM clock, joined by ·", () => {
+  // A separate, format-focused assertion (independent of the relative-time
+  // fixture above): the clock half is always two digits each side of the
+  // colon, even for a single-digit hour/minute.
+  const created = "2026-09-05T00:05:00Z";
+  const text = startedText(created, Date.parse(created) + 60_000);
+  const [clockPart, relPart] = text.split(" · ");
+  assert.match(clockPart, /^\d{2}:\d{2}$/);
+  assert.strictEqual(clockPart, hhmm(created));
+  assert.strictEqual(relPart, "1m ago");
 });
 
 test("the context bar prefers the server's percentage to its own arithmetic", () => {

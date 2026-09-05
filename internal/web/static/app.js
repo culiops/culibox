@@ -1215,6 +1215,11 @@ function syncEditorActions() {
     b.classList.toggle("off", state === "off");
     b.disabled = state === "off";
   }
+  // A read-only built-in profile can't Save, so Duplicate — the one action
+  // that actually does something — takes the primary look instead; an
+  // editable profile keeps Save as the primary and Duplicate plain.
+  $("pf-save").classList.toggle("pri", !st.locked);
+  $("pf-duplicate").classList.toggle("pri", st.locked);
   // Every interactive control the editor pane holds: a locked profile's fields
   // (.fld), its containment/option .seg buttons, its bare bool checkboxes (no
   // class of their own), and the allowlist's row buttons and "+ add" triggers

@@ -213,6 +213,14 @@
        here the same way .count/.path/.pip already do for their own content. */
     #sessions-phd #spawn-go { text-transform: none; letter-spacing: 0; }
     #sessions-phd.closed #spawn-go { display: none; }
+    /* Mirrors the rule above for the Files header (T11): its three action
+       icons (#ft-newdir/#ft-refresh/#ft-upload) no longer carry a shared
+       class — T16 dropped .nf when it switched them to ASCII glyphs — so
+       this is scoped by id instead of a class selector. Collapsed Files
+       keeps only its caret, "Files" label, .grow, and .path (mockup S2). */
+    #files-phd.closed #ft-newdir,
+    #files-phd.closed #ft-refresh,
+    #files-phd.closed #ft-upload { display: none; }
     #ft-menu {
       position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
       background: var(--panel); border: 1px solid var(--border);

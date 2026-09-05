@@ -47,16 +47,21 @@ function startedText(created, nowMs) {
   if (!created) return "";
   const t = Date.parse(created);
   if (!Number.isFinite(t)) return "";
+  // The clock face reads in the viewer's own local time, same as every other
+  // timestamp in the app; the relative half below is what makes it actionable
+  // without doing timezone math in your head.
+  const dt = new Date(t);
+  const clock = String(dt.getHours()).padStart(2, "0") + ":" + String(dt.getMinutes()).padStart(2, "0");
   // A clock a few seconds behind the daemon must read "just now", never
   // "-1m ago": the skew is ours, and the reader cannot act on it either way.
   let s = Math.floor(((nowMs || 0) - t) / 1000);
-  if (s < 60) return "just now";
+  if (s < 60) return clock + " · just now";
   const d = Math.floor(s / 86400); s -= d * 86400;
   const h = Math.floor(s / 3600); s -= h * 3600;
   const m = Math.floor(s / 60);
-  if (d) return d + "d " + h + "h ago";
-  if (h) return h + "h " + m + "m ago";
-  return m + "m ago";
+  if (d) return clock + " · " + d + "d " + h + "h ago";
+  if (h) return clock + " · " + h + "h " + m + "m ago";
+  return clock + " · " + m + "m ago";
 }
 
 // railMeta: the header and the four-row block. cwdText is passed in already
