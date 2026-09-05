@@ -40,16 +40,12 @@
   <div id="layout">
     <nav id="rail48" class="rail48" aria-label="Sessions"></nav>
     <aside id="sidebar">
-      <div id="spawn-bar">
-        <div class="split-btn">
-          <button id="spawn-go" type="button">[ + new session ]</button>
-        </div>
-      </div>
       <div id="sessions-pane">
         <div class="phd" id="sessions-phd">
           <button class="cv" id="sessions-cv" type="button" aria-expanded="true" aria-controls="sessions" title="Collapse sessions">&#9662;</button>
           <span>Sessions</span><span class="count" id="sessions-count">0</span>
           <span class="grow"></span>
+          <button id="spawn-go" type="button" class="btn pri">+ new</button>
           <span class="pip" id="sessions-pip" hidden><span class="dot waiting"></span><span id="sessions-pip-text"></span></span>
         </div>
         <ul id="sessions"><li class="empty">Loading…</li></ul>

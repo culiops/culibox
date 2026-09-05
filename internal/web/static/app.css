@@ -199,34 +199,17 @@
     }
 
     /* --- spawn button ---------------------------------------------------- */
-    #spawn-bar { flex: none; padding: .75lh 2ch .5lh; border-bottom: 1px solid var(--border); }
-    /* .split-btn now wraps a single button — the caret it was named for is
-       long gone (Task 7). Kept rather than collapsed: #spawn-go's flex: 1
-       (below) only does anything as a flex ITEM of this flex container: it is
-       how the button fills #spawn-bar's width. Inlining #spawn-go directly
-       into #spawn-bar and dropping the wrapper would mean redoing that as a
-       width/display change on the button itself — more surface area than
-       this fix wave's finding (a dead class name) justifies, and a control
-       deliberately sized for touch (2026-07-27) is not where to risk it. */
-    .split-btn { display: flex; }
-    .split-btn button {
-      background: var(--accent); border: 1px solid var(--accent); color: var(--bg);
-      font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; padding: 8px 10px;
-    }
-    #spawn-go { flex: 1; text-align: center; min-width: 0; }
-    /* Outlined, not filled: the approved design draws this as a bracketed TUI
-       control. WebTUI's button.css would do this via --mapped-primary, but that
-       file is not vendored — see Task 1 — and three declarations are cheaper than
-       4.5 KB of bare-element selectors. --accent on --panel measures 5.97, AA. */
-    #spawn-go { background: transparent; color: var(--accent); border-color: var(--accent); }
-    /* Inverse video on hover, which is both the terminal idiom and the only
-       high-contrast option: --sel is an 18% ACCENT tint, so accent text on it is
-       the same hue against itself and measures 4.22 — below AA. Inverting gives
-       7.79. filter:none because brightening a transparent background does nothing,
-       so the inherited hover would otherwise read as dead. */
-    #spawn-go:hover { background: var(--accent); color: var(--bg); filter: none; }
-    .split-btn button:hover { filter: brightness(1.12); }
-    .split-btn button:disabled { opacity: .6; cursor: default; filter: none; }
+    /* Lives in the Sessions pane header now (T5): the mockup's compact
+       ".btn.pri + new" replaces the old full-width bar above the list, so it
+       hides for free when the pane collapses (matches canvas S1) — no extra
+       JS, just a CSS rule keyed off the same .closed class togglePane()
+       already applies to #sessions-phd. #spawn-go keeps its id and click
+       handler unchanged; only its markup/class moved.
+       Sitting inside .phd it inherits that bar's uppercase + letter-spacing
+       (meant for the label text, not a button caption), so both are reset
+       here the same way .count/.path/.pip already do for their own content. */
+    #sessions-phd #spawn-go { text-transform: none; letter-spacing: 0; }
+    #sessions-phd.closed #spawn-go { display: none; }
     #ft-menu {
       position: fixed; z-index: 40; min-width: 168px; max-width: min(92vw, 320px);
       background: var(--panel); border: 1px solid var(--border);
@@ -1213,6 +1196,9 @@
          The menu item becomes a flex row so a taller box centres its label
          instead of stranding it at the top. */
       #sessions .kbtn { min-width: var(--tap); min-height: var(--tap); padding: 0 12px; font-size: 17px; }
+      /* The header's "+ new" is compact by design (T5) but still a real spawn
+         trigger, so it meets the same floor as every other primary control. */
+      #sessions-phd #spawn-go { min-height: var(--tap); }
       .menu .mi { min-height: var(--tap); display: flex; align-items: center; }
       /* The quick replies are the whole point of answering from a phone. */
       #sessions .qk .btn, .replystrip .btn { min-height: var(--tap); }
