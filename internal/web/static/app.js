@@ -1724,21 +1724,30 @@ async function currentShellProfile() {
 
 // --- settings: font sizes ----------------------------------------------------
 const FS_SURFACES = ["terminal", "code", "markdown", "filetree"];
+// The sample carries its own size rather than reading a CSS variable, because
+// one of the four surfaces has no variable to read: the terminal size is
+// pushed straight into xterm, not onto the document.
+function paintFsSample(surface) {
+  const s = document.querySelector('[data-fs-sample="' + surface + '"]');
+  if (s) s.style.fontSize = fontPrefs.get(surface) + "px";
+}
 function bumpFs(surface, delta) {
   fontPrefs.set(surface, fontPrefs.get(surface) + delta);
   const val = document.querySelector('.fs-val[data-fs="' + surface + '"]');
   if (val) val.value = fontPrefs.get(surface);
+  paintFsSample(surface);
 }
 function initSettings() {
   for (const s of FS_SURFACES) {
     const val = document.querySelector('.fs-val[data-fs="' + s + '"]');
     if (val) val.value = fontPrefs.get(s);
+    paintFsSample(s);
   }
   document.querySelectorAll("#settings [data-fs]").forEach((el) => {
     const s = el.dataset.fs;
     if (el.classList.contains("fs-inc")) el.onclick = () => bumpFs(s, +fontPrefs.STEP);
     else if (el.classList.contains("fs-dec")) el.onclick = () => bumpFs(s, -fontPrefs.STEP);
-    else if (el.classList.contains("fs-val")) el.onchange = () => { if (el.value.trim() !== "") fontPrefs.set(s, el.value); el.value = fontPrefs.get(s); };
+    else if (el.classList.contains("fs-val")) el.onchange = () => { if (el.value.trim() !== "") fontPrefs.set(s, el.value); el.value = fontPrefs.get(s); paintFsSample(s); };
   });
   const reset = $("fs-reset");
   if (reset) reset.onclick = () => { fontPrefs.reset(); initSettings(); };

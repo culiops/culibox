@@ -205,12 +205,41 @@
       </div>
     </div>
     <div class="dbd pad" id="settings" role="tabpanel" hidden>
-      <div class="settings-body">
-        <div class="fs-row"><label>Terminal</label><button type="button" class="fs-dec" data-fs="terminal">−</button><input class="fs-val" data-fs="terminal" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="terminal">+</button></div>
-        <div class="fs-row"><label>Code</label><button type="button" class="fs-dec" data-fs="code">−</button><input class="fs-val" data-fs="code" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="code">+</button></div>
-        <div class="fs-row"><label>Markdown</label><button type="button" class="fs-dec" data-fs="markdown">−</button><input class="fs-val" data-fs="markdown" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="markdown">+</button></div>
-        <div class="fs-row"><label>File tree</label><button type="button" class="fs-dec" data-fs="filetree">−</button><input class="fs-val" data-fs="filetree" type="number" min="8" max="32" step="1"><button type="button" class="fs-inc" data-fs="filetree">+</button></div>
+      <div class="fsrow"><span class="lbl">Terminal</span>
+        <div class="stepper">
+          <button type="button" class="fs-dec" data-fs="terminal" aria-label="Smaller terminal text">&minus;</button>
+          <input class="val fs-val" data-fs="terminal" type="number" min="8" max="32" step="1" aria-label="Terminal text size">
+          <button type="button" class="fs-inc" data-fs="terminal" aria-label="Larger terminal text">+</button>
+        </div>
+        <div class="sample" data-fs-sample="terminal">$ claude --model opus-5
+● Running the suite…</div>
       </div>
+      <div class="fsrow"><span class="lbl">Code</span>
+        <div class="stepper">
+          <button type="button" class="fs-dec" data-fs="code" aria-label="Smaller code text">&minus;</button>
+          <input class="val fs-val" data-fs="code" type="number" min="8" max="32" step="1" aria-label="Code text size">
+          <button type="button" class="fs-inc" data-fs="code" aria-label="Larger code text">+</button>
+        </div>
+        <div class="sample" data-fs-sample="code">func main() { log.Println("ok") }</div>
+      </div>
+      <div class="fsrow"><span class="lbl">Markdown</span>
+        <div class="stepper">
+          <button type="button" class="fs-dec" data-fs="markdown" aria-label="Smaller markdown text">&minus;</button>
+          <input class="val fs-val" data-fs="markdown" type="number" min="8" max="32" step="1" aria-label="Markdown text size">
+          <button type="button" class="fs-inc" data-fs="markdown" aria-label="Larger markdown text">+</button>
+        </div>
+        <div class="sample" data-fs-sample="markdown">## Heading, then a line of body text.</div>
+      </div>
+      <div class="fsrow"><span class="lbl">File tree</span>
+        <div class="stepper">
+          <button type="button" class="fs-dec" data-fs="filetree" aria-label="Smaller file tree text">&minus;</button>
+          <input class="val fs-val" data-fs="filetree" type="number" min="8" max="32" step="1" aria-label="File tree text size">
+          <button type="button" class="fs-inc" data-fs="filetree" aria-label="Larger file tree text">+</button>
+        </div>
+        <div class="sample" data-fs-sample="filetree">internal/web/static/app.css</div>
+      </div>
+      <p class="hint">Sizes apply as you change them — the panes behind this
+        dialog are already using them. A stored size wins over the default.</p>
     </div>
     <div class="dbd pad" id="tokens" role="tabpanel" hidden>
       <div class="settings-body">

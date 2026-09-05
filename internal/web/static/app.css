@@ -801,13 +801,25 @@
     .tok-item .tok-revoke:hover { border-color: var(--danger); }
     .tok-empty { color: var(--muted); font-size: 12px; padding: 2px; }
     .tok-foot { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px; }
-    /* --- font sizes (now a settings tab) ---------------------------------- */
     .settings-body { display: grid; gap: 8px; }
-    .fs-row { display: flex; align-items: center; gap: 6px; }
-    .fs-row > label { flex: 1; color: var(--muted); font-size: 12px; }
-    .fs-val { width: 56px; background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 4px 6px; font-size: 12.5px; text-align: center; }
-    .fs-dec, .fs-inc { background: var(--bg); color: var(--fg); border: 1px solid var(--border); width: 28px; padding: 4px 0; cursor: pointer; font-size: 14px; line-height: 1; }
-    .fs-dec:hover, .fs-inc:hover { border-color: var(--accent); }
+    /* --- font sizes (now a settings tab) ---------------------------------- */
+    /* One row per surface: a fixed label column so the four steppers line up,
+       the stepper, then a sample that takes the rest. The sample does not wrap —
+       a line that reflows as it grows is showing you the wrapping, not the size. */
+    .fsrow {
+      display: flex; align-items: center; gap: 20px; padding: 16px 0;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    }
+    .fsrow .lbl { width: 152px; flex: none; }
+    .sample {
+      flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
+      padding: 10px 12px; overflow: hidden; white-space: pre; color: var(--fg);
+    }
+    /* The value is a real field, so the browser's spin buttons would otherwise
+       sit inside a control that already has two. */
+    .stepper .val { -moz-appearance: textfield; appearance: textfield; }
+    .stepper .val::-webkit-outer-spin-button,
+    .stepper .val::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
     #fs-reset { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px; cursor: pointer; }
     #fs-reset:hover { border-color: var(--accent); }
 

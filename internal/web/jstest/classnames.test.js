@@ -31,6 +31,9 @@ const CSS_FILES = [
 // fixing, not the list extending.
 const HOOKS = new Set([
   "an-timewrap",  // analytics.js:400 querySelector(".an-timewrap")
+  "fs-dec",  // app.js initSettings/bumpFs: classList.contains("fs-dec") picks the decrement button
+  "fs-inc",  // app.js initSettings/bumpFs: classList.contains("fs-inc") picks the increment button
+  "fs-val",  // app.js initSettings/bumpFs: querySelector('.fs-val[data-fs="…"]'); visual styling comes from .stepper .val
 ]);
 
 function stripComments(css) {
