@@ -440,8 +440,12 @@
        inert. `color` set directly, at this rule's higher specificity, is
        the only property that actually reaches the rendered label; --danger
        is a light pink, so it goes dark (--bg) to stay readable — measured
-       ~7.1:1, comfortably past AA. */
-    #sessions .tier-danger { --badge-color: var(--danger); color: var(--bg); font-weight: 600; }
+       ~7.1:1, comfortably past AA. The border is a fourth, separate property
+       again (.bdg's own `border: 1px solid var(--border)`, grey): set
+       border-color here too, the same way the boxed badge's border already
+       matches its own fill, and the killing badge right below sets its own
+       border-color for the same reason. */
+    #sessions .tier-danger { --badge-color: var(--danger); color: var(--bg); border-color: var(--danger); font-weight: 600; }
     #sessions .srow.killing .bdg { border-color: var(--danger); }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
