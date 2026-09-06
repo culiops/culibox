@@ -976,7 +976,7 @@ function renderSession(s) {
   // open behind the menu. Letting it through is safe — openSessionMenu has
   // already recorded this button as the menu's anchor by the time the document
   // listener runs, and that listener ignores a click on the anchor.
-  kb.onclick = () => openSessionMenu(kb, s);
+  kb.onclick = () => (mobileActive(window.innerWidth) ? openActionsSheet(s) : openSessionMenu(kb, s));
   right.appendChild(kb);
   li.appendChild(right);
 
@@ -2209,16 +2209,20 @@ function closeSessionMenu(restoreFocus) {
   if (restoreFocus && a && a.isConnected) a.focus();
 }
 
-function openSessionMenu(anchor, s) {
-  const menu = $("session-menu");
-  if (!menu) return;
+// runSessionAction is the one dispatch table behind BOTH the desktop
+// #session-menu and the mobile actions sheet (openActionsSheet): `action` is
+// one of menuItems(s)'s ids (rename/files/attribution/copycwd/newpane/end)
+// plus the mobile-only "open-terminal". Neither caller may duplicate a
+// handler here — a second copy is exactly the drift this extraction exists
+// to prevent.
+function runSessionAction(action, s) {
   const name = s.name || s.id;
   const run = {
-    // Resolved from the session id at click time, never from `anchor`: the
-    // list rebuilds under the menu every few seconds (the menu is
-    // deliberately not in holdList()), so by the time an item is chosen the
-    // trigger that opened the menu may already be sitting in a detached
-    // subtree. `sessionRowFor` looks up whatever row is live right now.
+    // Resolved from the session id at call time, never from a captured row or
+    // anchor: the list rebuilds under an open menu/sheet every few seconds
+    // (neither is in holdList()), so by the time an item is chosen the
+    // trigger that opened it may already be sitting in a detached subtree.
+    // `sessionRowFor` looks up whatever row is live right now.
     rename: () => { const li = sessionRowFor(s.id); const nm = li && li.querySelector(".nm"); if (li && nm) startRename(li, nm, s); },
     // Through syncTreeToRoot, not a setFtRoot + ftLoadRoot pair of its own: that
     // pair is missing the dpClose() the real re-root does, and that close is
@@ -2237,8 +2241,85 @@ function openSessionMenu(anchor, s) {
     attribution: () => openSteerFor(s.id),
     copycwd: () => copyPath(s.cwd),
     newpane: () => openTerminal(s.id, name, { newPane: true }),
+    // Mobile-only: jump to (attaching if needed) and focus this session's
+    // terminal, switching the phone off the sheet's originating screen.
+    // openTerminal is the existing open-or-focus chokepoint (tabs.js) and
+    // already flips the mobile screen to "terminal" itself when active, so
+    // there is nothing left to duplicate here.
+    "open-terminal": () => openTerminal(s.id, name),
     end: () => confirmKill(s.id, name),
   };
+  const fn = run[action];
+  if (fn) fn();
+}
+
+// openActionsSheet is the mobile (M5) counterpart to openSessionMenu: same
+// session, same runSessionAction dispatch, a bottom sheet instead of a
+// floating menu. sheetActions/sheetMeta (sheet.js) are the single source for
+// which rows appear and their order/danger flag — this only renders them.
+function openActionsSheet(s) {
+  openSheet(function (body) {
+    const shd = document.createElement("div");
+    shd.className = "shd";
+    const act = activityClass(s.activity);
+    const dot = document.createElement("span");
+    dot.className = act.cls;
+    dot.setAttribute("aria-hidden", "true");
+    shd.appendChild(dot);
+    const nm = document.createElement("span");
+    nm.className = "grow";
+    nm.textContent = s.name || s.id;
+    shd.appendChild(nm);
+    const tier = tierBadge(s, boxRuntime);
+    if (tier) {
+      const tb = document.createElement("span");
+      tb.className = "bdg tier " + (tier.tone === "danger" ? "host" : "box");
+      tb.textContent = tier.text;
+      tb.title = tier.title;
+      shd.appendChild(tb);
+    }
+
+    // Meta line: model/effort/context% come from the terminal TAB bound to
+    // this session (a session has none of its own — see usage.js/tab.usage()),
+    // the same source renderSession and the 5b chip strip already read from.
+    // cwd/started come from sheetMeta(s); only cwd is ever non-empty today
+    // (Info carries no start time yet), but the join tolerates that.
+    const tab = terminalTabFor(s.id);
+    const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
+    const meta = sheetMeta(s);
+    const parts = [
+      u && u.model ? String(u.model) : "",
+      u && u.effort ? "effort " + u.effort : "",
+      u && typeof u.pct === "number" ? u.pct + "% of context" : "",
+      meta.cwd ? shortPath(meta.cwd) : "",
+      meta.started,
+    ].filter(Boolean);
+    const ml = document.createElement("div");
+    ml.className = "sheet-meta";
+    ml.textContent = parts.join(" · ");
+
+    body.append(shd, ml);
+
+    for (const a of sheetActions(s)) {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "arow" + (a.danger ? " dgr" : "");
+      const gl = document.createElement("span");
+      gl.className = "gl";
+      gl.setAttribute("aria-hidden", "true");
+      gl.textContent = a.glyph;
+      const lbl = document.createElement("span");
+      lbl.textContent = a.label;
+      row.append(gl, lbl);
+      row.onclick = () => { closeSheet(); runSessionAction(a.id, s); };
+      body.appendChild(row);
+    }
+  }, { height: "min(556px, 88dvh)" });
+}
+
+function openSessionMenu(anchor, s) {
+  const menu = $("session-menu");
+  if (!menu) return;
   const nodes = menuItems(s).map((it) => {
     const b = document.createElement("button");
     b.type = "button";
@@ -2247,7 +2328,7 @@ function openSessionMenu(anchor, s) {
     b.textContent = it.label;
     // Close first, then act: an action that opens a dialog would otherwise
     // leave the menu floating over it.
-    b.onclick = () => { closeSessionMenu(false); const fn = run[it.id]; if (fn) fn(); };
+    b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
     return b;
   });
   menu.replaceChildren(...nodes);

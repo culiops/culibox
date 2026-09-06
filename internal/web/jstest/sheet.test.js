@@ -21,6 +21,12 @@ test("every action carries a glyph", () => {
   for (const x of sheetActions(claude)) assert.ok(x.glyph, "missing glyph for " + x.id);
 });
 
+test("row order matches the M5 canvas: terminal, files, context, rename, copy, end", () => {
+  const full = { ...claude, claude: true };
+  const ids = sheetActions(full).map((x) => x.id);
+  assert.deepStrictEqual(ids, ["open-terminal", "files", "attribution", "rename", "copycwd", "end"]);
+});
+
 test("a non-claude shell session drops the claude-only items but keeps end", () => {
   const ids = sheetActions(shell).map((x) => x.id);
   assert.ok(ids.includes("open-terminal"));

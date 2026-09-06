@@ -1778,4 +1778,23 @@
       .sample { flex: 1 0 100%; }
       .frow { flex-direction: column; gap: 0; margin-bottom: 0; }
       .fcol { margin-bottom: 13px; }
+
+      /* --- M5: session actions bottom sheet -------------------------------- */
+      /* Header: activity dot + name + tier badge, same trio renderSession's
+         row shows, just laid out as a sheet header instead of a list item. */
+      #sheet-modal .shd { display: flex; align-items: center; gap: 10px; font-size: 14.5px;
+        padding: 0 14px 12px; border-bottom: 1px solid var(--border); }
+      #sheet-modal .sheet-meta { padding: 12px 15px; font-size: 11.5px; color: var(--muted);
+        line-height: 1.65; border-bottom: 1px solid var(--border); }
+      /* Rows clear the 44px tap floor with room to spare (58px, per the M5
+         measurement) — a phone has no hover, so every row must read as
+         tappable by height alone. */
+      #sheet-modal .arow { display: flex; align-items: center; gap: 13px; width: 100%;
+        min-height: 58px; padding: 0 15px; font-size: 14px; text-align: left;
+        background: none; border: 0; border-bottom: 1px solid rgba(69, 71, 90, .45); color: var(--fg); }
+      #sheet-modal .arow .gl { width: 20px; color: var(--muted); flex: none; text-align: center; }
+      /* End session… is the only destructive row and the only red thing on the
+         sheet — every other row, including its glyph, stays neutral. */
+      #sheet-modal .arow.dgr { color: var(--danger); }
+      #sheet-modal .arow.dgr .gl { color: var(--danger); }
     }

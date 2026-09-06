@@ -15,11 +15,21 @@ var SHEET_GLYPHS = {
   end: "⏹",
 };
 
+// M5's row order (measured against the canvas) is NOT menuItems' own order —
+// the desktop menu lists rename first, the sheet leads with the two
+// "go somewhere" actions before the edit/copy ones. ORDER is the single place
+// that sequencing is decided; sheetActions only fills it in, so a conditional
+// item's absence (no cwd, no claude transcript) just closes the gap.
+var ORDER = ["open-terminal", "files", "attribution", "rename", "copycwd", "end"];
+
 function sheetActions(s) {
-  var base = menuItems(s).filter(function (m) { return m.id !== "newpane"; });
-  var out = [{ id: "open-terminal", label: "Open terminal", glyph: SHEET_GLYPHS["open-terminal"], danger: false }];
-  for (var i = 0; i < base.length; i++) {
-    out.push({ id: base[i].id, label: base[i].label, glyph: SHEET_GLYPHS[base[i].id] || "", danger: !!base[i].danger });
+  var byId = {};
+  menuItems(s).forEach(function (m) { byId[m.id] = m; });
+  byId["open-terminal"] = { id: "open-terminal", label: "Open terminal", danger: false };
+  var out = [];
+  for (var i = 0; i < ORDER.length; i++) {
+    var m = byId[ORDER[i]];
+    if (m) out.push({ id: m.id, label: m.label, glyph: SHEET_GLYPHS[m.id] || "", danger: !!m.danger });
   }
   return out;
 }
