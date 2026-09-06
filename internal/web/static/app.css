@@ -576,6 +576,11 @@
        muted pair next to a lifted pair reads as "one of these is disabled". */
     #ft-upload, #ft-refresh, #ft-newdir { background: var(--surface-2); color: var(--fg); border: 1px solid var(--border); cursor: pointer; font-size: 12px; line-height: 1; padding: 2px 7px; }
     #ft-upload:hover, #ft-refresh:hover, #ft-newdir:hover { border-color: var(--accent); }
+    /* The Files-pane ⌘ trigger exists only for the mobile Files topbar (M6),
+       where the global header (and its palette button) is hidden; desktop keeps
+       the header's palette button and never shows this one. The 700px block
+       reveals + styles it. */
+    #ft-palette { display: none; }
     #ft-refresh, #ft-newdir { margin-right: 4px; }
     #ft-refresh[disabled] { opacity: .5; cursor: default; border-color: var(--border); color: var(--muted); }
     /* Drop affordance: it has to read as a target at a glance, or the whole
@@ -1449,24 +1454,92 @@
          whatever the desktop toggle last recorded (I1). */
       html.mobile-screen-sessions #sessions-pane > #limits-mobile:not([hidden]) { display: block; }
       html.mobile-screen-sessions #sessions-pane > #spawn-go-mobile { display: block; }
-      /* The header bar itself must stop advertising a collapsed state it no
-         longer has: .phd.closed (primitives.css) lifts onto --surface-2 and
-         hides the header's own action button. The mockup (M6) carries no
-         collapse caret at all, so rather than reproduce it in an "expanded"
-         state, the caret is simply hidden on the active mobile screen — which
-         also drops it from the a11y tree, so its now-stale aria-expanded
-         value is moot. */
-      html.mobile-screen-sessions #sessions-phd.closed,
-      html.mobile-screen-files #files-phd.closed { background: var(--panel); color: var(--muted); }
-      html.mobile-screen-files #files-phd.closed #ft-newdir,
-      html.mobile-screen-files #files-phd.closed #ft-refresh,
-      html.mobile-screen-files #files-phd.closed #ft-upload { display: inline-block; }
-      html.mobile-screen-sessions #sessions-phd .cv,
-      html.mobile-screen-files #files-phd .cv { display: none; }
-      /* The full-width #spawn-go-mobile below the list is the spawn trigger
-         on this screen; the compact header "+ new" is a duplicate action, so
-         it stays hidden in every state (not just collapsed). */
-      html.mobile-screen-sessions #sessions-phd #spawn-go { display: none; }
+      /* --- per-screen topbar cleanup (5a-polish) --------------------------
+         The mockup gives each mobile screen a single clean topbar and folds the
+         desktop's secondary pane-header bars away. Two desktop header controls
+         are dead at this width and hide on every screen: #sidebar-toggle (the
+         bottom nav switches screens, so there is no sidebar to toggle) and
+         #layouts (the grid is forced to one column below, so 1/2/4 do
+         nothing). */
+      #sidebar-toggle, #layouts { display: none; }
+
+      /* Sessions (M1): the global header IS this screen's topbar
+         ("agent-box DEV ⌘ ⚙"), so the pane's own "SESSIONS n / + new" bar is
+         pure duplication — the count and waiting state already live on the
+         bottom-nav pip, and the spawn trigger is the full-width
+         #spawn-go-mobile below the list. Drop the bar whole rather than
+         un-collapsing it (this outranks .phd/.phd.closed by the extra `html`
+         type selector, so it holds whatever the desktop toggle last recorded). */
+      html.mobile-screen-sessions #sessions-phd { display: none; }
+
+      /* Files (M6): the pane header is PROMOTED to be this screen's only topbar,
+         so the global header is hidden here. Its palette button goes with it,
+         replaced by #ft-palette in the promoted bar below; #steer-toggle and
+         #analytics-open (a 5c placement question) stay reachable from the
+         Sessions/Terminal screens, where the header still shows. */
+      html.mobile-screen-files header { display: none; }
+      /* The promoted bar is a 52px topbar: a full-strength "Files" title (not
+         the .phd uppercase-muted label) with the actions pushed to the right.
+         It must read as open regardless of whatever the desktop collapse toggle
+         last recorded, so these beat .phd/.phd.closed unconditionally via the
+         extra `html` type selector. */
+      html.mobile-screen-files #files-phd {
+        height: 52px; padding: 0 6px 0 13px; background: var(--panel);
+        color: var(--fg); text-transform: none; letter-spacing: 0;
+      }
+      html.mobile-screen-files #files-phd > span:not(.grow):not(.path) {
+        font-size: 14px; font-weight: 600;
+      }
+      /* No collapse caret in the mockup topbar; hiding it also drops its now
+         stale aria-expanded from the a11y tree. The path readout is a
+         collapsed-state summary the promoted bar has no room for beside its
+         four actions — the .rootchip pill below carries the root instead. */
+      html.mobile-screen-files #files-phd .cv,
+      html.mobile-screen-files #files-phd .path { display: none; }
+      /* The four topbar actions (⌘ + ↻ ↑, in that M6 order) at the 44px tap
+         floor, flat like the mockup's icon buttons. #ft-palette is this
+         screen's own palette entry, revealed here only (it is display:none on
+         desktop). */
+      html.mobile-screen-files #files-phd #ft-palette { display: inline-flex; }
+      html.mobile-screen-files #files-phd #ft-palette,
+      html.mobile-screen-files #files-phd #ft-newdir,
+      html.mobile-screen-files #files-phd #ft-refresh,
+      html.mobile-screen-files #files-phd #ft-upload {
+        min-width: var(--tap); min-height: var(--tap); margin: 0; padding: 0;
+        display: inline-flex; align-items: center; justify-content: center;
+        background: transparent; border: 0; color: var(--muted); font-size: 17px;
+      }
+      html.mobile-screen-files #files-phd #ft-palette:hover,
+      html.mobile-screen-files #files-phd #ft-newdir:hover,
+      html.mobile-screen-files #files-phd #ft-refresh:hover,
+      html.mobile-screen-files #files-phd #ft-upload:hover {
+        border: 0; color: var(--fg);
+      }
+      /* The root selector reads as the mockup's "root … ▾" pill: a 44px
+         bordered chip whose "root" prefix and ▾ affix are drawn in CSS (no new
+         DOM). The input inside still IS the type-to-search combobox — the
+         picker's measured pointer handling is untouched, only the chrome around
+         it changed. The path shows in full, not "~/…": its resting value is set
+         in one shared place (setFtRoot) that desktop renders too, so
+         abbreviating here would change desktop. The +3px horizontal margin lands
+         the pill's left edge at 13px to line up with the title, on top of
+         .files-body's own 10px side padding. */
+      html.mobile-screen-files .ft-row {
+        display: flex; align-items: center; gap: 8px;
+        margin: 11px 3px 0; padding: 0 12px; min-height: var(--tap);
+        border: 1px solid var(--border); box-sizing: border-box;
+      }
+      html.mobile-screen-files .ft-row::before {
+        content: "root"; flex: none; color: var(--muted); font-size: 13px;
+      }
+      html.mobile-screen-files .ft-row::after {
+        content: "\25be"; flex: none; color: var(--muted); font-size: 13px;
+      }
+      html.mobile-screen-files #ft-root-input {
+        flex: 1; width: auto; min-width: 0; border: 0; background: transparent;
+        padding: 0; font-size: 13px;
+      }
+      html.mobile-screen-files #ft-root-input:focus { border: 0; }
 
       /* The bottom nav: 60px, three equal items, active gets an inset top rule +
          soft fill (matches M1). The waiting pip is amber (an agent needs you). */
@@ -1539,9 +1612,9 @@
          is the screen and takes what there is. */
       #settings-modal, #settings-modal.tall { width: 94vw; height: auto; max-height: calc(100vh - 24px); }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
-      /* The upload button is the ONLY upload route on a phone (no drag exists),
-         so it cannot stay an 18px-tall desktop button sitting in a header. */
-      #ft-upload, #ft-refresh, #ft-newdir { min-height: 30px; min-width: 38px; font-size: 15px; }
+      /* (The Files action buttons #ft-newdir/#ft-refresh/#ft-upload are sized
+         with the promoted Files topbar above — on a phone the tree only ever
+         shows on the Files screen, where that bar owns them.) */
       /* Also size the row's actions button by viewport, not only by (hover: none):
          it is the row's only affordance, and an 11×12px target is not one. */
       .ft-more { visibility: visible; padding: 4px 8px; font-size: 15px; }
@@ -1561,9 +1634,10 @@
          The menu item becomes a flex row so a taller box centres its label
          instead of stranding it at the top. */
       #sessions .kbtn { min-width: var(--tap); min-height: var(--tap); padding: 0 12px; font-size: 17px; }
-      /* The header's "+ new" is compact by design (T5) but still a real spawn
-         trigger, so it meets the same floor as every other primary control. */
-      #sessions-phd #spawn-go { min-height: var(--tap); }
+      /* (#sessions-phd is hidden whole on the mobile Sessions screen — the
+         global header is the topbar there — so its "+ new" no longer needs a
+         mobile tap-floor rule; the desktop one at #sessions-phd #spawn-go
+         stands.) */
       .menu .mi { min-height: var(--tap); display: flex; align-items: center; }
       /* The quick replies are the whole point of answering from a phone. */
       #sessions .qk .btn, .replystrip .btn { min-height: var(--tap); }

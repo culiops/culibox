@@ -391,6 +391,12 @@ function initPalette() {
     openBtn.title = "Command palette (" + combos + ")";
     openBtn.onclick = openPalette;
   }
+  // The mobile Files screen hides the global header (and its palette button)
+  // and promotes the Files pane header into the screen's topbar, so it carries
+  // its own ⌘ trigger (M6). Same handler, no shortcut label — a phone has no
+  // keyboard to write down. Invisible on desktop (CSS), harmless if absent.
+  const filesPal = document.getElementById("ft-palette");
+  if (filesPal) filesPal.onclick = openPalette;
 
   // ^ is wrong on mac, where the same binding is ⌘. The hint is the only place
   // this shortcut is written down.
