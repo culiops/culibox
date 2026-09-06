@@ -42,7 +42,7 @@
     #mobile-nav { display: none; }
     /* Mobile terminal typing bars (slice 5b) are invisible above the breakpoint
        and on any screen other than Terminal; the 700px block turns them on. */
-    #term-chips, #term-input { display: none; }
+    #term-chips, #term-input, #keybar-more { display: none; }
     /* Placeholder only — real mobile-nav styling (icon size, active state, the
        pip badge) belongs to the @media (max-width:700px) block a later task
        adds. This exists solely so classnames.test.js (every class used has
@@ -1342,7 +1342,7 @@
       /* Session chip strip (M2): 56px, horizontal native touch-scroll, right-edge
          fade. Tapping a chip switches the shown session. Only on Terminal screen. */
       html.mobile-screen-terminal #term-chips {
-        display: flex; align-items: stretch; gap: 7px;
+        display: flex; align-items: stretch; gap: 7px; flex: none;
         height: 56px; padding: 5px 10px; box-sizing: border-box;
         overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
         background: var(--panel); border-bottom: 1px solid var(--border);
@@ -1359,8 +1359,11 @@
       .chip .dot { flex: 0 0 auto; }
       .chip .cnm { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chip .u { font-size: 10.5px; color: var(--muted); } /* context % on the active chip */
+      .chip.wait { color: var(--warn-fg); border-color: var(--warn-fg); } /* an agent needs you (also the amber waiting dot) */
+      /* .on comes AFTER .wait so the ACTIVE chip keeps its you-are-here accent even
+         when that session is itself waiting; the amber waiting dot still carries the
+         needs-you signal, matching M2 (active = accent border, state = the dot). */
       .chip.on { color: var(--fg); border-color: var(--accent); background: var(--sel-soft); }
-      .chip.wait { color: var(--warn-fg); border-color: var(--warn-fg); } /* an agent needs you */
       /* Right-edge fade hint that the strip scrolls (M2 .fade-r), painted over the
          strip without eating chip taps. */
       html.mobile-screen-terminal #term-chips::after {
@@ -1370,8 +1373,12 @@
       }
 
       /* Terminal screen shows ONE pane: the focused cell fills, others hide, and
-         the desktop split gutters/handles are gone (nothing to resize on a phone). */
-      html.mobile-screen-terminal #grid { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+         the desktop split gutters/handles are gone (nothing to resize on a phone).
+         min-height:0 lets the grid shrink inside the flex column so the fixed
+         chip strip + input bar keep their height and the pane never overflows
+         past the bottom nav (flexbox min-height:auto default would otherwise
+         force the terminal to overrun the nav). */
+      html.mobile-screen-terminal #grid { grid-template-columns: 1fr; grid-template-rows: 1fr; min-height: 0; }
       html.mobile-screen-terminal #grid > .cell:not(.focus) { display: none; }
 
       /* The input bars stack at the bottom of the Terminal screen, above the nav. */
