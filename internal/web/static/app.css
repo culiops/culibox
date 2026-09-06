@@ -810,6 +810,28 @@
     #ask-ok:disabled { opacity: .5; cursor: default; filter: none; }
     #ask-modal.danger #ask-ok { background: transparent; border-color: var(--danger); color: var(--danger); }
     #ask-modal.danger #ask-ok:hover { background: var(--danger-tint); }
+    /* Bottom sheet: a native <dialog> re-anchored to the bottom edge, sliding up
+       over a scrim. One #sheet-modal, body rebuilt per open (like #ask-modal).
+       Only opened at mobile widths, but the rules are unguarded by media query —
+       display:none (the dialog-closed default) keeps it inert on desktop.
+       display MUST stay gated on [open] (see the dialog[box-][open] comment
+       above, same trap): an unqualified `display: flex` on an ID selector beats
+       the UA's `dialog:not([open]) { display: none }` and renders the sheet at
+       full size, permanently, from page load. */
+    #sheet-modal.sheet-dialog {
+      margin: 0; margin-top: auto;            /* pin to bottom */
+      width: 100%; max-width: 100%;
+      border: 0; border-top: 1px solid var(--accent);
+      background: var(--panel); color: var(--fg);
+      padding: 0; border-radius: 0;
+      height: var(--sheet-h, min(648px, 90dvh));
+      max-height: 92dvh;
+    }
+    #sheet-modal.sheet-dialog[open] { display: flex; flex-direction: column; }
+    #sheet-modal.sheet-dialog::backdrop { background: rgba(17, 17, 27, .72); }
+    #sheet-modal .grab { display: flex; justify-content: center; align-items: center; height: 18px; flex: none; }
+    #sheet-modal .grab i { width: 36px; height: 3px; background: var(--rule); display: block; }
+    #sheet-modal .sheet-body { flex: 1; min-height: 0; overflow-y: auto; }
     /* An error raised while a dialog is open cannot use the toast: a fixed-position
        toast paints beneath the modal backdrop, so it would be invisible. */
     .dlg-err { color: var(--warn-fg); font-size: 12px; margin-top: 8px; line-height: 1.45; }

@@ -74,6 +74,30 @@ function closeDialog(id) {
   if (d && d.open) d.close();
 }
 
+// openSheet/closeSheet: the mobile bottom-sheet primitive. One #sheet-modal,
+// body rebuilt per open (like #ask-modal). `build(bodyEl)` fills the sheet;
+// `opts.height` sets the --sheet-h CSS var (default from app.css); `opts.onClose`
+// runs once, from the generic dialog `close` wiring in initDialogs, however the
+// sheet closes (Esc, backdrop, or a caller calling closeSheet()).
+function openSheet(build, opts) {
+  opts = opts || {};
+  const dlg = document.getElementById("sheet-modal");
+  if (!dlg || askIsBusy(document.querySelector("dialog[open]") != null)) return false;
+  const body = document.getElementById("sheet-body");
+  body.replaceChildren();
+  if (opts.height) dlg.style.setProperty("--sheet-h", opts.height);
+  else dlg.style.removeProperty("--sheet-h");
+  build(body);
+  dlg.__onClose = opts.onClose || null;
+  dlg.showModal();
+  return true;
+}
+
+function closeSheet() {
+  const dlg = document.getElementById("sheet-modal");
+  if (dlg && dlg.open) dlg.close();
+}
+
 // openSettings shows the settings dialog with one tab selected ("manage" =
 // profiles, "settings" = font sizes: the ids are the pre-existing panel ids,
 // kept so every handler that already targets them keeps working).
@@ -130,6 +154,15 @@ function initDialogs() {
     d.addEventListener("click", (e) => { if (pressedBackdrop && e.target === d) d.close(); });
     // Fires for Esc, ×, backdrop and programmatic close alike.
     d.addEventListener("close", focusTerminal);
+    // Sheets attach a one-shot onClose callback (openSheet's opts.onClose);
+    // every other dialog leaves __onClose unset, so this is a no-op for them.
+    d.addEventListener("close", () => {
+      if (d.__onClose) {
+        const cb = d.__onClose;
+        d.__onClose = null;
+        cb();
+      }
+    });
   }
   const settingsOpen = document.getElementById("settings-open");
   if (settingsOpen) settingsOpen.onclick = () => openSettings("manage");
