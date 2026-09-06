@@ -1797,4 +1797,24 @@
          sheet — every other row, including its glyph, stays neutral. */
       #sheet-modal .arow.dgr { color: var(--danger); }
       #sheet-modal .arow.dgr .gl { color: var(--danger); }
+
+      /* --- M4: reply bottom sheet ------------------------------------------- */
+      #sheet-modal .flab { padding: 14px 14px 0; font-size: 10.5px; text-transform: uppercase;
+        letter-spacing: .08em; color: var(--muted); }
+      #sheet-modal .msgbox { margin: 8px 14px 0; padding-left: 12px; border-left: 2px solid var(--rule);
+        font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+      #sheet-modal .sheet-body > .qk { display: flex; gap: 7px; margin: 14px 14px 0; }
+      #sheet-modal .sheet-body > .qk .btn { flex: 1; min-height: var(--tap); font-size: 12.5px; }
+      #sheet-modal .ta { display: block; width: calc(100% - 28px); margin: 13px 14px 0;
+        min-height: 72px; font-family: var(--font-family); font-size: 13.5px; padding: 10px 11px;
+        background: var(--bg); color: var(--fg); border: 1px solid var(--accent); }
+      #sheet-modal .ta:focus { outline: var(--focus); outline-offset: var(--focus-off); }
+      #sheet-modal .wide { display: flex; gap: 8px; margin: 8px 14px 0; }
+      #sheet-modal .wide .btn { flex: 1; min-height: var(--tap); font-size: 13px; }
+      /* Disabled here always means the fail-closed send gate: not enabled, or
+         the draft itself cannot be sent. Same dimmed treatment .btn.off uses
+         elsewhere, so a closed control never looks tappable. */
+      #sheet-modal .qk .btn:disabled, #sheet-modal .wide .btn:disabled {
+        opacity: .42; cursor: not-allowed; text-decoration: none; }
+      #sheet-modal .sheet-note { margin: 12px 14px 14px; line-height: 1.55; color: var(--warn); font-size: 12px; }
     }

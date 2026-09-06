@@ -661,6 +661,46 @@ function peekRowFor(li) {
   return n && n.classList && n.classList.contains("peek") ? n : null;
 }
 
+// sendReplyFor posts one reply for session `s` and reports the outcome the
+// same way everywhere: a toast, and (via `onFail`, when given) the exact
+// message text a caller wants to keep showing after the toast fades. It is
+// the ONE place the 403/409/410/400 mapping lives — extracted out of
+// togglePeek's composer so the mobile reply sheet (openReplySheet) can share
+// it without a live `<li>` to close over. Returns true on success (204),
+// false otherwise; never throws.
+async function sendReplyFor(s, text, onFail) {
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text }),
+    });
+    if (res.status === 204) {
+      showToast("Sent");
+      return true;
+    }
+    // Distinct statuses carry distinct meanings — say which one happened.
+    // Routed through showToast, not just a caller-owned element: a poll can
+    // rebuild the inline composer's row (detaching its `why` span) while the
+    // request is still in flight, the same reason cb.onchange's failure path
+    // already toasts instead of relying solely on an in-row element.
+    const msg =
+      res.status === 403 ? "Replies are not enabled for this session." :
+      res.status === 409 ? "Session is not ready for a message right now." :
+      res.status === 410 ? "That session is gone." :
+      res.status === 400 ? "That text was rejected." :
+      "Send failed (" + res.status + ").";
+    if (onFail) onFail(msg);
+    showToast(msg, { error: true });
+    return false;
+  } catch (_) {
+    const msg = "Send failed: no connection.";
+    if (onFail) onFail(msg);
+    showToast(msg, { error: true });
+    return false;
+  }
+}
+
 // togglePeek expands or collapses the answer block under a session row. The
 // fetch happens on expand only — the listing carries just the one-line
 // summary. The block is a sibling `<li class="peek">`, not a set of children
@@ -818,7 +858,12 @@ async function togglePeek(li, s) {
   };
 
   // sendReply is shared by the composer's Send button and the three quick
-  // replies: one send path, one error mapping, one refresh().
+  // replies: one send path, one error mapping, one refresh(). The POST + the
+  // 403/409/410/400 mapping now live once in the top-level sendReplyFor,
+  // shared with the mobile reply sheet (openReplySheet) — this wrapper only
+  // adds what is specific to the inline composer: the text-validation error
+  // shown before a request is even made, the in-flight latch, and clearing
+  // the row's own input/draft on success.
   async function sendReply(text) {
     if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
     const err = replyTextError(text);
@@ -831,34 +876,11 @@ async function togglePeek(li, s) {
     pendingSends.add(s.id);
     refresh();
     try {
-      const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text }),
-      });
-      if (res.status === 204) {
+      const ok = await sendReplyFor(s, text, (msg) => { why.textContent = msg; });
+      if (ok) {
         input.value = "";
         if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
-        showToast("Sent");
-        return;
       }
-      // Distinct statuses carry distinct meanings — say which one happened.
-      // Routed through showToast, not just why.textContent: a poll can rebuild
-      // this row (and detach `why` from the page) while the request is still
-      // in flight, the same reason cb.onchange's failure path already toasts
-      // instead of relying solely on an in-row element.
-      const msg =
-        res.status === 403 ? "Replies are not enabled for this session." :
-        res.status === 409 ? "Session is not ready for a message right now." :
-        res.status === 410 ? "That session is gone." :
-        res.status === 400 ? "That text was rejected." :
-        "Send failed (" + res.status + ").";
-      why.textContent = msg;
-      showToast(msg, { error: true });
-    } catch (_) {
-      const msg = "Send failed: no connection.";
-      why.textContent = msg;
-      showToast(msg, { error: true });
     } finally {
       // Runs whether the send succeeded, was rejected, or threw — including
       // when the session has since left the list — so the latch never
@@ -992,7 +1014,14 @@ function renderSession(s) {
     else { sum.textContent = "No summary"; sum.classList.add("placeholder"); sum.title = "Show why there is no summary"; }
     sum.setAttribute("role", "button");
     sum.setAttribute("tabindex", "0");
-    const toggle = (e) => { e.stopPropagation(); togglePeek(li, s); };
+    // Mobile has no room to expand a row in place — the summary tap opens
+    // the M4 reply sheet instead of the inline composer. Desktop is
+    // unchanged: togglePeek still owns the sidebar's own expand/collapse.
+    const toggle = (e) => {
+      e.stopPropagation();
+      if (mobileActive(window.innerWidth)) openReplySheet(s);
+      else togglePeek(li, s);
+    };
     sum.onclick = toggle;
     sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") toggle(e); };
     grow.appendChild(sum);
@@ -2315,6 +2344,170 @@ function openActionsSheet(s) {
       body.appendChild(row);
     }
   }, { height: "min(556px, 88dvh)" });
+}
+
+// openReplySheet is the mobile (M4) counterpart to togglePeek's inline
+// composer: the same last-message fetch, the same three quick replies, the
+// same sendState/replyTextError gate, and the same sendReplyFor send path —
+// a bottom sheet instead of an inline row under the session, because a phone
+// has no room to expand a row in place without losing the list underneath it.
+//
+// Gating is single-sourced and fail-closed: `refresh()` below is the only
+// place that computes send.disabled and the caption text, from the same
+// sendState/replyTextError peek.js already ships to the desktop composer.
+// Control and caption are written by the same call, so they cannot disagree.
+function openReplySheet(s) {
+  // pendingNow mirrors togglePeek's li.dataset.peekPending: whether the
+  // session is inside a tool call right now. There is no session-list field
+  // for it (only the /peek response carries it) — seed from the lastPeek
+  // cache so the gate is never briefly wrong about a session already seen,
+  // then refresh it for real once the fetch below lands.
+  let pendingNow = !!(lastPeek && lastPeek.id === s.id && lastPeek.pending);
+
+  openSheet(function (body) {
+    const flab = document.createElement("div");
+    flab.className = "flab";
+    flab.textContent = "Last message";
+
+    const box = document.createElement("div");
+    box.className = "msgbox";
+    box.textContent = lastPeek && lastPeek.id === s.id ? lastPeek.text : "Loading…";
+
+    // Quick replies: same three labels, same digit-only payload as the
+    // inline composer's qk row (togglePeek, above) — sent through the same
+    // doSend below, never a second copy of the send path.
+    const qk = document.createElement("div");
+    qk.className = "qk";
+    const qkButtons = [];
+    for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = digit + " " + word;
+      b.title = "Send " + digit;
+      b.onclick = () => doSend(digit);
+      qk.appendChild(b);
+      qkButtons.push(b);
+    }
+
+    const ta = document.createElement("textarea");
+    ta.className = "ta";
+    ta.rows = 3;
+    ta.placeholder = "Type a reply…";
+    // Restore an in-progress draft the same way the inline composer does —
+    // replyDraft is shared module state, so a draft started here survives a
+    // later desktop-width resize into the inline composer, and vice versa.
+    if (replyDraft && replyDraft.id === s.id) ta.value = replyDraft.text;
+    ta.addEventListener("input", () => {
+      replyDraft = { id: s.id, text: ta.value };
+      refresh();
+    });
+
+    const wide = document.createElement("div");
+    wide.className = "wide";
+    const openT = document.createElement("button");
+    openT.type = "button";
+    openT.className = "btn";
+    openT.textContent = "Open terminal";
+    openT.onclick = () => { closeSheet(); openTerminal(s.id, s.name); };
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "btn pri";
+    send.textContent = "Send ↵";
+    send.onclick = () => doSend(ta.value);
+    wide.append(openT, send);
+
+    const note = document.createElement("div");
+    note.className = "sheet-note";
+
+    body.append(flab, box, qk, ta, wide, note);
+
+    // refresh() is the ONE place send.disabled and the caption are decided —
+    // see the function-level comment above. sendState/replyTextError are the
+    // exact same peek.js functions the desktop composer's own refresh() uses.
+    function refresh() {
+      const st = sendState({ replyable: s.replyable, pending: pendingNow, activity: s.activity });
+      const errCode = replyTextError(ta.value);
+      const gateClosed = !st.enabled;
+      // The quick replies are controls too — a session that is not
+      // replyable/waiting/free must close them exactly like Send, not just
+      // the textarea's own composer. A digit always passes replyTextError,
+      // so without this they would stay tappable while the caption below
+      // says otherwise.
+      send.disabled = gateClosed || !!errCode;
+      for (const b of qkButtons) b.disabled = gateClosed;
+      // Same three sentences togglePeek's sendReply shows for these exact
+      // codes (see its err-branch above) — reused, not reinvented, so the
+      // wording an operator learns on desktop still applies here. Control
+      // and caption must never disagree: whenever Send is disabled there is
+      // always a reason on screen, gating reason or text-validation reason.
+      note.textContent = gateClosed ? st.reason
+        : errCode === "empty" ? "Type something first."
+        : errCode === "newline" ? "One line only — newlines are not sent."
+        : errCode === "control" ? "That text contains control characters and was not sent."
+        : "";
+      note.hidden = !note.textContent;
+    }
+
+    // doSend re-checks BOTH gates right before sending — sendState (a quick
+    // reply's disabled attribute is the only thing stopping it otherwise;
+    // this is the fail-closed backstop, not decorative) and replyTextError
+    // (a quick reply's own digit always passes, but Send reads whatever is
+    // in the textarea right now) — then reuses sendReplyFor for the actual
+    // POST + error mapping, the one send path shared with the desktop inline
+    // composer. pendingSends is the SAME module-level latch togglePeek uses,
+    // so a send already in flight from the inline composer for this session
+    // blocks a second one from the sheet too.
+    function doSend(text) {
+      if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
+      const st = sendState({ replyable: s.replyable, pending: pendingNow, activity: s.activity });
+      if (!st.enabled || replyTextError(text)) { refresh(); return; } // the note already explains why
+      pendingSends.add(s.id);
+      send.disabled = true;
+      for (const b of qkButtons) b.disabled = true;
+      sendReplyFor(s, text).then((ok) => {
+        pendingSends.delete(s.id);
+        if (ok) {
+          if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
+          closeSheet();
+        } else {
+          // Keep the sheet and the draft — sendReplyFor already toasted why.
+          // Do NOT clear ta.value: a rejected send must not lose what the
+          // operator typed.
+          refresh();
+        }
+      });
+    }
+
+    refresh();
+
+    // Live last message + pending flag, the same fetch togglePeek makes on
+    // expand — the sheet can be opened straight from the M1 card without the
+    // inline composer ever having run, so lastPeek may be stale or absent.
+    (async () => {
+      let status = 0;
+      let payload = null;
+      try {
+        const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/peek");
+        status = res.status;
+        if (status === 200) payload = await res.json();
+      } catch (_) {
+        status = 0;
+      }
+      const dlg = document.getElementById("sheet-modal");
+      // Two ways this fetch can land after it no longer matters: the sheet
+      // was closed outright (dlg.open false), or it is still open but was
+      // reopened for a different session in the meantime — openSheet's
+      // body.replaceChildren() would have detached `box` from the page, the
+      // same signal togglePeek reads via peek.isConnected.
+      if (!dlg || !dlg.open || !box.isConnected) return;
+      const st = peekState(!!s.claude, status, payload);
+      box.textContent = st.text;
+      pendingNow = !!(payload && payload.pending);
+      lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: pendingNow };
+      refresh();
+    })();
+  }, { height: "min(648px, 92dvh)" });
 }
 
 function openSessionMenu(anchor, s) {
