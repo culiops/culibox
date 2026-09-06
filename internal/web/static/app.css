@@ -1247,8 +1247,11 @@
        to the terminal tab element, so a tabless cell is never a target) and cheap
        insurance against a cell-level drop zone arriving later. */
     .cell:has(.cell-bar[hidden]):not(.drop-hot) { background: var(--bg); }
-    .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
-    .cell-bar .tab.act { color: #fff; background: var(--sel); box-shadow: inset 0 -2px 0 var(--accent); }
+    .cell-bar .tab { display: flex; align-items: center; gap: 5px; padding: 3px 8px; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; border-right: 1px solid var(--border); }
+    /* Active tab reads as the same surface as the pane below it (--bg, not a
+       blue --sel wash), with the accent line on the TOP edge pinning it to the
+       bar — matches the desktop mockup's tab treatment. */
+    .cell-bar .tab.act { color: var(--fg); background: var(--bg); box-shadow: inset 0 2px 0 var(--accent); }
     /* Removing the tab's own border took its affordance with it: an inactive
        tab became bare text on the bar. Hover puts "this is a control" back
        without spending a stroke. :not(.act) so the active tab keeps its fill. */
@@ -1265,9 +1268,8 @@
     /* Context readout doubles as the trigger for the session detail rail. */
     .cell-bar .tab-usage { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; padding: 0 4px; font-family: inherit; }
     .cell-bar .tab-usage:hover { color: var(--fg); border-color: var(--accent); }
-    /* Same --muted-on--sel failure as the palette above: the active tab sets
-       color: #fff on itself, but this child span re-asserts --muted, which
-       fails at 3.99 against the same --sel background. */
+    /* The active tab now uses the pane's own --bg; keep its status child at
+       --fg so it stays consistent with the active tab's --fg label. */
     .cell-bar .tab.act .tab-st { color: var(--fg); }
     .cell-bar .tab-x { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 14px; line-height: 1; }
     .cell-bar .tab-x:hover { color: var(--danger); }
