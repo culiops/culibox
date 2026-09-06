@@ -206,6 +206,7 @@ class TerminalTab {
     this.usageData = null;   // per-window transcript usage (claude only)
     this._usageKey = "";     // change-detect key so setUsage doesn't churn renders
     this.onUpdate = null;
+    this.ctrlArmed = false;  // mobile key bar: ctrl latched, modifies the NEXT typed char
 
     this.el = document.createElement("div");
     this.el.className = "tab-body";
@@ -287,6 +288,19 @@ class TerminalTab {
         // Once per tab: enough to diagnose later, not enough to spam.
         if (!this.warnedBadMouse) { this.warnedBadMouse = true; console.warn("dropped a mouse report with NaN coordinates:", JSON.stringify(d)); }
         return;
+      }
+      // Latched ctrl (mobile key bar): the ctrl key armed the NEXT keystroke.
+      // A single typed char becomes its control byte; an unmappable one (digit,
+      // multibyte, a paste of >1 char) is sent as typed. Either way ctrl disarms
+      // and the key bar repaints. This runs only when armed, so desktop typing
+      // and normal mobile typing are on the untouched fast path below.
+      if (this.ctrlArmed) {
+        this.ctrlArmed = false;
+        if (typeof renderMobileKeybar === "function") renderMobileKeybar();
+        if (d.length === 1) {
+          const b = ctrlByte(d);
+          if (b) { if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(b)); return; }
+        }
       }
       if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(enc.encode(d));
     });
@@ -498,6 +512,26 @@ class TerminalTab {
     this.ws.send(enc.encode(text));
     return true;
   }
+
+  // sendKey writes raw wire bytes the user explicitly pressed on the mobile key
+  // bar or the ^C snippet — esc, tab, arrows, Ctrl-<x>, and Return. It is the
+  // deliberate counterpart to sendText: sendText refuses control bytes and never
+  // submits, because it inserts *text*; sendKey sends exactly the bytes given,
+  // INCLUDING \r and \x03, because tapping ↵ or ^C IS the user pressing that key.
+  // Bytes come from mobileterm.js (all <0x80) — do not pass user text here.
+  // Returns false when the socket is not open so the caller can surface it.
+  sendKey(bytes) {
+    if (!bytes) return false;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this.ws.send(enc.encode(bytes));
+    return true;
+  }
+
+  // armCtrl toggles the ctrl latch. The next single char typed on the soft
+  // keyboard is then converted to its control byte in onData. Toggling lets a
+  // second tap cancel an accidental arm. Returns the new armed state.
+  armCtrl() { this.ctrlArmed = !this.ctrlArmed; return this.ctrlArmed; }
+  ctrlIsArmed() { return this.ctrlArmed; }
 
   // showTrouble renders one line above the terminal naming WHY it is disconnected
   // and what the user can do about it. "reconnecting…" alone left a stale login

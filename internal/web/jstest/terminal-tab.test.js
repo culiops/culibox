@@ -246,3 +246,15 @@ test("emitWheel caps the notches one move can produce", () => {
   emitWheel(term, -500, 0, 0);
   assert.strictEqual(sent.length, 20);
 });
+
+// --- mobile: latched ctrl ---------------------------------------------------
+// The DOM/WS wiring (onData's latch branch) is smoke-tested on DEV; this pins
+// the intended byte so a future edit to ctrlByte can't silently change what a
+// latched key sends without a test noticing.
+test("latched-ctrl transform matches what onData will send", () => {
+  const mt = require("../static/mobileterm.js");
+  // The onData latch sends ctrlByte(d) for a 1-char payload, else the char as-is.
+  assert.equal(mt.ctrlByte("c"), "\x03"); // ^C via keyboard while armed
+  assert.equal(mt.ctrlByte("d"), "\x04"); // ^D
+  assert.equal(mt.ctrlByte("5"), "");     // digit -> sent literally, not a byte
+});
