@@ -282,6 +282,7 @@ function initMobileShell() {
   setMobileScreen(_mobileScreen); // applies class + paints nav on boot
   renderMobileChips();
   renderMobileKeybar();
+  renderMobileSnips();
 }
 
 // --- mobile terminal: session chip strip -----------------------------------
@@ -351,6 +352,35 @@ function renderMobileChips() {
     btn.addEventListener("click", () => focusTerminalTab(t));
     strip.appendChild(btn);
   }
+}
+
+// --- mobile terminal: snippet row ------------------------------------------
+// ^C is a control byte sent immediately (panic stop, one tap); continue/yes/no//
+// are TEXT inserted via sendText (never auto-submits — the user presses Enter).
+// The split is the whole point: a control byte through sendText would be dropped,
+// and text through sendKey could carry a submitting newline.
+function renderMobileSnips() {
+  const row = document.getElementById("term-snips");
+  if (!row) return;
+  row.textContent = "";
+  for (const s of SNIPPETS) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "snip" + (s.danger ? " dgr" : "") + (s.ghost ? " gh" : "");
+    b.textContent = s.label;
+    b.setAttribute("aria-label", s.key === "sigint" ? "interrupt" : s.label);
+    b.addEventListener("click", () => onSnip(s));
+    row.appendChild(b);
+  }
+}
+
+function onSnip(s) {
+  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  if (!t) return;
+  if (s.kind === "control") { t.sendKey(s.bytes); t.term.focus(); return; }
+  if (s.kind === "text") { t.sendText(s.text); t.term.focus(); return; }
+  // s.kind === "more": overflow snippets are a later addition; no-op for now
+  // (the button exists per M2, its menu content is not in this slice).
 }
 
 // --- mobile terminal: 7-key accessory bar ----------------------------------
