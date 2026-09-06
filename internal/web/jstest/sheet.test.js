@@ -21,10 +21,21 @@ test("every action carries a glyph", () => {
   for (const x of sheetActions(claude)) assert.ok(x.glyph, "missing glyph for " + x.id);
 });
 
-test("row order matches the M5 canvas: terminal, files, context, rename, copy, end", () => {
+test("files and attribution use distinct glyphs (M5 differentiates them)", () => {
+  assert.notStrictEqual(SHEET_GLYPHS.files, SHEET_GLYPHS.attribution);
+});
+
+test("row order matches the M5 canvas: terminal, files, rename, copy, end", () => {
   const full = { ...claude, claude: true };
   const ids = sheetActions(full).map((x) => x.id);
-  assert.deepStrictEqual(ids, ["open-terminal", "files", "attribution", "rename", "copycwd", "end"]);
+  // "attribution" (Context by tool) is dropped on mobile: it opens the steer
+  // rail whose only dismiss control is hidden ≤700px (un-closable dead-end).
+  assert.deepStrictEqual(ids, ["open-terminal", "files", "rename", "copycwd", "end"]);
+});
+
+test("attribution is never offered on mobile (un-closable steer-rail dead-end)", () => {
+  const full = { ...claude, claude: true };
+  assert.ok(!sheetActions(full).some((x) => x.id === "attribution"));
 });
 
 test("a non-claude shell session drops the claude-only items but keeps end", () => {

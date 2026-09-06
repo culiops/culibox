@@ -1083,13 +1083,14 @@ function renderSession(s) {
 // on mobile. Only the needs-you group gets this treatment (refreshSessions
 // picks the builder per group below).
 //
-// The quick-reply buttons call sendReplyFor(s, digit) directly, not the
-// sheet's gated doSend: a card has no /peek fetch of its own, so it cannot
-// know `pending` the way openReplySheet's pendingNow does. Skipping a
-// client-side gate here is deliberate, not an oversight — the server's
-// canReply already 409s (and sendReplyFor already toasts) any wrong send, so
-// the fail-closed contract ("the transcript decides, not the dot") holds
-// without a per-card /peek poll.
+// The quick-reply buttons send through sendReplyFor(s, digit) — the same one
+// gated send path the sheet's doSend uses. They are gated client-side too,
+// via the SAME sendState peek.js function the reply sheet and the desktop
+// composer read (binding constraint: card quick-replies reuse sendState). A
+// card has no /peek fetch of its own, so it cannot know `pending`; we treat
+// it conservatively as false and let the server's canReply be the real gate
+// (it 409s, and sendReplyFor toasts, any send the client mis-permits) — the
+// fail-closed contract ("the transcript decides, not the dot") holds.
 function renderNeedsCard(s) {
   const li = document.createElement("li");
   li.className = "card";
@@ -1128,12 +1129,18 @@ function renderNeedsCard(s) {
 
   const qk = document.createElement("div");
   qk.className = "qk";
+  // Same gate as the reply sheet and the desktop composer: a digit always
+  // passes replyTextError, so sendState is the only client-side check that
+  // can close these. pending is unknowable from the session list (no /peek),
+  // so treat it as false — the server's canReply is the authoritative gate.
+  const cardSt = sendState({ replyable: s.replyable, pending: false, activity: s.activity });
   for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
     const b = document.createElement("button");
     b.type = "button";
     b.className = "btn";
     b.textContent = digit + " " + word;
     b.title = "Send " + digit;
+    b.disabled = !cardSt.enabled;
     b.onclick = () => sendReplyFor(s, digit);
     qk.appendChild(b);
   }
@@ -2511,6 +2518,29 @@ function openReplySheet(s) {
   let pendingNow = !!(lastPeek && lastPeek.id === s.id && lastPeek.pending);
 
   openSheet(function (body) {
+    // Session-identity header (M4): activity dot + session name + tier badge,
+    // the same trio openActionsSheet's .shd builds — so a reply sheet opened
+    // straight from the M1 card still says which session it is talking to.
+    const shd = document.createElement("div");
+    shd.className = "shd";
+    const sact = activityClass(s.activity);
+    const sdot = document.createElement("span");
+    sdot.className = sact.cls;
+    sdot.setAttribute("aria-hidden", "true");
+    shd.appendChild(sdot);
+    const snm = document.createElement("span");
+    snm.className = "grow";
+    snm.textContent = s.name || s.id;
+    shd.appendChild(snm);
+    const stier = tierBadge(s, boxRuntime);
+    if (stier) {
+      const stb = document.createElement("span");
+      stb.className = "bdg tier " + (stier.tone === "danger" ? "host" : "box");
+      stb.textContent = stier.text;
+      stb.title = stier.title;
+      shd.appendChild(stb);
+    }
+
     const flab = document.createElement("div");
     flab.className = "flab";
     flab.textContent = "Last message";
@@ -2518,6 +2548,41 @@ function openReplySheet(s) {
     const box = document.createElement("div");
     box.className = "msgbox";
     box.textContent = lastPeek && lastPeek.id === s.id ? lastPeek.text : "Loading…";
+
+    // Enable-replies toggle (I1 regression fix). Replyable defaults false and
+    // the ONLY control that grants it is this checkbox — pre-5c it lived in
+    // the inline peek composer the desktop still shows; on mobile the summary
+    // tap now opens this sheet instead, so the toggle must move here too or a
+    // default session's Send stays disabled forever with no way to enable it.
+    // Same POST /api/sessions/<id>/replyable the desktop cb makes; on success
+    // s.replyable flips and refresh() re-evaluates the gate (Send/qk enable
+    // when the session is also waiting). The M4 mockup omitted this control,
+    // but "UI fidelity never breaks function" — this restores a regressed
+    // capability, kept compact and consistent with the sheet's style.
+    const optin = document.createElement("label");
+    optin.className = "sheet-optin";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!s.replyable;
+    const optinText = document.createElement("span");
+    optinText.textContent = "Enable replies for this session";
+    optin.append(cb, optinText);
+    cb.onchange = async () => {
+      const want = cb.checked;
+      try {
+        const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ replyable: want }),
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        s.replyable = want;
+      } catch (_) {
+        cb.checked = !want; // the server is the truth; put the box back
+        showToast("Could not change the reply setting", { error: true });
+      }
+      refresh();
+    };
 
     // Quick replies: same three labels, same digit-only payload as the
     // inline composer's qk row (togglePeek, above) — sent through the same
@@ -2566,7 +2631,7 @@ function openReplySheet(s) {
     const note = document.createElement("div");
     note.className = "sheet-note";
 
-    body.append(flab, box, qk, ta, wide, note);
+    body.append(shd, flab, box, optin, qk, ta, wide, note);
 
     // refresh() is the ONE place send.disabled and the caption are decided —
     // see the function-level comment above. sendState/replyTextError are the

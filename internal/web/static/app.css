@@ -1386,6 +1386,12 @@
 
       /* Terminal screen: the pane grid fills the screen; the sidebar is hidden. */
       html.mobile-screen-terminal #sidebar { display: none; }
+      /* The steer rail is hidden on the sessions/files screens above; hide it
+         on the terminal screen too. Its only toggle (#steer-toggle) is hidden
+         ≤700px, so a rail shown here would be an un-closable dead-end. The
+         mobile actions sheet no longer offers "Context by tool" (sheet.js
+         drops it), so this is defence-in-depth — nothing should open it. */
+      html.mobile-screen-terminal #steer-rail { display: none; }
 
       /* Session topbar (M2): the Terminal screen's own topbar, replacing the
          global header there (see `html.mobile-screen-terminal header` below,
@@ -1831,6 +1837,20 @@
          promoted-topbar move Files/Terminal already make elsewhere. */
       #settings-modal.editing .tabs { display: none; }
 
+      /* M9/M10 close affordance: the full-screen dialog has no backdrop to
+         tap and a phone has no Esc key, so the header's "esc" ghost is a
+         dead-end hint. Turn the (already working) data-close button into a
+         back-‹ pinned to the header's left edge — the affordance the M9/M10
+         mockups draw. In the editor (.editing) the left-side #pf-back ‹
+         already owns navigation (back to the profile list), so hide this one
+         there to avoid two left arrows; closing the whole dialog is then the
+         two-step drill-back the drill-down model already implies. */
+      #settings-modal:not(.editing) #settings-esc {
+        order: -1; font-size: 0; padding-left: 0; padding-right: 0; }
+      #settings-modal:not(.editing) #settings-esc::before {
+        content: "\2039"; font-size: 24px; line-height: 1; }
+      #settings-modal.editing #settings-esc { display: none; }
+
       /* A 186px name column and a value box do not both fit in 340px, so the
          row wraps: name on its own line, then value and remove. */
       .kvrow { flex-wrap: wrap; }
@@ -1895,6 +1915,11 @@
         letter-spacing: .08em; color: var(--muted); }
       #sheet-modal .msgbox { margin: 8px 14px 0; padding-left: 12px; border-left: 2px solid var(--rule);
         font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+      /* Enable-replies toggle (I1): the only control that grants a session
+         reply permission — mirrors the desktop peek composer's .peek-optin. */
+      #sheet-modal .sheet-optin { display: flex; align-items: center; gap: 9px;
+        margin: 12px 14px 0; min-height: var(--tap); font-size: 12.5px; color: var(--muted); }
+      #sheet-modal .sheet-optin input { width: 18px; height: 18px; flex: none; }
       #sheet-modal .sheet-body > .qk { display: flex; gap: 7px; margin: 14px 14px 0; }
       #sheet-modal .sheet-body > .qk .btn { flex: 1; min-height: var(--tap); font-size: 12.5px; }
       #sheet-modal .ta { display: block; width: calc(100% - 28px); margin: 13px 14px 0;

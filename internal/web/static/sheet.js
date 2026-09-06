@@ -8,7 +8,7 @@ var menuItems = _sr.menuItems || (typeof window !== "undefined" && window.menuIt
 
 var SHEET_GLYPHS = {
   "open-terminal": "▮",
-  files: "▤",
+  files: "▢",
   attribution: "▤",
   rename: "✎",
   copycwd: "⇱",
@@ -20,7 +20,14 @@ var SHEET_GLYPHS = {
 // "go somewhere" actions before the edit/copy ones. ORDER is the single place
 // that sequencing is decided; sheetActions only fills it in, so a conditional
 // item's absence (no cwd, no claude transcript) just closes the gap.
-var ORDER = ["open-terminal", "files", "attribution", "rename", "copycwd", "end"];
+//
+// `attribution` ("Context by tool") is deliberately NOT in ORDER — same way
+// `newpane` is dropped. On mobile it opens the desktop steer rail, whose only
+// dismiss control (#steer-toggle) is hidden ≤700px, so it would be an
+// un-closable dead-end (collides with the "steer/analytics hidden on mobile"
+// decision). The desktop menu (openSessionMenu → menuItems) still offers it;
+// only this mobile sheet drops it.
+var ORDER = ["open-terminal", "files", "rename", "copycwd", "end"];
 
 function sheetActions(s) {
   var byId = {};
