@@ -212,7 +212,7 @@ function renderCollapsedSummaries(state) {
   // Same reasoning for the Terminal screen's chip strip and key bar: repaint
   // on the existing poll refresh rather than adding a second one.
   renderMobileChips();
-  if (typeof renderMobileKeybar === "function") renderMobileKeybar();
+  renderMobileKeybar();
 }
 
 function togglePane(kind) {
@@ -281,6 +281,7 @@ function initMobileShell() {
   if (sgm) sgm.addEventListener("click", () => { const g = document.getElementById("spawn-go"); if (g) g.click(); });
   setMobileScreen(_mobileScreen); // applies class + paints nav on boot
   renderMobileChips();
+  renderMobileKeybar();
 }
 
 // --- mobile terminal: session chip strip -----------------------------------
@@ -350,6 +351,69 @@ function renderMobileChips() {
     btn.addEventListener("click", () => focusTerminalTab(t));
     strip.appendChild(btn);
   }
+}
+
+// --- mobile terminal: 7-key accessory bar ----------------------------------
+// Fixed seven keys (esc tab ctrl ↑ ↓ ↵ ⋯), never reshaped between keyboard
+// states. Control keys write raw bytes via sendKey; ctrl is a latch that arms
+// the next typed char (handled in TerminalTab.onData). ⋯ reveals overflow keys.
+const KEY_GLYPH = { esc: "esc", tab: "tab", ctrl: "ctrl", up: "↑", down: "↓", enter: "↵", more: "⋯",
+                    left: "←", right: "→", pipe: "|", slash: "/", dash: "-", under: "_" };
+
+function renderMobileKeybar() {
+  const bar = document.getElementById("term-keybar");
+  if (!bar) return;
+  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const armed = !!(t && t.ctrlIsArmed && t.ctrlIsArmed());
+  bar.textContent = "";
+  for (const name of KEYBAR) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "key" + (name === "ctrl" && armed ? " armed" : "");
+    b.dataset.key = name;
+    b.textContent = KEY_GLYPH[name] || name;
+    b.setAttribute("aria-label", name);
+    b.addEventListener("click", () => onKeybarKey(name));
+    bar.appendChild(b);
+  }
+}
+
+function onKeybarKey(name) {
+  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  if (name === "more") { toggleKeybarMore(); return; }
+  if (!t) return;
+  if (name === "ctrl") { t.armCtrl(); renderMobileKeybar(); return; }
+  const bytes = keyByte(name);
+  if (bytes) t.sendKey(bytes);
+  t.term.focus();  // keep the soft keyboard up after an accessory key
+}
+
+// The ⋯ popover: left/right arrows + a few symbols. Arrows send bytes; symbols
+// insert TEXT (so a stray one never submits) via sendText. One pick closes it.
+function toggleKeybarMore() {
+  let pop = document.getElementById("keybar-more");
+  if (!pop) {
+    pop = document.createElement("div"); pop.id = "keybar-more";
+    for (const name of KEYBAR_MORE) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "key";
+      b.textContent = KEY_GLYPH[name] || name; b.setAttribute("aria-label", name);
+      b.addEventListener("click", () => { onKeybarMoreKey(name); pop.classList.remove("open"); });
+      pop.appendChild(b);
+    }
+    document.body.appendChild(pop);
+  }
+  const bar = document.getElementById("term-keybar");
+  if (bar) { const r = bar.getBoundingClientRect(); pop.style.bottom = (window.innerHeight - r.top + 5) + "px"; }
+  pop.classList.toggle("open");
+}
+
+function onKeybarMoreKey(name) {
+  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  if (!t) return;
+  const bytes = keyByte(name);                       // left/right arrows
+  if (bytes) { t.sendKey(bytes); t.term.focus(); return; }
+  const text = SYMBOL_TEXT[name];                     // symbols are inserted text
+  if (text) { t.sendText(text); t.term.focus(); }
 }
 
 // Shortcut hint: the right-hand half of the permanent #hint status bar

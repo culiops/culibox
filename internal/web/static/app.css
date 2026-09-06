@@ -1374,6 +1374,28 @@
       html.mobile-screen-terminal #grid { grid-template-columns: 1fr; grid-template-rows: 1fr; }
       html.mobile-screen-terminal #grid > .cell:not(.focus) { display: none; }
 
+      /* The input bars stack at the bottom of the Terminal screen, above the nav. */
+      html.mobile-screen-terminal #term-input { display: flex; flex-direction: column; flex: none; }
+
+      /* 7-key accessory bar (M2/M3): fixed 7 keys, 46px tall, never reshaped.
+         ctrl armed = accent (latched). ⋯ opens a popover of overflow keys. */
+      #term-keybar { display: flex; gap: 5px; padding: 5px 6px; background: var(--panel); border-top: 1px solid var(--border); }
+      #term-keybar .key {
+        flex: 1; min-width: 0; height: 46px; box-sizing: border-box;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 14px; color: var(--fg);
+        background: var(--surface-2); border: 1px solid var(--border); cursor: pointer;
+      }
+      #term-keybar .key.armed { color: var(--accent); border-color: var(--accent); background: var(--sel); font-weight: 700; } /* ctrl latched */
+
+      /* ⋯ overflow popover: one row of extra keys above the bar, NOT a second
+         permanent row — it closes after a pick so only one row is ever up. */
+      #keybar-more { position: fixed; left: 6px; right: 6px; display: none; gap: 5px;
+        padding: 5px 6px; background: var(--panel); border: 1px solid var(--border); z-index: 40; }
+      #keybar-more.open { display: flex; }
+      #keybar-more .key { flex: 1; height: 46px; display: flex; align-items: center; justify-content: center;
+        font-size: 14px; color: var(--fg); background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; }
+
       /* A pane collapsed on desktop (the .sessions-collapsed/.files-collapsed
          class on <html>, toggled by the ▾ caret) hides everything in it but
          its 36px header bar — fine when the OTHER pane is what fills the
