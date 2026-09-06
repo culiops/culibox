@@ -1306,10 +1306,23 @@ async function refreshSessions() {
   // The answer block is a sibling, so it can only be inserted once its row is
   // in the document. Re-opening after the attach also keeps the open panel from
   // collapsing under the reader every few seconds.
+  //
+  // On mobile, a needs-you session's `li` (from `rows`) is built but never
+  // appended — renderNeedsCard's own node takes its place in the DOM instead.
+  // `li.after(peek)` inside togglePeek is a silent no-op on that disconnected
+  // node (no parent to insert beside), so the peek would never actually
+  // render — and since openPeekId is only ever cleared from togglePeek's
+  // collapse branch, it would get stuck, driving a wasted /peek fetch on
+  // every poll until the session leaves needs-you or the window widens back
+  // past 700px. Require the li to actually be in the document before
+  // reopening; otherwise there is nothing to reopen, so clear the id instead
+  // of leaving it stuck. Desktop's li is always connected, so this is a no-op
+  // there — the reopen still runs exactly as before.
   const reopen = lastSessions.find((s) => s.id === openPeekId);
   if (reopen) {
     const li = rows[lastSessions.indexOf(reopen)];
-    if (li && !peekRowFor(li)) togglePeek(li, reopen);
+    if (li && li.isConnected && !peekRowFor(li)) togglePeek(li, reopen);
+    else if (!li || !li.isConnected) openPeekId = null;
   }
   syncSelectedRow();
   return lastSessions;
