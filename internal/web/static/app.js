@@ -353,7 +353,55 @@ function renderMobileChips() {
     btn.addEventListener("click", () => focusTerminalTab(t));
     strip.appendChild(btn);
   }
+  // The topbar mirrors this same focused-tab data (dot/name/context%), so
+  // paint it right here rather than adding a second call at every one of
+  // renderMobileChips' own call sites — the two can never drift apart.
+  renderTermTopbar();
 }
+
+// --- mobile terminal: session topbar (M2) -----------------------------------
+// Same data source as the focused chip above (the focused TAB's own
+// activity()/name/usage(), not a session lookup) so the dot and badge can
+// never disagree with the chip strip. ⋯ is the one control that needs a real
+// session object (openActionsSheet reads s.cwd/s.claude/etc. for the tier
+// badge and menu rows) — sessionForTab looks that up by the tab's id, which
+// IS the session id (tabs.js:691/807 construct TerminalTab(id, name) from a
+// session's own id).
+function sessionForTab(t) {
+  return t ? lastSessions.find((s) => s.id === t.id) || null : null;
+}
+
+function renderTermTopbar() {
+  const bar = document.getElementById("term-topbar");
+  if (!bar) return;
+  if (typeof mobileActive !== "function" || !mobileActive(window.innerWidth)) return;
+  const dot = document.getElementById("tt-dot");
+  const nm = document.getElementById("tt-name");
+  const ctx = document.getElementById("tt-ctx");
+  if (!dot || !nm || !ctx) return;
+  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const a = (t && typeof t.activity === "function") ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+  dot.className = a.cls;
+  dot.title = a.title;
+  nm.textContent = t ? (t.name || t.id) : "";
+  const u = (t && typeof t.usage === "function") ? t.usage() : null;
+  if (u && typeof u.pct === "number") {
+    ctx.textContent = u.pct + "%";
+    ctx.hidden = false;
+  } else {
+    ctx.textContent = "";
+    ctx.hidden = true;
+  }
+}
+
+const ttBack = document.getElementById("tt-back");
+if (ttBack) ttBack.onclick = () => setMobileScreen("sessions");
+const ttMore = document.getElementById("tt-more");
+if (ttMore) ttMore.onclick = () => {
+  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const s = sessionForTab(t);
+  if (s) openActionsSheet(s);
+};
 
 // --- mobile terminal: snippet row ------------------------------------------
 // ^C is a control byte sent immediately (panic stop, one tap); continue/yes/no//

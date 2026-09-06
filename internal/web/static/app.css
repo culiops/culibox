@@ -43,6 +43,8 @@
     /* Mobile terminal typing bars (slice 5b) are invisible above the breakpoint
        and on any screen other than Terminal; the 700px block turns them on. */
     #term-chips, #term-input, #keybar-more { display: none; }
+    /* Mobile terminal session topbar (M2, slice 5c) — same reasoning. */
+    #term-topbar { display: none; }
     /* Placeholder only — real mobile-nav styling (icon size, active state, the
        pip badge) belongs to the @media (max-width:700px) block a later task
        adds. This exists solely so classnames.test.js (every class used has
@@ -1381,6 +1383,27 @@
       /* Terminal screen: the pane grid fills the screen; the sidebar is hidden. */
       html.mobile-screen-terminal #sidebar { display: none; }
 
+      /* Session topbar (M2): the Terminal screen's own topbar, replacing the
+         global header there (see `html.mobile-screen-terminal header` below,
+         beside the equivalent Files rule). Sits above the chip strip; back ‹ /
+         dot / name / context% / ⋯ are filled by renderTermTopbar(), called
+         from renderMobileChips() so the two never disagree. */
+      html.mobile-screen-terminal #term-topbar {
+        display: flex; align-items: center; gap: 10px; flex: none;
+        height: 52px; padding: 0 6px 0 4px; box-sizing: border-box;
+        background: var(--panel); border-bottom: 1px solid var(--border);
+      }
+      #term-topbar .ic {
+        width: 44px; height: 44px; min-width: 44px; box-sizing: border-box;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--surface-2); color: var(--fg); border: 1px solid var(--border);
+        font-size: 18px; line-height: 1; cursor: pointer; flex: none;
+      }
+      #term-topbar .ic:hover { border-color: var(--accent); }
+      #term-topbar .tt-name {
+        font-size: 14px; color: var(--fg); min-width: 0;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
       /* Session chip strip (M2): 56px, horizontal native touch-scroll, right-edge
          fade. Tapping a chip switches the shown session. Only on Terminal screen. */
       html.mobile-screen-terminal #term-chips {
@@ -1499,6 +1522,12 @@
          #layouts (the grid is forced to one column below, so 1/2/4 do
          nothing). */
       #sidebar-toggle, #layouts { display: none; }
+      /* The session detail rail and the analytics dialog are both desktop-only
+         surfaces: the rail has no room on a one-screen-at-a-time phone layout,
+         and the analytics dialog is a dense desktop table. Resolved 2026-09-06
+         (was an open "5c placement question") — hide both outright rather than
+         relocate them. */
+      #steer-toggle, #analytics-open { display: none; }
 
       /* Sessions (M1): the global header IS this screen's topbar
          ("agent-box DEV ⌘ ⚙"), so the pane's own "SESSIONS n / + new" bar is
@@ -1511,10 +1540,12 @@
 
       /* Files (M6): the pane header is PROMOTED to be this screen's only topbar,
          so the global header is hidden here. Its palette button goes with it,
-         replaced by #ft-palette in the promoted bar below; #steer-toggle and
-         #analytics-open (a 5c placement question) stay reachable from the
-         Sessions/Terminal screens, where the header still shows. */
+         replaced by #ft-palette in the promoted bar below. */
       html.mobile-screen-files header { display: none; }
+      /* Terminal (M2): #term-topbar (above) is this screen's own topbar — back
+         ‹ / dot / name / context% / ⋯ — so the global header is redundant here
+         too, same reasoning as Files. */
+      html.mobile-screen-terminal header { display: none; }
       /* The promoted bar is a 52px topbar: a full-strength "Files" title (not
          the .phd uppercase-muted label) with the actions pushed to the right.
          It must read as open regardless of whatever the desktop collapse toggle
