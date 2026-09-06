@@ -209,6 +209,10 @@ function renderCollapsedSummaries(state) {
   // this file, hoisted like waitingCount() above; it no-ops safely before
   // #mobile-nav exists in the DOM or on desktop (where it stays hidden).
   renderMobileNav();
+  // Same reasoning for the Terminal screen's chip strip and key bar: repaint
+  // on the existing poll refresh rather than adding a second one.
+  renderMobileChips();
+  if (typeof renderMobileKeybar === "function") renderMobileKeybar();
 }
 
 function togglePane(kind) {
@@ -276,6 +280,76 @@ function initMobileShell() {
   const sgm = document.getElementById("spawn-go-mobile");
   if (sgm) sgm.addEventListener("click", () => { const g = document.getElementById("spawn-go"); if (g) g.click(); });
   setMobileScreen(_mobileScreen); // applies class + paints nav on boot
+  renderMobileChips();
+}
+
+// --- mobile terminal: session chip strip -----------------------------------
+// The chips are the open terminal tabs (the sessions you have launched into a
+// pane); the Sessions screen stays the full launcher. One chip is active (the
+// focused pane); tapping another switches which single pane the Terminal screen
+// shows. This reuses the pane machinery — no parallel session model.
+function openTerminalTabs() {
+  const out = [];
+  if (typeof eachTerminal === "function") eachTerminal((t) => out.push(t)); // cell order, then tab order
+  return out;
+}
+
+// cellOfTab: tabs carry no back-pointer to their Cell, so this is the honest
+// implementation — scan the live cells for the one holding this tab. `cells`
+// is tabs.js's module-level array; classic scripts share one global scope, so
+// it is reachable here like any other global.
+function cellOfTab(tab) {
+  if (typeof cells === "undefined") return null;
+  for (const c of cells) if (c.tabs.includes(tab)) return c;
+  return null;
+}
+
+function focusTerminalTab(tab) {
+  if (!tab || typeof setFocusedCell !== "function") return;
+  const cell = cellOfTab(tab);
+  if (!cell) return;
+  // Same order tabs.js's own openTerminal uses: focus the cell, then make this
+  // tab its active one (Cell has no separate "select" — activate() is both).
+  setFocusedCell(cell);
+  cell.activate(tab);
+  renderMobileChips();
+}
+
+function renderMobileChips() {
+  const strip = document.getElementById("term-chips");
+  if (!strip) return;
+  const tabs = openTerminalTabs();
+  strip.hidden = tabs.length === 0;
+  const focused = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  strip.textContent = "";
+  for (const t of tabs) {
+    // Reuse activity.js's own class map (the same one the session row and the
+    // tab-bar dot use) rather than re-deriving a state string.
+    const a = (typeof activityClass === "function" && typeof t.activity === "function")
+      ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+    const waiting = typeof t.activity === "function" && t.activity() === "waiting";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip" + (t === focused ? " on" : "") + (waiting ? " wait" : "");
+    const dot = document.createElement("span");
+    dot.className = a.cls;
+    dot.setAttribute("aria-hidden", "true");
+    const nm = document.createElement("span");
+    nm.className = "cnm";
+    nm.textContent = t.name || t.id;
+    btn.append(dot, nm);
+    // Context %, same field/format the tab strip's own usage readout uses
+    // (tabs.js renderBar / app.js renderSession) — no re-derivation here.
+    const u = (typeof t.usage === "function") ? t.usage() : null;
+    if (t === focused && u && typeof u.pct === "number") {
+      const pct = document.createElement("span");
+      pct.className = "u";
+      pct.textContent = u.pct + "%";
+      btn.appendChild(pct);
+    }
+    btn.addEventListener("click", () => focusTerminalTab(t));
+    strip.appendChild(btn);
+  }
 }
 
 // Shortcut hint: the right-hand half of the permanent #hint status bar

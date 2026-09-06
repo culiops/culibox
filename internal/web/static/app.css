@@ -40,6 +40,9 @@
     /* The mobile bottom nav is invisible above the mobile breakpoint; the 700px
        block below turns it on. It is the ONLY screen switcher on a phone. */
     #mobile-nav { display: none; }
+    /* Mobile terminal typing bars (slice 5b) are invisible above the breakpoint
+       and on any screen other than Terminal; the 700px block turns them on. */
+    #term-chips, #term-input { display: none; }
     /* Placeholder only — real mobile-nav styling (icon size, active state, the
        pip badge) belongs to the @media (max-width:700px) block a later task
        adds. This exists solely so classnames.test.js (every class used has
@@ -1335,6 +1338,41 @@
 
       /* Terminal screen: the pane grid fills the screen; the sidebar is hidden. */
       html.mobile-screen-terminal #sidebar { display: none; }
+
+      /* Session chip strip (M2): 56px, horizontal native touch-scroll, right-edge
+         fade. Tapping a chip switches the shown session. Only on Terminal screen. */
+      html.mobile-screen-terminal #term-chips {
+        display: flex; align-items: stretch; gap: 7px;
+        height: 56px; padding: 5px 10px; box-sizing: border-box;
+        overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+        background: var(--panel); border-bottom: 1px solid var(--border);
+        position: relative; scrollbar-width: none;
+      }
+      html.mobile-screen-terminal #term-chips[hidden] { display: none; } /* 0 open terminals */
+      #term-chips::-webkit-scrollbar { display: none; }
+      .chip {
+        flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px;
+        min-height: var(--tap); padding: 0 12px; box-sizing: border-box;
+        font-size: 12.5px; color: var(--muted);
+        background: transparent; border: 1px solid var(--border); cursor: pointer;
+      }
+      .chip .dot { flex: 0 0 auto; }
+      .chip .cnm { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip .u { font-size: 10.5px; color: var(--muted); } /* context % on the active chip */
+      .chip.on { color: var(--fg); border-color: var(--accent); background: var(--sel-soft); }
+      .chip.wait { color: var(--warn-fg); border-color: var(--warn-fg); } /* an agent needs you */
+      /* Right-edge fade hint that the strip scrolls (M2 .fade-r), painted over the
+         strip without eating chip taps. */
+      html.mobile-screen-terminal #term-chips::after {
+        content: ""; position: sticky; right: 0; align-self: stretch;
+        flex: 0 0 34px; margin-left: -34px; pointer-events: none;
+        background: linear-gradient(90deg, transparent, var(--panel));
+      }
+
+      /* Terminal screen shows ONE pane: the focused cell fills, others hide, and
+         the desktop split gutters/handles are gone (nothing to resize on a phone). */
+      html.mobile-screen-terminal #grid { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+      html.mobile-screen-terminal #grid > .cell:not(.focus) { display: none; }
 
       /* A pane collapsed on desktop (the .sessions-collapsed/.files-collapsed
          class on <html>, toggled by the ▾ caret) hides everything in it but
