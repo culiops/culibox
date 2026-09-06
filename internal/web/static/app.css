@@ -657,6 +657,10 @@
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dlg-x:hover { color: var(--fg); }
+    /* Mobile-only full-screen topbar (M8) — replaces .dlg-title/.dlg-head at
+       <=700px (see the @media (max-width:700px) block below for its layout).
+       Hidden here so the desktop dialog stays exactly as it was. */
+    #spawn-topbar { display: none; }
     /* No fixed max-height: a magic constant here has twice under-reserved the
        real chrome above/below .dlg-body (the head's height varies — e.g.
        #settings-modal's tabs row — and so does the dialog's own padding).
@@ -1863,4 +1867,61 @@
       #sheet-modal .qk .btn:disabled, #sheet-modal .wide .btn:disabled {
         opacity: .42; cursor: not-allowed; text-decoration: none; }
       #sheet-modal .sheet-note { margin: 12px 14px 14px; line-height: 1.55; color: var(--warn); font-size: 12px; }
+
+      /* --- M8: spawn full-screen -------------------------------------------
+         The desktop spawn dialog (D5) is a small centred box-drawn card; the
+         mockup makes it the whole screen on a phone instead — a sheet you
+         fill in, not a floating panel. Presentation only: the form fields,
+         openSpawnDialog, and #spawn-go/#spawn-go-mobile's forwarding
+         (app.js:280-281, :2175) are untouched. */
+      #spawn-modal {
+        margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh;
+        border: 0; border-radius: 0; padding: 0;
+      }
+      /* box.css's [box-=square]::before draws the desktop card's border from
+         @layer utils — unlayered always beats layered regardless of
+         specificity (same trick the dialog[box-] padding override above
+         relies on), so this bare descendant selector is enough to drop the
+         floating-card edge for the full-bleed sheet. */
+      #spawn-modal::before { display: none; }
+      /* .dlg-title/.dlg-head are the box-drawn legend-over-rule header
+         (.pane-head's absolute-positioned CSS) — the wrong shape for a
+         full-screen sheet. Swapped for the flat #spawn-topbar below, same
+         pattern as M2's #term-topbar / M6's promoted #files-phd. */
+      #spawn-modal .dlg-title, #spawn-modal .dlg-head { display: none; }
+      #spawn-topbar {
+        display: flex; align-items: center; gap: 8px; flex: none;
+        height: 52px; padding: 0 4px; box-sizing: border-box;
+        background: var(--panel); border-bottom: 3px solid var(--accent);
+      }
+      #spawn-topbar .spawn-x {
+        width: 44px; height: 44px; min-width: 44px; box-sizing: border-box;
+        display: flex; align-items: center; justify-content: center;
+        background: none; border: 0; color: var(--muted); font-size: 20px;
+        line-height: 1; cursor: pointer; flex: none;
+      }
+      #spawn-topbar .spawn-x:hover { color: var(--fg); }
+      #spawn-topbar .spawn-title { font-size: 14px; color: var(--fg); }
+      /* Bottom padding reserves room for the fixed footer below so the last
+         field (the warnbox) never renders underneath it. */
+      #spawn-modal .dlg-body { padding: 16px 13px 76px; }
+      /* Cancel / Spawn become the M8 "vbar": a 64px footer pinned to the
+         screen's bottom edge regardless of scroll position, both buttons
+         growing to share the row instead of hugging the right edge like the
+         desktop 2-button row does. position: sticky only pins an element
+         once its container's content overflows past it — with a short form
+         (the common case) it would just sit wherever the content ends,
+         leaving a gap below it, so this uses position: fixed instead.
+         #spawn-modal is itself position: fixed; inset: 0 (see above) and
+         covers the whole viewport, so fixed here lands in the same place a
+         true out-of-flow dialog footer (e.g. #settings-modal's .dft) would,
+         without moving the submit button out of the <form id="spawn">. */
+      #spawn-modal .spawn-actions {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 1;
+        display: flex; gap: 8px; align-items: center;
+        height: 64px; margin: 0; padding: 0 13px;
+        background: var(--panel); border-top: 1px solid var(--border);
+        box-sizing: border-box;
+      }
+      #spawn-modal .spawn-actions button { flex: 1; min-height: var(--tap); }
     }
