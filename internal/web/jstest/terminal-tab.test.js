@@ -258,3 +258,16 @@ test("latched-ctrl transform matches what onData will send", () => {
   assert.equal(mt.ctrlByte("d"), "\x04"); // ^D
   assert.equal(mt.ctrlByte("5"), "");     // digit -> sent literally, not a byte
 });
+
+// --- mobile: swipe gesture math ---------------------------------------------
+// installSwipe (below) is built entirely on these two pure helpers; pinning
+// the math here, beside the touch-scroll tests it shares a gesture with,
+// keeps the axis-lock and threshold behavior visible from this file too.
+test("swipe gesture: horizontal past slop + past threshold picks prev/next", () => {
+  const mt = require("../static/mobileterm.js");
+  assert.equal(mt.gestureAxis(30, 6, 8), "horizontal"); // committed to swipe
+  assert.equal(mt.gestureAxis(6, 30, 8), "vertical");   // committed to scroll
+  assert.equal(mt.swipeIntent(-70, 50), "next");        // dragged left
+  assert.equal(mt.swipeIntent(70, 50), "prev");
+  assert.equal(mt.swipeIntent(-30, 50), null);          // not far enough -> no switch
+});

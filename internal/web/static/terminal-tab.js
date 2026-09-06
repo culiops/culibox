@@ -183,6 +183,42 @@ function installTouchScroll(term, el, opts) {
   };
 }
 
+// installSwipe adds left/right session switching to the same touch surface as
+// installTouchScroll. It is deliberately narrow: it does nothing until the
+// gesture is committed horizontal past the slop, it NEVER acts while the running
+// program owns the mouse (a horizontal drag there is the app's own drag —
+// see the rejected arrow-key hack at :103), and it fires once, on touchend,
+// only if the total horizontal travel cleared SWIPE_THRESHOLD_PX. Vertical
+// scrolling is left entirely to installTouchScroll.
+const SWIPE_THRESHOLD_PX = 60;
+function installSwipe(term, el, onSwipe) {
+  if (!el || typeof el.addEventListener !== "function") return () => {};
+  let startX = 0, startY = 0, axis = null, active = false;
+  const onStart = (e) => {
+    if (e.touches.length !== 1) { active = false; return; }
+    startX = e.touches[0].clientX; startY = e.touches[0].clientY; axis = null; active = true;
+  };
+  const onMove = (e) => {
+    if (!active || e.touches.length !== 1) return;
+    if (axis === null) {
+      const dx = e.touches[0].clientX - startX, dy = e.touches[0].clientY - startY;
+      axis = gestureAxis(dx, dy, TOUCH_SLOP_PX);
+      if (axis === "horizontal" && appOwnsMouse(term)) { active = false; axis = null; } // ambiguous: let the app have it
+    }
+  };
+  const onEnd = (e) => {
+    if (!active || axis !== "horizontal") { active = false; return; }
+    const dx = (e.changedTouches[0] ? e.changedTouches[0].clientX : startX) - startX;
+    const intent = swipeIntent(dx, SWIPE_THRESHOLD_PX);
+    if (intent && typeof onSwipe === "function") onSwipe(intent);
+    active = false; axis = null;
+  };
+  el.addEventListener("touchstart", onStart, { passive: true });
+  el.addEventListener("touchmove", onMove, { passive: true }); // read-only; scroll installer owns preventDefault
+  el.addEventListener("touchend", onEnd, { passive: true });
+  return () => { el.removeEventListener("touchstart", onStart); el.removeEventListener("touchmove", onMove); el.removeEventListener("touchend", onEnd); };
+}
+
 // TerminalTab is one agent session as a tab body: an xterm.js terminal bound to
 // /ws/{id}, with self-healing reconnect and copy-on-select / clean-paste. The
 // terminal + WebSocket + reconnect logic is unchanged from the original Pane;
@@ -269,6 +305,9 @@ class TerminalTab {
     this.term.open(termEl);
     try { this.term.loadAddon(new WebglAddon.WebglAddon()); } catch (_) {}
     this.disposeTouchScroll = installTouchScroll(this.term, termEl);
+    if (typeof mobileActive === "function" && mobileActive(window.innerWidth) && typeof onTerminalSwipe === "function") {
+      this.disposeSwipe = installSwipe(this.term, termEl, (dir) => onTerminalSwipe(dir));
+    }
     this._fitRaf = 0;
     this.fit(); // best-effort now; skipped by the guard until the element is sized
     // Re-fit once the block-display font has loaded — cell metrics can shift.
@@ -627,6 +666,7 @@ class TerminalTab {
     this.hideTrouble();
     try { this.ws && this.ws.close(); } catch (_) {}
     if (this.disposeTouchScroll) { try { this.disposeTouchScroll(); } catch (_) {} }
+    if (this.disposeSwipe) { try { this.disposeSwipe(); } catch (_) {} }
     try { this.term.dispose(); } catch (_) {}
   }
 }
@@ -661,5 +701,5 @@ async function openTerminalUrl(raw, opts) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel };
+  module.exports = { isBrokenMouseReport, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

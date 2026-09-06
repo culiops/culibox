@@ -468,6 +468,20 @@ function initMobileKeyboard() {
   apply();
 }
 
+// onTerminalSwipe moves the focused pane one session left/right along the same
+// order the chip strip shows. "next" (drag left) goes forward, "prev" back.
+// Clamped at the ends — a swipe past the last session does nothing rather than
+// looping, so you always know where the edges are.
+function onTerminalSwipe(dir) {
+  const tabs = openTerminalTabs();
+  if (tabs.length < 2) return;
+  const cur = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  let i = tabs.indexOf(cur);
+  if (i < 0) i = 0;
+  const j = dir === "next" ? Math.min(i + 1, tabs.length - 1) : Math.max(i - 1, 0);
+  if (j !== i) focusTerminalTab(tabs[j]);
+}
+
 // Shortcut hint: the right-hand half of the permanent #hint status bar
 // (mockup D1 — no dismiss; a status bar you can't turn off, unlike the old
 // tips bar it replaced). The runtime tag ("runc"/"sysbox") depends on
