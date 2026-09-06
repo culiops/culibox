@@ -1339,13 +1339,28 @@
       /* Session-list group headers (M1): "Needs you" / "Running" / "Idle"
          above their rows, uppercase and muted like other section labels.
          "Needs you" is amber — the same --warn-fg the waiting pip/dot use —
-         because it means the same thing: an agent needs you. Nothing else on
-         this screen borrows that color. */
+         because it means the same thing: an agent needs you. Only the .card
+         below (also --warn-fg, deliberately, same reason) shares that color
+         on this screen; nothing else does. */
       .mhd { display: flex; align-items: baseline; gap: 8px; padding: 16px 13px 7px;
              font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
       .mhd .count { color: var(--muted); }
       .mhd.needs { color: var(--warn-fg); }        /* "an agent needs you" — the one amber label */
       .mhd.needs .count { color: var(--warn-fg); }
+      /* "Needs you" card (M1): the waiting agent as an answerable card instead
+         of a plain row. The 2px --warn-fg border is the ONE amber outline on
+         this screen — Running/Idle keep the ordinary renderSession `.srow`
+         (no border color at all), so nothing else here competes with it. */
+      .card { margin: 0 13px 6px; border: 2px solid var(--warn-fg); background: var(--warn-tint);
+              padding: 14px 14px 15px; }
+      .card .hdr { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+      .card .hdr .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .card .hdr .wt { color: var(--warn-fg); font-size: 11px; flex: none; }
+      .card .msg { font-size: 13px; margin-top: 11px; line-height: 1.55; white-space: pre-wrap; }
+      .card .qk { display: flex; gap: 7px; margin-top: 14px; }
+      .card .qk .btn { flex: 1; min-height: var(--tap); font-size: 12.5px; text-align: center; }
+      .card .wide { display: flex; gap: 8px; margin-top: 8px; }
+      .card .wide .btn { flex: 1; min-height: var(--tap); font-size: 13px; text-align: center; }
       /* Full-width primary spawn trigger below the list (M1), replacing the
          compact header "+ new" as the tappable action on this screen. */
       #spawn-go-mobile { display: block; margin: 16px 13px; min-height: var(--tap);

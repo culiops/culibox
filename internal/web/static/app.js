@@ -1028,6 +1028,86 @@ function renderSession(s) {
   }
   return li;
 }
+
+// renderNeedsCard builds the mobile "Needs you" card (M1) for one waiting
+// session: message up front, three quick replies, and a Reply…/Open terminal
+// pair — instead of the plain `.mrow`/renderSession row Running/Idle still use
+// on mobile. Only the needs-you group gets this treatment (refreshSessions
+// picks the builder per group below).
+//
+// The quick-reply buttons call sendReplyFor(s, digit) directly, not the
+// sheet's gated doSend: a card has no /peek fetch of its own, so it cannot
+// know `pending` the way openReplySheet's pendingNow does. Skipping a
+// client-side gate here is deliberate, not an oversight — the server's
+// canReply already 409s (and sendReplyFor already toasts) any wrong send, so
+// the fail-closed contract ("the transcript decides, not the dot") holds
+// without a per-card /peek poll.
+function renderNeedsCard(s) {
+  const li = document.createElement("li");
+  li.className = "card";
+  li.dataset.sid = s.id;
+  li.title = s.id;
+
+  const hdr = document.createElement("div");
+  hdr.className = "hdr";
+  const act = activityClass(s.activity);
+  const dot = document.createElement("span");
+  dot.className = act.cls;
+  dot.setAttribute("role", "img");
+  dot.setAttribute("aria-label", act.title);
+  dot.title = act.title;
+  hdr.appendChild(dot);
+  const nm = document.createElement("span");
+  nm.className = "grow";
+  nm.textContent = s.name || s.id;
+  hdr.appendChild(nm);
+  // No duration: the session payload carries no waiting-since timestamp (only
+  // a peek fetch reports pending, and that is not fetched for a card), so
+  // "waiting Nm" would be invented. "waiting" alone stays honest — the same
+  // call Task 4's sheet header already made for the identical reason.
+  const wt = document.createElement("span");
+  wt.className = "wt";
+  wt.textContent = "waiting";
+  hdr.appendChild(wt);
+  li.appendChild(hdr);
+
+  const msg = document.createElement("div");
+  msg.className = "msg";
+  // Same source renderSession's summary line reads (s.summary, the server's
+  // one-line digest of the last assistant message) — never a second fetch.
+  msg.textContent = s.summary || "No summary";
+  li.appendChild(msg);
+
+  const qk = document.createElement("div");
+  qk.className = "qk";
+  for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn";
+    b.textContent = digit + " " + word;
+    b.title = "Send " + digit;
+    b.onclick = () => sendReplyFor(s, digit);
+    qk.appendChild(b);
+  }
+  li.appendChild(qk);
+
+  const wide = document.createElement("div");
+  wide.className = "wide";
+  const reply = document.createElement("button");
+  reply.type = "button";
+  reply.className = "btn pri";
+  reply.textContent = "Reply…";
+  reply.onclick = () => openReplySheet(s);
+  const term = document.createElement("button");
+  term.type = "button";
+  term.className = "btn";
+  term.textContent = "Open terminal";
+  term.onclick = () => openTerminal(s.id, s.name);
+  wide.append(reply, term);
+  li.appendChild(wide);
+
+  return li;
+}
 // editing guards the inline rename: while true, the background poll must NOT
 // re-render the list (that would destroy the input + focus) and a stray click
 // must not open a pane.
@@ -1212,7 +1292,12 @@ async function refreshSessions() {
       h.className = g.key === "needs-you" ? "mhd needs" : "mhd";
       h.innerHTML = '<span>' + g.label + '</span><span class="count">' + g.count + '</span>';
       nodes.push(h);
-      for (const s of g.sessions) nodes.push(rowBySid.get(s.id));
+      // needs-you (M1) gets the interactive card, built fresh from `s` — NOT
+      // the renderSession row `rowBySid` holds for every other group. `rows`
+      // itself is untouched (still one renderSession per session, still
+      // indexed by original order) so the reopen-peek lookup below keeps
+      // working exactly as it did before this group grew a second renderer.
+      for (const s of g.sessions) nodes.push(g.key === "needs-you" ? renderNeedsCard(s) : rowBySid.get(s.id));
     }
     ul.replaceChildren(...nodes);
   } else {
