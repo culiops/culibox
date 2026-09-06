@@ -1408,6 +1408,20 @@
       #keybar-more .key { flex: 1; height: 46px; display: flex; align-items: center; justify-content: center;
         font-size: 14px; color: var(--fg); background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; }
 
+      /* Keyboard up: the shell is exactly the visual viewport tall, the bottom
+         nav is REMOVED (not hidden — it must not reserve space), and the chip
+         strip is dropped to give the transcript room (M3). The 7-key row stays.
+         body — not #layout — owns the 100vh box (app.css:16, `body { height:
+         100vh }`); #layout is only a flex:1 child of it with no height of its
+         own (app.css:155), so clamping #layout alone would leave body still
+         100vh tall and just add blank flex space below the shrunk layout,
+         under the header, rather than pulling the shell's bottom up to the
+         keyboard's top edge. Clamping body lets #layout's flex:1 do what it
+         already does — fill whatever room is left below the header. */
+      html.kbd-open body { height: var(--vvh); overflow: hidden; }
+      html.kbd-open #mobile-nav { display: none; }
+      html.kbd-open.mobile-screen-terminal #term-chips { display: none; }
+
       /* A pane collapsed on desktop (the .sessions-collapsed/.files-collapsed
          class on <html>, toggled by the ▾ caret) hides everything in it but
          its 36px header bar — fine when the OTHER pane is what fills the

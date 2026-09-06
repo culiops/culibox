@@ -283,6 +283,7 @@ function initMobileShell() {
   renderMobileChips();
   renderMobileKeybar();
   renderMobileSnips();
+  initMobileKeyboard();
 }
 
 // --- mobile terminal: session chip strip -----------------------------------
@@ -444,6 +445,27 @@ function onKeybarMoreKey(name) {
   if (bytes) { t.sendKey(bytes); t.term.focus(); return; }
   const text = SYMBOL_TEXT[name];                     // symbols are inserted text
   if (text) { t.sendText(text); t.term.focus(); }
+}
+
+// --- mobile terminal: soft-keyboard sizing ---------------------------------
+// When the soft keyboard opens, visualViewport.height shrinks but 100vh does
+// NOT — so a 100vh pane hides behind the keyboard. Size the mobile shell from
+// visualViewport.height instead, hide the bottom nav + chip strip while it is
+// up (M3), and refit xterm to the new height. Feature-detected: without
+// visualViewport we leave the plain layout alone (no keyboard awareness).
+function initMobileKeyboard() {
+  const vv = window.visualViewport;
+  if (!vv) return; // graceful fallback: no dynamic sizing on old browsers
+  const apply = () => {
+    const open = mobileActive(window.innerWidth) && keyboardOpen(window.innerHeight, vv.height, 120);
+    document.documentElement.classList.toggle("kbd-open", open);
+    document.documentElement.style.setProperty("--vvh", vv.height + "px");
+    const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+    if (t && typeof t.fit === "function") requestAnimationFrame(() => t.fit());
+  };
+  vv.addEventListener("resize", apply);
+  vv.addEventListener("scroll", apply);
+  apply();
 }
 
 // Shortcut hint: the right-hand half of the permanent #hint status bar
