@@ -9,22 +9,25 @@ import "strings"
 //	opus / opus-5 / opus-4.x : input $5,  output $25
 //	sonnet / sonnet-5        : input $3,  output $15
 //	haiku                    : input $1,  output $5
-//	fable                    : input $10, output $50
+//	fable-5.1                : input $10, output $50, cache read $0.25
+//	fable / fable-5          : input $10, output $50
 //
 // Cache is normally derived from the input rate: a cache READ costs 0.1x input,
 // a cache WRITE (cache_creation, 5-minute TTL) costs 1.25x input. A family whose
 // published cache rate does not follow the 0.1x rule sets cacheRead explicitly —
-// Opus 5.5 reads at $0.20 on a $4 input rate, which is 0.05x, so deriving it
-// would double the figure. Cache reads dominate real usage, so that is the most
+// Opus 5.5 reads at $0.20 on a $4 input rate (0.05x) and Fable 5.1 at $0.25 on
+// a $10 rate (0.025x), so deriving those would overcharge them 2x and 4x
+// respectively. Cache reads dominate real usage, so this is the most
 // consequential number in this file.
 //
 // Sonnet 5's introductory $2/$10 (through 2026-08-31) is deliberately IGNORED —
 // v1 uses the standard $3/$15 for every day. Refreshing rates is a one-file edit.
 //
 // The table is keyed by a substring of the model id and is matched
-// MOST-SPECIFIC-FIRST: "claude-opus-5-5" contains "opus", so the order of
-// familyRates below is load-bearing — a new, more specific key must be listed
-// above the generic family it would otherwise fall through to. An id that
+// MOST-SPECIFIC-FIRST: "claude-opus-5-5" contains "opus" and
+// "claude-fable-5-1" contains "fable", so the order of familyRates below is
+// load-bearing — a new, more specific key must be listed above the generic
+// family it would otherwise fall through to. An id that
 // matches no family prices to zero — the row is still shown with its raw token
 // counts; only its dollar figure is 0.
 type modelRate struct {
@@ -45,8 +48,14 @@ var familyRates = []struct {
 	{"opus", modelRate{input: 5, output: 25}},
 	{"sonnet", modelRate{input: 3, output: 15}},
 	{"haiku", modelRate{input: 1, output: 5}},
+	{"fable-5-1", modelRate{input: 10, output: 50, cacheRead: 0.25}},
 	{"fable", modelRate{input: 10, output: 50}},
 }
+
+// Not tabled: the Mythos ids (claude-mythos-5, claude-mythos-5-1). They share
+// Fable's per-token rates but are Project Glasswing only and their cache-read
+// rate is unconfirmed, so they price to $0 and show raw token counts rather
+// than a number we would be guessing.
 
 const (
 	cacheReadMult  = 0.1  // cache_read costs 0.1x the input rate, unless overridden
