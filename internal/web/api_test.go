@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -633,6 +634,86 @@ func TestSpawnPromptRefusalsAreShown(t *testing.T) {
 	}
 }
 
+// TestSpawnErrHidesDetailByDefault is writeSpawnErr's hide-the-detail branch:
+// the one a regression could silently defeat by switching to err.Error(),
+// leaking a secret name, a binary path, or the box-start cwd into the 400
+// body. Pins the body to EXACTLY the generic message, not just "doesn't
+// contain the secret" (a partial leak would still pass a looser check).
+func TestSpawnErrHidesDetailByDefault(t *testing.T) {
+	leaky := errors.New(`launcher: resolving secret "DB_PASSWORD": open /etc/agent-box/secrets/db: permission denied`)
+	a := &API{Sessions: &mockSvc{spawnErr: leaky}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"error":"could not start session"}`+"\n" {
+		t.Fatalf("body = %q, want exactly the generic message — no secret name, path, or detail", got)
+	}
+}
+
+// TestSpawnErrShowsUnboxableWorkspace is writeSpawnErr's one actionable
+// exception: a wrapped box.ErrUnboxableWorkspace's own message (which names
+// the cwd the caller just supplied) must reach the client.
+func TestSpawnErrShowsUnboxableWorkspace(t *testing.T) {
+	wrapped := fmt.Errorf("%w: /home/op (is $HOME). Pick a project directory, "+
+		`or choose "Run on trusted host" to run it uncontained on purpose`, box.ErrUnboxableWorkspace)
+	a := &API{Sessions: &mockSvc{spawnErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/home/op"}`))
+	var got struct {
+		Error string `json:"error"`
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got.Error != wrapped.Error() {
+		t.Fatalf("error = %q, want the unboxable-workspace detail %q", got.Error, wrapped.Error())
+	}
+}
+
+// TestRestartErrHidesDetailByDefault: /restart's unrecognised-error branch
+// also goes through writeSpawnErr (see the brief's "(restart <id>)" agent
+// label) — same hide-the-detail contract applies there too.
+func TestRestartErrHidesDetailByDefault(t *testing.T) {
+	leaky := errors.New(`launcher: resolving secret "DB_PASSWORD": open /etc/agent-box/secrets/db: permission denied`)
+	a := &API{Sessions: &mockSvc{restartErr: leaky}}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, postReq("/api/sessions/claude-3/restart", ""))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"error":"could not start session"}`+"\n" {
+		t.Fatalf("body = %q, want exactly the generic message — no secret name, path, or detail", got)
+	}
+}
+
+// TestRestartErrShowsUnboxableWorkspace: the same actionable exception on the
+// restart path (a restarted session can hit an unboxable cwd too, e.g. the
+// workspace was replaced by a symlink since the original spawn).
+func TestRestartErrShowsUnboxableWorkspace(t *testing.T) {
+	wrapped := fmt.Errorf("%w: /home/op (is $HOME). Pick a project directory, "+
+		`or choose "Run on trusted host" to run it uncontained on purpose`, box.ErrUnboxableWorkspace)
+	a := &API{Sessions: &mockSvc{restartErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, postReq("/api/sessions/claude-3/restart", ""))
+	var got struct {
+		Error string `json:"error"`
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got.Error != wrapped.Error() {
+		t.Fatalf("error = %q, want the unboxable-workspace detail %q", got.Error, wrapped.Error())
+	}
+}
+
 func TestInterruptEndpoint(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -650,6 +731,11 @@ func TestInterruptEndpoint(t *testing.T) {
 		(&API{Sessions: svc}).handleSession(rec, postReq("/api/sessions/x-1/interrupt", ""))
 		if rec.Code != c.code || svc.interruptID != "x-1" {
 			t.Errorf("err %v: code %d want %d (id %q)", c.err, rec.Code, c.code, svc.interruptID)
+		}
+		// The 410 catch-all must not leak the raw write error (a PTY path, an
+		// errno string) into the client-facing body.
+		if c.code == http.StatusGone && strings.Contains(rec.Body.String(), "ptmx") {
+			t.Errorf("err %v: 410 body leaked the raw write error: %s", c.err, rec.Body)
 		}
 	}
 	rec := httptest.NewRecorder()
@@ -676,6 +762,7 @@ func TestAnswerEndpoint(t *testing.T) {
 		{session.ErrNoSession, http.StatusNotFound},
 		{session.ErrNotClaude, http.StatusForbidden},
 		{session.ErrNotReplyable, http.StatusForbidden},
+		{session.ErrNotLive, http.StatusConflict},
 		{session.ErrNotBlocked, http.StatusConflict},
 		{session.ErrPromptChanged, http.StatusConflict},
 		{session.ErrTooSoon, http.StatusTooManyRequests},
@@ -690,6 +777,10 @@ func TestAnswerEndpoint(t *testing.T) {
 		}
 		if svc.answerID != "x-1" || svc.answerChoice != "yes" || svc.answerSHA != sha {
 			t.Errorf("not forwarded: %q %q %q", svc.answerID, svc.answerChoice, svc.answerSHA)
+		}
+		// The 410 catch-all must not leak the raw write error into the body.
+		if c.code == http.StatusGone && strings.Contains(rec.Body.String(), "broken pipe") {
+			t.Errorf("err %v: 410 body leaked the raw write error: %s", c.err, rec.Body)
 		}
 	}
 	if !strings.Contains(func() string {

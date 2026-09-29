@@ -283,6 +283,11 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "no such session")
 		case errors.Is(err, session.ErrNotClaude), errors.Is(err, session.ErrNotReplyable):
 			writeErr(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, session.ErrNotLive):
+			// Mirrors /interrupt: a died-between-the-guard-and-the-write race is
+			// a 410 (below), but a session that simply isn't live right now
+			// (exited/detached) is a normal, retryable conflict, not "gone".
+			writeErr(w, http.StatusConflict, err.Error())
 		case errors.Is(err, session.ErrNotBlocked), errors.Is(err, session.ErrPromptChanged):
 			// ErrPromptChanged also covers a repeat answer on an unchanged
 			// prompt (control.go's lastAnswered memo) — the session layer

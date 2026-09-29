@@ -226,7 +226,13 @@ func (m *ProfileManager) Delete(name string) error {
 }
 
 // argsBypassPermissions reports whether a profile's static args already turn
-// Claude Code's permission checks off.
+// Claude Code's permission checks off. Best-effort match for a UI warning, not
+// a security control: it only recognises the exact spellings a profile's own
+// editor produces (a bare flag, `--permission-mode bypassPermissions` as two
+// args, or `--permission-mode=bypassPermissions` as one). A variant it does
+// not special-case here — e.g. `--dangerously-skip-permissions=true` — is not
+// detected and silently reads as "not bypassing", so the warning can under-
+// but never over-report.
 func argsBypassPermissions(args []string) bool {
 	for i, a := range args {
 		switch {
