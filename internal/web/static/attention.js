@@ -92,7 +92,21 @@ function notifyBody(s) {
   return (s && (s.ask || s.summary)) || "Waiting for you";
 }
 
+// notifyPoll gates needsTransitions on `loaded`: true only once a real
+// /api/sessions fetch has actually succeeded at least once. Before that,
+// `lastSessions` in app.js is just the empty placeholder it starts as —
+// running needsTransitions against it would seed prevIds to "nothing is
+// waiting" from a list that was never real, so that when the real list lands
+// every session already waiting would look like a fresh transition and fire
+// a notification on reload. Not loaded: hand prevIds back untouched (still
+// null on the very first call) so the real first successful poll still gets
+// needsTransitions's own "first poll" seed-only behaviour.
+function notifyPoll(loaded, prevIds, sessions) {
+  if (!loaded) return { next: prevIds, fired: [] };
+  return needsTransitions(prevIds, sessions);
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
-    notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody };
+    notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll };
 }

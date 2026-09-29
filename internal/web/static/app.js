@@ -1427,8 +1427,11 @@ function rowLocal(s) {
 
 // signalAttention pushes the waiting count to the tab title and favicon — the
 // part of the signal you see without looking at the page. Runs on every
-// successful poll. The favicon href is swapped only when the state flips, so a
-// steady state costs no icon reload.
+// successful poll, AND from initEnv's title refresh (which can land before
+// the first session poll ever resolves) — so it touches title/favicon only.
+// Notifications are gated on an actual session list and live in
+// notifyTransitions, called separately by refreshSessions. The favicon href
+// is swapped only when the state flips, so a steady state costs no icon reload.
 let faviconNeeds = null;
 function signalAttention() {
   const n = waitingCount();
@@ -1440,7 +1443,6 @@ function signalAttention() {
     if (link) link.href = faviconHref(n);
     faviconNeeds = needs;
   }
-  notifyTransitions();
 }
 
 // notifyTransitions raises one OS notification per session that just started
@@ -1448,9 +1450,20 @@ function signalAttention() {
 // focused. tag = session id, so two tabs of this origin show it once.
 // Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this
 // can lag up to ~60 s; no push channel is built for it.
+//
+// Called ONLY from refreshSessions, after a successful /api/sessions fetch —
+// never from signalAttention/initEnv's title refresh and never on a fetch
+// error path. `lastSessions` starts as `[]` before the first real fetch, and
+// initEnv's title refresh can run before that fetch resolves; if this ran
+// there too it would seed attnPrev to an empty Set off that placeholder, and
+// every already-waiting session would look like a fresh transition and fire
+// once the real list landed. `sessionsLoaded` (flipped true only by that
+// success path) plus the pure notifyPoll gate is what needsTransitions relies
+// on to tell a not-yet-real empty list from a real "zero sessions" one.
 let attnPrev = null;
+let sessionsLoaded = false;
 function notifyTransitions() {
-  const t = needsTransitions(attnPrev, lastSessions);
+  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions);
   attnPrev = t.next;
   if (!t.fired.length || !notifyWanted()) return;
   if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
@@ -1522,7 +1535,9 @@ async function refreshSessions() {
     return null;
   }
   lastSessions = sessions || [];
+  sessionsLoaded = true;
   signalAttention();
+  notifyTransitions();
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.

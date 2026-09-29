@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody } = require("../static/attention.js");
+const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -96,4 +96,24 @@ test("notifyBody prefers the ask, then the summary", () => {
   assert.strictEqual(notifyBody({ ask: "Bash(ls)", summary: "x" }), "Bash(ls)");
   assert.strictEqual(notifyBody({ summary: "done" }), "done");
   assert.strictEqual(notifyBody({}), "Waiting for you");
+});
+
+test("notifyPoll: a call before the first successful list does not seed prevIds", () => {
+  // Simulates initEnv's title refresh firing before /api/sessions has ever
+  // resolved: loaded=false must hand prevIds back untouched (no seeding off
+  // the empty lastSessions placeholder) and must never report a transition.
+  let r = notifyPoll(false, null, []);
+  assert.deepEqual(r, { next: null, fired: [] });
+  r = notifyPoll(false, null, [W("a")]); // even if a stray list were passed
+  assert.deepEqual(r, { next: null, fired: [] });
+  // Once the real list lands (loaded flips true), the real first poll still
+  // seeds normally — nothing was consumed by the not-loaded calls above.
+  r = notifyPoll(true, r.next, [W("a"), B("b")]);
+  assert.deepEqual(r.fired, []);
+  assert.deepEqual([...r.next], ["a"]);
+});
+
+test("notifyPoll: once loaded, behaves exactly like needsTransitions", () => {
+  const r = notifyPoll(true, new Set(), [W("a")]);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
 });
