@@ -1064,6 +1064,7 @@
       border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
     }
     .fsrow .lbl { width: 152px; flex: none; }
+    .notify-opt { display: flex; align-items: center; gap: 0.5em; }
     .sample {
       flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
       padding: 10px 12px; overflow: hidden; white-space: pre; color: var(--fg);
@@ -1888,11 +1889,13 @@
          beside unselected siblings on the same surface); a full-width mobile
          tab has no "beside" to lift above, so M9 draws it as an underline. */
       #settings-tabs .t.on { background: var(--sel-soft); box-shadow: inset 0 -2px 0 var(--accent); }
-      /* M9 #3: the label's own size, and no border under the last block
-         (Terminal/Code/Markdown/File tree are the only four .fsrow rows on
-         this tab, scoped to it so the desktop rule elsewhere is untouched). */
+      /* M9 #3: the label's own size, and no border under the last block.
+         Targeted at the File tree row by id (not :last-of-type) because the
+         Alerts row (added for desktop notifications) now sits after it as
+         the tab's true last .fsrow — an id keeps File tree's border removed
+         exactly as before instead of the rule silently sliding onto Alerts. */
       .fsrow .lbl { font-size: 14px; }
-      #settings .fsrow:last-of-type { border-bottom: 0; }
+      #fsrow-filetree { border-bottom: 0; }
       /* M10: Containment/Base environment/Model/Effort all render as a .seg
          (renderPfRuntime/renderPfOptions) sized to its content on desktop,
          where it sits beside a label in a half-width column; the mobile

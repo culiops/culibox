@@ -51,6 +51,48 @@ function faviconHref(n) {
   return n > 0 ? "/favicon-needs.svg" : "/favicon.svg";
 }
 
+// needsTransitions: which sessions STARTED needing you since the last poll.
+// prevIds === null means "first poll after load": it only seeds, so a reload
+// never re-announces sessions that were already waiting.
+function needsTransitions(prevIds, sessions) {
+  const next = new Set();
+  const fired = [];
+  for (const s of Array.isArray(sessions) ? sessions : []) {
+    if (!s || s.activity !== "waiting") continue;
+    next.add(s.id);
+    if (prevIds && !prevIds.has(s.id)) fired.push(s);
+  }
+  return { next, fired };
+}
+
+// notifyAvailability: can the toggle be offered at all on this page? The
+// tailnet http:// origins are not secure contexts, and browsers only expose
+// notifications to secure ones.
+function notifyAvailability(secure, permission) {
+  if (!secure) return { enabled: false, reason: "Requires HTTPS — open via agent-box.culiops.dev" };
+  if (permission === "unsupported") return { enabled: false, reason: "This browser does not support notifications." };
+  return { enabled: true, reason: "" };
+}
+
+// notifyChecked: the toggle reads on only when the operator opted in AND the
+// browser still grants it (permission can be revoked behind our back).
+function notifyChecked(wanted, permission) {
+  return !!wanted && permission === "granted";
+}
+
+const NOTIFY_KEY = "agent-box:notify";
+function notifyWanted() {
+  try { return localStorage.getItem(NOTIFY_KEY) === "1"; } catch (_) { return false; }
+}
+function setNotifyWanted(v) {
+  try { if (v) localStorage.setItem(NOTIFY_KEY, "1"); else localStorage.removeItem(NOTIFY_KEY); } catch (_) {}
+}
+
+function notifyBody(s) {
+  return (s && (s.ask || s.summary)) || "Waiting for you";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needLabel, cardContent, attentionTitle, faviconHref };
+  module.exports = { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+    notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody };
 }

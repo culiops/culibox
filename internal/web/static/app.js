@@ -1440,6 +1440,51 @@ function signalAttention() {
     if (link) link.href = faviconHref(n);
     faviconNeeds = needs;
   }
+  notifyTransitions();
+}
+
+// notifyTransitions raises one OS notification per session that just started
+// needing you — only when opted in, still granted, and this tab is not
+// focused. tag = session id, so two tabs of this origin show it once.
+// Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this
+// can lag up to ~60 s; no push channel is built for it.
+let attnPrev = null;
+function notifyTransitions() {
+  const t = needsTransitions(attnPrev, lastSessions);
+  attnPrev = t.next;
+  if (!t.fired.length || !notifyWanted()) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (document.hasFocus()) return;
+  for (const s of t.fired) {
+    try {
+      const n = new Notification(s.name || s.id, { body: notifyBody(s), tag: s.id });
+      n.onclick = () => { window.focus(); openTerminal(s.id, s.name); n.close(); };
+    } catch (_) { /* a browser that refuses at construction time: stay silent */ }
+  }
+}
+
+// initNotifyToggle wires Settings → Appearance → Desktop notifications.
+function initNotifyToggle() {
+  const cb = $("notify-toggle"), why = $("notify-why");
+  if (!cb || !why) return;
+  const perm = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  const avail = notifyAvailability(window.isSecureContext, perm);
+  cb.disabled = !avail.enabled;
+  cb.checked = avail.enabled && notifyChecked(notifyWanted(), perm);
+  why.textContent = avail.reason;
+  cb.onchange = async () => {
+    if (!cb.checked) { setNotifyWanted(false); why.textContent = ""; return; }
+    let p = "denied";
+    try { p = await Notification.requestPermission(); } catch (_) {}
+    if (p === "granted") {
+      setNotifyWanted(true);
+      why.textContent = "You will be notified when an agent needs you and this tab is not focused.";
+    } else {
+      cb.checked = false;
+      setNotifyWanted(false);
+      why.textContent = "Permission was not granted, so notifications stay off.";
+    }
+  };
 }
 
 // Returns the live session list, or null if the request failed: the boot-time
@@ -3231,6 +3276,7 @@ initMobileShell();
 
 fontPrefs.applyCssVars();
 initSettings();
+initNotifyToggle();
 setInterval(refreshSessions, 3000);
 // Account limits change slowly and the file only updates when a claude statusLine
 // renders — a 30s refresh keeps the % fresh and the countdown ticking without

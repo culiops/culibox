@@ -53,7 +53,7 @@ const names = [
   "TextEncoder", "TextDecoder", "atob", "btoa", "structuredClone", "performance",
   "Event", "CustomEvent", "KeyboardEvent", "MouseEvent", "WheelEvent", "DragEvent", "DataTransfer",
   "HTMLElement", "Element", "Node", "NodeList", "Image", "DOMParser",
-  "ResizeObserver", "MutationObserver", "IntersectionObserver",
+  "ResizeObserver", "MutationObserver", "IntersectionObserver", "Notification",
   // alert/confirm/prompt are deliberately absent: the page uses its own dialogs
   // (shell.js askConfirm/askPrompt), so a bare call to one is now a no-undef
   // error here as well as a failure in no-native-dialogs.test.js.

@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent, attentionTitle, faviconHref } = require("../static/attention.js");
+const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -47,4 +47,53 @@ test("attentionTitle prefixes the waiting count only when there is one", () => {
 test("faviconHref flips to the amber-dot icon while anything needs you", () => {
   assert.strictEqual(faviconHref(0), "/favicon.svg");
   assert.strictEqual(faviconHref(3), "/favicon-needs.svg");
+});
+
+const W = (id) => ({ id, activity: "waiting" });
+const B = (id) => ({ id, activity: "working" });
+
+test("the first poll after load only seeds — no notification for already-waiting sessions", () => {
+  const r = needsTransitions(null, [W("a"), B("b")]);
+  assert.deepEqual(r.fired, []);
+  assert.deepEqual([...r.next], ["a"]);
+});
+
+test("a session that becomes waiting fires exactly once", () => {
+  let r = needsTransitions(new Set(), [W("a")]);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+  r = needsTransitions(r.next, [W("a")]);
+  assert.deepEqual(r.fired, []);
+});
+
+test("waiting -> working -> waiting fires again", () => {
+  let r = needsTransitions(new Set(["a"]), [B("a")]);
+  assert.deepEqual(r.fired, []);
+  r = needsTransitions(r.next, [W("a")]);
+  assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+});
+
+test("idle, done and unknown states never fire", () => {
+  const r = needsTransitions(new Set(), [{ id: "a", activity: "idle" }, { id: "b", activity: "done" }, { id: "c" }]);
+  assert.deepEqual(r.fired, []);
+});
+
+test("notifyAvailability: insecure origin disables with the HTTPS hint", () => {
+  const a = notifyAvailability(false, "default");
+  assert.strictEqual(a.enabled, false);
+  assert.match(a.reason, /Requires HTTPS — open via agent-box\.culiops\.dev/);
+  assert.strictEqual(notifyAvailability(true, "unsupported").enabled, false);
+  assert.deepEqual(notifyAvailability(true, "default"), { enabled: true, reason: "" });
+});
+
+test("notifyChecked is false unless permission is granted", () => {
+  assert.strictEqual(notifyChecked(true, "granted"), true);
+  assert.strictEqual(notifyChecked(true, "denied"), false);   // revoked in the browser after opting in
+  assert.strictEqual(notifyChecked(true, "default"), false);
+  assert.strictEqual(notifyChecked(false, "granted"), false);
+});
+
+test("notifyBody prefers the ask, then the summary", () => {
+  assert.strictEqual(notifyBody({ ask: "Bash(ls)", summary: "x" }), "Bash(ls)");
+  assert.strictEqual(notifyBody({ summary: "done" }), "done");
+  assert.strictEqual(notifyBody({}), "Waiting for you");
 });
