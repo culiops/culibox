@@ -23,6 +23,14 @@ const (
 	maxIndexPaths = 60000
 	maxIndexDepth = 12
 	indexBudget   = 2 * time.Second
+	// preferIndexBudget bounds a NEW prefer-root index's first build. The
+	// client aborts a palette fetch after PAL_FETCH_MS (4s); the very first
+	// search after boot can trigger the home index's first build (up to
+	// indexBudget) AND a brand-new prefer index's first build back to back,
+	// synchronously, in the same request — two indexBudget-sized builds sum to
+	// exactly the client's timeout. A separate, smaller budget for the prefer
+	// index keeps that worst case under it.
+	preferIndexBudget = 1 * time.Second
 	// maxPerRootPaths stops any single top-level subtree from consuming the
 	// whole budget. The walk is a lexical DFS, so without this the directories
 	// that happen to sort first decide what is findable: on a real home dir
@@ -789,6 +797,22 @@ func resolvePrefer(rhome, raw string) (abs, rel string, ok bool) {
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return "", "", false
 	}
+	// A prefer root that is itself a machine-generated/credential directory
+	// (skipDirs) or sits under a skipped home-relative path (skipRelPaths) is
+	// ignored the same way an unusable value is: the walk would refuse to
+	// index it anyway (it IS the excluded subtree, not merely a path that
+	// crosses one), so preferring it would silently search nothing.
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, p := range parts {
+		if skipDirs[p] {
+			return "", "", false
+		}
+	}
+	for i := range parts {
+		if skipRelPaths[strings.Join(parts[:i+1], "/")] {
+			return "", "", false
+		}
+	}
 	return resolved, rel, true
 }
 
@@ -804,6 +828,7 @@ func (s *Server) preferIndex(root, relPrefix string) *fileIndex {
 	if !ok {
 		ix = newFileIndex(root)
 		ix.relPrefix = relPrefix
+		ix.budget = preferIndexBudget
 		s.prefIdx[root] = ix
 	}
 	for i, r := range s.prefOrder {

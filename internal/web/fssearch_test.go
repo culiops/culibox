@@ -1123,3 +1123,55 @@ func TestPreferIndexEvictsTheLeastRecentlyUsed(t *testing.T) {
 		t.Fatal("a recently used index was evicted")
 	}
 }
+
+// resolvePrefer must reject (ignore silently, not error) a prefer root that
+// is itself a skipped directory or sits under a skipped home-relative path —
+// a directory a user would never deliberately search first, and one the
+// walk itself would refuse to index anyway (Minor pulled into the control-
+// actions final fix wave).
+func TestResolvePreferRejectsSkippedRoots(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, ".ssh"))
+	mustMkdirAll(t, filepath.Join(home, ".aws"))
+	mustMkdirAll(t, filepath.Join(home, ".claude", "projects", "slug"))
+	mustMkdirAll(t, filepath.Join(home, "proj", "node_modules", "leftpad"))
+	mustMkdirAll(t, filepath.Join(home, "proj", "src"))
+
+	for _, rel := range []string{
+		".ssh",                      // skipDirs, at the root
+		".aws",                      // skipDirs, at the root
+		"proj/node_modules",         // skipDirs, nested
+		"proj/node_modules/leftpad", // skipDirs, nested deeper still
+		".claude/projects",          // skipRelPaths, exact
+		".claude/projects/slug",     // skipRelPaths, a prefix of it
+	} {
+		if _, _, ok := resolvePrefer(home, filepath.Join(home, rel)); ok {
+			t.Errorf("prefer=%q: resolved ok=true, want it silently ignored", rel)
+		}
+	}
+
+	// A sibling that shares no path with a skip rule must still resolve.
+	if _, rel, ok := resolvePrefer(home, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
+		t.Fatalf("resolvePrefer(proj/src) = rel=%q ok=%v, want it to resolve normally", rel, ok)
+	}
+}
+
+// A brand-new prefer index must build under its own, smaller budget: the
+// first palette search after boot can build the home index (up to
+// indexBudget) and a brand-new prefer index back to back in one request, and
+// two indexBudget-sized builds would sum to the client's PAL_FETCH_MS abort.
+func TestPreferIndexUsesItsOwnBudget(t *testing.T) {
+	s := &Server{Home: t.TempDir()}
+	ix := s.preferIndex(filepath.Join(s.Home, "proj"), "proj")
+	if ix.budget != preferIndexBudget {
+		t.Fatalf("preferIndex budget = %v, want preferIndexBudget (%v)", ix.budget, preferIndexBudget)
+	}
+	if preferIndexBudget >= indexBudget {
+		t.Fatalf("preferIndexBudget (%v) must be smaller than the home index's indexBudget (%v)", preferIndexBudget, indexBudget)
+	}
+	// The home index itself keeps the larger budget.
+	home := newFileIndex(s.Home)
+	if home.budget != indexBudget {
+		t.Fatalf("home index budget = %v, want indexBudget (%v)", home.budget, indexBudget)
+	}
+}
