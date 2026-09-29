@@ -97,10 +97,22 @@ async function probeServer() {
 // Named so the command palette can invoke the same path as the ☰ button rather
 // than duplicating it (or synthesising a click on the DOM node).
 function toggleSidebar() {
+  // No sidebar to toggle below the breakpoint (the bottom nav picks the
+  // screen), and a value stored here would silently flip the next wide window.
+  if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
+  // Each state shows exactly one toggle (header ☰ with the sidebar, the rail's
+  // ☰ without), so the one just pressed disappears: hand focus to the other.
+  const rail = $("rail48");
+  const active = document.activeElement;
+  const fromToggle = !!active && (active === $("sidebar-toggle") || (!!rail && active === rail.firstElementChild));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
+  if (fromToggle) {
+    const next = hidden ? rail && rail.firstElementChild : $("sidebar-toggle");
+    if (next) next.focus();
+  }
 }
 $("sidebar-toggle").onclick = toggleSidebar;
 $("steer-toggle").onclick = toggleSteerRail;
