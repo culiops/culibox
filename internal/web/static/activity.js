@@ -7,6 +7,7 @@ function activityClass(activity) {
   switch (activity) {
     case "working":  return { cls: "dot working",  title: "working" };
     case "waiting":  return { cls: "dot waiting",  title: "waiting for input" };
+    case "idle":     return { cls: "dot idle",     title: "idle" };
     case "crashed":  return { cls: "dot crashed",  title: "crashed" };
     case "done":     return { cls: "dot done",     title: "exited" };
     case "detached": return { cls: "dot detached", title: "reconnecting" };

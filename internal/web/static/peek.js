@@ -81,6 +81,8 @@ function notWaitingReason(activity) {
       return "Session crashed — there is nothing listening.";
     case "detached":
       return "Session is detached — open it to reattach first.";
+    case "idle":
+      return "Nothing to answer yet — give this session its first prompt in its terminal.";
     default:
       return "Session is not ready for a message.";
   }
