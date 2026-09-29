@@ -53,16 +53,31 @@ function sessionMeta(s, cwdText, statusTitle) {
   return parts.filter((p) => p !== "").join(" · ");
 }
 
+// canInterrupt: when Interrupt is offered. Only a live session has anything to
+// stop. A claude also needs a turn to stop — working, or sitting on a prompt:
+// Esc on an idle claude prompt does nothing useful, and two in a row open
+// Claude Code's rewind menu. The server accepts any live session; this is the
+// menu's judgement, not the gate.
+function canInterrupt(s) {
+  const v = s || {};
+  if (v.status !== "live") return false;
+  if (!v.claude) return true;
+  return v.activity === "working" || v.need === "ask";
+}
+
 // menuItems: what the row's actions menu offers for THIS session.
 //
 // One item needs a claude transcript and one pair needs a working directory, so
 // each is dropped where it would open onto nothing — a menu item that always
-// fails is worse than an absent one.
+// fails is worse than an absent one. The control actions follow the session's
+// state: Interrupt while there is something to stop (canInterrupt), the reply
+// opt-in for a live claude, Restart for an ended one (it is listed, so it is
+// still within retention), Duplicate always.
 //
 // "End session…" is last, alone in carrying danger, and its trailing ellipsis
 // promises the confirm that follows. Both are house rules: destructive actions
 // sit at the end, past everything reversible, and every destructive trigger says
-// that it will ask.
+// that it will ask. "Duplicate…" carries one too: it opens the spawn form.
 function menuItems(s) {
   const v = s || {};
   const items = [{ id: "rename", label: "Rename…", danger: false }];
@@ -70,8 +85,40 @@ function menuItems(s) {
   if (v.claude) items.push({ id: "attribution", label: "Context by tool", danger: false });
   if (v.cwd) items.push({ id: "copycwd", label: "Copy working directory", danger: false });
   items.push({ id: "newpane", label: "Open in new pane", danger: false });
+  if (canInterrupt(v)) items.push({ id: "interrupt", label: "Interrupt", danger: false });
+  if (v.claude && !v.exited) {
+    items.push(v.replyable
+      ? { id: "replies-off", label: "Stop replies", danger: false }
+      : { id: "replies-on", label: "Allow replies", danger: false });
+  }
+  if (v.exited) items.push({ id: "restart", label: v.resumable ? "Restart (resume conversation)" : "Restart", danger: false });
+  items.push({ id: "duplicate", label: "Duplicate…", danger: false });
   items.push({ id: "end", label: "End session…", danger: true });
   return items;
+}
+
+// PALETTE_ACTION_IDS: the menu actions the palette offers for the focused
+// session, in the palette's order (spec §2.6). End session keeps its own
+// per-session palette row.
+const PALETTE_ACTION_IDS = ["interrupt", "rename", "replies-on", "replies-off", "restart", "duplicate", "newpane"];
+
+// paletteActionItems: menuItems' decisions, re-ordered for the palette, with
+// labels shorn of the "opens a form" ellipsis (the palette row names its
+// session after a " · ").
+function paletteActionItems(s) {
+  const byId = new Map(menuItems(s).map((m) => [m.id, m]));
+  return PALETTE_ACTION_IDS.filter((id) => byId.has(id))
+    .map((id) => ({ id: id, label: byId.get(id).label.replace(/…$/, "") }));
+}
+
+// actionFailText: the toast for a failed interrupt/restart (status 0 = the
+// request never completed).
+function actionFailText(action, status) {
+  if (status === 0) return "No connection — try again.";
+  if (status === 404 || status === 410) return "That session is gone.";
+  if (action === "interrupt" && status === 409) return "Nothing to interrupt — the session is not running.";
+  if (action === "restart" && status === 409) return "Only an ended session can be restarted.";
+  return (action === "restart" ? "Restart" : "Interrupt") + " failed (" + status + ").";
 }
 
 // jumpTarget: which session a number key addresses. 1-based over the sidebar
@@ -86,5 +133,5 @@ function jumpTarget(n, sessions) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget };
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText };
 }

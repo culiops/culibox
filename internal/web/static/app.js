@@ -801,6 +801,48 @@ function buildEnableRepliesButton(id, after) {
   return en;
 }
 
+// postSessionAction: POST /api/sessions/{id}/{action} with no body. Resolves to
+// the Response; never throws — a failed request resolves to {ok:false,status:0}.
+async function postSessionAction(id, action) {
+  try {
+    return await fetch("/api/sessions/" + encodeURIComponent(id) + "/" + action, { method: "POST" });
+  } catch (_) {
+    return { ok: false, status: 0, json: async () => null };
+  }
+}
+
+// interruptSession: no confirmation (spec §2.4) — it only stops work.
+async function interruptSession(id) {
+  const res = await postSessionAction(id, "interrupt");
+  if (!res.ok) showToast(actionFailText("interrupt", res.status), { error: true });
+}
+
+// restartSession replaces an ended session with a new one from the same spec;
+// its tab is swapped for the new session's.
+async function restartSession(s) {
+  const res = await postSessionAction(s.id, "restart");
+  if (!res.ok) {
+    let msg = "";
+    try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
+    showToast(res.status === 400 && msg ? "Restart failed: " + msg : actionFailText("restart", res.status), { error: true });
+    await refreshSessions();
+    return;
+  }
+  const ns = await res.json();
+  closeTerminal(s.id);
+  await refreshSessions();
+  openTerminal(ns.id, ns.name);
+}
+
+// setRepliesFromMenu flips the reply opt-in from the menu or the palette.
+async function setRepliesFromMenu(id, want) {
+  if (!(await postReplyable(id, want))) {
+    showToast("Could not change the reply setting", { error: true });
+    return;
+  }
+  await refreshSessions();
+}
+
 // buildReplyComposer builds the one-line reply field + Send button + status
 // caption shared by the sidebar peek panel (togglePeek) and the desktop
 // needs-you card (renderNeedsBody) — one place for draft-restore, the
@@ -2823,10 +2865,10 @@ function closeSessionMenu(restoreFocus) {
 
 // runSessionAction is the one dispatch table behind BOTH the desktop
 // #session-menu and the mobile actions sheet (openActionsSheet): `action` is
-// one of menuItems(s)'s ids (rename/files/attribution/copycwd/newpane/end)
-// plus the mobile-only "open-terminal". Neither caller may duplicate a
-// handler here — a second copy is exactly the drift this extraction exists
-// to prevent.
+// one of menuItems(s)'s ids (rename/files/attribution/copycwd/newpane/
+// interrupt/replies-on/replies-off/restart/duplicate/end) plus the
+// mobile-only "open-terminal". Neither caller may duplicate a handler here —
+// a second copy is exactly the drift this extraction exists to prevent.
 function runSessionAction(action, s) {
   const name = s.name || s.id;
   const run = {
@@ -2859,6 +2901,13 @@ function runSessionAction(action, s) {
     // already flips the mobile screen to "terminal" itself when active, so
     // there is nothing left to duplicate here.
     "open-terminal": () => openTerminal(s.id, name),
+    interrupt: () => interruptSession(s.id),
+    "replies-on": () => setRepliesFromMenu(s.id, true),
+    "replies-off": () => setRepliesFromMenu(s.id, false),
+    restart: () => restartSession(s),
+    // Duplicate opens the form prefilled — never a spawn from one click (the
+    // workspace IS the containment boundary; see "+ New session" above).
+    duplicate: () => openSpawnDialog(s.agent, spawnPrefill(s)),
     end: () => confirmKill(s.id, name),
   };
   const fn = run[action];
