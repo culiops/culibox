@@ -534,9 +534,14 @@
     #sessions .peektxt.ask { font-weight: 600; }
     #sessions .nacts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
     /* The full command an ask card's Yes/No answers (spec §2.5): monospace,
-       wrapped, scrolls past ~12 lines rather than pushing the list away. */
+       wrapped. No max-height/overflow (final fix wave, I2): Yes/No must not
+       unlock while most of a long command sits scrolled below the fold —
+       expanded means fully visible. askFullMax (4 KiB) bounds how long this
+       can get. Desktop-only in practice: renderNeedsBody (the only place
+       that builds .askfull) is called by renderDesktopEntry, never by
+       mobile's renderNeedsCard. */
     #sessions .askfull {
-      margin: 7px 0 0; padding: 6px 8px; max-height: 12em; overflow-y: auto;
+      margin: 7px 0 0; padding: 6px 8px;
       font: 12px/1.45 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all;
       background: var(--surface-2); border: 1px solid var(--border); color: var(--fg);
     }

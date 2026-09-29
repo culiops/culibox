@@ -91,10 +91,72 @@ func TestAskRenderIsUntruncatedAndClean(t *testing.T) {
 	if r := []rune(askLine("Bash", json.RawMessage(`{"command":"echo `+long+`"}`))); len(r) != askMax {
 		t.Fatalf("askLine is no longer elided: %d runes", len(r))
 	}
-	in, _ := json.Marshal(map[string]string{"command": "rm -rf build\n&& echo 'x'\x1b[31m‮\u009b"})
-	full, _ = askRender("Bash", in)
-	if full != "Bash(rm -rf build && echo 'x' [31m)" {
-		t.Fatalf("control/format characters survived: %q", full)
+}
+
+// Controller ruling (final fix wave, 2026-09-29, I1): askRender used to share
+// askLine/cleanArg's cleaner, which maps every control/format character AND
+// every newline to a plain space, then collapses whitespace runs — so
+// "# harmless note\nrm -rf ~/x" (a comment hiding a second command on its own
+// line) rendered, and HASHED, identically to the comment-only
+// "# harmless note rm -rf ~/x". The card showed the harmless comment; Yes
+// would have run the hidden rm. askRender now keeps its own cleaner that
+// preserves \n and \t and never collapses whitespace, so the two commands
+// render — and hash — differently.
+func TestAskRenderPreservesNewlinesSoAHiddenCommandIsVisible(t *testing.T) {
+	inHidden, _ := json.Marshal(map[string]string{"command": "# harmless note\nrm -rf ~/x"})
+	inComment, _ := json.Marshal(map[string]string{"command": "# harmless note rm -rf ~/x"})
+	withNewline, hasA := askRender("Bash", inHidden)
+	commentOnly, hasB := askRender("Bash", inComment)
+	if !hasA || !hasB {
+		t.Fatalf("hasA=%v hasB=%v", hasA, hasB)
+	}
+	if withNewline == commentOnly {
+		t.Fatalf("the two commands rendered identically: %q", withNewline)
+	}
+	if !strings.Contains(withNewline, "\n") {
+		t.Fatalf("askRender did not preserve the newline: %q", withNewline)
+	}
+	if hexSHA(withNewline) == hexSHA(commentOnly) {
+		t.Fatal("the two commands hashed identically — Yes on the comment-only rendering would authorize the hidden one")
+	}
+}
+
+// A heredoc's real line structure (what the operator is actually approving)
+// must survive askRender verbatim — \n is kept, not turned into a space.
+func TestAskRenderKeepsAHeredocsLineStructure(t *testing.T) {
+	cmd := "cat <<'EOF' > out.txt\nline one\nline two\nEOF"
+	in, _ := json.Marshal(map[string]string{"command": cmd})
+	full, has := askRender("Bash", in)
+	want := "Bash(" + cmd + ")"
+	if !has || full != want {
+		t.Fatalf("askRender = %q, want %q", full, want)
+	}
+}
+
+// \t is kept (indentation inside a script argument stays legible); every
+// OTHER C0/DEL/C1 control character and every Unicode Cf format character
+// (bidi override U+202E, …) becomes the VISIBLE U+FFFD replacement
+// character — visible, unlike askLine/cleanArg's space, so a hidden
+// character cannot pass as nothing.
+func TestAskRenderMapsControlAndFormatCharsToReplacementChar(t *testing.T) {
+	in, _ := json.Marshal(map[string]string{"command": "echo x\x1b[31m‮y\tz\u009b"})
+	full, has := askRender("Bash", in)
+	want := "Bash(echo x�[31m�y\tz�)"
+	if !has || full != want {
+		t.Fatalf("askRender = %q, want %q", full, want)
+	}
+}
+
+// Runs of 3+ blank lines collapse to 2 (the one whitespace-shaping the new
+// cleaner performs), so a heredoc with deliberately huge vertical whitespace
+// does not make the card unreadable.
+func TestAskRenderCollapsesLongRunsOfBlankLines(t *testing.T) {
+	cmd := "echo a" + strings.Repeat("\n", 6) + "echo b" // 6 \n = 5 blank lines
+	in, _ := json.Marshal(map[string]string{"command": cmd})
+	full, has := askRender("Bash", in)
+	want := "Bash(echo a" + strings.Repeat("\n", 3) + "echo b)" // 3 \n = 2 blank lines
+	if !has || full != want {
+		t.Fatalf("askRender = %q, want the blank-line run collapsed to %q", full, want)
 	}
 }
 
@@ -369,7 +431,7 @@ func TestParsePeekTailAskFullDuplicateRecordsSameToolUseIDCountedOnce(t *testing
 func TestParsePeekTailCutAskFullEmptyWhenCutWithoutABoundary(t *testing.T) {
 	p, ok := parsePeekTailCut(txBytes(
 		txResult("toolu_A_cut"),
-		txRecID("assistant", "msg_cut", txToolUse("Bash", "command", "C", "toolu_C_cut"))), true)
+		txRecID("assistant", "msg_cut", txToolUse("Bash", "command", "C", "toolu_C_cut"))), true, time.Time{})
 	if !ok || !p.Pending || p.AskFull != "" {
 		t.Fatalf("peek = %+v: a cut tail with no boundary must fail AskFull closed", p)
 	}
@@ -381,7 +443,7 @@ func TestParsePeekTailCutAskFullEmptyWhenCutWithoutABoundary(t *testing.T) {
 // "there was more before the window".
 func TestParsePeekTailCutAskFullEmptyForALoneCallWithNoBoundary(t *testing.T) {
 	p, ok := parsePeekTailCut(txBytes(
-		txRecID("assistant", "msg_cut_lone", txToolUse("Bash", "command", "C", "toolu_C_lone"))), true)
+		txRecID("assistant", "msg_cut_lone", txToolUse("Bash", "command", "C", "toolu_C_lone"))), true, time.Time{})
 	if !ok || !p.Pending || p.AskFull != "" {
 		t.Fatalf("peek = %+v: a cut tail holding only the pending call must fail AskFull closed", p)
 	}
@@ -392,7 +454,7 @@ func TestParsePeekTailCutAskFullEmptyForALoneCallWithNoBoundary(t *testing.T) {
 // offer — cut is the signal, not merely "no boundary was found".
 func TestParsePeekTailCutAskFullSetWhenFullFileHasNoBoundary(t *testing.T) {
 	p, ok := parsePeekTailCut(txBytes(txUser("go"),
-		txRecID("assistant", "msg_full", txToolUse("Bash", "command", "C", "toolu_C_full"))), false)
+		txRecID("assistant", "msg_full", txToolUse("Bash", "command", "C", "toolu_C_full"))), false, time.Time{})
 	if !ok || !p.Pending || p.AskFull != "Bash(C)" {
 		t.Fatalf("peek = %+v: a full-file read with no boundary must still offer", p)
 	}
@@ -485,5 +547,60 @@ func TestListShipsAskFullOnlyWhenAnswerable(t *testing.T) {
 	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "idle")) // transcript pending, registry not blocked
 	if i := askFullOf(); i.Need != "ask" || i.AskFull != "" {
 		t.Fatalf("not registry-blocked: need=%q ask_full=%q", i.Need, i.AskFull)
+	}
+}
+
+// txRecTS is txRecID plus an explicit top-level "timestamp" (RFC3339, the
+// field real transcripts carry sibling to "message") — for the stale-restart
+// AskFull tests below, which need to place a record before or after a given
+// Session.Created instant.
+func txRecTS(role, id, ts string, blocks ...map[string]any) string {
+	b, _ := json.Marshal(map[string]any{"type": role, "timestamp": ts, "message": map[string]any{"role": role, "id": id, "content": blocks}})
+	return string(b)
+}
+
+// After Restart with --resume, the resumed process appends to the SAME
+// transcript file. A pending tool_use record written by the OLD run (before
+// the session's own Created instant) must never be offered — it is not a
+// call this session ever made. Records without a parsable timestamp keep the
+// pre-fix behaviour (no filtering) since there is nothing to compare.
+func TestParsePeekTailAskFullEmptyForStaleTimestampBeforeCreated(t *testing.T) {
+	created, _ := time.Parse(time.RFC3339, "2026-09-29T10:00:00Z")
+	id := "msg_stale"
+	stale := txRecTS("assistant", id, "2026-09-29T09:59:59Z", txBash("touch /tmp/old"))
+	p, ok := parsePeekTailCut(txBytes(txUser("go"), stale), false, created)
+	if !ok || !p.Pending {
+		t.Fatalf("peek = %+v", p)
+	}
+	if p.AskFull != "" {
+		t.Fatalf("AskFull=%q, want empty: the record predates the session's Created", p.AskFull)
+	}
+}
+
+// The positive mirror: a record timestamped AFTER Created is the session's
+// own, current run, and must still offer.
+func TestParsePeekTailAskFullSetForTimestampAfterCreated(t *testing.T) {
+	created, _ := time.Parse(time.RFC3339, "2026-09-29T10:00:00Z")
+	id := "msg_fresh"
+	fresh := txRecTS("assistant", id, "2026-09-29T10:00:01Z", txBash("touch /tmp/new"))
+	p, ok := parsePeekTailCut(txBytes(txUser("go"), fresh), false, created)
+	if !ok || !p.Pending || p.AskFull != "Bash(touch /tmp/new)" {
+		t.Fatalf("peek = %+v: a record after Created must still offer", p)
+	}
+}
+
+// A record with no parsable timestamp keeps the pre-fix behaviour: AskFull
+// is still offered, since there is nothing to compare against Created.
+func TestParsePeekTailAskFullSetWhenTimestampUnparsable(t *testing.T) {
+	created, _ := time.Parse(time.RFC3339, "2026-09-29T10:00:00Z")
+	p, ok := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txBash("touch a"))))
+	if !ok || !p.Pending || p.AskFull != "Bash(touch a)" {
+		t.Fatalf("peek = %+v: a record with no timestamp field must not be filtered", p)
+	}
+	// Same, but driven through parsePeekTailCut directly with a non-zero
+	// created — txRec's helper never sets "timestamp" at all.
+	p, ok = parsePeekTailCut(txBytes(txUser("go"), txRec("assistant", txBash("touch a"))), false, created)
+	if !ok || !p.Pending || p.AskFull != "Bash(touch a)" {
+		t.Fatalf("peek = %+v: a missing timestamp must not be filtered", p)
 	}
 }

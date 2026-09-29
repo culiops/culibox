@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -73,7 +74,13 @@ const summaryMax = 120
 // because it is an array of blocks on assistant records but may be a bare
 // string on user records — decoding it eagerly would reject the latter.
 type peekRec struct {
-	Message struct {
+	// Timestamp is the record's own RFC3339 write time (real transcripts:
+	// "2026-09-15T12:51:20.057Z"), sibling to "message". Used only by the
+	// tail record — see parsePeekTailCut's created parameter — to refuse a
+	// pending tool_use written by a PRIOR run, before Restart's --resume
+	// reused this same transcript file.
+	Timestamp string `json:"timestamp"`
+	Message   struct {
 		Role string `json:"role"`
 		// ID is the API message id shared by every record one assistant
 		// message was split across on write (parallel tool_use calls each
@@ -120,18 +127,28 @@ func contentBlocks(raw json.RawMessage) []contentBlock {
 // possibly-truncated file (peekAndBlocked, via readUsageTail) calls
 // parsePeekTailCut directly with the reader's own cut result.
 func parsePeekTail(b []byte) (Peek, bool) {
-	return parsePeekTailCut(b, false)
+	return parsePeekTailCut(b, false, time.Time{})
 }
 
 // parsePeekTailCut is parsePeekTail plus cut: whether the byte slice is
 // KNOWN to be a truncated read of a larger file (readUsageTail sets this when
 // size > usageTailBytes) rather than the whole file.
 //
+// created, when non-zero, is the session's own Session.Created instant. After
+// Restart with --resume, the resumed process appends to the SAME transcript
+// file — a pending tool_use record still sitting there from the OLD run (one
+// this session never made) must not be offered. A tail record whose own
+// timestamp is parsable and strictly before created has its AskFull refused;
+// a record with no parsable timestamp, or a zero created (most callers,
+// including every parsePeekTail caller below, which represent "the whole
+// relevant story" rather than a real resumed transcript), keeps the ordinary
+// behaviour.
+//
 // ok reports that at least one record parsed — i.e. the transcript is readable
 // and non-empty. Text may still be empty ("no message yet"), which the UI shows
 // differently from "transcript unreadable". A line that fails to unmarshal is
 // skipped: the tail almost always begins mid-record.
-func parsePeekTailCut(b []byte, cut bool) (Peek, bool) {
+func parsePeekTailCut(b []byte, cut bool, created time.Time) (Peek, bool) {
 	lines := strings.Split(string(b), "\n")
 	var p Peek
 	var parsedAny, sawLast, foundText bool
@@ -193,7 +210,7 @@ func parsePeekTailCut(b []byte, cut bool) (Peek, bool) {
 	//       is computed, and the final check requires the one unresolved id to
 	//       equal it.
 	var runID, tailToolID string
-	var runOK, boundaryFound, failed bool
+	var runOK, boundaryFound, failed, tailStale bool
 	runToolIDs := map[string]bool{}
 	resolvedIDs := map[string]bool{}
 	var askFull string
@@ -243,6 +260,16 @@ func parsePeekTailCut(b []byte, cut bool) (Peek, bool) {
 					askFull = full
 				}
 				tailToolID = toolUseKey(len(bs) - 1)
+				// Restart --resume stale-record guard: only the TAIL record —
+				// the pending tool_use itself — is checked. created is zero
+				// for every parsePeekTail caller (no real Session behind it),
+				// so this is a no-op there; a record with no parsable
+				// timestamp is left unfiltered, matching pre-fix behaviour.
+				if !created.IsZero() {
+					if ts, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil && ts.Before(created) {
+						tailStale = true
+					}
+				}
 				if rec.Message.ID != "" {
 					runID = rec.Message.ID
 					runOK = true
@@ -294,7 +321,7 @@ func parsePeekTailCut(b []byte, cut bool) (Peek, bool) {
 			break
 		}
 	}
-	if runOK && !failed && (!cut || boundaryFound) {
+	if runOK && !failed && !tailStale && (!cut || boundaryFound) {
 		unresolved := 0
 		var onlyID string
 		for id := range runToolIDs {
@@ -418,6 +445,43 @@ var askableArgs = map[string]string{
 	"Read": "file_path",
 }
 
+// askFullBlankRuns matches 4+ consecutive newlines (3+ blank lines) — the one
+// whitespace-shaping askFullClean performs; see its doc comment.
+var askFullBlankRuns = regexp.MustCompile(`\n{4,}`)
+
+// askFullClean is askRender's OWN cleaner — deliberately NOT cleanArg, the
+// one askLine (and the one-line sidebar/notification text) shares. cleanArg
+// maps every control character, INCLUDING \n, to a space and then collapses
+// whitespace runs — which is exactly the defect this closes (controller
+// ruling, final fix wave, 2026-09-29, I1): a comment hiding a second command
+// on its own line, "# harmless note\nrm -rf ~/x", rendered and HASHED
+// identically to the comment-only "# harmless note rm -rf ~/x", so the card
+// showed the harmless comment while Yes ran the hidden rm.
+//
+// \n and \t are kept — a heredoc or an indented script argument keeps its
+// real, reviewable line structure. Every OTHER C0/DEL/C1 control character
+// and every Unicode Cf format character (bidi overrides, zero-width
+// joiners/spaces, …) becomes the VISIBLE U+FFFD replacement character —
+// visible, unlike cleanArg's space, so a hidden character cannot pass as
+// nothing. Whitespace runs are otherwise left exactly as written: this
+// function must not lose or reshape anything the operator is approving. The
+// one exception is a run of 3+ blank lines, collapsed to 2, so a heredoc with
+// deliberately huge vertical whitespace does not make the card unreadable —
+// cosmetic only, and never changes what the command DOES.
+func askFullClean(v string) string {
+	clean := strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\t':
+			return r
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return '�'
+		}
+		return r
+	}, v)
+	return askFullBlankRuns.ReplaceAllString(clean, "\n\n\n")
+}
+
 // askRender renders a tool call as one untruncated, printable line — the tool
 // name plus its primary argument — but ONLY for a tool in askableArgs; hasArg
 // is false for every other tool, including one that has a primary argument
@@ -436,7 +500,7 @@ func askRender(name string, input json.RawMessage) (string, bool) {
 	if !ok || strings.TrimSpace(v) == "" {
 		return "", false
 	}
-	return name + "(" + cleanArg(v) + ")", true
+	return name + "(" + askFullClean(v) + ")", true
 }
 
 // trailingToolUses counts the tool_use blocks at the END of a record's
@@ -536,32 +600,37 @@ func validReplyText(s string) error {
 	return nil
 }
 
-// peekEntry is one cached parse, valid while the transcript's path AND mtime
-// are unchanged — /clear moves a session to a new file.
+// peekEntry is one cached parse, valid while the transcript's path, mtime AND
+// size are unchanged — /clear moves a session to a new file. size guards
+// against a coarse mtime (measured on this kernel): an edit landing in the
+// same tick as the cached read leaves mtime unchanged while the file's
+// content, and therefore its size, moved — without size in the key, that
+// edit would never be seen again.
 type peekEntry struct {
 	path  string
 	mtime time.Time
+	size  int64
 	peek  Peek
 }
 
-// peekCached returns the cached parse when it still matches path and mtime.
-func (m *Manager) peekCached(id, path string, mtime time.Time) (Peek, bool) {
+// peekCached returns the cached parse when it still matches path, mtime and size.
+func (m *Manager) peekCached(id, path string, mtime time.Time, size int64) (Peek, bool) {
 	m.peekMu.Lock()
 	defer m.peekMu.Unlock()
 	e, ok := m.peekCache[id]
-	if !ok || e.path != path || !e.mtime.Equal(mtime) {
+	if !ok || e.path != path || !e.mtime.Equal(mtime) || e.size != size {
 		return Peek{}, false
 	}
 	return e.peek, true
 }
 
-func (m *Manager) peekStore(id, path string, mtime time.Time, p Peek) {
+func (m *Manager) peekStore(id, path string, mtime time.Time, size int64, p Peek) {
 	m.peekMu.Lock()
 	defer m.peekMu.Unlock()
 	if m.peekCache == nil {
 		m.peekCache = map[string]peekEntry{}
 	}
-	m.peekCache[id] = peekEntry{path: path, mtime: mtime, peek: p}
+	m.peekCache[id] = peekEntry{path: path, mtime: mtime, size: size, peek: p}
 }
 
 // peekForget drops a dead session's cached parse. Called beside every
@@ -604,21 +673,21 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 	if err != nil {
 		return Peek{}, false, blocked
 	}
-	if p, ok := m.peekCached(id, l.path, fi.ModTime()); ok {
+	if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
 		return p, true, blocked
 	}
 	b, cut, err := readUsageTail(l.path)
 	if err != nil {
 		return Peek{}, false, blocked
 	}
-	p, ok := parsePeekTailCut(b, cut)
+	p, ok := parsePeekTailCut(b, cut, l.created)
 	if !ok {
 		return Peek{}, false, blocked
 	}
 	if p.AskFull != "" {
 		p.askSrcPath, p.askSrcMTime, p.askSrcSize = l.path, fi.ModTime(), fi.Size()
 	}
-	m.peekStore(id, l.path, fi.ModTime(), p)
+	m.peekStore(id, l.path, fi.ModTime(), fi.Size(), p)
 	return p, true, blocked
 }
 
