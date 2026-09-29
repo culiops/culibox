@@ -50,6 +50,19 @@ type Peek struct {
 	// full command must not reach a client that cannot act on it (List ships
 	// it as Info.AskFull under those gates instead).
 	AskFull string `json:"-"`
+
+	// askID and the askSrc* fields identify the exact pending-prompt READ
+	// AskFull came from. Never serialised, never exposed outside this
+	// package — Manager.Answer's per-session at-most-once memo (control.go)
+	// is their only reader. askID is the pending tool_use's own id (real or,
+	// rarely, the positional synthetic key toolUseKey falls back to); askSrc*
+	// is the transcript read (path+mtime+size) that produced this Peek. Both
+	// are set together, only when AskFull is non-empty — see peekAndBlocked
+	// and parsePeekTailCut.
+	askID       string
+	askSrcPath  string
+	askSrcMTime time.Time
+	askSrcSize  int64
 }
 
 // summaryMax is the rune budget for the one-line sidebar summary. Measured at
@@ -292,6 +305,7 @@ func parsePeekTailCut(b []byte, cut bool) (Peek, bool) {
 		}
 		if unresolved == 1 && onlyID == tailToolID {
 			p.AskFull = askFull
+			p.askID = onlyID
 		}
 	}
 	return p, parsedAny
@@ -600,6 +614,9 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 	p, ok := parsePeekTailCut(b, cut)
 	if !ok {
 		return Peek{}, false, blocked
+	}
+	if p.AskFull != "" {
+		p.askSrcPath, p.askSrcMTime, p.askSrcSize = l.path, fi.ModTime(), fi.Size()
 	}
 	m.peekStore(id, l.path, fi.ModTime(), p)
 	return p, true, blocked

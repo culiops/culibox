@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -22,6 +23,10 @@ var (
 	ErrNotBlocked    = errors.New("session is not waiting on a prompt")
 	ErrPromptChanged = errors.New("the prompt changed")
 	ErrBadChoice     = errors.New("choice must be yes or no")
+	// ErrTooSoon is escGate's refusal: a second Esc to the same session
+	// within escDebounceWindow of the previous one. Shared by Interrupt and
+	// Answer("no") — see escGate.
+	ErrTooSoon = errors.New("wait a moment before sending another Esc")
 )
 
 // resumeFor is the conversation a restart continues: only a host-tier claude
@@ -100,9 +105,37 @@ func interruptKey(agent bool) []byte {
 	return []byte{0x03}
 }
 
+// escDebounceWindow is the minimum spacing between two Esc sent to the same
+// session, shared by Interrupt (agent Esc) and Answer("no") via escGate.
+// Claude Code opens its rewind menu on a SECOND Esc arriving within its own
+// short double-press window once a session has gone idle (measured,
+// 2.1.284, P9) — an interrupt immediately followed by declining a prompt, or
+// two rapid declines, must not risk landing inside that window. Ctrl+C
+// (shells) has no such hazard and is never debounced.
+const escDebounceWindow = 1 * time.Second
+
+// nowFunc is the clock escGate reads. A var so a test can inject the clock
+// instead of sleeping escDebounceWindow.
+var nowFunc = time.Now
+
+// escGate reports whether s may be sent an Esc right now. On success it
+// records the instant, so the session's NEXT Esc — from either Interrupt or
+// Answer("no") — is debounced against this one.
+func (s *Session) escGate() error {
+	s.escMu.Lock()
+	defer s.escMu.Unlock()
+	now := nowFunc()
+	if !s.lastEscAt.IsZero() && now.Sub(s.lastEscAt) < escDebounceWindow {
+		return ErrTooSoon
+	}
+	s.lastEscAt = now
+	return nil
+}
+
 // Interrupt stops what a live session is doing. It needs no reply opt-in: it
 // can only stop work, never start it (End session is equally unguarded).
-// Session.Write marks submitted only on \r, which neither key contains.
+// Session.Write marks submitted only on \r, which neither key contains. An
+// agent's Esc goes through escGate; a shell's Ctrl+C never does.
 func (m *Manager) Interrupt(id string) error {
 	m.mu.Lock()
 	s := m.sessions[id]
@@ -120,7 +153,13 @@ func (m *Manager) Interrupt(id string) error {
 	if !live {
 		return ErrNotLive
 	}
-	_, err := s.Write(interruptKey(isAgentBin(bin)))
+	key := interruptKey(isAgentBin(bin))
+	if key[0] == 0x1b {
+		if err := s.escGate(); err != nil {
+			return err
+		}
+	}
+	_, err := s.Write(key)
 	return err
 }
 
@@ -145,19 +184,55 @@ func askHashMatches(askFull, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(strings.ToLower(want))) == 1
 }
 
+// answerState identifies one specific pending prompt: the pending tool_use's
+// own id (Peek.askID) together with the transcript read that produced it
+// (Peek.askSrc* — path+mtime+size). Two states are "the same prompt" only if
+// every field matches. The zero value never matches a real prompt: askSrcPath
+// is always non-empty whenever AskFull is (see peekAndBlocked).
+type answerState struct {
+	id    string
+	path  string
+	mtime time.Time
+	size  int64
+}
+
+func stateOf(p Peek) answerState {
+	return answerState{id: p.askID, path: p.askSrcPath, mtime: p.askSrcMTime, size: p.askSrcSize}
+}
+
+// equal compares two answerStates. Not ==: time.Time carries an optional
+// monotonic reading that plain equality can trip on even for the same
+// instant, so mtime is compared with Equal.
+func (a answerState) equal(b answerState) bool {
+	return a.id == b.id && a.path == b.path && a.size == b.size && a.mtime.Equal(b.mtime)
+}
+
 // Answer types one key into a permission dialog. The gates run in this order,
 // each with its own error, and all are required:
 //  1. the choice is yes|no (checked first, so a malformed call probes nothing);
 //  2. a claude session (ErrNotClaude);
 //  3. the operator opted in to replies (ErrNotReplyable);
-//  4. Claude Code's live registry says it is blocked on a prompt RIGHT NOW
+//  4. the session is live (ErrNotLive) — mirrors Interrupt;
+//  5. Claude Code's live registry says it is blocked on a prompt RIGHT NOW
 //     (ErrNotBlocked) — never inferred from silence or the transcript alone;
-//  5. the current AskFull exists (exactly one pending call, short enough) and
-//     its SHA-256 is the one the operator reviewed (ErrPromptChanged).
+//  6. the current AskFull exists (exactly one pending call, short enough) and
+//     its SHA-256 is the one the operator reviewed (ErrPromptChanged);
+//  7. that exact prompt has not already been answered (ErrPromptChanged) —
+//     the per-session lastAnswered memo, below.
 //
-// The window between the gates and the Write is the same narrow TOCTOU
-// SendMessage accepts; the worst case is a key into a dialog that replaced the
-// reviewed one within that window.
+// Gate-check through Write is ONE critical section per session, under
+// s.answerMu: two concurrent Answer calls, or a double-click that resubmits
+// before the UI disables the button, both pass every gate above on an
+// UNCHANGED prompt — AskFull only moves once the approved command's
+// tool_result lands, which is after the first key is already written.
+// Without answerMu + the memo, the worst case was a stray key landing after
+// the dialog had already closed: a bare "1" typed as input text into
+// whatever came next, or a second Esc opening Claude Code's rewind menu on a
+// now-idle session (P9) — not a key reaching some *other*, replacement
+// dialog, since the registry+AskFull gates already require a live, matching
+// prompt. escGate closes the Esc half of that: Answer("no") shares Interrupt's
+// debounce, so two Esc (from either action) within escDebounceWindow refuse
+// as ErrTooSoon rather than risk the double-Esc rewind menu.
 func (m *Manager) Answer(id, choice, askSHA256 string) error {
 	key, err := answerKey(choice)
 	if err != nil {
@@ -178,10 +253,18 @@ func (m *Manager) Answer(id, choice, askSHA256 string) error {
 	}
 	s.mu.Lock()
 	replyable := s.replyable
+	live := s.status == statusLive
 	s.mu.Unlock()
 	if !replyable {
 		return ErrNotReplyable
 	}
+	if !live {
+		return ErrNotLive
+	}
+
+	s.answerMu.Lock()
+	defer s.answerMu.Unlock()
+
 	p, havePeek, blocked := m.peekAndBlocked(id)
 	if !blocked {
 		return ErrNotBlocked
@@ -189,6 +272,18 @@ func (m *Manager) Answer(id, choice, askSHA256 string) error {
 	if !havePeek || p.AskFull == "" || !askHashMatches(p.AskFull, askSHA256) {
 		return ErrPromptChanged
 	}
-	_, err = s.Write(key)
-	return err
+	cur := stateOf(p)
+	if cur.equal(s.lastAnswered) {
+		return ErrPromptChanged
+	}
+	if choice == "no" {
+		if err := s.escGate(); err != nil {
+			return err
+		}
+	}
+	if _, err := s.Write(key); err != nil {
+		return err
+	}
+	s.lastAnswered = cur
+	return nil
 }

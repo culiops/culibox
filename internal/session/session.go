@@ -299,6 +299,23 @@ type Session struct {
 
 	backend Backend       // nil for an ephemeral (daemon-owned-PTY) session
 	sub     *subscription // current subscriber (at most one)
+
+	// answerMu serializes Manager.Answer for THIS session: the gate-check
+	// (peekAndBlocked + the lastAnswered memo below) through the Write is one
+	// critical section, so two concurrent or rapidly-repeated Answer calls on
+	// an unchanged prompt cannot both pass the gates and both write — see
+	// Answer's doc comment. Never held together with mu or the Manager's mu.
+	answerMu sync.Mutex
+	// lastAnswered is the pending-prompt identity Answer last wrote a key
+	// for (zero value = none yet). Guarded by answerMu; only Answer touches
+	// it.
+	lastAnswered answerState
+
+	// escMu guards lastEscAt, shared by Interrupt (agent Esc) and
+	// Answer("no") so the two paths debounce each other's Esc — see
+	// escGate. Independent of answerMu: Interrupt never takes it.
+	escMu     sync.Mutex
+	lastEscAt time.Time // guarded by escMu; zero = no Esc sent yet
 }
 
 type subscription struct {
