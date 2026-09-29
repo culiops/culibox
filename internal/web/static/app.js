@@ -941,6 +941,15 @@ async function togglePeek(li, s) {
   send.onclick = () => sendReply(input.value);
 }
 
+// tabUsageFor(sid) → the usage object for an open terminal tab showing this
+// session, or null. Shared by renderSession (paints the context-% badge) and
+// rowLocal (feeds rowSig into reconcileRows) so the two never compute usage
+// two different ways.
+function tabUsageFor(sid) {
+  const tab = terminalTabFor(sid);
+  return tab && typeof tab.usage === "function" ? tab.usage() : null;
+}
+
 function renderSession(s) {
   const li = document.createElement("li");
   // rowClasses decides the state; this function only paints it. Selected and
@@ -1024,7 +1033,7 @@ function renderSession(s) {
   // fetched for an open terminal tab; there is deliberately no per-row request,
   // because a fetch per session per poll is a lot of traffic for two characters.
   // No placeholder when it is absent — a dash would read as "zero".
-  const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
+  const u = tabUsageFor(s.id);
   if (u && typeof u.pct === "number") {
     const pct = document.createElement("span");
     pct.className = "pct";
@@ -1256,6 +1265,20 @@ function syncSelectedRow() {
   renderRail48(); // the focus ring moved, so .ri.on must move with it
 }
 
+// rowLocal: the page-local inputs a desktop row renders, for rowSig. Must list
+// exactly what renderSession reads beyond the session record itself.
+function rowLocal(s) {
+  const tab = terminalTabFor(s.id);
+  const u = tabUsageFor(s.id);
+  return {
+    killing: killing.has(s.id),
+    heldHere: !!tab && tab.status() === "connected",
+    pct: u && typeof u.pct === "number" ? u.pct : null,
+    boxRuntime: boxRuntime,
+    sending: pendingSends.has(s.id),
+  };
+}
+
 // Returns the live session list, or null if the request failed: the boot-time
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
@@ -1337,13 +1360,15 @@ async function refreshSessions() {
   // Everything above has already been pushed. Only the list rebuild waits.
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
-  const rows = lastSessions.map(renderSession);
+  // Desktop reconciles by key (reconcile.js) so an unchanged row keeps its node
+  // — and any focus inside it. Mobile keeps its grouped rebuild. holdList above
+  // still guards both: a focused input must not even be re-rendered.
+  let rowById;
   if (mobileActive(window.innerWidth)) {
-    // Mobile groups the same rows under "Needs you"/"Running"/"Idle" headers
-    // (M1); `rows` stays indexed by ORIGINAL session order below so the
-    // reopen-peek block's `rows[lastSessions.indexOf(reopen)]` lookup keeps
-    // working — this only reorders what's appended to `ul`, never `rows`.
-    const rowBySid = new Map(lastSessions.map((s, i) => [s.id, rows[i]]));
+    // (s) => renderSession(s), not a bare renderSession: map passes the index
+    // as a second argument, and renderSession takes options there.
+    const rows = lastSessions.map((s) => renderSession(s));
+    rowById = new Map(lastSessions.map((s, i) => [s.id, rows[i]]));
     const nodes = [];
     for (const g of sessionGroups(lastSessions, (s) => s.activity)) {
       const h = document.createElement("li");
@@ -1351,34 +1376,20 @@ async function refreshSessions() {
       h.innerHTML = '<span>' + g.label + '</span><span class="count">' + g.count + '</span>';
       nodes.push(h);
       // needs-you (M1) gets the interactive card, built fresh from `s` — NOT
-      // the renderSession row `rowBySid` holds for every other group. `rows`
-      // itself is untouched (still one renderSession per session, still
-      // indexed by original order) so the reopen-peek lookup below keeps
-      // working exactly as it did before this group grew a second renderer.
-      for (const s of g.sessions) nodes.push(g.key === "needs-you" ? renderNeedsCard(s) : rowBySid.get(s.id));
+      // the renderSession row rowById holds for every other group.
+      for (const s of g.sessions) nodes.push(g.key === "needs-you" ? renderNeedsCard(s) : rowById.get(s.id));
     }
     ul.replaceChildren(...nodes);
   } else {
-    ul.replaceChildren(...rows); // desktop: flat list, unchanged
+    rowById = reconcileRows(ul, lastSessions, (s) => renderSession(s), (s) => rowSig(s, rowLocal(s)));
   }
   // The answer block is a sibling, so it can only be inserted once its row is
-  // in the document. Re-opening after the attach also keeps the open panel from
-  // collapsing under the reader every few seconds.
-  //
-  // On mobile, a needs-you session's `li` (from `rows`) is built but never
-  // appended — renderNeedsCard's own node takes its place in the DOM instead.
-  // `li.after(peek)` inside togglePeek is a silent no-op on that disconnected
-  // node (no parent to insert beside), so the peek would never actually
-  // render — and since openPeekId is only ever cleared from togglePeek's
-  // collapse branch, it would get stuck, driving a wasted /peek fetch on
-  // every poll until the session leaves needs-you or the window widens back
-  // past 700px. Require the li to actually be in the document before
-  // reopening; otherwise there is nothing to reopen, so clear the id instead
-  // of leaving it stuck. Desktop's li is always connected, so this is a no-op
-  // there — the reopen still runs exactly as before.
+  // in the document. On mobile a needs-you session's row is built but never
+  // appended (the card takes its place), so require isConnected, and clear the
+  // id instead of leaving it stuck driving a /peek fetch every poll.
   const reopen = lastSessions.find((s) => s.id === openPeekId);
   if (reopen) {
-    const li = rows[lastSessions.indexOf(reopen)];
+    const li = rowById.get(reopen.id);
     if (li && li.isConnected && !peekRowFor(li)) togglePeek(li, reopen);
     else if (!li || !li.isConnected) openPeekId = null;
   }
