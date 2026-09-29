@@ -92,10 +92,10 @@ function rowSig(s, local) {
   const l = local || {};
   return JSON.stringify([
     v.id, v.name || "", v.agent || "", v.cwd || "", v.runtime || "",
-    v.activity || "", v.need || "", v.ask || "", v.summary || "",
+    v.activity || "", v.need || "", v.ask || "", v.ask_full || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
     !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,
-    l.boxRuntime || "", !!l.sending, !!l.expanded,
+    l.boxRuntime || "", !!l.sending, !!l.expanded, !!l.answering,
   ]);
 }
 

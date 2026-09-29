@@ -532,7 +532,14 @@
        "Show the full message" toggle. */
     #sessions .nbody .peektxt { cursor: pointer; }
     #sessions .peektxt.ask { font-weight: 600; }
-    #sessions .nacts { display: flex; gap: 7px; margin-top: 9px; }
+    #sessions .nacts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+    /* The full command an ask card's Yes/No answers (spec §2.5): monospace,
+       wrapped, scrolls past ~12 lines rather than pushing the list away. */
+    #sessions .askfull {
+      margin: 7px 0 0; padding: 6px 8px; max-height: 12em; overflow-y: auto;
+      font: 12px/1.45 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all;
+      background: var(--surface-2); border: 1px solid var(--border); color: var(--fg);
+    }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

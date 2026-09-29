@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll } = require("../static/attention.js");
+const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -124,4 +124,54 @@ test("notifyPoll: a call before the first successful list does not seed prevIds"
 test("notifyPoll: once loaded, behaves exactly like needsTransitions", () => {
   const r = notifyPoll(true, new Set(), [W("a")]);
   assert.deepEqual(r.fired.map((s) => s.id), ["a"]);
+});
+
+// Known vectors (FIPS 180-2 + the padding boundaries 55/56/64 bytes) and the
+// cross-language vector Go's TestAnswerHashMatchesTheWebClientVector pins.
+test("sha256Hex matches known vectors", () => {
+  const v = [
+    ["", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    ["abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"],
+    ["abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"],
+    ["a".repeat(55), "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"],
+    ["a".repeat(56), "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"],
+    ["a".repeat(64), "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb"],
+    ["x".repeat(4096), "a2e659dacb4691e887ac0139f8893d04764ee197d70fb73d3190d56113d18e3e"],
+    ["Bash(rm -rf build) — é ü 漢 😀", "b8c0c145bfbc2ff37428ec2d15dc9ac3c6bf196fa6e8340756f91ec23d84166a"],
+    ["Bash(echo 'it'\"s\" $(date) `id`)", "680035fbd7b3950cf3c89f1d80a39c5ecc5f8ed78cd8bfdd105ad8eece43046f"],
+  ];
+  for (const [input, want] of v) assert.strictEqual(sha256Hex(input), want, input.slice(0, 20));
+});
+
+test("answerState: Yes/No unlock only once the full command on screen was expanded", () => {
+  const ask = { need: "ask", replyable: true, claude: true, activity: "waiting", ask_full: "Bash(touch a)" };
+  assert.deepStrictEqual(answerState(ask, false, undefined),
+    { show: true, enabled: false, title: "Expand to see the full command first", note: "" });
+  assert.deepStrictEqual(answerState(ask, true, "Bash(touch a)"), { show: true, enabled: true, title: "", note: "" });
+  // Changed underneath (the next prompt arrived while expanded): read it again.
+  const changed = answerState(ask, true, "Bash(touch b)");
+  assert.strictEqual(changed.enabled, false);
+  assert.match(changed.title, /changed/);
+  assert.strictEqual(answerState({ ...ask, replyable: false }, true, "Bash(touch a)").show, false);
+  const tooLong = answerState({ ...ask, ask_full: undefined }, true, "");
+  assert.strictEqual(tooLong.show, false);
+  assert.match(tooLong.note, /terminal/);
+  assert.deepStrictEqual(answerState({ ...ask, need: "turn" }, true, "Bash(touch a)"), { show: false, enabled: false, title: "", note: "" });
+  assert.strictEqual(answerState(null, true, "").show, false);
+});
+
+test("answerErrorText words each refusal", () => {
+  assert.strictEqual(answerErrorText(409, "the prompt changed"), "The prompt changed — review it again");
+  assert.match(answerErrorText(409, "session is not waiting on a prompt"), /no longer waiting/);
+  assert.match(answerErrorText(403, ""), /not enabled/);
+  assert.match(answerErrorText(410, ""), /gone/);
+  assert.match(answerErrorText(0, ""), /no connection/);
+  assert.match(answerErrorText(500, ""), /500/);
+});
+
+test("an ask card offers Enable replies when the claude session has not opted in", () => {
+  const c = cardContent({ activity: "waiting", need: "ask", ask: "Bash(x)", claude: true, replyable: false });
+  assert.strictEqual(c.enableReplies, true);
+  assert.strictEqual(c.reply, false);
+  assert.strictEqual(cardContent({ activity: "waiting", need: "ask", ask: "Bash(x)", claude: true, replyable: true }).enableReplies, false);
 });

@@ -136,15 +136,15 @@ test("a node without a signature (mobile card) is replaced, and duplicates are d
 
 test("rowSig changes on every field a row or card renders, and only those", () => {
   const base = { id: "a", name: "n", agent: "claude", cwd: "/x", runtime: "host", activity: "waiting",
-    need: "turn", ask: "", summary: "hi", replyable: false, attached: false, claude: true, exited: false };
-  const local = { killing: false, heldHere: false, pct: 10, boxRuntime: "runc", sending: false, expanded: false };
+    need: "turn", ask: "", ask_full: "", summary: "hi", replyable: false, attached: false, claude: true, exited: false };
+  const local = { killing: false, heldHere: false, pct: 10, boxRuntime: "runc", sending: false, expanded: false, answering: false };
   const s0 = rowSig(base, local);
   assert.strictEqual(rowSig(Object.assign({}, base), Object.assign({}, local)), s0);
   for (const [k, v] of Object.entries({ name: "m", activity: "working", need: "ask", ask: "Bash(x)",
-    summary: "bye", replyable: true, attached: true, cwd: "/y" })) {
+    ask_full: "Bash(x y)", summary: "bye", replyable: true, attached: true, cwd: "/y" })) {
     assert.notStrictEqual(rowSig(Object.assign({}, base, { [k]: v }), local), s0, k);
   }
-  for (const [k, v] of Object.entries({ killing: true, heldHere: true, pct: 11, sending: true, expanded: true })) {
+  for (const [k, v] of Object.entries({ killing: true, heldHere: true, pct: 11, sending: true, expanded: true, answering: true })) {
     assert.notStrictEqual(rowSig(base, Object.assign({}, local, { [k]: v })), s0, k);
   }
   assert.strictEqual(rowSig(Object.assign({}, base, { created: "later" }), local), s0, "unrendered field");

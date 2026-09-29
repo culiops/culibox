@@ -712,6 +712,14 @@ let cardExpanded = new Set();
 // so a poll-triggered rebuild of an already-expanded card does not flash back
 // to "Loading…" for a fetch it already made. Cleared alongside cardExpanded.
 let cardPeekCache = new Map();
+// cardAskSeen: for an expanded card, the ask_full it showed when it was
+// expanded — Yes/No unlock only for that exact command (answerState), and a
+// different one arriving collapses the card (refreshSessions).
+let cardAskSeen = new Map();
+// pendingAnswers: sessions with an /answer in flight (the double-click latch;
+// module-level for the same reason pendingSends is — a poll can rebuild the
+// card mid-request). Fed into rowLocal/rowSig.
+let pendingAnswers = new Set();
 
 // peekRowFor: the answer block belonging to a row, if it is open. A sibling,
 // not a child — see the stylesheet for why the amber column needs it there.
@@ -799,6 +807,35 @@ function buildEnableRepliesButton(id, after) {
     if (after) after();
   };
   return en;
+}
+
+// sendAnswer answers a permission prompt with ONE key (chosen by the server:
+// "1" or Esc), for exactly the command this card rendered — the body carries
+// sha256Hex(ask_full), and the server refuses (409) a prompt that changed
+// since. Whatever happens the card collapses: another prompt often follows a
+// Yes at once, and it must be expanded and read before it can be answered.
+async function sendAnswer(s, choice) {
+  if (pendingAnswers.has(s.id) || !s.ask_full) return;
+  pendingAnswers.add(s.id);
+  let status = 0, msg = "";
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ choice: choice, ask_sha256: sha256Hex(s.ask_full) }),
+    });
+    status = res.status;
+    if (!res.ok) { try { msg = ((await res.json()) || {}).error || ""; } catch (_) {} }
+  } catch (_) {
+    status = 0;
+  }
+  cardExpanded.delete(s.id);
+  cardPeekCache.delete(s.id);
+  cardAskSeen.delete(s.id);
+  pendingAnswers.delete(s.id);
+  if (status === 204) showToast(choice === "yes" ? "Answered Yes" : "Answered No");
+  else showToast(answerErrorText(status, msg), { error: true });
+  await refreshSessions();
 }
 
 // postSessionAction: POST /api/sessions/{id}/{action} with no body. Resolves to
@@ -1098,10 +1135,12 @@ async function toggleCardPeek(s) {
   if (cardExpanded.has(s.id)) {
     cardExpanded.delete(s.id);
     cardPeekCache.delete(s.id);
+    cardAskSeen.delete(s.id);
     await refreshSessions();
     return;
   }
   cardExpanded.add(s.id);
+  cardAskSeen.set(s.id, s.ask_full || ""); // what the operator is about to read
   await refreshSessions(); // rebuilds the card now, showing "Loading…"
   let status = 0;
   let payload = null;
@@ -1316,6 +1355,16 @@ function renderNeedsBody(s) {
   txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
   body.appendChild(txt);
 
+  // The full command, once expanded — what Yes/No will answer. textContent
+  // only; wrapped, monospace (spec §2.5).
+  const ans = answerState(s, expanded, cardAskSeen.get(s.id));
+  if (expanded && c.ask && s.ask_full) {
+    const pre = document.createElement("pre");
+    pre.className = "askfull";
+    pre.textContent = s.ask_full;
+    body.appendChild(pre);
+  }
+
   let composer = null;
   if (c.reply) {
     composer = buildReplyComposer(s, {
@@ -1372,6 +1421,19 @@ function renderNeedsBody(s) {
     };
     acts.appendChild(dis);
   }
+  if (ans.show) {
+    for (const [choice, label] of [["yes", "1 Yes"], ["no", "No"]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = label;
+      b.disabled = !ans.enabled || pendingAnswers.has(s.id);
+      b.classList.toggle("off", b.disabled);
+      if (ans.title) b.title = ans.title;
+      b.onclick = (e) => { e.stopPropagation(); b.disabled = true; sendAnswer(s, choice); };
+      acts.appendChild(b);
+    }
+  }
   const open = document.createElement("button");
   open.type = "button";
   open.className = c.ask ? "btn pri" : "btn";
@@ -1379,6 +1441,12 @@ function renderNeedsBody(s) {
   open.onclick = () => openTerminal(s.id, s.name);
   acts.appendChild(open);
   body.appendChild(acts);
+  if (ans.note) {
+    const why = document.createElement("span");
+    why.className = "peek-why";
+    why.textContent = ans.note;
+    body.appendChild(why);
+  }
   if (composer) body.appendChild(composer.why);
   return body;
 }
@@ -1574,6 +1642,7 @@ function rowLocal(s) {
     boxRuntime: boxRuntime,
     sending: pendingSends.has(s.id),
     expanded: cardExpanded.has(s.id),
+    answering: pendingAnswers.has(s.id),
   };
 }
 
@@ -1690,11 +1759,16 @@ async function refreshSessions() {
   sessionsLoaded = true;
   // A card's expanded state (and its cached full text) belongs to it needing
   // you, not to the session forever — drop both once the session is no longer
-  // waiting, so reopening it later (a fresh "needs you") starts collapsed.
+  // waiting, so reopening it later (a fresh "needs you") starts collapsed. An
+  // ask whose full command changed also collapses: the new prompt has not been
+  // read, so its Yes/No must not stay one click away.
   if (cardExpanded.size) {
-    const waitingIds = new Set(lastSessions.filter((s) => s.activity === "waiting").map((s) => s.id));
+    const byId = new Map(lastSessions.map((s) => [s.id, s]));
     for (const id of Array.from(cardExpanded)) {
-      if (!waitingIds.has(id)) { cardExpanded.delete(id); cardPeekCache.delete(id); }
+      const s = byId.get(id);
+      const stale = !s || s.activity !== "waiting" ||
+        (cardAskSeen.has(id) && (s.ask_full || "") !== cardAskSeen.get(id));
+      if (stale) { cardExpanded.delete(id); cardPeekCache.delete(id); cardAskSeen.delete(id); }
     }
   }
   signalAttention();
