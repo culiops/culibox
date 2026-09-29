@@ -86,6 +86,77 @@ func TestParsePeekTailToolOnlyTurnHasNoText(t *testing.T) {
 	}
 }
 
+func pendingTail(block string) []byte {
+	return []byte(`{"message":{"role":"assistant","content":[{"type":"text","text":"checking"},` + block + `]}}` + "\n")
+}
+
+func TestParsePeekTailAsk(t *testing.T) {
+	cases := []struct{ name, block, want string }{
+		{"bash shows its command", `{"type":"tool_use","name":"Bash","input":{"command":"rm -rf build","description":"clean"}}`, "Bash(rm -rf build)"},
+		{"edit shows its path", `{"type":"tool_use","name":"Edit","input":{"file_path":"internal/web/app.js","old_string":"a","new_string":"b"}}`, "Edit(internal/web/app.js)"},
+		{"read shows its path", `{"type":"tool_use","name":"Read","input":{"file_path":"peek.go"}}`, "Read(peek.go)"},
+		{"notebook shows its path", `{"type":"tool_use","name":"NotebookEdit","input":{"notebook_path":"a.ipynb"}}`, "NotebookEdit(a.ipynb)"},
+		{"unknown tool shows the name only", `{"type":"tool_use","name":"WebFetch","input":{"url":"https://x"}}`, "WebFetch"},
+		{"no input shows the name only", `{"type":"tool_use","name":"Bash"}`, "Bash"},
+		{"collapses to one line", `{"type":"tool_use","name":"Bash","input":{"command":"cd /x &&\n  make\ttest"}}`, "Bash(cd /x && make test)"},
+		{"control characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"echo \u001b[31mred\u0007"}}`, "Bash(echo [31mred)"},
+	}
+	for _, c := range cases {
+		p, ok := parsePeekTail(pendingTail(c.block))
+		if !ok || !p.Pending {
+			t.Fatalf("%s: ok=%v pending=%v, want a pending peek", c.name, ok, p.Pending)
+		}
+		if p.Ask != c.want {
+			t.Errorf("%s: Ask=%q want %q", c.name, p.Ask, c.want)
+		}
+	}
+}
+
+func TestParsePeekTailAskTruncatesByRune(t *testing.T) {
+	long := strings.Repeat("é", 200)
+	p, _ := parsePeekTail(pendingTail(`{"type":"tool_use","name":"Bash","input":{"command":"` + long + `"}}`))
+	r := []rune(p.Ask)
+	if len(r) != askMax || !strings.HasPrefix(p.Ask, "Bash(") || !strings.HasSuffix(p.Ask, "…") {
+		t.Errorf("Ask=%q (%d runes), want %d runes starting Bash( and ending …", p.Ask, len(r), askMax)
+	}
+}
+
+func TestParsePeekTailAskEmptyWhenNotPending(t *testing.T) {
+	p, _ := parsePeekTail([]byte(`{"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}` + "\n"))
+	if p.Pending || p.Ask != "" {
+		t.Errorf("Pending=%v Ask=%q for a finished turn, want false and empty", p.Pending, p.Ask)
+	}
+}
+
+// Claude Code appends role-less bookkeeping records (cost-state, last-prompt,
+// ai-title…) — measured after a prompt on 2.1.284. "Last record" must mean the
+// last MESSAGE record, or one trailing line flips an ask into "your turn".
+func TestParsePeekTailIgnoresRolelessTrailingRecords(t *testing.T) {
+	tail := `{"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}` + "\n" +
+		`{"type":"cost-state","sessionId":"x","totalCostUSD":0.01}` + "\n" +
+		`{"type":"last-prompt","lastPrompt":"run ls","sessionId":"x"}` + "\n"
+	p, ok := parsePeekTail([]byte(tail))
+	if !ok || !p.Pending || p.Ask != "Bash(ls)" {
+		t.Errorf("ok=%v Pending=%v Ask=%q, want true/true/Bash(ls)", ok, p.Pending, p.Ask)
+	}
+}
+
+// Controller ruling (D3): a stale, already-superseded tool_use earlier in the
+// tail must never leak into Pending or Ask — only the true last role-bearing
+// record (skipping role-less bookkeeping) decides them. Without the once-only
+// sawLast gate scoped to the first role-bearing record found from the end, an
+// older tool_use could otherwise resurrect Pending after the agent has already
+// finished with plain text.
+func TestParsePeekTailStaleOlderToolUseNeverOverwritesPending(t *testing.T) {
+	tail := `{"message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"rm -rf build"}}]}}` + "\n" +
+		`{"type":"cost-state","sessionId":"x","totalCostUSD":0.01}` + "\n" +
+		`{"message":{"role":"assistant","content":[{"type":"text","text":"all done, nothing pending"}]}}` + "\n"
+	p, ok := parsePeekTail([]byte(tail))
+	if !ok || p.Pending || p.Ask != "" {
+		t.Errorf("ok=%v Pending=%v Ask=%q, want ok=true Pending=false Ask=empty: the true last record is plain assistant text, an older stale tool_use must not resurrect Pending", ok, p.Pending, p.Ask)
+	}
+}
+
 func TestSummaryLine(t *testing.T) {
 	long := ""
 	for i := 0; i < 200; i++ {

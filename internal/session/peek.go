@@ -36,6 +36,10 @@ type Peek struct {
 	// tool call, which includes sitting on a permission prompt. This is ground
 	// truth from the transcript, unlike activityOf's silence heuristic.
 	Pending bool `json:"pending,omitempty"`
+	// Ask is a one-line rendering of the tool call a Pending session is waiting
+	// on — "Bash(rm -rf build)", "Edit(internal/web/app.js)", or the bare tool
+	// name — elided to askMax runes. Empty unless Pending.
+	Ask string `json:"ask,omitempty"`
 }
 
 // summaryMax is the rune budget for the one-line sidebar summary. Measured at
@@ -53,8 +57,10 @@ type peekRec struct {
 }
 
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text"`
+	Name  string          `json:"name"`  // tool_use
+	Input json.RawMessage `json:"input"` // tool_use
 }
 
 // contentBlocks decodes message.content as a block array. A bare string (or any
@@ -89,14 +95,21 @@ func parsePeekTail(b []byte) (Peek, bool) {
 			continue
 		}
 		parsedAny = true
+		// Bookkeeping records (cost-state, last-prompt, ai-title, …) carry no
+		// message. They are not "the last record" for pending purposes.
+		if rec.Message.Role == "" {
+			continue
+		}
 		bs := contentBlocks(rec.Message.Content)
-		// The first record we reach walking backwards IS the last record in the
-		// file. If a tool_result had arrived, it would be that record instead,
-		// so "last block is tool_use" is sufficient — no forward scan needed.
+		// The first role-bearing record we reach walking backwards IS the last
+		// message in the file. If a tool_result had arrived, it would be that
+		// record instead, so "last block is tool_use" is sufficient — no
+		// forward scan needed.
 		if !sawLast {
 			sawLast = true
 			if rec.Message.Role == "assistant" && len(bs) > 0 && bs[len(bs)-1].Type == "tool_use" {
 				p.Pending = true
+				p.Ask = askLine(bs[len(bs)-1].Name, bs[len(bs)-1].Input)
 			}
 		}
 		if !foundText && rec.Message.Role == "assistant" {
@@ -131,6 +144,44 @@ func summaryLine(text string) string {
 		return string(r[:summaryMax-1]) + "…"
 	}
 	return ""
+}
+
+// askMax is the rune budget for Peek.Ask, sized for the sidebar card and an OS
+// notification body.
+const askMax = 80
+
+// askLine renders a pending tool call as one printable line: the tool name,
+// plus the command (shell tools) or the path (file tools). Everything else is
+// the name alone — its input is not something to read at a glance. Control
+// characters become spaces and whitespace runs collapse, so a heredoc or an
+// ANSI-laden echo still renders as one clean line.
+func askLine(name string, input json.RawMessage) string {
+	if name == "" {
+		return ""
+	}
+	var in map[string]any
+	_ = json.Unmarshal(input, &in)
+	arg := ""
+	for _, k := range []string{"command", "file_path", "notebook_path"} {
+		if v, ok := in[k].(string); ok && strings.TrimSpace(v) != "" {
+			arg = v
+			break
+		}
+	}
+	s := name
+	if arg != "" {
+		clean := strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return ' '
+			}
+			return r
+		}, arg)
+		s = name + "(" + strings.Join(strings.Fields(clean), " ") + ")"
+	}
+	if r := []rune(s); len(r) > askMax {
+		s = string(r[:askMax-1]) + "…"
+	}
+	return s
 }
 
 // canReply is the whole authorization decision for sending a message into a
