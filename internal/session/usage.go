@@ -39,6 +39,20 @@ func projectSlug(cwd string) string { return slugNonAlnum.ReplaceAllString(cwd, 
 // mislabelled with that history's usage.
 func isClaudeBin(bin string) bool { return bin != "" && filepath.Base(bin) == "claude" }
 
+// isAgentBin reports whether a resolved binary is an interactive coding agent
+// whose silence can mean "your turn". Anything else (a shell, a REPL) that goes
+// quiet is simply idle.
+func isAgentBin(bin string) bool {
+	if bin == "" {
+		return false
+	}
+	switch filepath.Base(bin) {
+	case "claude", "codex":
+		return true
+	}
+	return false
+}
+
 // transcriptPath finds the newest *.jsonl for cwd under <home>/.claude/projects/<slug>/
 // whose mtime >= created; falls back to the newest overall. ok=false if none.
 func transcriptPath(cwd, home string, created time.Time) (string, bool) {
@@ -197,6 +211,10 @@ func (m *Manager) ResolveBins() {
 		}
 		if b, err := br.BinFor(launcher.SpawnSpec{Agent: s.Agent}); err == nil {
 			s.Bin = b
+			// Lock order m.mu -> s.mu, the same as List's call into Info.
+			s.mu.Lock()
+			s.agentKind = isAgentBin(b)
+			s.mu.Unlock()
 		}
 	}
 }

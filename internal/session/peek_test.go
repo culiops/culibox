@@ -139,6 +139,9 @@ func newPeekTestManager(t *testing.T, cwd, body string) (*Manager, string) {
 	m.sessions["s1"] = &Session{
 		ID: "s1", Agent: "claude", Cwd: cwd, Bin: "/usr/local/bin/claude",
 		Created: time.Now().Add(-time.Hour),
+		// A claude that has been given a turn; zero lastActivityAt reads stale,
+		// so Info() says "waiting" — what the reply tests assume.
+		agentKind: true, submitted: true,
 	}
 	return m, p
 }

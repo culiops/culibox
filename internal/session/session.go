@@ -59,10 +59,17 @@ const attachRepaintGrace = 1 * time.Second
 
 // activityOf classifies a session for the UI. Pure: no locks, no clock — the
 // caller passes `now`. Exit dominates the idle test because a just-exited
-// session's lastActivity is stale. exitKnown gates crashed: for abduco/boxed
-// sessions the reaped code is the attach process's, not the agent's, so it must
-// not be trusted into a red "crashed".
-func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Time, idle time.Duration) string {
+// session's lastActivity is stale. exitKnown gates crashed (see below).
+//
+// Silence alone is not "needs you": a quiet shell, or an agent nobody has given
+// a turn yet, is "idle". Only an agent (agent) that has had at least one
+// Enter-submitted input (submitted) reads "waiting" once it goes quiet. The
+// wire value "waiting" keeps meaning "needs you" so every consumer stays right.
+//
+// exitKnown gates crashed: for abduco/boxed sessions the reaped code is the
+// attach process's, not the agent's, so it must not be trusted into a red
+// "crashed".
+func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Time, idle time.Duration, agent, submitted bool) string {
 	if exited {
 		if exitKnown && exitCode != 0 {
 			return "crashed"
@@ -72,7 +79,10 @@ func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Tim
 	if now.Sub(lastActivity) < idle {
 		return "working"
 	}
-	return "waiting"
+	if agent && submitted {
+		return "waiting"
+	}
+	return "idle"
 }
 
 // recordActivity reports whether output observed at `now` should count as agent
@@ -151,7 +161,7 @@ type Info struct {
 	Created time.Time `json:"created"`
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
-	// Activity is a UI-facing classification: working|waiting|done|crashed|detached.
+	// Activity is a UI-facing classification: working|waiting|idle|done|crashed|detached.
 	Activity string `json:"activity"`
 	Name     string `json:"name"`              // mutable display label (id is the stable key)
 	Runtime  string `json:"runtime,omitempty"` // box | host
@@ -193,6 +203,9 @@ type Session struct {
 	// submitted: at least one Enter (\r) has been written to this session —
 	// the only input that means "the operator gave it a turn". Guarded by mu.
 	submitted bool
+	// agentKind mirrors isAgentBin(Bin) under mu, so Info() can gate "waiting"
+	// without m.mu (Bin itself is guarded by m.mu: ResolveBins backfills it).
+	agentKind bool
 	// onSubmitted persists the false->true edge of submitted. Set before the
 	// session is published to m.sessions and never changed, so it needs no
 	// lock; called with NO lock held.
@@ -519,7 +532,7 @@ func (s *Session) Info() Info {
 	defer s.mu.Unlock()
 	activity := statusDetached
 	if s.status != statusDetached {
-		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold)
+		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable}
 }
@@ -780,6 +793,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Box = boxName
 	sess.Bin = bin
 	sess.onSubmitted = m.submittedHook(id)
+	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
@@ -1159,6 +1173,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
 	sess.submitted = md.Submitted == nil || *md.Submitted
 	sess.onSubmitted = m.submittedHook(id)
+	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	m.sessions[id] = sess
 	m.mu.Unlock()
 	// The box was already adopted by Reconcile, before this attach was even

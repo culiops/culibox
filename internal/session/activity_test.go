@@ -9,25 +9,30 @@ import (
 
 func TestActivityOf(t *testing.T) {
 	now := time.Now()
+	stale := now.Add(-time.Minute)
 	cases := []struct {
-		name   string
-		exited bool
-		known  bool
-		code   int
-		last   time.Time
-		want   string
+		name             string
+		exited, known    bool
+		code             int
+		last             time.Time
+		agent, submitted bool
+		want             string
 	}{
-		{"working: output just now", false, false, 0, now, "working"},
-		{"working: 9s ago", false, false, 0, now.Add(-9 * time.Second), "working"},
-		{"waiting: exactly at threshold", false, false, 0, now.Add(-idleThreshold), "waiting"}, // now-last == idle, `< idle` is false
-		{"waiting: 11s ago", false, false, 0, now.Add(-11 * time.Second), "waiting"},
-		{"done: clean exit", true, true, 0, now, "done"},
-		{"crashed: known nonzero", true, true, 1, now, "crashed"},
-		{"done: nonzero but untrusted", true, false, 1, now, "done"},
-		{"done: exited untrusted zero", true, false, 0, now, "done"},
+		{"working: shell output just now", false, false, 0, now, false, false, "working"},
+		{"working: agent output just now", false, false, 0, now, true, true, "working"},
+		{"working: 9s ago", false, false, 0, now.Add(-9 * time.Second), true, true, "working"},
+		{"waiting: agent, submitted, exactly at threshold", false, false, 0, now.Add(-idleThreshold), true, true, "waiting"}, // `< idle` is false at ==
+		{"waiting: agent, submitted, stale", false, false, 0, stale, true, true, "waiting"},
+		{"idle: agent never prompted", false, false, 0, stale, true, false, "idle"},
+		{"idle: shell that was typed into", false, false, 0, stale, false, true, "idle"},
+		{"idle: shell never typed into", false, false, 0, stale, false, false, "idle"},
+		{"done: clean exit", true, true, 0, now, true, true, "done"},
+		{"crashed: known nonzero", true, true, 1, now, false, false, "crashed"},
+		{"done: nonzero but untrusted", true, false, 1, now, true, true, "done"},
+		{"done: exited untrusted zero, stale", true, false, 0, stale, false, false, "done"},
 	}
 	for _, c := range cases {
-		got := activityOf(c.exited, c.known, c.code, c.last, now, idleThreshold)
+		got := activityOf(c.exited, c.known, c.code, c.last, now, idleThreshold, c.agent, c.submitted)
 		if got != c.want {
 			t.Errorf("%s: got %q want %q", c.name, got, c.want)
 		}
@@ -42,10 +47,22 @@ func TestInfoActivity(t *testing.T) {
 			t.Fatalf("got %q want working", got)
 		}
 	})
-	t.Run("live stale -> waiting", func(t *testing.T) {
-		s := &Session{status: statusLive, lastActivityAt: now.Add(-time.Minute)}
+	t.Run("live stale agent that was prompted -> waiting", func(t *testing.T) {
+		s := &Session{status: statusLive, lastActivityAt: now.Add(-time.Minute), agentKind: true, submitted: true}
 		if got := s.Info().Activity; got != "waiting" {
 			t.Fatalf("got %q want waiting", got)
+		}
+	})
+	t.Run("live stale agent never prompted -> idle", func(t *testing.T) {
+		s := &Session{status: statusLive, lastActivityAt: now.Add(-time.Minute), agentKind: true}
+		if got := s.Info().Activity; got != "idle" {
+			t.Fatalf("got %q want idle", got)
+		}
+	})
+	t.Run("live stale shell -> idle", func(t *testing.T) {
+		s := &Session{status: statusLive, lastActivityAt: now.Add(-time.Minute), submitted: true}
+		if got := s.Info().Activity; got != "idle" {
+			t.Fatalf("got %q want idle", got)
 		}
 	})
 	t.Run("exited nonzero trusted -> crashed", func(t *testing.T) {
