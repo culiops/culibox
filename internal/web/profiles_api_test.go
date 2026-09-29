@@ -49,3 +49,24 @@ func TestProfilesAPI_CreateListDelete(t *testing.T) {
 		t.Fatalf("delete config seed want 404, got %d", rec.Code)
 	}
 }
+
+func TestProfileReplyableRoundTripsThroughTheAPI(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles",
+		strings.NewReader(`{"name":"rc","bin":"claude","runtime":"host","replyable":true}`)))
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/rc", nil))
+	if !strings.Contains(rec.Body.String(), `"replyable":true`) {
+		t.Fatalf("GET lost replyable: %s", rec.Body)
+	}
+	for _, v := range pm.Views() {
+		if v.Name == "rc" && !v.Replyable {
+			t.Fatal("the view does not report the reply default")
+		}
+	}
+}

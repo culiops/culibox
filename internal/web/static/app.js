@@ -2014,6 +2014,12 @@ function renderPfRuntime(value) {
   });
   $("pf-runtime-warn").hidden = (value || "") !== "host";
 }
+// syncPfReplyable shows "Allow replies by default" only for a claude binary:
+// replies are claude-only on the server, and a default nothing honours is a
+// setting that lies.
+function syncPfReplyable() {
+  $("pf-replyable-row").hidden = !isClaudeBinName($("pf-bin").value);
+}
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
@@ -2028,6 +2034,8 @@ function fillForm(p) {
   renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
+  $("pf-replyable").checked = !!p.replyable;
+  syncPfReplyable();
   syncEditorActions();
 }
 // syncEditorActions is the single place that decides what the editor may do,
@@ -2094,6 +2102,7 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
   if (cwd) p.default_cwd = cwd;
+  if (!$("pf-replyable-row").hidden && $("pf-replyable").checked) p.replyable = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
@@ -2213,7 +2222,10 @@ function addEnvRow(kind) {
 $("pf-env-add").addEventListener("click", () => addEnvRow("literal"));
 $("pf-secret-add").addEventListener("click", () => addEnvRow("secret"));
 // Re-scope the option list when the agent binary changes.
-$("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
+$("pf-bin").addEventListener("input", () => {
+  renderPfOptions(readForm().options);
+  syncPfReplyable();
+});
 $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });

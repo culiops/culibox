@@ -1032,6 +1032,9 @@
     }
     .lockbar[hidden] { display: none; }
     .frow { display: flex; gap: 18px; margin-bottom: 18px; }
+    /* .frow is display:flex, which beats the UA [hidden] rule. */
+    #pf-replyable-row[hidden] { display: none; }
+    .pf-check { display: flex; align-items: center; gap: 8px; }
     .fcol { flex: 1; min-width: 0; }
     .flab {
       font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
