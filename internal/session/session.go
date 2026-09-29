@@ -621,6 +621,11 @@ type Manager struct {
 	// that ordering fragile.
 	peekMu    sync.Mutex
 	peekCache map[string]peekEntry
+
+	// procStart reads a pid's starttime for the registry's pid-reuse guard.
+	// NewManager sets procStartOf; a nil value (struct-literal test managers)
+	// disables the registry path, falling back to the heuristic.
+	procStart procStartFunc
 }
 
 // SetPaths records where transcripts live: the daemon home (host-tier sessions)
@@ -696,6 +701,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		counters:  map[string]int{},
 		ringCap:   ringCap,
 		retention: retention,
+		procStart: procStartOf,
 	}
 }
 

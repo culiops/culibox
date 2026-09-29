@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -180,30 +179,32 @@ func validReplyText(s string) error {
 	return nil
 }
 
-// peekEntry is one cached parse, valid while the transcript's mtime is unchanged.
+// peekEntry is one cached parse, valid while the transcript's path AND mtime
+// are unchanged — /clear moves a session to a new file.
 type peekEntry struct {
+	path  string
 	mtime time.Time
 	peek  Peek
 }
 
-// peekCached returns the cached parse when it still matches mtime.
-func (m *Manager) peekCached(id string, mtime time.Time) (Peek, bool) {
+// peekCached returns the cached parse when it still matches path and mtime.
+func (m *Manager) peekCached(id, path string, mtime time.Time) (Peek, bool) {
 	m.peekMu.Lock()
 	defer m.peekMu.Unlock()
 	e, ok := m.peekCache[id]
-	if !ok || !e.mtime.Equal(mtime) {
+	if !ok || e.path != path || !e.mtime.Equal(mtime) {
 		return Peek{}, false
 	}
 	return e.peek, true
 }
 
-func (m *Manager) peekStore(id string, mtime time.Time, p Peek) {
+func (m *Manager) peekStore(id, path string, mtime time.Time, p Peek) {
 	m.peekMu.Lock()
 	defer m.peekMu.Unlock()
 	if m.peekCache == nil {
 		m.peekCache = map[string]peekEntry{}
 	}
-	m.peekCache[id] = peekEntry{mtime: mtime, peek: p}
+	m.peekCache[id] = peekEntry{path: path, mtime: mtime, peek: p}
 }
 
 // peekForget drops a dead session's cached parse. Called beside every
@@ -225,54 +226,40 @@ func (m *Manager) peekForget(id string) {
 // non-claude session, one whose transcript cannot be located or read, or one
 // whose tail holds no parseable record.
 //
-// The sidebar polls this for every session, so the hot path is one os.Stat: the
-// tail is re-read only when mtime moved. A waiting session's transcript is
-// static, so the sessions whose summaries anyone reads are served from cache.
-//
-// Locking mirrors UsageFor: capture Bin/Cwd/Box/Created in one critical section
-// (Bin is backfilled post-reconcile by ResolveBins, so a lock-free read races),
-// then work without the lock.
+// The sidebar polls this for every session, so the hot path is a pidfile read,
+// a registry read and one os.Stat: the tail is re-read only when the path or
+// mtime moved.
 func (m *Manager) PeekFor(id string) (Peek, bool) {
-	m.mu.Lock()
-	s := m.sessions[id]
-	home, stateDir := m.home, m.stateDir
-	var bin, cwd, box string
-	var created time.Time
-	if s != nil {
-		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
+	p, ok, _ := m.peekAndBlocked(id)
+	return p, ok
+}
+
+// peekAndBlocked is PeekFor plus whether Claude Code's live registry says the
+// session is sitting on a prompt. blocked can be true with ok=false (registry
+// readable, transcript not).
+func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
+	l := m.locate(id)
+	blocked := l.reg != nil && l.reg.Status == regStatusWaiting
+	if !l.claude || l.path == "" {
+		return Peek{}, false, blocked
 	}
-	m.mu.Unlock()
-	if s == nil || !isClaudeBin(bin) {
-		return Peek{}, false
-	}
-	base := home
-	if box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", box)
-	}
-	if base == "" {
-		return Peek{}, false
-	}
-	path, ok := transcriptPath(cwd, base, created)
-	if !ok {
-		return Peek{}, false
-	}
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(l.path)
 	if err != nil {
-		return Peek{}, false
+		return Peek{}, false, blocked
 	}
-	if p, ok := m.peekCached(id, fi.ModTime()); ok {
-		return p, true
+	if p, ok := m.peekCached(id, l.path, fi.ModTime()); ok {
+		return p, true, blocked
 	}
-	b, err := readUsageTail(path)
+	b, err := readUsageTail(l.path)
 	if err != nil {
-		return Peek{}, false
+		return Peek{}, false, blocked
 	}
 	p, ok := parsePeekTail(b)
 	if !ok {
-		return Peek{}, false
+		return Peek{}, false, blocked
 	}
-	m.peekStore(id, fi.ModTime(), p)
-	return p, true
+	m.peekStore(id, l.path, fi.ModTime(), p)
+	return p, true, blocked
 }
 
 // SendMessage types one line into a session's PTY, followed by Enter.

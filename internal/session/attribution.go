@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 )
 
 // ToolStat is one row of the context-attribution breakdown: how much a tool / MCP
@@ -126,30 +124,11 @@ func attributeTools(r io.Reader) Attribution {
 // AttributionFor streams a claude session's transcript into attributeTools. Same
 // gate/locator as UsageFor. ok=false for non-claude / no-transcript / unreadable.
 func (m *Manager) AttributionFor(id string) (Attribution, bool) {
-	m.mu.Lock()
-	s := m.sessions[id]
-	home, stateDir := m.home, m.stateDir
-	var bin, cwd, box string
-	var created time.Time
-	if s != nil {
-		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
-	}
-	m.mu.Unlock()
-	if s == nil || !isClaudeBin(bin) {
+	l := m.locate(id)
+	if !l.claude || l.path == "" {
 		return Attribution{}, false
 	}
-	base := home
-	if box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", box)
-	}
-	if base == "" {
-		return Attribution{}, false
-	}
-	p, ok := transcriptPath(cwd, base, created)
-	if !ok {
-		return Attribution{}, false
-	}
-	f, err := os.Open(p)
+	f, err := os.Open(l.path)
 	if err != nil {
 		return Attribution{}, false
 	}

@@ -148,36 +148,14 @@ func contextMax(model string) (int, bool) {
 
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
 // a non-claude session, one whose transcript can't be located/read, or one whose
-// tail carries no usage line. Immutable session fields (Cwd/Box/Created/Bin) are
-// read without the lock; only the map lookup and paths are guarded.
+// tail carries no usage line. Same locator as PeekFor (registry, then boxstate,
+// then cwd+mtime).
 func (m *Manager) UsageFor(id string) (Usage, bool) {
-	// Capture everything under the lock: Bin can be filled in post-reconcile by
-	// ResolveBins (a locked write), so reading it lock-free would race. Cwd/Box/
-	// Created are immutable but captured here too for one clean critical section.
-	m.mu.Lock()
-	s := m.sessions[id]
-	home, stateDir := m.home, m.stateDir
-	var bin, cwd, box string
-	var created time.Time
-	if s != nil {
-		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
-	}
-	m.mu.Unlock()
-	if s == nil || !isClaudeBin(bin) {
+	l := m.locate(id)
+	if !l.claude || l.path == "" {
 		return Usage{}, false
 	}
-	base := home
-	if box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", box)
-	}
-	if base == "" {
-		return Usage{}, false
-	}
-	p, ok := transcriptPath(cwd, base, created)
-	if !ok {
-		return Usage{}, false
-	}
-	b, err := readUsageTail(p)
+	b, err := readUsageTail(l.path)
 	if err != nil {
 		return Usage{}, false
 	}
