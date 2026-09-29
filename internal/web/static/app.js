@@ -224,6 +224,32 @@ function togglePane(kind) {
 
 $("sessions-cv") && ($("sessions-cv").onclick = () => togglePane("sessions"));
 $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
+
+// U3: a collapsed pane IS its header bar — the caret is visually the pane's
+// only affordance, but requiring that specific 11px target to re-expand it
+// is unnecessarily small. Any click on the bar that isn't on one of the bar's
+// own controls (the caret itself, +new, the file actions, the root input…)
+// re-expands the pane the same way the caret does. Expanded, nothing changes:
+// this only ever fires while .closed is present.
+//
+// Desktop only. On mobile, #files-phd is promoted into the Files screen's own
+// topbar and CSS forces it to always read as open regardless of whatever
+// .closed the desktop toggle last recorded (app.css's
+// html.mobile-screen-files #files-phd rules) — so a stray tap on that bar
+// must not silently flip hidden desktop state. #sessions-phd never renders at
+// all on mobile (display: none), so it needs no such guard, but the same
+// early return keeps both call sites identical.
+function phdRowClick(kind) {
+  return (e) => {
+    if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
+    if (!e.currentTarget.classList.contains("closed")) return;
+    if (e.target.closest("button, input, a, select, textarea")) return;
+    togglePane(kind);
+  };
+}
+$("sessions-phd") && $("sessions-phd").addEventListener("click", phdRowClick("sessions"));
+$("files-phd") && $("files-phd").addEventListener("click", phdRowClick("files"));
+
 // Applying the collapsed state at boot happens later, in the boot sequence
 // near initFileTree() — see the comment there. Assigning these two onclick
 // handlers is safe here: it only creates closures, it does not call
@@ -3622,6 +3648,17 @@ fontPrefs.applyCssVars();
 initSettings();
 initNotifyToggle();
 setInterval(refreshSessions, 3000);
+// U8: crossing the mobile breakpoint (rotate, resize, devtools) changes which
+// panes/screens are even in the DOM — mobileshell's own screen classes react
+// immediately via CSS, but the sidebar's last-painted rows do not repaint
+// themselves, so without this the operator sees last poll's shape for up to
+// 3s. matchMedia's change event fires exactly on that edge; the query string
+// is built from MOBILE_MAX_PX (mobileshell.js) so it cannot drift from the
+// CSS breakpoint or from mobileActive()'s own edge. No new polling — this
+// forces one extra refreshSessions() call only on the crossing itself.
+if (typeof mobileMediaQuery === "function" && window.matchMedia) {
+  window.matchMedia(mobileMediaQuery()).addEventListener("change", () => refreshSessions());
+}
 // Account limits change slowly and the file only updates when a claude statusLine
 // renders — a 30s refresh keeps the % fresh and the countdown ticking without
 // hammering /api/meta. Skipped while hidden.

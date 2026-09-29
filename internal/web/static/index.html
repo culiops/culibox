@@ -206,7 +206,7 @@
     <div class="dhd">
       <button type="button" class="btn gh" id="pf-back" aria-label="Back to profiles">&lsaquo;</button>
       <span class="grow">Settings</span>
-      <button type="button" class="btn gh" id="settings-esc" data-close="settings-modal">esc</button>
+      <button type="button" class="btn gh" id="settings-esc" data-close="settings-modal" aria-label="Close" title="Close (Esc)">&times;</button>
     </div>
     <div class="tabs" id="settings-tabs" role="tablist">
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
@@ -333,6 +333,7 @@
       <span class="grow"></span>
       <button id="pf-duplicate" type="button" class="btn" disabled>Duplicate</button>
       <button id="pf-save" type="button" class="btn pri">Save</button>
+      <button type="button" class="btn" data-close="settings-modal">Done</button>
     </div>
     <div class="dft" id="foot-settings" hidden>
       <button id="fs-reset" type="button" class="btn">Reset to defaults</button>

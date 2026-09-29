@@ -16,6 +16,14 @@ function mobileActive(width) {
   return Number(width) <= MOBILE_MAX_PX;
 }
 
+// U8: the string a matchMedia() breakpoint listener watches, built from the
+// same MOBILE_MAX_PX the CSS's `@media (max-width: 700px)` and mobileActive()
+// above agree on — so a resize/rotate/devtools crossing never hard-codes a
+// second "700" that could drift from the other two.
+function mobileMediaQuery() {
+  return "(max-width: " + MOBILE_MAX_PX + "px)";
+}
+
 // Stored screen is hostile input — hand-edited, written by an older version, or
 // quota-truncated. Anything not one of the three known screens degrades to the
 // landing screen rather than throwing: this is read in the pre-paint <script>,
@@ -67,6 +75,6 @@ function sessionGroups(sessions, statusFn) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     MOBILE_MAX_PX, MOBILESHELL_KEY, MOBILE_SCREENS,
-    mobileActive, loadScreen, saveScreen, screenClass, navModel, sessionGroups,
+    mobileActive, mobileMediaQuery, loadScreen, saveScreen, screenClass, navModel, sessionGroups,
   };
 }

@@ -152,7 +152,10 @@
     /* Collapsed: the bar is the whole pane, so it lifts onto its own surface and
        its text goes to full strength — a collapsed pane is still live, not
        disabled. */
-    .phd.closed { background: var(--surface-2); color: var(--fg); }
+    /* U3: collapsed, the whole bar re-expands on click (desktop only — see
+       app.js's phdRowClick), so it reads as clickable everywhere on it, not
+       just on the 11px caret. */
+    .phd.closed { background: var(--surface-2); color: var(--fg); cursor: pointer; }
     /* The count is a plain digit, not a path or a live phrase like the pip
        text, so it takes the bar's own type as-is — muted, same size — rather
        than the bordered chip #sessions-count wore before the pane grew a

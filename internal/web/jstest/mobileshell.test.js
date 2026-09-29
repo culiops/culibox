@@ -11,6 +11,14 @@ test("mobileActive is true at and below 700, false above", () => {
   assert.equal(m.mobileActive(1440), false);
 });
 
+// U8: the matchMedia() breakpoint listener's query must be derived from
+// MOBILE_MAX_PX, not a second hard-coded "700" that could drift from it or
+// from the CSS's own @media (max-width: 700px).
+test("mobileMediaQuery is built from MOBILE_MAX_PX", () => {
+  assert.equal(m.mobileMediaQuery(), "(max-width: " + m.MOBILE_MAX_PX + "px)");
+  assert.equal(m.mobileMediaQuery(), "(max-width: 700px)");
+});
+
 test("loadScreen keeps a known screen, degrades unknown/empty to sessions", () => {
   assert.equal(m.loadScreen("terminal"), "terminal");
   assert.equal(m.loadScreen("files"), "files");

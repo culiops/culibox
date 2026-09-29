@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { iconFor, treeBranch } = require("../static/filetree.js");
+const { iconFor, treeBranch, actionsLabel } = require("../static/filetree.js");
 
 // Codepoints are asserted by value, not by name. A glyph that silently changes
 // is a tofu box in the tree, and only the number can catch that.
@@ -100,4 +100,11 @@ test("childPrefix is always the same width as rowPrefix", () => {
     const b = treeBranch(prefix, last);
     assert.strictEqual(b.childPrefix.length, b.rowPrefix.length, prefix + "/" + last);
   }
+});
+
+// U6: the row's ⋯ menu button names itself by what it acts on, matching the
+// session row's kebab ("Session actions" on both aria-label and title).
+test("the row menu button is labeled by kind", () => {
+  assert.strictEqual(actionsLabel(true), "Folder actions");
+  assert.strictEqual(actionsLabel(false), "File actions");
 });
