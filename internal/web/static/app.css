@@ -520,7 +520,11 @@
        expanded in place with no click. It keeps .srow.needs's amber column, so
        the ONE amber signal on the list stays one; the body sits in the text
        column so the dot stays aligned with every other row. */
-    #sessions .srow.dcard { cursor: default; }
+    /* .srow.needs sets its bottom border transparent to fuse into a .peek
+       sibling (togglePeek's answer block). A .dcard has no such sibling — its
+       own bottom edge IS the row's real bottom — so give it back a visible
+       one, or two adjacent needs-you cards read as one fused block. */
+    #sessions .srow.dcard { cursor: default; border-bottom-color: color-mix(in srgb, var(--border) 45%, transparent); }
     #sessions .srow.dcard .grow { flex: 1; }
     #sessions .nbody { margin-top: 8px; }
     #sessions .peektxt.ask { font-weight: 600; }

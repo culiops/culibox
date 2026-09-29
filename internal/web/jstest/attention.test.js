@@ -27,10 +27,9 @@ test("turn card offers a reply field only when replies are enabled", () => {
     { text: "done", ask: false, reply: false, enableReplies: true });
 });
 
-test("claude waiting with no need (transcript unreadable) behaves like a turn", () => {
+test("claude waiting with no need (transcript unreadable) is Open only, like non-claude", () => {
   const c = cardContent({ activity: "waiting", claude: true, replyable: true });
-  assert.strictEqual(c.reply, true);
-  assert.strictEqual(c.text, "No summary");
+  assert.deepEqual(c, { text: "Waiting for input.", ask: false, reply: false, enableReplies: false });
 });
 
 test("non-claude waiting card offers Open only", () => {

@@ -869,11 +869,21 @@ function buildReplyComposer(s, opts) {
       // outlives the request that set it.
       pendingSends.delete(s.id);
       refresh();
+      // Disabling the field above (inside refresh(), while pendingSends still
+      // held this id) already blurs it in a real browser, which clears this
+      // through the field's own onblur — but that is indirect enough that it
+      // is worth stating outright rather than relying on it: a send must
+      // never leave the poll thinking a gone or re-rendered field is still
+      // focused and holding the list rebuild back.
+      replyFocused = false;
       if (o.afterSend) o.afterSend();
     }
   }
 
   send.onclick = () => sendText(input.value);
+  if (o.submitOnEnter) {
+    input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); sendText(input.value); } };
+  }
   return { form, why, refresh, send: sendText };
 }
 
@@ -1167,12 +1177,17 @@ function renderNeedsBody(s) {
       replyable: () => s.replyable,
       pending: () => s.need === "ask",
       ariaLabel: "Reply to " + (s.name || s.id),
+      submitOnEnter: true,
       afterSend: () => {
-        // Force this card to re-render on the next pass even if nothing the
-        // server reports has moved yet: its controls were changed behind the
-        // signature's back (pendingSends is page-local, not in rowSig).
-        const li = body.closest("li");
-        if (li) delete li.dataset.sig;
+        // No forced rebuild here: pendingSends IS already part of rowSig (via
+        // rowLocal's `sending`), so refreshSessions()'s own reconcile already
+        // rebuilds this card whenever anything it renders actually changed —
+        // typically `activity` itself, moving off "waiting" once the send
+        // lands. A forced rebuild used to run unconditionally here and
+        // clobbered this exact card's `why` text (just set by the onFail
+        // callback above, or left blank on success) with whatever a
+        // freshly-built composer's gate reason says — hiding the one error
+        // message an operator most needs to see right after a failed send.
         refreshSessions();
       },
     });
@@ -1195,7 +1210,14 @@ function renderNeedsBody(s) {
         showToast("Could not change the reply setting", { error: true });
         return;
       }
-      refreshSessions(); // replyable is in the signature: the card re-renders with its field
+      // replyable is in the signature: the card re-renders with its reply
+      // field. Nothing else moves focus onto that new field on its own —
+      // await the rebuild, then focus it, so the operator lands in the
+      // field they just asked for instead of on <body>.
+      await refreshSessions();
+      const li = sessionRowFor(s.id);
+      const fld = li && li.querySelector(".nbody .fld");
+      if (fld) fld.focus();
     };
     acts.appendChild(en);
   }
