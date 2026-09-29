@@ -1,7 +1,11 @@
 package session
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
+	"strings"
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -12,8 +16,12 @@ import (
 // so no caller can reach the PTY around the checks.
 
 var (
-	ErrNotExited  = errors.New("session has not exited")
-	ErrRestarting = errors.New("session is already being restarted")
+	ErrNotExited     = errors.New("session has not exited")
+	ErrRestarting    = errors.New("session is already being restarted")
+	ErrNotLive       = errors.New("session is not running")
+	ErrNotBlocked    = errors.New("session is not waiting on a prompt")
+	ErrPromptChanged = errors.New("the prompt changed")
+	ErrBadChoice     = errors.New("choice must be yes or no")
 )
 
 // resumeFor is the conversation a restart continues: only a host-tier claude
@@ -80,4 +88,107 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	}
 	m.removeSession(id, s)
 	return ns, nil
+}
+
+// interruptKey is chosen here, never by a caller. Esc ends an agent's turn
+// without exiting it (measured on Claude Code 2.1.284: the process stays, the
+// turn is cancelled); Ctrl+C stops a shell's foreground command.
+func interruptKey(agent bool) []byte {
+	if agent {
+		return []byte{0x1b}
+	}
+	return []byte{0x03}
+}
+
+// Interrupt stops what a live session is doing. It needs no reply opt-in: it
+// can only stop work, never start it (End session is equally unguarded).
+// Session.Write marks submitted only on \r, which neither key contains.
+func (m *Manager) Interrupt(id string) error {
+	m.mu.Lock()
+	s := m.sessions[id]
+	var bin string
+	if s != nil {
+		bin = s.Bin // guarded by m.mu: ResolveBins backfills it post-reconcile
+	}
+	m.mu.Unlock()
+	if s == nil {
+		return ErrNoSession
+	}
+	s.mu.Lock()
+	live := s.status == statusLive
+	s.mu.Unlock()
+	if !live {
+		return ErrNotLive
+	}
+	_, err := s.Write(interruptKey(isAgentBin(bin)))
+	return err
+}
+
+// answerKey maps an answer to the ONE key Claude Code's permission dialog reads
+// (measured on 2.1.284: `1` alone selects Yes, Esc alone rejects). Never a \r:
+// a stray Enter would land on whatever the agent shows next. There is no
+// "always" — that is a standing grant, not an answer.
+func answerKey(choice string) ([]byte, error) {
+	switch choice {
+	case "yes":
+		return []byte("1"), nil
+	case "no":
+		return []byte{0x1b}, nil
+	}
+	return nil, ErrBadChoice
+}
+
+// askHashMatches compares a client's hex SHA-256 with the current AskFull's.
+func askHashMatches(askFull, want string) bool {
+	sum := sha256.Sum256([]byte(askFull))
+	got := hex.EncodeToString(sum[:])
+	return subtle.ConstantTimeCompare([]byte(got), []byte(strings.ToLower(want))) == 1
+}
+
+// Answer types one key into a permission dialog. The gates run in this order,
+// each with its own error, and all are required:
+//  1. the choice is yes|no (checked first, so a malformed call probes nothing);
+//  2. a claude session (ErrNotClaude);
+//  3. the operator opted in to replies (ErrNotReplyable);
+//  4. Claude Code's live registry says it is blocked on a prompt RIGHT NOW
+//     (ErrNotBlocked) — never inferred from silence or the transcript alone;
+//  5. the current AskFull exists (exactly one pending call, short enough) and
+//     its SHA-256 is the one the operator reviewed (ErrPromptChanged).
+//
+// The window between the gates and the Write is the same narrow TOCTOU
+// SendMessage accepts; the worst case is a key into a dialog that replaced the
+// reviewed one within that window.
+func (m *Manager) Answer(id, choice, askSHA256 string) error {
+	key, err := answerKey(choice)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	s := m.sessions[id]
+	var bin string
+	if s != nil {
+		bin = s.Bin
+	}
+	m.mu.Unlock()
+	if s == nil {
+		return ErrNoSession
+	}
+	if !isClaudeBin(bin) {
+		return ErrNotClaude
+	}
+	s.mu.Lock()
+	replyable := s.replyable
+	s.mu.Unlock()
+	if !replyable {
+		return ErrNotReplyable
+	}
+	p, havePeek, blocked := m.peekAndBlocked(id)
+	if !blocked {
+		return ErrNotBlocked
+	}
+	if !havePeek || p.AskFull == "" || !askHashMatches(p.AskFull, askSHA256) {
+		return ErrPromptChanged
+	}
+	_, err = s.Write(key)
+	return err
 }
