@@ -184,7 +184,10 @@ function paletteCommands(mac) {
   }
   cmds.push({ kind: "settings", label: "Settings · Profiles", hint: "", run: () => openSettings("manage") });
   cmds.push({ kind: "settings", label: "Settings · Font sizes", hint: "", run: () => openSettings("settings") });
-  cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
+  // toggleSidebar is a no-op on mobile, so don't offer it there.
+  if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {
+    cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
+  }
   cmds.push({ kind: "view", label: "Toggle session detail rail", hint: "", run: toggleSteerRail });
   cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
   cmds.push({ kind: "view", label: "Collapse/expand files", hint: mac ? "⌥⌘F" : "Alt+Ctrl+F", run: () => togglePane("files") });

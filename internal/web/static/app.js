@@ -97,6 +97,9 @@ async function probeServer() {
 // Named so the command palette can invoke the same path as the ☰ button rather
 // than duplicating it (or synthesising a click on the DOM node).
 function toggleSidebar() {
+  // No sidebar to toggle below the breakpoint (the bottom nav picks the
+  // screen), and a value stored here would silently flip the next wide window.
+  if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
   // Each state shows exactly one toggle (header ☰ with the sidebar, the rail's
   // ☰ without), so the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
