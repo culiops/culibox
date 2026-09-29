@@ -377,7 +377,13 @@ function buildReplyStrip(tab) {
   strip.append(fld, send);
   // The strip's reason lives in a title nobody reads before clicking; when it
   // is the missing opt-in, offer the fix itself.
-  const enable = buildEnableRepliesButton(tab.id);
+  const enable = buildEnableRepliesButton(tab.id, () => {
+    // Focus only once the re-gate (refreshSessions, run synchronously inside
+    // buildEnableRepliesButton's onclick before this callback fires) has
+    // actually opened the field — a session that stopped waiting or entered a
+    // tool call in the meantime must not receive a focused-but-disabled input.
+    if (!fld.disabled) fld.focus();
+  });
   strip.appendChild(enable);
 
   // knownPending tracks the most recently observed /peek "pending" flag (a
