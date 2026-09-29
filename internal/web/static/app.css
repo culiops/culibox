@@ -516,6 +516,23 @@
        way to open it. A checkbox with a real label, never a bare glyph. */
     #sessions .peek-optin { display: flex; align-items: center; gap: 0.35em; margin-top: 0.35em; font-size: 0.8em; }
     #sessions .peek-why { display: block; font-size: 0.8em; margin-top: 0.25em; color: var(--muted); }
+    /* Desktop needs-you card (attention signal): the waiting row itself,
+       expanded in place with no click. It keeps .srow.needs's amber column, so
+       the ONE amber signal on the list stays one; the body sits in the text
+       column so the dot stays aligned with every other row. */
+    /* .srow.needs sets its bottom border transparent to fuse into a .peek
+       sibling (togglePeek's answer block). A .dcard has no such sibling — its
+       own bottom edge IS the row's real bottom — so give it back a visible
+       one, or two adjacent needs-you cards read as one fused block. */
+    #sessions .srow.dcard { cursor: default; border-bottom-color: color-mix(in srgb, var(--border) 45%, transparent); }
+    #sessions .srow.dcard .grow { flex: 1; }
+    #sessions .nbody { margin-top: 8px; }
+    /* The card's text doubles as its expand/collapse control (toggleCardPeek)
+       — same affordance .summary's cursor gives the sidebar row's own
+       "Show the full message" toggle. */
+    #sessions .nbody .peektxt { cursor: pointer; }
+    #sessions .peektxt.ask { font-weight: 600; }
+    #sessions .nacts { display: flex; gap: 7px; margin-top: 9px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
     .ft-row { flex: none; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -1051,6 +1068,7 @@
       border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
     }
     .fsrow .lbl { width: 152px; flex: none; }
+    .notify-opt { display: flex; align-items: center; gap: 0.5em; }
     .sample {
       flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
       padding: 10px 12px; overflow: hidden; white-space: pre; color: var(--fg);
@@ -1875,11 +1893,21 @@
          beside unselected siblings on the same surface); a full-width mobile
          tab has no "beside" to lift above, so M9 draws it as an underline. */
       #settings-tabs .t.on { background: var(--sel-soft); box-shadow: inset 0 -2px 0 var(--accent); }
-      /* M9 #3: the label's own size, and no border under the last block
-         (Terminal/Code/Markdown/File tree are the only four .fsrow rows on
-         this tab, scoped to it so the desktop rule elsewhere is untouched). */
+      /* M9 #3: the label's own size, and no border under the last block.
+         Targeted at the File tree row by id (not :last-of-type) because the
+         Alerts row (added for desktop notifications) now sits after it as
+         the tab's true last .fsrow — an id keeps File tree's border removed
+         exactly as before instead of the rule silently sliding onto Alerts. */
       .fsrow .lbl { font-size: 14px; }
-      #settings .fsrow:last-of-type { border-bottom: 0; }
+      #fsrow-filetree { border-bottom: 0; }
+      /* Android Chrome cannot construct a Notification without a service
+         worker (this page has none), so the toggle would sit there and fail
+         silently on exactly the platform most likely to open Settings on a
+         phone. Hidden here rather than left disabled: an always-broken
+         control is worse than an absent one. Desktop (the only place the
+         toggle can actually work) is untouched — this is CSS-only, inside
+         the existing mobile block, and does not touch #fsrow-filetree above. */
+      #fsrow-alerts, #notify-why { display: none; }
       /* M10: Containment/Base environment/Model/Effort all render as a .seg
          (renderPfRuntime/renderPfOptions) sized to its content on desktop,
          where it sits beside a label in a half-width column; the mobile

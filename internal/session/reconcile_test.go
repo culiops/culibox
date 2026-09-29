@@ -278,3 +278,34 @@ func TestParseID(t *testing.T) {
 		}
 	}
 }
+
+// ResolveBins backfills Bin after profiles load; the activity gate must follow,
+// or every reconciled profile session would read "idle" forever.
+func TestResolveBinsMarksAgentKind(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("my-project-1")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"my-project-1": {Agent: "my-project", Cwd: "/work", Created: time.Now()},
+	})
+	l := &regLauncher{known: map[string]string{}}
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("my-project-1") })
+	s, _ := m.Get("my-project-1")
+	s.mu.Lock()
+	s.lastActivityAt = time.Now().Add(-time.Minute)
+	s.mu.Unlock()
+	if got := s.Info().Activity; got != "idle" {
+		t.Fatalf("before ResolveBins: %q, want idle (bin unknown, so not an agent)", got)
+	}
+	l.known["my-project"] = "/usr/local/bin/claude"
+	m.ResolveBins()
+	if got := s.Info().Activity; got != "waiting" {
+		t.Fatalf("after ResolveBins: %q, want waiting (claude, pre-feature sidecar => submitted)", got)
+	}
+}

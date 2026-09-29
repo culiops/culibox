@@ -1,0 +1,287 @@
+package session
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+type pidBackend struct {
+	*fakeBackend
+	pids map[string]int
+}
+
+func (b pidBackend) InnerPid(id string) (int, bool) { p, ok := b.pids[id]; return p, ok }
+
+func writeReg(t *testing.T, home string, pid int, body string) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude", "sessions")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, strconv.Itoa(pid)+".json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func regJSON(pid int, sid, procStart, status string) string {
+	return fmt.Sprintf(`{"pid":%d,"sessionId":%q,"cwd":"/work/proj","procStart":%q,"status":%q,"version":"2.1.284"}`,
+		pid, sid, procStart, status)
+}
+
+// writeTx writes a one-record transcript whose text is `text` and whose model
+// is "model-<sid>", then pins its mtime.
+func writeTx(t *testing.T, home, cwd, sid, text string, mtime time.Time) string {
+	t.Helper()
+	dir := filepath.Join(home, ".claude", "projects", projectSlug(cwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, sid+".jsonl")
+	body := fmt.Sprintf(`{"message":{"role":"assistant","model":%q,"content":[{"type":"text","text":%q}],"usage":{"input_tokens":1}}}`+"\n",
+		"model-"+sid, text)
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+const locCwd = "/work/proj"
+
+// newLocatorManager: two prompted claude sessions in ONE cwd (the misattribution
+// case), pids 101/202 with procStart 5000/6000. Transcripts A (s1) and B (s2);
+// B is newer, so the old heuristic hands B to both.
+func newLocatorManager(t *testing.T) (*Manager, string) {
+	t.Helper()
+	home := t.TempDir()
+	m := &Manager{
+		home:     home,
+		sessions: map[string]*Session{},
+		backend:  pidBackend{newFakeBackend(), map[string]int{"s1": 101, "s2": 202}},
+		procStart: func(pid int) (string, bool) {
+			v, ok := map[int]string{101: "5000", 202: "6000"}[pid]
+			return v, ok
+		},
+	}
+	for _, id := range []string{"s1", "s2"} {
+		m.sessions[id] = &Session{ID: id, Agent: "claude", Cwd: locCwd, Bin: "/usr/bin/claude",
+			Created: time.Now().Add(-time.Hour), agentKind: true, submitted: true}
+	}
+	now := time.Now()
+	writeTx(t, home, locCwd, "aaaa-1", "from A", now.Add(-10*time.Minute))
+	writeTx(t, home, locCwd, "bbbb-2", "from B", now.Add(-5*time.Minute))
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "idle"))
+	writeReg(t, home, 202, regJSON(202, "bbbb-2", "6000", "idle"))
+	return m, home
+}
+
+func peekText(t *testing.T, m *Manager, id string) string {
+	t.Helper()
+	p, ok := m.PeekFor(id)
+	if !ok {
+		t.Fatalf("PeekFor(%s) missed", id)
+	}
+	return p.Text
+}
+
+func TestLocateUsesRegistryOverNewerSibling(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	if got := peekText(t, m, "s1"); got != "from A" {
+		t.Errorf("s1 peek=%q want its own %q (not the newer sibling's)", got, "from A")
+	}
+	if got := peekText(t, m, "s2"); got != "from B" {
+		t.Errorf("s2 peek=%q want %q", got, "from B")
+	}
+	if u, ok := m.UsageFor("s1"); !ok || u.Model != "model-aaaa-1" {
+		t.Errorf("s1 usage model=%q ok=%v want model-aaaa-1", u.Model, ok)
+	}
+}
+
+func TestLocateFollowsClear(t *testing.T) {
+	m, home := newLocatorManager(t)
+	_ = peekText(t, m, "s1") // prime the cache on A
+	writeTx(t, home, locCwd, "cccc-3", "from C", time.Now().Add(-20*time.Minute))
+	writeReg(t, home, 101, regJSON(101, "cccc-3", "5000", "idle")) // what /clear does
+	if got := peekText(t, m, "s1"); got != "from C" {
+		t.Errorf("after /clear s1 peek=%q want %q", got, "from C")
+	}
+}
+
+func TestLocateFallsBack(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"procStart mismatch (pid reused)", regJSON(101, "aaaa-1", "9999", "idle")},
+		{"malformed JSON", `{not json`},
+		{"pid field disagrees with the file name", regJSON(999, "aaaa-1", "5000", "idle")},
+		{"fields renamed by a future version", `{"id":101,"session":"aaaa-1","start":"5000"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m, home := newLocatorManager(t)
+			writeReg(t, home, 101, c.body)
+			// Fallback = the cwd+mtime heuristic = the newest transcript (B).
+			if got := peekText(t, m, "s1"); got != "from B" {
+				t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
+			}
+		})
+	}
+}
+
+// TestLocateMissingTranscriptDoesNotFallBack: once a registry entry VALIDATES,
+// it is trusted outright. If its named transcript does not exist, that must
+// read as "no transcript" for s1 — never as a fallback to a sibling's file
+// (the exact misattribution this locator exists to fix).
+func TestLocateMissingTranscriptDoesNotFallBack(t *testing.T) {
+	m, home := newLocatorManager(t)
+	writeReg(t, home, 101, regJSON(101, "gone-9", "5000", "idle"))
+	if _, ok := m.PeekFor("s1"); ok {
+		t.Error("PeekFor ok=true though the registry-named transcript does not exist")
+	}
+	if got := peekText(t, m, "s2"); got != "from B" {
+		t.Errorf("s2 peek=%q want %q (must be unaffected by s1's missing transcript)", got, "from B")
+	}
+}
+
+// TestLocateExitedSessionIgnoresRegistry: abduco's pidfile `inner=` pid is the
+// agent's LAST known pid, never updated after exit — so for an exited session
+// it can name a pid since reused by an unrelated claude. The registry step
+// must be skipped entirely once a session is known exited.
+func TestLocateExitedSessionIgnoresRegistry(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	m.sessions["s1"].mu.Lock()
+	m.sessions["s1"].status = statusExited
+	m.sessions["s1"].mu.Unlock()
+	if l := m.locate("s1"); l.reg != nil {
+		t.Errorf("exited session used the registry; reg=%+v", l.reg)
+	}
+}
+
+// TestLocateRejectsCwdMismatch: a registry entry whose cwd disagrees with the
+// session's own cwd must never be trusted, even with a matching pid+procStart —
+// this is the second, independent guard against a reused pid.
+func TestLocateRejectsCwdMismatch(t *testing.T) {
+	m, home := newLocatorManager(t)
+	body := `{"pid":101,"sessionId":"aaaa-1","cwd":"/some/other/dir","procStart":"5000","status":"idle"}`
+	writeReg(t, home, 101, body)
+	if l := m.locate("s1"); l.reg != nil {
+		t.Errorf("cwd mismatch accepted; reg=%+v", l.reg)
+	}
+	if got := peekText(t, m, "s1"); got != "from B" {
+		t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
+	}
+}
+
+// TestLocateRejectsSymlinkRegistryFile: a registry entry reached through a
+// symlink must never be trusted — the registry directory is untrusted input,
+// and a planted symlink could point anywhere readable by the daemon.
+func TestLocateRejectsSymlinkRegistryFile(t *testing.T) {
+	m, home := newLocatorManager(t)
+	real := filepath.Join(home, ".claude", "elsewhere.json")
+	if err := os.WriteFile(real, []byte(regJSON(101, "aaaa-1", "5000", "idle")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".claude", "sessions", "101.json")
+	_ = os.Remove(target)
+	if err := os.Symlink(real, target); err != nil {
+		t.Fatal(err)
+	}
+	if l := m.locate("s1"); l.reg != nil {
+		t.Error("symlinked registry file accepted")
+	}
+	if got := peekText(t, m, "s1"); got != "from B" {
+		t.Errorf("peek=%q want heuristic fallback %q (symlink must be ignored)", got, "from B")
+	}
+}
+
+// TestLocateRejectsOversizedRegistryFile: a registry file over registryMaxBytes
+// must be rejected outright, not silently truncated and parsed.
+func TestLocateRejectsOversizedRegistryFile(t *testing.T) {
+	m, home := newLocatorManager(t)
+	big := strings.Repeat("a", 70<<10)
+	body := fmt.Sprintf(`{"pid":101,"sessionId":"aaaa-1","cwd":"/work/proj","procStart":"5000","status":"idle","junk":%q}`, big)
+	writeReg(t, home, 101, body)
+	if l := m.locate("s1"); l.reg != nil {
+		t.Error("oversized registry file accepted")
+	}
+	if got := peekText(t, m, "s1"); got != "from B" {
+		t.Errorf("peek=%q want heuristic fallback %q (oversized file must be ignored)", got, "from B")
+	}
+}
+
+// TestLocateMissingTranscriptBlocksWithoutPeek: a validated "waiting" registry
+// entry whose transcript is missing must still report blocked=true even though
+// PeekFor cannot read a transcript — Task 5's amber indicator must not go dark
+// just because the transcript file is momentarily absent.
+func TestLocateMissingTranscriptBlocksWithoutPeek(t *testing.T) {
+	m, home := newLocatorManager(t)
+	writeReg(t, home, 101, regJSON(101, "gone-9", "5000", "waiting"))
+	p, ok, blocked := m.peekAndBlocked("s1")
+	if ok {
+		t.Errorf("peek ok=true for a session whose registry-named transcript does not exist; peek=%+v", p)
+	}
+	if !blocked {
+		t.Error("blocked=false though the registry says waiting")
+	}
+}
+
+func TestLocateRejectsTraversalSessionID(t *testing.T) {
+	for _, sid := range []string{"../../../etc/passwd", "", strings.Repeat("a", 300), "a/b", "a b"} {
+		m, home := newLocatorManager(t)
+		writeReg(t, home, 101, regJSON(101, sid, "5000", "idle"))
+		if l := m.locate("s1"); l.reg != nil {
+			t.Errorf("sessionId %q accepted; a registry id must never be joined into a path", sid)
+		}
+	}
+}
+
+func TestLocateBoxedIgnoresHostRegistry(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	state := t.TempDir()
+	m.stateDir = state
+	m.sessions["s1"].Box = "box-1"
+	writeTx(t, filepath.Join(state, "boxstate", "box-1"), locCwd, "dddd-4", "from box", time.Now())
+	if got := peekText(t, m, "s1"); got != "from box" {
+		t.Errorf("boxed peek=%q want %q", got, "from box")
+	}
+}
+
+func TestLocateReportsRegistryStatus(t *testing.T) {
+	m, home := newLocatorManager(t)
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "waiting"))
+	if _, _, blocked := m.peekAndBlocked("s1"); !blocked {
+		t.Error("blocked=false with registry status waiting")
+	}
+	if _, _, blocked := m.peekAndBlocked("s2"); blocked {
+		t.Error("blocked=true for a session whose registry says idle")
+	}
+}
+
+func TestStatStartTime(t *testing.T) {
+	// comm may contain spaces and ')'; fields after the LAST ')' start at field 3,
+	// so field 22 (starttime) is index 19 of that remainder.
+	got, ok := statStartTime("1234 (a) b) S 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 99999 23 24")
+	if !ok || got != "99999" {
+		t.Fatalf("statStartTime=%q,%v want 99999,true", got, ok)
+	}
+	for _, bad := range []string{"", "no paren", "1 (x) S 4 5"} {
+		if _, ok := statStartTime(bad); ok {
+			t.Errorf("statStartTime(%q) ok=true, want false", bad)
+		}
+	}
+}
+
+func TestProcStartOfSelf(t *testing.T) {
+	v, ok := procStartOf(os.Getpid())
+	if !ok || v == "" || strings.Trim(v, "0123456789") != "" {
+		t.Fatalf("procStartOf(self)=%q,%v want a decimal starttime", v, ok)
+	}
+}

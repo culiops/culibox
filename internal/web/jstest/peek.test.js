@@ -82,3 +82,8 @@ test("notWaitingReason does not tell a dead session to keep working", () => {
   // never an empty reason next to a disabled button.
   assert.equal(notWaitingReason("something-new"), "Session is not ready for a message.");
 });
+
+test("notWaitingReason tells an idle session to be prompted in its terminal", () => {
+  assert.match(notWaitingReason("idle"), /terminal/);
+  assert.doesNotMatch(notWaitingReason("idle"), /wait until it stops/);
+});

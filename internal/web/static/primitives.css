@@ -25,7 +25,7 @@
     .dot.working { background: var(--ok); }
     .dot.waiting { background: var(--warn-fg); }
     .dot.crashed { background: var(--danger); }
-    .dot.done, .dot.unknown { background: var(--muted); }
+    .dot.done, .dot.idle, .dot.unknown { background: var(--muted); }
     .dot.detached { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
     /* Someone else is holding this session, drawn as a ring around the activity
        dot. --fg, not a tint and not --muted or --accent: the row this matters

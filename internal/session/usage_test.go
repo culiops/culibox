@@ -79,3 +79,17 @@ func TestIsClaudeBin(t *testing.T) {
 		}
 	}
 }
+
+func TestIsAgentBin(t *testing.T) {
+	for _, c := range []struct {
+		bin  string
+		want bool
+	}{
+		{"/usr/bin/claude", true}, {"claude", true}, {"/home/x/.local/bin/codex", true}, {"codex", true},
+		{"zsh", false}, {"/bin/bash", false}, {"", false}, {"/opt/claude-tools/run", false},
+	} {
+		if got := isAgentBin(c.bin); got != c.want {
+			t.Errorf("isAgentBin(%q)=%v want %v", c.bin, got, c.want)
+		}
+	}
+}

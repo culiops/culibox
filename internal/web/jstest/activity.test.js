@@ -9,6 +9,7 @@ test("known states map to their class + human title", () => {
   assert.deepEqual(activityClass("crashed"), { cls: "dot crashed", title: "crashed" });
   assert.deepEqual(activityClass("done"), { cls: "dot done", title: "exited" });
   assert.deepEqual(activityClass("detached"), { cls: "dot detached", title: "reconnecting" });
+  assert.deepEqual(activityClass("idle"), { cls: "dot idle", title: "idle" });
 });
 
 test("unknown/missing activity is muted with no crash", () => {

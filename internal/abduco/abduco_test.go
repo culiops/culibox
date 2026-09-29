@@ -240,3 +240,23 @@ func TestProcIsAttacher(t *testing.T) {
 		t.Error("missing proc entry must not be classified as an attacher")
 	}
 }
+
+func TestInnerPid(t *testing.T) {
+	dir := t.TempDir()
+	a := &Adapter{PidDir: dir}
+	if err := os.WriteFile(filepath.Join(dir, "claude-1.pid"), []byte("inner=4242 srv=4241"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if pid, ok := a.InnerPid("claude-1"); !ok || pid != 4242 {
+		t.Fatalf("InnerPid=%d,%v want 4242,true", pid, ok)
+	}
+	if _, ok := a.InnerPid("missing"); ok {
+		t.Error("InnerPid ok=true for a missing pidfile")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "half.pid"), []byte("inner=7"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.InnerPid("half"); ok {
+		t.Error("InnerPid accepted an incomplete pidfile")
+	}
+}

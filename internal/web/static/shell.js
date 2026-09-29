@@ -104,6 +104,10 @@ function closeSheet() {
 function openSettings(tab) {
   selectSettingsTab(tab || "manage");
   openDialog("settings-modal");
+  // shell.js loads before app.js, so initNotifyToggle may not exist yet on the
+  // very first paint — guard it. Reopening Settings must reflect a permission
+  // revoked in the browser meanwhile, so this re-reads on every open.
+  if (typeof initNotifyToggle === "function") initNotifyToggle();
 }
 
 function selectSettingsTab(name) {

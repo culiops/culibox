@@ -184,6 +184,17 @@ func (a *Adapter) InnerAlive(id string) bool {
 	return inner > 1 && ppidOf(inner) == srv && a.srvIsOurs(srv, id)
 }
 
+// InnerPid returns the agent's own pid from the session's pidfile (`inner=`).
+// The wrapper execs the agent, so this is the agent process itself — the key
+// Claude Code's live registry (~/.claude/sessions/<pid>.json) is filed under.
+func (a *Adapter) InnerPid(id string) (int, bool) {
+	inner, _, err := readPidfile(a.pidfile(id))
+	if err != nil || inner <= 0 {
+		return 0, false
+	}
+	return inner, true
+}
+
 // Kill tears the session down: inner PROCESS GROUP (agent + children, TERM→KILL)
 // then the abduco SERVER (delist/unlink). Guarded against reused pids. Idempotent.
 func (a *Adapter) Kill(id string) error {

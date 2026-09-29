@@ -39,6 +39,20 @@ func projectSlug(cwd string) string { return slugNonAlnum.ReplaceAllString(cwd, 
 // mislabelled with that history's usage.
 func isClaudeBin(bin string) bool { return bin != "" && filepath.Base(bin) == "claude" }
 
+// isAgentBin reports whether a resolved binary is an interactive coding agent
+// whose silence can mean "your turn". Anything else (a shell, a REPL) that goes
+// quiet is simply idle.
+func isAgentBin(bin string) bool {
+	if bin == "" {
+		return false
+	}
+	switch filepath.Base(bin) {
+	case "claude", "codex":
+		return true
+	}
+	return false
+}
+
 // transcriptPath finds the newest *.jsonl for cwd under <home>/.claude/projects/<slug>/
 // whose mtime >= created; falls back to the newest overall. ok=false if none.
 func transcriptPath(cwd, home string, created time.Time) (string, bool) {
@@ -134,36 +148,14 @@ func contextMax(model string) (int, bool) {
 
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
 // a non-claude session, one whose transcript can't be located/read, or one whose
-// tail carries no usage line. Immutable session fields (Cwd/Box/Created/Bin) are
-// read without the lock; only the map lookup and paths are guarded.
+// tail carries no usage line. Same locator as PeekFor (registry, then boxstate,
+// then cwd+mtime).
 func (m *Manager) UsageFor(id string) (Usage, bool) {
-	// Capture everything under the lock: Bin can be filled in post-reconcile by
-	// ResolveBins (a locked write), so reading it lock-free would race. Cwd/Box/
-	// Created are immutable but captured here too for one clean critical section.
-	m.mu.Lock()
-	s := m.sessions[id]
-	home, stateDir := m.home, m.stateDir
-	var bin, cwd, box string
-	var created time.Time
-	if s != nil {
-		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
-	}
-	m.mu.Unlock()
-	if s == nil || !isClaudeBin(bin) {
+	l := m.locate(id)
+	if !l.claude || l.path == "" {
 		return Usage{}, false
 	}
-	base := home
-	if box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", box)
-	}
-	if base == "" {
-		return Usage{}, false
-	}
-	p, ok := transcriptPath(cwd, base, created)
-	if !ok {
-		return Usage{}, false
-	}
-	b, err := readUsageTail(p)
+	b, err := readUsageTail(l.path)
 	if err != nil {
 		return Usage{}, false
 	}
@@ -197,6 +189,10 @@ func (m *Manager) ResolveBins() {
 		}
 		if b, err := br.BinFor(launcher.SpawnSpec{Agent: s.Agent}); err == nil {
 			s.Bin = b
+			// Lock order m.mu -> s.mu, the same as List's call into Info.
+			s.mu.Lock()
+			s.agentKind = isAgentBin(b)
+			s.mu.Unlock()
 		}
 	}
 }

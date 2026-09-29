@@ -535,3 +535,28 @@ func TestSpawnAcceptsTheHostTierOverride(t *testing.T) {
 		t.Fatalf("spec.Runtime = %q, want host", svc.spawnedRuntime)
 	}
 }
+
+func TestAPI_ListCarriesNeedOnlyWhenSet(t *testing.T) {
+	m := &mockSvc{list: []session.Info{
+		{ID: "a", Activity: "waiting", Claude: true, Need: "ask", Ask: "Bash(x)"},
+		{ID: "b", Activity: "idle"},
+	}}
+	a := &API{Sessions: m}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("GET", "/api/sessions", nil))
+	var got []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got[0]["need"] != "ask" || got[0]["ask"] != "Bash(x)" {
+		t.Errorf("waiting claude item = %v, want need=ask ask=Bash(x)", got[0])
+	}
+	for _, k := range []string{"need", "ask"} {
+		if _, ok := got[1][k]; ok {
+			t.Errorf("idle item carries %q; the key must be omitted", k)
+		}
+	}
+	if got[1]["activity"] != "idle" {
+		t.Errorf("activity=%v want idle on the wire", got[1]["activity"])
+	}
+}

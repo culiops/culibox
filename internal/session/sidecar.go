@@ -34,6 +34,12 @@ type sessionMeta struct {
 	// field existed. A session must never become repliable by surviving a
 	// restart.
 	Replyable bool `json:"replyable,omitempty"`
+	// Submitted records that the session has had at least one Enter-submitted
+	// input — the gate that lets a silent agent read as "needs you" rather than
+	// "idle". A pointer so a record written before this field existed decodes
+	// to nil ("unknown"), which reconcile restores as TRUE for agents: showing a
+	// stale amber once beats hiding an agent that is waiting on you.
+	Submitted *bool `json:"submitted,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
@@ -113,6 +119,22 @@ func (sc *sidecar) setReplyable(id string, v bool) {
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }
+
+// setSubmitted records the session's first submitted input. No-op if the id is
+// absent, so a concurrent retention-prune can never be resurrected.
+func (sc *sidecar) setSubmitted(id string) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	md, ok := sc.m[id]
+	if !ok {
+		return
+	}
+	md.Submitted = boolPtr(true)
+	sc.m[id] = md
+	_ = sc.flushLocked()
+}
+
+func boolPtr(b bool) *bool { return &b }
 
 // all returns a copy of the current map.
 func (sc *sidecar) all() map[string]sessionMeta {

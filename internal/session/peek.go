@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -37,6 +37,10 @@ type Peek struct {
 	// tool call, which includes sitting on a permission prompt. This is ground
 	// truth from the transcript, unlike activityOf's silence heuristic.
 	Pending bool `json:"pending,omitempty"`
+	// Ask is a one-line rendering of the tool call a Pending session is waiting
+	// on — "Bash(rm -rf build)", "Edit(internal/web/app.js)", or the bare tool
+	// name — elided to askMax runes. Empty unless Pending.
+	Ask string `json:"ask,omitempty"`
 }
 
 // summaryMax is the rune budget for the one-line sidebar summary. Measured at
@@ -54,8 +58,10 @@ type peekRec struct {
 }
 
 type contentBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type  string          `json:"type"`
+	Text  string          `json:"text"`
+	Name  string          `json:"name"`  // tool_use
+	Input json.RawMessage `json:"input"` // tool_use
 }
 
 // contentBlocks decodes message.content as a block array. A bare string (or any
@@ -90,14 +96,21 @@ func parsePeekTail(b []byte) (Peek, bool) {
 			continue
 		}
 		parsedAny = true
+		// Bookkeeping records (cost-state, last-prompt, ai-title, …) carry no
+		// message. They are not "the last record" for pending purposes.
+		if rec.Message.Role == "" {
+			continue
+		}
 		bs := contentBlocks(rec.Message.Content)
-		// The first record we reach walking backwards IS the last record in the
-		// file. If a tool_result had arrived, it would be that record instead,
-		// so "last block is tool_use" is sufficient — no forward scan needed.
+		// The first role-bearing record we reach walking backwards IS the last
+		// message in the file. If a tool_result had arrived, it would be that
+		// record instead, so "last block is tool_use" is sufficient — no
+		// forward scan needed.
 		if !sawLast {
 			sawLast = true
 			if rec.Message.Role == "assistant" && len(bs) > 0 && bs[len(bs)-1].Type == "tool_use" {
 				p.Pending = true
+				p.Ask = askLine(bs[len(bs)-1].Name, bs[len(bs)-1].Input)
 			}
 		}
 		if !foundText && rec.Message.Role == "assistant" {
@@ -119,8 +132,26 @@ func parsePeekTail(b []byte) (Peek, bool) {
 // summaryLine reduces peek text to the single line the sidebar shows: the first
 // non-empty line, elided to summaryMax runes. Runes, not bytes — a byte-sliced
 // multi-byte character renders as a replacement glyph.
+//
+// Unicode format characters (Cf: bidi overrides U+202A-202E, bidi isolates
+// U+2066-2069, zero-width joiners/spaces/marks U+200B-200F, …) are mapped to a
+// space before the length/emptiness checks. They are invisible or
+// rendering-altering, not IsControl (askLine's comment below has the same
+// note for the same reason), so without this a line could read differently
+// than the bytes the sidebar/notification actually carries — or a bidi
+// override could visually reorder the rest of the line.
 func summaryLine(text string) string {
 	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		ln = strings.Map(func(r rune) rune {
+			if unicode.Is(unicode.Cf, r) {
+				return ' '
+			}
+			return r
+		}, ln)
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
 			continue
@@ -132,6 +163,52 @@ func summaryLine(text string) string {
 		return string(r[:summaryMax-1]) + "…"
 	}
 	return ""
+}
+
+// askMax is the rune budget for Peek.Ask, sized for the sidebar card and an OS
+// notification body.
+const askMax = 80
+
+// askLine renders a pending tool call as one printable line: the tool name,
+// plus the command (shell tools) or the path (file tools). Everything else is
+// the name alone — its input is not something to read at a glance. Control
+// characters become spaces and whitespace runs collapse, so a heredoc or an
+// ANSI-laden echo still renders as one clean line. unicode.IsControl covers C0
+// (< 0x20), DEL (0x7f) AND the C1 range (U+0080-U+009F, e.g. U+009B CSI,
+// U+009D OSC) — strings.Fields alone would not collapse a C1 control, since
+// unicode.IsSpace does not treat it as whitespace. unicode.Cf (format
+// characters: bidi overrides/isolates, zero-width joiners/spaces, …) is
+// mapped the same way — those are not IsControl either, but a bidi override
+// or a zero-width character reaching a rendered tool-call line is the same
+// class of problem: it changes what the line looks like without changing
+// what it says.
+func askLine(name string, input json.RawMessage) string {
+	if name == "" {
+		return ""
+	}
+	var in map[string]any
+	_ = json.Unmarshal(input, &in)
+	arg := ""
+	for _, k := range []string{"command", "file_path", "notebook_path"} {
+		if v, ok := in[k].(string); ok && strings.TrimSpace(v) != "" {
+			arg = v
+			break
+		}
+	}
+	s := name
+	if arg != "" {
+		clean := strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+				return ' '
+			}
+			return r
+		}, arg)
+		s = name + "(" + strings.Join(strings.Fields(clean), " ") + ")"
+	}
+	if r := []rune(s); len(r) > askMax {
+		s = string(r[:askMax-1]) + "…"
+	}
+	return s
 }
 
 // canReply is the whole authorization decision for sending a message into a
@@ -163,6 +240,38 @@ func canReply(replyable bool, activity string, pending bool) (bool, string) {
 	return true, ""
 }
 
+// needOf is the attention decision for one listed session, pure so every
+// combination is table-testable. activity is what Info computed from PTY
+// silence; blocked is Claude Code's own live registry saying the session sits
+// on a prompt.
+//
+// blocked RAISES a live session to "waiting" and never lowers one. A permission
+// prompt animates (~40 bytes every 0.6 s, measured on 2.1.284), so silence can
+// never see it; a missing or drifted registry therefore costs only the ask case,
+// which is exactly today's behaviour.
+func needOf(activity string, claude bool, p Peek, havePeek, blocked bool) (act, need, ask string) {
+	act = activity
+	if !claude {
+		return act, "", ""
+	}
+	if blocked && (act == "working" || act == "idle") {
+		act = "waiting"
+	}
+	if act != "waiting" {
+		return act, "", ""
+	}
+	switch {
+	case blocked || (havePeek && p.Pending):
+		need = "ask"
+		if havePeek {
+			ask = p.Ask
+		}
+	case havePeek:
+		need = "turn"
+	}
+	return act, need, ask
+}
+
 // validReplyText accepts exactly one line of printable text. Single-line is
 // what keeps bracketed paste (\x1b[200~ … \x1b[201~ plus a separate \r) out of
 // this feature entirely. Every C0 control is rejected, not only newline: a tab
@@ -180,30 +289,32 @@ func validReplyText(s string) error {
 	return nil
 }
 
-// peekEntry is one cached parse, valid while the transcript's mtime is unchanged.
+// peekEntry is one cached parse, valid while the transcript's path AND mtime
+// are unchanged — /clear moves a session to a new file.
 type peekEntry struct {
+	path  string
 	mtime time.Time
 	peek  Peek
 }
 
-// peekCached returns the cached parse when it still matches mtime.
-func (m *Manager) peekCached(id string, mtime time.Time) (Peek, bool) {
+// peekCached returns the cached parse when it still matches path and mtime.
+func (m *Manager) peekCached(id, path string, mtime time.Time) (Peek, bool) {
 	m.peekMu.Lock()
 	defer m.peekMu.Unlock()
 	e, ok := m.peekCache[id]
-	if !ok || !e.mtime.Equal(mtime) {
+	if !ok || e.path != path || !e.mtime.Equal(mtime) {
 		return Peek{}, false
 	}
 	return e.peek, true
 }
 
-func (m *Manager) peekStore(id string, mtime time.Time, p Peek) {
+func (m *Manager) peekStore(id, path string, mtime time.Time, p Peek) {
 	m.peekMu.Lock()
 	defer m.peekMu.Unlock()
 	if m.peekCache == nil {
 		m.peekCache = map[string]peekEntry{}
 	}
-	m.peekCache[id] = peekEntry{mtime: mtime, peek: p}
+	m.peekCache[id] = peekEntry{path: path, mtime: mtime, peek: p}
 }
 
 // peekForget drops a dead session's cached parse. Called beside every
@@ -225,54 +336,40 @@ func (m *Manager) peekForget(id string) {
 // non-claude session, one whose transcript cannot be located or read, or one
 // whose tail holds no parseable record.
 //
-// The sidebar polls this for every session, so the hot path is one os.Stat: the
-// tail is re-read only when mtime moved. A waiting session's transcript is
-// static, so the sessions whose summaries anyone reads are served from cache.
-//
-// Locking mirrors UsageFor: capture Bin/Cwd/Box/Created in one critical section
-// (Bin is backfilled post-reconcile by ResolveBins, so a lock-free read races),
-// then work without the lock.
+// The sidebar polls this for every session, so the hot path is a pidfile read,
+// a registry read and one os.Stat: the tail is re-read only when the path or
+// mtime moved.
 func (m *Manager) PeekFor(id string) (Peek, bool) {
-	m.mu.Lock()
-	s := m.sessions[id]
-	home, stateDir := m.home, m.stateDir
-	var bin, cwd, box string
-	var created time.Time
-	if s != nil {
-		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
+	p, ok, _ := m.peekAndBlocked(id)
+	return p, ok
+}
+
+// peekAndBlocked is PeekFor plus whether Claude Code's live registry says the
+// session is sitting on a prompt. blocked can be true with ok=false (registry
+// readable, transcript not).
+func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
+	l := m.locate(id)
+	blocked := l.reg != nil && l.reg.Status == regStatusWaiting
+	if !l.claude || l.path == "" {
+		return Peek{}, false, blocked
 	}
-	m.mu.Unlock()
-	if s == nil || !isClaudeBin(bin) {
-		return Peek{}, false
-	}
-	base := home
-	if box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", box)
-	}
-	if base == "" {
-		return Peek{}, false
-	}
-	path, ok := transcriptPath(cwd, base, created)
-	if !ok {
-		return Peek{}, false
-	}
-	fi, err := os.Stat(path)
+	fi, err := os.Stat(l.path)
 	if err != nil {
-		return Peek{}, false
+		return Peek{}, false, blocked
 	}
-	if p, ok := m.peekCached(id, fi.ModTime()); ok {
-		return p, true
+	if p, ok := m.peekCached(id, l.path, fi.ModTime()); ok {
+		return p, true, blocked
 	}
-	b, err := readUsageTail(path)
+	b, err := readUsageTail(l.path)
 	if err != nil {
-		return Peek{}, false
+		return Peek{}, false, blocked
 	}
 	p, ok := parsePeekTail(b)
 	if !ok {
-		return Peek{}, false
+		return Peek{}, false, blocked
 	}
-	m.peekStore(id, fi.ModTime(), p)
-	return p, true
+	m.peekStore(id, l.path, fi.ModTime(), p)
+	return p, true, blocked
 }
 
 // SendMessage types one line into a session's PTY, followed by Enter.
@@ -311,11 +408,13 @@ func (m *Manager) SendMessage(id, text string) error {
 	// pending=false PASSED the third guard — so the one state the guard exists
 	// to catch (no ground truth about the agent's turn) was also the state that
 	// waved the message through.
-	p, havePeek := m.PeekFor(id)
+	p, havePeek, blocked := m.peekAndBlocked(id)
 	if !havePeek {
 		return ErrNoTranscript
 	}
-	if ok, why := canReply(info.Replyable, info.Activity, p.Pending); !ok {
+	// blocked joins pending: the registry can see a prompt before (or without)
+	// the transcript's tool_use, and a line typed into a prompt answers it.
+	if ok, why := canReply(info.Replyable, info.Activity, p.Pending || blocked); !ok {
 		switch why {
 		case "not_replyable":
 			return ErrNotReplyable

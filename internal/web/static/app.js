@@ -701,6 +701,17 @@ let replyFocused = false;
 // in flight. A flag that must survive a rebuild the poll can trigger has to
 // live somewhere the rebuild does not reach.
 let pendingSends = new Set();
+// cardExpanded: desktop needs-you cards currently showing their full message
+// instead of cardContent's one-line text. Page-local, keyed by session id —
+// unlike openPeekId this is NOT "one at a time": several waiting sessions can
+// each have their card expanded together. Fed into rowLocal/rowSig (like
+// `sending` above) so an expanded card survives a 3s poll that changes
+// nothing else, and pruned in refreshSessions once a session stops waiting.
+let cardExpanded = new Set();
+// cardPeekCache: the last full-text fetch per expanded card ({text, muted}),
+// so a poll-triggered rebuild of an already-expanded card does not flash back
+// to "Loading…" for a fetch it already made. Cleared alongside cardExpanded.
+let cardPeekCache = new Map();
 
 // peekRowFor: the answer block belonging to a row, if it is open. A sibling,
 // not a child — see the stylesheet for why the amber column needs it there.
@@ -747,6 +758,152 @@ async function sendReplyFor(s, text, onFail) {
     showToast(msg, { error: true });
     return false;
   }
+}
+
+// postReplyable grants or revokes a session's sidebar-reply opt-in. true on a
+// 2xx; never throws. Shared by the peek checkbox and the needs-you card's
+// "Enable replies".
+async function postReplyable(id, want) {
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/replyable", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ replyable: want }),
+    });
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+// buildReplyComposer builds the one-line reply field + Send button + status
+// caption shared by the sidebar peek panel (togglePeek) and the desktop
+// needs-you card (renderNeedsBody) — one place for draft-restore, the
+// replyFocused guard, the send gate and the in-flight latch, instead of two
+// near-identical copies.
+//
+// `opts.replyable()` and `opts.pending()` are read at gate time, not once at
+// build time, because the two callers know these differently: togglePeek's
+// panel has a live checkbox and its own /peek fetch's `pending`; the card has
+// neither and reads `s.replyable` / `s.need === "ask"` straight off the
+// latest session record. `opts.onGate(closed)` lets a caller keep its own
+// extra controls (togglePeek's quick-reply buttons) in step with the same
+// `closed` value. `opts.ariaLabel` names the field for the card, which has no
+// visible "Reply to <session>" context the way the peek panel's row does.
+// `opts.afterSend()` runs once a send settles (success or failure), after the
+// shared refresh(): togglePeek needs nothing extra, the card forces its own
+// re-render because its controls are not otherwise repainted by the poll.
+//
+// Returns { form, why, refresh, send } — `send(text)` is exposed so a caller
+// can reuse the exact same validate/latch/refresh path for other controls
+// (togglePeek's three quick-reply digits) instead of re-deriving it.
+function buildReplyComposer(s, opts) {
+  const o = opts || {};
+  const form = document.createElement("div");
+  form.className = "rep";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "fld";
+  input.placeholder = "Reply (one line)";
+  if (o.ariaLabel) input.setAttribute("aria-label", o.ariaLabel);
+  const send = document.createElement("button");
+  send.type = "button";
+  send.className = "btn pri";
+  send.textContent = "send";
+  form.append(input, send);
+  const why = document.createElement("span");
+  why.className = "peek-why";
+
+  // Restore an in-progress draft's TEXT across the poll re-render that just
+  // rebuilt this input from scratch. This only matters when the input is not
+  // currently focused — while it is, replyFocused (set just below) stops the
+  // rebuild from happening in the first place. See replyDraft's declaration
+  // for why there is no matching focus/caret restore here.
+  if (replyDraft && replyDraft.id === s.id) input.value = replyDraft.text;
+  input.oninput = () => { replyDraft = { id: s.id, text: input.value }; };
+  // See replyFocused's declaration: this is what keeps the background poll
+  // from tearing this input out from under an in-progress keystroke.
+  input.onfocus = () => { replyFocused = true; };
+  input.onblur = () => { replyFocused = false; };
+
+  // The in-flight latch is pendingSends (module-level, see its declaration) —
+  // not a local `sending` here — because this composer's own closure can be
+  // torn down and rebuilt by the 3s poll while a send is still outstanding.
+  // refresh() writes the disabled flags from the gate every time it runs, so
+  // anything set behind its back is undone by the next call.
+  const refresh = () => {
+    const st = sendState({
+      replyable: o.replyable ? o.replyable() : s.replyable,
+      activity: s.activity,
+      pending: o.pending ? o.pending() : false,
+    });
+    const closed = !st.enabled || pendingSends.has(s.id);
+    // Three things move together, deliberately. The dimmed look says closed,
+    // the caption says why, and the real disabled attribute makes it true —
+    // a control that looks closed but still takes a keystroke is a control
+    // whose caption lies, and a keyboard user is the one who finds out.
+    send.disabled = closed;
+    input.disabled = closed;
+    send.classList.toggle("off", closed);
+    input.classList.toggle("off", closed);
+    why.textContent = st.reason;
+    if (o.onGate) o.onGate(closed);
+    return st;
+  };
+
+  // sendText is shared by the composer's own Send button and, for togglePeek,
+  // the three quick-reply digit buttons: one send path, one error mapping,
+  // one refresh(). The POST + the 403/409/410/400 mapping live once in the
+  // top-level sendReplyFor; this adds what is specific to a one-line
+  // composer: the text-validation error shown before a request is even made,
+  // the in-flight latch, and clearing the field/draft on success.
+  async function sendText(text) {
+    if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
+    const err = replyTextError(text);
+    if (err) {
+      why.textContent = err === "empty" ? "Type something first."
+        : err === "newline" ? "One line only — newlines are not sent."
+        : "That text contains control characters and was not sent.";
+      return;
+    }
+    pendingSends.add(s.id);
+    refresh();
+    try {
+      const ok = await sendReplyFor(s, text, (msg) => { why.textContent = msg; });
+      if (ok) {
+        input.value = "";
+        if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
+      }
+    } finally {
+      // Runs whether the send succeeded, was rejected, or threw — including
+      // when the session has since left the list — so the latch never
+      // outlives the request that set it.
+      pendingSends.delete(s.id);
+      refresh();
+      // Disabling the field above (inside refresh(), while pendingSends still
+      // held this id) already blurs it in a real browser, which clears this
+      // through the field's own onblur — but that is indirect enough that it
+      // is worth stating outright rather than relying on it: a send must
+      // never leave the poll thinking a gone or re-rendered field is still
+      // focused and holding the list rebuild back.
+      replyFocused = false;
+      if (o.afterSend) o.afterSend();
+    }
+  }
+
+  send.onclick = () => sendText(input.value);
+  if (o.submitOnEnter) {
+    input.onkeydown = (e) => {
+      // An IME (composing Vietnamese, CJK, …) commits its candidate with
+      // Enter too — without this guard that keystroke both confirms the
+      // candidate AND sends the still-mid-composition text. keyCode 229 is
+      // the historical Safari/older-browser signal; isComposing is the
+      // modern one, kept together since one browser is missing per source.
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") { e.preventDefault(); sendText(input.value); }
+    };
+  }
+  return { form, why, refresh, send: sendText };
 }
 
 // togglePeek expands or collapses the answer block under a session row. The
@@ -808,7 +965,7 @@ async function togglePeek(li, s) {
     b.className = "btn";
     b.textContent = digit + " " + word;
     b.title = "Send " + digit;
-    b.onclick = () => sendReply(digit);
+    b.onclick = () => composer.send(digit);
     qk.appendChild(b);
   }
   peek.appendChild(qk);
@@ -829,123 +986,95 @@ async function togglePeek(li, s) {
   optin.append(cb, optinText);
   peek.appendChild(optin);
 
-  const form = document.createElement("div");
-  form.className = "rep";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.className = "fld";
-  input.placeholder = "Reply (one line)";
-  const send = document.createElement("button");
-  send.type = "button";
-  send.className = "btn pri";
-  send.textContent = "send";
-  form.append(input, send);
-  const why = document.createElement("span");
-  why.className = "peek-why";
-  peek.append(form, why);
-
-  // Restore an in-progress draft's TEXT across the poll re-render that just
-  // rebuilt this input from scratch. This only matters when the input is not
-  // currently focused — while it is, replyFocused (set just below) stops the
-  // rebuild from happening in the first place. See replyDraft's declaration
-  // for why there is no matching focus/caret restore here.
-  if (replyDraft && replyDraft.id === s.id) input.value = replyDraft.text;
-  input.oninput = () => { replyDraft = { id: s.id, text: input.value }; };
-  // See replyFocused's declaration: this is what keeps the background poll
-  // from tearing this input out from under an in-progress keystroke.
-  input.onfocus = () => { replyFocused = true; };
-  input.onblur = () => { replyFocused = false; };
-
-  // The in-flight latch is pendingSends (module-level, see its declaration) —
-  // not a local `sending` here — because this composer's own closure can be
-  // torn down and rebuilt by the 3s poll while a send is still outstanding.
-  // refresh() feeds off it rather than setting send.disabled directly:
-  // refresh() writes the disabled flags from the gate every time it runs, so
-  // anything set behind its back is undone by the next call. It closes every
-  // control, not only send — the three quick replies are what an operator
-  // taps fast, and a double-tapped "2" answers two different questions on a
-  // numbered prompt. The server does not dedupe.
-  const refresh = () => {
-    const st2 = sendState({
-      replyable: cb.checked,
-      activity: s.activity,
-      pending: li.dataset.peekPending === "1",
-    });
-    const closed = !st2.enabled || pendingSends.has(s.id);
-    // Three things move together, deliberately. The dimmed look says closed,
-    // the caption says why, and the real disabled attribute makes it true —
-    // a control that looks closed but still takes a keystroke is a control
-    // whose caption lies, and a keyboard user is the one who finds out.
-    send.disabled = closed;
-    input.disabled = closed;
-    send.classList.toggle("off", closed);
-    input.classList.toggle("off", closed);
-    for (const b of qk.querySelectorAll(".btn")) {
-      b.disabled = closed;
-      b.classList.toggle("off", closed);
-    }
-    why.textContent = st2.reason;
-  };
-  refresh();
+  // The inline composer itself (field + send + why) is shared with the
+  // desktop needs-you card via buildReplyComposer — see its own comment.
+  // `onGate` keeps the three quick-reply buttons above in the same
+  // enabled/disabled state as the field: they are what an operator taps
+  // fast, and a double-tapped "2" answers two different questions on a
+  // numbered prompt (the server does not dedupe).
+  const composer = buildReplyComposer(s, {
+    replyable: () => cb.checked,
+    pending: () => li.dataset.peekPending === "1" || s.need === "ask",
+    onGate: (closed) => {
+      for (const b of qk.querySelectorAll(".btn")) {
+        b.disabled = closed;
+        b.classList.toggle("off", closed);
+      }
+    },
+  });
+  peek.append(composer.form, composer.why);
+  composer.refresh();
 
   cb.onchange = async () => {
     const want = cb.checked;
-    try {
-      const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ replyable: want }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
+    if (await postReplyable(s.id, want)) {
       s.replyable = want;
-    } catch (_) {
+    } else {
       cb.checked = !want; // the server is the truth; put the box back
       showToast("Could not change the reply setting", { error: true });
     }
-    refresh();
+    composer.refresh();
   };
-
-  // sendReply is shared by the composer's Send button and the three quick
-  // replies: one send path, one error mapping, one refresh(). The POST + the
-  // 403/409/410/400 mapping now live once in the top-level sendReplyFor,
-  // shared with the mobile reply sheet (openReplySheet) — this wrapper only
-  // adds what is specific to the inline composer: the text-validation error
-  // shown before a request is even made, the in-flight latch, and clearing
-  // the row's own input/draft on success.
-  async function sendReply(text) {
-    if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
-    const err = replyTextError(text);
-    if (err) {
-      why.textContent = err === "empty" ? "Type something first."
-        : err === "newline" ? "One line only — newlines are not sent."
-        : "That text contains control characters and was not sent.";
-      return;
-    }
-    pendingSends.add(s.id);
-    refresh();
-    try {
-      const ok = await sendReplyFor(s, text, (msg) => { why.textContent = msg; });
-      if (ok) {
-        input.value = "";
-        if (replyDraft && replyDraft.id === s.id) replyDraft = null; // sent — nothing left to restore
-      }
-    } finally {
-      // Runs whether the send succeeded, was rejected, or threw — including
-      // when the session has since left the list — so the latch never
-      // outlives the request that set it.
-      pendingSends.delete(s.id);
-      refresh();
-    }
-  }
-
-  send.onclick = () => sendReply(input.value);
 }
 
-function renderSession(s) {
+// toggleCardPeek expands or collapses a desktop needs-you card's text block in
+// place — the card's counterpart to togglePeek's sidebar answer block, for
+// exactly the sessions an operator is about to answer. Collapsing is
+// immediate (local state only); expanding fetches the same `/peek` endpoint
+// togglePeek uses and shows the full text via textContent, never innerHTML.
+// The rebuild that shows "Loading…" happens through the normal rowSig path
+// (cardExpanded is part of rowLocal), so this only needs to patch the fetched
+// text into the DOM once it lands — the row itself is not torn down again in
+// between (rowSig does not change a second time) so the node this looked up
+// is still the right one to write into, guarded by cardExpanded staying set.
+async function toggleCardPeek(s) {
+  if (cardExpanded.has(s.id)) {
+    cardExpanded.delete(s.id);
+    cardPeekCache.delete(s.id);
+    await refreshSessions();
+    return;
+  }
+  cardExpanded.add(s.id);
+  await refreshSessions(); // rebuilds the card now, showing "Loading…"
+  let status = 0;
+  let payload = null;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/peek");
+    status = res.status;
+    if (status === 200) payload = await res.json();
+  } catch (_) {
+    status = 0;
+  }
+  if (!cardExpanded.has(s.id)) return; // collapsed again while the fetch was in flight
+  const st = peekState(!!s.claude, status, payload);
+  cardPeekCache.set(s.id, { text: st.text, muted: st.kind !== "text" });
+  const li = sessionRowFor(s.id);
+  const txt = li && li.querySelector(".nbody .peektxt");
+  if (!txt) return; // the row moved on (e.g. stopped waiting) before this landed
+  txt.textContent = st.text;
+  txt.classList.toggle("muted", st.kind !== "text");
+}
+
+// usageOf(tab) → the usage object for an already-resolved terminal tab, or
+// null. Shared by renderSession (paints the context-% badge) and rowLocal
+// (feeds rowSig into reconcileRows) so the two never compute usage two
+// different ways. Takes the tab, not a session id: both callers already have
+// to resolve terminalTabFor(s.id) for their own other purpose (the elsewhere
+// badge / heldHere), and a second sid-keyed lookup here would scan cells×tabs
+// twice per session per poll for no reason.
+function usageOf(tab) {
+  return tab && typeof tab.usage === "function" ? tab.usage() : null;
+}
+
+function renderSession(s, opts) {
+  // card: render this waiting session as the desktop needs-you card — the same
+  // row, expanded in place with no click (renderNeedsBody). Row order is never
+  // changed for it.
+  const card = !!(opts && opts.card);
   const li = document.createElement("li");
   // rowClasses decides the state; this function only paints it. Selected and
   // needs-you are separate axes and a row can carry both.
-  li.className = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) }).join(" ");
+  li.className = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) }).join(" ") + (card ? " dcard" : "");
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
@@ -987,7 +1116,7 @@ function renderSession(s) {
 
   const smeta = document.createElement("div");
   smeta.className = "smeta";
-  smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", act.title);
+  smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
   grow.appendChild(smeta);
   li.appendChild(grow);
 
@@ -1024,7 +1153,7 @@ function renderSession(s) {
   // fetched for an open terminal tab; there is deliberately no per-row request,
   // because a fetch per session per poll is a lot of traffic for two characters.
   // No placeholder when it is absent — a dash would read as "zero".
-  const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
+  const u = usageOf(tab);
   if (u && typeof u.pct === "number") {
     const pct = document.createElement("span");
     pct.className = "pct";
@@ -1050,7 +1179,7 @@ function renderSession(s) {
   right.appendChild(kb);
   li.appendChild(right);
 
-  if (s.claude) {
+  if (s.claude && !card) {
     // Summary line: what this agent last said. Rendered for EVERY claude
     // session, not only ones with something to say — gating on the text made
     // the panel's empty states and the reply opt-in unreachable in exactly the
@@ -1074,7 +1203,132 @@ function renderSession(s) {
     sum.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") toggle(e); };
     grow.appendChild(sum);
   }
+  if (card) grow.appendChild(renderNeedsBody(s));
   return li;
+}
+
+// renderDesktopEntry: what the desktop list renders for one session — the
+// needs-you card for a waiting session, the plain row otherwise.
+function renderDesktopEntry(s) {
+  return s.activity === "waiting" ? renderSession(s, { card: true }) : renderSession(s);
+}
+
+// renderNeedsBody builds the expanded part of a desktop needs-you card
+// (cardContent decides which blocks). Sends go through the one gated path —
+// sendState here, canReply on the server — and never offer digits (see
+// cardContent). It shares its composer with togglePeek's inline reply panel
+// via buildReplyComposer — see that function's own comment for what differs
+// between the two callers.
+function renderNeedsBody(s) {
+  const c = cardContent(s);
+  const body = document.createElement("div");
+  body.className = "nbody";
+  // The text block doubles as the expand/collapse control — the sidebar's old
+  // togglePeek "Show the full message" peek, restored here for the card. A
+  // real interactive element (role+tabindex+aria-expanded), not a click
+  // handler on a plain div, so it is reachable and announced the same way the
+  // row's own summary line (renderSession) already is.
+  const expanded = cardExpanded.has(s.id);
+  const txt = document.createElement("div");
+  txt.className = c.ask ? "peektxt ask" : "peektxt";
+  txt.setAttribute("role", "button");
+  txt.setAttribute("tabindex", "0");
+  txt.setAttribute("aria-expanded", expanded ? "true" : "false");
+  const toggleLabel = expanded ? "Hide the full message" : "Show the full message";
+  txt.title = toggleLabel;
+  txt.setAttribute("aria-label", toggleLabel);
+  if (expanded) {
+    const cached = cardPeekCache.get(s.id);
+    txt.textContent = cached ? cached.text : "Loading…";
+    txt.classList.toggle("muted", !!(cached && cached.muted));
+  } else {
+    txt.textContent = c.text;
+  }
+  const toggle = (e) => { e.stopPropagation(); toggleCardPeek(s); };
+  txt.onclick = toggle;
+  txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
+  body.appendChild(txt);
+
+  let composer = null;
+  if (c.reply) {
+    composer = buildReplyComposer(s, {
+      replyable: () => s.replyable,
+      pending: () => s.need === "ask",
+      ariaLabel: "Reply to " + (s.name || s.id),
+      submitOnEnter: true,
+      afterSend: () => {
+        // No forced rebuild here: pendingSends IS already part of rowSig (via
+        // rowLocal's `sending`), so refreshSessions()'s own reconcile already
+        // rebuilds this card whenever anything it renders actually changed —
+        // typically `activity` itself, moving off "waiting" once the send
+        // lands. A forced rebuild used to run unconditionally here and
+        // clobbered this exact card's `why` text (just set by the onFail
+        // callback above, or left blank on success) with whatever a
+        // freshly-built composer's gate reason says — hiding the one error
+        // message an operator most needs to see right after a failed send.
+        refreshSessions();
+      },
+    });
+    body.appendChild(composer.form);
+    composer.refresh();
+  }
+
+  const acts = document.createElement("div");
+  acts.className = "nacts";
+  if (c.enableReplies) {
+    const en = document.createElement("button");
+    en.type = "button";
+    en.className = "btn";
+    en.textContent = "Enable replies";
+    en.title = "Allow answering this session from the sidebar";
+    en.onclick = async () => {
+      en.disabled = true;
+      if (!(await postReplyable(s.id, true))) {
+        en.disabled = false;
+        showToast("Could not change the reply setting", { error: true });
+        return;
+      }
+      // replyable is in the signature: the card re-renders with its reply
+      // field. Nothing else moves focus onto that new field on its own —
+      // await the rebuild, then focus it, so the operator lands in the
+      // field they just asked for instead of on <body>.
+      await refreshSessions();
+      const li = sessionRowFor(s.id);
+      const fld = li && li.querySelector(".nbody .fld");
+      if (fld) fld.focus();
+    };
+    acts.appendChild(en);
+  }
+  if (c.reply) {
+    // The card's counterpart to the sidebar peek panel's "Allow replies from
+    // here" checkbox — restoring the one function that checkbox served (reply
+    // permission must stay revocable from the sidebar) now that the card is
+    // the surface an operator actually answers from.
+    const dis = document.createElement("button");
+    dis.type = "button";
+    dis.className = "btn";
+    dis.textContent = "Disallow replies";
+    dis.title = "Revoke this session's sidebar-reply permission";
+    dis.onclick = async () => {
+      dis.disabled = true;
+      if (!(await postReplyable(s.id, false))) {
+        dis.disabled = false;
+        showToast("Could not change the reply setting", { error: true });
+        return;
+      }
+      await refreshSessions();
+    };
+    acts.appendChild(dis);
+  }
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = c.ask ? "btn pri" : "btn";
+  open.textContent = c.ask ? "Open to answer" : "Open";
+  open.onclick = () => openTerminal(s.id, s.name);
+  acts.appendChild(open);
+  body.appendChild(acts);
+  if (composer) body.appendChild(composer.why);
+  return body;
 }
 
 // renderNeedsCard builds the mobile "Needs you" card (M1) for one waiting
@@ -1131,9 +1385,12 @@ function renderNeedsCard(s) {
   qk.className = "qk";
   // Same gate as the reply sheet and the desktop composer: a digit always
   // passes replyTextError, so sendState is the only client-side check that
-  // can close these. pending is unknowable from the session list (no /peek),
-  // so treat it as false — the server's canReply is the authoritative gate.
-  const cardSt = sendState({ replyable: s.replyable, pending: false, activity: s.activity });
+  // can close these. pending is otherwise unknowable from the session list
+  // (no /peek here) — except need === "ask", which /api/sessions carries for
+  // exactly this case (a claude session blocked on a permission prompt, which
+  // the server refuses a reply to). The server's canReply stays the
+  // authoritative gate either way.
+  const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity });
   for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
     const b = document.createElement("button");
     b.type = "button";
@@ -1253,6 +1510,96 @@ function syncSelectedRow() {
   renderRail48(); // the focus ring moved, so .ri.on must move with it
 }
 
+// rowLocal: the page-local inputs a desktop row renders, for rowSig. Must list
+// exactly what renderSession reads beyond the session record itself.
+function rowLocal(s) {
+  const tab = terminalTabFor(s.id);
+  const u = usageOf(tab);
+  return {
+    killing: killing.has(s.id),
+    heldHere: !!tab && tab.status() === "connected",
+    pct: u && typeof u.pct === "number" ? u.pct : null,
+    boxRuntime: boxRuntime,
+    sending: pendingSends.has(s.id),
+    expanded: cardExpanded.has(s.id),
+  };
+}
+
+// signalAttention pushes the waiting count to the tab title and favicon — the
+// part of the signal you see without looking at the page. Runs on every
+// successful poll, AND from initEnv's title refresh (which can land before
+// the first session poll ever resolves) — so it touches title/favicon only.
+// Notifications are gated on an actual session list and live in
+// notifyTransitions, called separately by refreshSessions. The favicon href
+// is swapped only when the state flips, so a steady state costs no icon reload.
+let faviconNeeds = null;
+function signalAttention() {
+  const n = waitingCount();
+  const t = attentionTitle(n, window.__envLabel || "");
+  if (document.title !== t) document.title = t;
+  const needs = n > 0;
+  if (needs !== faviconNeeds) {
+    const link = $("favicon");
+    if (link) link.href = faviconHref(n);
+    faviconNeeds = needs;
+  }
+}
+
+// notifyTransitions raises one OS notification per session that just started
+// needing you — only when opted in, still granted, and this tab is not
+// focused. tag = session id, so two tabs of this origin show it once.
+// Accepted limit: Chrome throttles a tab hidden >5 min to ~1 timer/min, so this
+// can lag up to ~60 s; no push channel is built for it.
+//
+// Called ONLY from refreshSessions, after a successful /api/sessions fetch —
+// never from signalAttention/initEnv's title refresh and never on a fetch
+// error path. `lastSessions` starts as `[]` before the first real fetch, and
+// initEnv's title refresh can run before that fetch resolves; if this ran
+// there too it would seed attnPrev to an empty Set off that placeholder, and
+// every already-waiting session would look like a fresh transition and fire
+// once the real list landed. `sessionsLoaded` (flipped true only by that
+// success path) plus the pure notifyPoll gate is what needsTransitions relies
+// on to tell a not-yet-real empty list from a real "zero sessions" one.
+let attnPrev = null;
+let sessionsLoaded = false;
+function notifyTransitions() {
+  const t = notifyPoll(sessionsLoaded, attnPrev, lastSessions);
+  attnPrev = t.next;
+  if (!t.fired.length || !notifyWanted()) return;
+  if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+  if (document.hasFocus()) return;
+  for (const s of t.fired) {
+    try {
+      const n = new Notification(s.name || s.id, { body: notifyBody(s), tag: s.id });
+      n.onclick = () => { window.focus(); openTerminal(s.id, s.name); n.close(); };
+    } catch (_) { /* a browser that refuses at construction time: stay silent */ }
+  }
+}
+
+// initNotifyToggle wires Settings → Appearance → Desktop notifications.
+function initNotifyToggle() {
+  const cb = $("notify-toggle"), why = $("notify-why");
+  if (!cb || !why) return;
+  const perm = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
+  const avail = notifyAvailability(window.isSecureContext, perm);
+  cb.disabled = !avail.enabled;
+  cb.checked = avail.enabled && notifyChecked(notifyWanted(), perm);
+  why.textContent = avail.reason;
+  cb.onchange = async () => {
+    if (!cb.checked) { setNotifyWanted(false); why.textContent = ""; return; }
+    let p = "denied";
+    try { p = await Notification.requestPermission(); } catch (_) {}
+    if (p === "granted") {
+      setNotifyWanted(true);
+      why.textContent = "You will be notified when an agent needs you and this tab is not focused.";
+    } else {
+      cb.checked = false;
+      setNotifyWanted(false);
+      why.textContent = "Permission was not granted, so notifications stay off.";
+    }
+  };
+}
+
 // Returns the live session list, or null if the request failed: the boot-time
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
@@ -1288,6 +1635,18 @@ async function refreshSessions() {
     return null;
   }
   lastSessions = sessions || [];
+  sessionsLoaded = true;
+  // A card's expanded state (and its cached full text) belongs to it needing
+  // you, not to the session forever — drop both once the session is no longer
+  // waiting, so reopening it later (a fresh "needs you") starts collapsed.
+  if (cardExpanded.size) {
+    const waitingIds = new Set(lastSessions.filter((s) => s.activity === "waiting").map((s) => s.id));
+    for (const id of Array.from(cardExpanded)) {
+      if (!waitingIds.has(id)) { cardExpanded.delete(id); cardPeekCache.delete(id); }
+    }
+  }
+  signalAttention();
+  notifyTransitions();
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.
@@ -1334,13 +1693,15 @@ async function refreshSessions() {
   // Everything above has already been pushed. Only the list rebuild waits.
   if (holdList()) return lastSessions;
   if (lastSessions.length === 0) { ul.replaceChildren(emptyLi("No sessions yet")); return lastSessions; }
-  const rows = lastSessions.map(renderSession);
+  // Desktop reconciles by key (reconcile.js) so an unchanged row keeps its node
+  // — and any focus inside it. Mobile keeps its grouped rebuild. holdList above
+  // still guards both: a focused input must not even be re-rendered.
+  let rowById;
   if (mobileActive(window.innerWidth)) {
-    // Mobile groups the same rows under "Needs you"/"Running"/"Idle" headers
-    // (M1); `rows` stays indexed by ORIGINAL session order below so the
-    // reopen-peek block's `rows[lastSessions.indexOf(reopen)]` lookup keeps
-    // working — this only reorders what's appended to `ul`, never `rows`.
-    const rowBySid = new Map(lastSessions.map((s, i) => [s.id, rows[i]]));
+    // (s) => renderSession(s), not a bare renderSession: map passes the index
+    // as a second argument, and renderSession takes options there.
+    const rows = lastSessions.map((s) => renderSession(s));
+    rowById = new Map(lastSessions.map((s, i) => [s.id, rows[i]]));
     const nodes = [];
     for (const g of sessionGroups(lastSessions, (s) => s.activity)) {
       const h = document.createElement("li");
@@ -1348,36 +1709,26 @@ async function refreshSessions() {
       h.innerHTML = '<span>' + g.label + '</span><span class="count">' + g.count + '</span>';
       nodes.push(h);
       // needs-you (M1) gets the interactive card, built fresh from `s` — NOT
-      // the renderSession row `rowBySid` holds for every other group. `rows`
-      // itself is untouched (still one renderSession per session, still
-      // indexed by original order) so the reopen-peek lookup below keeps
-      // working exactly as it did before this group grew a second renderer.
-      for (const s of g.sessions) nodes.push(g.key === "needs-you" ? renderNeedsCard(s) : rowBySid.get(s.id));
+      // the renderSession row rowById holds for every other group.
+      for (const s of g.sessions) nodes.push(g.key === "needs-you" ? renderNeedsCard(s) : rowById.get(s.id));
     }
     ul.replaceChildren(...nodes);
   } else {
-    ul.replaceChildren(...rows); // desktop: flat list, unchanged
+    rowById = reconcileRows(ul, lastSessions, renderDesktopEntry, (s) => rowSig(s, rowLocal(s)));
   }
   // The answer block is a sibling, so it can only be inserted once its row is
-  // in the document. Re-opening after the attach also keeps the open panel from
-  // collapsing under the reader every few seconds.
-  //
-  // On mobile, a needs-you session's `li` (from `rows`) is built but never
-  // appended — renderNeedsCard's own node takes its place in the DOM instead.
-  // `li.after(peek)` inside togglePeek is a silent no-op on that disconnected
-  // node (no parent to insert beside), so the peek would never actually
-  // render — and since openPeekId is only ever cleared from togglePeek's
-  // collapse branch, it would get stuck, driving a wasted /peek fetch on
-  // every poll until the session leaves needs-you or the window widens back
-  // past 700px. Require the li to actually be in the document before
-  // reopening; otherwise there is nothing to reopen, so clear the id instead
-  // of leaving it stuck. Desktop's li is always connected, so this is a no-op
-  // there — the reopen still runs exactly as before.
+  // in the document. On mobile a needs-you session's row is built but never
+  // appended (the card takes its place), so require isConnected, and clear the
+  // id instead of leaving it stuck driving a /peek fetch every poll. On
+  // desktop a waiting session is now rendered as the needs-you card, which is
+  // already expanded in place — reopening togglePeek's own answer block under
+  // it would be a second, redundant composer.
   const reopen = lastSessions.find((s) => s.id === openPeekId);
   if (reopen) {
-    const li = rows[lastSessions.indexOf(reopen)];
-    if (li && li.isConnected && !peekRowFor(li)) togglePeek(li, reopen);
-    else if (!li || !li.isConnected) openPeekId = null;
+    const li = rowById.get(reopen.id);
+    const isCard = !!(li && li.classList.contains("dcard"));
+    if (li && li.isConnected && !isCard && !peekRowFor(li)) togglePeek(li, reopen);
+    else if (!li || !li.isConnected || isCard) openPeekId = null;
   }
   syncSelectedRow();
   return lastSessions;
@@ -2637,7 +2988,7 @@ function openReplySheet(s) {
     // see the function-level comment above. sendState/replyTextError are the
     // exact same peek.js functions the desktop composer's own refresh() uses.
     function refresh() {
-      const st = sendState({ replyable: s.replyable, pending: pendingNow, activity: s.activity });
+      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
       const errCode = replyTextError(ta.value);
       const gateClosed = !st.enabled;
       // The quick replies are controls too — a session that is not
@@ -2671,7 +3022,7 @@ function openReplySheet(s) {
     // blocks a second one from the sheet too.
     function doSend(text) {
       if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
-      const st = sendState({ replyable: s.replyable, pending: pendingNow, activity: s.activity });
+      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
       if (!st.enabled || replyTextError(text)) { refresh(); return; } // the note already explains why
       pendingSends.add(s.id);
       send.disabled = true;
@@ -3040,7 +3391,7 @@ initMobileShell();
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
     strip.hidden = false;
-    document.title = "[" + meta.env_label + "] Agent Box";
+    signalAttention(); // title = (N) [ENV] Agent Box, now that ENV is known
     updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh
@@ -3049,6 +3400,7 @@ initMobileShell();
 
 fontPrefs.applyCssVars();
 initSettings();
+initNotifyToggle();
 setInterval(refreshSessions, 3000);
 // Account limits change slowly and the file only updates when a claude statusLine
 // renders — a 30s refresh keeps the % fresh and the countdown ticking without

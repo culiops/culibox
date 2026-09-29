@@ -354,3 +354,24 @@ func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 		t.Error("POST with no fetch-metadata headers (older browser) was blocked")
 	}
 }
+
+// The page links /favicon.svg (and swaps to /favicon-needs.svg while an agent
+// needs you); both must be served, as SVG, to a logged-in page.
+func TestFaviconsAreServed(t *testing.T) {
+	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
+	ck := issueCookie(t, s)
+	h := s.Handler()
+	for _, p := range []string{"/favicon.svg", "/favicon-needs.svg"} {
+		req := httptest.NewRequest("GET", p, nil)
+		req.AddCookie(ck)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d, want 200", p, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "image/svg+xml") {
+			t.Fatalf("%s: Content-Type=%q, want image/svg+xml", p, ct)
+		}
+	}
+}

@@ -7,6 +7,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -58,10 +59,17 @@ const attachRepaintGrace = 1 * time.Second
 
 // activityOf classifies a session for the UI. Pure: no locks, no clock — the
 // caller passes `now`. Exit dominates the idle test because a just-exited
-// session's lastActivity is stale. exitKnown gates crashed: for abduco/boxed
-// sessions the reaped code is the attach process's, not the agent's, so it must
-// not be trusted into a red "crashed".
-func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Time, idle time.Duration) string {
+// session's lastActivity is stale. exitKnown gates crashed (see below).
+//
+// Silence alone is not "needs you": a quiet shell, or an agent nobody has given
+// a turn yet, is "idle". Only an agent (agent) that has had at least one
+// Enter-submitted input (submitted) reads "waiting" once it goes quiet. The
+// wire value "waiting" keeps meaning "needs you" so every consumer stays right.
+//
+// exitKnown gates crashed: for abduco/boxed sessions the reaped code is the
+// attach process's, not the agent's, so it must not be trusted into a red
+// "crashed".
+func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Time, idle time.Duration, agent, submitted bool) string {
 	if exited {
 		if exitKnown && exitCode != 0 {
 			return "crashed"
@@ -71,7 +79,10 @@ func activityOf(exited, exitKnown bool, exitCode int, lastActivity, now time.Tim
 	if now.Sub(lastActivity) < idle {
 		return "working"
 	}
-	return "waiting"
+	if agent && submitted {
+		return "waiting"
+	}
+	return "idle"
 }
 
 // recordActivity reports whether output observed at `now` should count as agent
@@ -150,7 +161,12 @@ type Info struct {
 	Created time.Time `json:"created"`
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
-	// Activity is a UI-facing classification: working|waiting|done|crashed|detached.
+	// Activity is a UI-facing classification: working|waiting|idle|done|crashed|detached.
+	// List can RAISE this to "waiting" for a claude session the live registry
+	// says is blocked on a prompt (see needOf) — it never lowers it. That raise
+	// happens only in List, the same way Claude below is only filled there: a
+	// Get/Spawn response is never rendered as a row, so it carries the
+	// un-raised value.
 	Activity string `json:"activity"`
 	Name     string `json:"name"`              // mutable display label (id is the stable key)
 	Runtime  string `json:"runtime,omitempty"` // box | host
@@ -173,6 +189,14 @@ type Info struct {
 	// re-lists after a spawn and never renders a row from those responses; a
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
+	// Need says why a waiting claude session needs you: "ask" (blocked on a
+	// permission/choice prompt) or "turn" (it finished its turn). Empty for
+	// every other session, including a waiting one whose transcript cannot be
+	// read — that one is still amber, just without a label. Like the registry
+	// raise itself (see needOf), filled by List only.
+	Need string `json:"need,omitempty"`
+	// Ask is Peek.Ask for a Need=="ask" session: the tool call it wants to run.
+	Ask string `json:"ask,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -188,6 +212,17 @@ type Session struct {
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
 	replyable bool
+
+	// submitted: at least one Enter (\r) has been written to this session —
+	// the only input that means "the operator gave it a turn". Guarded by mu.
+	submitted bool
+	// agentKind mirrors isAgentBin(Bin) under mu, so Info() can gate "waiting"
+	// without m.mu (Bin itself is guarded by m.mu: ResolveBins backfills it).
+	agentKind bool
+	// onSubmitted persists the false->true edge of submitted. Set before the
+	// session is published to m.sessions and never changed, so it needs no
+	// lock; called with NO lock held.
+	onSubmitted func()
 
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
@@ -447,8 +482,29 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 	}
 }
 
-// Write sends input to the PTY.
-func (s *Session) Write(p []byte) (int, error) { return s.ptmx.Write(p) }
+// Write sends input to the PTY. An Enter anywhere in p marks the session as
+// having been given a turn (see submitted). Focus reports, CPR/DA replies and
+// text without Enter do not count: xterm emits the former on its own.
+func (s *Session) Write(p []byte) (int, error) {
+	n, err := s.ptmx.Write(p)
+	if n > 0 && bytes.IndexByte(p[:n], '\r') >= 0 {
+		s.markSubmitted()
+	}
+	return n, err
+}
+
+// markSubmitted sets submitted and fires onSubmitted on the false->true edge
+// only — one sidecar write per session lifetime.
+func (s *Session) markSubmitted() {
+	s.mu.Lock()
+	first := !s.submitted
+	s.submitted = true
+	cb := s.onSubmitted
+	s.mu.Unlock()
+	if first && cb != nil {
+		cb()
+	}
+}
 
 // Resize resizes the PTY and records the size for ForceRedraw.
 func (s *Session) Resize(rows, cols uint16) error {
@@ -489,7 +545,7 @@ func (s *Session) Info() Info {
 	defer s.mu.Unlock()
 	activity := statusDetached
 	if s.status != statusDetached {
-		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold)
+		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable}
 }
@@ -534,6 +590,20 @@ func (m *Manager) SetReplyable(id string, v bool) error {
 	return nil
 }
 
+// submittedHook persists a session's first submitted input. Takes m.mu only
+// long enough to read the sidecar pointer; Write never holds m.mu, so the lock
+// order stays m.mu -> s.mu with nothing inverted.
+func (m *Manager) submittedHook(id string) func() {
+	return func() {
+		m.mu.Lock()
+		sc := m.sidecar
+		m.mu.Unlock()
+		if sc != nil {
+			sc.setSubmitted(id)
+		}
+	}
+}
+
 // signal sends sig to the child's whole process group (negative pid). creack/pty
 // forces Setsid, so the child leads its own group — this reaches its children
 // (e.g. claude's MCP subprocesses) without ever touching the daemon.
@@ -564,6 +634,11 @@ type Manager struct {
 	// that ordering fragile.
 	peekMu    sync.Mutex
 	peekCache map[string]peekEntry
+
+	// procStart reads a pid's starttime for the registry's pid-reuse guard.
+	// NewManager sets procStartOf; a nil value (struct-literal test managers)
+	// disables the registry path, falling back to the heuristic.
+	procStart procStartFunc
 }
 
 // SetPaths records where transcripts live: the daemon home (host-tier sessions)
@@ -639,6 +714,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		counters:  map[string]int{},
 		ringCap:   ringCap,
 		retention: retention,
+		procStart: procStartOf,
 	}
 }
 
@@ -735,12 +811,14 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Runtime = runtime
 	sess.Box = boxName
 	sess.Bin = bin
+	sess.onSubmitted = m.submittedHook(id)
+	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName, Replyable: false})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName, Replyable: false, Submitted: boolPtr(false)})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -857,13 +935,15 @@ func (m *Manager) List() []Info {
 		return o
 	}()
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
-	// Summaries are filled AFTER m.mu is released. PeekFor takes the same
-	// non-reentrant mutex, so filling them inside the loop above deadlocks the
-	// daemon on the first poll.
+	// Summaries and needs are filled AFTER m.mu is released. PeekFor takes the
+	// same non-reentrant mutex, so filling them inside the loop above deadlocks
+	// the daemon on the first poll.
 	for i := range out {
-		if p, ok := m.PeekFor(out[i].ID); ok {
+		p, ok, blocked := m.peekAndBlocked(out[i].ID)
+		if ok {
 			out[i].Summary = summaryLine(p.Text)
 		}
+		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 	}
 	return out
 }
@@ -1110,6 +1190,11 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.
 	sess.replyable = md.Replyable
+	// nil = a record written before the flag existed, or an orphan adopted with
+	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
+	sess.submitted = md.Submitted == nil || *md.Submitted
+	sess.onSubmitted = m.submittedHook(id)
+	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	m.sessions[id] = sess
 	m.mu.Unlock()
 	// The box was already adopted by Reconcile, before this attach was even

@@ -26,7 +26,7 @@ func TestKillReclaimsThePeekCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.peekStore(s.ID, time.Now(), Peek{Text: "a whole assistant message"})
+	m.peekStore(s.ID, "/x/t.jsonl", time.Now(), Peek{Text: "a whole assistant message"})
 	if !peekCacheHas(m, s.ID) {
 		t.Fatal("precondition: the entry was not stored")
 	}
@@ -46,7 +46,7 @@ func TestRetentionPruneReclaimsThePeekCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.peekStore(s.ID, time.Now(), Peek{Text: "a whole assistant message"})
+	m.peekStore(s.ID, "/x/t.jsonl", time.Now(), Peek{Text: "a whole assistant message"})
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, ok := m.Get(s.ID); !ok {

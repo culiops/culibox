@@ -30,6 +30,11 @@ import (
 	"github.com/culiops/agent-box/internal/web"
 )
 
+// The registry-based transcript locator only runs when the backend can name the
+// agent's pid. Assert it at compile time: an interface drift here would silently
+// fall back to the cwd heuristic in production.
+var _ session.PidResolver = (*abduco.Adapter)(nil)
+
 func main() {
 	cfgPath := flag.String("config", "config.json", "path to config file")
 	flag.Parse()
