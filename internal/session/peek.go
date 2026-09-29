@@ -41,6 +41,14 @@ type Peek struct {
 	// on — "Bash(rm -rf build)", "Edit(internal/web/app.js)", or the bare tool
 	// name — elided to askMax runes. Empty unless Pending.
 	Ask string `json:"ask,omitempty"`
+	// AskFull is Ask untruncated (askRender), for the card's Yes/No — which
+	// only this exact text may unlock (Manager.Answer hashes it). Empty unless
+	// exactly ONE tool call is pending and askRender reports a primary
+	// argument for it (only Bash/Read — see askRender), and the rendering fits
+	// askFullMax. Never serialised: /peek does not check replyable, and the
+	// full command must not reach a client that cannot act on it (List ships
+	// it as Info.AskFull under those gates instead).
+	AskFull string `json:"-"`
 }
 
 // summaryMax is the rune budget for the one-line sidebar summary. Measured at
@@ -86,6 +94,14 @@ func parsePeekTail(b []byte) (Peek, bool) {
 	lines := strings.Split(string(b), "\n")
 	var p Peek
 	var parsedAny, sawLast, foundText bool
+	// Parallel tool calls are written one tool_use per assistant record, and
+	// Claude Code asks about the FIRST while the file ends on the LAST
+	// (measured 2026-09-29). pendingTools counts the unresolved calls trailing
+	// the transcript; counting stays true until a record that ends the run is
+	// seen — a tail that runs out first cannot rule out more calls before it.
+	var pendingTools int
+	var counting bool
+	var askFull string
 	for i := len(lines) - 1; i >= 0; i-- {
 		ln := strings.TrimSpace(lines[i])
 		if ln == "" {
@@ -109,8 +125,24 @@ func parsePeekTail(b []byte) (Peek, bool) {
 		if !sawLast {
 			sawLast = true
 			if rec.Message.Role == "assistant" && len(bs) > 0 && bs[len(bs)-1].Type == "tool_use" {
+				last := bs[len(bs)-1]
 				p.Pending = true
-				p.Ask = askLine(bs[len(bs)-1].Name, bs[len(bs)-1].Input)
+				p.Ask = askLine(last.Name, last.Input)
+				if full, hasArg := askRender(last.Name, last.Input); hasArg && len(full) <= askFullMax {
+					askFull = full
+				}
+				counting = true
+			}
+		}
+		if counting {
+			n, all := trailingToolUses(bs)
+			if rec.Message.Role != "assistant" {
+				counting = false
+			} else {
+				pendingTools += n
+				if !all {
+					counting = false
+				}
 			}
 		}
 		if !foundText && rec.Message.Role == "assistant" {
@@ -125,6 +157,9 @@ func parsePeekTail(b []byte) (Peek, bool) {
 		if foundText {
 			break
 		}
+	}
+	if pendingTools == 1 && !counting {
+		p.AskFull = askFull
 	}
 	return p, parsedAny
 }
@@ -209,6 +244,69 @@ func askLine(name string, input json.RawMessage) string {
 		s = string(r[:askMax-1]) + "…"
 	}
 	return s
+}
+
+// askFullMax caps AskFull. A longer rendering is not offered for a remote
+// answer at all: the card says to open the terminal.
+const askFullMax = 4 << 10
+
+// askableArgs is the allowlist of tools whose primary argument IS the whole
+// action being requested, mapped to that argument's JSON key. Only these
+// tools may produce an AskFull: Edit/Write/NotebookEdit's real content is a
+// diff or a body of text, invisible in a one-line rendering, so an operator
+// answering Yes to the rendered line alone would not have seen what they are
+// approving. Every other/unknown tool (and every unlisted key on an allowed
+// tool) is refused the same way. (Controller ruling, 2026-09-29, amending
+// spec §1.2 — askLine above is unaffected and keeps rendering every tool's
+// command/file_path/notebook_path for the elided sidebar Ask line.)
+var askableArgs = map[string]string{
+	"Bash": "command",
+	"Read": "file_path",
+}
+
+// askRender renders a tool call as one untruncated, printable line — the tool
+// name plus its primary argument — but ONLY for a tool in askableArgs; hasArg
+// is false for every other tool, including one that has a primary argument
+// that just isn't safe to answer from alone (see askableArgs). Control
+// characters (C0, DEL, C1) and Unicode format characters (bidi overrides,
+// zero-width) become spaces, and whitespace runs collapse, exactly like
+// askLine above: a heredoc or an ANSI-laden echo still renders as one clean
+// line, and a bidi override cannot make the line read differently from what
+// it says.
+func askRender(name string, input json.RawMessage) (string, bool) {
+	key, ok := askableArgs[name]
+	if !ok {
+		return "", false
+	}
+	var in map[string]any
+	_ = json.Unmarshal(input, &in)
+	v, ok := in[key].(string)
+	if !ok || strings.TrimSpace(v) == "" {
+		return "", false
+	}
+	clean := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, v)
+	return name + "(" + strings.Join(strings.Fields(clean), " ") + ")", true
+}
+
+// trailingToolUses counts the tool_use blocks at the END of a record's
+// content and reports whether the record held nothing else (all == true), so
+// a caller can tell "N pending calls, and this record is entirely made of
+// them" from "N pending calls, but there was also a text/thinking block after
+// them" — the latter cannot happen for the tail record itself (a text block
+// there means the run finished, see parsePeekTail), but does for a record
+// further back that has both a text block and one or more trailing tool_use
+// blocks preceding it.
+func trailingToolUses(bs []contentBlock) (int, bool) {
+	n := 0
+	for j := len(bs) - 1; j >= 0 && bs[j].Type == "tool_use"; j-- {
+		n++
+	}
+	return n, n > 0 && n == len(bs)
 }
 
 // canReply is the whole authorization decision for sending a message into a

@@ -213,6 +213,10 @@ type Info struct {
 	Need string `json:"need,omitempty"`
 	// Ask is Peek.Ask for a Need=="ask" session: the tool call it wants to run.
 	Ask string `json:"ask,omitempty"`
+	// AskFull is Peek.AskFull for a Need=="ask" session that is registry-
+	// blocked AND replyable — the one case the card can answer (Manager.Answer
+	// refuses every other). Filled by List only.
+	AskFull string `json:"ask_full,omitempty"`
 	// Resumable: an exited host-tier claude whose conversation id is known —
 	// Restart will continue it (`--resume`). Filled by List only.
 	Resumable bool `json:"resumable,omitempty"`
@@ -1006,6 +1010,9 @@ func (m *Manager) List() []Info {
 			out[i].Summary = summaryLine(p.Text)
 		}
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
+		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
+			out[i].AskFull = p.AskFull
+		}
 	}
 	return out
 }
