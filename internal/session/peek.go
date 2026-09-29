@@ -76,10 +76,16 @@ type contentBlock struct {
 	Type string `json:"type"`
 	// ID is the tool_use block's own id (Claude Code writes "id":"toolu_…").
 	// Used to dedupe a tool_use across the records of one pending run.
-	ID    string          `json:"id"`
-	Text  string          `json:"text"`
-	Name  string          `json:"name"`  // tool_use
-	Input json.RawMessage `json:"input"` // tool_use
+	ID   string `json:"id"`
+	Text string `json:"text"`
+	Name string `json:"name"` // tool_use
+	// ToolUseID is the id of the tool_use a tool_result block resolves
+	// ("tool_use_id" — a different field from ID above). Streaming writes a
+	// tool_result USER record between two tool_use records of the SAME
+	// message.id (measured 2026-09-29, fix round 2: 1,546 times in 400
+	// transcripts) — see parsePeekTail's resolvedIDs.
+	ToolUseID string          `json:"tool_use_id"`
+	Input     json.RawMessage `json:"input"` // tool_use
 }
 
 // contentBlocks decodes message.content as a block array. A bare string (or any
@@ -104,34 +110,48 @@ func parsePeekTail(b []byte) (Peek, bool) {
 	lines := strings.Split(string(b), "\n")
 	var p Peek
 	var parsedAny, sawLast, foundText bool
-	// A "pending run" is the trailing assistant records that share ONE
-	// message.id — one API message Claude Code split into several written
-	// records (parallel tool calls each get their own record; a single
-	// streamed turn can split thinking/text/tool_use the same way). The
-	// dialog asks about the FIRST tool_use in the run while the transcript
-	// ends on the LAST (measured 2026-09-29, probe E), so AskFull is offered
-	// only when the run holds exactly one DISTINCT tool_use id — otherwise
-	// "which call does the card's '1' answer" is ambiguous and a remote Yes
-	// must not be offered at all. (Fix round 1, 2026-09-29: this replaces an
-	// earlier "trailing all-tool_use record" heuristic that a
-	// [thinking, tool_use A, text, tool_use B] split — a real shape for one
-	// turn — could miscount as a single pending call.)
+	// Fix round 2 (2026-09-29): real transcripts (measured: 1,546 times in the
+	// last 400) interleave a tool_result USER record BETWEEN two tool_use
+	// records of the SAME message.id — Claude Code streams tool execution, so
+	// an earlier call in a turn can resolve while a later call in that same
+	// turn is still being written. A rule that ends the run at the first
+	// non-assistant record (fix round 1's runActive) stops too early and can
+	// offer AskFull for a call that ISN'T the one still unresolved. The rule
+	// here instead:
 	//
-	// runActive tracks whether the walk is still inside that run: a
-	// text/thinking-only record does NOT end it (it is still part of the
-	// same split message) — only a record with a DIFFERENT message.id, a
-	// non-assistant role, or the tail simply running out (runActive never
-	// resolves to false) ends or fails it, the latter exactly like the old
-	// "counting" flag's fail-closed behaviour. runOK is false — and AskFull
-	// stays empty regardless of the count — when the pending record's
-	// message.id is itself missing: with no id to bind the run to, "exactly
-	// one" cannot be trusted, so this fails closed too. toolIDs pools the
-	// distinct tool_use ids seen across the run (a block with no id of its
-	// own gets a synthetic one, so two blank ids are never mistaken for the
-	// same call).
+	//   - walks back through every record, collecting each user tool_result's
+	//     tool_use_id into resolvedIDs (never ends the run — see below);
+	//   - binds the run to the LAST assistant record's message.id (runID);
+	//   - the run ends ONLY at an assistant record with a DIFFERENT
+	//     non-empty message.id (a boundary) — a text/thinking-only record,
+	//     and any user record (tool_result or not), do not end it;
+	//   - pools EVERY tool_use block's id from every run-matching assistant
+	//     record — not only trailing ones, because Claude Code can interleave
+	//     a tool_use with a text block in one record — into runToolIDs;
+	//   - once a boundary is found, keeps walking WITHOUT adding to
+	//     runToolIDs, purely to check that runID does not reappear further
+	//     back: a reappearance means message.id ordering is not the simple
+	//     single-split-turn shape this rule assumes, so the count up to the
+	//     boundary cannot be trusted (failed = true);
+	//   - an assistant record inside the run (before any boundary) with an
+	//     EMPTY message.id can't be told apart from a genuine continuation of
+	//     the run, so it also fails closed (failed = true);
+	//   - a line that fails to parse before a boundary is found means the
+	//     256 KiB tail itself may have started mid-message — indistinguishable
+	//     from a truncated record that could have held another call or the
+	//     true boundary — so that fails closed too (a malformed line found
+	//     AFTER a boundary is harmless: the run's own count is already
+	//     sealed).
+	//
+	// AskFull ends up set only when runOK, not failed, and EXACTLY ONE id in
+	// runToolIDs has no matching entry in resolvedIDs. That one unresolved
+	// call is always the tail's own last block (nothing can resolve it —
+	// there is nothing after it in the file), which is exactly what askFull
+	// below was rendered from, so no separate "which one" lookup is needed.
 	var runID string
-	var runOK, runActive bool
-	toolIDs := map[string]bool{}
+	var runOK, boundaryFound, failed bool
+	runToolIDs := map[string]bool{}
+	resolvedIDs := map[string]bool{}
 	var anonToolIDs int
 	var askFull string
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -141,6 +161,9 @@ func parsePeekTail(b []byte) (Peek, bool) {
 		}
 		var rec peekRec
 		if json.Unmarshal([]byte(ln), &rec) != nil {
+			if runOK && !boundaryFound {
+				failed = true
+			}
 			continue
 		}
 		parsedAny = true
@@ -166,21 +189,40 @@ func parsePeekTail(b []byte) (Peek, bool) {
 				if rec.Message.ID != "" {
 					runID = rec.Message.ID
 					runOK = true
-					runActive = true
 				}
 			}
 		}
-		if runActive {
-			if rec.Message.Role == "assistant" && rec.Message.ID == runID {
-				for _, id := range trailingToolUseIDs(bs) {
-					if id == "" {
-						anonToolIDs++
-						id = fmt.Sprintf("\x00%d", anonToolIDs)
+		if runOK {
+			if rec.Message.Role == "assistant" {
+				switch {
+				case boundaryFound:
+					// Past the run's boundary: only watching for a
+					// disqualifying reappearance now, never counting.
+					if rec.Message.ID == runID {
+						failed = true
 					}
-					toolIDs[id] = true
+				case rec.Message.ID == "":
+					failed = true
+				case rec.Message.ID == runID:
+					for _, blk := range bs {
+						if blk.Type != "tool_use" {
+							continue
+						}
+						id := blk.ID
+						if id == "" {
+							anonToolIDs++
+							id = fmt.Sprintf("\x00%d", anonToolIDs)
+						}
+						runToolIDs[id] = true
+					}
+				default:
+					boundaryFound = true
 				}
-			} else {
-				runActive = false
+			}
+			for _, blk := range bs {
+				if blk.Type == "tool_result" && blk.ToolUseID != "" {
+					resolvedIDs[blk.ToolUseID] = true
+				}
 			}
 		}
 		if !foundText && rec.Message.Role == "assistant" {
@@ -192,18 +234,24 @@ func parsePeekTail(b []byte) (Peek, bool) {
 				}
 			}
 		}
-		// The text search's own early exit must not cut the run-counting
-		// walk short: a text record found before the run's boundary is
-		// reached is still IN the run (see above), so breaking here on
-		// foundText alone — the pre-fix-round-1 condition — could stop
-		// before that boundary and leave runActive permanently true,
-		// under-reporting a real single-call run as "ran out mid-run".
-		if foundText && !runActive {
+		// The text search's own early exit must not cut the run-checking
+		// walk short: the run may still need to confirm there is no
+		// boundary-crossing reappearance (see above), which can require
+		// scanning past the point where text was found.
+		if foundText && (!runOK || failed) {
 			break
 		}
 	}
-	if runOK && !runActive && len(toolIDs) == 1 {
-		p.AskFull = askFull
+	if runOK && !failed {
+		unresolved := 0
+		for id := range runToolIDs {
+			if !resolvedIDs[id] {
+				unresolved++
+			}
+		}
+		if unresolved == 1 {
+			p.AskFull = askFull
+		}
 	}
 	return p, parsedAny
 }
@@ -337,42 +385,22 @@ func askRender(name string, input json.RawMessage) (string, bool) {
 }
 
 // trailingToolUses counts the tool_use blocks at the END of a record's
-// content, and reports whether the record held nothing else (all == true). A
-// record's tool_use blocks always trail any thinking/text blocks in a real
-// transcript, so "trailing" already means "every tool call this record
-// proposes" — no separate whole-record scan is needed.
+// content, and reports whether the record held nothing else (all == true).
 //
-// Fix round 1 (2026-09-29): this no longer decides on its own whether a
-// pending run continues past this record — that decision now belongs to
-// parsePeekTail's message.id-bound run (runActive), because a text/thinking
-// record (n == 0, all == false) must NOT end the run by itself. This
-// function now answers a narrower question — "how many, and is that all of
-// them" — which parsePeekTail uses (via trailingToolUseIDs) only to pool
-// each matching record's tool_use ids into the run's dedup set.
+// Fix round 2 (2026-09-29): parsePeekTail's pending-run count no longer calls
+// this — Claude Code can interleave a tool_use with a text block in one
+// record (measured; also the `[tool_use B, text, tool_use C]` shape), so
+// "trailing only" would miss B and undercount the run. parsePeekTail now
+// scans every block in a run-matching record itself. This function is kept
+// for the exact-name contract (constraints.md) and for a caller that
+// genuinely wants "does this record end on nothing but tool_use" rather than
+// "every tool_use anywhere in it".
 func trailingToolUses(bs []contentBlock) (int, bool) {
 	n := 0
 	for j := len(bs) - 1; j >= 0 && bs[j].Type == "tool_use"; j-- {
 		n++
 	}
 	return n, n > 0 && n == len(bs)
-}
-
-// trailingToolUseIDs returns the ids of the n trailing tool_use blocks
-// trailingToolUses(bs) counts — the same blocks, so a caller pooling ids
-// across a run's records does not re-implement the walk. A block with a
-// blank id (not a shape Claude Code writes, but not assumed) comes back as
-// "" — parsePeekTail gives each blank its own synthetic key rather than
-// dedup-merging them.
-func trailingToolUseIDs(bs []contentBlock) []string {
-	n, _ := trailingToolUses(bs)
-	if n == 0 {
-		return nil
-	}
-	ids := make([]string, n)
-	for i, blk := range bs[len(bs)-n:] {
-		ids[i] = blk.ID
-	}
-	return ids
 }
 
 // canReply is the whole authorization decision for sending a message into a

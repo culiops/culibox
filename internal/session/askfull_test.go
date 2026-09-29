@@ -48,6 +48,25 @@ func txUser(s string) string {
 }
 func txBytes(lines ...string) []byte { return []byte(strings.Join(lines, "\n") + "\n") }
 
+// txToolUse builds a tool_use block with an EXPLICIT id (unlike txBash's
+// auto-generated one) — fix round 2's streaming/dedup/reappearance tests need
+// to reference a specific call's id from a separate txResult line, or make
+// two records deliberately share one.
+func txToolUse(name, key, val, id string) map[string]any {
+	return map[string]any{"type": "tool_use", "id": id, "name": name, "input": map[string]any{key: val}}
+}
+
+// txResult is a user record resolving one tool_use id — the shape Claude
+// Code's streaming execution writes between records of the SAME message.id
+// once an earlier call in the run finishes (fix round 2, measured 1,546
+// times in 400 real transcripts).
+func txResult(toolUseID string) string {
+	b, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{
+		{"type": "tool_result", "tool_use_id": toolUseID, "content": "ok"},
+	}}})
+	return string(b)
+}
+
 func writeTxLines(t *testing.T, home, cwd, sid string, mtime time.Time, lines ...string) {
 	t.Helper()
 	dir := filepath.Join(home, ".claude", "projects", projectSlug(cwd))
@@ -231,6 +250,111 @@ func TestParsePeekTailAskFullEmptyWithoutAMessageID(t *testing.T) {
 	p, ok := parsePeekTail(txBytes(txUser("go"), rec))
 	if !ok || !p.Pending || p.AskFull != "" {
 		t.Fatalf("peek = %+v: a record with no message.id must fail AskFull closed", p)
+	}
+}
+
+// Fix round 2 (2026-09-29): measured on real transcripts — Claude Code's
+// streaming tool execution writes a tool_result USER record BETWEEN two
+// tool_use records of the SAME message.id (1,546 times in the last 400
+// transcripts). Fix round 1's "a non-assistant role ends the run" rule ended
+// the run at u{result A}, saw only C, and would have offered AskFull for C —
+// but B (an earlier call in the SAME run) is still unresolved, so the dialog
+// may actually be asking about B. Walking back through user records
+// (collecting their tool_result ids, never ending the run on them) and
+// counting every unresolved tool_use id under runID fixes this: A resolved,
+// B and C both unresolved → 2 unresolved → AskFull must stay empty.
+func TestParsePeekTailAskFullEmptyStreamingToolResultBetweenSameMessage(t *testing.T) {
+	id := "msg_stream1"
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", id, txToolUse("Read", "file_path", "A", "toolu_A1")),
+		txRecID("assistant", id, txToolUse("Bash", "command", "B", "toolu_B1")),
+		txResult("toolu_A1"),
+		txRecID("assistant", id, txToolUse("Bash", "command", "C", "toolu_C1"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: B is still unresolved under the same message.id, AskFull must stay empty", p)
+	}
+}
+
+// The positive mirror: only ONE call (A) precedes the tail call (C) in the
+// run, A resolves via a streamed tool_result, leaving exactly C unresolved.
+func TestParsePeekTailAskFullSetAfterStreamingResolvesEarlierCall(t *testing.T) {
+	id := "msg_stream2"
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", id, txToolUse("Bash", "command", "A", "toolu_A2")),
+		txResult("toolu_A2"),
+		txRecID("assistant", id, txToolUse("Bash", "command", "C", "toolu_C2"))))
+	if !ok || !p.Pending || p.AskFull != "Bash(C)" {
+		t.Fatalf("peek = %+v: A resolved, C is the only unresolved call", p)
+	}
+}
+
+// A line that fails to parse before the run finds its boundary means the
+// 256 KiB tail itself may have started mid-message — a truncated record
+// could have held another tool_use, another tool_result, or the true
+// boundary — so this fails AskFull closed even though the visible ids alone
+// would otherwise look like exactly one unresolved call.
+func TestParsePeekTailAskFullEmptyMidTailTruncationWithToolResult(t *testing.T) {
+	p, ok := parsePeekTail(txBytes(`{"partial record`,
+		txResult("toolu_A3"),
+		txRecID("assistant", "msg_trunc", txToolUse("Bash", "command", "C", "toolu_C3"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: a tail that may have started mid-message must fail AskFull closed", p)
+	}
+}
+
+// An assistant record INSIDE the run (before any boundary) with an empty
+// message.id can't be told apart from a genuine continuation of the same
+// run, so it fails closed too — distinct from
+// TestParsePeekTailAskFullEmptyWithoutAMessageID above, where it is the TAIL
+// record itself (runID never even gets set) that has no id.
+func TestParsePeekTailAskFullEmptyWhenAnEarlierRunRecordHasNoMessageID(t *testing.T) {
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", "", txToolUse("Bash", "command", "B", "toolu_B4")),
+		txRecID("assistant", "msg_x4", txToolUse("Bash", "command", "C", "toolu_C4"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: an earlier run record with no message.id must fail AskFull closed", p)
+	}
+}
+
+// A record with a DIFFERENT non-empty message.id ends the run (a boundary) —
+// but if runID reappears further back, past that boundary, the message.id
+// ordering isn't the simple single-split-turn shape the rule assumes, and
+// the count sealed at the boundary (only C, since B sat on the far side of Y)
+// cannot be trusted. Must fail closed rather than offer AskFull=Bash(C) with
+// B silently unresolved.
+func TestParsePeekTailAskFullEmptyWhenRunIDReappearsAcrossABoundary(t *testing.T) {
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", "msg_x5", txToolUse("Bash", "command", "B", "toolu_B5")),
+		txRecID("assistant", "msg_y5", txText("unrelated")),
+		txRecID("assistant", "msg_x5", txToolUse("Bash", "command", "C", "toolu_C5"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: runID reappearing across a different-id boundary must fail AskFull closed", p)
+	}
+}
+
+// One record can interleave a tool_use with a text block ([tool_use B, text,
+// tool_use C]) rather than keeping every tool_use trailing — every tool_use
+// block in a run-matching record must count, not only the trailing run, or B
+// would be missed and C alone would wrongly read as "exactly one".
+func TestParsePeekTailAskFullEmptyForInterleavedBlocksInOneRecord(t *testing.T) {
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRec("assistant", txToolUse("Bash", "command", "B", "toolu_B6"), txText("narrating"), txToolUse("Bash", "command", "C", "toolu_C6"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: every tool_use in the record counts, not only the trailing one", p)
+	}
+}
+
+// Two records can carry the SAME tool_use id (Claude Code rewriting a
+// partial record with more content as a turn streams in) — dedup by id means
+// this still counts as exactly one call, not two.
+func TestParsePeekTailAskFullDuplicateRecordsSameToolUseIDCountedOnce(t *testing.T) {
+	id := "msg_dup"
+	dup := func() map[string]any { return txToolUse("Bash", "command", "C", "toolu_dup7") }
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", id, dup()),
+		txRecID("assistant", id, dup())))
+	if !ok || !p.Pending || p.AskFull != "Bash(C)" {
+		t.Fatalf("peek = %+v: duplicate records sharing one tool_use id must count once", p)
 	}
 }
 
