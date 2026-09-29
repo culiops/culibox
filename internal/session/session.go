@@ -144,6 +144,19 @@ type BinResolver interface {
 	BinFor(spec launcher.SpawnSpec) (string, error)
 }
 
+// ReplyResolver is implemented by launchers that know a profile's reply
+// default. Optional, like BinResolver: without it every session starts with
+// replies off.
+type ReplyResolver interface {
+	ReplyableFor(spec launcher.SpawnSpec) bool
+}
+
+// OptionsResolver reports which per-spawn option overrides the launcher
+// accepted, so a restart re-applies exactly those. Optional.
+type OptionsResolver interface {
+	AcceptedOptions(spec launcher.SpawnSpec) map[string]any
+}
+
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
 // no bundle: sessions still run, just without user config.
 type Bundles interface {
@@ -170,6 +183,9 @@ type Info struct {
 	Activity string `json:"activity"`
 	Name     string `json:"name"`              // mutable display label (id is the stable key)
 	Runtime  string `json:"runtime,omitempty"` // box | host
+	// Options are the per-spawn option overrides this session started with
+	// (bools and enum choices — never secrets). Duplicate pre-fills from them.
+	Options map[string]any `json:"options,omitempty"`
 	// Attached reports that a viewer is subscribed right now. It says only THAT
 	// someone is watching, never who: every client authenticates with the same
 	// credentials, so the daemon has no identity to report and inventing one
@@ -197,6 +213,13 @@ type Info struct {
 	Need string `json:"need,omitempty"`
 	// Ask is Peek.Ask for a Need=="ask" session: the tool call it wants to run.
 	Ask string `json:"ask,omitempty"`
+	// AskFull is Peek.AskFull for a Need=="ask" session that is registry-
+	// blocked AND replyable — the one case the card can answer (Manager.Answer
+	// refuses every other). Filled by List only.
+	AskFull string `json:"ask_full,omitempty"`
+	// Resumable: an exited host-tier claude whose conversation id is known —
+	// Restart will continue it (`--resume`). Filled by List only.
+	Resumable bool `json:"resumable,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -223,6 +246,17 @@ type Session struct {
 	// session is published to m.sessions and never changed, so it needs no
 	// lock; called with NO lock held.
 	onSubmitted func()
+
+	// options are the accepted per-spawn overrides (OptionsResolver). Set
+	// before publication and never mutated, so read without a lock.
+	options map[string]any
+
+	// claudeSessionID is Claude Code's conversation id as last validated by
+	// locate (registry), so it follows /clear. Guarded by mu.
+	claudeSessionID string
+	// restarting latches the first Restart of an exited session, so a double
+	// click cannot start two replacements. Guarded by mu.
+	restarting bool
 
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
@@ -265,6 +299,28 @@ type Session struct {
 
 	backend Backend       // nil for an ephemeral (daemon-owned-PTY) session
 	sub     *subscription // current subscriber (at most one)
+
+	// answerMu serializes Manager.Answer for THIS session: the gate-check
+	// (peekAndBlocked + the lastAnswered memo below) through the Write is one
+	// critical section, so two concurrent or rapidly-repeated Answer calls on
+	// an unchanged prompt cannot both pass the gates and both write — see
+	// Answer's doc comment. answerMu is the OUTERMOST lock: Answer takes it
+	// only after releasing mu and the Manager's mu from its earlier reads,
+	// and peekAndBlocked's own m.locate call DOES take the Manager's mu (and
+	// nested under it, mu) WHILE answerMu is still held — that nesting is
+	// fine and expected. What must never happen is the reverse: acquiring
+	// answerMu while mu or the Manager's mu is already held.
+	answerMu sync.Mutex
+	// lastAnswered is the pending-prompt identity Answer last wrote a key
+	// for (zero value = none yet). Guarded by answerMu; only Answer touches
+	// it.
+	lastAnswered answerState
+
+	// escMu guards lastEscAt, shared by Interrupt (agent Esc) and
+	// Answer("no") so the two paths debounce each other's Esc — see
+	// escGate. Independent of answerMu: Interrupt never takes it.
+	escMu     sync.Mutex
+	lastEscAt time.Time // guarded by escMu; zero = no Esc sent yet
 }
 
 type subscription struct {
@@ -547,7 +603,14 @@ func (s *Session) Info() Info {
 	if s.status != statusDetached {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options}
+}
+
+// claudeSID returns the last validated Claude conversation id ("" if none).
+func (s *Session) claudeSID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claudeSessionID
 }
 
 // SetName updates the mutable display label.
@@ -728,6 +791,36 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	runtime := m.runtimeFor(spec)
 	spec.Runtime = runtime
 
+	// Resolve the agent binary once, up front: it gates claude-only features
+	// (usage, replies) and feeds the boxed config bundle below. Best-effort —
+	// an unresolvable bin just means no usage, no replies and no bundle.
+	bin := ""
+	if br, ok := m.launcher.(BinResolver); ok {
+		if b, err := br.BinFor(spec); err == nil {
+			bin = b
+		}
+	}
+
+	// The bundle is resolved BEFORE Build: its flags must sit ahead of the "--"
+	// that ends options (a first message follows it), and Build alone owns the
+	// argv order. Its mounts are fixed when Wrap starts the container below.
+	var mounts []box.Mount
+	var bundleHash string
+	if runtime == config.RuntimeBox {
+		m.mu.Lock()
+		bundles := m.bundles
+		m.mu.Unlock()
+		if bundles != nil && bin != "" {
+			var flags []string
+			var err error
+			mounts, flags, bundleHash, err = bundles.For(bin)
+			if err != nil {
+				log.Printf("spawn %s: config bundle unavailable (%v); the box will run without user config", spec.Agent, err)
+			}
+			spec.ExtraArgs = append(spec.ExtraArgs, flags...)
+		}
+	}
+
 	argv, env, err := m.launcher.Build(spec)
 	if err != nil {
 		return nil, err
@@ -742,42 +835,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		env = []string{}
 	}
 
-	// Resolve the agent binary once, up front: it gates claude-only features
-	// (usage) and feeds the boxed config bundle below. Best-effort — an
-	// unresolvable bin just means no usage and no bundle.
-	bin := ""
-	if br, ok := m.launcher.(BinResolver); ok {
-		if b, err := br.BinFor(spec); err == nil {
-			bin = b
-		}
-	}
-
-	// Containment is applied here, between the launcher and the process start,
-	// so abduco persistence and the whole session lifecycle stay untouched.
 	m.mu.Lock()
 	id := m.nextIDLocked(spec.Agent)
 	m.mu.Unlock()
 
+	// Containment is applied here, between the launcher and the process start,
+	// so abduco persistence and the whole session lifecycle stay untouched.
 	var boxName string
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
-		boxes, bundles := m.boxes, m.bundles
+		boxes := m.boxes
 		m.mu.Unlock()
-
-		// The bundle must be resolved BEFORE Wrap: Wrap is what starts the
-		// container, and its mounts are fixed at that moment.
-		var mounts []box.Mount
-		var bundleFlags []string
-		var bundleHash string
-		if bundles != nil && bin != "" {
-			var err error
-			mounts, bundleFlags, bundleHash, err = bundles.For(bin)
-			if err != nil {
-				log.Printf("session %s: config bundle unavailable (%v); the box will run without user config", id, err)
-			}
-		}
-		argv = append(argv, bundleFlags...)
-
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
 		if err != nil {
 			// A refusal already carries its own actionable message; wrapping it
@@ -804,6 +872,21 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		return nil, err
 	}
 
+	// Replies start at the profile default (or this spawn's override) and stay
+	// a claude-only feature whatever the profile says — SetReplyable's seam.
+	replyable := false
+	if rr, ok := m.launcher.(ReplyResolver); ok {
+		replyable = rr.ReplyableFor(spec)
+	}
+	replyable = replyable && isClaudeBin(bin)
+	var opts map[string]any
+	if ar, ok := m.launcher.(OptionsResolver); ok {
+		opts = ar.AcceptedOptions(spec)
+	}
+	// A first message IS the operator's first turn: the agent was given its
+	// task, so its silence afterwards means "your turn", not "idle".
+	submitted := spec.Prompt != ""
+
 	created := time.Now()
 	name := deriveName(spec.Name, spec.Cwd, id)
 	m.mu.Lock()
@@ -813,12 +896,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Bin = bin
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
+	sess.replyable = replyable
+	sess.submitted = submitted
+	sess.options = opts
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName, Replyable: false, Submitted: boolPtr(false)})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
+			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -930,6 +1017,7 @@ func (m *Manager) List() []Info {
 			// Bin is written under m.mu (ResolveBins), so this is the one place
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
+			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID()) != ""
 			o = append(o, i)
 		}
 		return o
@@ -944,6 +1032,9 @@ func (m *Manager) List() []Info {
 			out[i].Summary = summaryLine(p.Text)
 		}
 		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
+		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
+			out[i].AskFull = p.AskFull
+		}
 	}
 	return out
 }
@@ -1031,6 +1122,14 @@ func (m *Manager) Kill(id string) error {
 			<-s.done
 		}
 	}
+	m.removeSession(id, s)
+	return nil
+}
+
+// removeSession drops a session that is already stopped (killed, or exited and
+// being replaced by Restart) from everything the daemon tracks. Shared so the
+// teardown list cannot drift between Kill and Restart.
+func (m *Manager) removeSession(id string, s *Session) {
 	_ = s.ptmx.Close()
 	m.mu.Lock()
 	delete(m.sessions, id)
@@ -1048,7 +1147,6 @@ func (m *Manager) Kill(id string) error {
 	// idle TTL forever. releaseSessionBox is once-guarded, so the common path
 	// (both here and there) still counts exactly one release.
 	m.releaseSessionBox(s)
-	return nil
 }
 
 // Reconcile rebuilds the registry from surviving abduco sessions after a daemon
@@ -1190,6 +1288,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.
 	sess.replyable = md.Replyable
+	sess.options = md.Options
+	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
+		sess.claudeSessionID = md.ClaudeSessionID
+	}
 	// nil = a record written before the flag existed, or an orphan adopted with
 	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
 	sess.submitted = md.Submitted == nil || *md.Submitted

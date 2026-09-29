@@ -88,6 +88,13 @@ function notWaitingReason(activity) {
   }
 }
 
+// offerEnableReplies: show an "Enable replies" button beside a closed reply
+// control. True exactly when sendState's reason is the missing opt-in, for a
+// claude session that still runs (replies are claude-only on the server).
+function offerEnableReplies(s) {
+  return !!s && s.claude === true && !s.replyable && !s.exited;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { peekState, replyTextError, sendState, notWaitingReason };
+  module.exports = { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies };
 }

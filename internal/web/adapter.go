@@ -42,3 +42,17 @@ func (a ManagerService) AttributionFor(id string) (session.Attribution, bool) {
 func (a ManagerService) SetReplyable(id string, v bool) error { return a.M.SetReplyable(id, v) }
 
 func (a ManagerService) SendMessage(id, text string) error { return a.M.SendMessage(id, text) }
+
+func (a ManagerService) Interrupt(id string) error { return a.M.Interrupt(id) }
+
+func (a ManagerService) Answer(id, choice, askSHA256 string) error {
+	return a.M.Answer(id, choice, askSHA256)
+}
+
+func (a ManagerService) Restart(id string) (session.Info, error) {
+	s, err := a.M.Restart(id)
+	if err != nil {
+		return session.Info{}, err
+	}
+	return s.Info(), nil
+}

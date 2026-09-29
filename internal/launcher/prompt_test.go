@@ -1,0 +1,250 @@
+package launcher
+
+import (
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/culiops/agent-box/internal/config"
+)
+
+func claudeLauncher(t *testing.T, cfg config.AgentConfig, defs []config.OptionDef) *AgentLauncher {
+	t.Helper()
+	if cfg.Name == "" {
+		cfg.Name = "c"
+	}
+	if cfg.Bin == "" {
+		cfg.Bin = "/usr/local/bin/claude" // a slash: used verbatim, no PATH lookup
+	}
+	return New([]config.AgentConfig{cfg}, fakeResolver{}, defs)
+}
+
+func TestValidatePrompt(t *testing.T) {
+	ok := []string{
+		"fix the failing build",
+		"line one\nline two",
+		"tabs\tare fine",
+		"it's $(not) `run` — ünïcode 漢字",
+		"--dangerously-skip-permissions please", // a flag-looking prompt is fine: it goes after "--"
+		strings.Repeat("a ", maxPromptBytes/2),
+	}
+	for _, p := range ok {
+		if err := ValidatePrompt(p); err != nil {
+			t.Errorf("ValidatePrompt(%.30q) = %v, want nil", p, err)
+		}
+	}
+	bad := []string{
+		"", "   \n\t ",
+		strings.Repeat("a ", maxPromptBytes/2+1),
+		"nul\x00byte", "esc \x1b[31m red", "carriage\rreturn", "c1 \u009b csi",
+		"doctor", "update", "hi", "fix-it", // one bare word: could be a claude subcommand
+		"bad utf8 \xff here",
+		"bidi ‮ override", "zero​width", // Unicode format chars (Cf)
+	}
+	for _, p := range bad {
+		if err := ValidatePrompt(p); !errors.Is(err, ErrBadPrompt) {
+			t.Errorf("ValidatePrompt(%.30q) = %v, want ErrBadPrompt", p, err)
+		}
+	}
+}
+
+// exactLenPrompt builds a multi-word, no-leading/trailing-whitespace prompt of
+// exactly n bytes, so the maxPromptBytes boundary can be pinned exactly
+// without the one-bare-word rule or TrimSpace shifting the count.
+func exactLenPrompt(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		if i%2 == 1 {
+			b[i] = ' '
+		} else {
+			b[i] = 'a'
+		}
+	}
+	if n > 0 && b[n-1] == ' ' {
+		b[n-1] = 'a'
+	}
+	return string(b)
+}
+
+func TestValidatePromptLengthBoundary(t *testing.T) {
+	if err := ValidatePrompt(exactLenPrompt(maxPromptBytes)); err != nil {
+		t.Errorf("ValidatePrompt(%d bytes) = %v, want nil (exactly at the cap)", maxPromptBytes, err)
+	}
+	if err := ValidatePrompt(exactLenPrompt(maxPromptBytes + 1)); !errors.Is(err, ErrBadPrompt) {
+		t.Errorf("ValidatePrompt(%d bytes) = %v, want ErrBadPrompt (one over the cap)", maxPromptBytes+1, err)
+	}
+}
+
+func TestBuildPutsPromptLastAfterDashDash(t *testing.T) {
+	defs := []config.OptionDef{{Key: "effort", Type: "enum", Choices: []string{"high", "low"}, Flag: "--effort"}}
+	l := claudeLauncher(t, config.AgentConfig{Args: []string{"--add-dir", "/a", "/b"}, Options: map[string]any{"effort": "high"}}, defs)
+	argv, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost,
+		Resume: "abcd-1234", ExtraArgs: []string{"--strict-mcp-config"}, Prompt: "  -p rm everything  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"/usr/local/bin/claude", "--add-dir", "/a", "/b", "--effort", "high",
+		"--resume", "abcd-1234", "--strict-mcp-config", "--", "-p rm everything"}
+	if strings.Join(argv, "|") != strings.Join(want, "|") {
+		t.Fatalf("argv =\n %q\nwant\n %q", argv, want)
+	}
+}
+
+func TestBuildWithoutPromptHasNoDashDash(t *testing.T) {
+	l := claudeLauncher(t, config.AgentConfig{}, nil)
+	argv, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(argv, "--") {
+		t.Fatalf("no prompt, but argv carries a --: %v", argv)
+	}
+}
+
+func TestBuildBoxedPromptIsTheLastArgv(t *testing.T) {
+	l := claudeLauncher(t, config.AgentConfig{Bin: "claude"}, nil)
+	argv, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeBox,
+		ExtraArgs: []string{"--strict-mcp-config"}, Prompt: "run the tests"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(argv)
+	if n < 3 || argv[n-3] != "--strict-mcp-config" || argv[n-2] != "--" || argv[n-1] != "run the tests" {
+		t.Fatalf("boxed argv tail = %q, want [--strict-mcp-config -- run the tests]", argv)
+	}
+}
+
+func TestBuildRejectsPromptForNonClaude(t *testing.T) {
+	for _, bin := range []string{"/bin/bash", "codex", "/opt/bin/claude-wrapper"} {
+		l := New([]config.AgentConfig{{Name: "x", Bin: bin}}, fakeResolver{}, nil)
+		if _, _, err := l.Build(SpawnSpec{Agent: "x", Runtime: config.RuntimeBox, Prompt: "do the thing"}); !errors.Is(err, ErrPromptUnsupported) {
+			t.Errorf("bin %q: err=%v, want ErrPromptUnsupported", bin, err)
+		}
+	}
+}
+
+func TestBuildRejectsBadPromptBeforeResolvingSecrets(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "c", Bin: "/usr/local/bin/claude", Secrets: []string{"MISSING"}}}, fakeResolver{}, nil)
+	_, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost, Prompt: "doctor"})
+	if !errors.Is(err, ErrBadPrompt) {
+		t.Fatalf("err=%v, want ErrBadPrompt (checked before the unresolvable secret)", err)
+	}
+}
+
+func TestBuildResume(t *testing.T) {
+	l := claudeLauncher(t, config.AgentConfig{}, nil)
+	argv, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost, Resume: "b59c6dcd-11c9-4b0c-86bf-ada6cee780e6"})
+	if err != nil || !argvHasPair(argv, "--resume", "b59c6dcd-11c9-4b0c-86bf-ada6cee780e6") {
+		t.Fatalf("argv=%v err=%v, want --resume <id>", argv, err)
+	}
+	for _, bad := range []string{"../x", "a b", "id;rm", strings.Repeat("a", 129), "-p", "--dangerously-skip-permissions"} {
+		if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost, Resume: bad}); !errors.Is(err, ErrBadResume) {
+			t.Errorf("Resume %q: err=%v, want ErrBadResume", bad, err)
+		}
+	}
+	sh := New([]config.AgentConfig{{Name: "s", Bin: "/bin/bash"}}, fakeResolver{}, nil)
+	if _, _, err := sh.Build(SpawnSpec{Agent: "s", Runtime: config.RuntimeHost, Resume: "abcd"}); !errors.Is(err, ErrBadResume) {
+		t.Errorf("non-claude resume: err=%v, want ErrBadResume", err)
+	}
+}
+
+// The login wrap is the one place the prompt passes through a shell parser.
+// shellJoin must hand it back byte-for-byte, in every shell the daemon may use.
+func TestShellJoinRoundTripsHostileText(t *testing.T) {
+	dir := t.TempDir()
+	pwned := filepath.Join(dir, "pwned")
+	hostile := []string{
+		"it's a 'quoted' thing",
+		"$(touch " + pwned + ")",
+		"`touch " + pwned + "`",
+		"line1\nline2\n\nline4",
+		`a!b "double" \back\slash`,
+		"--dangerously-skip-permissions please",
+		"tab\there",
+		"$HOME ${PATH} %s %d",
+	}
+	// Production runs zsh as `-l -i -c` (rc files loaded, per argv()'s login
+	// wrap). Here we add -f (no rc) so the round trip is deterministic and
+	// unaffected by whatever a real ~/.zshrc on this box happens to do; -f
+	// changes shell startup behavior, not how -c parses/quotes its argument,
+	// so it does not weaken what this test is checking.
+	shells := [][]string{{"sh", "-c"}, {"bash", "-c"}, {"zsh", "-f", "-i", "-c"}}
+	for _, sh := range shells {
+		if _, err := exec.LookPath(sh[0]); err != nil {
+			t.Logf("skipping %s: not installed", sh[0])
+			continue
+		}
+		for _, p := range hostile {
+			args := append(append([]string{}, sh[1:]...), "printf %s "+shellJoin([]string{p}))
+			out, err := exec.Command(sh[0], args...).Output()
+			if err != nil {
+				t.Fatalf("%s: %v", sh[0], err)
+			}
+			if string(out) != p {
+				t.Errorf("%s round-trip: got %q want %q", sh[0], out, p)
+			}
+		}
+	}
+	if _, err := os.Stat(pwned); err == nil {
+		t.Fatal("a prompt executed a command substitution")
+	}
+}
+
+func TestBuildLoginPromptIsShellJoinedLast(t *testing.T) {
+	l := claudeLauncher(t, config.AgentConfig{Bin: "claude", Base: "login"}, nil)
+	l.shell = "/bin/sh"
+	p := "it's $(id)\nnext"
+	argv, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost, Prompt: p})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(argv[len(argv)-1], " "+shellJoin([]string{"--", p})) {
+		t.Fatalf("-c string %q must end with the quoted -- and prompt", argv[len(argv)-1])
+	}
+}
+
+func TestReplyableFor(t *testing.T) {
+	yes, no := true, false
+	l := New([]config.AgentConfig{
+		{Name: "on", Bin: "claude", Replyable: true},
+		{Name: "off", Bin: "claude"},
+		{Name: "sh", Bin: "/bin/bash", Replyable: true},
+	}, fakeResolver{}, nil)
+	cases := []struct {
+		spec SpawnSpec
+		want bool
+	}{
+		{SpawnSpec{Agent: "on"}, true},
+		{SpawnSpec{Agent: "off"}, false},
+		{SpawnSpec{Agent: "on", Replyable: &no}, false},
+		{SpawnSpec{Agent: "off", Replyable: &yes}, true},
+		{SpawnSpec{Agent: "sh"}, false},                  // replies are claude-only
+		{SpawnSpec{Agent: "sh", Replyable: &yes}, false}, // whatever the request says
+		{SpawnSpec{Agent: "nope", Replyable: &yes}, false},
+	}
+	for _, c := range cases {
+		if got := l.ReplyableFor(c.spec); got != c.want {
+			t.Errorf("ReplyableFor(%+v) = %v, want %v", c.spec, got, c.want)
+		}
+	}
+}
+
+func TestAcceptedOptionsKeepsOnlyWhatBuildWouldApply(t *testing.T) {
+	defs := []config.OptionDef{
+		{Key: "effort", Type: "enum", Choices: []string{"high", "low"}, Flag: "--effort"},
+		{Key: "skip", Type: "bool", Flag: "--dangerously-skip-permissions"},
+	}
+	l := New([]config.AgentConfig{{Name: "c", Bin: "claude", Options: map[string]any{"effort": "high", "skip": false}}}, fakeResolver{}, defs)
+	got := l.AcceptedOptions(SpawnSpec{Agent: "c", Options: map[string]any{
+		"effort": "low", "skip": true, "model": "opus", // model: not exposed by this profile
+	}})
+	if len(got) != 2 || got["effort"] != "low" || got["skip"] != true {
+		t.Fatalf("AcceptedOptions = %v, want effort=low skip=true only", got)
+	}
+	if got := l.AcceptedOptions(SpawnSpec{Agent: "c", Options: map[string]any{"effort": "$(evil)"}}); len(got) != 0 {
+		t.Fatalf("an invalid value was accepted: %v", got)
+	}
+}

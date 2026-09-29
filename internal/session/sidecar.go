@@ -40,6 +40,12 @@ type sessionMeta struct {
 	// to nil ("unknown"), which reconcile restores as TRUE for agents: showing a
 	// stale amber once beats hiding an agent that is waiting on you.
 	Submitted *bool `json:"submitted,omitempty"`
+	// Options are the per-spawn option overrides the launcher accepted
+	// (bools and enum choices, never secrets): what Restart re-applies.
+	Options map[string]any `json:"options,omitempty"`
+	// ClaudeSessionID is Claude Code's own conversation id, as last validated
+	// through its live registry (follows /clear). Restart resumes it.
+	ClaudeSessionID string `json:"claude_session_id,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
@@ -130,6 +136,20 @@ func (sc *sidecar) setSubmitted(id string) {
 		return
 	}
 	md.Submitted = boolPtr(true)
+	sc.m[id] = md
+	_ = sc.flushLocked()
+}
+
+// setClaudeSessionID records the conversation id. No-op if the id is absent,
+// so a concurrent retention-prune can never be resurrected.
+func (sc *sidecar) setClaudeSessionID(id, sid string) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	md, ok := sc.m[id]
+	if !ok || md.ClaudeSessionID == sid {
+		return
+	}
+	md.ClaudeSessionID = sid
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }

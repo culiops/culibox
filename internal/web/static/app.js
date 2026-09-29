@@ -712,6 +712,14 @@ let cardExpanded = new Set();
 // so a poll-triggered rebuild of an already-expanded card does not flash back
 // to "Loading…" for a fetch it already made. Cleared alongside cardExpanded.
 let cardPeekCache = new Map();
+// cardAskSeen: for an expanded card, the ask_full it showed when it was
+// expanded — Yes/No unlock only for that exact command (answerState), and a
+// different one arriving collapses the card (refreshSessions).
+let cardAskSeen = new Map();
+// pendingAnswers: sessions with an /answer in flight (the double-click latch;
+// module-level for the same reason pendingSends is — a poll can rebuild the
+// card mid-request). Fed into rowLocal/rowSig.
+let pendingAnswers = new Set();
 
 // peekRowFor: the answer block belonging to a row, if it is open. A sibling,
 // not a child — see the stylesheet for why the amber column needs it there.
@@ -774,6 +782,102 @@ async function postReplyable(id, want) {
   } catch (_) {
     return false;
   }
+}
+
+// buildEnableRepliesButton is the ONE "Enable replies" control: the needs-you
+// card, the steer rail composer and the pane reply strip all use it. It grants
+// the opt-in, re-polls (every gate re-reads `replyable` from the fresh list),
+// then runs `after` — the card uses it to focus its new reply field.
+function buildEnableRepliesButton(id, after) {
+  const en = document.createElement("button");
+  en.type = "button";
+  en.className = "btn";
+  en.textContent = "Enable replies";
+  en.title = "Allow answering this session from agent-box";
+  en.onclick = async (e) => {
+    e.stopPropagation();
+    en.disabled = true;
+    if (!(await postReplyable(id, true))) {
+      en.disabled = false;
+      showToast("Could not change the reply setting", { error: true });
+      return;
+    }
+    await refreshSessions();
+    en.disabled = false;
+    if (after) after();
+  };
+  return en;
+}
+
+// sendAnswer answers a permission prompt with ONE key (chosen by the server:
+// "1" or Esc), for exactly the command this card rendered — the body carries
+// sha256Hex(ask_full), and the server refuses (409) a prompt that changed
+// since. Whatever happens the card collapses: another prompt often follows a
+// Yes at once, and it must be expanded and read before it can be answered.
+async function sendAnswer(s, choice) {
+  if (pendingAnswers.has(s.id) || !s.ask_full) return;
+  pendingAnswers.add(s.id);
+  let status = 0, msg = "";
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ choice: choice, ask_sha256: sha256Hex(s.ask_full) }),
+    });
+    status = res.status;
+    if (!res.ok) { try { msg = ((await res.json()) || {}).error || ""; } catch (_) {} }
+  } catch (_) {
+    status = 0;
+  }
+  cardExpanded.delete(s.id);
+  cardPeekCache.delete(s.id);
+  cardAskSeen.delete(s.id);
+  pendingAnswers.delete(s.id);
+  if (status === 204) showToast(choice === "yes" ? "Answered Yes" : "Answered No");
+  else showToast(answerErrorText(status, msg), { error: true });
+  await refreshSessions();
+}
+
+// postSessionAction: POST /api/sessions/{id}/{action} with no body. Resolves to
+// the Response; never throws — a failed request resolves to {ok:false,status:0}.
+async function postSessionAction(id, action) {
+  try {
+    return await fetch("/api/sessions/" + encodeURIComponent(id) + "/" + action, { method: "POST" });
+  } catch (_) {
+    return { ok: false, status: 0, json: async () => null };
+  }
+}
+
+// interruptSession: no confirmation (spec §2.4) — it only stops work.
+async function interruptSession(id) {
+  const res = await postSessionAction(id, "interrupt");
+  if (!res.ok) showToast(actionFailText("interrupt", res.status), { error: true });
+}
+
+// restartSession replaces an ended session with a new one from the same spec;
+// its tab is swapped for the new session's.
+async function restartSession(s) {
+  const res = await postSessionAction(s.id, "restart");
+  if (!res.ok) {
+    let msg = "";
+    try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
+    showToast(res.status === 400 && msg ? "Restart failed: " + msg : actionFailText("restart", res.status), { error: true });
+    await refreshSessions();
+    return;
+  }
+  const ns = await res.json();
+  closeTerminal(s.id);
+  await refreshSessions();
+  openTerminal(ns.id, ns.name);
+}
+
+// setRepliesFromMenu flips the reply opt-in from the menu or the palette.
+async function setRepliesFromMenu(id, want) {
+  if (!(await postReplyable(id, want))) {
+    showToast("Could not change the reply setting", { error: true });
+    return;
+  }
+  await refreshSessions();
 }
 
 // buildReplyComposer builds the one-line reply field + Send button + status
@@ -1031,10 +1135,12 @@ async function toggleCardPeek(s) {
   if (cardExpanded.has(s.id)) {
     cardExpanded.delete(s.id);
     cardPeekCache.delete(s.id);
+    cardAskSeen.delete(s.id);
     await refreshSessions();
     return;
   }
   cardExpanded.add(s.id);
+  cardAskSeen.set(s.id, s.ask_full || ""); // what the operator is about to read
   await refreshSessions(); // rebuilds the card now, showing "Loading…"
   let status = 0;
   let payload = null;
@@ -1123,7 +1229,7 @@ function renderSession(s, opts) {
   if (killing.has(s.id)) {
     const st = document.createElement("span");
     st.className = "bdg";
-    st.textContent = "killing…";
+    st.textContent = "ending…";
     sname.appendChild(st);
     return li;
   }
@@ -1249,6 +1355,16 @@ function renderNeedsBody(s) {
   txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
   body.appendChild(txt);
 
+  // The full command, once expanded — what Yes/No will answer. textContent
+  // only; wrapped, monospace (spec §2.5).
+  const ans = answerState(s, expanded, cardAskSeen.get(s.id));
+  if (expanded && c.ask && s.ask_full) {
+    const pre = document.createElement("pre");
+    pre.className = "askfull";
+    pre.textContent = s.ask_full;
+    body.appendChild(pre);
+  }
+
   let composer = null;
   if (c.reply) {
     composer = buildReplyComposer(s, {
@@ -1276,28 +1392,13 @@ function renderNeedsBody(s) {
   const acts = document.createElement("div");
   acts.className = "nacts";
   if (c.enableReplies) {
-    const en = document.createElement("button");
-    en.type = "button";
-    en.className = "btn";
-    en.textContent = "Enable replies";
-    en.title = "Allow answering this session from the sidebar";
-    en.onclick = async () => {
-      en.disabled = true;
-      if (!(await postReplyable(s.id, true))) {
-        en.disabled = false;
-        showToast("Could not change the reply setting", { error: true });
-        return;
-      }
-      // replyable is in the signature: the card re-renders with its reply
-      // field. Nothing else moves focus onto that new field on its own —
-      // await the rebuild, then focus it, so the operator lands in the
-      // field they just asked for instead of on <body>.
-      await refreshSessions();
+    acts.appendChild(buildEnableRepliesButton(s.id, () => {
+      // replyable is in the signature, so the card re-rendered with its reply
+      // field; land the operator in it rather than on <body>.
       const li = sessionRowFor(s.id);
       const fld = li && li.querySelector(".nbody .fld");
       if (fld) fld.focus();
-    };
-    acts.appendChild(en);
+    }));
   }
   if (c.reply) {
     // The card's counterpart to the sidebar peek panel's "Allow replies from
@@ -1320,6 +1421,31 @@ function renderNeedsBody(s) {
     };
     acts.appendChild(dis);
   }
+  if (ans.show) {
+    // Both buttons, built first and kept in `pair` — a click on either must
+    // disable BOTH synchronously (before the await inside sendAnswer), or the
+    // sibling stays clickable for the whole round trip and silently no-ops
+    // through the pendingAnswers latch instead of visibly going inert.
+    const pair = [["yes", "1 Yes"], ["no", "No"]].map(([choice, label]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = label;
+      b.disabled = !ans.enabled || pendingAnswers.has(s.id);
+      b.classList.toggle("off", b.disabled);
+      if (ans.title) b.title = ans.title;
+      b.dataset.choice = choice;
+      return b;
+    });
+    for (const b of pair) {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        for (const sib of pair) { sib.disabled = true; sib.classList.add("off"); }
+        sendAnswer(s, b.dataset.choice);
+      };
+      acts.appendChild(b);
+    }
+  }
   const open = document.createElement("button");
   open.type = "button";
   open.className = c.ask ? "btn pri" : "btn";
@@ -1327,6 +1453,12 @@ function renderNeedsBody(s) {
   open.onclick = () => openTerminal(s.id, s.name);
   acts.appendChild(open);
   body.appendChild(acts);
+  if (ans.note) {
+    const why = document.createElement("span");
+    why.className = "peek-why";
+    why.textContent = ans.note;
+    body.appendChild(why);
+  }
   if (composer) body.appendChild(composer.why);
   return body;
 }
@@ -1522,6 +1654,7 @@ function rowLocal(s) {
     boxRuntime: boxRuntime,
     sending: pendingSends.has(s.id),
     expanded: cardExpanded.has(s.id),
+    answering: pendingAnswers.has(s.id),
   };
 }
 
@@ -1627,6 +1760,13 @@ async function refreshSessions() {
   // and cleared by the input's own focus/blur), so the flag cannot have gone
   // stale between the check and the call: the check and the call are adjacent
   // statements with no await between them.
+  //
+  // A held list can briefly go on showing an ask card whose command already
+  // changed underneath it (the DOM rebuild that would collapse it — see
+  // staleExpanded above — is exactly what's being skipped); a stray Yes/No
+  // click on it is still safe, because sendAnswer hashes the STALE ask_full it
+  // has on hand and the server's own hash/memo gate (ask_sha256 mismatch ->
+  // 409) refuses it rather than answering the wrong prompt.
   const holdList = () => editing || replyFocused;
   let sessions;
   try { sessions = await api("/api/sessions"); }
@@ -1638,11 +1778,15 @@ async function refreshSessions() {
   sessionsLoaded = true;
   // A card's expanded state (and its cached full text) belongs to it needing
   // you, not to the session forever — drop both once the session is no longer
-  // waiting, so reopening it later (a fresh "needs you") starts collapsed.
+  // waiting, so reopening it later (a fresh "needs you") starts collapsed. An
+  // ask whose full command changed also collapses: the new prompt has not been
+  // read, so its Yes/No must not stay one click away.
   if (cardExpanded.size) {
-    const waitingIds = new Set(lastSessions.filter((s) => s.activity === "waiting").map((s) => s.id));
+    const byId = new Map(lastSessions.map((s) => [s.id, s]));
     for (const id of Array.from(cardExpanded)) {
-      if (!waitingIds.has(id)) { cardExpanded.delete(id); cardPeekCache.delete(id); }
+      if (staleExpanded(byId.get(id), cardAskSeen.get(id))) {
+        cardExpanded.delete(id); cardPeekCache.delete(id); cardAskSeen.delete(id);
+      }
     }
   }
   signalAttention();
@@ -1813,6 +1957,7 @@ function renderOptions() {
       ctrl.type = "checkbox";
       ctrl.checked = o.value === true;
       lbl.htmlFor = "opt-" + o.key;
+      ctrl.onchange = () => syncSpawnExtras(false); // the bypass warning reads it
     } else {
       const choices = o.choices || [];
       if (choices.length > 0 && choices.length <= 5) {
@@ -1868,6 +2013,7 @@ $("agent").addEventListener("change", () => {
   renderOptions();
   syncRuntimeField();
   applyProfileCwd();
+  syncSpawnExtras(true);
 });
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
@@ -2012,6 +2158,12 @@ function renderPfRuntime(value) {
   });
   $("pf-runtime-warn").hidden = (value || "") !== "host";
 }
+// syncPfReplyable shows "Allow replies by default" only for a claude binary:
+// replies are claude-only on the server, and a default nothing honours is a
+// setting that lies.
+function syncPfReplyable() {
+  $("pf-replyable-row").hidden = !isClaudeBinName($("pf-bin").value);
+}
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
@@ -2026,6 +2178,8 @@ function fillForm(p) {
   renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
+  $("pf-replyable").checked = !!p.replyable;
+  syncPfReplyable();
   syncEditorActions();
 }
 // syncEditorActions is the single place that decides what the editor may do,
@@ -2092,6 +2246,7 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
   if (cwd) p.default_cwd = cwd;
+  if (!$("pf-replyable-row").hidden && $("pf-replyable").checked) p.replyable = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
@@ -2211,7 +2366,10 @@ function addEnvRow(kind) {
 $("pf-env-add").addEventListener("click", () => addEnvRow("literal"));
 $("pf-secret-add").addEventListener("click", () => addEnvRow("secret"));
 // Re-scope the option list when the agent binary changes.
-$("pf-bin").addEventListener("input", () => renderPfOptions(readForm().options));
+$("pf-bin").addEventListener("input", () => {
+  renderPfOptions(readForm().options);
+  syncPfReplyable();
+});
 $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });
@@ -2617,12 +2775,45 @@ function syncRuntimeField() {
   const explain = $("tier-explain");
   if (explain) explain.style.display = shown;
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
-  buildSeg(seg, [
-    { value: "", label: "box" },
-    { value: "host", label: "host", danger: true },
-  ], value, updateRuntimeWarning);
+  buildSeg(seg, runtimeSegChoices(), value, updateRuntimeWarning);
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
+
+// syncSpawnExtras shows the first-message field and the replies toggle only
+// for a profile whose agent takes them, and keeps the bypass warning honest.
+// resetReplies re-reads the toggle from the profile's default (dialog open,
+// profile change); an option/checkbox change keeps what the operator set.
+// openSpawnDialog sets #agent programmatically, which fires no change event,
+// so it calls this itself (memory profile-default-cwd-built).
+function syncSpawnExtras(resetReplies) {
+  const p = currentProfile();
+  $("spawn-prompt-row").hidden = !promptFieldVisible(p);
+  $("spawn-replies-row").hidden = !repliesFieldVisible(p);
+  if (resetReplies) $("spawn-replyable").checked = !!(p && p.replyable);
+  $("spawn-bypass-warn").hidden = !bypassWarningShown(p, getOptions(), $("spawn-replyable").checked);
+}
+
+// applySpawnPrefill fills the dialog from a session (Duplicate): cwd, tier and
+// this run's option values, over the profile defaults openSpawnDialog set.
+function applySpawnPrefill(pf) {
+  if (pf.cwd) setSwsCwd(pf.cwd);
+  const seg = $("runtime-seg");
+  if (pf.runtime && boxRuntime && seg) setSegValue(seg, pf.runtime);
+  for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
+    const k = ctrl.dataset.key;
+    if (!Object.prototype.hasOwnProperty.call(pf.options, k)) continue;
+    const v = pf.options[k];
+    if (ctrl.dataset.type === "bool") ctrl.checked = v === true;
+    else if (ctrl.classList.contains("seg")) setSegValue(ctrl, String(v));
+    else ctrl.value = String(v);
+  }
+  updateRuntimeWarning();
+  syncSpawnExtras(false);
+}
+
+// spawnPromptDraft keeps a first message whose spawn failed, so reopening the
+// dialog does not make the operator retype it.
+let spawnPromptDraft = "";
 
 // updateRuntimeWarning covers two DIFFERENT reasons #runtime-warn can be
 // showing, and they are mutually exclusive:
@@ -2662,7 +2853,9 @@ function updateRuntimeWarning() {
 
 // openSpawnDialog preselects whatever the one-click button would have done, so
 // "Advanced…" elaborates the visible target instead of presenting a fresh form.
-function openSpawnDialog(preselectAgent) {
+// prefill (Duplicate, see spawnPrefill) is applied last, over those defaults —
+// only when its profile still exists.
+function openSpawnDialog(preselectAgent, prefill) {
   const last = loadLastSpawn();
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent
@@ -2677,6 +2870,9 @@ function openSpawnDialog(preselectAgent) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  $("spawn-prompt").value = spawnPromptDraft;
+  spawnPromptDraft = "";
+  syncSpawnExtras(true);
   // Fresh open: don't carry a stale pick across dialog sessions. Then, in
   // priority order — profile default_cwd wins over the last spawn's cwd,
   // which wins over a sane tier-appropriate default (mirrors the old
@@ -2695,6 +2891,10 @@ function openSpawnDialog(preselectAgent) {
       setSwsCwd(defaultWorkspace(workspacesCache, segValue($("runtime-seg"))));
     }
   }
+  if (prefill) {
+    if (want === prefill.agent) applySpawnPrefill(prefill);
+    else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
+  }
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   openDialog("spawn-modal");
@@ -2706,20 +2906,33 @@ function initSpawnControl() {
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
   // control, so there is no native "change" event to hook here.
   $("spawn-go").onclick = () => openSpawnDialog();
+  $("spawn-replyable").onchange = () => syncSpawnExtras(false);
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
+  $("spawn-prompt").addEventListener("keydown", (e) => {
+    if (isSubmitHotkey(e, mac)) { e.preventDefault(); $("spawn").requestSubmit(); }
+  });
 }
 
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const req = { agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() };
-  const rt = segValue($("runtime-seg"));
-  if (rt) req.runtime = rt;
+  const req = spawnPayload({
+    agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
+    runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
+    replyable: $("spawn-replyable").checked, profile: currentProfile(),
+  });
+  const draft = $("spawn-prompt").value;
   // Close first: a fixed-position toast renders *beneath* a modal dialog's
   // backdrop, so an Undo offered while the dialog is still up is unreachable.
   closeDialog("spawn-modal");
   $("sess-name").value = "";
+  $("spawn-prompt").value = "";
   try {
     await spawnSession(req);
-  } catch (e) { showToast("Spawn failed: " + e.message, { error: true }); }
+  } catch (e) {
+    spawnPromptDraft = draft; // reopening New session restores it
+    showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
+  }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
 // every open — the list is replaced wholesale every few seconds, so a menu
@@ -2744,10 +2957,10 @@ function closeSessionMenu(restoreFocus) {
 
 // runSessionAction is the one dispatch table behind BOTH the desktop
 // #session-menu and the mobile actions sheet (openActionsSheet): `action` is
-// one of menuItems(s)'s ids (rename/files/attribution/copycwd/newpane/end)
-// plus the mobile-only "open-terminal". Neither caller may duplicate a
-// handler here — a second copy is exactly the drift this extraction exists
-// to prevent.
+// one of menuItems(s)'s ids (rename/files/attribution/copycwd/newpane/
+// interrupt/replies-on/replies-off/restart/duplicate/end) plus the
+// mobile-only "open-terminal". Neither caller may duplicate a handler here —
+// a second copy is exactly the drift this extraction exists to prevent.
 function runSessionAction(action, s) {
   const name = s.name || s.id;
   const run = {
@@ -2780,6 +2993,13 @@ function runSessionAction(action, s) {
     // already flips the mobile screen to "terminal" itself when active, so
     // there is nothing left to duplicate here.
     "open-terminal": () => openTerminal(s.id, name),
+    interrupt: () => interruptSession(s.id),
+    "replies-on": () => setRepliesFromMenu(s.id, true),
+    "replies-off": () => setRepliesFromMenu(s.id, false),
+    restart: () => restartSession(s),
+    // Duplicate opens the form prefilled — never a spawn from one click (the
+    // workspace IS the containment boundary; see "+ New session" above).
+    duplicate: () => openSpawnDialog(s.agent, spawnPrefill(s)),
     end: () => confirmKill(s.id, name),
   };
   const fn = run[action];
@@ -3151,9 +3371,9 @@ document.addEventListener("keydown", (e) => {
 // stays unguarded: Undo on a fresh spawn must not ask twice.
 async function confirmKill(id, name) {
   const ok = await askConfirm({
-    title: "Kill session",
-    body: 'Kill session "' + (name || id) + '"? This cannot be undone.',
-    confirmLabel: "Kill",
+    title: "End session",
+    body: 'End session "' + (name || id) + '"? This cannot be undone.',
+    confirmLabel: "End",
     danger: true,
   });
   if (ok) killSession(id);
@@ -3162,13 +3382,13 @@ async function confirmKill(id, name) {
 async function killSession(id) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
-  await refreshSessions(); // re-render → row shows "killing…"
+  await refreshSessions(); // re-render → row shows "ending…"
   try {
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
     killing.delete(id);
     await refreshSessions();
-    showToast("Kill failed: " + e.message, { error: true });
+    showToast("End failed: " + e.message, { error: true });
     return;
   }
   killing.delete(id);

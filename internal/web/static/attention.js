@@ -15,10 +15,12 @@ function needLabel(s) {
 }
 
 // cardContent decides which blocks a desktop needs-you card renders.
-//  - ask: the tool call it wants to run. NO reply field and NO digit buttons —
+//  - ask: the tool call it wants to run. No reply field and no digit buttons —
 //    the server refuses any message to a pending/blocked session by design (a
 //    permission dialog reads single keys), so the card sends you to the
-//    terminal instead (Open, always rendered by the caller).
+//    terminal (Open, always rendered by the caller), and — for a replyable,
+//    registry-blocked claude with the full command available — offers 1 Yes /
+//    No (answerState). Not replyable: Enable replies.
 //  - turn on claude: the summary + a one-line reply when the session has
 //    opted in, else an "Enable replies" control — never a dead field, and
 //    never digits (a digit would become the agent's next prompt).
@@ -32,7 +34,7 @@ function needLabel(s) {
 function cardContent(s) {
   const v = s || {};
   if (v.need === "ask") {
-    return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: false };
+    return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: !!v.claude && !v.replyable };
   }
   if (!v.claude || !v.need) {
     return { text: v.summary || "Waiting for input.", ask: false, reply: false, enableReplies: false };
@@ -120,7 +122,122 @@ function notifyPoll(loaded, prevIds, sessions) {
   return needsTransitions(prevIds, sessions);
 }
 
+// utf8Bytes: a string's UTF-8 bytes, by hand. A lone surrogate becomes
+// U+FFFD, as it does in Go's json decoding — the server hashes the same bytes.
+function utf8Bytes(str) {
+  const out = [];
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff && i + 1 < str.length) {
+      const d = str.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) { c = 0x10000 + ((c - 0xd800) << 10) + (d - 0xdc00); i++; } else c = 0xfffd;
+    } else if (c >= 0xd800 && c <= 0xdfff) {
+      c = 0xfffd;
+    }
+    if (c < 0x80) out.push(c);
+    else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+    else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+  }
+  return out;
+}
+
+const SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+// sha256Hex: lowercase hex SHA-256 of a string's UTF-8 bytes. Pure JS on
+// purpose: crypto.subtle exists only in a secure context, and the tailnet
+// http:// origin is not one — one tested path beats a fallback nobody runs.
+function sha256Hex(str) {
+  const bytes = utf8Bytes(String(str == null ? "" : str));
+  const bitLen = bytes.length * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  const hi = Math.floor(bitLen / 0x100000000), lo = bitLen >>> 0;
+  bytes.push((hi >>> 24) & 255, (hi >>> 16) & 255, (hi >>> 8) & 255, hi & 255,
+    (lo >>> 24) & 255, (lo >>> 16) & 255, (lo >>> 8) & 255, lo & 255);
+  const h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const w = new Array(64);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let off = 0; off < bytes.length; off += 64) {
+    for (let i = 0; i < 16; i++) {
+      const j = off + i * 4;
+      w[i] = ((bytes[j] << 24) | (bytes[j + 1] << 16) | (bytes[j + 2] << 8) | bytes[j + 3]) >>> 0;
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (hh + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+      const S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) >>> 0;
+      hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+    h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
+  }
+  return h.map((x) => x.toString(16).padStart(8, "0")).join("");
+}
+
+// answerState: whether an ask card offers 1 Yes / No, and whether they are
+// live. Offered only when the server sent ask_full — it does so only for a
+// replyable, registry-blocked claude with exactly one pending call. Live only
+// while the card is expanded AND the command on screen is the one that was
+// expanded (seenAskFull): a prompt that changed underneath must be read again.
+function answerState(s, expanded, seenAskFull) {
+  const off = { show: false, enabled: false, title: "", note: "" };
+  const v = s || {};
+  if (v.need !== "ask" || !v.replyable) return off;
+  if (!v.ask_full) return { show: false, enabled: false, title: "", note: "Answer this one in the terminal — the full prompt can't be shown here." };
+  if (!expanded) return { show: true, enabled: false, title: "Expand to see the full command first", note: "" };
+  if (seenAskFull !== v.ask_full) return { show: true, enabled: false, title: "The prompt changed — collapse and expand to review it", note: "" };
+  return { show: true, enabled: true, title: "", note: "" };
+}
+
+// answerErrorText: the toast for a refused answer. The two 409s differ: the
+// server names a changed prompt ("the prompt changed") vs. one that is gone.
+function answerErrorText(status, errMsg) {
+  if (status === 409) return /changed/.test(errMsg || "") ? "The prompt changed — review it again" : "The session is no longer waiting on a prompt.";
+  if (status === 429) return "Too soon — try again in a second.";
+  if (status === 403) return "Replies are not enabled for this session.";
+  if (status === 404 || status === 410) return "That session is gone.";
+  if (status === 0) return "Answer failed: no connection.";
+  return "Answer failed (" + status + ").";
+}
+
+// staleExpanded: whether an expanded needs-you card's state (its cardExpanded
+// membership and cached peek/ask_full text) must be dropped on this poll —
+// pulled out of refreshSessions's pruning loop so it is directly testable. `s`
+// is the session's CURRENT record, or undefined/null if it vanished from the
+// list entirely; `seenAskFull` is whatever cardAskSeen recorded for this id
+// when the card was expanded (undefined if nothing was ever recorded for it).
+// A session that vanished or stopped waiting is always stale. Otherwise, a
+// recorded seenAskFull that no longer matches the session's current ask_full
+// means the prompt underneath changed since the operator expanded the card —
+// including a turn card that just became an ask (seenAskFull was "" then) —
+// and it must collapse so the new prompt gets read again before Yes/No unlock.
+function staleExpanded(s, seenAskFull) {
+  if (!s || s.activity !== "waiting") return true;
+  if (seenAskFull === undefined) return false;
+  return (s.ask_full || "") !== seenAskFull;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
-    notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll };
+    notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
+    sha256Hex, answerState, answerErrorText, staleExpanded };
 }

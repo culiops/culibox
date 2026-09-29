@@ -259,7 +259,7 @@ class Cell {
       if (t.kind === "terminal") {
         const kill = document.createElement("button");
         kill.className = "tab-kill"; kill.textContent = "⏻";
-        kill.title = "Kill session (ends the agent)";
+        kill.title = "End session (ends the agent)";
         kill.onclick = (e) => { e.stopPropagation(); confirmKill(t.id, t.title()); };
         b.append(kill);
       }
@@ -375,6 +375,16 @@ function buildReplyStrip(tab) {
   send.className = "btn pri";
   send.textContent = "send";
   strip.append(fld, send);
+  // The strip's reason lives in a title nobody reads before clicking; when it
+  // is the missing opt-in, offer the fix itself.
+  const enable = buildEnableRepliesButton(tab.id, () => {
+    // Focus only once the re-gate (refreshSessions, run synchronously inside
+    // buildEnableRepliesButton's onclick before this callback fires) has
+    // actually opened the field — a session that stopped waiting or entered a
+    // tool call in the meantime must not receive a focused-but-disabled input.
+    if (!fld.disabled) fld.focus();
+  });
+  strip.appendChild(enable);
 
   // knownPending tracks the most recently observed /peek "pending" flag (a
   // tool call in flight). It starts false — the common case — and is
@@ -410,6 +420,7 @@ function buildReplyStrip(tab) {
     fld.classList.toggle("off", closed);
     send.classList.toggle("off", closed);
     send.title = st.reason;
+    enable.hidden = !offerEnableReplies(s);
     for (const b of digitBtns) {
       b.disabled = closed;
       b.classList.toggle("off", closed);

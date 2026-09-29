@@ -3,11 +3,13 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -36,6 +38,18 @@ type mockSvc struct {
 	sendMessageID   string
 	sendMessageV    string
 	sendMessageErr  error
+
+	spawnedPrompt    string
+	spawnedReplyable *bool
+	interruptID      string
+	interruptErr     error
+	answerID         string
+	answerChoice     string
+	answerSHA        string
+	answerErr        error
+	restartID        string
+	restartInfo      session.Info
+	restartErr       error
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -43,6 +57,8 @@ func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedCwd = s.Cwd
 	m.spawnedOptions = s.Options
 	m.spawnedRuntime = s.Runtime
+	m.spawnedPrompt = s.Prompt
+	m.spawnedReplyable = s.Replyable
 	if m.spawnErr != nil {
 		return session.Info{}, m.spawnErr
 	}
@@ -82,6 +98,15 @@ func (m *mockSvc) SetReplyable(id string, v bool) error {
 func (m *mockSvc) SendMessage(id, text string) error {
 	m.sendMessageID, m.sendMessageV = id, text
 	return m.sendMessageErr
+}
+func (m *mockSvc) Interrupt(id string) error { m.interruptID = id; return m.interruptErr }
+func (m *mockSvc) Answer(id, choice, sha string) error {
+	m.answerID, m.answerChoice, m.answerSHA = id, choice, sha
+	return m.answerErr
+}
+func (m *mockSvc) Restart(id string) (session.Info, error) {
+	m.restartID = id
+	return m.restartInfo, m.restartErr
 }
 
 func TestAPI_Attribution(t *testing.T) {
@@ -558,5 +583,260 @@ func TestAPI_ListCarriesNeedOnlyWhenSet(t *testing.T) {
 	}
 	if got[1]["activity"] != "idle" {
 		t.Errorf("activity=%v want idle on the wire", got[1]["activity"])
+	}
+}
+
+// postReq builds a same-origin JSON POST to path.
+func postReq(path, body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	return r
+}
+
+func crossSiteReq(path, body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	return r
+}
+
+func TestSpawnForwardsPromptAndReplyable(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "claude-1"}}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w","prompt":"fix the build","replyable":true}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code %d body %s", rec.Code, rec.Body)
+	}
+	if svc.spawnedPrompt != "fix the build" || svc.spawnedReplyable == nil || !*svc.spawnedReplyable {
+		t.Fatalf("prompt=%q replyable=%v", svc.spawnedPrompt, svc.spawnedReplyable)
+	}
+	svc = &mockSvc{}
+	a = &API{Sessions: svc}
+	a.handleSessions(httptest.NewRecorder(), postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
+	if svc.spawnedReplyable != nil {
+		t.Fatal("an absent replyable must reach the launcher as nil (profile default)")
+	}
+}
+
+func TestSpawnPromptRefusalsAreShown(t *testing.T) {
+	for _, e := range []error{
+		fmt.Errorf("%w: it is empty", launcher.ErrBadPrompt),
+		launcher.ErrPromptUnsupported,
+	} {
+		a := &API{Sessions: &mockSvc{spawnErr: e}}
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, postReq("/api/sessions", `{"agent":"bash","prompt":"x y"}`))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), e.Error()) {
+			t.Errorf("%v: code %d body %s", e, rec.Code, rec.Body)
+		}
+	}
+}
+
+// TestSpawnErrHidesDetailByDefault is writeSpawnErr's hide-the-detail branch:
+// the one a regression could silently defeat by switching to err.Error(),
+// leaking a secret name, a binary path, or the box-start cwd into the 400
+// body. Pins the body to EXACTLY the generic message, not just "doesn't
+// contain the secret" (a partial leak would still pass a looser check).
+func TestSpawnErrHidesDetailByDefault(t *testing.T) {
+	leaky := errors.New(`launcher: resolving secret "DB_PASSWORD": open /etc/agent-box/secrets/db: permission denied`)
+	a := &API{Sessions: &mockSvc{spawnErr: leaky}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"error":"could not start session"}`+"\n" {
+		t.Fatalf("body = %q, want exactly the generic message — no secret name, path, or detail", got)
+	}
+}
+
+// TestSpawnErrShowsUnboxableWorkspace is writeSpawnErr's one actionable
+// exception: a wrapped box.ErrUnboxableWorkspace's own message (which names
+// the cwd the caller just supplied) must reach the client.
+func TestSpawnErrShowsUnboxableWorkspace(t *testing.T) {
+	wrapped := fmt.Errorf("%w: /home/op (is $HOME). Pick a project directory, "+
+		`or choose "Run on trusted host" to run it uncontained on purpose`, box.ErrUnboxableWorkspace)
+	a := &API{Sessions: &mockSvc{spawnErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/home/op"}`))
+	var got struct {
+		Error string `json:"error"`
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got.Error != wrapped.Error() {
+		t.Fatalf("error = %q, want the unboxable-workspace detail %q", got.Error, wrapped.Error())
+	}
+}
+
+// TestRestartErrHidesDetailByDefault: /restart's unrecognised-error branch
+// also goes through writeSpawnErr (see the brief's "(restart <id>)" agent
+// label) — same hide-the-detail contract applies there too.
+func TestRestartErrHidesDetailByDefault(t *testing.T) {
+	leaky := errors.New(`launcher: resolving secret "DB_PASSWORD": open /etc/agent-box/secrets/db: permission denied`)
+	a := &API{Sessions: &mockSvc{restartErr: leaky}}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, postReq("/api/sessions/claude-3/restart", ""))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if got := rec.Body.String(); got != `{"error":"could not start session"}`+"\n" {
+		t.Fatalf("body = %q, want exactly the generic message — no secret name, path, or detail", got)
+	}
+}
+
+// TestRestartErrShowsUnboxableWorkspace: the same actionable exception on the
+// restart path (a restarted session can hit an unboxable cwd too, e.g. the
+// workspace was replaced by a symlink since the original spawn).
+func TestRestartErrShowsUnboxableWorkspace(t *testing.T) {
+	wrapped := fmt.Errorf("%w: /home/op (is $HOME). Pick a project directory, "+
+		`or choose "Run on trusted host" to run it uncontained on purpose`, box.ErrUnboxableWorkspace)
+	a := &API{Sessions: &mockSvc{restartErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, postReq("/api/sessions/claude-3/restart", ""))
+	var got struct {
+		Error string `json:"error"`
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got.Error != wrapped.Error() {
+		t.Fatalf("error = %q, want the unboxable-workspace detail %q", got.Error, wrapped.Error())
+	}
+}
+
+func TestInterruptEndpoint(t *testing.T) {
+	cases := []struct {
+		err  error
+		code int
+	}{
+		{nil, http.StatusNoContent},
+		{session.ErrNoSession, http.StatusNotFound},
+		{session.ErrNotLive, http.StatusConflict},
+		{session.ErrBinUnresolved, http.StatusConflict},
+		{session.ErrTooSoon, http.StatusTooManyRequests},
+		{errors.New("write /dev/ptmx: input/output error"), http.StatusGone},
+	}
+	for _, c := range cases {
+		svc := &mockSvc{interruptErr: c.err}
+		rec := httptest.NewRecorder()
+		(&API{Sessions: svc}).handleSession(rec, postReq("/api/sessions/x-1/interrupt", ""))
+		if rec.Code != c.code || svc.interruptID != "x-1" {
+			t.Errorf("err %v: code %d want %d (id %q)", c.err, rec.Code, c.code, svc.interruptID)
+		}
+		// The 410 catch-all must not leak the raw write error (a PTY path, an
+		// errno string) into the client-facing body.
+		if c.code == http.StatusGone && strings.Contains(rec.Body.String(), "ptmx") {
+			t.Errorf("err %v: 410 body leaked the raw write error: %s", c.err, rec.Body)
+		}
+	}
+	rec := httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}}).handleSession(rec, crossSiteReq("/api/sessions/x-1/interrupt", ""))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site: %d want 403", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}}).handleSession(rec, httptest.NewRequest(http.MethodGet, "/api/sessions/x-1/interrupt", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: %d want 405", rec.Code)
+	}
+}
+
+func TestAnswerEndpoint(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	body := `{"choice":"yes","ask_sha256":"` + sha + `"}`
+	cases := []struct {
+		err  error
+		code int
+	}{
+		{nil, http.StatusNoContent},
+		{session.ErrBadChoice, http.StatusBadRequest},
+		{session.ErrNoSession, http.StatusNotFound},
+		{session.ErrNotClaude, http.StatusForbidden},
+		{session.ErrNotReplyable, http.StatusForbidden},
+		{session.ErrNotLive, http.StatusConflict},
+		{session.ErrNotBlocked, http.StatusConflict},
+		{session.ErrPromptChanged, http.StatusConflict},
+		{session.ErrTooSoon, http.StatusTooManyRequests},
+		{errors.New("write: broken pipe"), http.StatusGone},
+	}
+	for _, c := range cases {
+		svc := &mockSvc{answerErr: c.err}
+		rec := httptest.NewRecorder()
+		(&API{Sessions: svc}).handleSession(rec, postReq("/api/sessions/x-1/answer", body))
+		if rec.Code != c.code {
+			t.Errorf("err %v: code %d want %d", c.err, rec.Code, c.code)
+		}
+		if svc.answerID != "x-1" || svc.answerChoice != "yes" || svc.answerSHA != sha {
+			t.Errorf("not forwarded: %q %q %q", svc.answerID, svc.answerChoice, svc.answerSHA)
+		}
+		// The 410 catch-all must not leak the raw write error into the body.
+		if c.code == http.StatusGone && strings.Contains(rec.Body.String(), "broken pipe") {
+			t.Errorf("err %v: 410 body leaked the raw write error: %s", c.err, rec.Body)
+		}
+	}
+	if !strings.Contains(func() string {
+		rec := httptest.NewRecorder()
+		(&API{Sessions: &mockSvc{answerErr: session.ErrPromptChanged}}).handleSession(rec, postReq("/api/sessions/x-1/answer", body))
+		return rec.Body.String()
+	}(), "prompt changed") {
+		t.Error("the 409 body must name the prompt change (the client words its toast on it)")
+	}
+	for _, bad := range []string{
+		`{"choice":"yes","ask_sha256":"` + strings.ToUpper(sha) + `"}`, // not lowercase
+		`{"choice":"yes","ask_sha256":"abc"}`,
+		`{"choice":"yes"}`,
+		`{not json`,
+		`{"choice":"yes","ask_sha256":"` + sha + `","pad":"` + strings.Repeat("x", 1100) + `"}`, // over the 1 KiB cap
+	} {
+		svc := &mockSvc{}
+		rec := httptest.NewRecorder()
+		(&API{Sessions: svc}).handleSession(rec, postReq("/api/sessions/x-1/answer", bad))
+		if rec.Code != http.StatusBadRequest || svc.answerID != "" {
+			t.Errorf("%.40s: code %d (forwarded=%q), want 400 and not forwarded", bad, rec.Code, svc.answerID)
+		}
+	}
+	rec := httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}}).handleSession(rec, crossSiteReq("/api/sessions/x-1/answer", body))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site: %d want 403", rec.Code)
+	}
+}
+
+func TestRestartEndpoint(t *testing.T) {
+	svc := &mockSvc{restartInfo: session.Info{ID: "claude-9", Name: "api"}}
+	rec := httptest.NewRecorder()
+	(&API{Sessions: svc}).handleSession(rec, postReq("/api/sessions/claude-3/restart", ""))
+	if rec.Code != http.StatusCreated || svc.restartID != "claude-3" || !strings.Contains(rec.Body.String(), `"claude-9"`) {
+		t.Fatalf("code %d id %q body %s", rec.Code, svc.restartID, rec.Body)
+	}
+	for _, c := range []struct {
+		err  error
+		code int
+	}{
+		{session.ErrNoSession, http.StatusNotFound},
+		{session.ErrNotExited, http.StatusConflict},
+		{session.ErrRestarting, http.StatusConflict},
+		{errors.New("launcher: unknown agent"), http.StatusBadRequest},
+	} {
+		rec := httptest.NewRecorder()
+		(&API{Sessions: &mockSvc{restartErr: c.err}}).handleSession(rec, postReq("/api/sessions/claude-3/restart", ""))
+		if rec.Code != c.code {
+			t.Errorf("err %v: code %d want %d", c.err, rec.Code, c.code)
+		}
+	}
+	rec = httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}}).handleSession(rec, crossSiteReq("/api/sessions/claude-3/restart", ""))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site: %d want 403", rec.Code)
 	}
 }

@@ -234,7 +234,7 @@ func TestLocateMissingTranscriptBlocksWithoutPeek(t *testing.T) {
 }
 
 func TestLocateRejectsTraversalSessionID(t *testing.T) {
-	for _, sid := range []string{"../../../etc/passwd", "", strings.Repeat("a", 300), "a/b", "a b"} {
+	for _, sid := range []string{"../../../etc/passwd", "", strings.Repeat("a", 300), "a/b", "a b", "-abcd", "-p"} {
 		m, home := newLocatorManager(t)
 		writeReg(t, home, 101, regJSON(101, sid, "5000", "idle"))
 		if l := m.locate("s1"); l.reg != nil {

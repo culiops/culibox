@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -93,17 +93,17 @@ test("sessionMeta drops empty segments instead of leaving separators", () => {
 // "End session…" is always last and always the only dangerous one.
 test("menuItems offers the full list for a claude session with a cwd", () => {
   const ids = menuItems({ claude: true, cwd: "/home/x" }).map((i) => i.id);
-  assert.deepEqual(ids, ["rename", "files", "attribution", "copycwd", "newpane", "end"]);
+  assert.deepEqual(ids, ["rename", "files", "attribution", "copycwd", "newpane", "replies-on", "duplicate", "end"]);
 });
 
 test("menuItems drops context-by-tool for a non-claude session", () => {
   const ids = menuItems({ claude: false, cwd: "/home/x" }).map((i) => i.id);
-  assert.deepEqual(ids, ["rename", "files", "copycwd", "newpane", "end"]);
+  assert.deepEqual(ids, ["rename", "files", "copycwd", "newpane", "duplicate", "end"]);
 });
 
 test("menuItems drops the directory actions when there is no cwd", () => {
   const ids = menuItems({ claude: true }).map((i) => i.id);
-  assert.deepEqual(ids, ["rename", "attribution", "newpane", "end"]);
+  assert.deepEqual(ids, ["rename", "attribution", "newpane", "replies-on", "duplicate", "end"]);
 });
 
 test("menuItems always ends with the one dangerous item", () => {
@@ -131,4 +131,52 @@ test("jumpTarget returns null for anything out of range", () => {
   assert.equal(jumpTarget(1, []), null);
   assert.equal(jumpTarget(1, null), null);
   assert.equal(jumpTarget(NaN, list), null);
+});
+
+test("canInterrupt: live only; a claude only while it has a turn to stop", () => {
+  assert.strictEqual(canInterrupt({ status: "live", claude: false, activity: "idle" }), true); // a shell's quiet `sleep`
+  assert.strictEqual(canInterrupt({ status: "live", claude: true, activity: "working" }), true);
+  assert.strictEqual(canInterrupt({ status: "live", claude: true, activity: "waiting", need: "ask" }), true);
+  // Esc on an idle claude prompt does nothing useful, and a second one opens rewind.
+  assert.strictEqual(canInterrupt({ status: "live", claude: true, activity: "waiting", need: "turn" }), false);
+  assert.strictEqual(canInterrupt({ status: "live", claude: true, activity: "idle" }), false);
+  assert.strictEqual(canInterrupt({ status: "exited", claude: false }), false);
+  assert.strictEqual(canInterrupt({ status: "detached", claude: false }), false);
+  assert.strictEqual(canInterrupt(null), false);
+});
+
+test("menuItems adds the control actions per session state", () => {
+  const ids = (s) => menuItems(s).map((i) => i.id);
+  assert.deepStrictEqual(ids({ claude: true, status: "live", activity: "working", replyable: true, cwd: "/x" }),
+    ["rename", "files", "attribution", "copycwd", "newpane", "interrupt", "replies-off", "duplicate", "end"]);
+  assert.deepStrictEqual(ids({ claude: false, status: "live", activity: "idle" }),
+    ["rename", "newpane", "interrupt", "duplicate", "end"]);
+  const exited = menuItems({ claude: true, status: "exited", exited: true, activity: "done", resumable: true });
+  assert.deepStrictEqual(exited.map((i) => i.id), ["rename", "attribution", "newpane", "restart", "duplicate", "end"]);
+  assert.strictEqual(exited.find((i) => i.id === "restart").label, "Restart (resume conversation)");
+  assert.strictEqual(menuItems({ status: "exited", exited: true }).find((i) => i.id === "restart").label, "Restart");
+  assert.strictEqual(menuItems({ claude: true }).find((i) => i.id === "duplicate").label, "Duplicate…");
+});
+
+test("paletteActionItems: the focused session's commands, labels without the ellipsis", () => {
+  const items = paletteActionItems({ claude: true, status: "live", activity: "working", replyable: false, cwd: "/x" });
+  assert.deepStrictEqual(items.map((i) => i.id), ["interrupt", "rename", "replies-on", "duplicate", "newpane"]);
+  assert.deepStrictEqual(items.map((i) => i.label), ["Interrupt", "Rename", "Allow replies", "Duplicate", "Open in new pane"]);
+  const exited = paletteActionItems({ status: "exited", exited: true });
+  assert.ok(!exited.some((i) => i.id === "interrupt"));
+  assert.ok(exited.some((i) => i.id === "restart"));
+  assert.ok(!paletteActionItems({}).some((i) => i.id === "end"), "End session has its own palette row");
+});
+
+test("actionFailText words each failure", () => {
+  assert.match(actionFailText("interrupt", 409), /not running/);
+  assert.match(actionFailText("restart", 409), /ended session/);
+  assert.match(actionFailText("restart", 404), /gone/);
+  assert.match(actionFailText("interrupt", 0), /no connection/i);
+  assert.match(actionFailText("interrupt", 500), /500/);
+});
+
+test("actionFailText: 429 (ErrTooSoon) gets its own text for any action", () => {
+  assert.strictEqual(actionFailText("interrupt", 429), "Too soon — try again in a second.");
+  assert.strictEqual(actionFailText("restart", 429), "Too soon — try again in a second.");
 });

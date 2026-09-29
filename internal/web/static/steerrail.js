@@ -409,7 +409,20 @@ function renderMsgSection(s) {
   form.append(input, send);
   const note = document.createElement("p");
   note.className = "note";
+  // "Enable replies for this session first." names a fix: offer it right here.
+  // Built only for a claude session — belt-and-braces alongside
+  // offerEnableReplies' own s.claude check (buildReplyStrip's early return is
+  // the same guard for the pane strip): a non-claude session's reply box can
+  // never be enabled on the server, so its composer gets no such button at all.
+  const enable = s.claude ? buildEnableRepliesButton(s.id, () => {
+    // Focus only once the re-gate (refreshSessions, run synchronously inside
+    // buildEnableRepliesButton's onclick before this callback fires) has
+    // actually opened the field — a session that stopped waiting or entered a
+    // tool call in the meantime must not receive a focused-but-disabled input.
+    if (!input.disabled) input.focus();
+  }) : null;
   kids.push(form, note);
+  if (enable) kids.push(enable);
   el.replaceChildren(...kids);
   // The id the poll's repaint checks before it re-gates these controls.
   el.dataset.sid = s.id;
@@ -445,6 +458,7 @@ function renderMsgSection(s) {
     input.placeholder = closed ? "reply opens when this session stops" : "reply…";
     note.textContent = closed ? (st.reason || "Sending…") : "";
     note.hidden = !closed;
+    if (enable) enable.hidden = !offerEnableReplies(now);
   };
   refresh();
   el._refresh = refresh;

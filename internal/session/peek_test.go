@@ -255,29 +255,51 @@ func TestPeekForCachesUntilMtimeChanges(t *testing.T) {
 	if p, _ := m.PeekFor("s1"); p.Text != "first" {
 		t.Fatalf("Text=%q want %q", p.Text, "first")
 	}
-	// Rewrite the content but pin the OLD mtime: a cache keyed on mtime must
-	// still serve the first read.
+	// Rewrite the content, pin the OLD mtime, but keep the SAME byte length:
+	// with mtime and size both unchanged the cache key is a hit and the
+	// stale parse is served — the one shape this cache still cannot see
+	// through (a coarse mtime AND a same-size edit, both at once).
 	fi, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	next := `{"message":{"role":"assistant","content":[{"type":"text","text":"second"}]}}` + "\n"
-	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+	sameSize := `{"message":{"role":"assistant","content":[{"type":"text","text":"fifth"}]}}` + "\n"
+	if len(sameSize) != len(body) {
+		t.Fatalf("test setup: sameSize must match body's byte length (%d vs %d)", len(sameSize), len(body))
+	}
+	if err := os.WriteFile(path, []byte(sameSize), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(path, fi.ModTime(), fi.ModTime()); err != nil {
 		t.Fatal(err)
 	}
 	if p, _ := m.PeekFor("s1"); p.Text != "first" {
-		t.Errorf("Text=%q want cached %q", p.Text, "first")
+		t.Errorf("Text=%q want cached %q (same mtime, same size)", p.Text, "first")
 	}
-	// Now advance mtime: the cache must miss and re-read.
+	// Rewrite again, still at the SAME mtime, but this time with a DIFFERENT
+	// byte length — the coarse-mtime scenario this cache key must catch
+	// (fix, control-actions final wave). Size differing must miss the cache.
+	next := `{"message":{"role":"assistant","content":[{"type":"text","text":"second, and longer"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(next), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, fi.ModTime(), fi.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := m.PeekFor("s1"); p.Text != "second, and longer" {
+		t.Errorf("Text=%q want re-read %q (same mtime, size changed)", p.Text, "second, and longer")
+	}
+	// Now advance mtime too: the cache must miss and re-read.
 	later := fi.ModTime().Add(2 * time.Second)
+	final := `{"message":{"role":"assistant","content":[{"type":"text","text":"third"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(final), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chtimes(path, later, later); err != nil {
 		t.Fatal(err)
 	}
-	if p, _ := m.PeekFor("s1"); p.Text != "second" {
-		t.Errorf("Text=%q want re-read %q", p.Text, "second")
+	if p, _ := m.PeekFor("s1"); p.Text != "third" {
+		t.Errorf("Text=%q want re-read %q", p.Text, "third")
 	}
 }
 
