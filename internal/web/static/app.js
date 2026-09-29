@@ -1422,7 +1422,11 @@ function renderNeedsBody(s) {
     acts.appendChild(dis);
   }
   if (ans.show) {
-    for (const [choice, label] of [["yes", "1 Yes"], ["no", "No"]]) {
+    // Both buttons, built first and kept in `pair` — a click on either must
+    // disable BOTH synchronously (before the await inside sendAnswer), or the
+    // sibling stays clickable for the whole round trip and silently no-ops
+    // through the pendingAnswers latch instead of visibly going inert.
+    const pair = [["yes", "1 Yes"], ["no", "No"]].map(([choice, label]) => {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "btn";
@@ -1430,7 +1434,15 @@ function renderNeedsBody(s) {
       b.disabled = !ans.enabled || pendingAnswers.has(s.id);
       b.classList.toggle("off", b.disabled);
       if (ans.title) b.title = ans.title;
-      b.onclick = (e) => { e.stopPropagation(); b.disabled = true; sendAnswer(s, choice); };
+      b.dataset.choice = choice;
+      return b;
+    });
+    for (const b of pair) {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        for (const sib of pair) { sib.disabled = true; sib.classList.add("off"); }
+        sendAnswer(s, b.dataset.choice);
+      };
       acts.appendChild(b);
     }
   }
@@ -1748,6 +1760,13 @@ async function refreshSessions() {
   // and cleared by the input's own focus/blur), so the flag cannot have gone
   // stale between the check and the call: the check and the call are adjacent
   // statements with no await between them.
+  //
+  // A held list can briefly go on showing an ask card whose command already
+  // changed underneath it (the DOM rebuild that would collapse it — see
+  // staleExpanded above — is exactly what's being skipped); a stray Yes/No
+  // click on it is still safe, because sendAnswer hashes the STALE ask_full it
+  // has on hand and the server's own hash/memo gate (ask_sha256 mismatch ->
+  // 409) refuses it rather than answering the wrong prompt.
   const holdList = () => editing || replyFocused;
   let sessions;
   try { sessions = await api("/api/sessions"); }
@@ -1765,10 +1784,9 @@ async function refreshSessions() {
   if (cardExpanded.size) {
     const byId = new Map(lastSessions.map((s) => [s.id, s]));
     for (const id of Array.from(cardExpanded)) {
-      const s = byId.get(id);
-      const stale = !s || s.activity !== "waiting" ||
-        (cardAskSeen.has(id) && (s.ask_full || "") !== cardAskSeen.get(id));
-      if (stale) { cardExpanded.delete(id); cardPeekCache.delete(id); cardAskSeen.delete(id); }
+      if (staleExpanded(byId.get(id), cardAskSeen.get(id))) {
+        cardExpanded.delete(id); cardPeekCache.delete(id); cardAskSeen.delete(id);
+      }
     }
   }
   signalAttention();

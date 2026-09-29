@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText } = require("../static/attention.js");
+const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -163,6 +163,7 @@ test("answerState: Yes/No unlock only once the full command on screen was expand
 test("answerErrorText words each refusal", () => {
   assert.strictEqual(answerErrorText(409, "the prompt changed"), "The prompt changed — review it again");
   assert.match(answerErrorText(409, "session is not waiting on a prompt"), /no longer waiting/);
+  assert.match(answerErrorText(429, ""), /too soon/i);
   assert.match(answerErrorText(403, ""), /not enabled/);
   assert.match(answerErrorText(410, ""), /gone/);
   assert.match(answerErrorText(0, ""), /no connection/);
@@ -174,4 +175,29 @@ test("an ask card offers Enable replies when the claude session has not opted in
   assert.strictEqual(c.enableReplies, true);
   assert.strictEqual(c.reply, false);
   assert.strictEqual(cardContent({ activity: "waiting", need: "ask", ask: "Bash(x)", claude: true, replyable: true }).enableReplies, false);
+});
+
+test("staleExpanded: gone or no-longer-waiting is always stale", () => {
+  assert.strictEqual(staleExpanded(undefined, "Bash(x)"), true);
+  assert.strictEqual(staleExpanded(null, undefined), true);
+  assert.strictEqual(staleExpanded({ activity: "working", need: "ask", ask_full: "Bash(x)" }, "Bash(x)"), true);
+});
+
+test("staleExpanded: ask_full changed since expand is stale; unchanged is not", () => {
+  const s = { activity: "waiting", need: "ask", ask_full: "Bash(touch a)" };
+  assert.strictEqual(staleExpanded(s, "Bash(touch a)"), false);
+  assert.strictEqual(staleExpanded(s, "Bash(touch b)"), true);
+});
+
+test("staleExpanded: a turn card that gains an ask since expand is stale", () => {
+  // Expanded as a turn card (no ask_full to track, so cardAskSeen recorded
+  // ""); the very next poll shows the same session now needing an ask — the
+  // new prompt has not been read, so it must collapse.
+  const nowAsk = { activity: "waiting", need: "ask", ask_full: "Bash(rm -rf x)" };
+  assert.strictEqual(staleExpanded(nowAsk, ""), true);
+});
+
+test("staleExpanded: no seenAskFull recorded never stales on ask_full alone", () => {
+  const s = { activity: "waiting", need: "turn", summary: "done" };
+  assert.strictEqual(staleExpanded(s, undefined), false);
 });

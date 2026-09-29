@@ -212,14 +212,32 @@ function answerState(s, expanded, seenAskFull) {
 // server names a changed prompt ("the prompt changed") vs. one that is gone.
 function answerErrorText(status, errMsg) {
   if (status === 409) return /changed/.test(errMsg || "") ? "The prompt changed — review it again" : "The session is no longer waiting on a prompt.";
+  if (status === 429) return "Too soon — try again in a second.";
   if (status === 403) return "Replies are not enabled for this session.";
   if (status === 404 || status === 410) return "That session is gone.";
   if (status === 0) return "Answer failed: no connection.";
   return "Answer failed (" + status + ").";
 }
 
+// staleExpanded: whether an expanded needs-you card's state (its cardExpanded
+// membership and cached peek/ask_full text) must be dropped on this poll —
+// pulled out of refreshSessions's pruning loop so it is directly testable. `s`
+// is the session's CURRENT record, or undefined/null if it vanished from the
+// list entirely; `seenAskFull` is whatever cardAskSeen recorded for this id
+// when the card was expanded (undefined if nothing was ever recorded for it).
+// A session that vanished or stopped waiting is always stale. Otherwise, a
+// recorded seenAskFull that no longer matches the session's current ask_full
+// means the prompt underneath changed since the operator expanded the card —
+// including a turn card that just became an ask (seenAskFull was "" then) —
+// and it must collapse so the new prompt gets read again before Yes/No unlock.
+function staleExpanded(s, seenAskFull) {
+  if (!s || s.activity !== "waiting") return true;
+  if (seenAskFull === undefined) return false;
+  return (s.ask_full || "") !== seenAskFull;
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
-    sha256Hex, answerState, answerErrorText };
+    sha256Hex, answerState, answerErrorText, staleExpanded };
 }
