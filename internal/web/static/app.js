@@ -869,7 +869,7 @@ async function togglePeek(li, s) {
     const st2 = sendState({
       replyable: cb.checked,
       activity: s.activity,
-      pending: li.dataset.peekPending === "1",
+      pending: li.dataset.peekPending === "1" || s.need === "ask",
     });
     const closed = !st2.enabled || pendingSends.has(s.id);
     // Three things move together, deliberately. The dimmed look says closed,
@@ -1131,9 +1131,12 @@ function renderNeedsCard(s) {
   qk.className = "qk";
   // Same gate as the reply sheet and the desktop composer: a digit always
   // passes replyTextError, so sendState is the only client-side check that
-  // can close these. pending is unknowable from the session list (no /peek),
-  // so treat it as false — the server's canReply is the authoritative gate.
-  const cardSt = sendState({ replyable: s.replyable, pending: false, activity: s.activity });
+  // can close these. pending is otherwise unknowable from the session list
+  // (no /peek here) — except need === "ask", which /api/sessions carries for
+  // exactly this case (a claude session blocked on a permission prompt, which
+  // the server refuses a reply to). The server's canReply stays the
+  // authoritative gate either way.
+  const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity });
   for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
     const b = document.createElement("button");
     b.type = "button";
@@ -2637,7 +2640,7 @@ function openReplySheet(s) {
     // see the function-level comment above. sendState/replyTextError are the
     // exact same peek.js functions the desktop composer's own refresh() uses.
     function refresh() {
-      const st = sendState({ replyable: s.replyable, pending: pendingNow, activity: s.activity });
+      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
       const errCode = replyTextError(ta.value);
       const gateClosed = !st.enabled;
       // The quick replies are controls too — a session that is not
@@ -2671,7 +2674,7 @@ function openReplySheet(s) {
     // blocks a second one from the sheet too.
     function doSend(text) {
       if (pendingSends.has(s.id)) return; // a second tap while the first is still in flight
-      const st = sendState({ replyable: s.replyable, pending: pendingNow, activity: s.activity });
+      const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
       if (!st.enabled || replyTextError(text)) { refresh(); return; } // the note already explains why
       pendingSends.add(s.id);
       send.disabled = true;

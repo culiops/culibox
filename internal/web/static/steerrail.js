@@ -430,10 +430,13 @@ function renderMsgSection(s) {
   // that stopped working three seconds ago would keep a closed reply box.
   const refresh = (cur) => {
     const now = cur || s;
-    // pending is false because the rail does not fetch /peek. POST /message
-    // re-checks it server-side and answers 409, which the mapping below names:
-    // the gate is at the server, and the note says what the server said.
-    const st = sendState({ replyable: now.replyable, activity: now.activity, pending: false });
+    // The rail does not fetch /peek, so pending is otherwise unknowable here —
+    // except for need === "ask": a claude session blocked on a permission
+    // prompt redraws its own tool call, so it still LOOKS "waiting" with no
+    // /peek, and the server refuses a reply to it (409). Treating that one
+    // case as pending keeps this gate honest without a fetch; POST /message
+    // re-checks server-side either way, and the note says what the server said.
+    const st = sendState({ replyable: now.replyable, activity: now.activity, pending: now.need === "ask" });
     const closed = !st.enabled || (typeof pendingSends !== "undefined" && pendingSends.has(s.id));
     input.disabled = closed;
     send.disabled = closed;
