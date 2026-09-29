@@ -37,7 +37,7 @@ func projectSlug(cwd string) string { return slugNonAlnum.ReplaceAllString(cwd, 
 // agent that writes the ~/.claude/projects transcripts this reads. Gating on it
 // stops a shell (or codex) in a cwd that ALSO has claude history from being
 // mislabelled with that history's usage.
-func isClaudeBin(bin string) bool { return bin != "" && filepath.Base(bin) == "claude" }
+func isClaudeBin(bin string) bool { return launcher.IsClaudeBin(bin) }
 
 // isAgentBin reports whether a resolved binary is an interactive coding agent
 // whose silence can mean "your turn". Anything else (a shell, a REPL) that goes

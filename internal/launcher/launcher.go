@@ -5,13 +5,17 @@
 package launcher
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/secrets"
@@ -24,12 +28,80 @@ type SpawnSpec struct {
 	Cwd     string
 	Options map[string]any // per-spawn option overrides (profile keys only)
 	Runtime string         // "" = use the agent's setting; box|host otherwise
+	// Prompt is the agent's first message. Claude only (AcceptsPrompt),
+	// validated by ValidatePrompt, and appended LAST after a "--": a prompt
+	// can never be read as a flag, nor be swallowed by a variadic one.
+	Prompt string
+	// Resume continues a claude conversation (`--resume <id>`). Set only by
+	// the session layer's Restart; must look like a session id.
+	Resume string
+	// Replyable overrides the profile's reply default; nil = the default.
+	// Read by ReplyableFor, never by Build.
+	Replyable *bool
+	// ExtraArgs are flags the session layer adds (the boxed config bundle's).
+	// Build places them after the option flags and BEFORE the "--" that ends
+	// options — appended afterwards, they would become operands.
+	ExtraArgs []string
 }
 
 // Builder composes argv + env for a spawn.
 type Builder interface {
 	Build(spec SpawnSpec) (argv []string, env []string, err error)
 }
+
+// First-message and resume refusals. The messages name only a reason, never
+// the text: they are returned to the API caller and logged.
+var (
+	ErrBadPrompt         = errors.New("invalid first message")
+	ErrPromptUnsupported = errors.New("this profile's agent does not accept a first message")
+	ErrBadResume         = errors.New("launcher: invalid resume session id")
+)
+
+// maxPromptBytes caps a first message. It travels in argv (visible to
+// same-uid processes, bounded by ARG_MAX) and is typed by a human.
+const maxPromptBytes = 8 << 10
+
+// oneWordRe matches a prompt that is a single bare word. Measured on Claude
+// Code 2.1.284: `claude -- doctor` runs the doctor SUBCOMMAND ("--" does not
+// stop subcommand dispatch), so a one-word first message could run update,
+// doctor, mcp, … instead of starting a chat.
+var oneWordRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+// resumeIDRe mirrors session.sessionIDRe: a uuid-ish token, nothing a shell
+// or a path could misread.
+var resumeIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+
+// ValidatePrompt accepts a first message: non-empty once trimmed, at most
+// maxPromptBytes, valid UTF-8, no control characters except newline and tab,
+// and more than one bare word.
+func ValidatePrompt(p string) error {
+	t := strings.TrimSpace(p)
+	switch {
+	case t == "":
+		return fmt.Errorf("%w: it is empty", ErrBadPrompt)
+	case len(t) > maxPromptBytes:
+		return fmt.Errorf("%w: it is longer than 8 KiB", ErrBadPrompt)
+	case !utf8.ValidString(t):
+		return fmt.Errorf("%w: it is not valid UTF-8", ErrBadPrompt)
+	}
+	for _, r := range t {
+		if r != '\n' && r != '\t' && unicode.IsControl(r) {
+			return fmt.Errorf("%w: it contains a control character", ErrBadPrompt)
+		}
+	}
+	if oneWordRe.MatchString(t) {
+		return fmt.Errorf("%w: a single word can be read as a claude subcommand — add a few more words", ErrBadPrompt)
+	}
+	return nil
+}
+
+// IsClaudeBin is THE claude test (the session package delegates to it).
+func IsClaudeBin(bin string) bool { return bin != "" && filepath.Base(bin) == "claude" }
+
+// AcceptsPrompt reports whether an agent binary takes a first message in
+// argv. Claude only: codex could not be measured (not installed), and a
+// refusal is the safe answer for an unmeasured CLI.
+func AcceptsPrompt(bin string) bool { return IsClaudeBin(bin) }
 
 // claudeSessionEnvBlocklist: Claude Code session-identity vars that make a
 // spawned `claude` behave as a nested child session. Stripped from every base.
@@ -148,6 +220,21 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	if !ok {
 		return nil, nil, fmt.Errorf("launcher: unknown agent %q", spec.Agent)
 	}
+
+	// Validate the first message and the resume id BEFORE anything reads a
+	// secret: a refusal must not cost a secret lookup.
+	if spec.Prompt != "" {
+		if !AcceptsPrompt(cfg.Bin) {
+			return nil, nil, ErrPromptUnsupported
+		}
+		if err := ValidatePrompt(spec.Prompt); err != nil {
+			return nil, nil, err
+		}
+	}
+	if spec.Resume != "" && (!IsClaudeBin(cfg.Bin) || !resumeIDRe.MatchString(spec.Resume)) {
+		return nil, nil, ErrBadResume
+	}
+
 	boxed := spec.Runtime == config.RuntimeBox ||
 		(spec.Runtime == "" && l.tierOf(cfg) == config.RuntimeBox)
 
@@ -190,6 +277,16 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	// post-quote — that would be an injection vector).
 	cmd := append([]string{cfg.Bin}, cfg.Args...)
 	cmd = l.applyOptionFlags(opts, cmd)
+	if spec.Resume != "" {
+		cmd = append(cmd, "--resume", spec.Resume)
+	}
+	cmd = append(cmd, spec.ExtraArgs...)
+	// "--" then the prompt, LAST: options end here, so the prompt is one
+	// operand whatever it starts with (see ValidatePrompt for the one case
+	// "--" cannot cover).
+	if p := strings.TrimSpace(spec.Prompt); p != "" {
+		cmd = append(cmd, "--", p)
+	}
 
 	argv, err := l.argv(cfg, cmd, env["PATH"], boxed)
 	if err != nil {
@@ -199,24 +296,62 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 }
 
 // mergeOptions layers per-spawn overrides over the profile's option defaults,
-// keeping only keys the profile actually exposes.
+// keeping only overrides acceptOverride allows.
 func (l *AgentLauncher) mergeOptions(cfg config.AgentConfig, spec SpawnSpec) map[string]any {
 	merged := make(map[string]any, len(cfg.Options))
 	for k, v := range cfg.Options {
 		merged[k] = v
 	}
 	for k, v := range spec.Options {
-		if _, ok := cfg.Options[k]; !ok {
-			continue // option not exposed by this profile → ignore
-		}
-		// Accept the override only if it's a valid value for the option's type;
-		// otherwise keep the (config-validated) profile default. An untrusted
-		// enum value never reaches the command.
-		if def, ok := l.optionDefs[k]; ok && validOptionValue(def, v) {
+		if l.acceptOverride(cfg, k, v) {
 			merged[k] = v
 		}
 	}
 	return merged
+}
+
+// acceptOverride is the one rule for a per-spawn option override: the profile
+// exposes the key, and the value is valid for its type. An untrusted enum
+// value never reaches the command.
+func (l *AgentLauncher) acceptOverride(cfg config.AgentConfig, k string, v any) bool {
+	if _, ok := cfg.Options[k]; !ok {
+		return false
+	}
+	def, ok := l.optionDefs[k]
+	return ok && validOptionValue(def, v)
+}
+
+// AcceptedOptions returns the overrides Build would apply for spec — what a
+// restart must re-apply. nil when there are none.
+func (l *AgentLauncher) AcceptedOptions(spec SpawnSpec) map[string]any {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return nil
+	}
+	var out map[string]any
+	for k, v := range spec.Options {
+		if l.acceptOverride(cfg, k, v) {
+			if out == nil {
+				out = map[string]any{}
+			}
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// ReplyableFor is the reply opt-in a new session starts with: the per-spawn
+// override when given, else the profile default — and never for a non-claude
+// agent, whose sessions have no reply path at all.
+func (l *AgentLauncher) ReplyableFor(spec SpawnSpec) bool {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok || !IsClaudeBin(cfg.Bin) {
+		return false
+	}
+	if spec.Replyable != nil {
+		return *spec.Replyable
+	}
+	return cfg.Replyable
 }
 
 func validOptionValue(def config.OptionDef, v any) bool {
