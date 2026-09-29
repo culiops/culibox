@@ -11,6 +11,14 @@ test("mobileActive is true at and below 700, false above", () => {
   assert.equal(m.mobileActive(1440), false);
 });
 
+// U8: the matchMedia() breakpoint listener's query must be derived from
+// MOBILE_MAX_PX, not a second hard-coded "700" that could drift from it or
+// from the CSS's own @media (max-width: 700px).
+test("mobileMediaQuery is built from MOBILE_MAX_PX", () => {
+  assert.equal(m.mobileMediaQuery(), "(max-width: " + m.MOBILE_MAX_PX + "px)");
+  assert.equal(m.mobileMediaQuery(), "(max-width: 700px)");
+});
+
 test("loadScreen keeps a known screen, degrades unknown/empty to sessions", () => {
   assert.equal(m.loadScreen("terminal"), "terminal");
   assert.equal(m.loadScreen("files"), "files");
@@ -63,4 +71,19 @@ test("sessionGroups partitions into needs-you / running / idle and drops empties
 test("sessionGroups omits a group with no members", () => {
   const g = m.sessionGroups([{ id: "a", status: "working" }], (s) => s.status);
   assert.deepEqual(g.map((x) => x.key), ["running"]);
+});
+
+// I1: mobile has no un-maximize control, so the grid must ignore a persisted
+// `maximized` cell while mobile is active — but must still honour it on
+// desktop, where the ❐ control lives and restore-on-refresh is the point.
+test("effectiveMaximized: mobile always sees no maximized cell", () => {
+  const cell = { id: "c1" };
+  assert.equal(m.effectiveMaximized(cell, true), null);
+  assert.equal(m.effectiveMaximized(null, true), null);
+});
+
+test("effectiveMaximized: desktop passes the maximized cell through unchanged", () => {
+  const cell = { id: "c1" };
+  assert.equal(m.effectiveMaximized(cell, false), cell);
+  assert.equal(m.effectiveMaximized(null, false), null);
 });

@@ -888,8 +888,27 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	submitted := spec.Prompt != ""
 
 	created := time.Now()
-	name := deriveName(spec.Name, spec.Cwd, id)
+	base := deriveName(spec.Name, spec.Cwd, id)
 	m.mu.Lock()
+	// Uniqueness is resolved in the SAME critical section that inserts
+	// m.sessions[id] below, so two concurrent spawns can never both win the
+	// same label. A session counts as "taken" only if it is not exited (read
+	// under its own s.mu, nested inside m.mu — the same m.mu-then-s.mu order
+	// locate() already uses to read another session's status): an exited
+	// namesake must not force a suffix, which is exactly what lets Restart
+	// keep the old name (the old, exited session is still in m.sessions when
+	// Spawn runs for the replacement).
+	name := uniqueName(base, func(n string) bool {
+		for _, other := range m.sessions {
+			other.mu.Lock()
+			collide := other.name == n && other.status != statusExited
+			other.mu.Unlock()
+			if collide {
+				return true
+			}
+		}
+		return false
+	})
 	sess := newSession(id, spec.Agent, name, spec.Cwd, created, cmd, ptmx, m.ringCap, m.backend)
 	sess.Runtime = runtime
 	sess.Box = boxName
@@ -1350,6 +1369,37 @@ func capName(s string) string {
 		s = string(r[:maxNameLen])
 	}
 	return s
+}
+
+// uniqueName returns base unchanged if taken(base) is false, else the first
+// of base+"-2", base+"-3", ... for which taken returns false. base is
+// trimmed rune-safe (like capName) so the suffixed candidate still fits
+// within maxNameLen runes — never bytes, so a multibyte base is never sliced
+// mid-rune. Any space or hyphen left dangling right where the cut landed is
+// also trimmed, so the suffix never reads as "foo -2" or "foo--2" — cosmetic,
+// but the candidate is still compared against taken() unchanged from the
+// caller's perspective (only the rendered name is tidied). Pure: taken is
+// the caller's own "is this name in use" check.
+func uniqueName(base string, taken func(string) bool) string {
+	if !taken(base) {
+		return base
+	}
+	baseRunes := []rune(base)
+	for n := 2; ; n++ {
+		suffix := fmt.Sprintf("-%d", n)
+		limit := maxNameLen - len([]rune(suffix))
+		if limit < 0 {
+			limit = 0
+		}
+		trimmed := baseRunes
+		if len(trimmed) > limit {
+			trimmed = trimmed[:limit]
+		}
+		candidate := strings.TrimRight(string(trimmed), " -") + suffix
+		if !taken(candidate) {
+			return candidate
+		}
+	}
 }
 
 // Rename updates a session's display label (not its id). Persisted to the sidecar

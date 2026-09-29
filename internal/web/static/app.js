@@ -224,6 +224,32 @@ function togglePane(kind) {
 
 $("sessions-cv") && ($("sessions-cv").onclick = () => togglePane("sessions"));
 $("files-cv") && ($("files-cv").onclick = () => togglePane("files"));
+
+// U3: a collapsed pane IS its header bar — the caret is visually the pane's
+// only affordance, but requiring that specific 11px target to re-expand it
+// is unnecessarily small. Any click on the bar that isn't on one of the bar's
+// own controls (the caret itself, +new, the file actions, the root input…)
+// re-expands the pane the same way the caret does. Expanded, nothing changes:
+// this only ever fires while .closed is present.
+//
+// Desktop only. On mobile, #files-phd is promoted into the Files screen's own
+// topbar and CSS forces it to always read as open regardless of whatever
+// .closed the desktop toggle last recorded (app.css's
+// html.mobile-screen-files #files-phd rules) — so a stray tap on that bar
+// must not silently flip hidden desktop state. #sessions-phd never renders at
+// all on mobile (display: none), so it needs no such guard, but the same
+// early return keeps both call sites identical.
+function phdRowClick(kind) {
+  return (e) => {
+    if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return;
+    if (!e.currentTarget.classList.contains("closed")) return;
+    if (e.target.closest("button, input, a, select, textarea")) return;
+    togglePane(kind);
+  };
+}
+$("sessions-phd") && $("sessions-phd").addEventListener("click", phdRowClick("sessions"));
+$("files-phd") && $("files-phd").addEventListener("click", phdRowClick("files"));
+
 // Applying the collapsed state at boot happens later, in the boot sequence
 // near initFileTree() — see the comment there. Assigning these two onclick
 // handlers is safe here: it only creates closures, it does not call
@@ -287,13 +313,25 @@ function initMobileShell() {
 }
 
 // --- mobile terminal: session chip strip -----------------------------------
-// The chips are the open terminal tabs (the sessions you have launched into a
-// pane); the Sessions screen stays the full launcher. One chip is active (the
-// focused pane); tapping another switches which single pane the Terminal screen
-// shows. This reuses the pane machinery — no parallel session model.
+// The chips are every open tab — terminal AND viewer (U1) — across all
+// panes; the Sessions screen stays the full launcher. One chip is active (the
+// focused pane's active tab); tapping another switches which single pane the
+// Terminal screen shows. This reuses the pane machinery — no parallel
+// session model.
 function openTerminalTabs() {
   const out = [];
   if (typeof eachTerminal === "function") eachTerminal((t) => out.push(t)); // cell order, then tab order
+  return out;
+}
+
+// openMobileTabs: every open tab — terminal AND viewer — across all cells,
+// in cell order then tab order (the ordering Cell.tabs already holds, and
+// the one the desktop cell-bar itself paints in). U1: the mobile chip strip
+// is the single switcher for BOTH kinds, so unlike openTerminalTabs above
+// this does not filter by kind.
+function openMobileTabs() {
+  const out = [];
+  if (typeof cells !== "undefined") for (const c of cells) for (const t of c.tabs) out.push(t);
   return out;
 }
 
@@ -307,7 +345,11 @@ function cellOfTab(tab) {
   return null;
 }
 
-function focusTerminalTab(tab) {
+// focusMobileTab: kind-agnostic — a terminal tab and a viewer tab are both
+// just Cell tabs, and cellOfTab/activate don't care which. Renamed from
+// focusTerminalTab (U1): the chip strip now switches to either kind, and a
+// viewer chip's focus button must be able to call this too.
+function focusMobileTab(tab) {
   if (!tab || typeof setFocusedCell !== "function") return;
   const cell = cellOfTab(tab);
   if (!cell) return;
@@ -318,40 +360,143 @@ function focusTerminalTab(tab) {
   renderMobileChips();
 }
 
+// Fix round 2: renderMobileChips runs on every ~3s session poll
+// (refreshSessions -> renderCollapsedSummaries -> renderMobileChips), not
+// only on navigation. Scrolling the focused chip into view on every one of
+// those renders fought a manual scroll of an overflowing strip — the strip
+// snapped back within one poll cycle even while the operator was browsing
+// it. This remembers the tab object last scrolled to; shouldScrollToFocused
+// (chipmodel.js) gates the scroll on that actually changing.
+let _lastScrolledChip = null;
+
+// U1: chips list every open tab — terminal AND viewer — as the single mobile
+// switcher (the desktop per-cell .cell-bar is hidden at <=700px, see
+// app.css). The pure decision (label/title/on/wait/closable per tab) lives
+// in chipmodel.js's chipModel(); this function only turns that model into
+// DOM. Each chip is a wrapper holding a focus button (`.chip-main`) plus,
+// on the focused chip only, a SEPARATE close button (`.chip-x`) — never a
+// <button> nested inside a <button>.
 function renderMobileChips() {
   const strip = document.getElementById("term-chips");
   if (!strip) return;
-  const tabs = openTerminalTabs();
+  const tabs = openMobileTabs();
   strip.hidden = tabs.length === 0;
-  const focused = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const focused = (typeof focusedTab === "function") ? focusedTab() : null;
+  const model = chipModel(
+    tabs, focused,
+    (t) => (typeof t.activity === "function" ? t.activity() : null),
+    (t) => (typeof t.status === "function" ? t.status() : null),
+  );
   strip.textContent = "";
-  for (const t of tabs) {
-    // Reuse activity.js's own class map (the same one the session row and the
-    // tab-bar dot use) rather than re-deriving a state string.
-    const a = (typeof activityClass === "function" && typeof t.activity === "function")
-      ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
-    const waiting = typeof t.activity === "function" && t.activity() === "waiting";
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chip" + (t === focused ? " on" : "") + (waiting ? " wait" : "");
-    const dot = document.createElement("span");
-    dot.className = a.cls;
-    dot.setAttribute("aria-hidden", "true");
+  tabs.forEach((t, i) => {
+    const c = model[i];
+    const chip = document.createElement("span");
+    chip.className = "chip" + (c.on ? " on" : "") + (c.wait ? " wait" : "") + (c.status ? " trouble" : "");
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "chip-main";
+    main.title = c.title;
+    main.setAttribute("aria-label", (c.kind === "viewer" ? "File: " : "Session: ") + c.label);
+
+    if (c.kind === "viewer") {
+      // A small square marker, not a round activity dot — a viewer has no
+      // activity of its own. A CSS shape rather than a symbol-font glyph:
+      // see the Nerd Font "glyphs vanish on retype" gotcha in this repo's
+      // memory — a plain drawn shape can't have that failure mode.
+      const vic = document.createElement("span");
+      vic.className = "vic";
+      vic.setAttribute("aria-hidden", "true");
+      main.appendChild(vic);
+    } else {
+      // Reuse activity.js's own class map (the same one the session row and the
+      // tab-bar dot use) rather than re-deriving a state string.
+      const a = (typeof activityClass === "function" && typeof t.activity === "function")
+        ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+      const dot = document.createElement("span");
+      dot.className = a.cls;
+      dot.setAttribute("aria-hidden", "true");
+      main.appendChild(dot);
+    }
+
     const nm = document.createElement("span");
     nm.className = "cnm";
-    nm.textContent = t.name || t.id;
-    btn.append(dot, nm);
-    // Context %, same field/format the tab strip's own usage readout uses
-    // (tabs.js renderBar / app.js renderSession) — no re-derivation here.
-    const u = (typeof t.usage === "function") ? t.usage() : null;
-    if (t === focused && u && typeof u.pct === "number") {
-      const pct = document.createElement("span");
-      pct.className = "u";
-      pct.textContent = u.pct + "%";
-      btn.appendChild(pct);
+    nm.textContent = c.label;
+    main.appendChild(nm);
+
+    // m4: a transient connection state (the same t.status() the desktop
+    // tab-bar's .tab-st reads), on ANY terminal chip — not only the focused
+    // one, since the point is to see trouble on a session you switched away
+    // from. chipModel already suppresses the healthy "connected" state.
+    if (c.kind === "terminal" && c.status) {
+      const st = document.createElement("span");
+      st.className = "chip-st";
+      st.textContent = c.status;
+      main.appendChild(st);
     }
-    btn.addEventListener("click", () => focusTerminalTab(t));
-    strip.appendChild(btn);
+
+    // Context %, same field/format the tab strip's own usage readout uses
+    // (tabs.js renderBar / app.js renderSession) — terminal chips only, and
+    // only the focused one, matching the model's `on`.
+    if (c.kind === "terminal" && c.on && typeof t.usage === "function") {
+      const u = t.usage();
+      if (u && typeof u.pct === "number") {
+        const pct = document.createElement("span");
+        pct.className = "u";
+        pct.textContent = u.pct + "%";
+        main.appendChild(pct);
+      }
+    }
+
+    main.addEventListener("click", () => focusMobileTab(t));
+    chip.appendChild(main);
+
+    // Only the focused chip carries a close control (c.closable === c.on).
+    // It does exactly what the desktop cell-bar's per-tab × does today:
+    // closes the VIEW, never ends the session (End stays in the ⋯ sheet).
+    if (c.closable) {
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "chip-x";
+      x.textContent = "×";
+      x.title = "Close tab";
+      x.setAttribute("aria-label", "Close tab");
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof closeTabEverywhere === "function") closeTabEverywhere(t);
+        // m2/M1: repaint right here rather than waiting for the next
+        // /api/sessions poll (closeTab's own refreshSessions call) — on a
+        // slow link the closed tab, and its ×, would otherwise keep showing
+        // for the fetch latency, or until the next successful poll at all.
+        renderMobileChips();
+      });
+      chip.appendChild(x);
+    }
+
+    strip.appendChild(chip);
+  });
+  // m11: keep the focused chip in view when the strip overflows — a newly
+  // opened tab (or one switched to via swipe/spawn) can land off-screen even
+  // though the topbar already names it. `block: "nearest"` keeps this from
+  // ever scrolling the page itself: #term-chips is the only scrolling
+  // ancestor in play (vertically it already fits), so only its own
+  // horizontal scroll position moves.
+  //
+  // Fix round 2: gated on shouldScrollToFocused, not run unconditionally.
+  // This function also runs on every ~3s session poll (see _lastScrolledChip
+  // above); without the gate, a poll landing while the operator had manually
+  // scrolled the strip to look at a DIFFERENT chip would snap it straight
+  // back to the focused one. Reset the tracker when the strip empties so a
+  // later re-open scrolls again rather than staying silently stuck on a tab
+  // object that no longer exists.
+  if (tabs.length === 0) {
+    _lastScrolledChip = null;
+  } else if (shouldScrollToFocused(focused, _lastScrolledChip)) {
+    const onChip = strip.querySelector(".chip.on");
+    if (onChip && typeof onChip.scrollIntoView === "function") {
+      onChip.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    _lastScrolledChip = focused;
   }
   // The topbar mirrors this same focused-tab data (dot/name/context%), so
   // paint it right here rather than adding a second call at every one of
@@ -371,6 +516,15 @@ function sessionForTab(t) {
   return t ? lastSessions.find((s) => s.id === t.id) || null : null;
 }
 
+// U1: the focused tab can now be a viewer, not only a terminal. A viewer
+// shows its basename as the name, a neutral dot (the same "dot unknown"
+// fallback already used below for "no tab focused" — a viewer genuinely has
+// no activity of its own, so this is not a special case, just that same
+// fallback), no ctx badge, and ⋯ (session actions) hidden+disabled since the
+// sheet needs a real session. sessionForTab already returns null for a
+// viewer's synthetic "view:<path>" id, so ⋯'s own onclick stays a safe no-op
+// even if this guard were ever bypassed — belt and suspenders, not the only
+// guard.
 function renderTermTopbar() {
   const bar = document.getElementById("term-topbar");
   if (!bar) return;
@@ -378,8 +532,23 @@ function renderTermTopbar() {
   const dot = document.getElementById("tt-dot");
   const nm = document.getElementById("tt-name");
   const ctx = document.getElementById("tt-ctx");
+  const more = document.getElementById("tt-more");
+  const st = document.getElementById("tt-st");
   if (!dot || !nm || !ctx) return;
-  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const t = (typeof focusedTab === "function") ? focusedTab() : null;
+  const isViewer = !!(t && t.kind === "viewer");
+  if (more) { more.hidden = isViewer; more.disabled = isViewer; }
+  if (isViewer) {
+    dot.className = "dot unknown";
+    dot.title = "";
+    nm.textContent = t.name || "";
+    ctx.textContent = "";
+    ctx.hidden = true;
+    // m4: a viewer has no connection state of its own — same reasoning as
+    // the ctx badge above.
+    if (st) { st.textContent = ""; st.hidden = true; }
+    return;
+  }
   const a = (t && typeof t.activity === "function") ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
   dot.className = a.cls;
   dot.title = a.title;
@@ -391,6 +560,15 @@ function renderTermTopbar() {
   } else {
     ctx.textContent = "";
     ctx.hidden = true;
+  }
+  // m4: mirror the desktop tab-bar's .tab-st (t.status()), same source and
+  // the same "connected" is suppressed rule (tabs.js renderBar) — the healthy
+  // steady state carries no information, every other value is a real signal.
+  if (st) {
+    const rawStatus = (t && typeof t.status === "function") ? t.status() : "";
+    const text = rawStatus && rawStatus !== "connected" ? rawStatus : "";
+    st.textContent = text;
+    st.hidden = !text;
   }
 }
 
@@ -516,10 +694,13 @@ function initMobileKeyboard() {
   apply();
 }
 
-// onTerminalSwipe moves the focused pane one session left/right along the same
-// order the chip strip shows. "next" (drag left) goes forward, "prev" back.
-// Clamped at the ends — a swipe past the last session does nothing rather than
-// looping, so you always know where the edges are.
+// onTerminalSwipe moves the focused pane one session left/right, cycling
+// TERMINAL tabs only (openTerminalTabs, not the chip strip's openMobileTabs)
+// — a swipe is bound to xterm, so a focused viewer has no gesture to drive
+// this, and a viewer chip never counts as a stop along the way. "next" (drag
+// left) goes forward, "prev" back. Clamped at the ends — a swipe past the
+// last session does nothing rather than looping, so you always know where
+// the edges are.
 function onTerminalSwipe(dir) {
   const tabs = openTerminalTabs();
   if (tabs.length < 2) return;
@@ -527,7 +708,7 @@ function onTerminalSwipe(dir) {
   let i = tabs.indexOf(cur);
   if (i < 0) i = 0;
   const j = dir === "next" ? Math.min(i + 1, tabs.length - 1) : Math.max(i - 1, 0);
-  if (j !== i) focusTerminalTab(tabs[j]);
+  if (j !== i) focusMobileTab(tabs[j]);
 }
 
 // Shortcut hint: the right-hand half of the permanent #hint status bar
@@ -3622,6 +3803,25 @@ fontPrefs.applyCssVars();
 initSettings();
 initNotifyToggle();
 setInterval(refreshSessions, 3000);
+// U8: crossing the mobile breakpoint (rotate, resize, devtools) changes which
+// panes/screens are even in the DOM — mobileshell's own screen classes react
+// immediately via CSS, but the sidebar's last-painted rows do not repaint
+// themselves, so without this the operator sees last poll's shape for up to
+// 3s. matchMedia's change event fires exactly on that edge; the query string
+// is built from MOBILE_MAX_PX (mobileshell.js) so it cannot drift from the
+// CSS breakpoint or from mobileActive()'s own edge. No new polling — this
+// forces one extra refreshSessions() call only on the crossing itself.
+// I1: also re-run renderGrid() on the same crossing — it is the one that
+// reads currentMaximized() (tabs.js), so a live crossing (not just the next
+// boot) re-lays the grid immediately: widening back past the breakpoint with
+// a maximized cell restores it for desktop right away, instead of waiting
+// for the next action that happens to call renderGrid().
+if (typeof mobileMediaQuery === "function" && window.matchMedia) {
+  window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
+    refreshSessions();
+    if (typeof renderGrid === "function") renderGrid();
+  });
+}
 // Account limits change slowly and the file only updates when a claude statusLine
 // renders — a 30s refresh keeps the % fresh and the countdown ticking without
 // hammering /api/meta. Skipped while hidden.

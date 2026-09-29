@@ -48,6 +48,15 @@ function iconFor(name, isDir, open) {
   return ICON_EXT[lower.slice(cut + 1)] || ICON_FILE;
 }
 
+// actionsLabel names the row's ⋯ menu button by what it acts on, matching the
+// session row's kebab (app.js: "Session actions" on both aria-label and title).
+// A glyph button has no accessible name from its own text, so screen readers
+// need this — and "Actions" alone didn't say whether the row was a file or a
+// folder.
+function actionsLabel(isDir) {
+  return isDir ? "Folder actions" : "File actions";
+}
+
 // treeBranch builds the box-drawing prefix for one row and the prefix its own
 // children inherit. Depth used to be left padding; drawing it is what makes the
 // tree read as a TUI.
@@ -142,12 +151,16 @@ async function ftRenderDir(path, container, prefix) {
     const more = document.createElement("button");
     more.className = "ft-more nf";
     more.textContent = "";
-    more.title = "Actions";
+    // Folder vs File so a screen reader announces which kind of row this menu
+    // acts on, matching the session row's kebab (app.js sets both aria-label
+    // and title to the same string).
+    const moreLabel = actionsLabel(ent.is_dir);
+    more.title = moreLabel;
     // A button's accessible name comes from its TEXT CONTENT before its title,
     // and the title is only consulted when that text is empty. This button's text
     // is a Private Use Area glyph — non-empty, but with no Unicode name — so
     // without this the control announces as nothing at all.
-    more.setAttribute("aria-label", "Actions");
+    more.setAttribute("aria-label", moreLabel);
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
     row.append(more);
     // Appended BEFORE the directory branch, not after it: auto-open below calls
@@ -622,5 +635,5 @@ async function initFileTree() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { iconFor, treeBranch, treeFollowTarget };
+  module.exports = { iconFor, treeBranch, treeFollowTarget, actionsLabel };
 }

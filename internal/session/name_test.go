@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,19 +67,136 @@ func TestSpawn_CustomNameIsLabel(t *testing.T) {
 	}
 }
 
-func TestSpawn_DuplicateLabelsAllowed(t *testing.T) {
+func TestSpawn_DuplicateCustomNamesGetSuffixed(t *testing.T) {
 	m := NewManager(fakeLauncher{}, newFakeBackend(), 1<<16, time.Minute)
 	a, _ := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "dup"})
 	b, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "dup"})
 	if err != nil {
-		t.Fatalf("dup label should be allowed: %v", err)
+		t.Fatalf("dup label should be allowed (suffixed): %v", err)
 	}
 	t.Cleanup(func() { _ = m.Kill(a.ID); _ = m.Kill(b.ID) })
 	if a.ID == b.ID {
 		t.Fatal("ids must differ")
 	}
-	if a.Info().Name != "dup" || b.Info().Name != "dup" {
-		t.Fatal("both labels should be dup")
+	if a.Info().Name != "dup" || b.Info().Name != "dup-2" {
+		t.Fatalf("names = %q, %q; want dup, dup-2", a.Info().Name, b.Info().Name)
+	}
+}
+
+// --- uniqueName helper ---
+
+func TestUniqueName_NoCollision(t *testing.T) {
+	got := uniqueName("archive", func(string) bool { return false })
+	if got != "archive" {
+		t.Fatalf("uniqueName=%q want archive", got)
+	}
+}
+
+func TestUniqueName_One(t *testing.T) {
+	taken := map[string]bool{"archive": true}
+	got := uniqueName("archive", func(n string) bool { return taken[n] })
+	if got != "archive-2" {
+		t.Fatalf("uniqueName=%q want archive-2", got)
+	}
+}
+
+func TestUniqueName_Several(t *testing.T) {
+	taken := map[string]bool{"archive": true, "archive-2": true, "archive-3": true}
+	got := uniqueName("archive", func(n string) bool { return taken[n] })
+	if got != "archive-4" {
+		t.Fatalf("uniqueName=%q want archive-4", got)
+	}
+}
+
+func TestUniqueName_RuneCapTrimming(t *testing.T) {
+	base := strings.Repeat("á", maxNameLen) // 64 multibyte runes, already at the cap
+	taken := map[string]bool{base: true}
+	got := uniqueName(base, func(n string) bool { return taken[n] })
+	if !utf8.ValidString(got) {
+		t.Fatal("uniqueName produced invalid UTF-8 (sliced mid-rune)")
+	}
+	if n := utf8.RuneCountInString(got); n != maxNameLen {
+		t.Fatalf("rune count=%d want %d", n, maxNameLen)
+	}
+	if !strings.HasSuffix(got, "-2") {
+		t.Fatalf("uniqueName=%q want a -2 suffix", got)
+	}
+}
+
+// m6: when the rune-cap trim lands right after a space, the space must not
+// survive into the rendered suffix ("foo -2") — trim it, same as a trailing
+// hyphen ("foo--2") would be.
+func TestUniqueName_TrimsTrailingSpaceBeforeSuffix(t *testing.T) {
+	// suffix "-2" costs 2 runes, so the first candidate is cut to the first 62
+	// runes of base: 61 "a"s followed by the space at index 61 — landing the
+	// cut exactly on the space.
+	base := strings.Repeat("a", 61) + " " + strings.Repeat("b", 10)
+	taken := map[string]bool{base: true}
+	got := uniqueName(base, func(n string) bool { return taken[n] })
+	want := strings.Repeat("a", 61) + "-2"
+	if got != want {
+		t.Fatalf("uniqueName=%q want %q (no dangling space before the suffix)", got, want)
+	}
+}
+
+// --- Spawn-level uniqueness ---
+
+// archiveDir returns a real, existing directory whose basename is "archive"
+// (deriveName needs a real cwd to fork/exec into, and a real basename to
+// derive the "archive" label from).
+func archiveDir(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "archive")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestSpawn_UniqueNameAmongLiveSessions(t *testing.T) {
+	l := &ctlLauncher{argv: []string{"sleep", "30"}, bin: "/usr/bin/claude"}
+	m, _ := newCtlManager(t, l)
+	dir := archiveDir(t)
+	a, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(a.ID); _ = m.Kill(b.ID) })
+	if a.Info().Name != "archive" || b.Info().Name != "archive-2" {
+		t.Fatalf("names = %q, %q; want archive, archive-2", a.Info().Name, b.Info().Name)
+	}
+}
+
+func TestSpawn_ExitedNamesakeDoesNotCount(t *testing.T) {
+	l := &ctlLauncher{argv: []string{"sh", "-c", "exit 0"}, bin: "/usr/bin/claude"}
+	m, _ := newCtlManager(t, l)
+	dir := archiveDir(t)
+	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "claude", Cwd: dir})
+	fresh, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(old.ID); _ = m.Kill(fresh.ID) })
+	if fresh.Info().Name != "archive" {
+		t.Fatalf("name=%q want archive (exited namesake must not count)", fresh.Info().Name)
+	}
+}
+
+func TestRestart_KeepsTheSameName(t *testing.T) {
+	l := &ctlLauncher{argv: []string{"sh", "-c", "exit 0"}, bin: "/usr/bin/claude"}
+	m, _ := newCtlManager(t, l)
+	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "claude", Name: "api", Cwd: t.TempDir()})
+	ns, err := m.Restart(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(ns.ID) })
+	if ns.Info().Name != "api" {
+		t.Fatalf("restarted name=%q want api (the old exited session must not force a suffix)", ns.Info().Name)
 	}
 }
 
