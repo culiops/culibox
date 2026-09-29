@@ -100,13 +100,25 @@ func contentBlocks(raw json.RawMessage) []contentBlock {
 }
 
 // parsePeekTail scans a byte tail backwards for the last assistant text block,
-// and reports whether the final record is an unresolved tool_use.
+// and reports whether the final record is an unresolved tool_use. It is
+// parsePeekTailCut with cut=false — the right default for a hand-built test
+// tail, which represents "the whole relevant story" rather than a byte-sliced
+// read of a real file. The one production caller that reads a real,
+// possibly-truncated file (peekAndBlocked, via readUsageTail) calls
+// parsePeekTailCut directly with the reader's own cut result.
+func parsePeekTail(b []byte) (Peek, bool) {
+	return parsePeekTailCut(b, false)
+}
+
+// parsePeekTailCut is parsePeekTail plus cut: whether the byte slice is
+// KNOWN to be a truncated read of a larger file (readUsageTail sets this when
+// size > usageTailBytes) rather than the whole file.
 //
 // ok reports that at least one record parsed — i.e. the transcript is readable
 // and non-empty. Text may still be empty ("no message yet"), which the UI shows
 // differently from "transcript unreadable". A line that fails to unmarshal is
 // skipped: the tail almost always begins mid-record.
-func parsePeekTail(b []byte) (Peek, bool) {
+func parsePeekTailCut(b []byte, cut bool) (Peek, bool) {
 	lines := strings.Split(string(b), "\n")
 	var p Peek
 	var parsedAny, sawLast, foundText bool
@@ -143,16 +155,34 @@ func parsePeekTail(b []byte) (Peek, bool) {
 	//     AFTER a boundary is harmless: the run's own count is already
 	//     sealed).
 	//
-	// AskFull ends up set only when runOK, not failed, and EXACTLY ONE id in
-	// runToolIDs has no matching entry in resolvedIDs. That one unresolved
-	// call is always the tail's own last block (nothing can resolve it —
-	// there is nothing after it in the file), which is exactly what askFull
-	// below was rendered from, so no separate "which one" lookup is needed.
-	var runID string
+	// Fix round 3 (2026-09-29), two more fail-open edges closed:
+	//
+	//   (a) The malformed-line check above only fires when the 256 KiB cut
+	//       happens to land MID-line, producing unparseable JSON. When the
+	//       cut instead lands exactly on a newline, no line fails to parse,
+	//       yet a record just outside the window (e.g. an earlier unresolved
+	//       call) is exactly as invisible. cut (from the reader) fixes this:
+	//       when cut and no boundary was ever found inside the tail, AskFull
+	//       stays empty regardless of what the visible ids alone would
+	//       suggest — the window may simply be too small to have shown the
+	//       whole run. A FULL file read (cut=false) with no boundary is the
+	//       ordinary "this is the session's first message" case and must
+	//       still offer.
+	//   (b) AskFull used to assume the single unresolved id is always the
+	//       tail's own last tool_use block — true in general (nothing can
+	//       resolve the tail's own call, since nothing follows it in the
+	//       file) EXCEPT when the SAME tool_use id is written more than once
+	//       (a duplicate record) and a tool_result resolves that shared id
+	//       while walking back BEFORE reaching an older, genuinely different,
+	//       still-unresolved call: the count can then land on exactly one
+	//       unresolved id that is NOT the tail's own. tailToolID captures the
+	//       tail's own (possibly synthetic, see below) key at the point askFull
+	//       is computed, and the final check requires the one unresolved id to
+	//       equal it.
+	var runID, tailToolID string
 	var runOK, boundaryFound, failed bool
 	runToolIDs := map[string]bool{}
 	resolvedIDs := map[string]bool{}
-	var anonToolIDs int
 	var askFull string
 	for i := len(lines) - 1; i >= 0; i-- {
 		ln := strings.TrimSpace(lines[i])
@@ -173,6 +203,19 @@ func parsePeekTail(b []byte) (Peek, bool) {
 			continue
 		}
 		bs := contentBlocks(rec.Message.Content)
+		// toolUseKey resolves a block's dedup key: its own id, or — for a
+		// block with no id (not a shape Claude Code writes, but not assumed)
+		// — a synthetic key from its position (line i, block index j).
+		// Position-based rather than a shared counter so the SAME block
+		// queried from two different places below (the tail's own last
+		// block, and the general per-record scan) always resolves to the
+		// SAME key, without needing to share mutable state between them.
+		toolUseKey := func(j int) string {
+			if id := bs[j].ID; id != "" {
+				return id
+			}
+			return fmt.Sprintf("\x00%d:%d", i, j)
+		}
 		// The first role-bearing record we reach walking backwards IS the last
 		// message in the file. If a tool_result had arrived, it would be that
 		// record instead, so "last block is tool_use" is sufficient — no
@@ -186,6 +229,7 @@ func parsePeekTail(b []byte) (Peek, bool) {
 				if full, hasArg := askRender(last.Name, last.Input); hasArg && len(full) <= askFullMax {
 					askFull = full
 				}
+				tailToolID = toolUseKey(len(bs) - 1)
 				if rec.Message.ID != "" {
 					runID = rec.Message.ID
 					runOK = true
@@ -204,16 +248,11 @@ func parsePeekTail(b []byte) (Peek, bool) {
 				case rec.Message.ID == "":
 					failed = true
 				case rec.Message.ID == runID:
-					for _, blk := range bs {
+					for j, blk := range bs {
 						if blk.Type != "tool_use" {
 							continue
 						}
-						id := blk.ID
-						if id == "" {
-							anonToolIDs++
-							id = fmt.Sprintf("\x00%d", anonToolIDs)
-						}
-						runToolIDs[id] = true
+						runToolIDs[toolUseKey(j)] = true
 					}
 				default:
 					boundaryFound = true
@@ -242,14 +281,16 @@ func parsePeekTail(b []byte) (Peek, bool) {
 			break
 		}
 	}
-	if runOK && !failed {
+	if runOK && !failed && (!cut || boundaryFound) {
 		unresolved := 0
+		var onlyID string
 		for id := range runToolIDs {
 			if !resolvedIDs[id] {
 				unresolved++
+				onlyID = id
 			}
 		}
-		if unresolved == 1 {
+		if unresolved == 1 && onlyID == tailToolID {
 			p.AskFull = askFull
 		}
 	}
@@ -552,11 +593,11 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 	if p, ok := m.peekCached(id, l.path, fi.ModTime()); ok {
 		return p, true, blocked
 	}
-	b, err := readUsageTail(l.path)
+	b, cut, err := readUsageTail(l.path)
 	if err != nil {
 		return Peek{}, false, blocked
 	}
-	p, ok := parsePeekTail(b)
+	p, ok := parsePeekTailCut(b, cut)
 	if !ok {
 		return Peek{}, false, blocked
 	}

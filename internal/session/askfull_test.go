@@ -358,6 +358,64 @@ func TestParsePeekTailAskFullDuplicateRecordsSameToolUseIDCountedOnce(t *testing
 	}
 }
 
+// Fix round 3 (2026-09-29), edge (a): verified correct on 600 real
+// transcripts, but a 256 KiB tail cut that happens to land EXACTLY on a
+// newline produces no malformed line — the fix-round-2 truncation check
+// never fires — even though a record just outside the window (e.g. an
+// earlier unresolved call) is exactly as invisible as a mid-line cut would
+// have made it. When the reader reports cut=true and no boundary was ever
+// found inside the visible tail, AskFull must stay empty: the window may
+// simply be too small to show the whole run.
+func TestParsePeekTailCutAskFullEmptyWhenCutWithoutABoundary(t *testing.T) {
+	p, ok := parsePeekTailCut(txBytes(
+		txResult("toolu_A_cut"),
+		txRecID("assistant", "msg_cut", txToolUse("Bash", "command", "C", "toolu_C_cut"))), true)
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: a cut tail with no boundary must fail AskFull closed", p)
+	}
+}
+
+// The same cut tail, but with nothing before the tail record at all (the
+// other bad shape the ruling named) — still must fail closed: a cut tail
+// gives no way to tell "this really is the session's first message" from
+// "there was more before the window".
+func TestParsePeekTailCutAskFullEmptyForALoneCallWithNoBoundary(t *testing.T) {
+	p, ok := parsePeekTailCut(txBytes(
+		txRecID("assistant", "msg_cut_lone", txToolUse("Bash", "command", "C", "toolu_C_lone"))), true)
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: a cut tail holding only the pending call must fail AskFull closed", p)
+	}
+}
+
+// The positive counterpart: a FULL file (cut=false) with no boundary is the
+// ordinary "this is the session's first message" shape and must still
+// offer — cut is the signal, not merely "no boundary was found".
+func TestParsePeekTailCutAskFullSetWhenFullFileHasNoBoundary(t *testing.T) {
+	p, ok := parsePeekTailCut(txBytes(txUser("go"),
+		txRecID("assistant", "msg_full", txToolUse("Bash", "command", "C", "toolu_C_full"))), false)
+	if !ok || !p.Pending || p.AskFull != "Bash(C)" {
+		t.Fatalf("peek = %+v: a full-file read with no boundary must still offer", p)
+	}
+}
+
+// Fix round 3, edge (b): the single unresolved id can end up NOT being the
+// tail's own call when a tool_use id is written twice (a duplicate record)
+// and a tool_result resolves that shared id while an older, genuinely
+// different, still-open call (B) sits further back. The naive "count == 1"
+// check would offer the tail's own rendering (C) while B, not C, is the one
+// actually unresolved — must fail closed instead.
+func TestParsePeekTailAskFullEmptyWhenTheSoleUnresolvedIDIsNotTheTailsOwnCall(t *testing.T) {
+	id := "msg_notail"
+	p, ok := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", id, txToolUse("Bash", "command", "B", "toolu_B8")),
+		txRecID("assistant", id, txToolUse("Bash", "command", "C", "toolu_C8")),
+		txResult("toolu_C8"),
+		txRecID("assistant", id, txToolUse("Bash", "command", "C", "toolu_C8"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: the sole unresolved id (B) is not the tail's own call (C), must fail AskFull closed", p)
+	}
+}
+
 func TestParsePeekTailAskFullEmptyWhenTheTailRunsOutMidRun(t *testing.T) {
 	p, _ := parsePeekTail(txBytes(`{"partial record`, txRec("assistant", txBash("touch a"))))
 	if !p.Pending || p.AskFull != "" {

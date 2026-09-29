@@ -155,7 +155,7 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !l.claude || l.path == "" {
 		return Usage{}, false
 	}
-	b, err := readUsageTail(l.path)
+	b, _, err := readUsageTail(l.path)
 	if err != nil {
 		return Usage{}, false
 	}
@@ -198,24 +198,30 @@ func (m *Manager) ResolveBins() {
 }
 
 // readUsageTail reads the last usageTailBytes of a file (or the whole file if
-// smaller) — never the whole of a multi-MB transcript.
-func readUsageTail(path string) ([]byte, error) {
+// smaller) — never the whole of a multi-MB transcript. cut reports whether the
+// read actually started partway through the file (size > usageTailBytes):
+// fix round 3 (2026-09-29) — parsePeekTailCut uses it to fail AskFull closed
+// when a byte cut, even one that happens to land exactly on a newline (so no
+// line fails to parse), could have hidden context just outside the window.
+func readUsageTail(path string) (data []byte, cut bool, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	size := fi.Size()
 	off := int64(0)
 	if size > usageTailBytes {
 		off = size - usageTailBytes
+		cut = true
 	}
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return io.ReadAll(f)
+	data, err = io.ReadAll(f)
+	return data, cut, err
 }
