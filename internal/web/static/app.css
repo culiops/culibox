@@ -906,6 +906,18 @@
        Name, Containment, Effort) stays in its own half. */
     #spawn > div.span2 { grid-column: 1 / -1; }
     #spawn .seg { flex-wrap: wrap; }
+    /* First message (spec §2.1): same box as the inputs above, vertical resize only. */
+    #spawn textarea {
+      background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      padding: 7px 9px; font-size: 13px; font-family: inherit; width: 100%;
+      resize: vertical; min-height: 4.5em;
+    }
+    #spawn textarea:focus { border-color: var(--accent); outline: none; }
+    /* The replies toggle: a checkbox beside its words. Overrides the generic
+       uppercase #spawn label and the 100%-wide #spawn input rules. */
+    #spawn label.spawn-check { display: flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; color: var(--fg); font-size: 13px; }
+    #spawn label.spawn-check input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: var(--accent); }
+    #spawn-bypass-warn { margin-top: 6px; }
     #options, #effort-slot { display: grid; gap: 8px; }
     #options .opt, #effort-slot .opt { display: flex; align-items: center; gap: 8px; min-width: 0; }
     #options .opt > *, #effort-slot .opt > * { min-width: 0; }

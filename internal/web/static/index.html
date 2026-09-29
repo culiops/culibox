@@ -165,6 +165,12 @@
           <div id="spawn-ws-list" role="listbox" aria-label="Directories" hidden></div>
           <div class="form-hint" id="spawn-ws-note"></div>
         </div>
+        <div class="span2" id="spawn-prompt-row" hidden>
+          <label for="spawn-prompt">First message</label>
+          <textarea id="spawn-prompt" rows="3" spellcheck="false"
+                    placeholder="First message to the agent (optional)"></textarea>
+          <div class="form-hint" id="spawn-prompt-hint">Ctrl+Enter spawns</div>
+        </div>
         <div id="runtime-row" style="display:none">
           <label>Containment</label>
           <div class="seg" id="runtime-seg" data-value="" role="group" aria-label="Containment"></div>
@@ -179,6 +185,10 @@
         </div>
         <div class="span2">
           <div class="warnbox" id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
+        </div>
+        <div class="span2" id="spawn-replies-row" hidden>
+          <label class="spawn-check"><input id="spawn-replyable" type="checkbox"> Allow replies from the sidebar</label>
+          <div class="warnbox" id="spawn-bypass-warn" hidden>Replies to a bypass session run without permission checks.</div>
         </div>
         <div class="span2 spawn-adv" id="spawn-adv">
           <span class="spawn-adv-label">Advanced</span>
@@ -431,6 +441,7 @@
   <script src="/fontprefs.js"></script>
   <script src="/links.js"></script>
   <script src="/tier.js"></script>
+  <script src="/spawnform.js"></script>
   <script src="/activity.js"></script>
   <script src="/peek.js"></script>
   <script src="/usage.js"></script>

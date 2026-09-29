@@ -1813,6 +1813,7 @@ function renderOptions() {
       ctrl.type = "checkbox";
       ctrl.checked = o.value === true;
       lbl.htmlFor = "opt-" + o.key;
+      ctrl.onchange = () => syncSpawnExtras(false); // the bypass warning reads it
     } else {
       const choices = o.choices || [];
       if (choices.length > 0 && choices.length <= 5) {
@@ -1868,6 +1869,7 @@ $("agent").addEventListener("change", () => {
   renderOptions();
   syncRuntimeField();
   applyProfileCwd();
+  syncSpawnExtras(true);
 });
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
@@ -2617,12 +2619,45 @@ function syncRuntimeField() {
   const explain = $("tier-explain");
   if (explain) explain.style.display = shown;
   const value = spawnRuntimeDefault(currentProfile(), boxRuntime);
-  buildSeg(seg, [
-    { value: "", label: "box" },
-    { value: "host", label: "host", danger: true },
-  ], value, updateRuntimeWarning);
+  buildSeg(seg, runtimeSegChoices(), value, updateRuntimeWarning);
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
+
+// syncSpawnExtras shows the first-message field and the replies toggle only
+// for a profile whose agent takes them, and keeps the bypass warning honest.
+// resetReplies re-reads the toggle from the profile's default (dialog open,
+// profile change); an option/checkbox change keeps what the operator set.
+// openSpawnDialog sets #agent programmatically, which fires no change event,
+// so it calls this itself (memory profile-default-cwd-built).
+function syncSpawnExtras(resetReplies) {
+  const p = currentProfile();
+  $("spawn-prompt-row").hidden = !promptFieldVisible(p);
+  $("spawn-replies-row").hidden = !repliesFieldVisible(p);
+  if (resetReplies) $("spawn-replyable").checked = !!(p && p.replyable);
+  $("spawn-bypass-warn").hidden = !bypassWarningShown(p, getOptions(), $("spawn-replyable").checked);
+}
+
+// applySpawnPrefill fills the dialog from a session (Duplicate): cwd, tier and
+// this run's option values, over the profile defaults openSpawnDialog set.
+function applySpawnPrefill(pf) {
+  if (pf.cwd) setSwsCwd(pf.cwd);
+  const seg = $("runtime-seg");
+  if (pf.runtime && boxRuntime && seg) setSegValue(seg, pf.runtime);
+  for (const ctrl of $("spawn").querySelectorAll("[data-key]")) {
+    const k = ctrl.dataset.key;
+    if (!Object.prototype.hasOwnProperty.call(pf.options, k)) continue;
+    const v = pf.options[k];
+    if (ctrl.dataset.type === "bool") ctrl.checked = v === true;
+    else if (ctrl.classList.contains("seg")) setSegValue(ctrl, String(v));
+    else ctrl.value = String(v);
+  }
+  updateRuntimeWarning();
+  syncSpawnExtras(false);
+}
+
+// spawnPromptDraft keeps a first message whose spawn failed, so reopening the
+// dialog does not make the operator retype it.
+let spawnPromptDraft = "";
 
 // updateRuntimeWarning covers two DIFFERENT reasons #runtime-warn can be
 // showing, and they are mutually exclusive:
@@ -2662,7 +2697,9 @@ function updateRuntimeWarning() {
 
 // openSpawnDialog preselects whatever the one-click button would have done, so
 // "Advanced…" elaborates the visible target instead of presenting a fresh form.
-function openSpawnDialog(preselectAgent) {
+// prefill (Duplicate, see spawnPrefill) is applied last, over those defaults —
+// only when its profile still exists.
+function openSpawnDialog(preselectAgent, prefill) {
   const last = loadLastSpawn();
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent
@@ -2677,6 +2714,9 @@ function openSpawnDialog(preselectAgent) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  $("spawn-prompt").value = spawnPromptDraft;
+  spawnPromptDraft = "";
+  syncSpawnExtras(true);
   // Fresh open: don't carry a stale pick across dialog sessions. Then, in
   // priority order — profile default_cwd wins over the last spawn's cwd,
   // which wins over a sane tier-appropriate default (mirrors the old
@@ -2695,6 +2735,10 @@ function openSpawnDialog(preselectAgent) {
       setSwsCwd(defaultWorkspace(workspacesCache, segValue($("runtime-seg"))));
     }
   }
+  if (prefill) {
+    if (want === prefill.agent) applySpawnPrefill(prefill);
+    else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
+  }
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   openDialog("spawn-modal");
@@ -2706,20 +2750,33 @@ function initSpawnControl() {
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
   // control, so there is no native "change" event to hook here.
   $("spawn-go").onclick = () => openSpawnDialog();
+  $("spawn-replyable").onchange = () => syncSpawnExtras(false);
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
+  $("spawn-prompt").addEventListener("keydown", (e) => {
+    if (isSubmitHotkey(e, mac)) { e.preventDefault(); $("spawn").requestSubmit(); }
+  });
 }
 
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  const req = { agent: $("agent").value, name: $("sess-name").value.trim(), cwd: getCwd(), options: getOptions() };
-  const rt = segValue($("runtime-seg"));
-  if (rt) req.runtime = rt;
+  const req = spawnPayload({
+    agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
+    runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
+    replyable: $("spawn-replyable").checked, profile: currentProfile(),
+  });
+  const draft = $("spawn-prompt").value;
   // Close first: a fixed-position toast renders *beneath* a modal dialog's
   // backdrop, so an Undo offered while the dialog is still up is unreachable.
   closeDialog("spawn-modal");
   $("sess-name").value = "";
+  $("spawn-prompt").value = "";
   try {
     await spawnSession(req);
-  } catch (e) { showToast("Spawn failed: " + e.message, { error: true }); }
+  } catch (e) {
+    spawnPromptDraft = draft; // reopening New session restores it
+    showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
+  }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
 // every open — the list is replaced wholesale every few seconds, so a menu
