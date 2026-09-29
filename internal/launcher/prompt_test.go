@@ -42,11 +42,39 @@ func TestValidatePrompt(t *testing.T) {
 		"nul\x00byte", "esc \x1b[31m red", "carriage\rreturn", "c1 \u009b csi",
 		"doctor", "update", "hi", "fix-it", // one bare word: could be a claude subcommand
 		"bad utf8 \xff here",
+		"bidi ‮ override", "zero​width", // Unicode format chars (Cf)
 	}
 	for _, p := range bad {
 		if err := ValidatePrompt(p); !errors.Is(err, ErrBadPrompt) {
 			t.Errorf("ValidatePrompt(%.30q) = %v, want ErrBadPrompt", p, err)
 		}
+	}
+}
+
+// exactLenPrompt builds a multi-word, no-leading/trailing-whitespace prompt of
+// exactly n bytes, so the maxPromptBytes boundary can be pinned exactly
+// without the one-bare-word rule or TrimSpace shifting the count.
+func exactLenPrompt(n int) string {
+	b := make([]byte, n)
+	for i := range b {
+		if i%2 == 1 {
+			b[i] = ' '
+		} else {
+			b[i] = 'a'
+		}
+	}
+	if n > 0 && b[n-1] == ' ' {
+		b[n-1] = 'a'
+	}
+	return string(b)
+}
+
+func TestValidatePromptLengthBoundary(t *testing.T) {
+	if err := ValidatePrompt(exactLenPrompt(maxPromptBytes)); err != nil {
+		t.Errorf("ValidatePrompt(%d bytes) = %v, want nil (exactly at the cap)", maxPromptBytes, err)
+	}
+	if err := ValidatePrompt(exactLenPrompt(maxPromptBytes + 1)); !errors.Is(err, ErrBadPrompt) {
+		t.Errorf("ValidatePrompt(%d bytes) = %v, want ErrBadPrompt (one over the cap)", maxPromptBytes+1, err)
 	}
 }
 
@@ -112,7 +140,7 @@ func TestBuildResume(t *testing.T) {
 	if err != nil || !argvHasPair(argv, "--resume", "b59c6dcd-11c9-4b0c-86bf-ada6cee780e6") {
 		t.Fatalf("argv=%v err=%v, want --resume <id>", argv, err)
 	}
-	for _, bad := range []string{"../x", "a b", "id;rm", strings.Repeat("a", 129)} {
+	for _, bad := range []string{"../x", "a b", "id;rm", strings.Repeat("a", 129), "-p", "--dangerously-skip-permissions"} {
 		if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost, Resume: bad}); !errors.Is(err, ErrBadResume) {
 			t.Errorf("Resume %q: err=%v, want ErrBadResume", bad, err)
 		}
@@ -138,6 +166,11 @@ func TestShellJoinRoundTripsHostileText(t *testing.T) {
 		"tab\there",
 		"$HOME ${PATH} %s %d",
 	}
+	// Production runs zsh as `-l -i -c` (rc files loaded, per argv()'s login
+	// wrap). Here we add -f (no rc) so the round trip is deterministic and
+	// unaffected by whatever a real ~/.zshrc on this box happens to do; -f
+	// changes shell startup behavior, not how -c parses/quotes its argument,
+	// so it does not weaken what this test is checking.
 	shells := [][]string{{"sh", "-c"}, {"bash", "-c"}, {"zsh", "-f", "-i", "-c"}}
 	for _, sh := range shells {
 		if _, err := exec.LookPath(sh[0]); err != nil {

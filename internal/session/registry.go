@@ -37,8 +37,11 @@ type claudeRegEntry struct {
 const regStatusWaiting = "waiting"
 
 // sessionIDRe bounds what a registry sessionId may look like before it is ever
-// joined into a path: a uuid-ish token, nothing that can traverse.
-var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+// joined into a path: a uuid-ish token, nothing that can traverse. The first
+// character must be alphanumeric — real ids are UUIDs, and a leading "-"
+// would let a downstream `--resume <id>` be misread as a flag (see
+// launcher.resumeIDRe).
+var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
 
 // procStartFunc returns field 22 (starttime) of /proc/<pid>/stat. Injected so
 // tests need no real processes.

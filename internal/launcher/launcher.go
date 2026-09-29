@@ -68,12 +68,17 @@ const maxPromptBytes = 8 << 10
 var oneWordRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
 
 // resumeIDRe mirrors session.sessionIDRe: a uuid-ish token, nothing a shell
-// or a path could misread.
-var resumeIDRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
+// or a path could misread. The first character must be alphanumeric: a
+// leading "-" would make `--resume <id>` read as a bare --resume (its value
+// is OPTIONAL, so commander stops at the next flag-looking arg) followed by
+// an injected flag such as "-p" or "--dangerously-skip-permissions".
+var resumeIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
 
 // ValidatePrompt accepts a first message: non-empty once trimmed, at most
 // maxPromptBytes, valid UTF-8, no control characters except newline and tab,
-// and more than one bare word.
+// no Unicode format characters (bidi overrides, zero-width joiners, …,
+// consistent with the transcript display sanitising in commit 9900d74), and
+// more than one bare word.
 func ValidatePrompt(p string) error {
 	t := strings.TrimSpace(p)
 	switch {
@@ -87,6 +92,9 @@ func ValidatePrompt(p string) error {
 	for _, r := range t {
 		if r != '\n' && r != '\t' && unicode.IsControl(r) {
 			return fmt.Errorf("%w: it contains a control character", ErrBadPrompt)
+		}
+		if unicode.Is(unicode.Cf, r) {
+			return fmt.Errorf("%w: it contains a Unicode format character", ErrBadPrompt)
 		}
 	}
 	if oneWordRe.MatchString(t) {
@@ -521,8 +529,12 @@ func lookPathIn(bin, pathv string) (string, error) {
 	return "", fmt.Errorf("not found")
 }
 
-// shellJoin single-quote-escapes each token for a shell -c string. bin/args come
-// from trusted config (never the API), so this is for correctness, not a trust boundary.
+// shellJoin single-quote-escapes each token for a shell -c string. bin/args
+// come from trusted config, but for a base=login spawn the trailing "--
+// <prompt>" tokens are the untrusted API prompt — shellJoin IS the trust
+// boundary there, the one place that text passes through a shell parser.
+// See TestShellJoinRoundTripsHostileText, which verifies the round trip
+// (and no injected command execution) across sh/bash/zsh.
 func shellJoin(args []string) string {
 	q := make([]string, len(args))
 	for i, a := range args {
