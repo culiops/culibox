@@ -7,6 +7,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -188,6 +189,14 @@ type Session struct {
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
 	replyable bool
+
+	// submitted: at least one Enter (\r) has been written to this session —
+	// the only input that means "the operator gave it a turn". Guarded by mu.
+	submitted bool
+	// onSubmitted persists the false->true edge of submitted. Set before the
+	// session is published to m.sessions and never changed, so it needs no
+	// lock; called with NO lock held.
+	onSubmitted func()
 
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
@@ -447,8 +456,29 @@ func (s *Session) deliver(sub *subscription, cursor int64) {
 	}
 }
 
-// Write sends input to the PTY.
-func (s *Session) Write(p []byte) (int, error) { return s.ptmx.Write(p) }
+// Write sends input to the PTY. An Enter anywhere in p marks the session as
+// having been given a turn (see submitted). Focus reports, CPR/DA replies and
+// text without Enter do not count: xterm emits the former on its own.
+func (s *Session) Write(p []byte) (int, error) {
+	n, err := s.ptmx.Write(p)
+	if n > 0 && bytes.IndexByte(p[:n], '\r') >= 0 {
+		s.markSubmitted()
+	}
+	return n, err
+}
+
+// markSubmitted sets submitted and fires onSubmitted on the false->true edge
+// only — one sidecar write per session lifetime.
+func (s *Session) markSubmitted() {
+	s.mu.Lock()
+	first := !s.submitted
+	s.submitted = true
+	cb := s.onSubmitted
+	s.mu.Unlock()
+	if first && cb != nil {
+		cb()
+	}
+}
 
 // Resize resizes the PTY and records the size for ForceRedraw.
 func (s *Session) Resize(rows, cols uint16) error {
@@ -532,6 +562,20 @@ func (m *Manager) SetReplyable(id string, v bool) error {
 		sc.setReplyable(id, v)
 	}
 	return nil
+}
+
+// submittedHook persists a session's first submitted input. Takes m.mu only
+// long enough to read the sidecar pointer; Write never holds m.mu, so the lock
+// order stays m.mu -> s.mu with nothing inverted.
+func (m *Manager) submittedHook(id string) func() {
+	return func() {
+		m.mu.Lock()
+		sc := m.sidecar
+		m.mu.Unlock()
+		if sc != nil {
+			sc.setSubmitted(id)
+		}
+	}
 }
 
 // signal sends sig to the child's whole process group (negative pid). creack/pty
@@ -735,12 +779,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Runtime = runtime
 	sess.Box = boxName
 	sess.Bin = bin
+	sess.onSubmitted = m.submittedHook(id)
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
 
 	if sc != nil {
-		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName, Replyable: false})
+		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName, Replyable: false, Submitted: boolPtr(false)})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1110,6 +1155,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.
 	sess.replyable = md.Replyable
+	// nil = a record written before the flag existed, or an orphan adopted with
+	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
+	sess.submitted = md.Submitted == nil || *md.Submitted
+	sess.onSubmitted = m.submittedHook(id)
 	m.sessions[id] = sess
 	m.mu.Unlock()
 	// The box was already adopted by Reconcile, before this attach was even
