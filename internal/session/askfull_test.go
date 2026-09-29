@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,12 +10,35 @@ import (
 	"time"
 )
 
+// txMsgSeq/txToolSeq back the auto-id defaults below (txRec, txBash): a
+// fresh id per call, since the common case in these tests is that
+// consecutive records are separate turns/messages.
+var txMsgSeq, txToolSeq int
+
+// txRec builds one JSONL record with blocks as message.content, under a
+// FRESH message.id. A test that needs several records to represent ONE
+// split API message — parallel tool calls, or one streamed turn split across
+// thinking/text/tool_use, which is exactly the shape AskFull's
+// message.id-bound "pending run" exists for (fix round 1, 2026-09-29) — uses
+// txRecID directly with one id shared across the calls.
 func txRec(role string, blocks ...map[string]any) string {
-	b, _ := json.Marshal(map[string]any{"type": role, "message": map[string]any{"role": role, "content": blocks}})
+	txMsgSeq++
+	return txRecID(role, fmt.Sprintf("msg_%d", txMsgSeq), blocks...)
+}
+
+// txRecID is txRec with an explicit message.id, for binding several records
+// to one pending run.
+func txRecID(role, id string, blocks ...map[string]any) string {
+	b, _ := json.Marshal(map[string]any{"type": role, "message": map[string]any{"role": role, "id": id, "content": blocks}})
 	return string(b)
 }
+
+// txBash gives each call its own tool_use id (Claude Code writes
+// "id":"toolu_…" on every tool_use block), so two Bash calls in one test are
+// never accidentally deduped as "the same call".
 func txBash(cmd string) map[string]any {
-	return map[string]any{"type": "tool_use", "name": "Bash", "input": map[string]any{"command": cmd}}
+	txToolSeq++
+	return map[string]any{"type": "tool_use", "id": fmt.Sprintf("toolu_%d", txToolSeq), "name": "Bash", "input": map[string]any{"command": cmd}}
 }
 func txText(s string) map[string]any { return map[string]any{"type": "text", "text": s} }
 func txThinking() map[string]any     { return map[string]any{"type": "thinking", "thinking": ""} }
@@ -90,8 +114,26 @@ func TestAskRenderExcludesEditWriteNotebookEdit(t *testing.T) {
 	}
 }
 
+// A positive Read case, plus wrong-key rows: an allowed tool called with a
+// key that isn't its own primary argument (not a shape Claude Code
+// produces) must not be rendered either.
+func TestAskRenderReadAndWrongKeys(t *testing.T) {
+	if full, has := askRender("Read", json.RawMessage(`{"file_path":"internal/session/peek.go"}`)); !has || full != "Read(internal/session/peek.go)" {
+		t.Fatalf("Read askRender = %q,%v", full, has)
+	}
+	for _, c := range []struct{ name, input string }{
+		{"Read", `{"command":"ls"}`},
+		{"Bash", `{"file_path":"a.go"}`},
+	} {
+		if full, has := askRender(c.name, json.RawMessage(c.input)); has {
+			t.Errorf("%s: a key that isn't its primary argument still reported one: %q", c.name, full)
+		}
+	}
+}
+
 func TestParsePeekTailAskFullForASingleCall(t *testing.T) {
-	p, ok := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txThinking()), txRec("assistant", txBash("touch /tmp/a"))))
+	id := "msg_single"
+	p, ok := parsePeekTail(txBytes(txUser("go"), txRecID("assistant", id, txThinking()), txRecID("assistant", id, txBash("touch /tmp/a"))))
 	if !ok || !p.Pending || p.AskFull != "Bash(touch /tmp/a)" {
 		t.Fatalf("peek = %+v", p)
 	}
@@ -105,9 +147,9 @@ func TestParsePeekTailAskFullEmptyForEditWriteNotebookEdit(t *testing.T) {
 		block   map[string]any
 		wantAsk string
 	}{
-		{map[string]any{"type": "tool_use", "name": "Edit", "input": map[string]any{"file_path": "internal/web/app.js", "old_string": "a", "new_string": "b"}}, "Edit(internal/web/app.js)"},
-		{map[string]any{"type": "tool_use", "name": "Write", "input": map[string]any{"file_path": "internal/web/app.js", "content": "x"}}, "Write(internal/web/app.js)"},
-		{map[string]any{"type": "tool_use", "name": "NotebookEdit", "input": map[string]any{"notebook_path": "a.ipynb"}}, "NotebookEdit(a.ipynb)"},
+		{map[string]any{"type": "tool_use", "id": "toolu_e1", "name": "Edit", "input": map[string]any{"file_path": "internal/web/app.js", "old_string": "a", "new_string": "b"}}, "Edit(internal/web/app.js)"},
+		{map[string]any{"type": "tool_use", "id": "toolu_e2", "name": "Write", "input": map[string]any{"file_path": "internal/web/app.js", "content": "x"}}, "Write(internal/web/app.js)"},
+		{map[string]any{"type": "tool_use", "id": "toolu_e3", "name": "NotebookEdit", "input": map[string]any{"notebook_path": "a.ipynb"}}, "NotebookEdit(a.ipynb)"},
 	} {
 		p, ok := parsePeekTail(txBytes(txUser("go"), txRec("assistant", c.block)))
 		name, _ := c.block["name"].(string)
@@ -124,10 +166,12 @@ func TestParsePeekTailAskFullEmptyForEditWriteNotebookEdit(t *testing.T) {
 }
 
 // Measured 2026-09-29 (probe E): two parallel calls are two records; the dialog
-// asks about the FIRST while the transcript ends on the SECOND.
+// asks about the FIRST while the transcript ends on the SECOND. Both records
+// come from ONE split API message, so they share a message.id.
 func TestParsePeekTailAskFullEmptyForParallelCalls(t *testing.T) {
-	p, _ := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txThinking()),
-		txRec("assistant", txBash("touch /tmp/e1")), txRec("assistant", txBash("touch /tmp/e2"))))
+	id := "msg_parallel"
+	p, _ := parsePeekTail(txBytes(txUser("go"), txRecID("assistant", id, txThinking()),
+		txRecID("assistant", id, txBash("touch /tmp/e1")), txRecID("assistant", id, txBash("touch /tmp/e2"))))
 	if !p.Pending || p.Ask != "Bash(touch /tmp/e2)" || p.AskFull != "" {
 		t.Fatalf("peek = %+v: AskFull must be empty with two pending calls", p)
 	}
@@ -137,6 +181,56 @@ func TestParsePeekTailAskFullEmptyForMultiBlockRecord(t *testing.T) {
 	p, _ := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txText("ok"), txBash("touch a"), txBash("touch b"))))
 	if !p.Pending || p.AskFull != "" {
 		t.Fatalf("peek = %+v", p)
+	}
+}
+
+// A single trailing tool_use, preceded by a text block in the SAME record,
+// still counts as exactly one pending call.
+func TestParsePeekTailAskFullSetForOneCallAfterText(t *testing.T) {
+	p, ok := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txText("checking"), txBash("touch a"))))
+	if !ok || !p.Pending || p.AskFull != "Bash(touch a)" {
+		t.Fatalf("peek = %+v", p)
+	}
+}
+
+// Fix round 1: the pending run is bound to message.id, and a text/thinking
+// record between two tool_use calls does NOT end the run — it is still part
+// of the same split API message. Two distinct tool_use ids under one
+// message.id must still read as "more than one pending call", even though
+// the immediately-preceding record (walking backward) is plain text.
+func TestParsePeekTailAskFullEmptyAcrossTextSplitSameMessage(t *testing.T) {
+	id := "msg_split"
+	p, _ := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", id, txText("first")),
+		txRecID("assistant", id, txBash("touch /tmp/a")),
+		txRecID("assistant", id, txText("second")),
+		txRecID("assistant", id, txBash("touch /tmp/b"))))
+	if !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: two tool_use ids under one message.id must not offer AskFull", p)
+	}
+}
+
+// The mirror image: one message.id, exactly ONE tool_use, with thinking and
+// text records on either side of it in the same run — AskFull must be set.
+func TestParsePeekTailAskFullSetAcrossTextSplitSameMessage(t *testing.T) {
+	id := "msg_split_single"
+	p, _ := parsePeekTail(txBytes(txUser("go"),
+		txRecID("assistant", id, txThinking()),
+		txRecID("assistant", id, txText("about to run it")),
+		txRecID("assistant", id, txBash("touch /tmp/a"))))
+	if !p.Pending || p.AskFull != "Bash(touch /tmp/a)" {
+		t.Fatalf("peek = %+v", p)
+	}
+}
+
+// A missing message.id on the pending record fails AskFull closed
+// regardless of how many calls are actually pending — with no id to bind
+// the run to, "exactly one" cannot be trusted.
+func TestParsePeekTailAskFullEmptyWithoutAMessageID(t *testing.T) {
+	rec := `{"message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_x","name":"Bash","input":{"command":"touch a"}}]}}`
+	p, ok := parsePeekTail(txBytes(txUser("go"), rec))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("peek = %+v: a record with no message.id must fail AskFull closed", p)
 	}
 }
 
@@ -151,6 +245,21 @@ func TestParsePeekTailAskFullEmptyOverTheCap(t *testing.T) {
 	p, _ := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txBash("echo "+strings.Repeat("y", askFullMax)))))
 	if !p.Pending || p.Ask == "" || p.AskFull != "" {
 		t.Fatalf("peek Ask=%q AskFull len=%d", p.Ask, len(p.AskFull))
+	}
+}
+
+// Exact cap boundary: a rendering of exactly askFullMax bytes is accepted,
+// one byte more is refused.
+func TestParsePeekTailAskFullCapBoundary(t *testing.T) {
+	overhead := len("Bash()")
+	atCap := strings.Repeat("z", askFullMax-overhead)
+	p, ok := parsePeekTail(txBytes(txUser("go"), txRec("assistant", txBash(atCap))))
+	if !ok || !p.Pending || len(p.AskFull) != askFullMax {
+		t.Fatalf("at cap: ok=%v pending=%v AskFull len=%d, want exactly %d", ok, p.Pending, len(p.AskFull), askFullMax)
+	}
+	p, ok = parsePeekTail(txBytes(txUser("go"), txRec("assistant", txBash(atCap+"z"))))
+	if !ok || !p.Pending || p.AskFull != "" {
+		t.Fatalf("one byte over cap: ok=%v pending=%v AskFull=%q, want empty", ok, p.Pending, p.AskFull)
 	}
 }
 

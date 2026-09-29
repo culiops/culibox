@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -60,13 +61,22 @@ const summaryMax = 120
 // string on user records — decoding it eagerly would reject the latter.
 type peekRec struct {
 	Message struct {
-		Role    string          `json:"role"`
+		Role string `json:"role"`
+		// ID is the API message id shared by every record one assistant
+		// message was split across on write (parallel tool_use calls each
+		// get their own record; a single streamed turn can split
+		// thinking/text/tool_use the same way). It is what binds a "pending
+		// run" together in parsePeekTail — see the comment there.
+		ID      string          `json:"id"`
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 }
 
 type contentBlock struct {
-	Type  string          `json:"type"`
+	Type string `json:"type"`
+	// ID is the tool_use block's own id (Claude Code writes "id":"toolu_…").
+	// Used to dedupe a tool_use across the records of one pending run.
+	ID    string          `json:"id"`
 	Text  string          `json:"text"`
 	Name  string          `json:"name"`  // tool_use
 	Input json.RawMessage `json:"input"` // tool_use
@@ -94,13 +104,35 @@ func parsePeekTail(b []byte) (Peek, bool) {
 	lines := strings.Split(string(b), "\n")
 	var p Peek
 	var parsedAny, sawLast, foundText bool
-	// Parallel tool calls are written one tool_use per assistant record, and
-	// Claude Code asks about the FIRST while the file ends on the LAST
-	// (measured 2026-09-29). pendingTools counts the unresolved calls trailing
-	// the transcript; counting stays true until a record that ends the run is
-	// seen — a tail that runs out first cannot rule out more calls before it.
-	var pendingTools int
-	var counting bool
+	// A "pending run" is the trailing assistant records that share ONE
+	// message.id — one API message Claude Code split into several written
+	// records (parallel tool calls each get their own record; a single
+	// streamed turn can split thinking/text/tool_use the same way). The
+	// dialog asks about the FIRST tool_use in the run while the transcript
+	// ends on the LAST (measured 2026-09-29, probe E), so AskFull is offered
+	// only when the run holds exactly one DISTINCT tool_use id — otherwise
+	// "which call does the card's '1' answer" is ambiguous and a remote Yes
+	// must not be offered at all. (Fix round 1, 2026-09-29: this replaces an
+	// earlier "trailing all-tool_use record" heuristic that a
+	// [thinking, tool_use A, text, tool_use B] split — a real shape for one
+	// turn — could miscount as a single pending call.)
+	//
+	// runActive tracks whether the walk is still inside that run: a
+	// text/thinking-only record does NOT end it (it is still part of the
+	// same split message) — only a record with a DIFFERENT message.id, a
+	// non-assistant role, or the tail simply running out (runActive never
+	// resolves to false) ends or fails it, the latter exactly like the old
+	// "counting" flag's fail-closed behaviour. runOK is false — and AskFull
+	// stays empty regardless of the count — when the pending record's
+	// message.id is itself missing: with no id to bind the run to, "exactly
+	// one" cannot be trusted, so this fails closed too. toolIDs pools the
+	// distinct tool_use ids seen across the run (a block with no id of its
+	// own gets a synthetic one, so two blank ids are never mistaken for the
+	// same call).
+	var runID string
+	var runOK, runActive bool
+	toolIDs := map[string]bool{}
+	var anonToolIDs int
 	var askFull string
 	for i := len(lines) - 1; i >= 0; i-- {
 		ln := strings.TrimSpace(lines[i])
@@ -131,18 +163,24 @@ func parsePeekTail(b []byte) (Peek, bool) {
 				if full, hasArg := askRender(last.Name, last.Input); hasArg && len(full) <= askFullMax {
 					askFull = full
 				}
-				counting = true
+				if rec.Message.ID != "" {
+					runID = rec.Message.ID
+					runOK = true
+					runActive = true
+				}
 			}
 		}
-		if counting {
-			n, all := trailingToolUses(bs)
-			if rec.Message.Role != "assistant" {
-				counting = false
-			} else {
-				pendingTools += n
-				if !all {
-					counting = false
+		if runActive {
+			if rec.Message.Role == "assistant" && rec.Message.ID == runID {
+				for _, id := range trailingToolUseIDs(bs) {
+					if id == "" {
+						anonToolIDs++
+						id = fmt.Sprintf("\x00%d", anonToolIDs)
+					}
+					toolIDs[id] = true
 				}
+			} else {
+				runActive = false
 			}
 		}
 		if !foundText && rec.Message.Role == "assistant" {
@@ -154,11 +192,17 @@ func parsePeekTail(b []byte) (Peek, bool) {
 				}
 			}
 		}
-		if foundText {
+		// The text search's own early exit must not cut the run-counting
+		// walk short: a text record found before the run's boundary is
+		// reached is still IN the run (see above), so breaking here on
+		// foundText alone — the pre-fix-round-1 condition — could stop
+		// before that boundary and leave runActive permanently true,
+		// under-reporting a real single-call run as "ran out mid-run".
+		if foundText && !runActive {
 			break
 		}
 	}
-	if pendingTools == 1 && !counting {
+	if runOK && !runActive && len(toolIDs) == 1 {
 		p.AskFull = askFull
 	}
 	return p, parsedAny
@@ -204,12 +248,12 @@ func summaryLine(text string) string {
 // notification body.
 const askMax = 80
 
-// askLine renders a pending tool call as one printable line: the tool name,
-// plus the command (shell tools) or the path (file tools). Everything else is
-// the name alone — its input is not something to read at a glance. Control
-// characters become spaces and whitespace runs collapse, so a heredoc or an
-// ANSI-laden echo still renders as one clean line. unicode.IsControl covers C0
-// (< 0x20), DEL (0x7f) AND the C1 range (U+0080-U+009F, e.g. U+009B CSI,
+// cleanArg makes a tool argument safe to render as one printable line —
+// shared by askLine and askRender (fix round 1: this used to be duplicated
+// verbatim in both). Control characters (C0, DEL, C1) and Unicode format
+// characters become spaces, and whitespace runs collapse, so a heredoc or an
+// ANSI-laden echo still renders as one clean line. unicode.IsControl covers
+// C0 (< 0x20), DEL (0x7f) AND the C1 range (U+0080-U+009F, e.g. U+009B CSI,
 // U+009D OSC) — strings.Fields alone would not collapse a C1 control, since
 // unicode.IsSpace does not treat it as whitespace. unicode.Cf (format
 // characters: bidi overrides/isolates, zero-width joiners/spaces, …) is
@@ -217,6 +261,19 @@ const askMax = 80
 // or a zero-width character reaching a rendered tool-call line is the same
 // class of problem: it changes what the line looks like without changing
 // what it says.
+func cleanArg(v string) string {
+	clean := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return ' '
+		}
+		return r
+	}, v)
+	return strings.Join(strings.Fields(clean), " ")
+}
+
+// askLine renders a pending tool call as one printable line: the tool name,
+// plus the command (shell tools) or the path (file tools). Everything else is
+// the name alone — its input is not something to read at a glance.
 func askLine(name string, input json.RawMessage) string {
 	if name == "" {
 		return ""
@@ -232,13 +289,7 @@ func askLine(name string, input json.RawMessage) string {
 	}
 	s := name
 	if arg != "" {
-		clean := strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-				return ' '
-			}
-			return r
-		}, arg)
-		s = name + "(" + strings.Join(strings.Fields(clean), " ") + ")"
+		s = name + "(" + cleanArg(arg) + ")"
 	}
 	if r := []rune(s); len(r) > askMax {
 		s = string(r[:askMax-1]) + "…"
@@ -267,12 +318,10 @@ var askableArgs = map[string]string{
 // askRender renders a tool call as one untruncated, printable line — the tool
 // name plus its primary argument — but ONLY for a tool in askableArgs; hasArg
 // is false for every other tool, including one that has a primary argument
-// that just isn't safe to answer from alone (see askableArgs). Control
-// characters (C0, DEL, C1) and Unicode format characters (bidi overrides,
-// zero-width) become spaces, and whitespace runs collapse, exactly like
-// askLine above: a heredoc or an ANSI-laden echo still renders as one clean
-// line, and a bidi override cannot make the line read differently from what
-// it says.
+// that just isn't safe to answer from alone (see askableArgs), and for an
+// allowed tool whose call used a different key (e.g. Read with "command"
+// instead of "file_path" — not a shape Claude Code produces, but not trusted
+// either).
 func askRender(name string, input json.RawMessage) (string, bool) {
 	key, ok := askableArgs[name]
 	if !ok {
@@ -284,29 +333,46 @@ func askRender(name string, input json.RawMessage) (string, bool) {
 	if !ok || strings.TrimSpace(v) == "" {
 		return "", false
 	}
-	clean := strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return ' '
-		}
-		return r
-	}, v)
-	return name + "(" + strings.Join(strings.Fields(clean), " ") + ")", true
+	return name + "(" + cleanArg(v) + ")", true
 }
 
 // trailingToolUses counts the tool_use blocks at the END of a record's
-// content and reports whether the record held nothing else (all == true), so
-// a caller can tell "N pending calls, and this record is entirely made of
-// them" from "N pending calls, but there was also a text/thinking block after
-// them" — the latter cannot happen for the tail record itself (a text block
-// there means the run finished, see parsePeekTail), but does for a record
-// further back that has both a text block and one or more trailing tool_use
-// blocks preceding it.
+// content, and reports whether the record held nothing else (all == true). A
+// record's tool_use blocks always trail any thinking/text blocks in a real
+// transcript, so "trailing" already means "every tool call this record
+// proposes" — no separate whole-record scan is needed.
+//
+// Fix round 1 (2026-09-29): this no longer decides on its own whether a
+// pending run continues past this record — that decision now belongs to
+// parsePeekTail's message.id-bound run (runActive), because a text/thinking
+// record (n == 0, all == false) must NOT end the run by itself. This
+// function now answers a narrower question — "how many, and is that all of
+// them" — which parsePeekTail uses (via trailingToolUseIDs) only to pool
+// each matching record's tool_use ids into the run's dedup set.
 func trailingToolUses(bs []contentBlock) (int, bool) {
 	n := 0
 	for j := len(bs) - 1; j >= 0 && bs[j].Type == "tool_use"; j-- {
 		n++
 	}
 	return n, n > 0 && n == len(bs)
+}
+
+// trailingToolUseIDs returns the ids of the n trailing tool_use blocks
+// trailingToolUses(bs) counts — the same blocks, so a caller pooling ids
+// across a run's records does not re-implement the walk. A block with a
+// blank id (not a shape Claude Code writes, but not assumed) comes back as
+// "" — parsePeekTail gives each blank its own synthetic key rather than
+// dedup-merging them.
+func trailingToolUseIDs(bs []contentBlock) []string {
+	n, _ := trailingToolUses(bs)
+	if n == 0 {
+		return nil
+	}
+	ids := make([]string, n)
+	for i, blk := range bs[len(bs)-n:] {
+		ids[i] = blk.ID
+	}
+	return ids
 }
 
 // canReply is the whole authorization decision for sending a message into a
