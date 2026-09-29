@@ -40,6 +40,17 @@ function cardContent(s) {
   return { text: v.summary || "No summary", ask: false, reply: !!v.replyable, enableReplies: !v.replyable };
 }
 
+// attentionTitle: the tab title. The waiting count goes FIRST so it survives a
+// tab strip that truncates from the right.
+function attentionTitle(n, env) {
+  return (n > 0 ? "(" + n + ") " : "") + (env ? "[" + env + "] " : "") + "Agent Box";
+}
+
+// faviconHref: the amber-dot icon while anything needs you.
+function faviconHref(n) {
+  return n > 0 ? "/favicon-needs.svg" : "/favicon.svg";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needLabel, cardContent };
+  module.exports = { needLabel, cardContent, attentionTitle, faviconHref };
 }

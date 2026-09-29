@@ -1425,6 +1425,23 @@ function rowLocal(s) {
   };
 }
 
+// signalAttention pushes the waiting count to the tab title and favicon — the
+// part of the signal you see without looking at the page. Runs on every
+// successful poll. The favicon href is swapped only when the state flips, so a
+// steady state costs no icon reload.
+let faviconNeeds = null;
+function signalAttention() {
+  const n = waitingCount();
+  const t = attentionTitle(n, window.__envLabel || "");
+  if (document.title !== t) document.title = t;
+  const needs = n > 0;
+  if (needs !== faviconNeeds) {
+    const link = $("favicon");
+    if (link) link.href = faviconHref(n);
+    faviconNeeds = needs;
+  }
+}
+
 // Returns the live session list, or null if the request failed: the boot-time
 // restore must be able to tell "the server says there are none" (a valid answer:
 // restore nothing) from "the server could not be asked" (retry, restore nothing
@@ -1460,6 +1477,7 @@ async function refreshSessions() {
     return null;
   }
   lastSessions = sessions || [];
+  signalAttention();
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.
@@ -3204,7 +3222,7 @@ initMobileShell();
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
     strip.hidden = false;
-    document.title = "[" + meta.env_label + "] Agent Box";
+    signalAttention(); // title = (N) [ENV] Agent Box, now that ENV is known
     updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh

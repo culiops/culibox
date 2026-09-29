@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent } = require("../static/attention.js");
+const { needLabel, cardContent, attentionTitle, faviconHref } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -35,4 +35,16 @@ test("claude waiting with no need (transcript unreadable) is Open only, like non
 test("non-claude waiting card offers Open only", () => {
   assert.deepEqual(cardContent({ activity: "waiting", claude: false, replyable: true, summary: "" }),
     { text: "Waiting for input.", ask: false, reply: false, enableReplies: false });
+});
+
+test("attentionTitle prefixes the waiting count only when there is one", () => {
+  assert.strictEqual(attentionTitle(0, "DEV"), "[DEV] Agent Box");
+  assert.strictEqual(attentionTitle(2, "DEV"), "(2) [DEV] Agent Box");
+  assert.strictEqual(attentionTitle(1, ""), "(1) Agent Box");
+  assert.strictEqual(attentionTitle(0, ""), "Agent Box");
+});
+
+test("faviconHref flips to the amber-dot icon while anything needs you", () => {
+  assert.strictEqual(faviconHref(0), "/favicon.svg");
+  assert.strictEqual(faviconHref(3), "/favicon-needs.svg");
 });
