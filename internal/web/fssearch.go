@@ -53,6 +53,11 @@ const (
 
 	searchDefaultLimit = 50
 	searchMaxLimit     = 200
+
+	// maxPreferIndexes bounds the per-directory indexes behind ?prefer=. Each
+	// holds up to maxIndexPaths entries; an operator moves between a handful of
+	// repos, not dozens.
+	maxPreferIndexes = 4
 )
 
 // skipDirs are never descended into. Dot-prefixed directories are NOT skipped
@@ -196,7 +201,11 @@ type indexEntry struct {
 // fileIndex is a TTL-cached, bounded list of files under root. The bounds are
 // fields rather than constants so tests can shrink them.
 type fileIndex struct {
-	root           string
+	root string
+	// relPrefix is root's slash path relative to $HOME ("" for the home index
+	// itself), so skipRelPaths — which are home-relative — still apply to an
+	// index rooted deeper, e.g. at ~/.claude.
+	relPrefix      string
 	mu             sync.Mutex
 	ttl            time.Duration
 	maxPaths       int
@@ -288,7 +297,7 @@ func (ix *fileIndex) snapshot(k searchKind) ([]indexEntry, bool) {
 // bounds snapshots the limits for a walk. Caller holds mu, so the background
 // rebuild never reads a field another goroutine is writing.
 func (ix *fileIndex) bounds() walkBounds {
-	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDirs, ix.maxPerRootDirs, ix.maxDepth, ix.budget}
+	return walkBounds{ix.root, ix.maxPaths, ix.maxPerRoot, ix.maxDirs, ix.maxPerRootDirs, ix.maxDepth, ix.budget, ix.relPrefix}
 }
 
 // walkBounds is every limit a walk honours, captured under the index lock so the
@@ -302,6 +311,7 @@ type walkBounds struct {
 	maxPerRootDirs int
 	maxDepth       int
 	budget         time.Duration
+	relPrefix      string
 }
 
 // walkTree collects files AND directories under root in one pass, each with its
@@ -459,7 +469,7 @@ func walkTree(b walkBounds) (files []indexEntry, filesTrunc bool, dirs []indexEn
 		}
 
 		if d.IsDir() {
-			if skipDirs[d.Name()] || skipRelPaths[slash] || len(parts) >= b.maxDepth {
+			if skipDirs[d.Name()] || skipRelPaths[path.Join(b.relPrefix, slash)] || len(parts) >= b.maxDepth {
 				return fs.SkipDir
 			}
 			// A CONJUNCTION, not the old single test: skip the subtree only once
@@ -645,9 +655,11 @@ func (s *Server) searchIndex() *fileIndex {
 	return s.idx
 }
 
-// handleFsSearch serves GET /api/fs/search?q=&limit= — fuzzy-matched files under
-// $HOME, best first. `truncated` reports that the underlying index hit one of its
-// bounds, so a short result set is never mistaken for "no such file".
+// handleFsSearch serves GET /api/fs/search?q=&limit=&kind=&prefer= — fuzzy-matched
+// files under $HOME, best first. `truncated` reports that the underlying index hit
+// one of its bounds, so a short result set is never mistaken for "no such file".
+// prefer=<abs dir inside $HOME> lists that subtree's matches first (see
+// resolvePrefer).
 func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if q == "" {
@@ -672,32 +684,39 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("kind") == "dir" {
 		kind = kindDirs
 	}
-	entries, truncated := s.searchIndex().snapshot(kind)
-	lq := strings.ToLower(q)
-	hits := make([]searchHit, 0, limit)
-	for _, e := range entries {
-		score, ok := fuzzyScoreLower(e.lower, e.baseStart, lq)
-		if !ok {
-			continue
-		}
-		hits = append(hits, searchHit{Rel: e.rel, Score: score})
-	}
-	sort.Slice(hits, func(i, j int) bool {
-		if hits[i].Score != hits[j].Score {
-			return hits[i].Score > hits[j].Score
-		}
-		return hits[i].Rel < hits[j].Rel
-	})
-
-	// Resolve and containment-check only what will actually be returned: a
-	// symlink inside $HOME pointing outside it must never be surfaced, exactly
-	// as /api/fs/list and /api/fs/read already guarantee. $HOME is resolved once
-	// rather than per hit.
+	// $HOME is resolved once, up front: resolvePrefer needs it, and the
+	// containment check below uses it for every hit.
 	rhome, err := filepath.EvalSymlinks(s.Home)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "home unresolvable")
 		return
 	}
+	entries, truncated := s.searchIndex().snapshot(kind)
+	lq := strings.ToLower(q)
+	// prefer=<abs dir>: walk that subtree first (its own index, so a home walk
+	// that ran out of budget before reaching it cannot hide it), and list its
+	// hits before everything else. Files only: the directory picker is unchanged.
+	var hits []searchHit
+	preferRel := ""
+	if kind == kindFiles {
+		if pabs, prel, ok := resolvePrefer(rhome, r.URL.Query().Get("prefer")); ok {
+			preferRel = prel
+			pentries, ptrunc := s.preferIndex(pabs, filepath.ToSlash(prel)).snapshot(kindFiles)
+			truncated = truncated || ptrunc
+			hits = scoreEntries(pentries, lq, prel)
+		}
+	}
+	for _, h := range scoreEntries(entries, lq, "") {
+		// The home index holds the preferred subtree too; list each file once.
+		if preferRel != "" && strings.HasPrefix(h.Rel, preferRel+string(filepath.Separator)) {
+			continue
+		}
+		hits = append(hits, h)
+	}
+
+	// Resolve and containment-check only what will actually be returned: a
+	// symlink inside $HOME pointing outside it must never be surfaced, exactly
+	// as /api/fs/list and /api/fs/read already guarantee.
 	out := make([]searchHit, 0, limit)
 	for _, h := range hits {
 		if len(out) >= limit {
@@ -722,4 +741,81 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		out = append(out, h)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": out, "truncated": truncated})
+}
+
+// scoreEntries fuzzy-scores an index against lq and returns the hits best
+// first. prefix (home-relative) is joined onto each entry's rel for an index
+// rooted below $HOME; the score is computed on the index's own rel, so a
+// preferred repo's files are not penalised for the length of its path.
+func scoreEntries(entries []indexEntry, lq, prefix string) []searchHit {
+	hits := make([]searchHit, 0, 64)
+	for _, e := range entries {
+		score, ok := fuzzyScoreLower(e.lower, e.baseStart, lq)
+		if !ok {
+			continue
+		}
+		rel := e.rel
+		if prefix != "" {
+			rel = filepath.Join(prefix, e.rel)
+		}
+		hits = append(hits, searchHit{Rel: rel, Score: score})
+	}
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Score != hits[j].Score {
+			return hits[i].Score > hits[j].Score
+		}
+		return hits[i].Rel < hits[j].Rel
+	})
+	return hits
+}
+
+// resolvePrefer turns ?prefer=<abs dir> into the directory to walk first and
+// its path relative to (resolved) $HOME. Anything unusable — relative, missing,
+// not a directory, outside home once symlinks resolve, or home itself — is
+// ignored (ok=false), never an error: preferring is a ranking hint, not a scope.
+func resolvePrefer(rhome, raw string) (abs, rel string, ok bool) {
+	if raw == "" {
+		return "", "", false
+	}
+	resolved, err := containedUnder(rhome, raw)
+	if err != nil || resolved == rhome {
+		return "", "", false
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil || !fi.IsDir() {
+		return "", "", false
+	}
+	rel, err = filepath.Rel(rhome, resolved)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", "", false
+	}
+	return resolved, rel, true
+}
+
+// preferIndex returns the index rooted at root (created on first use) and marks
+// it most recently used, evicting the oldest past maxPreferIndexes.
+func (s *Server) preferIndex(root, relPrefix string) *fileIndex {
+	s.prefMu.Lock()
+	defer s.prefMu.Unlock()
+	if s.prefIdx == nil {
+		s.prefIdx = map[string]*fileIndex{}
+	}
+	ix, ok := s.prefIdx[root]
+	if !ok {
+		ix = newFileIndex(root)
+		ix.relPrefix = relPrefix
+		s.prefIdx[root] = ix
+	}
+	for i, r := range s.prefOrder {
+		if r == root {
+			s.prefOrder = append(s.prefOrder[:i], s.prefOrder[i+1:]...)
+			break
+		}
+	}
+	s.prefOrder = append(s.prefOrder, root)
+	for len(s.prefOrder) > maxPreferIndexes {
+		delete(s.prefIdx, s.prefOrder[0])
+		s.prefOrder = s.prefOrder[1:]
+	}
+	return ix
 }

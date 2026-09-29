@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -998,5 +999,127 @@ func TestDirPickerSkipSetMatchesSkipDirRecord(t *testing.T) {
 			"so a real workspace disappears from the picker's empty state with no signal at all; "+
 			"either add them to skipDirRecord or drop them from dpSkipWorkspaceNames",
 			missingInGo, jsPath)
+	}
+}
+
+func hitRels(out searchResp) []string {
+	r := make([]string, 0, len(out.Results))
+	for _, h := range out.Results {
+		r = append(r, h.Rel)
+	}
+	return r
+}
+
+func TestSearchPreferRanksTheSubtreeFirst(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, "aaa", "peek.go"))                         // shorter path: wins on score alone
+	mustWrite(t, filepath.Join(home, "proj", "internal", "session", "peek.go")) // the focused session's repo
+	s := &Server{Home: home}
+	_, plain := doSearch(t, s, "q=peek")
+	if len(plain.Results) < 2 || plain.Results[0].Rel != filepath.Join("aaa", "peek.go") {
+		t.Fatalf("baseline changed: %v", hitRels(plain))
+	}
+	_, out := doSearch(t, s, "q=peek&prefer="+url.QueryEscape(filepath.Join(home, "proj")))
+	want := filepath.Join("proj", "internal", "session", "peek.go")
+	if len(out.Results) != 2 || out.Results[0].Rel != want || out.Results[0].Path != filepath.Join(home, want) {
+		t.Fatalf("prefer did not rank its subtree first (or listed a file twice): %+v", out.Results)
+	}
+}
+
+func TestSearchPreferWalksItsOwnSubtreeWhenTheHomeIndexIsTruncated(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, "aaa", "filler.txt"))
+	mustWrite(t, filepath.Join(home, "zzz", "target-file.go"))
+	s := &Server{Home: home}
+	s.idx = newFileIndex(home)
+	s.idx.maxPaths = 1 // the home walk fills up on aaa/ and never records zzz/
+	_, plain := doSearch(t, s, "q=target")
+	if len(plain.Results) != 0 || !plain.Truncated {
+		t.Fatalf("setup: want a truncated miss, got %+v", plain)
+	}
+	_, out := doSearch(t, s, "q=target&prefer="+url.QueryEscape(filepath.Join(home, "zzz")))
+	if len(out.Results) != 1 || out.Results[0].Rel != filepath.Join("zzz", "target-file.go") {
+		t.Fatalf("prefer must walk its own subtree: %+v", out.Results)
+	}
+}
+
+func TestSearchPreferIgnoresUnusableValues(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	mustWrite(t, filepath.Join(home, "proj", "notes.md"))
+	mustWrite(t, filepath.Join(home, "other", "notes-2.md"))
+	mustWrite(t, filepath.Join(outside, "notes-outside.md"))
+	if err := os.Symlink(outside, filepath.Join(home, "link-out")); err != nil {
+		t.Skip("symlink not supported")
+	}
+	s := &Server{Home: home}
+	_, plain := doSearch(t, s, "q=notes")
+	for _, p := range []string{
+		"proj",                                  // relative
+		home,                                    // $HOME itself: nothing to prefer
+		filepath.Join(home, "missing"),          // does not exist
+		filepath.Join(home, "proj", "notes.md"), // a file
+		outside,                                 // outside home
+		filepath.Join(home, "link-out"),         // a symlink out of home
+		"/",
+	} {
+		rr, out := doSearch(t, s, "q=notes&prefer="+url.QueryEscape(p))
+		if rr.Code != http.StatusOK {
+			t.Fatalf("prefer=%q: code %d, want 200 (ignored, never an error)", p, rr.Code)
+		}
+		if !reflect.DeepEqual(hitRels(out), hitRels(plain)) {
+			t.Errorf("prefer=%q changed the results: %v vs %v", p, hitRels(out), hitRels(plain))
+		}
+		for _, r := range out.Results {
+			if strings.Contains(r.Rel, "outside") {
+				t.Fatalf("prefer=%q escaped home: %v", p, hitRels(out))
+			}
+		}
+	}
+}
+
+func TestSearchPreferKeepsSkipRules(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"))
+	mustWrite(t, filepath.Join(home, ".claude", "projects", "slug", "transcript.json"))
+	s := &Server{Home: home}
+	_, out := doSearch(t, s, "q=json&prefer="+url.QueryEscape(filepath.Join(home, ".claude")))
+	for _, r := range out.Results {
+		if strings.Contains(r.Rel, "projects") {
+			t.Fatalf("skipRelPaths lost under a prefer root: %v", hitRels(out))
+		}
+	}
+	if len(out.Results) != 1 {
+		t.Fatalf("want settings.json only, got %v", hitRels(out))
+	}
+}
+
+func TestSearchPreferIsIgnoredForDirectories(t *testing.T) {
+	home := t.TempDir()
+	mustMkdirAll(t, filepath.Join(home, "zproj", ".git"))
+	mustMkdirAll(t, filepath.Join(home, "aproj", ".git"))
+	s := &Server{Home: home}
+	_, plain := doSearch(t, s, "q=proj&kind=dir")
+	_, out := doSearch(t, s, "q=proj&kind=dir&prefer="+url.QueryEscape(filepath.Join(home, "zproj")))
+	if !reflect.DeepEqual(hitRels(out), hitRels(plain)) {
+		t.Fatalf("the directory picker must not change: %v vs %v", hitRels(out), hitRels(plain))
+	}
+}
+
+func TestPreferIndexEvictsTheLeastRecentlyUsed(t *testing.T) {
+	s := &Server{Home: t.TempDir()}
+	for _, r := range []string{"/a", "/b", "/c", "/d"} {
+		s.preferIndex(r, "")
+	}
+	s.preferIndex("/a", "") // touch /a: /b is now the oldest
+	s.preferIndex("/e", "")
+	if len(s.prefIdx) != maxPreferIndexes {
+		t.Fatalf("%d indexes kept, want %d", len(s.prefIdx), maxPreferIndexes)
+	}
+	if _, ok := s.prefIdx["/b"]; ok {
+		t.Fatal("the least recently used index was not evicted")
+	}
+	if _, ok := s.prefIdx["/a"]; !ok {
+		t.Fatal("a recently used index was evicted")
 	}
 }

@@ -60,6 +60,13 @@ type Server struct {
 	// idx is the lazily-built file index behind /api/fs/search (see fssearch.go).
 	idxMu sync.Mutex
 	idx   *fileIndex
+
+	// prefIdx holds file indexes rooted at "preferred" directories (the
+	// focused session's cwd, see /api/fs/search?prefer=), least recently used
+	// evicted past maxPreferIndexes. prefOrder is oldest first.
+	prefMu    sync.Mutex
+	prefIdx   map[string]*fileIndex
+	prefOrder []string
 }
 
 // QuickShell exposes the verified quick-shell name for startup diagnostics.
