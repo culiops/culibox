@@ -37,6 +37,9 @@
     #palette-open { font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 4px 8px; }
     #palette-open .pal-short { display: none; }
     .sidebar-hidden #sidebar { display: none; }
+    /* One sidebar toggle per state: while the sidebar is hidden the rail48's own
+       ☰ (the design's placement) is the way back, so the header's copy goes. */
+    .sidebar-hidden #sidebar-toggle { display: none; }
     /* The mobile bottom nav is invisible above the mobile breakpoint; the 700px
        block below turns it on. It is the ONLY screen switcher on a phone. */
     #mobile-nav { display: none; }
@@ -1397,6 +1400,13 @@
          only one scroll region is ever live. */
       #layout { flex-direction: column; }
       #sidebar { width: 100%; flex: 1 1 auto; min-height: 0; border-right: none; border-bottom: none; }
+      /* sidebarHidden persisted from a wide window means nothing here — the
+         bottom nav picks the screen, and no sidebar toggle is reachable at this
+         width — so neutralize it rather than blank the Sessions/Files screens
+         behind a desktop rail. (1,1,1) and earlier in the file than the
+         mobile-screen-terminal #sidebar rule, which must still win there. */
+      html.sidebar-hidden #sidebar { display: flex; }
+      html.sidebar-hidden .rail48 { display: none; }
       #split-v, #split-h { display: none; }              /* nothing to resize when one pane fills the screen */
       #hint { display: none; }                            /* the bottom nav replaces the desktop status bar */
 
