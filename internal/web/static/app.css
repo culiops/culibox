@@ -1460,6 +1460,13 @@
         font-size: 18px; line-height: 1; cursor: pointer; flex: none;
       }
       #term-topbar .ic:hover { border-color: var(--accent); }
+      /* .ic's own `display: flex` above beats the UA sheet's [hidden] rule at
+         equal specificity (author beats user-agent) — same trap noted at
+         .cell-bar[hidden] and #agent-seg[hidden] elsewhere in this file. U1:
+         renderTermTopbar hides #tt-more when the focused tab is a viewer
+         (the ⋯ actions sheet needs a real session), and without this it
+         would stay visibly clickable. */
+      #term-topbar .ic[hidden] { display: none; }
       #term-topbar .tt-name {
         font-size: 14px; color: var(--fg); min-width: 0;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1473,15 +1480,32 @@
         background: var(--panel); border-bottom: 1px solid var(--border);
         position: relative; scrollbar-width: none;
       }
-      html.mobile-screen-terminal #term-chips[hidden] { display: none; } /* 0 open terminals */
+      html.mobile-screen-terminal #term-chips[hidden] { display: none; } /* 0 open tabs (terminal or viewer) */
       #term-chips::-webkit-scrollbar { display: none; }
+      /* U1: a chip is a WRAPPER, not a button — it holds a focus button
+         (.chip-main) plus, on the focused chip only, a separate close button
+         (.chip-x). Never nest a <button> inside a <button>. Visual state
+         (.wait/.on) stays on the wrapper so it colors both children via
+         `color: inherit` / the shared background, exactly as the single old
+         <button class="chip"> used to look. */
       .chip {
-        flex: 0 0 auto; display: inline-flex; align-items: center; gap: 7px;
-        min-height: var(--tap); padding: 0 12px; box-sizing: border-box;
+        flex: 0 0 auto; display: inline-flex; align-items: stretch;
+        min-height: var(--tap); box-sizing: border-box;
         font-size: 12.5px; color: var(--muted);
-        background: transparent; border: 1px solid var(--border); cursor: pointer;
+        background: transparent; border: 1px solid var(--border);
+      }
+      .chip-main {
+        flex: 1 1 auto; display: inline-flex; align-items: center; gap: 7px;
+        padding: 0 12px; box-sizing: border-box;
+        font: inherit; color: inherit; background: none; border: none; cursor: pointer;
       }
       .chip .dot { flex: 0 0 auto; }
+      /* Viewer chip marker: a small square, not the round activity dot — a
+         viewer has no activity of its own. Drawn in CSS rather than a
+         symbol-font glyph on purpose: this repo has hit glyphs from an icon
+         font silently vanishing on retype, a failure mode a plain shape
+         cannot have. */
+      .chip .vic { flex: 0 0 auto; width: 8px; height: 8px; box-sizing: border-box; border: 1.5px solid var(--muted); }
       .chip .cnm { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chip .u { font-size: 10.5px; color: var(--muted); } /* context % on the active chip */
       .chip.wait { color: var(--warn-fg); border-color: var(--warn-fg); } /* an agent needs you (also the amber waiting dot) */
@@ -1489,6 +1513,19 @@
          when that session is itself waiting; the amber waiting dot still carries the
          needs-you signal, matching M2 (active = accent border, state = the dot). */
       .chip.on { color: var(--fg); border-color: var(--accent); background: var(--sel-soft); }
+      /* The focused chip's close control: closes the VIEW, same as the
+         desktop cell-bar's own .tab-x (never ends the session — End lives in
+         the ⋯ sheet). Sized to the same >=28px mobile floor as
+         .cell-bar .tab-x below, since this is the one touch target on the
+         whole strip that removes something. */
+      .chip-x {
+        flex: 0 0 auto; align-self: center; margin: 0 8px 0 0;
+        min-width: 28px; min-height: 28px; box-sizing: border-box;
+        display: inline-flex; align-items: center; justify-content: center;
+        color: var(--muted); background: none; border: none; cursor: pointer;
+        font-size: 15px; line-height: 1;
+      }
+      .chip-x:hover { color: var(--danger); }
       /* Right-edge fade hint that the strip scrolls (M2 .fade-r), painted over the
          strip without eating chip taps. */
       html.mobile-screen-terminal #term-chips::after {
@@ -1496,6 +1533,14 @@
         flex: 0 0 34px; margin-left: -34px; pointer-events: none;
         background: linear-gradient(90deg, transparent, var(--panel));
       }
+      /* U1: the chip strip above is now the ONLY tab-switcher on mobile — the
+         desktop per-cell .cell-bar would otherwise show a second one (and it
+         has no viewer tabs, and no close control for them at all). Its
+         remaining controls need no mobile path: +sh -> Sessions screen's own
+         "+ new session"; ⛶/pane-close are meaningless with the one visible
+         cell mobile shows; per-tab ⏻ End -> the ⋯ actions sheet (#tt-more,
+         already reachable from the topbar above). */
+      .cell-bar { display: none; }
 
       /* Terminal screen shows ONE pane: the focused cell fills, others hide, and
          the desktop split gutters/handles are gone (nothing to resize on a phone).

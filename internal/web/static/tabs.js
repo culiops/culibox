@@ -737,6 +737,14 @@ function moveToOwnPane(from, tab) {
   refreshSessions();
 }
 
+// U1: opening a file switches the mobile shell to the Terminal screen, the
+// same way openTerminal already does above (typeof-guarded — tabs.js loads
+// before the mobile globals in mobileshell.js/app.js) — covering both
+// branches below (already-open and newly-opened), since a file's chip now
+// lives in the same #term-chips strip a terminal's does and there is no
+// separate "viewer" screen to land on. renderMobileChips is likewise
+// typeof-guarded and re-painted here rather than waiting for the next
+// session poll, so a newly opened file's chip appears at once.
 function openFile(path) {
   // Normalise BEFORE matching, on the same rule ViewerTab's constructor uses.
   // Comparing the raw argument meant "/home/u/./a.md" missed the tab already
@@ -745,11 +753,18 @@ function openFile(path) {
   if (typeof normalizePath === "function") path = normalizePath(path);
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "viewer" && t.path === path);
-    if (t) { setFocusedCell(c); c.activate(t); return; }
+    if (t) {
+      setFocusedCell(c); c.activate(t);
+      if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+      if (typeof renderMobileChips === "function") renderMobileChips();
+      return;
+    }
   }
   const cell = focusedCellOrCreate();
   cell.addTab(new ViewerTab(path));
   renderGrid();
+  if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+  if (typeof renderMobileChips === "function") renderMobileChips();
 }
 
 function closeTabEverywhere(tab) {

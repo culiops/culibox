@@ -323,6 +323,17 @@ function openTerminalTabs() {
   return out;
 }
 
+// openMobileTabs: every open tab — terminal AND viewer — across all cells,
+// in cell order then tab order (the ordering Cell.tabs already holds, and
+// the one the desktop cell-bar itself paints in). U1: the mobile chip strip
+// is the single switcher for BOTH kinds, so unlike openTerminalTabs above
+// this does not filter by kind.
+function openMobileTabs() {
+  const out = [];
+  if (typeof cells !== "undefined") for (const c of cells) for (const t of c.tabs) out.push(t);
+  return out;
+}
+
 // cellOfTab: tabs carry no back-pointer to their Cell, so this is the honest
 // implementation — scan the live cells for the one holding this tab. `cells`
 // is tabs.js's module-level array; classic scripts share one global scope, so
@@ -333,7 +344,11 @@ function cellOfTab(tab) {
   return null;
 }
 
-function focusTerminalTab(tab) {
+// focusMobileTab: kind-agnostic — a terminal tab and a viewer tab are both
+// just Cell tabs, and cellOfTab/activate don't care which. Renamed from
+// focusTerminalTab (U1): the chip strip now switches to either kind, and a
+// viewer chip's focus button must be able to call this too.
+function focusMobileTab(tab) {
   if (!tab || typeof setFocusedCell !== "function") return;
   const cell = cellOfTab(tab);
   if (!cell) return;
@@ -344,41 +359,92 @@ function focusTerminalTab(tab) {
   renderMobileChips();
 }
 
+// U1: chips list every open tab — terminal AND viewer — as the single mobile
+// switcher (the desktop per-cell .cell-bar is hidden at <=700px, see
+// app.css). The pure decision (label/title/on/wait/closable per tab) lives
+// in chipmodel.js's chipModel(); this function only turns that model into
+// DOM. Each chip is a wrapper holding a focus button (`.chip-main`) plus,
+// on the focused chip only, a SEPARATE close button (`.chip-x`) — never a
+// <button> nested inside a <button>.
 function renderMobileChips() {
   const strip = document.getElementById("term-chips");
   if (!strip) return;
-  const tabs = openTerminalTabs();
+  const tabs = openMobileTabs();
   strip.hidden = tabs.length === 0;
-  const focused = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const focused = (typeof focusedTab === "function") ? focusedTab() : null;
+  const model = chipModel(tabs, focused, (t) => (typeof t.activity === "function" ? t.activity() : null));
   strip.textContent = "";
-  for (const t of tabs) {
-    // Reuse activity.js's own class map (the same one the session row and the
-    // tab-bar dot use) rather than re-deriving a state string.
-    const a = (typeof activityClass === "function" && typeof t.activity === "function")
-      ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
-    const waiting = typeof t.activity === "function" && t.activity() === "waiting";
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "chip" + (t === focused ? " on" : "") + (waiting ? " wait" : "");
-    const dot = document.createElement("span");
-    dot.className = a.cls;
-    dot.setAttribute("aria-hidden", "true");
+  tabs.forEach((t, i) => {
+    const c = model[i];
+    const chip = document.createElement("span");
+    chip.className = "chip" + (c.on ? " on" : "") + (c.wait ? " wait" : "");
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "chip-main";
+    main.title = c.title;
+    main.setAttribute("aria-label", (c.kind === "viewer" ? "File: " : "Session: ") + c.label);
+
+    if (c.kind === "viewer") {
+      // A small square marker, not a round activity dot — a viewer has no
+      // activity of its own. A CSS shape rather than a symbol-font glyph:
+      // see the Nerd Font "glyphs vanish on retype" gotcha in this repo's
+      // memory — a plain drawn shape can't have that failure mode.
+      const vic = document.createElement("span");
+      vic.className = "vic";
+      vic.setAttribute("aria-hidden", "true");
+      main.appendChild(vic);
+    } else {
+      // Reuse activity.js's own class map (the same one the session row and the
+      // tab-bar dot use) rather than re-deriving a state string.
+      const a = (typeof activityClass === "function" && typeof t.activity === "function")
+        ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+      const dot = document.createElement("span");
+      dot.className = a.cls;
+      dot.setAttribute("aria-hidden", "true");
+      main.appendChild(dot);
+    }
+
     const nm = document.createElement("span");
     nm.className = "cnm";
-    nm.textContent = t.name || t.id;
-    btn.append(dot, nm);
+    nm.textContent = c.label;
+    main.appendChild(nm);
+
     // Context %, same field/format the tab strip's own usage readout uses
-    // (tabs.js renderBar / app.js renderSession) — no re-derivation here.
-    const u = (typeof t.usage === "function") ? t.usage() : null;
-    if (t === focused && u && typeof u.pct === "number") {
-      const pct = document.createElement("span");
-      pct.className = "u";
-      pct.textContent = u.pct + "%";
-      btn.appendChild(pct);
+    // (tabs.js renderBar / app.js renderSession) — terminal chips only, and
+    // only the focused one, matching the model's `on`.
+    if (c.kind === "terminal" && c.on && typeof t.usage === "function") {
+      const u = t.usage();
+      if (u && typeof u.pct === "number") {
+        const pct = document.createElement("span");
+        pct.className = "u";
+        pct.textContent = u.pct + "%";
+        main.appendChild(pct);
+      }
     }
-    btn.addEventListener("click", () => focusTerminalTab(t));
-    strip.appendChild(btn);
-  }
+
+    main.addEventListener("click", () => focusMobileTab(t));
+    chip.appendChild(main);
+
+    // Only the focused chip carries a close control (c.closable === c.on).
+    // It does exactly what the desktop cell-bar's per-tab × does today:
+    // closes the VIEW, never ends the session (End stays in the ⋯ sheet).
+    if (c.closable) {
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "chip-x";
+      x.textContent = "×";
+      x.title = "Close tab";
+      x.setAttribute("aria-label", "Close tab");
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (typeof closeTabEverywhere === "function") closeTabEverywhere(t);
+      });
+      chip.appendChild(x);
+    }
+
+    strip.appendChild(chip);
+  });
   // The topbar mirrors this same focused-tab data (dot/name/context%), so
   // paint it right here rather than adding a second call at every one of
   // renderMobileChips' own call sites — the two can never drift apart.
@@ -397,6 +463,15 @@ function sessionForTab(t) {
   return t ? lastSessions.find((s) => s.id === t.id) || null : null;
 }
 
+// U1: the focused tab can now be a viewer, not only a terminal. A viewer
+// shows its basename as the name, a neutral dot (the same "dot unknown"
+// fallback already used below for "no tab focused" — a viewer genuinely has
+// no activity of its own, so this is not a special case, just that same
+// fallback), no ctx badge, and ⋯ (session actions) hidden+disabled since the
+// sheet needs a real session. sessionForTab already returns null for a
+// viewer's synthetic "view:<path>" id, so ⋯'s own onclick stays a safe no-op
+// even if this guard were ever bypassed — belt and suspenders, not the only
+// guard.
 function renderTermTopbar() {
   const bar = document.getElementById("term-topbar");
   if (!bar) return;
@@ -404,8 +479,19 @@ function renderTermTopbar() {
   const dot = document.getElementById("tt-dot");
   const nm = document.getElementById("tt-name");
   const ctx = document.getElementById("tt-ctx");
+  const more = document.getElementById("tt-more");
   if (!dot || !nm || !ctx) return;
-  const t = (typeof focusedTerminal === "function") ? focusedTerminal() : null;
+  const t = (typeof focusedTab === "function") ? focusedTab() : null;
+  const isViewer = !!(t && t.kind === "viewer");
+  if (more) { more.hidden = isViewer; more.disabled = isViewer; }
+  if (isViewer) {
+    dot.className = "dot unknown";
+    dot.title = "";
+    nm.textContent = t.name || "";
+    ctx.textContent = "";
+    ctx.hidden = true;
+    return;
+  }
   const a = (t && typeof t.activity === "function") ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
   dot.className = a.cls;
   dot.title = a.title;
@@ -553,7 +639,7 @@ function onTerminalSwipe(dir) {
   let i = tabs.indexOf(cur);
   if (i < 0) i = 0;
   const j = dir === "next" ? Math.min(i + 1, tabs.length - 1) : Math.max(i - 1, 0);
-  if (j !== i) focusTerminalTab(tabs[j]);
+  if (j !== i) focusMobileTab(tabs[j]);
 }
 
 // Shortcut hint: the right-hand half of the permanent #hint status bar

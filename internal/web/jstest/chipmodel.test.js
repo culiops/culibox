@@ -1,0 +1,69 @@
+// internal/web/jstest/chipmodel.test.js
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert");
+const m = require("../static/chipmodel.js");
+
+function term(id, name) { return { kind: "terminal", id, name }; }
+function viewer(path) { return { kind: "viewer", id: "view:" + path, path, name: path.split("/").pop() }; }
+
+test("terminal chip carries kind/label/title from the tab's name", () => {
+  const t = term("s1", "worker");
+  const model = m.chipModel([t], null, () => null);
+  assert.deepEqual(model[0], { kind: "terminal", label: "worker", title: "worker", on: false, wait: false, closable: false });
+});
+
+test("terminal chip falls back to id when unnamed", () => {
+  const t = term("s1", "");
+  const model = m.chipModel([t], null, () => null);
+  assert.equal(model[0].label, "s1");
+  assert.equal(model[0].title, "s1");
+});
+
+test("viewer chip: label/title are the basename / full path, never waits", () => {
+  const v = viewer("/home/u/project/README.md");
+  const model = m.chipModel([v], null, () => null);
+  assert.deepEqual(model[0], {
+    kind: "viewer", label: "README.md", title: "/home/u/project/README.md",
+    on: false, wait: false, closable: false,
+  });
+});
+
+test("the focused tab (any kind) is 'on' and the ONLY closable chip", () => {
+  const t1 = term("s1", "a"), v1 = viewer("/x/y.md"), t2 = term("s2", "b");
+  const model = m.chipModel([t1, v1, t2], v1, () => null);
+  assert.deepEqual(model.map((c) => c.on), [false, true, false]);
+  assert.deepEqual(model.map((c) => c.closable), [false, true, false]);
+});
+
+test("a terminal chip waits only when activityOf reports 'waiting'; a viewer never waits even if focused", () => {
+  const t1 = term("s1", "a"), v1 = viewer("/x/y.md");
+  const activityOf = (t) => (t === t1 ? "waiting" : null);
+  const model = m.chipModel([t1, v1], v1, activityOf);
+  assert.equal(model[0].wait, true);
+  assert.equal(model[1].wait, false);
+});
+
+test("order is preserved exactly as given — the caller owns cell-then-tab ordering", () => {
+  const tabs = [term("s3", "c"), viewer("/a.md"), term("s1", "a")];
+  const model = m.chipModel(tabs, null, () => null);
+  assert.deepEqual(model.map((c) => c.kind), ["terminal", "viewer", "terminal"]);
+});
+
+test("empty/missing input yields an empty list", () => {
+  assert.deepEqual(m.chipModel([], null, () => null), []);
+  assert.deepEqual(m.chipModel(null, null, () => null), []);
+});
+
+test("activityOf is never consulted for a viewer tab", () => {
+  const v = viewer("/x.md");
+  let called = false;
+  m.chipModel([v], v, () => { called = true; return "waiting"; });
+  assert.equal(called, false);
+});
+
+test("activityOf missing (undefined) never throws — a terminal chip just never waits", () => {
+  const t = term("s1", "a");
+  assert.doesNotThrow(() => m.chipModel([t], t, undefined));
+  assert.equal(m.chipModel([t], t, undefined)[0].wait, false);
+});
