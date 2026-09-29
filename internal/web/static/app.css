@@ -527,6 +527,10 @@
     #sessions .srow.dcard { cursor: default; border-bottom-color: color-mix(in srgb, var(--border) 45%, transparent); }
     #sessions .srow.dcard .grow { flex: 1; }
     #sessions .nbody { margin-top: 8px; }
+    /* The card's text doubles as its expand/collapse control (toggleCardPeek)
+       — same affordance .summary's cursor gives the sidebar row's own
+       "Show the full message" toggle. */
+    #sessions .nbody .peektxt { cursor: pointer; }
     #sessions .peektxt.ask { font-weight: 600; }
     #sessions .nacts { display: flex; gap: 7px; margin-top: 9px; }
     .files-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
@@ -1896,6 +1900,14 @@
          exactly as before instead of the rule silently sliding onto Alerts. */
       .fsrow .lbl { font-size: 14px; }
       #fsrow-filetree { border-bottom: 0; }
+      /* Android Chrome cannot construct a Notification without a service
+         worker (this page has none), so the toggle would sit there and fail
+         silently on exactly the platform most likely to open Settings on a
+         phone. Hidden here rather than left disabled: an always-broken
+         control is worse than an absent one. Desktop (the only place the
+         toggle can actually work) is untouched — this is CSS-only, inside
+         the existing mobile block, and does not touch #fsrow-filetree above. */
+      #fsrow-alerts, #notify-why { display: none; }
       /* M10: Containment/Base environment/Model/Effort all render as a .seg
          (renderPfRuntime/renderPfOptions) sized to its content on desktop,
          where it sits beside a label in a half-width column; the mobile

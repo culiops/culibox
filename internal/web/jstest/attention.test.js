@@ -92,8 +92,16 @@ test("notifyChecked is false unless permission is granted", () => {
   assert.strictEqual(notifyChecked(false, "granted"), false);
 });
 
-test("notifyBody prefers the ask, then the summary", () => {
-  assert.strictEqual(notifyBody({ ask: "Bash(ls)", summary: "x" }), "Bash(ls)");
+test("notifyBody: an ask shows the tool NAME only, never the command", () => {
+  // The full command must never reach OS notification history.
+  assert.strictEqual(notifyBody({ need: "ask", ask: "Bash(rm -rf build)", summary: "x" }), "asks: Bash");
+  assert.strictEqual(notifyBody({ need: "ask", ask: "WebFetch" }), "asks: WebFetch"); // no "(" — whole ask text
+  assert.strictEqual(notifyBody({ need: "ask", ask: "", summary: "fallback" }), "asks: fallback");
+  assert.strictEqual(notifyBody({ need: "ask" }), "Waiting for you");
+});
+
+test("notifyBody: a turn (or unknown need) keeps the full summary", () => {
+  assert.strictEqual(notifyBody({ need: "turn", ask: "Bash(ls)", summary: "done" }), "done");
   assert.strictEqual(notifyBody({ summary: "done" }), "done");
   assert.strictEqual(notifyBody({}), "Waiting for you");
 });

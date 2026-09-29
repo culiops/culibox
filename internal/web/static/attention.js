@@ -88,8 +88,22 @@ function setNotifyWanted(v) {
   try { if (v) localStorage.setItem(NOTIFY_KEY, "1"); else localStorage.removeItem(NOTIFY_KEY); } catch (_) {}
 }
 
+// notifyBody: the OS notification body text. For an "ask" (a pending tool
+// call), this is the tool NAME ONLY — "asks: Bash", never the full command —
+// derived from the ask text up to its first "(". An OS keeps notification
+// history outside this app's own access controls, and a shell command in
+// that history (a path, a secret-looking argument, an rm target) is a token
+// leak the operator did not choose to make. `turn` (and anything without a
+// known need) keeps the one-line summary, unchanged.
 function notifyBody(s) {
-  return (s && (s.ask || s.summary)) || "Waiting for you";
+  const v = s || {};
+  if (v.need === "ask") {
+    const ask = v.ask || v.summary || "";
+    if (!ask) return "Waiting for you";
+    const i = ask.indexOf("(");
+    return "asks: " + (i === -1 ? ask : ask.slice(0, i));
+  }
+  return v.summary || "Waiting for you";
 }
 
 // notifyPoll gates needsTransitions on `loaded`: true only once a real

@@ -95,7 +95,7 @@ function rowSig(s, local) {
     v.activity || "", v.need || "", v.ask || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
     !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,
-    l.boxRuntime || "", !!l.sending,
+    l.boxRuntime || "", !!l.sending, !!l.expanded,
   ]);
 }
 

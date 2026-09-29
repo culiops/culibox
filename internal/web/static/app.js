@@ -701,6 +701,17 @@ let replyFocused = false;
 // in flight. A flag that must survive a rebuild the poll can trigger has to
 // live somewhere the rebuild does not reach.
 let pendingSends = new Set();
+// cardExpanded: desktop needs-you cards currently showing their full message
+// instead of cardContent's one-line text. Page-local, keyed by session id —
+// unlike openPeekId this is NOT "one at a time": several waiting sessions can
+// each have their card expanded together. Fed into rowLocal/rowSig (like
+// `sending` above) so an expanded card survives a 3s poll that changes
+// nothing else, and pruned in refreshSessions once a session stops waiting.
+let cardExpanded = new Set();
+// cardPeekCache: the last full-text fetch per expanded card ({text, muted}),
+// so a poll-triggered rebuild of an already-expanded card does not flash back
+// to "Loading…" for a fetch it already made. Cleared alongside cardExpanded.
+let cardPeekCache = new Map();
 
 // peekRowFor: the answer block belonging to a row, if it is open. A sibling,
 // not a child — see the stylesheet for why the amber column needs it there.
@@ -882,7 +893,15 @@ function buildReplyComposer(s, opts) {
 
   send.onclick = () => sendText(input.value);
   if (o.submitOnEnter) {
-    input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); sendText(input.value); } };
+    input.onkeydown = (e) => {
+      // An IME (composing Vietnamese, CJK, …) commits its candidate with
+      // Enter too — without this guard that keystroke both confirms the
+      // candidate AND sends the still-mid-composition text. keyCode 229 is
+      // the historical Safari/older-browser signal; isComposing is the
+      // modern one, kept together since one browser is missing per source.
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") { e.preventDefault(); sendText(input.value); }
+    };
   }
   return { form, why, refresh, send: sendText };
 }
@@ -996,6 +1015,44 @@ async function togglePeek(li, s) {
     }
     composer.refresh();
   };
+}
+
+// toggleCardPeek expands or collapses a desktop needs-you card's text block in
+// place — the card's counterpart to togglePeek's sidebar answer block, for
+// exactly the sessions an operator is about to answer. Collapsing is
+// immediate (local state only); expanding fetches the same `/peek` endpoint
+// togglePeek uses and shows the full text via textContent, never innerHTML.
+// The rebuild that shows "Loading…" happens through the normal rowSig path
+// (cardExpanded is part of rowLocal), so this only needs to patch the fetched
+// text into the DOM once it lands — the row itself is not torn down again in
+// between (rowSig does not change a second time) so the node this looked up
+// is still the right one to write into, guarded by cardExpanded staying set.
+async function toggleCardPeek(s) {
+  if (cardExpanded.has(s.id)) {
+    cardExpanded.delete(s.id);
+    cardPeekCache.delete(s.id);
+    await refreshSessions();
+    return;
+  }
+  cardExpanded.add(s.id);
+  await refreshSessions(); // rebuilds the card now, showing "Loading…"
+  let status = 0;
+  let payload = null;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/peek");
+    status = res.status;
+    if (status === 200) payload = await res.json();
+  } catch (_) {
+    status = 0;
+  }
+  if (!cardExpanded.has(s.id)) return; // collapsed again while the fetch was in flight
+  const st = peekState(!!s.claude, status, payload);
+  cardPeekCache.set(s.id, { text: st.text, muted: st.kind !== "text" });
+  const li = sessionRowFor(s.id);
+  const txt = li && li.querySelector(".nbody .peektxt");
+  if (!txt) return; // the row moved on (e.g. stopped waiting) before this landed
+  txt.textContent = st.text;
+  txt.classList.toggle("muted", st.kind !== "text");
 }
 
 // usageOf(tab) → the usage object for an already-resolved terminal tab, or
@@ -1166,9 +1223,30 @@ function renderNeedsBody(s) {
   const c = cardContent(s);
   const body = document.createElement("div");
   body.className = "nbody";
+  // The text block doubles as the expand/collapse control — the sidebar's old
+  // togglePeek "Show the full message" peek, restored here for the card. A
+  // real interactive element (role+tabindex+aria-expanded), not a click
+  // handler on a plain div, so it is reachable and announced the same way the
+  // row's own summary line (renderSession) already is.
+  const expanded = cardExpanded.has(s.id);
   const txt = document.createElement("div");
   txt.className = c.ask ? "peektxt ask" : "peektxt";
-  txt.textContent = c.text;
+  txt.setAttribute("role", "button");
+  txt.setAttribute("tabindex", "0");
+  txt.setAttribute("aria-expanded", expanded ? "true" : "false");
+  const toggleLabel = expanded ? "Hide the full message" : "Show the full message";
+  txt.title = toggleLabel;
+  txt.setAttribute("aria-label", toggleLabel);
+  if (expanded) {
+    const cached = cardPeekCache.get(s.id);
+    txt.textContent = cached ? cached.text : "Loading…";
+    txt.classList.toggle("muted", !!(cached && cached.muted));
+  } else {
+    txt.textContent = c.text;
+  }
+  const toggle = (e) => { e.stopPropagation(); toggleCardPeek(s); };
+  txt.onclick = toggle;
+  txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
   body.appendChild(txt);
 
   let composer = null;
@@ -1220,6 +1298,27 @@ function renderNeedsBody(s) {
       if (fld) fld.focus();
     };
     acts.appendChild(en);
+  }
+  if (c.reply) {
+    // The card's counterpart to the sidebar peek panel's "Allow replies from
+    // here" checkbox — restoring the one function that checkbox served (reply
+    // permission must stay revocable from the sidebar) now that the card is
+    // the surface an operator actually answers from.
+    const dis = document.createElement("button");
+    dis.type = "button";
+    dis.className = "btn";
+    dis.textContent = "Disallow replies";
+    dis.title = "Revoke this session's sidebar-reply permission";
+    dis.onclick = async () => {
+      dis.disabled = true;
+      if (!(await postReplyable(s.id, false))) {
+        dis.disabled = false;
+        showToast("Could not change the reply setting", { error: true });
+        return;
+      }
+      await refreshSessions();
+    };
+    acts.appendChild(dis);
   }
   const open = document.createElement("button");
   open.type = "button";
@@ -1422,6 +1521,7 @@ function rowLocal(s) {
     pct: u && typeof u.pct === "number" ? u.pct : null,
     boxRuntime: boxRuntime,
     sending: pendingSends.has(s.id),
+    expanded: cardExpanded.has(s.id),
   };
 }
 
@@ -1536,6 +1636,15 @@ async function refreshSessions() {
   }
   lastSessions = sessions || [];
   sessionsLoaded = true;
+  // A card's expanded state (and its cached full text) belongs to it needing
+  // you, not to the session forever — drop both once the session is no longer
+  // waiting, so reopening it later (a fresh "needs you") starts collapsed.
+  if (cardExpanded.size) {
+    const waitingIds = new Set(lastSessions.filter((s) => s.activity === "waiting").map((s) => s.id));
+    for (const id of Array.from(cardExpanded)) {
+      if (!waitingIds.has(id)) { cardExpanded.delete(id); cardPeekCache.delete(id); }
+    }
+  }
   signalAttention();
   notifyTransitions();
   // Push each session's activity onto its open terminal tab (a different axis
