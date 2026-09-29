@@ -100,6 +100,7 @@ func TestParsePeekTailAsk(t *testing.T) {
 		{"no input shows the name only", `{"type":"tool_use","name":"Bash"}`, "Bash"},
 		{"collapses to one line", `{"type":"tool_use","name":"Bash","input":{"command":"cd /x &&\n  make\ttest"}}`, "Bash(cd /x && make test)"},
 		{"control characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"echo \u001b[31mred\u0007"}}`, "Bash(echo [31mred)"},
+		{"C1 control characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"echo \u009b31mred\u009d"}}`, "Bash(echo 31mred)"},
 	}
 	for _, c := range cases {
 		p, ok := parsePeekTail(pendingTail(c.block))

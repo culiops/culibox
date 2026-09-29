@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 )
 
 var (
@@ -154,7 +155,10 @@ const askMax = 80
 // plus the command (shell tools) or the path (file tools). Everything else is
 // the name alone — its input is not something to read at a glance. Control
 // characters become spaces and whitespace runs collapse, so a heredoc or an
-// ANSI-laden echo still renders as one clean line.
+// ANSI-laden echo still renders as one clean line. unicode.IsControl covers C0
+// (< 0x20), DEL (0x7f) AND the C1 range (U+0080-U+009F, e.g. U+009B CSI,
+// U+009D OSC) — strings.Fields alone would not collapse a C1 control, since
+// unicode.IsSpace does not treat it as whitespace.
 func askLine(name string, input json.RawMessage) string {
 	if name == "" {
 		return ""
@@ -171,7 +175,7 @@ func askLine(name string, input json.RawMessage) string {
 	s := name
 	if arg != "" {
 		clean := strings.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f {
+			if unicode.IsControl(r) {
 				return ' '
 			}
 			return r
