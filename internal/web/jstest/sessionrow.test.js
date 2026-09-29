@@ -175,3 +175,8 @@ test("actionFailText words each failure", () => {
   assert.match(actionFailText("interrupt", 0), /no connection/i);
   assert.match(actionFailText("interrupt", 500), /500/);
 });
+
+test("actionFailText: 429 (ErrTooSoon) gets its own text for any action", () => {
+  assert.strictEqual(actionFailText("interrupt", 429), "Too soon — try again in a second.");
+  assert.strictEqual(actionFailText("restart", 429), "Too soon — try again in a second.");
+});

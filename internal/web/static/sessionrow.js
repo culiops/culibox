@@ -118,6 +118,7 @@ function actionFailText(action, status) {
   if (status === 404 || status === 410) return "That session is gone.";
   if (action === "interrupt" && status === 409) return "Nothing to interrupt — the session is not running.";
   if (action === "restart" && status === 409) return "Only an ended session can be restarted.";
+  if (status === 429) return "Too soon — try again in a second.";
   return (action === "restart" ? "Restart" : "Interrupt") + " failed (" + status + ").";
 }
 
