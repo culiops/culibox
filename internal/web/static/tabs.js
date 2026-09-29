@@ -375,6 +375,10 @@ function buildReplyStrip(tab) {
   send.className = "btn pri";
   send.textContent = "send";
   strip.append(fld, send);
+  // The strip's reason lives in a title nobody reads before clicking; when it
+  // is the missing opt-in, offer the fix itself.
+  const enable = buildEnableRepliesButton(tab.id);
+  strip.appendChild(enable);
 
   // knownPending tracks the most recently observed /peek "pending" flag (a
   // tool call in flight). It starts false — the common case — and is
@@ -410,6 +414,7 @@ function buildReplyStrip(tab) {
     fld.classList.toggle("off", closed);
     send.classList.toggle("off", closed);
     send.title = st.reason;
+    enable.hidden = !offerEnableReplies(s);
     for (const b of digitBtns) {
       b.disabled = closed;
       b.classList.toggle("off", closed);

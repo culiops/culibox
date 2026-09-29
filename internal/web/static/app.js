@@ -776,6 +776,31 @@ async function postReplyable(id, want) {
   }
 }
 
+// buildEnableRepliesButton is the ONE "Enable replies" control: the needs-you
+// card, the steer rail composer and the pane reply strip all use it. It grants
+// the opt-in, re-polls (every gate re-reads `replyable` from the fresh list),
+// then runs `after` — the card uses it to focus its new reply field.
+function buildEnableRepliesButton(id, after) {
+  const en = document.createElement("button");
+  en.type = "button";
+  en.className = "btn";
+  en.textContent = "Enable replies";
+  en.title = "Allow answering this session from agent-box";
+  en.onclick = async (e) => {
+    e.stopPropagation();
+    en.disabled = true;
+    if (!(await postReplyable(id, true))) {
+      en.disabled = false;
+      showToast("Could not change the reply setting", { error: true });
+      return;
+    }
+    await refreshSessions();
+    en.disabled = false;
+    if (after) after();
+  };
+  return en;
+}
+
 // buildReplyComposer builds the one-line reply field + Send button + status
 // caption shared by the sidebar peek panel (togglePeek) and the desktop
 // needs-you card (renderNeedsBody) — one place for draft-restore, the
@@ -1276,28 +1301,13 @@ function renderNeedsBody(s) {
   const acts = document.createElement("div");
   acts.className = "nacts";
   if (c.enableReplies) {
-    const en = document.createElement("button");
-    en.type = "button";
-    en.className = "btn";
-    en.textContent = "Enable replies";
-    en.title = "Allow answering this session from the sidebar";
-    en.onclick = async () => {
-      en.disabled = true;
-      if (!(await postReplyable(s.id, true))) {
-        en.disabled = false;
-        showToast("Could not change the reply setting", { error: true });
-        return;
-      }
-      // replyable is in the signature: the card re-renders with its reply
-      // field. Nothing else moves focus onto that new field on its own —
-      // await the rebuild, then focus it, so the operator lands in the
-      // field they just asked for instead of on <body>.
-      await refreshSessions();
+    acts.appendChild(buildEnableRepliesButton(s.id, () => {
+      // replyable is in the signature, so the card re-rendered with its reply
+      // field; land the operator in it rather than on <body>.
       const li = sessionRowFor(s.id);
       const fld = li && li.querySelector(".nbody .fld");
       if (fld) fld.focus();
-    };
-    acts.appendChild(en);
+    }));
   }
   if (c.reply) {
     // The card's counterpart to the sidebar peek panel's "Allow replies from

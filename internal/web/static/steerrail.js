@@ -409,7 +409,9 @@ function renderMsgSection(s) {
   form.append(input, send);
   const note = document.createElement("p");
   note.className = "note";
-  kids.push(form, note);
+  // "Enable replies for this session first." names a fix: offer it right here.
+  const enable = buildEnableRepliesButton(s.id);
+  kids.push(form, note, enable);
   el.replaceChildren(...kids);
   // The id the poll's repaint checks before it re-gates these controls.
   el.dataset.sid = s.id;
@@ -445,6 +447,7 @@ function renderMsgSection(s) {
     input.placeholder = closed ? "reply opens when this session stops" : "reply…";
     note.textContent = closed ? (st.reason || "Sending…") : "";
     note.hidden = !closed;
+    enable.hidden = !offerEnableReplies(now);
   };
   refresh();
   el._refresh = refresh;

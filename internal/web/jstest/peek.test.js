@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { peekState, replyTextError, sendState, notWaitingReason } = require("../static/peek.js");
+const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies } = require("../static/peek.js");
 
 test("peekState distinguishes the empty cases", () => {
   // 200 with text: normal
@@ -86,4 +86,26 @@ test("notWaitingReason does not tell a dead session to keep working", () => {
 test("notWaitingReason tells an idle session to be prompted in its terminal", () => {
   assert.match(notWaitingReason("idle"), /terminal/);
   assert.doesNotMatch(notWaitingReason("idle"), /wait until it stops/);
+});
+
+test("offerEnableReplies: a live claude that has not opted in", () => {
+  assert.strictEqual(offerEnableReplies({ claude: true, replyable: false }), true);
+  assert.strictEqual(offerEnableReplies({ claude: true, replyable: true }), false);
+  assert.strictEqual(offerEnableReplies({ claude: false, replyable: false }), false);
+  assert.strictEqual(offerEnableReplies({ claude: true, replyable: false, exited: true }), false);
+  assert.strictEqual(offerEnableReplies(null), false);
+});
+
+// The button must appear exactly where the gate's reason names the missing
+// opt-in — the two must not drift apart.
+test("offerEnableReplies agrees with sendState's not-replyable reason", () => {
+  const why = "Enable replies for this session first.";
+  for (const replyable of [true, false]) {
+    for (const activity of ["working", "waiting", "idle"]) {
+      for (const pending of [true, false]) {
+        const s = { claude: true, replyable, activity, pending };
+        assert.strictEqual(offerEnableReplies(s), sendState(s).reason === why, JSON.stringify(s));
+      }
+    }
+  }
 });
