@@ -101,6 +101,8 @@ func TestParsePeekTailAsk(t *testing.T) {
 		{"collapses to one line", `{"type":"tool_use","name":"Bash","input":{"command":"cd /x &&\n  make\ttest"}}`, "Bash(cd /x && make test)"},
 		{"control characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"echo \u001b[31mred\u0007"}}`, "Bash(echo [31mred)"},
 		{"C1 control characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"echo \u009b31mred\u009d"}}`, "Bash(echo 31mred)"},
+		{"unicode format characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"echo ​hi‮"}}`, "Bash(echo hi)"},
+		{"bidi isolate characters never survive", `{"type":"tool_use","name":"Bash","input":{"command":"rm ⁦evil⁩.txt"}}`, "Bash(rm evil .txt)"},
 	}
 	for _, c := range cases {
 		p, ok := parsePeekTail(pendingTail(c.block))
@@ -172,6 +174,10 @@ func TestSummaryLine(t *testing.T) {
 		// Rune-safe: cutting a multi-byte character in half renders as a
 		// replacement glyph, so truncation counts runes, not bytes.
 		{"héllo", "héllo"},
+		// Unicode format characters (zero-width, bidi overrides/isolates) are
+		// not IsControl and must not survive into the sidebar/notification.
+		{"hi​there", "hi there"},
+		{"‮evil⁦hidden⁩‬", "evil hidden"},
 	}
 	for _, c := range cases {
 		if got := summaryLine(c.in); got != c.want {

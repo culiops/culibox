@@ -132,8 +132,26 @@ func parsePeekTail(b []byte) (Peek, bool) {
 // summaryLine reduces peek text to the single line the sidebar shows: the first
 // non-empty line, elided to summaryMax runes. Runes, not bytes — a byte-sliced
 // multi-byte character renders as a replacement glyph.
+//
+// Unicode format characters (Cf: bidi overrides U+202A-202E, bidi isolates
+// U+2066-2069, zero-width joiners/spaces/marks U+200B-200F, …) are mapped to a
+// space before the length/emptiness checks. They are invisible or
+// rendering-altering, not IsControl (askLine's comment below has the same
+// note for the same reason), so without this a line could read differently
+// than the bytes the sidebar/notification actually carries — or a bidi
+// override could visually reorder the rest of the line.
 func summaryLine(text string) string {
 	for _, ln := range strings.Split(text, "\n") {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		ln = strings.Map(func(r rune) rune {
+			if unicode.Is(unicode.Cf, r) {
+				return ' '
+			}
+			return r
+		}, ln)
 		ln = strings.TrimSpace(ln)
 		if ln == "" {
 			continue
@@ -158,7 +176,12 @@ const askMax = 80
 // ANSI-laden echo still renders as one clean line. unicode.IsControl covers C0
 // (< 0x20), DEL (0x7f) AND the C1 range (U+0080-U+009F, e.g. U+009B CSI,
 // U+009D OSC) — strings.Fields alone would not collapse a C1 control, since
-// unicode.IsSpace does not treat it as whitespace.
+// unicode.IsSpace does not treat it as whitespace. unicode.Cf (format
+// characters: bidi overrides/isolates, zero-width joiners/spaces, …) is
+// mapped the same way — those are not IsControl either, but a bidi override
+// or a zero-width character reaching a rendered tool-call line is the same
+// class of problem: it changes what the line looks like without changing
+// what it says.
 func askLine(name string, input json.RawMessage) string {
 	if name == "" {
 		return ""
@@ -175,7 +198,7 @@ func askLine(name string, input json.RawMessage) string {
 	s := name
 	if arg != "" {
 		clean := strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) {
+			if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 				return ' '
 			}
 			return r
