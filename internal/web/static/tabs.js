@@ -606,10 +606,25 @@ function toggleMax(cell) {
   scheduleSaveLayout();
 }
 
+// currentMaximized: the `maximized` cell to actually honour right now. Mobile
+// has no un-maximize control (the desktop .cell-bar's ❐ is hidden <=700px —
+// see app.css), so a persisted maximized cell must not blank every other
+// chip on that viewport; effectiveMaximized (mobileshell.js) is the pure
+// decision, this just supplies it the live inputs. `maximized` itself is
+// left untouched — desktop still restores it once the viewport widens back
+// past the breakpoint. typeof-guarded because tabs.js is a classic script
+// loaded before mobileshell.js (see index.html's script order).
+function currentMaximized() {
+  const isMobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
+  if (typeof effectiveMaximized === "function") return effectiveMaximized(maximized, isMobile);
+  return isMobile ? null : maximized;
+}
+
 function renderGrid() {
   const grid = document.getElementById("grid");
-  grid.className = "cols-" + gridCols() + (maximized ? " maximized" : "");
-  const show = maximized ? [maximized] : cells;
+  const max = currentMaximized();
+  grid.className = "cols-" + gridCols() + (max ? " maximized" : "");
+  const show = max ? [max] : cells;
   grid.replaceChildren(...show.map((c) => c.el));
   // `show`, not `cells`: with a pane maximized the others are NOT in the
   // document, and the renderBar sweep on the next line is a trap to copy —
@@ -620,7 +635,8 @@ function renderGrid() {
 }
 
 function fitAll() {
-  const visible = maximized ? [maximized] : cells;
+  const max = currentMaximized();
+  const visible = max ? [max] : cells;
   visible.forEach((c) => c.activeTab && c.activeTab.fit && c.activeTab.fit());
 }
 
@@ -670,9 +686,11 @@ function applyCap(n) {
 // openTerminal is the single chokepoint every "open or focus this session"
 // caller funnels through (row tap, spawn success, "open in new pane"), so the
 // mobile guard lives here — once — covering all three of its return points,
-// rather than at each call site. It naturally excludes openFile: a viewer tab
-// never goes through openTerminal, so opening a file into a pane never
-// switches screens, matching the "viewer stays put" rule for free.
+// rather than at each call site. A viewer tab never goes through openTerminal
+// at all, so this guard naturally excludes it; openFile (below) carries the
+// same mobile switch-to-Terminal-screen call on its own two return points
+// instead (U1: a file's chip now lives in the same switcher a terminal's
+// does, so opening one also switches screens).
 // typeof-guarded because tabs.js is a classic script loaded before the mobile
 // globals (mobileActive/setMobileScreen live in mobileshell.js/app.js).
 function openTerminal(id, name, opts) {
@@ -721,8 +739,9 @@ function moveToOwnPane(from, tab) {
     showToast("Pane limit reached: the tab stays where it is.");
     return;
   }
-  // renderGrid shows only the maximized cell (`show = maximized ? [maximized]
-  // : cells`), so a cell created while one is maximized never enters the
+  // renderGrid shows only the maximized cell on desktop (`show = max ? [max]
+  // : cells`, via currentMaximized() — see its comment for the mobile
+  // exception), so a cell created while one is maximized never enters the
   // document — the tab this action just gave "its own pane" would disappear,
   // focused but unrendered. Giving the tab a pane of its own is the point of
   // this action, so drop out of maximized rather than block the request or

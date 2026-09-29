@@ -24,6 +24,21 @@ function mobileMediaQuery() {
   return "(max-width: " + MOBILE_MAX_PX + "px)";
 }
 
+// I1 fix: mobile has no un-maximize control (the desktop .cell-bar, and its
+// ❐, is hidden <=700px — see app.css), and the mobile Terminal screen already
+// shows exactly one pane on its own (#grid > .cell:not(.focus) { display:
+// none }). A persisted `maximized` cell would otherwise blank the screen for
+// every OTHER chip, with no way back short of clearing site data or widening
+// past the breakpoint. So the grid ignores `maximized` while mobile is
+// active — tabs.js's renderGrid/fitAll call this rather than reading the
+// `maximized` module variable directly. The persisted value itself is left
+// untouched by the caller, so a viewport that widens back past the
+// breakpoint restores it for desktop (see the U8 matchMedia listener in
+// app.js, which re-runs renderGrid() on that crossing).
+function effectiveMaximized(maximized, isMobile) {
+  return isMobile ? null : maximized;
+}
+
 // Stored screen is hostile input — hand-edited, written by an older version, or
 // quota-truncated. Anything not one of the three known screens degrades to the
 // landing screen rather than throwing: this is read in the pre-paint <script>,
@@ -75,6 +90,6 @@ function sessionGroups(sessions, statusFn) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     MOBILE_MAX_PX, MOBILESHELL_KEY, MOBILE_SCREENS,
-    mobileActive, mobileMediaQuery, loadScreen, saveScreen, screenClass, navModel, sessionGroups,
+    mobileActive, mobileMediaQuery, effectiveMaximized, loadScreen, saveScreen, screenClass, navModel, sessionGroups,
   };
 }

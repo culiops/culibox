@@ -17,15 +17,26 @@
 // itself so this file stays DOM-free and node-testable; it is consulted
 // ONLY for terminal tabs — a viewer has no activity of its own and its chip
 // never carries the `wait` accent, however activityOf answers.
-function chipModel(tabs, focused, activityOf) {
+//
+// statusOf(tab) (m4) is the same injection pattern for connection status —
+// the same t.status() the desktop tab-bar reads (see tabs.js renderBar).
+// Consulted ONLY for terminal tabs, like activityOf: a viewer has no
+// connection of its own. `status` mirrors the desktop bar's own rule —
+// the healthy steady state ("connected") carries no information, so it is
+// suppressed to "" the same way; any other value (connecting…,
+// reconnecting…, error, taken over, ended, …) is a real signal and passes
+// through as-is.
+function chipModel(tabs, focused, activityOf, statusOf) {
   return (tabs || []).map((t) => {
     const on = t === focused;
     if (t.kind === "viewer") {
-      return { kind: "viewer", label: t.name || t.path, title: t.path, on, wait: false, closable: on };
+      return { kind: "viewer", label: t.name || t.path, title: t.path, on, wait: false, closable: on, status: "" };
     }
     const activity = activityOf ? activityOf(t) : null;
     const label = t.name || t.id;
-    return { kind: "terminal", label, title: label, on, wait: activity === "waiting", closable: on };
+    const rawStatus = statusOf ? statusOf(t) : null;
+    const status = rawStatus && rawStatus !== "connected" ? rawStatus : "";
+    return { kind: "terminal", label, title: label, on, wait: activity === "waiting", closable: on, status };
   });
 }
 

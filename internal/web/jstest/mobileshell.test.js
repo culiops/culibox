@@ -72,3 +72,18 @@ test("sessionGroups omits a group with no members", () => {
   const g = m.sessionGroups([{ id: "a", status: "working" }], (s) => s.status);
   assert.deepEqual(g.map((x) => x.key), ["running"]);
 });
+
+// I1: mobile has no un-maximize control, so the grid must ignore a persisted
+// `maximized` cell while mobile is active — but must still honour it on
+// desktop, where the ❐ control lives and restore-on-refresh is the point.
+test("effectiveMaximized: mobile always sees no maximized cell", () => {
+  const cell = { id: "c1" };
+  assert.equal(m.effectiveMaximized(cell, true), null);
+  assert.equal(m.effectiveMaximized(null, true), null);
+});
+
+test("effectiveMaximized: desktop passes the maximized cell through unchanged", () => {
+  const cell = { id: "c1" };
+  assert.equal(m.effectiveMaximized(cell, false), cell);
+  assert.equal(m.effectiveMaximized(null, false), null);
+});

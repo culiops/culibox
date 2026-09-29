@@ -313,10 +313,11 @@ function initMobileShell() {
 }
 
 // --- mobile terminal: session chip strip -----------------------------------
-// The chips are the open terminal tabs (the sessions you have launched into a
-// pane); the Sessions screen stays the full launcher. One chip is active (the
-// focused pane); tapping another switches which single pane the Terminal screen
-// shows. This reuses the pane machinery — no parallel session model.
+// The chips are every open tab — terminal AND viewer (U1) — across all
+// panes; the Sessions screen stays the full launcher. One chip is active (the
+// focused pane's active tab); tapping another switches which single pane the
+// Terminal screen shows. This reuses the pane machinery — no parallel
+// session model.
 function openTerminalTabs() {
   const out = [];
   if (typeof eachTerminal === "function") eachTerminal((t) => out.push(t)); // cell order, then tab order
@@ -372,12 +373,16 @@ function renderMobileChips() {
   const tabs = openMobileTabs();
   strip.hidden = tabs.length === 0;
   const focused = (typeof focusedTab === "function") ? focusedTab() : null;
-  const model = chipModel(tabs, focused, (t) => (typeof t.activity === "function" ? t.activity() : null));
+  const model = chipModel(
+    tabs, focused,
+    (t) => (typeof t.activity === "function" ? t.activity() : null),
+    (t) => (typeof t.status === "function" ? t.status() : null),
+  );
   strip.textContent = "";
   tabs.forEach((t, i) => {
     const c = model[i];
     const chip = document.createElement("span");
-    chip.className = "chip" + (c.on ? " on" : "") + (c.wait ? " wait" : "");
+    chip.className = "chip" + (c.on ? " on" : "") + (c.wait ? " wait" : "") + (c.status ? " trouble" : "");
 
     const main = document.createElement("button");
     main.type = "button";
@@ -410,6 +415,17 @@ function renderMobileChips() {
     nm.textContent = c.label;
     main.appendChild(nm);
 
+    // m4: a transient connection state (the same t.status() the desktop
+    // tab-bar's .tab-st reads), on ANY terminal chip — not only the focused
+    // one, since the point is to see trouble on a session you switched away
+    // from. chipModel already suppresses the healthy "connected" state.
+    if (c.kind === "terminal" && c.status) {
+      const st = document.createElement("span");
+      st.className = "chip-st";
+      st.textContent = c.status;
+      main.appendChild(st);
+    }
+
     // Context %, same field/format the tab strip's own usage readout uses
     // (tabs.js renderBar / app.js renderSession) — terminal chips only, and
     // only the focused one, matching the model's `on`.
@@ -439,12 +455,27 @@ function renderMobileChips() {
       x.addEventListener("click", (e) => {
         e.stopPropagation();
         if (typeof closeTabEverywhere === "function") closeTabEverywhere(t);
+        // m2/M1: repaint right here rather than waiting for the next
+        // /api/sessions poll (closeTab's own refreshSessions call) — on a
+        // slow link the closed tab, and its ×, would otherwise keep showing
+        // for the fetch latency, or until the next successful poll at all.
+        renderMobileChips();
       });
       chip.appendChild(x);
     }
 
     strip.appendChild(chip);
   });
+  // m11: keep the focused chip in view when the strip overflows — a newly
+  // opened tab (or one switched to via swipe/spawn) can land off-screen even
+  // though the topbar already names it. `block: "nearest"` keeps this from
+  // ever scrolling the page itself: #term-chips is the only scrolling
+  // ancestor in play (vertically it already fits), so only its own
+  // horizontal scroll position moves.
+  const onChip = strip.querySelector(".chip.on");
+  if (onChip && typeof onChip.scrollIntoView === "function") {
+    onChip.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
   // The topbar mirrors this same focused-tab data (dot/name/context%), so
   // paint it right here rather than adding a second call at every one of
   // renderMobileChips' own call sites — the two can never drift apart.
@@ -480,6 +511,7 @@ function renderTermTopbar() {
   const nm = document.getElementById("tt-name");
   const ctx = document.getElementById("tt-ctx");
   const more = document.getElementById("tt-more");
+  const st = document.getElementById("tt-st");
   if (!dot || !nm || !ctx) return;
   const t = (typeof focusedTab === "function") ? focusedTab() : null;
   const isViewer = !!(t && t.kind === "viewer");
@@ -490,6 +522,9 @@ function renderTermTopbar() {
     nm.textContent = t.name || "";
     ctx.textContent = "";
     ctx.hidden = true;
+    // m4: a viewer has no connection state of its own — same reasoning as
+    // the ctx badge above.
+    if (st) { st.textContent = ""; st.hidden = true; }
     return;
   }
   const a = (t && typeof t.activity === "function") ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
@@ -503,6 +538,15 @@ function renderTermTopbar() {
   } else {
     ctx.textContent = "";
     ctx.hidden = true;
+  }
+  // m4: mirror the desktop tab-bar's .tab-st (t.status()), same source and
+  // the same "connected" is suppressed rule (tabs.js renderBar) — the healthy
+  // steady state carries no information, every other value is a real signal.
+  if (st) {
+    const rawStatus = (t && typeof t.status === "function") ? t.status() : "";
+    const text = rawStatus && rawStatus !== "connected" ? rawStatus : "";
+    st.textContent = text;
+    st.hidden = !text;
   }
 }
 
@@ -628,10 +672,13 @@ function initMobileKeyboard() {
   apply();
 }
 
-// onTerminalSwipe moves the focused pane one session left/right along the same
-// order the chip strip shows. "next" (drag left) goes forward, "prev" back.
-// Clamped at the ends — a swipe past the last session does nothing rather than
-// looping, so you always know where the edges are.
+// onTerminalSwipe moves the focused pane one session left/right, cycling
+// TERMINAL tabs only (openTerminalTabs, not the chip strip's openMobileTabs)
+// — a swipe is bound to xterm, so a focused viewer has no gesture to drive
+// this, and a viewer chip never counts as a stop along the way. "next" (drag
+// left) goes forward, "prev" back. Clamped at the ends — a swipe past the
+// last session does nothing rather than looping, so you always know where
+// the edges are.
 function onTerminalSwipe(dir) {
   const tabs = openTerminalTabs();
   if (tabs.length < 2) return;
@@ -3742,8 +3789,16 @@ setInterval(refreshSessions, 3000);
 // is built from MOBILE_MAX_PX (mobileshell.js) so it cannot drift from the
 // CSS breakpoint or from mobileActive()'s own edge. No new polling — this
 // forces one extra refreshSessions() call only on the crossing itself.
+// I1: also re-run renderGrid() on the same crossing — it is the one that
+// reads currentMaximized() (tabs.js), so a live crossing (not just the next
+// boot) re-lays the grid immediately: widening back past the breakpoint with
+// a maximized cell restores it for desktop right away, instead of waiting
+// for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
-  window.matchMedia(mobileMediaQuery()).addEventListener("change", () => refreshSessions());
+  window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
+    refreshSessions();
+    if (typeof renderGrid === "function") renderGrid();
+  });
 }
 // Account limits change slowly and the file only updates when a claude statusLine
 // renders — a 30s refresh keeps the % fresh and the countdown ticking without

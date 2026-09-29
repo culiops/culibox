@@ -123,6 +123,22 @@ func TestUniqueName_RuneCapTrimming(t *testing.T) {
 	}
 }
 
+// m6: when the rune-cap trim lands right after a space, the space must not
+// survive into the rendered suffix ("foo -2") — trim it, same as a trailing
+// hyphen ("foo--2") would be.
+func TestUniqueName_TrimsTrailingSpaceBeforeSuffix(t *testing.T) {
+	// suffix "-2" costs 2 runes, so the first candidate is cut to the first 62
+	// runes of base: 61 "a"s followed by the space at index 61 — landing the
+	// cut exactly on the space.
+	base := strings.Repeat("a", 61) + " " + strings.Repeat("b", 10)
+	taken := map[string]bool{base: true}
+	got := uniqueName(base, func(n string) bool { return taken[n] })
+	want := strings.Repeat("a", 61) + "-2"
+	if got != want {
+		t.Fatalf("uniqueName=%q want %q (no dangling space before the suffix)", got, want)
+	}
+}
+
 // --- Spawn-level uniqueness ---
 
 // archiveDir returns a real, existing directory whose basename is "archive"

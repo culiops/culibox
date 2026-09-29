@@ -1375,7 +1375,11 @@ func capName(s string) string {
 // of base+"-2", base+"-3", ... for which taken returns false. base is
 // trimmed rune-safe (like capName) so the suffixed candidate still fits
 // within maxNameLen runes — never bytes, so a multibyte base is never sliced
-// mid-rune. Pure: taken is the caller's own "is this name in use" check.
+// mid-rune. Any space or hyphen left dangling right where the cut landed is
+// also trimmed, so the suffix never reads as "foo -2" or "foo--2" — cosmetic,
+// but the candidate is still compared against taken() unchanged from the
+// caller's perspective (only the rendered name is tidied). Pure: taken is
+// the caller's own "is this name in use" check.
 func uniqueName(base string, taken func(string) bool) string {
 	if !taken(base) {
 		return base
@@ -1391,7 +1395,7 @@ func uniqueName(base string, taken func(string) bool) string {
 		if len(trimmed) > limit {
 			trimmed = trimmed[:limit]
 		}
-		candidate := string(trimmed) + suffix
+		candidate := strings.TrimRight(string(trimmed), " -") + suffix
 		if !taken(candidate) {
 			return candidate
 		}

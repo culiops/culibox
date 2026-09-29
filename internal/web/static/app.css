@@ -686,6 +686,14 @@
     .dlg-head .spacer { flex: 1; }
     .dlg-x { background: none; border: none; color: var(--muted); font-size: 19px; line-height: 1; cursor: pointer; padding: 0 4px; }
     .dlg-x:hover { color: var(--fg); }
+    /* U5: the settings dialog's own close control is a `.btn.gh`, not a
+       `.dlg-x` (it must stay a `.btn` — the mobile tap-floor rule `.dhd .btn`
+       and the mobile "‹" rule `#settings-modal:not(.editing) #settings-esc`,
+       higher specificity and still wins there, both key off that class). At
+       desktop size `.btn` forces a 12px font with a hover fill, so on its own
+       it reads smaller and busier than the other three dialogs' 19px, no-fill
+       ×. This makes it match `.dlg-x` visually without touching the class. */
+    .dhd #settings-esc { font-size: 19px; line-height: 1; }
     /* Mobile-only full-screen topbar (M8) — replaces .dlg-title/.dlg-head at
        <=700px (see the @media (max-width:700px) block below for its layout).
        Hidden here so the desktop dialog stays exactly as it was. */
@@ -1471,6 +1479,14 @@
         font-size: 14px; color: var(--fg); min-width: 0;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
+      /* m4: the desktop tab-bar's .tab-st (connecting…/reconnecting…/error)
+         has no mobile equivalent once .cell-bar is hidden. Mirror it here for
+         the focused terminal tab, same source (t.status()) and the same
+         "connected" is suppressed rule the desktop bar uses — see
+         renderTermTopbar (app.js). Hidden by default (no tab, or the healthy
+         steady state); a viewer never sets it (no connection of its own). */
+      #term-topbar .tt-st { font-size: 11px; color: var(--warn-fg); flex: none; white-space: nowrap; }
+      #term-topbar .tt-st[hidden] { display: none; }
       /* Session chip strip (M2): 56px, horizontal native touch-scroll, right-edge
          fade. Tapping a chip switches the shown session. Only on Terminal screen. */
       html.mobile-screen-terminal #term-chips {
@@ -1508,6 +1524,12 @@
       .chip .vic { flex: 0 0 auto; width: 8px; height: 8px; box-sizing: border-box; border: 1.5px solid var(--muted); }
       .chip .cnm { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .chip .u { font-size: 10.5px; color: var(--muted); } /* context % on the active chip */
+      /* m4: a transient connection state (connecting…/reconnecting…/error),
+         same source as the desktop tab-bar's .tab-st (t.status()), painted on
+         ANY chip — not only the focused one, since the whole point is to see
+         trouble on a session you have switched away from. */
+      .chip .chip-st { font-size: 10px; color: var(--warn-fg); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip.trouble { border-color: var(--warn-fg); }
       .chip.wait { color: var(--warn-fg); border-color: var(--warn-fg); } /* an agent needs you (also the amber waiting dot) */
       /* .on comes AFTER .wait so the ACTIVE chip keeps its you-are-here accent even
          when that session is itself waiting; the amber waiting dot still carries the
@@ -1534,12 +1556,18 @@
         background: linear-gradient(90deg, transparent, var(--panel));
       }
       /* U1: the chip strip above is now the ONLY tab-switcher on mobile — the
-         desktop per-cell .cell-bar would otherwise show a second one (and it
-         has no viewer tabs, and no close control for them at all). Its
-         remaining controls need no mobile path: +sh -> Sessions screen's own
-         "+ new session"; ⛶/pane-close are meaningless with the one visible
-         cell mobile shows; per-tab ⏻ End -> the ⋯ actions sheet (#tt-more,
-         already reachable from the topbar above). */
+         desktop per-cell .cell-bar would otherwise show a second one, and it
+         already paints viewer tabs too (with their own ×; only
+         openTerminalTabs() is terminal-only, not the bar). Its remaining
+         controls need no mobile path: +sh -> Sessions screen's own "+ new
+         session"; per-tab ⏻ End -> the ⋯ actions sheet (#tt-more, already
+         reachable from the topbar above); pane-close (cell-del) has nothing
+         to map to since mobile exposes no separate "pane", only tabs. ⛶
+         (maximize/restore) has no mobile control either, but a PERSISTED
+         maximized cell is not simply moot here — hiding this bar removed the
+         only un-maximize path, so tabs.js's renderGrid/fitAll now go through
+         currentMaximized() (mobileshell.js's effectiveMaximized) to ignore a
+         maximized cell while mobile is active; see that comment (I1). */
       .cell-bar { display: none; }
 
       /* Terminal screen shows ONE pane: the focused cell fills, others hide, and

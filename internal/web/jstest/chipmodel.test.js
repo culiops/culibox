@@ -10,7 +10,7 @@ function viewer(path) { return { kind: "viewer", id: "view:" + path, path, name:
 test("terminal chip carries kind/label/title from the tab's name", () => {
   const t = term("s1", "worker");
   const model = m.chipModel([t], null, () => null);
-  assert.deepEqual(model[0], { kind: "terminal", label: "worker", title: "worker", on: false, wait: false, closable: false });
+  assert.deepEqual(model[0], { kind: "terminal", label: "worker", title: "worker", on: false, wait: false, closable: false, status: "" });
 });
 
 test("terminal chip falls back to id when unnamed", () => {
@@ -25,7 +25,7 @@ test("viewer chip: label/title are the basename / full path, never waits", () =>
   const model = m.chipModel([v], null, () => null);
   assert.deepEqual(model[0], {
     kind: "viewer", label: "README.md", title: "/home/u/project/README.md",
-    on: false, wait: false, closable: false,
+    on: false, wait: false, closable: false, status: "",
   });
 });
 
@@ -66,4 +66,28 @@ test("activityOf missing (undefined) never throws — a terminal chip just never
   const t = term("s1", "a");
   assert.doesNotThrow(() => m.chipModel([t], t, undefined));
   assert.equal(m.chipModel([t], t, undefined)[0].wait, false);
+});
+
+// m4: mobile loses the desktop tab-bar's connection readout once .cell-bar is
+// hidden — chipModel carries the same t.status() so the mobile chip strip
+// and topbar can show it too.
+test("terminal chip's status mirrors statusOf, suppressed at the healthy steady state", () => {
+  const t = term("s1", "a");
+  assert.equal(m.chipModel([t], null, () => null, () => "connected")[0].status, "");
+  assert.equal(m.chipModel([t], null, () => null, () => "reconnecting…")[0].status, "reconnecting…");
+  assert.equal(m.chipModel([t], null, () => null, () => "error")[0].status, "error");
+});
+
+test("a viewer chip's status is always empty — statusOf is never consulted for it", () => {
+  const v = viewer("/x.md");
+  let called = false;
+  const model = m.chipModel([v], v, () => null, () => { called = true; return "error"; });
+  assert.equal(called, false);
+  assert.equal(model[0].status, "");
+});
+
+test("statusOf missing (undefined) never throws — a terminal chip's status is just empty", () => {
+  const t = term("s1", "a");
+  assert.doesNotThrow(() => m.chipModel([t], t, () => null, undefined));
+  assert.equal(m.chipModel([t], t, () => null, undefined)[0].status, "");
 });
