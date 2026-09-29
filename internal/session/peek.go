@@ -217,6 +217,38 @@ func canReply(replyable bool, activity string, pending bool) (bool, string) {
 	return true, ""
 }
 
+// needOf is the attention decision for one listed session, pure so every
+// combination is table-testable. activity is what Info computed from PTY
+// silence; blocked is Claude Code's own live registry saying the session sits
+// on a prompt.
+//
+// blocked RAISES a live session to "waiting" and never lowers one. A permission
+// prompt animates (~40 bytes every 0.6 s, measured on 2.1.284), so silence can
+// never see it; a missing or drifted registry therefore costs only the ask case,
+// which is exactly today's behaviour.
+func needOf(activity string, claude bool, p Peek, havePeek, blocked bool) (act, need, ask string) {
+	act = activity
+	if !claude {
+		return act, "", ""
+	}
+	if blocked && (act == "working" || act == "idle") {
+		act = "waiting"
+	}
+	if act != "waiting" {
+		return act, "", ""
+	}
+	switch {
+	case blocked || (havePeek && p.Pending):
+		need = "ask"
+		if havePeek {
+			ask = p.Ask
+		}
+	case havePeek:
+		need = "turn"
+	}
+	return act, need, ask
+}
+
 // validReplyText accepts exactly one line of printable text. Single-line is
 // what keeps bracketed paste (\x1b[200~ … \x1b[201~ plus a separate \r) out of
 // this feature entirely. Every C0 control is rejected, not only newline: a tab
@@ -353,11 +385,13 @@ func (m *Manager) SendMessage(id, text string) error {
 	// pending=false PASSED the third guard — so the one state the guard exists
 	// to catch (no ground truth about the agent's turn) was also the state that
 	// waved the message through.
-	p, havePeek := m.PeekFor(id)
+	p, havePeek, blocked := m.peekAndBlocked(id)
 	if !havePeek {
 		return ErrNoTranscript
 	}
-	if ok, why := canReply(info.Replyable, info.Activity, p.Pending); !ok {
+	// blocked joins pending: the registry can see a prompt before (or without)
+	// the transcript's tool_use, and a line typed into a prompt answers it.
+	if ok, why := canReply(info.Replyable, info.Activity, p.Pending || blocked); !ok {
 		switch why {
 		case "not_replyable":
 			return ErrNotReplyable

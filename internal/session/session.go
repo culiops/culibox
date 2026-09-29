@@ -162,6 +162,11 @@ type Info struct {
 	Exited  bool      `json:"exited"`
 	Status  string    `json:"status"`
 	// Activity is a UI-facing classification: working|waiting|idle|done|crashed|detached.
+	// List can RAISE this to "waiting" for a claude session the live registry
+	// says is blocked on a prompt (see needOf) — it never lowers it. That raise
+	// happens only in List, the same way Claude below is only filled there: a
+	// Get/Spawn response is never rendered as a row, so it carries the
+	// un-raised value.
 	Activity string `json:"activity"`
 	Name     string `json:"name"`              // mutable display label (id is the stable key)
 	Runtime  string `json:"runtime,omitempty"` // box | host
@@ -184,6 +189,14 @@ type Info struct {
 	// re-lists after a spawn and never renders a row from those responses; a
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
+	// Need says why a waiting claude session needs you: "ask" (blocked on a
+	// permission/choice prompt) or "turn" (it finished its turn). Empty for
+	// every other session, including a waiting one whose transcript cannot be
+	// read — that one is still amber, just without a label. Like the registry
+	// raise itself (see needOf), filled by List only.
+	Need string `json:"need,omitempty"`
+	// Ask is Peek.Ask for a Need=="ask" session: the tool call it wants to run.
+	Ask string `json:"ask,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -922,13 +935,15 @@ func (m *Manager) List() []Info {
 		return o
 	}()
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.Before(out[j].Created) })
-	// Summaries are filled AFTER m.mu is released. PeekFor takes the same
-	// non-reentrant mutex, so filling them inside the loop above deadlocks the
-	// daemon on the first poll.
+	// Summaries and needs are filled AFTER m.mu is released. PeekFor takes the
+	// same non-reentrant mutex, so filling them inside the loop above deadlocks
+	// the daemon on the first poll.
 	for i := range out {
-		if p, ok := m.PeekFor(out[i].ID); ok {
+		p, ok, blocked := m.peekAndBlocked(out[i].ID)
+		if ok {
 			out[i].Summary = summaryLine(p.Text)
 		}
+		out[i].Activity, out[i].Need, out[i].Ask = needOf(out[i].Activity, out[i].Claude, p, ok, blocked)
 	}
 	return out
 }
