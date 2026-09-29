@@ -1229,7 +1229,7 @@ function renderSession(s, opts) {
   if (killing.has(s.id)) {
     const st = document.createElement("span");
     st.className = "bdg";
-    st.textContent = "killing…";
+    st.textContent = "ending…";
     sname.appendChild(st);
     return li;
   }
@@ -3371,9 +3371,9 @@ document.addEventListener("keydown", (e) => {
 // stays unguarded: Undo on a fresh spawn must not ask twice.
 async function confirmKill(id, name) {
   const ok = await askConfirm({
-    title: "Kill session",
-    body: 'Kill session "' + (name || id) + '"? This cannot be undone.',
-    confirmLabel: "Kill",
+    title: "End session",
+    body: 'End session "' + (name || id) + '"? This cannot be undone.',
+    confirmLabel: "End",
     danger: true,
   });
   if (ok) killSession(id);
@@ -3382,13 +3382,13 @@ async function confirmKill(id, name) {
 async function killSession(id) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
-  await refreshSessions(); // re-render → row shows "killing…"
+  await refreshSessions(); // re-render → row shows "ending…"
   try {
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
     killing.delete(id);
     await refreshSessions();
-    showToast("Kill failed: " + e.message, { error: true });
+    showToast("End failed: " + e.message, { error: true });
     return;
   }
   killing.delete(id);
