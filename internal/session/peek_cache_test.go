@@ -26,7 +26,7 @@ func TestKillReclaimsThePeekCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.peekStore(s.ID, "/x/t.jsonl", time.Now(), Peek{Text: "a whole assistant message"})
+	m.peekStore(s.ID, "/x/t.jsonl", time.Now(), 42, Peek{Text: "a whole assistant message"})
 	if !peekCacheHas(m, s.ID) {
 		t.Fatal("precondition: the entry was not stored")
 	}
@@ -46,7 +46,7 @@ func TestRetentionPruneReclaimsThePeekCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.peekStore(s.ID, "/x/t.jsonl", time.Now(), Peek{Text: "a whole assistant message"})
+	m.peekStore(s.ID, "/x/t.jsonl", time.Now(), 42, Peek{Text: "a whole assistant message"})
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, ok := m.Get(s.ID); !ok {
@@ -59,5 +59,27 @@ func TestRetentionPruneReclaimsThePeekCache(t *testing.T) {
 	}
 	if peekCacheHas(m, s.ID) {
 		t.Error("peekCache still holds the pruned session's parse")
+	}
+}
+
+// The cache key is (id, path, mtime) — but mtime is coarse on this kernel
+// (measured), so a real edit landing in the same tick as the cached read
+// keeps the SAME mtime while the file's content, and therefore its size,
+// changed. Without size in the key, PeekFor would keep serving the stale
+// parse forever (nothing ever invalidates it again, since mtime never
+// moves). Adding file size to the key catches this.
+func TestPeekCacheKeyIncludesFileSize(t *testing.T) {
+	m, home := newLocatorManager(t)
+	fixed := time.Now()
+	writeTxLines(t, home, locCwd, "aaaa-1", fixed, txUser("go"), txRec("assistant", txText("first")))
+	p1, ok := m.PeekFor("s1")
+	if !ok || p1.Text != "first" {
+		t.Fatalf("first read: %+v ok=%v", p1, ok)
+	}
+	// Same mtime (the coarse-mtime scenario), a longer body → different size.
+	writeTxLines(t, home, locCwd, "aaaa-1", fixed, txUser("go"), txRec("assistant", txText("second, and longer than before")))
+	p2, ok := m.PeekFor("s1")
+	if !ok || p2.Text != "second, and longer than before" {
+		t.Fatalf("a same-mtime size change was served from a stale cache: %+v ok=%v", p2, ok)
 	}
 }

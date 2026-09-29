@@ -136,6 +136,11 @@ type located struct {
 	claude bool
 	path   string
 	reg    *claudeRegEntry
+	// created is the session's own Session.Created instant — peekAndBlocked
+	// passes it to parsePeekTailCut so a pending tool_use left over from a
+	// PRIOR run in the same transcript file (Restart --resume reuses it)
+	// never offers AskFull.
+	created time.Time
 }
 
 // locate resolves a claude session's transcript, in order:
@@ -177,7 +182,7 @@ func (m *Manager) locate(id string) located {
 	if s == nil || !isClaudeBin(bin) {
 		return located{}
 	}
-	l := located{claude: true}
+	l := located{claude: true, created: created}
 	if box == "" && home != "" && !exited {
 		if pr, ok := backend.(PidResolver); ok {
 			if pid, ok := pr.InnerPid(id); ok {
