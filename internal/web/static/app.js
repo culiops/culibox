@@ -360,6 +360,15 @@ function focusMobileTab(tab) {
   renderMobileChips();
 }
 
+// Fix round 2: renderMobileChips runs on every ~3s session poll
+// (refreshSessions -> renderCollapsedSummaries -> renderMobileChips), not
+// only on navigation. Scrolling the focused chip into view on every one of
+// those renders fought a manual scroll of an overflowing strip — the strip
+// snapped back within one poll cycle even while the operator was browsing
+// it. This remembers the tab object last scrolled to; shouldScrollToFocused
+// (chipmodel.js) gates the scroll on that actually changing.
+let _lastScrolledChip = null;
+
 // U1: chips list every open tab — terminal AND viewer — as the single mobile
 // switcher (the desktop per-cell .cell-bar is hidden at <=700px, see
 // app.css). The pure decision (label/title/on/wait/closable per tab) lives
@@ -472,9 +481,22 @@ function renderMobileChips() {
   // ever scrolling the page itself: #term-chips is the only scrolling
   // ancestor in play (vertically it already fits), so only its own
   // horizontal scroll position moves.
-  const onChip = strip.querySelector(".chip.on");
-  if (onChip && typeof onChip.scrollIntoView === "function") {
-    onChip.scrollIntoView({ block: "nearest", inline: "nearest" });
+  //
+  // Fix round 2: gated on shouldScrollToFocused, not run unconditionally.
+  // This function also runs on every ~3s session poll (see _lastScrolledChip
+  // above); without the gate, a poll landing while the operator had manually
+  // scrolled the strip to look at a DIFFERENT chip would snap it straight
+  // back to the focused one. Reset the tracker when the strip empties so a
+  // later re-open scrolls again rather than staying silently stuck on a tab
+  // object that no longer exists.
+  if (tabs.length === 0) {
+    _lastScrolledChip = null;
+  } else if (shouldScrollToFocused(focused, _lastScrolledChip)) {
+    const onChip = strip.querySelector(".chip.on");
+    if (onChip && typeof onChip.scrollIntoView === "function") {
+      onChip.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    _lastScrolledChip = focused;
   }
   // The topbar mirrors this same focused-tab data (dot/name/context%), so
   // paint it right here rather than adding a second call at every one of

@@ -91,3 +91,29 @@ test("statusOf missing (undefined) never throws — a terminal chip's status is 
   assert.doesNotThrow(() => m.chipModel([t], t, () => null, undefined));
   assert.equal(m.chipModel([t], t, () => null, undefined)[0].status, "");
 });
+
+// Fix round 2: renderMobileChips runs on every ~3s session poll, not only on
+// navigation. Scrolling the strip on every render fights a manual scroll —
+// shouldScrollToFocused gates it on an actual focus change since the last
+// scroll.
+test("shouldScrollToFocused: true the first time (lastScrolled is null/undefined)", () => {
+  const t = term("s1", "a");
+  assert.equal(m.shouldScrollToFocused(t, null), true);
+  assert.equal(m.shouldScrollToFocused(t, undefined), true);
+});
+
+test("shouldScrollToFocused: false once the same tab is already the last-scrolled one", () => {
+  const t = term("s1", "a");
+  assert.equal(m.shouldScrollToFocused(t, t), false);
+});
+
+test("shouldScrollToFocused: true again when focus actually moves to a different tab", () => {
+  const t1 = term("s1", "a"), t2 = term("s2", "b");
+  assert.equal(m.shouldScrollToFocused(t2, t1), true);
+});
+
+test("shouldScrollToFocused: false when nothing is focused, regardless of lastScrolled", () => {
+  const t = term("s1", "a");
+  assert.equal(m.shouldScrollToFocused(null, null), false);
+  assert.equal(m.shouldScrollToFocused(null, t), false);
+});

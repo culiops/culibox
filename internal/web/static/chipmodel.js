@@ -40,6 +40,21 @@ function chipModel(tabs, focused, activityOf, statusOf) {
   });
 }
 
+// shouldScrollToFocused: the mobile chip strip's "did the focused chip
+// actually change" gate. renderMobileChips (app.js) runs on every session
+// poll (~3s), not only on navigation — scrolling on every render fights any
+// manual scroll of the overflowing strip, snapping it back to the focused
+// chip within one poll cycle even while the operator is browsing the rest of
+// it. The caller tracks `lastScrolled` (the tab object last scrolled to) in a
+// module-level variable and updates it only when this returns true, so a
+// render that reaches the same focused tab as last time is a no-op here.
+// Identity comparison (===), not a derived key: tab objects are stable for
+// the life of a tab (TerminalTab/ViewerTab instances), so reference equality
+// is both correct and needs no DOM/string plumbing to stay pure.
+function shouldScrollToFocused(focused, lastScrolled) {
+  return !!focused && focused !== lastScrolled;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { chipModel };
+  module.exports = { chipModel, shouldScrollToFocused };
 }
