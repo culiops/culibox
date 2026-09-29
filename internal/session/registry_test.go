@@ -122,7 +122,6 @@ func TestLocateFallsBack(t *testing.T) {
 		{"procStart mismatch (pid reused)", regJSON(101, "aaaa-1", "9999", "idle")},
 		{"malformed JSON", `{not json`},
 		{"pid field disagrees with the file name", regJSON(999, "aaaa-1", "5000", "idle")},
-		{"registry names a transcript that does not exist", regJSON(101, "gone-9", "5000", "idle")},
 		{"fields renamed by a future version", `{"id":101,"session":"aaaa-1","start":"5000"}`},
 	}
 	for _, c := range cases {
@@ -134,6 +133,103 @@ func TestLocateFallsBack(t *testing.T) {
 				t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
 			}
 		})
+	}
+}
+
+// TestLocateMissingTranscriptDoesNotFallBack: once a registry entry VALIDATES,
+// it is trusted outright. If its named transcript does not exist, that must
+// read as "no transcript" for s1 — never as a fallback to a sibling's file
+// (the exact misattribution this locator exists to fix).
+func TestLocateMissingTranscriptDoesNotFallBack(t *testing.T) {
+	m, home := newLocatorManager(t)
+	writeReg(t, home, 101, regJSON(101, "gone-9", "5000", "idle"))
+	if _, ok := m.PeekFor("s1"); ok {
+		t.Error("PeekFor ok=true though the registry-named transcript does not exist")
+	}
+	if got := peekText(t, m, "s2"); got != "from B" {
+		t.Errorf("s2 peek=%q want %q (must be unaffected by s1's missing transcript)", got, "from B")
+	}
+}
+
+// TestLocateExitedSessionIgnoresRegistry: abduco's pidfile `inner=` pid is the
+// agent's LAST known pid, never updated after exit — so for an exited session
+// it can name a pid since reused by an unrelated claude. The registry step
+// must be skipped entirely once a session is known exited.
+func TestLocateExitedSessionIgnoresRegistry(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	m.sessions["s1"].mu.Lock()
+	m.sessions["s1"].status = statusExited
+	m.sessions["s1"].mu.Unlock()
+	if l := m.locate("s1"); l.reg != nil {
+		t.Errorf("exited session used the registry; reg=%+v", l.reg)
+	}
+}
+
+// TestLocateRejectsCwdMismatch: a registry entry whose cwd disagrees with the
+// session's own cwd must never be trusted, even with a matching pid+procStart —
+// this is the second, independent guard against a reused pid.
+func TestLocateRejectsCwdMismatch(t *testing.T) {
+	m, home := newLocatorManager(t)
+	body := `{"pid":101,"sessionId":"aaaa-1","cwd":"/some/other/dir","procStart":"5000","status":"idle"}`
+	writeReg(t, home, 101, body)
+	if l := m.locate("s1"); l.reg != nil {
+		t.Errorf("cwd mismatch accepted; reg=%+v", l.reg)
+	}
+	if got := peekText(t, m, "s1"); got != "from B" {
+		t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
+	}
+}
+
+// TestLocateRejectsSymlinkRegistryFile: a registry entry reached through a
+// symlink must never be trusted — the registry directory is untrusted input,
+// and a planted symlink could point anywhere readable by the daemon.
+func TestLocateRejectsSymlinkRegistryFile(t *testing.T) {
+	m, home := newLocatorManager(t)
+	real := filepath.Join(home, ".claude", "elsewhere.json")
+	if err := os.WriteFile(real, []byte(regJSON(101, "aaaa-1", "5000", "idle")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(home, ".claude", "sessions", "101.json")
+	_ = os.Remove(target)
+	if err := os.Symlink(real, target); err != nil {
+		t.Fatal(err)
+	}
+	if l := m.locate("s1"); l.reg != nil {
+		t.Error("symlinked registry file accepted")
+	}
+	if got := peekText(t, m, "s1"); got != "from B" {
+		t.Errorf("peek=%q want heuristic fallback %q (symlink must be ignored)", got, "from B")
+	}
+}
+
+// TestLocateRejectsOversizedRegistryFile: a registry file over registryMaxBytes
+// must be rejected outright, not silently truncated and parsed.
+func TestLocateRejectsOversizedRegistryFile(t *testing.T) {
+	m, home := newLocatorManager(t)
+	big := strings.Repeat("a", 70<<10)
+	body := fmt.Sprintf(`{"pid":101,"sessionId":"aaaa-1","cwd":"/work/proj","procStart":"5000","status":"idle","junk":%q}`, big)
+	writeReg(t, home, 101, body)
+	if l := m.locate("s1"); l.reg != nil {
+		t.Error("oversized registry file accepted")
+	}
+	if got := peekText(t, m, "s1"); got != "from B" {
+		t.Errorf("peek=%q want heuristic fallback %q (oversized file must be ignored)", got, "from B")
+	}
+}
+
+// TestLocateMissingTranscriptBlocksWithoutPeek: a validated "waiting" registry
+// entry whose transcript is missing must still report blocked=true even though
+// PeekFor cannot read a transcript — Task 5's amber indicator must not go dark
+// just because the transcript file is momentarily absent.
+func TestLocateMissingTranscriptBlocksWithoutPeek(t *testing.T) {
+	m, home := newLocatorManager(t)
+	writeReg(t, home, 101, regJSON(101, "gone-9", "5000", "waiting"))
+	p, ok, blocked := m.peekAndBlocked("s1")
+	if ok {
+		t.Errorf("peek ok=true for a session whose registry-named transcript does not exist; peek=%+v", p)
+	}
+	if !blocked {
+		t.Error("blocked=false though the registry says waiting")
 	}
 }
 
