@@ -40,6 +40,9 @@ type sessionMeta struct {
 	// to nil ("unknown"), which reconcile restores as TRUE for agents: showing a
 	// stale amber once beats hiding an agent that is waiting on you.
 	Submitted *bool `json:"submitted,omitempty"`
+	// Options are the per-spawn option overrides the launcher accepted
+	// (bools and enum choices, never secrets): what Restart re-applies.
+	Options map[string]any `json:"options,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
