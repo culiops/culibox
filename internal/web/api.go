@@ -251,6 +251,8 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "no such session")
 		case errors.Is(err, session.ErrNotLive):
 			writeErr(w, http.StatusConflict, err.Error())
+		case errors.Is(err, session.ErrBinUnresolved):
+			writeErr(w, http.StatusConflict, err.Error())
 		case errors.Is(err, session.ErrTooSoon):
 			writeErr(w, http.StatusTooManyRequests, err.Error())
 		default:

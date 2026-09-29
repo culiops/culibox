@@ -27,6 +27,13 @@ var (
 	// within escDebounceWindow of the previous one. Shared by Interrupt and
 	// Answer("no") — see escGate.
 	ErrTooSoon = errors.New("wait a moment before sending another Esc")
+	// ErrBinUnresolved is Interrupt's refusal when a session's Bin has not
+	// been backfilled yet (ResolveBins runs post-reconcile). Interrupt picks
+	// its key from isAgentBin(bin); an unresolved "" bin must never be
+	// treated as "not an agent" and fall through to Ctrl+C — the session
+	// could be a claude whose SECOND Ctrl+C exits it rather than merely
+	// interrupting it. Refuse instead of guessing; nothing is written.
+	ErrBinUnresolved = errors.New("session's agent is not yet known")
 )
 
 // resumeFor is the conversation a restart continues: only a host-tier claude
@@ -154,6 +161,9 @@ func (m *Manager) Interrupt(id string) error {
 	s.mu.Unlock()
 	if !live {
 		return ErrNotLive
+	}
+	if bin == "" {
+		return ErrBinUnresolved
 	}
 	key := interruptKey(isAgentBin(bin))
 	if key[0] == 0x1b {

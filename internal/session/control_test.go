@@ -43,7 +43,7 @@ func hexSHA(s string) string { sum := sha256.Sum256([]byte(s)); return hex.Encod
 
 func TestInterruptPicksTheKeyServerSide(t *testing.T) {
 	for _, c := range []struct{ bin, want string }{
-		{"/usr/bin/claude", "\x1b"}, {"codex", "\x1b"}, {"/bin/bash", "\x03"}, {"", "\x03"},
+		{"/usr/bin/claude", "\x1b"}, {"codex", "\x1b"}, {"/bin/bash", "\x03"},
 	} {
 		s := &Session{ID: "a", Bin: c.bin, status: statusLive}
 		r := pipeTo(t, s)
@@ -74,6 +74,22 @@ func TestInterruptRefusesWhatIsNotRunning(t *testing.T) {
 	}
 	if err := (&Manager{sessions: map[string]*Session{}}).Interrupt("nope"); !errors.Is(err, ErrNoSession) {
 		t.Errorf("unknown: err=%v want ErrNoSession", err)
+	}
+}
+
+// An unresolved Bin ("") must never fall through to Ctrl+C: it may be a
+// claude session whose bin just hasn't been backfilled yet (ResolveBins runs
+// post-reconcile), and two Ctrl+C in a row can exit a claude session rather
+// than merely interrupt it. Refuse instead of guessing, and write nothing.
+func TestInterruptRefusesAnUnresolvedBin(t *testing.T) {
+	s := &Session{ID: "a", Bin: "", status: statusLive}
+	r := pipeTo(t, s)
+	m := &Manager{sessions: map[string]*Session{"a": s}}
+	if err := m.Interrupt("a"); !errors.Is(err, ErrBinUnresolved) {
+		t.Fatalf("err=%v want ErrBinUnresolved", err)
+	}
+	if got := written(t, r); got != "" {
+		t.Fatalf("wrote %q want nothing", got)
 	}
 }
 
@@ -246,6 +262,72 @@ func TestAnswerMemoSurvivesABookkeepingAppend(t *testing.T) {
 	}
 	if got := written(t, r); got != "1" {
 		t.Fatalf("wrote %q want exactly one \"1\" total", got)
+	}
+}
+
+// The positive mirror of TestAnswerMemoSurvivesABookkeepingAppend: a brand
+// NEW tool_use id — a different call Claude Code happens to have rendered
+// with the identical text — must be answerable even though AskFull's string
+// is byte-identical to the one already recorded. The memo is keyed on
+// path+id, never on the rendered text.
+func TestAnswerMemoAllowsANewToolUseIDWithTheSameCommandText(t *testing.T) {
+	m, home := newLocatorManager(t)
+	first := txRecID("assistant", "msg_a", txToolUse("Bash", "command", "touch /tmp/a", "toolu_first"))
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), txUser("go"), first)
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "waiting"))
+	s := m.sessions["s1"]
+	s.replyable = true
+	s.status = statusLive
+	r := pipeTo(t, s)
+
+	if err := m.Answer("s1", "yes", hexSHA(s1Ask)); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	// A second, distinct call (a fresh tool_use id) that happens to run the
+	// exact same command — the prior call resolves (a tool_result), and this
+	// new one is the tail's own pending call.
+	second := txRecID("assistant", "msg_b", txToolUse("Bash", "command", "touch /tmp/a", "toolu_second"))
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now().Add(2*time.Second), txUser("go"), first, txResult("toolu_first"), second)
+
+	if err := m.Answer("s1", "yes", hexSHA(s1Ask)); err != nil {
+		t.Fatalf("second (new tool_use id, same command text): %v", err)
+	}
+	if got := written(t, r); got != "11" {
+		t.Fatalf("wrote %q want two \"1\"s (both distinct calls answered)", got)
+	}
+}
+
+// The positive mirror for the transcript path half of the memo key: /clear
+// starts a NEW sessionId, i.e. a brand-new transcript file. Even a pending
+// call sharing the exact same tool_use id (a coincidence — ids are unique
+// per file, never reused, but the memo must not rely on that) in the NEW
+// file must be answerable: it is the path changing that unlocks it here,
+// not the id.
+func TestAnswerMemoAllowsANewTranscriptPathAfterClear(t *testing.T) {
+	m, home := newLocatorManager(t)
+	call := func() map[string]any { return txToolUse("Bash", "command", "touch /tmp/a", "toolu_shared") }
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), txUser("go"), txRecID("assistant", "msg_pre_clear", call()))
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "waiting"))
+	s := m.sessions["s1"]
+	s.replyable = true
+	s.status = statusLive
+	r := pipeTo(t, s)
+
+	if err := m.Answer("s1", "yes", hexSHA(s1Ask)); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	// /clear: a new sessionId, so locate() points at a different file —
+	// registry now names it, and that file holds its own first pending call.
+	writeTxLines(t, home, locCwd, "eeee-9", time.Now(), txUser("go"), txRecID("assistant", "msg_post_clear", call()))
+	writeReg(t, home, 101, regJSON(101, "eeee-9", "5000", "waiting"))
+
+	if err := m.Answer("s1", "yes", hexSHA(s1Ask)); err != nil {
+		t.Fatalf("second (new transcript path after /clear): %v", err)
+	}
+	if got := written(t, r); got != "11" {
+		t.Fatalf("wrote %q want two \"1\"s (both distinct calls answered)", got)
 	}
 }
 

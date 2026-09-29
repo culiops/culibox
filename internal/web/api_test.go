@@ -722,6 +722,7 @@ func TestInterruptEndpoint(t *testing.T) {
 		{nil, http.StatusNoContent},
 		{session.ErrNoSession, http.StatusNotFound},
 		{session.ErrNotLive, http.StatusConflict},
+		{session.ErrBinUnresolved, http.StatusConflict},
 		{session.ErrTooSoon, http.StatusTooManyRequests},
 		{errors.New("write /dev/ptmx: input/output error"), http.StatusGone},
 	}
