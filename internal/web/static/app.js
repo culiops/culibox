@@ -941,12 +941,14 @@ async function togglePeek(li, s) {
   send.onclick = () => sendReply(input.value);
 }
 
-// tabUsageFor(sid) → the usage object for an open terminal tab showing this
-// session, or null. Shared by renderSession (paints the context-% badge) and
-// rowLocal (feeds rowSig into reconcileRows) so the two never compute usage
-// two different ways.
-function tabUsageFor(sid) {
-  const tab = terminalTabFor(sid);
+// usageOf(tab) → the usage object for an already-resolved terminal tab, or
+// null. Shared by renderSession (paints the context-% badge) and rowLocal
+// (feeds rowSig into reconcileRows) so the two never compute usage two
+// different ways. Takes the tab, not a session id: both callers already have
+// to resolve terminalTabFor(s.id) for their own other purpose (the elsewhere
+// badge / heldHere), and a second sid-keyed lookup here would scan cells×tabs
+// twice per session per poll for no reason.
+function usageOf(tab) {
   return tab && typeof tab.usage === "function" ? tab.usage() : null;
 }
 
@@ -1033,7 +1035,7 @@ function renderSession(s) {
   // fetched for an open terminal tab; there is deliberately no per-row request,
   // because a fetch per session per poll is a lot of traffic for two characters.
   // No placeholder when it is absent — a dash would read as "zero".
-  const u = tabUsageFor(s.id);
+  const u = usageOf(tab);
   if (u && typeof u.pct === "number") {
     const pct = document.createElement("span");
     pct.className = "pct";
@@ -1269,7 +1271,7 @@ function syncSelectedRow() {
 // exactly what renderSession reads beyond the session record itself.
 function rowLocal(s) {
   const tab = terminalTabFor(s.id);
-  const u = tabUsageFor(s.id);
+  const u = usageOf(tab);
   return {
     killing: killing.has(s.id),
     heldHere: !!tab && tab.status() === "connected",
