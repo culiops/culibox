@@ -238,3 +238,43 @@ func TestSaveAllowsHomeCwdForHostTier(t *testing.T) {
 		t.Fatalf("host tier should accept any default_cwd: %v", err)
 	}
 }
+
+func TestProfileViewCarriesControlFields(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "claude", Bin: "claude", Replyable: true},
+		{Name: "yolo", Bin: "/usr/local/bin/claude", Args: []string{"--permission-mode", "bypassPermissions"}},
+		{Name: "bash", Bin: "bash", Replyable: true},
+	}
+	pm := NewProfileManager(seeds, nil, "", newFakeStore(), func([]config.AgentConfig) {})
+	got := map[string]ProfileView{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v
+	}
+	if v := got["claude"]; !v.AcceptsPrompt || !v.Claude || !v.Replyable || v.BypassArgs {
+		t.Errorf("claude view = %+v", v)
+	}
+	if v := got["yolo"]; !v.Claude || v.Replyable || !v.BypassArgs {
+		t.Errorf("yolo view = %+v", v)
+	}
+	if v := got["bash"]; v.AcceptsPrompt || v.Claude || v.Replyable {
+		t.Errorf("bash view = %+v (replies/prompt are claude-only)", v)
+	}
+}
+
+func TestArgsBypassPermissions(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--dangerously-skip-permissions"}, true},
+		{[]string{"--permission-mode", "bypassPermissions"}, true},
+		{[]string{"--permission-mode=bypassPermissions"}, true},
+		{[]string{"--permission-mode", "default"}, false},
+		{[]string{"--permission-mode"}, false},
+		{nil, false},
+	} {
+		if got := argsBypassPermissions(c.args); got != c.want {
+			t.Errorf("%q: %v want %v", c.args, got, c.want)
+		}
+	}
+}

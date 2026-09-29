@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/store"
 )
 
@@ -30,6 +31,15 @@ type ProfileView struct {
 	Runtime    string          `json:"runtime"`
 	DefaultCwd string          `json:"default_cwd,omitempty"`
 	Options    []ProfileOption `json:"options,omitempty"`
+	// AcceptsPrompt: the spawn form may offer a first message (launcher.AcceptsPrompt).
+	AcceptsPrompt bool `json:"accepts_prompt,omitempty"`
+	// Claude: replies (and their default) apply to this profile at all.
+	Claude bool `json:"claude,omitempty"`
+	// Replyable is the profile's reply default — only ever true for claude.
+	Replyable bool `json:"replyable,omitempty"`
+	// BypassArgs: the profile's own args already bypass permission checks, so
+	// the spawn form must warn when replies are on even with the option off.
+	BypassArgs bool `json:"bypass_args,omitempty"`
 }
 
 // profileStore is the subset of *store.Store the manager needs (injectable).
@@ -143,10 +153,14 @@ func (m *ProfileManager) Views() []ProfileView {
 	out := make([]ProfileView, 0, len(merged))
 	for _, a := range merged {
 		pv := ProfileView{
-			Name:       a.Name,
-			Editable:   editable[a.Name],
-			Runtime:    config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
-			DefaultCwd: a.DefaultCwd,
+			Name:          a.Name,
+			Editable:      editable[a.Name],
+			Runtime:       config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
+			DefaultCwd:    a.DefaultCwd,
+			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),
+			Claude:        launcher.IsClaudeBin(a.Bin),
+			Replyable:     a.Replyable && launcher.IsClaudeBin(a.Bin),
+			BypassArgs:    argsBypassPermissions(a.Args),
 		}
 		for _, def := range m.options {
 			if v, ok := a.Options[def.Key]; ok && def.AppliesTo(a.Bin) {
@@ -209,4 +223,18 @@ func (m *ProfileManager) Delete(name string) error {
 	}
 	m.apply(m.merged())
 	return nil
+}
+
+// argsBypassPermissions reports whether a profile's static args already turn
+// Claude Code's permission checks off.
+func argsBypassPermissions(args []string) bool {
+	for i, a := range args {
+		switch {
+		case a == "--dangerously-skip-permissions", a == "--permission-mode=bypassPermissions":
+			return true
+		case a == "--permission-mode" && i+1 < len(args) && args[i+1] == "bypassPermissions":
+			return true
+		}
+	}
+	return false
 }

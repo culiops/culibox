@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/culiops/agent-box/internal/box"
@@ -28,6 +29,9 @@ type SessionService interface {
 	PeekFor(id string) (session.Peek, bool)
 	SetReplyable(id string, v bool) error
 	SendMessage(id, text string) error
+	Interrupt(id string) error
+	Answer(id, choice, askSHA256 string) error
+	Restart(id string) (session.Info, error)
 }
 
 // API holds the HTTP handlers for sessions.
@@ -46,6 +50,25 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
+// sha256HexRe is the only ask_sha256 shape /answer accepts (what the web
+// client's sha256Hex produces).
+var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// writeSpawnErr maps a Spawn or Restart failure. A refusal that names only
+// what the caller just sent is shown (a workspace that cannot be contained, a
+// first message that was refused); anything else stays generic and the detail
+// goes to the server log only. None of these messages carries the prompt text.
+func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
+	log.Printf("spawn agent=%q: %v", agent, err)
+	switch {
+	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, launcher.ErrBadPrompt),
+		errors.Is(err, launcher.ErrPromptUnsupported):
+		writeErr(w, http.StatusBadRequest, err.Error())
+	default:
+		writeErr(w, http.StatusBadRequest, "could not start session")
+	}
+}
+
 // handleSessions serves GET (list) and POST (spawn) on /api/sessions.
 func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -53,11 +76,13 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, a.Sessions.List())
 	case http.MethodPost:
 		var req struct {
-			Agent   string         `json:"agent"`
-			Name    string         `json:"name"`
-			Cwd     string         `json:"cwd"`
-			Options map[string]any `json:"options"`
-			Runtime string         `json:"runtime"` // "" = the agent's default (box)
+			Agent     string         `json:"agent"`
+			Name      string         `json:"name"`
+			Cwd       string         `json:"cwd"`
+			Options   map[string]any `json:"options"`
+			Runtime   string         `json:"runtime"`   // "" = the agent's default (box)
+			Prompt    string         `json:"prompt"`    // first message (claude only; the launcher validates)
+			Replyable *bool          `json:"replyable"` // nil = the profile's default
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -78,20 +103,15 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		// Name is a free-form display label (blank → working-dir default), so a
 		// spawn no longer fails on the name.
+		// The generic message hides most refusals; a refusal that is actionable
+		// and names only what the caller just supplied (an unboxable workspace,
+		// a rejected first message) is shown instead — see writeSpawnErr.
 		info, err := a.Sessions.Spawn(launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
+			Prompt: req.Prompt, Replyable: req.Replyable,
 		})
 		if err != nil {
-			log.Printf("spawn agent=%q: %v", req.Agent, err) // detail server-side only
-			// One exception to the generic message: a refusal to contain the
-			// chosen workspace is actionable and names only the path the caller
-			// just supplied. Hiding it behind "could not start session" is the
-			// silent failure that makes people give up on containment.
-			if errors.Is(err, box.ErrUnboxableWorkspace) {
-				writeErr(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			writeErr(w, http.StatusBadRequest, "could not start session")
+			writeSpawnErr(w, req.Agent, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, info)
@@ -213,6 +233,87 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		default:
 			// The session died between the guard and the write.
 			writeErr(w, http.StatusGone, "session is gone")
+		}
+		return
+	}
+	// POST /api/sessions/{id}/interrupt — stop what the session is doing: Esc
+	// for an agent (its turn ends, it keeps running), Ctrl+C for a shell. The
+	// key is chosen in the session layer. No body and no reply opt-in: it can
+	// only stop work, never start it.
+	if strings.HasSuffix(id, "/interrupt") {
+		if !checkMutationGuard(w, r) {
+			return
+		}
+		switch err := a.Sessions.Interrupt(strings.TrimSuffix(id, "/interrupt")); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, session.ErrNoSession):
+			writeErr(w, http.StatusNotFound, "no such session")
+		case errors.Is(err, session.ErrNotLive):
+			writeErr(w, http.StatusConflict, err.Error())
+		case errors.Is(err, session.ErrTooSoon):
+			writeErr(w, http.StatusTooManyRequests, err.Error())
+		default:
+			writeErr(w, http.StatusGone, "session is gone")
+		}
+		return
+	}
+	// POST /api/sessions/{id}/answer — one key into a permission dialog, only
+	// for the exact command the operator reviewed (ask_sha256). Every gate is
+	// in the session layer; this validates the shape and names the refusal.
+	if strings.HasSuffix(id, "/answer") {
+		if !checkMutationGuard(w, r) {
+			return
+		}
+		var body struct {
+			Choice    string `json:"choice"`
+			AskSHA256 string `json:"ask_sha256"`
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !sha256HexRe.MatchString(body.AskSHA256) {
+			writeErr(w, http.StatusBadRequest, "bad body")
+			return
+		}
+		switch err := a.Sessions.Answer(strings.TrimSuffix(id, "/answer"), body.Choice, body.AskSHA256); {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, session.ErrBadChoice):
+			writeErr(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, session.ErrNoSession):
+			writeErr(w, http.StatusNotFound, "no such session")
+		case errors.Is(err, session.ErrNotClaude), errors.Is(err, session.ErrNotReplyable):
+			writeErr(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, session.ErrNotBlocked), errors.Is(err, session.ErrPromptChanged):
+			// ErrPromptChanged also covers a repeat answer on an unchanged
+			// prompt (control.go's lastAnswered memo) — the session layer
+			// cannot and does not distinguish the two, so the body stays the
+			// sentinel's own text ("the prompt changed"); the web client (Task
+			// 11/12's answerErrorText) is what turns a 409 here into "Already
+			// answered — if the dialog is still open, answer in the terminal."
+			writeErr(w, http.StatusConflict, err.Error())
+		case errors.Is(err, session.ErrTooSoon):
+			writeErr(w, http.StatusTooManyRequests, err.Error())
+		default:
+			writeErr(w, http.StatusGone, "session is gone")
+		}
+		return
+	}
+	// POST /api/sessions/{id}/restart — replace an exited session (still in
+	// retention) with a new one from the same spec; 201 + the new session.
+	if strings.HasSuffix(id, "/restart") {
+		if !checkMutationGuard(w, r) {
+			return
+		}
+		info, err := a.Sessions.Restart(strings.TrimSuffix(id, "/restart"))
+		switch {
+		case err == nil:
+			writeJSON(w, http.StatusCreated, info)
+		case errors.Is(err, session.ErrNoSession):
+			writeErr(w, http.StatusNotFound, "no such session")
+		case errors.Is(err, session.ErrNotExited), errors.Is(err, session.ErrRestarting):
+			writeErr(w, http.StatusConflict, err.Error())
+		default:
+			writeSpawnErr(w, "(restart "+strings.TrimSuffix(id, "/restart")+")", err)
 		}
 		return
 	}
