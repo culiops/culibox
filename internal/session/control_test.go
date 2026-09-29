@@ -212,6 +212,43 @@ func TestAnswerRefusesARepeatOnAnUnchangedPrompt(t *testing.T) {
 	}
 }
 
+// Regression: Claude Code keeps appending role-less bookkeeping records
+// (last-prompt, mode, ai-title, permission-mode, …) to the transcript while
+// a call sits unresolved. parsePeekTailCut skips them — AskFull/askID stay
+// the same — but they still move the file's mtime and size. The memo must
+// still recognize this as the SAME prompt (real ids are keyed on path+id
+// alone) and refuse the second Answer; before this fix it did not, and a
+// stray second "1" reached the PTY.
+func TestAnswerMemoSurvivesABookkeepingAppend(t *testing.T) {
+	m, home := newLocatorManager(t)
+	const askID = "toolu_fixed_1"
+	askRec := txRecID("assistant", "msg_fixed", txToolUse("Bash", "command", "touch /tmp/a", askID))
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), txUser("go"), askRec)
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "waiting"))
+	s := m.sessions["s1"]
+	s.replyable = true
+	s.status = statusLive
+	r := pipeTo(t, s)
+
+	if err := m.Answer("s1", "yes", hexSHA("Bash(touch /tmp/a)")); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+
+	// Same two lines, same askRec/id — plus a bookkeeping record with no
+	// "message" at all (Message.Role == "" is skipped by parsePeekTailCut) —
+	// and a strictly newer mtime, so the file's identity moves but the call
+	// does not. Registry still "waiting".
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now().Add(2*time.Second), txUser("go"), askRec,
+		`{"type":"last-prompt","prompt":"go"}`)
+
+	if err := m.Answer("s1", "yes", hexSHA("Bash(touch /tmp/a)")); !errors.Is(err, ErrPromptChanged) {
+		t.Fatalf("second: err=%v want ErrPromptChanged", err)
+	}
+	if got := written(t, r); got != "1" {
+		t.Fatalf("wrote %q want exactly one \"1\" total", got)
+	}
+}
+
 // Two Answer calls racing on the same session (a double-click, or two tabs)
 // must not both pass the gates: answerMu makes gate-check-through-Write one
 // critical section, so exactly one of them writes and the other sees the

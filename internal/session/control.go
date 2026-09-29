@@ -107,11 +107,13 @@ func interruptKey(agent bool) []byte {
 
 // escDebounceWindow is the minimum spacing between two Esc sent to the same
 // session, shared by Interrupt (agent Esc) and Answer("no") via escGate.
-// Claude Code opens its rewind menu on a SECOND Esc arriving within its own
-// short double-press window once a session has gone idle (measured,
-// 2.1.284, P9) — an interrupt immediately followed by declining a prompt, or
-// two rapid declines, must not risk landing inside that window. Ctrl+C
-// (shells) has no such hazard and is never debounced.
+// Claude Code opens its rewind menu on a second Esc once a session has gone
+// idle (P9) — how short its own double-press window actually is was NOT
+// measured, so 1s is a deliberately conservative, unmeasured choice: long
+// enough to absorb an interrupt immediately followed by declining a prompt,
+// or two rapid declines, without risking that window; short enough not to
+// block a deliberate second interrupt. Ctrl+C (shells) has no such hazard
+// and is never debounced.
 const escDebounceWindow = 1 * time.Second
 
 // nowFunc is the clock escGate reads. A var so a test can inject the clock
@@ -184,27 +186,55 @@ func askHashMatches(askFull, want string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(strings.ToLower(want))) == 1
 }
 
-// answerState identifies one specific pending prompt: the pending tool_use's
-// own id (Peek.askID) together with the transcript read that produced it
-// (Peek.askSrc* — path+mtime+size). Two states are "the same prompt" only if
-// every field matches. The zero value never matches a real prompt: askSrcPath
-// is always non-empty whenever AskFull is (see peekAndBlocked).
+// answerState identifies one specific pending prompt: the transcript path
+// plus the pending tool_use's own id (Peek.askID). A REAL id (the normal
+// case — Claude Code always writes one) is unique on its own, so path+id
+// alone is the call's identity; mtime/size are carried only for the rare
+// synthetic-id fallback (see equal) and must never be required for a real
+// id. Claude Code keeps appending role-less bookkeeping records
+// (last-prompt, mode, ai-title, permission-mode, …) to the transcript while
+// a call sits unresolved — parsePeekTailCut skips them (askID/AskFull don't
+// move), but they still bump the file's mtime and size, so requiring those
+// to match too used to make Answer's own successful write look like a
+// changed prompt on the very next read. The zero value never matches a real
+// prompt: askSrcPath is always non-empty whenever AskFull is (see
+// peekAndBlocked).
 type answerState struct {
-	id    string
 	path  string
+	id    string
 	mtime time.Time
 	size  int64
 }
 
 func stateOf(p Peek) answerState {
-	return answerState{id: p.askID, path: p.askSrcPath, mtime: p.askSrcMTime, size: p.askSrcSize}
+	return answerState{path: p.askSrcPath, id: p.askID, mtime: p.askSrcMTime, size: p.askSrcSize}
 }
 
-// equal compares two answerStates. Not ==: time.Time carries an optional
-// monotonic reading that plain equality can trip on even for the same
-// instant, so mtime is compared with Equal.
+// syntheticAskID reports whether id is toolUseKey's positional fallback
+// (peek.go: "\x00%d:%d", used only when a tool_use block carries no id of
+// its own — not a shape Claude Code actually writes, but not assumed away
+// either). Only that case falls back to the mtime/size read-snapshot in
+// answerState.equal: a bare line/block position is not guaranteed to name
+// the same call across two separate reads.
+func syntheticAskID(id string) bool { return strings.HasPrefix(id, "\x00") }
+
+// equal compares two answerStates as "the same pending call". path+id always
+// have to match. For a REAL id that is the whole comparison — the id alone
+// already names the call uniquely, and requiring mtime/size too would make
+// the memo stop matching on every bookkeeping-record append that leaves the
+// call itself untouched (see answerState's doc comment). Only a synthetic id
+// also requires mtime+size, since a bare position isn't trustworthy alone.
+// Not ==: time.Time carries an optional monotonic reading that plain
+// equality can trip on even for the same instant, so mtime is compared with
+// Equal.
 func (a answerState) equal(b answerState) bool {
-	return a.id == b.id && a.path == b.path && a.size == b.size && a.mtime.Equal(b.mtime)
+	if a.id != b.id || a.path != b.path {
+		return false
+	}
+	if !syntheticAskID(a.id) {
+		return true
+	}
+	return a.size == b.size && a.mtime.Equal(b.mtime)
 }
 
 // Answer types one key into a permission dialog. The gates run in this order,

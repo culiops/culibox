@@ -304,7 +304,12 @@ type Session struct {
 	// (peekAndBlocked + the lastAnswered memo below) through the Write is one
 	// critical section, so two concurrent or rapidly-repeated Answer calls on
 	// an unchanged prompt cannot both pass the gates and both write — see
-	// Answer's doc comment. Never held together with mu or the Manager's mu.
+	// Answer's doc comment. answerMu is the OUTERMOST lock: Answer takes it
+	// only after releasing mu and the Manager's mu from its earlier reads,
+	// and peekAndBlocked's own m.locate call DOES take the Manager's mu (and
+	// nested under it, mu) WHILE answerMu is still held — that nesting is
+	// fine and expected. What must never happen is the reverse: acquiring
+	// answerMu while mu or the Manager's mu is already held.
 	answerMu sync.Mutex
 	// lastAnswered is the pending-prompt identity Answer last wrote a key
 	// for (zero value = none yet). Guarded by answerMu; only Answer touches
