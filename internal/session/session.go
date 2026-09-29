@@ -213,6 +213,9 @@ type Info struct {
 	Need string `json:"need,omitempty"`
 	// Ask is Peek.Ask for a Need=="ask" session: the tool call it wants to run.
 	Ask string `json:"ask,omitempty"`
+	// Resumable: an exited host-tier claude whose conversation id is known —
+	// Restart will continue it (`--resume`). Filled by List only.
+	Resumable bool `json:"resumable,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -243,6 +246,13 @@ type Session struct {
 	// options are the accepted per-spawn overrides (OptionsResolver). Set
 	// before publication and never mutated, so read without a lock.
 	options map[string]any
+
+	// claudeSessionID is Claude Code's conversation id as last validated by
+	// locate (registry), so it follows /clear. Guarded by mu.
+	claudeSessionID string
+	// restarting latches the first Restart of an exited session, so a double
+	// click cannot start two replacements. Guarded by mu.
+	restarting bool
 
 	// releaseOnce makes the box release idempotent. Two different paths finalize
 	// a session (the retention goroutine, and Kill), and a DETACHED session is
@@ -568,6 +578,13 @@ func (s *Session) Info() Info {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options}
+}
+
+// claudeSID returns the last validated Claude conversation id ("" if none).
+func (s *Session) claudeSID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claudeSessionID
 }
 
 // SetName updates the mutable display label.
@@ -974,6 +991,7 @@ func (m *Manager) List() []Info {
 			// Bin is written under m.mu (ResolveBins), so this is the one place
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
+			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID()) != ""
 			o = append(o, i)
 		}
 		return o
@@ -1075,6 +1093,14 @@ func (m *Manager) Kill(id string) error {
 			<-s.done
 		}
 	}
+	m.removeSession(id, s)
+	return nil
+}
+
+// removeSession drops a session that is already stopped (killed, or exited and
+// being replaced by Restart) from everything the daemon tracks. Shared so the
+// teardown list cannot drift between Kill and Restart.
+func (m *Manager) removeSession(id string, s *Session) {
 	_ = s.ptmx.Close()
 	m.mu.Lock()
 	delete(m.sessions, id)
@@ -1092,7 +1118,6 @@ func (m *Manager) Kill(id string) error {
 	// idle TTL forever. releaseSessionBox is once-guarded, so the common path
 	// (both here and there) still counts exactly one release.
 	m.releaseSessionBox(s)
-	return nil
 }
 
 // Reconcile rebuilds the registry from surviving abduco sessions after a daemon
@@ -1235,6 +1260,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// merely surviving a restart.
 	sess.replyable = md.Replyable
 	sess.options = md.Options
+	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
+		sess.claudeSessionID = md.ClaudeSessionID
+	}
 	// nil = a record written before the flag existed, or an orphan adopted with
 	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
 	sess.submitted = md.Submitted == nil || *md.Submitted

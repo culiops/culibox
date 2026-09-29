@@ -183,6 +183,7 @@ func (m *Manager) locate(id string) located {
 			if pid, ok := pr.InnerPid(id); ok {
 				if e, ok := readClaudeRegistry(home, pid, procStart, cwd); ok {
 					l.reg = &e
+					m.noteClaudeSessionID(s, id, e.SessionID)
 					p := filepath.Join(home, ".claude", "projects", projectSlug(cwd), e.SessionID+".jsonl")
 					if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
 						l.path = p
@@ -207,4 +208,24 @@ func (m *Manager) locate(id string) located {
 		l.path = p
 	}
 	return l
+}
+
+// noteClaudeSessionID remembers the conversation a validated registry entry
+// names, so an exited session can be restarted into it. Only a change costs a
+// sidecar write. Called by locate with no lock held; e.SessionID already
+// matched sessionIDRe inside readClaudeRegistry.
+func (m *Manager) noteClaudeSessionID(s *Session, id, sid string) {
+	s.mu.Lock()
+	changed := s.claudeSessionID != sid
+	s.claudeSessionID = sid
+	s.mu.Unlock()
+	if !changed {
+		return
+	}
+	m.mu.Lock()
+	sc := m.sidecar
+	m.mu.Unlock()
+	if sc != nil {
+		sc.setClaudeSessionID(id, sid)
+	}
 }
