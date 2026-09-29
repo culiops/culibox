@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isPaletteHotkey, isInsertHotkey, palSection, palGroup } = require("../static/palette.js");
+const { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint } = require("../static/palette.js");
 
 // A KeyboardEvent stand-in: only the fields the matcher reads.
 const ev = (code, mods) => Object.assign(
@@ -118,4 +118,24 @@ test("palGroup omits a section entirely when it has no rows (commands-only mode)
   const items = [{ kind: "new", label: "New session…" }, { kind: "view", label: "Toggle sidebar" }];
   const grouped = palGroup(items);
   assert.deepStrictEqual(grouped.map((g) => g.section), ["COMMANDS", "COMMANDS"]);
+});
+
+test("palPreferDir: the focused session's cwd, else the tree root, else nothing", () => {
+  assert.strictEqual(palPreferDir({ cwd: "/home/u/repo" }, "/home/u/other"), "/home/u/repo");
+  assert.strictEqual(palPreferDir({ cwd: "" }, "/home/u/other"), "/home/u/other");
+  assert.strictEqual(palPreferDir(null, "/home/u/other"), "/home/u/other");
+  assert.strictEqual(palPreferDir(null, ""), "");
+});
+
+test("sessions match by name and by summary", () => {
+  assert.strictEqual(palSessionMatchText({ id: "claude-3", name: "api", summary: "Fixed the flaky login test" }),
+    "api Fixed the flaky login test");
+  assert.strictEqual(palSessionMatchText({ id: "claude-3" }), "claude-3");
+});
+
+test("palModHint follows the selected row's kind (⌘↵ keeps inserting a file's path)", () => {
+  assert.strictEqual(palModHint("session", true), "⌘↵ open in new pane");
+  assert.strictEqual(palModHint("session", false), "^↵ open in new pane");
+  assert.strictEqual(palModHint("file", true), "⌘↵ insert path");
+  assert.strictEqual(palModHint("view", false), "");
 });

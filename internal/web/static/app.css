@@ -1193,6 +1193,9 @@
     }
     #pal-list li.pal-row.sel .pal-glyph { color: var(--fg); }
     #pal-list .pal-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* A session row's one-line summary (spec §2.6): muted, clipped, and given
+       more of the row than the name so the words that matched stay visible. */
+    #pal-list .pal-sub { flex: 2 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
     #pal-list .pal-hint { flex: none; color: var(--muted); font-size: 11px; font-family: ui-monospace, Menlo, monospace; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #pal-list .pal-copy { flex: none; display: none; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; line-height: 1; padding: 2px 4px; }
     #pal-list li.pal-row.sel .pal-copy { display: block; }

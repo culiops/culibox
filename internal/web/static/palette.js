@@ -72,6 +72,48 @@ function closePalette() {
   if (d && d.open) d.close();
 }
 
+// palFocusedSession: the session whose terminal the focused pane shows, or
+// null (a file viewer, or no tabs) — the one the per-session commands act on.
+function palFocusedSession() {
+  const t = typeof focusedTerminal === "function" ? focusedTerminal() : null;
+  return t ? lastSessions.find((s) => s.id === t.id) || null : null;
+}
+
+// palPreferDir: where file search looks first — the focused terminal
+// session's cwd, else the file tree's root.
+function palPreferDir(session, treeRoot) {
+  return (session && session.cwd) || treeRoot || "";
+}
+
+// palSessionMatchText: a session row matches on its name AND its summary, so
+// "the login test" finds the agent that was working on it.
+function palSessionMatchText(s) {
+  const v = s || {};
+  return [v.name || v.id || "", v.summary || ""].filter((x) => x !== "").join(" ");
+}
+
+// palModHint: what ⌘↵ / Ctrl+↵ does on the selected row. A session opens in a
+// new pane; a file keeps inserting its path (the shipped behaviour).
+function palModHint(kind, mac) {
+  const k = mac ? "⌘↵" : "^↵";
+  if (kind === "session") return k + " open in new pane";
+  if (kind === "file") return k + " insert path";
+  return "";
+}
+
+// palPaintModHint shows the selected row's ⌘↵ meaning, and hides the hint
+// (with its separator) where ⌘↵ does nothing.
+function palPaintModHint() {
+  const hint = document.getElementById("pal-insert-hint");
+  const sep = document.getElementById("pal-mod-sep");
+  if (!hint) return;
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const it = palItems[palSel];
+  hint.textContent = it ? palModHint(it.kind, mac) : "";
+  hint.hidden = hint.textContent === "";
+  if (sep) sep.hidden = hint.hidden;
+}
+
 // runItem closes the palette BEFORE acting. Several actions open another dialog
 // or raise the undo toast, and a fixed-position toast paints *beneath* a modal
 // dialog's backdrop: an Undo the user cannot click is worse than none.
@@ -100,8 +142,10 @@ function paletteSessions(mac) {
     const act = activityClass(s.activity);
     return {
       kind: "session", label: name, hint: jumpHint || (s.cwd ? shortPath(s.cwd) : ""),
+      sub: s.summary || "", match: palSessionMatchText(s),
       dotCls: act.cls, dotTitle: act.title,
       run: () => openTerminal(s.id, name),
+      runNewPane: () => openTerminal(s.id, name, { newPane: true }),
     };
   });
 }
@@ -122,9 +166,18 @@ function paletteCommands(mac) {
   if (window.shellProfile) {
     cmds.push({ kind: "new", label: "New shell here", hint: "Ctrl+Shift+`", run: () => spawnShellIn(focusedCell) });
   }
+  // The focused session's control commands, through the same dispatch the
+  // row menu uses (runSessionAction) — one handler per action.
+  const focused = palFocusedSession();
+  if (focused) {
+    const fname = focused.name || focused.id;
+    for (const a of paletteActionItems(focused)) {
+      cmds.push({ kind: "session-action", label: a.label + " · " + fname, hint: "", run: () => runSessionAction(a.id, focused) });
+    }
+  }
   for (const s of lastSessions) {
     const name = s.name || s.id;
-    cmds.push({ kind: "kill", label: "Kill session · " + name, hint: "", run: () => confirmKill(s.id, name) });
+    cmds.push({ kind: "kill", label: "End session · " + name, hint: "", run: () => confirmKill(s.id, name) });
   }
   for (const n of [1, 2, 4]) {
     cmds.push({ kind: "layout", label: "Layout · " + n + (n === 1 ? " window" : " windows"), hint: "", run: () => applyCap(n) });
@@ -158,7 +211,7 @@ function palMatch(text, q) {
 function palFilter(items, q) {
   if (!q) return items;
   return items
-    .map((it) => ({ it, s: palMatch(it.label, q) }))
+    .map((it) => ({ it, s: palMatch(it.match || it.label, q) }))
     .filter((x) => x.s >= 0)
     .sort((a, b) => b.s - a.s)
     .map((x) => x.it);
@@ -196,7 +249,9 @@ async function palSearchFiles(q, seq, local) {
   const timer = setTimeout(() => ac.abort(), PAL_FETCH_MS);
   let data = null, failed = false;
   try {
-    const res = await fetch("/api/fs/search?limit=40&q=" + encodeURIComponent(q), { signal: ac.signal });
+    const prefer = palPreferDir(palFocusedSession(), typeof ftRootPath === "string" ? ftRootPath : "");
+    const url = "/api/fs/search?limit=40&q=" + encodeURIComponent(q) + (prefer ? "&prefer=" + encodeURIComponent(prefer) : "");
+    const res = await fetch(url, { signal: ac.signal });
     if (res.ok) data = await res.json();
     else failed = true;
   } catch (_) {
@@ -296,6 +351,14 @@ function palBuildRow(it, idx, selected) {
   label.textContent = it.label;
   label.title = it.title || it.label;
   li.append(label);
+  if (it.sub) {
+    // One-line summary beside the session's name (spec §2.6); clipped by CSS.
+    const sub = document.createElement("span");
+    sub.className = "pal-sub";
+    sub.textContent = it.sub;
+    sub.title = it.sub;
+    li.append(sub);
+  }
   if (it.hint) {
     const h = document.createElement("span");
     h.className = "pal-hint";
@@ -353,6 +416,7 @@ function palRender(items, note) {
 
   document.getElementById("pal-empty").hidden = palItems.length > 0;
   document.getElementById("pal-note").textContent = note || "";
+  palPaintModHint();
 }
 
 function palSelect(i) {
@@ -361,6 +425,7 @@ function palSelect(i) {
   for (let k = 0; k < palRowEls.length; k++) palRowEls[k].classList.toggle("sel", k === palSel);
   const el = palRowEls[palSel];
   if (el) el.scrollIntoView({ block: "nearest" });
+  palPaintModHint();
 }
 
 // --- wiring ------------------------------------------------------------------
@@ -398,15 +463,16 @@ function initPalette() {
   const filesPal = document.getElementById("ft-palette");
   if (filesPal) filesPal.onclick = openPalette;
 
-  // ^ is wrong on mac, where the same binding is ⌘. The hint is the only place
-  // this shortcut is written down.
-  const insHint = document.getElementById("pal-insert-hint");
-  if (insHint) insHint.textContent = (mac ? "⌘↵" : "^↵") + " insert path";
-
   inp.addEventListener("input", palRefresh);
   inp.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); palSelect(palSel + 1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); palSelect(palSel - 1); }
+    else if (isInsertHotkey(e, mac) && palItems[palSel] && palItems[palSel].runNewPane) {
+      e.preventDefault();
+      const it = palItems[palSel];
+      closePalette();
+      it.runNewPane();
+    }
     else if (isInsertHotkey(e, mac) && palItems[palSel] && palItems[palSel].path) {
       e.preventDefault();
       const p = palItems[palSel].path;
@@ -440,5 +506,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint };
 }
