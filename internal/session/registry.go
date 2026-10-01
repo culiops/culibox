@@ -119,7 +119,7 @@ func readClaudeRegistry(home string, pid int, procStart procStartFunc, cwd strin
 	if json.Unmarshal(b, &e) != nil || e.Pid != pid || !sessionIDRe.MatchString(e.SessionID) {
 		return claudeRegEntry{}, false
 	}
-	if filepath.Clean(e.Cwd) != filepath.Clean(cwd) {
+	if !regCwdMatches(e.Cwd, cwd) {
 		return claudeRegEntry{}, false
 	}
 	want, ok := procStart(pid)
@@ -127,6 +127,18 @@ func readClaudeRegistry(home string, pid int, procStart procStartFunc, cwd strin
 		return claudeRegEntry{}, false
 	}
 	return e, true
+}
+
+// regCwdMatches is readClaudeRegistry's cwd guard. Up to 2.1.285 the registry
+// cwd stays the spawn dir; from 2.1.286 EnterWorktree rewrites it to the
+// worktree. So it accepts the spawn dir itself or any checkout of the SAME
+// repository (by common git dir) — still rejecting a reused pid now running a
+// claude in an unrelated directory or another repository.
+func regCwdMatches(regCwd, cwd string) bool {
+	if filepath.Clean(regCwd) == filepath.Clean(cwd) {
+		return true
+	}
+	return filepath.IsAbs(regCwd) && sameRepository(filepath.Clean(regCwd), filepath.Clean(cwd))
 }
 
 // located is where a session's transcript lives, plus what Claude Code's live
@@ -193,9 +205,16 @@ func (m *Manager) locate(id string) located {
 				if e, ok := readClaudeRegistry(home, pid, procStart, cwd); ok {
 					l.reg = &e
 					m.noteClaudeSessionID(s, id, e.SessionID)
-					p := filepath.Join(home, ".claude", "projects", projectSlug(cwd), e.SessionID+".jsonl")
-					if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-						l.path = p
+					// 2.1.286 moves the transcript into the worktree's project dir
+					// along with the registry cwd, so look where the registry says
+					// the session is now, then in the spawn dir. Named by sessionId
+					// either way, so neither can be a sibling's file.
+					for _, dir := range []string{e.Cwd, cwd} {
+						p := filepath.Join(home, ".claude", "projects", projectSlug(filepath.Clean(dir)), e.SessionID+".jsonl")
+						if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+							l.path = p
+							break
+						}
 					}
 					// A validated entry is trusted as-is, whether or not its
 					// transcript exists — never fall through to the heuristic,
