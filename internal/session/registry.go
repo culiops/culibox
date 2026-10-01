@@ -141,6 +141,10 @@ type located struct {
 	// PRIOR run in the same transcript file (Restart --resume reuses it)
 	// never offers AskFull.
 	created time.Time
+	// cwd and boxed are the session's spawn dir and tier, for UsageFor's
+	// liveCwd vetting of the transcript's own cwd.
+	cwd   string
+	boxed bool
 }
 
 // locate resolves a claude session's transcript, in order:
@@ -182,7 +186,7 @@ func (m *Manager) locate(id string) located {
 	if s == nil || !isClaudeBin(bin) {
 		return located{}
 	}
-	l := located{claude: true, created: created}
+	l := located{claude: true, created: created, cwd: cwd, boxed: box != ""}
 	if box == "" && home != "" && !exited {
 		if pr, ok := backend.(PidResolver); ok {
 			if pid, ok := pr.InnerPid(id); ok {

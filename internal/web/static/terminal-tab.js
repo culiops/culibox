@@ -229,6 +229,7 @@ class TerminalTab {
     this.kind = "terminal";
     this.name = name || id;
     this.cwd = "";
+    this.agentCwd = ""; // live transcript cwd (a worktree), set by setUsage
     this.closed = false;
     this.ended = false;
     this.retries = 0;
@@ -412,17 +413,15 @@ class TerminalTab {
     // same numbers doesn't rebuild the tab strip.
     const key = u ? `${u.contextTokens}|${u.pct ?? ""}|${u.model}|${u.effort}` : "";
     if (key !== this._usageKey) { this._usageKey = key; this.usageData = u; this.onUpdate?.(); }
+    // Where the agent works NOW (a worktree it entered), for resolvePath. Not in
+    // the render key: nothing on screen shows it.
+    this.agentCwd = (u && u.cwd) || "";
   }
 
   onShow() { this.fit(); this.term.focus(); }
   onHide() {}
 
-  resolvePath(tok) {
-    if (tok.startsWith("/")) return tok;
-    if (tok.startsWith("~/")) return window.HOME_DIR ? window.HOME_DIR + tok.slice(1) : tok; // ~/foo → <home>/foo
-    const base = (this.cwd || "").replace(/\/$/, "");
-    return base ? base + "/" + tok.replace(/^\.\//, "") : tok;
-  }
+  resolvePath(tok) { return resolveTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR); }
 
   connect() {
     this.term.reset();
@@ -700,6 +699,17 @@ async function openTerminalUrl(raw, opts) {
   }
 }
 
+// resolveTermPath turns a path token clicked in terminal output into an absolute
+// path. A relative one joins onto agentCwd — the agent's live directory from its
+// transcript, which differs from the spawn cwd once Claude Code enters a worktree
+// (it moves without a chdir) — and onto the spawn cwd when that is unknown.
+function resolveTermPath(tok, cwd, agentCwd, home) {
+  if (tok.startsWith("/")) return tok;
+  if (tok.startsWith("~/")) return home ? home + tok.slice(1) : tok; // ~/foo → <home>/foo
+  const base = (agentCwd || cwd || "").replace(/\/$/, "");
+  return base ? base + "/" + tok.replace(/^\.\//, "") : tok;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { isBrokenMouseReport, resolveTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }

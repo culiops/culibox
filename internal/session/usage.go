@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/culiops/agent-box/internal/launcher"
@@ -19,6 +20,7 @@ type Usage struct {
 	ContextTokens int    `json:"contextTokens"`
 	ContextMax    int    `json:"contextMax,omitempty"`
 	Pct           *int   `json:"pct,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
 }
 
 const usageTailBytes = 256 << 10
@@ -90,16 +92,26 @@ func transcriptPath(cwd, home string, created time.Time) (string, bool) {
 
 // parseUsageTail scans a byte tail from the end for the last assistant message
 // carrying message.usage. Sums TOP-LEVEL usage fields only (iterations double-count).
-// effort is the most recent top-level `effort` seen anywhere in the tail.
+// effort is the most recent top-level `effort` seen anywhere in the tail, and cwd
+// the most recent absolute top-level `cwd`: Claude Code's EnterWorktree moves the
+// agent without a chdir of the process, so the transcript is the only record of
+// where it is working now.
 func parseUsageTail(b []byte) (Usage, bool) {
 	lines := strings.Split(string(b), "\n")
-	var effort string
+	var effort, cwd string
 	for _, ln := range lines {
 		var probe struct {
 			Effort string `json:"effort"`
+			Cwd    string `json:"cwd"`
 		}
-		if json.Unmarshal([]byte(ln), &probe) == nil && probe.Effort != "" {
+		if json.Unmarshal([]byte(ln), &probe) != nil {
+			continue
+		}
+		if probe.Effort != "" {
 			effort = probe.Effort
+		}
+		if filepath.IsAbs(probe.Cwd) {
+			cwd = probe.Cwd
 		}
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -127,6 +139,7 @@ func parseUsageTail(b []byte) (Usage, bool) {
 				Model:         rec.Message.Model,
 				Effort:        effort,
 				ContextTokens: u.Input + u.CacheRead + u.CacheWrite,
+				Cwd:           cwd,
 			}, true
 		}
 	}
@@ -163,6 +176,7 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !ok {
 		return Usage{}, false
 	}
+	u.Cwd = liveCwd(u.Cwd, l.cwd, l.boxed)
 	if max, ok := contextMax(u.Model); ok && u.ContextTokens <= max {
 		u.ContextMax = max
 		pctv := u.ContextTokens * 100 / max
@@ -224,4 +238,87 @@ func readUsageTail(path string) (data []byte, cut bool, err error) {
 	}
 	data, err = io.ReadAll(f)
 	return data, cut, err
+}
+
+// liveCwd turns the transcript's cwd into the base the browser should join
+// relative terminal paths onto, or "" to keep the spawn cwd. That cwd moves on
+// every Bash `cd`, not only on Claude Code's EnterWorktree (which moves the agent
+// without a chdir of the process), while a path the agent prints is relative to
+// its checkout. So the base changes only when the cwd sits in a linked worktree
+// the spawn cwd is not already inside, and it becomes that worktree's root.
+// Boxed tier: the cwd must also be at or under the spawn cwd, the one mount that
+// names the same files in the container and on the host (box/argv.go: cwd:cwd).
+func liveCwd(raw, spawn string, boxed bool) string {
+	if raw == "" || !filepath.IsAbs(raw) {
+		return ""
+	}
+	raw, spawn = filepath.Clean(raw), filepath.Clean(spawn)
+	if boxed && !within(raw, spawn) {
+		return ""
+	}
+	root, ok := worktreeRoot(raw)
+	if !ok || within(spawn, root) {
+		return ""
+	}
+	return root
+}
+
+// within reports whether p is dir or below it (both already Clean).
+func within(p, dir string) bool {
+	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+// worktreeRoot walks up from dir to the nearest .git and reports that checkout's
+// root only if it is a linked worktree: a .git FILE whose gitdir is a
+// <common>/worktrees/<name> admin dir. A .git directory (main checkout), a submodule's
+// .git file (.git/modules/), or no .git at all → ok=false.
+func worktreeRoot(dir string) (string, bool) {
+	for d := dir; ; {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			// The admin dir is <common>/worktrees/<name>, so its PARENT is named
+			// worktrees; a submodule of a worktree (…/worktrees/wt/modules/sub)
+			// merely contains the word.
+			gitdir, ok := readGitFile(filepath.Join(d, ".git"))
+			if ok && filepath.Base(filepath.Dir(filepath.Clean(gitdir))) == "worktrees" {
+				return d, true
+			}
+			return "", false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
+}
+
+// readGitFile returns the gitdir a .git FILE points at; ok=false for anything
+// that is not a regular file of the form "gitdir: <path>".
+func readGitFile(p string) (string, bool) {
+	f, ok := openRegular(p)
+	if !ok {
+		return "", false
+	}
+	defer f.Close()
+	b, _ := io.ReadAll(io.LimitReader(f, 4096))
+	gitdir, found := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	return strings.TrimSpace(gitdir), found
+}
+
+// openRegular opens p only if it is a regular file, deciding on the opened fd
+// rather than a prior Lstat: under a box mount the agent owns these files and can
+// swap one for a FIFO between the check and the open, and a plain open of a FIFO
+// blocks with no timeout (one pinned thread per poll). O_NONBLOCK makes that open
+// return at once; O_NOFOLLOW refuses a symlink.
+func openRegular(p string) (*os.File, bool) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, false
+	}
+	return f, true
 }

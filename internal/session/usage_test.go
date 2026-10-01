@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -91,5 +92,135 @@ func TestIsAgentBin(t *testing.T) {
 		if got := isAgentBin(c.bin); got != c.want {
 			t.Errorf("isAgentBin(%q)=%v want %v", c.bin, got, c.want)
 		}
+	}
+}
+
+// Claude Code's EnterWorktree moves the agent's working directory without a
+// chdir of the process; only the transcript records it, on every entry's `cwd`.
+// The LAST such entry is the live one, even when it comes after the last usage
+// line, and ExitWorktree is just a later entry carrying the old dir again.
+func TestParseUsageTail_cwdIsTheLastRecorded(t *testing.T) {
+	lines := `{"cwd":"/work/proj","message":{"role":"user"}}
+{"cwd":"/work/proj/.claude/worktrees/wt","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}
+{"cwd":"/work/proj/.claude/worktrees/wt2","message":{"role":"user"}}
+`
+	u, ok := parseUsageTail([]byte(lines))
+	if !ok || u.Cwd != "/work/proj/.claude/worktrees/wt2" {
+		t.Fatalf("got %+v ok=%v", u, ok)
+	}
+}
+
+func TestParseUsageTail_relativeCwdIgnored(t *testing.T) {
+	lines := `{"cwd":"/work/proj","message":{"role":"user"}}
+{"cwd":"wt","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}
+`
+	u, _ := parseUsageTail([]byte(lines))
+	if u.Cwd != "/work/proj" {
+		t.Fatalf("Cwd=%q want the last ABSOLUTE one", u.Cwd)
+	}
+}
+
+// mkCheckouts builds a main checkout (a .git dir) with a linked worktree under
+// .claude/worktrees/wt (a .git FILE pointing into .git/worktrees/wt) and a
+// submodule (a .git file pointing into .git/modules), each with a sub/ dir.
+func mkCheckouts(t *testing.T) (main, wt, sm string) {
+	t.Helper()
+	main = filepath.Join(t.TempDir(), "proj")
+	wt = filepath.Join(main, ".claude", "worktrees", "wt")
+	sm = filepath.Join(main, "vendor", "lib")
+	for _, d := range []string{filepath.Join(main, ".git", "worktrees", "wt"), filepath.Join(main, "sub"),
+		filepath.Join(wt, "sub", "deep"), filepath.Join(sm, "sub")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+main+"/.git/worktrees/wt\n"), 0o644)
+	os.WriteFile(filepath.Join(sm, ".git"), []byte("gitdir: ../../.git/modules/lib\n"), 0o644)
+	return main, wt, sm
+}
+
+// The transcript cwd moves on every Bash `cd`, not only on EnterWorktree, and a
+// path the agent prints is relative to its CHECKOUT, not to wherever its shell
+// last cd'd. So only a move into a different linked worktree changes the base,
+// and the base is that worktree's root.
+func TestLiveCwd(t *testing.T) {
+	main, wt, sm := mkCheckouts(t)
+	cases := []struct {
+		name, raw, spawn string
+		boxed            bool
+		want             string
+	}{
+		{"entered a worktree", wt, main, false, wt},
+		{"cd'd into a worktree subdir", filepath.Join(wt, "sub", "deep"), main, false, wt},
+		{"cd'd into a main-checkout subdir", filepath.Join(main, "sub"), main, false, ""},
+		{"cd'd outside any checkout", t.TempDir(), main, false, ""},
+		{"submodule is not a worktree", filepath.Join(sm, "sub"), main, false, ""},
+		{"spawned inside that worktree", filepath.Join(wt, "sub"), wt, false, ""},
+		{"boxed, worktree under the mount", wt, main, true, wt},
+		{"boxed, worktree outside the mount", wt, filepath.Join(main, "sub"), true, ""},
+		{"relative", "wt", main, false, ""},
+		{"empty", "", main, false, ""},
+	}
+	for _, c := range cases {
+		if got := liveCwd(c.raw, c.spawn, c.boxed); got != c.want {
+			t.Errorf("%s: liveCwd(%q,%q,%v)=%q want %q", c.name, c.raw, c.spawn, c.boxed, got, c.want)
+		}
+	}
+}
+
+// A boxed agent owns the files under its mount and can swap .git between a
+// regular file and a FIFO, so a check-then-open loses the race and the plain open
+// of the FIFO blocks the poll forever. openRegular must decide on the OPENED fd
+// and never block.
+func TestOpenRegularRejectsFIFOWithoutBlocking(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".git")
+	if err := syscall.Mkfifo(p, 0o644); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	done := make(chan bool, 1)
+	go func() {
+		f, ok := openRegular(p)
+		if f != nil {
+			f.Close()
+		}
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("a FIFO was accepted as a regular file")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("openRegular blocked on a FIFO")
+	}
+}
+
+func TestOpenRegularRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real")
+	os.WriteFile(target, []byte("gitdir: /x/.git/worktrees/wt"), 0o644)
+	link := filepath.Join(dir, ".git")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := openRegular(link); ok {
+		f.Close()
+		t.Fatal("a symlinked .git was followed")
+	}
+	if f, ok := openRegular(target); !ok {
+		t.Fatal("a regular file was rejected")
+	} else {
+		f.Close()
+	}
+}
+
+// A submodule checked out inside a worktree has gitdir
+// <main>/.git/worktrees/<wt>/modules/<sub>: it contains "/worktrees/" but is not
+// itself a linked worktree. Only a gitdir whose PARENT is named worktrees is.
+func TestWorktreeRootRejectsSubmoduleOfAWorktree(t *testing.T) {
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, ".git"), []byte("gitdir: /m/.git/worktrees/wt/modules/sub\n"), 0o644)
+	if r, ok := worktreeRoot(d); ok {
+		t.Fatalf("submodule of a worktree taken as a worktree root %q", r)
 	}
 }
