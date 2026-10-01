@@ -239,22 +239,61 @@ func readUsageTail(path string) (data []byte, cut bool, err error) {
 	return data, cut, err
 }
 
-// liveCwd vets a transcript cwd before it is handed to the browser, which joins
-// relative paths printed in the terminal onto it. Host tier: any absolute path
-// (superpowers puts worktrees outside the repo). Boxed tier: only the spawn cwd
-// or below, because that mount is the one place a container path and a host path
-// name the same file (box/argv.go mounts cwd:cwd).
+// liveCwd turns the transcript's cwd into the base the browser should join
+// relative terminal paths onto, or "" to keep the spawn cwd. That cwd moves on
+// every Bash `cd`, not only on Claude Code's EnterWorktree (which moves the agent
+// without a chdir of the process), while a path the agent prints is relative to
+// its checkout. So the base changes only when the cwd sits in a linked worktree
+// the spawn cwd is not already inside, and it becomes that worktree's root.
+// Boxed tier: the cwd must also be at or under the spawn cwd, the one mount that
+// names the same files in the container and on the host (box/argv.go: cwd:cwd).
 func liveCwd(raw, spawn string, boxed bool) string {
 	if raw == "" || !filepath.IsAbs(raw) {
 		return ""
 	}
-	raw = filepath.Clean(raw)
-	if !boxed {
-		return raw
+	raw, spawn = filepath.Clean(raw), filepath.Clean(spawn)
+	if boxed && !within(raw, spawn) {
+		return ""
 	}
-	spawn = filepath.Clean(spawn)
-	if raw == spawn || strings.HasPrefix(raw, spawn+string(filepath.Separator)) {
-		return raw
+	root, ok := worktreeRoot(raw)
+	if !ok || within(spawn, root) {
+		return ""
 	}
-	return ""
+	return root
+}
+
+// within reports whether p is dir or below it (both already Clean).
+func within(p, dir string) bool {
+	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+// worktreeRoot walks up from dir to the nearest .git and reports that checkout's
+// root only if it is a linked worktree: a .git FILE whose gitdir points into a
+// .git/worktrees/ admin dir. A .git directory (main checkout), a submodule's
+// .git file (.git/modules/), or no .git at all → ok=false.
+func worktreeRoot(dir string) (string, bool) {
+	for d := dir; ; {
+		fi, err := os.Lstat(filepath.Join(d, ".git"))
+		if err == nil {
+			if !fi.Mode().IsRegular() {
+				return "", false
+			}
+			f, err := os.Open(filepath.Join(d, ".git"))
+			if err != nil {
+				return "", false
+			}
+			b, _ := io.ReadAll(io.LimitReader(f, 4096))
+			f.Close()
+			gitdir, found := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+			if found && strings.Contains(filepath.ToSlash(gitdir), "/worktrees/") {
+				return d, true
+			}
+			return "", false
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
 }

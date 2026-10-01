@@ -288,9 +288,9 @@ func TestProcStartOfSelf(t *testing.T) {
 
 func TestUsageForReportsTheAgentsLiveCwd(t *testing.T) {
 	m, home := newLocatorManager(t)
-	wt := locCwd + "/.claude/worktrees/wt"
+	_, wt, _ := mkCheckouts(t)
 	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(),
-		`{"cwd":"`+wt+`","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}`)
+		`{"cwd":"`+wt+`/sub","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}`)
 	if u, ok := m.UsageFor("s1"); !ok || u.Cwd != wt {
 		t.Fatalf("usage=%+v ok=%v want Cwd %q", u, ok, wt)
 	}

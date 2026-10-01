@@ -119,26 +119,50 @@ func TestParseUsageTail_relativeCwdIgnored(t *testing.T) {
 	}
 }
 
-// A box mounts only its spawn cwd at the same path on both sides, so only a
-// directory at or under it names the same files on the host. Anywhere else (the
-// box's own home, /tmp in the container) would open an unrelated host file.
+// mkCheckouts builds a main checkout (a .git dir) with a linked worktree under
+// .claude/worktrees/wt (a .git FILE pointing into .git/worktrees/wt) and a
+// submodule (a .git file pointing into .git/modules), each with a sub/ dir.
+func mkCheckouts(t *testing.T) (main, wt, sm string) {
+	t.Helper()
+	main = filepath.Join(t.TempDir(), "proj")
+	wt = filepath.Join(main, ".claude", "worktrees", "wt")
+	sm = filepath.Join(main, "vendor", "lib")
+	for _, d := range []string{filepath.Join(main, ".git", "worktrees", "wt"), filepath.Join(main, "sub"),
+		filepath.Join(wt, "sub", "deep"), filepath.Join(sm, "sub")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+main+"/.git/worktrees/wt\n"), 0o644)
+	os.WriteFile(filepath.Join(sm, ".git"), []byte("gitdir: ../../.git/modules/lib\n"), 0o644)
+	return main, wt, sm
+}
+
+// The transcript cwd moves on every Bash `cd`, not only on EnterWorktree, and a
+// path the agent prints is relative to its CHECKOUT, not to wherever its shell
+// last cd'd. So only a move into a different linked worktree changes the base,
+// and the base is that worktree's root.
 func TestLiveCwd(t *testing.T) {
+	main, wt, sm := mkCheckouts(t)
 	cases := []struct {
-		raw, spawn string
-		boxed      bool
-		want       string
+		name, raw, spawn string
+		boxed            bool
+		want             string
 	}{
-		{"/work/proj/.claude/worktrees/wt", "/work/proj", false, "/work/proj/.claude/worktrees/wt"},
-		{"/home/u/.config/superpowers/worktrees/p/x", "/work/proj", false, "/home/u/.config/superpowers/worktrees/p/x"},
-		{"/work/proj/.claude/worktrees/wt", "/work/proj", true, "/work/proj/.claude/worktrees/wt"},
-		{"/work/proj", "/work/proj/", true, "/work/proj"},
-		{"/home/agent", "/work/proj", true, ""},
-		{"/work/proj-evil", "/work/proj", true, ""},
-		{"", "/work/proj", false, ""},
+		{"entered a worktree", wt, main, false, wt},
+		{"cd'd into a worktree subdir", filepath.Join(wt, "sub", "deep"), main, false, wt},
+		{"cd'd into a main-checkout subdir", filepath.Join(main, "sub"), main, false, ""},
+		{"cd'd outside any checkout", t.TempDir(), main, false, ""},
+		{"submodule is not a worktree", filepath.Join(sm, "sub"), main, false, ""},
+		{"spawned inside that worktree", filepath.Join(wt, "sub"), wt, false, ""},
+		{"boxed, worktree under the mount", wt, main, true, wt},
+		{"boxed, worktree outside the mount", wt, filepath.Join(main, "sub"), true, ""},
+		{"relative", "wt", main, false, ""},
+		{"empty", "", main, false, ""},
 	}
 	for _, c := range cases {
 		if got := liveCwd(c.raw, c.spawn, c.boxed); got != c.want {
-			t.Errorf("liveCwd(%q,%q,%v)=%q want %q", c.raw, c.spawn, c.boxed, got, c.want)
+			t.Errorf("%s: liveCwd(%q,%q,%v)=%q want %q", c.name, c.raw, c.spawn, c.boxed, got, c.want)
 		}
 	}
 }
