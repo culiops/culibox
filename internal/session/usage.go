@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/culiops/agent-box/internal/launcher"
@@ -268,24 +269,17 @@ func within(p, dir string) bool {
 }
 
 // worktreeRoot walks up from dir to the nearest .git and reports that checkout's
-// root only if it is a linked worktree: a .git FILE whose gitdir points into a
-// .git/worktrees/ admin dir. A .git directory (main checkout), a submodule's
+// root only if it is a linked worktree: a .git FILE whose gitdir is a
+// <common>/worktrees/<name> admin dir. A .git directory (main checkout), a submodule's
 // .git file (.git/modules/), or no .git at all → ok=false.
 func worktreeRoot(dir string) (string, bool) {
 	for d := dir; ; {
-		fi, err := os.Lstat(filepath.Join(d, ".git"))
-		if err == nil {
-			if !fi.Mode().IsRegular() {
-				return "", false
-			}
-			f, err := os.Open(filepath.Join(d, ".git"))
-			if err != nil {
-				return "", false
-			}
-			b, _ := io.ReadAll(io.LimitReader(f, 4096))
-			f.Close()
-			gitdir, found := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
-			if found && strings.Contains(filepath.ToSlash(gitdir), "/worktrees/") {
+		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
+			// The admin dir is <common>/worktrees/<name>, so its PARENT is named
+			// worktrees; a submodule of a worktree (…/worktrees/wt/modules/sub)
+			// merely contains the word.
+			gitdir, ok := readGitFile(filepath.Join(d, ".git"))
+			if ok && filepath.Base(filepath.Dir(filepath.Clean(gitdir))) == "worktrees" {
 				return d, true
 			}
 			return "", false
@@ -296,4 +290,35 @@ func worktreeRoot(dir string) (string, bool) {
 		}
 		d = parent
 	}
+}
+
+// readGitFile returns the gitdir a .git FILE points at; ok=false for anything
+// that is not a regular file of the form "gitdir: <path>".
+func readGitFile(p string) (string, bool) {
+	f, ok := openRegular(p)
+	if !ok {
+		return "", false
+	}
+	defer f.Close()
+	b, _ := io.ReadAll(io.LimitReader(f, 4096))
+	gitdir, found := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir:")
+	return strings.TrimSpace(gitdir), found
+}
+
+// openRegular opens p only if it is a regular file, deciding on the opened fd
+// rather than a prior Lstat: under a box mount the agent owns these files and can
+// swap one for a FIFO between the check and the open, and a plain open of a FIFO
+// blocks with no timeout (one pinned thread per poll). O_NONBLOCK makes that open
+// return at once; O_NOFOLLOW refuses a symlink.
+func openRegular(p string) (*os.File, bool) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, false
+	}
+	return f, true
 }

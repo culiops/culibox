@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -164,5 +165,62 @@ func TestLiveCwd(t *testing.T) {
 		if got := liveCwd(c.raw, c.spawn, c.boxed); got != c.want {
 			t.Errorf("%s: liveCwd(%q,%q,%v)=%q want %q", c.name, c.raw, c.spawn, c.boxed, got, c.want)
 		}
+	}
+}
+
+// A boxed agent owns the files under its mount and can swap .git between a
+// regular file and a FIFO, so a check-then-open loses the race and the plain open
+// of the FIFO blocks the poll forever. openRegular must decide on the OPENED fd
+// and never block.
+func TestOpenRegularRejectsFIFOWithoutBlocking(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".git")
+	if err := syscall.Mkfifo(p, 0o644); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	done := make(chan bool, 1)
+	go func() {
+		f, ok := openRegular(p)
+		if f != nil {
+			f.Close()
+		}
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("a FIFO was accepted as a regular file")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("openRegular blocked on a FIFO")
+	}
+}
+
+func TestOpenRegularRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real")
+	os.WriteFile(target, []byte("gitdir: /x/.git/worktrees/wt"), 0o644)
+	link := filepath.Join(dir, ".git")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := openRegular(link); ok {
+		f.Close()
+		t.Fatal("a symlinked .git was followed")
+	}
+	if f, ok := openRegular(target); !ok {
+		t.Fatal("a regular file was rejected")
+	} else {
+		f.Close()
+	}
+}
+
+// A submodule checked out inside a worktree has gitdir
+// <main>/.git/worktrees/<wt>/modules/<sub>: it contains "/worktrees/" but is not
+// itself a linked worktree. Only a gitdir whose PARENT is named worktrees is.
+func TestWorktreeRootRejectsSubmoduleOfAWorktree(t *testing.T) {
+	d := t.TempDir()
+	os.WriteFile(filepath.Join(d, ".git"), []byte("gitdir: /m/.git/worktrees/wt/modules/sub\n"), 0o644)
+	if r, ok := worktreeRoot(d); ok {
+		t.Fatalf("submodule of a worktree taken as a worktree root %q", r)
 	}
 }
