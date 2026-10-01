@@ -285,3 +285,13 @@ func TestProcStartOfSelf(t *testing.T) {
 		t.Fatalf("procStartOf(self)=%q,%v want a decimal starttime", v, ok)
 	}
 }
+
+func TestUsageForReportsTheAgentsLiveCwd(t *testing.T) {
+	m, home := newLocatorManager(t)
+	wt := locCwd + "/.claude/worktrees/wt"
+	writeTxLines(t, home, locCwd, "aaaa-1", time.Now(),
+		`{"cwd":"`+wt+`","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}`)
+	if u, ok := m.UsageFor("s1"); !ok || u.Cwd != wt {
+		t.Fatalf("usage=%+v ok=%v want Cwd %q", u, ok, wt)
+	}
+}

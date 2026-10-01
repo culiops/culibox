@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isBrokenMouseReport, hasSize } = require("../static/terminal-tab.js");
+const { isBrokenMouseReport, hasSize, resolveTermPath } = require("../static/terminal-tab.js");
 
 test("an SGR mouse report with NaN coordinates is dropped", () => {
   assert.strictEqual(isBrokenMouseReport("\x1b[<0;NaN;NaNm"), true);
@@ -270,4 +270,24 @@ test("swipe gesture: horizontal past slop + past threshold picks prev/next", () 
   assert.equal(mt.swipeIntent(-70, 50), "next");        // dragged left
   assert.equal(mt.swipeIntent(70, 50), "prev");
   assert.equal(mt.swipeIntent(-30, 50), null);          // not far enough -> no switch
+});
+
+// A Claude session that entered a worktree prints paths relative to the
+// worktree, while its spawn cwd is still the main checkout. Joining onto the
+// spawn cwd 404s a worktree-only file and silently opens the MAIN copy of one
+// that exists in both.
+test("a relative path resolves against the agent's live cwd when known", () => {
+  assert.strictEqual(resolveTermPath("docs/a.md", "/r", "/r/.claude/worktrees/wt", "/h"), "/r/.claude/worktrees/wt/docs/a.md");
+  assert.strictEqual(resolveTermPath("./docs/a.md", "/r", "/r/wt/", "/h"), "/r/wt/docs/a.md");
+});
+
+test("a relative path falls back to the spawn cwd without a live cwd", () => {
+  assert.strictEqual(resolveTermPath("docs/a.md", "/r/", "", "/h"), "/r/docs/a.md");
+  assert.strictEqual(resolveTermPath("docs/a.md", "", "", "/h"), "docs/a.md");
+});
+
+test("absolute and home paths ignore both cwds", () => {
+  assert.strictEqual(resolveTermPath("/etc/x", "/r", "/r/wt", "/h"), "/etc/x");
+  assert.strictEqual(resolveTermPath("~/x.md", "/r", "/r/wt", "/h"), "/h/x.md");
+  assert.strictEqual(resolveTermPath("~/x.md", "/r", "/r/wt", ""), "~/x.md");
 });

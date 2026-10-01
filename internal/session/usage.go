@@ -19,6 +19,7 @@ type Usage struct {
 	ContextTokens int    `json:"contextTokens"`
 	ContextMax    int    `json:"contextMax,omitempty"`
 	Pct           *int   `json:"pct,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
 }
 
 const usageTailBytes = 256 << 10
@@ -90,16 +91,26 @@ func transcriptPath(cwd, home string, created time.Time) (string, bool) {
 
 // parseUsageTail scans a byte tail from the end for the last assistant message
 // carrying message.usage. Sums TOP-LEVEL usage fields only (iterations double-count).
-// effort is the most recent top-level `effort` seen anywhere in the tail.
+// effort is the most recent top-level `effort` seen anywhere in the tail, and cwd
+// the most recent absolute top-level `cwd`: Claude Code's EnterWorktree moves the
+// agent without a chdir of the process, so the transcript is the only record of
+// where it is working now.
 func parseUsageTail(b []byte) (Usage, bool) {
 	lines := strings.Split(string(b), "\n")
-	var effort string
+	var effort, cwd string
 	for _, ln := range lines {
 		var probe struct {
 			Effort string `json:"effort"`
+			Cwd    string `json:"cwd"`
 		}
-		if json.Unmarshal([]byte(ln), &probe) == nil && probe.Effort != "" {
+		if json.Unmarshal([]byte(ln), &probe) != nil {
+			continue
+		}
+		if probe.Effort != "" {
 			effort = probe.Effort
+		}
+		if filepath.IsAbs(probe.Cwd) {
+			cwd = probe.Cwd
 		}
 	}
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -127,6 +138,7 @@ func parseUsageTail(b []byte) (Usage, bool) {
 				Model:         rec.Message.Model,
 				Effort:        effort,
 				ContextTokens: u.Input + u.CacheRead + u.CacheWrite,
+				Cwd:           cwd,
 			}, true
 		}
 	}
@@ -163,6 +175,7 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !ok {
 		return Usage{}, false
 	}
+	u.Cwd = liveCwd(u.Cwd, l.cwd, l.boxed)
 	if max, ok := contextMax(u.Model); ok && u.ContextTokens <= max {
 		u.ContextMax = max
 		pctv := u.ContextTokens * 100 / max
@@ -224,4 +237,24 @@ func readUsageTail(path string) (data []byte, cut bool, err error) {
 	}
 	data, err = io.ReadAll(f)
 	return data, cut, err
+}
+
+// liveCwd vets a transcript cwd before it is handed to the browser, which joins
+// relative paths printed in the terminal onto it. Host tier: any absolute path
+// (superpowers puts worktrees outside the repo). Boxed tier: only the spawn cwd
+// or below, because that mount is the one place a container path and a host path
+// name the same file (box/argv.go mounts cwd:cwd).
+func liveCwd(raw, spawn string, boxed bool) string {
+	if raw == "" || !filepath.IsAbs(raw) {
+		return ""
+	}
+	raw = filepath.Clean(raw)
+	if !boxed {
+		return raw
+	}
+	spawn = filepath.Clean(spawn)
+	if raw == spawn || strings.HasPrefix(raw, spawn+string(filepath.Separator)) {
+		return raw
+	}
+	return ""
 }

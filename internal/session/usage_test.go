@@ -93,3 +93,52 @@ func TestIsAgentBin(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code's EnterWorktree moves the agent's working directory without a
+// chdir of the process; only the transcript records it, on every entry's `cwd`.
+// The LAST such entry is the live one, even when it comes after the last usage
+// line, and ExitWorktree is just a later entry carrying the old dir again.
+func TestParseUsageTail_cwdIsTheLastRecorded(t *testing.T) {
+	lines := `{"cwd":"/work/proj","message":{"role":"user"}}
+{"cwd":"/work/proj/.claude/worktrees/wt","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}
+{"cwd":"/work/proj/.claude/worktrees/wt2","message":{"role":"user"}}
+`
+	u, ok := parseUsageTail([]byte(lines))
+	if !ok || u.Cwd != "/work/proj/.claude/worktrees/wt2" {
+		t.Fatalf("got %+v ok=%v", u, ok)
+	}
+}
+
+func TestParseUsageTail_relativeCwdIgnored(t *testing.T) {
+	lines := `{"cwd":"/work/proj","message":{"role":"user"}}
+{"cwd":"wt","message":{"role":"assistant","model":"m","usage":{"input_tokens":1}}}
+`
+	u, _ := parseUsageTail([]byte(lines))
+	if u.Cwd != "/work/proj" {
+		t.Fatalf("Cwd=%q want the last ABSOLUTE one", u.Cwd)
+	}
+}
+
+// A box mounts only its spawn cwd at the same path on both sides, so only a
+// directory at or under it names the same files on the host. Anywhere else (the
+// box's own home, /tmp in the container) would open an unrelated host file.
+func TestLiveCwd(t *testing.T) {
+	cases := []struct {
+		raw, spawn string
+		boxed      bool
+		want       string
+	}{
+		{"/work/proj/.claude/worktrees/wt", "/work/proj", false, "/work/proj/.claude/worktrees/wt"},
+		{"/home/u/.config/superpowers/worktrees/p/x", "/work/proj", false, "/home/u/.config/superpowers/worktrees/p/x"},
+		{"/work/proj/.claude/worktrees/wt", "/work/proj", true, "/work/proj/.claude/worktrees/wt"},
+		{"/work/proj", "/work/proj/", true, "/work/proj"},
+		{"/home/agent", "/work/proj", true, ""},
+		{"/work/proj-evil", "/work/proj", true, ""},
+		{"", "/work/proj", false, ""},
+	}
+	for _, c := range cases {
+		if got := liveCwd(c.raw, c.spawn, c.boxed); got != c.want {
+			t.Errorf("liveCwd(%q,%q,%v)=%q want %q", c.raw, c.spawn, c.boxed, got, c.want)
+		}
+	}
+}
