@@ -295,3 +295,77 @@ func TestUsageForReportsTheAgentsLiveCwd(t *testing.T) {
 		t.Fatalf("usage=%+v ok=%v want Cwd %q", u, ok, wt)
 	}
 }
+
+func regJSONCwd(pid int, sid, procStart, cwd string) string {
+	return fmt.Sprintf(`{"pid":%d,"sessionId":%q,"cwd":%q,"procStart":%q,"status":"idle","version":"2.1.286"}`,
+		pid, sid, cwd, procStart)
+}
+
+// newWorktreeLocator: one claude session spawned in a real main checkout whose
+// registry entry, as Claude Code 2.1.286 writes it after EnterWorktree, names
+// the worktree as its cwd.
+func newWorktreeLocator(t *testing.T) (m *Manager, home, main, wt string) {
+	t.Helper()
+	home = t.TempDir()
+	main, wt, _ = mkCheckouts(t)
+	m = &Manager{
+		home:      home,
+		sessions:  map[string]*Session{},
+		backend:   pidBackend{newFakeBackend(), map[string]int{"s1": 101}},
+		procStart: func(pid int) (string, bool) { return "5000", pid == 101 },
+	}
+	m.sessions["s1"] = &Session{ID: "s1", Agent: "claude", Cwd: main, Bin: "/usr/bin/claude",
+		Created: time.Now().Add(-time.Hour), agentKind: true, submitted: true}
+	writeReg(t, home, 101, regJSONCwd(101, "aaaa-1", "5000", wt))
+	return m, home, main, wt
+}
+
+// 2.1.286 moves the whole transcript to the worktree's project dir on
+// EnterWorktree. The session's own file must be found there by its sessionId —
+// never a newer sibling left in the spawn dir by the mtime heuristic.
+func TestLocateFollowsATranscriptMovedIntoAWorktree(t *testing.T) {
+	m, home, main, wt := newWorktreeLocator(t)
+	writeTxLines(t, home, wt, "aaaa-1", time.Now().Add(-time.Minute),
+		`{"cwd":"`+wt+`","message":{"role":"assistant","model":"model-moved","usage":{"input_tokens":1}}}`)
+	writeTx(t, home, main, "zzzz-9", "sibling", time.Now())
+	u, ok := m.UsageFor("s1")
+	if !ok || u.Model != "model-moved" || u.Cwd != wt {
+		t.Fatalf("usage=%+v ok=%v want the moved transcript (model-moved, cwd %q)", u, ok, wt)
+	}
+}
+
+// Mixed versions: the registry already names the worktree but the transcript
+// is still in the spawn dir (≤2.1.285 layout).
+func TestLocateFindsTheSpawnDirTranscriptWhenTheRegistryNamesAWorktree(t *testing.T) {
+	m, home, main, _ := newWorktreeLocator(t)
+	writeTxLines(t, home, main, "aaaa-1", time.Now(),
+		`{"message":{"role":"assistant","model":"model-stayed","usage":{"input_tokens":1}}}`)
+	if u, ok := m.UsageFor("s1"); !ok || u.Model != "model-stayed" {
+		t.Fatalf("usage=%+v ok=%v want model-stayed", u, ok)
+	}
+}
+
+// The cwd guard is the second line against a reused pid (procStart is the
+// first). It widens only to a checkout of the SAME repository.
+func TestRegistryCwdGuardAcceptsOnlyTheSameRepository(t *testing.T) {
+	home := t.TempDir()
+	main, wt, _ := mkCheckouts(t)
+	_, otherWt, _ := mkCheckouts(t)
+	ps := func(pid int) (string, bool) { return "5000", true }
+	cases := []struct {
+		name, regCwd string
+		want         bool
+	}{
+		{"spawn dir itself", main, true},
+		{"worktree of the same repo", wt, true},
+		{"subdir of a worktree of the same repo", filepath.Join(wt, "sub"), true},
+		{"worktree of another repo", otherWt, false},
+		{"unrelated dir", t.TempDir(), false},
+	}
+	for _, c := range cases {
+		writeReg(t, home, 7, regJSONCwd(7, "aaaa-1", "5000", c.regCwd))
+		if _, ok := readClaudeRegistry(home, 7, ps, main); ok != c.want {
+			t.Errorf("%s: accepted=%v want %v", c.name, ok, c.want)
+		}
+	}
+}

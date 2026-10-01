@@ -268,28 +268,53 @@ func within(p, dir string) bool {
 	return p == dir || strings.HasPrefix(p, dir+string(filepath.Separator))
 }
 
-// worktreeRoot walks up from dir to the nearest .git and reports that checkout's
-// root only if it is a linked worktree: a .git FILE whose gitdir is a
-// <common>/worktrees/<name> admin dir. A .git directory (main checkout), a submodule's
-// .git file (.git/modules/), or no .git at all → ok=false.
+// worktreeRoot reports dir's checkout root only if it is a linked worktree.
 func worktreeRoot(dir string) (string, bool) {
+	_, root, ok := checkoutOf(dir)
+	return root, ok && root != ""
+}
+
+// checkoutOf walks up from dir to the nearest .git and reports the repository's
+// common git dir, plus the checkout root when that checkout is a linked worktree
+// (a .git FILE whose gitdir is <common>/worktrees/<name>; its PARENT is named
+// worktrees, so a submodule of a worktree — …/worktrees/wt/modules/sub — merely
+// contains the word). A .git directory is a main checkout; a submodule's .git
+// file names its own gitdir as the common dir. ok=false: no .git found, or one
+// that is neither a directory nor a readable regular file.
+func checkoutOf(dir string) (common, wtRoot string, ok bool) {
 	for d := dir; ; {
-		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
-			// The admin dir is <common>/worktrees/<name>, so its PARENT is named
-			// worktrees; a submodule of a worktree (…/worktrees/wt/modules/sub)
-			// merely contains the word.
-			gitdir, ok := readGitFile(filepath.Join(d, ".git"))
-			if ok && filepath.Base(filepath.Dir(filepath.Clean(gitdir))) == "worktrees" {
-				return d, true
+		g := filepath.Join(d, ".git")
+		if fi, err := os.Lstat(g); err == nil {
+			if fi.IsDir() {
+				return g, "", true
 			}
-			return "", false
+			gitdir, ok := readGitFile(g)
+			if !ok || gitdir == "" {
+				return "", "", false
+			}
+			if !filepath.IsAbs(gitdir) {
+				gitdir = filepath.Join(d, gitdir)
+			}
+			gitdir = filepath.Clean(gitdir)
+			if filepath.Base(filepath.Dir(gitdir)) == "worktrees" {
+				return filepath.Dir(filepath.Dir(gitdir)), d, true
+			}
+			return gitdir, "", true
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return "", false
+			return "", "", false
 		}
 		d = parent
 	}
+}
+
+// sameRepository reports whether a and b are checkouts (or dirs inside
+// checkouts) of one repository, by common git dir.
+func sameRepository(a, b string) bool {
+	ca, _, okA := checkoutOf(a)
+	cb, _, okB := checkoutOf(b)
+	return okA && okB && ca == cb
 }
 
 // readGitFile returns the gitdir a .git FILE points at; ok=false for anything
