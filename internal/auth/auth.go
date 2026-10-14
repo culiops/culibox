@@ -60,18 +60,23 @@ func NewCookieAuth(path string) (*CookieAuth, error) {
 	if _, err := rand.Read(s); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	// Atomic write so a crash mid-write can't leave a torn secret.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, s, 0o600); err != nil {
-		return nil, err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := writeSecretFile(path, s); err != nil {
 		return nil, err
 	}
 	return &CookieAuth{secret: s}, nil
+}
+
+// writeSecretFile writes b atomically (tmp + rename, so a crash cannot leave a
+// torn secret), file 0600 in a 0700 directory.
+func writeSecretFile(path string, b []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 func newEphemeral() (*CookieAuth, error) {
