@@ -86,6 +86,10 @@ func readRegistryFile(path string) ([]byte, bool) {
 	return b, true
 }
 
+// ReadRegistryFile is readRegistryFile for diagnostics outside this package
+// (agent-box doctor): the same no-follow, FIFO-safe, size-capped read.
+func ReadRegistryFile(path string) ([]byte, bool) { return readRegistryFile(path) }
+
 // readClaudeRegistry returns the registry entry for pid, only if it is provably
 // THAT process's, for THIS session: the pid field matches, procStart equals the
 // live process's starttime (a recycled pid has a different one), and the

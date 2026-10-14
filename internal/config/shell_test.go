@@ -190,3 +190,32 @@ func TestWithDetectedShell(t *testing.T) {
 		}
 	})
 }
+
+func TestDetectShellSrc(t *testing.T) {
+	dir := t.TempDir()
+	sh := filepath.Join(dir, "zsh")
+	if err := os.WriteFile(sh, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	passwd := filepath.Join(dir, "passwd")
+	if err := os.WriteFile(passwd, []byte("u:x:1001:1001::/home/u:"+sh+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		env, want string
+		uid       int
+		wantSrc   string
+	}{
+		{sh, sh, 1001, "$SHELL"},
+		{"", sh, 1001, "passwd"},
+		{"", "/bin/bash", 4242, "fallback"},
+	} {
+		got, src := detectShellSrc(c.env, passwd, c.uid)
+		if got != c.want || src != c.wantSrc {
+			t.Errorf("detectShellSrc(%q, uid %d) = %q,%q want %q,%q", c.env, c.uid, got, src, c.want, c.wantSrc)
+		}
+	}
+	if sh, src := DetectShellSource(); sh != DetectShell() || src == "" {
+		t.Errorf("DetectShellSource = %q,%q; must agree with DetectShell %q", sh, src, DetectShell())
+	}
+}

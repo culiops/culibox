@@ -16,13 +16,20 @@ import (
 // production), cron, or a bare exec all start without it. Trusting $SHELL alone
 // would silently hand those a /bin/bash "detected" shell.
 func detectShell(envShell, passwdPath string, uid int) string {
+	sh, _ := detectShellSrc(envShell, passwdPath, uid)
+	return sh
+}
+
+// detectShellSrc is detectShell plus where the answer came from ("$SHELL",
+// "passwd" or "fallback"), so a diagnostic can report it.
+func detectShellSrc(envShell, passwdPath string, uid int) (shell, source string) {
 	if usableShell(envShell) {
-		return envShell
+		return envShell, "$SHELL"
 	}
 	if sh := shellFromPasswd(passwdPath, uid); usableShell(sh) {
-		return sh
+		return sh, "passwd"
 	}
-	return "/bin/bash"
+	return "/bin/bash", "fallback"
 }
 
 // detectShellDarwin resolves the shell on macOS: $SHELL, then the account's

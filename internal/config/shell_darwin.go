@@ -16,6 +16,12 @@ func DetectShell() string {
 	return detectShellDarwin(os.Getenv("SHELL"), dsclUserShell)
 }
 
+// DetectShellSource is DetectShell plus where the answer came from: "$SHELL",
+// "dscl" or "fallback". For diagnostics (agent-box doctor).
+func DetectShellSource() (shell, source string) {
+	return detectShellDarwinSrc(os.Getenv("SHELL"), dsclUserShell)
+}
+
 // dsclUserShell asks Directory Services for the login shell; any failure is "".
 func dsclUserShell() string {
 	u, err := user.Current()

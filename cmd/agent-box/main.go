@@ -26,6 +26,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/secrets"
@@ -49,10 +50,9 @@ func main() {
 	home, homeErr := serveHome(os.UserHomeDir)
 	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, os.Getenv("XDG_CONFIG_HOME"))
 	if args.Cmd == "doctor" {
-		// Task 11 replaces this with doctor.Run(os.Stdout, doctor.Input{Config: cfg,
-		// Source: src, ConfigErr: cfgErr, Home: home, Commit: buildCommit()}).
-		fmt.Fprintln(os.Stderr, "agent-box doctor: not implemented yet")
-		os.Exit(1)
+		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
+		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
+			Home: home, Commit: buildCommit()}))
 	}
 	if homeErr != nil {
 		log.Fatalf("home: %v", homeErr)

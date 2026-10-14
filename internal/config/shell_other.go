@@ -9,3 +9,9 @@ import "os"
 func DetectShell() string {
 	return detectShell(os.Getenv("SHELL"), "/etc/passwd", os.Getuid())
 }
+
+// DetectShellSource is DetectShell plus where the answer came from: "$SHELL",
+// "passwd" or "fallback". For diagnostics (agent-box doctor).
+func DetectShellSource() (shell, source string) {
+	return detectShellSrc(os.Getenv("SHELL"), "/etc/passwd", os.Getuid())
+}
