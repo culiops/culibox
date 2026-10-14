@@ -56,8 +56,9 @@ type Result struct{ Status, Check, Detail string }
 // Run prints every check and returns the exit code: 1 if any check failed.
 func Run(w io.Writer, in Input) int {
 	code := 0
+	host, _ := os.Hostname()
 	for _, r := range Checks(in) {
-		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, tilde(r.Detail, in.Home))
+		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, tilde(redactHost(r.Check, r.Detail, host), in.Home))
 		if r.Status == Fail {
 			code = 1
 		}
@@ -65,10 +66,25 @@ func Run(w io.Writer, in Input) int {
 	return code
 }
 
+// redactHost is the backstop for the hostname rule: abduco's own error text can
+// echo a socket path ("doctor-1@<host>"). bind and port print the user's
+// configured address, never a hostname read from the machine, so they are left
+// alone (a host named "localhost" would otherwise mangle them).
+func redactHost(check, detail, host string) string {
+	if host == "" || check == "bind" || check == "port" {
+		return detail
+	}
+	return strings.ReplaceAll(detail, host, "<host>")
+}
+
 // tilde shows the home dir as "~". It only matches a whole path component, so
 // /home/ab is not rewritten when home is /home/a.
 func tilde(s, home string) string {
 	if home == "" || home == "/" {
+		return s
+	}
+	home = filepath.Clean(home) // "/Users/a/" must still match "/Users/a/.local"
+	if home == "/" {
 		return s
 	}
 	var b strings.Builder
@@ -186,7 +202,7 @@ func checkBind(c config.Config) Result {
 	host, _, _ := net.SplitHostPort(c.BindAddr)
 	ip := net.ParseIP(host)
 	detail := fmt.Sprintf("%s; allowed hosts: %s", c.BindAddr, strings.Join(c.HostAllowlist(), ", "))
-	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
 		return Result{Warn, "bind", detail + " — not loopback: reachable from the network"}
 	}
 	return Result{Pass, "bind", detail}
@@ -211,7 +227,9 @@ func checkAbducoBinary(bin string) Result {
 	// `abduco -v` prints its version and exits non-zero; only the text matters.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	v, _ := exec.CommandContext(ctx, p, "-v").CombinedOutput()
+	cmd := exec.CommandContext(ctx, p, "-v")
+	cmd.WaitDelay = time.Second // a forked child holding stdout must not outlast the cap
+	v, _ := cmd.CombinedOutput()
 	return Result{Pass, "abduco binary", p + " " + strings.TrimSpace(firstLine(string(v)))}
 }
 
@@ -235,8 +253,7 @@ func checkRoundtrip(bin string) Result {
 	if err := a.Create(id, dir, []string{"sleep", "30"}, os.Environ()); err != nil {
 		detail := "create: " + err.Error()
 		if inner, ok := a.InnerPid(id); ok {
-			_, perr := procinfo.Ppid(inner)
-			detail += fmt.Sprintf(" (procinfo.Ppid(inner) err=%v)", perr)
+			detail += "; " + procinfoStep(inner, id, procinfo.Ppid, procinfo.Args)
 		}
 		return Result{Fail, "abduco roundtrip", detail}
 	}
@@ -252,6 +269,22 @@ func checkRoundtrip(bin string) Result {
 		return Result{Fail, "abduco roundtrip", "kill: the session's process is still alive"}
 	}
 	return Result{Pass, "abduco roundtrip", "create, liveness, socket path and kill all work"}
+}
+
+// procinfoStep names which procinfo call broke when a session could not be
+// confirmed: Ppid of the agent, then Args of that parent (the abduco server,
+// which must mention abduco and the session id). Booleans only: argv itself is
+// never printed.
+func procinfoStep(inner int, id string, ppid func(int) (int, error), args func(int) ([]string, error)) string {
+	p, perr := ppid(inner)
+	msg := fmt.Sprintf("Ppid(inner)=%d err=%v", p, perr)
+	if perr != nil {
+		return msg + "; Args skipped"
+	}
+	argv, aerr := args(p)
+	joined := strings.Join(argv, " ")
+	return msg + fmt.Sprintf("; Args(%d) has abduco=%v id=%v err=%v",
+		p, strings.Contains(joined, "abduco"), strings.Contains(joined, id), aerr)
 }
 
 func checkProcinfoSelf() Result {
@@ -321,7 +354,9 @@ func checkAgents(c config.Config) []Result {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		v, _ := exec.CommandContext(ctx, p, "--version").Output()
+		cmd := exec.CommandContext(ctx, p, "--version")
+		cmd.WaitDelay = time.Second
+		v, _ := cmd.Output()
 		cancel()
 		out = append(out, Result{Pass, "agent " + a.Name, p + " " + strings.TrimSpace(firstLine(string(v)))})
 	}

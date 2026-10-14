@@ -240,9 +240,93 @@ func TestTilde(t *testing.T) {
 		{"/home/ab/x", "/home/a", "/home/ab/x"},
 		{"x", "", "x"},
 		{"/home/a: err", "/home/a", "~: err"},
+		{"/Users/a/.local/share/x", "/Users/a/", "~/.local/share/x"},
+		{"/Users/a", "/Users/a/", "~"},
 	} {
 		if got := tilde(c.in, c.home); got != c.want {
 			t.Errorf("tilde(%q,%q) = %q want %q", c.in, c.home, got, c.want)
 		}
+	}
+}
+
+func TestProcinfoStep_NamesTheBrokenStep(t *testing.T) {
+	okArgs := func(int) ([]string, error) { return []string{"abduco", "-n", "doctor-1", "SECRET-ARGV"}, nil }
+	got := procinfoStep(10, "doctor-1", func(int) (int, error) { return 9, nil }, okArgs)
+	if got != "Ppid(inner)=9 err=<nil>; Args(9) has abduco=true id=true err=<nil>" {
+		t.Errorf("got %q", got)
+	}
+	if strings.Contains(got, "SECRET-ARGV") {
+		t.Errorf("argv printed: %q", got)
+	}
+	bad := procinfoStep(10, "doctor-1", func(int) (int, error) { return 1, nil },
+		func(int) ([]string, error) { return []string{"launchd"}, nil })
+	if bad != "Ppid(inner)=1 err=<nil>; Args(1) has abduco=false id=false err=<nil>" {
+		t.Errorf("got %q", bad)
+	}
+	noPpid := procinfoStep(10, "doctor-1", func(int) (int, error) { return 0, errors.New("sysctl: boom") }, okArgs)
+	if noPpid != "Ppid(inner)=0 err=sysctl: boom; Args skipped" {
+		t.Errorf("got %q", noPpid)
+	}
+	noArgs := procinfoStep(10, "doctor-1", func(int) (int, error) { return 9, nil },
+		func(int) ([]string, error) { return nil, errors.New("kern.procargs2: boom") })
+	if noArgs != "Ppid(inner)=9 err=<nil>; Args(9) has abduco=false id=false err=kern.procargs2: boom" {
+		t.Errorf("got %q", noArgs)
+	}
+}
+
+func TestRedactHost(t *testing.T) {
+	if got := redactHost("abduco roundtrip", "create: bind /tmp/x/doctor-1@Mac-Pro.local failed", "Mac-Pro.local"); got != "create: bind /tmp/x/doctor-1@<host> failed" {
+		t.Errorf("got %q", got)
+	}
+	if got := redactHost("x", "abc", ""); got != "abc" {
+		t.Errorf("empty host must not rewrite: %q", got)
+	}
+	if got := redactHost("bind", "localhost:1", "localhost"); got != "localhost:1" {
+		t.Errorf("bind must be left alone: %q", got)
+	}
+}
+
+func TestDoctor_RunRedactsHostnameFromAbducoErrors(t *testing.T) {
+	// A fake abduco that fails and echoes a socket path with the hostname.
+	dir := t.TempDir()
+	host, _ := os.Hostname()
+	fake := filepath.Join(dir, "abduco")
+	script := "#!/bin/sh\necho \"cannot bind /x/doctor-1@" + host + "\" >&2\nexit 1\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in := input(t)
+	in.Config.AbducoBin = fake
+	out, code := run(in)
+	if code != 1 || !strings.Contains(out, "FAIL abduco roundtrip") {
+		t.Fatalf("code=%d\n%s", code, out)
+	}
+	if strings.Contains(out, host) || !strings.Contains(out, "doctor-1@<host>") {
+		t.Fatalf("hostname not redacted:\n%s", out)
+	}
+}
+
+func TestDoctor_BindLocalhostIsCaseInsensitive(t *testing.T) {
+	in := input(t)
+	in.Config.BindAddr = "LocalHost:1"
+	out, _ := run(in)
+	if !strings.Contains(out, "PASS bind:") {
+		t.Fatalf("LocalHost must count as loopback:\n%s", out)
+	}
+}
+
+// A binary that forks a child holding stdout must not hang doctor past the cap.
+func TestDoctor_AgentVersionCannotHang(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "slow")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30 &\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in := input(t)
+	in.Config.Agents = []config.AgentConfig{{Name: "slow", Bin: bin}}
+	start := time.Now()
+	out, _ := run(in)
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("doctor took %v\n%s", d, out)
 	}
 }
