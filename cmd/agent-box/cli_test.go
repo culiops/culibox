@@ -23,11 +23,11 @@ func TestParseArgs(t *testing.T) {
 		argv []string
 		want cliArgs
 	}{
-		{nil, cliArgs{Cmd: "serve", ConfigPath: "config.json"}},
+		{nil, cliArgs{Cmd: "serve", ConfigPath: ""}},
 		{[]string{"-config", "config.prod.json"}, cliArgs{Cmd: "serve", ConfigPath: "config.prod.json", ConfigSet: true}}, // today's systemd/air form
-		{[]string{"serve"}, cliArgs{Cmd: "serve", ConfigPath: "config.json"}},
+		{[]string{"serve"}, cliArgs{Cmd: "serve", ConfigPath: ""}},
 		{[]string{"serve", "--config", "/x.json"}, cliArgs{Cmd: "serve", ConfigPath: "/x.json", ConfigSet: true}},
-		{[]string{"doctor"}, cliArgs{Cmd: "doctor", ConfigPath: "config.json"}},
+		{[]string{"doctor"}, cliArgs{Cmd: "doctor", ConfigPath: ""}},
 	}
 	for _, c := range cases {
 		got, err := parseArgs(c.argv)

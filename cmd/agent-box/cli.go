@@ -41,7 +41,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	path := fs.String("config", "config.json", "path to config file")
+	path := fs.String("config", "", "path to config file (default: $XDG_CONFIG_HOME or ~/.config /agent-box/config.json, else built-in defaults; never ./config.json)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}

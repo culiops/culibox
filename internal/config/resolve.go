@@ -21,10 +21,11 @@ func (s Source) String() string {
 }
 
 // Resolve loads the config. With an explicit -config (set), that file must
-// exist. Otherwise the first existing file wins: ./config.json (the historical
-// default, so existing invocations are unchanged), then
+// exist. Otherwise the first existing file wins:
 // $XDG_CONFIG_HOME/agent-box/config.json (absolute XDG only, per the spec), else
-// ~/.config/agent-box/config.json; with none, Defaults().
+// ~/.config/agent-box/config.json; with none, Defaults(). The current directory
+// is deliberately NOT searched: running agent-box inside a cloned repo must not
+// load that repo's config (allowed_hosts, password_env, agent bins).
 func Resolve(explicit string, set bool, home, xdg string) (Config, Source, error) {
 	if set {
 		c, err := Load(explicit)
@@ -34,7 +35,7 @@ func Resolve(explicit string, set bool, home, xdg string) (Config, Source, error
 	if xdg != "" && filepath.IsAbs(xdg) {
 		base = xdg
 	}
-	for _, p := range []string{"config.json", filepath.Join(base, "agent-box", "config.json")} {
+	for _, p := range []string{filepath.Join(base, "agent-box", "config.json")} {
 		_, err := os.Stat(p)
 		if err == nil {
 			c, lerr := Load(p)

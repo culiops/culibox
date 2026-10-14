@@ -284,3 +284,18 @@ func TestValidateRejectsUnknownDefaultRuntime(t *testing.T) {
 		t.Fatal("expected validation error for default_runtime \"vm\"")
 	}
 }
+
+// config.example.json is what docs/MACOS.md points readers at: it must load and
+// show allowed_hosts.
+func TestExampleConfigLoadsAndShowsAllowedHosts(t *testing.T) {
+	c, err := Load("../../config.example.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AllowedHosts) == 0 {
+		t.Fatal("config.example.json must carry an allowed_hosts example")
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("example config must validate: %v", err)
+	}
+}

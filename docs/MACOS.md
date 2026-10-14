@@ -33,7 +33,10 @@ directory at a time.
 
 ## Configure
 
-Optional: `~/.config/agent-box/config.json` (see `config.example.json`). To reach
+Optional: `~/.config/agent-box/config.json` (or `$XDG_CONFIG_HOME/agent-box/config.json`;
+see `config.example.json`), or pass `-config <path>`. A `config.json` in the current
+directory is deliberately not read, so running agent-box inside a cloned repo never
+loads that repo's config. To reach
 agent-box through a reverse proxy, add its hostname to `allowed_hosts`; any other
 Host header is refused.
 

@@ -23,7 +23,7 @@ func TestResolve_Order(t *testing.T) {
 	t.Chdir(work)
 
 	// 3. nothing anywhere → built-in defaults
-	c, src, err := Resolve("config.json", false, home, "")
+	c, src, err := Resolve("", false, home, "")
 	if err != nil || !src.Default || c.BindAddr != "127.0.0.1:8899" {
 		t.Fatalf("defaults: %+v %+v %v", c, src, err)
 	}
@@ -36,7 +36,7 @@ func TestResolve_Order(t *testing.T) {
 
 	// 2. ~/.config/agent-box/config.json
 	writeCfg(t, filepath.Join(home, ".config", "agent-box", "config.json"), "127.0.0.1:1")
-	c, src, _ = Resolve("config.json", false, home, "")
+	c, src, _ = Resolve("", false, home, "")
 	if c.BindAddr != "127.0.0.1:1" || src.Default {
 		t.Errorf("home config not used: %+v %+v", c, src)
 	}
@@ -44,20 +44,27 @@ func TestResolve_Order(t *testing.T) {
 	// 2'. $XDG_CONFIG_HOME wins over ~/.config when absolute
 	xdg := t.TempDir()
 	writeCfg(t, filepath.Join(xdg, "agent-box", "config.json"), "127.0.0.1:2")
-	c, _, _ = Resolve("config.json", false, home, xdg)
+	c, _, _ = Resolve("", false, home, xdg)
 	if c.BindAddr != "127.0.0.1:2" {
 		t.Errorf("XDG config not used: %+v", c)
 	}
-	c, _, _ = Resolve("config.json", false, home, "relative/xdg")
+	c, _, _ = Resolve("", false, home, "relative/xdg")
 	if c.BindAddr != "127.0.0.1:1" {
 		t.Errorf("a relative XDG_CONFIG_HOME must be ignored: %+v", c)
 	}
 
-	// 1. ./config.json beats both (back-compat with the old default)
+	// A ./config.json in the cwd is IGNORED: running agent-box inside a cloned
+	// hostile repo must not load that repo's config.
 	writeCfg(t, filepath.Join(work, "config.json"), "127.0.0.1:3")
-	c, src, _ = Resolve("config.json", false, home, xdg)
-	if c.BindAddr != "127.0.0.1:3" || src.Path != "config.json" {
-		t.Errorf("cwd config not used: %+v %+v", c, src)
+	c, src, _ = Resolve("", false, home, xdg)
+	if c.BindAddr != "127.0.0.1:2" || src.Path == "config.json" {
+		t.Errorf("cwd config must be ignored: %+v %+v", c, src)
+	}
+	os.RemoveAll(filepath.Join(home, ".config"))
+	os.RemoveAll(xdg)
+	c, src, _ = Resolve("", false, home, "")
+	if !src.Default || c.BindAddr != "127.0.0.1:8899" {
+		t.Errorf("only a cwd config present: want built-in defaults, got %+v %+v", c, src)
 	}
 }
 
