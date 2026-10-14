@@ -17,7 +17,13 @@ func testAdapter(t *testing.T) *Adapter {
 	if _, err := exec.LookPath("abduco"); err != nil {
 		t.Skip("abduco not installed")
 	}
-	dir := t.TempDir()
+	// Short /tmp path: t.TempDir() is ~150 bytes on macOS, which would put every
+	// session socket over the 103-byte limit Create enforces.
+	dir, err := os.MkdirTemp("/tmp", "ab-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
 	a, err := New("abduco", filepath.Join(dir, "sock"), filepath.Join(dir, "pids"))
 	if err != nil {
 		t.Fatal(err)

@@ -42,6 +42,7 @@ type Adapter struct {
 	PidDir    string
 	DetachKey string // caret form, e.g. "^^" = Ctrl-^
 	host      string
+	user      string
 }
 
 // New creates the adapter and ensures its dirs exist (0700).
@@ -50,12 +51,16 @@ func New(bin, socketDir, pidDir string) (*Adapter, error) {
 		bin = "abduco"
 	}
 	host, _ := os.Hostname()
-	a := &Adapter{Bin: bin, SocketDir: socketDir, PidDir: pidDir, DetachKey: "^^", host: host}
+	a := &Adapter{Bin: bin, SocketDir: socketDir, PidDir: pidDir, DetachKey: "^^", host: host, user: CurrentUser()}
 	if err := a.ensureDirs(); err != nil {
 		return nil, err
 	}
 	return a, nil
 }
+
+// User and Host are the values abduco puts in this adapter's socket paths.
+func (a *Adapter) User() string { return a.user }
+func (a *Adapter) Host() string { return a.host }
 
 func (a *Adapter) ensureDirs() error {
 	if err := os.MkdirAll(a.SocketDir, 0700); err != nil {
@@ -87,6 +92,9 @@ func (a *Adapter) withSocketDir(env []string) []string {
 func (a *Adapter) Create(id, cwd string, argv, env []string) error {
 	if len(argv) == 0 {
 		return fmt.Errorf("abduco create %q: empty argv", id)
+	}
+	if err := CheckSocketPath(a.SocketDir, a.user, id, a.host); err != nil {
+		return err
 	}
 	if err := a.ensureDirs(); err != nil {
 		return err
