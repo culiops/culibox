@@ -24,8 +24,8 @@ to paste into an issue.
     ./agent-box serve
 
 With no config file, agent-box listens on `127.0.0.1:8899` and prints a login
-URL containing a one-time-generated token (`#token=…`). Open it in a browser on
-the same Mac. The token lives in `~/.local/share/agent-box/login.token`.
+URL containing a login token (`#token=…`), generated on first start and kept in
+`~/.local/share/agent-box/login.token`. Open the URL in a browser on the same Mac.
 
 Closing the terminal tab stops agent-box but not your sessions; run
 `agent-box serve` again and they reattach. Only one agent-box can serve a data
@@ -38,6 +38,8 @@ agent-box through a reverse proxy, add its hostname to `allowed_hosts`; any othe
 Host header is refused.
 
 ## Rotate credentials
+
+Both files sit in the data directory (default `~/.local/share/agent-box`).
 
 - New login token: delete `login.token` and restart.
 - Log out every browser: delete `cookie.secret` and restart.
