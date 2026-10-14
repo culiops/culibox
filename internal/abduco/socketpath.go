@@ -55,6 +55,14 @@ func RepresentativeID(names []string) string {
 	return longest + "-9999"
 }
 
+// CheckProfileSocketPaths is the startup socket-length check, shared by serve
+// and doctor: the longest profile name (in bytes) with a four-digit session
+// counter must fit under the limit. names should include every profile serve
+// starts with, the detected quick-shell profile among them.
+func CheckProfileSocketPaths(dir, user, host string, names []string) error {
+	return CheckSocketPath(dir, user, RepresentativeID(names), host)
+}
+
 // DefaultSocketDir is the socket dir when abduco_socket_dir is unset.
 //
 // Linux keeps <dataDir>/abduco: changing it would orphan the sessions PROD is

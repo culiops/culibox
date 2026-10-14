@@ -205,3 +205,17 @@ func TestCreateWithoutCheckDirKeepsMkdirAllBehaviour(t *testing.T) {
 		t.Fatalf("Create = %v, want a plain exec failure (no dir refusal) when CheckDir is off", err)
 	}
 }
+
+// Ruling P3: the one startup check serve and doctor share. It must cover the
+// longest profile name (in bytes), whatever its position in the list.
+func TestCheckProfileSocketPaths(t *testing.T) {
+	dir := "/tmp/" + strings.Repeat("d", 40)
+	if err := CheckProfileSocketPaths(dir, "alice", "mbp.local", []string{"claude", "zsh"}); err != nil {
+		t.Errorf("short names refused: %v", err)
+	}
+	long := strings.Repeat("phân", 10) // 50 bytes, 40 runes
+	err := CheckProfileSocketPaths(dir, "alice", "mbp.local", []string{"claude", long, "zsh"})
+	if err == nil || !strings.Contains(err.Error(), long+"-9999") {
+		t.Errorf("long profile not refused by name: %v", err)
+	}
+}
