@@ -19,12 +19,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/culiops/agent-box/internal/procinfo"
 )
 
 // ErrNotFound means the session was never created / has no usable pidfile.
@@ -272,38 +275,23 @@ func readPidfile(path string) (inner, srv int, err error) {
 	return inner, srv, nil
 }
 
-// ppidOf reads /proc/<pid>/stat field 4 (ppid), robust to a comm containing
-// spaces/parens by scanning past the last ')'.
+// ppidOf is the parent pid, or 0 when it cannot be read — callers compare it
+// against a known server pid, so 0 always reads as "not ours".
 func ppidOf(pid int) int {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	p, err := procinfo.Ppid(pid)
 	if err != nil {
 		return 0
 	}
-	s := string(b)
-	i := strings.LastIndex(s, ")")
-	if i < 0 {
-		return 0
-	}
-	fields := strings.Fields(s[i+1:])
-	if len(fields) < 2 {
-		return 0
-	}
-	ppid, _ := strconv.Atoi(fields[1])
-	return ppid
+	return p
 }
 
+// cmdlineArgs is the process argv, or nil when it cannot be read.
 func cmdlineArgs(pid int) []string {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	a, err := procinfo.Args(pid)
 	if err != nil {
 		return nil
 	}
-	var out []string
-	for _, p := range strings.Split(string(b), "\x00") {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
+	return a
 }
 
 func procExists(pid int) bool { return syscall.Kill(pid, 0) == nil }
@@ -319,61 +307,34 @@ func waitGone(pid int, d time.Duration) bool {
 	return !procExists(pid)
 }
 
-// procIsAttacher reports whether the process described by /proc entry procDir is
-// an abduco ATTACH client (`-a`) whose ABDUCO_SOCKET_DIR is exactly socketDir.
-//
-// Both halves matter, because this feeds a kill:
-//   - `-a` only. An abduco SERVER (`-n`) is the user's running agent; killing one
-//     would destroy the session that persistence exists to protect.
-//   - exact socket dir. Session ids are per-instance names like "zsh-1" and
-//     collide freely between dev, prod and any throwaway test instance, so the
-//     id is useless as an owner check. The socket dir is not.
-func procIsAttacher(procDir, socketDir string) bool {
-	argv, err := readNulFile(filepath.Join(procDir, "cmdline"))
-	if err != nil || len(argv) == 0 {
-		return false
-	}
-	if filepath.Base(argv[0]) != "abduco" {
+// attachArgv reports whether argv is an abduco ATTACH client (`-a`/`-A`). A
+// server (`-n`/`-c`) is the user's running agent; killing one would destroy the
+// session persistence exists to protect.
+func attachArgv(argv []string) bool {
+	if len(argv) == 0 || filepath.Base(argv[0]) != "abduco" {
 		return false
 	}
 	attach := false
 	for _, a := range argv[1:] {
 		switch a {
 		case "-n", "-c":
-			return false // a session server, not a client
+			return false
 		case "-a", "-A":
 			attach = true
 		}
 	}
-	if !attach {
-		return false
-	}
-	env, err := readNulFile(filepath.Join(procDir, "environ"))
-	if err != nil {
-		return false
-	}
-	for _, e := range env {
-		if e == "ABDUCO_SOCKET_DIR="+socketDir {
-			return true
-		}
-	}
-	return false
+	return attach
 }
 
-// readNulFile reads a NUL-separated /proc file into its fields.
-func readNulFile(path string) ([]string, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+// isAttacher reports whether a process with this argv and env is an attach
+// client whose ABDUCO_SOCKET_DIR is exactly socketDir. Session ids collide
+// freely between dev, prod and throwaway instances, so the socket dir — not the
+// id — is the owner check.
+func isAttacher(argv, env []string, socketDir string) bool {
+	if !attachArgv(argv) {
+		return false
 	}
-	parts := strings.Split(string(b), "\x00")
-	out := parts[:0]
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out, nil
+	return slices.Contains(env, "ABDUCO_SOCKET_DIR="+socketDir)
 }
 
 // SweepOrphanAttachers kills abduco attach clients left behind by a previous
@@ -385,21 +346,22 @@ func readNulFile(path string) ([]string, error) {
 // ever runs; without it such an orphan spins at 100% CPU until the box is
 // rebooted or someone notices.
 func (a *Adapter) SweepOrphanAttachers() int {
-	entries, err := os.ReadDir("/proc")
+	pids, err := procinfo.PIDs()
 	if err != nil {
 		return 0
 	}
 	self := os.Getpid()
 	killed := 0
-	for _, e := range entries {
-		if !e.IsDir() {
+	for _, pid := range pids {
+		if pid <= 1 || pid == self {
 			continue
 		}
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == self {
-			continue
+		argv, err := procinfo.Args(pid)
+		if err != nil || !attachArgv(argv) {
+			continue // argv first: env is read only for abduco attach clients
 		}
-		if !procIsAttacher(filepath.Join("/proc", e.Name()), a.SocketDir) {
+		env, err := procinfo.Env(pid)
+		if err != nil || !isAttacher(argv, env, a.SocketDir) {
 			continue
 		}
 		// SIGKILL directly: a spinning client is in a tight userspace loop and
