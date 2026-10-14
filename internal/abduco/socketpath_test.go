@@ -90,20 +90,28 @@ func TestCheckSocketDir(t *testing.T) {
 	}
 
 	wide := filepath.Join(base, "wide")
-	_ = os.Mkdir(wide, 0o700)
-	_ = os.Chmod(wide, 0o755)
+	if err := os.Mkdir(wide, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(wide, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := CheckSocketDir(wide, uid); err == nil {
 		t.Errorf("mode 0755 must be refused")
 	}
 
 	link := filepath.Join(base, "link")
-	_ = os.Symlink(ok, link)
+	if err := os.Symlink(ok, link); err != nil {
+		t.Fatal(err)
+	}
 	if err := CheckSocketDir(link, uid); err == nil {
 		t.Errorf("symlink must be refused")
 	}
 
 	file := filepath.Join(base, "file")
-	_ = os.WriteFile(file, nil, 0o600)
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := CheckSocketDir(file, uid); err == nil {
 		t.Errorf("regular file must be refused")
 	}
@@ -144,5 +152,56 @@ func TestCreateRefusesOverlongPath(t *testing.T) {
 	err := a.Create(long, "/", []string{"true"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "limit") {
 		t.Fatalf("Create with an overlong id = %v, want the length error before abduco runs", err)
+	}
+}
+
+// Squatting defence beyond startup: with CheckDir set, Create re-validates the
+// socket dir instead of letting MkdirAll accept whatever now sits at the path.
+func TestCreateCheckDirRefusesWideDir(t *testing.T) {
+	base := t.TempDir()
+	sock := filepath.Join(base, "s")
+	if err := os.Mkdir(sock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{Bin: "abduco-not-run", SocketDir: sock, PidDir: filepath.Join(base, "p"), user: "u", host: "h", CheckDir: true}
+	err := a.Create("x-1", "/", []string{"true"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "mode") {
+		t.Fatalf("Create = %v, want the socket-dir mode refusal before abduco runs", err)
+	}
+}
+
+func TestCreateCheckDirRecreatesMissingDir(t *testing.T) {
+	base := t.TempDir()
+	sock := filepath.Join(base, "s")
+	a := &Adapter{Bin: "abduco-not-run", SocketDir: sock, PidDir: filepath.Join(base, "p"), user: "u", host: "h", CheckDir: true}
+	// abduco-not-run fails to exec, but only after the dir step succeeded.
+	if err := a.Create("x-1", "/", []string{"true"}, nil); err == nil {
+		t.Fatal("expected the never-run bin to fail")
+	}
+	fi, err := os.Lstat(sock)
+	if err != nil {
+		t.Fatalf("socket dir not recreated: %v", err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Errorf("recreated socket dir mode = %o, want 700", fi.Mode().Perm())
+	}
+}
+
+func TestCreateWithoutCheckDirKeepsMkdirAllBehaviour(t *testing.T) {
+	base := t.TempDir()
+	sock := filepath.Join(base, "s")
+	if err := os.Mkdir(sock, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := &Adapter{Bin: "abduco-not-run", SocketDir: sock, PidDir: filepath.Join(base, "p"), user: "u", host: "h"}
+	err := a.Create("x-1", "/", []string{"true"}, nil)
+	if err == nil || strings.Contains(err.Error(), "mode") {
+		t.Fatalf("Create = %v, want a plain exec failure (no dir refusal) when CheckDir is off", err)
 	}
 }

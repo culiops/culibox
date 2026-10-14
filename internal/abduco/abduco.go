@@ -43,6 +43,10 @@ type Adapter struct {
 	DetachKey string // caret form, e.g. "^^" = Ctrl-^
 	host      string
 	user      string
+	// CheckDir: when set, every Create re-runs PrepareSocketDir on SocketDir
+	// instead of trusting MkdirAll; serve sets it where it prepared the dir at
+	// startup.
+	CheckDir bool
 }
 
 // New creates the adapter and ensures its dirs exist (0700).
@@ -63,7 +67,13 @@ func (a *Adapter) User() string { return a.user }
 func (a *Adapter) Host() string { return a.host }
 
 func (a *Adapter) ensureDirs() error {
-	if err := os.MkdirAll(a.SocketDir, 0700); err != nil {
+	if a.CheckDir {
+		// The socket dir may sit in a shared /tmp: if it vanished, MkdirAll would
+		// quietly accept a dir another local user pre-created at the same path.
+		if err := PrepareSocketDir(a.SocketDir, os.Getuid()); err != nil {
+			return err
+		}
+	} else if err := os.MkdirAll(a.SocketDir, 0700); err != nil {
 		return err
 	}
 	return os.MkdirAll(a.PidDir, 0700)
