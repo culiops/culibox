@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -64,7 +66,8 @@ func containsSig(s syscall.Signal) bool {
 // test binary here, which is exactly the daemon's failure mode.
 func TestHangupReachesShutdownChannel(t *testing.T) {
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, shutdownSignals...)
+	// The not-ignored path (no nohup): the set serve registers then.
+	signal.Notify(stop, shutdownSignalsFor(func(os.Signal) bool { return false })...)
 	defer signal.Stop(stop)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
@@ -187,5 +190,42 @@ func TestServeHome(t *testing.T) {
 		if (err == nil) != c.ok || (c.ok && got != c.home) {
 			t.Errorf("serveHome(%q,%v) = %q,%v want ok=%v", c.home, c.err, got, err, c.ok)
 		}
+	}
+}
+
+// `nohup agent-box serve &` ignores SIGHUP on purpose. signal.Notify would
+// re-enable it, so an ignored SIGHUP must stay out of the registered set.
+func TestShutdownSignalsFor(t *testing.T) {
+	notIgnored := shutdownSignalsFor(func(os.Signal) bool { return false })
+	if len(notIgnored) != len(shutdownSignals) {
+		t.Errorf("not ignored: got %v, want %v", notIgnored, shutdownSignals)
+	}
+	hupIgnored := shutdownSignalsFor(func(s os.Signal) bool { return s == syscall.SIGHUP })
+	want := []os.Signal{syscall.SIGINT, syscall.SIGTERM}
+	if fmt.Sprint(hupIgnored) != fmt.Sprint(want) {
+		t.Errorf("SIGHUP ignored (nohup): got %v, want %v", hupIgnored, want)
+	}
+	// Only SIGHUP follows the inherited disposition: INT and TERM are how the
+	// operator and systemd stop the daemon, and must always take the clean path.
+	allIgnored := shutdownSignalsFor(func(os.Signal) bool { return true })
+	if fmt.Sprint(allIgnored) != fmt.Sprint(want) {
+		t.Errorf("all ignored: got %v, want %v", allIgnored, want)
+	}
+}
+
+// A signal registered before Reconcile can be handled before Serve starts:
+// Shutdown first, then Serve, must still be the clean ErrServerClosed exit.
+func TestServeAfterShutdownIsCleanExit(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	srv := &http.Server{Handler: http.NotFoundHandler()}
+	if err := srv.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("Serve after Shutdown = %v, want ErrServerClosed", err)
 	}
 }

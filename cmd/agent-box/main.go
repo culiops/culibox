@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/culiops/agent-box/internal/abduco"
@@ -273,6 +274,20 @@ func serve(cfg config.Config, home string) {
 		}
 	}
 
+	// Release attach clients on the way out instead of leaving it to SIGHUP (see
+	// awaitShutdown). SIGHUP itself is one of the signals: closing the terminal
+	// tab that runs `agent-box serve` must take this path too, unless serve was
+	// started under nohup. Registered here, not earlier or later: Reconcile is
+	// what creates attach clients, so a signal from here on must not take the
+	// default disposition and orphan them; everything before it stays
+	// interruptible by ^C. The buffered signal is handled once awaitShutdown
+	// runs below; a Shutdown before Serve makes Serve return ErrServerClosed.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, shutdownSignalsFor(signal.Ignored)...)
+	if signal.Ignored(syscall.SIGHUP) {
+		log.Printf("SIGHUP is ignored (nohup): closing the terminal will not stop agent-box")
+	}
+
 	if err := mgr.Reconcile(); err != nil {
 		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
 	}
@@ -413,11 +428,8 @@ func serve(cfg config.Config, home string) {
 
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
-	// Release attach clients on the way out instead of leaving it to SIGHUP (see
-	// awaitShutdown). SIGHUP itself is one of the signals: closing the terminal
-	// tab that runs `agent-box serve` must take this path too.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, shutdownSignals...)
+	// Release attach clients on the way out (stop is registered before
+	// Reconcile, above); the signal waits in the buffer until this runs.
 	go awaitShutdown(stop, shutdownSteps{
 		DetachAll: mgr.DetachAll,
 		StopAnalytics: func() {

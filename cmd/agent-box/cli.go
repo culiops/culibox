@@ -57,6 +57,21 @@ func parseArgs(argv []string) (cliArgs, error) {
 // sends: closing the terminal tab that runs `agent-box serve`.
 var shutdownSignals = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP}
 
+// shutdownSignalsFor is shutdownSignals minus a SIGHUP the process started
+// with ignored: `nohup agent-box serve &` asks to outlive the terminal, and
+// signal.Notify would re-enable the SIGHUP that nohup ignored. INT and TERM are
+// always registered. ignored is signal.Ignored, injectable for the test.
+func shutdownSignalsFor(ignored func(os.Signal) bool) []os.Signal {
+	out := make([]os.Signal, 0, len(shutdownSignals))
+	for _, s := range shutdownSignals {
+		if s == syscall.SIGHUP && ignored(s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // shutdownSteps are what serve undoes on a shutdown signal, as functions so the
 // signal path is testable without a daemon.
 type shutdownSteps struct {
