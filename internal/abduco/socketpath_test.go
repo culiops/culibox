@@ -158,7 +158,7 @@ func TestCreateRefusesOverlongPath(t *testing.T) {
 // Squatting defence beyond startup: with CheckDir set, Create re-validates the
 // socket dir instead of letting MkdirAll accept whatever now sits at the path.
 func TestCreateCheckDirRefusesWideDir(t *testing.T) {
-	base := t.TempDir()
+	base := shortTempDir(t) // socket path must fit 103 bytes on macOS
 	sock := filepath.Join(base, "s")
 	if err := os.Mkdir(sock, 0o700); err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestCreateCheckDirRefusesWideDir(t *testing.T) {
 }
 
 func TestCreateCheckDirRecreatesMissingDir(t *testing.T) {
-	base := t.TempDir()
+	base := shortTempDir(t) // socket path must fit 103 bytes on macOS
 	sock := filepath.Join(base, "s")
 	a := &Adapter{Bin: "abduco-not-run", SocketDir: sock, PidDir: filepath.Join(base, "p"), user: "u", host: "h", CheckDir: true}
 	// abduco-not-run fails to exec, but only after the dir step succeeded.
@@ -191,7 +191,7 @@ func TestCreateCheckDirRecreatesMissingDir(t *testing.T) {
 }
 
 func TestCreateWithoutCheckDirKeepsMkdirAllBehaviour(t *testing.T) {
-	base := t.TempDir()
+	base := shortTempDir(t) // socket path must fit 103 bytes on macOS
 	sock := filepath.Join(base, "s")
 	if err := os.Mkdir(sock, 0o700); err != nil {
 		t.Fatal(err)

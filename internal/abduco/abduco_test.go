@@ -12,18 +12,27 @@ import (
 	"time"
 )
 
-func testAdapter(t *testing.T) *Adapter {
+// shortTempDir returns a short /tmp directory removed at test end. Use it for
+// any directory a socket path is built from: t.TempDir() is ~150 bytes on macOS,
+// which would put every session socket over the 103-byte limit Create enforces
+// (CheckSocketPath runs before anything else, so such a test would fail with the
+// length error instead of the behaviour it is pinning).
+func shortTempDir(t *testing.T) string {
 	t.Helper()
-	if _, err := exec.LookPath("abduco"); err != nil {
-		t.Skip("abduco not installed")
-	}
-	// Short /tmp path: t.TempDir() is ~150 bytes on macOS, which would put every
-	// session socket over the 103-byte limit Create enforces.
 	dir, err := os.MkdirTemp("/tmp", "ab-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
+func testAdapter(t *testing.T) *Adapter {
+	t.Helper()
+	if _, err := exec.LookPath("abduco"); err != nil {
+		t.Skip("abduco not installed")
+	}
+	dir := shortTempDir(t)
 	a, err := New("abduco", filepath.Join(dir, "sock"), filepath.Join(dir, "pids"))
 	if err != nil {
 		t.Fatal(err)
