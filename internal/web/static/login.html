@@ -56,7 +56,7 @@
            password manager can associate the saved credential (the server
            ignores this field and checks only the password). -->
       <input type="text" name="username" value="agent-box" autocomplete="username" hidden>
-      <label for="password">Password</label>
+      <label for="password">Password or login token</label>
       <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
       <button type="submit">Log in</button>
     </form>
@@ -65,6 +65,16 @@
     // The POST handler bounces a failed browser login back to /login?e=1.
     if (new URLSearchParams(location.search).get("e") === "1") {
       document.getElementById("err").hidden = false;
+    }
+    // Token mode: `agent-box serve` prints /login#token=<token>. The fragment
+    // never reaches the server; strip it from the URL bar and history before
+    // anything else, then submit it as the password. A wrong token comes back
+    // as /login?e=1 with no fragment, so this cannot loop.
+    const m = /(?:^|&)token=([A-Za-z0-9_-]+)/.exec(location.hash.slice(1));
+    if (m) {
+      history.replaceState(null, "", location.pathname + location.search);
+      document.getElementById("password").value = m[1];
+      document.querySelector("form").submit();
     }
   </script>
 </body>
