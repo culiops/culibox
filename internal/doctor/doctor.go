@@ -55,10 +55,15 @@ type Result struct{ Status, Check, Detail string }
 
 // Run prints every check and returns the exit code: 1 if any check failed.
 func Run(w io.Writer, in Input) int {
-	code := 0
 	host, _ := os.Hostname()
+	return runWithHost(w, in, host)
+}
+
+// runWithHost is Run with the machine's hostname injected, for the tests.
+func runWithHost(w io.Writer, in Input, host string) int {
+	code := 0
 	for _, r := range Checks(in) {
-		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, tilde(redactHost(r.Check, r.Detail, host), in.Home))
+		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, redactHost(tilde(r.Detail, in.Home), host))
 		if r.Status == Fail {
 			code = 1
 		}
@@ -67,11 +72,13 @@ func Run(w io.Writer, in Input) int {
 }
 
 // redactHost is the backstop for the hostname rule: abduco's own error text can
-// echo a socket path ("doctor-1@<host>"). bind and port print the user's
-// configured address, never a hostname read from the machine, so they are left
-// alone (a host named "localhost" would otherwise mangle them).
-func redactHost(check, detail, host string) string {
-	if host == "" || check == "bind" || check == "port" {
+// echo a socket path ("doctor-1@<host>"), and bind / allowed_hosts may name the
+// machine. It runs AFTER tilde: a host that is a substring of $HOME ("mac" in
+// /Users/macuser) would otherwise stop ~ from matching and leak the home path.
+// An empty or "localhost" host is left alone (it would mangle 127.0.0.1-style
+// output like "localhost:8899").
+func redactHost(detail, host string) string {
+	if host == "" || strings.EqualFold(host, "localhost") {
 		return detail
 	}
 	return strings.ReplaceAll(detail, host, "<host>")

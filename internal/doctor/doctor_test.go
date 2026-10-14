@@ -275,14 +275,16 @@ func TestProcinfoStep_NamesTheBrokenStep(t *testing.T) {
 }
 
 func TestRedactHost(t *testing.T) {
-	if got := redactHost("abduco roundtrip", "create: bind /tmp/x/doctor-1@Mac-Pro.local failed", "Mac-Pro.local"); got != "create: bind /tmp/x/doctor-1@<host> failed" {
+	if got := redactHost("create: bind /tmp/x/doctor-1@Mac-Pro.local failed", "Mac-Pro.local"); got != "create: bind /tmp/x/doctor-1@<host> failed" {
 		t.Errorf("got %q", got)
 	}
-	if got := redactHost("x", "abc", ""); got != "abc" {
+	if got := redactHost("abc", ""); got != "abc" {
 		t.Errorf("empty host must not rewrite: %q", got)
 	}
-	if got := redactHost("bind", "localhost:1", "localhost"); got != "localhost:1" {
-		t.Errorf("bind must be left alone: %q", got)
+	for _, h := range []string{"localhost", "LocalHost"} {
+		if got := redactHost("localhost:1", h); got != "localhost:1" {
+			t.Errorf("host %q must be left alone: %q", h, got)
+		}
 	}
 }
 
@@ -328,5 +330,46 @@ func TestDoctor_AgentVersionCannotHang(t *testing.T) {
 	out, _ := run(in)
 	if d := time.Since(start); d > 10*time.Second {
 		t.Fatalf("doctor took %v\n%s", d, out)
+	}
+}
+
+// The hostname is redacted AFTER ~ is applied: a host that is a substring of
+// $HOME ("mac" in /Users/macuser) must not break the ~ rewrite.
+func TestDoctor_HostInsideHomeStillTilded(t *testing.T) {
+	in := input(t)
+	in.Home = "/Users/macuser"
+	in.Config.DataDir = "/Users/macuser/.local/share/agent-box"
+	in.Config.AbducoSocketDir = ""
+	var b bytes.Buffer
+	runWithHost(&b, in, "mac")
+	out := b.String()
+	if !strings.Contains(out, "~/.local/share/agent-box") {
+		t.Fatalf("home not shown as ~:\n%s", out)
+	}
+	if strings.Contains(out, "/Users/") {
+		t.Fatalf("home leaked (host redaction ran before ~):\n%s", out)
+	}
+}
+
+// bind and port echo the user's configured address, which may well be the
+// machine's hostname: it must be redacted like everything else. A hostname of
+// "" or "localhost" is not redacted (it would mangle the loopback address).
+func TestDoctor_BindHostnameRedacted(t *testing.T) {
+	in := input(t)
+	in.Config.BindAddr = "alices-mbp.local:8899"
+	in.Config.AllowedHosts = []string{"alices-mbp.local:8899"}
+	var b bytes.Buffer
+	runWithHost(&b, in, "alices-mbp")
+	if strings.Contains(b.String(), "alices-mbp") {
+		t.Fatalf("hostname printed:\n%s", b.String())
+	}
+	for _, h := range []string{"", "localhost", "LocalHost"} {
+		in := input(t)
+		in.Config.BindAddr = "localhost:8899"
+		var b bytes.Buffer
+		runWithHost(&b, in, h)
+		if !strings.Contains(b.String(), "localhost:8899") {
+			t.Errorf("host %q must not mangle the bind line:\n%s", h, b.String())
+		}
 	}
 }
