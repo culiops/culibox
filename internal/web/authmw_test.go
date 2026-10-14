@@ -25,8 +25,9 @@ func testServerWithAuth(t *testing.T) (*Server, string) {
 		t.Fatal(err)
 	}
 	s := &Server{
-		Session: auth.NewSession(secret, 30*24*time.Hour),
-		Tokens:  ts,
+		AllowedHosts: []string{"example.com"},
+		Session:      auth.NewSession(secret, 30*24*time.Hour),
+		Tokens:       ts,
 	}
 	return s, plain
 }

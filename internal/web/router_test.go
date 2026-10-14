@@ -15,11 +15,12 @@ func routedServer(t *testing.T) (*Server, string) {
 	ts, _ := auth.OpenTokenStore(t.TempDir() + "/tokens.json")
 	plain, _, _ := ts.Create("test")
 	s := &Server{
-		Session:  auth.NewSession([]byte("0123456789abcdef0123456789abcdef"), 30*24*time.Hour),
-		Tokens:   ts,
-		Password: "pw",
-		Terminal: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }),
-		API:      &API{},
+		AllowedHosts: []string{"example.com"},
+		Session:      auth.NewSession([]byte("0123456789abcdef0123456789abcdef"), 30*24*time.Hour),
+		Tokens:       ts,
+		Password:     "pw",
+		Terminal:     http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }),
+		API:          &API{},
 	}
 	return s, plain
 }

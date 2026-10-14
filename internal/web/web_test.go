@@ -31,8 +31,9 @@ func issueCookie(t *testing.T, s *Server) *http.Cookie {
 func TestWSRouteRejectsAnonAcceptsCred(t *testing.T) {
 	termHit := false
 	s := &Server{
-		API:      &API{Sessions: &mockSvc{}},
-		Terminal: http.HandlerFunc(func(http.ResponseWriter, *http.Request) { termHit = true }),
+		AllowedHosts: []string{"example.com"},
+		API:          &API{Sessions: &mockSvc{}},
+		Terminal:     http.HandlerFunc(func(http.ResponseWriter, *http.Request) { termHit = true }),
 	}
 	ck := issueCookie(t, s)
 	h := s.Handler()
@@ -56,7 +57,7 @@ func TestWSRouteRejectsAnonAcceptsCred(t *testing.T) {
 }
 
 func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
@@ -115,7 +116,7 @@ func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 // TestStaticNoCacheOnAppFiles: the app's own files (index.html, app.js) must
 // carry Cache-Control: no-cache; the vendored /xterm/* bundle stays cacheable.
 func TestStaticNoCacheOnAppFiles(t *testing.T) {
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
@@ -143,7 +144,7 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 // Only tokens.css and primitives.css are exposed: a colour palette, which the
 // login page's own appearance already reveals. app.css stays protected.
 func TestSharedStylesheetsArePublic(t *testing.T) {
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler()
 
@@ -206,7 +207,7 @@ func TestHandleMeta(t *testing.T) {
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
 		nil, "", newFakeStore(), func([]config.AgentConfig) {},
 	)
-	s := &Server{EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	s := &Server{AllowedHosts: []string{"example.com"}, EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	got := metaGet(t, s)
 	if got["env_label"] != "PROD" || got["env_color"] != "#b45309" {
 		t.Fatalf("got %v", got)
@@ -220,7 +221,7 @@ func TestHandleMetaRateLimits(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "rl.json")
 	os.WriteFile(f, []byte(`{"five_hour":{"used_percentage":80,"resets_at":1785654600},"seven_day":{"used_percentage":42,"resets_at":1786107600}}`), 0o644)
 	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
-	s := &Server{Profiles: pm, RateLimitsFile: f}
+	s := &Server{AllowedHosts: []string{"example.com"}, Profiles: pm, RateLimitsFile: f}
 	ck := issueCookie(t, s)
 	h := s.Handler()
 	req := httptest.NewRequest("GET", "/api/meta", nil)
@@ -243,7 +244,7 @@ func TestHandleMetaRateLimits(t *testing.T) {
 
 func TestHandleMetaNoRateLimitsFile(t *testing.T) {
 	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {})
-	s := &Server{Profiles: pm, RateLimitsFile: filepath.Join(t.TempDir(), "absent.json")}
+	s := &Server{AllowedHosts: []string{"example.com"}, Profiles: pm, RateLimitsFile: filepath.Join(t.TempDir(), "absent.json")}
 	got := metaGet(t, s)
 	if _, present := got["rate_limits"]; present {
 		t.Fatal("rate_limits must be omitted when the file is absent")
@@ -262,7 +263,7 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
 		nil, "", fs, func([]config.AgentConfig) {},
 	)
-	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	s := &Server{AllowedHosts: []string{"example.com"}, ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	if got := metaGet(t, s); got["shell_profile"] != "" {
 		t.Fatalf("shell_profile = %q, want empty (shadowed by a profile running python3)", got["shell_profile"])
 	}
@@ -271,7 +272,7 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 // Without the pieces needed to verify the profile, the answer must be "no quick
 // shell" — never an unverified name.
 func TestHandleMetaFailsClosedWithoutProfiles(t *testing.T) {
-	s := &Server{ShellProfile: "zsh"} // no Profiles, no ShellBin
+	s := &Server{AllowedHosts: []string{"example.com"}, ShellProfile: "zsh"} // no Profiles, no ShellBin
 	if got := metaGet(t, s); got["shell_profile"] != "" {
 		t.Fatalf("shell_profile = %q, want empty (unverifiable)", got["shell_profile"])
 	}
@@ -283,7 +284,7 @@ func TestHandleMetaShellProfileIntact(t *testing.T) {
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
 		nil, "", newFakeStore(), func([]config.AgentConfig) {},
 	)
-	s := &Server{ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	s := &Server{AllowedHosts: []string{"example.com"}, ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	if got := metaGet(t, s); got["shell_profile"] != "zsh" {
 		t.Fatalf("shell_profile = %q, want zsh", got["shell_profile"])
 	}
@@ -293,7 +294,7 @@ func TestHandleMetaShellProfileIntact(t *testing.T) {
 // "no quick shell available" and hides the +sh button, so a missing key would be
 // ambiguous.
 func TestHandleMetaNoShellProfile(t *testing.T) {
-	got := metaGet(t, &Server{})
+	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}})
 	if _, ok := got["shell_profile"]; !ok {
 		t.Fatal("shell_profile key must always be present (empty = no quick shell)")
 	}
@@ -308,7 +309,7 @@ func TestHandleMetaNoShellProfile(t *testing.T) {
 func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 	ts, _ := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
 	tok, _, _ := ts.Create("cli")
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(), Tokens: ts,
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(), Tokens: ts,
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
@@ -358,7 +359,7 @@ func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 // The page links /favicon.svg (and swaps to /favicon-needs.svg while an agent
 // needs you); both must be served, as SVG, to a logged-in page.
 func TestFaviconsAreServed(t *testing.T) {
-	s := &Server{API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
 		Profiles: NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
