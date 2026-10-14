@@ -2,7 +2,6 @@ package session
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/culiops/agent-box/internal/procinfo"
 )
 
 // PidResolver is implemented by persistence backends that know the agent's own
@@ -43,31 +44,17 @@ const regStatusWaiting = "waiting"
 // launcher.resumeIDRe).
 var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
 
-// procStartFunc returns field 22 (starttime) of /proc/<pid>/stat. Injected so
-// tests need no real processes.
+// procStartFunc returns a pid's start-time token. Injected so tests need no
+// real processes.
 type procStartFunc func(pid int) (string, bool)
 
+// procStartOf is the pid's start time as procinfo reports it. On Linux this is
+// /proc stat field 22, the same value Claude Code writes as procStart. On darwin
+// Claude Code's format is unmeasured; a mismatch only makes readClaudeRegistry
+// miss, and the caller falls back to the cwd heuristic.
 func procStartOf(pid int) (string, bool) {
-	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return "", false
-	}
-	return statStartTime(string(b))
-}
-
-// statStartTime extracts starttime from a /proc/<pid>/stat line. comm (field 2)
-// may contain spaces and ')', so scan past the LAST ')': the remainder starts
-// at field 3, which puts field 22 at index 19.
-func statStartTime(stat string) (string, bool) {
-	i := strings.LastIndex(stat, ")")
-	if i < 0 {
-		return "", false
-	}
-	f := strings.Fields(stat[i+1:])
-	if len(f) < 20 {
-		return "", false
-	}
-	return f[19], true
+	s, err := procinfo.StartTime(pid)
+	return s, err == nil
 }
 
 // registryMaxBytes bounds how much of a registry file we will ever read. The
@@ -98,6 +85,10 @@ func readRegistryFile(path string) ([]byte, bool) {
 	}
 	return b, true
 }
+
+// ReadRegistryFile is readRegistryFile for diagnostics outside this package
+// (agent-box doctor): the same no-follow, FIFO-safe, size-capped read.
+func ReadRegistryFile(path string) ([]byte, bool) { return readRegistryFile(path) }
 
 // readClaudeRegistry returns the registry entry for pid, only if it is provably
 // THAT process's, for THIS session: the pid field matches, procStart equals the

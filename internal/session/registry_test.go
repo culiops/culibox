@@ -265,24 +265,10 @@ func TestLocateReportsRegistryStatus(t *testing.T) {
 	}
 }
 
-func TestStatStartTime(t *testing.T) {
-	// comm may contain spaces and ')'; fields after the LAST ')' start at field 3,
-	// so field 22 (starttime) is index 19 of that remainder.
-	got, ok := statStartTime("1234 (a) b) S 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 99999 23 24")
-	if !ok || got != "99999" {
-		t.Fatalf("statStartTime=%q,%v want 99999,true", got, ok)
-	}
-	for _, bad := range []string{"", "no paren", "1 (x) S 4 5"} {
-		if _, ok := statStartTime(bad); ok {
-			t.Errorf("statStartTime(%q) ok=true, want false", bad)
-		}
-	}
-}
-
 func TestProcStartOfSelf(t *testing.T) {
 	v, ok := procStartOf(os.Getpid())
-	if !ok || v == "" || strings.Trim(v, "0123456789") != "" {
-		t.Fatalf("procStartOf(self)=%q,%v want a decimal starttime", v, ok)
+	if !ok || v == "" {
+		t.Fatalf("procStartOf(self)=%q,%v want a non-empty start time", v, ok)
 	}
 }
 

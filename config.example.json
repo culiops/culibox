@@ -5,6 +5,9 @@
   "env_label": "DEV",
   "env_color": "#64748b",
 
+  "comment_allowed_hosts": "Extra Host header values this instance answers to, beyond loopback and bind_addr. Add the hostname of a reverse proxy / tunnel in front of agent-box (host or host:port, no scheme, path or wildcard); any other Host header is refused.",
+  "allowed_hosts": ["box.example.com"],
+
   "comment_shell": "No shell agent is needed below: at boot the console detects $SHELL and adds a profile for it (named after the shell, e.g. zsh) unless one of the agents already runs that binary. That profile is what the UI's +sh button spawns; define your own shell agent to override the detection.",
 
   "comment_persistence": "Sessions run under abduco so they survive a daemon restart. All optional, with sensible defaults under data_dir (default ~/.local/share/agent-box). abduco must be installed (the daemon fails fast if not).",

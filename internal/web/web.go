@@ -42,6 +42,10 @@ type Server struct {
 	// is re-checked against this on every /api/meta rather than trusted from boot.
 	ShellBin string
 
+	// AllowedHosts is every Host header value the instance answers to (from
+	// config.HostAllowlist). Empty refuses every request: the guard fails closed.
+	AllowedHosts []string
+
 	// RateLimitsFile is the account 5h/weekly usage snapshot (produced by a
 	// statusLine hook); read fresh on every /api/meta. Empty → no limits in the UI.
 	RateLimitsFile string
@@ -185,7 +189,8 @@ func (s *Server) Handler() http.Handler {
 		s.Terminal.ServeHTTP(w, r)
 	})))
 	root.Handle("/", s.authGuard(csrfGuard(protected)))
-	return root
+	// Outermost: every route, static and /login included, is Host-checked first.
+	return newHostGuard(s.AllowedHosts, nil).wrap(root)
 }
 
 // csrfGuard rejects cross-site requests that could change state.

@@ -6,13 +6,17 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +26,8 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/secrets"
 	"github.com/culiops/agent-box/internal/session"
@@ -36,22 +42,99 @@ import (
 var _ session.PidResolver = (*abduco.Adapter)(nil)
 
 func main() {
-	cfgPath := flag.String("config", "config.json", "path to config file")
-	flag.Parse()
-
-	cfg, err := config.Load(*cfgPath)
+	args, err := parseArgs(os.Args[1:])
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fmt.Fprintf(os.Stderr, "agent-box: %v\n%s", err, usage)
+		os.Exit(2)
 	}
+	home, homeErr := serveHome(os.UserHomeDir)
+	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, os.Getenv("XDG_CONFIG_HOME"))
+	if args.Cmd == "doctor" {
+		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
+		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
+			Home: home, Commit: buildCommit()}))
+	}
+	if homeErr != nil {
+		log.Fatalf("home: %v", homeErr)
+	}
+	if cfgErr != nil {
+		log.Fatalf("config: %v", cfgErr)
+	}
+	// Resolve only loads; the security invariants (bind, allowed_hosts, socket
+	// dir) are enforced here, for every source including built-in defaults.
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	log.Printf("config: %s (agent-box %s)", src, buildCommit())
+	serve(cfg, home)
+}
 
-	// Master password (single operator), read from the env var named by
-	// password_env. Login is password-only — there is no username.
-	pass, err := auth.ResolveCred(cfg)
+// serveHome is the user's home dir, refused when empty or relative: the data
+// dir, the profiles file and the config search path are all built from it, and
+// would otherwise land relative to wherever serve happened to be started.
+func serveHome(userHomeDir func() (string, error)) (string, error) {
+	home, err := userHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if home == "" || !filepath.IsAbs(home) {
+		return "", fmt.Errorf("home dir %q is not an absolute path; set $HOME", home)
+	}
+	return home, nil
+}
+
+// buildCommit is the stamped commit, else the VCS revision Go embedded, else
+// "unknown" (a source tarball carries no .git).
+func buildCommit() string {
+	if commit != "" {
+		return commit
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.revision" {
+				return s.Value
+			}
+		}
+	}
+	return "unknown"
+}
+
+func serve(cfg config.Config, home string) {
+	// Absolute and clean: the darwin socket dir is a hash of this string, so two
+	// spellings of one dir must not yield two socket dirs.
+	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
+	if err != nil {
+		log.Fatalf("data dir: %v", err)
+	}
+	// One instance per data dir, and the port is ours, BEFORE the orphan sweep
+	// and reconcile below: a second serve (a forgotten terminal tab) would
+	// otherwise kill the live instance's attach clients and adopt its sessions,
+	// and only then fail on the busy port.
+	release, err := instancelock.Acquire(dataDir)
+	if err != nil {
+		log.Fatalf("%v (%s)", err, dataDir)
+	}
+	// The deferred call keeps the lock file reachable for the whole of serve: an
+	// unreachable *os.File is closed by its finalizer, which would drop the flock.
+	defer release()
+	ln, err := net.Listen("tcp", cfg.BindAddr)
+	if err != nil {
+		log.Fatalf("listen %s: %v", cfg.BindAddr, err)
+	}
+	if w := bindWarning(cfg); w != "" {
+		log.Printf("WARNING: %s", w)
+	}
+
+	// The login secret, AFTER the lock: in token mode the first start writes
+	// login.token, and two concurrent first starts would race on it. Password
+	// mode reads the env var named by password_env; token mode generates
+	// <dataDir>/login.token. Login is password-only — there is no username.
+	login, err := auth.ResolveLogin(cfg, dataDir)
 	if err != nil {
 		log.Fatalf("auth: %v", err)
+	}
+	if login.Mode == auth.ModePassword && auth.WeakPassword(login.Secret) {
+		log.Printf("WARNING: the login password (env %s) is shorter than 12 characters", cfg.PasswordEnv)
 	}
 
 	resolver, err := secrets.New(cfg.SecretSources)
@@ -76,18 +159,11 @@ func main() {
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
 
 	// Default working dir: config value if set, else $HOME.
-	home, _ := os.UserHomeDir()
 	defaultCwd := cfg.DefaultCwd
 	if defaultCwd == "" {
 		defaultCwd = home
 	}
 
-	// Session persistence via abduco: agents run under abduco so they survive a
-	// daemon restart. abduco is a hard dependency — fail fast if it is missing.
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = filepath.Join(home, ".local", "share", "agent-box")
-	}
 	// Cookie-signing secret, persisted under dataDir so a daemon restart does not
 	// invalidate live sessions (the session cookie is signed with it; rotating
 	// the file is "log out everywhere").
@@ -106,15 +182,37 @@ func main() {
 	if abducoBin == "" {
 		abducoBin = "abduco"
 	}
+	// Session persistence via abduco: agents run under abduco so they survive a
+	// daemon restart. abduco is a hard dependency — fail fast if it is missing.
 	if _, err := exec.LookPath(abducoBin); err != nil {
 		log.Fatalf("abduco not found on PATH (%q): session persistence requires it; install abduco or set abduco_bin", abducoBin)
 	}
-	socketDir := cfg.AbducoSocketDir
-	if socketDir == "" {
-		socketDir = filepath.Join(dataDir, "abduco")
+	// Linux keeps <dataDir>/abduco; darwin defaults to a short per-data-dir dir
+	// in /tmp, because its 103-byte socket path limit cannot afford the data dir.
+	socketDir := abduco.SocketDirFor(cfg.AbducoSocketDir, runtime.GOOS, dataDir, os.Getuid())
+	checkDir := runtime.GOOS == "darwin"
+	if checkDir {
+		// /tmp is world-writable: refuse a dir someone else created first. Before
+		// abduco.New, whose MkdirAll would accept a squatted dir as is.
+		if err := abduco.PrepareSocketDir(socketDir, os.Getuid()); err != nil {
+			log.Fatalf("abduco: %v", err)
+		}
 	}
 	adapter, err := abduco.New(abducoBin, socketDir, filepath.Join(dataDir, "sessions", "pids"))
 	if err != nil {
+		log.Fatalf("abduco: %v", err)
+	}
+	// Every spawn re-validates the dir it was prepared as, in case it vanished
+	// and another user re-created it.
+	adapter.CheckDir = checkDir
+	// The longest profile name (the quick shell included) must fit in a socket
+	// path, or every spawn of it would fail; profiles stored later are checked at
+	// spawn. Same user and host values the adapter's own spawn check uses.
+	profileNames := make([]string, 0, len(agents))
+	for _, a := range agents {
+		profileNames = append(profileNames, a.Name)
+	}
+	if err := abduco.CheckProfileSocketPaths(socketDir, adapter.User(), adapter.Host(), profileNames); err != nil {
 		log.Fatalf("abduco: %v", err)
 	}
 	// Sweep before Reconcile, while every attach client for our socket dir is by
@@ -137,17 +235,23 @@ func main() {
 	// reaper never stops a container a live session is running inside.
 	boxRuntime := ""
 	boxDocker, _ := box.LookDocker(cfg.DockerBin)
-	boxes, err := newBoxes(cfg, dataDir)
-	switch {
-	case err != nil:
-		// Not fatal: without containment the console still runs, on the host
-		// tier, and says so rather than pretending to be contained.
-		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
-	default:
-		mgr.SetBoxes(boxes)
-		boxRuntime = boxes.Runtime()
-		log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
-			boxImage(cfg), boxRuntime, cfg.BoxIdleTTL())
+	var boxes *box.Manager
+	if runtime.GOOS == "darwin" {
+		log.Printf("containment: boxed tier on macOS is not supported yet (M2); every session runs on the host tier")
+	} else {
+		var err error
+		boxes, err = newBoxes(cfg, dataDir)
+		switch {
+		case err != nil:
+			// Not fatal: without containment the console still runs, on the host
+			// tier, and says so rather than pretending to be contained.
+			log.Printf("containment unavailable (%v); every session will run on the host tier", err)
+		default:
+			mgr.SetBoxes(boxes)
+			boxRuntime = boxes.Runtime()
+			log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
+				boxImage(cfg), boxRuntime, cfg.BoxIdleTTL())
+		}
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
@@ -168,6 +272,20 @@ func main() {
 			mgr.SetBundles(bundle.NewProvider(bm))
 			log.Printf("config bundle source: %s", src)
 		}
+	}
+
+	// Release attach clients on the way out instead of leaving it to SIGHUP (see
+	// awaitShutdown). SIGHUP itself is one of the signals: closing the terminal
+	// tab that runs `agent-box serve` must take this path too, unless serve was
+	// started under nohup. Registered here, not earlier or later: Reconcile is
+	// what creates attach clients, so a signal from here on must not take the
+	// default disposition and orphan them; everything before it stays
+	// interruptible by ^C. The buffered signal is handled once awaitShutdown
+	// runs below; a Shutdown before Serve makes Serve return ErrServerClosed.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, shutdownSignalsFor(signal.Ignored)...)
+	if signal.Ignored(syscall.SIGHUP) {
+		log.Printf("SIGHUP is ignored (nohup): closing the terminal will not stop agent-box")
 	}
 
 	if err := mgr.Reconcile(); err != nil {
@@ -218,7 +336,6 @@ func main() {
 	// for profile-based claude sessions that survived a daemon restart.
 	mgr.ResolveBins()
 
-	archiveBytes, archiveFiles := cfg.ArchiveLimits()
 	rateLimitsFile := cfg.RateLimitsFile
 	if rateLimitsFile == "" {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
@@ -227,22 +344,18 @@ func main() {
 		API:        &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
 		Session:    sess,
 		Tokens:     tokens,
-		Password:   pass,
+		Password:   login.Secret,
 		Profiles:   pm,
 		Home:       home,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
-		EnvLabel:   cfg.EnvLabel,
-		EnvColor:   cfg.EnvColor,
 		BoxRuntime: boxRuntime,
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),
 
-		MaxUploadBytes:  cfg.UploadLimit(),
-		MaxArchiveBytes: archiveBytes,
-		MaxArchiveFiles: archiveFiles,
-		RateLimitsFile:  rateLimitsFile,
+		RateLimitsFile: rateLimitsFile,
 	}
+	configureServer(srv, cfg)
 
 	// Analytics: durable token/prompt rollups mined from the Claude Code
 	// transcripts. Enabled by default; only an explicit config false turns it off.
@@ -313,33 +426,92 @@ func main() {
 		go analyticsSvc.Start(analyticsCtx)
 	}
 
-	httpSrv := &http.Server{Addr: cfg.BindAddr, Handler: srv.Handler()}
+	httpSrv := &http.Server{Handler: srv.Handler()}
 
-	// Release attach clients on the way out instead of leaving it to SIGHUP.
-	// SIGHUP on a closing PTY master reaches only that terminal's foreground
-	// process group, so a client that is not it survives the daemon and spins at
-	// 100% CPU forever on a hung-up fd. The agents themselves are untouched —
-	// they live under abduco and are meant to survive a restart.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-stop
-		log.Printf("received %v: releasing %d attach client(s), agents stay running",
-			sig, mgr.DetachAll())
-		analyticsCancel()
-		if analyticsSvc != nil {
-			_ = analyticsSvc.Close()
+	// Release attach clients on the way out (stop is registered before
+	// Reconcile, above); the signal waits in the buffer until this runs.
+	go awaitShutdown(stop, shutdownSteps{
+		DetachAll: mgr.DetachAll,
+		StopAnalytics: func() {
+			analyticsCancel()
+			if analyticsSvc != nil {
+				_ = analyticsSvc.Close()
+			}
+		},
+		ShutdownHTTP: httpSrv.Shutdown,
+	}, log.Printf)
+
+	log.Printf("agent-box listening on %s (allowed hosts: %s)", cfg.BindAddr, strings.Join(cfg.HostAllowlist(), ", "))
+	if login.Mode == auth.ModeToken {
+		// The only place the token is ever printed.
+		url, hint := loginURLFor(cfg, login.Secret)
+		if hint != "" {
+			hint = "\n           (" + hint + ")"
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(ctx)
-	}()
-
-	log.Printf("agent-box listening on %s", cfg.BindAddr)
-	if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(os.Stderr, "\nagent-box: open %s%s\n           (token stored in %s)\n\n",
+			url, hint, login.TokenPath)
+	}
+	if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 	log.Printf("agent-box stopped")
+}
+
+// configureServer sets the web server fields that come straight from config.
+// The Host allowlist above all: left unset, the guard refuses every request.
+func configureServer(srv *web.Server, cfg config.Config) {
+	archiveBytes, archiveFiles := cfg.ArchiveLimits()
+	srv.AllowedHosts = cfg.HostAllowlist()
+	srv.EnvLabel = cfg.EnvLabel
+	srv.EnvColor = cfg.EnvColor
+	srv.MaxUploadBytes = cfg.UploadLimit()
+	srv.MaxArchiveBytes = archiveBytes
+	srv.MaxArchiveFiles = archiveFiles
+}
+
+// wildcardBind reports a bind_addr that listens on every interface (only
+// possible with allow_public).
+func wildcardBind(bind string) (port string, ok bool) {
+	host, port, err := net.SplitHostPort(bind)
+	if err != nil {
+		return "", false
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		return port, true
+	}
+	return port, false
+}
+
+// bindWarning is a startup warning for a config that will refuse every browser:
+// a wildcard bind is allowlisted only as its literal "0.0.0.0:P", which no
+// browser sends as a Host header.
+func bindWarning(cfg config.Config) string {
+	if _, ok := wildcardBind(cfg.BindAddr); ok && len(cfg.AllowedHosts) == 0 {
+		return fmt.Sprintf("bind_addr %s listens on every interface but allowed_hosts is empty: "+
+			"every browser request will be refused (403) until allowed_hosts lists the host:port you open", cfg.BindAddr)
+	}
+	return ""
+}
+
+// loginURLFor is the token-mode login URL to print. A wildcard bind is not an
+// address a browser can open (and its literal is no Host the guard accepts), so
+// it uses the first allowlisted host on the bind's port, else a placeholder and
+// a hint saying what to put there.
+func loginURLFor(cfg config.Config, token string) (url, hint string) {
+	port, ok := wildcardBind(cfg.BindAddr)
+	if !ok {
+		return auth.LoginURL(cfg.BindAddr, token), ""
+	}
+	for _, h := range cfg.HostAllowlist() {
+		if host, p, err := net.SplitHostPort(h); err == nil && p == port {
+			if _, wild := wildcardBind(h); !wild && host != "" {
+				return auth.LoginURL(h, token), ""
+			}
+		}
+	}
+	return auth.LoginURL("<host>:"+port, token),
+		"replace <host> with this machine's address and add it as <host>:" + port + " to allowed_hosts"
 }
 
 // reclaimBoxState removes the host homes of boxes that are gone and unused, and

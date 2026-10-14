@@ -8,6 +8,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -115,12 +117,17 @@ func (a AgentConfig) BasePolicy() string {
 
 // Config is the top-level app configuration.
 type Config struct {
-	BindAddr        string         `json:"bind_addr"`
-	PasswordEnv     string         `json:"password_env"` // env var holding the master login password
-	DefaultCwd      string         `json:"default_cwd"`
-	EnvLabel        string         `json:"env_label,omitempty"` // e.g. "PROD"/"DEV"; empty → no UI badge
-	EnvColor        string         `json:"env_color,omitempty"` // CSS color for the badge/strip
-	AllowPublic     bool           `json:"allow_public"`
+	BindAddr    string `json:"bind_addr"`
+	PasswordEnv string `json:"password_env"` // env var holding the master login password
+	DefaultCwd  string `json:"default_cwd"`
+	EnvLabel    string `json:"env_label,omitempty"` // e.g. "PROD"/"DEV"; empty → no UI badge
+	EnvColor    string `json:"env_color,omitempty"` // CSS color for the badge/strip
+	AllowPublic bool   `json:"allow_public"`
+	// AllowedHosts are extra Host header values this instance answers to, beyond
+	// its bind address (and the loopback aliases of a loopback bind) — e.g. the
+	// public hostname of a reverse proxy or tunnel. Exact host[:port]; no
+	// wildcards. Everything else is refused: that is the DNS-rebinding defence.
+	AllowedHosts    []string       `json:"allowed_hosts,omitempty"`
 	ProfilesPath    string         `json:"profiles_path,omitempty"`    // store for runtime profiles
 	DataDir         string         `json:"data_dir,omitempty"`         // default ~/.local/share/agent-box
 	RateLimitsFile  string         `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
@@ -284,6 +291,14 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: unknown secret_source type %q", s.Type)
 		}
 	}
+	for _, h := range c.AllowedHosts {
+		if !validHostEntry(h) {
+			return fmt.Errorf("config: invalid allowed_hosts entry %q (want host or host:port, no scheme, path or wildcard)", h)
+		}
+	}
+	if c.AbducoSocketDir != "" && !filepath.IsAbs(c.AbducoSocketDir) {
+		return fmt.Errorf("config: abduco_socket_dir %q must be an absolute path", c.AbducoSocketDir)
+	}
 	return c.checkBind()
 }
 
@@ -351,6 +366,53 @@ func (c Config) checkBind() error {
 		return fmt.Errorf("config: bind_addr %q binds all interfaces; set allow_public to override", c.BindAddr)
 	}
 	return nil
+}
+
+// validHostEntry accepts what a Host header can carry: a host, optionally with
+// a port, nothing else.
+func validHostEntry(h string) bool {
+	if h == "" || strings.Contains(h, "://") || strings.ContainsAny(h, "/*@ \t") {
+		return false
+	}
+	if host, port, err := net.SplitHostPort(h); err == nil {
+		return host != "" && port != ""
+	}
+	return !strings.Contains(h, ":") // a bare IPv6 must be bracketed with a port
+}
+
+// HostAllowlist is every Host header value this instance answers to, lowercased.
+func (c Config) HostAllowlist() []string {
+	set := map[string]bool{strings.ToLower(c.BindAddr): true}
+	if host, port, err := net.SplitHostPort(c.BindAddr); err == nil && isLoopbackHost(host) {
+		for _, alias := range []string{"127.0.0.1", "localhost", "::1"} {
+			set[net.JoinHostPort(alias, port)] = true
+		}
+	}
+	for _, h := range c.AllowedHosts {
+		set[strings.ToLower(h)] = true
+	}
+	out := make([]string, 0, len(set))
+	for h := range set {
+		out = append(out, h)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func isLoopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+// ResolvedDataDir is data_dir, or ~/.local/share/agent-box.
+func (c Config) ResolvedDataDir(home string) string {
+	if c.DataDir != "" {
+		return c.DataDir
+	}
+	return filepath.Join(home, ".local", "share", "agent-box")
 }
 
 // UploadLimit is the per-file upload cap, defaulting to 64 MiB. A zero or

@@ -8,12 +8,6 @@ import (
 	"strings"
 )
 
-// DetectShell returns a usable interactive shell. This is the single
-// shell-detection implementation — the launcher's base=login wrapper uses it too.
-func DetectShell() string {
-	return detectShell(os.Getenv("SHELL"), "/etc/passwd", os.Getuid())
-}
-
 // detectShell resolves the shell in order: $SHELL, then the login shell from
 // /etc/passwd, then /bin/bash.
 //
@@ -22,13 +16,50 @@ func DetectShell() string {
 // production), cron, or a bare exec all start without it. Trusting $SHELL alone
 // would silently hand those a /bin/bash "detected" shell.
 func detectShell(envShell, passwdPath string, uid int) string {
+	sh, _ := detectShellSrc(envShell, passwdPath, uid)
+	return sh
+}
+
+// detectShellSrc is detectShell plus where the answer came from ("$SHELL",
+// "passwd" or "fallback"), so a diagnostic can report it.
+func detectShellSrc(envShell, passwdPath string, uid int) (shell, source string) {
 	if usableShell(envShell) {
-		return envShell
+		return envShell, "$SHELL"
 	}
 	if sh := shellFromPasswd(passwdPath, uid); usableShell(sh) {
-		return sh
+		return sh, "passwd"
 	}
-	return "/bin/bash"
+	return "/bin/bash", "fallback"
+}
+
+// detectShellDarwin resolves the shell on macOS: $SHELL, then the account's
+// UserShell from Directory Services (macOS does not list real users in
+// /etc/passwd), then /bin/zsh, the default since macOS 10.15.
+func detectShellDarwin(envShell string, fromDS func() string) string {
+	sh, _ := detectShellDarwinSrc(envShell, fromDS)
+	return sh
+}
+
+// detectShellDarwinSrc is detectShellDarwin plus where the answer came from
+// ("$SHELL", "dscl" or "fallback"), so a diagnostic can report it.
+func detectShellDarwinSrc(envShell string, fromDS func() string) (shell, source string) {
+	if usableShell(envShell) {
+		return envShell, "$SHELL"
+	}
+	if sh := fromDS(); usableShell(sh) {
+		return sh, "dscl"
+	}
+	return "/bin/zsh", "fallback"
+}
+
+// parseDsclUserShell extracts the value from `dscl . -read /Users/<u> UserShell`.
+func parseDsclUserShell(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(line, "UserShell:"); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // usableShell rejects empty or relative paths, nologin/false stubs, and anything

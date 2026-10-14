@@ -12,12 +12,27 @@ import (
 	"time"
 )
 
+// shortTempDir returns a short /tmp directory removed at test end. Use it for
+// any directory a socket path is built from: t.TempDir() is ~150 bytes on macOS,
+// which would put every session socket over the 103-byte limit Create enforces
+// (CheckSocketPath runs before anything else, so such a test would fail with the
+// length error instead of the behaviour it is pinning).
+func shortTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "ab-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 func testAdapter(t *testing.T) *Adapter {
 	t.Helper()
 	if _, err := exec.LookPath("abduco"); err != nil {
 		t.Skip("abduco not installed")
 	}
-	dir := t.TempDir()
+	dir := shortTempDir(t)
 	a, err := New("abduco", filepath.Join(dir, "sock"), filepath.Join(dir, "pids"))
 	if err != nil {
 		t.Fatal(err)
@@ -171,73 +186,34 @@ func TestListEmptyForeignDir(t *testing.T) {
 	}
 }
 
-// writeProc fakes one /proc/<pid> entry.
-func writeProc(t *testing.T, root, pid string, argv, env []string) string {
-	t.Helper()
-	d := filepath.Join(root, pid)
-	if err := os.MkdirAll(d, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	nulJoin := func(ss []string) []byte {
-		var b []byte
-		for _, s := range ss {
-			b = append(b, []byte(s)...)
-			b = append(b, 0)
-		}
-		return b
-	}
-	if err := os.WriteFile(filepath.Join(d, "cmdline"), nulJoin(argv), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(d, "environ"), nulJoin(env), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return d
-}
-
 // The sweep kills processes, so misclassifying one is worse than missing one.
 // The two failure modes that matter: killing an attach client belonging to a
 // DIFFERENT console instance (session ids like "zsh-1" collide across
 // instances), and killing an abduco SERVER, which is the user's actual agent.
-func TestProcIsAttacher(t *testing.T) {
-	root := t.TempDir()
-	ours := "/home/u/.local/share/agent-box/abduco"
-	theirs := "/tmp/other-instance/abduco"
-
+func TestIsAttacher(t *testing.T) {
+	ours := "/tmp/ours"
+	env := []string{"PATH=/bin", "ABDUCO_SOCKET_DIR=" + ours}
 	cases := []struct {
 		name string
 		argv []string
 		env  []string
 		want bool
 	}{
-		{"our attach client", []string{"abduco", "-e", "^\\", "-a", "zsh-1"},
-			[]string{"PATH=/usr/bin", "ABDUCO_SOCKET_DIR=" + ours}, true},
-		{"attach client of another instance, same session name",
-			[]string{"abduco", "-e", "^\\", "-a", "zsh-1"},
-			[]string{"ABDUCO_SOCKET_DIR=" + theirs}, false},
-		{"our SERVER — this is the user's agent, never kill it",
-			[]string{"abduco", "-n", "zsh-1", "/usr/bin/zsh"},
-			[]string{"ABDUCO_SOCKET_DIR=" + ours}, false},
-		{"absolute path to the abduco binary still counts",
-			[]string{"/usr/local/bin/abduco", "-e", "^\\", "-a", "claude-2"},
-			[]string{"ABDUCO_SOCKET_DIR=" + ours}, true},
-		{"not abduco at all", []string{"grep", "-a", "zsh-1"},
-			[]string{"ABDUCO_SOCKET_DIR=" + ours}, false},
-		{"no socket dir in env", []string{"abduco", "-e", "^\\", "-a", "zsh-1"},
-			[]string{"PATH=/usr/bin"}, false},
-		{"socket dir is a prefix of ours, not ours",
-			[]string{"abduco", "-e", "^\\", "-a", "zsh-1"},
-			[]string{"ABDUCO_SOCKET_DIR=" + ours + "-2"}, false},
+		{"attach client for our dir", []string{"abduco", "-e", "^^", "-a", "zsh-1"}, env, true},
+		{"absolute abduco path", []string{"/opt/homebrew/bin/abduco", "-a", "zsh-1"}, env, true},
+		{"-A also attaches", []string{"abduco", "-A", "zsh-1"}, env, true},
+		{"server -n is a session, never a client", []string{"abduco", "-n", "zsh-1", "sh"}, env, false},
+		{"server -c", []string{"abduco", "-c", "zsh-1"}, env, false},
+		{"other socket dir", []string{"abduco", "-a", "zsh-1"}, []string{"ABDUCO_SOCKET_DIR=/tmp/theirs"}, false},
+		{"prefix of our dir is not ours", []string{"abduco", "-a", "zsh-1"}, []string{"ABDUCO_SOCKET_DIR=" + ours + "x"}, false},
+		{"not abduco", []string{"bash", "-a"}, env, false},
+		{"no args", nil, env, false},
+		{"env unreadable", []string{"abduco", "-a", "zsh-1"}, nil, false},
 	}
 	for _, c := range cases {
-		d := writeProc(t, root, strings.ReplaceAll(c.name, " ", "_"), c.argv, c.env)
-		if got := procIsAttacher(d, ours); got != c.want {
-			t.Errorf("%s: procIsAttacher = %v, want %v", c.name, got, c.want)
+		if got := isAttacher(c.argv, c.env, ours); got != c.want {
+			t.Errorf("%s: isAttacher = %v, want %v", c.name, got, c.want)
 		}
-	}
-
-	if procIsAttacher(filepath.Join(root, "does-not-exist"), ours) {
-		t.Error("missing proc entry must not be classified as an attacher")
 	}
 }
 
