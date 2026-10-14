@@ -1,0 +1,191 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/web"
+)
+
+func TestParseArgs(t *testing.T) {
+	cases := []struct {
+		argv []string
+		want cliArgs
+	}{
+		{nil, cliArgs{Cmd: "serve", ConfigPath: "config.json"}},
+		{[]string{"-config", "config.prod.json"}, cliArgs{Cmd: "serve", ConfigPath: "config.prod.json", ConfigSet: true}}, // today's systemd/air form
+		{[]string{"serve"}, cliArgs{Cmd: "serve", ConfigPath: "config.json"}},
+		{[]string{"serve", "--config", "/x.json"}, cliArgs{Cmd: "serve", ConfigPath: "/x.json", ConfigSet: true}},
+		{[]string{"doctor"}, cliArgs{Cmd: "doctor", ConfigPath: "config.json"}},
+	}
+	for _, c := range cases {
+		got, err := parseArgs(c.argv)
+		if err != nil || got != c.want {
+			t.Errorf("parseArgs(%q) = %+v,%v want %+v", c.argv, got, err, c.want)
+		}
+	}
+	for _, bad := range [][]string{{"deploy"}, {"serve", "extra"}, {"-nope"}} {
+		if _, err := parseArgs(bad); err == nil {
+			t.Errorf("parseArgs(%q): want error", bad)
+		}
+	}
+}
+
+// Closing the terminal tab that runs `agent-box serve` sends SIGHUP. Without it
+// here the daemon dies without DetachAll and its attach clients spin at 100% CPU.
+func TestShutdownSignalsIncludeHangup(t *testing.T) {
+	for _, s := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP} {
+		if !containsSig(s) {
+			t.Errorf("shutdownSignals missing %v", s)
+		}
+	}
+}
+
+func containsSig(s syscall.Signal) bool {
+	for _, x := range shutdownSignals {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// A real SIGHUP sent to this process must land on the channel serve listens on.
+// Were it missing from shutdownSignals, the default disposition would kill the
+// test binary here, which is exactly the daemon's failure mode.
+func TestHangupReachesShutdownChannel(t *testing.T) {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, shutdownSignals...)
+	defer signal.Stop(stop)
+	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case sig := <-stop:
+		if sig != syscall.SIGHUP {
+			t.Fatalf("got %v, want SIGHUP", sig)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("SIGHUP never reached the shutdown channel")
+	}
+}
+
+// The handler serve runs on a shutdown signal: attach clients are released
+// BEFORE the HTTP server drains, analytics stops, and the log names the signal.
+func TestAwaitShutdown_HangupReleasesThenDrains(t *testing.T) {
+	var steps []string
+	var logged string
+	stop := make(chan os.Signal, 1)
+	stop <- syscall.SIGHUP
+	awaitShutdown(stop, shutdownSteps{
+		DetachAll:     func() int { steps = append(steps, "detach"); return 2 },
+		StopAnalytics: func() { steps = append(steps, "analytics") },
+		ShutdownHTTP: func(ctx context.Context) error {
+			if _, ok := ctx.Deadline(); !ok {
+				t.Error("HTTP shutdown context has no deadline")
+			}
+			steps = append(steps, "http")
+			return nil
+		},
+	}, func(f string, a ...any) { logged = fmt.Sprintf(f, a...) })
+	if got := strings.Join(steps, ","); got != "detach,analytics,http" {
+		t.Errorf("steps = %s, want detach,analytics,http", got)
+	}
+	if !strings.Contains(logged, "received hangup: releasing 2 attach client(s)") {
+		t.Errorf("log = %q", logged)
+	}
+}
+
+// Carry 1: the Host guard refuses everything when AllowedHosts is unset, so the
+// serve wiring must fill it from the config.
+func TestConfigureServer_HostAllowlistWired(t *testing.T) {
+	srv := &web.Server{}
+	configureServer(srv, config.Config{BindAddr: "127.0.0.1:8899", EnvLabel: "DEV"})
+	if srv.EnvLabel != "DEV" {
+		t.Errorf("EnvLabel not wired: %q", srv.EnvLabel)
+	}
+	h := srv.Handler()
+	for host, want := range map[string]int{
+		"127.0.0.1:8899":    http.StatusOK,
+		"localhost:8899":    http.StatusOK,
+		"evil.example:8899": http.StatusForbidden,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/login", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("GET /login Host %s = %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
+// Carry 4: a wildcard bind is not something a browser can open.
+func TestLoginURLFor(t *testing.T) {
+	const tok = "TOKEN"
+	cases := []struct {
+		cfg      config.Config
+		want     string
+		wantHint bool
+	}{
+		{config.Config{BindAddr: "127.0.0.1:8899"}, "http://127.0.0.1:8899/login#token=TOKEN", false},
+		{config.Config{BindAddr: "[::1]:8899"}, "http://[::1]:8899/login#token=TOKEN", false},
+		{config.Config{BindAddr: "100.76.118.121:9000"}, "http://100.76.118.121:9000/login#token=TOKEN", false},
+		{config.Config{BindAddr: "0.0.0.0:8899", AllowedHosts: []string{"box.example", "mac.lan:8899"}}, "http://mac.lan:8899/login#token=TOKEN", false},
+		{config.Config{BindAddr: "0.0.0.0:8899"}, "http://<host>:8899/login#token=TOKEN", true},
+		{config.Config{BindAddr: ":8899"}, "http://<host>:8899/login#token=TOKEN", true},
+		{config.Config{BindAddr: "[::]:8899"}, "http://<host>:8899/login#token=TOKEN", true},
+	}
+	for _, c := range cases {
+		got, hint := loginURLFor(c.cfg, tok)
+		if got != c.want || (hint != "") != c.wantHint {
+			t.Errorf("loginURLFor(%q, %v) = %q, hint %q; want %q, hint=%v",
+				c.cfg.BindAddr, c.cfg.AllowedHosts, got, hint, c.want, c.wantHint)
+		}
+	}
+}
+
+// Carry 2: a wildcard bind with no allowed_hosts answers every browser with 403.
+func TestBindWarning(t *testing.T) {
+	for bind, warn := range map[string]bool{
+		"127.0.0.1:8899": false, "100.76.118.121:9000": false,
+		"0.0.0.0:8899": true, ":8899": true, "[::]:8899": true,
+	} {
+		got := bindWarning(config.Config{BindAddr: bind})
+		if (got != "") != warn {
+			t.Errorf("bindWarning(%q) = %q, want warning=%v", bind, got, warn)
+		}
+	}
+	if got := bindWarning(config.Config{BindAddr: "0.0.0.0:8899", AllowedHosts: []string{"mac.lan:8899"}}); got != "" {
+		t.Errorf("wildcard with allowed_hosts warned: %q", got)
+	}
+}
+
+// Carry 2: without an absolute home, the data dir and config search paths
+// would silently become relative to wherever serve was started.
+func TestServeHome(t *testing.T) {
+	for _, c := range []struct {
+		home string
+		err  error
+		ok   bool
+	}{
+		{"/home/u", nil, true},
+		{"", nil, false},
+		{"relative/home", nil, false},
+		{"", fmt.Errorf("$HOME is not defined"), false},
+	} {
+		got, err := serveHome(func() (string, error) { return c.home, c.err })
+		if (err == nil) != c.ok || (c.ok && got != c.home) {
+			t.Errorf("serveHome(%q,%v) = %q,%v want ok=%v", c.home, c.err, got, err, c.ok)
+		}
+	}
+}
