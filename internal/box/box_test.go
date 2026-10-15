@@ -743,3 +743,95 @@ func TestPrepareIsAPassThrough(t *testing.T) {
 		t.Fatalf("a nil hook is a no-op, got %v", err)
 	}
 }
+
+// A box that failed Verify and could not be removed is still running. The next
+// spawn must not reuse it just because Inspect says Running: it removes it,
+// creates a fresh one and verifies that.
+func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	verifyErr := fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error {
+			verifies++
+			if verifies == 1 {
+				return verifyErr
+			}
+			return nil
+		}})
+	dir := t.TempDir()
+	f.stopFails = 1
+	_, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "daemon unreachable") {
+		t.Fatalf("want ErrBoxUnavailable naming the removal failure, got %v", err)
+	}
+	if f.runs() != 1 || f.stops() != 1 {
+		t.Fatalf("runs=%d stops=%d", f.runs(), f.stops())
+	}
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatalf("a fresh, verified box must serve the retry: %v", err)
+	}
+	if f.stops() != 2 || f.runs() != 2 || verifies != 2 {
+		t.Fatalf("the failed box must be removed and re-created and re-verified: stops=%d runs=%d verifies=%d",
+			f.stops(), f.runs(), verifies)
+	}
+	// Normal accounting afterwards: exactly one live session, and the box is
+	// kept (not idle-stopped) until it is released.
+	m.mu.Lock()
+	active := m.active[name]
+	m.mu.Unlock()
+	if active != 1 {
+		t.Fatalf("active sessions = %d, want 1 (the failed Wrap must not leak a count)", active)
+	}
+	m.ReleaseBox(name)
+	m.mu.Lock()
+	active = m.active[name]
+	m.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active after release = %d, want 0", active)
+	}
+	// Verified once, so a third Wrap reuses it without verifying again.
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil); err != nil || verifies != 2 {
+		t.Fatalf("the mark must be cleared: err=%v verifies=%d", err, verifies)
+	}
+}
+
+// If the retry cannot remove the unverified box either, the spawn is refused
+// and the mark stays, so the box is still never reused.
+func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error {
+			verifies++
+			if verifies == 1 {
+				return fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
+			}
+			return nil
+		}})
+	dir := t.TempDir()
+	f.stopFails = 2
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err == nil {
+		t.Fatal("first Wrap must fail Verify")
+	}
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "docker rm -f") {
+		t.Fatalf("want ErrBoxUnavailable with the remedy, got %v", err)
+	}
+	if verifies != 1 || f.runs() != 1 {
+		t.Fatalf("no reuse and no new box while the old one cannot be removed: verifies=%d runs=%d", verifies, f.runs())
+	}
+	m.mu.Lock()
+	for n, c := range m.active {
+		if c != 0 {
+			t.Fatalf("leaked session count on %s: %d", n, c)
+		}
+	}
+	m.mu.Unlock()
+	_ = name
+	// Once removal works, the next spawn recovers.
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("recovery after the daemon returns: %v", err)
+	}
+}

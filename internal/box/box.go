@@ -143,6 +143,9 @@ type Manager struct {
 	mu     sync.Mutex
 	active map[string]int // box name → live session count
 	timers map[string]*time.Timer
+	// unverified holds boxes that failed Verify and could not be removed. They
+	// may still be running, so ensure never reuses one: it removes it first.
+	unverified map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -167,6 +170,8 @@ func New(opts Options) (*Manager, error) {
 		runtime: runtimeRunc,
 		active:  map[string]int{},
 		timers:  map[string]*time.Timer{},
+
+		unverified: map[string]bool{},
 	}
 	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
 		m.runtime = runtimeSysbox
@@ -429,6 +434,22 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	}
 	m.mu.Unlock()
 
+	// A box that failed its containment check and could not be removed is
+	// removed now, whatever Inspect would say, and a fresh one takes its place.
+	m.mu.Lock()
+	wasUnverified := m.unverified[name]
+	m.mu.Unlock()
+	if wasUnverified {
+		if err := m.opts.Client.Stop(ctx, name); err != nil {
+			m.rearmIfIdle(name)
+			return fmt.Errorf("%w: box %s failed its containment check earlier and could not be removed (%v); it is not reused",
+				ErrBoxUnavailable, name, err)
+		}
+		m.mu.Lock()
+		delete(m.unverified, name)
+		m.mu.Unlock()
+	}
+
 	st, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
@@ -463,7 +484,15 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 		if m.opts.Verify != nil {
 			if err := m.opts.Verify(ctx, name); err != nil {
 				// Never leave an unverified box behind for the next spawn to reuse.
-				_ = m.opts.Client.Stop(ctx, name)
+				if stopErr := m.opts.Client.Stop(ctx, name); stopErr != nil {
+					// It may still be running: remember it so ensure removes it
+					// instead of trusting Inspect.
+					m.mu.Lock()
+					m.unverified[name] = true
+					m.mu.Unlock()
+					err = fmt.Errorf("%w (box %s could not be removed: %v; it is not reused and removal is retried on the next spawn)",
+						err, name, stopErr)
+				}
 				m.rearmIfIdle(name)
 				return err
 			}

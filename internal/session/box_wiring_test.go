@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ type fakeBoxes struct {
 	kills    int
 	adopted  []string
 
+	wrapErr    error // returned by Wrap when set
 	prepares   int
 	prepareErr error
 	order      *callLog // optional: shared with fakeBundles to pin call order
@@ -79,6 +81,9 @@ func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []stri
 	defer f.mu.Unlock()
 	f.wraps++
 	f.order.add("wrap")
+	if f.wrapErr != nil {
+		return nil, nil, "", f.wrapErr
+	}
 	// /usr/bin/env, not docker: it exists on Linux and macOS alike and really
 	// runs argv, so the kill/exit tests drive a live agent instead of a
 	// `docker exec` that fails at once.
@@ -343,5 +348,22 @@ func TestHostSpawnDoesNotPrepare(t *testing.T) {
 	defer m.Kill(s.ID)
 	if boxes.prepares != 0 {
 		t.Fatalf("host tier must not Prepare, got %d", boxes.prepares)
+	}
+}
+
+// A containment-check failure from Wrap reaches the user exactly as the box
+// layer worded it: no session prefix and no hint to run on the host instead.
+func TestBoxUnavailableFromWrapPassesThroughUnwrapped(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	boxes.wrapErr = fmt.Errorf("%w: new box reached the host loopback", box.ErrBoxUnavailable)
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	if err.Error() != boxes.wrapErr.Error() {
+		t.Fatalf("error = %q, want it passed through unchanged (%q)", err, boxes.wrapErr)
+	}
+	if strings.Contains(err.Error(), "spawn with runtime") {
+		t.Fatalf("must not suggest the host tier: %v", err)
 	}
 }

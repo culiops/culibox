@@ -863,8 +863,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
 		if err != nil {
 			// A refusal already carries its own actionable message; wrapping it
-			// again would print the remedy twice.
-			if errors.Is(err, box.ErrUnboxableWorkspace) {
+			// again would print the remedy twice. A containment-check failure
+			// gets no "run on the host" hint either: that is the one thing to
+			// push the user away from right after containment failed.
+			if errors.Is(err, box.ErrUnboxableWorkspace) || errors.Is(err, box.ErrBoxUnavailable) {
 				return nil, err
 			}
 			// Name the way out: a silent failure here is what makes people

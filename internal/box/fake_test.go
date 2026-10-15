@@ -20,6 +20,7 @@ type fakeClient struct {
 	running    map[string]bool
 	exited     map[string]bool // present but not running
 	inspectErr error
+	stopFails  int // the next N Stop calls fail and leave the container running
 	sysbox     bool
 
 	// inspectHook runs inside Inspect, before it answers and with no lock held,
@@ -112,6 +113,10 @@ func (f *fakeClient) Stop(_ context.Context, name string) error {
 	defer f.mu.Unlock()
 	f.stopCount++
 	f.stopped = append(f.stopped, name)
+	if f.stopFails > 0 {
+		f.stopFails--
+		return errors.New("docker rm -f: daemon unreachable")
+	}
 	delete(f.running, name)
 	delete(f.exited, name)
 	return nil
