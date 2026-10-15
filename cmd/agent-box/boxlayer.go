@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -17,6 +18,14 @@ import (
 // box manager's operation lock while it runs, so a hung exec must not hold it
 // (and every other spawn) indefinitely. A var so a test can shorten it.
 var verifyTimeout = 30 * time.Second
+
+// prepareVMTimeout bounds a boxed spawn's wait for the VM. The session layer
+// calls prepare with a context that never ends, and EnsureRunning holds the
+// VM's single-slot lock while `colima status` runs, so a wedged hostagent
+// would otherwise block this spawn and every later boxed spawn until restart.
+// It bounds only the wait: a VM start is detached and has its own cap (120 s).
+// A var so a test can shorten it.
+var prepareVMTimeout = 3 * time.Minute
 
 // imageCheckTimeout bounds Prepare's image check (two quick docker calls).
 const imageCheckTimeout = 30 * time.Second
@@ -114,8 +123,14 @@ func (l *boxLayer) prober(image string) bundle.ImageProber {
 // deadline, so the spawn simply takes longer and no "starting the box VM"
 // state is needed in the UI (spec §3.6).
 func (l *boxLayer) prepare(ctx context.Context) error {
-	started, err := l.vm.EnsureRunning(ctx)
+	vctx, vcancel := context.WithTimeout(ctx, prepareVMTimeout)
+	started, err := l.vm.EnsureRunning(vctx)
+	vcancel()
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			return fmt.Errorf("%w: the box VM did not answer within %s; check `agent-box box status`",
+				box.ErrBoxUnavailable, prepareVMTimeout)
+		}
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 	}
 	if started {

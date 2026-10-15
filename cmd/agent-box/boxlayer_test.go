@@ -27,15 +27,22 @@ type fakeColima struct {
 	socket  string // docker_socket reported while running
 	mount   string // mount_type reported while running; "" = virtiofs
 	garbled bool   // status exits 0 with output that is not colima's JSON
+	hang    bool   // status blocks until its context ends (a wedged hostagent)
 	calls   []string
 }
 
-func (f *fakeColima) Run(_ context.Context, _ []string, _ string, args ...string) (string, error) {
+func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, strings.Join(args, " "))
 	switch args[0] {
 	case "status":
+		if f.hang {
+			f.mu.Unlock()
+			<-ctx.Done()
+			f.mu.Lock()
+			return "", ctx.Err()
+		}
 		if f.garbled {
 			return "WARN something colima printed\n", nil
 		}
@@ -295,6 +302,26 @@ func TestVerifyHasADeadline(t *testing.T) {
 	}
 	if time.Since(start) > 3*time.Second {
 		t.Fatalf("verify ignored its deadline: %s", time.Since(start))
+	}
+}
+
+// A hung `colima status` runs under the VM's single-slot lock, so without a
+// deadline it would block this spawn and every later boxed spawn forever.
+func TestPrepareHasADeadline(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	fc.hang = true
+	old := prepareVMTimeout
+	prepareVMTimeout = 200 * time.Millisecond
+	defer func() { prepareVMTimeout = old }()
+	for i := 0; i < 2; i++ { // the second spawn must get the lock back
+		start := time.Now()
+		err := l.prepare(context.Background())
+		if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "did not answer") {
+			t.Fatalf("spawn %d: a hung VM check must fail as unavailable: %v", i, err)
+		}
+		if time.Since(start) > 3*time.Second {
+			t.Fatalf("spawn %d: prepare ignored its deadline: %s", i, time.Since(start))
+		}
 	}
 }
 
