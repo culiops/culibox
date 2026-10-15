@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // CLIClient drives the real docker CLI. It is deliberately thin: every decision
@@ -44,14 +45,50 @@ func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 	return c.run(ctx, args...)
 }
 
-// Inspect reports whether the named container exists AND is running. A missing
-// container is not an error — it is the common case on first spawn.
-func (c CLIClient) Inspect(ctx context.Context, name string) (bool, error) {
+// Inspect reports whether the named container is missing, running or stopped.
+// "No such object" is the common first-spawn answer and not an error; any other
+// failure (an unreachable daemon, a stopped VM) is, because guessing "missing"
+// would send the caller into a docker run that cannot work either.
+func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
 	out, err := exec.CommandContext(ctx, c.Bin, "inspect", "-f", "{{.State.Running}}", name).CombinedOutput()
+	s := strings.TrimSpace(string(out))
 	if err != nil {
-		return false, nil // no such container
+		// The wording's case differs between docker versions ("Error: No such
+		// object" vs "error: no such object"), so compare case-insensitively.
+		if l := strings.ToLower(s); strings.Contains(l, "no such object") || strings.Contains(l, "no such container") {
+			return StateMissing, nil
+		}
+		return StateMissing, fmt.Errorf("docker inspect: %w: %s", err, s)
 	}
-	return strings.TrimSpace(string(out)) == "true", nil
+	if s == "true" {
+		return StateRunning, nil
+	}
+	return StateStopped, nil
+}
+
+// ListBoxes returns every container carrying the label, running or not.
+func (c CLIClient) ListBoxes(ctx context.Context, label string) ([]BoxInfo, error) {
+	out, err := c.run(ctx, "ps", "-a", "--filter", "label="+label, "--format",
+		"{{.Names}}\t{{.State}}\t{{.Label \""+LabelWorkspace+"\"}}\t{{.CreatedAt}}")
+	if err != nil || out == "" {
+		return nil, err
+	}
+	var boxes []BoxInfo
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.SplitN(line, "\t", 4)
+		if len(f) < 2 {
+			continue
+		}
+		b := BoxInfo{Name: f[0], State: f[1]}
+		if len(f) > 2 {
+			b.Workspace = f[2]
+		}
+		if len(f) > 3 {
+			b.Created, _ = time.Parse("2006-01-02 15:04:05 -0700 MST", f[3])
+		}
+		boxes = append(boxes, b)
+	}
+	return boxes, nil
 }
 
 // ListByLabel returns container names carrying the label, running or not, so

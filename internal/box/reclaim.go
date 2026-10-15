@@ -122,8 +122,8 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 	// have spawned and already released between the snapshot and here, leaving
 	// active back at 0 while the container it created is still up, awaiting
 	// its idle timer. When Inspect cannot say for certain, do not delete.
-	running, err := m.opts.Client.Inspect(ctx, name)
-	if err != nil || running {
+	st, err := m.opts.Client.Inspect(ctx, name)
+	if err != nil || st == StateRunning {
 		return nil, nil
 	}
 	// The age from the snapshot is just as stale as the other two grounds were.

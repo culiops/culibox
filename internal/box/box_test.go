@@ -613,3 +613,40 @@ func TestTheMarkerLivesOutsideTheBoxHome(t *testing.T) {
 		t.Fatalf("marker not written: %v", err)
 	}
 }
+
+// Measured 2026-10-15 on real docker: an exited container keeps its name, so a
+// second `docker run --name` answers Conflict, and every spawn into that
+// workspace fails until the daemon restarts. A colima VM restart exits every box.
+func TestStoppedBoxIsRemovedAndRecreated(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	name, err := m.boxName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.exited[name] = true
+	fake.mu.Unlock()
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.stoppedAny(name) {
+		t.Fatal("a stopped box must be removed before it is recreated")
+	}
+	if fake.runs() != 1 {
+		t.Fatalf("want 1 docker run after removing the stopped box, got %d", fake.runs())
+	}
+}
+
+func TestInspectErrorFailsTheSpawnInsteadOfReadingAsMissing(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	fake.mu.Lock()
+	fake.inspectErr = errors.New("Cannot connect to the Docker daemon")
+	fake.mu.Unlock()
+	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil, nil); err == nil {
+		t.Fatal("an unreachable daemon must fail the spawn")
+	}
+	if fake.runs() != 0 {
+		t.Fatal("no docker run when inspect could not answer")
+	}
+}

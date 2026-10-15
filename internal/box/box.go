@@ -51,6 +51,23 @@ const (
 // config and the deny-by-default mount rule stays visible in one function.
 type Mount struct{ Host, Box string }
 
+// State is what docker says about a box container. Stopped is not Missing: an
+// exited container keeps its name, so treating it as absent makes the next
+// `docker run --name` fail with Conflict until someone removes it.
+type State int
+
+const (
+	StateMissing State = iota
+	StateRunning
+	StateStopped
+)
+
+// BoxInfo is one box container as `docker ps -a` reports it.
+type BoxInfo struct {
+	Name, Workspace, State string // State is docker's .State: running, exited, created, ...
+	Created                time.Time
+}
+
 // ErrUnboxableWorkspace marks a refusal the user can act on directly: the
 // workspace they picked cannot be contained. Its message names the path they
 // chose and nothing else, so it is safe to show them — unlike a generic spawn
@@ -61,7 +78,8 @@ var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 // every unit test, so none of them requires a running daemon.
 type Client interface {
 	Run(ctx context.Context, args []string) (string, error)
-	Inspect(ctx context.Context, name string) (running bool, err error)
+	Inspect(ctx context.Context, name string) (State, error)
+	ListBoxes(ctx context.Context, label string) ([]BoxInfo, error)
 	ListByLabel(ctx context.Context, label string) ([]string, error)
 	Stop(ctx context.Context, name string) error
 	HasRuntime(ctx context.Context, name string) bool
@@ -358,12 +376,21 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	}
 	m.mu.Unlock()
 
-	running, err := m.opts.Client.Inspect(ctx, name)
+	st, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
 	}
-	if !running {
+	if st == StateStopped {
+		// Its agents are already dead (docker exec does not survive the
+		// container), and its name blocks a fresh `docker run`.
+		if err := m.opts.Client.Stop(ctx, name); err != nil {
+			m.rearmIfIdle(name)
+			return fmt.Errorf("box: removing stopped %s: %w", name, err)
+		}
+		st = StateMissing
+	}
+	if st == StateMissing {
 		for _, p := range append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...) {
 			if reason := MountUnsafe(p); reason != "" {
 				m.rearmIfIdle(name)
