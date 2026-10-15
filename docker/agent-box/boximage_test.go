@@ -92,3 +92,25 @@ func TestInspectMissingImage(t *testing.T) {
 		t.Fatalf("missing image: %+v %v", st, err)
 	}
 }
+
+// A CLI or context warning on stderr must not become part of the answer: read
+// into the arch it made every darwin spawn fail as "wrong arch".
+func TestInspectIgnoresAWarningOnStderr(t *testing.T) {
+	bin, _ := fakeDocker(t, "echo 'WARNING: some context warning' >&2; echo 'arm64|"+Hash()+"'\n")
+	st, err := Docker{Bin: bin}.Inspect(context.Background(), "x")
+	if err != nil || !st.Present || st.Arch != "arm64" || st.Hash != Hash() {
+		t.Fatalf("a stderr warning corrupted the answer: %+v %v", st, err)
+	}
+	if fatal, msg := st.Check("arm64"); fatal {
+		t.Fatalf("a current image read as fatal: %s", msg)
+	}
+}
+
+// Other failures stay errors and carry docker's stderr.
+func TestInspectFailureIsAnError(t *testing.T) {
+	bin, _ := fakeDocker(t, "echo 'Cannot connect to the Docker daemon' >&2; exit 1\n")
+	if _, err := (Docker{Bin: bin}).Inspect(context.Background(), "x"); err == nil ||
+		!strings.Contains(err.Error(), "Cannot connect") {
+		t.Fatalf("want an error carrying stderr, got %v", err)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
@@ -93,17 +94,25 @@ type ImageState struct {
 	Arch, Hash string
 }
 
-// Inspect reads the image's architecture and Dockerfile label.
+// Inspect reads the image's architecture and Dockerfile label. Stdout only: a
+// CLI or context warning on stderr must not become part of the arch, or a
+// current image reads as built for another architecture. stderr is read only
+// on failure, to tell a missing image from a real error.
 func (d Docker) Inspect(ctx context.Context, image string) (ImageState, error) {
 	out, err := d.command(ctx, "image", "inspect", "--format",
-		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`, image).CombinedOutput()
-	s := strings.TrimSpace(string(out))
+		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`, image).Output()
 	if err != nil {
-		if strings.Contains(s, "No such image") {
-			return ImageState{}, nil
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+			if strings.Contains(strings.ToLower(stderr), "no such image") {
+				return ImageState{}, nil
+			}
 		}
-		return ImageState{}, fmt.Errorf("docker image inspect: %w: %s", err, s)
+		return ImageState{}, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
 	}
+	s := strings.TrimSpace(string(out))
 	arch, hash, _ := strings.Cut(s, "|")
 	if hash == "<no value>" {
 		hash = ""
