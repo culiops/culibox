@@ -60,7 +60,10 @@ func TestSpawn_BlankNameUsesDirBasename(t *testing.T) {
 
 func TestSpawn_CustomNameIsLabel(t *testing.T) {
 	m := NewManager(fakeLauncher{}, newFakeBackend(), 1<<16, time.Minute)
-	s, _ := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "editor", Cwd: "/work/proj"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "editor", Cwd: "/work/proj"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	if s.ID != "bash-1" || s.Info().Name != "editor" {
 		t.Fatalf("id=%q name=%q want bash-1/editor", s.ID, s.Info().Name)
@@ -69,7 +72,10 @@ func TestSpawn_CustomNameIsLabel(t *testing.T) {
 
 func TestSpawn_DuplicateCustomNamesGetSuffixed(t *testing.T) {
 	m := NewManager(fakeLauncher{}, newFakeBackend(), 1<<16, time.Minute)
-	a, _ := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "dup"})
+	a, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "dup"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	b, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "dup"})
 	if err != nil {
 		t.Fatalf("dup label should be allowed (suffixed): %v", err)
@@ -202,7 +208,10 @@ func TestRestart_KeepsTheSameName(t *testing.T) {
 
 func TestRename(t *testing.T) {
 	m := NewManager(fakeLauncher{}, newFakeBackend(), 1<<16, time.Minute)
-	s, _ := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "old"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	if err := m.Rename(s.ID, "  new  "); err != nil {
 		t.Fatal(err)
@@ -225,7 +234,10 @@ func TestRename_PersistsToSidecar(t *testing.T) {
 	if err := m.SetSidecarPath(path); err != nil {
 		t.Fatal(err)
 	}
-	s, _ := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "old", Cwd: "/x"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Name: "old", Cwd: "/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	_ = m.Rename(s.ID, "renamed")
 	sc, _ := openSidecar(path)

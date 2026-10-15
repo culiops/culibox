@@ -296,7 +296,10 @@ func TestResolveBinsMarksAgentKind(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill("my-project-1") })
-	s, _ := m.Get("my-project-1")
+	s, ok := m.Get("my-project-1")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
 	s.mu.Lock()
 	s.lastActivityAt = time.Now().Add(-time.Minute)
 	s.mu.Unlock()

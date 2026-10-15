@@ -57,7 +57,10 @@ func TestReconcileRestoresClaudeSessionID(t *testing.T) {
 		if err := m.Reconcile(); err != nil {
 			t.Fatal(err)
 		}
-		s, _ := m.Get("claude-2")
+		s, ok := m.Get("claude-2")
+		if !ok {
+			t.Fatal("survivor not re-attached")
+		}
 		if got := claudeSIDOf(s); got != c.want {
 			t.Errorf("stored %q restored as %q, want %q", c.stored, got, c.want)
 		}
