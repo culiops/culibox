@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // Workspace is a selectable working directory (home + its subfolders).
@@ -20,8 +22,9 @@ type Workspace struct {
 }
 
 // UnboxableDefaultCwd reports why a directory cannot be a contained workspace.
-// It mirrors the daemon-side refusal in the box package so the UI and the
-// startup check can explain the same rule without importing it.
+// It mirrors the daemon-side refusal in the box package (including
+// box.MountUnsafe, shared so the two cannot drift) so the UI and the startup
+// check explain the same rule.
 func UnboxableDefaultCwd(dir, home string) (string, bool) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -29,6 +32,9 @@ func UnboxableDefaultCwd(dir, home string) (string, bool) {
 	}
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
+	}
+	if reason := box.MountUnsafe(abs); reason != "" {
+		return reason, true
 	}
 	h := filepath.Clean(home)
 	if real, err := filepath.EvalSymlinks(h); err == nil {

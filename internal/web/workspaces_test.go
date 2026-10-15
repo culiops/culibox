@@ -83,3 +83,24 @@ func TestDefaultCwdIsCheckedForBoxability(t *testing.T) {
 		t.Fatal("a project directory must pass")
 	}
 }
+
+// The picker must not offer a directory the box will refuse: docker reads
+// --mount as CSV, so a comma in the path is unboxable (box.MountUnsafe).
+func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
+	home := t.TempDir()
+	mustMkdir(t, filepath.Join(home, "a,b"))
+	mustMkdir(t, filepath.Join(home, "fine"))
+	byLabel := map[string]Workspace{}
+	for _, w := range listWorkspaces(home) {
+		byLabel[w.Label] = w
+	}
+	if w := byLabel["a,b"]; w.Boxable || w.Reason == "" {
+		t.Fatalf("a path with a comma must be unboxable with a reason: %+v", w)
+	}
+	if !byLabel["fine"].Boxable {
+		t.Fatalf("an ordinary directory must stay boxable: %+v", byLabel["fine"])
+	}
+	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "a,b"), home); !bad || reason == "" {
+		t.Fatal("default_cwd with a comma must be reported at save/startup")
+	}
+}

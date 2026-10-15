@@ -3,6 +3,7 @@ package box
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -100,16 +101,63 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
 	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil)
 	joined := strings.Join(got, " ")
-	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude:"} {
+	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude,"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("run args must never reference %q: %q", forbidden, joined)
 		}
 	}
-	if !containsPair(got, "-v", "/home/claude/proj:/home/claude/proj:rw") {
-		t.Fatalf("workspace must mount at its identical host path: %q", joined)
+	if !containsPair(got, "--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj") {
+		t.Fatalf("workspace must bind at its identical host path: %q", joined)
 	}
-	if n := countFlag(got, "-v"); n != 2 {
+	if n := countFlag(got, "--mount"); n != 2 {
 		t.Fatalf("expected exactly 2 mounts (workspace + state), got %d: %q", n, joined)
+	}
+	if countFlag(got, "-v") != 0 {
+		t.Fatalf("-v silently creates a missing source inside a VM; use --mount: %q", joined)
+	}
+}
+
+func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
+	m := newTestManager(t)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}})
+	if !containsPair(got, "--mount", "type=bind,src=/data/bundle,dst=/opt/agent-bundle,readonly") {
+		t.Fatalf("extra mounts must be readonly binds: %q", strings.Join(got, " "))
+	}
+}
+
+// docker parses --mount as CSV: a comma in a path starts a new option, so a
+// workspace named "x,dst=/etc" would rewrite the mount. Refuse, never escape.
+func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	for _, name := range []string{"a,b", `q"uote`, "nl\nx"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) {
+			t.Fatalf("%q: want ErrUnboxableWorkspace, got %v", name, err)
+		}
+	}
+	if fake.runs() != 0 {
+		t.Fatal("no docker call may happen for a refused path")
+	}
+}
+
+func TestUnsafeExtraMountSourceFailsTheSpawn(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	_, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil,
+		[]Mount{{Host: "/x,y", Box: "/opt/agent-bundle"}})
+	if err == nil || fake.runs() != 0 {
+		t.Fatalf("an unsafe mount source must fail before docker run: err=%v runs=%d", err, fake.runs())
+	}
+}
+
+func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
+	for _, p := range []string{"/home/claude/proj", "/Users/me/My Project", "/srv/a-b_c.d"} {
+		if r := MountUnsafe(p); r != "" {
+			t.Errorf("%q should be safe, got %q", p, r)
+		}
 	}
 }
 
@@ -269,14 +317,19 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	}
 	var stateMount string
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-v" && strings.HasSuffix(args[i+1], ":"+boxHome) {
+		if args[i] == "--mount" && strings.Contains(args[i+1], ",dst="+boxHome) {
 			stateMount = args[i+1]
 		}
 	}
 	if stateMount == "" {
 		t.Fatalf("no state mount onto %s in %q", boxHome, joined)
 	}
-	host := strings.TrimSuffix(stateMount, ":"+boxHome)
+	host := ""
+	for _, kv := range strings.Split(stateMount, ",") {
+		if v, ok := strings.CutPrefix(kv, "src="); ok {
+			host = v
+		}
+	}
 	if !strings.HasPrefix(host, "/") {
 		t.Fatalf("state source %q must be an absolute host path", host)
 	}

@@ -38,16 +38,16 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m",
 		"--pids-limit", "512",
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
-		"-v", cwd + ":" + cwd + ":rw",
+		"--mount", bindMount(cwd, cwd, false),
 		// The WHOLE home, not just ~/.claude. Claude Code's primary state file is
 		// $HOME/.claude.json, which sits beside that directory — with only
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
-		"-v", m.stateDir(boxName) + ":" + boxHome,
+		"--mount", bindMount(m.stateDir(boxName), boxHome, false),
 	}
-	// Extra binds are always :ro. The caller chooses what, never whether.
+	// Extra binds are always read-only. The caller chooses what, never whether.
 	for _, mt := range extraRO {
-		args = append(args, "-v", mt.Host+":"+mt.Box+":ro")
+		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
 	}
 	if m.runtime == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)
@@ -98,4 +98,33 @@ func forwardableEnvNames(env []string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// bindMount renders one --mount value. --mount, unlike -v, refuses a source that
+// does not exist: inside a colima VM, -v on an unshared path silently creates an
+// empty root-owned directory and starts the agent there. Callers guarantee both
+// paths passed MountUnsafe, because docker reads this value as CSV.
+func bindMount(src, dst string, ro bool) string {
+	s := "type=bind,src=" + src + ",dst=" + dst
+	if ro {
+		s += ",readonly"
+	}
+	return s
+}
+
+// MountUnsafe names why docker's --mount CSV parser would misread p, or "" when
+// it is safe. A comma starts a new option and a quote opens a CSV field, so
+// either one in a workspace name could rewrite the mount. Refused, not escaped.
+func MountUnsafe(p string) string {
+	for _, r := range p {
+		switch {
+		case r == ',':
+			return "its path contains a comma, which docker --mount cannot carry safely"
+		case r == '"':
+			return "its path contains a double quote, which docker --mount cannot carry safely"
+		case r < 0x20 || r == 0x7f:
+			return "its path contains a control character"
+		}
+	}
+	return ""
 }

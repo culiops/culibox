@@ -287,6 +287,9 @@ func unboxableWorkspace(cwd string) (string, bool) {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
+	if reason := MountUnsafe(abs); reason != "" {
+		return reason, true
+	}
 	if abs == string(filepath.Separator) {
 		return "it is the filesystem root", true
 	}
@@ -361,6 +364,12 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
 	}
 	if !running {
+		for _, p := range append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...) {
+			if reason := MountUnsafe(p); reason != "" {
+				m.rearmIfIdle(name)
+				return fmt.Errorf("box: mount source %q: %s", p, reason)
+			}
+		}
 		if _, err := m.ensureStateDir(name, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
@@ -377,6 +386,15 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	m.acquire(name)
 	m.touchMarker(name)
 	return nil
+}
+
+// mountSources lists every path of the extra mounts that docker will parse.
+func mountSources(ms []Mount) []string {
+	out := make([]string, 0, 2*len(ms))
+	for _, mt := range ms {
+		out = append(out, mt.Host, mt.Box)
+	}
+	return out
 }
 
 // rearmIfIdle restores the idle timer after a failed ensure, but only when no
