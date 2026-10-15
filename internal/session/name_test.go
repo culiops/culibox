@@ -240,7 +240,10 @@ func TestRename_PersistsToSidecar(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	_ = m.Rename(s.ID, "renamed")
-	sc, _ := openSidecar(path)
+	sc, err := openSidecar(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if sc.all()[s.ID].Name != "renamed" {
 		t.Fatalf("sidecar name=%q want renamed", sc.all()[s.ID].Name)
 	}

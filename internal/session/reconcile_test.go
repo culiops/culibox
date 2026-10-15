@@ -177,7 +177,10 @@ func TestReconcileDropsDeadSidecarEntry(t *testing.T) {
 		t.Fatal("dead session should not be re-attached")
 	}
 	// sidecar entry pruned
-	sc, _ := openSidecar(path)
+	sc, err := openSidecar(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := sc.all()["bash-1"]; ok {
 		t.Fatal("dead sidecar entry not pruned")
 	}
@@ -204,7 +207,10 @@ func TestReconcileCleansLingeringDead(t *testing.T) {
 	if !fb.wasKilled("bash-1") {
 		t.Fatal("lingering-dead socket not torn down (backend.Kill not called)")
 	}
-	sc, _ := openSidecar(path)
+	sc, err := openSidecar(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, ok := sc.all()["bash-1"]; ok {
 		t.Fatal("sidecar entry for dead session not dropped")
 	}

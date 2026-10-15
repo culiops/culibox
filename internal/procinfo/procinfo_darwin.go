@@ -80,8 +80,8 @@ func PIDs() ([]int, error) {
 const szomb = 5
 
 // Table reads the whole process table in one sysctl and the two limits fork
-// enforces: kern.maxproc for everyone, kern.maxprocperuid per real uid (root is
-// exempt, so it is left 0 there).
+// enforces: kern.maxproc for everyone, and per real uid the lower of
+// kern.maxprocperuid and our RLIMIT_NPROC (root is exempt, so it is left 0).
 func Table() (TableStats, error) {
 	ks, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
@@ -99,6 +99,11 @@ func Table() (TableStats, error) {
 			return TableStats{}, err
 		}
 		ts.MaxPerUID = int(per)
+		// fork checks RLIMIT_NPROC (`ulimit -u`), which may sit below the sysctl.
+		var rl unix.Rlimit
+		if unix.Getrlimit(unix.RLIMIT_NPROC, &rl) == nil && rl.Cur < uint64(per) {
+			ts.MaxPerUID = int(rl.Cur)
+		}
 	}
 	for i := range ks {
 		if ks[i].Proc.P_pid <= 0 {
