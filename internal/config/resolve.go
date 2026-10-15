@@ -66,7 +66,7 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 		return c, Source{Path: explicit}, err
 	}
 	if err := checkRoot(root); err != nil {
-		return Config{}, Source{Path: filepath.Join(root, "config.json")}, err
+		return Config{}, Source{Path: root}, err
 	}
 	candidates := []string{filepath.Join(root, "config.json")}
 	if !relocated {
@@ -77,8 +77,11 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 		candidates = append(candidates, filepath.Join(base, "agent-box", "config.json"))
 	}
 	for _, p := range candidates {
-		_, err := os.Stat(p)
+		fi, err := os.Stat(p)
 		if err == nil {
+			if err := checkOwned(p, fi); err != nil {
+				return Config{}, Source{Path: p}, err
+			}
 			c, lerr := Load(p)
 			return c, Source{Path: p}, lerr
 		}
@@ -114,11 +117,17 @@ func checkRoot(root string) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("data root %s is not a directory", root)
 	}
+	return checkOwned("data root "+root, fi)
+}
+
+// checkOwned refuses what is not ours or is writable by group or others
+// (group too: on macOS group staff is every local user).
+func checkOwned(what string, fi os.FileInfo) error {
 	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("data root %s is not owned by you; refusing to read a config from it", root)
+		return fmt.Errorf("%s is not owned by you; refusing to read a config from it", what)
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("data root %s is writable by others (mode %o); chmod 700 it", root, fi.Mode().Perm())
+		return fmt.Errorf("%s is writable by others (mode %o); chmod go-w it", what, fi.Mode().Perm())
 	}
 	return nil
 }

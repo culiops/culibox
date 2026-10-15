@@ -182,3 +182,24 @@ func TestRoot_RelativeHomeIsAnError(t *testing.T) {
 		t.Fatal("a relative home must not yield a relative root")
 	}
 }
+
+// A config file others can edit is as bad as a root they can write into, in the
+// root and in the ~/.config fallback alike.
+func TestResolve_RefusesAWritableConfigFile(t *testing.T) {
+	home := privateDir(t)
+	for _, p := range []string{
+		filepath.Join(home, ".local", "share", "agent-box", "config.json"),
+		filepath.Join(home, ".config", "agent-box", "config.json"),
+	} {
+		writeCfg(t, p, "127.0.0.1:8")
+		if err := os.Chmod(p, 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Resolve("", false, home, "", ""); err == nil {
+			t.Fatalf("read a world-writable %s", p)
+		}
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
