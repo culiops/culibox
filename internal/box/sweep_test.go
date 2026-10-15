@@ -106,3 +106,41 @@ func TestSweepContinuesPastAFailedRemoval(t *testing.T) {
 		t.Fatalf("the other box must still be removed: %+v stops=%d", rep, f.stops())
 	}
 }
+
+// A stopped box whose sessions are still registered keeps its count, exactly as
+// ensure's stopped-box path does. Dropping it would let a stale session's late
+// release take the count of the re-created box to zero and arm the idle timer
+// under a live session.
+func TestSweepOfAStoppedBoxKeepsItsCounterAgainstAStaleRelease(t *testing.T) {
+	m, f := sweepManager(t, true)
+	dir := t.TempDir()
+	_, _, name, err := m.Wrap(context.Background(), dir, "d-1", []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A docker restart leaves the container exited; the detached session D is
+	// still registered.
+	f.mu.Lock()
+	delete(f.running, name)
+	f.exited[name] = true
+	f.mu.Unlock()
+
+	rep, err := m.Sweep(context.Background(), map[string]int{name: 1})
+	if err != nil || len(rep.Removed) != 1 {
+		t.Fatalf("the stopped box must be removed: %+v %v", rep, err)
+	}
+	if _, _, _, err := m.Wrap(context.Background(), dir, "n-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.runs() != 2 {
+		t.Fatalf("ensure must re-create the box, runs=%d", f.runs())
+	}
+	m.ReleaseBox(name) // the stale session D is killed
+
+	m.mu.Lock()
+	n, armed := m.active[name], m.timers[name] != nil
+	m.mu.Unlock()
+	if n != 1 || armed {
+		t.Fatalf("the new session must keep the box: active=%d idleTimerArmed=%v", n, armed)
+	}
+}

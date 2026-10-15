@@ -735,20 +735,14 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 	return rep, errors.Join(errs...)
 }
 
-// remove stops a box and, only if that worked, drops its bookkeeping. Callers
-// hold opMu.
+// remove deletes a box's container. It leaves the session counter alone, like
+// ensure's stopped-box path: sessions that are still registered will release
+// their count later, and a count dropped here would underflow against the
+// container a new spawn re-creates under the same name. Callers hold opMu.
 func (m *Manager) remove(ctx context.Context, name string) error {
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return fmt.Errorf("box: sweep removing %s: %w", name, err)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if t, ok := m.timers[name]; ok {
-		t.Stop()
-		delete(m.timers, name)
-	}
-	delete(m.active, name)
-	delete(m.drift, name)
 	return nil
 }

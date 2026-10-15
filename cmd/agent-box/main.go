@@ -555,14 +555,16 @@ func loginURLFor(cfg config.Config, token string) (url, hint string) {
 		"replace <host> with this machine's address and add it as <host>:" + port + " to allowed_hosts"
 }
 
-// reclaimBoxState removes the host homes of boxes that are gone and unused, and
-// reports what it freed. internal/box returns results rather than logging so its
-// decisions stay testable without a daemon; the printing belongs here.
 // sweepBoxes runs one box sweep and logs every action with its reason. A sweep
 // skipped because the daemon is unreachable logs nothing: that is the expected
 // state whenever the VM is stopped, and it must not fill the log.
+//
+// The pass is bounded: it holds the box manager's operation lock, so a hung
+// daemon must not be able to hold it (and every spawn) indefinitely.
 func sweepBoxes(boxes *box.Manager, mgr *session.Manager) {
-	rep, err := boxes.Sweep(context.Background(), mgr.LiveBoxCounts())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	rep, err := boxes.Sweep(ctx, mgr.LiveBoxCounts())
 	for _, a := range rep.Removed {
 		log.Printf("box sweep: removed %s: %s", a.Box, a.Reason)
 	}
@@ -574,6 +576,9 @@ func sweepBoxes(boxes *box.Manager, mgr *session.Manager) {
 	}
 }
 
+// reclaimBoxState removes the host homes of boxes that are gone and unused, and
+// reports what it freed. internal/box returns results rather than logging so its
+// decisions stay testable without a daemon; the printing belongs here.
 func reclaimBoxState(boxes *box.Manager) {
 	done, err := boxes.ReclaimState(context.Background(), box.DefaultStateTTL)
 	for _, r := range done {
