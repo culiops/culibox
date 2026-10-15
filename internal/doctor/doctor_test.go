@@ -373,3 +373,48 @@ func TestDoctor_BindHostnameRedacted(t *testing.T) {
 		}
 	}
 }
+
+func TestProcTableResult(t *testing.T) {
+	cases := []struct {
+		name   string
+		ts     procinfo.TableStats
+		status string
+		want   []string
+	}{
+		{"mac measured full", procinfo.TableStats{Procs: 3991, Max: 4000, Zombies: 3377, Own: 600, MaxPerUID: 2666},
+			Warn, []string{"3991 of 4000 processes", "3377 zombies", "own uid 600 of 2666", "EAGAIN", "ps -axo ppid=,stat="}},
+		{"mac healthy", procinfo.TableStats{Procs: 600, Max: 4000, Own: 400, MaxPerUID: 2666},
+			Pass, []string{"600 of 4000 processes", "own uid 400 of 2666"}},
+		{"just under 5% headroom", procinfo.TableStats{Procs: 3801, Max: 4000},
+			Warn, []string{"3801 of 4000"}},
+		{"exactly 5% headroom", procinfo.TableStats{Procs: 3800, Max: 4000},
+			Pass, []string{"3800 of 4000"}},
+		{"only the per-uid limit is near", procinfo.TableStats{Procs: 2700, Max: 4000, Own: 2600, MaxPerUID: 2666},
+			Warn, []string{"own uid 2600 of 2666"}},
+		{"no limit known (linux)", procinfo.TableStats{Procs: 412},
+			Pass, []string{"412 processes"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := procTableResult(c.ts)
+			if r.Status != c.status || r.Check != "process table" {
+				t.Fatalf("got %+v, want status %s", r, c.status)
+			}
+			for _, w := range c.want {
+				if !strings.Contains(r.Detail, w) {
+					t.Errorf("detail %q missing %q", r.Detail, w)
+				}
+			}
+			if c.status == Pass && strings.Contains(r.Detail, "EAGAIN") {
+				t.Errorf("a passing line carries the warning hint: %q", r.Detail)
+			}
+		})
+	}
+}
+
+func TestDoctor_ReportsProcessTable(t *testing.T) {
+	out, _ := run(input(t))
+	if !strings.Contains(out, " process table: ") {
+		t.Fatalf("no process table line:\n%s", out)
+	}
+}

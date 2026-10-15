@@ -85,3 +85,14 @@ func parseProcArgs2(b []byte) (args, env []string, err error) {
 	}
 	return args, env, nil
 }
+
+// TableStats is how full the process table is. A zero Max or MaxPerUID means
+// this OS has no single limit worth comparing against (Linux: cgroup pids.max
+// and RLIMIT_NPROC, which counts threads, are what bite there).
+type TableStats struct {
+	Procs     int // every process, zombies included
+	Max       int // system-wide process limit, 0 if not checked
+	Zombies   int // exited but never reaped; they still hold a slot
+	Own       int // processes of our real uid
+	MaxPerUID int // per-uid process limit, 0 if not checked or root
+}

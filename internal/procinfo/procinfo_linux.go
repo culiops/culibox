@@ -74,3 +74,13 @@ func PIDs() ([]int, error) {
 	}
 	return out, nil
 }
+
+// Table counts processes only: Linux has no one process limit to compare
+// against (see TableStats).
+func Table() (TableStats, error) {
+	pids, err := PIDs()
+	if err != nil {
+		return TableStats{}, err
+	}
+	return TableStats{Procs: len(pids)}, nil
+}

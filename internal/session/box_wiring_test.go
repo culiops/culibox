@@ -43,7 +43,10 @@ func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []stri
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
-	return append([]string{"/usr/bin/docker", "exec"}, argv...), env, "ab-box-test", nil
+	// /usr/bin/env, not docker: it exists on Linux and macOS alike and really
+	// runs argv, so the kill/exit tests drive a live agent instead of a
+	// `docker exec` that fails at once.
+	return append([]string{"/usr/bin/env"}, argv...), env, "ab-box-test", nil
 }
 
 func (f *fakeBoxes) AdoptBox(name string) {

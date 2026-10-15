@@ -4,6 +4,7 @@ package procinfo
 
 import (
 	"fmt"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
@@ -31,7 +32,8 @@ func Ppid(pid int) (int, error) {
 }
 
 // StartTime is the process start as "<sec>.<usec>". Claude Code's registry
-// procStart on macOS has not been measured yet; agent-box doctor prints both.
+// writes the same instant as a UTC ctime string; session.StartMatches compares
+// the two.
 func StartTime(pid int) (string, error) {
 	k, err := kinfo(pid)
 	if err != nil {
@@ -72,4 +74,48 @@ func PIDs() ([]int, error) {
 		}
 	}
 	return out, nil
+}
+
+// szomb is SZOMB from <sys/proc.h>; x/sys does not export it.
+const szomb = 5
+
+// Table reads the whole process table in one sysctl and the two limits fork
+// enforces: kern.maxproc for everyone, and per real uid the lower of
+// kern.maxprocperuid and our RLIMIT_NPROC (root is exempt, so it is left 0).
+func Table() (TableStats, error) {
+	ks, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return TableStats{}, err
+	}
+	max, err := unix.SysctlUint32("kern.maxproc")
+	if err != nil {
+		return TableStats{}, err
+	}
+	uid := uint32(os.Getuid())
+	ts := TableStats{Max: int(max)}
+	if uid != 0 {
+		per, err := unix.SysctlUint32("kern.maxprocperuid")
+		if err != nil {
+			return TableStats{}, err
+		}
+		ts.MaxPerUID = int(per)
+		// fork checks RLIMIT_NPROC (`ulimit -u`), which may sit below the sysctl.
+		var rl unix.Rlimit
+		if unix.Getrlimit(unix.RLIMIT_NPROC, &rl) == nil && rl.Cur < uint64(per) {
+			ts.MaxPerUID = int(rl.Cur)
+		}
+	}
+	for i := range ks {
+		if ks[i].Proc.P_pid <= 0 {
+			continue
+		}
+		ts.Procs++
+		if ks[i].Proc.P_stat == szomb {
+			ts.Zombies++
+		}
+		if ks[i].Eproc.Pcred.P_ruid == uid {
+			ts.Own++
+		}
+	}
+	return ts, nil
 }

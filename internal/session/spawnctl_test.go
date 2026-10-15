@@ -199,7 +199,10 @@ func TestProfileReplyDefaultDoesNotLeakIntoRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill("claude-2") })
-	s, _ := m.Get("claude-2")
+	s, ok := m.Get("claude-2")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
 	if s.Info().Replyable {
 		t.Fatal("a reattached session picked up the profile's reply default")
 	}
