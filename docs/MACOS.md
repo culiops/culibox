@@ -33,10 +33,18 @@ directory at a time.
 
 ## Configure
 
-Optional: `~/.config/agent-box/config.json` (or `$XDG_CONFIG_HOME/agent-box/config.json`;
-see `config.example.json`), or pass `-config <path>`. A `config.json` in the current
-directory is deliberately not read, so running agent-box inside a cloned repo never
-loads that repo's config. To reach
+Everything agent-box writes lives in one directory, `~/.local/share/agent-box`
+(set `AGENT_BOX_HOME` to an absolute path to move it): its config, login token,
+session records, profiles and analytics. Back it up, move it or delete it as a
+unit. Claude Code's own files stay in `~/.claude`; agent-box only reads them. The one
+exception is the abduco socket directory, `/tmp/agent-box-<uid>-<hash>`, because macOS
+caps a socket path at 103 bytes; it holds only live sockets.
+
+Optional config: `~/.local/share/agent-box/config.json` (see `config.example.json`), or
+pass `-config <path>`. When `AGENT_BOX_HOME` is unset, `~/.config/agent-box/config.json`
+(or `$XDG_CONFIG_HOME/agent-box/config.json`) is still read as a fallback. A
+`config.json` in the current directory is deliberately not read, so running agent-box
+inside a cloned repo never loads that repo's config. To reach
 agent-box through a reverse proxy, add its hostname to `allowed_hosts`; any other
 Host header is refused.
 

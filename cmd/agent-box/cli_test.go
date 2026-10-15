@@ -229,3 +229,13 @@ func TestServeAfterShutdownIsCleanExit(t *testing.T) {
 		t.Fatalf("Serve after Shutdown = %v, want ErrServerClosed", err)
 	}
 }
+
+// profiles.json follows the data dir, so moving data_dir moves the profiles too.
+func TestProfilesPathFor(t *testing.T) {
+	if got := profilesPathFor(config.Config{}, "/srv/ab"); got != "/srv/ab/profiles.json" {
+		t.Errorf("default: got %q", got)
+	}
+	if got := profilesPathFor(config.Config{ProfilesPath: "/x/p.json"}, "/srv/ab"); got != "/x/p.json" {
+		t.Errorf("explicit profiles_path: got %q", got)
+	}
+}

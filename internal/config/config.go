@@ -129,7 +129,7 @@ type Config struct {
 	// wildcards. Everything else is refused: that is the DNS-rebinding defence.
 	AllowedHosts    []string       `json:"allowed_hosts,omitempty"`
 	ProfilesPath    string         `json:"profiles_path,omitempty"`    // store for runtime profiles
-	DataDir         string         `json:"data_dir,omitempty"`         // default ~/.local/share/agent-box
+	DataDir         string         `json:"data_dir,omitempty"`         // default: the data root (see Root)
 	RateLimitsFile  string         `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
 	AbducoBin       string         `json:"abduco_bin,omitempty"`       // default "abduco" on PATH
 	AbducoSocketDir string         `json:"abduco_socket_dir,omitempty"`
@@ -407,7 +407,8 @@ func isLoopbackHost(h string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// ResolvedDataDir is data_dir, or ~/.local/share/agent-box.
+// ResolvedDataDir is data_dir, or ~/.local/share/agent-box for a Config that
+// did not come through Resolve (which always fills data_dir).
 func (c Config) ResolvedDataDir(home string) string {
 	if c.DataDir != "" {
 		return c.DataDir

@@ -48,7 +48,7 @@ func main() {
 		os.Exit(2)
 	}
 	home, homeErr := serveHome(os.UserHomeDir)
-	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, os.Getenv("XDG_CONFIG_HOME"))
+	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME"))
 	if args.Cmd == "doctor" {
 		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
 		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
@@ -81,6 +81,14 @@ func serveHome(userHomeDir func() (string, error)) (string, error) {
 		return "", fmt.Errorf("home dir %q is not an absolute path; set $HOME", home)
 	}
 	return home, nil
+}
+
+// profilesPathFor is profiles_path, else profiles.json in the data dir.
+func profilesPathFor(cfg config.Config, dataDir string) string {
+	if cfg.ProfilesPath != "" {
+		return cfg.ProfilesPath
+	}
+	return filepath.Join(dataDir, "profiles.json")
 }
 
 // buildCommit is the stamped commit, else the VCS revision Go embedded, else
@@ -311,10 +319,7 @@ func serve(cfg config.Config, home string) {
 
 	// Runtime profile store (config.Agents are read-only seeds; the store holds
 	// UI-created/edited profiles). The manager pushes the merged set to the launcher.
-	profilesPath := cfg.ProfilesPath
-	if profilesPath == "" {
-		profilesPath = filepath.Join(home, ".local", "share", "agent-box", "profiles.json")
-	}
+	profilesPath := profilesPathFor(cfg, dataDir)
 	if err := os.MkdirAll(filepath.Dir(profilesPath), 0o700); err != nil {
 		log.Fatalf("profiles dir: %v", err)
 	}
