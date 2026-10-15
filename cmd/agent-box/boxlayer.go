@@ -21,8 +21,9 @@ var verifyTimeout = 30 * time.Second
 // imageCheckTimeout bounds Prepare's image check (two quick docker calls).
 const imageCheckTimeout = 30 * time.Second
 
-// vmStartPassTimeout bounds the reconcile Prepare runs after starting the VM,
-// as sweepBoxes bounds the sweep: it holds the operation lock too.
+// vmStartPassTimeout bounds one reconcile+reclaim pass (at boot, or after
+// prepare starts the VM), as sweepBoxes bounds the sweep: both docker listings
+// and the reclaim's per-box re-check run under the operation lock.
 const vmStartPassTimeout = 2 * time.Minute
 
 // boxLayer is the containment layer and how to reach its docker daemon.
@@ -183,17 +184,19 @@ func (l *boxLayer) dailyReclaim(ctx context.Context) {
 	if l.vmStopped(ctx) {
 		return
 	}
-	reclaimBoxState(l.boxes)
+	ctx, cancel := context.WithTimeout(ctx, vmStartPassTimeout)
+	defer cancel()
+	reclaimBoxState(ctx, l.boxes)
 }
 
 // reconcileAndReclaim runs AFTER session reconcile (at boot) or right after a
 // VM start: reconcile removes the orphaned containers, so what is left on disk
-// belongs to boxes that are genuinely gone.
+// belongs to boxes that are genuinely gone. The whole pass shares one deadline.
 func (l *boxLayer) reconcileAndReclaim(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, vmStartPassTimeout)
 	defer cancel()
 	if err := l.boxes.Reconcile(ctx); err != nil {
 		log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
 	}
-	reclaimBoxState(l.boxes)
+	reclaimBoxState(ctx, l.boxes)
 }

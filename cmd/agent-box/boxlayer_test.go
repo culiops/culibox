@@ -26,6 +26,7 @@ type fakeColima struct {
 	running bool
 	socket  string // docker_socket reported while running
 	mount   string // mount_type reported while running; "" = virtiofs
+	garbled bool   // status exits 0 with output that is not colima's JSON
 	calls   []string
 }
 
@@ -35,6 +36,9 @@ func (f *fakeColima) Run(_ context.Context, _ []string, _ string, args ...string
 	f.calls = append(f.calls, strings.Join(args, " "))
 	switch args[0] {
 	case "status":
+		if f.garbled {
+			return "WARN something colima printed\n", nil
+		}
 		if !f.running {
 			return "colima [profile=agent-box] is not running", errors.New("exit status 1")
 		}
@@ -106,6 +110,16 @@ func (d *fakeDocker) log() string {
 	return string(b)
 }
 
+// resolved is p with symlinks resolved: the spelling the VM config uses.
+func resolved(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 const blockedProbe = "DNS ok\nBLOCKED host.lima.internal ECONNREFUSED\nBLOCKED 192.168.5.2 ETIMEDOUT\n"
 
 // shortRoot is a data root short enough for macOS's 104-byte socket paths
@@ -172,6 +186,7 @@ func TestDarwinLayerPinsTheVM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root = resolved(t, root) // macOS: /var/folders → /private/var/folders
 	if l.vm == nil || !strings.Contains(strings.Join(l.dockerArgs, " "), "--host unix://"+root+"/vm/agent-box/docker.sock") {
 		t.Fatalf("darwin layer must pin the VM socket: %+v", l)
 	}
@@ -222,7 +237,7 @@ func TestDarwinLayerSharesOneDockerArgsSlice(t *testing.T) {
 // Every darwin path comes from the VM's symlink-resolved root and home: the VM
 // mounts the resolved paths, so an unresolved one is invisible inside it.
 func TestDarwinLayerUsesResolvedPaths(t *testing.T) {
-	real := t.TempDir()
+	real := resolved(t, t.TempDir())
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
@@ -370,7 +385,7 @@ func TestRunningVMIsReconciledAtBoot(t *testing.T) {
 	}
 }
 
-func runVM(t *testing.T, l *boxLayer, fc *fakeColima, a cliArgs) (int, string) {
+func runVM(t *testing.T, l *boxLayer, a cliArgs) (int, string) {
 	t.Helper()
 	var out bytes.Buffer
 	rc := runBoxVM(context.Background(), a, config.Config{}, l, &out)
@@ -381,14 +396,14 @@ func TestBoxStopRefusesRunningBoxesUnlessForced(t *testing.T) {
 	l, fc, d := darwinLayer(t, false)
 	fc.running = true
 	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t2026-10-15 10:00:00 +0000 UTC\nab-box-2\texited\t/Users/a/q\t\n")
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "stop"})
+	rc, out := runVM(t, l, cliArgs{Sub: "stop"})
 	if rc != 1 || !strings.Contains(out, "refusing: 1 box(es) running") || !strings.Contains(out, "ab-box-1") {
 		t.Fatalf("stop with a running box = %d:\n%s", rc, out)
 	}
 	if fc.called("stop") {
 		t.Fatal("a refused stop must not stop the VM")
 	}
-	rc, out = runVM(t, l, fc, cliArgs{Sub: "stop", Force: true})
+	rc, out = runVM(t, l, cliArgs{Sub: "stop", Force: true})
 	if rc != 0 || !fc.called("stop") {
 		t.Fatalf("forced stop = %d:\n%s", rc, out)
 	}
@@ -401,27 +416,45 @@ func TestBoxStopFailsClosedWhenBoxesCannotBeListed(t *testing.T) {
 	if err := os.WriteFile(d.bin, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "stop"})
+	rc, out := runVM(t, l, cliArgs{Sub: "stop"})
 	if rc != 1 || fc.called("stop") {
 		t.Fatalf("an unlistable VM must not be stopped: %d\n%s", rc, out)
 	}
 }
 
+// A VM whose state cannot be read may be running boxes: without -force, stop
+// refuses rather than reading the error as "not running".
+func TestBoxStopRefusesAnUnreadableVMUnlessForced(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	fc.garbled = true
+	rc, out := runVM(t, l, cliArgs{Sub: "stop"})
+	if rc != 1 || !strings.Contains(out, "refusing") || !strings.Contains(out, "unreadable output") {
+		t.Fatalf("stop with an unreadable VM state = %d:\n%s", rc, out)
+	}
+	if fc.called("stop") {
+		t.Fatal("a refused stop must not stop the VM")
+	}
+	rc, out = runVM(t, l, cliArgs{Sub: "stop", Force: true})
+	if rc != 0 || !fc.called("stop") {
+		t.Fatalf("forced stop = %d:\n%s", rc, out)
+	}
+}
+
 func TestBoxStatusReportsVMImageAndBoxes(t *testing.T) {
 	l, fc, d := darwinLayer(t, true)
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "status"})
+	rc, out := runVM(t, l, cliArgs{Sub: "status"})
 	if rc != 0 || !strings.Contains(out, "not set up") {
 		t.Fatalf("status not set up = %d:\n%s", rc, out)
 	}
 	l, fc, d = darwinLayer(t, false)
-	rc, out = runVM(t, l, fc, cliArgs{Sub: "status"})
+	rc, out = runVM(t, l, cliArgs{Sub: "status"})
 	if rc != 0 || !strings.Contains(out, "stopped (starts on the first boxed spawn)") {
 		t.Fatalf("status stopped = %d:\n%s", rc, out)
 	}
 	fc.running = true
 	d.set(t, "image", "arm64|0ld\n")
 	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t\n")
-	rc, out = runVM(t, l, fc, cliArgs{Sub: "status"})
+	rc, out = runVM(t, l, cliArgs{Sub: "status"})
 	for _, want := range []string{"box VM: running", "virtiofs", "WARN image", "older than this agent-box", "ab-box-1"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status running lacks %q:\n%s", want, out)
@@ -447,7 +480,7 @@ func readySetup(t *testing.T, ctxName string) (*boxLayer, *fakeColima, *fakeDock
 
 func TestBoxSetupProvisionsProbesAndChecksContext(t *testing.T) {
 	l, fc, d := readySetup(t, "default")
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	rc, out := runVM(t, l, cliArgs{Sub: "setup"})
 	if rc != 0 {
 		t.Fatalf("setup = %d:\n%s", rc, out)
 	}
@@ -463,6 +496,20 @@ func TestBoxSetupProvisionsProbesAndChecksContext(t *testing.T) {
 	if !strings.Contains(d.log(), strings.Join(l.dockerArgs, " ")+" run --rm --cap-drop=ALL") {
 		t.Errorf("probe must run through the pinned daemon:\n%s", d.log())
 	}
+	// Review focus 4: the user-context check reads the USER's docker CLI, so it
+	// must not carry our --host/--config (which would always answer "ours is fine").
+	sawContext := false
+	for _, line := range strings.Split(d.log(), "\n") {
+		if strings.Contains(line, "context show") {
+			sawContext = true
+			if line != "context show" {
+				t.Errorf("context check ran as %q, want plain `docker context show`", line)
+			}
+		}
+	}
+	if !sawContext {
+		t.Error("setup never checked the user's docker context")
+	}
 	for _, c := range fc.calls {
 		if strings.HasPrefix(c, "start") && !strings.Contains(c, "--activate=false") {
 			t.Errorf("colima start without --activate=false: %q", c)
@@ -471,25 +518,25 @@ func TestBoxSetupProvisionsProbesAndChecksContext(t *testing.T) {
 }
 
 func TestBoxSetupRefusesASwitchedDockerContext(t *testing.T) {
-	l, fc, _ := readySetup(t, "colima-agent-box")
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	l, _, _ := readySetup(t, "colima-agent-box")
+	rc, out := runVM(t, l, cliArgs{Sub: "setup"})
 	if rc != 1 || !strings.Contains(out, "FAIL docker context") {
 		t.Fatalf("a switched context must fail setup = %d:\n%s", rc, out)
 	}
 }
 
 func TestBoxSetupWarnsWhenTheContextCannotBeChecked(t *testing.T) {
-	l, fc, _ := readySetup(t, "") // docker context show fails
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	l, _, _ := readySetup(t, "") // docker context show fails
+	rc, out := runVM(t, l, cliArgs{Sub: "setup"})
 	if rc != 0 || !strings.Contains(out, "WARN docker context") {
 		t.Fatalf("an unchecked context warns and proceeds = %d:\n%s", rc, out)
 	}
 }
 
 func TestBoxSetupFailsAReachingProbe(t *testing.T) {
-	l, fc, d := readySetup(t, "default")
+	l, _, d := readySetup(t, "default")
 	d.set(t, "probe", "DNS ok\nREACHED host.lima.internal\n")
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	rc, out := runVM(t, l, cliArgs{Sub: "setup"})
 	if rc != 1 || !strings.Contains(out, "FAIL containment") {
 		t.Fatalf("a reaching probe must fail setup = %d:\n%s", rc, out)
 	}
@@ -498,7 +545,7 @@ func TestBoxSetupFailsAReachingProbe(t *testing.T) {
 func TestBoxSetupFailsAForeignSocket(t *testing.T) {
 	l, fc, _ := readySetup(t, "default")
 	fc.socket = "/Users/a/.colima/default/docker.sock"
-	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	rc, out := runVM(t, l, cliArgs{Sub: "setup"})
 	if rc != 1 || !strings.Contains(out, "docker socket is") {
 		t.Fatalf("a VM on another socket must fail setup = %d:\n%s", rc, out)
 	}

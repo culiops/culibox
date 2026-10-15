@@ -67,14 +67,20 @@ func boxStatusVM(ctx context.Context, l *boxLayer, w io.Writer) int {
 }
 
 // boxStopVM stops the VM, refusing while any box runs: an idle box counts, since
-// stopping the VM ends whatever session is attached to it. A listing that fails
-// refuses too, rather than reading as "no boxes".
+// stopping the VM ends whatever session is attached to it. Fail closed: a VM
+// whose state cannot be read, or whose boxes cannot be listed, is not stopped
+// without -force, rather than reading as "no boxes".
 func boxStopVM(ctx context.Context, force bool, l *boxLayer, w io.Writer) int {
+	st, err := l.vm.Status(ctx)
+	if err != nil && !force {
+		fmt.Fprintf(w, "refusing: cannot read the box VM's state (%v), so running boxes cannot be ruled out. Use -force.\n", err)
+		return 1
+	}
 	running := 0
-	if l.vm.Running(ctx) {
+	if err == nil && st.Running {
 		bs, err := l.cli.ListBoxes(ctx, box.LabelInstance)
-		if err != nil {
-			fmt.Fprintf(w, "FAIL box VM: listing boxes: %v\n", err)
+		if err != nil && !force {
+			fmt.Fprintf(w, "refusing: listing boxes failed (%v), so running boxes cannot be ruled out. Use -force.\n", err)
 			return 1
 		}
 		for _, b := range bs {
