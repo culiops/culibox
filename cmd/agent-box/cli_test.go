@@ -267,3 +267,19 @@ func TestWarnLeftBehindProfiles(t *testing.T) {
 		t.Fatalf("warned without cause: %q", buf.String())
 	}
 }
+
+func TestParseBoxSubcommands(t *testing.T) {
+	a, err := parseArgs([]string{"box", "setup", "-rebuild"})
+	if err != nil || a.Cmd != "box" || a.Sub != "setup" || !a.Rebuild {
+		t.Fatalf("got %+v %v", a, err)
+	}
+	a, err = parseArgs([]string{"box", "stop", "-force"})
+	if err != nil || a.Sub != "stop" || !a.Force {
+		t.Fatalf("got %+v %v", a, err)
+	}
+	for _, bad := range [][]string{{"box"}, {"box", "nuke"}, {"box", "status", "-force"}, {"box", "stop", "-rebuild"}} {
+		if _, err := parseArgs(bad); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
+	}
+}

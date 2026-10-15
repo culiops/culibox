@@ -65,6 +65,9 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	if args.Cmd == "box" {
+		os.Exit(runBox(args, cfg, home, os.Stdout))
+	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
 	serve(cfg, home)
 }
