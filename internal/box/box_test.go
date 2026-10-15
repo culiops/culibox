@@ -1007,7 +1007,7 @@ func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
 	if err := os.Symlink(root, rootLink); err != nil {
 		t.Fatal(err)
 	}
-	if reason := DataRootOverlap(inside, rootLink); reason == "" {
+	if reason := ProtectedOverlap(inside, []ProtectedDir{DataDirProtected(rootLink)}); reason == "" {
 		t.Fatal("a symlinked data root must still be matched")
 	}
 	// The ab prefix must not match abc: component-wise, not string prefix.
@@ -1015,7 +1015,7 @@ func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
 	if err := os.Mkdir(abc, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if reason := DataRootOverlap(abc, root); reason != "" {
+	if reason := ProtectedOverlap(abc, []ProtectedDir{DataDirProtected(root)}); reason != "" {
 		t.Fatalf("%s is not inside %s: %q", abc, root, reason)
 	}
 }

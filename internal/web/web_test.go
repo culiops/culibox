@@ -58,7 +58,7 @@ func TestWSRouteRejectsAnonAcceptsCred(t *testing.T) {
 
 func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
 
@@ -117,7 +117,7 @@ func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 // carry Cache-Control: no-cache; the vendored /xterm/* bundle stays cacheable.
 func TestStaticNoCacheOnAppFiles(t *testing.T) {
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
 
@@ -145,7 +145,7 @@ func TestStaticNoCacheOnAppFiles(t *testing.T) {
 // login page's own appearance already reveals. app.css stays protected.
 func TestSharedStylesheetsArePublic(t *testing.T) {
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
 	h := s.Handler()
 
 	// A per-file sentinel unique to that file's body, so this test also
@@ -205,7 +205,7 @@ func metaGet(t *testing.T, s *Server) map[string]any {
 func TestHandleMeta(t *testing.T) {
 	pm := NewProfileManager(
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, "", "", newFakeStore(), func([]config.AgentConfig) {},
+		nil, "", nil, newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{AllowedHosts: []string{"example.com"}, EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	got := metaGet(t, s)
@@ -220,7 +220,7 @@ func TestHandleMeta(t *testing.T) {
 func TestHandleMetaRateLimits(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "rl.json")
 	os.WriteFile(f, []byte(`{"five_hour":{"used_percentage":80,"resets_at":1785654600},"seven_day":{"used_percentage":42,"resets_at":1786107600}}`), 0o644)
-	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	s := &Server{AllowedHosts: []string{"example.com"}, Profiles: pm, RateLimitsFile: f}
 	ck := issueCookie(t, s)
 	h := s.Handler()
@@ -243,7 +243,7 @@ func TestHandleMetaRateLimits(t *testing.T) {
 }
 
 func TestHandleMetaNoRateLimitsFile(t *testing.T) {
-	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	s := &Server{AllowedHosts: []string{"example.com"}, Profiles: pm, RateLimitsFile: filepath.Join(t.TempDir(), "absent.json")}
 	got := metaGet(t, s)
 	if _, present := got["rate_limits"]; present {
@@ -261,7 +261,7 @@ func TestHandleMetaShellProfileShadowed(t *testing.T) {
 	}
 	pm := NewProfileManager(
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, "", "", fs, func([]config.AgentConfig) {},
+		nil, "", nil, fs, func([]config.AgentConfig) {},
 	)
 	s := &Server{AllowedHosts: []string{"example.com"}, ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	if got := metaGet(t, s); got["shell_profile"] != "" {
@@ -282,7 +282,7 @@ func TestHandleMetaFailsClosedWithoutProfiles(t *testing.T) {
 func TestHandleMetaShellProfileIntact(t *testing.T) {
 	pm := NewProfileManager(
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
-		nil, "", "", newFakeStore(), func([]config.AgentConfig) {},
+		nil, "", nil, newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{AllowedHosts: []string{"example.com"}, ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
 	if got := metaGet(t, s); got["shell_profile"] != "zsh" {
@@ -310,7 +310,7 @@ func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 	ts, _ := auth.OpenTokenStore(filepath.Join(t.TempDir(), "tokens.json"))
 	tok, _, _ := ts.Create("cli")
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(), Tokens: ts,
-		Profiles: NewProfileManager(nil, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
 
@@ -360,7 +360,7 @@ func TestUnsafeMethodsRequireSameOrigin(t *testing.T) {
 // needs you); both must be served, as SVG, to a logged-in page.
 func TestFaviconsAreServed(t *testing.T) {
 	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
-		Profiles: NewProfileManager(nil, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})}
+		Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})}
 	ck := issueCookie(t, s)
 	h := s.Handler()
 	for _, p := range []string{"/favicon.svg", "/favicon-needs.svg"} {

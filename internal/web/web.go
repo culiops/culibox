@@ -10,6 +10,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/box"
 )
 
 //go:embed static
@@ -27,12 +28,13 @@ type Server struct {
 	// from the env var named by config's password_env). Never logged.
 	Password string
 	Home     string // for the workspace picker ($HOME + subfolders)
-	// DataRoot is agent-box's data directory. The picker marks a directory that
-	// overlaps it unboxable, matching the daemon's refusal.
-	DataRoot string
-	Terminal http.Handler
-	EnvLabel string // shown as the UI env badge; empty → no badge
-	EnvColor string // CSS color for the env badge/strip
+	// Protected are the directories a boxed workspace must not overlap (data
+	// root, config and profiles directories). The picker marks a directory that
+	// overlaps one unboxable, matching the daemon's refusal.
+	Protected []box.ProtectedDir
+	Terminal  http.Handler
+	EnvLabel  string // shown as the UI env badge; empty → no badge
+	EnvColor  string // CSS color for the env badge/strip
 	// BoxRuntime is the detected isolation runtime ("runc"/"sysbox-runc"), or ""
 	// when containment is unavailable and every session runs on the host tier.
 	BoxRuntime string
@@ -129,7 +131,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, meta)
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.DataRoot))
+		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.Protected))
 	})
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)

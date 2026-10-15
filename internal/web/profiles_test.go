@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/store"
 )
@@ -40,7 +41,7 @@ func TestProfileManager(t *testing.T) {
 	var lastApplied []config.AgentConfig
 	apply := func(a []config.AgentConfig) { lastApplied = a }
 
-	pm := NewProfileManager(seeds, opts, "", "", fs, apply)
+	pm := NewProfileManager(seeds, opts, "", nil, fs, apply)
 	if len(lastApplied) != 2 {
 		t.Fatalf("init should push 2 seeds to the launcher, got %d", len(lastApplied))
 	}
@@ -102,7 +103,7 @@ func TestViewsExposeEffectiveRuntime(t *testing.T) {
 	fs := newFakeStore()
 	fs.m["hosted"] = config.AgentConfig{Name: "hosted", Bin: "claude", Runtime: config.RuntimeHost}
 
-	m := NewProfileManager(seeds, nil, config.RuntimeHost, "", fs, func([]config.AgentConfig) {})
+	m := NewProfileManager(seeds, nil, config.RuntimeHost, nil, fs, func([]config.AgentConfig) {})
 
 	got := map[string]string{}
 	for _, v := range m.Views() {
@@ -122,7 +123,7 @@ func TestViewsExposeEffectiveRuntime(t *testing.T) {
 // Containment must not be reachable by omission: an instance that configures no
 // default_runtime still reports box, matching config.AgentConfig.RuntimePolicy.
 func TestViewsRuntimeFallsBackToBox(t *testing.T) {
-	m := NewProfileManager([]config.AgentConfig{{Name: "a", Bin: "claude"}}, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})
+	m := NewProfileManager([]config.AgentConfig{{Name: "a", Bin: "claude"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	if rt := m.Views()[0].Runtime; rt != config.RuntimeBox {
 		t.Errorf("with no instance default the view must report box, got %q", rt)
 	}
@@ -138,7 +139,7 @@ func TestViewsFilterOptionsByBin(t *testing.T) {
 		{Name: "shell", Bin: "bash", Options: map[string]any{"model": "claude-opus-5"}},
 	}
 	fs := newFakeStore()
-	m := NewProfileManager(seeds, opts, "", "", fs, func([]config.AgentConfig) {})
+	m := NewProfileManager(seeds, opts, "", nil, fs, func([]config.AgentConfig) {})
 	views := m.Views()
 	got := map[string]int{}
 	for _, v := range views {
@@ -168,7 +169,7 @@ func TestMergedStripsInapplicableOptions(t *testing.T) {
 
 	var applied []config.AgentConfig
 	apply := func(a []config.AgentConfig) { applied = a }
-	m := NewProfileManager(nil, opts, "", "", fs, apply)
+	m := NewProfileManager(nil, opts, "", nil, fs, apply)
 
 	found := false
 	for _, a := range applied {
@@ -196,7 +197,7 @@ func TestMergedStripsInapplicableOptions(t *testing.T) {
 func TestViewsEmitDefaultCwd(t *testing.T) {
 	fs := newFakeStore()
 	_ = fs.Save(config.AgentConfig{Name: "p", Bin: "claude", DefaultCwd: "/home/me/proj"})
-	pm := NewProfileManager(nil, nil, config.RuntimeHost, "", fs, func([]config.AgentConfig) {})
+	pm := NewProfileManager(nil, nil, config.RuntimeHost, nil, fs, func([]config.AgentConfig) {})
 
 	var got string
 	for _, v := range pm.Views() {
@@ -211,7 +212,7 @@ func TestViewsEmitDefaultCwd(t *testing.T) {
 
 func TestSaveRejectsUnboxableDefaultCwd(t *testing.T) {
 	home := t.TempDir()
-	pm := NewProfileManager(nil, nil, config.RuntimeBox, "", newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, newFakeStore(), func([]config.AgentConfig) {})
 	pm.home = home
 
 	// cwd == home is un-boxable for a box-tier profile → reject.
@@ -231,7 +232,7 @@ func TestSaveRejectsUnboxableDefaultCwd(t *testing.T) {
 
 func TestSaveAllowsHomeCwdForHostTier(t *testing.T) {
 	home := t.TempDir()
-	pm := NewProfileManager(nil, nil, config.RuntimeHost, "", newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager(nil, nil, config.RuntimeHost, nil, newFakeStore(), func([]config.AgentConfig) {})
 	pm.home = home
 
 	// Host tier is uncontained; any path is fine, including home.
@@ -246,7 +247,7 @@ func TestProfileViewCarriesControlFields(t *testing.T) {
 		{Name: "yolo", Bin: "/usr/local/bin/claude", Args: []string{"--permission-mode", "bypassPermissions"}},
 		{Name: "bash", Bin: "bash", Replyable: true},
 	}
-	pm := NewProfileManager(seeds, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
 	got := map[string]ProfileView{}
 	for _, v := range pm.Views() {
 		got[v.Name] = v
@@ -286,7 +287,7 @@ func TestSaveRejectsDataRootDefaultCwd(t *testing.T) {
 	if err := os.Mkdir(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	pm := NewProfileManager(nil, nil, config.RuntimeBox, root, newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, []box.ProtectedDir{box.DataDirProtected(root)}, newFakeStore(), func([]config.AgentConfig) {})
 	pm.home = home
 	err := pm.Save(config.AgentConfig{Name: "p", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: root})
 	if err == nil || !strings.Contains(err.Error(), "data directory") {

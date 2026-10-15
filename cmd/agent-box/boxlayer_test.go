@@ -148,7 +148,7 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 	root := shortRoot(t)
 	d := newFakeDocker(t)
 	fc := &fakeColima{}
-	l, err := newBoxLayer(config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, root, root, "darwin", fc)
+	l, err := newBoxLayer(config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, root, root, "darwin", fc, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDock
 
 func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 	root := t.TempDir()
-	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil)
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 func TestDarwinLayerPinsTheVM(t *testing.T) {
 	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
 	root := t.TempDir()
-	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{})
+	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestDarwinLayerPinsTheVM(t *testing.T) {
 }
 
 func TestDarwinLayerWithoutColimaIsUnavailable(t *testing.T) {
-	_, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "colima-definitely-missing"}, t.TempDir(), t.TempDir(), "darwin", &fakeColima{})
+	_, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "colima-definitely-missing"}, t.TempDir(), t.TempDir(), "darwin", &fakeColima{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "brew install colima") {
 		t.Fatalf("missing colima must explain the install: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestDarwinLayerWithoutColimaIsUnavailable(t *testing.T) {
 func TestDarwinLayerSharesOneDockerArgsSlice(t *testing.T) {
 	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
 	root := t.TempDir()
-	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{})
+	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +250,7 @@ func TestDarwinLayerUsesResolvedPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
-	l, err := newBoxLayer(cfg, link, link, "darwin", &fakeColima{})
+	l, err := newBoxLayer(cfg, link, link, "darwin", &fakeColima{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -644,3 +644,22 @@ func TestBoxSetupFailsAForeignSocket(t *testing.T) {
 }
 
 var _ boxvm.Runner = (*fakeColima)(nil)
+
+// The serve path protects the data root, every config dir and the profiles dir,
+// deduped, and the box manager refuses a workspace over a config dir that is
+// outside the data root.
+func TestProtectedDirsReachTheBoxManager(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := t.TempDir()
+	prot := protectedDirs(root, []string{root, cfgDir}, filepath.Join(root, "profiles.json"))
+	if len(prot) != 2 || prot[0].What != "agent-box's data directory" || prot[1].What != "agent-box's config directory" {
+		t.Fatalf("want data root + the outside config dir, deduped: %+v", prot)
+	}
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil, prot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason, bad := l.boxes.Unboxable(cfgDir); !bad || !strings.Contains(reason, "config directory") {
+		t.Fatalf("a workspace at the config dir must be refused: %q %v", reason, bad)
+	}
+}

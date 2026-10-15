@@ -126,6 +126,10 @@ type Options struct {
 	// Shared lists the host directories the docker daemon can see; a workspace
 	// outside them is refused. nil = every path is visible.
 	Shared []string
+	// Protected are host directories besides StateRoot (always protected) that
+	// a workspace must not overlap: the config and profiles directories when
+	// they live outside the data root.
+	Protected []ProtectedDir
 	// Reachable reports whether the daemon answers; false = down, and the idle
 	// sweep skips instead of reaping on a failed list. nil = assume reachable.
 	Reachable func(ctx context.Context) bool
@@ -344,7 +348,7 @@ func ensureMountpoints(root *os.Root, mounts []Mount) error {
 // agent the whole home — ~/.ssh, any secrets file, the agent's own config —
 // and every other control in this package becomes decoration. Refuse loudly
 // rather than narrow silently: a surprising mount is how containment dies.
-func unboxableWorkspace(cwd, dataRoot string, shared []string) (string, bool) {
+func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (string, bool) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", false
@@ -371,7 +375,7 @@ func unboxableWorkspace(cwd, dataRoot string, shared []string) (string, bool) {
 			return "it contains your home directory", true
 		}
 	}
-	if reason := DataRootOverlap(abs, dataRoot); reason != "" {
+	if reason := ProtectedOverlap(abs, protected); reason != "" {
 		return reason, true
 	}
 	if len(shared) > 0 && !UnderMount(abs, shared) {
@@ -381,46 +385,15 @@ func unboxableWorkspace(cwd, dataRoot string, shared []string) (string, bool) {
 	return "", false
 }
 
-// DataRootOverlap reports why a workspace that is, contains, or sits inside the
-// agent-box data root cannot be boxed, or "" when the two are disjoint. That
-// root holds what the box must never write: the box VM's colima.yaml (its
-// provision script runs as root in the VM), lima's SSH key for the VM user, the
-// profiles and the config. Both paths are compared with symlinks resolved and
-// component-wise, so /x/ab is not inside /x/a. An empty dataRoot checks nothing.
-// The web layer calls this too, so the picker and the daemon cannot drift.
-func DataRootOverlap(workspace, dataRoot string) string {
-	if dataRoot == "" {
-		return ""
-	}
-	ws, err := filepath.Abs(workspace)
-	if err != nil {
-		return ""
-	}
-	if real, err := filepath.EvalSymlinks(ws); err == nil {
-		ws = real
-	}
-	root, err := filepath.Abs(dataRoot)
-	if err != nil {
-		return ""
-	}
-	if real, err := filepath.EvalSymlinks(root); err == nil {
-		root = real
-	}
-	const why = "), which holds the box VM's controls, its SSH key and your profiles"
-	switch {
-	case ws == root:
-		return "it is agent-box's data directory (" + root + why
-	case UnderMount(root, []string{ws}):
-		return "it contains agent-box's data directory (" + root + why
-	case UnderMount(ws, []string{root}):
-		return "it is inside agent-box's data directory (" + root + why
-	}
-	return ""
+// protected is every directory a workspace must not overlap: the state root
+// first, then the caller's (config, profiles), deduplicated.
+func (m *Manager) protected() []ProtectedDir {
+	return DedupeProtected(append([]ProtectedDir{DataDirProtected(m.opts.StateRoot)}, m.opts.Protected...))
 }
 
 // Unboxable is the workspace refusal Wrap applies, for the boot-time check.
 func (m *Manager) Unboxable(cwd string) (string, bool) {
-	return unboxableWorkspace(cwd, m.opts.StateRoot, m.opts.Shared)
+	return unboxableWorkspace(cwd, m.protected(), m.opts.Shared)
 }
 
 // Prepare readies the containment layer for a boxed spawn (on macOS: the VM is
@@ -443,7 +416,7 @@ func (m *Manager) Prepare(ctx context.Context) error {
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
 func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
-	if reason, bad := unboxableWorkspace(cwd, m.opts.StateRoot, m.opts.Shared); bad {
+	if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
 			ErrUnboxableWorkspace, cwd, reason)

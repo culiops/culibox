@@ -72,8 +72,9 @@ context and never edits `~/.ssh/config`.
   an idle one; `agent-box box stop -force` stops the VM anyway and ends those
   sessions. `agent-box box status` shows the VM, the image and the boxes.
 - Workspaces must be under your home directory (the VM shares only that), and
-  must not be, contain or sit inside the data root: it holds the VM's own
-  settings and SSH key.
+  must not be, contain or sit inside the data root (it holds the VM's own
+  settings and SSH key), the directory of the config file agent-box reads, or
+  the directory of `profiles_path`.
 - A box cannot reach services listening on your Mac's 127.0.0.1. agent-box
   checks this on every new box and refuses the box if the check fails.
 - Claude Code keeps its macOS login in the Keychain, which a box cannot read.

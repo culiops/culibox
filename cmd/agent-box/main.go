@@ -49,7 +49,8 @@ func main() {
 		os.Exit(2)
 	}
 	home, homeErr := serveHome(os.UserHomeDir)
-	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME"))
+	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
+	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if args.Cmd == "doctor" {
 		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
 		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
@@ -70,7 +71,11 @@ func main() {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
 	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
-	serve(cfg, home)
+	cfgDirs, err := config.ConfigDirs(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	serve(cfg, home, cfgDirs)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -93,6 +98,23 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 		return cfg.ProfilesPath
 	}
 	return filepath.Join(dataDir, "profiles.json")
+}
+
+// protectedDirs is every host directory a boxed workspace must not overlap,
+// built once for both the box manager and the web layer: the data root, each
+// directory a config file is read from on the next start (cfgDirs, which may
+// be outside the data root: -config, the ~/.config fallback), and the
+// profiles file's directory (profiles_path may be anywhere). A box that could
+// write any of them could change the binaries agent-box runs.
+func protectedDirs(dataDir string, cfgDirs []string, profilesPath string) []box.ProtectedDir {
+	out := []box.ProtectedDir{box.DataDirProtected(dataDir)}
+	for _, d := range cfgDirs {
+		out = append(out, box.ConfigDirProtected(d))
+	}
+	if p, err := filepath.Abs(profilesPath); err == nil {
+		out = append(out, box.ProfilesDirProtected(filepath.Dir(p)))
+	}
+	return box.DedupeProtected(out)
 }
 
 // warnLeftBehindProfiles: before profiles.json followed the data dir it always
@@ -134,7 +156,7 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg config.Config, home string) {
+func serve(cfg config.Config, home string, cfgDirs []string) {
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -271,7 +293,8 @@ func serve(cfg config.Config, home string) {
 	boxRuntime := ""
 	var layer *boxLayer
 	var boxes *box.Manager
-	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}); err != nil {
+	protected := protectedDirs(dataDir, cfgDirs, profilesPathFor(cfg, dataDir))
+	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}, protected); err != nil {
 		// Not fatal: without containment the console still runs, on the host
 		// tier, and says so rather than pretending to be contained.
 		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
@@ -376,7 +399,7 @@ func serve(cfg config.Config, home string) {
 			log.Fatalf("profiles store: %v", err)
 		}
 	}
-	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, dataDir, st, lnch.SetAgents)
+	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
 	// for profile-based claude sessions that survived a daemon restart.
@@ -393,7 +416,7 @@ func serve(cfg config.Config, home string) {
 		Password:   login.Secret,
 		Profiles:   pm,
 		Home:       home,
-		DataRoot:   dataDir,
+		Protected:  protected,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime: boxRuntime,
 

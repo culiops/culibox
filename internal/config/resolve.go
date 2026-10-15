@@ -68,15 +68,7 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 	if err := checkRoot(root); err != nil {
 		return Config{}, Source{Path: root}, err
 	}
-	candidates := []string{filepath.Join(root, "config.json")}
-	if !relocated {
-		base := filepath.Join(home, ".config")
-		if xdg != "" && filepath.IsAbs(xdg) {
-			base = xdg
-		}
-		candidates = append(candidates, filepath.Join(base, "agent-box", "config.json"))
-	}
-	for _, p := range candidates {
+	for _, p := range candidates(root, home, xdg, relocated) {
 		fi, err := os.Stat(p)
 		if err == nil {
 			if err := checkOwned(p, fi); err != nil {
@@ -90,6 +82,43 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 		}
 	}
 	return Defaults(), Source{Default: true}, nil
+}
+
+// candidates are the config files load tries, in order.
+func candidates(root, home, xdg string, relocated bool) []string {
+	out := []string{filepath.Join(root, "config.json")}
+	if !relocated {
+		base := filepath.Join(home, ".config")
+		if xdg != "" && filepath.IsAbs(xdg) {
+			base = xdg
+		}
+		out = append(out, filepath.Join(base, "agent-box", "config.json"))
+	}
+	return out
+}
+
+// ConfigDirs is every directory Resolve (with the same arguments) reads a
+// config file from, whether or not the file exists yet: the explicit file's
+// directory, else each candidate's. A boxed workspace must not overlap any of
+// them, or a box could write the config that names the binaries agent-box
+// runs on its next start.
+func ConfigDirs(explicit string, set bool, home, xdg, abHome string) ([]string, error) {
+	if set {
+		p, err := filepath.Abs(explicit)
+		if err != nil {
+			return nil, err
+		}
+		return []string{filepath.Dir(p)}, nil
+	}
+	root, err := Root(home, abHome)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range candidates(root, home, xdg, abHome != "") {
+		out = append(out, filepath.Dir(p))
+	}
+	return out, nil
 }
 
 // Defaults is the zero-config laptop setup: loopback only, token login (no

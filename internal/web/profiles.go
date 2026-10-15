@@ -6,6 +6,7 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/store"
@@ -65,16 +66,17 @@ type ProfileManager struct {
 	// site can leave the containment default implicit.
 	defaultRuntime string
 	home           string // for save-time boxability checks on default_cwd
-	// dataRoot is agent-box's data directory; a boxed default_cwd must not
-	// overlap it (box.DataRootOverlap). Empty only in tests.
-	dataRoot string
+	// protected are the directories a boxed default_cwd must not overlap (data
+	// root, config and profiles directories; box.ProtectedOverlap). nil only in
+	// tests.
+	protected []box.ProtectedDir
 }
 
 // NewProfileManager wires seeds + store + launcher-apply and does the initial
 // refresh. defaultRuntime is the instance tier (config.DefaultRuntime); "" means
-// box, matching config.AgentConfig.RuntimePolicy. dataRoot is the data
-// directory a boxed default_cwd must not overlap.
-func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, defaultRuntime, dataRoot string, st profileStore, apply func([]config.AgentConfig)) *ProfileManager {
+// box, matching config.AgentConfig.RuntimePolicy. protected are the directories
+// a boxed default_cwd must not overlap (the same set the box manager refuses).
+func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, defaultRuntime string, protected []box.ProtectedDir, st profileStore, apply func([]config.AgentConfig)) *ProfileManager {
 	m := &ProfileManager{
 		seeds:          map[string]config.AgentConfig{},
 		options:        options,
@@ -82,7 +84,7 @@ func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, d
 		store:          st,
 		apply:          apply,
 		defaultRuntime: defaultRuntime,
-		dataRoot:       dataRoot,
+		protected:      protected,
 	}
 	for _, s := range seeds {
 		if _, dup := m.seeds[s.Name]; !dup {
@@ -202,7 +204,7 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	if p.DefaultCwd != "" {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(p)
 		if rt == config.RuntimeBox {
-			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.dataRoot); bad {
+			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.protected); bad {
 				return fmt.Errorf("default working dir cannot be contained: %s", reason)
 			}
 		}

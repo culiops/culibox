@@ -203,3 +203,33 @@ func TestResolve_RefusesAWritableConfigFile(t *testing.T) {
 		}
 	}
 }
+
+// ConfigDirs is every directory Resolve reads a config file from on the next
+// start, whether or not the file exists yet: a box that could write one could
+// plant a config naming the binaries agent-box runs.
+func TestConfigDirs(t *testing.T) {
+	home := "/h"
+	got, err := ConfigDirs("", false, home, "", "")
+	if err != nil || len(got) != 2 || got[0] != "/h/.local/share/agent-box" || got[1] != "/h/.config/agent-box" {
+		t.Fatalf("default: %v %v", got, err)
+	}
+	got, _ = ConfigDirs("", false, home, "/x", "")
+	if got[1] != "/x/agent-box" {
+		t.Fatalf("xdg: %v", got)
+	}
+	got, _ = ConfigDirs("", false, home, "/x", "/ab")
+	if len(got) != 1 || got[0] != "/ab" {
+		t.Fatalf("relocated: %v", got)
+	}
+	got, _ = ConfigDirs("/etc/ab/c.json", true, home, "", "")
+	if len(got) != 1 || got[0] != "/etc/ab" {
+		t.Fatalf("explicit: %v", got)
+	}
+	got, _ = ConfigDirs("c.json", true, home, "", "")
+	if wd, _ := os.Getwd(); len(got) != 1 || got[0] != wd {
+		t.Fatalf("a relative explicit path must resolve against the cwd: %v", got)
+	}
+	if _, err := ConfigDirs("", false, home, "", "rel"); err == nil {
+		t.Fatal("a relative AGENT_BOX_HOME must be an error")
+	}
+}

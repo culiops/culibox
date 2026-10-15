@@ -57,8 +57,9 @@ type boxLayer struct {
 // On darwin the layer exists whenever colima and docker resolve. Whether the
 // VM is set up, running and has a fitting image is decided per spawn (prepare),
 // and reaches the user as ErrBoxUnavailable with its remedy. Nothing here
-// starts the VM (D3).
-func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Runner) (*boxLayer, error) {
+// starts the VM (D3). protected are the directories besides the state root a
+// workspace must not overlap (config, profiles); nil off the serve path.
+func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Runner, protected []box.ProtectedDir) (*boxLayer, error) {
 	bin, err := box.LookDocker(cfg.DockerBin)
 	if err != nil {
 		return nil, err
@@ -78,7 +79,9 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 	}
 	l.cli = box.CLIClient{Bin: bin, Args: l.dockerArgs}
 	l.img = boximage.Docker{Bin: bin, Args: l.dockerArgs}
-	m, err := box.New(l.options(cfg))
+	o := l.options(cfg)
+	o.Protected = protected
+	m, err := box.New(o)
 	if err != nil {
 		return nil, err
 	}
