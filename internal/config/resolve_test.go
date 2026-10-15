@@ -17,6 +17,17 @@ func writeCfg(t *testing.T, path, bind string) {
 	}
 }
 
+// privateDir is a t.TempDir with mode 700: t.TempDir follows the umask, and a
+// group-writable root is refused.
+func privateDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func TestResolve_Order(t *testing.T) {
 	work := t.TempDir()
 	home := t.TempDir()
@@ -119,7 +130,7 @@ func TestResolve_DataDirDefaultsToTheRoot(t *testing.T) {
 // must not pick up the first one's ~/.config file.
 func TestResolve_AgentBoxHome(t *testing.T) {
 	home := t.TempDir()
-	ab := t.TempDir()
+	ab := privateDir(t)
 	writeCfg(t, filepath.Join(home, ".config", "agent-box", "config.json"), "127.0.0.1:1")
 	c, src, err := Resolve("", false, home, "", ab)
 	if err != nil || !src.Default || c.DataDir != ab {
@@ -135,5 +146,39 @@ func TestResolve_AgentBoxHome(t *testing.T) {
 func TestResolve_RelativeAgentBoxHomeIsAnError(t *testing.T) {
 	if _, _, err := Resolve("", false, t.TempDir(), "", "rel/ab"); err == nil {
 		t.Fatal("a relative AGENT_BOX_HOME must be refused, not resolved against the cwd")
+	}
+}
+
+// The config names the binaries agent-box runs, so it is only read from a root
+// nobody else can write into (AGENT_BOX_HOME may point anywhere).
+func TestResolve_RefusesAWritableRoot(t *testing.T) {
+	ab := privateDir(t)
+	writeCfg(t, filepath.Join(ab, "config.json"), "127.0.0.1:7")
+	if err := os.Chmod(ab, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Resolve("", false, t.TempDir(), "", ab); err == nil {
+		t.Fatal("read a config from a world-writable root")
+	}
+	if err := os.Chmod(ab, 0o775); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Resolve("", false, t.TempDir(), "", ab); err == nil {
+		t.Fatal("read a config from a group-writable root (macOS: group staff is every local user)")
+	}
+	if err := os.Chmod(ab, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, err := Resolve("", false, t.TempDir(), "", ab); err != nil || c.BindAddr != "127.0.0.1:7" {
+		t.Fatalf("a 0755 root of our own must be read: %+v %v", c, err)
+	}
+}
+
+func TestRoot_RelativeHomeIsAnError(t *testing.T) {
+	if _, err := Root("", ""); err == nil {
+		t.Fatal("an empty home must not yield a relative root")
+	}
+	if _, err := Root("rel/home", ""); err == nil {
+		t.Fatal("a relative home must not yield a relative root")
 	}
 }

@@ -48,7 +48,7 @@ var pathEscapes = map[string]int{
 	// everything else; the -config help text names the lookup order.
 	"cmd/agent-box/main.go os.UserHomeDir":      1,
 	"cmd/agent-box/main.go env XDG_CONFIG_HOME": 1,
-	"cmd/agent-box/cli.go literal .local":       1,
+	"cmd/agent-box/cli.go literal .local":       2, // -config help and the usage text
 	"cmd/agent-box/cli.go literal .config":      1,
 	// /tmp INSIDE the box: its tmpfs mount and the pid file kept on it.
 	"internal/box/argv.go literal /tmp": 2,

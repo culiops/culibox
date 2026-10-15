@@ -18,6 +18,9 @@ var commit string
 const usage = `usage:
   agent-box [serve] [-config <path>]   run the web control-plane
   agent-box doctor  [-config <path>]   check this machine; prints no secrets
+
+Everything agent-box writes, its config.json included, lives in one data root:
+$AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 
 type cliArgs struct {

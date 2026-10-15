@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // Source records where the effective config came from, for the startup log and
@@ -31,6 +32,9 @@ func Root(home, abHome string) (string, error) {
 			return "", fmt.Errorf("AGENT_BOX_HOME %q is not an absolute path", abHome)
 		}
 		return filepath.Clean(abHome), nil
+	}
+	if !filepath.IsAbs(home) {
+		return "", fmt.Errorf("home dir %q is not an absolute path; set $HOME", home)
 	}
 	return filepath.Join(home, ".local", "share", "agent-box"), nil
 }
@@ -60,6 +64,9 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 	if set {
 		c, err := Load(explicit)
 		return c, Source{Path: explicit}, err
+	}
+	if err := checkRoot(root); err != nil {
+		return Config{}, Source{Path: filepath.Join(root, "config.json")}, err
 	}
 	candidates := []string{filepath.Join(root, "config.json")}
 	if !relocated {
@@ -91,4 +98,27 @@ func Defaults() Config {
 		DefaultRuntime: RuntimeHost,
 		Agents:         []AgentConfig{{Name: "claude", Bin: "claude"}},
 	}
+}
+
+// checkRoot refuses a root that someone else could have planted a config.json
+// in: the config names the binaries agent-box runs. A root that does not exist
+// yet is fine (serve creates it 0700).
+func checkRoot(root string) error {
+	fi, err := os.Stat(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("data root %s is not a directory", root)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("data root %s is not owned by you; refusing to read a config from it", root)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("data root %s is writable by others (mode %o); chmod 700 it", root, fi.Mode().Perm())
+	}
+	return nil
 }

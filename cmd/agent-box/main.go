@@ -91,6 +91,29 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 	return filepath.Join(dataDir, "profiles.json")
 }
 
+// warnLeftBehindProfiles: before profiles.json followed the data dir it always
+// sat in the default root. A config with a custom data_dir and no profiles_path
+// would otherwise start with only the seed profiles and say nothing.
+func warnLeftBehindProfiles(cfg config.Config, home, profilesPath string) {
+	if cfg.ProfilesPath != "" {
+		return
+	}
+	old, err := config.Root(home, "")
+	if err != nil {
+		return
+	}
+	old = filepath.Join(old, "profiles.json")
+	if old == profilesPath {
+		return
+	}
+	if _, err := os.Stat(profilesPath); !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if _, err := os.Stat(old); err == nil {
+		log.Printf("profiles: %s does not exist but %s does (profiles used to live there); move it, or set profiles_path", profilesPath, old)
+	}
+}
+
 // buildCommit is the stamped commit, else the VCS revision Go embedded, else
 // "unknown" (a source tarball carries no .git).
 func buildCommit() string {
@@ -320,6 +343,7 @@ func serve(cfg config.Config, home string) {
 	// Runtime profile store (config.Agents are read-only seeds; the store holds
 	// UI-created/edited profiles). The manager pushes the merged set to the launcher.
 	profilesPath := profilesPathFor(cfg, dataDir)
+	warnLeftBehindProfiles(cfg, home, profilesPath)
 	if err := os.MkdirAll(filepath.Dir(profilesPath), 0o700); err != nil {
 		log.Fatalf("profiles dir: %v", err)
 	}
