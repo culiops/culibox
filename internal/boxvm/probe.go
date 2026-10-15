@@ -51,7 +51,7 @@ func probeScript(port int) string {
 // was BLOCKED, none REACHED, and the listener accepted nothing. Anything else,
 // including a probe that could not run, is a failure: the caller refuses the box.
 func ProbeLoopback(ctx context.Context, exec ExecFunc) error {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		return fmt.Errorf("containment check: opening a loopback listener: %w", err)
 	}
@@ -59,17 +59,18 @@ func ProbeLoopback(ctx context.Context, exec ExecFunc) error {
 	out, execErr := exec(ctx, probeScript(ln.Addr().(*net.TCPAddr).Port))
 	// Count accepts after exec returns, on this goroutine: no race with the
 	// listener's close, and queued handshakes are still returned by Accept.
+	// Fail closed: without the deadline the drain cannot be trusted to count.
+	if err := ln.SetDeadline(time.Now().Add(acceptDrain)); err != nil {
+		return fmt.Errorf("containment check: setting the accept deadline: %w", err)
+	}
 	accepted := 0
-	if tl, ok := ln.(*net.TCPListener); ok {
-		_ = tl.SetDeadline(time.Now().Add(acceptDrain))
-		for {
-			c, err := tl.Accept()
-			if err != nil {
-				break
-			}
-			accepted++
-			c.Close()
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			break
 		}
+		accepted++
+		c.Close()
 	}
 	if accepted > 0 {
 		return errors.New("containment check failed: the box can reach the Mac's loopback services; run `agent-box doctor`")
