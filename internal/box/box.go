@@ -143,9 +143,11 @@ type Manager struct {
 	mu     sync.Mutex
 	active map[string]int // box name → live session count
 	timers map[string]*time.Timer
-	// unverified holds boxes that failed Verify and could not be removed. They
-	// may still be running, so ensure never reuses one: it removes it first.
-	unverified map[string]bool
+	// verified holds the boxes this process has seen pass Verify since they were
+	// last (re)created. With a Verify hook, ensure reuses a running box only if
+	// it is listed here, so a box left over from before a daemon restart, or one
+	// whose failed removal left it running, is verified again before any use.
+	verified map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -171,7 +173,7 @@ func New(opts Options) (*Manager, error) {
 		active:  map[string]int{},
 		timers:  map[string]*time.Timer{},
 
-		unverified: map[string]bool{},
+		verified: map[string]bool{},
 	}
 	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
 		m.runtime = runtimeSysbox
@@ -434,22 +436,6 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	}
 	m.mu.Unlock()
 
-	// A box that failed its containment check and could not be removed is
-	// removed now, whatever Inspect would say, and a fresh one takes its place.
-	m.mu.Lock()
-	wasUnverified := m.unverified[name]
-	m.mu.Unlock()
-	if wasUnverified {
-		if err := m.opts.Client.Stop(ctx, name); err != nil {
-			m.rearmIfIdle(name)
-			return fmt.Errorf("%w: box %s failed its containment check earlier and could not be removed (%v); it is not reused",
-				ErrBoxUnavailable, name, err)
-		}
-		m.mu.Lock()
-		delete(m.unverified, name)
-		m.mu.Unlock()
-	}
-
 	st, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
@@ -458,11 +444,20 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	if st == StateStopped {
 		// Its agents are already dead (docker exec does not survive the
 		// container), and its name blocks a fresh `docker run`.
+		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: removing stopped %s: %w", name, err)
 		}
 		st = StateMissing
+	}
+	if st == StateRunning && m.opts.Verify != nil && !m.isVerified(name) {
+		// Found, not created, by this process: adopted after a restart, or left
+		// running by a failed removal. Never trust it unchecked.
+		if err := m.opts.Verify(ctx, name); err != nil {
+			return m.refuseUnverified(ctx, name, err)
+		}
+		m.markVerified(name)
 	}
 	if st == StateMissing {
 		for _, p := range append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...) {
@@ -483,19 +478,9 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 		}
 		if m.opts.Verify != nil {
 			if err := m.opts.Verify(ctx, name); err != nil {
-				// Never leave an unverified box behind for the next spawn to reuse.
-				if stopErr := m.opts.Client.Stop(ctx, name); stopErr != nil {
-					// It may still be running: remember it so ensure removes it
-					// instead of trusting Inspect.
-					m.mu.Lock()
-					m.unverified[name] = true
-					m.mu.Unlock()
-					err = fmt.Errorf("%w (box %s could not be removed: %v; it is not reused and removal is retried on the next spawn)",
-						err, name, stopErr)
-				}
-				m.rearmIfIdle(name)
-				return err
+				return m.refuseUnverified(ctx, name, err)
 			}
+			m.markVerified(name)
 		}
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
@@ -503,6 +488,43 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	m.acquire(name)
 	m.touchMarker(name)
 	return nil
+}
+
+// refuseUnverified handles a box that failed its containment check: it is
+// removed so nothing reuses it, and the spawn is refused. If the removal fails
+// the box may still be running; it is not in verified, so the next ensure
+// verifies it again and removes it rather than trusting Inspect.
+func (m *Manager) refuseUnverified(ctx context.Context, name string, verr error) error {
+	m.unverify(name)
+	if !errors.Is(verr, ErrBoxUnavailable) {
+		verr = fmt.Errorf("%w: %v", ErrBoxUnavailable, verr)
+	}
+	if stopErr := m.opts.Client.Stop(ctx, name); stopErr != nil {
+		verr = fmt.Errorf("%w (box %s could not be removed: %v; it is not reused and is checked again on the next spawn)",
+			verr, name, stopErr)
+	}
+	m.rearmIfIdle(name)
+	return verr
+}
+
+func (m *Manager) isVerified(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.verified[name]
+}
+
+func (m *Manager) markVerified(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verified[name] = true
+}
+
+// unverify forgets that a box passed Verify. Every path that stops or removes a
+// box calls it first, so a re-created container is verified again.
+func (m *Manager) unverify(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.verified, name)
 }
 
 // mountSources lists every path of the extra mounts that docker will parse.
@@ -588,6 +610,7 @@ func (m *Manager) stopIfIdle(name string) {
 	}
 	delete(m.timers, name)
 	m.mu.Unlock()
+	m.unverify(name)
 	_ = m.opts.Client.Stop(context.Background(), name)
 }
 
@@ -608,11 +631,19 @@ func (m *Manager) AdoptBox(name string) {
 // ones with no live sessions. This is the orphan guard: leaked containers would
 // be the 2.0 of the orphaned `abduco -a` clients that pegged a core, so it is
 // tested rather than trusted.
+//
+// The whole pass holds opMu, as Sweep does: Prepare can call it while another
+// spawn's ensure is verifying a box it just created, and that box has no
+// session counted yet. A failed removal does not stop the pass; every orphan is
+// tried and the failures are returned together.
 func (m *Manager) Reconcile(ctx context.Context) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	names, err := m.opts.Client.ListByLabel(ctx, LabelInstance+"="+m.opts.Instance)
 	if err != nil {
 		return fmt.Errorf("box: listing boxes: %w", err)
 	}
+	var errs []error
 	for _, name := range names {
 		m.mu.Lock()
 		live := m.active[name]
@@ -620,9 +651,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if live > 0 {
 			continue
 		}
+		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
-			return fmt.Errorf("box: reaping orphan %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

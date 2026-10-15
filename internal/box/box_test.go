@@ -745,8 +745,9 @@ func TestPrepareIsAPassThrough(t *testing.T) {
 }
 
 // A box that failed Verify and could not be removed is still running. The next
-// spawn must not reuse it just because Inspect says Running: it removes it,
-// creates a fresh one and verifies that.
+// spawn must not reuse it just because Inspect says Running: it is verified
+// again, fails again, and is removed; the spawn after that creates a fresh box
+// and verifies that.
 func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 	f := newFake()
 	verifies := 0
@@ -754,7 +755,7 @@ func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Verify: func(context.Context, string) error {
 			verifies++
-			if verifies == 1 {
+			if verifies <= 2 {
 				return verifyErr
 			}
 			return nil
@@ -768,13 +769,18 @@ func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d", f.runs(), f.stops())
 	}
-	_, _, name, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil)
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("the still-running box must be re-verified and refused: %v", err)
+	}
+	if f.runs() != 1 || f.stops() != 2 || verifies != 2 {
+		t.Fatalf("no reuse: runs=%d stops=%d verifies=%d", f.runs(), f.stops(), verifies)
+	}
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil)
 	if err != nil {
 		t.Fatalf("a fresh, verified box must serve the retry: %v", err)
 	}
-	if f.stops() != 2 || f.runs() != 2 || verifies != 2 {
-		t.Fatalf("the failed box must be removed and re-created and re-verified: stops=%d runs=%d verifies=%d",
-			f.stops(), f.runs(), verifies)
+	if f.runs() != 2 || verifies != 3 {
+		t.Fatalf("a fresh box must be created and verified: runs=%d verifies=%d", f.runs(), verifies)
 	}
 	// Normal accounting afterwards: exactly one live session, and the box is
 	// kept (not idle-stopped) until it is released.
@@ -782,7 +788,7 @@ func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 	active := m.active[name]
 	m.mu.Unlock()
 	if active != 1 {
-		t.Fatalf("active sessions = %d, want 1 (the failed Wrap must not leak a count)", active)
+		t.Fatalf("active sessions = %d, want 1 (the failed Wraps must not leak a count)", active)
 	}
 	m.ReleaseBox(name)
 	m.mu.Lock()
@@ -791,21 +797,22 @@ func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 	if active != 0 {
 		t.Fatalf("active after release = %d, want 0", active)
 	}
-	// Verified once, so a third Wrap reuses it without verifying again.
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil); err != nil || verifies != 2 {
-		t.Fatalf("the mark must be cleared: err=%v verifies=%d", err, verifies)
+	// Verified once, so a further Wrap reuses it without verifying again.
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-4", []string{"claude"}, nil, nil); err != nil || verifies != 3 {
+		t.Fatalf("a verified box is reused unchecked: err=%v verifies=%d", err, verifies)
 	}
 }
 
-// If the retry cannot remove the unverified box either, the spawn is refused
-// and the mark stays, so the box is still never reused.
+// If the box cannot be removed either, the spawn is refused every time, so the
+// box is still never reused; once the daemon recovers the spawn succeeds.
 func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
 	f := newFake()
 	verifies := 0
+	failing := true
 	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Verify: func(context.Context, string) error {
 			verifies++
-			if verifies == 1 {
+			if failing {
 				return fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
 			}
 			return nil
@@ -815,11 +822,11 @@ func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
 	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err == nil {
 		t.Fatal("first Wrap must fail Verify")
 	}
-	_, _, name, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil)
+	_, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil)
 	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "docker rm -f") {
-		t.Fatalf("want ErrBoxUnavailable with the remedy, got %v", err)
+		t.Fatalf("want ErrBoxUnavailable naming the removal failure, got %v", err)
 	}
-	if verifies != 1 || f.runs() != 1 {
+	if verifies != 2 || f.runs() != 1 {
 		t.Fatalf("no reuse and no new box while the old one cannot be removed: verifies=%d runs=%d", verifies, f.runs())
 	}
 	m.mu.Lock()
@@ -829,9 +836,120 @@ func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
 		}
 	}
 	m.mu.Unlock()
-	_ = name
-	// Once removal works, the next spawn recovers.
+	// The daemon recovers and the box now passes its check: it may serve.
+	failing = false
 	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil); err != nil {
 		t.Fatalf("recovery after the daemon returns: %v", err)
+	}
+}
+
+// A running box this process never verified (it survived a daemon restart) is
+// verified before it is reused.
+func TestRunningBoxFromBeforeARestartIsVerifiedBeforeReuse(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	var verr error
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { verifies++; return verr }})
+	dir := t.TempDir()
+	name, err := m.boxName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.running[name] = true
+	m.AdoptBox(name)
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if verifies != 1 || f.runs() != 0 {
+		t.Fatalf("an unverified running box is verified once and reused: verifies=%d runs=%d", verifies, f.runs())
+	}
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil); err != nil || verifies != 1 {
+		t.Fatalf("once verified it is not checked again: err=%v verifies=%d", err, verifies)
+	}
+
+	// A different box that fails its check is removed and the spawn refused.
+	dir2 := t.TempDir()
+	name2, _ := m.boxName(dir2)
+	f.running[name2] = true
+	verr = fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
+	stopsBefore := f.stops()
+	if _, _, _, err := m.Wrap(context.Background(), dir2, "s-3", []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	if f.stops() != stopsBefore+1 || f.running[name2] || f.runs() != 0 {
+		t.Fatalf("the failing box must be removed, not reused: stops=%d running=%v runs=%d", f.stops(), f.running[name2], f.runs())
+	}
+}
+
+// Removal drops the verified mark, so a re-created container is checked again.
+func TestIdleStopForgetsVerification(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { verifies++; return nil }})
+	dir := t.TempDir()
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(name)
+	m.stopIfIdle(name)
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if verifies != 2 || f.runs() != 2 {
+		t.Fatalf("a re-created box must be verified again: verifies=%d runs=%d", verifies, f.runs())
+	}
+}
+
+// Reconcile can be called by Prepare while another spawn's ensure is verifying a
+// box it just created, before that session is counted. It must wait for ensure
+// instead of removing the box out from under it.
+func TestReconcileWaitsForAnEnsureInFlight(t *testing.T) {
+	f := newFake()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { close(entered); <-release; return nil }})
+	dir := t.TempDir()
+	name, _ := m.boxName(dir)
+	f.existing = []string{name}
+
+	wrapDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+		wrapDone <- err
+	}()
+	<-entered
+	recDone := make(chan error, 1)
+	go func() { recDone <- m.Reconcile(context.Background()) }()
+	select {
+	case <-recDone:
+		t.Fatal("Reconcile ran while ensure held opMu")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-wrapDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recDone; err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 0 {
+		t.Fatalf("the box ensure just created must survive Reconcile, stops=%d", f.stops())
+	}
+}
+
+func TestReconcileTriesEveryOrphanPastAFailedRemoval(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	f.existing = []string{"ab-box-a", "ab-box-b", "ab-box-c"}
+	f.stopFails = 1
+	err := m.Reconcile(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "ab-box-a") {
+		t.Fatalf("the failed removal must be reported, got %v", err)
+	}
+	if f.stops() != 3 {
+		t.Fatalf("every orphan must be tried, stops=%d of 3", f.stops())
 	}
 }
