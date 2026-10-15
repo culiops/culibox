@@ -24,6 +24,7 @@ import (
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/doctor"
@@ -268,37 +269,40 @@ func serve(cfg config.Config, home string) {
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
 	// reaper never stops a container a live session is running inside.
 	boxRuntime := ""
-	boxDocker, _ := box.LookDocker(cfg.DockerBin)
+	var layer *boxLayer
 	var boxes *box.Manager
-	if runtime.GOOS == "darwin" {
-		log.Printf("containment: boxed tier on macOS is not supported yet (M2); every session runs on the host tier")
+	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}); err != nil {
+		// Not fatal: without containment the console still runs, on the host
+		// tier, and says so rather than pretending to be contained.
+		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
 	} else {
-		var err error
-		boxes, err = newBoxes(cfg, dataDir)
-		switch {
-		case err != nil:
-			// Not fatal: without containment the console still runs, on the host
-			// tier, and says so rather than pretending to be contained.
-			log.Printf("containment unavailable (%v); every session will run on the host tier", err)
-		default:
-			mgr.SetBoxes(boxes)
-			boxRuntime = boxes.Runtime()
+		layer, boxes = l, l.boxes
+		mgr.SetBoxes(boxes)
+		boxRuntime = boxes.Runtime()
+		if l.vm != nil {
+			// The VM is not started here (D3): the first boxed spawn starts it.
+			log.Printf("containment ready (macOS box VM in %s, starts on the first boxed spawn): image %s, idle TTL %s",
+				l.vm.Config().ColimaHome(), cfg.BoxImageOrDefault(), cfg.BoxIdleTTL())
+		} else {
 			log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
 				cfg.BoxImageOrDefault(), boxRuntime, cfg.BoxIdleTTL())
 		}
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
-	if boxes != nil && cfg.BundleSource != "off" {
+	if layer != nil && cfg.BundleSource != "off" {
 		src := bundle.ExpandTilde(cfg.BundleSource)
 		if src == "" {
 			src = bundle.DefaultSource()
 		}
+		// Root is under the layer's state root: on macOS the symlink-resolved
+		// data root, the spelling the VM mounts, since the bundle is mounted
+		// into boxes.
 		bm, err := bundle.New(bundle.Options{
 			Source:  src,
-			Root:    filepath.Join(dataDir, "bundle"),
+			Root:    filepath.Join(layer.stateRoot, "bundle"),
 			MCPFile: bundle.DefaultMCPFile(src),
-			Prober:  bundle.ImageProber{Docker: boxDocker, Image: cfg.BoxImageOrDefault()},
+			Prober:  layer.prober(cfg.BoxImageOrDefault()),
 		})
 		if err != nil {
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
@@ -327,18 +331,16 @@ func serve(cfg config.Config, home string) {
 	}
 	// AFTER session reconcile: that pass adopts every surviving box, so what
 	// remains unclaimed here is genuinely orphaned.
-	if boxes != nil {
-		if err := boxes.Reconcile(context.Background()); err != nil {
-			log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
-		}
-		// After reconcile: that pass removes the containers, so what is left on
-		// disk belongs to boxes that are genuinely gone.
-		reclaimBoxState(boxes)
+	if layer != nil {
+		// On darwin with the VM stopped this waits for the first boxed spawn: it
+		// never starts the VM, and an unreachable docker must not read as "no
+		// boxes".
+		layer.bootReconcile(context.Background())
 		go func() {
 			t := time.NewTicker(24 * time.Hour)
 			defer t.Stop()
 			for range t.C {
-				reclaimBoxState(boxes)
+				layer.dailyReclaim(context.Background())
 			}
 		}()
 		// Reconcile covers a daemon restart only. The sweep covers what happens
@@ -443,7 +445,9 @@ func serve(cfg config.Config, home string) {
 			}
 		}
 		if anyBoxed {
-			if reason, bad := web.UnboxableDefaultCwd(defaultCwd, home); bad {
+			// The manager's own rule, so on macOS it includes "under the box
+			// VM's shared directories".
+			if reason, bad := boxes.Unboxable(defaultCwd); bad {
 				log.Printf("WARNING: default_cwd %q cannot host a contained session (%s). "+
 					"Boxed spawns must name a project directory; set default_cwd to one, "+
 					"or set runtime \"host\" on your agents.", defaultCwd, reason)
@@ -470,6 +474,10 @@ func serve(cfg config.Config, home string) {
 		go analyticsSvc.Start(analyticsCtx)
 	}
 
+	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
+	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
+	// UI's spawn request has no deadline either. Adding a write timeout here
+	// would turn that cold start into a failed spawn.
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
 	// Release attach clients on the way out (stop is registered before
@@ -593,22 +601,4 @@ func reclaimBoxState(boxes *box.Manager) {
 			"left unwritable (chmod it back), otherwise an old root-owned stub that has "+
 			"to be removed as its owner. New boxes create neither.", err)
 	}
-}
-
-// newBoxes builds the containment layer, or reports why it is unavailable. A
-// missing docker or a missing image must degrade to the host tier loudly, never
-// silently pretend to contain.
-func newBoxes(cfg config.Config, dataDir string) (*box.Manager, error) {
-	bin, err := box.LookDocker(cfg.DockerBin)
-	if err != nil {
-		return nil, err
-	}
-	return box.New(box.Options{
-		DockerBin: bin,
-		Image:     cfg.BoxImageOrDefault(),
-		Instance:  cfg.BoxInstance(),
-		IdleTTL:   cfg.BoxIdleTTL(),
-		StateRoot: dataDir,
-		Client:    box.CLIClient{Bin: bin},
-	})
 }

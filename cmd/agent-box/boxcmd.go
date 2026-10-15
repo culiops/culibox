@@ -28,7 +28,8 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	case "setup":
 		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), a.Rebuild, w)
 	case "status":
-		return boxListStatus(ctx, box.CLIClient{Bin: bin}, w)
+		rc := boxImageStatus(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), w)
+		return max(rc, boxListStatus(ctx, box.CLIClient{Bin: bin}, w))
 	default: // stop
 		fmt.Fprintln(w, "agent-box box stop: only on macOS, where boxes run in agent-box's own VM")
 		return 1
@@ -57,6 +58,32 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 		return 1
 	}
 	fmt.Fprintf(w, "PASS image: built %s (linux/%s, dockerfile %s)\n", image, arch, boximage.Hash())
+	return 0
+}
+
+// boxImageStatus prints the image's state against the daemon: present, built
+// for the daemon's architecture, and from this binary's Dockerfile. A missing or
+// foreign image fails (no box can start); a stale one only warns.
+func boxImageStatus(ctx context.Context, d boximage.Docker, image string, w io.Writer) int {
+	arch, err := d.ServerArch(ctx)
+	if err != nil {
+		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		return 1
+	}
+	st, err := d.Inspect(ctx, image)
+	if err != nil {
+		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		return 1
+	}
+	switch fatal, msg := st.Check(arch); {
+	case fatal:
+		fmt.Fprintf(w, "FAIL image: %s: %s\n", image, msg)
+		return 1
+	case msg != "":
+		fmt.Fprintf(w, "WARN image: %s (linux/%s): %s\n", image, st.Arch, msg)
+	default:
+		fmt.Fprintf(w, "image: %s is current (linux/%s)\n", image, st.Arch)
+	}
 	return 0
 }
 

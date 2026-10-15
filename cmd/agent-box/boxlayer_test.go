@@ -1,0 +1,507 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	boximage "github.com/culiops/agent-box/docker/agent-box"
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxvm"
+	"github.com/culiops/agent-box/internal/config"
+)
+
+// fakeColima stands in for the colima binary. Its zero value answers every
+// call as "not running"; nothing is started unless a test asks for it.
+type fakeColima struct {
+	mu      sync.Mutex
+	running bool
+	socket  string // docker_socket reported while running
+	mount   string // mount_type reported while running; "" = virtiofs
+	calls   []string
+}
+
+func (f *fakeColima) Run(_ context.Context, _ []string, _ string, args ...string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, strings.Join(args, " "))
+	switch args[0] {
+	case "status":
+		if !f.running {
+			return "colima [profile=agent-box] is not running", errors.New("exit status 1")
+		}
+		mount := f.mount
+		if mount == "" {
+			mount = "virtiofs"
+		}
+		return fmt.Sprintf(`{"driver":"macOS Virtualization.Framework","arch":"aarch64","mount_type":%q,"docker_socket":"unix://%s"}`,
+			mount, f.socket), nil
+	case "start":
+		f.running = true
+	case "stop":
+		f.running = false
+	}
+	return "", nil
+}
+
+func (f *fakeColima) called(sub string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, sub+" ") || c == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// fakeDocker is a /bin/sh docker CLI. It logs every argv, strips the global
+// flags, and answers each subcommand from a file the test writes.
+type fakeDocker struct {
+	bin, dir string
+}
+
+func newFakeDocker(t *testing.T) *fakeDocker {
+	t.Helper()
+	dir := t.TempDir()
+	d := &fakeDocker{bin: filepath.Join(dir, "docker"), dir: dir}
+	script := `#!/bin/sh
+d=` + dir + `
+echo "$*" >> "$d/log"
+while [ "$1" = --host ] || [ "$1" = --config ]; do shift 2; done
+case "$1" in
+version) cat "$d/arch" 2>/dev/null || echo arm64 ;;
+image) cat "$d/image" 2>/dev/null || { echo "Error: No such image" >&2; exit 1; } ;;
+ps) cat "$d/ps" 2>/dev/null ;;
+context) [ -f "$d/context" ] || { echo "cannot connect" >&2; exit 1; }; cat "$d/context" ;;
+run|exec) [ -f "$d/sleep" ] && exec sleep 5; cat "$d/probe" 2>/dev/null ;;
+info) echo '{"runc":{}}' ;;
+rm) ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(d.bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func (d *fakeDocker) set(t *testing.T, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(d.dir, name), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (d *fakeDocker) log() string {
+	b, _ := os.ReadFile(filepath.Join(d.dir, "log"))
+	return string(b)
+}
+
+const blockedProbe = "DNS ok\nBLOCKED host.lima.internal ECONNREFUSED\nBLOCKED 192.168.5.2 ETIMEDOUT\n"
+
+// shortRoot is a data root short enough for macOS's 104-byte socket paths
+// (t.TempDir embeds the test name and overflows them).
+func shortRoot(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "bl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	return d
+}
+
+// darwinLayer builds a darwin layer over the fakes, with the VM set up (its
+// stamp written) unless notSetUp.
+func darwinLayer(t *testing.T, notSetUp bool) (*boxLayer, *fakeColima, *fakeDocker) {
+	t.Helper()
+	root := shortRoot(t)
+	d := newFakeDocker(t)
+	fc := &fakeColima{}
+	l, err := newBoxLayer(config.Config{DockerBin: d.bin, ColimaBin: "/bin/sh"}, root, root, "darwin", fc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.socket = l.vm.Config().DockerSocket()
+	if !notSetUp {
+		vc := l.vm.Config()
+		if err := os.MkdirAll(vc.ColimaHome(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(vc.StampPath(), []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return l, fc, d
+}
+
+func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
+	root := t.TempDir()
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, t.TempDir(), "linux", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.vm != nil || len(l.dockerArgs) != 0 {
+		t.Fatalf("linux must be unchanged: vm=%v args=%v", l.vm, l.dockerArgs)
+	}
+	o := l.options(config.Config{DockerBin: "/bin/sh"})
+	if o.Prepare != nil || o.Verify != nil || o.Reachable != nil || o.Shared != nil || len(o.DockerArgs) != 0 {
+		t.Fatalf("linux options must carry no VM hooks: %+v", o)
+	}
+	if o.StateRoot != root || o.Image != config.DefaultBoxImage || o.Instance != "default" {
+		t.Fatalf("linux options = %+v", o)
+	}
+	if l.vmStopped(context.Background()) {
+		t.Fatal("linux has no VM to be stopped")
+	}
+}
+
+func TestDarwinLayerPinsTheVM(t *testing.T) {
+	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
+	root := t.TempDir()
+	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.vm == nil || !strings.Contains(strings.Join(l.dockerArgs, " "), "--host unix://"+root+"/vm/agent-box/docker.sock") {
+		t.Fatalf("darwin layer must pin the VM socket: %+v", l)
+	}
+}
+
+func TestDarwinLayerWithoutColimaIsUnavailable(t *testing.T) {
+	_, err := newBoxLayer(config.Config{DockerBin: "/bin/sh", ColimaBin: "colima-definitely-missing"}, t.TempDir(), t.TempDir(), "darwin", &fakeColima{})
+	if err == nil || !strings.Contains(err.Error(), "brew install colima") {
+		t.Fatalf("missing colima must explain the install: %v", err)
+	}
+}
+
+// One slice of global docker flags reaches every docker caller: a caller that
+// misses it talks to the user's own daemon, outside the VM's loopback block.
+func TestDarwinLayerSharesOneDockerArgsSlice(t *testing.T) {
+	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
+	root := t.TempDir()
+	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := l.vm.Config().DockerArgs()
+	o := l.options(cfg)
+	cli, ok := o.Client.(box.CLIClient)
+	if !ok {
+		t.Fatalf("client is %T", o.Client)
+	}
+	for what, got := range map[string][]string{
+		"layer":              l.dockerArgs,
+		"CLIClient.Args":     cli.Args,
+		"Options.DockerArgs": o.DockerArgs,
+		"ImageProber.Args":   l.prober("img").Args,
+		"boximage.Args":      l.img.Args,
+		"layer cli.Args":     l.cli.Args,
+	} {
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s = %q, want %q", what, got, want)
+		}
+	}
+	if p := l.prober("img"); p.Docker != l.dockerBin || p.Image != "img" {
+		t.Errorf("prober = %+v", p)
+	}
+	if o.Prepare == nil || o.Verify == nil || o.Reachable == nil {
+		t.Errorf("darwin options must carry the VM hooks")
+	}
+}
+
+// Every darwin path comes from the VM's symlink-resolved root and home: the VM
+// mounts the resolved paths, so an unresolved one is invisible inside it.
+func TestDarwinLayerUsesResolvedPaths(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
+	l, err := newBoxLayer(cfg, link, link, "darwin", &fakeColima{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := l.options(cfg)
+	if o.StateRoot != real {
+		t.Errorf("StateRoot = %q, want the resolved %q", o.StateRoot, real)
+	}
+	if !reflect.DeepEqual(o.Shared, []string{real}) {
+		t.Errorf("Shared = %q, want [%q]", o.Shared, real)
+	}
+	if got := strings.Join(l.dockerArgs, " "); !strings.Contains(got, "unix://"+real+"/vm/") || strings.Contains(got, link) {
+		t.Errorf("docker args = %q, want the resolved root", got)
+	}
+}
+
+func TestVerifyPassesABlockedBoxThroughThePinnedDaemon(t *testing.T) {
+	l, _, d := darwinLayer(t, false)
+	d.set(t, "probe", blockedProbe)
+	if err := l.verify(context.Background(), "ab-box-1"); err != nil {
+		t.Fatalf("a blocked box must pass: %v", err)
+	}
+	want := strings.Join(l.dockerArgs, " ") + " exec ab-box-1 node -e "
+	if !strings.Contains(d.log(), want) {
+		t.Fatalf("probe must exec in the box through the VM's daemon; log:\n%s", d.log())
+	}
+}
+
+func TestVerifyRefusesAReachingBox(t *testing.T) {
+	l, _, d := darwinLayer(t, false)
+	d.set(t, "probe", "DNS ok\nREACHED host.lima.internal\n")
+	err := l.verify(context.Background(), "ab-box-1")
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "containment check failed") {
+		t.Fatalf("a reaching box must be refused as unavailable: %v", err)
+	}
+}
+
+// The spawn holds box operations while Verify runs, so a hung exec must not
+// hold them forever.
+func TestVerifyHasADeadline(t *testing.T) {
+	l, _, d := darwinLayer(t, false)
+	d.set(t, "sleep", "")
+	old := verifyTimeout
+	verifyTimeout = 200 * time.Millisecond
+	defer func() { verifyTimeout = old }()
+	start := time.Now()
+	err := l.verify(context.Background(), "ab-box-1")
+	if err == nil || !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("a hung probe must fail closed: %v", err)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatalf("verify ignored its deadline: %s", time.Since(start))
+	}
+}
+
+func TestPrepareNotSetUpIsUnavailable(t *testing.T) {
+	l, fc, _ := darwinLayer(t, true)
+	err := l.prepare(context.Background())
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "box setup") {
+		t.Fatalf("not set up must point at box setup: %v", err)
+	}
+	if fc.called("start") {
+		t.Fatal("a VM that is not set up must not be started")
+	}
+}
+
+// The first boxed spawn starts the VM; every box in a freshly started VM is a
+// leftover from before it stopped, so reconcile runs once, right then.
+func TestPrepareStartsTheVMAndReconcilesOnce(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	d.set(t, "image", "arm64|"+boximage.Hash()+"\n")
+	d.set(t, "ps", "ab-box-old\n")
+	if err := l.prepare(context.Background()); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if !fc.called("start") {
+		t.Fatal("prepare must start a stopped VM")
+	}
+	if n := strings.Count(d.log(), "rm -f ab-box-old"); n != 1 {
+		t.Fatalf("leftover box removed %d times after the start, want 1; log:\n%s", n, d.log())
+	}
+	if err := l.prepare(context.Background()); err != nil {
+		t.Fatalf("second prepare: %v", err)
+	}
+	if n := strings.Count(d.log(), "rm -f ab-box-old"); n != 1 {
+		t.Fatalf("a VM already running must not be reconciled again (%d removals)", n)
+	}
+}
+
+func TestPrepareRefusesAMissingOrForeignImage(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	err := l.prepare(context.Background())
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "not built") {
+		t.Fatalf("a missing image must fail the spawn: %v", err)
+	}
+	d.set(t, "image", "amd64|"+boximage.Hash()+"\n")
+	err = l.prepare(context.Background())
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "emulated") {
+		t.Fatalf("a wrong-arch image must fail the spawn: %v", err)
+	}
+	d.set(t, "image", "arm64|0ld\n")
+	if err := l.prepare(context.Background()); err != nil {
+		t.Fatalf("a stale image still runs: %v", err)
+	}
+}
+
+// Review focus 3: with the VM stopped, the boot pass and the daily reclaim
+// neither start the VM nor touch docker, and the sweep skips.
+func TestStoppedVMIsLeftAloneByBackgroundPasses(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	ctx := context.Background()
+	if !l.vmStopped(ctx) {
+		t.Fatal("a VM that is not running is stopped")
+	}
+	l.bootReconcile(ctx)
+	l.dailyReclaim(ctx)
+	rep, err := l.boxes.Sweep(ctx, nil)
+	if err != nil || !rep.Skipped {
+		t.Fatalf("sweep with the VM stopped = %+v, %v; want skipped", rep, err)
+	}
+	if fc.called("start") {
+		t.Fatal("a background pass started the VM")
+	}
+	if strings.Contains(d.log(), " ps ") || strings.Contains(d.log(), " rm ") {
+		t.Fatalf("a background pass reached docker with the VM stopped:\n%s", d.log())
+	}
+}
+
+func TestRunningVMIsReconciledAtBoot(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	d.set(t, "ps", "ab-box-old\n")
+	l.bootReconcile(context.Background())
+	if !strings.Contains(d.log(), "rm -f ab-box-old") {
+		t.Fatalf("boot reconcile must reap orphans in a running VM:\n%s", d.log())
+	}
+	if fc.called("start") {
+		t.Fatal("boot reconcile must never start the VM")
+	}
+}
+
+func runVM(t *testing.T, l *boxLayer, fc *fakeColima, a cliArgs) (int, string) {
+	t.Helper()
+	var out bytes.Buffer
+	rc := runBoxVM(context.Background(), a, config.Config{}, l, &out)
+	return rc, out.String()
+}
+
+func TestBoxStopRefusesRunningBoxesUnlessForced(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t2026-10-15 10:00:00 +0000 UTC\nab-box-2\texited\t/Users/a/q\t\n")
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "stop"})
+	if rc != 1 || !strings.Contains(out, "refusing: 1 box(es) running") || !strings.Contains(out, "ab-box-1") {
+		t.Fatalf("stop with a running box = %d:\n%s", rc, out)
+	}
+	if fc.called("stop") {
+		t.Fatal("a refused stop must not stop the VM")
+	}
+	rc, out = runVM(t, l, fc, cliArgs{Sub: "stop", Force: true})
+	if rc != 0 || !fc.called("stop") {
+		t.Fatalf("forced stop = %d:\n%s", rc, out)
+	}
+}
+
+func TestBoxStopFailsClosedWhenBoxesCannotBeListed(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	d.set(t, "ps", "") // replaced below by a failing docker
+	if err := os.WriteFile(d.bin, []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "stop"})
+	if rc != 1 || fc.called("stop") {
+		t.Fatalf("an unlistable VM must not be stopped: %d\n%s", rc, out)
+	}
+}
+
+func TestBoxStatusReportsVMImageAndBoxes(t *testing.T) {
+	l, fc, d := darwinLayer(t, true)
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "status"})
+	if rc != 0 || !strings.Contains(out, "not set up") {
+		t.Fatalf("status not set up = %d:\n%s", rc, out)
+	}
+	l, fc, d = darwinLayer(t, false)
+	rc, out = runVM(t, l, fc, cliArgs{Sub: "status"})
+	if rc != 0 || !strings.Contains(out, "stopped (starts on the first boxed spawn)") {
+		t.Fatalf("status stopped = %d:\n%s", rc, out)
+	}
+	fc.running = true
+	d.set(t, "image", "arm64|0ld\n")
+	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t\n")
+	rc, out = runVM(t, l, fc, cliArgs{Sub: "status"})
+	for _, want := range []string{"box VM: running", "virtiofs", "WARN image", "older than this agent-box", "ab-box-1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("status running lacks %q:\n%s", want, out)
+		}
+	}
+	if rc != 0 {
+		t.Errorf("a stale image is a warning, not a failure: rc %d", rc)
+	}
+	if fc.called("start") {
+		t.Fatal("status must never start the VM")
+	}
+}
+
+func readySetup(t *testing.T, ctxName string) (*boxLayer, *fakeColima, *fakeDocker) {
+	l, fc, d := darwinLayer(t, true)
+	d.set(t, "image", "arm64|"+boximage.Hash()+"\n")
+	d.set(t, "probe", blockedProbe)
+	if ctxName != "" {
+		d.set(t, "context", ctxName+"\n")
+	}
+	return l, fc, d
+}
+
+func TestBoxSetupProvisionsProbesAndChecksContext(t *testing.T) {
+	l, fc, d := readySetup(t, "default")
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	if rc != 0 {
+		t.Fatalf("setup = %d:\n%s", rc, out)
+	}
+	for _, want := range []string{"PASS box VM", "PASS image", "PASS containment", "PASS docker context", "boxed claude token"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("setup output lacks %q:\n%s", want, out)
+		}
+	}
+	if !l.vm.SetUp() {
+		t.Error("setup must stamp the VM")
+	}
+	// The containment probe is a throwaway container on the VM's daemon.
+	if !strings.Contains(d.log(), strings.Join(l.dockerArgs, " ")+" run --rm --cap-drop=ALL") {
+		t.Errorf("probe must run through the pinned daemon:\n%s", d.log())
+	}
+	for _, c := range fc.calls {
+		if strings.HasPrefix(c, "start") && !strings.Contains(c, "--activate=false") {
+			t.Errorf("colima start without --activate=false: %q", c)
+		}
+	}
+}
+
+func TestBoxSetupRefusesASwitchedDockerContext(t *testing.T) {
+	l, fc, _ := readySetup(t, "colima-agent-box")
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	if rc != 1 || !strings.Contains(out, "FAIL docker context") {
+		t.Fatalf("a switched context must fail setup = %d:\n%s", rc, out)
+	}
+}
+
+func TestBoxSetupWarnsWhenTheContextCannotBeChecked(t *testing.T) {
+	l, fc, _ := readySetup(t, "") // docker context show fails
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	if rc != 0 || !strings.Contains(out, "WARN docker context") {
+		t.Fatalf("an unchecked context warns and proceeds = %d:\n%s", rc, out)
+	}
+}
+
+func TestBoxSetupFailsAReachingProbe(t *testing.T) {
+	l, fc, d := readySetup(t, "default")
+	d.set(t, "probe", "DNS ok\nREACHED host.lima.internal\n")
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	if rc != 1 || !strings.Contains(out, "FAIL containment") {
+		t.Fatalf("a reaching probe must fail setup = %d:\n%s", rc, out)
+	}
+}
+
+func TestBoxSetupFailsAForeignSocket(t *testing.T) {
+	l, fc, _ := readySetup(t, "default")
+	fc.socket = "/Users/a/.colima/default/docker.sock"
+	rc, out := runVM(t, l, fc, cliArgs{Sub: "setup"})
+	if rc != 1 || !strings.Contains(out, "docker socket is") {
+		t.Fatalf("a VM on another socket must fail setup = %d:\n%s", rc, out)
+	}
+}
+
+var _ boxvm.Runner = (*fakeColima)(nil)
