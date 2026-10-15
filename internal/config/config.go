@@ -183,6 +183,15 @@ func (c Config) RuntimeFor(a AgentConfig) string {
 	return RuntimeBox
 }
 
+// BoxInstance is the label that keeps this instance's boxes apart from another
+// instance's (DEV vs PROD on one docker daemon): the env label, or "default".
+func (c Config) BoxInstance() string {
+	if c.EnvLabel != "" {
+		return c.EnvLabel
+	}
+	return "default"
+}
+
 // DefaultBoxImage is the box image when neither the agent nor the config names one.
 const DefaultBoxImage = "culiops/agent-box:base"
 

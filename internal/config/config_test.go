@@ -360,3 +360,12 @@ func TestValidate_BoxImage(t *testing.T) {
 		t.Fatalf("a profile with box.image \"-v\" must be refused: %v", err)
 	}
 }
+
+func TestBoxInstanceDefaultsToDefault(t *testing.T) {
+	if got := (Config{}).BoxInstance(); got != "default" {
+		t.Fatalf("got %q", got)
+	}
+	if got := (Config{EnvLabel: "PROD"}).BoxInstance(); got != "PROD" {
+		t.Fatalf("got %q", got)
+	}
+}

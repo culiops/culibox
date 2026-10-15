@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // Profile is the colima profile name. Short on purpose: lima puts sockets under
@@ -31,6 +32,14 @@ type Config struct {
 	DockerBin string
 	CPUs      int
 	MemoryGiB int
+}
+
+// ConfigFor is the VM config for an instance: paths from the data root and
+// home, size from the instance config. The one place that maps config.json onto
+// a Config, so doctor and box setup cannot disagree about the VM they mean.
+func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string) Config {
+	cpus, mem := cfg.BoxVMSize()
+	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem}
 }
 
 func (c Config) ColimaHome() string      { return filepath.Join(c.Root, "vm") }

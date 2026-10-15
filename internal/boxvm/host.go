@@ -3,19 +3,26 @@ package boxvm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 )
 
+// ErrContextUnchecked wraps the error CheckUserDockerContext returns when the
+// user's docker CLI could not be asked, so the answer is "unknown", not "fine".
+var ErrContextUnchecked = errors.New("could not check your docker CLI's current context")
+
 // CheckUserDockerContext fails if the USER's docker CLI (their env, their
 // ~/.docker) points at agent-box's VM. colima's defaults would have switched
-// it; StartArgs and autoActivate:false prevent that, and this proves it.
+// it; StartArgs and autoActivate:false prevent that, and this proves it. When
+// the CLI cannot be run the error wraps ErrContextUnchecked: callers that gate
+// on it (setup) may proceed, but a report must not call that a pass.
 func CheckUserDockerContext(ctx context.Context, dockerBin string) error {
 	out, err := exec.CommandContext(ctx, dockerBin, "context", "show").Output()
 	if err != nil {
-		return nil // no context support or no config: nothing was switched
+		return fmt.Errorf("%w (docker context show: %v)", ErrContextUnchecked, err)
 	}
 	if strings.TrimSpace(string(out)) == "colima-"+Profile {
 		return errors.New("your docker CLI's current context is agent-box's box VM; run `docker context use default` (or your usual context)")

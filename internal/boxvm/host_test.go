@@ -2,6 +2,7 @@ package boxvm
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,17 @@ func TestCheckUserDockerContextFlagsOurProfile(t *testing.T) {
 	}
 	if err := CheckUserDockerContext(context.Background(), bin); err != nil {
 		t.Fatalf("the user's own colima context is fine: %v", err)
+	}
+}
+
+func TestCheckUserDockerContextUnrunnableIsUnchecked(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckUserDockerContext(context.Background(), bin); !errors.Is(err, ErrContextUnchecked) {
+		t.Fatalf("an unrunnable docker CLI is unknown, not fine: %v", err)
 	}
 }
 

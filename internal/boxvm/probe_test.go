@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 var portRe = regexp.MustCompile(`const port=(\d+);`)
@@ -77,5 +81,26 @@ func TestProbeScriptConnectsConcurrently(t *testing.T) {
 	})
 	if !strings.Contains(script, "Promise.all") {
 		t.Fatal("the in-box connects must run concurrently")
+	}
+}
+
+func TestThrowawayProbeUsesTheGlobalArgsAndTheLockdownFlags(t *testing.T) {
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "argv")
+	bin := filepath.Join(dir, "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+seen+"\necho DNS ok\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cli := box.CLIClient{Bin: bin, Args: []string{"--host", "unix:///vm/docker.sock", "--config", "/data/docker"}}
+	out, err := ThrowawayProbe(cli, "img:tag")(context.Background(), "console.log(1)")
+	if err != nil || out != "DNS ok" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+	b, _ := os.ReadFile(seen)
+	got := strings.Split(strings.TrimSpace(string(b)), "\n")
+	want := []string{"--host", "unix:///vm/docker.sock", "--config", "/data/docker", "run", "--rm", "--cap-drop=ALL",
+		"--security-opt", "no-new-privileges", "--read-only", "--entrypoint", "node", "img:tag", "-e", "console.log(1)"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("argv = %q\nwant   %q", got, want)
 	}
 }

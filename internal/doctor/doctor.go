@@ -26,7 +26,6 @@ import (
 
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/auth"
-	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/procinfo"
 	"github.com/culiops/agent-box/internal/session"
@@ -157,7 +156,7 @@ func Checks(in Input) []Result {
 	sh, src := config.DetectShellSource()
 	out = append(out, Result{Pass, "shell", fmt.Sprintf("%s (from %s)", sh, src)})
 	out = append(out, checkAgents(c)...)
-	out = append(out, checkBoxTier(c))
+	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c))...)
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
 }
@@ -400,16 +399,6 @@ func checkAgents(c config.Config) []Result {
 		out = append(out, Result{Pass, "agent " + a.Name, p + " " + strings.TrimSpace(firstLine(string(v)))})
 	}
 	return out
-}
-
-func checkBoxTier(c config.Config) Result {
-	if runtime.GOOS == "darwin" {
-		return Result{Pass, "boxed tier", "disabled on macOS until M2; sessions run on the host tier (NOT contained)"}
-	}
-	if _, err := box.LookDocker(c.DockerBin); err != nil {
-		return Result{Warn, "boxed tier", "docker not found: host tier only (" + err.Error() + ")"}
-	}
-	return Result{Pass, "boxed tier", "docker found"}
 }
 
 // startRe bounds what a registry procStart may look like before it is printed:

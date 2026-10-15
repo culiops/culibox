@@ -603,14 +603,10 @@ func newBoxes(cfg config.Config, dataDir string) (*box.Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	instance := cfg.EnvLabel
-	if instance == "" {
-		instance = "default"
-	}
 	return box.New(box.Options{
 		DockerBin: bin,
 		Image:     cfg.BoxImageOrDefault(),
-		Instance:  instance,
+		Instance:  cfg.BoxInstance(),
 		IdleTTL:   cfg.BoxIdleTTL(),
 		StateRoot: dataDir,
 		Client:    box.CLIClient{Bin: bin},

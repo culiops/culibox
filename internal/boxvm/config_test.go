@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/config"
 )
 
 func testCfg() Config {
@@ -180,5 +182,16 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 		if c.Validate() == nil {
 			t.Fatalf("%s must be refused", name)
 		}
+	}
+}
+
+func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
+	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d")
+	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8}
+	if got != want {
+		t.Fatalf("got %+v want %+v", got, want)
+	}
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 {
+		t.Fatalf("defaults: %+v", d)
 	}
 }

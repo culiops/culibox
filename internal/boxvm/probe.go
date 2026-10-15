@@ -8,10 +8,23 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // ExecFunc runs `node -e <script>` inside a box and returns its stdout.
 type ExecFunc func(ctx context.Context, script string) (string, error)
+
+// ThrowawayProbe is the ExecFunc doctor and `box setup` hand to ProbeLoopback:
+// each script runs in a fresh, removed-on-exit container of image, with the same
+// lockdown flags a real box gets and no mounts. It goes through cli, so the
+// global --host/--config args pin it to agent-box's own VM.
+func ThrowawayProbe(cli box.CLIClient, image string) ExecFunc {
+	return func(ctx context.Context, script string) (string, error) {
+		return cli.Run(ctx, []string{"run", "--rm", "--cap-drop=ALL", "--security-opt", "no-new-privileges",
+			"--read-only", "--entrypoint", "node", image, "-e", script})
+	}
+}
 
 // acceptDrain is how long the probe keeps accepting after the box script has
 // returned. The kernel completes a TCP handshake before Accept runs, so a
