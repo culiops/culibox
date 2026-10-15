@@ -63,7 +63,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $AGENT_BOX_HOME or ~/.local/share/agent-box; then $XDG_CONFIG_HOME or ~/.config/agent-box/config.json unless AGENT_BOX_HOME is set; else built-in defaults; never ./config.json)")
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
-	force := fs.Bool("force", false, "box stop, box setup -recreate: go ahead even with boxes running")
+	force := fs.Bool("force", false, "box stop, box setup -recreate: go ahead even with boxes running or the VM state unknown")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}

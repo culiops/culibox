@@ -514,12 +514,21 @@ func TestBoxSetupRecreateRefusesAnUnreadableVMUnlessForced(t *testing.T) {
 	}
 }
 
-// A stopped VM has no live sessions, so recreating it needs no -force.
-func TestBoxSetupRecreateOfAStoppedVMProceeds(t *testing.T) {
+// A "not running" reading is also what Status returns for any non-zero
+// `colima status` exit while the VM runs, so its boxes cannot be listed:
+// -recreate (which deletes the VM) needs -force on that reading, as stop does.
+func TestBoxSetupRecreateOfANotRunningVMNeedsForce(t *testing.T) {
 	l, fc, _ := readySetup(t, "default")
 	rc, out := runVM(t, l, cliArgs{Sub: "setup", Recreate: true})
+	if rc != 1 || !strings.Contains(out, "refusing") || !strings.Contains(out, "-force") {
+		t.Fatalf("recreate of a not-running VM without -force = %d:\n%s", rc, out)
+	}
+	if fc.called("delete") || fc.called("start") {
+		t.Fatal("a refused recreate must not touch the VM")
+	}
+	rc, out = runVM(t, l, cliArgs{Sub: "setup", Recreate: true, Force: true})
 	if rc != 0 || !fc.called("delete") {
-		t.Fatalf("recreate of a stopped VM = %d:\n%s", rc, out)
+		t.Fatalf("forced recreate of a not-running VM = %d:\n%s", rc, out)
 	}
 }
 

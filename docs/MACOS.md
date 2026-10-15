@@ -85,4 +85,5 @@ context and never edits `~/.ssh/config`.
   tier: the workspace crosses a VM file share (virtiofs).
 - If doctor warns about the VM's mount type, `agent-box box setup -recreate`
   deletes and recreates the VM. Like `box stop`, it refuses while any box is
-  running; add `-force` to go ahead and end those sessions.
+  running, and also when the VM is not running (its boxes cannot be checked
+  then); add `-force` to go ahead and end any sessions in it.

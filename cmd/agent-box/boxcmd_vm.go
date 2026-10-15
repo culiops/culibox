@@ -133,9 +133,18 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 		fmt.Fprintf(w, "FAIL macOS %d: the box VM needs macOS 13+ (vz + virtiofs)\n", major)
 		return 1
 	}
-	// -recreate deletes the VM, which ends every session in it.
+	// -recreate deletes the VM, which ends every session in it. A "not running"
+	// reading is not enough to go ahead: Status returns it for any non-zero
+	// `colima status` exit, even while the VM runs, and then no box can be
+	// listed. So, as with stop, only -force deletes on that reading.
 	if a.Recreate && !a.Force {
-		if _, ok := noLiveBoxes(ctx, l, w); !ok {
+		running, ok := noLiveBoxes(ctx, l, w)
+		if !ok {
+			return 1
+		}
+		if !running {
+			fmt.Fprintln(w, "refusing: the box VM reads as not running, so running boxes cannot be ruled out, "+
+				"and -recreate deletes it. Use -recreate -force.")
 			return 1
 		}
 	}
