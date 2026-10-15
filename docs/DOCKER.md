@@ -32,15 +32,18 @@ with pidfiles under `<data_dir>/sessions/pids`. If `data_dir` is inside the
 container's ephemeral layer, a container replacement wipes the sockets and the
 surviving agents become unreachable, and persistence is defeated.
 
-Mount `data_dir` on a named volume (or host bind mount):
+Point the data root at a named volume (or host bind mount). Everything agent-box
+writes lives there, its `config.json` included, so nothing lands on the container's
+ephemeral filesystem:
 
 ```yaml
 services:
   agent-box:
     image: agent-box
+    environment:
+      AGENT_BOX_HOME: /data   # config.json goes in /data; leave data_dir out of it
     volumes:
       - agent-data:/data
-    # config.json → { "data_dir": "/data", ... }
 volumes:
   agent-data:
 ```

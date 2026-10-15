@@ -18,6 +18,9 @@ var commit string
 const usage = `usage:
   agent-box [serve] [-config <path>]   run the web control-plane
   agent-box doctor  [-config <path>]   check this machine; prints no secrets
+
+Everything agent-box writes, its config.json included, lives in one data root:
+$AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 
 type cliArgs struct {
@@ -41,7 +44,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	path := fs.String("config", "", "path to config file (default: $XDG_CONFIG_HOME or ~/.config /agent-box/config.json, else built-in defaults; never ./config.json)")
+	path := fs.String("config", "", "path to config file (default: <data root>/config.json, the root being $AGENT_BOX_HOME or ~/.local/share/agent-box; then $XDG_CONFIG_HOME or ~/.config/agent-box/config.json unless AGENT_BOX_HOME is set; else built-in defaults; never ./config.json)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -227,5 +229,41 @@ func TestServeAfterShutdownIsCleanExit(t *testing.T) {
 	}
 	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
 		t.Fatalf("Serve after Shutdown = %v, want ErrServerClosed", err)
+	}
+}
+
+// profiles.json follows the data dir, so moving data_dir moves the profiles too.
+func TestProfilesPathFor(t *testing.T) {
+	if got := profilesPathFor(config.Config{}, "/srv/ab"); got != "/srv/ab/profiles.json" {
+		t.Errorf("default: got %q", got)
+	}
+	if got := profilesPathFor(config.Config{ProfilesPath: "/x/p.json"}, "/srv/ab"); got != "/x/p.json" {
+		t.Errorf("explicit profiles_path: got %q", got)
+	}
+}
+
+func TestWarnLeftBehindProfiles(t *testing.T) {
+	home := t.TempDir()
+	oldRoot := filepath.Join(home, ".local", "share", "agent-box")
+	if err := os.MkdirAll(oldRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldRoot, "profiles.json"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	moved := filepath.Join(t.TempDir(), "profiles.json")
+	warnLeftBehindProfiles(config.Config{}, home, moved)
+	if !strings.Contains(buf.String(), "profiles used to live there") {
+		t.Fatalf("no warning for profiles left in the old root: %q", buf.String())
+	}
+	buf.Reset()
+	warnLeftBehindProfiles(config.Config{}, home, filepath.Join(oldRoot, "profiles.json"))
+	warnLeftBehindProfiles(config.Config{ProfilesPath: moved}, home, moved)
+	if buf.Len() != 0 {
+		t.Fatalf("warned without cause: %q", buf.String())
 	}
 }

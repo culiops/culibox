@@ -1,0 +1,180 @@
+package main
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// pathEscapes is every place the product code OBTAINS a location outside the
+// data root: the home, temp, config or cache dir from the OS or the environment,
+// or a literal path into /tmp, ~/Library or a ~/.local, ~/.config or ~/.cache
+// component. Each entry is "<file> <kind>" → count, with the reason it may.
+// Anything agent-box writes belongs under the data root (config.Root /
+// data_dir), so a new escape fails this test until someone decides, here, that
+// it is a read of another program's files, a guard, or a kernel limit.
+//
+// Its limit: it sees where those locations come from, not what is built from
+// them. filepath.Join(home, "x") on the home that main.go already resolved is
+// invisible here; review catches that.
+var pathEscapes = map[string]int{
+	// Locating the data root itself, and the ~/.config fallback for the config file.
+	"internal/config/config.go literal .local":   1, // ResolvedDataDir, for a Config not built by Resolve
+	"internal/config/resolve.go literal .local":  1,
+	"internal/config/resolve.go literal .config": 1,
+	// The bundle reads the user's Claude config (a read, never a write): "~" in
+	// bundle_source, the default ~/.claude source, and refusing a source whose
+	// symlinks resolve to the whole home.
+	"internal/bundle/bundle.go os.UserHomeDir": 3,
+	// A spawned agent with no HOME gets the user's: the agent's env, not our storage.
+	"internal/launcher/launcher.go os.UserHomeDir": 1,
+	// Refuses the home dir as a boxed profile's default_cwd (UnboxableDefaultCwd).
+	"internal/web/profiles.go os.UserHomeDir": 1,
+	// Refuses $HOME as a boxed workspace (it would mount the whole home).
+	"internal/box/box.go os.UserHomeDir": 1,
+	// darwin caps a socket path at 103 bytes, so the socket dir cannot live in the
+	// data root there; it is still derived from it (a hash) and holds only sockets.
+	"internal/abduco/socketpath.go literal /tmp": 1,
+	// doctor's throwaway probe dir, removed before it returns.
+	"internal/doctor/doctor.go literal /tmp": 1,
+	// The home dir and XDG_CONFIG_HOME are resolved once, here, and handed to
+	// everything else; the -config help text names the lookup order.
+	"cmd/agent-box/main.go os.UserHomeDir":      1,
+	"cmd/agent-box/main.go env XDG_CONFIG_HOME": 1,
+	"cmd/agent-box/cli.go literal .local":       2, // -config help and the usage text
+	"cmd/agent-box/cli.go literal .config":      1,
+	// /tmp INSIDE the box: its tmpfs mount and the pid file kept on it.
+	"internal/box/argv.go literal /tmp": 2,
+	// The file-search index skips or includes dirs under the home it browses.
+	"internal/web/fssearch.go literal .local":  1,
+	"internal/web/fssearch.go literal .config": 3,
+	"internal/web/fssearch.go literal .cache":  1,
+}
+
+func TestOutOfRootLocationsAreAllowlisted(t *testing.T) {
+	root := filepath.Join("..", "..")
+	got := map[string]int{}
+	for _, dir := range []string{"cmd", "internal"} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return err
+			}
+			rel, _ := filepath.Rel(root, p)
+			rel = filepath.ToSlash(rel)
+			f, err := parser.ParseFile(token.NewFileSet(), p, nil, 0)
+			if err != nil {
+				return err
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				for _, k := range escapeKinds(n) {
+					got[rel+" "+k]++
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var diffs []string
+	for k, n := range got {
+		if pathEscapes[k] != n {
+			diffs = append(diffs, fmt.Sprintf("  %q: found %d, allowed %d", k, n, pathEscapes[k]))
+		}
+	}
+	for k, n := range pathEscapes {
+		if _, ok := got[k]; !ok {
+			diffs = append(diffs, fmt.Sprintf("  %q: found 0, allowed %d (stale entry)", k, n))
+		}
+	}
+	if len(diffs) > 0 {
+		sort.Strings(diffs)
+		t.Fatalf("locations outside the data root changed. Anything agent-box writes must derive from "+
+			"the data root (config.Root / data_dir); a read of another program's files, a guard or a "+
+			"kernel limit goes in pathEscapes with its reason:\n%s", strings.Join(diffs, "\n"))
+	}
+}
+
+// escapeKinds names the ways node n reaches a location outside the data root:
+// the home, temp, config or cache dir obtained from the OS or the environment,
+// a user's HomeDir, a temp file in the default temp dir, or a string literal
+// pointing into /tmp, ~/Library or a ~/.local, ~/.config or ~/.cache component.
+// Dot dirs count only as a whole path component, so SQL like
+// "excluded.cache_read" is not mistaken for ~/.cache.
+func escapeKinds(n ast.Node) []string {
+	switch n := n.(type) {
+	case *ast.SelectorExpr: // a call or a func value (serveHome(os.UserHomeDir))
+		if isPkg(n.X, "os") {
+			switch n.Sel.Name {
+			case "UserHomeDir", "TempDir", "UserConfigDir", "UserCacheDir":
+				return []string{"os." + n.Sel.Name}
+			}
+		}
+		if n.Sel.Name == "HomeDir" { // user.Current().HomeDir and friends
+			return []string{"HomeDir"}
+		}
+	case *ast.CallExpr:
+		sel, ok := n.Fun.(*ast.SelectorExpr)
+		if !ok || !isPkg(sel.X, "os") || len(n.Args) == 0 {
+			return nil
+		}
+		arg, _ := literal(n.Args[0])
+		switch sel.Sel.Name {
+		case "MkdirTemp", "CreateTemp":
+			if arg == "" && isStringLit(n.Args[0]) {
+				return []string{"os." + sel.Sel.Name + `("")`}
+			}
+		case "Getenv", "LookupEnv":
+			if arg == "HOME" || arg == "TMPDIR" || strings.HasPrefix(arg, "XDG_") {
+				return []string{"env " + arg}
+			}
+		}
+	case *ast.BasicLit:
+		v, ok := literal(n)
+		if !ok {
+			return nil
+		}
+		var out []string
+		if strings.Contains(v, "/tmp") {
+			out = append(out, "literal /tmp")
+		}
+		parts := strings.Split(v, "/")
+		for _, c := range []string{".local", ".config", ".cache", "Library"} {
+			for _, p := range parts {
+				if p == c {
+					out = append(out, "literal "+c)
+					break
+				}
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func isPkg(x ast.Expr, name string) bool {
+	id, ok := x.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+func isStringLit(x ast.Expr) bool {
+	l, ok := x.(*ast.BasicLit)
+	return ok && l.Kind == token.STRING
+}
+
+func literal(x ast.Node) (string, bool) {
+	l, ok := x.(*ast.BasicLit)
+	if !ok || l.Kind != token.STRING {
+		return "", false
+	}
+	v, err := strconv.Unquote(l.Value)
+	return v, err == nil
+}
