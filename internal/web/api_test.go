@@ -840,3 +840,13 @@ func TestRestartEndpoint(t *testing.T) {
 		t.Fatalf("cross-site: %d want 403", rec.Code)
 	}
 }
+
+// ErrBoxUnavailable carries its remedy (a command, a path) and is shown as-is,
+// like ErrUnboxableWorkspace, instead of the generic message.
+func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", fmt.Errorf("%w: run agent-box box setup", box.ErrBoxUnavailable))
+	if !strings.Contains(rec.Body.String(), "agent-box box setup") {
+		t.Fatalf("the remedy must reach the user: %s", rec.Body.String())
+	}
+}

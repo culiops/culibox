@@ -1,0 +1,136 @@
+// Package boximage builds the box image from the Dockerfile embedded in the
+// binary. The macOS binary is downloaded without the source tree, so the image
+// recipe has to travel inside it.
+package boximage
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	_ "embed"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os/exec"
+	"strings"
+)
+
+//go:embed Dockerfile
+var dockerfile []byte
+
+// LabelHash records which Dockerfile built an image, so doctor can tell an
+// image older than this binary.
+const LabelHash = "io.culiops.agent-box.dockerfile"
+
+// Hash is the first 12 hex digits of the embedded Dockerfile's sha256.
+func Hash() string {
+	sum := sha256.Sum256(dockerfile)
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// Docker is the docker CLI with agent-box's global flags (see box.CLIClient).
+type Docker struct {
+	Bin  string
+	Args []string
+}
+
+func (d Docker) command(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, d.Bin, append(append([]string(nil), d.Args...), args...)...)
+}
+
+// ServerArch is the daemon's architecture in docker platform terms (arm64, amd64).
+func (d Docker) ServerArch(ctx context.Context) (string, error) {
+	out, err := d.command(ctx, "version", "--format", "{{.Server.Arch}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("docker version: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// contextTar is the build context: the Dockerfile alone, streamed on stdin, so
+// nothing is written to disk.
+func contextTar() ([]byte, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(dockerfile))}); err != nil {
+		return nil, err
+	}
+	if _, err := tw.Write(dockerfile); err != nil {
+		return nil, err
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// Build builds the image for the daemon's own architecture. --platform and
+// --pull are not optional: a local node:* tag of another arch once produced an
+// emulated box about 8x slower, with no error anywhere.
+func (d Docker) Build(ctx context.Context, image string, w io.Writer) error {
+	arch, err := d.ServerArch(ctx)
+	if err != nil {
+		return err
+	}
+	tarball, err := contextTar()
+	if err != nil {
+		return err
+	}
+	cmd := d.command(ctx, "build", "--pull", "--platform", "linux/"+arch,
+		"--label", LabelHash+"="+Hash(), "-t", image, "-")
+	cmd.Stdin = bytes.NewReader(tarball)
+	cmd.Stdout, cmd.Stderr = w, w
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker build %s: %w", image, err)
+	}
+	return nil
+}
+
+// ImageState is what the daemon holds under the image name.
+type ImageState struct {
+	Present    bool
+	Arch, Hash string
+}
+
+// Inspect reads the image's architecture and Dockerfile label. Stdout only: a
+// CLI or context warning on stderr must not become part of the arch, or a
+// current image reads as built for another architecture. stderr is read only
+// on failure, to tell a missing image from a real error.
+func (d Docker) Inspect(ctx context.Context, image string) (ImageState, error) {
+	out, err := d.command(ctx, "image", "inspect", "--format",
+		`{{.Architecture}}|{{index .Config.Labels "`+LabelHash+`"}}`, image).Output()
+	if err != nil {
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+			if strings.Contains(strings.ToLower(stderr), "no such image") {
+				return ImageState{}, nil
+			}
+		}
+		return ImageState{}, fmt.Errorf("docker image inspect: %w: %s", err, stderr)
+	}
+	s := strings.TrimSpace(string(out))
+	arch, hash, _ := strings.Cut(s, "|")
+	if hash == "<no value>" {
+		hash = ""
+	}
+	return ImageState{Present: true, Arch: arch, Hash: hash}, nil
+}
+
+// Check grades the image against the daemon. A missing image or one built for
+// another architecture cannot run a box (fatal). An image from an older
+// Dockerfile still works, so it only warns. msg is "" when all is well.
+func (s ImageState) Check(serverArch string) (fatal bool, msg string) {
+	switch {
+	case !s.Present:
+		return true, "box image not built; run `agent-box box setup`"
+	case s.Arch != serverArch:
+		return true, fmt.Sprintf("box image is %s but the daemon is %s (it would run emulated); run `agent-box box setup -rebuild`", s.Arch, serverArch)
+	case s.Hash != Hash():
+		return false, "box image is older than this agent-box; run `agent-box box setup -rebuild`"
+	}
+	return false, ""
+}

@@ -1,7 +1,8 @@
 # Running agent-box on macOS
 
-Host tier only for now: sessions run as your user, **not contained**. The boxed
-tier (Docker/colima) is not supported on macOS yet.
+Sessions run as your user (host tier, **not contained**) unless you set up the
+boxed tier, which runs them in a container inside agent-box's own colima VM; see
+[Boxed tier](#boxed-tier-contained-sessions) below.
 
 ## Install (from source)
 
@@ -54,3 +55,37 @@ Both files sit in the data directory (default `~/.local/share/agent-box`).
 
 - New login token: delete `login.token` and restart.
 - Log out every browser: delete `cookie.secret` and restart.
+
+## Boxed tier (contained sessions)
+
+A boxed session runs in a container inside agent-box's **own** colima VM, which
+lives under the data root (`<data root>/vm`). It never becomes your docker
+context and never edits `~/.ssh/config`.
+
+    brew install colima docker
+    agent-box box setup        # once: creates the VM, builds the image natively, checks containment
+    agent-box doctor           # the "boxed tier", "box image" and "containment" lines
+
+- The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
+  `agent-box box stop` frees its memory (default 4 CPU / 4 GiB; `box_vm_cpus`,
+  `box_vm_memory_gib` in config.json). It refuses while any box is running, even
+  an idle one; `agent-box box stop -force` stops the VM anyway and ends those
+  sessions. `agent-box box status` shows the VM, the image and the boxes.
+- Workspaces must be under your home directory (the VM shares only that), and
+  must not be, contain or sit inside the data root (it holds the VM's own
+  settings and SSH key). They also must not be or contain the directory of the
+  config file agent-box reads, or of `profiles_path` (symlinks are followed to
+  their targets); a folder below those is fine.
+- A box cannot reach services listening on your Mac's 127.0.0.1. agent-box
+  checks this on every new box and refuses the box if the check fails.
+- Claude Code keeps its macOS login in the Keychain, which a box cannot read.
+  Create a token for boxes with `claude setup-token`, store it as a secret
+  source, and add `CLAUDE_CODE_OAUTH_TOKEN` to the agent's `secrets`.
+- Requirements: macOS 13+, Apple Silicon (Intel Macs untested), colima 0.8+.
+- Not yet tested: company VPN/split-DNS from inside a box.
+- File-heavy work (`npm install`, large builds) is slower boxed than on the host
+  tier: the workspace crosses a VM file share (virtiofs).
+- If doctor warns about the VM's mount type, `agent-box box setup -recreate`
+  deletes and recreates the VM. Like `box stop`, it refuses while any box is
+  running, and also when the VM is not running (its boxes cannot be checked
+  then); add `-force` to go ahead and end any sessions in it.

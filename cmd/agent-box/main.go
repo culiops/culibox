@@ -24,6 +24,7 @@ import (
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/doctor"
@@ -48,7 +49,8 @@ func main() {
 		os.Exit(2)
 	}
 	home, homeErr := serveHome(os.UserHomeDir)
-	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME"))
+	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
+	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if args.Cmd == "doctor" {
 		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
 		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
@@ -65,8 +67,15 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	if args.Cmd == "box" {
+		os.Exit(runBox(args, cfg, home, os.Stdout))
+	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
-	serve(cfg, home)
+	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	serve(cfg, home, cfgFiles)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -89,6 +98,26 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 		return cfg.ProfilesPath
 	}
 	return filepath.Join(dataDir, "profiles.json")
+}
+
+// protectedDirs is every host directory a boxed workspace must not overlap,
+// built once for all four gates (spawn, boot check, profile save, picker): the
+// data root, and the directory of each config file read on the next start
+// (cfgFiles: -config, the ~/.config fallback) and of the profiles file
+// (profiles_path may be anywhere). Both files are read through symlinks, so
+// every hop's directory and the target's count (box.FileDirs). A box that
+// could write any of them could change the binaries agent-box runs.
+func protectedDirs(dataDir string, cfgFiles []string, profilesPath string) []box.ProtectedDir {
+	out := []box.ProtectedDir{box.DataDirProtected(dataDir)}
+	for _, f := range cfgFiles {
+		for _, d := range box.FileDirs(f) {
+			out = append(out, box.ConfigDirProtected(d))
+		}
+	}
+	for _, d := range box.FileDirs(profilesPath) {
+		out = append(out, box.ProfilesDirProtected(d))
+	}
+	return box.DedupeProtected(out)
 }
 
 // warnLeftBehindProfiles: before profiles.json followed the data dir it always
@@ -130,7 +159,7 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg config.Config, home string) {
+func serve(cfg config.Config, home string, cfgFiles []string) {
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -265,37 +294,41 @@ func serve(cfg config.Config, home string) {
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
 	// reaper never stops a container a live session is running inside.
 	boxRuntime := ""
-	boxDocker, _ := box.LookDocker(cfg.DockerBin)
+	var layer *boxLayer
 	var boxes *box.Manager
-	if runtime.GOOS == "darwin" {
-		log.Printf("containment: boxed tier on macOS is not supported yet (M2); every session runs on the host tier")
+	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir))
+	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}, protected); err != nil {
+		// Not fatal: without containment the console still runs, on the host
+		// tier, and says so rather than pretending to be contained.
+		log.Printf("containment unavailable (%v); every session will run on the host tier", err)
 	} else {
-		var err error
-		boxes, err = newBoxes(cfg, dataDir)
-		switch {
-		case err != nil:
-			// Not fatal: without containment the console still runs, on the host
-			// tier, and says so rather than pretending to be contained.
-			log.Printf("containment unavailable (%v); every session will run on the host tier", err)
-		default:
-			mgr.SetBoxes(boxes)
-			boxRuntime = boxes.Runtime()
+		layer, boxes = l, l.boxes
+		mgr.SetBoxes(boxes)
+		boxRuntime = boxes.Runtime()
+		if l.vm != nil {
+			// The VM is not started here (D3): the first boxed spawn starts it.
+			log.Printf("containment ready (macOS box VM in %s, starts on the first boxed spawn): image %s, idle TTL %s",
+				l.vm.Config().ColimaHome(), cfg.BoxImageOrDefault(), cfg.BoxIdleTTL())
+		} else {
 			log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
-				boxImage(cfg), boxRuntime, cfg.BoxIdleTTL())
+				cfg.BoxImageOrDefault(), boxRuntime, cfg.BoxIdleTTL())
 		}
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
-	if boxes != nil && cfg.BundleSource != "off" {
+	if layer != nil && cfg.BundleSource != "off" {
 		src := bundle.ExpandTilde(cfg.BundleSource)
 		if src == "" {
 			src = bundle.DefaultSource()
 		}
+		// Root is under the layer's state root: on macOS the symlink-resolved
+		// data root, the spelling the VM mounts, since the bundle is mounted
+		// into boxes.
 		bm, err := bundle.New(bundle.Options{
 			Source:  src,
-			Root:    filepath.Join(dataDir, "bundle"),
+			Root:    filepath.Join(layer.stateRoot, "bundle"),
 			MCPFile: bundle.DefaultMCPFile(src),
-			Prober:  bundle.ImageProber{Docker: boxDocker, Image: boxImage(cfg)},
+			Prober:  layer.prober(cfg.BoxImageOrDefault()),
 		})
 		if err != nil {
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
@@ -324,18 +357,28 @@ func serve(cfg config.Config, home string) {
 	}
 	// AFTER session reconcile: that pass adopts every surviving box, so what
 	// remains unclaimed here is genuinely orphaned.
-	if boxes != nil {
-		if err := boxes.Reconcile(context.Background()); err != nil {
-			log.Printf("box reconcile: %v (continuing; an orphaned box may be left running)", err)
-		}
-		// After reconcile: that pass removes the containers, so what is left on
-		// disk belongs to boxes that are genuinely gone.
-		reclaimBoxState(boxes)
+	if layer != nil {
+		// On darwin with the VM stopped this waits for the first boxed spawn: it
+		// never starts the VM, and an unreachable docker must not read as "no
+		// boxes".
+		layer.bootReconcile(context.Background())
 		go func() {
 			t := time.NewTicker(24 * time.Hour)
 			defer t.Stop()
 			for range t.C {
-				reclaimBoxState(boxes)
+				layer.dailyReclaim(context.Background())
+			}
+		}()
+		// Reconcile covers a daemon restart only. The sweep covers what happens
+		// after it: a docker or VM restart leaves stopped boxes, and a missed
+		// release leaves a counter that keeps a box alive. Every 10 minutes is
+		// longer than the 5-minute session retention, so an exited session's
+		// late release cannot be seen twice as drift.
+		go func() {
+			t := time.NewTicker(10 * time.Minute)
+			defer t.Stop()
+			for range t.C {
+				sweepBoxes(boxes, mgr)
 			}
 		}()
 	}
@@ -359,7 +402,7 @@ func serve(cfg config.Config, home string) {
 			log.Fatalf("profiles store: %v", err)
 		}
 	}
-	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, st, lnch.SetAgents)
+	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
 	// for profile-based claude sessions that survived a daemon restart.
@@ -376,6 +419,7 @@ func serve(cfg config.Config, home string) {
 		Password:   login.Secret,
 		Profiles:   pm,
 		Home:       home,
+		Protected:  protected,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime: boxRuntime,
 
@@ -428,7 +472,9 @@ func serve(cfg config.Config, home string) {
 			}
 		}
 		if anyBoxed {
-			if reason, bad := web.UnboxableDefaultCwd(defaultCwd, home); bad {
+			// The manager's own rule, so on macOS it includes "under the box
+			// VM's shared directories".
+			if reason, bad := boxes.Unboxable(defaultCwd); bad {
 				log.Printf("WARNING: default_cwd %q cannot host a contained session (%s). "+
 					"Boxed spawns must name a project directory; set default_cwd to one, "+
 					"or set runtime \"host\" on your agents.", defaultCwd, reason)
@@ -455,6 +501,10 @@ func serve(cfg config.Config, home string) {
 		go analyticsSvc.Start(analyticsCtx)
 	}
 
+	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
+	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
+	// UI's spawn request has no deadline either. Adding a write timeout here
+	// would turn that cold start into a failed spawn.
 	httpSrv := &http.Server{Handler: srv.Handler()}
 
 	// Release attach clients on the way out (stop is registered before
@@ -543,11 +593,32 @@ func loginURLFor(cfg config.Config, token string) (url, hint string) {
 		"replace <host> with this machine's address and add it as <host>:" + port + " to allowed_hosts"
 }
 
+// sweepBoxes runs one box sweep and logs every action with its reason. A sweep
+// skipped because the daemon is unreachable logs nothing: that is the expected
+// state whenever the VM is stopped, and it must not fill the log.
+//
+// The pass is bounded: it holds the box manager's operation lock, so a hung
+// daemon must not be able to hold it (and every spawn) indefinitely.
+func sweepBoxes(boxes *box.Manager, mgr *session.Manager) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	rep, err := boxes.Sweep(ctx, mgr.LiveBoxCounts())
+	for _, a := range rep.Removed {
+		log.Printf("box sweep: removed %s: %s", a.Box, a.Reason)
+	}
+	for _, a := range rep.Corrected {
+		log.Printf("box sweep: corrected %s: %s", a.Box, a.Reason)
+	}
+	if err != nil {
+		log.Printf("box sweep: %v", err)
+	}
+}
+
 // reclaimBoxState removes the host homes of boxes that are gone and unused, and
 // reports what it freed. internal/box returns results rather than logging so its
 // decisions stay testable without a daemon; the printing belongs here.
-func reclaimBoxState(boxes *box.Manager) {
-	done, err := boxes.ReclaimState(context.Background(), box.DefaultStateTTL)
+func reclaimBoxState(ctx context.Context, boxes *box.Manager) {
+	done, err := boxes.ReclaimState(ctx, box.DefaultStateTTL)
 	for _, r := range done {
 		log.Printf("reclaimed box state %s: unused for %d days, %d MiB freed",
 			r.Box, int(r.Age.Hours()/24), r.Bytes/(1024*1024))
@@ -557,34 +628,4 @@ func reclaimBoxState(boxes *box.Manager) {
 			"left unwritable (chmod it back), otherwise an old root-owned stub that has "+
 			"to be removed as its owner. New boxes create neither.", err)
 	}
-}
-
-// boxImage picks the configured box image, falling back to the project default.
-func boxImage(cfg config.Config) string {
-	if cfg.BoxImage != "" {
-		return cfg.BoxImage
-	}
-	return "culiops/agent-box:base"
-}
-
-// newBoxes builds the containment layer, or reports why it is unavailable. A
-// missing docker or a missing image must degrade to the host tier loudly, never
-// silently pretend to contain.
-func newBoxes(cfg config.Config, dataDir string) (*box.Manager, error) {
-	bin, err := box.LookDocker(cfg.DockerBin)
-	if err != nil {
-		return nil, err
-	}
-	instance := cfg.EnvLabel
-	if instance == "" {
-		instance = "default"
-	}
-	return box.New(box.Options{
-		DockerBin: bin,
-		Image:     boxImage(cfg),
-		Instance:  instance,
-		IdleTTL:   cfg.BoxIdleTTL(),
-		StateRoot: dataDir,
-		Client:    box.CLIClient{Bin: bin},
-	})
 }

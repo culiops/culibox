@@ -3,6 +3,8 @@ package box
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -100,16 +102,74 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
 	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil)
 	joined := strings.Join(got, " ")
-	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude:"} {
+	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude,"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("run args must never reference %q: %q", forbidden, joined)
 		}
 	}
-	if !containsPair(got, "-v", "/home/claude/proj:/home/claude/proj:rw") {
-		t.Fatalf("workspace must mount at its identical host path: %q", joined)
+	if !containsPair(got, "--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj") {
+		t.Fatalf("workspace must bind at its identical host path: %q", joined)
 	}
-	if n := countFlag(got, "-v"); n != 2 {
+	if n := countFlag(got, "--mount"); n != 2 {
 		t.Fatalf("expected exactly 2 mounts (workspace + state), got %d: %q", n, joined)
+	}
+	if countFlag(got, "-v") != 0 {
+		t.Fatalf("-v silently creates a missing source inside a VM; use --mount: %q", joined)
+	}
+}
+
+func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
+	m := newTestManager(t)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}})
+	if !containsPair(got, "--mount", "type=bind,src=/data/bundle,dst=/opt/agent-bundle,readonly") {
+		t.Fatalf("extra mounts must be readonly binds: %q", strings.Join(got, " "))
+	}
+}
+
+// docker parses --mount as CSV: a comma in a path starts a new option, so a
+// workspace named "x,dst=/etc" would rewrite the mount. Refuse, never escape.
+func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	for _, name := range []string{"a,b", `q"uote`, "nl\nx", "nel\u0085x", "ls\u2028x", "ps\u2029x", "c1\u009bx", "bad\xffutf8"} {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) {
+			t.Fatalf("%q: want ErrUnboxableWorkspace, got %v", name, err)
+		}
+	}
+	if fake.runs() != 0 {
+		t.Fatal("no docker call may happen for a refused path")
+	}
+}
+
+func TestUnsafeExtraMountSourceFailsTheSpawn(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	_, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil,
+		[]Mount{{Host: "/x,y", Box: "/opt/agent-bundle"}})
+	if err == nil || fake.runs() != 0 {
+		t.Fatalf("an unsafe mount source must fail before docker run: err=%v runs=%d", err, fake.runs())
+	}
+}
+
+// MountUnsafe also refuses what a YAML/CSV reader may fold into a different
+// path: C1 controls (U+0085 NEL), U+2028/U+2029 line separators, invalid UTF-8.
+func TestMountUnsafeRefusesLineBreaksControlsAndBadUTF8(t *testing.T) {
+	for _, p := range []string{"/a,b", `/a"b`, "/a\nb", "/a\x7fb", "/a\u0080b", "/a\u0085b", "/a\u009bb",
+		"/a\u2028b", "/a\u2029b", "/a\xffb"} {
+		if MountUnsafe(p) == "" {
+			t.Errorf("%q must be refused", p)
+		}
+	}
+}
+
+func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
+	for _, p := range []string{"/home/claude/proj", "/Users/me/My Project", "/srv/a-b_c.d", "/Users/me/projet \u00e9t\u00e9", "/home/x/\u4e2d\u6587"} {
+		if r := MountUnsafe(p); r != "" {
+			t.Errorf("%q should be safe, got %q", p, r)
+		}
 	}
 }
 
@@ -269,14 +329,19 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	}
 	var stateMount string
 	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-v" && strings.HasSuffix(args[i+1], ":"+boxHome) {
+		if args[i] == "--mount" && strings.Contains(args[i+1], ",dst="+boxHome) {
 			stateMount = args[i+1]
 		}
 	}
 	if stateMount == "" {
 		t.Fatalf("no state mount onto %s in %q", boxHome, joined)
 	}
-	host := strings.TrimSuffix(stateMount, ":"+boxHome)
+	host := ""
+	for _, kv := range strings.Split(stateMount, ",") {
+		if v, ok := strings.CutPrefix(kv, "src="); ok {
+			host = v
+		}
+	}
 	if !strings.HasPrefix(host, "/") {
 		t.Fatalf("state source %q must be an absolute host path", host)
 	}
@@ -558,5 +623,399 @@ func TestTheMarkerLivesOutsideTheBoxHome(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("marker not written: %v", err)
+	}
+}
+
+// Measured 2026-10-15 on real docker: an exited container keeps its name, so a
+// second `docker run --name` answers Conflict, and every spawn into that
+// workspace fails until the daemon restarts. A colima VM restart exits every box.
+func TestStoppedBoxIsRemovedAndRecreated(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	name, err := m.boxName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.exited[name] = true
+	fake.mu.Unlock()
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.stoppedAny(name) {
+		t.Fatal("a stopped box must be removed before it is recreated")
+	}
+	if fake.runs() != 1 {
+		t.Fatalf("want 1 docker run after removing the stopped box, got %d", fake.runs())
+	}
+}
+
+func TestInspectErrorFailsTheSpawnInsteadOfReadingAsMissing(t *testing.T) {
+	m, fake := newTestManagerWithFake(t)
+	fake.mu.Lock()
+	fake.inspectErr = errors.New("Cannot connect to the Docker daemon")
+	fake.mu.Unlock()
+	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil, nil); err == nil {
+		t.Fatal("an unreachable daemon must fail the spawn")
+	}
+	if fake.runs() != 0 {
+		t.Fatal("no docker run when inspect could not answer")
+	}
+}
+
+func TestExecArgvCarriesTheGlobalArgs(t *testing.T) {
+	f := newFake()
+	m, err := New(Options{DockerBin: "/usr/bin/docker", DockerArgs: []string{"--host", "unix:///v/s"},
+		Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.execArgv("ab-box-1", "/w", "s-1", []string{"claude"}, nil)
+	if len(got) < 4 || got[0] != "/usr/bin/docker" || got[1] != "--host" || got[2] != "unix:///v/s" || got[3] != "exec" {
+		t.Fatalf("exec argv must start docker --host … exec: %q", got)
+	}
+}
+
+func TestUnderMountIsComponentWise(t *testing.T) {
+	ms := []string{"/Users/a"}
+	for p, want := range map[string]bool{
+		"/Users/a": true, "/Users/a/proj": true, "/Users/ab": false, "/private/tmp/x": false,
+	} {
+		if got := UnderMount(p, ms); got != want {
+			t.Fatalf("UnderMount(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+func TestWorkspaceOutsideSharedDirsIsRefused(t *testing.T) {
+	f := newFake()
+	shared := t.TempDir()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Shared: []string{shared}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "shared directories") {
+		t.Fatalf("want a shared-dirs refusal, got %v", err)
+	}
+	if reason, bad := m.Unboxable(t.TempDir()); !bad || !strings.Contains(reason, "shared directories") {
+		t.Fatalf("Unboxable must apply the same rule, got %q %v", reason, bad)
+	}
+	inside := filepath.Join(shared, "proj")
+	_ = os.Mkdir(inside, 0o700)
+	if _, _, _, err := m.Wrap(context.Background(), inside, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("a workspace under a shared dir must box: %v", err)
+	}
+}
+
+func TestVerifyFailureRemovesTheNewBoxAndRefuses(t *testing.T) {
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { return fmt.Errorf("%w: reached loopback", ErrBoxUnavailable) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	if f.stops() != 1 {
+		t.Fatalf("the unverified box must be removed, stops=%d", f.stops())
+	}
+}
+
+func TestVerifyRunsOnlyForNewContainers(t *testing.T) {
+	f := newFake()
+	calls := 0
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { calls++; return nil }})
+	dir := t.TempDir()
+	for i := 0; i < 2; i++ {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "s", []string{"claude"}, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("Verify must run once per created container, ran %d", calls)
+	}
+}
+
+func TestPrepareIsAPassThrough(t *testing.T) {
+	f := newFake()
+	want := fmt.Errorf("%w: run agent-box box setup", ErrBoxUnavailable)
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Prepare: func(context.Context) error { return want }})
+	if err := m.Prepare(context.Background()); !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("Prepare must return the hook's error, got %v", err)
+	}
+	m2, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f})
+	if err := m2.Prepare(context.Background()); err != nil {
+		t.Fatalf("a nil hook is a no-op, got %v", err)
+	}
+}
+
+// A box that failed Verify and could not be removed is still running. The next
+// spawn must not reuse it just because Inspect says Running: it is verified
+// again, fails again, and is removed; the spawn after that creates a fresh box
+// and verifies that.
+func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	verifyErr := fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error {
+			verifies++
+			if verifies <= 2 {
+				return verifyErr
+			}
+			return nil
+		}})
+	dir := t.TempDir()
+	f.stopFails = 1
+	_, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "daemon unreachable") {
+		t.Fatalf("want ErrBoxUnavailable naming the removal failure, got %v", err)
+	}
+	if f.runs() != 1 || f.stops() != 1 {
+		t.Fatalf("runs=%d stops=%d", f.runs(), f.stops())
+	}
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("the still-running box must be re-verified and refused: %v", err)
+	}
+	if f.runs() != 1 || f.stops() != 2 || verifies != 2 {
+		t.Fatalf("no reuse: runs=%d stops=%d verifies=%d", f.runs(), f.stops(), verifies)
+	}
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatalf("a fresh, verified box must serve the retry: %v", err)
+	}
+	if f.runs() != 2 || verifies != 3 {
+		t.Fatalf("a fresh box must be created and verified: runs=%d verifies=%d", f.runs(), verifies)
+	}
+	// Normal accounting afterwards: exactly one live session, and the box is
+	// kept (not idle-stopped) until it is released.
+	m.mu.Lock()
+	active := m.active[name]
+	m.mu.Unlock()
+	if active != 1 {
+		t.Fatalf("active sessions = %d, want 1 (the failed Wraps must not leak a count)", active)
+	}
+	m.ReleaseBox(name)
+	m.mu.Lock()
+	active = m.active[name]
+	m.mu.Unlock()
+	if active != 0 {
+		t.Fatalf("active after release = %d, want 0", active)
+	}
+	// Verified once, so a further Wrap reuses it without verifying again.
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-4", []string{"claude"}, nil, nil); err != nil || verifies != 3 {
+		t.Fatalf("a verified box is reused unchecked: err=%v verifies=%d", err, verifies)
+	}
+}
+
+// If the box cannot be removed either, the spawn is refused every time, so the
+// box is still never reused; once the daemon recovers the spawn succeeds.
+func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	failing := true
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error {
+			verifies++
+			if failing {
+				return fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
+			}
+			return nil
+		}})
+	dir := t.TempDir()
+	f.stopFails = 2
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err == nil {
+		t.Fatal("first Wrap must fail Verify")
+	}
+	_, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "docker rm -f") {
+		t.Fatalf("want ErrBoxUnavailable naming the removal failure, got %v", err)
+	}
+	if verifies != 2 || f.runs() != 1 {
+		t.Fatalf("no reuse and no new box while the old one cannot be removed: verifies=%d runs=%d", verifies, f.runs())
+	}
+	m.mu.Lock()
+	for n, c := range m.active {
+		if c != 0 {
+			t.Fatalf("leaked session count on %s: %d", n, c)
+		}
+	}
+	m.mu.Unlock()
+	// The daemon recovers and the box now passes its check: it may serve.
+	failing = false
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("recovery after the daemon returns: %v", err)
+	}
+}
+
+// A running box this process never verified (it survived a daemon restart) is
+// verified before it is reused.
+func TestRunningBoxFromBeforeARestartIsVerifiedBeforeReuse(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	var verr error
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { verifies++; return verr }})
+	dir := t.TempDir()
+	name, err := m.boxName(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.running[name] = true
+	m.AdoptBox(name)
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if verifies != 1 || f.runs() != 0 {
+		t.Fatalf("an unverified running box is verified once and reused: verifies=%d runs=%d", verifies, f.runs())
+	}
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil); err != nil || verifies != 1 {
+		t.Fatalf("once verified it is not checked again: err=%v verifies=%d", err, verifies)
+	}
+
+	// A different box that fails its check is removed and the spawn refused.
+	dir2 := t.TempDir()
+	name2, _ := m.boxName(dir2)
+	f.running[name2] = true
+	verr = fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
+	stopsBefore := f.stops()
+	if _, _, _, err := m.Wrap(context.Background(), dir2, "s-3", []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	if f.stops() != stopsBefore+1 || f.running[name2] || f.runs() != 0 {
+		t.Fatalf("the failing box must be removed, not reused: stops=%d running=%v runs=%d", f.stops(), f.running[name2], f.runs())
+	}
+}
+
+// Removal drops the verified mark, so a re-created container is checked again.
+func TestIdleStopForgetsVerification(t *testing.T) {
+	f := newFake()
+	verifies := 0
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { verifies++; return nil }})
+	dir := t.TempDir()
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(name)
+	m.stopIfIdle(name)
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if verifies != 2 || f.runs() != 2 {
+		t.Fatalf("a re-created box must be verified again: verifies=%d runs=%d", verifies, f.runs())
+	}
+}
+
+// Reconcile can be called by Prepare while another spawn's ensure is verifying a
+// box it just created, before that session is counted. It must wait for ensure
+// instead of removing the box out from under it.
+func TestReconcileWaitsForAnEnsureInFlight(t *testing.T) {
+	f := newFake()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { close(entered); <-release; return nil }})
+	dir := t.TempDir()
+	name, _ := m.boxName(dir)
+	f.existing = []string{name}
+
+	wrapDone := make(chan error, 1)
+	go func() {
+		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", []string{"claude"}, nil, nil)
+		wrapDone <- err
+	}()
+	<-entered
+	recDone := make(chan error, 1)
+	go func() { recDone <- m.Reconcile(context.Background()) }()
+	select {
+	case <-recDone:
+		t.Fatal("Reconcile ran while ensure held opMu")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-wrapDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-recDone; err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 0 {
+		t.Fatalf("the box ensure just created must survive Reconcile, stops=%d", f.stops())
+	}
+}
+
+func TestReconcileTriesEveryOrphanPastAFailedRemoval(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	f.existing = []string{"ab-box-a", "ab-box-b", "ab-box-c"}
+	f.stopFails = 1
+	err := m.Reconcile(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "ab-box-a") {
+		t.Fatalf("the failed removal must be reported, got %v", err)
+	}
+	if f.stops() != 3 {
+		t.Fatalf("every orphan must be tried, stops=%d of 3", f.stops())
+	}
+}
+
+// A workspace that overlaps the data root would hand the box the VM's root-run
+// provision script (<root>/vm/agent-box/colima.yaml), lima's SSH key and the
+// profiles, so every overlap shape is refused, symlinked paths included.
+func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "ab")
+	inside := filepath.Join(root, "vm", "agent-box")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: root, Client: newFake()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, ws := range map[string]string{
+		"equal": root, "ancestor": parent, "descendant": inside, "symlink into it": link,
+	} {
+		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", []string{"claude"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "data directory") ||
+			!strings.Contains(err.Error(), ws) {
+			t.Errorf("%s: want a data-root refusal naming %q, got %v", name, ws, err)
+		}
+		if _, bad := m.Unboxable(ws); !bad {
+			t.Errorf("%s: Unboxable must apply the same rule", name)
+		}
+	}
+	sibling := filepath.Join(parent, "proj")
+	if err := os.Mkdir(sibling, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := m.Wrap(context.Background(), sibling, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("a sibling of the data root must box: %v", err)
+	}
+	// A data root reached through a symlink is the same directory.
+	rootLink := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink(root, rootLink); err != nil {
+		t.Fatal(err)
+	}
+	if reason := ProtectedOverlap(inside, []ProtectedDir{DataDirProtected(rootLink)}); reason == "" {
+		t.Fatal("a symlinked data root must still be matched")
+	}
+	// The ab prefix must not match abc: component-wise, not string prefix.
+	abc := filepath.Join(parent, "abc")
+	if err := os.Mkdir(abc, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if reason := ProtectedOverlap(abc, []ProtectedDir{DataDirProtected(root)}); reason != "" {
+		t.Fatalf("%s is not inside %s: %q", abc, root, reason)
 	}
 }

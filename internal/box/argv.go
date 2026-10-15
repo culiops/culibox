@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // hostOnlyEnv names that must never cross into a box. PATH/HOME/SHELL would
@@ -38,16 +40,16 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
 		"--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m",
 		"--pids-limit", "512",
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
-		"-v", cwd + ":" + cwd + ":rw",
+		"--mount", bindMount(cwd, cwd, false),
 		// The WHOLE home, not just ~/.claude. Claude Code's primary state file is
 		// $HOME/.claude.json, which sits beside that directory — with only
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
-		"-v", m.stateDir(boxName) + ":" + boxHome,
+		"--mount", bindMount(m.stateDir(boxName), boxHome, false),
 	}
-	// Extra binds are always :ro. The caller chooses what, never whether.
+	// Extra binds are always read-only. The caller chooses what, never whether.
 	for _, mt := range extraRO {
-		args = append(args, "-v", mt.Host+":"+mt.Box+":ro")
+		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
 	}
 	if m.runtime == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)
@@ -65,7 +67,8 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
 // `abduco -a` clients that once pegged a core here. KillSession needs that pid
 // to reach the real process.
 func (m *Manager) execArgv(boxName, cwd, sessionID string, argv, env []string) []string {
-	out := []string{m.opts.DockerBin, "exec", "-it", "-w", cwd}
+	out := append([]string{m.opts.DockerBin}, m.opts.DockerArgs...)
+	out = append(out, "exec", "-it", "-w", cwd)
 	for _, name := range forwardableEnvNames(env) {
 		out = append(out, "-e", name)
 	}
@@ -98,4 +101,41 @@ func forwardableEnvNames(env []string) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// bindMount renders one --mount value. --mount, unlike -v, refuses a source that
+// does not exist: inside a colima VM, -v on an unshared path silently creates an
+// empty root-owned directory and starts the agent there. Callers guarantee both
+// paths passed MountUnsafe, because docker reads this value as CSV.
+func bindMount(src, dst string, ro bool) string {
+	s := "type=bind,src=" + src + ",dst=" + dst
+	if ro {
+		s += ",readonly"
+	}
+	return s
+}
+
+// MountUnsafe names why docker's --mount CSV parser (or a reader of the same
+// path elsewhere, such as the VM's YAML) would misread p, or "" when it is safe.
+// A comma starts a new option and a quote opens a CSV field, so either one in a
+// workspace name could rewrite the mount. Invalid UTF-8, every control character
+// (C0, DEL, C1 including U+0085 NEL) and the U+2028/U+2029 separators are refused
+// too: a YAML reader folds some of them into a space or a line break, so the VM
+// would share a different directory than the one docker is told to mount.
+// Refused, not escaped.
+func MountUnsafe(p string) string {
+	if !utf8.ValidString(p) {
+		return "its path is not valid UTF-8"
+	}
+	for _, r := range p {
+		switch {
+		case r == ',':
+			return "its path contains a comma, which docker --mount cannot carry safely"
+		case r == '"':
+			return "its path contains a double quote, which docker --mount cannot carry safely"
+		case unicode.IsControl(r) || r == '\u2028' || r == '\u2029':
+			return "its path contains a control or line-separator character"
+		}
+	}
+	return ""
 }

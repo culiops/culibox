@@ -61,7 +61,7 @@ var pathEscapes = map[string]int{
 func TestOutOfRootLocationsAreAllowlisted(t *testing.T) {
 	root := filepath.Join("..", "..")
 	got := map[string]int{}
-	for _, dir := range []string{"cmd", "internal"} {
+	for _, dir := range []string{"cmd", "docker", "internal"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
 				return err

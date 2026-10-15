@@ -125,6 +125,9 @@ type Backend interface {
 // Kept as an interface here so the session package does not depend on the box
 // package and stays unit-testable with a fake.
 type Boxes interface {
+	// Prepare readies containment for a boxed spawn; an ErrBoxUnavailable
+	// error carries a user-facing remedy.
+	Prepare(ctx context.Context) error
 	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
@@ -801,6 +804,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
+	if runtime == config.RuntimeBox {
+		m.mu.Lock()
+		boxes := m.boxes
+		m.mu.Unlock()
+		// Before the bundle: its MCP probe runs a container, which on macOS
+		// needs the box VM up. An ErrBoxUnavailable reaches the user as-is.
+		if err := boxes.Prepare(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+
 	// The bundle is resolved BEFORE Build: its flags must sit ahead of the "--"
 	// that ends options (a first message follows it), and Build alone owns the
 	// argv order. Its mounts are fixed when Wrap starts the container below.
@@ -849,8 +863,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
 		if err != nil {
 			// A refusal already carries its own actionable message; wrapping it
-			// again would print the remedy twice.
-			if errors.Is(err, box.ErrUnboxableWorkspace) {
+			// again would print the remedy twice. A containment-check failure
+			// gets no "run on the host" hint either: that is the one thing to
+			// push the user away from right after containment failed.
+			if errors.Is(err, box.ErrUnboxableWorkspace) || errors.Is(err, box.ErrBoxUnavailable) {
 				return nil, err
 			}
 			// Name the way out: a silent failure here is what makes people
@@ -942,6 +958,25 @@ func (m *Manager) releaseBoxNamed(name string) {
 	if boxes != nil {
 		boxes.ReleaseBox(name)
 	}
+}
+
+// LiveBoxCounts is the registry's view, per box, of sessions that have not
+// exited, for the box sweep. A detached session counts: its agent still runs.
+func (m *Manager) LiveBoxCounts() map[string]int {
+	m.mu.Lock()
+	ss := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		ss = append(ss, s)
+	}
+	m.mu.Unlock()
+	out := map[string]int{}
+	for _, s := range ss {
+		if s.Runtime != config.RuntimeBox || s.Box == "" || s.Exited() {
+			continue
+		}
+		out[s.Box]++
+	}
+	return out
 }
 
 // releaseSessionBox releases a session's box exactly once, however the session

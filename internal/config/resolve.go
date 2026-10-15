@@ -68,15 +68,7 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 	if err := checkRoot(root); err != nil {
 		return Config{}, Source{Path: root}, err
 	}
-	candidates := []string{filepath.Join(root, "config.json")}
-	if !relocated {
-		base := filepath.Join(home, ".config")
-		if xdg != "" && filepath.IsAbs(xdg) {
-			base = xdg
-		}
-		candidates = append(candidates, filepath.Join(base, "agent-box", "config.json"))
-	}
-	for _, p := range candidates {
+	for _, p := range candidates(root, home, xdg, relocated) {
 		fi, err := os.Stat(p)
 		if err == nil {
 			if err := checkOwned(p, fi); err != nil {
@@ -90,6 +82,39 @@ func load(explicit string, set bool, root, home, xdg string, relocated bool) (Co
 		}
 	}
 	return Defaults(), Source{Default: true}, nil
+}
+
+// candidates are the config files load tries, in order.
+func candidates(root, home, xdg string, relocated bool) []string {
+	out := []string{filepath.Join(root, "config.json")}
+	if !relocated {
+		base := filepath.Join(home, ".config")
+		if xdg != "" && filepath.IsAbs(xdg) {
+			base = xdg
+		}
+		out = append(out, filepath.Join(base, "agent-box", "config.json"))
+	}
+	return out
+}
+
+// ConfigFiles is every config file Resolve (with the same arguments) reads on
+// the next start, absolute, whether or not it exists yet: the explicit file,
+// else each candidate. A boxed workspace must not reach any of them (nor the
+// files they link to), or a box could write the config that names the
+// binaries agent-box runs.
+func ConfigFiles(explicit string, set bool, home, xdg, abHome string) ([]string, error) {
+	if set {
+		p, err := filepath.Abs(explicit)
+		if err != nil {
+			return nil, err
+		}
+		return []string{p}, nil
+	}
+	root, err := Root(home, abHome)
+	if err != nil {
+		return nil, err
+	}
+	return candidates(root, home, xdg, abHome != ""), nil
 }
 
 // Defaults is the zero-config laptop setup: loopback only, token login (no

@@ -149,6 +149,9 @@ type Config struct {
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
+	ColimaBin         string `json:"colima_bin,omitempty"`           // macOS: default "colima"
+	BoxVMCPUs         int    `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → 4
+	BoxVMMemoryGiB    int    `json:"box_vm_memory_gib,omitempty"`    // macOS box VM; 0 → 4
 
 	Analytics AnalyticsConfig `json:"analytics,omitempty"`
 }
@@ -178,6 +181,60 @@ func (c Config) RuntimeFor(a AgentConfig) string {
 		return c.DefaultRuntime
 	}
 	return RuntimeBox
+}
+
+// BoxInstance is the label that keeps this instance's boxes apart from another
+// instance's (DEV vs PROD on one docker daemon): the env label, or "default".
+func (c Config) BoxInstance() string {
+	if c.EnvLabel != "" {
+		return c.EnvLabel
+	}
+	return "default"
+}
+
+// DefaultBoxImage is the box image when neither the agent nor the config names one.
+const DefaultBoxImage = "culiops/agent-box:base"
+
+// BoxImageOrDefault is the configured fallback box image, or DefaultBoxImage.
+func (c Config) BoxImageOrDefault() string {
+	if c.BoxImage != "" {
+		return c.BoxImage
+	}
+	return DefaultBoxImage
+}
+
+// BoxVMSize is the macOS box VM's CPUs and memory in GiB, defaulting to 4 and 4.
+func (c Config) BoxVMSize() (cpus, memGiB int) {
+	cpus, memGiB = c.BoxVMCPUs, c.BoxVMMemoryGiB
+	if cpus <= 0 {
+		cpus = 4
+	}
+	if memGiB <= 0 {
+		memGiB = 4
+	}
+	return cpus, memGiB
+}
+
+// validImageRef refuses an image name docker would read as something else. The
+// image is a positional argument in `docker run … <image>`, `image inspect` and
+// `--entrypoint node <image>`, so a leading "-" would be parsed as a flag. Empty
+// means "use the default" and is allowed.
+func validImageRef(img string) error {
+	if img == "" {
+		return nil
+	}
+	if img[0] == '-' {
+		return fmt.Errorf("box image %q must not start with '-' (docker would read it as a flag)", img)
+	}
+	for _, r := range img {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '/', r == ':', r == '@', r == '-':
+		default:
+			return fmt.Errorf("box image %q contains %q; only letters, digits and . _ / : @ - are allowed", img, r)
+		}
+	}
+	return nil
 }
 
 // BoxIdleTTL is how long a box outlives its last session, so returning to a
@@ -213,10 +270,16 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("config: invalid default_runtime %q (want box|host)", c.DefaultRuntime)
 	}
+	if err := validImageRef(c.BoxImage); err != nil {
+		return fmt.Errorf("config: box_image: %w", err)
+	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
 		if a.Name == "" || a.Bin == "" {
 			return errors.New("config: each agent requires a name and bin")
+		}
+		if err := validImageRef(a.Box.Image); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if seen[a.Name] {
 			return fmt.Errorf("config: duplicate agent name %q", a.Name)
@@ -307,6 +370,9 @@ func (c Config) Validate() error {
 func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	if a.Name == "" || a.Bin == "" {
 		return errors.New("profile requires a name and bin")
+	}
+	if err := validImageRef(a.Box.Image); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	switch a.BasePolicy() {
 	case BaseClean, BaseLogin, BaseInherit:

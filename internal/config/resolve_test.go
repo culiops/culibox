@@ -203,3 +203,34 @@ func TestResolve_RefusesAWritableConfigFile(t *testing.T) {
 		}
 	}
 }
+
+// ConfigFiles is every file Resolve reads a config from on the next start,
+// whether or not it exists yet: a box that could write one could plant a
+// config naming the binaries agent-box runs.
+func TestConfigFiles(t *testing.T) {
+	home := "/h"
+	got, err := ConfigFiles("", false, home, "", "")
+	if err != nil || len(got) != 2 || got[0] != "/h/.local/share/agent-box/config.json" ||
+		got[1] != "/h/.config/agent-box/config.json" {
+		t.Fatalf("default: %v %v", got, err)
+	}
+	got, _ = ConfigFiles("", false, home, "/x", "")
+	if got[1] != "/x/agent-box/config.json" {
+		t.Fatalf("xdg: %v", got)
+	}
+	got, _ = ConfigFiles("", false, home, "/x", "/ab")
+	if len(got) != 1 || got[0] != "/ab/config.json" {
+		t.Fatalf("relocated: %v", got)
+	}
+	got, _ = ConfigFiles("/etc/ab/c.json", true, home, "", "")
+	if len(got) != 1 || got[0] != "/etc/ab/c.json" {
+		t.Fatalf("explicit: %v", got)
+	}
+	got, _ = ConfigFiles("c.json", true, home, "", "")
+	if wd, _ := os.Getwd(); len(got) != 1 || got[0] != filepath.Join(wd, "c.json") {
+		t.Fatalf("a relative explicit path must resolve against the cwd: %v", got)
+	}
+	if _, err := ConfigFiles("", false, home, "", "rel"); err == nil {
+		t.Fatal("a relative AGENT_BOX_HOME must be an error")
+	}
+}

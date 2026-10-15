@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // Workspace is a selectable working directory (home + its subfolders).
@@ -20,15 +22,20 @@ type Workspace struct {
 }
 
 // UnboxableDefaultCwd reports why a directory cannot be a contained workspace.
-// It mirrors the daemon-side refusal in the box package so the UI and the
-// startup check can explain the same rule without importing it.
-func UnboxableDefaultCwd(dir, home string) (string, bool) {
+// It mirrors the daemon-side refusal in the box package (including
+// box.MountUnsafe and box.ProtectedOverlap, shared so the two cannot drift) so
+// the UI and the startup check explain the same rule. protected are the
+// directories a workspace must not overlap (data root, config, profiles).
+func UnboxableDefaultCwd(dir, home string, protected []box.ProtectedDir) (string, bool) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return "", false
 	}
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
+	}
+	if reason := box.MountUnsafe(abs); reason != "" {
+		return reason, true
 	}
 	h := filepath.Clean(home)
 	if real, err := filepath.EvalSymlinks(h); err == nil {
@@ -44,13 +51,17 @@ func UnboxableDefaultCwd(dir, home string) (string, bool) {
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
 		return "it contains your home directory", true
 	}
+	if reason := box.ProtectedOverlap(abs, protected); reason != "" {
+		return reason, true
+	}
 	return "", false
 }
 
 // listWorkspaces returns home first, then each non-hidden subdirectory of home
 // (depth 1, symlinked dirs included), sorted by name. Only home's children are
-// listed — no arbitrary path traversal is exposed.
-func listWorkspaces(home string) []Workspace {
+// listed — no arbitrary path traversal is exposed. A directory overlapping a
+// protected directory is listed but not boxable.
+func listWorkspaces(home string, protected []box.ProtectedDir) []Workspace {
 	// Home stays listed — it is a legitimate trusted-host workspace — but it can
 	// never be boxed, so it is labelled rather than silently offered.
 	out := []Workspace{{
@@ -79,7 +90,7 @@ func listWorkspaces(home string) []Workspace {
 		if !isDir {
 			continue
 		}
-		reason, bad := UnboxableDefaultCwd(full, home)
+		reason, bad := UnboxableDefaultCwd(full, home, protected)
 		dirs = append(dirs, Workspace{Label: name, Path: full, Boxable: !bad, Reason: reason})
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Label < dirs[j].Label })

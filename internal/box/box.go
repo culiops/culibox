@@ -51,17 +51,54 @@ const (
 // config and the deny-by-default mount rule stays visible in one function.
 type Mount struct{ Host, Box string }
 
+// State is what docker says about a box container. Stopped is not Missing: an
+// exited container keeps its name, so treating it as absent makes the next
+// `docker run --name` fail with Conflict until someone removes it.
+type State int
+
+const (
+	StateMissing State = iota
+	StateRunning
+	StateStopped
+)
+
+// BoxInfo is one box container as `docker ps -a` reports it.
+type BoxInfo struct {
+	Name, Workspace, State string // State is docker's .State: running, exited, created, ...
+	Created                time.Time
+}
+
 // ErrUnboxableWorkspace marks a refusal the user can act on directly: the
 // workspace they picked cannot be contained. Its message names the path they
 // chose and nothing else, so it is safe to show them — unlike a generic spawn
 // failure, which must stay server-side.
 var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 
+// ErrBoxUnavailable marks a boxed spawn the containment layer cannot serve right
+// now: the box VM is not set up or will not start, the image is missing or built
+// for another architecture, or a new box failed its containment check. Its
+// message carries the remedy (a command, a path) and is shown to the user, so it
+// must never contain env values or secrets.
+var ErrBoxUnavailable = errors.New("containment unavailable")
+
+// UnderMount reports whether path (absolute, symlinks resolved) is at or below
+// one of mounts. Component-wise, so /Users/ab is not under /Users/a.
+func UnderMount(path string, mounts []string) bool {
+	for _, mt := range mounts {
+		mt = filepath.Clean(mt)
+		if path == mt || strings.HasPrefix(path, mt+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // Client is the narrow slice of the docker CLI this package needs. A fake drives
 // every unit test, so none of them requires a running daemon.
 type Client interface {
 	Run(ctx context.Context, args []string) (string, error)
-	Inspect(ctx context.Context, name string) (running bool, err error)
+	Inspect(ctx context.Context, name string) (State, error)
+	ListBoxes(ctx context.Context, label string) ([]BoxInfo, error)
 	ListByLabel(ctx context.Context, label string) ([]string, error)
 	Stop(ctx context.Context, name string) error
 	HasRuntime(ctx context.Context, name string) bool
@@ -70,11 +107,32 @@ type Client interface {
 // Options configures a Manager.
 type Options struct {
 	DockerBin string // absolute path; resolved by the caller at startup
-	Image     string
-	Instance  string // env label (DEV/PROD)
-	IdleTTL   time.Duration
-	StateRoot string // where per-box agent homes live (usually data_dir)
-	Client    Client
+	// DockerArgs are global docker flags for execArgv; they must equal the
+	// Client's. The session exec runs under a curated env that drops
+	// DOCKER_HOST/DOCKER_CONTEXT, while management calls inherit the daemon env,
+	// so flags, not env, are the only way both groups reach the same daemon.
+	DockerArgs []string
+	Image      string
+	Instance   string // env label (DEV/PROD)
+	IdleTTL    time.Duration
+	StateRoot  string // where per-box agent homes live (usually data_dir)
+	Client     Client
+
+	// Hooks for a containment layer that needs more than a local daemon (on
+	// macOS: a VM). All are optional; nil leaves the behaviour unchanged.
+
+	Prepare func(ctx context.Context) error             // before any docker call of a boxed spawn
+	Verify  func(ctx context.Context, box string) error // right after a NEW container starts
+	// Shared lists the host directories the docker daemon can see; a workspace
+	// outside them is refused. nil = every path is visible.
+	Shared []string
+	// Protected are host directories besides StateRoot (always protected) that
+	// a workspace must not overlap: the config and profiles directories when
+	// they live outside the data root.
+	Protected []ProtectedDir
+	// Reachable reports whether the daemon answers; false = down, and the idle
+	// sweep skips instead of reaping on a failed list. nil = assume reachable.
+	Reachable func(ctx context.Context) bool
 }
 
 // Manager tracks one box per workspace and keeps their lifecycle honest.
@@ -89,6 +147,14 @@ type Manager struct {
 	mu     sync.Mutex
 	active map[string]int // box name → live session count
 	timers map[string]*time.Timer
+	// verified holds the boxes this process has seen pass Verify since they were
+	// last (re)created. With a Verify hook, ensure reuses a running box only if
+	// it is listed here, so a box left over from before a daemon restart, or one
+	// whose failed removal left it running, is verified again before any use.
+	verified map[string]bool
+	// drift marks boxes whose counter disagreed with the registry at the last
+	// sweep (guarded by mu).
+	drift map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -113,6 +179,9 @@ func New(opts Options) (*Manager, error) {
 		runtime: runtimeRunc,
 		active:  map[string]int{},
 		timers:  map[string]*time.Timer{},
+
+		verified: map[string]bool{},
+		drift:    map[string]bool{},
 	}
 	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
 		m.runtime = runtimeSysbox
@@ -279,7 +348,7 @@ func ensureMountpoints(root *os.Root, mounts []Mount) error {
 // agent the whole home — ~/.ssh, any secrets file, the agent's own config —
 // and every other control in this package becomes decoration. Refuse loudly
 // rather than narrow silently: a surprising mount is how containment dies.
-func unboxableWorkspace(cwd string) (string, bool) {
+func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (string, bool) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", false
@@ -287,25 +356,54 @@ func unboxableWorkspace(cwd string) (string, bool) {
 	if real, err := filepath.EvalSymlinks(abs); err == nil {
 		abs = real
 	}
+	if reason := MountUnsafe(abs); reason != "" {
+		return reason, true
+	}
 	if abs == string(filepath.Separator) {
 		return "it is the filesystem root", true
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
+	if home, err := os.UserHomeDir(); err == nil {
+		if real, err := filepath.EvalSymlinks(home); err == nil {
+			home = real
+		}
+		if abs == filepath.Clean(home) {
+			return "it is your home directory, so the box would mount everything in it", true
+		}
+		// An ancestor of home is worse still.
+		if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			return "it contains your home directory", true
+		}
 	}
-	if real, err := filepath.EvalSymlinks(home); err == nil {
-		home = real
+	if reason := ProtectedOverlap(abs, protected); reason != "" {
+		return reason, true
 	}
-	if abs == filepath.Clean(home) {
-		return "it is your home directory, so the box would mount everything in it", true
-	}
-	// An ancestor of home is worse still.
-	if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
-		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
-		return "it contains your home directory", true
+	if len(shared) > 0 && !UnderMount(abs, shared) {
+		return "it is not under the box VM's shared directories (" + strings.Join(shared, ", ") +
+			"), so docker cannot see it", true
 	}
 	return "", false
+}
+
+// protected is every directory a workspace must not overlap: the state root
+// first, then the caller's (config, profiles), deduplicated.
+func (m *Manager) protected() []ProtectedDir {
+	return DedupeProtected(append([]ProtectedDir{DataDirProtected(m.opts.StateRoot)}, m.opts.Protected...))
+}
+
+// Unboxable is the workspace refusal Wrap applies, for the boot-time check.
+func (m *Manager) Unboxable(cwd string) (string, bool) {
+	return unboxableWorkspace(cwd, m.protected(), m.opts.Shared)
+}
+
+// Prepare readies the containment layer for a boxed spawn (on macOS: the VM is
+// running and the image fits). The session layer calls it BEFORE resolving the
+// config bundle, whose MCP probe needs a reachable daemon too.
+func (m *Manager) Prepare(ctx context.Context) error {
+	if m.opts.Prepare == nil {
+		return nil
+	}
+	return m.opts.Prepare(ctx)
 }
 
 // Wrap ensures the workspace's box is running and returns the argv/env to
@@ -318,7 +416,7 @@ func unboxableWorkspace(cwd string) (string, bool) {
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
 func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
-	if reason, bad := unboxableWorkspace(cwd); bad {
+	if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
 			ErrUnboxableWorkspace, cwd, reason)
@@ -355,12 +453,36 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 	}
 	m.mu.Unlock()
 
-	running, err := m.opts.Client.Inspect(ctx, name)
+	st, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
 	}
-	if !running {
+	if st == StateStopped {
+		// Its agents are already dead (docker exec does not survive the
+		// container), and its name blocks a fresh `docker run`.
+		m.unverify(name)
+		if err := m.opts.Client.Stop(ctx, name); err != nil {
+			m.rearmIfIdle(name)
+			return fmt.Errorf("box: removing stopped %s: %w", name, err)
+		}
+		st = StateMissing
+	}
+	if st == StateRunning && m.opts.Verify != nil && !m.isVerified(name) {
+		// Found, not created, by this process: adopted after a restart, or left
+		// running by a failed removal. Never trust it unchecked.
+		if err := m.opts.Verify(ctx, name); err != nil {
+			return m.refuseUnverified(ctx, name, err)
+		}
+		m.markVerified(name)
+	}
+	if st == StateMissing {
+		for _, p := range append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...) {
+			if reason := MountUnsafe(p); reason != "" {
+				m.rearmIfIdle(name)
+				return fmt.Errorf("box: mount source %q: %s", p, reason)
+			}
+		}
 		if _, err := m.ensureStateDir(name, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
@@ -371,12 +493,64 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: starting %s: %w", name, err)
 		}
+		if m.opts.Verify != nil {
+			if err := m.opts.Verify(ctx, name); err != nil {
+				return m.refuseUnverified(ctx, name, err)
+			}
+			m.markVerified(name)
+		}
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
 	// cannot leak a reference that keeps the box alive forever.
 	m.acquire(name)
 	m.touchMarker(name)
 	return nil
+}
+
+// refuseUnverified handles a box that failed its containment check: it is
+// removed so nothing reuses it, and the spawn is refused. If the removal fails
+// the box may still be running; it is not in verified, so the next ensure
+// verifies it again and removes it rather than trusting Inspect.
+func (m *Manager) refuseUnverified(ctx context.Context, name string, verr error) error {
+	m.unverify(name)
+	if !errors.Is(verr, ErrBoxUnavailable) {
+		verr = fmt.Errorf("%w: %v", ErrBoxUnavailable, verr)
+	}
+	if stopErr := m.opts.Client.Stop(ctx, name); stopErr != nil {
+		verr = fmt.Errorf("%w (box %s could not be removed: %v; it is not reused and is checked again on the next spawn)",
+			verr, name, stopErr)
+	}
+	m.rearmIfIdle(name)
+	return verr
+}
+
+func (m *Manager) isVerified(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.verified[name]
+}
+
+func (m *Manager) markVerified(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.verified[name] = true
+}
+
+// unverify forgets that a box passed Verify. Every path that stops or removes a
+// box calls it first, so a re-created container is verified again.
+func (m *Manager) unverify(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.verified, name)
+}
+
+// mountSources lists every path of the extra mounts that docker will parse.
+func mountSources(ms []Mount) []string {
+	out := make([]string, 0, 2*len(ms))
+	for _, mt := range ms {
+		out = append(out, mt.Host, mt.Box)
+	}
+	return out
 }
 
 // rearmIfIdle restores the idle timer after a failed ensure, but only when no
@@ -453,6 +627,7 @@ func (m *Manager) stopIfIdle(name string) {
 	}
 	delete(m.timers, name)
 	m.mu.Unlock()
+	m.unverify(name)
 	_ = m.opts.Client.Stop(context.Background(), name)
 }
 
@@ -473,11 +648,19 @@ func (m *Manager) AdoptBox(name string) {
 // ones with no live sessions. This is the orphan guard: leaked containers would
 // be the 2.0 of the orphaned `abduco -a` clients that pegged a core, so it is
 // tested rather than trusted.
+//
+// The whole pass holds opMu, as Sweep does: Prepare can call it while another
+// spawn's ensure is verifying a box it just created, and that box has no
+// session counted yet. A failed removal does not stop the pass; every orphan is
+// tried and the failures are returned together.
 func (m *Manager) Reconcile(ctx context.Context) error {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
 	names, err := m.opts.Client.ListByLabel(ctx, LabelInstance+"="+m.opts.Instance)
 	if err != nil {
 		return fmt.Errorf("box: listing boxes: %w", err)
 	}
+	var errs []error
 	for _, name := range names {
 		m.mu.Lock()
 		live := m.active[name]
@@ -485,9 +668,94 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		if live > 0 {
 			continue
 		}
+		m.unverify(name)
 		if err := m.opts.Client.Stop(ctx, name); err != nil {
-			return fmt.Errorf("box: reaping orphan %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// SweepAction is one thing the sweep did, with the reason it logs.
+type SweepAction struct{ Box, Reason string }
+
+// SweepReport is what one sweep did. Skipped means the daemon was unreachable,
+// so nothing was looked at.
+type SweepReport struct {
+	Skipped            bool
+	Removed, Corrected []SweepAction
+}
+
+// Sweep reconciles running boxes with the session registry. Boot-time Reconcile
+// covers a daemon restart; this covers everything after it: a docker or VM
+// restart leaves stopped boxes, and a missed release leaves a counter that keeps
+// a box alive forever. live is the registry's per-box count of sessions that
+// have not exited. The whole pass holds opMu, so it never races ensure or the
+// idle stop, and the listing it acts on cannot go stale mid-pass.
+func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, error) {
+	var rep SweepReport
+	if m.opts.Reachable != nil && !m.opts.Reachable(ctx) {
+		rep.Skipped = true
+		return rep, nil
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance)
+	if err != nil {
+		return rep, fmt.Errorf("box: sweep listing: %w", err)
+	}
+	var errs []error
+	nextDrift := map[string]bool{}
+	for _, b := range boxes {
+		m.mu.Lock()
+		count := m.active[b.Name]
+		_, armed := m.timers[b.Name]
+		drifted := m.drift[b.Name]
+		m.mu.Unlock()
+		switch {
+		case b.State != "running":
+			if err := m.remove(ctx, b.Name); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			rep.Removed = append(rep.Removed, SweepAction{b.Name, "not running (" + b.State + ")"})
+		case live[b.Name] == 0 && count == 0 && !armed:
+			if err := m.remove(ctx, b.Name); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			rep.Removed = append(rep.Removed, SweepAction{b.Name, "running with no session and no idle timer"})
+		case live[b.Name] == 0 && count > 0:
+			if !drifted {
+				nextDrift[b.Name] = true
+				continue
+			}
+			m.mu.Lock()
+			delete(m.active, b.Name)
+			if t, ok := m.timers[b.Name]; ok {
+				t.Stop()
+			}
+			name := b.Name
+			m.timers[name] = time.AfterFunc(m.opts.IdleTTL, func() { m.stopIfIdle(name) })
+			m.mu.Unlock()
+			rep.Corrected = append(rep.Corrected, SweepAction{b.Name,
+				fmt.Sprintf("counter said %d live session(s), the registry says 0 on two sweeps; idle timer armed", count)})
+		}
+	}
+	m.mu.Lock()
+	m.drift = nextDrift
+	m.mu.Unlock()
+	return rep, errors.Join(errs...)
+}
+
+// remove deletes a box's container. It leaves the session counter alone, like
+// ensure's stopped-box path: sessions that are still registered will release
+// their count later, and a count dropped here would underflow against the
+// container a new spawn re-creates under the same name. Callers hold opMu.
+func (m *Manager) remove(ctx context.Context, name string) error {
+	m.unverify(name)
+	if err := m.opts.Client.Stop(ctx, name); err != nil {
+		return fmt.Errorf("box: sweep removing %s: %w", name, err)
 	}
 	return nil
 }
