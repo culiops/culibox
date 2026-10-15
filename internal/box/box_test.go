@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -661,5 +662,84 @@ func TestExecArgvCarriesTheGlobalArgs(t *testing.T) {
 	got := m.execArgv("ab-box-1", "/w", "s-1", []string{"claude"}, nil)
 	if len(got) < 4 || got[0] != "/usr/bin/docker" || got[1] != "--host" || got[2] != "unix:///v/s" || got[3] != "exec" {
 		t.Fatalf("exec argv must start docker --host … exec: %q", got)
+	}
+}
+
+func TestUnderMountIsComponentWise(t *testing.T) {
+	ms := []string{"/Users/a"}
+	for p, want := range map[string]bool{
+		"/Users/a": true, "/Users/a/proj": true, "/Users/ab": false, "/private/tmp/x": false,
+	} {
+		if got := UnderMount(p, ms); got != want {
+			t.Fatalf("UnderMount(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+func TestWorkspaceOutsideSharedDirsIsRefused(t *testing.T) {
+	f := newFake()
+	shared := t.TempDir()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Shared: []string{shared}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "shared directories") {
+		t.Fatalf("want a shared-dirs refusal, got %v", err)
+	}
+	if reason, bad := m.Unboxable(t.TempDir()); !bad || !strings.Contains(reason, "shared directories") {
+		t.Fatalf("Unboxable must apply the same rule, got %q %v", reason, bad)
+	}
+	inside := filepath.Join(shared, "proj")
+	_ = os.Mkdir(inside, 0o700)
+	if _, _, _, err := m.Wrap(context.Background(), inside, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("a workspace under a shared dir must box: %v", err)
+	}
+}
+
+func TestVerifyFailureRemovesTheNewBoxAndRefuses(t *testing.T) {
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { return fmt.Errorf("%w: reached loopback", ErrBoxUnavailable) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", []string{"claude"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	if f.stops() != 1 {
+		t.Fatalf("the unverified box must be removed, stops=%d", f.stops())
+	}
+}
+
+func TestVerifyRunsOnlyForNewContainers(t *testing.T) {
+	f := newFake()
+	calls := 0
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Verify: func(context.Context, string) error { calls++; return nil }})
+	dir := t.TempDir()
+	for i := 0; i < 2; i++ {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "s", []string{"claude"}, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("Verify must run once per created container, ran %d", calls)
+	}
+}
+
+func TestPrepareIsAPassThrough(t *testing.T) {
+	f := newFake()
+	want := fmt.Errorf("%w: run agent-box box setup", ErrBoxUnavailable)
+	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
+		Prepare: func(context.Context) error { return want }})
+	if err := m.Prepare(context.Background()); !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("Prepare must return the hook's error, got %v", err)
+	}
+	m2, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f})
+	if err := m2.Prepare(context.Background()); err != nil {
+		t.Fatalf("a nil hook is a no-op, got %v", err)
 	}
 }

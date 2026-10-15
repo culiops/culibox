@@ -125,6 +125,9 @@ type Backend interface {
 // Kept as an interface here so the session package does not depend on the box
 // package and stays unit-testable with a fake.
 type Boxes interface {
+	// Prepare readies containment for a boxed spawn; an ErrBoxUnavailable
+	// error carries a user-facing remedy.
+	Prepare(ctx context.Context) error
 	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
@@ -798,6 +801,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if br, ok := m.launcher.(BinResolver); ok {
 		if b, err := br.BinFor(spec); err == nil {
 			bin = b
+		}
+	}
+
+	if runtime == config.RuntimeBox {
+		m.mu.Lock()
+		boxes := m.boxes
+		m.mu.Unlock()
+		// Before the bundle: its MCP probe runs a container, which on macOS
+		// needs the box VM up. An ErrBoxUnavailable reaches the user as-is.
+		if err := boxes.Prepare(context.Background()); err != nil {
+			return nil, err
 		}
 	}
 

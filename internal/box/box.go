@@ -74,6 +74,25 @@ type BoxInfo struct {
 // failure, which must stay server-side.
 var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 
+// ErrBoxUnavailable marks a boxed spawn the containment layer cannot serve right
+// now: the box VM is not set up or will not start, the image is missing or built
+// for another architecture, or a new box failed its containment check. Its
+// message carries the remedy (a command, a path) and is shown to the user, so it
+// must never contain env values or secrets.
+var ErrBoxUnavailable = errors.New("containment unavailable")
+
+// UnderMount reports whether path (absolute, symlinks resolved) is at or below
+// one of mounts. Component-wise, so /Users/ab is not under /Users/a.
+func UnderMount(path string, mounts []string) bool {
+	for _, mt := range mounts {
+		mt = filepath.Clean(mt)
+		if path == mt || strings.HasPrefix(path, mt+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 // Client is the narrow slice of the docker CLI this package needs. A fake drives
 // every unit test, so none of them requires a running daemon.
 type Client interface {
@@ -98,6 +117,18 @@ type Options struct {
 	IdleTTL    time.Duration
 	StateRoot  string // where per-box agent homes live (usually data_dir)
 	Client     Client
+
+	// Hooks for a containment layer that needs more than a local daemon (on
+	// macOS: a VM). All are optional; nil leaves the behaviour unchanged.
+
+	Prepare func(ctx context.Context) error             // before any docker call of a boxed spawn
+	Verify  func(ctx context.Context, box string) error // right after a NEW container starts
+	// Shared lists the host directories the docker daemon can see; a workspace
+	// outside them is refused. nil = every path is visible.
+	Shared []string
+	// Reachable reports whether the daemon answers; false = down, and the idle
+	// sweep skips instead of reaping on a failed list. nil = assume reachable.
+	Reachable func(ctx context.Context) bool
 }
 
 // Manager tracks one box per workspace and keeps their lifecycle honest.
@@ -302,7 +333,7 @@ func ensureMountpoints(root *os.Root, mounts []Mount) error {
 // agent the whole home — ~/.ssh, any secrets file, the agent's own config —
 // and every other control in this package becomes decoration. Refuse loudly
 // rather than narrow silently: a surprising mount is how containment dies.
-func unboxableWorkspace(cwd string) (string, bool) {
+func unboxableWorkspace(cwd string, shared []string) (string, bool) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", false
@@ -331,7 +362,24 @@ func unboxableWorkspace(cwd string) (string, bool) {
 		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
 		return "it contains your home directory", true
 	}
+	if len(shared) > 0 && !UnderMount(abs, shared) {
+		return "it is not under the box VM's shared directories (" + strings.Join(shared, ", ") +
+			"), so docker cannot see it", true
+	}
 	return "", false
+}
+
+// Unboxable is the workspace refusal Wrap applies, for the boot-time check.
+func (m *Manager) Unboxable(cwd string) (string, bool) { return unboxableWorkspace(cwd, m.opts.Shared) }
+
+// Prepare readies the containment layer for a boxed spawn (on macOS: the VM is
+// running and the image fits). The session layer calls it BEFORE resolving the
+// config bundle, whose MCP probe needs a reachable daemon too.
+func (m *Manager) Prepare(ctx context.Context) error {
+	if m.opts.Prepare == nil {
+		return nil
+	}
+	return m.opts.Prepare(ctx)
 }
 
 // Wrap ensures the workspace's box is running and returns the argv/env to
@@ -344,7 +392,7 @@ func unboxableWorkspace(cwd string) (string, bool) {
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
 func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
-	if reason, bad := unboxableWorkspace(cwd); bad {
+	if reason, bad := unboxableWorkspace(cwd, m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
 			ErrUnboxableWorkspace, cwd, reason)
@@ -411,6 +459,14 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: starting %s: %w", name, err)
+		}
+		if m.opts.Verify != nil {
+			if err := m.opts.Verify(ctx, name); err != nil {
+				// Never leave an unverified box behind for the next spawn to reuse.
+				_ = m.opts.Client.Stop(ctx, name)
+				m.rearmIfIdle(name)
+				return err
+			}
 		}
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
