@@ -367,3 +367,38 @@ func TestBoxUnavailableFromWrapPassesThroughUnwrapped(t *testing.T) {
 		t.Fatalf("must not suggest the host tier: %v", err)
 	}
 }
+
+// The sweep judges a box by what the registry says is still running: a boxed
+// session counts until it exits, a host session never does.
+func TestLiveBoxCountsCountsOnlyUnexitedBoxedSessions(t *testing.T) {
+	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	a, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(a.ID)
+	b, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(h.ID)
+
+	if got := m.LiveBoxCounts(); got["ab-box-test"] != 2 || len(got) != 1 {
+		t.Fatalf("want {ab-box-test:2}, got %v", got)
+	}
+	if err := m.Kill(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-b.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("killed session never exited")
+	}
+	if got := m.LiveBoxCounts(); got["ab-box-test"] != 1 || len(got) != 1 {
+		t.Fatalf("want {ab-box-test:1} after one exits, got %v", got)
+	}
+}

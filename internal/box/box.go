@@ -148,6 +148,9 @@ type Manager struct {
 	// it is listed here, so a box left over from before a daemon restart, or one
 	// whose failed removal left it running, is verified again before any use.
 	verified map[string]bool
+	// drift marks boxes whose counter disagreed with the registry at the last
+	// sweep (guarded by mu).
+	drift map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -174,6 +177,7 @@ func New(opts Options) (*Manager, error) {
 		timers:  map[string]*time.Timer{},
 
 		verified: map[string]bool{},
+		drift:    map[string]bool{},
 	}
 	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
 		m.runtime = runtimeSysbox
@@ -657,4 +661,94 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// SweepAction is one thing the sweep did, with the reason it logs.
+type SweepAction struct{ Box, Reason string }
+
+// SweepReport is what one sweep did. Skipped means the daemon was unreachable,
+// so nothing was looked at.
+type SweepReport struct {
+	Skipped            bool
+	Removed, Corrected []SweepAction
+}
+
+// Sweep reconciles running boxes with the session registry. Boot-time Reconcile
+// covers a daemon restart; this covers everything after it: a docker or VM
+// restart leaves stopped boxes, and a missed release leaves a counter that keeps
+// a box alive forever. live is the registry's per-box count of sessions that
+// have not exited. The whole pass holds opMu, so it never races ensure or the
+// idle stop, and the listing it acts on cannot go stale mid-pass.
+func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, error) {
+	var rep SweepReport
+	if m.opts.Reachable != nil && !m.opts.Reachable(ctx) {
+		rep.Skipped = true
+		return rep, nil
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance+"="+m.opts.Instance)
+	if err != nil {
+		return rep, fmt.Errorf("box: sweep listing: %w", err)
+	}
+	var errs []error
+	nextDrift := map[string]bool{}
+	for _, b := range boxes {
+		m.mu.Lock()
+		count := m.active[b.Name]
+		_, armed := m.timers[b.Name]
+		drifted := m.drift[b.Name]
+		m.mu.Unlock()
+		switch {
+		case b.State != "running":
+			if err := m.remove(ctx, b.Name); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			rep.Removed = append(rep.Removed, SweepAction{b.Name, "not running (" + b.State + ")"})
+		case live[b.Name] == 0 && count == 0 && !armed:
+			if err := m.remove(ctx, b.Name); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			rep.Removed = append(rep.Removed, SweepAction{b.Name, "running with no session and no idle timer"})
+		case live[b.Name] == 0 && count > 0:
+			if !drifted {
+				nextDrift[b.Name] = true
+				continue
+			}
+			m.mu.Lock()
+			delete(m.active, b.Name)
+			if t, ok := m.timers[b.Name]; ok {
+				t.Stop()
+			}
+			name := b.Name
+			m.timers[name] = time.AfterFunc(m.opts.IdleTTL, func() { m.stopIfIdle(name) })
+			m.mu.Unlock()
+			rep.Corrected = append(rep.Corrected, SweepAction{b.Name,
+				fmt.Sprintf("counter said %d live session(s), the registry says 0 on two sweeps; idle timer armed", count)})
+		}
+	}
+	m.mu.Lock()
+	m.drift = nextDrift
+	m.mu.Unlock()
+	return rep, errors.Join(errs...)
+}
+
+// remove stops a box and, only if that worked, drops its bookkeeping. Callers
+// hold opMu.
+func (m *Manager) remove(ctx context.Context, name string) error {
+	m.unverify(name)
+	if err := m.opts.Client.Stop(ctx, name); err != nil {
+		return fmt.Errorf("box: sweep removing %s: %w", name, err)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.timers[name]; ok {
+		t.Stop()
+		delete(m.timers, name)
+	}
+	delete(m.active, name)
+	delete(m.drift, name)
+	return nil
 }

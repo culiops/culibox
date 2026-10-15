@@ -338,6 +338,18 @@ func serve(cfg config.Config, home string) {
 				reclaimBoxState(boxes)
 			}
 		}()
+		// Reconcile covers a daemon restart only. The sweep covers what happens
+		// after it: a docker or VM restart leaves stopped boxes, and a missed
+		// release leaves a counter that keeps a box alive. Every 10 minutes is
+		// longer than the 5-minute session retention, so an exited session's
+		// late release cannot be seen twice as drift.
+		go func() {
+			t := time.NewTicker(10 * time.Minute)
+			defer t.Stop()
+			for range t.C {
+				sweepBoxes(boxes, mgr)
+			}
+		}()
 	}
 
 	// Runtime profile store (config.Agents are read-only seeds; the store holds
@@ -546,6 +558,22 @@ func loginURLFor(cfg config.Config, token string) (url, hint string) {
 // reclaimBoxState removes the host homes of boxes that are gone and unused, and
 // reports what it freed. internal/box returns results rather than logging so its
 // decisions stay testable without a daemon; the printing belongs here.
+// sweepBoxes runs one box sweep and logs every action with its reason. A sweep
+// skipped because the daemon is unreachable logs nothing: that is the expected
+// state whenever the VM is stopped, and it must not fill the log.
+func sweepBoxes(boxes *box.Manager, mgr *session.Manager) {
+	rep, err := boxes.Sweep(context.Background(), mgr.LiveBoxCounts())
+	for _, a := range rep.Removed {
+		log.Printf("box sweep: removed %s: %s", a.Box, a.Reason)
+	}
+	for _, a := range rep.Corrected {
+		log.Printf("box sweep: corrected %s: %s", a.Box, a.Reason)
+	}
+	if err != nil {
+		log.Printf("box sweep: %v", err)
+	}
+}
+
 func reclaimBoxState(boxes *box.Manager) {
 	done, err := boxes.ReclaimState(context.Background(), box.DefaultStateTTL)
 	for _, r := range done {

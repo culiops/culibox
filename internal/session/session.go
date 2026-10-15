@@ -960,6 +960,25 @@ func (m *Manager) releaseBoxNamed(name string) {
 	}
 }
 
+// LiveBoxCounts is the registry's view, per box, of sessions that have not
+// exited, for the box sweep. A detached session counts: its agent still runs.
+func (m *Manager) LiveBoxCounts() map[string]int {
+	m.mu.Lock()
+	ss := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		ss = append(ss, s)
+	}
+	m.mu.Unlock()
+	out := map[string]int{}
+	for _, s := range ss {
+		if s.Runtime != config.RuntimeBox || s.Box == "" || s.Exited() {
+			continue
+		}
+		out[s.Box]++
+	}
+	return out
+}
+
 // releaseSessionBox releases a session's box exactly once, however the session
 // ended. Both the retention goroutine and Kill call this; a detached session is
 // only ever released by Kill, because the retention goroutine has already left.
