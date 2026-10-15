@@ -66,6 +66,7 @@ func (c Config) Mounts() []string {
 const provisionScript = `#!/bin/sh
 # agent-box: boxes must not reach the Mac's loopback through the host gateway.
 set -eu
+# IPv6: the default docker bridge has no IPv6, so the IPv4 host-gateway DROP is the whole rule.
 gw=$(getent ahostsv4 host.lima.internal | awk 'NR==1 {print $1}')
 [ -n "$gw" ] || gw=192.168.5.2
 iptables -N DOCKER-USER 2>/dev/null || true

@@ -52,13 +52,20 @@ type Status struct {
 // ErrNotSetUp means `agent-box box setup` has not provisioned the VM yet.
 var ErrNotSetUp = errors.New("the box VM is not set up; run `agent-box box setup`")
 
-// VM is agent-box's colima profile. mu serialises start/stop, so concurrent
-// boxed spawns trigger one start, not five.
+// VM is agent-box's colima profile. sem (a one-slot lock a waiter can abandon
+// when its context ends) serialises start/stop, so concurrent boxed spawns
+// trigger one start, not five.
 type VM struct {
 	cfg          Config
 	r            Runner
-	mu           sync.Mutex
+	sem          chan struct{}
 	startTimeout time.Duration
+
+	// needsReconcile is set when a start is attempted and cleared when some
+	// caller is handed started=true. A start that errored but then came up, or
+	// whose caller went away, still gets exactly one reconcile.
+	flagMu         sync.Mutex
+	needsReconcile bool
 }
 
 // NewVM resolves the config's Root and Home through symlinks, so the mount
@@ -69,7 +76,7 @@ type VM struct {
 func NewVM(cfg Config, r Runner) *VM {
 	cfg.Root = resolvePath(cfg.Root)
 	cfg.Home = resolvePath(cfg.Home)
-	return &VM{cfg: cfg, r: r, startTimeout: 120 * time.Second}
+	return &VM{cfg: cfg, r: r, sem: make(chan struct{}, 1), startTimeout: 120 * time.Second}
 }
 
 // resolvePath follows symlinks in the longest existing prefix of p and keeps
@@ -95,6 +102,33 @@ func resolvePath(p string) string {
 }
 
 func (v *VM) Config() Config { return v.cfg }
+
+// lock takes the start/stop lock, or gives up when ctx ends first.
+func (v *VM) lock(ctx context.Context) error {
+	select {
+	case v.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (v *VM) unlock() { <-v.sem }
+
+func (v *VM) markReconcile() {
+	v.flagMu.Lock()
+	v.needsReconcile = true
+	v.flagMu.Unlock()
+}
+
+// claimReconcile hands started=true to exactly one caller per attempted start.
+func (v *VM) claimReconcile() bool {
+	v.flagMu.Lock()
+	defer v.flagMu.Unlock()
+	c := v.needsReconcile
+	v.needsReconcile = false
+	return c
+}
 
 // preflight refuses a config that cannot be carried safely, before any colima
 // invocation: a root docker or YAML would misparse, or a socket path past the
@@ -167,39 +201,63 @@ func (v *VM) Running(ctx context.Context) bool {
 	return err == nil && st.Running
 }
 
-// EnsureRunning starts the VM if it is stopped. started is true only for the
-// caller whose call actually started it, so that caller alone reconciles boxes.
+// EnsureRunning starts the VM if it is stopped. started is true for exactly
+// one caller per attempted start, so that caller alone reconciles boxes.
+//
+// The start is shared work: it runs under a context detached from the caller's
+// (bounded by startTimeout), so a request cancelled mid-boot (a closed tab)
+// bounds only its own wait. Killing `colima start` would orphan limactl's
+// children and skip colima's post-boot docker setup. A caller that goes away
+// leaves the start running; the next caller waits for it, finds the VM up and
+// is handed started=true.
 func (v *VM) EnsureRunning(ctx context.Context) (started bool, err error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	if !v.SetUp() {
 		return false, ErrNotSetUp
 	}
 	if err := v.preflight(); err != nil {
 		return false, err
 	}
+	if err := v.lock(ctx); err != nil {
+		return false, err
+	}
 	st, err := v.Status(ctx)
 	if err != nil {
+		v.unlock()
 		return false, err
 	}
 	if st.Running {
-		return false, nil
+		v.unlock()
+		return v.claimReconcile(), nil
 	}
-	sctx, cancel := context.WithTimeout(ctx, v.startTimeout)
-	defer cancel()
-	if _, err := v.r.Run(sctx, v.env(), v.cfg.ColimaBin, v.cfg.StartArgs()...); err != nil {
-		return false, fmt.Errorf("starting the box VM: %w", err)
+	v.markReconcile()
+	done := make(chan error, 1)
+	go func() {
+		defer v.unlock() // the lock lasts as long as the start, not the caller
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.startTimeout)
+		defer cancel()
+		_, err := v.r.Run(sctx, v.env(), v.cfg.ColimaBin, v.cfg.StartArgs()...)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			return false, fmt.Errorf("starting the box VM: %w", err)
+		}
+		return v.claimReconcile(), nil
+	case <-ctx.Done():
+		return false, ctx.Err()
 	}
-	return true, nil
 }
 
 // Stop stops the VM. Callers check for running boxes first (box stop -force).
 func (v *VM) Stop(ctx context.Context) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	if err := v.preflight(); err != nil {
 		return err
 	}
+	if err := v.lock(ctx); err != nil {
+		return err
+	}
+	defer v.unlock()
 	_, err := v.r.Run(ctx, v.env(), v.cfg.ColimaBin, "stop", "--profile", Profile)
 	return err
 }
@@ -209,11 +267,13 @@ func (v *VM) Stop(ctx context.Context) error {
 // because colima fixes vmType, mountType and mounts at creation: changing them
 // means deleting the VM (its images and cache; box homes live on the host).
 func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	if err := v.preflight(); err != nil {
 		return err
 	}
+	if err := v.lock(ctx); err != nil {
+		return err
+	}
+	defer v.unlock()
 	y, err := v.cfg.YAML()
 	if err != nil {
 		return err

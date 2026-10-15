@@ -19,8 +19,10 @@ type fakeRunner struct {
 	envs    map[string][]string // first arg (start, stop, ...) -> the env of the last such call
 	running atomic.Bool
 	startN  atomic.Int32
-	delay   time.Duration
-	failOn  string
+	// startCancelled is set when a start's context was cancelled under it.
+	startCancelled atomic.Bool
+	delay          time.Duration
+	failOn         string
 }
 
 func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...string) (string, error) {
@@ -45,10 +47,11 @@ func (f *fakeRunner) Run(ctx context.Context, env []string, bin string, args ...
 		select {
 		case <-time.After(f.delay):
 		case <-ctx.Done():
+			f.startCancelled.Store(true)
 			return "", ctx.Err()
 		}
 		f.running.Store(true)
-	case "stop":
+	case "stop", "delete":
 		f.running.Store(false)
 	}
 	return "", nil
@@ -131,6 +134,77 @@ func TestEnsureRunningTimesOut(t *testing.T) {
 	v.startTimeout = 20 * time.Millisecond
 	if _, err := v.EnsureRunning(context.Background()); err == nil {
 		t.Fatal("a start past the timeout must fail")
+	}
+}
+
+func TestCancelledCallerDoesNotKillTheSharedStart(t *testing.T) {
+	r := &fakeRunner{delay: 150 * time.Millisecond}
+	v := setUpVM(t, r)
+	r.running.Store(false)
+	r.startN.Store(0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() {
+		_, err := v.EnsureRunning(ctx)
+		errc <- err
+	}()
+	for r.startN.Load() == 0 { // the start is in flight
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-errc; err == nil {
+		t.Fatal("the cancelled caller must see its own cancellation")
+	}
+
+	// A later caller waits for the start that is still running, then is the
+	// one handed started=true (its boot was never reconciled).
+	started, err := v.EnsureRunning(context.Background())
+	if err != nil || !started {
+		t.Fatalf("the late caller must reconcile the boot: started=%v err=%v", started, err)
+	}
+	if r.startCancelled.Load() {
+		t.Fatal("cancelling a caller killed colima start")
+	}
+	if r.startN.Load() != 1 {
+		t.Fatalf("want one start, got %d", r.startN.Load())
+	}
+	if again, err := v.EnsureRunning(context.Background()); err != nil || again {
+		t.Fatalf("started=true is handed out once: again=%v err=%v", again, err)
+	}
+}
+
+func TestAWaiterCancelledOnTheLockReturnsEarly(t *testing.T) {
+	r := &fakeRunner{delay: 300 * time.Millisecond}
+	v := setUpVM(t, r)
+	r.running.Store(false)
+	go v.EnsureRunning(context.Background()) // holds the lock for the start
+	for r.startN.Load() < 2 {                // setUpVM's own start was 1
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	t0 := time.Now()
+	if _, err := v.EnsureRunning(ctx); err == nil || time.Since(t0) > 200*time.Millisecond {
+		t.Fatalf("a cancelled waiter must return early with an error: %v after %v", err, time.Since(t0))
+	}
+}
+
+func TestAnErroredStartStillReconcilesOnceWhenTheVMComesUp(t *testing.T) {
+	r := &fakeRunner{delay: time.Second}
+	v := setUpVM(t, r)
+	r.running.Store(false)
+	v.startTimeout = 20 * time.Millisecond
+	if _, err := v.EnsureRunning(context.Background()); err == nil {
+		t.Fatal("a start past the timeout must fail")
+	}
+	r.running.Store(true) // the boot finished anyway
+	started, err := v.EnsureRunning(context.Background())
+	if err != nil || !started {
+		t.Fatalf("the late boot must be reconciled once: started=%v err=%v", started, err)
+	}
+	if again, _ := v.EnsureRunning(context.Background()); again {
+		t.Fatal("reconcile must be handed out once")
 	}
 }
 
@@ -278,8 +352,14 @@ func TestProvisionRecreateDeletesFirst(t *testing.T) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	joined := strings.Join(r.calls, "|")
-	if !strings.Contains(joined, "delete --profile agent-box --force") {
+	del := strings.Index(joined, "delete --profile agent-box --force")
+	if del < 0 {
 		t.Fatalf("recreate must delete the VM: %s", joined)
+	}
+	// setUpVM's own first provision started the VM once; the recreate's start
+	// must come after the delete, not before.
+	if start := strings.LastIndex(joined, "start "); start < del {
+		t.Fatalf("recreate must start after it deletes: %s", joined)
 	}
 }
 

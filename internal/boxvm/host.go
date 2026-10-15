@@ -3,6 +3,7 @@ package boxvm
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ func CheckUserDockerContext(ctx context.Context, dockerBin string) error {
 
 // MacOSMajor is the running macOS major version, or 0 when it cannot be read.
 func MacOSMajor(ctx context.Context) int {
-	out, err := exec.CommandContext(ctx, "sw_vers", "-productVersion").Output()
+	out, err := exec.CommandContext(ctx, "/usr/bin/sw_vers", "-productVersion").Output()
 	if err != nil {
 		return 0
 	}
@@ -33,9 +34,16 @@ func MacOSMajor(ctx context.Context) int {
 	return n
 }
 
-// ColimaVersion parses `colima version` ("colima version 0.8.1 …"), "" when unknown.
-func ColimaVersion(ctx context.Context, colimaBin string) string {
-	out, err := exec.CommandContext(ctx, colimaBin, "version").Output()
+// ColimaVersion parses `colima version` ("colima version 0.8.1 …"), "" when
+// unknown. Colima runs with cfg's pinned environment, never the daemon's own:
+// even a version query must not touch the user's ~/.colima.
+func ColimaVersion(ctx context.Context, cfg Config) string {
+	if cfg.Validate() != nil {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, cfg.ColimaBin, "version")
+	cmd.Env = cfg.Env(os.Environ())
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}

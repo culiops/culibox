@@ -31,3 +31,22 @@ func TestCheckUserDockerContextFlagsOurProfile(t *testing.T) {
 		t.Fatalf("the user's own colima context is fine: %v", err)
 	}
 }
+
+func TestColimaVersionRunsWithThePinnedEnv(t *testing.T) {
+	t.Setenv("COLIMA_HOME", "/users/own/.colima") // must not reach colima
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "seen")
+	bin := filepath.Join(dir, "colima")
+	script := "#!/bin/sh\nprintf %s \"$COLIMA_HOME\" > " + seen + "\necho colima version 0.8.1\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Root: "/data/ab", Home: "/home/a", ColimaBin: bin, DockerBin: "/d", CPUs: 4, MemoryGiB: 4}
+	if v := ColimaVersion(context.Background(), cfg); v != "0.8.1" {
+		t.Fatalf("version = %q", v)
+	}
+	got, err := os.ReadFile(seen)
+	if err != nil || string(got) != cfg.ColimaHome() {
+		t.Fatalf("colima ran with COLIMA_HOME=%q (%v), want %q", got, err, cfg.ColimaHome())
+	}
+}
