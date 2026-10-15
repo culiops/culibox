@@ -13,15 +13,33 @@ import (
 // prints the canned output for the subcommand (by first non-flag arg).
 func fakeDocker(t *testing.T, outputs map[string]string, exitCodes map[string]int) (bin, log string) {
 	t.Helper()
+	return fakeDockerStderr(t, outputs, nil, exitCodes)
+}
+
+// fakeDockerStderr is fakeDocker with a canned stderr per subcommand, printed
+// before the stdout, as docker prints a warning ahead of its answer.
+func fakeDockerStderr(t *testing.T, outputs, stderrs map[string]string, exitCodes map[string]int) (bin, log string) {
+	t.Helper()
 	dir := t.TempDir()
 	log = filepath.Join(dir, "argv.log")
 	var sb strings.Builder
 	sb.WriteString("#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + log + "\n")
 	sb.WriteString("sub=''\nfor a in \"$@\"; do case \"$a\" in --host|--config) skip=1;; *) if [ -n \"$skip\" ]; then skip=''; elif [ -z \"$sub\" ]; then sub=$a; fi;; esac; done\n")
 	sb.WriteString("case \"$sub\" in\n")
-	for sub, out := range outputs {
+	subs := map[string]bool{}
+	for sub := range outputs {
+		subs[sub] = true
+	}
+	for sub := range stderrs {
+		subs[sub] = true
+	}
+	for sub := range subs {
 		code := exitCodes[sub]
-		sb.WriteString("  " + sub + ") printf '%s' '" + out + "'; exit " + strconv.Itoa(code) + ";;\n")
+		sb.WriteString("  " + sub + ") ")
+		if e := stderrs[sub]; e != "" {
+			sb.WriteString("printf '%s\\n' '" + e + "' >&2; ")
+		}
+		sb.WriteString("printf '%s' '" + outputs[sub] + "'; exit " + strconv.Itoa(code) + ";;\n")
 	}
 	sb.WriteString("esac\nexit 0\n")
 	bin = filepath.Join(dir, "docker")
@@ -33,23 +51,30 @@ func fakeDocker(t *testing.T, outputs map[string]string, exitCodes map[string]in
 
 func TestInspectDistinguishesMissingRunningStopped(t *testing.T) {
 	cases := []struct {
-		out  string
-		code int
-		want State
-		err  bool
+		name         string
+		stdout, errs string
+		code         int
+		want         State
+		err          bool
 	}{
-		{"true", 0, StateRunning, false},
-		{"false", 0, StateStopped, false},
-		{"Error: No such object: ab-box-x", 1, StateMissing, false},
+		{"running", "true", "", 0, StateRunning, false},
+		{"stopped", "false", "", 0, StateStopped, false},
+		{"missing", "", "Error: No such object: ab-box-x", 1, StateMissing, false},
 		// Measured 2026-10-15 on the docker CLI of this host: lowercase.
-		{"error: no such object: ab-box-x", 1, StateMissing, false},
-		{"Cannot connect to the Docker daemon at unix:///x. Is the docker daemon running?", 1, StateMissing, true},
+		{"missing lowercase", "", "error: no such object: ab-box-x", 1, StateMissing, false},
+		{"daemon down", "", "Cannot connect to the Docker daemon at unix:///x. Is the docker daemon running?", 1, StateMissing, true},
+		// A warning on stderr beside a successful answer must not turn a live
+		// box into "stopped": ensure force-removes a stopped one.
+		{"running with stderr warning", "true", "WARNING: a deprecated thing", 0, StateRunning, false},
+		{"unexpected stdout", "maybe", "", 0, StateMissing, true},
+		{"empty stdout", "", "", 0, StateMissing, true},
+		{"no such text on stdout only is not missing", "Error: No such object: x", "", 1, StateMissing, true},
 	}
 	for _, c := range cases {
-		bin, _ := fakeDocker(t, map[string]string{"inspect": c.out}, map[string]int{"inspect": c.code})
+		bin, _ := fakeDockerStderr(t, map[string]string{"inspect": c.stdout}, map[string]string{"inspect": c.errs}, map[string]int{"inspect": c.code})
 		got, err := CLIClient{Bin: bin}.Inspect(context.Background(), "ab-box-x")
 		if got != c.want || (err != nil) != c.err {
-			t.Fatalf("%q: got (%v, %v), want (%v, err=%v)", c.out, got, err, c.want, c.err)
+			t.Fatalf("%s: got (%v, %v), want (%v, err=%v)", c.name, got, err, c.want, c.err)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -50,20 +51,32 @@ func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 // failure (an unreachable daemon, a stopped VM) is, because guessing "missing"
 // would send the caller into a docker run that cannot work either.
 func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
-	out, err := exec.CommandContext(ctx, c.Bin, "inspect", "-f", "{{.State.Running}}", name).CombinedOutput()
-	s := strings.TrimSpace(string(out))
+	// Stdout only: a CLI or context warning on stderr must not be read as the
+	// answer, because "not exactly true" means Stopped and the caller removes it.
+	out, err := exec.CommandContext(ctx, c.Bin, "inspect", "-f", "{{.State.Running}}", name).Output()
 	if err != nil {
-		// The wording's case differs between docker versions ("Error: No such
-		// object" vs "error: no such object"), so compare case-insensitively.
-		if l := strings.ToLower(s); strings.Contains(l, "no such object") || strings.Contains(l, "no such container") {
-			return StateMissing, nil
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+			// The wording's case differs between docker versions ("Error: No such
+			// object" vs "error: no such object"), so compare case-insensitively.
+			if l := strings.ToLower(stderr); strings.Contains(l, "no such object") || strings.Contains(l, "no such container") {
+				return StateMissing, nil
+			}
 		}
-		return StateMissing, fmt.Errorf("docker inspect: %w: %s", err, s)
+		return StateMissing, fmt.Errorf("docker inspect: %w: %s", err, stderr)
 	}
-	if s == "true" {
+	switch s := strings.TrimSpace(string(out)); s {
+	case "true":
 		return StateRunning, nil
+	case "false":
+		return StateStopped, nil
+	default:
+		// Fail closed: the caller force-removes a Stopped box, so an answer we
+		// cannot read must never be taken for one.
+		return StateMissing, fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
 	}
-	return StateStopped, nil
 }
 
 // ListBoxes returns every container carrying the label, running or not.

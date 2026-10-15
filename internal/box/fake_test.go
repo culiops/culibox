@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,10 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	f.runArgs = append(f.runArgs, args)
 	for i, a := range args {
 		if a == "--name" && i+1 < len(args) {
+			if f.exited[args[i+1]] {
+				// What real docker answers when an exited box still holds the name.
+				return "", errors.New("docker run: Conflict. The container name \"" + args[i+1] + "\" is already in use")
+			}
 			f.running[args[i+1]] = true
 			delete(f.exited, args[i+1])
 		}
