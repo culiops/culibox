@@ -467,6 +467,62 @@ func TestBoxStopRefusesAnUnreadableVMUnlessForced(t *testing.T) {
 	}
 }
 
+// colima status exits non-zero for a stopped VM, but also for other failures
+// while the VM runs; Status reads both as "not running". So without -force,
+// stop never calls colima stop on that reading: if the reading lied, nothing
+// is stopped and no session ends.
+func TestBoxStopOnANotRunningVMStopsNothing(t *testing.T) {
+	l, fc, _ := darwinLayer(t, false)
+	rc, out := runVM(t, l, cliArgs{Sub: "stop"})
+	if rc != 0 || !strings.Contains(out, "not running") {
+		t.Fatalf("stop of a not-running VM = %d:\n%s", rc, out)
+	}
+	if fc.called("stop") {
+		t.Fatal("stop must not call colima stop on a VM that reads as not running")
+	}
+	rc, out = runVM(t, l, cliArgs{Sub: "stop", Force: true})
+	if rc != 0 || !fc.called("stop") {
+		t.Fatalf("forced stop = %d:\n%s", rc, out)
+	}
+}
+
+// -recreate deletes the VM, which ends every session in it, so it takes the
+// same live-box guard as stop.
+func TestBoxSetupRecreateRefusesRunningBoxesUnlessForced(t *testing.T) {
+	l, fc, d := readySetup(t, "default")
+	fc.running = true
+	d.set(t, "ps", "ab-box-1\trunning\t/Users/a/p\t2026-10-15 10:00:00 +0000 UTC\n")
+	rc, out := runVM(t, l, cliArgs{Sub: "setup", Recreate: true})
+	if rc != 1 || !strings.Contains(out, "refusing: 1 box(es) running") {
+		t.Fatalf("recreate with a running box = %d:\n%s", rc, out)
+	}
+	if fc.called("delete") || fc.called("start") {
+		t.Fatal("a refused recreate must not touch the VM")
+	}
+	rc, out = runVM(t, l, cliArgs{Sub: "setup", Recreate: true, Force: true})
+	if rc != 0 || !fc.called("delete") {
+		t.Fatalf("forced recreate = %d:\n%s", rc, out)
+	}
+}
+
+func TestBoxSetupRecreateRefusesAnUnreadableVMUnlessForced(t *testing.T) {
+	l, fc, _ := readySetup(t, "default")
+	fc.garbled = true
+	rc, out := runVM(t, l, cliArgs{Sub: "setup", Recreate: true})
+	if rc != 1 || !strings.Contains(out, "refusing") || fc.called("delete") {
+		t.Fatalf("recreate with an unreadable VM = %d:\n%s", rc, out)
+	}
+}
+
+// A stopped VM has no live sessions, so recreating it needs no -force.
+func TestBoxSetupRecreateOfAStoppedVMProceeds(t *testing.T) {
+	l, fc, _ := readySetup(t, "default")
+	rc, out := runVM(t, l, cliArgs{Sub: "setup", Recreate: true})
+	if rc != 0 || !fc.called("delete") {
+		t.Fatalf("recreate of a stopped VM = %d:\n%s", rc, out)
+	}
+}
+
 func TestBoxStatusReportsVMImageAndBoxes(t *testing.T) {
 	l, fc, d := darwinLayer(t, true)
 	rc, out := runVM(t, l, cliArgs{Sub: "status"})

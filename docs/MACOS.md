@@ -84,4 +84,5 @@ context and never edits `~/.ssh/config`.
 - File-heavy work (`npm install`, large builds) is slower boxed than on the host
   tier: the workspace crosses a VM file share (virtiofs).
 - If doctor warns about the VM's mount type, `agent-box box setup -recreate`
-  deletes and recreates the VM.
+  deletes and recreates the VM. Like `box stop`, it refuses while any box is
+  running; add `-force` to go ahead and end those sessions.

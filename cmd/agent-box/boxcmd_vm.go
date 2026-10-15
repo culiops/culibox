@@ -66,33 +66,55 @@ func boxStatusVM(ctx context.Context, l *boxLayer, w io.Writer) int {
 	return max(rc, boxListStatus(ctx, l.cli, w))
 }
 
-// boxStopVM stops the VM, refusing while any box runs: an idle box counts, since
-// stopping the VM ends whatever session is attached to it. Fail closed: a VM
-// whose state cannot be read, or whose boxes cannot be listed, is not stopped
-// without -force, rather than reading as "no boxes".
-func boxStopVM(ctx context.Context, force bool, l *boxLayer, w io.Writer) int {
+// noLiveBoxes is the guard for an operation that ends every session in the VM
+// (stop, setup -recreate) without -force: an idle box counts, since its session
+// ends too. Fail closed: a VM whose state cannot be read, or whose boxes cannot
+// be listed, is refused rather than read as "no boxes". vmRunning is false when
+// colima reports the VM not running; that reading also covers other non-zero
+// exits of `colima status`, so a caller must not act on the VM on that reading
+// alone.
+func noLiveBoxes(ctx context.Context, l *boxLayer, w io.Writer) (vmRunning, ok bool) {
 	st, err := l.vm.Status(ctx)
-	if err != nil && !force {
+	if err != nil {
 		fmt.Fprintf(w, "refusing: cannot read the box VM's state (%v), so running boxes cannot be ruled out. Use -force.\n", err)
-		return 1
+		return false, false
+	}
+	if !st.Running {
+		return false, true
+	}
+	bs, err := l.cli.ListBoxes(ctx, box.LabelInstance)
+	if err != nil {
+		fmt.Fprintf(w, "refusing: listing boxes failed (%v), so running boxes cannot be ruled out. Use -force.\n", err)
+		return true, false
 	}
 	running := 0
-	if err == nil && st.Running {
-		bs, err := l.cli.ListBoxes(ctx, box.LabelInstance)
-		if err != nil && !force {
-			fmt.Fprintf(w, "refusing: listing boxes failed (%v), so running boxes cannot be ruled out. Use -force.\n", err)
-			return 1
-		}
-		for _, b := range bs {
-			if b.State == "running" {
-				running++
-				fmt.Fprintf(w, "running: %s %s\n", b.Name, b.Workspace)
-			}
+	for _, b := range bs {
+		if b.State == "running" {
+			running++
+			fmt.Fprintf(w, "running: %s %s\n", b.Name, b.Workspace)
 		}
 	}
-	if running > 0 && !force {
+	if running > 0 {
 		fmt.Fprintf(w, "refusing: %d box(es) running (idle boxes count; their sessions would end). Use -force.\n", running)
-		return 1
+		return true, false
+	}
+	return true, true
+}
+
+// boxStopVM stops the VM, refusing while any box runs (noLiveBoxes). Without
+// -force, a VM that reads as not running is left alone: colima status exits
+// non-zero for more than a stopped VM, and stopping on that reading could end
+// live sessions with nothing checked.
+func boxStopVM(ctx context.Context, force bool, l *boxLayer, w io.Writer) int {
+	if !force {
+		running, ok := noLiveBoxes(ctx, l, w)
+		if !ok {
+			return 1
+		}
+		if !running {
+			fmt.Fprintln(w, "box VM is not running; nothing to stop (use -force to stop it anyway)")
+			return 0
+		}
 	}
 	if err := l.vm.Stop(ctx); err != nil {
 		fmt.Fprintf(w, "FAIL box VM stop: %v\n", err)
@@ -110,6 +132,12 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 	if major := boxvm.MacOSMajor(ctx); major != 0 && major < 13 {
 		fmt.Fprintf(w, "FAIL macOS %d: the box VM needs macOS 13+ (vz + virtiofs)\n", major)
 		return 1
+	}
+	// -recreate deletes the VM, which ends every session in it.
+	if a.Recreate && !a.Force {
+		if _, ok := noLiveBoxes(ctx, l, w); !ok {
+			return 1
+		}
 	}
 	if err := l.vm.Provision(ctx, a.Recreate, w); err != nil {
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)

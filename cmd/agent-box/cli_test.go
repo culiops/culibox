@@ -277,7 +277,12 @@ func TestParseBoxSubcommands(t *testing.T) {
 	if err != nil || a.Sub != "stop" || !a.Force {
 		t.Fatalf("got %+v %v", a, err)
 	}
-	for _, bad := range [][]string{{"box"}, {"box", "nuke"}, {"box", "status", "-force"}, {"box", "stop", "-rebuild"}} {
+	a, err = parseArgs([]string{"box", "setup", "-recreate", "-force"})
+	if err != nil || !a.Recreate || !a.Force {
+		t.Fatalf("got %+v %v", a, err)
+	}
+	for _, bad := range [][]string{{"box"}, {"box", "nuke"}, {"box", "status", "-force"}, {"box", "stop", "-rebuild"},
+		{"box", "setup", "-force"}} {
 		if _, err := parseArgs(bad); err == nil {
 			t.Fatalf("%q must be refused", bad)
 		}
