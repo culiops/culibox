@@ -26,7 +26,7 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	ctx := context.Background()
 	switch a.Sub {
 	case "setup":
-		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, boxImage(cfg), a.Rebuild, w)
+		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), a.Rebuild, w)
 	case "status":
 		return boxListStatus(ctx, box.CLIClient{Bin: bin}, w)
 	default: // stop

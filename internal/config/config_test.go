@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -297,5 +298,65 @@ func TestExampleConfigLoadsAndShowsAllowedHosts(t *testing.T) {
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("example config must validate: %v", err)
+	}
+}
+
+func TestBoxVMSizeDefaults(t *testing.T) {
+	if c, m := (Config{}).BoxVMSize(); c != 4 || m != 4 {
+		t.Fatalf("defaults = %d/%d", c, m)
+	}
+	if c, m := (Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 6}).BoxVMSize(); c != 2 || m != 6 {
+		t.Fatalf("overrides = %d/%d", c, m)
+	}
+}
+
+func TestLoad_BoxVMFields(t *testing.T) {
+	p := writeTemp(t, `{"colima_bin":"/opt/homebrew/bin/colima","box_vm_cpus":2,"box_vm_memory_gib":6,"agents":[{"name":"c","bin":"claude"}]}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ColimaBin != "/opt/homebrew/bin/colima" || c.BoxVMCPUs != 2 || c.BoxVMMemoryGiB != 6 {
+		t.Fatalf("vm fields = %+v", c)
+	}
+}
+
+func TestBoxImageOrDefault(t *testing.T) {
+	if got := (Config{}).BoxImageOrDefault(); got != "culiops/agent-box:base" {
+		t.Fatalf("default = %q", got)
+	}
+	if got := (Config{BoxImage: "me/img:1"}).BoxImageOrDefault(); got != "me/img:1" {
+		t.Fatalf("override = %q", got)
+	}
+}
+
+// An image that starts with "-" is parsed by docker as a flag in
+// `docker run … <image>`, `image inspect <image>` and `--entrypoint node <image>`.
+func TestValidate_BoxImage(t *testing.T) {
+	base := func() Config {
+		return Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "c", Bin: "claude"}}}
+	}
+	for _, ok := range []string{"", "culiops/agent-box:base", "registry.example.com:5000/a/b_c-d.e:1.2", "img@sha256:abc123"} {
+		c := base()
+		c.BoxImage = ok
+		if err := c.Validate(); err != nil {
+			t.Fatalf("box_image %q refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"-v", "--privileged", "a b", "a,b", "a\nb", "img;rm", "img$x", "img\"x", "\u00efmg", "a=b"} {
+		c := base()
+		c.BoxImage = bad
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "box image") {
+			t.Fatalf("box_image %q must be refused for its image, got %v", bad, err)
+		}
+	}
+	// the per-agent override reaches the same docker argv
+	c := base()
+	c.Agents[0].Box.Image = "-v"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "box image") {
+		t.Fatalf("per-agent box.image \"-v\" must be refused: %v", err)
+	}
+	if err := ValidateProfile(c.Agents[0], nil); err == nil || !strings.Contains(err.Error(), "box image") {
+		t.Fatalf("a profile with box.image \"-v\" must be refused: %v", err)
 	}
 }

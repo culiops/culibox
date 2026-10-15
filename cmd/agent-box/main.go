@@ -284,7 +284,7 @@ func serve(cfg config.Config, home string) {
 			mgr.SetBoxes(boxes)
 			boxRuntime = boxes.Runtime()
 			log.Printf("containment ready: image %s, isolation runtime %s, idle TTL %s",
-				boxImage(cfg), boxRuntime, cfg.BoxIdleTTL())
+				cfg.BoxImageOrDefault(), boxRuntime, cfg.BoxIdleTTL())
 		}
 	}
 
@@ -298,7 +298,7 @@ func serve(cfg config.Config, home string) {
 			Source:  src,
 			Root:    filepath.Join(dataDir, "bundle"),
 			MCPFile: bundle.DefaultMCPFile(src),
-			Prober:  bundle.ImageProber{Docker: boxDocker, Image: boxImage(cfg)},
+			Prober:  bundle.ImageProber{Docker: boxDocker, Image: cfg.BoxImageOrDefault()},
 		})
 		if err != nil {
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
@@ -595,14 +595,6 @@ func reclaimBoxState(boxes *box.Manager) {
 	}
 }
 
-// boxImage picks the configured box image, falling back to the project default.
-func boxImage(cfg config.Config) string {
-	if cfg.BoxImage != "" {
-		return cfg.BoxImage
-	}
-	return "culiops/agent-box:base"
-}
-
 // newBoxes builds the containment layer, or reports why it is unavailable. A
 // missing docker or a missing image must degrade to the host tier loudly, never
 // silently pretend to contain.
@@ -617,7 +609,7 @@ func newBoxes(cfg config.Config, dataDir string) (*box.Manager, error) {
 	}
 	return box.New(box.Options{
 		DockerBin: bin,
-		Image:     boxImage(cfg),
+		Image:     cfg.BoxImageOrDefault(),
 		Instance:  instance,
 		IdleTTL:   cfg.BoxIdleTTL(),
 		StateRoot: dataDir,
