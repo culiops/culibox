@@ -645,13 +645,14 @@ func TestBoxSetupFailsAForeignSocket(t *testing.T) {
 
 var _ boxvm.Runner = (*fakeColima)(nil)
 
-// The serve path protects the data root, every config dir and the profiles dir,
-// deduped, and the box manager refuses a workspace over a config dir that is
-// outside the data root.
+// The serve path protects the data root and the directories of every config
+// file and of the profiles file, deduped, and the box manager refuses a
+// workspace over a config dir that is outside the data root.
 func TestProtectedDirsReachTheBoxManager(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := t.TempDir()
-	prot := protectedDirs(root, []string{root, cfgDir}, filepath.Join(root, "profiles.json"))
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(cfgDir, "config.json")},
+		filepath.Join(root, "profiles.json"))
 	if len(prot) != 2 || prot[0].What != "agent-box's data directory" || prot[1].What != "agent-box's config directory" {
 		t.Fatalf("want data root + the outside config dir, deduped: %+v", prot)
 	}
@@ -661,5 +662,81 @@ func TestProtectedDirsReachTheBoxManager(t *testing.T) {
 	}
 	if reason, bad := l.boxes.Unboxable(cfgDir); !bad || !strings.Contains(reason, "config directory") {
 		t.Fatalf("a workspace at the config dir must be refused: %q %v", reason, bad)
+	}
+}
+
+// load and store.Open read through a symlinked config.json / profiles.json, so
+// the link targets' directories (outside the data root, e.g. ~/dotfiles) are
+// protected too, along with the directories holding the links.
+func TestProtectedDirsFollowSymlinkedConfigAndProfiles(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "data")
+	xdgDir := filepath.Join(home, "xdg", "agent-box")
+	dots := filepath.Join(home, "dotfiles")
+	profDots := filepath.Join(home, "profdots")
+	for _, d := range []string{root, xdgDir, dots, profDots} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{filepath.Join(dots, "config.json"), filepath.Join(profDots, "profiles.json")} {
+		if err := os.WriteFile(f, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(dots, "config.json"), filepath.Join(xdgDir, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(profDots, "profiles.json"), filepath.Join(root, "profiles.json")); err != nil {
+		t.Fatal(err)
+	}
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(xdgDir, "config.json")},
+		filepath.Join(root, "profiles.json"))
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ws, want := range map[string]string{
+		dots:     "it is agent-box's config directory",
+		xdgDir:   "it is agent-box's config directory",
+		profDots: "it is agent-box's profiles directory",
+	} {
+		if reason, bad := l.boxes.Unboxable(ws); !bad || !strings.Contains(reason, want) {
+			t.Errorf("%s: want %q, got %q %v", ws, want, reason, bad)
+		}
+	}
+	proj := filepath.Join(dots, "proj")
+	if err := os.Mkdir(proj, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if reason, bad := l.boxes.Unboxable(proj); bad {
+		t.Fatalf("a subdir of a config dir must stay boxable: %q", reason)
+	}
+}
+
+// profiles_path directly in $HOME protects $HOME itself (already refused) but
+// must not make every project under $HOME unboxable.
+func TestProfilesInHomeLeavesProjectsBoxable(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(t.TempDir(), "data") // outside home, so home's refusal is the profiles dir's
+	proj := filepath.Join(home, "proj")
+	for _, d := range []string{root, proj} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(home, "profiles.json"))
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason, bad := l.boxes.Unboxable(proj); bad {
+		t.Fatalf("~/proj must stay boxable with profiles.json in $HOME: %q", reason)
+	}
+	if reason, bad := l.boxes.Unboxable(home); !bad || !strings.Contains(reason, "profiles directory") {
+		t.Fatalf("$HOME itself must be refused as the profiles dir: %q %v", reason, bad)
+	}
+	if reason, bad := l.boxes.Unboxable(filepath.Join(root, "vm")); !bad || !strings.Contains(reason, "inside agent-box's data directory") {
+		t.Fatalf("inside the data root must stay refused: %q %v", reason, bad)
 	}
 }

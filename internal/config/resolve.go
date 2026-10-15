@@ -97,28 +97,24 @@ func candidates(root, home, xdg string, relocated bool) []string {
 	return out
 }
 
-// ConfigDirs is every directory Resolve (with the same arguments) reads a
-// config file from, whether or not the file exists yet: the explicit file's
-// directory, else each candidate's. A boxed workspace must not overlap any of
-// them, or a box could write the config that names the binaries agent-box
-// runs on its next start.
-func ConfigDirs(explicit string, set bool, home, xdg, abHome string) ([]string, error) {
+// ConfigFiles is every config file Resolve (with the same arguments) reads on
+// the next start, absolute, whether or not it exists yet: the explicit file,
+// else each candidate. A boxed workspace must not reach any of them (nor the
+// files they link to), or a box could write the config that names the
+// binaries agent-box runs.
+func ConfigFiles(explicit string, set bool, home, xdg, abHome string) ([]string, error) {
 	if set {
 		p, err := filepath.Abs(explicit)
 		if err != nil {
 			return nil, err
 		}
-		return []string{filepath.Dir(p)}, nil
+		return []string{p}, nil
 	}
 	root, err := Root(home, abHome)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, p := range candidates(root, home, xdg, abHome != "") {
-		out = append(out, filepath.Dir(p))
-	}
-	return out, nil
+	return candidates(root, home, xdg, abHome != ""), nil
 }
 
 // Defaults is the zero-config laptop setup: loopback only, token login (no

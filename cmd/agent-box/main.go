@@ -71,11 +71,11 @@ func main() {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
 	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
-	cfgDirs, err := config.ConfigDirs(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	serve(cfg, home, cfgDirs)
+	serve(cfg, home, cfgFiles)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -101,18 +101,21 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 }
 
 // protectedDirs is every host directory a boxed workspace must not overlap,
-// built once for both the box manager and the web layer: the data root, each
-// directory a config file is read from on the next start (cfgDirs, which may
-// be outside the data root: -config, the ~/.config fallback), and the
-// profiles file's directory (profiles_path may be anywhere). A box that could
-// write any of them could change the binaries agent-box runs.
-func protectedDirs(dataDir string, cfgDirs []string, profilesPath string) []box.ProtectedDir {
+// built once for all four gates (spawn, boot check, profile save, picker): the
+// data root, and the directory of each config file read on the next start
+// (cfgFiles: -config, the ~/.config fallback) and of the profiles file
+// (profiles_path may be anywhere). Both files are read through symlinks, so
+// every hop's directory and the target's count (box.FileDirs). A box that
+// could write any of them could change the binaries agent-box runs.
+func protectedDirs(dataDir string, cfgFiles []string, profilesPath string) []box.ProtectedDir {
 	out := []box.ProtectedDir{box.DataDirProtected(dataDir)}
-	for _, d := range cfgDirs {
-		out = append(out, box.ConfigDirProtected(d))
+	for _, f := range cfgFiles {
+		for _, d := range box.FileDirs(f) {
+			out = append(out, box.ConfigDirProtected(d))
+		}
 	}
-	if p, err := filepath.Abs(profilesPath); err == nil {
-		out = append(out, box.ProfilesDirProtected(filepath.Dir(p)))
+	for _, d := range box.FileDirs(profilesPath) {
+		out = append(out, box.ProfilesDirProtected(d))
 	}
 	return box.DedupeProtected(out)
 }
@@ -156,7 +159,7 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg config.Config, home string, cfgDirs []string) {
+func serve(cfg config.Config, home string, cfgFiles []string) {
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -293,7 +296,7 @@ func serve(cfg config.Config, home string, cfgDirs []string) {
 	boxRuntime := ""
 	var layer *boxLayer
 	var boxes *box.Manager
-	protected := protectedDirs(dataDir, cfgDirs, profilesPathFor(cfg, dataDir))
+	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir))
 	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}, protected); err != nil {
 		// Not fatal: without containment the console still runs, on the host
 		// tier, and says so rather than pretending to be contained.

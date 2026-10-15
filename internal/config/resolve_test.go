@@ -204,32 +204,33 @@ func TestResolve_RefusesAWritableConfigFile(t *testing.T) {
 	}
 }
 
-// ConfigDirs is every directory Resolve reads a config file from on the next
-// start, whether or not the file exists yet: a box that could write one could
-// plant a config naming the binaries agent-box runs.
-func TestConfigDirs(t *testing.T) {
+// ConfigFiles is every file Resolve reads a config from on the next start,
+// whether or not it exists yet: a box that could write one could plant a
+// config naming the binaries agent-box runs.
+func TestConfigFiles(t *testing.T) {
 	home := "/h"
-	got, err := ConfigDirs("", false, home, "", "")
-	if err != nil || len(got) != 2 || got[0] != "/h/.local/share/agent-box" || got[1] != "/h/.config/agent-box" {
+	got, err := ConfigFiles("", false, home, "", "")
+	if err != nil || len(got) != 2 || got[0] != "/h/.local/share/agent-box/config.json" ||
+		got[1] != "/h/.config/agent-box/config.json" {
 		t.Fatalf("default: %v %v", got, err)
 	}
-	got, _ = ConfigDirs("", false, home, "/x", "")
-	if got[1] != "/x/agent-box" {
+	got, _ = ConfigFiles("", false, home, "/x", "")
+	if got[1] != "/x/agent-box/config.json" {
 		t.Fatalf("xdg: %v", got)
 	}
-	got, _ = ConfigDirs("", false, home, "/x", "/ab")
-	if len(got) != 1 || got[0] != "/ab" {
+	got, _ = ConfigFiles("", false, home, "/x", "/ab")
+	if len(got) != 1 || got[0] != "/ab/config.json" {
 		t.Fatalf("relocated: %v", got)
 	}
-	got, _ = ConfigDirs("/etc/ab/c.json", true, home, "", "")
-	if len(got) != 1 || got[0] != "/etc/ab" {
+	got, _ = ConfigFiles("/etc/ab/c.json", true, home, "", "")
+	if len(got) != 1 || got[0] != "/etc/ab/c.json" {
 		t.Fatalf("explicit: %v", got)
 	}
-	got, _ = ConfigDirs("c.json", true, home, "", "")
-	if wd, _ := os.Getwd(); len(got) != 1 || got[0] != wd {
+	got, _ = ConfigFiles("c.json", true, home, "", "")
+	if wd, _ := os.Getwd(); len(got) != 1 || got[0] != filepath.Join(wd, "c.json") {
 		t.Fatalf("a relative explicit path must resolve against the cwd: %v", got)
 	}
-	if _, err := ConfigDirs("", false, home, "", "rel"); err == nil {
+	if _, err := ConfigFiles("", false, home, "", "rel"); err == nil {
 		t.Fatal("a relative AGENT_BOX_HOME must be an error")
 	}
 }

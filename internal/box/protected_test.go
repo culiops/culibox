@@ -90,3 +90,107 @@ func TestDedupeProtectedKeepsTheFirstMeaning(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A config or profiles directory is protected against a workspace that IS it or
+// CONTAINS it: its files sit directly in it, so a box mounted below it cannot
+// reach them. Refusing "inside" too would make every workspace under $HOME
+// unboxable when profiles.json sits directly in $HOME. The data root keeps
+// all three shapes: the VM's files live deep inside it.
+func TestConfigAndProfilesDirsRefuseOnlyIsAndContains(t *testing.T) {
+	home := t.TempDir()
+	proj := filepath.Join(home, "proj")
+	sub := filepath.Join(home, "cfg", "sub")
+	if err := os.MkdirAll(proj, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	prof := []ProtectedDir{ProfilesDirProtected(home)}
+	if r := ProtectedOverlap(proj, prof); r != "" {
+		t.Fatalf("a project under a profiles dir in $HOME must stay boxable: %q", r)
+	}
+	if r := ProtectedOverlap(home, prof); !strings.Contains(r, "it is agent-box's profiles directory") {
+		t.Fatalf("the profiles dir itself must be refused: %q", r)
+	}
+	cfg := []ProtectedDir{ConfigDirProtected(filepath.Join(home, "cfg"))}
+	if r := ProtectedOverlap(sub, cfg); r != "" {
+		t.Fatalf("a subdir of a config dir must be boxable: %q", r)
+	}
+	if r := ProtectedOverlap(home, cfg); !strings.Contains(r, "it contains agent-box's config directory") {
+		t.Fatalf("an ancestor of the config dir must be refused: %q", r)
+	}
+	data := []ProtectedDir{DataDirProtected(filepath.Join(home, "cfg"))}
+	if r := ProtectedOverlap(sub, data); !strings.Contains(r, "it is inside agent-box's data directory") {
+		t.Fatalf("the data root still refuses a workspace inside it: %q", r)
+	}
+}
+
+// FileDirs follows a symlinked file hop by hop: agent-box reads through the
+// link, so the directory of every hop (where the link could be swapped) and of
+// the target (where the content can be rewritten) is protected.
+func TestFileDirsFollowsTheSymlinkChain(t *testing.T) {
+	a, b, c := t.TempDir(), t.TempDir(), t.TempDir()
+	target := filepath.Join(c, "config.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(b, "mid.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../"+filepath.Base(b)+"/mid.json", filepath.Join(a, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	got := FileDirs(filepath.Join(a, "config.json"))
+	want := map[string]bool{a: false, b: false, c: false}
+	for _, d := range got {
+		if _, ok := want[d]; ok {
+			want[d] = true
+		}
+	}
+	for d, seen := range want {
+		if !seen {
+			t.Errorf("FileDirs missed %s: %v", d, got)
+		}
+	}
+	if got := FileDirs(filepath.Join(a, "missing.json")); len(got) != 1 || got[0] != a {
+		t.Fatalf("a missing file protects its own dir only: %v", got)
+	}
+}
+
+// A protected dir reached through a symlinked directory is matched in both
+// spellings: the box could swap the link from the directory that holds it.
+func TestProtectedOverlapMatchesTheLinkSpellingToo(t *testing.T) {
+	home := t.TempDir()
+	dots := filepath.Join(home, "dotfiles", "ab")
+	cfgParent := filepath.Join(home, "dotconfig")
+	for _, d := range []string{dots, cfgParent} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(cfgParent, "agent-box")
+	if err := os.Symlink(dots, link); err != nil {
+		t.Fatal(err)
+	}
+	prot := []ProtectedDir{ConfigDirProtected(link)}
+	if r := ProtectedOverlap(cfgParent, prot); !strings.Contains(r, "contains") {
+		t.Fatalf("the directory holding the link must be refused: %q", r)
+	}
+	if r := ProtectedOverlap(dots, prot); !strings.Contains(r, "it is") {
+		t.Fatalf("the link's target must be refused: %q", r)
+	}
+}
+
+// A config dir first does not hide the data root's stricter "inside" rule.
+func TestDedupeProtectedNeverDropsTheStricterEntry(t *testing.T) {
+	d := t.TempDir()
+	got := DedupeProtected([]ProtectedDir{ConfigDirProtected(d), DataDirProtected(d), ProfilesDirProtected(d)})
+	if len(got) != 2 || got[1].What != "agent-box's data directory" {
+		t.Fatalf("got %+v", got)
+	}
+	inside := filepath.Join(d, "x")
+	if r := ProtectedOverlap(inside, got); !strings.Contains(r, "inside agent-box's data directory") {
+		t.Fatalf("inside the data root must stay refused: %q", r)
+	}
+}
