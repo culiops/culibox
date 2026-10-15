@@ -376,7 +376,7 @@ func serve(cfg config.Config, home string) {
 			log.Fatalf("profiles store: %v", err)
 		}
 	}
-	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, st, lnch.SetAgents)
+	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, dataDir, st, lnch.SetAgents)
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
 	// for profile-based claude sessions that survived a daemon restart.
@@ -393,6 +393,7 @@ func serve(cfg config.Config, home string) {
 		Password:   login.Secret,
 		Profiles:   pm,
 		Home:       home,
+		DataRoot:   dataDir,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime: boxRuntime,
 

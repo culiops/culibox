@@ -964,3 +964,58 @@ func TestReconcileTriesEveryOrphanPastAFailedRemoval(t *testing.T) {
 		t.Fatalf("every orphan must be tried, stops=%d of 3", f.stops())
 	}
 }
+
+// A workspace that overlaps the data root would hand the box the VM's root-run
+// provision script (<root>/vm/agent-box/colima.yaml), lima's SSH key and the
+// profiles, so every overlap shape is refused, symlinked paths included.
+func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "ab")
+	inside := filepath.Join(root, "vm", "agent-box")
+	if err := os.MkdirAll(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: root, Client: newFake()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, ws := range map[string]string{
+		"equal": root, "ancestor": parent, "descendant": inside, "symlink into it": link,
+	} {
+		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", []string{"claude"}, nil, nil)
+		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "data directory") ||
+			!strings.Contains(err.Error(), ws) {
+			t.Errorf("%s: want a data-root refusal naming %q, got %v", name, ws, err)
+		}
+		if _, bad := m.Unboxable(ws); !bad {
+			t.Errorf("%s: Unboxable must apply the same rule", name)
+		}
+	}
+	sibling := filepath.Join(parent, "proj")
+	if err := os.Mkdir(sibling, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := m.Wrap(context.Background(), sibling, "s-1", []string{"claude"}, nil, nil); err != nil {
+		t.Fatalf("a sibling of the data root must box: %v", err)
+	}
+	// A data root reached through a symlink is the same directory.
+	rootLink := filepath.Join(t.TempDir(), "rootlink")
+	if err := os.Symlink(root, rootLink); err != nil {
+		t.Fatal(err)
+	}
+	if reason := DataRootOverlap(inside, rootLink); reason == "" {
+		t.Fatal("a symlinked data root must still be matched")
+	}
+	// The ab prefix must not match abc: component-wise, not string prefix.
+	abc := filepath.Join(parent, "abc")
+	if err := os.Mkdir(abc, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if reason := DataRootOverlap(abc, root); reason != "" {
+		t.Fatalf("%s is not inside %s: %q", abc, root, reason)
+	}
+}

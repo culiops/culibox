@@ -10,7 +10,7 @@ import (
 
 func TestProfilesAPI_CreateListDelete(t *testing.T) {
 	pm := NewProfileManager(
-		[]config.AgentConfig{{Name: "bash", Bin: "bash"}}, nil, "", newFakeStore(), func([]config.AgentConfig) {},
+		[]config.AgentConfig{{Name: "bash", Bin: "bash"}}, nil, "", "", newFakeStore(), func([]config.AgentConfig) {},
 	)
 	s := &Server{Profiles: pm}
 
@@ -51,7 +51,7 @@ func TestProfilesAPI_CreateListDelete(t *testing.T) {
 }
 
 func TestProfileReplyableRoundTripsThroughTheAPI(t *testing.T) {
-	pm := NewProfileManager(nil, nil, "", newFakeStore(), func([]config.AgentConfig) {})
+	pm := NewProfileManager(nil, nil, "", "", newFakeStore(), func([]config.AgentConfig) {})
 	s := &Server{Profiles: pm}
 	rec := httptest.NewRecorder()
 	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles",

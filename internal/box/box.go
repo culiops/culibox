@@ -344,7 +344,7 @@ func ensureMountpoints(root *os.Root, mounts []Mount) error {
 // agent the whole home — ~/.ssh, any secrets file, the agent's own config —
 // and every other control in this package becomes decoration. Refuse loudly
 // rather than narrow silently: a surprising mount is how containment dies.
-func unboxableWorkspace(cwd string, shared []string) (string, bool) {
+func unboxableWorkspace(cwd, dataRoot string, shared []string) (string, bool) {
 	abs, err := filepath.Abs(cwd)
 	if err != nil {
 		return "", false
@@ -358,20 +358,21 @@ func unboxableWorkspace(cwd string, shared []string) (string, bool) {
 	if abs == string(filepath.Separator) {
 		return "it is the filesystem root", true
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
+	if home, err := os.UserHomeDir(); err == nil {
+		if real, err := filepath.EvalSymlinks(home); err == nil {
+			home = real
+		}
+		if abs == filepath.Clean(home) {
+			return "it is your home directory, so the box would mount everything in it", true
+		}
+		// An ancestor of home is worse still.
+		if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+			return "it contains your home directory", true
+		}
 	}
-	if real, err := filepath.EvalSymlinks(home); err == nil {
-		home = real
-	}
-	if abs == filepath.Clean(home) {
-		return "it is your home directory, so the box would mount everything in it", true
-	}
-	// An ancestor of home is worse still.
-	if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
-		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
-		return "it contains your home directory", true
+	if reason := DataRootOverlap(abs, dataRoot); reason != "" {
+		return reason, true
 	}
 	if len(shared) > 0 && !UnderMount(abs, shared) {
 		return "it is not under the box VM's shared directories (" + strings.Join(shared, ", ") +
@@ -380,8 +381,47 @@ func unboxableWorkspace(cwd string, shared []string) (string, bool) {
 	return "", false
 }
 
+// DataRootOverlap reports why a workspace that is, contains, or sits inside the
+// agent-box data root cannot be boxed, or "" when the two are disjoint. That
+// root holds what the box must never write: the box VM's colima.yaml (its
+// provision script runs as root in the VM), lima's SSH key for the VM user, the
+// profiles and the config. Both paths are compared with symlinks resolved and
+// component-wise, so /x/ab is not inside /x/a. An empty dataRoot checks nothing.
+// The web layer calls this too, so the picker and the daemon cannot drift.
+func DataRootOverlap(workspace, dataRoot string) string {
+	if dataRoot == "" {
+		return ""
+	}
+	ws, err := filepath.Abs(workspace)
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(ws); err == nil {
+		ws = real
+	}
+	root, err := filepath.Abs(dataRoot)
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	const why = "), which holds the box VM's controls, its SSH key and your profiles"
+	switch {
+	case ws == root:
+		return "it is agent-box's data directory (" + root + why
+	case UnderMount(root, []string{ws}):
+		return "it contains agent-box's data directory (" + root + why
+	case UnderMount(ws, []string{root}):
+		return "it is inside agent-box's data directory (" + root + why
+	}
+	return ""
+}
+
 // Unboxable is the workspace refusal Wrap applies, for the boot-time check.
-func (m *Manager) Unboxable(cwd string) (string, bool) { return unboxableWorkspace(cwd, m.opts.Shared) }
+func (m *Manager) Unboxable(cwd string) (string, bool) {
+	return unboxableWorkspace(cwd, m.opts.StateRoot, m.opts.Shared)
+}
 
 // Prepare readies the containment layer for a boxed spawn (on macOS: the VM is
 // running and the image fits). The session layer calls it BEFORE resolving the
@@ -403,7 +443,7 @@ func (m *Manager) Prepare(ctx context.Context) error {
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
 func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
-	if reason, bad := unboxableWorkspace(cwd, m.opts.Shared); bad {
+	if reason, bad := unboxableWorkspace(cwd, m.opts.StateRoot, m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
 			ErrUnboxableWorkspace, cwd, reason)

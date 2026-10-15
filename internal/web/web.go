@@ -27,6 +27,9 @@ type Server struct {
 	// from the env var named by config's password_env). Never logged.
 	Password string
 	Home     string // for the workspace picker ($HOME + subfolders)
+	// DataRoot is agent-box's data directory. The picker marks a directory that
+	// overlaps it unboxable, matching the daemon's refusal.
+	DataRoot string
 	Terminal http.Handler
 	EnvLabel string // shown as the UI env badge; empty → no badge
 	EnvColor string // CSS color for the env badge/strip
@@ -126,7 +129,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, meta)
 	})
 	protected.HandleFunc("/api/workspaces", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, listWorkspaces(s.Home))
+		writeJSON(w, http.StatusOK, listWorkspaces(s.Home, s.DataRoot))
 	})
 	protected.HandleFunc("/api/fs/list", s.handleFsList)
 	protected.HandleFunc("/api/fs/read", s.handleFsRead)

@@ -3,6 +3,7 @@ package web
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func TestListWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ws := listWorkspaces(home)
+	ws := listWorkspaces(home, "")
 	if len(ws) != 3 {
 		t.Fatalf("want 3 (home + 2 non-hidden dirs), got %d: %+v", len(ws), ws)
 	}
@@ -48,7 +49,7 @@ func TestHomeIsListedButNotBoxable(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, "project"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	got := listWorkspaces(home)
+	got := listWorkspaces(home, "")
 	if len(got) < 2 {
 		t.Fatalf("expected home plus the project, got %+v", got)
 	}
@@ -72,14 +73,14 @@ func TestHomeIsListedButNotBoxable(t *testing.T) {
 // can never be contained.
 func TestDefaultCwdIsCheckedForBoxability(t *testing.T) {
 	home := t.TempDir()
-	if reason, ok := UnboxableDefaultCwd(home, home); !ok || reason == "" {
+	if reason, ok := UnboxableDefaultCwd(home, home, ""); !ok || reason == "" {
 		t.Fatal("a default_cwd equal to home must be reported at startup")
 	}
 	proj := filepath.Join(home, "project")
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := UnboxableDefaultCwd(proj, home); ok {
+	if _, ok := UnboxableDefaultCwd(proj, home, ""); ok {
 		t.Fatal("a project directory must pass")
 	}
 }
@@ -95,7 +96,7 @@ func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
 		mustMkdir(t, filepath.Join(home, n))
 	}
 	byLabel := map[string]Workspace{}
-	for _, w := range listWorkspaces(home) {
+	for _, w := range listWorkspaces(home, "") {
 		byLabel[w.Label] = w
 	}
 	if w := byLabel["a,b"]; w.Boxable || w.Reason == "" {
@@ -109,7 +110,43 @@ func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
 	if !byLabel["fine"].Boxable {
 		t.Fatalf("an ordinary directory must stay boxable: %+v", byLabel["fine"])
 	}
-	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "a,b"), home); !bad || reason == "" {
+	if reason, bad := UnboxableDefaultCwd(filepath.Join(home, "a,b"), home, ""); !bad || reason == "" {
 		t.Fatal("default_cwd with a comma must be reported at save/startup")
+	}
+}
+
+// The picker and the save-time check mirror the daemon's data-root refusal
+// (box.DataRootOverlap): equal, ancestor, descendant and a symlink into it.
+func TestDataRootOverlapIsNotBoxable(t *testing.T) {
+	home := t.TempDir()
+	parent := filepath.Join(home, "local")
+	root := filepath.Join(parent, "ab")
+	inside := filepath.Join(root, "vm")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, "vmlink")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Fatal(err)
+	}
+	mustMkdir(t, filepath.Join(home, "proj"))
+	for name, dir := range map[string]string{
+		"equal": root, "ancestor": parent, "descendant": inside, "symlink into it": link,
+	} {
+		if reason, bad := UnboxableDefaultCwd(dir, home, root); !bad || !strings.Contains(reason, "data directory") {
+			t.Errorf("%s: want a data-root refusal, got %q %v", name, reason, bad)
+		}
+	}
+	byLabel := map[string]Workspace{}
+	for _, w := range listWorkspaces(home, root) {
+		byLabel[w.Label] = w
+	}
+	for _, l := range []string{"local", "vmlink"} {
+		if w := byLabel[l]; w.Boxable || !strings.Contains(w.Reason, "data directory") {
+			t.Errorf("picker must mark %s unboxable: %+v", l, w)
+		}
+	}
+	if !byLabel["proj"].Boxable {
+		t.Fatalf("an unrelated project must stay boxable: %+v", byLabel["proj"])
 	}
 }

@@ -65,12 +65,16 @@ type ProfileManager struct {
 	// site can leave the containment default implicit.
 	defaultRuntime string
 	home           string // for save-time boxability checks on default_cwd
+	// dataRoot is agent-box's data directory; a boxed default_cwd must not
+	// overlap it (box.DataRootOverlap). Empty only in tests.
+	dataRoot string
 }
 
 // NewProfileManager wires seeds + store + launcher-apply and does the initial
 // refresh. defaultRuntime is the instance tier (config.DefaultRuntime); "" means
-// box, matching config.AgentConfig.RuntimePolicy.
-func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, defaultRuntime string, st profileStore, apply func([]config.AgentConfig)) *ProfileManager {
+// box, matching config.AgentConfig.RuntimePolicy. dataRoot is the data
+// directory a boxed default_cwd must not overlap.
+func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, defaultRuntime, dataRoot string, st profileStore, apply func([]config.AgentConfig)) *ProfileManager {
 	m := &ProfileManager{
 		seeds:          map[string]config.AgentConfig{},
 		options:        options,
@@ -78,6 +82,7 @@ func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, d
 		store:          st,
 		apply:          apply,
 		defaultRuntime: defaultRuntime,
+		dataRoot:       dataRoot,
 	}
 	for _, s := range seeds {
 		if _, dup := m.seeds[s.Name]; !dup {
@@ -197,7 +202,7 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	if p.DefaultCwd != "" {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(p)
 		if rt == config.RuntimeBox {
-			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home); bad {
+			if reason, bad := UnboxableDefaultCwd(p.DefaultCwd, m.home, m.dataRoot); bad {
 				return fmt.Errorf("default working dir cannot be contained: %s", reason)
 			}
 		}
