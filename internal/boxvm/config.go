@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/culiops/agent-box/internal/box"
 )
@@ -70,13 +72,20 @@ iptables -N DOCKER-USER 2>/dev/null || true
 iptables -C DOCKER-USER -d "$gw" -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -d "$gw" -j DROP
 `
 
-// yamlSafe refuses what a double-quoted YAML scalar would need escaping for.
-// Refused, not escaped: the same paths also reach docker and colima argv.
+// yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
+// could be read differently: a double quote, a backslash, invalid UTF-8, any
+// control character (C0, DEL, C1 including U+0085 NEL) and U+2028/U+2029, which
+// YAML 1.1 readers treat as line breaks. Refused, not escaped: the same paths
+// also reach docker and colima argv.
 func yamlSafe(p string) error {
+	bad := !utf8.ValidString(p)
 	for _, r := range p {
-		if r == '"' || r == '\\' || r < 0x20 || r == 0x7f {
-			return fmt.Errorf("path %q contains a character agent-box will not write into the VM config", p)
+		if r == '"' || r == '\\' || unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			bad = true
 		}
+	}
+	if bad {
+		return fmt.Errorf("path %q contains a character agent-box will not write into the VM config", p)
 	}
 	return nil
 }
@@ -91,11 +100,24 @@ func (c Config) Validate() error {
 		if !filepath.IsAbs(p.path) {
 			return fmt.Errorf("the box VM needs an absolute %s, got %q", p.what, p.path)
 		}
+		why := ""
 		if err := yamlSafe(p.path); err != nil {
-			return fmt.Errorf("%s: %w. Choose another data root with AGENT_BOX_HOME", p.what, err)
+			why = err.Error()
+		} else if r := box.MountUnsafe(p.path); r != "" {
+			why = fmt.Sprintf("%s %q: %s", p.what, p.path, r)
 		}
-		if why := box.MountUnsafe(p.path); why != "" {
-			return fmt.Errorf("%s %q: %s. Choose another data root with AGENT_BOX_HOME", p.what, p.path, why)
+		if why == "" {
+			continue
+		}
+		if p.what == "home" {
+			// AGENT_BOX_HOME moves the data root, never the user's home.
+			return fmt.Errorf("the box VM cannot share this home directory (%s). Rename the home directory, or run agents on the host tier instead", why)
+		}
+		return fmt.Errorf("the box VM cannot use this data root (%s). Choose another data root with AGENT_BOX_HOME", why)
+	}
+	for _, b := range []struct{ what, path string }{{"colima", c.ColimaBin}, {"docker", c.DockerBin}} {
+		if !filepath.IsAbs(b.path) {
+			return fmt.Errorf("the box VM needs an absolute %s binary path, got %q", b.what, b.path)
 		}
 	}
 	if c.CPUs <= 0 || c.MemoryGiB <= 0 {

@@ -130,7 +130,7 @@ func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
 // workspace named "x,dst=/etc" would rewrite the mount. Refuse, never escape.
 func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
-	for _, name := range []string{"a,b", `q"uote`, "nl\nx"} {
+	for _, name := range []string{"a,b", `q"uote`, "nl\nx", "nel\u0085x", "ls\u2028x", "ps\u2029x", "c1\u009bx", "bad\xffutf8"} {
 		dir := filepath.Join(t.TempDir(), name)
 		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatal(err)
@@ -154,8 +154,19 @@ func TestUnsafeExtraMountSourceFailsTheSpawn(t *testing.T) {
 	}
 }
 
+// MountUnsafe also refuses what a YAML/CSV reader may fold into a different
+// path: C1 controls (U+0085 NEL), U+2028/U+2029 line separators, invalid UTF-8.
+func TestMountUnsafeRefusesLineBreaksControlsAndBadUTF8(t *testing.T) {
+	for _, p := range []string{"/a,b", `/a"b`, "/a\nb", "/a\x7fb", "/a\u0080b", "/a\u0085b", "/a\u009bb",
+		"/a\u2028b", "/a\u2029b", "/a\xffb"} {
+		if MountUnsafe(p) == "" {
+			t.Errorf("%q must be refused", p)
+		}
+	}
+}
+
 func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
-	for _, p := range []string{"/home/claude/proj", "/Users/me/My Project", "/srv/a-b_c.d"} {
+	for _, p := range []string{"/home/claude/proj", "/Users/me/My Project", "/srv/a-b_c.d", "/Users/me/projet \u00e9t\u00e9", "/home/x/\u4e2d\u6587"} {
 		if r := MountUnsafe(p); r != "" {
 			t.Errorf("%q should be safe, got %q", p, r)
 		}

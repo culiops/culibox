@@ -90,12 +90,21 @@ func TestWorkspaceWithMountMetacharactersIsNotBoxable(t *testing.T) {
 	home := t.TempDir()
 	mustMkdir(t, filepath.Join(home, "a,b"))
 	mustMkdir(t, filepath.Join(home, "fine"))
+	odd := []string{"nel\u0085x", "ls\u2028x", "ps\u2029x", "bad\xffutf8"}
+	for _, n := range odd {
+		mustMkdir(t, filepath.Join(home, n))
+	}
 	byLabel := map[string]Workspace{}
 	for _, w := range listWorkspaces(home) {
 		byLabel[w.Label] = w
 	}
 	if w := byLabel["a,b"]; w.Boxable || w.Reason == "" {
 		t.Fatalf("a path with a comma must be unboxable with a reason: %+v", w)
+	}
+	for _, n := range odd {
+		if w := byLabel[n]; w.Boxable || w.Reason == "" {
+			t.Fatalf("%q must be unboxable with a reason: %+v", n, w)
+		}
 	}
 	if !byLabel["fine"].Boxable {
 		t.Fatalf("an ordinary directory must stay boxable: %+v", byLabel["fine"])

@@ -127,7 +127,8 @@ func TestSocketPathLimit(t *testing.T) {
 }
 
 func TestValidateRefusesPathsDockerOrYAMLCannotCarry(t *testing.T) {
-	for _, bad := range []string{"/Users/a,b", `/Users/a"b`, `/Users/a\b`, "/Users/a\nb", "/Users/a\x7fb"} {
+	for _, bad := range []string{"/Users/a,b", `/Users/a"b`, `/Users/a\b`, "/Users/a\nb", "/Users/a\x7fb",
+		"/Users/a\u0085b", "/Users/a\u0080b", "/Users/a\u009bb", "/Users/a\u2028b", "/Users/a\u2029b", "/Users/a\xffb"} {
 		for _, field := range []string{"root", "home"} {
 			c := testCfg()
 			if field == "root" {
@@ -143,8 +144,15 @@ func TestValidateRefusesPathsDockerOrYAMLCannotCarry(t *testing.T) {
 			if field == "root" {
 				offender = c.Root
 			}
-			if !strings.Contains(err.Error(), "AGENT_BOX_HOME") || !strings.Contains(err.Error(), fmt.Sprintf("%q", offender)) {
-				t.Fatalf("%s %q: error must name the path and the remedy: %v", field, bad, err)
+			if !strings.Contains(err.Error(), fmt.Sprintf("%q", offender)) {
+				t.Fatalf("%s %q: error must name the path: %v", field, bad, err)
+			}
+			// AGENT_BOX_HOME moves the data root, not the home.
+			if has := strings.Contains(err.Error(), "AGENT_BOX_HOME"); has != (field == "root") {
+				t.Fatalf("%s %q: AGENT_BOX_HOME remedy present=%v, want %v: %v", field, bad, has, field == "root", err)
+			}
+			if field == "home" && !strings.Contains(err.Error(), "host tier") {
+				t.Fatalf("home %q: error must offer renaming the home or the host tier: %v", bad, err)
 			}
 			if _, yerr := c.YAML(); yerr == nil {
 				t.Fatalf("YAML must refuse %s %q too", field, bad)
@@ -162,6 +170,10 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 		"relative home": func(c *Config) { c.Home = "Users/a" },
 		"zero cpus":     func(c *Config) { c.CPUs = 0 },
 		"zero memory":   func(c *Config) { c.MemoryGiB = 0 },
+		"empty colima":  func(c *Config) { c.ColimaBin = "" },
+		"rel colima":    func(c *Config) { c.ColimaBin = "colima" },
+		"empty docker":  func(c *Config) { c.DockerBin = "" },
+		"rel docker":    func(c *Config) { c.DockerBin = "bin/docker" },
 	} {
 		c := testCfg()
 		mut(&c)

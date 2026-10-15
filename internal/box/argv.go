@@ -5,6 +5,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // hostOnlyEnv names that must never cross into a box. PATH/HOME/SHELL would
@@ -113,18 +115,26 @@ func bindMount(src, dst string, ro bool) string {
 	return s
 }
 
-// MountUnsafe names why docker's --mount CSV parser would misread p, or "" when
-// it is safe. A comma starts a new option and a quote opens a CSV field, so
-// either one in a workspace name could rewrite the mount. Refused, not escaped.
+// MountUnsafe names why docker's --mount CSV parser (or a reader of the same
+// path elsewhere, such as the VM's YAML) would misread p, or "" when it is safe.
+// A comma starts a new option and a quote opens a CSV field, so either one in a
+// workspace name could rewrite the mount. Invalid UTF-8, every control character
+// (C0, DEL, C1 including U+0085 NEL) and the U+2028/U+2029 separators are refused
+// too: a YAML reader folds some of them into a space or a line break, so the VM
+// would share a different directory than the one docker is told to mount.
+// Refused, not escaped.
 func MountUnsafe(p string) string {
+	if !utf8.ValidString(p) {
+		return "its path is not valid UTF-8"
+	}
 	for _, r := range p {
 		switch {
 		case r == ',':
 			return "its path contains a comma, which docker --mount cannot carry safely"
 		case r == '"':
 			return "its path contains a double quote, which docker --mount cannot carry safely"
-		case r < 0x20 || r == 0x7f:
-			return "its path contains a control character"
+		case unicode.IsControl(r) || r == '\u2028' || r == '\u2029':
+			return "its path contains a control or line-separator character"
 		}
 	}
 	return ""
