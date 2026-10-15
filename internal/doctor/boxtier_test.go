@@ -194,3 +194,27 @@ func TestGatherBoxFactsDarwinNeverStartsTheVM(t *testing.T) {
 		t.Fatalf("doctor may only ask colima for its version, got calls:\n%s", b)
 	}
 }
+
+// Review focus 4: whether the user's own docker context is still theirs does not
+// depend on the box VM, so the row appears on every darwin early return too.
+func TestBoxTierContextRowSurvivesEarlyReturns(t *testing.T) {
+	switched := errors.New("your docker CLI's current context is agent-box's box VM")
+	for name, mod := range map[string]func(*boxFacts){
+		"no colima":       func(f *boxFacts) { f.ColimaErr = errors.New("colima not found") },
+		"old macOS":       func(f *boxFacts) { f.MacOSMajor = 12 },
+		"socket too long": func(f *boxFacts) { f.SocketErr = errors.New("socket too long") },
+		"not set up":      func(f *boxFacts) { f.SetUp = false },
+		"status failed":   func(f *boxFacts) { f.StatusErr = errors.New("boom") },
+	} {
+		f := ok()
+		mod(&f)
+		f.UserContext = switched
+		if d := detail(boxTierResults("darwin", f, tokenOK)); !strings.Contains(d, "FAIL docker context") {
+			t.Errorf("%s: the context row was dropped:\n%s", name, d)
+		}
+		f.UserContext = nil
+		if d := detail(boxTierResults("darwin", f, tokenOK)); !strings.Contains(d, "PASS docker context") {
+			t.Errorf("%s: the context PASS row was dropped:\n%s", name, d)
+		}
+	}
+}

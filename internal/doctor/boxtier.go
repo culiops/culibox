@@ -96,19 +96,32 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		stopped()
 		return out
 	}
-	switch {
-	case f.DockerErr != nil:
+	if f.DockerErr != nil {
 		return []Result{{Fail, ck, "docker CLI not found; install it with `brew install colima docker` (" + f.DockerErr.Error() + ")"}}
+	}
+	// Whether the user's own docker context is still theirs does not depend on
+	// the box VM (review focus 4), so this row is on every return below.
+	var userCtx Result
+	switch {
+	case errors.Is(f.UserContext, boxvm.ErrContextUnchecked):
+		// Unknown is not fine: say so rather than let silence read as a pass.
+		userCtx = Result{Warn, "docker context", f.UserContext.Error()}
+	case f.UserContext != nil:
+		userCtx = Result{Fail, "docker context", f.UserContext.Error()}
+	default:
+		userCtx = Result{Pass, "docker context", "your docker CLI's current context is not the box VM"}
+	}
+	switch {
 	case f.ColimaErr != nil:
-		return []Result{{Fail, ck, f.ColimaErr.Error()}}
+		return []Result{{Fail, ck, f.ColimaErr.Error()}, userCtx}
 	case f.MacOSMajor != 0 && f.MacOSMajor < 13:
-		return []Result{{Fail, ck, fmt.Sprintf("macOS %d: the box VM needs macOS 13+ (vz + virtiofs)", f.MacOSMajor)}}
+		return []Result{{Fail, ck, fmt.Sprintf("macOS %d: the box VM needs macOS 13+ (vz + virtiofs)", f.MacOSMajor)}, userCtx}
 	case f.SocketErr != nil:
-		return []Result{{Fail, ck, f.SocketErr.Error()}}
+		return []Result{{Fail, ck, f.SocketErr.Error()}, userCtx}
 	case !f.SetUp:
-		return []Result{{Warn, ck, "box VM not set up; run `agent-box box setup`"}, token}
+		return []Result{{Warn, ck, "box VM not set up; run `agent-box box setup`"}, userCtx, token}
 	case f.StatusErr != nil:
-		return []Result{{Fail, ck, "box VM status: " + f.StatusErr.Error()}}
+		return []Result{{Fail, ck, "box VM status: " + f.StatusErr.Error()}, userCtx}
 	}
 	if f.ColimaVer != "" && !boxvm.VersionAtLeast(f.ColimaVer, 0, 8) {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
@@ -116,15 +129,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	if f.Drifted {
 		out = append(out, Result{Warn, "box VM config", "changed since setup; run `agent-box box setup -recreate`"})
 	}
-	switch {
-	case errors.Is(f.UserContext, boxvm.ErrContextUnchecked):
-		// Unknown is not fine: say so rather than let silence read as a pass.
-		out = append(out, Result{Warn, "docker context", f.UserContext.Error()})
-	case f.UserContext != nil:
-		out = append(out, Result{Fail, "docker context", f.UserContext.Error()})
-	default:
-		out = append(out, Result{Pass, "docker context", "your docker CLI's current context is not the box VM"})
-	}
+	out = append(out, userCtx)
 	if !f.Status.Running {
 		out = append(out, Result{Pass, ck, "box VM stopped (starts on the first boxed spawn)"}, token)
 		return out
@@ -169,6 +174,9 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 		f.Stopped = stoppedBoxes(ctx, box.CLIClient{Bin: bin}, instance)
 		return f
 	}
+	// Needs only the user's docker CLI, so it is checked even when colima is
+	// missing: doctor reports it on every darwin path.
+	f.UserContext = boxvm.CheckUserDockerContext(ctx, bin)
 	colima, err := boxvm.LookColima(c.ColimaBin)
 	if err != nil {
 		f.ColimaErr = err
@@ -180,7 +188,6 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 	f.ColimaVer = boxvm.ColimaVersion(ctx, vc)
 	f.SocketErr = vc.CheckSocketPaths()
 	f.SetUp, f.Drifted = vm.SetUp(), vm.Drifted()
-	f.UserContext = boxvm.CheckUserDockerContext(ctx, bin)
 	if !f.SetUp {
 		return f
 	}
