@@ -91,3 +91,31 @@ func TestListBoxesParsesNameStateWorkspaceCreated(t *testing.T) {
 		t.Fatalf("unexpected parse: %+v", got)
 	}
 }
+
+// Every docker call must carry the endpoint flags. The per-session exec runs
+// under a curated env that drops DOCKER_HOST/DOCKER_CONTEXT, so an env-based
+// endpoint would send management calls and exec calls to different daemons.
+func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
+	bin, log := fakeDocker(t, map[string]string{"inspect": "true", "info": `{"runc":{}}`}, nil)
+	c := CLIClient{Bin: bin, Args: []string{"--host", "unix:///v/docker.sock", "--config", "/v/docker"}}
+	ctx := context.Background()
+	_, _ = c.Run(ctx, []string{"run", "-d", "x"})
+	_, _ = c.Inspect(ctx, "x")
+	_, _ = c.ListByLabel(ctx, "l")
+	_, _ = c.ListBoxes(ctx, "l")
+	_ = c.Stop(ctx, "x")
+	_ = c.HasRuntime(ctx, "sysbox-runc")
+	b, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("want 6 docker calls, got %d: %q", len(lines), lines)
+	}
+	for _, l := range lines {
+		if !strings.HasPrefix(l, "--host unix:///v/docker.sock --config /v/docker ") {
+			t.Fatalf("call without the endpoint flags first: %q", l)
+		}
+	}
+}

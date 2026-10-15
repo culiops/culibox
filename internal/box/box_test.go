@@ -650,3 +650,16 @@ func TestInspectErrorFailsTheSpawnInsteadOfReadingAsMissing(t *testing.T) {
 		t.Fatal("no docker run when inspect could not answer")
 	}
 }
+
+func TestExecArgvCarriesTheGlobalArgs(t *testing.T) {
+	f := newFake()
+	m, err := New(Options{DockerBin: "/usr/bin/docker", DockerArgs: []string{"--host", "unix:///v/s"},
+		Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.execArgv("ab-box-1", "/w", "s-1", []string{"claude"}, nil)
+	if len(got) < 4 || got[0] != "/usr/bin/docker" || got[1] != "--host" || got[2] != "unix:///v/s" || got[3] != "exec" {
+		t.Fatalf("exec argv must start docker --host … exec: %q", got)
+	}
+}

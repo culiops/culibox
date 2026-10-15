@@ -88,11 +88,16 @@ type Client interface {
 // Options configures a Manager.
 type Options struct {
 	DockerBin string // absolute path; resolved by the caller at startup
-	Image     string
-	Instance  string // env label (DEV/PROD)
-	IdleTTL   time.Duration
-	StateRoot string // where per-box agent homes live (usually data_dir)
-	Client    Client
+	// DockerArgs are global docker flags for execArgv; they must equal the
+	// Client's. The session exec runs under a curated env that drops
+	// DOCKER_HOST/DOCKER_CONTEXT, while management calls inherit the daemon env,
+	// so flags, not env, are the only way both groups reach the same daemon.
+	DockerArgs []string
+	Image      string
+	Instance   string // env label (DEV/PROD)
+	IdleTTL    time.Duration
+	StateRoot  string // where per-box agent homes live (usually data_dir)
+	Client     Client
 }
 
 // Manager tracks one box per workspace and keeps their lifecycle honest.

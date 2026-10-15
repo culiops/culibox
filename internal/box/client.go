@@ -14,6 +14,15 @@ import (
 // daemon and this type stays a transport.
 type CLIClient struct {
 	Bin string // absolute path to the docker binary
+	// Args are global flags placed before every subcommand (--host, --config).
+	// Empty on Linux. On macOS they pin agent-box's own colima VM: the session
+	// exec runs under a curated env that drops DOCKER_HOST and DOCKER_CONTEXT,
+	// so only flags reach the same daemon from every call site.
+	Args []string
+}
+
+func (c CLIClient) command(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, c.Bin, append(append([]string(nil), c.Args...), args...)...)
 }
 
 // LookDocker resolves the docker binary to an absolute path. Boxed spawns run
@@ -34,7 +43,7 @@ func LookDocker(bin string) (string, error) {
 }
 
 func (c CLIClient) run(ctx context.Context, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, c.Bin, args...).CombinedOutput()
+	out, err := c.command(ctx, args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
 	}
@@ -53,7 +62,7 @@ func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
 	// Stdout only: a CLI or context warning on stderr must not be read as the
 	// answer, because "not exactly true" means Stopped and the caller removes it.
-	out, err := exec.CommandContext(ctx, c.Bin, "inspect", "-f", "{{.State.Running}}", name).Output()
+	out, err := c.command(ctx, "inspect", "-f", "{{.State.Running}}", name).Output()
 	if err != nil {
 		var stderr string
 		var ee *exec.ExitError

@@ -65,7 +65,8 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
 // `abduco -a` clients that once pegged a core here. KillSession needs that pid
 // to reach the real process.
 func (m *Manager) execArgv(boxName, cwd, sessionID string, argv, env []string) []string {
-	out := []string{m.opts.DockerBin, "exec", "-it", "-w", cwd}
+	out := append([]string{m.opts.DockerBin}, m.opts.DockerArgs...)
+	out = append(out, "exec", "-it", "-w", cwd)
 	for _, name := range forwardableEnvNames(env) {
 		out = append(out, "-e", name)
 	}

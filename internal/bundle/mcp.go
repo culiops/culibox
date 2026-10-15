@@ -32,7 +32,10 @@ func (DenyAllProber) Resolves(cmds []string) map[string]bool {
 // ImageProber asks the box image once per build whether each command exists.
 type ImageProber struct {
 	Docker string
-	Image  string
+	// Args are global docker flags (--host, --config) placed before the
+	// subcommand, so the probe reaches the same daemon as every other call.
+	Args  []string
+	Image string
 }
 
 func (p ImageProber) Resolves(cmds []string) map[string]bool {
@@ -48,7 +51,8 @@ func (p ImageProber) Resolves(cmds []string) map[string]bool {
 	for _, c := range cmds {
 		sb.WriteString("if command -v " + shellQuote(c) + " >/dev/null 2>&1; then echo OK " + shellQuote(c) + "; fi\n")
 	}
-	cmd := exec.CommandContext(context.Background(), p.Docker, "run", "--rm", "--entrypoint", "sh", p.Image, "-c", sb.String())
+	args := append(append([]string(nil), p.Args...), "run", "--rm", "--entrypoint", "sh", p.Image, "-c", sb.String())
+	cmd := exec.CommandContext(context.Background(), p.Docker, args...)
 	res, err := cmd.Output()
 	if err != nil {
 		return out
