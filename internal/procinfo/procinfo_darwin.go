@@ -4,6 +4,7 @@ package procinfo
 
 import (
 	"fmt"
+	"os"
 
 	"golang.org/x/sys/unix"
 )
@@ -73,4 +74,43 @@ func PIDs() ([]int, error) {
 		}
 	}
 	return out, nil
+}
+
+// szomb is SZOMB from <sys/proc.h>; x/sys does not export it.
+const szomb = 5
+
+// Table reads the whole process table in one sysctl and the two limits fork
+// enforces: kern.maxproc for everyone, kern.maxprocperuid per real uid (root is
+// exempt, so it is left 0 there).
+func Table() (TableStats, error) {
+	ks, err := unix.SysctlKinfoProcSlice("kern.proc.all")
+	if err != nil {
+		return TableStats{}, err
+	}
+	max, err := unix.SysctlUint32("kern.maxproc")
+	if err != nil {
+		return TableStats{}, err
+	}
+	uid := uint32(os.Getuid())
+	ts := TableStats{Max: int(max)}
+	if uid != 0 {
+		per, err := unix.SysctlUint32("kern.maxprocperuid")
+		if err != nil {
+			return TableStats{}, err
+		}
+		ts.MaxPerUID = int(per)
+	}
+	for i := range ks {
+		if ks[i].Proc.P_pid <= 0 {
+			continue
+		}
+		ts.Procs++
+		if ks[i].Proc.P_stat == szomb {
+			ts.Zombies++
+		}
+		if ks[i].Eproc.Pcred.P_ruid == uid {
+			ts.Own++
+		}
+	}
+	return ts, nil
 }

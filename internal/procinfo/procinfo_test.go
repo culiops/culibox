@@ -145,3 +145,16 @@ func TestLiveGonePid(t *testing.T) {
 		t.Errorf("StartTime(reaped %d) = nil error, want error", pid)
 	}
 }
+
+func TestTableCountsThisProcess(t *testing.T) {
+	ts, err := Table()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts.Procs < 1 || ts.Zombies < 0 || ts.Zombies > ts.Procs {
+		t.Fatalf("Table()=%+v: want at least this process, zombies within procs", ts)
+	}
+	if ts.Max != 0 && ts.Procs > ts.Max {
+		t.Fatalf("Table()=%+v: more processes than the limit", ts)
+	}
+}

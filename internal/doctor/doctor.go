@@ -148,7 +148,7 @@ func Checks(in Input) []Result {
 	if ab.Status != Fail {
 		out = append(out, checkRoundtrip(bin))
 	}
-	out = append(out, checkProcinfoSelf())
+	out = append(out, checkProcinfoSelf(), checkProcTable())
 	socketDir := abduco.SocketDirFor(c.AbducoSocketDir, runtime.GOOS, dataDir, os.Getuid())
 	out = append(out, checkSocketLength(c, socketDir))
 	if runtime.GOOS == "darwin" {
@@ -320,6 +320,38 @@ func checkProcinfoSelf() Result {
 	}
 	return Result{Pass, "procinfo", fmt.Sprintf("ppid, start time (%s), argv, env (%d vars), %d pids", st, len(env), len(pids))}
 }
+
+func checkProcTable() Result {
+	ts, err := procinfo.Table()
+	if err != nil {
+		return Result{Warn, "process table", "could not read: " + err.Error()}
+	}
+	return procTableResult(ts)
+}
+
+// procTableResult warns when either limit has under 5% headroom: every fork on
+// the machine (agent spawns, abduco, the shell) then fails with EAGAIN. Counts
+// only — never a process name or user.
+func procTableResult(ts procinfo.TableStats) Result {
+	if ts.Max == 0 {
+		return Result{Pass, "process table", fmt.Sprintf("%d processes (no single limit to check on %s)", ts.Procs, runtime.GOOS)}
+	}
+	detail := fmt.Sprintf("%d of %d processes (%d zombies)", ts.Procs, ts.Max, ts.Zombies)
+	near := nearlyFull(ts.Procs, ts.Max)
+	if ts.MaxPerUID > 0 {
+		detail += fmt.Sprintf("; own uid %d of %d", ts.Own, ts.MaxPerUID)
+		near = near || nearlyFull(ts.Own, ts.MaxPerUID)
+	}
+	if !near {
+		return Result{Pass, "process table", detail}
+	}
+	return Result{Warn, "process table", detail + "; nearly full, new processes fail with EAGAIN. " +
+		"Zombies: find the parent not reaping them with " +
+		"`ps -axo ppid=,stat= | awk '$2~/Z/{print $1}' | sort | uniq -c | sort -rn | head`"}
+}
+
+// nearlyFull is under 5% headroom, in integers.
+func nearlyFull(n, max int) bool { return (max-n)*20 < max }
 
 // checkSocketLength asks the same helper serve does, over the same profile list
 // (the detected quick shell included), so doctor cannot pass a config that
