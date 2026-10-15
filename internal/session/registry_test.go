@@ -355,3 +355,39 @@ func TestRegistryCwdGuardAcceptsOnlyTheSameRepository(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code on macOS writes procStart as a UTC ctime string; procinfo there
+// reports "<sec>.<usec>". The pair below was read off a live Mac (TZ +0700):
+// the same instant in two formats. Linux keeps its exact compare.
+func TestStartMatches(t *testing.T) {
+	const real, ours = "Wed Oct 14 08:03:58 2026", "1791965038.541726"
+	cases := []struct {
+		name, goos, recorded, ours string
+		want                       bool
+	}{
+		{"linux exact", "linux", "123456", "123456", true},
+		{"linux differs", "linux", "123456", "123457", false},
+		{"linux never parses ctime", "linux", real, ours, false},
+		{"darwin measured sample", "darwin", real, ours, true},
+		{"darwin usec ignored", "darwin", real, "1791965038.999999", true},
+		{"darwin one second later", "darwin", real, "1791965039.000000", false},
+		{"darwin one second earlier", "darwin", real, "1791965037.999999", false},
+		{"darwin local-time reading rejected", "darwin", real, "1791990238.541726", false},
+		{"darwin padded day", "darwin", "Mon Oct  5 01:02:03 2026", "1791162123.000001", true},
+		{"darwin unpadded day", "darwin", "Mon Oct 5 01:02:03 2026", "1791162123.000001", true},
+		{"darwin wrong weekday", "darwin", "Thu Oct 14 08:03:58 2026", ours, false},
+		{"darwin exact still matches", "darwin", ours, ours, true},
+		{"darwin no year", "darwin", "Wed Oct 14 08:03:58", ours, false},
+		{"darwin empty", "darwin", "", ours, false},
+		{"darwin trailing junk", "darwin", real + " x", ours, false},
+		{"darwin ours malformed", "darwin", real, "1791965038", false},
+		{"darwin ours not a number", "darwin", real, "abc.541726", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := startMatches(c.goos, c.recorded, c.ours); got != c.want {
+				t.Fatalf("startMatches(%q, %q, %q)=%v want %v", c.goos, c.recorded, c.ours, got, c.want)
+			}
+		})
+	}
+}

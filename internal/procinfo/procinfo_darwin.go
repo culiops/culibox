@@ -31,7 +31,8 @@ func Ppid(pid int) (int, error) {
 }
 
 // StartTime is the process start as "<sec>.<usec>". Claude Code's registry
-// procStart on macOS has not been measured yet; agent-box doctor prints both.
+// writes the same instant as a UTC ctime string; session.StartMatches compares
+// the two.
 func StartTime(pid int) (string, error) {
 	k, err := kinfo(pid)
 	if err != nil {

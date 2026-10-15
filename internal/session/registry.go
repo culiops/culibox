@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -50,11 +51,52 @@ type procStartFunc func(pid int) (string, bool)
 
 // procStartOf is the pid's start time as procinfo reports it. On Linux this is
 // /proc stat field 22, the same value Claude Code writes as procStart. On darwin
-// Claude Code's format is unmeasured; a mismatch only makes readClaudeRegistry
-// miss, and the caller falls back to the cwd heuristic.
+// it is "<sec>.<usec>" while Claude Code writes a UTC ctime string; StartMatches
+// bridges the two.
 func procStartOf(pid int) (string, bool) {
 	s, err := procinfo.StartTime(pid)
 	return s, err == nil
+}
+
+// StartMatches reports whether Claude Code's recorded procStart names the same
+// process start as ours (procinfo.StartTime). Doctor uses it too, so its
+// match= line agrees with attribution.
+func StartMatches(recorded, ours string) bool {
+	return startMatches(runtime.GOOS, recorded, ours)
+}
+
+// ctimeLayout is Claude Code's darwin procStart once runs of spaces are
+// collapsed ("Mon Oct  5" pads the day).
+const ctimeLayout = "Mon Jan 2 15:04:05 2006"
+
+// startMatches: on Linux both sides are /proc stat field 22, compared exactly.
+// On darwin Claude Code writes a ctime string in UTC (measured on a +0700 Mac,
+// 5/5 live pids): it matches when it parses as UTC to the same second as ours.
+// Anything that does not parse is a mismatch, never a guess.
+func startMatches(goos, recorded, ours string) bool {
+	if recorded == ours {
+		return true
+	}
+	if goos != "darwin" {
+		return false
+	}
+	secStr, usec, ok := strings.Cut(ours, ".")
+	if !ok || len(usec) != 6 {
+		return false
+	}
+	sec, err := strconv.ParseInt(secStr, 10, 64)
+	if err != nil {
+		return false
+	}
+	if _, err := strconv.Atoi(usec); err != nil {
+		return false
+	}
+	f := strings.Fields(recorded)
+	t, err := time.Parse(ctimeLayout, strings.Join(f, " "))
+	if err != nil || len(f) == 0 || f[0] != t.Weekday().String()[:3] {
+		return false // time.Parse ignores the weekday; a wrong one is not this start
+	}
+	return t.Unix() == sec
 }
 
 // registryMaxBytes bounds how much of a registry file we will ever read. The
@@ -91,7 +133,7 @@ func readRegistryFile(path string) ([]byte, bool) {
 func ReadRegistryFile(path string) ([]byte, bool) { return readRegistryFile(path) }
 
 // readClaudeRegistry returns the registry entry for pid, only if it is provably
-// THAT process's, for THIS session: the pid field matches, procStart equals the
+// THAT process's, for THIS session: the pid field matches, procStart names the
 // live process's starttime (a recycled pid has a different one), and the
 // entry's cwd matches the session's own cwd (cleaned) — pid alone is not
 // enough once a session is known to be exited (see locate), so this is a
@@ -114,7 +156,7 @@ func readClaudeRegistry(home string, pid int, procStart procStartFunc, cwd strin
 		return claudeRegEntry{}, false
 	}
 	want, ok := procStart(pid)
-	if !ok || strings.Trim(string(e.ProcStart), `"`) != want {
+	if !ok || !StartMatches(strings.Trim(string(e.ProcStart), `"`), want) {
 		return claudeRegEntry{}, false
 	}
 	return e, true

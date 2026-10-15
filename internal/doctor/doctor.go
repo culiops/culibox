@@ -385,10 +385,10 @@ func checkBoxTier(c config.Config) Result {
 var startRe = regexp.MustCompile(`^[0-9A-Za-z :._-]{1,48}$`)
 
 // checkClaudeRegistry compares Claude Code's recorded procStart with what
-// procinfo reads, for live sessions. A mismatch on darwin is expected until the
-// format is measured: it only degrades transcript attribution. The files are
-// read through the session package's defensive reader (no symlink following,
-// FIFO-safe, size-capped).
+// procinfo reads, for live sessions, with the same session.StartMatches rule
+// attribution uses (darwin's two formats name one instant). A mismatch only
+// degrades transcript attribution. The files are read through the session
+// package's defensive reader (no symlink following, FIFO-safe, size-capped).
 func checkClaudeRegistry(home string) []Result {
 	files, _ := filepath.Glob(filepath.Join(home, ".claude", "sessions", "*.json"))
 	var out []Result
@@ -412,7 +412,7 @@ func checkClaudeRegistry(home string) []Result {
 			continue // not running
 		}
 		theirs := strings.Trim(string(e.ProcStart), `"`)
-		match := theirs == ours
+		match := session.StartMatches(theirs, ours)
 		if !startRe.MatchString(theirs) {
 			theirs = "<unprintable>"
 		}
