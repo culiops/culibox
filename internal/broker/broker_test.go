@@ -304,20 +304,48 @@ func TestSSOExpiredIsActionable(t *testing.T) {
 	}
 }
 
-func TestSTSFailureIsAuditedAndSurfaced(t *testing.T) {
+func TestSTSFailureShowsTheBoxOnlyTheCodeAndAuditsTheDetail(t *testing.T) {
 	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
-	fm.err = errors.New("AccessDenied: not authorized\nto perform sts:AssumeRole")
+	const detail = "User: arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin/alice@example.com\nis not authorized to perform sts:AssumeRole; cache /home/alice/.aws/sso/cache/x.json"
+	fm.err = fmt.Errorf("mint: %w", &MintError{Code: "AccessDenied", Detail: detail})
 	w := call(b, tokA("claude-3"))
-	if w.Code != 502 || !strings.Contains(w.Body.String(), "AccessDenied") {
-		t.Fatalf("status %d body %s", w.Code, w.Body)
+	body := w.Body.String()
+	if w.Code != 502 || !strings.Contains(body, "AccessDenied") || !strings.Contains(body, "trust policy") {
+		t.Fatalf("status %d body %s", w.Code, body)
+	}
+	for _, leak := range []string{"alice", "arn:aws:sts", "/home/", "not authorized"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("box body leaks %q: %s", leak, body)
+		}
 	}
 	last := rec.rows[len(rec.rows)-1]
-	if last.Outcome != OutcomeSTSError || strings.ContainsAny(last.Error, "\n\r") || !strings.Contains(last.Error, "AccessDenied") {
+	if last.Outcome != OutcomeSTSError || strings.ContainsAny(last.Error, "\n\r") ||
+		!strings.Contains(last.Error, "AccessDenied") || !strings.Contains(last.Error, "alice@example.com") {
 		t.Fatalf("audit: %+v", last)
 	}
 	st, _ := b.Stats("claude-3")
-	if st.Mints != 0 || !strings.Contains(st.LastError, "AccessDenied") {
+	if st.Mints != 0 || !strings.Contains(st.LastError, "AccessDenied") || !strings.Contains(st.LastError, "alice@example.com") {
 		t.Fatalf("stats %+v", st)
+	}
+}
+
+func TestUntypedMinterErrorNeverReachesTheBox(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
+	fm.err = errors.New("open /home/alice/.aws/config: permission denied")
+	w := call(b, tokA("claude-3"))
+	if w.Code != 502 || strings.Contains(w.Body.String(), "alice") || !strings.Contains(w.Body.String(), "MintFailed") {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	if !strings.Contains(rec.rows[len(rec.rows)-1].Error, "permission denied") {
+		t.Fatalf("audit lost the detail: %+v", rec.rows[len(rec.rows)-1])
+	}
+}
+
+func TestMinterCodeIsConstrainedToAnIdentifier(t *testing.T) {
+	b, fm, _, _ := setup(t, map[string]SessionView{"claude-3": live()})
+	fm.err = &MintError{Code: "AccessDenied for alice@example.com", Detail: "d"}
+	if w := call(b, tokA("claude-3")); strings.Contains(w.Body.String(), "alice") {
+		t.Fatalf("free text in the code reached the box: %s", w.Body)
 	}
 }
 

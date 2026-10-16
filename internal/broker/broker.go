@@ -53,6 +53,20 @@ type Minter interface {
 // ErrSSOExpired is wrapped by a Minter when the host's SSO login has lapsed.
 var ErrSSOExpired = errors.New("SSO session expired")
 
+// MintError is a failed mint. Code is the AWS error code (or a generic one) and
+// is the only part of the failure the box is shown, next to a static hint;
+// Detail is the full SDK text, which can name the human's SSO principal and host
+// paths, so it goes only to the audit row and Stats.LastError. A Minter may
+// return any error; one that is not a *MintError is treated as Code
+// "MintFailed" with its text as Detail.
+type MintError struct {
+	Code, Detail string
+	cause        error
+}
+
+func (e *MintError) Error() string { return e.Code + ": " + e.Detail }
+func (e *MintError) Unwrap() error { return e.cause }
+
 // Recorder receives one row per mint and per refused or failed request.
 type Recorder interface{ Record(Row) error }
 
@@ -199,7 +213,15 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		b.fail(w, base, OutcomeSTSError, http.StatusBadGateway, "AssumeRole failed: "+sanitize(err.Error()))
+		code, detail := "MintFailed", err.Error()
+		var me *MintError
+		if errors.As(err, &me) {
+			code, detail = me.Code, me.Detail
+		}
+		code = safeCode(code)
+		b.failSplit(w, base, OutcomeSTSError, http.StatusBadGateway,
+			fmt.Sprintf("STS AssumeRole failed: %s — %s", code, stsHint(code)),
+			"AssumeRole failed: "+code+": "+sanitize(detail))
 		return
 	}
 	b.mu.Lock()
@@ -215,12 +237,51 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 }
 
 func (b *Broker) fail(w http.ResponseWriter, row Row, o Outcome, status int, msg string) {
+	b.failSplit(w, row, o, status, msg, msg)
+}
+
+// failSplit replies to the box with boxMsg but keeps hostMsg (which may carry
+// host-side detail) for the audit row and Stats.LastError.
+func (b *Broker) failSplit(w http.ResponseWriter, row Row, o Outcome, status int, boxMsg, hostMsg string) {
 	b.mu.Lock()
-	b.statsLocked(row.SessionID).LastError = msg
+	b.statsLocked(row.SessionID).LastError = hostMsg
 	b.mu.Unlock()
-	row.Outcome, row.Error = o, msg
+	row.Outcome, row.Error = o, hostMsg
 	b.record(row)
-	replyErr(w, status, msg)
+	replyErr(w, status, boxMsg)
+}
+
+// safeCode keeps an error code to a short identifier, so a Minter cannot smuggle
+// free text to the box through it.
+func safeCode(c string) string {
+	if c == "" || len(c) > 64 {
+		return "MintFailed"
+	}
+	for _, r := range c {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-') {
+			return "MintFailed"
+		}
+	}
+	return c
+}
+
+// stsHint is the static advice shown to the box for an AWS error code.
+func stsHint(code string) string {
+	switch code {
+	case "AccessDenied":
+		return "check the agent role's trust policy and the binding's role ARN"
+	case "ValidationError", "MalformedPolicyDocument", "PackedPolicyTooLarge":
+		return "the session policy or role binding was rejected; re-save the profile"
+	case "RegionDisabledException", "InvalidClientTokenId":
+		return "the region or account is not usable with this binding"
+	case "ExpiredToken", "ExpiredTokenException":
+		return "the host's AWS login is no longer valid"
+	case "ConfigError":
+		return "the binding's source profile could not be loaded on the host"
+	case "Throttling", "ThrottlingException":
+		return "AWS is throttling; retry shortly"
+	}
+	return "see the agent-box audit log on the host for details"
 }
 
 func (b *Broker) statsLocked(sid string) *Stats {
