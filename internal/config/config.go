@@ -284,6 +284,9 @@ func (c Config) Validate() error {
 	if err := validImageRef(c.BoxImage); err != nil {
 		return fmt.Errorf("config: box_image: %w", err)
 	}
+	if c.BrokerPort < 0 || c.BrokerPort > 65535 {
+		return fmt.Errorf("config: broker_port %d out of range (want 1-65535, or 0 for the default)", c.BrokerPort)
+	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
 		if a.Name == "" || a.Bin == "" {

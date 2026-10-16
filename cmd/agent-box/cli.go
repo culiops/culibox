@@ -106,7 +106,10 @@ func shutdownSignalsFor(ignored func(os.Signal) bool) []os.Signal {
 type shutdownSteps struct {
 	DetachAll     func() int // release attach clients; returns how many
 	StopAnalytics func()
-	ShutdownHTTP  func(context.Context) error
+	// StopBroker stops the credential broker and closes its audit store. Nil when
+	// the broker is not running (no containment layer, or it could not listen).
+	StopBroker   func(context.Context)
+	ShutdownHTTP func(context.Context) error
 }
 
 // awaitShutdown blocks until a signal arrives on stop, then releases attach
@@ -115,12 +118,16 @@ type shutdownSteps struct {
 // not it survives the daemon and spins at 100% CPU forever on a hung-up fd. The
 // agents themselves are untouched — they live under abduco and are meant to
 // survive a restart. The HTTP server drains last, so Serve returns only after
-// the attach clients are gone.
+// the attach clients are gone. The broker stops before it: no new credential
+// request is served once the console is draining.
 func awaitShutdown(stop <-chan os.Signal, s shutdownSteps, logf func(string, ...any)) {
 	sig := <-stop
 	logf("received %v: releasing %d attach client(s), agents stay running", sig, s.DetachAll())
 	s.StopAnalytics()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if s.StopBroker != nil {
+		s.StopBroker(ctx)
+	}
 	_ = s.ShutdownHTTP(ctx)
 }

@@ -124,3 +124,22 @@ func TestBrokerPortDefault(t *testing.T) {
 		t.Fatal("broker port default")
 	}
 }
+
+// BrokerPortOrDefault would turn a negative port into 9071 without a word, so
+// Validate is where a bad broker_port has to be refused.
+func TestValidateRefusesABadBrokerPort(t *testing.T) {
+	for _, bad := range []int{-1, 65536, 100000} {
+		c := validCfg()
+		c.BrokerPort = bad
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "broker_port") {
+			t.Errorf("broker_port %d: want a broker_port error, got %v", bad, err)
+		}
+	}
+	for _, ok := range []int{0, 1, 9071, 65535} {
+		c := validCfg()
+		c.BrokerPort = ok
+		if err := c.Validate(); err != nil {
+			t.Errorf("broker_port %d refused: %v", ok, err)
+		}
+	}
+}

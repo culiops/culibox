@@ -349,6 +349,24 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 
+	// Credential broker (M3a): only with containment, because a bound session
+	// runs only in a box. Before Reconcile so reattached sessions find the hooks.
+	var brokerSvc *brokerService
+	if layer != nil {
+		svc, err := startBroker(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
+			mgr.Get, web.ManagerService{M: mgr}.Get)
+		switch {
+		case errors.Is(err, errBrokerListen):
+			log.Printf("%v (profiles with an AWS binding will refuse to spawn)", err)
+		case err != nil:
+			log.Fatalf("%v", err)
+		default:
+			brokerSvc = svc
+			mgr.SetBroker(svc.Hooks)
+			log.Printf("credential broker listening on %s", svc.Hooks.EP.BoxURL)
+		}
+	}
+
 	// Release attach clients on the way out instead of leaving it to SIGHUP (see
 	// awaitShutdown). SIGHUP itself is one of the signals: closing the terminal
 	// tab that runs `agent-box serve` must take this path too, unless serve was
@@ -424,8 +442,14 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	if rateLimitsFile == "" {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
+	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd}
+	var stopBroker func(context.Context)
+	if brokerSvc != nil {
+		api.AWS = brokerSvc.Status // only when running: a nil service must read as "no broker", not a typed nil
+		stopBroker = brokerSvc.Stop
+	}
 	srv := &web.Server{
-		API:        &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd},
+		API:        api,
 		Session:    sess,
 		Tokens:     tokens,
 		Password:   login.Secret,
@@ -535,6 +559,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 				_ = analyticsSvc.Close()
 			}
 		},
+		StopBroker:   stopBroker,
 		ShutdownHTTP: httpSrv.Shutdown,
 	}, log.Printf)
 
