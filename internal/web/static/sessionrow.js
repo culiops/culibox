@@ -155,14 +155,22 @@ function awsBadge(s) {
   };
 }
 
-// awsRailRow: the steer rail's one-line binding. A production binding says so
-// in words as well as in the badge colour.
-function awsRailRow(s) {
+// awsRailRows: the steer rail's view of the binding, as short rows rather than
+// one long line: the rail's value cell is ~260px, and a single
+// "label · account · role · read-only" string was ellipsized so that the end of
+// it (read-only, production) was exactly what the reader could not see. The
+// identifiers wrap; "read-only" is its own row; production is a row of its own
+// drawn as the red chip, so no label length can push it out of view.
+function awsRailRows(s) {
   const a = s && s.aws;
-  if (!a) return null;
-  const parts = [a.label || "aws", a.account_id, roleName(a.role_arn), "read-only"];
-  if (a.prod) parts.push("production");
-  return { k: "aws", v: parts.join(" · ") };
+  if (!a) return [];
+  const rows = [
+    { k: "aws", v: a.label ? a.label + " · " + a.account_id : String(a.account_id), wrap: true },
+    { k: "role", v: roleName(a.role_arn), wrap: true },
+    { k: "scope", v: "read-only" },
+  ];
+  if (a.prod) rows.push({ k: "prod", v: "production", chip: "bdg aws prod" });
+  return rows;
 }
 
 // readAWSFields: the profile editor's AWS block as the object the server
@@ -183,5 +191,5 @@ function readAWSFields(get) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRow, readAWSFields };
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields };
 }

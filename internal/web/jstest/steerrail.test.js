@@ -174,7 +174,7 @@ test("a null percentage draws no fill rather than a zero-width one", () => {
 test("railMeta appends the caller's extra rows after its own", () => {
   const s = { id: "a", activity: "done", created: "2026-09-05T10:00:00Z" };
   const m = railMeta(s, { model: "opus-5" }, "", Date.parse("2026-09-05T10:00:30Z"), null,
-    [{ k: "aws", v: "sandbox · 123456789012 · agentbox-agent · read-only" }, null]);
+    [{ k: "aws", v: "sandbox · 123456789012" }, null]);
   assert.deepStrictEqual(m.rows.map((r) => r.k), ["model", "started", "aws"]);
   assert.deepStrictEqual(railMeta(s, null, "", 0, null, null).rows.map((r) => r.k), ["started"]);
 });

@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRow, readAWSFields } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -199,12 +199,19 @@ test("awsBadge: label, account fallback, prod flag", () => {
   assert.strictEqual(awsBadge({ aws: { label: "prd", account_id: "1", role_arn: "x", prod: true } }).prod, true);
 });
 
-test("awsRailRow: one line, and prod is spelled out", () => {
-  assert.strictEqual(awsRailRow({}), null);
-  assert.deepStrictEqual(awsRailRow({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }),
-    { k: "aws", v: "sandbox · 123456789012 · agentbox-agent · read-only" });
-  assert.strictEqual(awsRailRow({ aws: { label: "", account_id: "123456789012", role_arn: ARN, prod: true } }).v,
-    "aws · 123456789012 · agentbox-agent · read-only · production");
+test("awsRailRows: short rows that wrap, and a production chip that is its own row", () => {
+  assert.deepStrictEqual(awsRailRows({}), []);
+  assert.deepStrictEqual(awsRailRows({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }), [
+    { k: "aws", v: "sandbox · 123456789012", wrap: true },
+    { k: "role", v: "agentbox-agent", wrap: true },
+    { k: "scope", v: "read-only" },
+  ]);
+  // no label: the account alone, not "aws · 1234"
+  assert.strictEqual(awsRailRows({ aws: { label: "", account_id: "123456789012", role_arn: ARN } })[0].v, "123456789012");
+  // prod is a row of its own, drawn as the red chip: it cannot be clipped by a long label
+  const prod = awsRailRows({ aws: { label: "x".repeat(40), account_id: "123456789012", role_arn: ARN, prod: true } });
+  assert.deepStrictEqual(prod[prod.length - 1], { k: "prod", v: "production", chip: "bdg aws prod" });
+  assert.strictEqual(prod.filter((r) => r.k === "prod").length, 1);
 });
 
 test("readAWSFields: omitted when role is empty; trims and splits the allowlist", () => {

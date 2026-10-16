@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy } =
+const { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy, setDialogError } =
   require("../static/shell.js");
 
 // A <dialog> closed by Esc, by a backdrop click, or by dialog.close() with no
@@ -59,4 +59,25 @@ test("focus returns to the terminal only when no dialog is left open", () => {
   assert.strictEqual(shouldRefocusTerminal(0), true);
   assert.strictEqual(shouldRefocusTerminal(1), false);
   assert.strictEqual(shouldRefocusTerminal(3), false);
+});
+
+// The profile editor's error line sits at the bottom of a scrolling form, so a
+// failed Save wrote its message below the fold and nothing visibly happened.
+// Setting a message must bring the line into view; clearing it must not move
+// the form under the reader.
+test("setDialogError scrolls a new message into view, and only a message", () => {
+  const calls = [];
+  const el = { textContent: "", scrollIntoView: (o) => calls.push(o) };
+  global.document = { querySelector: (sel) => (sel === "#settings-modal .dlg-err" ? el : null) };
+  try {
+    setDialogError("settings-modal", "aws.region: not a region");
+    assert.strictEqual(el.textContent, "aws.region: not a region");
+    assert.deepStrictEqual(calls, [{ block: "nearest" }]);
+    setDialogError("settings-modal", "");
+    assert.strictEqual(el.textContent, "");
+    assert.strictEqual(calls.length, 1);
+    setDialogError("nope", "x"); // no such dialog: no throw
+  } finally {
+    delete global.document;
+  }
 });

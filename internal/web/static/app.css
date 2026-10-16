@@ -197,6 +197,7 @@
     .kv .v { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     /* A row whose value must be read whole (the broker's last error carries the
        command to run) wraps instead of clipping. */
+    .kv .bdg { align-self: center; }
     .kv.wrap .v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
     .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
     .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }

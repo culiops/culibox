@@ -257,7 +257,7 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const awsRows = s.aws ? [awsRailRow(s), ...awsStatsRows(awsRailCache.get(s.id), Date.now())] : null;
+  const awsRows = s.aws ? [...awsRailRows(s), ...awsStatsRows(awsRailCache.get(s.id), Date.now())] : null;
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, awsRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
@@ -292,7 +292,7 @@ function renderSteerFacts(s) {
     if (meta.tier.title) b.title = meta.tier.title;
     hrow.appendChild(b);
   }
-  head.replaceChildren(hrow, ...meta.rows.map((r) => kvRow(r.k, r.v, r.wrap)));
+  head.replaceChildren(hrow, ...meta.rows.map((r) => kvRow(r.k, r.v, r.wrap, r.chip)));
 
   // 2 — how full the window is. Drawn only when there is a number to draw.
   ctx.replaceChildren(railTitle("Context window"));
@@ -329,13 +329,15 @@ function railTitle(text) {
   return t;
 }
 
-function kvRow(k, v, wrap) {
+function kvRow(k, v, wrap, chip) {
   const row = document.createElement("div");
   row.className = wrap ? "kv wrap" : "kv";
   const a = document.createElement("span");
   a.textContent = k;
   const b = document.createElement("span");
-  b.className = "v";
+  // chip: the value is a status badge (the red production marker), not muted
+  // text — it keeps its own colour and is never clipped.
+  b.className = chip || "v";
   b.textContent = v;
   b.title = v;
   row.append(a, b);
