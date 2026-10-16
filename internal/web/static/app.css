@@ -136,6 +136,10 @@
        source order. Same specificity means the later rule (the mobile one)
        wins there, and this one wins everywhere above the breakpoint. */
     #limits { display: flex; align-items: center; gap: 14px; }
+    /* Which agent account the meters belong to (non-default only), and a
+       reading older than ACCT_STALE_SEC dimmed so it never reads as current. */
+    .acct-lab { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    #limits.stale, #limits-mobile.stale, .acct-meters.stale { opacity: .5; }
     /* The meters cost ~376px of header that cannot shrink — the bar is flex:none
        and the reset text does not wrap — so below this width the header can only
        pay for them out of the app title, and further down it overflows and pushes
@@ -460,6 +464,11 @@
        tone in var(--warn), not var(--danger), so app.js adds "host" rather
        than a bespoke danger class here. */
     #sessions .tier { white-space: nowrap; }
+    /* The agent-account badge: the .bdg chip's own shape (primitives.css),
+       in the neutral foreground rather than a tier colour — an account is
+       which login, not a safety verdict. Shown only for non-default accounts. */
+    .bdg.acct { color: var(--fg); border-color: var(--border); flex: none;
+                max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     /* Session summary: the row's third line, under the name and the meta. Muted and clipped to a
@@ -1097,6 +1106,26 @@
     .tokrow .meta { flex: 1; min-width: 0; color: var(--muted); font-size: 11.5px; }
     .tokrow.arm .nm, .tokrow.arm .meta { color: var(--danger); }
     .tokempty { color: var(--muted); font-size: 12px; padding: 14px 0; }
+    /* --- agent accounts (a settings tab) ----------------------------------- */
+    #acct-list { list-style: none; margin: 0; padding: 0; }
+    .acct-row {
+      padding: 12px 0; font-size: 12.5px;
+      border-bottom: 1px solid color-mix(in srgb, var(--border) 40%, transparent);
+    }
+    .acct-head { display: flex; gap: 1ch; align-items: baseline; flex-wrap: wrap; }
+    .acct-meta { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; min-width: 0; }
+    .acct-meters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+    .acct-age { color: var(--muted); font-size: 11px; }
+    .acct-actions { display: flex; gap: 1ch; align-items: center; flex-wrap: wrap; }
+    /* The label is a flex row of its own: the checkbox is a fixed-size item
+       pinned to the first text line and the text wraps under itself, instead of
+       an inline box that a multi-line wrap pushed above the first line. */
+    .acct-actions label { flex: 1; min-width: 0; color: var(--muted); display: flex; align-items: flex-start; gap: 1ch; }
+    .acct-actions label input[type="checkbox"] { flex: none; margin: 2px 0 0; }
+    /* Phone width: the label takes its own full-width line, so Log in / Delete
+       sit on the line below rather than squeezing the wrapping text. */
+    @media (max-width: 700px) { .acct-actions label { flex: 1 1 100%; } }
+    #foot-accounts .fld { width: auto; }
     /* --- font sizes (now a settings tab) ---------------------------------- */
     /* One row per surface: a fixed label column so the four steppers line up,
        the stepper, then a sample that takes the rest. The sample does not wrap —

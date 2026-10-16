@@ -75,6 +75,12 @@ var unresolvedVar = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\}`)
 
 type mcpServer map[string]any
 
+// FilterMCP is filterMCP for callers outside the bundle (agent accounts that
+// inherit the default account's MCP servers): same shape rules, same drops.
+func FilterMCP(path string, prober Prober) (map[string]any, []Drop) {
+	return filterMCP(path, prober)
+}
+
 // filterMCP classifies servers by SHAPE. No server is ever matched by name: the
 // same rule has to work for configs this project has never seen.
 func filterMCP(path string, prober Prober) (map[string]any, []Drop) {

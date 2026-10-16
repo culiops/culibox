@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/session"
@@ -23,6 +24,8 @@ type mockSvc struct {
 	spawnedCwd      string
 	spawnedOptions  map[string]any
 	spawnedRuntime  string
+	spawnedAccount  string
+	spawnedLogin    bool
 	renamedID       string
 	renamedName     string
 	renameErr       error
@@ -57,6 +60,8 @@ func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedCwd = s.Cwd
 	m.spawnedOptions = s.Options
 	m.spawnedRuntime = s.Runtime
+	m.spawnedAccount = s.Account
+	m.spawnedLogin = s.Login
 	m.spawnedPrompt = s.Prompt
 	m.spawnedReplyable = s.Replyable
 	if m.spawnErr != nil {
@@ -78,6 +83,63 @@ func TestAPI_ForwardsOptions(t *testing.T) {
 		t.Fatalf("options not forwarded: %v", svc.spawnedOptions)
 	}
 }
+func TestAPI_ForwardsAccount(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions",
+		strings.NewReader(`{"agent":"claude","account":"work"}`)))
+	if rec.Code != 201 {
+		t.Fatalf("code %d", rec.Code)
+	}
+	if svc.spawnedAccount != "work" {
+		t.Fatalf("account not forwarded: %q", svc.spawnedAccount)
+	}
+}
+
+func TestAPI_ForwardsLogin(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc}
+	for _, c := range []struct {
+		body string
+		want bool
+	}{{`{"agent":"claude","account":"work","login":true}`, true}, {`{"agent":"claude","account":"work"}`, false}} {
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(c.body)))
+		if rec.Code != 201 {
+			t.Fatalf("code %d", rec.Code)
+		}
+		if svc.spawnedLogin != c.want {
+			t.Fatalf("%s: login = %v, want %v", c.body, svc.spawnedLogin, c.want)
+		}
+	}
+}
+
+// Account refusals name only what the caller just chose, so they are shown
+// instead of the generic "could not start session".
+func TestAPI_SpawnAccountRefusalsAreShown(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{launcher.ErrCodexAccount, "codex accounts are not supported yet"},
+		{fmt.Errorf("%w %q", account.ErrUnknown, "ghost"), `unknown account "ghost"`},
+		{fmt.Errorf("%w: profile %q carries secret X", launcher.ErrAccountConflict, "p"), "account conflict: profile \"p\" carries secret X"},
+	}
+	for _, c := range cases {
+		svc := &mockSvc{spawnErr: c.err}
+		a := &API{Sessions: svc}
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions",
+			strings.NewReader(`{"agent":"claude","account":"work"}`)))
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != 400 || body["error"] != c.err.Error() || !strings.Contains(body["error"], c.want) {
+			t.Fatalf("err %v: got %d %s, want 400 with %q", c.err, rec.Code, rec.Body, c.want)
+		}
+	}
+}
+
 func (m *mockSvc) Kill(id string) error { m.killed = id; return nil }
 func (m *mockSvc) Get(id string) (session.Info, bool) {
 	return session.Info{ID: id, Name: m.renamedName}, m.getOK

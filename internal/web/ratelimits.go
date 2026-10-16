@@ -2,7 +2,10 @@ package web
 
 import (
 	"encoding/json"
-	"os"
+	"path/filepath"
+
+	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 // RateLimitWindow is one rolling usage window (Claude's 5-hour or 7-day).
@@ -29,8 +32,11 @@ func readRateLimits(path string) (RateLimits, bool) {
 	if path == "" {
 		return RateLimits{}, false
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
+	// The file lives in a directory a host-tier agent can write to: read it with
+	// the no-follow, FIFO-safe, size-capped reader so a planted FIFO or symlink
+	// cannot hang /api/meta.
+	b, ok := session.ReadRegistryFile(path)
+	if !ok {
 		return RateLimits{}, false
 	}
 	var rl RateLimits
@@ -41,4 +47,28 @@ func readRateLimits(path string) (RateLimits, bool) {
 		return RateLimits{}, false
 	}
 	return rl, true
+}
+
+// rateLimitsByAccount returns each account's 5h/weekly windows. default reads
+// RateLimitsFile (abtop or the opt-in script); every other account reads the
+// file its own provisioned statusLine writes. Accounts with no data are absent.
+// The account list is read on every call, so an account created while the daemon
+// runs shows its quota without a restart.
+func (s *Server) rateLimitsByAccount() map[string]RateLimits {
+	out := map[string]RateLimits{}
+	if rl, ok := readRateLimits(s.RateLimitsFile); ok {
+		out[account.Default] = rl
+	}
+	if s.Accounts == nil {
+		return out
+	}
+	for _, a := range s.Accounts.List() {
+		if a.IsDefault {
+			continue
+		}
+		if rl, ok := readRateLimits(filepath.Join(a.ConfigDir, account.RateLimitsName)); ok {
+			out[a.Name] = rl
+		}
+	}
+	return out
 }

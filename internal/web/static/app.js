@@ -821,19 +821,34 @@ function renderRateLimitsInto(host, rl) {
   return count;
 }
 
-// renderRateLimits paints the account 5h/weekly usage into the header (once,
-// globally) and, when present, mirrors the same meters into the mobile
-// Sessions-screen band (#limits-mobile, slice 5a). The mobile slot is hidden
-// by count rather than by html-string truthiness (there is no html string —
-// renderRateLimitsInto builds DOM nodes) so an absent rate_limits vanishes
-// the band cleanly instead of leaving an empty 0% row.
+// renderRateLimits paints one agent account's 5h/weekly usage into the header
+// and, when present, mirrors the same meters into the mobile Sessions-screen
+// band (#limits-mobile, slice 5a). rl is /api/meta.rate_limits — a map keyed
+// by account (acctLimitsMap also takes the pre-accounts flat shape). The
+// account shown is the focused session's (headerAccount, accounts.js), else
+// the default; a non-default one is labelled, and a reading older than
+// ACCT_STALE_SEC is dimmed so it is never read as current. The mobile slot is
+// hidden by count rather than by html-string truthiness (there is no html
+// string — renderRateLimitsInto builds DOM nodes) so an absent reading
+// vanishes the band cleanly instead of leaving an empty 0% row.
 function renderRateLimits(rl) {
-  const host = $("limits");
-  if (host) renderRateLimitsInto(host, rl);
-  const lm = document.getElementById("limits-mobile");
-  if (lm) {
-    const count = renderRateLimitsInto(lm, rl);
-    lm.hidden = count === 0;
+  const name = headerAccount();
+  acctHeaderShown = name;
+  const lims = acctLimitsMap(rl)[name] || null;
+  const age = acctLimitsAge(lims && lims.updated_at, Math.floor(Date.now() / 1000));
+  for (const id of ["limits", "limits-mobile"]) {
+    const host = document.getElementById(id);
+    if (!host) continue;
+    const count = renderRateLimitsInto(host, lims);
+    if (count && name !== ACCT_DEFAULT) {
+      const lab = document.createElement("span");
+      lab.className = "acct-lab";
+      lab.textContent = name;
+      host.prepend(lab);
+    }
+    host.classList.toggle("stale", !!(count && age.stale));
+    host.title = count ? (name + " · updated " + age.text) : "";
+    if (id === "limits-mobile") host.hidden = count === 0;
   }
 }
 
@@ -1445,6 +1460,8 @@ function renderSession(s, opts) {
     tb.title = tier.title;
     sname.appendChild(tb);
   }
+  const ab = acctBadgeEl(s);
+  if (ab) sname.appendChild(ab);
 
   const right = document.createElement("div");
   right.className = "sright";
@@ -1969,6 +1986,8 @@ async function refreshSessions() {
   }
   lastSessions = sessions || [];
   sessionsLoaded = true;
+  // The focused session's account can only be known once the list is here.
+  syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing
   // you, not to the session forever — drop both once the session is no longer
   // waiting, so reopening it later (a fresh "needs you") starts collapsed. An
@@ -2205,6 +2224,7 @@ function getOptions() {
 $("agent").addEventListener("change", () => {
   renderOptions();
   syncRuntimeField();
+  syncSpawnAccount();
   applyProfileCwd();
   syncSpawnExtras(true);
 });
@@ -2347,9 +2367,37 @@ function renderPfRuntime(value) {
   ], value || "", (v) => {
     $("pf-runtime-warn").hidden = v !== "host";
     renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value));
+    syncPfAccountWarn();
     syncEditorActions();
   });
   $("pf-runtime-warn").hidden = (value || "") !== "host";
+}
+// renderPfAccount fills the profile's Agent account select. The default
+// account is value "" (a profile with no account stored). It paints from the
+// cache at once — fillForm is synchronous and syncEditorActions runs right
+// after — and, when the cache is empty, repaints once the fetch lands,
+// keeping whatever the select holds by then. acctChoices keeps the profile's
+// own account selectable even if the list does not carry it, so Save can
+// never silently drop it.
+function renderPfAccount(value) {
+  paintPfAccount(value || "");
+  if (!accountsCache.length) fetchAccounts().then(() => paintPfAccount($("pf-account").value));
+}
+function paintPfAccount(value) {
+  const sel = $("pf-account");
+  sel.replaceChildren(...acctChoices(accountsCache, value).map((n) => {
+    const o = document.createElement("option");
+    o.value = n === ACCT_DEFAULT ? "" : n;
+    o.textContent = n === ACCT_DEFAULT ? "default (~/.claude)" : n;
+    return o;
+  }));
+  sel.value = value || "";
+  syncPfAccountWarn();
+}
+// syncPfAccountWarn: a non-default account on the host tier is config kept
+// apart, not a security boundary — say so where the choice is made.
+function syncPfAccountWarn() {
+  $("pf-account-warn").hidden = !($("pf-account").value && segValue($("pf-runtime")) === "host");
 }
 // syncPfReplyable shows "Allow replies by default" only for a claude binary:
 // replies are claude-only on the server, and a default nothing honours is a
@@ -2366,6 +2414,7 @@ function fillForm(p) {
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
   renderPfRuntime(p.runtime || "");
+  renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
   pfEnvRows = envRows(p);
   renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
@@ -2421,6 +2470,8 @@ function readForm() {
   // it explicitly would hard-code today's default into every stored profile.
   const rt = segValue($("pf-runtime"));
   if (rt) p.runtime = rt;
+  const acct = $("pf-account").value;
+  if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
   if (args.length) p.args = args;
   const { env, secrets } = rowsToConfig(pfEnvRows);
@@ -2566,6 +2617,7 @@ $("pf-bin").addEventListener("input", () => {
 $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });
+$("pf-account").addEventListener("change", syncPfAccountWarn);
 // pf-runtime's own change is handled by renderPfRuntime's buildSeg onChange —
 // a .seg is buttons, not a form control, so it has no native "change" event.
 // workspacesCache backs the tier-aware re-render: switching Runtime must be able
@@ -2972,6 +3024,44 @@ function syncRuntimeField() {
   updateRuntimeWarning(); // whether the picked cwd is boxable depends on the tier too
 }
 
+// syncSpawnAccount offers the Agent account select for a claude profile when
+// there is more than the default account to choose from. It starts on the
+// Duplicate's account when one is given, else the profile's own (ruling C2:
+// the default is the explicit "default", so picking it overrides a pinned
+// profile for this run). Painted from the cache at once; the fetch behind it
+// repaints only when the set of accounts changed, keeping the user's pick.
+// openSpawnDialog sets #agent programmatically (no change event), so it calls
+// this itself, like syncRuntimeField.
+function syncSpawnAccount(prefillAccount) {
+  const before = acctChoices(accountsCache, "").join(",");
+  paintSpawnAccount(prefillAccount);
+  fetchAccounts().then(() => {
+    if (acctChoices(accountsCache, "").join(",") === before) return;
+    paintSpawnAccount($("spawn-account-row").hidden ? prefillAccount : $("spawn-account").value);
+  });
+}
+function paintSpawnAccount(prefillAccount) {
+  const row = $("spawn-account-row"), sel = $("spawn-account");
+  const prof = currentProfile();
+  const pick = acctSpawnPick(prefillAccount, prof && prof.account);
+  const names = acctChoices(accountsCache, pick);
+  if (!prof || !prof.claude || names.length < 2) {
+    row.hidden = true;
+    sel.replaceChildren();
+    return;
+  }
+  const lims = acctLimitsMap(lastRateLimits);
+  const now = Math.floor(Date.now() / 1000);
+  sel.replaceChildren(...names.map((n) => {
+    const o = document.createElement("option");
+    o.value = n;
+    o.textContent = acctOptionLabel(n, lims[n], now);
+    return o;
+  }));
+  sel.value = pick;
+  row.hidden = false;
+}
+
 // syncSpawnExtras shows the first-message field and the replies toggle only
 // for a profile whose agent takes them, and keeps the bypass warning honest.
 // resetReplies re-reads the toggle from the profile's default (dialog open,
@@ -3063,6 +3153,8 @@ function openSpawnDialog(preselectAgent, prefill) {
   renderProfileSeg();
   // Tier first: it decides which workspaces are boxable, for the warning below.
   syncRuntimeField();
+  // A Duplicate's account applies only where its prefill does (same profile).
+  syncSpawnAccount(prefill && want === prefill.agent ? prefill.account : undefined);
   $("spawn-prompt").value = spawnPromptDraft;
   spawnPromptDraft = "";
   syncSpawnExtras(true);
@@ -3113,6 +3205,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
     runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
     replyable: $("spawn-replyable").checked, profile: currentProfile(),
+    account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });
   const draft = $("spawn-prompt").value;
   // Close first: a fixed-position toast renders *beneath* a modal dialog's
@@ -3224,6 +3317,8 @@ function openActionsSheet(s) {
       tb.title = tier.title;
       shd.appendChild(tb);
     }
+    const ab = acctBadgeEl(s);
+    if (ab) shd.appendChild(ab);
 
     // Meta line: model/effort/context% come from the terminal TAB bound to
     // this session (a session has none of its own — see usage.js/tab.usage()),
@@ -3304,6 +3399,8 @@ function openReplySheet(s) {
       stb.title = stier.title;
       shd.appendChild(stb);
     }
+    const sab = acctBadgeEl(s);
+    if (sab) shd.appendChild(sab);
 
     const flab = document.createElement("div");
     flab.className = "flab";
@@ -3794,7 +3891,8 @@ initMobileShell();
     boxRuntime = (meta && meta.box_runtime) || "";
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
-    renderRateLimits(meta && meta.rate_limits); // account 5h/weekly meters in the header
+    lastRateLimits = (meta && meta.rate_limits) || null;
+    renderRateLimits(lastRateLimits); // account 5h/weekly meters in the header
     refreshSessions(); // re-render rows now that the tier label is known
     if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
     if (!meta || !meta.env_label) return;
@@ -3839,7 +3937,11 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
 // hammering /api/meta. Skipped while hidden.
 setInterval(async () => {
   if (document.hidden) return;
-  try { const m = await api("/api/meta"); renderRateLimits(m && m.rate_limits); } catch (_) {}
+  try {
+    const m = await api("/api/meta");
+    lastRateLimits = (m && m.rate_limits) || null;
+    renderRateLimits(lastRateLimits);
+  } catch (_) {}
 }, 30000);
 
 // Ctrl+Shift+` → new shell in the focused window. Capture phase + stopPropagation

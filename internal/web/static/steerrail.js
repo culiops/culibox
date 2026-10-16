@@ -157,6 +157,10 @@ function openSteerFor(id) {
 }
 
 function renderSteerRail() {
+  // Every focus change lands here, so this is also where the header's quota
+  // meters follow the focused session's agent account — before the early
+  // return, because the rail being closed does not stop the header following.
+  if (typeof syncRateLimitsAccount === "function") syncRateLimitsAccount();
   const rail = document.getElementById("steer-rail");
   if (!rail || rail.hidden) return;
   const s = railSession();

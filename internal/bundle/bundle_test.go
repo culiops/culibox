@@ -204,3 +204,10 @@ func TestLockRecordsAHashForEveryFile(t *testing.T) {
 		t.Fatalf("lock is missing CLAUDE.md: %v", b.Lock.Files)
 	}
 }
+
+func TestAllowlistNames(t *testing.T) {
+	got := strings.Join(AllowlistNames(), ",")
+	if got != "CLAUDE.md,skills,agents,commands" {
+		t.Fatalf("AllowlistNames = %s", got)
+	}
+}

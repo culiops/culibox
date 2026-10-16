@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -54,9 +55,10 @@ func resumeFor(runtime, bin, sid string) string {
 func (m *Manager) Restart(id string) (*Session, error) {
 	m.mu.Lock()
 	s := m.sessions[id]
-	var bin string
+	var bin, acct string
 	if s != nil {
 		bin = s.Bin // guarded by m.mu: ResolveBins backfills it post-reconcile
+		acct = s.Account
 	}
 	m.mu.Unlock()
 	if s == nil {
@@ -75,6 +77,13 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	name, sid := s.name, s.claudeSessionID
 	s.mu.Unlock()
 
+	// Always explicit: "" would fall back to the profile's CURRENT account, and
+	// a resume under another account has the wrong credentials and cannot find
+	// the transcript. A default session says so by name.
+	if acct == "" {
+		acct = account.Default
+	}
+
 	var opts map[string]any
 	if len(s.options) > 0 {
 		opts = make(map[string]any, len(s.options))
@@ -83,7 +92,7 @@ func (m *Manager) Restart(id string) (*Session, error) {
 		}
 	}
 	ns, err := m.Spawn(launcher.SpawnSpec{
-		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts,
+		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
 		Resume: resumeFor(s.Runtime, bin, sid),
 	})
 	if err != nil {

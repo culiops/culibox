@@ -3,7 +3,9 @@ package web
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestReadRateLimits(t *testing.T) {
@@ -45,5 +47,27 @@ func TestReadRateLimits_malformed(t *testing.T) {
 	os.WriteFile(f2, []byte(`{"updated_at":1}`), 0o644) // neither window
 	if _, ok := readRateLimits(f2); ok {
 		t.Fatal("no windows should be ok=false")
+	}
+}
+
+// A host-tier agent can replace a rate-limits file with a FIFO; a plain
+// os.ReadFile would block /api/meta forever on it.
+func TestReadRateLimits_fifoDoesNotHang(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "agent-box-rate-limits.json")
+	if err := syscall.Mkfifo(f, 0o600); err != nil {
+		t.Skipf("mkfifo unavailable: %v", err)
+	}
+	done := make(chan bool, 1)
+	go func() {
+		_, ok := readRateLimits(f)
+		done <- ok
+	}()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("a FIFO must yield no data")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("readRateLimits blocked on a FIFO")
 	}
 }

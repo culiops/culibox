@@ -24,6 +24,7 @@ import (
 
 	"github.com/creack/pty"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -128,7 +129,7 @@ type Boxes interface {
 	// Prepare readies containment for a boxed spawn; an ErrBoxUnavailable
 	// error carries a user-facing remedy.
 	Prepare(ctx context.Context) error
-	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
+	Wrap(ctx context.Context, cwd, sessionID, acct string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
 	KillSession(ctx context.Context, boxName, sessionID string) error
@@ -145,6 +146,13 @@ type RuntimeResolver interface {
 // is how a config-bundle layout is chosen. Optional, like RuntimeResolver.
 type BinResolver interface {
 	BinFor(spec launcher.SpawnSpec) (string, error)
+}
+
+// AccountForResolver is implemented by launchers that resolve which agent
+// account a spawn runs under. Optional, like BinResolver: without it every
+// session runs under the default account.
+type AccountForResolver interface {
+	AccountFor(spec launcher.SpawnSpec) (account.Resolved, error)
 }
 
 // ReplyResolver is implemented by launchers that know a profile's reply
@@ -223,6 +231,9 @@ type Info struct {
 	// Resumable: an exited host-tier claude whose conversation id is known —
 	// Restart will continue it (`--resume`). Filled by List only.
 	Resumable bool `json:"resumable,omitempty"`
+	// Account is the agent account the session runs under; empty for the
+	// default account, so a default session's wire shape is unchanged.
+	Account string `json:"account,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -234,6 +245,13 @@ type Session struct {
 	Runtime string // box | host; immutable for the session's lifetime
 	Box     string // container name for a boxed session; "" on the host tier
 	Bin     string // resolved agent binary (for claude-only features like usage)
+	// Account is the agent account the session runs under ("" = default).
+	// ConfigDir is that account's config dir, set only for a host-tier session
+	// under a non-default account: a boxed session's config lives in its box,
+	// and the default account's dir is never ours to record. Both are set
+	// before publication and never mutated.
+	Account   string
+	ConfigDir string
 
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
@@ -606,7 +624,7 @@ func (s *Session) Info() Info {
 	if s.status != statusDetached {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options}
+	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
 }
 
 // claudeSID returns the last validated Claude conversation id ("" if none).
@@ -804,6 +822,25 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
+	// The account is resolved before anything is prepared or started, so a
+	// refused one (unknown, codex, a profile carrying its own auth) costs
+	// nothing. Without a resolver every session is the default account.
+	acct := account.DefaultResolved("")
+	if ar, ok := m.launcher.(AccountForResolver); ok {
+		r, err := ar.AccountFor(spec)
+		if err != nil {
+			return nil, err
+		}
+		acct = r
+	}
+	acctName, cfgDir := "", ""
+	if !acct.IsDefault {
+		acctName = acct.Name
+		if runtime != config.RuntimeBox {
+			cfgDir = acct.ConfigDir
+		}
+	}
+
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
@@ -824,7 +861,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		bundles := m.bundles
 		m.mu.Unlock()
-		if bundles != nil && bin != "" {
+		// A non-default account gets the personal config only when it opted in:
+		// the bundle carries the default login's skills and MCP servers.
+		if bundles != nil && bin != "" && (acct.IsDefault || acct.InheritPersonal) {
 			var flags []string
 			var err error
 			mounts, flags, bundleHash, err = bundles.For(bin)
@@ -860,7 +899,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
+		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, acctName, argv, env, mounts)
 		if err != nil {
 			// A refusal already carries its own actionable message; wrapping it
 			// again would print the remedy twice. A containment-check failure
@@ -929,6 +968,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Runtime = runtime
 	sess.Box = boxName
 	sess.Bin = bin
+	sess.Account = acctName
+	sess.ConfigDir = cfgDir
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	sess.replyable = replyable
@@ -940,7 +981,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
-			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts})
+			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
+			Account: acctName, ConfigDir: cfgDir})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1338,6 +1380,8 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Runtime = runtime
 	sess.Box = md.Box
 	sess.Bin = bin
+	sess.Account = md.Account
+	sess.ConfigDir = md.ConfigDir
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.

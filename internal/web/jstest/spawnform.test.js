@@ -62,10 +62,10 @@ test("spawnPayload carries prompt and replies only where they apply", () => {
 test("spawnPrefill copies profile, cwd, runtime and options — never the name or a first message", () => {
   const s = { id: "claude-3", agent: "claude", name: "api", cwd: "/w", runtime: "host", options: { effort: "low" }, summary: "x" };
   const pf = spawnPrefill(s);
-  assert.deepStrictEqual(pf, { agent: "claude", cwd: "/w", runtime: "host", options: { effort: "low" } });
+  assert.deepStrictEqual(pf, { agent: "claude", cwd: "/w", runtime: "host", account: "", options: { effort: "low" } });
   pf.options.effort = "high";
   assert.strictEqual(s.options.effort, "low", "the prefill must not alias the session's options");
-  assert.deepStrictEqual(spawnPrefill({}), { agent: "", cwd: "", runtime: "", options: {} });
+  assert.deepStrictEqual(spawnPrefill({}), { agent: "", cwd: "", runtime: "", account: "", options: {} });
 });
 
 test("Ctrl+Enter (⌘+Enter on mac) spawns; plain Enter, AltGr and IME composition do not", () => {
@@ -76,4 +76,18 @@ test("Ctrl+Enter (⌘+Enter on mac) spawns; plain Enter, AltGr and IME compositi
   assert.strictEqual(isSubmitHotkey(ev({ ctrlKey: true, altKey: true }), false), false);
   assert.strictEqual(isSubmitHotkey(ev({ ctrlKey: true, isComposing: true }), false), false);
   assert.strictEqual(isSubmitHotkey(ev({ metaKey: true }), false), false);
+});
+
+test("spawnPayload sends any chosen account (even default, to override a pinned profile); omits an unset one", () => {
+  assert.strictEqual(spawnPayload({ agent: "c", account: "work" }).account, "work");
+  assert.strictEqual(spawnPayload({ agent: "c", account: "default" }).account, "default");
+  assert.strictEqual("account" in spawnPayload({ agent: "c", account: "" }), false);
+  assert.strictEqual("account" in spawnPayload({ agent: "c" }), false);
+  assert.strictEqual(spawnPrefill({ agent: "c", account: "work" }).account, "work");
+});
+
+test("spawnPayload sends login:true only when set (the Settings Log in session)", () => {
+  assert.strictEqual(spawnPayload({ agent: "c", account: "work", login: true }).login, true);
+  assert.strictEqual("login" in spawnPayload({ agent: "c", account: "work" }), false);
+  assert.strictEqual("login" in spawnPayload({ agent: "c", login: false }), false);
 });

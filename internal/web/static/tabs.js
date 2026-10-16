@@ -239,6 +239,12 @@ class Cell {
       x.className = "tab-x"; x.textContent = "×"; x.title = "Close tab";
       x.onclick = (e) => { e.stopPropagation(); this.closeTab(t); };
       b.append(label, st);
+      // The session's agent account, when it is not the default: a tab is
+      // where you type into it, so the account must be visible right there.
+      if (t.kind === "terminal") {
+        const ab = acctBadgeEl((lastSessions || []).find((x) => x.id === t.id));
+        if (ab) b.append(ab);
+      }
       // Per-window context readout (claude only; usageTab is "" otherwise). Re-
       // emitted every rebuild from the tab's stored usage, like the dot above.
       if (t.kind === "terminal" && typeof t.usage === "function") {

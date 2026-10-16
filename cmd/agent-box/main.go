@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/abduco"
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
@@ -218,6 +219,15 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	lnch := launcher.New(agents, resolver, cfg.Options)
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
 
+	// Agent accounts: accounts.json lives inside the data dir (the store writes it
+	// through os.Root). The default account is the agent's own config dir.
+	accts, err := account.Open(filepath.Join(dataDir, "accounts.json"), dataDir, bundle.DefaultSource())
+	if err != nil {
+		log.Fatalf("accounts: %v", err)
+	}
+	defer accts.Close()
+	lnch.SetAccounts(accts)
+
 	// Default working dir: config value if set, else $HOME.
 	defaultCwd := cfg.DefaultCwd
 	if defaultCwd == "" {
@@ -403,6 +413,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
 	// for profile-based claude sessions that survived a daemon restart.
@@ -427,13 +438,16 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		ShellBin:     config.DetectShell(),
 
 		RateLimitsFile: rateLimitsFile,
+
+		Accounts: accts,
+		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
 	}
 	configureServer(srv, cfg)
 
 	// Analytics: durable token/prompt rollups mined from the Claude Code
 	// transcripts. Enabled by default; only an explicit config false turns it off.
 	// Roots default to ~/.claude/projects (all host + direct usage — the bulk) plus
-	// this instance's boxed-session transcript dirs.
+	// this instance's boxed-session and agent-account transcript dirs.
 	var analyticsSvc *analytics.Service
 	if cfg.Analytics.On() {
 		dbPath := cfg.Analytics.DBPath
@@ -442,9 +456,12 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 		roots := cfg.Analytics.Roots
 		if len(roots) == 0 {
-			roots = []string{filepath.Join(home, ".claude", "projects")}
-			if boxed, _ := filepath.Glob(filepath.Join(dataDir, "boxstate", "*", ".claude", "projects")); len(boxed) > 0 {
-				roots = append(roots, boxed...)
+			// Glob patterns, expanded on every ingest (not at boot) so boxes
+			// and agent accounts created while the daemon runs are picked up.
+			roots = []string{
+				filepath.Join(home, ".claude", "projects"),
+				filepath.Join(dataDir, "boxstate", "*", ".claude", "projects"),
+				filepath.Join(dataDir, "accounts", "*", "claude", "projects"),
 			}
 		}
 		interval := 24 * time.Hour

@@ -194,8 +194,11 @@ func (m *Manager) Runtime() string { return m.runtime }
 
 // boxName derives the container name from the canonical workspace path.
 // Symlinks are resolved so two spellings of one directory never produce two
-// boxes, and the instance is mixed in so DEV and PROD stay separate.
-func (m *Manager) boxName(cwd string) (string, error) {
+// boxes, and the instance is mixed in so DEV and PROD stay separate. The agent
+// account is mixed in for every account but the default, so each (workspace,
+// account) pair gets its own container and home; the default account hashes
+// exactly what it always has, keeping existing box names and boxstate valid.
+func (m *Manager) boxName(cwd, acct string) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
@@ -204,7 +207,11 @@ func (m *Manager) boxName(cwd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("box: absolute path for %q: %w", real, err)
 	}
-	sum := sha256.Sum256([]byte(m.opts.Instance + "\x00" + abs))
+	key := m.opts.Instance + "\x00" + abs
+	if acct != "" && acct != "default" { // account.Default; box does not import account
+		key += "\x00" + acct
+	}
+	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
 }
 
@@ -415,13 +422,13 @@ func (m *Manager) Prepare(ctx context.Context) error {
 // from cwd. A workspace directory can be moved or deleted while its agent is
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
-func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
+func (m *Manager) Wrap(ctx context.Context, cwd, sessionID, acct string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
 	if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
 			ErrUnboxableWorkspace, cwd, reason)
 	}
-	name, err := m.boxName(cwd)
+	name, err := m.boxName(cwd, acct)
 	if err != nil {
 		return nil, nil, "", err
 	}

@@ -3,9 +3,11 @@ package web
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -28,6 +30,7 @@ type ProfileOption struct {
 // the client never has to re-derive containment policy.
 type ProfileView struct {
 	Name       string          `json:"name"`
+	Account    string          `json:"account,omitempty"`
 	Editable   bool            `json:"editable"`
 	Runtime    string          `json:"runtime"`
 	DefaultCwd string          `json:"default_cwd,omitempty"`
@@ -70,6 +73,16 @@ type ProfileManager struct {
 	// root, config and profiles directories; box.ProtectedOverlap). nil only in
 	// tests.
 	protected []box.ProtectedDir
+	// accounts validates a profile's agent account on save; nil = only the
+	// default account exists. Spawn-time checkAccount stays the authority.
+	accounts launcher.AccountResolver
+}
+
+// SetAccounts installs the account resolver used by Save. Call at boot.
+func (m *ProfileManager) SetAccounts(r launcher.AccountResolver) {
+	m.mu.Lock()
+	m.accounts = r
+	m.mu.Unlock()
 }
 
 // NewProfileManager wires seeds + store + launcher-apply and does the initial
@@ -161,6 +174,7 @@ func (m *ProfileManager) Views() []ProfileView {
 	for _, a := range merged {
 		pv := ProfileView{
 			Name:          a.Name,
+			Account:       a.Account,
 			Editable:      editable[a.Name],
 			Runtime:       config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
 			DefaultCwd:    a.DefaultCwd,
@@ -211,10 +225,56 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkAccount(p); err != nil {
+		return err
+	}
 	if err := m.store.Save(p); err != nil {
 		return err
 	}
 	m.apply(m.merged())
+	return nil
+}
+
+// checkAccount is the early, friendly form of launcher.checkAccount: it rejects
+// a profile whose account cannot work with it. Spawn time re-checks. Caller
+// holds m.mu.
+func (m *ProfileManager) checkAccount(p config.AgentConfig) error {
+	// The account owns the config dir whichever account the profile names.
+	for k := range p.Env {
+		if k == "CLAUDE_CONFIG_DIR" || k == "CODEX_HOME" {
+			return fmt.Errorf("profile %q: %s is set by the agent account, not the profile", p.Name, k)
+		}
+	}
+	if p.Account == "" || p.Account == account.Default {
+		return nil
+	}
+	if m.accounts == nil {
+		return fmt.Errorf("profile %q: agent accounts are not configured", p.Name)
+	}
+	acct, err := m.accounts.Resolve(p.Account)
+	if err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	switch acct.Provider {
+	case account.ProviderClaude:
+		if !launcher.IsClaudeBin(p.Bin) {
+			return fmt.Errorf("profile %q: bin %s cannot use claude account %q", p.Name, p.Bin, p.Account)
+		}
+	case account.ProviderCodex:
+		if p.Bin == "" || filepath.Base(p.Bin) != "codex" {
+			return fmt.Errorf("profile %q: bin %s cannot use codex account %q", p.Name, p.Bin, p.Account)
+		}
+	}
+	for _, n := range p.Secrets {
+		if account.IsAuthEnv(n) {
+			return fmt.Errorf("profile %q: secret %s conflicts with account %q; set the token on the account", p.Name, n, p.Account)
+		}
+	}
+	for k := range p.Env {
+		if account.IsAuthEnv(k) {
+			return fmt.Errorf("profile %q: env %s conflicts with account %q", p.Name, k, p.Account)
+		}
+	}
 	return nil
 }
 
