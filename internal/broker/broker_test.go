@@ -304,6 +304,30 @@ func TestSSOExpiredIsActionable(t *testing.T) {
 	}
 }
 
+func TestSSOExpiredAuditKeepsTheDetailButTheBoxDoesNot(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
+	const detail = "refresh cached SSO token failed\nfor /home/alice/.aws/sso/cache/x.json: InvalidGrantException"
+	fm.err = fmt.Errorf("mint: %w", &MintError{Code: "SSOExpired", Detail: detail, cause: ErrSSOExpired})
+	w := call(b, tokA("claude-3"))
+	body := w.Body.String()
+	if w.Code != 503 || !strings.Contains(body, `aws sso login --profile sandbox-admin`) {
+		t.Fatalf("status %d body %s", w.Code, body)
+	}
+	for _, leak := range []string{"alice", "/home/", "InvalidGrant", "cached SSO"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("box body leaks %q: %s", leak, body)
+		}
+	}
+	row := rec.rows[len(rec.rows)-1]
+	if row.Outcome != OutcomeSSOExpired || !strings.Contains(row.Error, "InvalidGrantException") ||
+		strings.Contains(row.Error, "\n") {
+		t.Fatalf("audit row %+v: want sso_expired with the sanitized detail", row)
+	}
+	if st, _ := b.Stats("claude-3"); !strings.Contains(st.LastError, "InvalidGrantException") {
+		t.Fatalf("stats.LastError %q lacks the detail", st.LastError)
+	}
+}
+
 func TestSTSFailureShowsTheBoxOnlyTheCodeAndAuditsTheDetail(t *testing.T) {
 	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
 	const detail = "User: arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_Admin/alice@example.com\nis not authorized to perform sts:AssumeRole; cache /home/alice/.aws/sso/cache/x.json"

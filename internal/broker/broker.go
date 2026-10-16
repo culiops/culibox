@@ -207,9 +207,15 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	c, err := b.minter.Mint(r.Context(), MintInput{SourceProfile: bnd.SourceProfile, Region: bnd.Region,
 		RoleARN: bnd.RoleARN, SessionName: base.SourceIdentity, Policy: policy, Duration: credTTL})
 	if errors.Is(err, ErrSSOExpired) {
-		b.fail(w, base, OutcomeSSOExpired, http.StatusServiceUnavailable, fmt.Sprintf(
+		boxMsg := fmt.Sprintf(
 			`SSO session for profile %q expired — run "aws sso login --profile %s" on the host, then retry`,
-			bnd.SourceProfile, bnd.SourceProfile))
+			bnd.SourceProfile, bnd.SourceProfile)
+		hostMsg := boxMsg
+		var me *MintError
+		if errors.As(err, &me) && me.Detail != "" { // a misclassified failure must stay debuggable from the audit
+			hostMsg += ": " + sanitize(me.Detail)
+		}
+		b.failSplit(w, base, OutcomeSSOExpired, http.StatusServiceUnavailable, boxMsg, hostMsg)
 		return
 	}
 	if err != nil {
