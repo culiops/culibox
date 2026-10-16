@@ -132,7 +132,11 @@ func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	for _, name := range []string{"a,b", `q"uote`, "nl\nx", "nel\u0085x", "ls\u2028x", "ps\u2029x", "c1\u009bx", "bad\xffutf8"} {
 		dir := filepath.Join(t.TempDir(), name)
-		if err := os.Mkdir(dir, 0o700); err != nil {
+		if err := os.Mkdir(dir, 0o700); errors.Is(err, syscall.EILSEQ) {
+			// APFS refuses a name that is not UTF-8, so no workspace can carry one there.
+			t.Logf("%q: the filesystem refuses this name: %v", name, err)
+			continue
+		} else if err != nil {
 			t.Fatal(err)
 		}
 		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil)
@@ -689,7 +693,11 @@ func TestUnderMountIsComponentWise(t *testing.T) {
 
 func TestWorkspaceOutsideSharedDirsIsRefused(t *testing.T) {
 	f := newFake()
-	shared := t.TempDir()
+	// Resolved, as boxvm hands it over: t.TempDir() is under /var -> /private/var on macOS.
+	shared, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	m, err := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Shared: []string{shared}})
 	if err != nil {

@@ -160,8 +160,15 @@ func TestFileDirsFollowsTheSymlinkChain(t *testing.T) {
 
 // A protected dir reached through a symlinked directory is matched in both
 // spellings: the box could swap the link from the directory that holds it.
+//
+// home itself is reached through a symlink, as t.TempDir() is on macOS
+// (/var -> /private/var): the link then sits in a directory whose resolved
+// spelling is neither of the link's own two.
 func TestProtectedOverlapMatchesTheLinkSpellingToo(t *testing.T) {
-	home := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(t.TempDir(), home); err != nil {
+		t.Fatal(err)
+	}
 	dots := filepath.Join(home, "dotfiles", "ab")
 	cfgParent := filepath.Join(home, "dotconfig")
 	for _, d := range []string{dots, cfgParent} {
