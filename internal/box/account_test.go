@@ -14,14 +14,14 @@ import (
 func TestBoxNameAccount(t *testing.T) {
 	m := newTestManager(t)
 	dir := t.TempDir()
-	legacy, err := m.boxName(dir, "")
+	legacy, err := m.boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, _ := m.boxName(dir, "default")
-	work, _ := m.boxName(dir, "work")
-	work2, _ := m.boxName(dir, "work")
-	other, _ := m.boxName(dir, "other")
+	def, _ := m.boxName(dir, BoxKey{Account: "default"})
+	work, _ := m.boxName(dir, BoxKey{Account: "work"})
+	work2, _ := m.boxName(dir, BoxKey{Account: "work"})
+	other, _ := m.boxName(dir, BoxKey{Account: "other"})
 	if def != legacy {
 		t.Fatal("default account must keep today's box name")
 	}
@@ -30,6 +30,33 @@ func TestBoxNameAccount(t *testing.T) {
 	}
 	if !isBoxName(work) {
 		t.Fatal("account box name must keep the prefix+12hex format (reclaim depends on it)")
+	}
+}
+
+func TestBoxNameBindingKeepsUnboundNamesStable(t *testing.T) {
+	m := newTestManager(t)
+	dir := t.TempDir()
+	plain, _ := m.boxName(dir, BoxKey{})
+	legacy, _ := m.boxName(dir, BoxKey{Account: "default"})
+	bound, _ := m.boxName(dir, BoxKey{Binding: "abc123abc123"})
+	bound2, _ := m.boxName(dir, BoxKey{Binding: "ffffffffffff"})
+	if plain != legacy {
+		t.Fatal("default account must hash as before")
+	}
+	if bound == plain || bound == bound2 {
+		t.Fatal("a binding must get its own box, and different bindings different boxes")
+	}
+	again, _ := m.boxName(dir, BoxKey{Binding: "abc123abc123"})
+	if again != bound {
+		t.Fatal("the same binding must share a box")
+	}
+	work, _ := m.boxName(dir, BoxKey{Account: "work"})
+	workBound, _ := m.boxName(dir, BoxKey{Account: "work", Binding: "abc123abc123"})
+	if workBound == work || workBound == bound {
+		t.Fatal("account and binding both key the box")
+	}
+	if !isBoxName(bound) || !isBoxName(workBound) {
+		t.Fatal("bound box names must keep the prefix+12hex format (reclaim depends on it)")
 	}
 }
 
@@ -50,7 +77,7 @@ func TestBoxNameDefaultMatchesPreAccountFormula(t *testing.T) {
 	sum := sha256.Sum256([]byte("PROD" + "\x00" + abs))
 	want := namePrefix + hex.EncodeToString(sum[:6])
 	for _, acct := range []string{"", "default"} {
-		got, err := m.boxName(dir, acct)
+		got, err := m.boxName(dir, BoxKey{Account: acct})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +116,7 @@ func TestWrapGivesEachAccountItsOwnBox(t *testing.T) {
 	ws := t.TempDir()
 	names := map[string]string{}
 	for _, acct := range []string{"", "default", "work", "other"} {
-		_, _, name, err := m.Wrap(context.Background(), ws, "s-"+acct, acct, []string{"claude"}, nil, nil)
+		_, _, name, err := m.Wrap(context.Background(), ws, "s-"+acct, BoxKey{Account: acct}, []string{"claude"}, nil, nil)
 		if err != nil {
 			t.Fatalf("account %q: %v", acct, err)
 		}
@@ -125,7 +152,7 @@ func TestReclaimRemovesAnAccountHomeLikeADefaultOne(t *testing.T) {
 
 func mustAcctBoxName(t *testing.T, m *Manager, cwd, acct string) string {
 	t.Helper()
-	n, err := m.boxName(cwd, acct)
+	n, err := m.boxName(cwd, BoxKey{Account: acct})
 	if err != nil {
 		t.Fatal(err)
 	}

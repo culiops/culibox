@@ -361,3 +361,21 @@ func TestProfileEnvMayStillSetAnABVariable(t *testing.T) {
 		t.Fatal("explicit profile env was stripped")
 	}
 }
+
+func TestAWSForReturnsTheProfileBinding(t *testing.T) {
+	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::226198813800:role/a", Region: "ap-southeast-1",
+		S3Read: []string{"bucket"}}
+	l := New([]config.AgentConfig{{Name: "c", Bin: "claude", AWS: b}, {Name: "plain", Bin: "claude"}}, fakeResolver{}, nil)
+	if got := l.AWSFor("c"); got == nil || got.RoleARN != b.RoleARN {
+		t.Fatalf("got %+v", got)
+	}
+	if l.AWSFor("plain") != nil || l.AWSFor("missing") != nil {
+		t.Fatal("unbound/missing must be nil")
+	}
+	got := l.AWSFor("c")
+	got.Region = "mutated"
+	got.S3Read[0] = "mutated"
+	if again := l.AWSFor("c"); again.Region != "ap-southeast-1" || again.S3Read[0] != "bucket" {
+		t.Fatal("AWSFor must return a deep copy")
+	}
+}

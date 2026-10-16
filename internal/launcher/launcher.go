@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -332,6 +333,19 @@ func (l *AgentLauncher) BinFor(spec SpawnSpec) (string, error) {
 		return "", fmt.Errorf("launcher: unknown agent %q", spec.Agent)
 	}
 	return cfg.Bin, nil
+}
+
+// AWSFor returns a copy of the profile's AWS binding, or nil for a profile
+// without one (or an unknown profile). The copy is the session's own: a later
+// profile edit must never change the scope of a session already spawned.
+func (l *AgentLauncher) AWSFor(agent string) *config.AWSBinding {
+	cfg, ok := l.agent(agent)
+	if !ok || cfg.AWS == nil {
+		return nil
+	}
+	c := *cfg.AWS
+	c.S3Read = slices.Clone(cfg.AWS.S3Read)
+	return &c
 }
 
 // Build composes (argv, env) for the agent per its base policy + env + secrets.

@@ -192,7 +192,7 @@ func TestReclaimHoldsOpMuAgainstAConcurrentSpawn(t *testing.T) {
 
 	spawned := make(chan error, 1)
 	go func() {
-		_, _, _, err := m.Wrap(context.Background(), ws, "bash-1", "", []string{"claude"}, nil, nil)
+		_, _, _, err := m.Wrap(context.Background(), ws, "bash-1", BoxKey{}, []string{"claude"}, nil, nil)
 		spawned <- err
 	}()
 	select {

@@ -32,7 +32,7 @@ func TestWorkspaceOverlappingConfigOrProfilesDirIsRefused(t *testing.T) {
 		profDir:                         "it is agent-box's profiles directory",
 		elsewhere:                       "it contains agent-box's config directory",
 	} {
-		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", "", []string{"claude"}, nil, nil)
+		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: want %q, got %v", ws, want, err)
 		}
@@ -41,7 +41,7 @@ func TestWorkspaceOverlappingConfigOrProfilesDirIsRefused(t *testing.T) {
 	if err := os.Mkdir(other, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := m.Wrap(context.Background(), other, "s-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), other, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatalf("a sibling of the config and profiles dirs must box: %v", err)
 	}
 }

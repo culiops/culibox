@@ -192,13 +192,22 @@ func New(opts Options) (*Manager, error) {
 // Runtime reports the detected isolation runtime, for the UI badge.
 func (m *Manager) Runtime() string { return m.runtime }
 
+// BoxKey is everything besides the workspace that decides which box a session
+// runs in. Account is the agent account name ("" or "default" for the default
+// account). Binding is the hash of the session's AWS binding (config.AWSBinding
+// Hash), "" for a session without one.
+type BoxKey struct{ Account, Binding string }
+
 // boxName derives the container name from the canonical workspace path.
 // Symlinks are resolved so two spellings of one directory never produce two
 // boxes, and the instance is mixed in so DEV and PROD stay separate. The agent
 // account is mixed in for every account but the default, so each (workspace,
 // account) pair gets its own container and home; the default account hashes
 // exactly what it always has, keeping existing box names and boxstate valid.
-func (m *Manager) boxName(cwd, acct string) (string, error) {
+// An AWS binding hash is mixed in last, so a session without a binding never
+// shares a box with one that has a binding, sessions with the same binding
+// share, and an unbound session's name is unchanged from before bindings.
+func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
@@ -208,8 +217,11 @@ func (m *Manager) boxName(cwd, acct string) (string, error) {
 		return "", fmt.Errorf("box: absolute path for %q: %w", real, err)
 	}
 	key := m.opts.Instance + "\x00" + abs
-	if acct != "" && acct != "default" { // account.Default; box does not import account
-		key += "\x00" + acct
+	if k.Account != "" && k.Account != "default" { // account.Default; box does not import account
+		key += "\x00" + k.Account
+	}
+	if k.Binding != "" {
+		key += "\x00aws:" + k.Binding
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
@@ -422,13 +434,13 @@ func (m *Manager) Prepare(ctx context.Context) error {
 // from cwd. A workspace directory can be moved or deleted while its agent is
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
-func (m *Manager) Wrap(ctx context.Context, cwd, sessionID, acct string, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
+func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
 	if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
 			ErrUnboxableWorkspace, cwd, reason)
 	}
-	name, err := m.boxName(cwd, acct)
+	name, err := m.boxName(cwd, key)
 	if err != nil {
 		return nil, nil, "", err
 	}

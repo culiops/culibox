@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -129,7 +131,7 @@ type Boxes interface {
 	// Prepare readies containment for a boxed spawn; an ErrBoxUnavailable
 	// error carries a user-facing remedy.
 	Prepare(ctx context.Context) error
-	Wrap(ctx context.Context, cwd, sessionID, acct string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
+	Wrap(ctx context.Context, cwd, sessionID string, key box.BoxKey, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
 	KillSession(ctx context.Context, boxName, sessionID string) error
@@ -166,6 +168,47 @@ type ReplyResolver interface {
 // accepted, so a restart re-applies exactly those. Optional.
 type OptionsResolver interface {
 	AcceptedOptions(spec launcher.SpawnSpec) map[string]any
+}
+
+// AWSResolver is implemented by launchers that know a profile's AWS binding.
+// Optional, like BinResolver: without it no session is ever bound.
+type AWSResolver interface {
+	AWSFor(agent string) *config.AWSBinding
+}
+
+// BrokerHooks is what spawning a bound session needs from the credential
+// broker, kept as an interface so this package does not import it (the broker
+// adapter implements it). A nil BrokerHooks means the broker is not running,
+// and every bound profile is refused rather than started without it.
+type BrokerHooks interface {
+	// NewNonce returns a fresh per-spawn secret. Session ids are reused, so the
+	// token is bound to (id, nonce), never to the id alone.
+	NewNonce() string
+	// Token is the bearer token the session's box presents to the broker.
+	Token(sessionID, nonce string) string
+	// BoxFor prepares the binding's host files and returns the read-only
+	// mounts and the env (NAME=value) that point a box's AWS tooling at the
+	// broker. The values reach the box by name only (box.Wrap's `-e NAME`).
+	BoxFor(b config.AWSBinding) (mounts []box.Mount, env []string, err error)
+	// StripEnv names every variable a bound session must not inherit from its
+	// profile: static credentials and anything that would shadow the broker.
+	StripEnv() []string
+	// Forget drops the broker's per-session state (cache, stats) once a
+	// session is gone from the registry.
+	Forget(sessionID string)
+}
+
+// brokerTokenEnv carries the session's token into its box (the broker
+// package's TokenEnv; this package does not import it).
+const brokerTokenEnv = "AGENTBOX_BROKER_TOKEN"
+
+// AWSInfo is the wire view of a session's AWS binding: what it can reach, never
+// how it authenticates (no source profile, no nonce, no token).
+type AWSInfo struct {
+	Label     string `json:"label"`
+	AccountID string `json:"account_id"`
+	RoleARN   string `json:"role_arn"`
+	Prod      bool   `json:"prod"`
 }
 
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
@@ -234,6 +277,9 @@ type Info struct {
 	// Account is the agent account the session runs under; empty for the
 	// default account, so a default session's wire shape is unchanged.
 	Account string `json:"account,omitempty"`
+	// AWS is the binding the session was spawned with; nil (absent) for an
+	// unbound session, so its wire shape is unchanged.
+	AWS *AWSInfo `json:"aws,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -252,6 +298,12 @@ type Session struct {
 	// before publication and never mutated.
 	Account   string
 	ConfigDir string
+	// AWS is the binding the session was spawned with; immutable, read without
+	// the lock. A later profile edit never changes a running session's scope.
+	AWS *config.AWSBinding
+	// AWSNonce is this spawn's broker-token nonce (set iff AWS is). Immutable,
+	// read without the lock. Never put it on the wire: Info leaves it out.
+	AWSNonce string
 
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
@@ -624,7 +676,11 @@ func (s *Session) Info() Info {
 	if s.status != statusDetached {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
-	return Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
+	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
+	if s.AWS != nil {
+		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod}
+	}
+	return in
 }
 
 // claudeSID returns the last validated Claude conversation id ("" if none).
@@ -708,10 +764,11 @@ type Manager struct {
 	counters  map[string]int
 	ringCap   int
 	retention time.Duration
-	boxes     Boxes   // nil = containment unavailable; every spawn is host tier
-	bundles   Bundles // nil = boxed sessions run without user config
-	home      string  // daemon user's home; where a host session's ~/.claude lives
-	stateDir  string  // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
+	bundles   Bundles     // nil = boxed sessions run without user config
+	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	home      string      // daemon user's home; where a host session's ~/.claude lives
+	stateDir  string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -738,6 +795,13 @@ func (m *Manager) SetPaths(home, stateDir string) {
 func (m *Manager) SetBundles(b Bundles) {
 	m.mu.Lock()
 	m.bundles = b
+	m.mu.Unlock()
+}
+
+// SetBroker installs the credential-broker hooks. Call once at boot.
+func (m *Manager) SetBroker(h BrokerHooks) {
+	m.mu.Lock()
+	m.broker = h
 	m.mu.Unlock()
 }
 
@@ -841,6 +905,27 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
+	// An AWS binding runs only in a box, and only through the broker. Refused
+	// here, before anything is prepared, built or issued: a host-tier spawn
+	// (the profile's tier, a per-spawn "host" override, or containment being
+	// unavailable) would hand the agent the host's own AWS access, and no token
+	// is minted for a spawn that is refused.
+	var binding *config.AWSBinding
+	if r, ok := m.launcher.(AWSResolver); ok {
+		binding = r.AWSFor(spec.Agent)
+	}
+	m.mu.Lock()
+	brk := m.broker
+	m.mu.Unlock()
+	if binding != nil {
+		if runtime != config.RuntimeBox {
+			return nil, fmt.Errorf("profile %q has an AWS binding, so it can only run in a box, never on the host tier", spec.Agent)
+		}
+		if brk == nil {
+			return nil, fmt.Errorf("profile %q has an AWS binding but the credential broker is not running", spec.Agent)
+		}
+	}
+
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
@@ -895,11 +980,35 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// Containment is applied here, between the launcher and the process start,
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	var boxName string
+	var nonce string
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, acctName, argv, env, mounts)
+		key := box.BoxKey{Account: acctName}
+		if binding != nil {
+			bm, benv, err := brk.BoxFor(*binding)
+			if err != nil {
+				return nil, fmt.Errorf("spawn %s: preparing AWS access: %w", spec.Agent, err)
+			}
+			nonce = brk.NewNonce()
+			// Strip before adding: whatever the profile or daemon env says about
+			// AWS must neither bypass credential_process nor shadow a broker
+			// value. The broker's own names are stripped too, so each is set
+			// exactly once, by the broker.
+			strip := append(slices.Clone(brk.StripEnv()), brokerTokenEnv) // never append into the hooks' own slice
+			for _, kv := range benv {
+				if i := strings.IndexByte(kv, '='); i > 0 {
+					strip = append(strip, kv[:i])
+				}
+			}
+			env = withoutEnv(env, strip)
+			env = append(env, benv...)
+			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
+			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
+			key.Binding = binding.Hash()
+		}
+		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {
 			// A refusal already carries its own actionable message; wrapping it
 			// again would print the remedy twice. A containment-check failure
@@ -970,6 +1079,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Bin = bin
 	sess.Account = acctName
 	sess.ConfigDir = cfgDir
+	sess.AWS = binding
+	sess.AWSNonce = nonce
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	sess.replyable = replyable
@@ -982,10 +1093,41 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// brokerForget drops a bound session's broker state (cached credentials,
+// stats) once it has left the registry. Called after the delete, so the
+// broker's lookup already refuses the id.
+func (m *Manager) brokerForget(s *Session) {
+	if s.AWS == nil {
+		return
+	}
+	m.mu.Lock()
+	brk := m.broker
+	m.mu.Unlock()
+	if brk != nil {
+		brk.Forget(s.ID)
+	}
+}
+
+// withoutEnv drops every "NAME=..." entry whose NAME is listed.
+func withoutEnv(env, names []string) []string {
+	drop := make(map[string]bool, len(names))
+	for _, n := range names {
+		drop[n] = true
+	}
+	out := env[:0:0]
+	for _, kv := range env {
+		if i := strings.IndexByte(kv, '='); i > 0 && drop[kv[:i]] {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // releaseBoxNamed tells the box layer one session for this box is gone. Safe
@@ -1087,6 +1229,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		backend := m.backend
 		m.mu.Unlock()
 		m.peekForget(id) // the cached transcript parse dies with the session
+		m.brokerForget(sess)
 		if sc != nil {
 			sc.remove(id) // a naturally-exited session is gone for good
 		}
@@ -1232,6 +1375,7 @@ func (m *Manager) removeSession(id string, s *Session) {
 	sc := m.sidecar
 	m.mu.Unlock()
 	m.peekForget(id) // the cached transcript parse dies with the session
+	m.brokerForget(s)
 	if sc != nil {
 		sc.remove(id)
 	}
@@ -1382,6 +1526,8 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Bin = bin
 	sess.Account = md.Account
 	sess.ConfigDir = md.ConfigDir
+	sess.AWS = md.AWS
+	sess.AWSNonce = md.AWSNonce
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.

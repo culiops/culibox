@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // sessionMeta is the metadata abduco cannot recover on its own. The agent name
@@ -54,6 +56,11 @@ type sessionMeta struct {
 	// from it). Stored rather than recomputed so it survives the account
 	// being edited or removed while the session still runs.
 	ConfigDir string `json:"config_dir,omitempty"`
+	// AWS is the binding the session was spawned with, so a profile edit never
+	// changes a running session's scope, and AWSNonce is that spawn's token
+	// nonce: without it the box's token stops verifying after a restart.
+	AWS      *config.AWSBinding `json:"aws,omitempty"`
+	AWSNonce string             `json:"aws_nonce,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
