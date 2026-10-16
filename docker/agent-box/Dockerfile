@@ -20,8 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG AWSCLI_VERSION=2.38.1
 ARG AWSCLI_SHA256_X86_64=b11ed416d91f4251da363a17706938eeaf0e520745754c104c0c1890dd8363c7
 ARG AWSCLI_SHA256_AARCH64=91360c0adb2ae508334ff657dce4787b598b443a11cf3dc58e08b74f12e16009
-# Terraform is verified against HashiCorp's SHA256SUMS fetched from the same
-# origin: it catches a corrupt download, not a compromised origin.
+# Terraform 1.16.6, pinned by version AND per-arch SHA256, taken from (and
+# cross-checked against the zips and) HashiCorp's SHA256SUMS:
+#   https://releases.hashicorp.com/terraform/1.16.6/terraform_1.16.6_SHA256SUMS
+# On a version bump the new sums MUST be checked against the signed
+# SHA256SUMS(.sig) (HashiCorp release key), not just copied from the download.
+ARG TERRAFORM_SHA256_AMD64=38034b38d03096399a7a1264a14561a8029b2b496fd1f169452656e53968f1b7
+ARG TERRAFORM_SHA256_ARM64=a750b5a11038f165846b2658c40c88cd7070aa67a61bab431a14ba27928ea9ea
 ARG TERRAFORM_VERSION=1.16.6
 RUN set -eu; \
     arch="$(uname -m)"; \
@@ -35,12 +40,14 @@ RUN set -eu; \
     unzip -q /tmp/awscli.zip -d /tmp; /tmp/aws/install; rm -rf /tmp/aws /tmp/awscli.zip; \
     aws --version
 RUN set -eu; \
-    case "$(dpkg --print-architecture)" in amd64) a=amd64 ;; arm64) a=arm64 ;; *) echo "unsupported arch" >&2; exit 1 ;; esac; \
-    cd /tmp; \
-    curl -fsSLO "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${a}.zip"; \
-    curl -fsSLO "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS"; \
-    grep " terraform_${TERRAFORM_VERSION}_linux_${a}.zip\$" "terraform_${TERRAFORM_VERSION}_SHA256SUMS" | sha256sum -c -; \
-    unzip -q "terraform_${TERRAFORM_VERSION}_linux_${a}.zip" -d /usr/local/bin; rm -f terraform_*; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=amd64; sum="$TERRAFORM_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$TERRAFORM_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${a}.zip" -o /tmp/terraform.zip; \
+    echo "${sum}  /tmp/terraform.zip" | sha256sum -c -; \
+    unzip -q /tmp/terraform.zip -d /usr/local/bin; rm -f /tmp/terraform.zip; \
     terraform version
 
 RUN npm install -g @anthropic-ai/claude-code
