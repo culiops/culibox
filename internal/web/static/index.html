@@ -180,6 +180,10 @@
           <label>Effort</label>
           <div id="effort-slot"></div>
         </div>
+        <div class="span2" id="spawn-account-row" hidden>
+          <label for="spawn-account">Agent account</label>
+          <select id="spawn-account"></select>
+        </div>
         <div class="span2 form-hint" id="tier-explain" style="display:none">
           <div><b>box</b> — the agent sees only <span id="tier-explain-cwd"></span>.</div>
           <div><b class="dgr">host</b> — the agent has your whole account.</div>
@@ -213,6 +217,7 @@
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Access tokens</button>
+      <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
@@ -253,6 +258,12 @@
           <div class="fcol"><label class="flab" for="pf-cwd">Default workspace</label>
             <select id="pf-cwd" class="fld"></select>
             <input id="pf-cwd-custom" class="fld" type="text" placeholder="/custom/path" autocomplete="off" hidden></div>
+          <div class="fcol" id="pf-account-col">
+            <label class="flab" for="pf-account">Agent account</label>
+            <select id="pf-account" class="fld"></select>
+            <div class="warnbox" id="pf-account-warn" hidden>Host tier: this account's sessions run as your
+              OS user and can read the default account's files. Use box containment to keep accounts apart.</div>
+          </div>
         </div>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
@@ -328,6 +339,15 @@
       <ul id="tok-list"></ul>
       <div class="dlg-err" id="tok-err"></div>
     </div>
+    <div class="dbd pad" id="accounts" role="tabpanel" hidden>
+      <p class="hint">Each agent account is a separate Claude login with its own history and quota.
+        You choose the account when you start a session. agent-box never switches accounts for you.
+        On the host tier this keeps config apart but is not a security boundary; use a boxed
+        profile when the accounts must not see each other.</p>
+      <ul id="acct-list"></ul>
+      <p class="hint" id="acct-note" hidden></p>
+      <div class="dlg-err" id="acct-err"></div>
+    </div>
 
     <div class="dft" id="foot-manage">
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
@@ -345,6 +365,15 @@
       <button id="tok-logout" type="button" class="btn dgr">Sign out of this box…</button>
       <span class="grow"></span>
       <button id="tok-new" type="button" class="btn">+ new token</button>
+      <button type="button" class="btn pri" data-close="settings-modal">Done</button>
+    </div>
+    <div class="dft" id="foot-accounts" hidden>
+      <span class="grow"></span>
+      <select id="acct-provider" class="fld" aria-label="Provider for a new account">
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+      </select>
+      <button id="acct-new" type="button" class="btn">+ new account</button>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
   </dialog>

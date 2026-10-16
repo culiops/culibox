@@ -136,6 +136,7 @@ function selectSettingsTab(name) {
   setDialogError("settings-modal", "");
   // The Access-tokens tab loads its list lazily whenever it is shown.
   if (name === "tokens" && typeof loadTokens === "function") loadTokens();
+  if (name === "accounts" && typeof loadAccounts === "function") loadAccounts();
 }
 
 function initDialogs() {

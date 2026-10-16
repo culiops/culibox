@@ -48,3 +48,49 @@ test("acctOptionLabel never presents stale quota as current", () => {
   // numbers with no timestamp at all are also unverifiable
   assert.equal(acctOptionLabel("work", { five_hour: { used_percentage: 10 } }, now), "work · 5h 10% (no data)");
 });
+
+const { acctChoices, acctPutBody, acctSpawnPick, acctLoginProfile, acctLoginText } = require("../static/accounts.js");
+
+test("acctChoices: default first, list order kept, a kept value never dropped", () => {
+  const list = [{ name: "default", default: true }, { name: "work" }, { name: "lab" }];
+  assert.deepEqual(acctChoices(list, ""), ["default", "work", "lab"]);
+  assert.deepEqual(acctChoices(list, "work"), ["default", "work", "lab"]);
+  // A profile pinned to an account the list does not (yet) carry keeps it:
+  // an empty or failed fetch must not silently re-save the profile as default.
+  assert.deepEqual(acctChoices([], "work"), ["default", "work"]);
+  assert.deepEqual(acctChoices(null, ""), ["default"]);
+  assert.deepEqual(acctChoices(list, "default"), ["default", "work", "lab"]);
+});
+
+test("acctPutBody always carries both replaced fields", () => {
+  const a = { name: "work", token_secret: "WORK_TOKEN", inherit_personal: true };
+  assert.deepEqual(acctPutBody(a, { inherit_personal: false }), { token_secret: "WORK_TOKEN", inherit_personal: false });
+  assert.deepEqual(acctPutBody({ name: "x" }, {}), { token_secret: "", inherit_personal: false });
+  assert.deepEqual(acctPutBody({ name: "x" }, { token_secret: "T" }), { token_secret: "T", inherit_personal: false });
+});
+
+test("acctSpawnPick: prefill wins, else the profile's, else default", () => {
+  assert.equal(acctSpawnPick(undefined, ""), "default");
+  assert.equal(acctSpawnPick(undefined, undefined), "default");
+  assert.equal(acctSpawnPick(undefined, "work"), "work");
+  // Duplicate of a default-account session over a work-pinned profile: the
+  // explicit default must survive (ruling C2).
+  assert.equal(acctSpawnPick("", "work"), "default");
+  assert.equal(acctSpawnPick("lab", "work"), "lab");
+});
+
+test("acctLoginProfile prefers the bare claude profile, else any unpinned claude", () => {
+  const ps = [{ name: "bash" }, { name: "pinned", claude: true, account: "work" }, { name: "c2", claude: true }, { name: "claude", claude: true }];
+  assert.equal(acctLoginProfile(ps).name, "claude");
+  assert.equal(acctLoginProfile(ps.slice(0, 3)).name, "c2");
+  assert.equal(acctLoginProfile(ps.slice(0, 2)), null);
+  assert.equal(acctLoginProfile(null), null);
+});
+
+test("acctLoginText names each state", () => {
+  assert.equal(acctLoginText("token"), "token");
+  assert.equal(acctLoginText("logged_in"), "logged in");
+  assert.equal(acctLoginText("unknown"), "login unknown");
+  assert.equal(acctLoginText("weird"), "weird");
+  assert.equal(acctLoginText(undefined), "login unknown");
+});
