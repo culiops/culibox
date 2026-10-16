@@ -77,6 +77,17 @@ func DedupeProtected(dirs []ProtectedDir) []ProtectedDir {
 // ending at the target's. agent-box reads such a file through its links, so a
 // box that could write any of these directories could swap a link or rewrite
 // the content. A missing file gives its own directory only.
+//
+// The result is a UNION of three views, deduplicated in order. Dropping any
+// one reopened a hole in an earlier attempt, so none is a fallback for another:
+//
+//  1. the hops as SPELLED: a relative target joined onto the link's own
+//     directory as text (where a link can be swapped from a parent as written);
+//  2. the hops as the KERNEL walks them: each directory resolved with its own
+//     symlinks applied, and a relative target taken from that REAL directory,
+//     with ".." applied to the already-resolved prefix, never lexically;
+//  3. when a symlink hop's target does not exist, the deepest directory that
+//     does, since creating the missing part there completes the chain.
 func FileDirs(file string) []string {
 	p, err := filepath.Abs(file)
 	if err != nil {
@@ -105,7 +116,92 @@ func FileDirs(file string) []string {
 			out = append(out, filepath.Dir(r))
 		}
 	}
+	out = append(out, kernelWalkDirs(file)...)
+	var uniq []string
+	for _, d := range out {
+		if !slices.Contains(uniq, d) {
+			uniq = append(uniq, d)
+		}
+	}
+	return uniq
+}
+
+// kernelWalkDirs is view 2 and 3 of FileDirs. raw is never cleaned: Clean
+// would fold "link/.." away as text, landing in a directory the kernel never
+// reads. A first hop that is a plain missing file adds nothing (its spelled
+// directory is the whole answer); every hop that is a symlink, or follows one,
+// adds its resolved directory.
+func kernelWalkDirs(file string) []string {
+	raw := file
+	if !filepath.IsAbs(raw) {
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil
+		}
+		raw = wd + string(filepath.Separator) + raw
+	}
+	var out []string
+	for hop := 0; hop < 40; hop++ {
+		i := strings.LastIndex(raw, string(filepath.Separator))
+		if i < 0 {
+			break
+		}
+		dirPart, name := raw[:i], raw[i+1:]
+		if name == "" || name == "." || name == ".." {
+			break
+		}
+		if dirPart == "" {
+			dirPart = string(filepath.Separator)
+		}
+		dir, err := filepath.EvalSymlinks(dirPart)
+		if err != nil {
+			if hop > 0 {
+				out = append(out, deepestExisting(dirPart))
+			}
+			break
+		}
+		if dir, err = filepath.Abs(dir); err != nil {
+			break
+		}
+		fi, err := os.Lstat(filepath.Join(dir, name))
+		if err == nil || hop > 0 {
+			out = append(out, dir)
+		}
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			break
+		}
+		t, err := os.Readlink(filepath.Join(dir, name))
+		if err != nil {
+			break
+		}
+		if filepath.IsAbs(t) {
+			raw = t
+		} else {
+			raw = dir + string(filepath.Separator) + t
+		}
+	}
 	return out
+}
+
+// deepestExisting resolves the longest existing prefix of p. p is cut at its
+// last separator as text, not cleaned, so a ".." after a symlinked component
+// keeps the kernel's meaning.
+func deepestExisting(p string) string {
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			if abs, err := filepath.Abs(r); err == nil {
+				return abs
+			}
+			return r
+		}
+		i := strings.LastIndex(p, string(filepath.Separator))
+		if i < 0 {
+			return p
+		}
+		if p = p[:i]; p == "" {
+			p = string(filepath.Separator)
+		}
+	}
 }
 
 // ProtectedOverlap reports why workspace cannot be boxed because it is,
