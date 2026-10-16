@@ -150,6 +150,9 @@ type AgentLauncher struct {
 	defaultRuntime string
 	// accounts resolves agent accounts; nil means only the default exists.
 	accounts AccountResolver
+	// daemonSecretEnv names daemon-only variables (without the AB_ prefix) that
+	// never reach a session through an inherited base.
+	daemonSecretEnv map[string]bool
 }
 
 // AccountResolver is the launcher's view of the account store.
@@ -246,6 +249,21 @@ func fileExists(p string) bool {
 func (l *AgentLauncher) SetDefaultRuntime(rt string) {
 	l.mu.Lock()
 	l.defaultRuntime = rt
+	l.mu.Unlock()
+}
+
+// SetDaemonSecretEnv names daemon-only variables (the login password's env var)
+// that must never reach a session through an inherited base. Every AB_* variable
+// is stripped regardless; this adds names that do not carry the prefix.
+func (l *AgentLauncher) SetDaemonSecretEnv(names ...string) {
+	m := map[string]bool{}
+	for _, n := range names {
+		if n != "" {
+			m[n] = true
+		}
+	}
+	l.mu.Lock()
+	l.daemonSecretEnv = m
 	l.mu.Unlock()
 }
 
@@ -360,8 +378,11 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 		basePolicy = config.BaseClean
 	}
 	env := l.baseEnv(basePolicy)
-	for k := range env { // strip Claude session markers from any base
-		if claudeSessionEnvBlocklist[k] {
+	l.mu.RLock()
+	daemonSecrets := l.daemonSecretEnv
+	l.mu.RUnlock()
+	for k := range env { // strip Claude session markers and daemon secrets from any base
+		if claudeSessionEnvBlocklist[k] || strings.HasPrefix(k, "AB_") || daemonSecrets[k] {
 			delete(env, k)
 		}
 	}

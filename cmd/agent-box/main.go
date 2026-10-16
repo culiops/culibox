@@ -218,6 +218,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 	lnch := launcher.New(agents, resolver, cfg.Options)
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
+	lnch.SetDaemonSecretEnv(cfg.PasswordEnv)
 
 	// Agent accounts: accounts.json lives inside the data dir (the store writes it
 	// through os.Root). The default account is the agent's own config dir.
