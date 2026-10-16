@@ -128,7 +128,7 @@ type Boxes interface {
 	// Prepare readies containment for a boxed spawn; an ErrBoxUnavailable
 	// error carries a user-facing remedy.
 	Prepare(ctx context.Context) error
-	Wrap(ctx context.Context, cwd, sessionID string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
+	Wrap(ctx context.Context, cwd, sessionID, acct string, argv, env []string, extraRO []box.Mount) (argvOut, envOut []string, boxName string, err error)
 	AdoptBox(boxName string)
 	ReleaseBox(boxName string)
 	KillSession(ctx context.Context, boxName, sessionID string) error
@@ -860,7 +860,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, argv, env, mounts)
+		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, "", argv, env, mounts)
 		if err != nil {
 			// A refusal already carries its own actionable message; wrapping it
 			// again would print the remedy twice. A containment-check failure

@@ -22,6 +22,9 @@ var hostOnlyEnv = map[string]bool{
 	"PWD":               true,
 	"OLDPWD":            true,
 	"ABDUCO_SOCKET_DIR": true,
+	// host paths; inside a box the per-account box home's .claude is the config dir
+	"CLAUDE_CONFIG_DIR": true,
+	"CODEX_HOME":        true,
 }
 
 // runArgs builds `docker run -d` for a box. Deny by default: exactly two mounts,

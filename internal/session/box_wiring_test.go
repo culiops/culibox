@@ -36,6 +36,7 @@ func (l tieredLauncher) RuntimeFor(spec launcher.SpawnSpec) (string, error) {
 type fakeBoxes struct {
 	mu       sync.Mutex
 	wraps    int
+	lastAcct string // account the last Wrap was called with
 	releases int
 	adopts   int
 	kills    int
@@ -76,10 +77,11 @@ func (f *fakeBoxes) Prepare(context.Context) error {
 	return f.prepareErr
 }
 
-func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, argv, env []string, _ []box.Mount) ([]string, []string, string, error) {
+func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, acct string, argv, env []string, _ []box.Mount) ([]string, []string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
+	f.lastAcct = acct
 	f.order.add("wrap")
 	if f.wrapErr != nil {
 		return nil, nil, "", f.wrapErr

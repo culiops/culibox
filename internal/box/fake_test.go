@@ -231,7 +231,7 @@ func waitFor(t *testing.T, limit time.Duration, cond func() bool) {
 
 func mustBoxName(t *testing.T, m *Manager, cwd string) string {
 	t.Helper()
-	n, err := m.boxName(cwd)
+	n, err := m.boxName(cwd, "")
 	if err != nil {
 		t.Fatal(err)
 	}
