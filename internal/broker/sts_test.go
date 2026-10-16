@@ -22,8 +22,10 @@ func TestClassifySSOExpiry(t *testing.T) {
 		"typed invalid token": {fmt.Errorf("get credentials: %w", &ssocreds.InvalidTokenError{Err: errors.New("x")}), true},
 		"refresh failed text": {errors.New("failed to refresh cached SSO token: InvalidGrantException"), true},
 		"sso expired text":    {errors.New("the SSO session associated with this profile has expired or is otherwise invalid"), true},
-		"access denied":       {errors.New("AccessDenied: User is not authorized to perform: sts:AssumeRole"), false},
-		"no such profile":     {errors.New("failed to get shared config profile, sandbox-admin"), false},
+		"logged out (no token file)": {errors.New("get credentials: failed to refresh cached credentials, failed to read cached SSO token file, " +
+			"open /home/u/.aws/sso/cache/0123.json: no such file or directory"), true},
+		"access denied":   {errors.New("AccessDenied: User is not authorized to perform: sts:AssumeRole"), false},
+		"no such profile": {errors.New("failed to get shared config profile, sandbox-admin"), false},
 	}
 	for name, c := range cases {
 		if got := errors.Is(classify(c.err), ErrSSOExpired); got != c.want {
@@ -94,5 +96,30 @@ func TestMintWithAMissingProfileFailsLocallyWithAConfigError(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("Mint wrote into the config dir: %v", entries)
+	}
+}
+
+// `aws sso logout` deletes the cached SSO token file. The SDK then fails before
+// any network call with "failed to read cached SSO token file"; that is the
+// same human action as an expired login (run aws sso login), not an STS error.
+// Found by the Linux integration run (check 7), where it surfaced as a 502
+// MintFailed with no login hint.
+// The name avoids "sso"/"expired": t.TempDir embeds it in the cache path the
+// SDK error quotes, and the text heuristic would then match on the path alone.
+func TestMintAfterALogoutAsksForALogin(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config")
+	ini := "[sso-session s]\nsso_start_url = https://example.awsapps.com/start\nsso_region = ap-southeast-1\n" +
+		"[profile src]\nsso_session = s\nsso_account_id = 123456789012\nsso_role_name = AdministratorAccess\nregion = ap-southeast-1\n"
+	if err := os.WriteFile(cfg, []byte(ini), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+	t.Setenv("HOME", dir) // no ~/.aws/sso/cache: the state right after a logout
+	_, err := STSMinter{}.Mint(context.Background(), MintInput{SourceProfile: "src", Region: "ap-southeast-1",
+		RoleARN: "arn:aws:iam::123456789012:role/r", SessionName: "agentbox-x", Policy: "{}", Duration: 15 * time.Minute})
+	if !errors.Is(err, ErrSSOExpired) {
+		t.Fatalf("got %v, want ErrSSOExpired", err)
 	}
 }

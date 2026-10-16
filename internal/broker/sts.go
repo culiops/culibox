@@ -55,12 +55,15 @@ func assumeRoleInput(in MintInput) *sts.AssumeRoleInput {
 }
 
 // classify turns an SDK failure into a *MintError: ErrSSOExpired when the host's
-// SSO login has lapsed, else the AWS error code when there is one.
+// SSO login has lapsed or was ended (`aws sso logout` deletes the cached token
+// file, which the SDK reports as "failed to read cached SSO token file"), else
+// the AWS error code when there is one.
 func classify(err error) error {
 	var inv *ssocreds.InvalidTokenError
 	s := strings.ToLower(err.Error())
 	if errors.As(err, &inv) || (strings.Contains(s, "sso") && (strings.Contains(s, "expired") ||
-		strings.Contains(s, "invalidgrant") || strings.Contains(s, "refresh cached sso token"))) {
+		strings.Contains(s, "invalidgrant") || strings.Contains(s, "refresh cached sso token") ||
+		strings.Contains(s, "read cached sso token file"))) {
 		return &MintError{Code: "SSOExpired", Detail: err.Error(), cause: ErrSSOExpired}
 	}
 	code := "MintFailed"
