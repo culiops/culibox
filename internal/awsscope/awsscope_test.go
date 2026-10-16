@@ -124,3 +124,16 @@ func TestSessionPolicyBudget(t *testing.T) {
 		t.Fatal("invalid entry accepted by SessionPolicy")
 	}
 }
+
+func TestSessionPolicyRefusesBadPartition(t *testing.T) {
+	for _, part := range []string{"", "aws:s3:::*", "*", "aws\n", "AWS", "aws-iso", "aws-cn/x", " aws"} {
+		if p, err := SessionPolicy(part, []string{"bucket"}); err == nil {
+			t.Errorf("partition %q accepted: %s", part, p)
+		}
+	}
+	for _, part := range []string{"aws", "aws-cn", "aws-us-gov"} {
+		if _, err := SessionPolicy(part, []string{"bucket"}); err != nil {
+			t.Errorf("partition %q rejected: %v", part, err)
+		}
+	}
+}

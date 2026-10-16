@@ -5,7 +5,6 @@ package awsscope
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -14,12 +13,17 @@ import (
 // MaxPolicyChars is STS's limit on an inline session policy's plaintext.
 const MaxPolicyChars = 2048
 
+// partitionAlt is the one list of accepted AWS partitions; the role ARN and
+// the partition check are both built from it.
+const partitionAlt = `aws|aws-cn|aws-us-gov`
+
 var (
-	roleARNRe = regexp.MustCompile(`^arn:(aws|aws-cn|aws-us-gov):iam::(\d{12}):role/[\w+=,.@/-]{1,512}$`)
-	regionRe  = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
-	bucketRe  = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
-	prefixRe  = regexp.MustCompile(`^[A-Za-z0-9._=-]+(/[A-Za-z0-9._=-]+)*/$`)
-	nameBadRe = regexp.MustCompile(`[^\w+=,.@-]`)
+	roleARNRe   = regexp.MustCompile(`^arn:(` + partitionAlt + `):iam::(\d{12}):role/[\w+=,.@/-]{1,512}$`)
+	partitionRe = regexp.MustCompile(`^(?:` + partitionAlt + `)$`)
+	regionRe    = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d{1,2}$`)
+	bucketRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
+	prefixRe    = regexp.MustCompile(`^[A-Za-z0-9._=-]+(/[A-Za-z0-9._=-]+)*/$`)
+	nameBadRe   = regexp.MustCompile(`[^\w+=,.@-]`)
 )
 
 func ValidRoleARN(s string) error {
@@ -90,8 +94,8 @@ var dataReadDenies = []string{
 // S3 object reads outside the allowlist, secret/parameter values, DynamoDB
 // items, and KMS decryption other than through S3.
 func SessionPolicy(partition string, s3Read []string) (string, error) {
-	if partition == "" {
-		return "", errors.New("session policy: empty partition")
+	if !partitionRe.MatchString(partition) {
+		return "", fmt.Errorf("session policy: partition %q is not aws, aws-cn or aws-us-gov", partition)
 	}
 	s3 := statement{Effect: "Deny", Action: []string{"s3:GetObject", "s3:GetObjectVersion"}}
 	if len(s3Read) == 0 {
