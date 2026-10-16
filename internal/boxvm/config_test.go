@@ -201,10 +201,13 @@ func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
 
 // fakeIptables keeps the DOCKER-USER chain in a file, one rule per line, so the
 // provision script runs for real and its rule ORDER can be checked. It knows
-// only what the script uses: -N, -C, -D and -I at position 1.
+// only what the script uses: -N, -C, -D and -I at position 1, always with -w
+// (wait for the xtables lock docker may hold while it starts).
 const fakeIptables = `#!/bin/sh
 chain="$CHAIN"
 touch "$chain"
+[ "$1" = -w ] || exit 6
+shift
 op=$1; shift
 [ "$1" = DOCKER-USER ] || exit 3
 shift
@@ -257,12 +260,12 @@ func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 
 // Measured on the founder's Mac (2026-10-16): docker gives boxes the lima
 // gateway as their nameserver, so a DROP of everything to it broke DNS in
-// every box and in the image build. Port 53 passes; every other port to the
-// gateway (the Mac's loopback) stays dropped, whatever state the chain was in.
+// every box and in the image build. udp/53 passes; every other port to the
+// gateway (the Mac's loopback), tcp/53 included, stays dropped, whatever state
+// the chain was in.
 func TestProvisionLetsDNSThroughBeforeTheGatewayDrop(t *testing.T) {
 	gw := "192.168.5.9"
 	want := []string{
-		"-d " + gw + " -p tcp --dport 53 -j RETURN",
 		"-d " + gw + " -p udp --dport 53 -j RETURN",
 		"-d " + gw + " -j DROP",
 	}
