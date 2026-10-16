@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, awsStatsRows } = require("../static/steerrail.js");
 // The real tierBadge, not a hand-written stand-in: the point of the change these
 // tests cover is that the rail consumes tier.js's verdict rather than deriving a
 // second one, so a fixture that agreed with the rail but not with tier.js would
@@ -169,4 +169,29 @@ test("with no percentage it computes one, and clamps it", () => {
 
 test("a null percentage draws no fill rather than a zero-width one", () => {
   assert.strictEqual(ctxFill(null).width, "0%");
+});
+
+test("railMeta appends the caller's extra rows after its own", () => {
+  const s = { id: "a", activity: "done", created: "2026-09-05T10:00:00Z" };
+  const m = railMeta(s, { model: "opus-5" }, "", Date.parse("2026-09-05T10:00:30Z"), null,
+    [{ k: "aws", v: "sandbox · 123456789012 · agentbox-agent · read-only" }, null]);
+  assert.deepStrictEqual(m.rows.map((r) => r.k), ["model", "started", "aws"]);
+  assert.deepStrictEqual(railMeta(s, null, "", 0, null, null).rows.map((r) => r.k), ["started"]);
+});
+
+test("awsStatsRows: never before the first mint, the zero time is not year 1", () => {
+  assert.deepStrictEqual(awsStatsRows(null, 0), []);
+  assert.deepStrictEqual(awsStatsRows({ stats: { mints: 0, last_mint: "0001-01-01T00:00:00Z" } }, Date.now()),
+    [{ k: "minted", v: "0 mints · last mint never" }]);
+  const now = Date.parse("2026-10-16T12:10:00Z");
+  const rows = awsStatsRows({ stats: { mints: 1, last_mint: "2026-10-16T12:05:00Z" } }, now);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].v, "1 mint · last mint " + startedText("2026-10-16T12:05:00Z", now));
+});
+
+test("awsStatsRows: last error is its own wrapping row, verbatim", () => {
+  const err = "aws sso login --profile sandbox-admin (session expired)";
+  const rows = awsStatsRows({ stats: { mints: 3, last_mint: "0001-01-01T00:00:00Z", last_error: err } }, 0);
+  assert.deepStrictEqual(rows[1], { k: "error", v: err, wrap: true });
+  assert.strictEqual(awsStatsRows({ stats: { mints: 3, last_mint: "0001-01-01T00:00:00Z", last_error: "" } }, 0).length, 1);
 });

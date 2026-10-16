@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRow, readAWSFields } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -179,4 +179,41 @@ test("actionFailText words each failure", () => {
 test("actionFailText: 429 (ErrTooSoon) gets its own text for any action", () => {
   assert.strictEqual(actionFailText("interrupt", 429), "Too soon — try again in a second.");
   assert.strictEqual(actionFailText("restart", 429), "Too soon — try again in a second.");
+});
+
+const ARN = "arn:aws:iam::123456789012:role/agentbox-agent";
+
+test("roleName is the last path segment of a role ARN", () => {
+  assert.strictEqual(roleName(ARN), "agentbox-agent");
+  assert.strictEqual(roleName("arn:aws:iam::123456789012:role/team/deep-role"), "deep-role");
+  assert.strictEqual(roleName("bare"), "bare");
+  assert.strictEqual(roleName(undefined), "");
+});
+
+test("awsBadge: label, account fallback, prod flag", () => {
+  assert.strictEqual(awsBadge({}), null);
+  assert.strictEqual(awsBadge(null), null);
+  assert.deepStrictEqual(awsBadge({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }),
+    { text: "sandbox", prod: false, title: "AWS 123456789012 · agentbox-agent · read-only" });
+  assert.strictEqual(awsBadge({ aws: { label: "", account_id: "123456789012", role_arn: ARN, prod: true } }).text, "aws:123456789012");
+  assert.strictEqual(awsBadge({ aws: { label: "prd", account_id: "1", role_arn: "x", prod: true } }).prod, true);
+});
+
+test("awsRailRow: one line, and prod is spelled out", () => {
+  assert.strictEqual(awsRailRow({}), null);
+  assert.deepStrictEqual(awsRailRow({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }),
+    { k: "aws", v: "sandbox · 123456789012 · agentbox-agent · read-only" });
+  assert.strictEqual(awsRailRow({ aws: { label: "", account_id: "123456789012", role_arn: ARN, prod: true } }).v,
+    "aws · 123456789012 · agentbox-agent · read-only · production");
+});
+
+test("readAWSFields: omitted when role is empty; trims and splits the allowlist", () => {
+  const vals = { "pf-aws-role": "", "pf-aws-profile": "x", "pf-aws-region": "ap-southeast-1", "pf-aws-s3": "", "pf-aws-label": "", "pf-aws-prod": false };
+  assert.strictEqual(readAWSFields((id) => vals[id]), undefined);
+  vals["pf-aws-role"] = " " + ARN + " ";
+  vals["pf-aws-s3"] = "culishop-tfstate\n\n  culishop-logs/AWSLogs/ \n";
+  vals["pf-aws-prod"] = true;
+  assert.deepStrictEqual(readAWSFields((id) => vals[id]), {
+    source_profile: "x", role_arn: ARN, region: "ap-southeast-1",
+    s3_read: ["culishop-tfstate", "culishop-logs/AWSLogs/"], label: "", prod: true });
 });

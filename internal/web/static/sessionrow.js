@@ -133,6 +133,55 @@ function jumpTarget(n, sessions) {
   return list[i - 1] || null;
 }
 
+// AWS binding (credential broker). The session carries s.aws = {label,
+// account_id, role_arn, prod} only when its profile has a binding; every
+// surface draws it from here so the sidebar, the sheets, the tab and the steer
+// rail cannot disagree. The label is operator-typed free text: callers set it
+// through textContent, never markup.
+function roleName(arn) {
+  const i = (arn || "").lastIndexOf("/");
+  return i >= 0 ? arn.slice(i + 1) : (arn || "");
+}
+
+// awsBadge: the short chip. Red (prod) is the operator's own flag on the
+// binding, not something inferred from the account.
+function awsBadge(s) {
+  const a = s && s.aws;
+  if (!a) return null;
+  return {
+    text: a.label || ("aws:" + a.account_id),
+    prod: !!a.prod,
+    title: "AWS " + a.account_id + " · " + roleName(a.role_arn) + " · read-only",
+  };
+}
+
+// awsRailRow: the steer rail's one-line binding. A production binding says so
+// in words as well as in the badge colour.
+function awsRailRow(s) {
+  const a = s && s.aws;
+  if (!a) return null;
+  const parts = [a.label || "aws", a.account_id, roleName(a.role_arn), "read-only"];
+  if (a.prod) parts.push("production");
+  return { k: "aws", v: parts.join(" · ") };
+}
+
+// readAWSFields: the profile editor's AWS block as the object the server
+// stores, or undefined when no role is given (an empty block means "no
+// binding", not an invalid one). get(id) returns an input's value, or its
+// checked state for the checkbox.
+function readAWSFields(get) {
+  const role = String(get("pf-aws-role") || "").trim();
+  if (!role) return undefined;
+  return {
+    source_profile: String(get("pf-aws-profile") || "").trim(),
+    role_arn: role,
+    region: String(get("pf-aws-region") || "").trim(),
+    s3_read: String(get("pf-aws-s3") || "").split("\n").map((x) => x.trim()).filter(Boolean),
+    label: String(get("pf-aws-label") || "").trim(),
+    prod: !!get("pf-aws-prod"),
+  };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText };
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRow, readAWSFields };
 }

@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -55,4 +55,22 @@ test("a segmented control's value round-trips through its container", () => {
   assert.strictEqual(segValue(el), "host");
   assert.strictEqual(segValue(null), "");
   assert.strictEqual(segValue({ dataset: {} }), "");
+});
+
+test("the AWS block is off on a locked profile and on the host tier, never re-enabled by either", () => {
+  assert.deepStrictEqual(awsFieldsState(false, ""), { disabled: false, hint: false });
+  assert.deepStrictEqual(awsFieldsState(false, "host"), { disabled: true, hint: true });
+  // a locked box profile is disabled, but the hint is about the tier, not the lock
+  assert.deepStrictEqual(awsFieldsState(true, ""), { disabled: true, hint: false });
+  assert.deepStrictEqual(awsFieldsState(true, "host"), { disabled: true, hint: true });
+});
+
+test("a stored runtime 'box' lights the box button; an AWS binding forces an explicit 'box'", () => {
+  assert.strictEqual(segFromRuntime("box"), "");
+  assert.strictEqual(segFromRuntime("host"), "host");
+  assert.strictEqual(segFromRuntime(undefined), "");
+  assert.strictEqual(runtimeToSend("", false, false), "");      // blank: the instance default decides
+  assert.strictEqual(runtimeToSend("", true, false), "box");    // stored as box: stays box
+  assert.strictEqual(runtimeToSend("", false, true), "box");    // AWS: the server refuses an empty runtime
+  assert.strictEqual(runtimeToSend("host", false, true), "host"); // the server's refusal is the message
 });

@@ -242,8 +242,11 @@ class Cell {
       // The session's agent account, when it is not the default: a tab is
       // where you type into it, so the account must be visible right there.
       if (t.kind === "terminal") {
-        const ab = acctBadgeEl((lastSessions || []).find((x) => x.id === t.id));
+        const ts = (lastSessions || []).find((x) => x.id === t.id);
+        const ab = acctBadgeEl(ts);
         if (ab) b.append(ab);
+        const awsb = awsBadgeEl(ts);
+        if (awsb) b.append(awsb);
       }
       // Per-window context readout (claude only; usageTab is "" otherwise). Re-
       // emitted every rebuild from the tab's stored usage, like the dot above.

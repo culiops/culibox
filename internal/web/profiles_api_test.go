@@ -70,3 +70,38 @@ func TestProfileReplyableRoundTripsThroughTheAPI(t *testing.T) {
 		}
 	}
 }
+
+// The editor sends the binding as profile.aws and reads it back from
+// GET /api/profiles/{name}; an empty runtime is refused at save, which is why
+// the editor sends "box" explicitly when it sends a binding.
+func TestProfileAWSBindingRoundTripsThroughTheAPI(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	body := func(runtime string) string {
+		return `{"name":"infra","bin":"claude",` + runtime + `"aws":{"source_profile":"sandbox-admin",` +
+			`"role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1",` +
+			`"s3_read":["culishop-tfstate","culishop-logs/AWSLogs/"],"label":"sandbox","prod":true}}`
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body(""))))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "runtime: box") {
+		t.Fatalf("empty runtime with a binding: code %d body %s, want 400 naming runtime: box", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body(`"runtime":"box",`))))
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/infra", nil))
+	for _, want := range []string{
+		`"runtime":"box"`, `"source_profile":"sandbox-admin"`, `"role_arn":"arn:aws:iam::123456789012:role/agentbox-agent"`,
+		`"region":"ap-southeast-1"`, `"s3_read":["culishop-tfstate","culishop-logs/AWSLogs/"]`, `"label":"sandbox"`, `"prod":true`,
+	} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("GET lost %s: %s", want, rec.Body)
+		}
+	}
+}
