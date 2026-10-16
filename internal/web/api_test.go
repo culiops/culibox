@@ -912,3 +912,44 @@ func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
 		t.Fatalf("the remedy must reach the user: %s", rec.Body.String())
 	}
 }
+
+type fakeAWS map[string]any
+
+func (f fakeAWS) AWSStatus(id string) (any, bool) { v, ok := f[id]; return v, ok }
+
+func TestSessionAWSStatus(t *testing.T) {
+	a := &API{Sessions: &mockSvc{}, AWS: fakeAWS{"claude-3": map[string]any{"label": "sandbox", "mints": 2}}}
+
+	rec := httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/claude-3/aws", nil))
+	if rec.Code != 200 {
+		t.Fatalf("code %d want 200: %s", rec.Code, rec.Body)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["label"] != "sandbox" || body["mints"] != float64(2) {
+		t.Fatalf("body %+v", body)
+	}
+
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/nope/aws", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unknown session: code %d want 204", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("POST", "/api/sessions/claude-3/aws", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST: code %d want 405", rec.Code)
+	}
+
+	// No broker: the route is a 404, not a 204 that looks like "no binding".
+	a = &API{Sessions: &mockSvc{}}
+	rec = httptest.NewRecorder()
+	a.handleSession(rec, httptest.NewRequest("GET", "/api/sessions/claude-3/aws", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("no broker: code %d want 404", rec.Code)
+	}
+}

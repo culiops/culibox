@@ -195,6 +195,10 @@
     }
     .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; padding: 3px 0; }
     .kv .v { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* A row whose value must be read whole (the broker's last error carries the
+       command to run) wraps instead of clipping. */
+    .kv .bdg { align-self: center; }
+    .kv.wrap .v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
     .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
     .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }
     .attr { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 4px 0; }
@@ -469,6 +473,13 @@
        which login, not a safety verdict. Shown only for non-default accounts. */
     .bdg.acct { color: var(--fg); border-color: var(--border); flex: none;
                 max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+    /* The AWS binding chip: neutral like the account badge (it is a fact about
+       the session), red when the operator flagged the binding as production —
+       the same --danger the env banner's PROD uses. Label is free text, so a
+       long one is ellipsized; the title carries account and role. */
+    .bdg.aws { color: var(--fg); border-color: var(--border); flex: none;
+               max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+    .bdg.aws.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     /* Session summary: the row's third line, under the name and the meta. Muted and clipped to a
@@ -1067,6 +1078,11 @@
     /* .frow is display:flex, which beats the UA [hidden] rule. */
     #pf-replyable-row[hidden] { display: none; }
     .pf-check { display: flex; align-items: center; gap: 8px; }
+    /* The AWS block is greyed with the rest of the editor's .off controls when
+       the host tier (or a lock) closes it; the hint says why. */
+    #pf-aws-block { margin-top: 14px; }
+    #pf-aws-block > .flab { display: block; margin-bottom: 6px; }
+    #pf-aws-hint { margin: 0 0 8px; }
     .fcol { flex: 1; min-width: 0; }
     .flab {
       font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;

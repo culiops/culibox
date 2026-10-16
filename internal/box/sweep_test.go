@@ -114,7 +114,7 @@ func TestSweepContinuesPastAFailedRemoval(t *testing.T) {
 func TestSweepOfAStoppedBoxKeepsItsCounterAgainstAStaleRelease(t *testing.T) {
 	m, f := sweepManager(t, true)
 	dir := t.TempDir()
-	_, _, name, err := m.Wrap(context.Background(), dir, "d-1", "", []string{"claude"}, nil, nil)
+	_, _, name, err := m.Wrap(context.Background(), dir, "d-1", BoxKey{}, []string{"claude"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestSweepOfAStoppedBoxKeepsItsCounterAgainstAStaleRelease(t *testing.T) {
 	if err != nil || len(rep.Removed) != 1 {
 		t.Fatalf("the stopped box must be removed: %+v %v", rep, err)
 	}
-	if _, _, _, err := m.Wrap(context.Background(), dir, "n-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "n-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if f.runs() != 2 {

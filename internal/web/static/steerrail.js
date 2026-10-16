@@ -72,7 +72,7 @@ function startedText(created, nowMs) {
 // and this panel would come to disagree about whether a session is contained.
 // Passed as an argument rather than read as a global so this file stays pure
 // and node --test can still require it.
-function railMeta(s, usage, cwdText, nowMs, badge) {
+function railMeta(s, usage, cwdText, nowMs, badge, extraRows) {
   if (!s) return null;
   const u = usage || {};
   const rows = [];
@@ -81,6 +81,9 @@ function railMeta(s, usage, cwdText, nowMs, badge) {
   if (cwdText) rows.push({ k: "cwd", v: String(cwdText) });
   const st = startedText(s.created, nowMs);
   if (st) rows.push({ k: "started", v: st });
+  // Rows the caller derived from state this file has no business reading (the
+  // AWS binding and its broker counters). Null entries are skipped.
+  for (const r of extraRows || []) if (r) rows.push(r);
   // tierBadge already decided the wording and the severity; this only dresses
   // it as the same flat .bdg.box / .bdg.host chip the sidebar draws for the
   // identical session — a danger tone takes the host tier's warn colour (per
@@ -93,6 +96,22 @@ function railMeta(s, usage, cwdText, nowMs, badge) {
     ? { label: badge.text, cls: "bdg " + (badge.tone === "danger" ? "host" : "box"), title: badge.title || "" }
     : null;
   return { id: s.id, name: s.name || s.id, activity: s.activity || "", tier, rows };
+}
+
+// awsStatsRows: the broker's counters for the focused session, from
+// GET /api/sessions/{id}/aws. last_mint is the zero time before the first mint
+// (Go's time.Time), which must read "never", not year 1. last_error is shown
+// verbatim in a wrapping row of its own: it carries the actionable
+// `aws sso login` hint, which an ellipsis would cut off.
+function awsStatsRows(st, nowMs) {
+  const x = st && st.stats;
+  if (!x) return [];
+  const n = Number(x.mints) || 0;
+  const t = Date.parse(x.last_mint);
+  const last = Number.isFinite(t) && t > Date.UTC(2000, 0, 1) ? startedText(x.last_mint, nowMs) : "never";
+  const rows = [{ k: "minted", v: n + (n === 1 ? " mint" : " mints") + " · last mint " + last }];
+  if (x.last_error) rows.push({ k: "error", v: String(x.last_error), wrap: true });
+  return rows;
 }
 
 // ctxFill: the context meter. The server omits pct when the window maximum is
@@ -185,6 +204,7 @@ function renderSteerRail() {
     return;
   }
   // 1 and 2 — who this is, and how full its window is.
+  if (s.aws) loadAwsRailStats(s.id);
   renderSteerFacts(s);
 
   // 3 — where the context went. On demand: this is a full transcript scan, so
@@ -205,6 +225,31 @@ function renderSteerRail() {
 // carries none of the hazard that keeps the composer and the tool rows out of
 // the poll. A signature stops it churning every three seconds for nothing.
 let steerFactsKey = "";
+
+// The broker counters for AWS-bound sessions, fetched when a session takes the
+// rail's focus (no new poll) and kept per session id. renderSteerFacts reads
+// this cache on every repaint, so the rows are part of the signature and a
+// rebuild triggered by anything else does not wipe them; a focus change
+// refetches while the old value stays up, and one session's numbers can never
+// be drawn for another because the key is the id.
+const awsRailCache = new Map();
+const awsRailInflight = new Set();
+function loadAwsRailStats(id) {
+  if (awsRailInflight.has(id)) return;
+  awsRailInflight.add(id);
+  fetch("/api/sessions/" + encodeURIComponent(id) + "/aws")
+    .then((res) => (res.status === 200 ? res.json() : null), () => undefined)
+    .then((st) => {
+      // undefined = the request failed: keep what we had. null = 204/404: the
+      // session has no binding (or the broker is off), so there is nothing to show.
+      if (st === undefined) return;
+      if (st === null) awsRailCache.delete(id); else awsRailCache.set(id, st);
+      const cur = typeof railSession === "function" ? railSession() : null;
+      if (cur && cur.id === id) renderSteerFacts(cur);
+    })
+    .finally(() => awsRailInflight.delete(id));
+}
+
 function renderSteerFacts(s) {
   const head = document.getElementById("steer-head");
   const ctx = document.getElementById("steer-ctx");
@@ -212,11 +257,13 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge);
+  const awsRows = s.aws ? [...awsRailRows(s), ...awsStatsRows(awsRailCache.get(s.id), Date.now())] : null;
+  const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, awsRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
-    meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0].join("|");
+    meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
+    JSON.stringify(s.aws || null)].join("|");
   if (key === steerFactsKey) return;
   steerFactsKey = key;
 
@@ -245,7 +292,7 @@ function renderSteerFacts(s) {
     if (meta.tier.title) b.title = meta.tier.title;
     hrow.appendChild(b);
   }
-  head.replaceChildren(hrow, ...meta.rows.map((r) => kvRow(r.k, r.v)));
+  head.replaceChildren(hrow, ...meta.rows.map((r) => kvRow(r.k, r.v, r.wrap, r.chip)));
 
   // 2 — how full the window is. Drawn only when there is a number to draw.
   ctx.replaceChildren(railTitle("Context window"));
@@ -282,13 +329,15 @@ function railTitle(text) {
   return t;
 }
 
-function kvRow(k, v) {
+function kvRow(k, v, wrap, chip) {
   const row = document.createElement("div");
-  row.className = "kv";
+  row.className = wrap ? "kv wrap" : "kv";
   const a = document.createElement("span");
   a.textContent = k;
   const b = document.createElement("span");
-  b.className = "v";
+  // chip: the value is a status badge (the red production marker), not muted
+  // text — it keeps its own colour and is never clipped.
+  b.className = chip || "v";
   b.textContent = v;
   b.title = v;
   row.append(a, b);
@@ -538,5 +587,5 @@ function repaintSteerRail() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { railItems, railMeta, startedText, ctxFill };
+  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows };
 }

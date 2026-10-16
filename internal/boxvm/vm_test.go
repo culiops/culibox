@@ -73,7 +73,7 @@ func shortRoot(t *testing.T) string {
 func setUpVM(t *testing.T, r Runner) *VM {
 	t.Helper()
 	root := shortRoot(t)
-	v := NewVM(Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4}, r)
+	v := NewVM(Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071}, r)
 	if err := v.Provision(context.Background(), false, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestStatusParsesRunningAndStopped(t *testing.T) {
 }
 
 func TestEnsureRunningRefusesWhenNotSetUp(t *testing.T) {
-	v := NewVM(Config{Root: shortRoot(t), Home: "/h", ColimaBin: "/c", DockerBin: "/d"}, &fakeRunner{})
+	v := NewVM(Config{Root: shortRoot(t), Home: "/h", ColimaBin: "/c", DockerBin: "/d", BrokerPort: 9071}, &fakeRunner{})
 	if _, err := v.EnsureRunning(context.Background()); !errors.Is(err, ErrNotSetUp) {
 		t.Fatalf("want ErrNotSetUp, got %v", err)
 	}
@@ -245,13 +245,13 @@ func TestStartUsesTheSafeArgsAndEnv(t *testing.T) {
 
 func TestNothingReachesColimaWithAnUnusableConfig(t *testing.T) {
 	good := func(root string) Config {
-		return Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4}
+		return Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071}
 	}
 	long := filepath.Join(shortRoot(t), strings.Repeat("d", 60)) // sockets past macOS's limit
 	for name, cfg := range map[string]Config{
 		"comma in the root": good(filepath.Join(shortRoot(t), "a,b")),
 		"socket too long":   good(long),
-		"relative colima":   {Root: shortRoot(t), Home: "/h", ColimaBin: "colima", DockerBin: "/d", CPUs: 4, MemoryGiB: 4},
+		"relative colima":   {Root: shortRoot(t), Home: "/h", ColimaBin: "colima", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071},
 	} {
 		r := &fakeRunner{}
 		v := NewVM(cfg, r)
@@ -311,7 +311,7 @@ func TestConfigIsSymlinkResolved(t *testing.T) {
 	// The home is reached through a symlink and the data root sits inside it
 	// (not yet created): without resolving, Mounts would see a different prefix.
 	root := filepath.Join(link, "data")
-	v := NewVM(Config{Root: root, Home: link, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4}, &fakeRunner{})
+	v := NewVM(Config{Root: root, Home: link, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071}, &fakeRunner{})
 	c := v.Config()
 	wantHome, _ := filepath.EvalSymlinks(real)
 	if c.Home != wantHome || c.Root != filepath.Join(wantHome, "data") {

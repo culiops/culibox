@@ -484,7 +484,12 @@ function shortcutsBlocked(activeElement, openDialogCount) {
 // dialog is open cannot use the toast, which paints beneath the backdrop.
 function setDialogError(dialogId, msg) {
   const el = document.querySelector("#" + dialogId + " .dlg-err");
-  if (el) el.textContent = msg || "";
+  if (!el) return;
+  el.textContent = msg || "";
+  // The line sits under a scrolling form (the profile editor's is below the
+  // fold), so a failure written there is invisible. "nearest" moves nothing
+  // when it is already on screen. Clearing never scrolls.
+  if (msg && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -495,5 +500,6 @@ if (typeof module !== "undefined" && module.exports) {
     shouldRefocusTerminal,
     askIsBusy,
     shortcutsBlocked,
+    setDialogError,
   };
 }

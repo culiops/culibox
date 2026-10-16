@@ -89,6 +89,7 @@ type AgentConfig struct {
 	Box        BoxConfig         `json:"box,omitempty"`         // per-agent box image override
 	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
+	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours
@@ -114,6 +115,14 @@ func (a AgentConfig) BasePolicy() string {
 		return BaseInherit
 	}
 	return a.Base
+}
+
+// BrokerPortOrDefault is the darwin broker's TCP port on 127.0.0.1.
+func (c Config) BrokerPortOrDefault() int {
+	if c.BrokerPort > 0 {
+		return c.BrokerPort
+	}
+	return 9071
 }
 
 // Config is the top-level app configuration.
@@ -153,6 +162,7 @@ type Config struct {
 	ColimaBin         string `json:"colima_bin,omitempty"`           // macOS: default "colima"
 	BoxVMCPUs         int    `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → 4
 	BoxVMMemoryGiB    int    `json:"box_vm_memory_gib,omitempty"`    // macOS box VM; 0 → 4
+	BrokerPort        int    `json:"broker_port,omitempty"`          // macOS: credential broker TCP port on 127.0.0.1; 0 → 9071
 
 	Analytics AnalyticsConfig `json:"analytics,omitempty"`
 }
@@ -274,6 +284,9 @@ func (c Config) Validate() error {
 	if err := validImageRef(c.BoxImage); err != nil {
 		return fmt.Errorf("config: box_image: %w", err)
 	}
+	if c.BrokerPort < 0 || c.BrokerPort > 65535 {
+		return fmt.Errorf("config: broker_port %d out of range (want 1-65535, or 0 for the default)", c.BrokerPort)
+	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
 		if a.Name == "" || a.Bin == "" {
@@ -295,6 +308,9 @@ func (c Config) Validate() error {
 		case RuntimeBox, RuntimeHost:
 		default:
 			return fmt.Errorf("config: agent %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
+		}
+		if err := validateAWS(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 	}
 	optDefs := map[string]OptionDef{}
@@ -384,6 +400,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	case RuntimeBox, RuntimeHost:
 	default:
 		return fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
+	}
+	if err := validateAWS(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	for k, v := range a.Options {
 		def, ok := optDefs[k]

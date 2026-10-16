@@ -21,11 +21,11 @@ func TestBoxNameIsStableAndCanonical(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := newTestManager(t)
-	viaReal, err := m.boxName(dir, "")
+	viaReal, err := m.boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	viaLink, err := m.boxName(link, "")
+	viaLink, err := m.boxName(link, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,11 +39,11 @@ func TestBoxNameIsStableAndCanonical(t *testing.T) {
 
 func TestBoxNameSeparatesInstances(t *testing.T) {
 	dir := t.TempDir()
-	a, err := newTestManagerWithInstance(t, "DEV").boxName(dir, "")
+	a, err := newTestManagerWithInstance(t, "DEV").boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := newTestManagerWithInstance(t, "PROD").boxName(dir, "")
+	b, err := newTestManagerWithInstance(t, "PROD").boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
 		} else if err != nil {
 			t.Fatal(err)
 		}
-		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil)
+		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		if !errors.Is(err, ErrUnboxableWorkspace) {
 			t.Fatalf("%q: want ErrUnboxableWorkspace, got %v", name, err)
 		}
@@ -151,7 +151,7 @@ func TestWorkspaceWithMountMetacharactersIsRefused(t *testing.T) {
 
 func TestUnsafeExtraMountSourceFailsTheSpawn(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
-	_, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", "", []string{"claude"}, nil,
+	_, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", BoxKey{}, []string{"claude"}, nil,
 		[]Mount{{Host: "/x,y", Box: "/opt/agent-bundle"}})
 	if err == nil || fake.runs() != 0 {
 		t.Fatalf("an unsafe mount source must fail before docker run: err=%v runs=%d", err, fake.runs())
@@ -210,7 +210,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -222,7 +222,7 @@ func TestSecondSessionReusesTheSameBox(t *testing.T) {
 func TestBoxStopsAfterIdleTTLWhenLastSessionReleases(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m.ReleaseBox(mustBoxName(t, m, dir))
@@ -233,7 +233,7 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 20*time.Millisecond)
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -249,12 +249,12 @@ func TestReleaseOfOneOfTwoSessionsKeepsTheBox(t *testing.T) {
 func TestSpawnDuringIdleWindowCancelsTheStop(t *testing.T) {
 	m, fake := newTestManagerWithFakeTTL(t, 150*time.Millisecond)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	m.ReleaseBox(mustBoxName(t, m, dir))
 	time.Sleep(30 * time.Millisecond)
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -277,10 +277,10 @@ func TestReconcileReapsBoxesWithNoSessions(t *testing.T) {
 func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	name, _ := m.boxName(dir, "")
+	name, _ := m.boxName(dir, BoxKey{})
 	fake.existing = []string{name, "ab-box-orphan"}
 	if err := m.Reconcile(context.Background()); err != nil {
 		t.Fatal(err)
@@ -300,7 +300,7 @@ func TestReconcileKeepsBoxesThatHaveLiveSessions(t *testing.T) {
 func TestAdoptedWorkspaceSurvivesReconcile(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	name, err := m.boxName(dir, "")
+	name, err := m.boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestBoxingTheHomeDirectoryIsRefused(t *testing.T) {
 	if err != nil {
 		t.Skip("no home dir")
 	}
-	_, _, _, err = m.Wrap(context.Background(), home, "s-1", "", []string{"claude"}, nil, nil)
+	_, _, _, err = m.Wrap(context.Background(), home, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 	if err == nil {
 		t.Fatal("boxing the home directory must be refused; it mounts the whole home into the box")
 	}
@@ -392,7 +392,7 @@ func TestBoxingTheHomeDirectoryIsRefused(t *testing.T) {
 
 func TestBoxingAnAncestorOfHomeIsRefused(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
-	if _, _, _, err := m.Wrap(context.Background(), "/", "s-1", "", []string{"claude"}, nil, nil); err == nil {
+	if _, _, _, err := m.Wrap(context.Background(), "/", "s-1", BoxKey{}, []string{"claude"}, nil, nil); err == nil {
 		t.Fatal("boxing / must be refused")
 	}
 }
@@ -590,7 +590,7 @@ func TestSeedIsNotWrittenThroughASymlinkOutOfTheBoxHome(t *testing.T) {
 func TestSpawnTouchesTheLastUsedMarker(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	marker := m.markerPath(mustBoxName(t, m, dir))
@@ -599,7 +599,7 @@ func TestSpawnTouchesTheLastUsedMarker(t *testing.T) {
 		t.Fatalf("the first spawn must create the marker: %v", err)
 	}
 	// Second spawn: the box is already running, so this is the warm path.
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-2", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-2", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	fi, err := os.Stat(marker)
@@ -616,7 +616,7 @@ func TestSpawnTouchesTheLastUsedMarker(t *testing.T) {
 func TestTheMarkerLivesOutsideTheBoxHome(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	name := mustBoxName(t, m, dir)
@@ -636,14 +636,14 @@ func TestTheMarkerLivesOutsideTheBoxHome(t *testing.T) {
 func TestStoppedBoxIsRemovedAndRecreated(t *testing.T) {
 	m, fake := newTestManagerWithFake(t)
 	dir := t.TempDir()
-	name, err := m.boxName(dir, "")
+	name, err := m.boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake.mu.Lock()
 	fake.exited[name] = true
 	fake.mu.Unlock()
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if !fake.stoppedAny(name) {
@@ -659,7 +659,7 @@ func TestInspectErrorFailsTheSpawnInsteadOfReadingAsMissing(t *testing.T) {
 	fake.mu.Lock()
 	fake.inspectErr = errors.New("Cannot connect to the Docker daemon")
 	fake.mu.Unlock()
-	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", "", []string{"claude"}, nil, nil); err == nil {
+	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s-1", BoxKey{}, []string{"claude"}, nil, nil); err == nil {
 		t.Fatal("an unreachable daemon must fail the spawn")
 	}
 	if fake.runs() != 0 {
@@ -703,7 +703,7 @@ func TestWorkspaceOutsideSharedDirsIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", "", []string{"claude"}, nil, nil)
+	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 	if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "shared directories") {
 		t.Fatalf("want a shared-dirs refusal, got %v", err)
 	}
@@ -712,7 +712,7 @@ func TestWorkspaceOutsideSharedDirsIsRefused(t *testing.T) {
 	}
 	inside := filepath.Join(shared, "proj")
 	_ = os.Mkdir(inside, 0o700)
-	if _, _, _, err := m.Wrap(context.Background(), inside, "s-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), inside, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatalf("a workspace under a shared dir must box: %v", err)
 	}
 }
@@ -724,7 +724,7 @@ func TestVerifyFailureRemovesTheNewBoxAndRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", "", []string{"claude"}, nil, nil)
+	_, _, _, err = m.Wrap(context.Background(), t.TempDir(), "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 	if !errors.Is(err, ErrBoxUnavailable) {
 		t.Fatalf("want ErrBoxUnavailable, got %v", err)
 	}
@@ -740,7 +740,7 @@ func TestVerifyRunsOnlyForNewContainers(t *testing.T) {
 		Verify: func(context.Context, string) error { calls++; return nil }})
 	dir := t.TempDir()
 	for i := 0; i < 2; i++ {
-		if _, _, _, err := m.Wrap(context.Background(), dir, "s", "", []string{"claude"}, nil, nil); err != nil {
+		if _, _, _, err := m.Wrap(context.Background(), dir, "s", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -781,20 +781,20 @@ func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 		}})
 	dir := t.TempDir()
 	f.stopFails = 1
-	_, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil)
+	_, _, _, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "daemon unreachable") {
 		t.Fatalf("want ErrBoxUnavailable naming the removal failure, got %v", err)
 	}
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d", f.runs(), f.stops())
 	}
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", "", []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", BoxKey{}, []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
 		t.Fatalf("the still-running box must be re-verified and refused: %v", err)
 	}
 	if f.runs() != 1 || f.stops() != 2 || verifies != 2 {
 		t.Fatalf("no reuse: runs=%d stops=%d verifies=%d", f.runs(), f.stops(), verifies)
 	}
-	_, _, name, err := m.Wrap(context.Background(), dir, "s-3", "", []string{"claude"}, nil, nil)
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-3", BoxKey{}, []string{"claude"}, nil, nil)
 	if err != nil {
 		t.Fatalf("a fresh, verified box must serve the retry: %v", err)
 	}
@@ -817,7 +817,7 @@ func TestUnremovedUnverifiedBoxIsNeverReused(t *testing.T) {
 		t.Fatalf("active after release = %d, want 0", active)
 	}
 	// Verified once, so a further Wrap reuses it without verifying again.
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-4", "", []string{"claude"}, nil, nil); err != nil || verifies != 3 {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-4", BoxKey{}, []string{"claude"}, nil, nil); err != nil || verifies != 3 {
 		t.Fatalf("a verified box is reused unchecked: err=%v verifies=%d", err, verifies)
 	}
 }
@@ -838,10 +838,10 @@ func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
 		}})
 	dir := t.TempDir()
 	f.stopFails = 2
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil); err == nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err == nil {
 		t.Fatal("first Wrap must fail Verify")
 	}
-	_, _, _, err := m.Wrap(context.Background(), dir, "s-2", "", []string{"claude"}, nil, nil)
+	_, _, _, err := m.Wrap(context.Background(), dir, "s-2", BoxKey{}, []string{"claude"}, nil, nil)
 	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "docker rm -f") {
 		t.Fatalf("want ErrBoxUnavailable naming the removal failure, got %v", err)
 	}
@@ -857,7 +857,7 @@ func TestUnremovableUnverifiedBoxRefusesTheSpawn(t *testing.T) {
 	m.mu.Unlock()
 	// The daemon recovers and the box now passes its check: it may serve.
 	failing = false
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-3", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatalf("recovery after the daemon returns: %v", err)
 	}
 }
@@ -871,29 +871,29 @@ func TestRunningBoxFromBeforeARestartIsVerifiedBeforeReuse(t *testing.T) {
 	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Verify: func(context.Context, string) error { verifies++; return verr }})
 	dir := t.TempDir()
-	name, err := m.boxName(dir, "")
+	name, err := m.boxName(dir, BoxKey{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.running[name] = true
 	m.AdoptBox(name)
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if verifies != 1 || f.runs() != 0 {
 		t.Fatalf("an unverified running box is verified once and reused: verifies=%d runs=%d", verifies, f.runs())
 	}
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", "", []string{"claude"}, nil, nil); err != nil || verifies != 1 {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", BoxKey{}, []string{"claude"}, nil, nil); err != nil || verifies != 1 {
 		t.Fatalf("once verified it is not checked again: err=%v verifies=%d", err, verifies)
 	}
 
 	// A different box that fails its check is removed and the spawn refused.
 	dir2 := t.TempDir()
-	name2, _ := m.boxName(dir2, "")
+	name2, _ := m.boxName(dir2, BoxKey{})
 	f.running[name2] = true
 	verr = fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
 	stopsBefore := f.stops()
-	if _, _, _, err := m.Wrap(context.Background(), dir2, "s-3", "", []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
+	if _, _, _, err := m.Wrap(context.Background(), dir2, "s-3", BoxKey{}, []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {
 		t.Fatalf("want ErrBoxUnavailable, got %v", err)
 	}
 	if f.stops() != stopsBefore+1 || f.running[name2] || f.runs() != 0 {
@@ -908,13 +908,13 @@ func TestIdleStopForgetsVerification(t *testing.T) {
 	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Verify: func(context.Context, string) error { verifies++; return nil }})
 	dir := t.TempDir()
-	_, _, name, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil)
+	_, _, name, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	m.ReleaseBox(name)
 	m.stopIfIdle(name)
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s-2", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if verifies != 2 || f.runs() != 2 {
@@ -932,12 +932,12 @@ func TestReconcileWaitsForAnEnsureInFlight(t *testing.T) {
 	m, _ := New(Options{DockerBin: "/d", Image: "i", Instance: "T", StateRoot: t.TempDir(), Client: f,
 		Verify: func(context.Context, string) error { close(entered); <-release; return nil }})
 	dir := t.TempDir()
-	name, _ := m.boxName(dir, "")
+	name, _ := m.boxName(dir, BoxKey{})
 	f.existing = []string{name}
 
 	wrapDone := make(chan error, 1)
 	go func() {
-		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", "", []string{"claude"}, nil, nil)
+		_, _, _, err := m.Wrap(context.Background(), dir, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		wrapDone <- err
 	}()
 	<-entered
@@ -994,7 +994,7 @@ func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
 	for name, ws := range map[string]string{
 		"equal": root, "ancestor": parent, "descendant": inside, "symlink into it": link,
 	} {
-		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", "", []string{"claude"}, nil, nil)
+		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "data directory") ||
 			!strings.Contains(err.Error(), ws) {
 			t.Errorf("%s: want a data-root refusal naming %q, got %v", name, ws, err)
@@ -1007,7 +1007,7 @@ func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
 	if err := os.Mkdir(sibling, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := m.Wrap(context.Background(), sibling, "s-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), sibling, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatalf("a sibling of the data root must box: %v", err)
 	}
 	// A data root reached through a symlink is the same directory.

@@ -38,7 +38,14 @@ type SessionService interface {
 // API holds the HTTP handlers for sessions.
 type API struct {
 	Sessions   SessionService
-	DefaultCwd string // used when a spawn request omits cwd (e.g. $HOME)
+	DefaultCwd string           // used when a spawn request omits cwd (e.g. $HOME)
+	AWS        AWSStatusService // nil = the credential broker is not running; /aws is a 404
+}
+
+// AWSStatusService reports a session's AWS binding, broker counters and recent
+// audit rows. ok is false for a session that is unknown or has no binding.
+type AWSStatusService interface {
+	AWSStatus(sessionID string) (status any, ok bool)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -141,6 +148,25 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		sid := strings.TrimSuffix(id, "/usage")
 		if u, ok := a.Sessions.UsageFor(sid); ok {
 			writeJSON(w, http.StatusOK, u)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+	// GET /api/sessions/{id}/aws — the session's AWS binding, broker counters and
+	// recent audit rows. 204 when the session is unknown or has no binding; 404
+	// when the broker is not running.
+	if strings.HasSuffix(id, "/aws") {
+		if a.AWS == nil {
+			writeErr(w, http.StatusNotFound, "credential broker not enabled")
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if st, ok := a.AWS.AWSStatus(strings.TrimSuffix(id, "/aws")); ok {
+			writeJSON(w, http.StatusOK, st)
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}

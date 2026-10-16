@@ -1462,6 +1462,8 @@ function renderSession(s, opts) {
   }
   const ab = acctBadgeEl(s);
   if (ab) sname.appendChild(ab);
+  const awsb = awsBadgeEl(s);
+  if (awsb) sname.appendChild(awsb);
 
   const right = document.createElement("div");
   right.className = "sright";
@@ -2409,11 +2411,16 @@ function syncPfReplyable() {
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
 let pfEnvRows = [];
+let pfExplicitBox = false;
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
-  renderPfRuntime(p.runtime || "");
+  // A stored "box" has no button of its own (blank is the box button), so
+  // remember it was explicit: saving it as blank would hand the tier back to
+  // the instance default.
+  pfExplicitBox = p.runtime === "box";
+  renderPfRuntime(segFromRuntime(p.runtime));
   renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
   pfEnvRows = envRows(p);
@@ -2421,6 +2428,13 @@ function fillForm(p) {
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
   $("pf-replyable").checked = !!p.replyable;
+  const aws = p.aws || {};
+  $("pf-aws-profile").value = aws.source_profile || "";
+  $("pf-aws-role").value = aws.role_arn || "";
+  $("pf-aws-region").value = aws.region || "";
+  $("pf-aws-s3").value = (aws.s3_read || []).join("\n");
+  $("pf-aws-label").value = aws.label || "";
+  $("pf-aws-prod").checked = !!aws.prod;
   syncPfReplyable();
   syncEditorActions();
 }
@@ -2453,6 +2467,14 @@ function syncEditorActions() {
     f.disabled = st.locked;
   }
   $("pf-save").textContent = saveLabel(segValue($("pf-runtime")));
+  // After the lock loop above, which re-enabled every .fld: the AWS block is
+  // also closed by the host tier, and this is the only pass that knows both.
+  const aws = awsFieldsState(st.locked, segValue($("pf-runtime")));
+  for (const f of $("pf-aws-block").querySelectorAll(".fld, input[type=checkbox]")) {
+    f.classList.toggle("off", aws.disabled);
+    f.disabled = aws.disabled;
+  }
+  $("pf-aws-hint").hidden = !aws.hint;
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
 // no-op; only grab focus when the dialog is actually on screen.
@@ -2466,9 +2488,13 @@ function newProfile() {
 }
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
+  const aws = readAWSFields((id) => { const el = $(id); return el.type === "checkbox" ? el.checked : el.value; });
+  if (aws) p.aws = aws;
   // Blank means "use the default tier", which the server resolves to box. Sending
-  // it explicitly would hard-code today's default into every stored profile.
-  const rt = segValue($("pf-runtime"));
+  // it explicitly would hard-code today's default into every stored profile —
+  // except where it must be explicit (see runtimeToSend); the server's own
+  // message answers the one case left, an AWS binding saved on the host tier.
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfExplicitBox, !!aws);
   if (rt) p.runtime = rt;
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
@@ -3319,6 +3345,8 @@ function openActionsSheet(s) {
     }
     const ab = acctBadgeEl(s);
     if (ab) shd.appendChild(ab);
+    const awsb = awsBadgeEl(s);
+    if (awsb) shd.appendChild(awsb);
 
     // Meta line: model/effort/context% come from the terminal TAB bound to
     // this session (a session has none of its own — see usage.js/tab.usage()),
@@ -3401,6 +3429,8 @@ function openReplySheet(s) {
     }
     const sab = acctBadgeEl(s);
     if (sab) shd.appendChild(sab);
+    const sawsb = awsBadgeEl(s);
+    if (sawsb) shd.appendChild(sawsb);
 
     const flab = document.createElement("div");
     flab.className = "flab";

@@ -265,6 +265,29 @@
               OS user and can read the default account's files. Use box containment to keep accounts apart.</div>
           </div>
         </div>
+        <div id="pf-aws-block">
+          <span class="flab">AWS (boxed only)</span>
+          <p class="tiny mut" id="pf-aws-hint" hidden>AWS needs runtime: box. The host tier cannot contain credentials.</p>
+          <div class="frow">
+            <div class="fcol"><label class="flab" for="pf-aws-profile">Source profile</label>
+              <input id="pf-aws-profile" class="fld" type="text" placeholder="sandbox-admin" autocomplete="off" spellcheck="false"></div>
+            <div class="fcol"><label class="flab" for="pf-aws-region">Region</label>
+              <input id="pf-aws-region" class="fld" type="text" placeholder="ap-southeast-1" autocomplete="off" spellcheck="false"></div>
+          </div>
+          <div class="frow">
+            <div class="fcol"><label class="flab" for="pf-aws-role">Role ARN (empty = no AWS access)</label>
+              <input id="pf-aws-role" class="fld" type="text" placeholder="arn:aws:iam::&lt;account&gt;:role/agentbox-agent" autocomplete="off" spellcheck="false"></div>
+          </div>
+          <div class="frow">
+            <div class="fcol"><label class="flab" for="pf-aws-s3">S3 read allowlist</label>
+              <textarea id="pf-aws-s3" class="fld" rows="2" spellcheck="false" placeholder="one bucket or bucket/prefix/ per line"></textarea></div>
+          </div>
+          <div class="frow">
+            <div class="fcol"><label class="flab" for="pf-aws-label">Label</label>
+              <input id="pf-aws-label" class="fld" type="text" maxlength="40" placeholder="sandbox" autocomplete="off"></div>
+            <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-aws-prod"> production</label></div>
+          </div>
+        </div>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
           <label class="pf-check"><input type="checkbox" id="pf-replyable"> Allow replies by default</label>

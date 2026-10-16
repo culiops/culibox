@@ -110,6 +110,26 @@ func TestAwaitShutdown_HangupReleasesThenDrains(t *testing.T) {
 	}
 }
 
+func TestAwaitShutdown_StopsTheBrokerBeforeTheHTTPDrain(t *testing.T) {
+	var steps []string
+	stop := make(chan os.Signal, 1)
+	stop <- syscall.SIGTERM
+	awaitShutdown(stop, shutdownSteps{
+		DetachAll:     func() int { return 0 },
+		StopAnalytics: func() {},
+		StopBroker: func(ctx context.Context) {
+			if _, ok := ctx.Deadline(); !ok {
+				t.Error("broker shutdown context has no deadline")
+			}
+			steps = append(steps, "broker")
+		},
+		ShutdownHTTP: func(context.Context) error { steps = append(steps, "http"); return nil },
+	}, func(string, ...any) {})
+	if got := strings.Join(steps, ","); got != "broker,http" {
+		t.Errorf("steps = %s, want broker,http", got)
+	}
+}
+
 // Carry 1: the Host guard refuses everything when AllowedHosts is unset, so the
 // serve wiring must fill it from the config.
 func TestConfigureServer_HostAllowlistWired(t *testing.T) {

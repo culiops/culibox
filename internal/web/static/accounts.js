@@ -135,6 +135,21 @@ function acctBadgeEl(s) {
   return b;
 }
 
+// awsBadgeEl is the AWS binding chip, drawn beside acctBadgeEl on every surface
+// that names a session (sidebar row, mobile sheet headers, terminal tab). It
+// lives here only because this is the file that already builds the other badge;
+// the verdict (text, prod, title) is sessionrow.js's awsBadge. The label is
+// operator-typed, so it goes in through textContent.
+function awsBadgeEl(s) {
+  const ab = awsBadge(s);
+  if (!ab) return null;
+  const b = document.createElement("span");
+  b.className = "bdg aws" + (ab.prod ? " prod" : "");
+  b.textContent = ab.text;
+  b.title = ab.title;
+  return b;
+}
+
 async function loadAccounts() {
   const list = document.getElementById("acct-list");
   if (!list) return;

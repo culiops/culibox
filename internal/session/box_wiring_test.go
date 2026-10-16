@@ -37,6 +37,9 @@ type fakeBoxes struct {
 	mu       sync.Mutex
 	wraps    int
 	lastAcct string // account the last Wrap was called with
+	lastKey  box.BoxKey
+	lastEnv  []string
+	lastRO   []box.Mount
 	releases int
 	adopts   int
 	kills    int
@@ -77,11 +80,14 @@ func (f *fakeBoxes) Prepare(context.Context) error {
 	return f.prepareErr
 }
 
-func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, acct string, argv, env []string, _ []box.Mount) ([]string, []string, string, error) {
+func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, key box.BoxKey, argv, env []string, extraRO []box.Mount) ([]string, []string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.wraps++
-	f.lastAcct = acct
+	f.lastAcct = key.Account
+	f.lastKey = key
+	f.lastEnv = append([]string(nil), env...)
+	f.lastRO = append([]box.Mount(nil), extraRO...)
 	f.order.add("wrap")
 	if f.wrapErr != nil {
 		return nil, nil, "", f.wrapErr

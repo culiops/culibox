@@ -325,3 +325,57 @@ func TestRuntimeForPrefersTheSpawnOverride(t *testing.T) {
 		t.Fatalf("override = %q, want host", got)
 	}
 }
+
+func TestInheritStripsAgentBoxDaemonVars(t *testing.T) {
+	t.Setenv("AB_PASS", "hunter2")
+	t.Setenv("AB_PROD_PASS", "hunter3")
+	t.Setenv("MY_LOGIN_PW", "hunter4")
+	t.Setenv("AC_TEST_KEEP", "kept")
+	l := New([]config.AgentConfig{{Name: "sh", Bin: "bash", Base: config.BaseInherit, Runtime: config.RuntimeHost}},
+		fakeResolver{vals: map[string]string{}}, nil)
+	l.SetDaemonSecretEnv("MY_LOGIN_PW")
+	_, env, err := l.Build(SpawnSpec{Agent: "sh", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := envMap(env)
+	for _, k := range []string{"AB_PASS", "AB_PROD_PASS", "MY_LOGIN_PW"} {
+		if _, ok := m[k]; ok {
+			t.Fatalf("inherit base leaked daemon secret %s", k)
+		}
+	}
+	if m["AC_TEST_KEEP"] != "kept" {
+		t.Fatalf("inherit base dropped an ordinary variable")
+	}
+}
+
+func TestProfileEnvMayStillSetAnABVariable(t *testing.T) {
+	// The strip applies to the inherited base only; an explicit profile env is the user's choice.
+	l := New([]config.AgentConfig{{Name: "sh", Bin: "bash", Base: config.BaseInherit, Runtime: config.RuntimeHost,
+		Env: map[string]string{"AB_FEATURE": "on"}}}, fakeResolver{vals: map[string]string{}}, nil)
+	_, env, err := l.Build(SpawnSpec{Agent: "sh", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envMap(env)["AB_FEATURE"] != "on" {
+		t.Fatal("explicit profile env was stripped")
+	}
+}
+
+func TestAWSForReturnsTheProfileBinding(t *testing.T) {
+	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::226198813800:role/a", Region: "ap-southeast-1",
+		S3Read: []string{"bucket"}}
+	l := New([]config.AgentConfig{{Name: "c", Bin: "claude", AWS: b}, {Name: "plain", Bin: "claude"}}, fakeResolver{}, nil)
+	if got := l.AWSFor("c"); got == nil || got.RoleARN != b.RoleARN {
+		t.Fatalf("got %+v", got)
+	}
+	if l.AWSFor("plain") != nil || l.AWSFor("missing") != nil {
+		t.Fatal("unbound/missing must be nil")
+	}
+	got := l.AWSFor("c")
+	got.Region = "mutated"
+	got.S3Read[0] = "mutated"
+	if again := l.AWSFor("c"); again.Region != "ap-southeast-1" || again.S3Read[0] != "bucket" {
+		t.Fatal("AWSFor must return a deep copy")
+	}
+}

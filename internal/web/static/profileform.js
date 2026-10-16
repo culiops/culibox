@@ -59,6 +59,30 @@ function setSegValue(el, value) {
   }
 }
 
+// The AWS block's state. The credential broker only serves a boxed session, so
+// the fields are off on the host tier as well as on a locked profile. One
+// function decides both, because syncEditorActions re-enables every field of an
+// unlocked profile and would otherwise undo the host rule. hint = show "AWS
+// needs runtime: box" (the tier is the reason, not the lock).
+function awsFieldsState(locked, runtime) {
+  const host = runtime === "host";
+  return { disabled: !!locked || host, hint: host };
+}
+
+// The runtime seg has two buttons: "" (box, the instance default) and "host".
+// A stored profile can say runtime "box" explicitly — an AWS binding requires
+// it — and the seg would show neither button lit for that value.
+function segFromRuntime(runtime) { return runtime === "host" ? "host" : ""; }
+
+// What to send as runtime. Blank stays blank (the instance default decides),
+// except where "box" must be explicit: a profile stored as box, which a blank
+// would silently turn into the instance default (host on PROD), and any
+// profile with an AWS binding, which the server refuses without it.
+function runtimeToSend(seg, storedExplicitBox, hasAWS) {
+  if (seg) return seg;
+  return storedExplicitBox || hasAWS ? "box" : "";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue };
+  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend };
 }

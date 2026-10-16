@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestWorkspaceOverlappingConfigOrProfilesDirIsRefused(t *testing.T) {
 		profDir:                         "it is agent-box's profiles directory",
 		elsewhere:                       "it contains agent-box's config directory",
 	} {
-		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", "", []string{"claude"}, nil, nil)
+		_, _, _, err := m.Wrap(context.Background(), ws, "s-1", BoxKey{}, []string{"claude"}, nil, nil)
 		if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: want %q, got %v", ws, want, err)
 		}
@@ -40,7 +41,7 @@ func TestWorkspaceOverlappingConfigOrProfilesDirIsRefused(t *testing.T) {
 	if err := os.Mkdir(other, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := m.Wrap(context.Background(), other, "s-1", "", []string{"claude"}, nil, nil); err != nil {
+	if _, _, _, err := m.Wrap(context.Background(), other, "s-1", BoxKey{}, []string{"claude"}, nil, nil); err != nil {
 		t.Fatalf("a sibling of the config and profiles dirs must box: %v", err)
 	}
 }
@@ -199,5 +200,184 @@ func TestDedupeProtectedNeverDropsTheStricterEntry(t *testing.T) {
 	inside := filepath.Join(d, "x")
 	if r := ProtectedOverlap(inside, got); !strings.Contains(r, "inside agent-box's data directory") {
 		t.Fatalf("inside the data root must stay refused: %q", r)
+	}
+}
+
+// oracleDirs walks the chain the way the kernel does: each hop's target is
+// resolved relative to the directory that CONTAINS the link, after that
+// directory's own symlinks are resolved.
+func oracleDirs(t *testing.T, file string) []string {
+	t.Helper()
+	var out []string
+	p, err := filepath.Abs(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40; i++ {
+		dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+		if err != nil {
+			return append(out, deepestExisting(filepath.Dir(p)))
+		}
+		out = append(out, dir)
+		fi, err := os.Lstat(filepath.Join(dir, filepath.Base(p)))
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return out
+		}
+		tgt, err := os.Readlink(filepath.Join(dir, filepath.Base(p)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !filepath.IsAbs(tgt) {
+			tgt = filepath.Join(dir, tgt)
+		}
+		p = tgt
+	}
+	return out
+}
+
+// FileDirs must protect every directory the kernel walks (the oracle) AND the
+// directories as spelled (mustInclude): the oracle only produces resolved
+// directories, so a spelled one a union could drop needs its own column.
+// Rows 4-6 are the three cases the round-4 attempt (832f741) regressed.
+func TestFileDirsCoversEveryDirTheKernelWalks(t *testing.T) {
+	type link struct {
+		at, to string // relative to the temp root
+		abs    bool   // to is joined onto the temp root
+	}
+	cases := []struct {
+		name        string
+		dirs        []string
+		links       []link
+		files       []string
+		start       string   // appended to the root as TEXT, never cleaned
+		skipOracle  bool     // the oracle cleans the path lexically
+		mustInclude []string // relative to the root
+	}{
+		{name: "plain file", dirs: []string{"cfg"}, files: []string{"cfg/config.json"}, start: "cfg/config.json",
+			mustInclude: []string{"cfg"}},
+		{name: "dir link then relative file link (#130)",
+			dirs:  []string{"dotfiles/ab", "dotfiles/shared"},
+			links: []link{{"cfgdir", "dotfiles/ab", true}, {"dotfiles/ab/config.json", "../shared/l2", false}},
+			files: []string{"dotfiles/shared/l2"}, start: "cfgdir/config.json",
+			mustInclude: []string{"cfgdir", "dotfiles/ab", "dotfiles/shared"}},
+		{name: "broken chain protects the deepest existing dir",
+			dirs:  []string{"a"},
+			links: []link{{"a/config.json", "../missing/x", false}}, start: "a/config.json",
+			mustInclude: []string{"a", "missing", ""}},
+		// 832f741 regression 1: a later hop's spelled directory is itself a
+		// directory symlink; only the spelled view still names it.
+		{name: "spelled hop dir that is a dir symlink",
+			dirs:  []string{"a", "real"},
+			links: []link{{"d", "real", true}, {"a/config.json", "../d/mid.json", false}, {"real/mid.json", "tail.json", false}},
+			files: []string{"real/tail.json"}, start: "a/config.json",
+			mustInclude: []string{"a", "d", "real"}},
+		// 832f741 regression 2: fail-open when a hop's directory is missing.
+		{name: "hop with a missing dir component",
+			dirs:  []string{"a", "x"},
+			links: []link{{"a/config.json", "../x/nodir/sub/f", false}}, start: "a/config.json",
+			mustInclude: []string{"a", "x/nodir/sub", "x"}},
+		// 832f741 regression 3: ".." after a symlinked component. Kernel: lnk
+		// -> real/sub, so lnk/../x is real/x; lexically it is x.
+		{name: "dot-dot after a symlinked component",
+			dirs:  []string{"real/sub", "real/x", "x"},
+			links: []link{{"lnk", "real/sub", true}}, files: []string{"real/x/config.json", "x/config.json"},
+			start: "lnk/../x/config.json", skipOracle: true,
+			mustInclude: []string{"x", "real/x"}},
+		// Dangling directory link: the chain ends where the missing part would
+		// be created, which is behind the link, not beside it.
+		{name: "dangling dir link in the middle of a chain (A)",
+			dirs:        []string{"home/a", "elsewhere"},
+			links:       []link{{"home/d", "elsewhere/missing", true}, {"home/a/config.json", "../d/x", false}},
+			start:       "home/a/config.json",
+			mustInclude: []string{"home/a", "home", "elsewhere"}},
+		// The #130 setup before the dotfiles target exists.
+		{name: "config dir is a link to a target not created yet (B)",
+			dirs:        []string{"home/.config", "dotfiles"},
+			links:       []link{{"home/.config/agent-box", "dotfiles/ab", true}},
+			start:       "home/.config/agent-box/config.json",
+			mustInclude: []string{"home/.config", "dotfiles"}},
+		// Directory links inside a directory path: each link's parent is a
+		// place the link can be swapped.
+		{name: "nested directory links in the path (C)",
+			dirs: []string{"data/cfg", "data/x2", "data/ab"},
+			links: []link{{".config", "data/cfg", true}, {"data/cfg/x", "data/x2", true},
+				{"data/x2/agent-box", "data/ab", true}},
+			files: []string{"data/ab/config.json"}, start: ".config/x/agent-box/config.json",
+			mustInclude: []string{"", "data/cfg", "data/x2", "data/ab"}},
+		{name: "file link through three directory links (D)",
+			dirs: []string{"a", "m/p1", "m/p2", "m/p3"},
+			links: []link{{"a/config.json", "l1/l2/l3/t", false}, {"a/l1", "m/p1", true},
+				{"m/p1/l2", "m/p2", true}, {"m/p2/l3", "m/p3", true}},
+			files: []string{"m/p3/t"}, start: "a/config.json",
+			mustInclude: []string{"a", "m/p1", "m/p2", "m/p3"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, d := range c.dirs {
+				if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, f := range c.files {
+				if err := os.WriteFile(filepath.Join(root, f), []byte("{}"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, l := range c.links {
+				to := l.to
+				if l.abs {
+					to = filepath.Join(root, to)
+				}
+				if err := os.Symlink(to, filepath.Join(root, l.at)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			start := root + string(filepath.Separator) + c.start
+			got := FileDirs(start)
+			if !c.skipOracle {
+				for _, want := range oracleDirs(t, start) {
+					if !slices.Contains(got, want) {
+						t.Errorf("FileDirs missed %s (the kernel walks it); got %q", want, got)
+					}
+				}
+			}
+			for _, rel := range c.mustInclude {
+				if want := filepath.Join(root, rel); !slices.Contains(got, want) {
+					t.Errorf("FileDirs missed spelled/expected %s; got %q", want, got)
+				}
+			}
+		})
+	}
+}
+
+// A symlink loop must end the walk (the kernel gives up after 40 links) and
+// still protect the directory the loop sits in.
+func TestFileDirsTerminatesOnASymlinkLoop(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(root, "a")
+	if err := os.Mkdir(a, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("config.json", filepath.Join(a, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "l2"), filepath.Join(a, "d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "a", "d"), filepath.Join(root, "l2")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{filepath.Join(a, "config.json"), filepath.Join(a, "d", "config.json")} {
+		got := FileDirs(f)
+		if !slices.Contains(got, a) {
+			t.Errorf("FileDirs(%s) must protect %s even on a loop; got %q", f, a, got)
+		}
 	}
 }
