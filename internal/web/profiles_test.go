@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/store"
@@ -292,5 +293,69 @@ func TestSaveRejectsDataRootDefaultCwd(t *testing.T) {
 	err := pm.Save(config.AgentConfig{Name: "p", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: root})
 	if err == nil || !strings.Contains(err.Error(), "data directory") {
 		t.Fatalf("a boxed default_cwd at the data root must be refused, got %v", err)
+	}
+}
+
+type fakeAccountsWeb map[string]account.Resolved
+
+func (f fakeAccountsWeb) Resolve(n string) (account.Resolved, error) {
+	if n == "" || n == account.Default {
+		return account.DefaultResolved("/home/u/.claude"), nil
+	}
+	r, ok := f[n]
+	if !ok {
+		return account.Resolved{}, account.ErrUnknown
+	}
+	return r, nil
+}
+
+func TestProfileSaveAccountRules(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.SetAccounts(fakeAccountsWeb{
+		"work": account.Resolved{Account: account.Account{Name: "work", Provider: "claude"}},
+		"gpt":  account.Resolved{Account: account.Account{Name: "gpt", Provider: "codex"}},
+	})
+	ok := []config.AgentConfig{
+		{Name: "a", Bin: "claude", Account: "work"},
+		{Name: "b", Bin: "claude"},                                               // default
+		{Name: "c", Bin: "claude", Secrets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}, // default keeps the workaround
+		{Name: "h", Bin: "/usr/local/bin/codex", Account: "gpt"},
+	}
+	for _, p := range ok {
+		if err := pm.Save(p); err != nil {
+			t.Errorf("Save(%s) = %v", p.Name, err)
+		}
+	}
+	bad := []config.AgentConfig{
+		{Name: "d", Bin: "claude", Account: "nope"},
+		{Name: "e", Bin: "/bin/bash", Account: "work"},
+		{Name: "f", Bin: "claude", Account: "work", Secrets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
+		{Name: "g", Bin: "claude", Env: map[string]string{"CLAUDE_CONFIG_DIR": "/x"}},
+		{Name: "i", Bin: "claude", Account: "gpt"}, // codex account on a claude bin
+		{Name: "j", Bin: "codex", Account: "work"}, // claude account on a codex bin
+		{Name: "k", Bin: "claude", Account: "work", Env: map[string]string{"ANTHROPIC_API_KEY": "x"}},
+	}
+	for _, p := range bad {
+		if err := pm.Save(p); err == nil {
+			t.Errorf("Save(%s) accepted", p.Name)
+		}
+	}
+	for _, v := range pm.Views() {
+		if v.Name == "a" && v.Account != "work" {
+			t.Errorf("view a Account = %q, want work", v.Account)
+		}
+		if v.Name == "b" && v.Account != "" {
+			t.Errorf("view b Account = %q, want empty", v.Account)
+		}
+	}
+}
+
+func TestProfileSaveAccountWithoutResolver(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	if err := pm.Save(config.AgentConfig{Name: "a", Bin: "claude", Account: "work"}); err == nil {
+		t.Error("named account accepted with no resolver")
+	}
+	if err := pm.Save(config.AgentConfig{Name: "b", Bin: "claude", Account: "default"}); err != nil {
+		t.Errorf("explicit default rejected: %v", err)
 	}
 }
