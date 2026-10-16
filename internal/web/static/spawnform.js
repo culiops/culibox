@@ -50,6 +50,9 @@ function spawnPayload(f) {
   const v = f || {};
   const req = { agent: v.agent, name: String(v.name || "").trim(), cwd: v.cwd || "", options: v.options || {} };
   if (v.runtime) req.runtime = v.runtime;
+  // Any chosen account is sent, "default" included: an explicit default pick
+  // must override a profile pinned to another account. Unset = omit.
+  if (v.account) req.account = v.account;
   const prompt = String(v.prompt || "").trim();
   if (prompt && promptFieldVisible(v.profile)) req.prompt = prompt;
   if (repliesFieldVisible(v.profile)) req.replyable = !!v.replyable;
@@ -61,7 +64,7 @@ function spawnPayload(f) {
 // was the old run's task).
 function spawnPrefill(s) {
   const v = s || {};
-  return { agent: v.agent || "", cwd: v.cwd || "", runtime: v.runtime || "", options: Object.assign({}, v.options || {}) };
+  return { agent: v.agent || "", cwd: v.cwd || "", runtime: v.runtime || "", account: v.account || "", options: Object.assign({}, v.options || {}) };
 }
 
 // isSubmitHotkey: Ctrl+Enter (⌘+Enter on mac) in the first-message field
