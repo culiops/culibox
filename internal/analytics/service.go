@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -24,7 +25,8 @@ type Service struct {
 }
 
 // New opens the analytics DB at dbPath and returns a Service over the given
-// transcript roots (e.g. ~/.claude/projects and <dataDir>/boxstate/*/.claude/projects).
+// transcript root glob patterns (e.g. ~/.claude/projects and
+// <dataDir>/boxstate/*/.claude/projects), re-expanded on every Ingest.
 func New(dbPath string, roots []string, interval time.Duration) (*Service, error) {
 	st, err := Open(dbPath)
 	if err != nil {
@@ -47,8 +49,17 @@ func (s *Service) Ingest() (IngestStats, error) {
 	}
 	defer s.mu.Unlock()
 	var st IngestStats
-	for _, root := range s.roots {
-		ingestRoot(s.store, root, &st)
+	// Roots are glob patterns, expanded on every pass so an agent account or box
+	// created after startup is ingested without a restart. A literal path is a
+	// pattern that matches itself.
+	for _, pat := range s.roots {
+		matches, err := filepath.Glob(pat)
+		if err != nil { // malformed pattern: treat as a literal path
+			matches = []string{pat}
+		}
+		for _, root := range matches {
+			ingestRoot(s.store, root, &st)
+		}
 	}
 	return st, nil
 }

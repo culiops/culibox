@@ -433,7 +433,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	// Analytics: durable token/prompt rollups mined from the Claude Code
 	// transcripts. Enabled by default; only an explicit config false turns it off.
 	// Roots default to ~/.claude/projects (all host + direct usage — the bulk) plus
-	// this instance's boxed-session transcript dirs.
+	// this instance's boxed-session and agent-account transcript dirs.
 	var analyticsSvc *analytics.Service
 	if cfg.Analytics.On() {
 		dbPath := cfg.Analytics.DBPath
@@ -442,9 +442,12 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 		roots := cfg.Analytics.Roots
 		if len(roots) == 0 {
-			roots = []string{filepath.Join(home, ".claude", "projects")}
-			if boxed, _ := filepath.Glob(filepath.Join(dataDir, "boxstate", "*", ".claude", "projects")); len(boxed) > 0 {
-				roots = append(roots, boxed...)
+			// Glob patterns, expanded on every ingest (not at boot) so boxes
+			// and agent accounts created while the daemon runs are picked up.
+			roots = []string{
+				filepath.Join(home, ".claude", "projects"),
+				filepath.Join(dataDir, "boxstate", "*", ".claude", "projects"),
+				filepath.Join(dataDir, "accounts", "*", "claude", "projects"),
 			}
 		}
 		interval := 24 * time.Hour

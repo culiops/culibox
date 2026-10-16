@@ -163,7 +163,7 @@ type Config struct {
 // off.
 type AnalyticsConfig struct {
 	Enabled        *bool    `json:"enabled,omitempty"`         // nil/true → on; false → off
-	Roots          []string `json:"roots,omitempty"`           // transcript roots; empty → defaults (see main)
+	Roots          []string `json:"roots,omitempty"`           // transcript root glob patterns; empty → defaults (see main)
 	IngestInterval string   `json:"ingest_interval,omitempty"` // e.g. "24h"; empty/invalid → 24h
 	DBPath         string   `json:"db_path,omitempty"`         // empty → <dataDir>/analytics.db
 }
