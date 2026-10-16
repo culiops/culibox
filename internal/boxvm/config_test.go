@@ -2,6 +2,9 @@ package boxvm
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -193,5 +196,95 @@ func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
 	}
 	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 {
 		t.Fatalf("defaults: %+v", d)
+	}
+}
+
+// fakeIptables keeps the DOCKER-USER chain in a file, one rule per line, so the
+// provision script runs for real and its rule ORDER can be checked. It knows
+// only what the script uses: -N, -C, -D and -I at position 1, always with -w
+// (wait for the xtables lock docker may hold while it starts).
+const fakeIptables = `#!/bin/sh
+chain="$CHAIN"
+touch "$chain"
+[ "$1" = -w ] || exit 6
+shift
+op=$1; shift
+[ "$1" = DOCKER-USER ] || exit 3
+shift
+case "$op" in
+-N) exit 0 ;;
+-C) grep -qxF -- "$*" "$chain" ;;
+-D) grep -qxF -- "$*" "$chain" || exit 1
+	awk -v r="$*" '!d && $0 == r { d = 1; next } { print }' "$chain" > "$chain.t" && mv "$chain.t" "$chain" ;;
+-I) [ "$1" = 1 ] || exit 4; shift
+	{ printf '%s\n' "$*"; cat "$chain"; } > "$chain.t" && mv "$chain.t" "$chain" ;;
+*) exit 5 ;;
+esac
+`
+
+// runProvision runs provisionScript against fakeIptables and a getent that
+// resolves host.lima.internal to gw, starting from the chain in seed, and
+// returns the chain afterwards.
+func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
+	t.Helper()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	dir := t.TempDir()
+	chain := filepath.Join(dir, "chain")
+	if len(seed) > 0 {
+		if err := os.WriteFile(chain, []byte(strings.Join(seed, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	getent := "#!/bin/sh\n[ \"$2\" = host.lima.internal ] && echo '" + gw + "       STREAM host.lima.internal'\n"
+	for name, body := range map[string]string{"iptables": fakeIptables, "getent": getent, "provision.sh": provisionScript} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < runs; i++ {
+		cmd := exec.Command(sh, filepath.Join(dir, "provision.sh"))
+		cmd.Env = []string{"PATH=" + dir + ":/usr/bin:/bin", "CHAIN=" + chain}
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("provision run %d: %v\n%s", i+1, err, out)
+		}
+	}
+	b, err := os.ReadFile(chain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+}
+
+// Measured on the founder's Mac (2026-10-16): docker gives boxes the lima
+// gateway as their nameserver, so a DROP of everything to it broke DNS in
+// every box and in the image build. udp/53 passes; every other port to the
+// gateway (the Mac's loopback), tcp/53 included, stays dropped, whatever state
+// the chain was in.
+func TestProvisionLetsDNSThroughBeforeTheGatewayDrop(t *testing.T) {
+	gw := "192.168.5.9"
+	want := []string{
+		"-d " + gw + " -p udp --dport 53 -j RETURN",
+		"-d " + gw + " -j DROP",
+	}
+	for name, tc := range map[string]struct {
+		seed []string
+		runs int
+	}{
+		"fresh boot":              {nil, 1},
+		"run twice":               {nil, 2},
+		"VM provisioned before":   {[]string{"-d " + gw + " -j DROP", "-j RETURN"}, 1},
+		"DNS rule below the DROP": {[]string{"-d " + gw + " -j DROP", "-d " + gw + " -p udp --dport 53 -j RETURN"}, 1},
+	} {
+		got := runProvision(t, gw, tc.seed, tc.runs)
+		exp := append([]string(nil), want...)
+		if len(tc.seed) > 0 && tc.seed[len(tc.seed)-1] == "-j RETURN" {
+			exp = append(exp, "-j RETURN")
+		}
+		if strings.Join(got, "\n") != strings.Join(exp, "\n") {
+			t.Errorf("%s: chain\n%s\nwant\n%s", name, strings.Join(got, "\n"), strings.Join(exp, "\n"))
+		}
 	}
 }

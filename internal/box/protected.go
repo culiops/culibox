@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -123,9 +124,16 @@ func protectedOverlap(workspace string, dirs []ProtectedDir, fold bool) string {
 		}
 		// Both spellings: the resolved one is where the files are; the one as
 		// spelled matters when a link in it could be swapped from a parent.
+		// A third: the link in its resolved parent, which is where a workspace
+		// that holds it is spelled when a parent is itself a link (macOS /var).
 		spellings := []string{resolveExisting(d.Path)}
-		if abs, err := filepath.Abs(d.Path); err == nil && abs != spellings[0] {
-			spellings = append(spellings, abs)
+		if abs, err := filepath.Abs(d.Path); err == nil {
+			inParent := filepath.Join(resolveExisting(filepath.Dir(abs)), filepath.Base(abs))
+			for _, p := range []string{abs, inParent} {
+				if !slices.Contains(spellings, p) {
+					spellings = append(spellings, p)
+				}
+			}
 		}
 		for _, p := range spellings {
 			var how string
