@@ -90,6 +90,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Prompt    string         `json:"prompt"`    // first message (claude only; the launcher validates)
 			Replyable *bool          `json:"replyable"` // nil = the profile's default
 			Account   string         `json:"account"`   // "" = the profile's own account, else default
+			Login     bool           `json:"login"`     // sign-in session for a named claude account (host tier)
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -115,7 +116,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// a rejected first message) is shown instead — see writeSpawnErr.
 		info, err := a.Sessions.Spawn(launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
-			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account,
+			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account, Login: req.Login,
 		})
 		if err != nil {
 			writeSpawnErr(w, req.Agent, err)

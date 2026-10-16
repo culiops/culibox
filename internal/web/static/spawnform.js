@@ -53,6 +53,9 @@ function spawnPayload(f) {
   // Any chosen account is sent, "default" included: an explicit default pick
   // must override a profile pinned to another account. Unset = omit.
   if (v.account) req.account = v.account;
+  // login: the Settings "Log in" session; the server drops the profile's own
+  // auth and accepts it only for a named claude account on the host tier.
+  if (v.login) req.login = true;
   const prompt = String(v.prompt || "").trim();
   if (prompt && promptFieldVisible(v.profile)) req.prompt = prompt;
   if (repliesFieldVisible(v.profile)) req.replyable = !!v.replyable;

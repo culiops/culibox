@@ -258,3 +258,83 @@ func TestBuild_InheritAddsMCPConfigOnHostOnly(t *testing.T) {
 		}
 	}
 }
+
+// Login mode (Settings → Log in): a profile that carries the personal login can
+// still host the sign-in session, because Build drops its auth instead of
+// refusing it.
+func TestBuild_LoginModeDropsProfileAuth(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "daemon-key")
+	l := New([]config.AgentConfig{{
+		Name: "claude", Bin: "/usr/bin/claude", Base: config.BaseInherit,
+		Secrets: []string{"CLAUDE_CODE_OAUTH_TOKEN", "KEEP_SECRET"},
+		Env:     map[string]string{"ANTHROPIC_API_KEY": "profile-key", "KEEP_ENV": "e"},
+	}}, fakeResolver{vals: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "personal", "KEEP_SECRET": "s"}}, nil)
+	l.SetAccounts(fakeAccounts{"work": workAcct("/data/accounts/work/claude")})
+	_, env, err := l.Build(SpawnSpec{Agent: "claude", Account: "work", Runtime: config.RuntimeHost, Login: true})
+	if err != nil {
+		t.Fatalf("login-mode spawn refused: %v", err)
+	}
+	m := envMap(env)
+	for _, k := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if v, ok := m[k]; ok {
+			t.Fatalf("%s=%q reached the login session", k, v)
+		}
+	}
+	if m["CLAUDE_CONFIG_DIR"] != "/data/accounts/work/claude" {
+		t.Fatalf("CLAUDE_CONFIG_DIR = %q", m["CLAUDE_CONFIG_DIR"])
+	}
+	if m["KEEP_SECRET"] != "s" || m["KEEP_ENV"] != "e" {
+		t.Fatalf("non-auth secret/env dropped: %q %q", m["KEEP_SECRET"], m["KEEP_ENV"])
+	}
+}
+
+func TestBuild_LoginModeKeepsAccountTokenOnly(t *testing.T) {
+	acct := workAcct("/d")
+	acct.TokenSecret = "WORK_TOK"
+	l := New([]config.AgentConfig{{Name: "claude", Bin: "/usr/bin/claude", Secrets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}},
+		fakeResolver{vals: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "personal", "WORK_TOK": "w"}}, nil)
+	l.SetAccounts(fakeAccounts{"work": acct})
+	_, env, err := l.Build(SpawnSpec{Agent: "claude", Account: "work", Runtime: config.RuntimeHost, Login: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envMap(env)["CLAUDE_CODE_OAUTH_TOKEN"]; got != "w" {
+		t.Fatalf("token = %q, want the account's", got)
+	}
+}
+
+func TestBuild_LoginModeOnlyForHostClaudeNamedAccount(t *testing.T) {
+	codex := account.Resolved{Account: account.Account{Name: "cx", Provider: account.ProviderCodex}, ConfigDir: "/d"}
+	l := New([]config.AgentConfig{
+		{Name: "claude", Bin: "/usr/bin/claude"},
+		{Name: "sh", Bin: "/bin/bash"},
+		{Name: "lg", Bin: "/usr/bin/claude", Base: config.BaseLogin},
+	}, fakeResolver{}, nil)
+	l.SetAccounts(fakeAccounts{"work": workAcct("/d"), "cx": codex})
+	cases := []struct {
+		name string
+		spec SpawnSpec
+		want error
+	}{
+		{"default account", SpawnSpec{Agent: "claude", Runtime: config.RuntimeHost, Login: true}, ErrAccountConflict},
+		{"explicit default", SpawnSpec{Agent: "claude", Account: account.Default, Runtime: config.RuntimeHost, Login: true}, ErrAccountConflict},
+		{"boxed", SpawnSpec{Agent: "claude", Account: "work", Runtime: config.RuntimeBox, Login: true}, ErrAccountConflict},
+		{"codex account", SpawnSpec{Agent: "claude", Account: "cx", Runtime: config.RuntimeHost, Login: true}, ErrCodexAccount},
+		{"non-claude bin", SpawnSpec{Agent: "sh", Account: "work", Runtime: config.RuntimeHost, Login: true}, ErrAccountConflict},
+		{"login base still refused", SpawnSpec{Agent: "lg", Account: "work", Runtime: config.RuntimeHost, Login: true}, ErrAccountConflict},
+	}
+	for _, c := range cases {
+		if _, _, err := l.Build(c.spec); !errors.Is(err, c.want) {
+			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+		}
+	}
+}
+
+func TestBuild_SameProfileWithoutLoginStillRefused(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "claude", Bin: "/usr/bin/claude", Secrets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}},
+		fakeResolver{vals: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "personal"}}, nil)
+	l.SetAccounts(fakeAccounts{"work": workAcct("/d")})
+	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Account: "work", Runtime: config.RuntimeHost}); !errors.Is(err, ErrAccountConflict) {
+		t.Fatalf("err = %v", err)
+	}
+}

@@ -39,6 +39,11 @@ type SpawnSpec struct {
 	// Account overrides the profile's agent account; "" = the profile's (default
 	// when that is unset too). Resolved by AccountFor, never trusted as a path.
 	Account string
+	// Login marks a spawn that exists only to sign an account in (Settings →
+	// Log in). It is valid for a non-default claude account on a claude bin at
+	// the host tier, and makes Build drop the profile's own auth secrets
+	// instead of refusing them, so the session sees no login but the account's.
+	Login bool
 	// Replyable overrides the profile's reply default; nil = the default.
 	// Read by ReplyableFor, never by Build.
 	Replyable *bool
@@ -193,7 +198,15 @@ func (l *AgentLauncher) AccountFor(spec SpawnSpec) (account.Resolved, error) {
 // checkAccount refuses combinations that would mix credentials. boxed is the
 // spawn's effective tier: a boxed spawn never login-wraps (Build forces the
 // clean base), so base=login only matters on the host.
-func checkAccount(cfg config.AgentConfig, acct account.Resolved, boxed bool) error {
+func checkAccount(cfg config.AgentConfig, acct account.Resolved, boxed, login bool) error {
+	if login {
+		if acct.IsDefault {
+			return fmt.Errorf("%w: login mode needs a named account", ErrAccountConflict)
+		}
+		if boxed {
+			return fmt.Errorf("%w: login mode runs on the host tier only", ErrAccountConflict)
+		}
+	}
 	if acct.IsDefault {
 		return nil
 	}
@@ -207,6 +220,9 @@ func checkAccount(cfg config.AgentConfig, acct account.Resolved, boxed bool) err
 	// re-export CLAUDE_CODE_OAUTH_TOKEN: the default login would reach this account.
 	if !boxed && cfg.BasePolicy() == config.BaseLogin {
 		return fmt.Errorf("%w: profile %q uses base=login, whose shell rc files can re-export another login's credentials; use base clean or inherit with account %q", ErrAccountConflict, cfg.Name, acct.Name)
+	}
+	if login { // Build drops the profile's auth env and secrets in login mode
+		return nil
 	}
 	for k := range cfg.Env {
 		if account.IsAuthEnv(k) {
@@ -335,7 +351,7 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := checkAccount(cfg, acct, boxed); err != nil {
+	if err := checkAccount(cfg, acct, boxed, spec.Login); err != nil {
 		return nil, nil, err
 	}
 
@@ -366,6 +382,9 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	}
 
 	for _, name := range cfg.Secrets { // secrets by reference (authoritative)
+		if spec.Login && account.IsAuthEnv(name) {
+			continue // login mode: the profile's own login never reaches the account
+		}
 		v, ok, err := l.secrets.Resolve(name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("launcher: resolving secret %q for agent %q: %w", name, cfg.Name, err)

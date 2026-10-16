@@ -74,8 +74,9 @@ function acctSpawnPick(prefillAccount, profileAccount) {
 }
 
 // acctLoginProfile: the profile "Log in" spawns under the account — the bare
-// claude profile, else any claude profile not pinned to an account. The
-// server still refuses one carrying its own auth secret; the caller shows that.
+// claude profile, else any claude profile not pinned to an account. The spawn
+// is sent with login:true, so the server drops the profile's own auth secrets
+// rather than refusing them; any other refusal is shown by the caller.
 function acctLoginProfile(profiles) {
   const ps = profiles || [];
   return ps.find((x) => x.claude && x.name === "claude") || ps.find((x) => x.claude && !x.account) || null;
@@ -272,11 +273,11 @@ async function acctDelete(name) {
   setAcctNote("Deleted \"" + name + "\". Its folder is left at " + ((r && r.left_on_disk) || "its old path") + ".");
 }
 
-// acctLogin starts an ordinary claude session under the account, on the host
+// acctLogin starts a claude login-mode session under the account, on the host
 // tier (a box keeps its own config dir, so a login there would not land in
-// the account); the user runs /login in it. No new endpoint: the launcher sets
-// CLAUDE_CONFIG_DIR. A refusal (say, the profile carries its own auth secret)
-// stays in the dialog rather than vanishing.
+// the account); the user runs /login in it. login:true makes the launcher drop
+// the profile's personal auth so only the account's CLAUDE_CONFIG_DIR applies.
+// A refusal stays in the dialog rather than vanishing.
 async function acctLogin(name) {
   setAcctErr("");
   setAcctNote("");
@@ -284,7 +285,7 @@ async function acctLogin(name) {
   if (!p) { setAcctErr("Log in needs a claude profile with no agent account set."); return; }
   try {
     await spawnSession(spawnPayload({
-      agent: p.name, account: name, runtime: "host", name: "login: " + name,
+      agent: p.name, account: name, runtime: "host", login: true, name: "login: " + name,
       cwd: "", options: {}, profile: p,
     }), { toast: false });
   } catch (e) {

@@ -85,3 +85,9 @@ test("spawnPayload sends any chosen account (even default, to override a pinned 
   assert.strictEqual("account" in spawnPayload({ agent: "c" }), false);
   assert.strictEqual(spawnPrefill({ agent: "c", account: "work" }).account, "work");
 });
+
+test("spawnPayload sends login:true only when set (the Settings Log in session)", () => {
+  assert.strictEqual(spawnPayload({ agent: "c", account: "work", login: true }).login, true);
+  assert.strictEqual("login" in spawnPayload({ agent: "c", account: "work" }), false);
+  assert.strictEqual("login" in spawnPayload({ agent: "c", login: false }), false);
+});

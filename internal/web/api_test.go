@@ -25,6 +25,7 @@ type mockSvc struct {
 	spawnedOptions  map[string]any
 	spawnedRuntime  string
 	spawnedAccount  string
+	spawnedLogin    bool
 	renamedID       string
 	renamedName     string
 	renameErr       error
@@ -60,6 +61,7 @@ func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedOptions = s.Options
 	m.spawnedRuntime = s.Runtime
 	m.spawnedAccount = s.Account
+	m.spawnedLogin = s.Login
 	m.spawnedPrompt = s.Prompt
 	m.spawnedReplyable = s.Replyable
 	if m.spawnErr != nil {
@@ -92,6 +94,24 @@ func TestAPI_ForwardsAccount(t *testing.T) {
 	}
 	if svc.spawnedAccount != "work" {
 		t.Fatalf("account not forwarded: %q", svc.spawnedAccount)
+	}
+}
+
+func TestAPI_ForwardsLogin(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc}
+	for _, c := range []struct {
+		body string
+		want bool
+	}{{`{"agent":"claude","account":"work","login":true}`, true}, {`{"agent":"claude","account":"work"}`, false}} {
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(c.body)))
+		if rec.Code != 201 {
+			t.Fatalf("code %d", rec.Code)
+		}
+		if svc.spawnedLogin != c.want {
+			t.Fatalf("%s: login = %v, want %v", c.body, svc.spawnedLogin, c.want)
+		}
 	}
 }
 
