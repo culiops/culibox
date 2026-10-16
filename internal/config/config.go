@@ -88,6 +88,7 @@ type AgentConfig struct {
 	Runtime    string            `json:"runtime,omitempty"`     // box(default)|host — separate axis from Base
 	Box        BoxConfig         `json:"box,omitempty"`         // per-agent box image override
 	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
+	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours

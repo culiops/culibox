@@ -17,6 +17,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/secrets"
 )
@@ -35,6 +36,9 @@ type SpawnSpec struct {
 	// Resume continues a claude conversation (`--resume <id>`). Set only by
 	// the session layer's Restart; must look like a session id.
 	Resume string
+	// Account overrides the profile's agent account; "" = the profile's (default
+	// when that is unset too). Resolved by AccountFor, never trusted as a path.
+	Account string
 	// Replyable overrides the profile's reply default; nil = the default.
 	// Read by ReplyableFor, never by Build.
 	Replyable *bool
@@ -139,6 +143,87 @@ type AgentLauncher struct {
 	// lives here rather than being stamped onto each agent so that profiles
 	// added later through SetAgents pick it up too.
 	defaultRuntime string
+	// accounts resolves agent accounts; nil means only the default exists.
+	accounts AccountResolver
+}
+
+// AccountResolver is the launcher's view of the account store.
+type AccountResolver interface {
+	Resolve(name string) (account.Resolved, error)
+}
+
+var (
+	// ErrCodexAccount: codex accounts validate and are stored, but cannot spawn yet.
+	ErrCodexAccount = errors.New("codex accounts are not supported yet")
+	// ErrAccountConflict wraps every refusal to mix an account with a profile
+	// that would carry another login's credentials. Safe to show the caller.
+	ErrAccountConflict = errors.New("account conflict")
+)
+
+// SetAccounts installs the account resolver. Call at boot.
+func (l *AgentLauncher) SetAccounts(r AccountResolver) {
+	l.mu.Lock()
+	l.accounts = r
+	l.mu.Unlock()
+}
+
+// AccountFor resolves which account a spawn runs under: the spawn override,
+// else the profile's, else default. Without a resolver only default exists.
+func (l *AgentLauncher) AccountFor(spec SpawnSpec) (account.Resolved, error) {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return account.Resolved{}, fmt.Errorf("launcher: unknown agent %q", spec.Agent)
+	}
+	name := spec.Account
+	if name == "" {
+		name = cfg.Account
+	}
+	l.mu.RLock()
+	r := l.accounts
+	l.mu.RUnlock()
+	if r == nil {
+		if name == "" || name == account.Default {
+			return account.DefaultResolved(""), nil
+		}
+		return account.Resolved{}, fmt.Errorf("%w %q (accounts not configured)", account.ErrUnknown, name)
+	}
+	return r.Resolve(name)
+}
+
+// checkAccount refuses combinations that would mix credentials. boxed is the
+// spawn's effective tier: a boxed spawn never login-wraps (Build forces the
+// clean base), so base=login only matters on the host.
+func checkAccount(cfg config.AgentConfig, acct account.Resolved, boxed bool) error {
+	if acct.IsDefault {
+		return nil
+	}
+	if acct.Provider == account.ProviderCodex {
+		return ErrCodexAccount
+	}
+	if !IsClaudeBin(cfg.Bin) {
+		return fmt.Errorf("%w: profile %q (bin %s) cannot run under claude account %q", ErrAccountConflict, cfg.Name, cfg.Bin, acct.Name)
+	}
+	// $SHELL -l -i re-sources the rc files AFTER the env strip, and those can
+	// re-export CLAUDE_CODE_OAUTH_TOKEN: the default login would reach this account.
+	if !boxed && cfg.BasePolicy() == config.BaseLogin {
+		return fmt.Errorf("%w: profile %q uses base=login, whose shell rc files can re-export another login's credentials; use base clean or inherit with account %q", ErrAccountConflict, cfg.Name, acct.Name)
+	}
+	for k := range cfg.Env {
+		if account.IsAuthEnv(k) {
+			return fmt.Errorf("%w: profile %q sets %s; it cannot run under account %q", ErrAccountConflict, cfg.Name, k, acct.Name)
+		}
+	}
+	for _, n := range cfg.Secrets {
+		if account.IsAuthEnv(n) {
+			return fmt.Errorf("%w: profile %q carries secret %s; it cannot run under account %q", ErrAccountConflict, cfg.Name, n, acct.Name)
+		}
+	}
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 // SetDefaultRuntime installs the instance-level tier default. Call once at boot.
@@ -246,6 +331,14 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	boxed := spec.Runtime == config.RuntimeBox ||
 		(spec.Runtime == "" && l.tierOf(cfg) == config.RuntimeBox)
 
+	acct, err := l.AccountFor(spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkAccount(cfg, acct, boxed); err != nil {
+		return nil, nil, err
+	}
+
 	basePolicy := cfg.BasePolicy()
 	if boxed {
 		basePolicy = config.BaseClean
@@ -266,6 +359,12 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	opts := l.mergeOptions(cfg, spec)
 	l.applyOptionEnv(opts, env)
 
+	if !acct.IsDefault { // never let the daemon's own login reach another account
+		for _, k := range account.AuthEnv {
+			delete(env, k)
+		}
+	}
+
 	for _, name := range cfg.Secrets { // secrets by reference (authoritative)
 		v, ok, err := l.secrets.Resolve(name)
 		if err != nil {
@@ -276,6 +375,21 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 		}
 		env[name] = v
 	}
+	if !acct.IsDefault {
+		if !boxed { // in a box the per-account box home's .claude is the config dir
+			env["CLAUDE_CONFIG_DIR"] = acct.ConfigDir
+		}
+		if acct.TokenSecret != "" {
+			v, ok, err := l.secrets.Resolve(acct.TokenSecret)
+			if err != nil {
+				return nil, nil, fmt.Errorf("launcher: account %q: resolving token secret %s: %w", acct.Name, acct.TokenSecret, err)
+			}
+			if !ok {
+				return nil, nil, fmt.Errorf("launcher: account %q: token secret %s is not resolvable (check secret_sources)", acct.Name, acct.TokenSecret)
+			}
+			env[account.TokenEnv] = v
+		}
+	}
 	if _, ok := env["TERM"]; !ok { // explicit agent.env TERM wins; else default
 		env["TERM"] = "xterm-256color"
 	}
@@ -284,6 +398,11 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	// they pass through shellJoin's single-quoting (never string-concatenated
 	// post-quote — that would be an injection vector).
 	cmd := append([]string{cfg.Bin}, cfg.Args...)
+	if !acct.IsDefault && !boxed && acct.InheritPersonal {
+		if p := filepath.Join(acct.ConfigDir, account.MCPFileName); fileExists(p) {
+			cmd = append(cmd, "--mcp-config", p) // variadic: stays before flags/prompt
+		}
+	}
 	cmd = l.applyOptionFlags(opts, cmd)
 	if spec.Resume != "" {
 		cmd = append(cmd, "--resume", spec.Resume)
