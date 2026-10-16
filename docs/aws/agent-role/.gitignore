@@ -1,0 +1,6 @@
+# Local Terraform working files. .terraform.lock.hcl is NOT ignored: it pins the
+# provider hashes and is committed.
+.terraform/
+*.tfstate
+*.tfstate.*
+tf.plan
