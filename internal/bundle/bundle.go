@@ -45,6 +45,16 @@ var allowlist = []entry{
 	{rel: "commands", dir: true},
 }
 
+// AllowlistNames is the personal-config allowlist, shared with agent accounts
+// that inherit the default account's config.
+func AllowlistNames() []string {
+	out := make([]string, len(allowlist))
+	for i, e := range allowlist {
+		out[i] = e.rel
+	}
+	return out
+}
+
 type entry struct {
 	rel string
 	dir bool

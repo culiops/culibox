@@ -1,0 +1,204 @@
+package account
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func readJSON(t *testing.T, p string) map[string]any {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+func TestProvisionWiresStatusLine(t *testing.T) {
+	s, _ := newStore(t)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(s.ScriptPath())
+	if err != nil || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("script not extracted as 0755: %v %v", fi, err)
+	}
+	sl := readJSON(t, filepath.Join(r.ConfigDir, "settings.json"))["statusLine"].(map[string]any)
+	if sl["type"] != "command" || sl["command"] != s.ScriptPath() {
+		t.Fatalf("statusLine = %v", sl)
+	}
+}
+
+func TestProvisionRewritesScriptOnlyWhenBytesDiffer(t *testing.T) {
+	s, _ := newStore(t)
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(s.ScriptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same bytes: a second provision must leave the file (inode) alone.
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.Stat(s.ScriptPath())
+	if !os.SameFile(before, after) || !after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("script rewritten although its bytes did not change")
+	}
+	// Stale bytes (an older build's script): refreshed.
+	if err := os.WriteFile(s.ScriptPath(), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(s.ScriptPath()); string(b) != string(statuslineScript) {
+		t.Fatal("stale script not refreshed")
+	}
+}
+
+func TestProvisionKeepsForeignStatusLine(t *testing.T) {
+	s, data := newStore(t)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	if err := os.MkdirAll(cfg, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := `{"statusLine":{"type":"command","command":"/usr/bin/abtop"},"theme":"dark"}`
+	if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte(foreign), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude}); err != nil {
+		t.Fatal(err)
+	}
+	m := readJSON(t, filepath.Join(cfg, "settings.json"))
+	if m["statusLine"].(map[string]any)["command"] != "/usr/bin/abtop" || m["theme"] != "dark" {
+		t.Fatalf("foreign settings clobbered: %v", m)
+	}
+}
+
+func TestProvisionKeepsNonObjectStatusLine(t *testing.T) {
+	for _, sl := range []string{`"/usr/bin/abtop"`, `["x"]`, `null`, `7`} {
+		s, data := newStore(t)
+		cfg := filepath.Join(data, "accounts", "work", "claude")
+		if err := os.MkdirAll(cfg, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		in := `{"statusLine":` + sl + `,"theme":"dark"}`
+		if err := os.WriteFile(filepath.Join(cfg, "settings.json"), []byte(in), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude}); err != nil {
+			t.Fatal(err)
+		}
+		b, _ := os.ReadFile(filepath.Join(cfg, "settings.json"))
+		if string(b) != in {
+			t.Fatalf("statusLine %s: settings.json rewritten: %s", sl, b)
+		}
+	}
+}
+
+func TestProvisionInheritToggle(t *testing.T) {
+	s, _ := newStore(t)
+	// default config: CLAUDE.md + skills present, agents/commands absent
+	os.WriteFile(filepath.Join(s.defaultDir, "CLAUDE.md"), []byte("x"), 0o600)
+	os.MkdirAll(filepath.Join(s.defaultDir, "skills"), 0o700)
+	os.WriteFile(filepath.Join(s.defaultDir, ".credentials.json"), []byte("SECRET"), 0o600)
+	os.WriteFile(filepath.Join(filepath.Dir(s.defaultDir), ".claude.json"),
+		[]byte(`{"mcpServers":{"remote":{"url":"https://mcp.example/x"},"leaky":{"command":"sh","env":{"TOKEN":"s3cr3t-literal"}}},"oauthAccount":{"x":1}}`), 0o600)
+
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"CLAUDE.md", "skills"} {
+		if tgt, err := os.Readlink(filepath.Join(r.ConfigDir, n)); err != nil || tgt != filepath.Join(s.defaultDir, n) {
+			t.Fatalf("%s link = %q %v", n, tgt, err)
+		}
+	}
+	for _, n := range []string{"agents", "commands", ".credentials.json", ".claude.json"} {
+		if _, err := os.Lstat(filepath.Join(r.ConfigDir, n)); err == nil {
+			t.Fatalf("%s must not be created", n)
+		}
+	}
+	mcpPath := filepath.Join(r.ConfigDir, MCPFileName)
+	mcp := readJSON(t, mcpPath)
+	servers := mcp["mcpServers"].(map[string]any)
+	if _, ok := servers["remote"]; !ok || mcp["oauthAccount"] != nil {
+		t.Fatalf("mcp file = %v", mcp)
+	}
+	if _, ok := servers["leaky"]; ok {
+		t.Fatalf("server with literal env must be filtered out: %v", servers)
+	}
+	if raw, _ := os.ReadFile(mcpPath); strings.Contains(string(raw), "s3cr3t-literal") {
+		t.Fatal("a literal secret reached the written MCP file")
+	}
+	if m := readJSON(t, filepath.Join(r.ConfigDir, manifestName)); m["mcp"] != true {
+		t.Fatalf("manifest = %v", m)
+	}
+
+	// A file the user put there by hand must survive toggling off.
+	os.WriteFile(filepath.Join(r.ConfigDir, "mine.txt"), []byte("keep"), 0o600)
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"CLAUDE.md", "skills", MCPFileName} {
+		if _, err := os.Lstat(filepath.Join(r.ConfigDir, n)); err == nil {
+			t.Fatalf("%s should be removed when inherit is off", n)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(s.defaultDir, "skills")); err != nil {
+		t.Fatal("toggling off must never touch the default dir")
+	}
+	if _, err := os.Stat(filepath.Join(r.ConfigDir, "mine.txt")); err != nil {
+		t.Fatal("user file removed")
+	}
+}
+
+func TestProvisionNeverReplacesExistingEntry(t *testing.T) {
+	s, data := newStore(t)
+	os.MkdirAll(filepath.Join(s.defaultDir, "skills"), 0o700)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	os.MkdirAll(filepath.Join(cfg, "skills"), 0o700) // user's own skills dir
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(filepath.Join(cfg, "skills")); fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("existing skills dir replaced by a symlink")
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg, "skills")); err != nil {
+		t.Fatal("user's skills dir removed on toggle-off (not in manifest)")
+	}
+}
+
+func TestProvisionRefusesPlantedSymlinkOutsideDataDir(t *testing.T) {
+	s, data := newStore(t)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	if err := os.MkdirAll(cfg, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "victim.json")
+	if err := os.WriteFile(outside, []byte(`{"keep":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cfg, "settings.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude}); err == nil {
+		t.Fatal("provision followed a symlink out of the data dir")
+	}
+	if b, _ := os.ReadFile(outside); string(b) != `{"keep":true}` {
+		t.Fatalf("file outside the data dir was written: %s", b)
+	}
+}

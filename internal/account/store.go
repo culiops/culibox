@@ -22,9 +22,10 @@ const (
 type Store struct {
 	mu           sync.Mutex
 	root         *os.Root // dataDir
-	jsonRel      string   // accounts.json, relative to root
-	accountsRoot string   // <dataDir>/accounts (absolute, for reporting paths)
-	defaultDir   string   // the default account's config dir
+	dataDir      string
+	jsonRel      string // accounts.json, relative to root
+	accountsRoot string // <dataDir>/accounts (absolute, for reporting paths)
+	defaultDir   string // the default account's config dir
 	byName       map[string]Account
 }
 
@@ -44,6 +45,7 @@ func Open(path, dataDir, defaultDir string) (*Store, error) {
 	}
 	s := &Store{
 		root:         root,
+		dataDir:      dataDir,
 		jsonRel:      rel,
 		accountsRoot: filepath.Join(dataDir, accountsDir),
 		defaultDir:   defaultDir,
