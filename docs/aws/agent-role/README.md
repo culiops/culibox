@@ -62,3 +62,16 @@ Only a sandbox or lab account for now. **Do not apply this to a company or produ
 account until output redaction (M3c) ships:** with read access an agent can still pull data
 into its transcript that `ReadOnlyAccess` allows and the session policy does not deny
 (Lambda code URLs, ECR layers, Athena and Glue results, CloudWatch Logs, among others).
+
+## Known limits between sessions
+
+- **Within one box:** processes share a uid and can read each other's
+  `/proc/*/environ`, so one session can present another's broker token. Attribution
+  (the audit and CloudTrail `SourceIdentity`) is best-effort between sessions that share a
+  box (same binding).
+- **Shared workspace:** two sessions in the same project folder get separate boxes but
+  share that folder read-write. An unbound session, or one with a different binding, can
+  plant a file the bound session will run (for example under `.terraform/`, a git hook, a
+  script). That code runs inside the bound box, can read its token and credentials from the
+  environment, and so gets the bound session's access. Give a bound session its own
+  workspace.
