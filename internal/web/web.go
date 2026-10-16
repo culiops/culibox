@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
@@ -54,6 +55,13 @@ type Server struct {
 	// RateLimitsFile is the account 5h/weekly usage snapshot (produced by a
 	// statusLine hook); read fresh on every /api/meta. Empty → no limits in the UI.
 	RateLimitsFile string
+
+	// Accounts is the agent-account registry behind /api/accounts. Nil → the
+	// feature is off: no routes, and only the default account's quota is shown.
+	Accounts *account.Store
+	// SecretOK reports whether a secret NAME resolves (never its value); it only
+	// feeds an account's login_state.
+	SecretOK func(name string) bool
 
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
@@ -111,6 +119,10 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/sessions/", s.API.handleSession)
 	protected.HandleFunc("/api/profiles", s.handleProfiles)
 	protected.HandleFunc("/api/profiles/", s.handleProfile)
+	if s.Accounts != nil {
+		protected.HandleFunc("/api/accounts", s.handleAccounts)
+		protected.HandleFunc("/api/accounts/", s.handleAccount)
+	}
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/tokens", s.handleTokens)
 	protected.HandleFunc("/api/tokens/", s.handleToken)
@@ -123,10 +135,10 @@ func (s *Server) Handler() http.Handler {
 			"box_runtime":   s.BoxRuntime,
 			"analytics":     s.Analytics != nil,
 		}
-		// Account 5h/weekly usage, read fresh (tiny file). Omitted when absent so
-		// the client shows nothing rather than an empty widget.
-		if rl, ok := readRateLimits(s.RateLimitsFile); ok {
-			meta["rate_limits"] = rl
+		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
+		// account has data so the client shows nothing rather than an empty widget.
+		if m := s.rateLimitsByAccount(); len(m) > 0 {
+			meta["rate_limits"] = m
 		}
 		writeJSON(w, http.StatusOK, meta)
 	})

@@ -232,12 +232,12 @@ func TestHandleMetaRateLimits(t *testing.T) {
 		t.Fatalf("status %d", rec.Code)
 	}
 	var got struct {
-		RateLimits *RateLimits `json:"rate_limits"`
+		RateLimits map[string]RateLimits `json:"rate_limits"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if got.RateLimits == nil || got.RateLimits.FiveHour == nil || got.RateLimits.FiveHour.UsedPercentage != 80 {
+	if def := got.RateLimits["default"]; def.FiveHour == nil || def.FiveHour.UsedPercentage != 80 {
 		t.Fatalf("rate_limits missing/wrong: %+v", got.RateLimits)
 	}
 }

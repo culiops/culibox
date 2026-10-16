@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -56,7 +57,7 @@ var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // writeSpawnErr maps a Spawn or Restart failure. A refusal that names only
 // what the caller just sent (a workspace that cannot be contained, a first
-// message that was refused) or a containment remedy (ErrBoxUnavailable: a
+// message that was refused, an account that cannot run the profile) or a containment remedy (ErrBoxUnavailable: a
 // command or path, never an env value) is shown; anything else stays generic
 // and the detail goes to the server log only. None of these messages carries
 // the prompt text.
@@ -65,7 +66,9 @@ func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 	switch {
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable),
 		errors.Is(err, launcher.ErrBadPrompt),
-		errors.Is(err, launcher.ErrPromptUnsupported):
+		errors.Is(err, launcher.ErrPromptUnsupported),
+		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),
+		errors.Is(err, launcher.ErrAccountConflict):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		writeErr(w, http.StatusBadRequest, "could not start session")
@@ -86,6 +89,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Runtime   string         `json:"runtime"`   // "" = the agent's default (box)
 			Prompt    string         `json:"prompt"`    // first message (claude only; the launcher validates)
 			Replyable *bool          `json:"replyable"` // nil = the profile's default
+			Account   string         `json:"account"`   // "" = the profile's own account, else default
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.Agent == "" {
 			writeErr(w, http.StatusBadRequest, "agent required")
@@ -111,7 +115,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// a rejected first message) is shown instead — see writeSpawnErr.
 		info, err := a.Sessions.Spawn(launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
-			Prompt: req.Prompt, Replyable: req.Replyable,
+			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account,
 		})
 		if err != nil {
 			writeSpawnErr(w, req.Agent, err)

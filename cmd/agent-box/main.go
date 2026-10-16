@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/abduco"
+	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
@@ -218,6 +219,15 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	lnch := launcher.New(agents, resolver, cfg.Options)
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
 
+	// Agent accounts: accounts.json lives inside the data dir (the store writes it
+	// through os.Root). The default account is the agent's own config dir.
+	accts, err := account.Open(filepath.Join(dataDir, "accounts.json"), dataDir, bundle.DefaultSource())
+	if err != nil {
+		log.Fatalf("accounts: %v", err)
+	}
+	defer accts.Close()
+	lnch.SetAccounts(accts)
+
 	// Default working dir: config value if set, else $HOME.
 	defaultCwd := cfg.DefaultCwd
 	if defaultCwd == "" {
@@ -403,6 +413,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
 	// for profile-based claude sessions that survived a daemon restart.
@@ -427,6 +438,9 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		ShellBin:     config.DetectShell(),
 
 		RateLimitsFile: rateLimitsFile,
+
+		Accounts: accts,
+		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
 	}
 	configureServer(srv, cfg)
 
