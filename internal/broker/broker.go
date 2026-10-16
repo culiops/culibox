@@ -79,17 +79,33 @@ type Broker struct {
 	rec    Recorder
 	now    func() time.Time
 
-	mu         sync.Mutex
-	cache      map[string]cached
-	mintTimes  map[string][]time.Time
-	stats      map[string]*Stats
-	lastDenied map[Outcome]time.Time
+	mu        sync.Mutex
+	cache     map[string]cached
+	mintTimes map[string][]time.Time
+	stats     map[string]*Stats
+	denied    map[deniedKey]*deniedState
+	lastPrune time.Time
 }
+
+// deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
+// "" for denied_token (whose claimed id is never trusted).
+type deniedKey struct {
+	outcome Outcome
+	sid     string
+}
+
+// deniedState is the last row written for a key and how many were dropped since.
+type deniedState struct {
+	row        Row
+	suppressed int
+}
+
+const deniedWindow = time.Second
 
 func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 	return &Broker{secret: secret, lookup: lookup, minter: m, rec: rec, now: time.Now,
 		cache: map[string]cached{}, mintTimes: map[string][]time.Time{}, stats: map[string]*Stats{},
-		lastDenied: map[Outcome]time.Time{}}
+		denied: map[deniedKey]*deniedState{}}
 }
 
 // Token is the bearer token for one spawn of a session.
@@ -141,10 +157,9 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	// A nonce mismatch must NOT forget: the live session under this id is someone
 	// else's, and a stale token must not reset its cache or rate-limit window.
-	if !found || !sv.Live || !sv.Boxed || sv.AWS == nil || sv.Nonce == "" ||
-		subtle.ConstantTimeCompare([]byte(sv.Nonce), []byte(nonce)) != 1 {
-		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: OutcomeDeniedSession})
-		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding")
+	if reason := refusalReason(sv, found, nonce); reason != "" {
+		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: OutcomeDeniedSession, Error: reason})
+		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
 		return
 	}
 	bnd := *sv.AWS
@@ -232,18 +247,70 @@ func (b *Broker) allowMintLocked(sid string, now time.Time) bool {
 	return true
 }
 
-// recordDenied writes at most one row per outcome per second, so a looping or
-// hostile client cannot grow the audit store without bound.
+// recordDenied writes at most one row per (outcome, session) per second, so a
+// looping or hostile client cannot grow the audit store without bound, and a
+// probe of one session cannot mask another's row. Dropped requests are counted
+// and the count rides on the next row for that key ("+N similar refusals
+// suppressed"). A key that goes quiet with a pending count is flushed as a
+// summary row the next time the (at most once-a-second) prune runs.
 func (b *Broker) recordDenied(r Row) {
+	key := deniedKey{r.Outcome, r.SessionID}
+	var out []Row
 	b.mu.Lock()
-	last := b.lastDenied[r.Outcome]
-	if !last.IsZero() && r.Time.Sub(last) < time.Second {
-		b.mu.Unlock()
-		return
+	if b.now().Sub(b.lastPrune) >= deniedWindow {
+		b.lastPrune = b.now()
+		for k, st := range b.denied {
+			if r.Time.Sub(st.row.Time) >= deniedWindow && k != key {
+				if st.suppressed > 0 {
+					sum := st.row
+					sum.Time, sum.Error = r.Time, suppressedNote(st.row.Error, st.suppressed)
+					out = append(out, sum)
+				}
+				delete(b.denied, k)
+			}
+		}
 	}
-	b.lastDenied[r.Outcome] = r.Time
+	st, ok := b.denied[key]
+	switch {
+	case ok && r.Time.Sub(st.row.Time) < deniedWindow:
+		st.suppressed++
+	default:
+		if ok && st.suppressed > 0 {
+			r.Error = suppressedNote(r.Error, st.suppressed)
+		}
+		b.denied[key] = &deniedState{row: r}
+		out = append(out, r)
+	}
 	b.mu.Unlock()
-	b.record(r)
+	for _, row := range out {
+		b.record(row)
+	}
+}
+
+func suppressedNote(reason string, n int) string {
+	note := fmt.Sprintf("+%d similar refusals suppressed", n)
+	if reason == "" {
+		return note
+	}
+	return reason + "; " + note
+}
+
+// refusalReason names why a session may not mint ("" = it may). Stored in the
+// audit row only; the HTTP reply is deliberately uniform.
+func refusalReason(sv SessionView, found bool, nonce string) string {
+	switch {
+	case !found:
+		return "unknown session"
+	case !sv.Live:
+		return "not live"
+	case !sv.Boxed:
+		return "not boxed"
+	case sv.AWS == nil:
+		return "no binding"
+	case sv.Nonce == "" || subtle.ConstantTimeCompare([]byte(sv.Nonce), []byte(nonce)) != 1:
+		return "nonce mismatch"
+	}
+	return ""
 }
 
 func (b *Broker) record(r Row) {

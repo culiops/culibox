@@ -417,3 +417,108 @@ func TestStaleNonceDoesNotWipeTheLiveSessionsState(t *testing.T) {
 		t.Fatalf("rate-limit window was reset by a stale token: %d", w.Code)
 	}
 }
+
+func TestDeniedThrottleIsPerSession(t *testing.T) {
+	// Two different sessions refused in the same second each get their own row,
+	// and a flood on one cannot mask the other.
+	b, _, rec, _ := setup(t, map[string]SessionView{"a-1": live(), "b-1": live()})
+	for i := 0; i < 20; i++ {
+		call(b, Token(secret, "a-1", nonceB)) // stale nonce for a-1
+	}
+	call(b, Token(secret, "b-1", nonceB)) // stale nonce for b-1
+	got := map[string]int{}
+	for _, r := range rec.rows {
+		if r.Outcome != OutcomeDeniedSession {
+			t.Fatalf("unexpected row %+v", r)
+		}
+		got[r.SessionID]++
+	}
+	if len(rec.rows) != 2 || got["a-1"] != 1 || got["b-1"] != 1 {
+		t.Fatalf("rows by session: %v (total %d)", got, len(rec.rows))
+	}
+}
+
+func TestSuppressedRefusalsAreCountedOnTheNextRow(t *testing.T) {
+	b, _, rec, now := setup(t, nil)
+	const n = 7
+	for i := 0; i < n; i++ {
+		call(b, "garbage")
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Error != "" {
+		t.Fatalf("burst rows: %+v", rec.rows)
+	}
+	*now = now.Add(time.Second)
+	call(b, "garbage")
+	if len(rec.rows) != 2 || rec.rows[1].Error != fmt.Sprintf("+%d similar refusals suppressed", n-1) {
+		t.Fatalf("rows after the window: %+v", rec.rows)
+	}
+	*now = now.Add(time.Second)
+	call(b, "garbage") // nothing suppressed in between: no note
+	if len(rec.rows) != 3 || rec.rows[2].Error != "" {
+		t.Fatalf("count was not reset: %+v", rec.rows)
+	}
+}
+
+func TestSuppressedCountOnAQuietKeyIsFlushed(t *testing.T) {
+	b, _, rec, now := setup(t, nil)
+	for i := 0; i < 4; i++ {
+		call(b, "garbage")
+	}
+	*now = now.Add(5 * time.Second)
+	// a different refusal arrives later; the quiet key's count must not be lost
+	call(b, tokA("missing-1"))
+	var note string
+	for _, r := range rec.rows {
+		if r.Outcome == OutcomeDeniedToken && r.Error != "" {
+			note = r.Error
+		}
+	}
+	if note != "+3 similar refusals suppressed" {
+		t.Fatalf("flush note %q, rows %+v", note, rec.rows)
+	}
+}
+
+func TestThrottleStateIsPruned(t *testing.T) {
+	sessions := map[string]SessionView{}
+	b, _, _, now := setup(t, sessions)
+	for i := 0; i < 50; i++ {
+		call(b, Token(secret, fmt.Sprintf("s-%d", i), nonceA)) // 50 distinct unknown sessions
+	}
+	*now = now.Add(2 * time.Second)
+	call(b, "garbage")
+	if len(b.denied) > 2 {
+		t.Fatalf("throttle map holds %d keys after the window", len(b.denied))
+	}
+}
+
+func TestRefusalReasonsAreAuditedButTheReplyIsUniform(t *testing.T) {
+	notLive, host, unbound := live(), live(), live()
+	notLive.Live, host.Boxed, unbound.AWS = false, false, nil
+	stale := live()
+	stale.Nonce = nonceB
+	b, _, rec, now := setup(t, map[string]SessionView{"dead-1": notLive, "host-1": host, "plain-1": unbound, "stale-1": stale})
+	cases := []struct{ id, want string }{
+		{"missing-1", "unknown session"}, {"dead-1", "not live"}, {"host-1", "not boxed"},
+		{"plain-1", "no binding"}, {"stale-1", "nonce mismatch"},
+	}
+	var bodies []string
+	for _, c := range cases {
+		w := call(b, tokA(c.id))
+		if w.Code != 403 {
+			t.Fatalf("%s: %d", c.id, w.Code)
+		}
+		bodies = append(bodies, w.Body.String())
+		*now = now.Add(2 * time.Second)
+	}
+	for i, c := range cases {
+		if rec.rows[i].SessionID != c.id || rec.rows[i].Error != c.want {
+			t.Errorf("%s: row %+v, want reason %q", c.id, rec.rows[i], c.want)
+		}
+		if bodies[i] != bodies[0] {
+			t.Errorf("%s: 403 body differs from the others: %q vs %q", c.id, bodies[i], bodies[0])
+		}
+	}
+	if len(rec.rows) != len(cases) {
+		t.Fatalf("rows %d", len(rec.rows))
+	}
+}
