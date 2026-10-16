@@ -350,7 +350,7 @@ func TestRegistryCwdGuardAcceptsOnlyTheSameRepository(t *testing.T) {
 	}
 	for _, c := range cases {
 		writeReg(t, home, 7, regJSONCwd(7, "aaaa-1", "5000", c.regCwd))
-		if _, ok := readClaudeRegistry(home, 7, ps, main); ok != c.want {
+		if _, ok := readClaudeRegistry(filepath.Join(home, ".claude"), 7, ps, main); ok != c.want {
 			t.Errorf("%s: accepted=%v want %v", c.name, ok, c.want)
 		}
 	}
@@ -389,5 +389,52 @@ func TestStartMatches(t *testing.T) {
 				t.Fatalf("startMatches(%q, %q, %q)=%v want %v", c.goos, c.recorded, c.ours, got, c.want)
 			}
 		})
+	}
+}
+
+// TestLocateFollowsSessionConfigDir: a host session run under an agent account
+// has its registry and transcripts under the account's config dir. A newer
+// transcript for the same cwd under the default ~/.claude must not be
+// attributed to it, via the registry path or the heuristic fallback.
+func TestLocateFollowsSessionConfigDir(t *testing.T) {
+	m, home := newLocatorManager(t) // decoy: default ~/.claude holds A (s1's registry) and a newer B
+	cd := filepath.Join(t.TempDir(), "acct", "claude")
+	sessions := filepath.Join(cd, "sessions")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sessions, "101.json"), []byte(regJSON(101, "acct-1", "5000", "idle")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proj := filepath.Join(cd, "projects", projectSlug(locCwd))
+	if err := os.MkdirAll(proj, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(proj, "acct-1.jsonl")
+	body := `{"message":{"role":"assistant","model":"model-acct-1","content":[{"type":"text","text":"from account"}],"usage":{"input_tokens":1}}}` + "\n"
+	if err := os.WriteFile(want, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-30 * time.Minute)
+	if err := os.Chtimes(want, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// The decoys under <home>/.claude/projects/<slug>/ are newer than the account's transcript.
+	writeTx(t, home, locCwd, "decoy-9", "from decoy", time.Now())
+
+	m.sessions["s1"].ConfigDir = cd
+	if l := m.locate("s1"); l.path != want || l.reg == nil {
+		t.Fatalf("registry path: locate = %q reg=%v, want %q", l.path, l.reg, want)
+	}
+	if got := peekText(t, m, "s1"); got != "from account" {
+		t.Errorf("s1 peek=%q want %q", got, "from account")
+	}
+
+	// No account registry entry: the heuristic must still stay inside ConfigDir.
+	if err := os.Remove(filepath.Join(sessions, "101.json")); err != nil {
+		t.Fatal(err)
+	}
+	if l := m.locate("s1"); l.reg != nil || l.path != want {
+		t.Fatalf("heuristic path: locate = %q reg=%v, want %q", l.path, l.reg, want)
 	}
 }

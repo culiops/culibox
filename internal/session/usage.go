@@ -55,10 +55,12 @@ func isAgentBin(bin string) bool {
 	return false
 }
 
-// transcriptPath finds the newest *.jsonl for cwd under <home>/.claude/projects/<slug>/
+// transcriptPath finds the newest *.jsonl for cwd under <claudeDir>/projects/<slug>/
 // whose mtime >= created; falls back to the newest overall. ok=false if none.
-func transcriptPath(cwd, home string, created time.Time) (string, bool) {
-	dir := filepath.Join(home, ".claude", "projects", projectSlug(cwd))
+// claudeDir is the .claude directory itself (the default ~/.claude, an agent
+// account's config dir, or a box's per-box .claude), not a home.
+func transcriptPath(cwd, claudeDir string, created time.Time) (string, bool) {
+	dir := filepath.Join(claudeDir, "projects", projectSlug(cwd))
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return "", false

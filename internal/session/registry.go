@@ -132,7 +132,8 @@ func readRegistryFile(path string) ([]byte, bool) {
 // (agent-box doctor): the same no-follow, FIFO-safe, size-capped read.
 func ReadRegistryFile(path string) ([]byte, bool) { return readRegistryFile(path) }
 
-// readClaudeRegistry returns the registry entry for pid, only if it is provably
+// readClaudeRegistry returns the registry entry for pid (read from
+// <claudeDir>/sessions, the .claude dir itself), only if it is provably
 // THAT process's, for THIS session: the pid field matches, procStart names the
 // live process's starttime (a recycled pid has a different one), and the
 // entry's cwd matches the session's own cwd (cleaned) — pid alone is not
@@ -140,11 +141,11 @@ func ReadRegistryFile(path string) ([]byte, bool) { return readRegistryFile(path
 // second, independent guard against a pid that has been reused for an
 // unrelated claude invocation in a different directory. Any failure is
 // ok=false — the registry may improve attribution, never break it.
-func readClaudeRegistry(home string, pid int, procStart procStartFunc, cwd string) (claudeRegEntry, bool) {
-	if home == "" || pid <= 0 || procStart == nil {
+func readClaudeRegistry(claudeDir string, pid int, procStart procStartFunc, cwd string) (claudeRegEntry, bool) {
+	if claudeDir == "" || pid <= 0 || procStart == nil {
 		return claudeRegEntry{}, false
 	}
-	b, ok := readRegistryFile(filepath.Join(home, ".claude", "sessions", strconv.Itoa(pid)+".json"))
+	b, ok := readRegistryFile(filepath.Join(claudeDir, "sessions", strconv.Itoa(pid)+".json"))
 	if !ok {
 		return claudeRegEntry{}, false
 	}
@@ -218,11 +219,11 @@ func (m *Manager) locate(id string) located {
 	m.mu.Lock()
 	s := m.sessions[id]
 	home, stateDir, backend, procStart := m.home, m.stateDir, m.backend, m.procStart
-	var bin, cwd, box string
+	var bin, cwd, box, configDir string
 	var created time.Time
 	var exited bool
 	if s != nil {
-		bin, cwd, box, created = s.Bin, s.Cwd, s.Box, s.Created
+		bin, cwd, box, configDir, created = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created
 		s.mu.Lock()
 		exited = s.status == statusExited
 		s.mu.Unlock()
@@ -232,10 +233,24 @@ func (m *Manager) locate(id string) located {
 		return located{}
 	}
 	l := located{claude: true, created: created, cwd: cwd, boxed: box != ""}
-	if box == "" && home != "" && !exited {
+	// The .claude dir this session's registry and transcripts live in: the
+	// default ~/.claude, an agent account's config dir (host tier only), or
+	// the per-box .claude. Empty only when nothing is known (no home, no
+	// account dir, no box state); never a relative path.
+	var claudeDir string
+	if home != "" {
+		claudeDir = filepath.Join(home, ".claude")
+	}
+	if configDir != "" {
+		claudeDir = configDir
+	}
+	if box != "" && stateDir != "" {
+		claudeDir = filepath.Join(stateDir, "boxstate", box, ".claude")
+	}
+	if box == "" && claudeDir != "" && !exited {
 		if pr, ok := backend.(PidResolver); ok {
 			if pid, ok := pr.InnerPid(id); ok {
-				if e, ok := readClaudeRegistry(home, pid, procStart, cwd); ok {
+				if e, ok := readClaudeRegistry(claudeDir, pid, procStart, cwd); ok {
 					l.reg = &e
 					m.noteClaudeSessionID(s, id, e.SessionID)
 					// 2.1.286 moves the transcript into the worktree's project dir
@@ -243,7 +258,7 @@ func (m *Manager) locate(id string) located {
 					// the session is now, then in the spawn dir. Named by sessionId
 					// either way, so neither can be a sibling's file.
 					for _, dir := range []string{e.Cwd, cwd} {
-						p := filepath.Join(home, ".claude", "projects", projectSlug(filepath.Clean(dir)), e.SessionID+".jsonl")
+						p := filepath.Join(claudeDir, "projects", projectSlug(filepath.Clean(dir)), e.SessionID+".jsonl")
 						if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
 							l.path = p
 							break
@@ -258,14 +273,10 @@ func (m *Manager) locate(id string) located {
 			}
 		}
 	}
-	base := home
-	if box != "" && stateDir != "" {
-		base = filepath.Join(stateDir, "boxstate", box)
-	}
-	if base == "" {
+	if claudeDir == "" {
 		return l
 	}
-	if p, ok := transcriptPath(cwd, base, created); ok {
+	if p, ok := transcriptPath(cwd, claudeDir, created); ok {
 		l.path = p
 	}
 	return l
