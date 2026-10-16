@@ -46,6 +46,14 @@ type sessionMeta struct {
 	// ClaudeSessionID is Claude Code's own conversation id, as last validated
 	// through its live registry (follows /clear). Restart resumes it.
 	ClaudeSessionID string `json:"claude_session_id,omitempty"`
+	// Account is the agent account the session runs under; empty = default.
+	// Restart re-spawns under it, so its credentials and transcripts match.
+	Account string `json:"account,omitempty"`
+	// ConfigDir is that account's config dir, recorded only for a host-tier
+	// session under a non-default account (usage and peek read transcripts
+	// from it). Stored rather than recomputed so it survives the account
+	// being edited or removed while the session still runs.
+	ConfigDir string `json:"config_dir,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
