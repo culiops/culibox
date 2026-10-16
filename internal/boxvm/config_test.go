@@ -13,7 +13,7 @@ import (
 
 func testCfg() Config {
 	return Config{Root: "/Users/a/.local/share/agent-box", Home: "/Users/a",
-		ColimaBin: "/opt/homebrew/bin/colima", DockerBin: "/opt/homebrew/bin/docker", CPUs: 4, MemoryGiB: 4}
+		ColimaBin: "/opt/homebrew/bin/colima", DockerBin: "/opt/homebrew/bin/docker", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071}
 }
 
 func TestPathsLiveUnderTheDataRoot(t *testing.T) {
@@ -190,12 +190,15 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 
 func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
 	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d")
-	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8}
+	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8, BrokerPort: 9071}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
-	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 {
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 {
 		t.Fatalf("defaults: %+v", d)
+	}
+	if c := ConfigFor(config.Config{BrokerPort: 9100}, "/data", "/home/a", "/c", "/d"); c.BrokerPort != 9100 {
+		t.Fatalf("broker_port from config: %+v", c)
 	}
 }
 
@@ -239,7 +242,7 @@ func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 		}
 	}
 	getent := "#!/bin/sh\n[ \"$2\" = host.lima.internal ] && echo '" + gw + "       STREAM host.lima.internal'\n"
-	for name, body := range map[string]string{"iptables": fakeIptables, "getent": getent, "provision.sh": provisionScript} {
+	for name, body := range map[string]string{"iptables": fakeIptables, "getent": getent, "provision.sh": provisionScript(9071)} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -265,7 +268,9 @@ func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 // the chain was in.
 func TestProvisionLetsDNSThroughBeforeTheGatewayDrop(t *testing.T) {
 	gw := "192.168.5.9"
+	// The broker's TCP port is re-inserted last, so it sits above DNS and the DROP.
 	want := []string{
+		"-d " + gw + " -p tcp --dport 9071 -j RETURN",
 		"-d " + gw + " -p udp --dport 53 -j RETURN",
 		"-d " + gw + " -j DROP",
 	}
@@ -285,6 +290,50 @@ func TestProvisionLetsDNSThroughBeforeTheGatewayDrop(t *testing.T) {
 		}
 		if strings.Join(got, "\n") != strings.Join(exp, "\n") {
 			t.Errorf("%s: chain\n%s\nwant\n%s", name, strings.Join(got, "\n"), strings.Join(exp, "\n"))
+		}
+	}
+}
+
+func TestProvisionLetsTheBrokerPortThroughBeforeTheGatewayDrop(t *testing.T) {
+	gw := "192.168.5.2"
+	broker := "-d " + gw + " -p tcp --dport 9071 -j RETURN"
+	dns := "-d " + gw + " -p udp --dport 53 -j RETURN"
+	drop := "-d " + gw + " -j DROP"
+	for name, seed := range map[string][]string{
+		"fresh boot":             nil,
+		"provisioned before M3":  {dns, drop},
+		"broker rule below DROP": {dns, drop, broker},
+	} {
+		got := runProvision(t, gw, seed, 2)
+		want := []string{broker, dns, drop}
+		if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, want)
+		}
+	}
+	if strings.Contains(provisionScript(9071), "tcp --dport 53") {
+		t.Fatal("tcp/53 must stay dropped")
+	}
+}
+
+func TestProvisionUsesTheConfiguredBrokerPort(t *testing.T) {
+	gw := "192.168.5.2"
+	got := runProvision(t, gw, nil, 1)
+	if got[0] != "-d "+gw+" -p tcp --dport 9071 -j RETURN" {
+		t.Fatalf("default port: %q", got)
+	}
+	y, err := Config{Root: "/Users/a/.local/share/agent-box", Home: "/Users/a", ColimaBin: "/c", DockerBin: "/d",
+		CPUs: 4, MemoryGiB: 4, BrokerPort: 9100}.YAML()
+	if err != nil || !strings.Contains(string(y), "--dport 9100 -j RETURN") || strings.Contains(string(y), "9071") {
+		t.Fatalf("yaml must carry the configured port: %v\n%s", err, y)
+	}
+}
+
+func TestValidateRefusesABrokerPortOutOfRange(t *testing.T) {
+	for _, p := range []int{0, -1, 65536} {
+		c := testCfg()
+		c.BrokerPort = p
+		if c.Validate() == nil {
+			t.Errorf("broker port %d accepted", p)
 		}
 	}
 }

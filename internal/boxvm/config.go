@@ -32,6 +32,9 @@ type Config struct {
 	DockerBin string
 	CPUs      int
 	MemoryGiB int
+	// BrokerPort is the Mac-loopback TCP port of the credential broker; the
+	// provision script lets boxes through the gateway DROP on exactly this port.
+	BrokerPort int
 }
 
 // ConfigFor is the VM config for an instance: paths from the data root and
@@ -39,7 +42,7 @@ type Config struct {
 // a Config, so doctor and box setup cannot disagree about the VM they mean.
 func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string) Config {
 	cpus, mem := cfg.BoxVMSize()
-	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem}
+	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem, BrokerPort: cfg.BrokerPortOrDefault()}
 }
 
 func (c Config) ColimaHome() string      { return filepath.Join(c.Root, "vm") }
@@ -74,7 +77,11 @@ func (c Config) Mounts() []string {
 // whole broke DNS in every box and in the image build), so udp/53 passes.
 // DOCKER-USER is the chain docker evaluates first and never rewrites; creating
 // it here is harmless if docker has not started yet (docker keeps it).
-const provisionScript = `#!/bin/sh
+func provisionScript(brokerPort int) string {
+	return provisionBase + fmt.Sprintf(provisionBroker, brokerPort, brokerPort)
+}
+
+const provisionBase = `#!/bin/sh
 # agent-box: boxes must not reach the Mac's loopback through the host gateway.
 set -eu
 # IPv6: the default docker bridge has no IPv6, so the IPv4 host-gateway DROP is the whole rule.
@@ -91,6 +98,15 @@ iptables -w -C DOCKER-USER -d "$gw" -j DROP 2>/dev/null || iptables -w -I DOCKER
 # DROP on every run, so the order always holds.
 while iptables -w -D DOCKER-USER -d "$gw" -p udp --dport 53 -j RETURN 2>/dev/null; do :; done
 iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
+`
+
+// provisionBroker is its own constant, formatted with only the broker port, so
+// a stray % in provisionBase can never break it. The credential broker listens
+// on the Mac's loopback; boxes reach it through the gateway on exactly one TCP
+// port, re-inserted above the DROP on every boot like DNS.
+const provisionBroker = `# credential broker (loopback on the Mac): one TCP port through the gateway DROP.
+while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
+iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport %d -j RETURN
 `
 
 // yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
@@ -141,6 +157,9 @@ func (c Config) Validate() error {
 			return fmt.Errorf("the box VM needs an absolute %s binary path, got %q", b.what, b.path)
 		}
 	}
+	if c.BrokerPort <= 0 || c.BrokerPort > 65535 {
+		return fmt.Errorf("the box VM needs a broker port between 1 and 65535, got %d", c.BrokerPort)
+	}
 	if c.CPUs <= 0 || c.MemoryGiB <= 0 {
 		return fmt.Errorf("the box VM needs positive cpus and memory, got %d and %d GiB", c.CPUs, c.MemoryGiB)
 	}
@@ -167,7 +186,7 @@ func (c Config) YAML() ([]byte, error) {
 		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: true\n", m)
 	}
 	b.WriteString("provision:\n  - mode: system\n    script: |\n")
-	for _, line := range strings.Split(strings.TrimRight(provisionScript, "\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(provisionScript(c.BrokerPort), "\n"), "\n") {
 		b.WriteString("      " + line + "\n")
 	}
 	return []byte(b.String()), nil
