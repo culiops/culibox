@@ -70,6 +70,8 @@ func (c Config) Mounts() []string {
 // provisionScript runs as root on every VM start. lima's user-mode network maps
 // the host gateway (host.lima.internal, 192.168.5.2 in the spike) to the Mac's
 // 127.0.0.1, so without this a box reaches every loopback service on the Mac.
+// The same address is the boxes' nameserver (measured 2026-10-16: dropping it
+// whole broke DNS in every box and in the image build), so port 53 passes.
 // DOCKER-USER is the chain docker evaluates first and never rewrites; creating
 // it here is harmless if docker has not started yet (docker keeps it).
 const provisionScript = `#!/bin/sh
@@ -80,6 +82,13 @@ gw=$(getent ahostsv4 host.lima.internal | awk 'NR==1 {print $1}')
 [ -n "$gw" ] || gw=192.168.5.2
 iptables -N DOCKER-USER 2>/dev/null || true
 iptables -C DOCKER-USER -d "$gw" -j DROP 2>/dev/null || iptables -I DOCKER-USER 1 -d "$gw" -j DROP
+# DNS is the one exception: docker hands boxes the gateway as their nameserver
+# (the VM's systemd-resolved uplink), and port 53 there is lima's own resolver.
+# Removed and re-inserted above the DROP on every run, so the order always holds.
+for p in udp tcp; do
+  while iptables -D DOCKER-USER -d "$gw" -p "$p" --dport 53 -j RETURN 2>/dev/null; do :; done
+  iptables -I DOCKER-USER 1 -d "$gw" -p "$p" --dport 53 -j RETURN
+done
 `
 
 // yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
