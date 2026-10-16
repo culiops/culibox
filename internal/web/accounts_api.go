@@ -73,7 +73,9 @@ func (s *Server) handleAccount(w http.ResponseWriter, r *http.Request) {
 			TokenSecret     string `json:"token_secret"`
 			InheritPersonal bool   `json:"inherit_personal"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+		dec.DisallowUnknownFields() // provider/name/config_dir are immutable: an error, not silently ignored
+		if err := dec.Decode(&body); err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid account json")
 			return
 		}

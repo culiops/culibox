@@ -60,6 +60,15 @@ func TestAccountsCRUD(t *testing.T) {
 	if rec := doJSON(t, s.handleAccount, "PUT", "/api/accounts/work", `{"token_secret":"WORK_TOK","inherit_personal":true}`); rec.Code != 200 {
 		t.Fatalf("update %d %s", rec.Code, rec.Body)
 	}
+	rec = doJSON(t, s.handleAccounts, "GET", "/api/accounts", "")
+	list = nil
+	json.Unmarshal(rec.Body.Bytes(), &list)
+	if len(list) != 2 || list[1]["token_secret"] != "WORK_TOK" || list[1]["inherit_personal"] != true {
+		t.Fatalf("PUT values not reflected by GET: %v", list)
+	}
+	if rec := doJSON(t, s.handleAccount, "PUT", "/api/accounts/work", `{"provider":"codex","token_secret":"","inherit_personal":false}`); rec.Code != 400 {
+		t.Fatalf("PUT with an unknown field must be 400, got %d", rec.Code)
+	}
 	if rec := doJSON(t, s.handleAccount, "PUT", "/api/accounts/default", `{}`); rec.Code != 400 {
 		t.Fatalf("default editable: %d", rec.Code)
 	}
