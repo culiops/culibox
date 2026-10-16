@@ -283,6 +283,33 @@ func TestFileDirsCoversEveryDirTheKernelWalks(t *testing.T) {
 			links: []link{{"lnk", "real/sub", true}}, files: []string{"real/x/config.json", "x/config.json"},
 			start: "lnk/../x/config.json", skipOracle: true,
 			mustInclude: []string{"x", "real/x"}},
+		// Dangling directory link: the chain ends where the missing part would
+		// be created, which is behind the link, not beside it.
+		{name: "dangling dir link in the middle of a chain (A)",
+			dirs:        []string{"home/a", "elsewhere"},
+			links:       []link{{"home/d", "elsewhere/missing", true}, {"home/a/config.json", "../d/x", false}},
+			start:       "home/a/config.json",
+			mustInclude: []string{"home/a", "home", "elsewhere"}},
+		// The #130 setup before the dotfiles target exists.
+		{name: "config dir is a link to a target not created yet (B)",
+			dirs:        []string{"home/.config", "dotfiles"},
+			links:       []link{{"home/.config/agent-box", "dotfiles/ab", true}},
+			start:       "home/.config/agent-box/config.json",
+			mustInclude: []string{"home/.config", "dotfiles"}},
+		// Directory links inside a directory path: each link's parent is a
+		// place the link can be swapped.
+		{name: "nested directory links in the path (C)",
+			dirs: []string{"data/cfg", "data/x2", "data/ab"},
+			links: []link{{".config", "data/cfg", true}, {"data/cfg/x", "data/x2", true},
+				{"data/x2/agent-box", "data/ab", true}},
+			files: []string{"data/ab/config.json"}, start: ".config/x/agent-box/config.json",
+			mustInclude: []string{"", "data/cfg", "data/x2", "data/ab"}},
+		{name: "file link through three directory links (D)",
+			dirs: []string{"a", "m/p1", "m/p2", "m/p3"},
+			links: []link{{"a/config.json", "l1/l2/l3/t", false}, {"a/l1", "m/p1", true},
+				{"m/p1/l2", "m/p2", true}, {"m/p2/l3", "m/p3", true}},
+			files: []string{"m/p3/t"}, start: "a/config.json",
+			mustInclude: []string{"a", "m/p1", "m/p2", "m/p3"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -324,5 +351,33 @@ func TestFileDirsCoversEveryDirTheKernelWalks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A symlink loop must end the walk (the kernel gives up after 40 links) and
+// still protect the directory the loop sits in.
+func TestFileDirsTerminatesOnASymlinkLoop(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(root, "a")
+	if err := os.Mkdir(a, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("config.json", filepath.Join(a, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "l2"), filepath.Join(a, "d")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "a", "d"), filepath.Join(root, "l2")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{filepath.Join(a, "config.json"), filepath.Join(a, "d", "config.json")} {
+		got := FileDirs(f)
+		if !slices.Contains(got, a) {
+			t.Errorf("FileDirs(%s) must protect %s even on a loop; got %q", f, a, got)
+		}
 	}
 }

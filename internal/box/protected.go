@@ -83,11 +83,12 @@ func DedupeProtected(dirs []ProtectedDir) []ProtectedDir {
 //
 //  1. the hops as SPELLED: a relative target joined onto the link's own
 //     directory as text (where a link can be swapped from a parent as written);
-//  2. the hops as the KERNEL walks them: each directory resolved with its own
-//     symlinks applied, and a relative target taken from that REAL directory,
-//     with ".." applied to the already-resolved prefix, never lexically;
-//  3. when a symlink hop's target does not exist, the deepest directory that
-//     does, since creating the missing part there completes the chain.
+//  2. the hops as the KERNEL walks them (walkChain): every component resolved
+//     one at a time, the real parent of each link followed (directory links
+//     too) and of each hop's final name, a relative target taken from that
+//     REAL directory, ".." applied to the resolved prefix, never lexically;
+//  3. where the chain breaks, the real directory in which the missing part
+//     would be created, found by following dangling links too.
 func FileDirs(file string) []string {
 	p, err := filepath.Abs(file)
 	if err != nil {
@@ -126,11 +127,8 @@ func FileDirs(file string) []string {
 	return uniq
 }
 
-// kernelWalkDirs is view 2 and 3 of FileDirs. raw is never cleaned: Clean
-// would fold "link/.." away as text, landing in a directory the kernel never
-// reads. A first hop that is a plain missing file adds nothing (its spelled
-// directory is the whole answer); every hop that is a symlink, or follows one,
-// adds its resolved directory.
+// kernelWalkDirs is views 2 and 3 of FileDirs: the directories walkChain
+// records for file, taken from the raw (never cleaned) path.
 func kernelWalkDirs(file string) []string {
 	raw := file
 	if !filepath.IsAbs(raw) {
@@ -140,68 +138,87 @@ func kernelWalkDirs(file string) []string {
 		}
 		raw = wd + string(filepath.Separator) + raw
 	}
-	var out []string
-	for hop := 0; hop < 40; hop++ {
-		i := strings.LastIndex(raw, string(filepath.Separator))
-		if i < 0 {
-			break
-		}
-		dirPart, name := raw[:i], raw[i+1:]
-		if name == "" || name == "." || name == ".." {
-			break
-		}
-		if dirPart == "" {
-			dirPart = string(filepath.Separator)
-		}
-		dir, err := filepath.EvalSymlinks(dirPart)
-		if err != nil {
-			if hop > 0 {
-				out = append(out, deepestExisting(dirPart))
-			}
-			break
-		}
-		if dir, err = filepath.Abs(dir); err != nil {
-			break
-		}
-		fi, err := os.Lstat(filepath.Join(dir, name))
-		if err == nil || hop > 0 {
-			out = append(out, dir)
-		}
-		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
-			break
-		}
-		t, err := os.Readlink(filepath.Join(dir, name))
-		if err != nil {
-			break
-		}
-		if filepath.IsAbs(t) {
-			raw = t
-		} else {
-			raw = dir + string(filepath.Separator) + t
-		}
-	}
-	return out
+	dirs, _ := walkChain(raw)
+	return dirs
 }
 
-// deepestExisting resolves the longest existing prefix of p. p is cut at its
-// last separator as text, not cleaned, so a ".." after a symlinked component
-// keeps the kernel's meaning.
-func deepestExisting(p string) string {
-	for {
-		if r, err := filepath.EvalSymlinks(p); err == nil {
-			if abs, err := filepath.Abs(r); err == nil {
-				return abs
+// maxLinks caps the symlinks one walk follows, like the kernel's ELOOP limit.
+const maxLinks = 40
+
+// walkChain resolves raw one component at a time, as the kernel does, and
+// returns the real directories a box could write to change what it reaches:
+//
+//   - the real parent of every symlink it follows, directory links included
+//     (that is where the link can be swapped);
+//   - the real parent of the final name of the path and of each spliced link
+//     target (where the file or the next link lives);
+//   - when a component is missing after a link was followed, or a directory
+//     component is missing at all, the real directory it would be created in
+//     (a dangling link does not end the chain: creating its target completes
+//     it). A plain missing final file with no link adds nothing: its spelled
+//     directory is already protected.
+//
+// ".." applies to the already-resolved directory, never lexically. end is the
+// real path reached, or the real directory the first missing component would
+// be created in. A loop of more than maxLinks links, or an unreadable
+// component, records the directory reached and stops, which fails closed.
+func walkChain(raw string) (dirs []string, end string) {
+	sep := string(filepath.Separator)
+	split := func(p string) []string {
+		var c []string
+		for _, n := range strings.Split(p, sep) {
+			if n != "" && n != "." {
+				c = append(c, n)
 			}
-			return r
 		}
-		i := strings.LastIndex(p, string(filepath.Separator))
-		if i < 0 {
-			return p
+		return c
+	}
+	resolved := sep
+	queue := split(raw)
+	links := 0
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if name == ".." {
+			resolved = filepath.Dir(resolved)
+			continue
 		}
-		if p = p[:i]; p == "" {
-			p = string(filepath.Separator)
+		last := len(queue) == 0
+		cand := filepath.Join(resolved, name)
+		fi, err := os.Lstat(cand)
+		switch {
+		case err != nil:
+			if !os.IsNotExist(err) || !last || links > 0 {
+				dirs = append(dirs, resolved)
+			}
+			return dirs, resolved
+		case fi.Mode()&os.ModeSymlink != 0:
+			links++
+			dirs = append(dirs, resolved)
+			t, err := os.Readlink(cand)
+			if links > maxLinks || err != nil {
+				return dirs, resolved
+			}
+			if filepath.IsAbs(t) {
+				resolved = sep
+			}
+			queue = append(split(t), queue...)
+		default:
+			if last {
+				dirs = append(dirs, resolved)
+			}
+			resolved = cand
 		}
 	}
+	return dirs, resolved
+}
+
+// deepestExisting follows p link by link and returns where it ends: its real
+// path, or the real directory in which its first missing component would be
+// created.
+func deepestExisting(p string) string {
+	_, end := walkChain(p)
+	return end
 }
 
 // ProtectedOverlap reports why workspace cannot be boxed because it is,
