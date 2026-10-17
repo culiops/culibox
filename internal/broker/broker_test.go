@@ -450,7 +450,17 @@ func TestNothingSecretLeaksIntoErrorsOrAuditRows(t *testing.T) {
 	}
 	etok := tokA("aws-1")
 	emac := etok[strings.LastIndexByte(etok, '.')+1:]
+	var elevRows []any
 	for _, r := range erec.rows {
+		elevRows = append(elevRows, r)
+	}
+	for _, r := range erec.appr {
+		elevRows = append(elevRows, r)
+	}
+	if len(erec.rows) == 0 || len(erec.appr) == 0 {
+		t.Fatalf("want mint and approval rows, got %d and %d", len(erec.rows), len(erec.appr))
+	}
+	for _, r := range elevRows {
 		j, _ := json.Marshal(r)
 		for _, bad := range []string{emac, nonceA, "ASIAFAKE", `"s"`, `"t"`} {
 			if strings.Contains(string(j), bad) {

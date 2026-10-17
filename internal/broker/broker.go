@@ -216,9 +216,6 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		if c, ok := b.cache[sid]; ok && c.nonce == nonce && c.scopeKey == p.key &&
 			c.creds.Expiration.Sub(now) > refreshMargin {
 			st.CacheHits++
-			if p.elevated { // a window re-granted since this credential was minted must still know of it
-				b.noteElevatedExp(sid, c.creds.Expiration)
-			}
 			b.mu.Unlock()
 			writeCreds(w, c.creds)
 			return
@@ -283,6 +280,8 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			e := b.elev[sid]
 			var why string
 			switch {
+			case !c.Expiration.After(now): // an absent or past Expiration proves nothing about the bound
+				why = "elevated credential has no usable expiration; minted read-only instead"
 			case c.Expiration.After(p.until):
 				why = "elevated credential would outlive the window; minted read-only instead"
 			case e == nil || e.gen != p.gen:
@@ -307,6 +306,8 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		writeCreds(w, c)
 		return
 	}
+	// Unreachable: attempt 1 is read-only and always returns. Fail closed if that changes.
+	b.fail(w, base, OutcomeSTSError, http.StatusBadGateway, "no credential could be minted")
 }
 
 // mintPlan is what one mint attempt will ask STS for. key is the cache key: the
@@ -329,7 +330,9 @@ func (b *Broker) planLocked(sid string, bnd config.AWSBinding, now time.Time, fo
 	}
 	if e, ok := b.elevatedLocked(sid, now); ok {
 		p.elevated, p.until, p.gen = true, e.until, e.gen
-		p.key += "/e" + strconv.FormatInt(e.until.Unix(), 10)
+		// gen too: Drop leaves the cache alone, so a later window ending in the
+		// same second must not hit the dropped window's credential.
+		p.key += "/e" + strconv.FormatInt(e.until.Unix(), 10) + "." + strconv.FormatUint(e.gen, 10)
 		p.role = bnd.Elevate.RoleARN
 	}
 	return p

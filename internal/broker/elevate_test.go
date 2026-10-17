@@ -709,3 +709,45 @@ func TestExtendDuringMintFallsBackToReadOnly(t *testing.T) {
 		t.Fatalf("a discarded credential must not count as handed out: %v", got)
 	}
 }
+
+// Drop leaves the cache alone; a later window that ends in the same second as
+// the dropped one must not be served the dropped window's credential.
+func TestNewWindowWithTheSameEndDoesNotReuseTheDroppedCredential(t *testing.T) {
+	b, fm, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	start := *now
+	b.Elevate("aws-1", cookie(60)) // ends start+60m
+	*now = start.Add(30 * time.Minute)
+	mintOnce(t, b) // valid until start+45m, so still fresh in the cache after the drop
+	b.Drop("aws-1", CredCookie)
+	b.Elevate("aws-1", cookie(30)) // also ends start+60m
+	mintOnce(t, b)
+	if len(fm.calls) != 2 || fm.calls[1].RoleARN != writeRole {
+		t.Fatalf("want a fresh elevated mint for the new window, got %d calls", len(fm.calls))
+	}
+	if got := lastExpOf(b, "aws-1"); !got.Equal(fm.expOf(1)) {
+		t.Fatalf("lastExp %v, want %v", got, fm.expOf(1))
+	}
+}
+
+// A zero Expiration (sts.go maps a nil one to it) proves nothing about the bound.
+func TestBackstopDiscardsAnElevatedCredentialWithoutAnExpiration(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(30))
+	fm.exp = func(in MintInput) time.Time {
+		if in.RoleARN == writeRole {
+			return time.Time{}
+		}
+		return fm.now().Add(in.Duration)
+	}
+	if w := call(b, tokA("aws-1")); w.Code != 200 || len(fm.calls) != 2 || fm.calls[1].RoleARN == writeRole {
+		t.Fatalf("want a read-only re-mint, got %d calls", len(fm.calls))
+	}
+	if d := rec.rows[0]; d.Outcome != OutcomeSTSError || !d.Elevated || !strings.Contains(d.Error, "expiration") {
+		t.Fatalf("discard row %+v", d)
+	}
+	if got := lastExpOf(b, "aws-1"); !got.IsZero() {
+		t.Fatalf("lastExp %v", got)
+	}
+}
