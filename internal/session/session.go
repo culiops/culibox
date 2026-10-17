@@ -952,7 +952,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("profile %q has an AWS binding but the credential broker is not running", spec.Agent)
 		}
 		if eg == nil {
-			return nil, fmt.Errorf("profile %q has an AWS binding but egress control is not running, so it cannot spawn", spec.Agent)
+			// ErrBoxUnavailable: a containment refusal the UI shows verbatim.
+			return nil, fmt.Errorf("%w: profile %q has an AWS binding but egress control is not running, so it cannot spawn",
+				box.ErrBoxUnavailable, spec.Agent)
 		}
 	}
 
@@ -1029,7 +1031,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			penv, err := eg.SpawnEnv(ectx, id, nonce)
 			cancel()
 			if err != nil {
-				return nil, fmt.Errorf("spawn %s: preparing egress: %w", spec.Agent, err)
+				// Shown to the user (writeSpawnErr): these are operator remedies
+				// (a network to remove, a port in use), and the token is only
+				// derived after Ready succeeds, so it can never be in err.
+				return nil, fmt.Errorf("%w: spawn %s: preparing egress: %w", box.ErrBoxUnavailable, spec.Agent, err)
 			}
 			// Strip before adding: whatever the profile or daemon env says about
 			// AWS must neither bypass credential_process nor shadow a broker

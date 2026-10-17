@@ -480,6 +480,11 @@ func TestBoundSpawnRefusedWithoutEgress(t *testing.T) {
 	if !strings.Contains(err.Error(), "egress control is not running") {
 		t.Fatalf("err = %v, want the egress refusal", err)
 	}
+	// The UI shows only ErrBoxUnavailable-class refusals verbatim; any other
+	// error becomes "could not start session" with no hint.
+	if !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("err = %v, want it to wrap box.ErrBoxUnavailable so the UI shows it", err)
+	}
 	if boxes.prepares != 0 || boxes.wraps != 0 {
 		t.Fatalf("refused spawn touched the box layer: prepares=%d wraps=%d", boxes.prepares, boxes.wraps)
 	}
@@ -501,6 +506,9 @@ func TestBoundSpawnEgressErrorRefuses(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "preparing egress") || !strings.Contains(err.Error(), "egress network missing") {
 		t.Fatalf("err = %v", err)
+	}
+	if !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("err = %v, want it to wrap box.ErrBoxUnavailable so the UI shows the remedy", err)
 	}
 	if boxes.wraps != 0 {
 		t.Fatalf("wraps = %d, want 0", boxes.wraps)
