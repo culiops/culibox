@@ -379,3 +379,167 @@ func abs(t *testing.T, rel string) string {
 	}
 	return wd + "/" + rel
 }
+
+func writeScript(t *testing.T, body string) string {
+	t.Helper()
+	bin := t.TempDir() + "/aws"
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// A CLI that closes stdout without a code but keeps running must not hold the
+// key hostage: the group is killed, the flow fails promptly, a retry works.
+func TestSilentStdoutCloseKillsAndAllowsARetry(t *testing.T) {
+	counter := t.TempDir() + "/runs"
+	bin := writeScript(t, "echo x >> "+counter+"\nexec 1>&-\nsleep 60\n")
+	r := New(bin, []string{"PATH=/usr/bin:/bin"})
+	r.exitGrace = 50 * time.Millisecond
+	t.Cleanup(r.Close)
+	var mu sync.Mutex
+	var details []string
+	done := func(_ bool, d string) { mu.Lock(); details = append(details, d); mu.Unlock() }
+	begin := time.Now()
+	if _, err := r.Start("k", "p", done); !errors.Is(err, ErrUnparsed) {
+		t.Fatalf("err %v", err)
+	}
+	if s, _ := r.Status("k"); s.State != StateFailed {
+		t.Fatalf("state %q right after the failed Start", s.State)
+	}
+	if time.Since(begin) > 3*time.Second {
+		t.Fatal("the failure was not prompt")
+	}
+	mu.Lock()
+	if !slices.Equal(details, []string{"unparsed output"}) {
+		t.Fatalf("details %q", details)
+	}
+	mu.Unlock()
+	if _, err := r.Start("k", "p", done); !errors.Is(err, ErrUnparsed) {
+		t.Fatalf("retry err %v", err)
+	}
+	raw, _ := os.ReadFile(counter)
+	if n := strings.Count(string(raw), "x"); n != 2 {
+		t.Fatalf("the retry must start a new process, runs = %d", n)
+	}
+}
+
+// A grandchild the CLI leaves behind dies when the leader exits normally.
+func TestAGrandchildDoesNotOutliveTheLeader(t *testing.T) {
+	pidFile := t.TempDir() + "/child"
+	p, err := realStart("/bin/sh", []string{"-c", "sleep 60 & echo $! > " + pidFile}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = p.Wait()
+	var child int
+	waitUntil(t, func() bool {
+		raw, _ := os.ReadFile(pidFile)
+		child = atoi(strings.TrimSpace(string(raw)))
+		return child > 0
+	})
+	waitUntil(t, func() bool { return syscall.Kill(child, 0) == syscall.ESRCH })
+}
+
+func TestAHugeLineDoesNotStallTheReader(t *testing.T) {
+	huge := strings.Repeat("a", 100_000) + "\n"
+	for name, tc := range map[string]struct {
+		output string
+		parsed bool
+	}{
+		"code first":  {fixture(t) + huge, true},
+		"code buried": {huge + fixture(t), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, fs := newFakeRunner(t)
+			fs.output = tc.output
+			st, err := r.Start("k", "p", func(bool, string) {})
+			if tc.parsed {
+				if err != nil || st.Code != "ABCD-EFGH" {
+					t.Fatalf("Start = %+v %v", st, err)
+				}
+				fs.last().exit(nil)
+			} else if !errors.Is(err, ErrUnparsed) {
+				t.Fatalf("err %v", err)
+			}
+			// Either way the whole output was drained and the flow ends.
+			waitUntil(t, func() bool { s, _ := r.Status("k"); return s.State != StateWaiting })
+		})
+	}
+}
+
+func TestALastLineWithoutANewline(t *testing.T) {
+	r, fs := newFakeRunner(t)
+	fs.output = strings.TrimSuffix(fixture(t), "\n") // the autofill URL has no newline
+	st, err := r.Start("k", "p", func(bool, string) {})
+	if err != nil || st.Code != "ABCD-EFGH" || !st.URITrusted {
+		t.Fatalf("Start = %+v %v", st, err)
+	}
+	fs.last().exit(nil) // EOF: the unterminated line is parsed at the end
+	waitUntil(t, func() bool {
+		s, _ := r.Status("k")
+		return s.State == StateOK && strings.Contains(s.URI, "user_code=ABCD-EFGH")
+	})
+}
+
+func TestACodeLineWithoutANewlineIsReadAtEOF(t *testing.T) {
+	r, fs := newFakeRunner(t)
+	fs.output = "https://d-0000000000.awsapps.com/start/#/device\nABCD-EFGH"
+	go func() {
+		waitUntil(t, func() bool { return fs.starts() == 1 })
+		fs.last().exit(nil)
+	}()
+	st, err := r.Start("k", "p", func(bool, string) {})
+	if err != nil || st.Code != "ABCD-EFGH" {
+		t.Fatalf("Start = %+v %v", st, err)
+	}
+}
+
+// The CLI sees only the curated environment: the daemon's secrets are absent.
+func TestChildEnvironmentIsCurated(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-from-the-daemon")
+	t.Setenv("AB_PROD_PASS", "pw-from-the-daemon")
+	envFile := t.TempDir() + "/env"
+	bin := writeScript(t, "env > "+envFile+"\ncat "+abs(t, "testdata/device-code.txt")+" | tail -n +2\n")
+	r := New(bin, os.Environ())
+	t.Cleanup(r.Close)
+	if _, err := r.Start("k", "p", func(bool, string) {}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(raw)
+	for _, bad := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "AB_PROD_PASS", "tok-from-the-daemon", "pw-from-the-daemon"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("child environment leaks %s", bad)
+		}
+	}
+	if !strings.Contains(got, "PATH=") {
+		t.Error("child lost PATH")
+	}
+}
+
+func TestConcurrentStartsShareOneProcess(t *testing.T) {
+	r, fs := newFakeRunner(t)
+	var wg sync.WaitGroup
+	states := make([]State, 8)
+	errs := make([]error, 8)
+	for i := range states {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			states[i], errs[i] = r.Start("k", "p", func(bool, string) {})
+		}()
+	}
+	wg.Wait()
+	if fs.starts() != 1 {
+		t.Fatalf("%d processes started", fs.starts())
+	}
+	for i := range states {
+		if errs[i] != nil || states[i].Code != "ABCD-EFGH" {
+			t.Fatalf("start %d = %+v %v", i, states[i], errs[i])
+		}
+	}
+}

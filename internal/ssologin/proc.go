@@ -63,13 +63,17 @@ func (p *osProc) Output() io.Reader { return p.out }
 
 func (p *osProc) Wait() error {
 	err := p.cmd.Wait()
+	// The leader is reaped, but a child it forked may live on in the group
+	// (the pgid cannot be recycled while a member exists). One group kill
+	// before marking waited, so nothing outlives the sign-in.
+	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
 	p.waited.Store(true)
 	time.AfterFunc(drainGrace, func() { p.out.Close() })
 	return err
 }
 
-// Kill sends SIGKILL to the whole group. After Wait has reaped the leader it
-// does nothing, so a recycled pid is never signalled.
+// Kill sends SIGKILL to the whole group. After Wait has reaped the leader and
+// swept the group it does nothing, so a recycled pid is never signalled.
 func (p *osProc) Kill() {
 	if p.waited.Load() {
 		return

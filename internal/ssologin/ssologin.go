@@ -124,7 +124,9 @@ type flow struct {
 	ready      chan struct{} // closed once the code is parsed
 	readyOnce  sync.Once
 	readerDone chan struct{}
-	once       sync.Once // guards finishing
+	exited     chan struct{} // closed once the leader has been reaped
+	finished   chan struct{} // closed once the final state is published
+	once       sync.Once     // guards finishing
 	done       Done
 }
 
@@ -134,6 +136,7 @@ type Runner struct {
 	start        func(bin string, args, env []string) (proc, error)
 	now          func() time.Time
 	parseTimeout time.Duration
+	exitGrace    time.Duration // how long a CLI that closed stdout gets to exit on its own
 	flowTimeout  time.Duration
 	keepDone     time.Duration
 
@@ -150,6 +153,7 @@ func New(awsBin string, environ []string) *Runner {
 		start:        realStart,
 		now:          time.Now,
 		parseTimeout: 15 * time.Second,
+		exitGrace:    time.Second,
 		flowTimeout:  10 * time.Minute,
 		keepDone:     2 * time.Minute,
 		flows:        map[string]*flow{},
@@ -183,6 +187,8 @@ func (r *Runner) Start(key, profile string, done Done) (State, error) {
 		state:      State{State: StateWaiting, Expires: r.now().Add(r.flowTimeout)},
 		ready:      make(chan struct{}),
 		readerDone: make(chan struct{}),
+		exited:     make(chan struct{}),
+		finished:   make(chan struct{}),
 		done:       done,
 	}
 	r.flows[key] = f
@@ -243,18 +249,20 @@ func (r *Runner) setReason(f *flow, reason string) {
 	r.mu.Unlock()
 }
 
-// await returns the flow's state once its code is parsed. A parse timeout
-// kills the process; an output that ends without a code is left to the waiter,
-// which reports the exit status.
+// await returns the flow's state once its code is parsed. Without a code the
+// process group is killed (reason stored first) and await waits for the flow
+// to finish, so an immediate retry starts a fresh flow. A CLI that closed
+// stdout and exits within exitGrace is left alone: its exit status is the
+// more useful verdict.
 func (r *Runner) await(f *flow) (State, error) {
 	timer := time.NewTimer(r.parseTimeout)
 	defer timer.Stop()
-	timedOut := false
+	kill := false
 	select {
 	case <-f.ready:
 	case <-f.readerDone:
 	case <-timer.C:
-		timedOut = true
+		kill = true
 	}
 	r.mu.Lock()
 	st := f.state
@@ -262,9 +270,24 @@ func (r *Runner) await(f *flow) (State, error) {
 	if st.Code != "" {
 		return st, nil
 	}
-	if timedOut {
+	if !kill {
+		grace := time.NewTimer(r.exitGrace)
+		defer grace.Stop()
+		select {
+		case <-f.exited:
+		case <-grace.C:
+			kill = true
+		}
+	}
+	if kill {
 		r.setReason(f, reasonUnparsed)
 		f.p.Kill()
+	}
+	settle := time.NewTimer(2 * time.Second)
+	defer settle.Stop()
+	select {
+	case <-f.finished:
+	case <-settle.C:
 	}
 	return State{}, ErrUnparsed
 }
@@ -314,6 +337,7 @@ func (r *Runner) wait(f *flow) {
 	})
 	err := f.p.Wait()
 	timer.Stop()
+	close(f.exited)
 	<-f.readerDone // the code is final before the verdict is
 
 	r.mu.Lock()
@@ -350,5 +374,6 @@ func (r *Runner) finish(f *flow, ok bool, detail string) {
 		}
 		f.finishedAt = r.now()
 		r.mu.Unlock()
+		close(f.finished)
 	})
 }
