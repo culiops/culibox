@@ -1,8 +1,10 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -163,7 +165,7 @@ func TestAWSStatusCarriesElevateElevationAndSSO(t *testing.T) {
 	}
 	decode := func(id string) map[string]any {
 		t.Helper()
-		st, ok := ad.AWSStatus(id)
+		st, ok := ad.AWSStatusFor(id, true)
 		if !ok {
 			t.Fatal("bound session reported no status")
 		}
@@ -215,5 +217,42 @@ func TestAWSStatusCarriesElevateElevationAndSSO(t *testing.T) {
 	raw, _ = json.Marshal(st)
 	if strings.Contains(string(raw), `"elevation"`) || strings.Contains(string(raw), `"sso"`) {
 		t.Fatalf("%s", raw)
+	}
+}
+
+// The device code and URL belong to the browser session that started the flow:
+// a bearer token reading the same status gets the state, not the code.
+func TestAWSStatusHidesTheDeviceCodeFromNonCookieCallers(t *testing.T) {
+	info := map[string]session.Info{"claude-3": {ID: "claude-3", AWS: &session.AWSInfo{Label: "sandbox"}}}
+	ad := awsAdapter(info, nil, nil, nil)
+	ad.SSO = func(id string) (SSOStatus, bool) {
+		return SSOStatus{Expired: true, Command: "aws sso login --profile p", Login: &ssologin.State{
+			State: "waiting", URI: "https://acme.awsapps.com/start/#/device", URITrusted: true, Code: "ABCD-EFGH",
+			Expires: time.Unix(1_800_000_600, 0).UTC()}}, true
+	}
+	get := func(kind credKind) string {
+		a := &API{Sessions: &mockSvc{}, AWS: ad}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/sessions/claude-3/aws", nil)
+		a.handleSession(w, r.WithContext(context.WithValue(r.Context(), credKindKey, kind)))
+		if w.Code != 200 {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	for _, kind := range []credKind{credBearer, credNone} {
+		b := get(kind)
+		if strings.Contains(b, "ABCD-EFGH") || strings.Contains(b, "awsapps.com") || !strings.Contains(b, `"state":"waiting"`) ||
+			!strings.Contains(b, `"expires"`) || !strings.Contains(b, `"command":"aws sso login --profile p"`) {
+			t.Errorf("kind %d: %s", kind, b)
+		}
+	}
+	if b := get(credCookie); !strings.Contains(b, "ABCD-EFGH") || !strings.Contains(b, "acme.awsapps.com") {
+		t.Errorf("the cookie session gets the code: %s", b)
+	}
+	// The bare AWSStatus (no credential known) fails closed.
+	st, _ := ad.AWSStatus("claude-3")
+	if raw, _ := json.Marshal(st); strings.Contains(string(raw), "ABCD-EFGH") {
+		t.Errorf("AWSStatus without a credential kind leaks the code: %s", raw)
 	}
 }

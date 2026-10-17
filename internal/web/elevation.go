@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -136,7 +137,9 @@ func (a *API) handleElevate(w http.ResponseWriter, r *http.Request, sid string) 
 			Reason       string `json:"reason"`
 			ConfirmLabel string `json:"confirm_label"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil || dec.Decode(&json.RawMessage{}) != io.EOF { // one value, nothing after it
 			writeErr(w, http.StatusBadRequest, "invalid request")
 			return
 		}

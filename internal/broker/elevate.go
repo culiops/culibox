@@ -306,12 +306,16 @@ func (b *Broker) Elevation(sid string) (ElevationView, bool) {
 }
 
 // RefuseElevation audits a refusal the web layer decided itself (a bearer
-// credential, a bad origin), with the session's identifiers when it is known.
+// credential, a bad origin). Only a session the daemon knows is recorded: the
+// throttle is per (session, cred), so a caller rotating made-up ids would
+// otherwise write an unbounded number of rows.
 func (b *Broker) RefuseElevation(sid, cred, reason string) {
-	row := ApprovalRow{Time: b.now(), SessionID: sid, Cred: credLabel(cred)}
-	if sv, ok := b.lookup(sid); ok {
-		identify(&row, sv)
+	sv, ok := b.lookup(sid)
+	if !ok {
+		return
 	}
+	row := ApprovalRow{Time: b.now(), SessionID: sid, Cred: credLabel(cred)}
+	identify(&row, sv)
 	b.recordRefusal(row, reason)
 }
 

@@ -51,6 +51,14 @@ type AWSStatusService interface {
 	AWSStatus(sessionID string) (status any, ok bool)
 }
 
+// credAwareAWSStatus is an AWSStatusService that can tell a signed-in browser
+// session from any other caller. The device sign-in code and URL are returned
+// only to the cookie session (a bearer token must not read them), so the
+// status of the /aws route goes through this when the service has it.
+type credAwareAWSStatus interface {
+	AWSStatusFor(sessionID string, cookie bool) (status any, ok bool)
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -178,7 +186,15 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		if st, ok := a.AWS.AWSStatus(strings.TrimSuffix(id, "/aws")); ok {
+		sid := strings.TrimSuffix(id, "/aws")
+		var st any
+		var ok bool
+		if cs, isCS := a.AWS.(credAwareAWSStatus); isCS {
+			st, ok = cs.AWSStatusFor(sid, credKindOf(r) == credCookie)
+		} else {
+			st, ok = a.AWS.AWSStatus(sid)
+		}
+		if ok {
 			writeJSON(w, http.StatusOK, st)
 		} else {
 			w.WriteHeader(http.StatusNoContent)

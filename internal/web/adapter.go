@@ -88,8 +88,14 @@ type AWSStatusAdapter struct {
 	Grant func(id string) GrantContext
 }
 
-// AWSStatus is ok only for a known session that has an AWS binding.
-func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) {
+// AWSStatus is the status for a caller that is not a signed-in browser session:
+// the sign-in code and URL are left out.
+func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) { return a.AWSStatusFor(id, false) }
+
+// AWSStatusFor is ok only for a known session that has an AWS binding. The
+// device sign-in code and URL are in the reply only when cookie is true: they
+// are shown to the browser session that asked for the flow, not to a token.
+func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	info, ok := a.Get(id)
 	if !ok || info.AWS == nil {
 		return nil, false
@@ -136,6 +142,11 @@ func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) {
 	}
 	if a.SSO != nil {
 		if s, ok := a.SSO(id); ok {
+			if s.Login != nil && !cookie {
+				l := *s.Login
+				l.URI, l.Code, l.URITrusted = "", "", false
+				s.Login = &l
+			}
 			out["sso"] = s
 		}
 	}

@@ -189,7 +189,7 @@ func TestRefusedRowsAreThrottledPerSessionAndCred(t *testing.T) {
 }
 
 func TestRefusalThrottleMapIsPrunedAndForgotten(t *testing.T) {
-	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	b, _, _, now := setup(t, map[string]SessionView{"a": liveElev(), "b": liveElev(), "c": liveElev(), "d": liveElev(), "e": liveElev()})
 	for _, sid := range []string{"a", "b", "c", "d"} {
 		b.RefuseElevation(sid, CredBearer, "x")
 	}
@@ -749,5 +749,21 @@ func TestBackstopDiscardsAnElevatedCredentialWithoutAnExpiration(t *testing.T) {
 	}
 	if got := lastExpOf(b, "aws-1"); !got.IsZero() {
 		t.Fatalf("lastExp %v", got)
+	}
+}
+
+func TestRefuseElevationIgnoresUnknownSessions(t *testing.T) {
+	b, _, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	b.RefuseElevation("made-up-1", CredBearer, "x")
+	b.RefuseElevation("made-up-2", CredBearer, "x")
+	b.mu.Lock()
+	n := len(b.refused)
+	b.mu.Unlock()
+	if len(rec.appr) != 0 || n != 0 {
+		t.Fatalf("unknown ids wrote %d rows and %d throttle keys", len(rec.appr), n)
+	}
+	b.RefuseElevation("aws-1", CredBearer, "x")
+	if len(rec.appr) != 1 || rec.appr[0].SessionID != "aws-1" || rec.appr[0].Action != ActionRefused {
+		t.Fatalf("a known id writes one row: %+v", rec.appr)
 	}
 }

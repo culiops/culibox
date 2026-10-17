@@ -200,12 +200,22 @@ func TestElevateErrorMapping(t *testing.T) {
 			t.Errorf("%s: %d refused=%v (a malformed id is never audited)", bad, w.Code, f.refused)
 		}
 	}
-	w := httptest.NewRecorder()
+	for _, body := range []string{"{", `{"minutes":60,"extra":1}`, `{"minutes":60}{"minutes":30}`, `{"minutes":60} x`, `{"minutes":60}}`} {
+		f := &fakeElev{}
+		w := httptest.NewRecorder()
+		r := elevReq("POST", "/api/sessions/aws-1/aws/elevate", "http://"+host, "", credCookie)
+		r.Body = io.NopCloser(strings.NewReader(body))
+		(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(w, r)
+		if w.Code != 400 || len(f.grants) != 0 {
+			t.Errorf("body %q: %d grants %v", body, w.Code, f.grants)
+		}
+	}
+	f := &fakeElev{}
 	r := elevReq("POST", "/api/sessions/aws-1/aws/elevate", "http://"+host, "", credCookie)
-	r.Body = io.NopCloser(strings.NewReader("{"))
-	(&API{Sessions: &mockSvc{}, Elevation: &fakeElev{}}).handleSession(w, r)
-	if w.Code != 400 {
-		t.Fatalf("bad JSON: %d", w.Code)
+	r.Body = io.NopCloser(strings.NewReader(" {\"minutes\":30,\"reason\":\"r\",\"confirm_label\":\"L\"}\n"))
+	(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(httptest.NewRecorder(), r)
+	if len(f.grants) != 1 || f.grants[0] != "aws-1/30/r/L/cookie" {
+		t.Fatalf("a well-formed body with surrounding whitespace is accepted: %v", f.grants)
 	}
 }
 
