@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,9 +85,9 @@ type Stats struct {
 // same spawn (nonce) and the same binding, so a session id that is reused by a
 // new spawn, or a binding that was edited, never gets the old credentials.
 type cached struct {
-	creds     Creds
-	nonce     string
-	scopeHash string
+	creds    Creds
+	nonce    string
+	scopeKey string // the binding hash, plus the window end for an elevated credential
 }
 
 type Broker struct {
@@ -202,70 +203,136 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
 		return
 	}
-	bnd := *sv.AWS
+	bnd := *sv.AWS // a shallow copy: bnd.Elevate is shared with the session, read it only
 	base := Row{Time: now, SessionID: sid, Profile: sv.Agent, AccountID: awsscope.AccountOf(bnd.RoleARN),
 		RoleARN: bnd.RoleARN, SourceIdentity: awsscope.SessionName(sid), ScopeHash: bnd.Hash()}
 
-	b.mu.Lock()
-	st := b.statsLocked(sid)
-	if c, ok := b.cache[sid]; ok && c.nonce == nonce && c.scopeHash == base.ScopeHash &&
-		c.creds.Expiration.Sub(now) > refreshMargin {
-		st.CacheHits++
+	// Attempt 0 mints what the window allows. Attempt 1 exists only to fall back to
+	// read-only after an elevated credential was discarded below; it never loops.
+	for attempt := 0; attempt < 2; attempt++ {
+		b.mu.Lock()
+		p := b.planLocked(sid, bnd, now, attempt > 0)
+		st := b.statsLocked(sid)
+		if c, ok := b.cache[sid]; ok && c.nonce == nonce && c.scopeKey == p.key &&
+			c.creds.Expiration.Sub(now) > refreshMargin {
+			st.CacheHits++
+			if p.elevated { // a window re-granted since this credential was minted must still know of it
+				b.noteElevatedExp(sid, c.creds.Expiration)
+			}
+			b.mu.Unlock()
+			writeCreds(w, c.creds)
+			return
+		}
+		if attempt == 0 && !b.allowMintLocked(sid, now) { // the fallback mint is not a second request
+			b.mu.Unlock()
+			row := base
+			row.Outcome = OutcomeRateLimited
+			b.recordDenied(row)
+			replyErr(w, http.StatusTooManyRequests, fmt.Sprintf("more than %d credential mints in a minute; slow down", mintsPerMinute))
+			return
+		}
 		b.mu.Unlock()
-		writeCreds(w, c.creds)
-		return
-	}
-	if !b.allowMintLocked(sid, now) {
-		b.mu.Unlock()
-		row := base
-		row.Outcome = OutcomeRateLimited
-		b.recordDenied(row)
-		replyErr(w, http.StatusTooManyRequests, fmt.Sprintf("more than %d credential mints in a minute; slow down", mintsPerMinute))
-		return
-	}
-	b.mu.Unlock()
 
-	policy, err := awsscope.SessionPolicy(awsscope.PartitionOf(bnd.RoleARN), bnd.S3Read)
-	if err != nil { // validated at save; reaching here means the profile file was edited by hand
-		b.fail(w, base, OutcomeSTSError, http.StatusBadGateway, "the session's AWS binding is invalid; re-save the profile")
-		return
-	}
-	c, err := b.minter.Mint(r.Context(), MintInput{SourceProfile: bnd.SourceProfile, Region: bnd.Region,
-		RoleARN: bnd.RoleARN, SessionName: base.SourceIdentity, Policy: policy, Duration: credTTL})
-	if errors.Is(err, ErrSSOExpired) {
-		boxMsg := fmt.Sprintf(
-			`SSO session for profile %q expired — run "aws sso login --profile %s" on the host, then retry`,
-			bnd.SourceProfile, bnd.SourceProfile)
-		hostMsg := boxMsg
-		var me *MintError
-		if errors.As(err, &me) && me.Detail != "" { // a misclassified failure must stay debuggable from the audit
-			hostMsg += ": " + sanitize(me.Detail)
+		partition := awsscope.PartitionOf(bnd.RoleARN)
+		var policy string
+		var err error
+		if p.elevated {
+			policy, err = awsscope.ElevatedPolicy(partition, bnd.S3Read, bnd.Elevate.AllowIAM)
+		} else {
+			policy, err = awsscope.SessionPolicy(partition, bnd.S3Read)
 		}
-		b.failSplit(w, base, OutcomeSSOExpired, http.StatusServiceUnavailable, boxMsg, hostMsg)
-		return
-	}
-	if err != nil {
-		code, detail := "MintFailed", err.Error()
-		var me *MintError
-		if errors.As(err, &me) {
-			code, detail = me.Code, me.Detail
+		if err != nil { // validated at save; reaching here means the profile file was edited by hand
+			b.fail(w, base, OutcomeSTSError, http.StatusBadGateway, "the session's AWS binding is invalid; re-save the profile")
+			return
 		}
-		code = safeCode(code)
-		b.failSplit(w, base, OutcomeSTSError, http.StatusBadGateway,
-			fmt.Sprintf("STS AssumeRole failed: %s — %s", code, stsHint(code)),
-			"AssumeRole failed: "+code+": "+sanitize(detail))
+		row := base
+		row.RoleARN, row.Elevated = p.role, p.elevated // ScopeHash stays the binding's; these say which side minted
+		c, err := b.minter.Mint(r.Context(), MintInput{SourceProfile: bnd.SourceProfile, Region: bnd.Region,
+			RoleARN: p.role, SessionName: base.SourceIdentity, Policy: policy, Duration: credTTL})
+		if errors.Is(err, ErrSSOExpired) {
+			boxMsg := fmt.Sprintf(
+				`SSO session for profile %q expired — run "aws sso login --profile %s" on the host, then retry`,
+				bnd.SourceProfile, bnd.SourceProfile)
+			hostMsg := boxMsg
+			var me *MintError
+			if errors.As(err, &me) && me.Detail != "" { // a misclassified failure must stay debuggable from the audit
+				hostMsg += ": " + sanitize(me.Detail)
+			}
+			b.failSplit(w, row, OutcomeSSOExpired, http.StatusServiceUnavailable, boxMsg, hostMsg)
+			return
+		}
+		if err != nil {
+			code, detail := "MintFailed", err.Error()
+			var me *MintError
+			if errors.As(err, &me) {
+				code, detail = me.Code, me.Detail
+			}
+			code = safeCode(code)
+			b.failSplit(w, row, OutcomeSTSError, http.StatusBadGateway,
+				fmt.Sprintf("STS AssumeRole failed: %s — %s", code, stsHint(code)),
+				"AssumeRole failed: "+code+": "+sanitize(detail))
+			return
+		}
+
+		b.mu.Lock()
+		if p.elevated {
+			// The hard bound (spec §5.2): a write credential never outlives the window
+			// it was minted under, and is never handed out for a window that changed
+			// while STS was being called. Either way it is discarded, not cached, and
+			// the box gets a read-only credential instead.
+			e := b.elev[sid]
+			var why string
+			switch {
+			case c.Expiration.After(p.until):
+				why = "elevated credential would outlive the window; minted read-only instead"
+			case e == nil || e.gen != p.gen:
+				why = "the elevation changed during the mint; minted read-only instead"
+			}
+			if why != "" {
+				b.mu.Unlock()
+				bad := row
+				bad.Outcome, bad.Error = OutcomeSTSError, why
+				b.record(bad)
+				continue
+			}
+			b.noteElevatedExp(sid, c.Expiration) // same critical section as the check: a drop now sees it
+		}
+		b.cache[sid] = cached{creds: c, nonce: nonce, scopeKey: p.key}
+		st = b.statsLocked(sid)
+		st.Mints++
+		st.LastMint, st.LastError = now, ""
+		b.mu.Unlock()
+		row.Outcome, row.Expires = OutcomeMinted, c.Expiration
+		b.record(row)
+		writeCreds(w, c)
 		return
 	}
-	b.mu.Lock()
-	b.cache[sid] = cached{creds: c, nonce: nonce, scopeHash: base.ScopeHash}
-	st = b.statsLocked(sid)
-	st.Mints++
-	st.LastMint, st.LastError = now, ""
-	b.mu.Unlock()
-	row := base
-	row.Outcome, row.Expires = OutcomeMinted, c.Expiration
-	b.record(row)
-	writeCreds(w, c)
+}
+
+// mintPlan is what one mint attempt will ask STS for. key is the cache key: the
+// binding hash, plus the window end for an elevated credential so a grant,
+// extend or drop never reuses a credential minted under another window.
+type mintPlan struct {
+	elevated  bool
+	until     time.Time
+	gen       uint64
+	key, role string
+}
+
+// planLocked decides, under b.mu, whether a mint is elevated (spec §5.2): only
+// while elevatedLocked says a window is in force with enough time left, and only
+// if the binding still has an elevate role. forceRead is the read-only fallback.
+func (b *Broker) planLocked(sid string, bnd config.AWSBinding, now time.Time, forceRead bool) mintPlan {
+	p := mintPlan{key: bnd.Hash(), role: bnd.RoleARN}
+	if forceRead || bnd.Elevate == nil {
+		return p
+	}
+	if e, ok := b.elevatedLocked(sid, now); ok {
+		p.elevated, p.until, p.gen = true, e.until, e.gen
+		p.key += "/e" + strconv.FormatInt(e.until.Unix(), 10)
+		p.role = bnd.Elevate.RoleARN
+	}
+	return p
 }
 
 func (b *Broker) fail(w http.ResponseWriter, row Row, o Outcome, status int, msg string) {

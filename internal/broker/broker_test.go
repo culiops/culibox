@@ -18,19 +18,38 @@ import (
 type fakeMinter struct {
 	mu    sync.Mutex
 	calls []MintInput
+	exps  []time.Time // the Expiration handed out for each call (zero when it failed)
 	err   error
 	now   func() time.Time
+	exp   func(MintInput) time.Time // overrides the returned Expiration
+	hook  func(MintInput)           // runs inside Mint after the call is recorded, without mu held
 }
 
 func (f *fakeMinter) Mint(_ context.Context, in MintInput) (Creds, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, in)
-	if f.err != nil {
-		return Creds{}, f.err
+	f.exps = append(f.exps, time.Time{})
+	i, err, hook := len(f.calls)-1, f.err, f.hook
+	f.mu.Unlock()
+	if hook != nil {
+		hook(in)
 	}
-	return Creds{AccessKeyID: "ASIAFAKE", SecretAccessKey: "s", SessionToken: "t", Expiration: f.now().Add(in.Duration)}, nil
+	if err != nil {
+		return Creds{}, err
+	}
+	exp := f.now().Add(in.Duration)
+	if f.exp != nil {
+		exp = f.exp(in)
+	}
+	f.mu.Lock()
+	f.exps[i] = exp
+	f.mu.Unlock()
+	return Creds{AccessKeyID: "ASIAFAKE", SecretAccessKey: "s", SessionToken: "t", Expiration: exp}, nil
 }
+
+// expOf is the Expiration handed out for call i; calls0Exp for the first call.
+func (f *fakeMinter) expOf(i int) time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.exps[i] }
+func (f *fakeMinter) calls0Exp() time.Time  { return f.expOf(0) }
 
 type memRec struct {
 	mu      sync.Mutex
@@ -420,6 +439,25 @@ func TestNothingSecretLeaksIntoErrorsOrAuditRows(t *testing.T) {
 	fm.err = nil
 	call(b, tok)
 	bodies = append(bodies, call(b, Token(secret, "claude-3", nonceB)).Body.String())
+	// An elevated mint (and its approval row) must leak nothing either.
+	eb, efm, erec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(eb)
+	if _, err := eb.Elevate("aws-1", cookie(60)); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(eb, tokA("aws-1")); w.Code != 200 || efm.calls[0].RoleARN != writeRole {
+		t.Fatalf("elevated mint: %d %+v", w.Code, efm.calls)
+	}
+	etok := tokA("aws-1")
+	emac := etok[strings.LastIndexByte(etok, '.')+1:]
+	for _, r := range erec.rows {
+		j, _ := json.Marshal(r)
+		for _, bad := range []string{emac, nonceA, "ASIAFAKE", `"s"`, `"t"`} {
+			if strings.Contains(string(j), bad) {
+				t.Fatalf("elevated audit row leaked %q: %s", bad, j)
+			}
+		}
+	}
 	for _, body := range bodies {
 		if strings.Contains(body, mac) || strings.Contains(body, nonceA) {
 			t.Fatalf("error body echoed the token: %s", body)

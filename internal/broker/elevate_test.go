@@ -509,3 +509,203 @@ func TestDropAuditsAFixedLabelForFreeTextCred(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// lastExpOf reads the overlay's lastExp (zero when there is no overlay); the
+// active ElevationView does not expose it.
+func lastExpOf(b *Broker, sid string) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if e := b.elev[sid]; e != nil {
+		return e.lastExp
+	}
+	return time.Time{}
+}
+
+func mintOnce(t *testing.T, b *Broker) {
+	t.Helper()
+	if w := call(b, tokA("aws-1")); w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestElevatedMintUsesTheWriteRoleAndPolicy(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(60))
+	mintOnce(t, b)
+	in := fm.calls[0]
+	if in.RoleARN != writeRole || in.Duration != 15*time.Minute || in.SessionName != "agentbox-aws-1" ||
+		!strings.Contains(in.Policy, "sts:AssumeRole*") || !strings.Contains(in.Policy, "iam:Create*") {
+		t.Fatalf("mint input %+v", in)
+	}
+	r := rec.rows[len(rec.rows)-1]
+	if !r.Elevated || r.RoleARN != writeRole || r.Outcome != OutcomeMinted || r.ScopeHash != elevBnd().Hash() {
+		t.Fatalf("audit %+v", r)
+	}
+	if got := lastExpOf(b, "aws-1"); !got.Equal(fm.calls0Exp()) {
+		t.Fatalf("lastExp %v, want %v", got, fm.calls0Exp())
+	}
+}
+
+func TestReadOnlyWithoutAnOverlay(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	mintOnce(t, b)
+	if fm.calls[0].RoleARN != elevBnd().RoleARN || strings.Contains(fm.calls[0].Policy, "AssumeRole") || rec.rows[0].Elevated {
+		t.Fatalf("an elevatable but unelevated session must mint read-only: %+v", fm.calls[0])
+	}
+}
+
+// Elevated iff at least 16 minutes remain (spec §5.2), even inside the window.
+func TestElevatedOnlyWithSixteenMinutesLeft(t *testing.T) {
+	b, fm, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(30))
+	start := *now
+	*now = start.Add(14 * time.Minute) // exactly 16 left
+	mintOnce(t, b)
+	if fm.calls[0].RoleARN != writeRole {
+		t.Fatal("16 min left must still mint write")
+	}
+	*now = start.Add(14*time.Minute + time.Second) // 15m59s left: the read-only key misses the elevated cache entry
+	mintOnce(t, b)
+	if fm.calls[1].RoleARN == writeRole {
+		t.Fatal("under 16 min left must mint read-only")
+	}
+}
+
+// The core guarantee: across grant, extend, drop and expiry, no elevated
+// credential handed out expires after the window that was current when it
+// was minted. Fetches every minute for two hours, with transitions.
+func TestNoElevatedExpirationAfterUntil(t *testing.T) {
+	b, fm, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	ts := withTimers(b)
+	start := *now
+	type minted struct{ exp, until time.Time }
+	var got []minted
+	for m := 0; m <= 120; m++ {
+		*now = start.Add(time.Duration(m) * time.Minute)
+		switch m {
+		case 0:
+			b.Elevate("aws-1", cookie(60))
+		case 41:
+			b.Elevate("aws-1", cookie(30)) // extend with 19 left
+		case 60:
+			b.Drop("aws-1", CredCookie)
+		case 70:
+			b.Elevate("aws-1", cookie(30))
+		case 100: // the 70-minute grant's timer fires
+			for _, tm := range *ts {
+				if !tm.stopped {
+					tm.f()
+				}
+			}
+		}
+		v, on := b.Elevation("aws-1")
+		before := len(fm.calls)
+		mintOnce(t, b)
+		if len(fm.calls) > before && fm.calls[before].RoleARN == writeRole {
+			if !on || !v.Active {
+				t.Fatalf("minute %d: elevated mint without an active window", m)
+			}
+			got = append(got, minted{fm.expOf(before), v.Until})
+		}
+	}
+	if len(got) < 4 {
+		t.Fatalf("too few elevated mints to mean anything: %d", len(got))
+	}
+	for i, g := range got {
+		if g.exp.After(g.until) {
+			t.Fatalf("elevated credential %d expires %s, after its window %s", i, g.exp, g.until)
+		}
+	}
+}
+
+func TestCacheKeyChangesOnGrantExtendDrop(t *testing.T) {
+	b, fm, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	mintOnce(t, b) // 1: read-only
+	mintOnce(t, b) //    cache hit
+	b.Elevate("aws-1", cookie(60))
+	mintOnce(t, b) // 2: elevated
+	mintOnce(t, b) //    cache hit
+	*now = now.Add(time.Minute)
+	b.Elevate("aws-1", cookie(60)) // extend: new Until
+	mintOnce(t, b)                 // 3: elevated again
+	b.Drop("aws-1", CredCookie)
+	mintOnce(t, b) // 4: read-only
+	if len(fm.calls) != 4 || fm.calls[1].RoleARN != writeRole || fm.calls[2].RoleARN != writeRole || fm.calls[3].RoleARN == writeRole {
+		t.Fatalf("mints %d: %+v", len(fm.calls), fm.calls)
+	}
+}
+
+func TestBackstopDiscardsAnOverlongElevatedCredential(t *testing.T) {
+	b, fm, rec, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(30))
+	fm.exp = func(in MintInput) time.Time { return now.Add(31 * time.Minute) } // a lying or skewed STS
+	w := call(b, tokA("aws-1"))
+	if w.Code != 200 || len(fm.calls) != 2 || fm.calls[1].RoleARN == writeRole {
+		t.Fatalf("want a read-only re-mint, got %d calls %+v", len(fm.calls), fm.calls)
+	}
+	var discarded bool
+	for _, r := range rec.rows {
+		discarded = discarded || (r.Outcome == OutcomeSTSError && r.Elevated && strings.Contains(r.Error, "outlive"))
+	}
+	if !discarded {
+		t.Fatalf("the discarded credential must be audited: %+v", rec.rows)
+	}
+	if got := lastExpOf(b, "aws-1"); !got.IsZero() {
+		t.Fatalf("a discarded credential must not count as handed out: %v", got)
+	}
+}
+
+func TestWindowChangeDuringMintFallsBackToReadOnly(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(60))
+	fm.hook = func(in MintInput) {
+		if in.RoleARN == writeRole {
+			b.Drop("aws-1", CredCookie)
+		}
+	}
+	w := call(b, tokA("aws-1"))
+	if w.Code != 200 || len(fm.calls) != 2 || fm.calls[1].RoleARN == writeRole {
+		t.Fatalf("calls %+v", fm.calls)
+	}
+	if v, _ := b.Elevation("aws-1"); !v.LastValid.IsZero() {
+		t.Fatalf("a discarded credential must not count as handed out: %+v", v)
+	}
+	if len(rec.rows) != 2 {
+		t.Fatalf("want a discard row and a read-only mint row, got %+v", rec.rows)
+	}
+	d, m := rec.rows[0], rec.rows[1]
+	if d.Outcome != OutcomeSTSError || !d.Elevated || d.RoleARN != writeRole || !strings.Contains(d.Error, "changed during the mint") {
+		t.Fatalf("discard row %+v", d)
+	}
+	if m.Outcome != OutcomeMinted || m.Elevated || m.RoleARN == writeRole {
+		t.Fatalf("fallback row %+v", m)
+	}
+}
+
+// A replaced overlay (an extend, here) is a different window even though one
+// still exists: the credential minted under the old one is discarded.
+func TestExtendDuringMintFallsBackToReadOnly(t *testing.T) {
+	b, fm, rec, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(60))
+	fm.hook = func(in MintInput) {
+		if in.RoleARN == writeRole {
+			*now = now.Add(time.Second)
+			b.Elevate("aws-1", cookie(60))
+		}
+	}
+	if w := call(b, tokA("aws-1")); w.Code != 200 || len(fm.calls) != 2 || fm.calls[1].RoleARN == writeRole {
+		t.Fatalf("calls %+v", fm.calls)
+	}
+	if d := rec.rows[0]; d.Outcome != OutcomeSTSError || !d.Elevated || !strings.Contains(d.Error, "changed during the mint") {
+		t.Fatalf("discard row %+v", d)
+	}
+	if got := lastExpOf(b, "aws-1"); !got.IsZero() {
+		t.Fatalf("a discarded credential must not count as handed out: %v", got)
+	}
+}
