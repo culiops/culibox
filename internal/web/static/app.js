@@ -424,7 +424,7 @@ function renderMobileChips() {
       // Reuse activity.js's own class map (the same one the session row and the
       // tab-bar dot use) rather than re-deriving a state string.
       const a = (typeof activityClass === "function" && typeof t.activity === "function")
-        ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+        ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : { cls: "dot unknown", title: "" };
       const dot = document.createElement("span");
       dot.className = a.cls;
       dot.setAttribute("aria-hidden", "true");
@@ -561,7 +561,8 @@ function renderTermTopbar() {
     if (st) { st.textContent = ""; st.hidden = true; }
     return;
   }
-  const a = (t && typeof t.activity === "function") ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+  const a = (t && typeof t.activity === "function")
+    ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : { cls: "dot unknown", title: "" };
   dot.className = a.cls;
   dot.title = a.title;
   nm.textContent = t ? (t.name || t.id) : "";
@@ -1551,12 +1552,6 @@ function renderDesktopEntry(s) {
   return needsYou(s) ? renderSession(s, { card: true }) : renderSession(s);
 }
 
-// renderNeedsBody builds the expanded part of a desktop needs-you card
-// (cardContent decides which blocks). Sends go through the one gated path —
-// sendState here, canReply on the server — and never offer digits (see
-// cardContent). It shares its composer with togglePeek's inline reply panel
-// via buildReplyComposer — see that function's own comment for what differs
-// between the two callers.
 // buildCardComposer: the one-line reply composer a desktop needs-you card
 // carries — the ask/turn body and the SSO body build it the same way.
 function buildCardComposer(s) {
@@ -1580,6 +1575,12 @@ function buildCardComposer(s) {
   });
 }
 
+// renderNeedsBody builds the expanded part of a desktop needs-you card
+// (cardContent decides which blocks). Sends go through the one gated path —
+// sendState here, canReply on the server — and never offer digits (see
+// cardContent). It shares its composer with togglePeek's inline reply panel
+// via buildReplyComposer — see that function's own comment for what differs
+// between the two callers.
 function renderNeedsBody(s) {
   const c = cardContent(s);
   // An expired AWS sign-in outranks turn/ask for which card shows.
@@ -1831,6 +1832,7 @@ function renderNeedsCard(s) {
 const ssoFlows = new Map();        // id -> login state {state, uri, uri_trusted, code, expires} | {fallback: command}
 const ssoStatus = new Map();       // id -> last GET .../aws body (carries the host command)
 const ssoStatusAsked = new Set();  // ids whose status was requested (one fetch per card lifetime)
+const ssoStatusFailed = new Map(); // id -> failed status fetches, so a failure moves the card's rowSig and a later render retries
 const ssoPollers = new Map();      // id -> interval handle, only while a flow is open
 const ssoPolling = new Set();      // ids with a poll request in flight
 const ssoStarting = new Set();     // ids whose sign-in POST is in flight
@@ -1848,7 +1850,7 @@ function ssoCommand(id) {
 function ssoLocalSig(id) {
   const f = ssoFlows.get(id) || {};
   return [f.state || "", f.code || "", f.uri || "", f.uri_trusted ? 1 : 0, f.expires || "", f.fallback || "",
-    ssoStatus.has(id) ? 1 : 0, ssoCommand(id), ssoStarting.has(id) ? 1 : 0].join("~");
+    ssoStatus.has(id) ? 1 : 0, ssoStatusFailed.get(id) || 0, ssoCommand(id), ssoStarting.has(id) ? 1 : 0].join("~");
 }
 
 const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to retry if it stopped.";
@@ -1867,13 +1869,22 @@ function ssoAdopt(id, body) {
 }
 
 // ensureSSOStatus: fetch the host command (and any flow already running, e.g.
-// after a reload) once when the card first renders. An empty object marks "asked".
+// after a reload) when the card renders. A failed fetch (network, non-200, bad
+// JSON) stores nothing and clears "asked", so the next render of the card asks
+// again; ssoStatusFailed is in the card's rowSig, so that render comes with the
+// next list poll: one retry per poll, never a tight loop.
 function ensureSSOStatus(id) {
   if (ssoStatus.has(id) || ssoStatusAsked.has(id)) return;
   ssoStatusAsked.add(id);
-  fetch(ssoPath(id)).then((res) => (res.status === 200 ? res.json() : null), () => null).then((body) => {
+  fetch(ssoPath(id)).then((res) => (res.status === 200 ? res.json() : null), () => null).catch(() => null).then((body) => {
     const s = lastSessions.find((x) => x.id === id);
     if (!s || s.need !== "sso") return; // the card went away while this was in flight
+    if (!body || typeof body !== "object") {
+      ssoStatusAsked.delete(id);
+      ssoStatusFailed.set(id, (ssoStatusFailed.get(id) || 0) + 1);
+      return; // the next poll's rowSig sees the counter move and re-renders
+    }
+    ssoStatusFailed.delete(id);
     ssoAdopt(id, body);
     refreshSessions();
   });
@@ -1926,7 +1937,7 @@ async function ssoPollTick(id, last) {
 // no longer needs a sign-in.
 function pruneSSO() {
   const byId = new Map(lastSessions.map((s) => [s.id, s]));
-  const ids = new Set([...ssoFlows.keys(), ...ssoStatus.keys(), ...ssoStatusAsked, ...ssoPollers.keys()]);
+  const ids = new Set([...ssoFlows.keys(), ...ssoStatus.keys(), ...ssoStatusAsked, ...ssoStatusFailed.keys(), ...ssoPollers.keys()]);
   for (const id of ids) {
     const s = byId.get(id);
     if (s && s.need === "sso") continue;
@@ -1937,6 +1948,7 @@ function pruneSSO() {
     ssoFlows.delete(id);
     ssoStatus.delete(id);
     ssoStatusAsked.delete(id);
+    ssoStatusFailed.delete(id);
   }
 }
 
@@ -2335,10 +2347,13 @@ async function refreshSessions() {
   // A session that needs you for a non-activity reason (an expired AWS sign-in)
   // reads "waiting" on its tab too, so the tab dot, the chip strip and the pane's
   // amber frame (chipmodel.js, tabs.js) follow needsYou without each knowing why.
+  // The tab also carries tabNeedWhy so its dot says "AWS sign-in needed", not
+  // "waiting for input", for an agent that is still working.
   const actById = new Map(lastSessions.map((s) => [s.id, needsYou(s) ? "waiting" : s.activity]));
+  const whyById = new Map(lastSessions.map((s) => [s.id, tabNeedWhy(s)]));
   // A tab whose session has left the list (killed/pruned) would otherwise keep
   // its last dot — a stale green "working" on a dead agent. Fall back to "done".
-  eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
+  eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done", whyById.get(t.id) || ""); });
   // Repaint every open pane's answer-strip control state (disabled/.off/title)
   // against the session list this poll just refreshed. setActivity above is a
   // no-op when activity is unchanged, so a pane whose replyable flag was

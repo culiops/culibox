@@ -17,3 +17,9 @@ test("unknown/missing activity is muted with no crash", () => {
     assert.equal(activityClass(v).cls, "dot unknown", JSON.stringify(v));
   }
 });
+
+test("a tab waiting only on an AWS sign-in does not claim to wait for input", () => {
+  assert.deepEqual(activityClass("waiting", "sso"), { cls: "dot waiting", title: "AWS sign-in needed" });
+  assert.deepEqual(activityClass("waiting", ""), { cls: "dot waiting", title: "waiting for input" });
+  assert.equal(activityClass("working", "sso").title, "working", "why only relabels the waiting dot");
+});

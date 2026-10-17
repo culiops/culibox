@@ -3,7 +3,12 @@
 // activityClass maps a session's server-computed activity to a dot class and a
 // hover title. Unknown/missing (an older payload, or a state we don't model yet)
 // is muted, never a thrown error — the dot must degrade, not break the row.
-function activityClass(activity) {
+//
+// why is the optional reason a session reads "waiting" without the agent
+// waiting for input (tabNeedWhy in attention.js): "sso" labels the dot "AWS
+// sign-in needed" so a working agent is not described as waiting for input.
+function activityClass(activity, why) {
+  if (activity === "waiting" && why === "sso") return { cls: "dot waiting", title: "AWS sign-in needed" };
   switch (activity) {
     case "working":  return { cls: "dot working",  title: "working" };
     case "waiting":  return { cls: "dot waiting",  title: "waiting for input" };

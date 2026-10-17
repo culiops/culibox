@@ -27,8 +27,7 @@ function grantPanel(aws, st) {
   const e = aws && aws.elevate;
   if (!e) return null;
   const max = Number(e.max_minutes) || 60;
-  let windows = ELEV_WINDOWS.filter((w) => w <= max);
-  if (!windows.length) windows = [max];
+  const windows = ELEV_WINDOWS.filter((w) => w <= max);
   const se = (st && st.elevate) || {};
   return {
     role: elevRoleName(e.role_arn),

@@ -301,6 +301,7 @@
               <select id="pf-aws-elev-max" class="fld"><option value="60">60 min</option><option value="30">30 min</option></select></div>
             <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-aws-elev-iam"> allow IAM writes</label></div>
           </div>
+          <p class="tiny" id="pf-aws-elev-help">The window bounds the agent's credentials, not everything it sets up. Even with IAM writes off, it can create access that outlives the window through resource policies (an S3 bucket policy, a KMS grant, an EC2 key pair, a Lambda function URL).</p>
           <p class="warnbox tiny" id="pf-aws-elev-warn" hidden>With IAM writes on, an agent that can create a role can make one that trusts an outside account, which outlives the window. The window then bounds these credentials, not what the agent can set up.</p>
         </div>
         <div id="pf-options"></div>

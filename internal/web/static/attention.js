@@ -11,6 +11,14 @@ function needsYou(s) {
   return !!s && (s.activity === "waiting" || s.need === "sso");
 }
 
+// tabNeedWhy: why a session's tab reads "waiting" when the agent itself is not
+// waiting for input: "sso" for an expired AWS sign-in over any other activity,
+// "" otherwise. The tab's dot and tooltip use it so a working agent is not
+// described as waiting for input (the activity itself is never rewritten).
+function tabNeedWhy(s) {
+  return s && s.need === "sso" && s.activity !== "waiting" ? "sso" : "";
+}
+
 // ssoExpiredText: the SSO card's sentence, shared by cardContent and the card
 // model in elevation.js so the two cannot drift.
 function ssoExpiredText(s) {
@@ -269,7 +277,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+  module.exports = { needsYou, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

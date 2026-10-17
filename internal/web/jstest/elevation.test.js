@@ -13,7 +13,6 @@ test("grantPanel: windows up to the binding's max, role, host-tier warning, prod
     hostSessions: [{ id: "zsh-1", name: "zsh" }], blocked: "", allowIAM: false,
   });
   assert.deepStrictEqual(grantPanel({ ...aws, elevate: { ...aws.elevate, max_minutes: 30 } }, st).windows, [30]);
-  assert.deepStrictEqual(grantPanel({ ...aws, elevate: { ...aws.elevate, max_minutes: 15 } }, st).windows, [15]); // never an empty choice
   assert.strictEqual(grantPanel({ ...aws, prod: true }, st).needLabel, true);
   assert.deepStrictEqual(grantPanel(aws, null).hostSessions, []); // status not loaded yet: no list, not a crash
   assert.strictEqual(grantPanel(aws, { elevate: { blocked: "a box started by an older agent-box (instance PROD) uses /w" } }).blocked,

@@ -216,7 +216,7 @@ class Cell {
       // Activity dot leads a terminal tab (viewer tabs have no activity). Re-
       // emitted here every rebuild, so it survives renderBar wiping the strip.
       if (t.kind === "terminal" && typeof t.activity === "function") {
-        const a = activityClass(t.activity());
+        const a = activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "");
         const dot = document.createElement("span");
         dot.className = a.cls;
         if (a.title) { dot.title = a.title; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", a.title); }

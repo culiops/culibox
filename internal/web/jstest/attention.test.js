@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needsYou, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
+const { needsYou, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -247,4 +247,14 @@ test("an SSO card keeps the reply box of a replyable session (spec 8.2)", () => 
   assert.strictEqual(c.enableReplies, false);
   assert.strictEqual(cardContent({ ...s, replyable: false }).reply, false);
   assert.ok(!cardContent(s).text.includes("Done with the plan")); // the SSO sentence, not the turn summary
+});
+
+test("tabNeedWhy is sso only while the agent itself is not waiting", () => {
+  assert.strictEqual(tabNeedWhy({ activity: "working", need: "sso" }), "sso");
+  assert.strictEqual(tabNeedWhy({ activity: "idle", need: "sso" }), "sso");
+  assert.strictEqual(tabNeedWhy({ activity: "waiting", need: "sso" }), "");
+  assert.strictEqual(tabNeedWhy({ activity: "waiting", need: "ask" }), "");
+  assert.strictEqual(tabNeedWhy({ activity: "working" }), "");
+  assert.ok(needsYou({ activity: "working", need: "sso" }), "still needs-you everywhere");
+  assert.strictEqual(tabNeedWhy(null), "");
 });
