@@ -355,3 +355,60 @@ func TestProvisionRefusesPlantedDelegateSymlink(t *testing.T) {
 		t.Fatalf("file outside the data dir was written: %s", b)
 	}
 }
+
+func TestOpenReprovisionsExistingAccounts(t *testing.T) {
+	s, data := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Roll the account back to what an older build left behind: stale script,
+	// no delegate file, manifest without the delegate flag.
+	if err := os.WriteFile(s.ScriptPath(), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(r.ConfigDir, DelegateFileName))
+	os.WriteFile(filepath.Join(r.ConfigDir, manifestName), []byte(`{"mcp":true}`), 0o600)
+	def := s.defaultDir
+	s.Close()
+
+	s2, err := Open(filepath.Join(data, "accounts.json"), data, def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if b, _ := os.ReadFile(s2.ScriptPath()); string(b) != string(statuslineScript) {
+		t.Fatal("stale script not refreshed on Open")
+	}
+	if b, err := os.ReadFile(filepath.Join(r.ConfigDir, DelegateFileName)); err != nil || string(b) != "/x/sl.sh" {
+		t.Fatalf("delegate after Open = %q %v", b, err)
+	}
+}
+
+func TestOpenSurvivesOneAccountFailingToProvision(t *testing.T) {
+	s, data := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	bad, err := s.Create(Account{Name: "bad", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, err := s.Create(Account{Name: "good", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt bad's settings.json so provision refuses it; remove good's delegate.
+	os.WriteFile(filepath.Join(bad.ConfigDir, "settings.json"), []byte("{not json"), 0o600)
+	os.Remove(filepath.Join(good.ConfigDir, DelegateFileName))
+	def := s.defaultDir
+	s.Close()
+
+	s2, err := Open(filepath.Join(data, "accounts.json"), data, def)
+	if err != nil {
+		t.Fatalf("Open must not fail on one bad account: %v", err)
+	}
+	defer s2.Close()
+	if _, err := os.Stat(filepath.Join(good.ConfigDir, DelegateFileName)); err != nil {
+		t.Fatalf("other accounts must still be re-provisioned: %v", err)
+	}
+}

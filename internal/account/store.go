@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -71,7 +72,26 @@ func Open(path, dataDir, defaultDir string) (*Store, error) {
 		}
 		s.byName[a.Name] = a
 	}
+	s.reprovisionAll()
 	return s, nil
+}
+
+// reprovisionAll brings every registered account up to this build's script and
+// delegate. provision otherwise runs only on Create/Update, so without this an
+// upgraded daemon would leave existing accounts on the old statusLine script.
+// provision is idempotent and never clobbers; one account failing is logged
+// and must not stop the daemon (or the other accounts).
+func (s *Store) reprovisionAll() {
+	names := make([]string, 0, len(s.byName))
+	for n := range s.byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if err := s.provision(s.resolvedLocked(s.byName[n])); err != nil {
+			log.Printf("account %q: re-provision on startup failed (continuing): %v", n, err)
+		}
+	}
 }
 
 // Close releases the dataDir root.

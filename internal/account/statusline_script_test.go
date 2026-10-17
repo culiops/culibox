@@ -117,3 +117,26 @@ func TestStatusScriptSelfReferencingDelegateFallsBack(t *testing.T) {
 	}
 	assertHarvested(t, cfg)
 }
+
+func TestStatusScriptToleratesWrongJSONTypes(t *testing.T) {
+	cases := map[string]string{
+		`{"model":"Opus 5.5","effort":"high","workspace":"x","cwd":"/work/proj"}`: "Opus 5.5 | ~/proj\n",
+		`{"model":7,"effort":[1],"workspace":[],"cwd":"/work/proj"}`:              "unknown | ~/proj\n",
+		`{"model":{"display_name":"Opus 5.5"},"effort":{"level":3},"cwd":5}`:      "Opus 5.5 | ~/ | effort 3\n",
+	}
+	for in, want := range cases {
+		if got := runStatusScript(t, t.TempDir(), in); got != want {
+			t.Fatalf("%s\n got %q want %q", in, got, want)
+		}
+	}
+}
+
+func TestStatusScriptKeepsDelegateOutputOnNonZeroExit(t *testing.T) {
+	cfg := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cfg, DelegateFileName), []byte("cat >/dev/null; echo PARTIAL-FOOTER; exit 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := runStatusScript(t, cfg, sampleStatusInput); got != "PARTIAL-FOOTER\n" {
+		t.Fatalf("output = %q", got)
+	}
+}

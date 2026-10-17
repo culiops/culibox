@@ -45,11 +45,12 @@ except Exception:
     sys.exit(0)
 if not isinstance(data, dict):
     sys.exit(0)
-rl = data.get("rate_limits") or {}
+rl = data.get("rate_limits")
+rl = rl if isinstance(rl, dict) else {}
 out = {"source": "agent-box", "updated_at": int(time.time())}
 for key in ("five_hour", "seven_day"):
     w = rl.get(key)
-    if not w:
+    if not isinstance(w, dict) or not w:
         continue
     out[key] = {"used_percentage": w.get("used_percentage", 0), "resets_at": w.get("resets_at", 0)}
 cfg = os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(os.path.expanduser("~"), ".claude"))
@@ -58,12 +59,18 @@ try:
         json.dump(out, f)
 except OSError:
     pass
-model = (data.get("model") or {}).get("display_name") or "unknown"
-cwd = (data.get("workspace") or {}).get("current_dir") or data.get("cwd") or ""
+def obj(v):
+    return v if isinstance(v, dict) else {}
+def text(v):
+    return v if isinstance(v, str) else ""
+m = data.get("model")
+model = (m if isinstance(m, str) else text(obj(m).get("display_name"))) or "unknown"
+cwd = text(obj(data.get("workspace")).get("current_dir")) or text(data.get("cwd"))
 base = os.path.basename(cwd.rstrip("/")) or cwd
 line = "%s | ~/%s" % (model, base)
-effort = (data.get("effort") or {}).get("level")
-if effort:
+e = obj(data.get("effort")).get("level")
+effort = e if isinstance(e, (str, int)) and not isinstance(e, bool) else ""
+if effort != "":
     line += " | effort %s" % effort
 print(line)
 ' 2>/dev/null || true)
@@ -78,7 +85,9 @@ if [ -s "$DELEGATE" ] && [ -z "${AGENTBOX_STATUSLINE_DELEGATING:-}" ]; then
     "") ;;
     *statusline-ratelimits.sh*) ;;
     *)
-      OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || OUT=""
+      # Keep whatever it printed even on a non-zero exit (the default script's
+      # last step can fail after the footer line is already out).
+      OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || true
       if [ -n "$OUT" ]; then
         printf '%s\n' "$OUT"
         exit 0
