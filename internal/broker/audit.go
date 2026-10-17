@@ -151,7 +151,9 @@ func (a *Audit) Record(r Row) error {
 }
 
 // RecordApproval appends one approval row. Times are unix seconds (until 0 when
-// zero); Reason and Error are one line and bounded. The error is returned so a
+// zero); Reason and Error are one line and bounded. Reason has its own, larger
+// bound (maxReasonBytes) so a valid 200-character reason in any script is kept
+// whole. The error is returned so a
 // caller can fail closed when the decision could not be recorded.
 func (a *Audit) RecordApproval(r ApprovalRow) error {
 	var until int64
@@ -162,7 +164,7 @@ func (a *Audit) RecordApproval(r ApprovalRow) error {
 		(ts, session_id, profile, account_id, role_arn, action, until, minutes, reason, cred, error)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, string(r.Action), until, r.Minutes,
-		sanitize(r.Reason), r.Cred, sanitize(r.Error))
+		sanitizeN(r.Reason, maxReasonBytes), r.Cred, sanitize(r.Error))
 	return err
 }
 

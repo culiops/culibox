@@ -33,8 +33,20 @@ func (f *fakeMinter) Mint(_ context.Context, in MintInput) (Creds, error) {
 }
 
 type memRec struct {
-	mu   sync.Mutex
-	rows []Row
+	mu      sync.Mutex
+	rows    []Row
+	appr    []ApprovalRow
+	apprErr error
+}
+
+func (m *memRec) RecordApproval(r ApprovalRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.apprErr != nil {
+		return m.apprErr
+	}
+	m.appr = append(m.appr, r)
+	return nil
 }
 
 func (m *memRec) Record(r Row) error {

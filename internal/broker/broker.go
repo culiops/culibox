@@ -30,7 +30,10 @@ type SessionView struct {
 	Nonce string
 	Boxed bool
 	Live  bool
-	AWS   *config.AWSBinding
+	// Exclusive: the session's box is its own (an elevate binding); a grant is
+	// refused without it.
+	Exclusive bool
+	AWS       *config.AWSBinding
 }
 
 // Lookup resolves a session id; ok is false for an unknown session.
@@ -99,6 +102,17 @@ type Broker struct {
 	stats     map[string]*Stats
 	denied    map[deniedKey]*deniedState
 	lastPrune time.Time
+
+	// Elevation overlay (elevate.go); all guarded by mu except after/claimCheck/appr,
+	// which are set before the broker serves.
+	elev       map[string]*elevation
+	dropped    map[string]time.Time // sid -> latest Expiration still valid after a drop
+	gen        uint64
+	refused    map[refusedKey]time.Time
+	lastRefuse time.Time
+	after      func(time.Duration, func()) stopper
+	claimCheck func(sessionID string) error
+	appr       ApprovalRecorder // nil when rec cannot store approvals: every grant is refused
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -117,9 +131,13 @@ type deniedState struct {
 const deniedWindow = time.Second
 
 func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
-	return &Broker{secret: secret, lookup: lookup, minter: m, rec: rec, now: time.Now,
+	b := &Broker{secret: secret, lookup: lookup, minter: m, rec: rec, now: time.Now,
 		cache: map[string]cached{}, mintTimes: map[string][]time.Time{}, stats: map[string]*Stats{},
-		denied: map[deniedKey]*deniedState{}}
+		denied: map[deniedKey]*deniedState{},
+		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
+		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
+	b.appr, _ = rec.(ApprovalRecorder)
+	return b
 }
 
 // Token is the bearer token for one spawn of a session.
@@ -143,6 +161,14 @@ func (b *Broker) Forget(sessionID string) {
 	delete(b.cache, sessionID)
 	delete(b.mintTimes, sessionID)
 	delete(b.stats, sessionID)
+	if e := b.elev[sessionID]; e != nil {
+		e.timer.Stop()
+		delete(b.elev, sessionID)
+	}
+	delete(b.dropped, sessionID)
+	delete(b.refused, refusedKey{sessionID, CredCookie})
+	delete(b.refused, refusedKey{sessionID, CredBearer})
+	delete(b.refused, refusedKey{sessionID, credNone})
 }
 
 func (b *Broker) Handler() http.Handler {
@@ -387,10 +413,13 @@ func (b *Broker) record(r Row) {
 }
 
 // sanitize makes a minter error safe to store and return: one line, bounded.
-func sanitize(s string) string {
+func sanitize(s string) string { return sanitizeN(s, maxErrLen) }
+
+// sanitizeN is sanitize with an explicit byte bound.
+func sanitizeN(s string, n int) string {
 	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > maxErrLen {
-		s = strings.ToValidUTF8(s[:maxErrLen], "") + "…"
+	if len(s) > n {
+		s = strings.ToValidUTF8(s[:n], "") + "…"
 	}
 	return s
 }
