@@ -555,6 +555,10 @@
        "Show the full message" toggle. */
     #sessions .nbody .peektxt { cursor: pointer; }
     #sessions .peektxt.ask { font-weight: 600; }
+    /* The display-mask note under an ask/peek/summary (syncMaskHint). A <p> in
+       the card, the peek row, the reply sheet and the mobile card, so the
+       default block margins are reset once here. */
+    .maskhint { margin: 4px 0 0; overflow-wrap: anywhere; }
     #sessions .nacts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
     /* The full command an ask card's Yes/No answers (spec §2.5): monospace,
        wrapped. No max-height/overflow (final fix wave, I2): Yes/No must not

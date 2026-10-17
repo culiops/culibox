@@ -180,7 +180,8 @@ function awsRailRows(s) {
 function readAWSFields(get) {
   const role = String(get("pf-aws-role") || "").trim();
   if (!role) return undefined;
-  return {
+  const egress = String(get("pf-aws-egress") || "").split("\n").map((x) => x.trim()).filter(Boolean);
+  const out = {
     source_profile: String(get("pf-aws-profile") || "").trim(),
     role_arn: role,
     region: String(get("pf-aws-region") || "").trim(),
@@ -188,6 +189,10 @@ function readAWSFields(get) {
     label: String(get("pf-aws-label") || "").trim(),
     prod: !!get("pf-aws-prod"),
   };
+  // Only when there are hosts: an empty list must not reach the server, so a
+  // binding without extra hosts keeps its pre-egress hash (and its box name).
+  if (egress.length) out.egress_allow = egress;
+  return out;
 }
 
 if (typeof module !== "undefined" && module.exports) {

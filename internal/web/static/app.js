@@ -929,6 +929,22 @@ let cardAskSeen = new Map();
 // card mid-request). Fed into rowLocal/rowSig.
 let pendingAnswers = new Set();
 
+// syncMaskHint keeps the display-mask note as the sibling right after `anchor`
+// (a text block already in the DOM): present iff the text shown there carries a
+// mask token. textContent only; the hint is a fixed string, the text is data.
+function syncMaskHint(anchor, text) {
+  if (!anchor) return;
+  const next = anchor.nextElementSibling;
+  const have = next && next.classList.contains("maskhint") ? next : null;
+  const msg = maskHint(text);
+  if (!msg) { if (have) have.remove(); return; }
+  if (have) { have.textContent = msg; return; }
+  const p = document.createElement("p");
+  p.className = "tiny mut maskhint";
+  p.textContent = msg;
+  anchor.after(p);
+}
+
 // peekRowFor: the answer block belonging to a row, if it is open. A sibling,
 // not a child — see the stylesheet for why the amber column needs it there.
 function peekRowFor(li) {
@@ -1250,6 +1266,7 @@ async function togglePeek(li, s) {
     body.textContent = "Loading…";
   }
   peek.appendChild(body);
+  syncMaskHint(body, body.textContent);
   let status = 0;
   let payload = null;
   try {
@@ -1263,6 +1280,7 @@ async function togglePeek(li, s) {
   const st = peekState(!!s.claude, status, payload);
   body.textContent = st.text;
   body.classList.toggle("muted", st.kind !== "text");
+  syncMaskHint(body, st.text);
   li.dataset.peekPending = payload && payload.pending ? "1" : "";
   lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: !!(payload && payload.pending) };
 
@@ -1367,6 +1385,7 @@ async function toggleCardPeek(s) {
   if (!txt) return; // the row moved on (e.g. stopped waiting) before this landed
   txt.textContent = st.text;
   txt.classList.toggle("muted", st.kind !== "text");
+  syncMaskHint(txt, st.text);
 }
 
 // usageOf(tab) → the usage object for an already-resolved terminal tab, or
@@ -1566,6 +1585,7 @@ function renderNeedsBody(s) {
   txt.onclick = toggle;
   txt.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(e); } };
   body.appendChild(txt);
+  syncMaskHint(txt, txt.textContent);
 
   // The full command, once expanded — what Yes/No will answer. textContent
   // only; wrapped, monospace (spec §2.5).
@@ -1724,6 +1744,7 @@ function renderNeedsCard(s) {
   // one-line digest of the last assistant message) — never a second fetch.
   msg.textContent = s.summary || "No summary";
   li.appendChild(msg);
+  syncMaskHint(msg, msg.textContent);
 
   const qk = document.createElement("div");
   qk.className = "qk";
@@ -2433,6 +2454,7 @@ function fillForm(p) {
   $("pf-aws-role").value = aws.role_arn || "";
   $("pf-aws-region").value = aws.region || "";
   $("pf-aws-s3").value = (aws.s3_read || []).join("\n");
+  $("pf-aws-egress").value = (aws.egress_allow || []).join("\n");
   $("pf-aws-label").value = aws.label || "";
   $("pf-aws-prod").checked = !!aws.prod;
   syncPfReplyable();
@@ -3605,6 +3627,7 @@ function openReplySheet(s) {
       if (!dlg || !dlg.open || !box.isConnected) return;
       const st = peekState(!!s.claude, status, payload);
       box.textContent = st.text;
+      syncMaskHint(box, st.text);
       pendingNow = !!(payload && payload.pending);
       lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: pendingNow };
       refresh();
