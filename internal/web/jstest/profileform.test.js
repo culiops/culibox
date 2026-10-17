@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -73,4 +73,12 @@ test("a stored runtime 'box' lights the box button; an AWS binding forces an exp
   assert.strictEqual(runtimeToSend("", true, false), "box");    // stored as box: stays box
   assert.strictEqual(runtimeToSend("", false, true), "box");    // AWS: the server refuses an empty runtime
   assert.strictEqual(runtimeToSend("host", false, true), "host"); // the server's refusal is the message
+});
+
+test("boxToSend returns the stored image override and nothing else", () => {
+  assert.deepStrictEqual(boxToSend({ image: "culiops/agent-box:m3a-test" }), { image: "culiops/agent-box:m3a-test" });
+  assert.deepStrictEqual(boxToSend({ image: "  img:1  " }), { image: "img:1" });
+  for (const v of [undefined, null, {}, { image: "" }, { image: "   " }, { image: 42 }]) {
+    assert.strictEqual(boxToSend(v), undefined, JSON.stringify(v));
+  }
 });

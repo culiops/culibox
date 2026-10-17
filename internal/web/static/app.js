@@ -2433,6 +2433,9 @@ function syncPfReplyable() {
 // rowsToConfig turns them back into the two fields the server stores.
 let pfEnvRows = [];
 let pfExplicitBox = false;
+// The stored profile's box override (image). The editor has no box field, so it
+// is carried through unchanged; see boxToSend.
+let pfLoadedBox = null;
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
@@ -2441,6 +2444,7 @@ function fillForm(p) {
   // remember it was explicit: saving it as blank would hand the tier back to
   // the instance default.
   pfExplicitBox = p.runtime === "box";
+  pfLoadedBox = p.box || null;
   renderPfRuntime(segFromRuntime(p.runtime));
   renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
@@ -2518,6 +2522,8 @@ function readForm() {
   // message answers the one case left, an AWS binding saved on the host tier.
   const rt = runtimeToSend(segValue($("pf-runtime")), pfExplicitBox, !!aws);
   if (rt) p.runtime = rt;
+  const bx = boxToSend(pfLoadedBox);
+  if (bx) p.box = bx;
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
