@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -610,5 +613,105 @@ func TestInfoNeverCarriesTheEgressToken(t *testing.T) {
 	b, _ := json.Marshal(s.Info())
 	if strings.Contains(string(b), "etok-") || strings.Contains(string(b), "@172.21.0.1") {
 		t.Fatalf("Info leaks the egress token or proxy URL: %s", b)
+	}
+}
+
+func elevTestBinding() *config.AWSBinding {
+	b := testBinding()
+	b.Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write"}
+	return b
+}
+
+func elevLauncher() awsLauncher {
+	return awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, binding: elevTestBinding()}
+}
+
+func TestElevatableSpawnGetsItsOwnBoxAndIsExclusive(t *testing.T) {
+	m, boxes, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	m.launcher = elevLauncher()
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if boxes.lastKey.Session != s.ID || boxes.lastKey.Binding != elevTestBinding().Hash() || !s.Exclusive {
+		t.Fatalf("key %+v exclusive %v", boxes.lastKey, s.Exclusive)
+	}
+}
+
+func TestPlainBoundSpawnIsNotExclusive(t *testing.T) {
+	m, boxes, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if boxes.lastKey.Session != "" || s.Exclusive {
+		t.Fatalf("a binding without elevate shares boxes as before: %+v", boxes.lastKey)
+	}
+}
+
+func TestWorkspaceHeldReachesTheUserVerbatim(t *testing.T) {
+	m, boxes, _, _ := boundManager(t, []string{"sh"}, config.RuntimeBox, time.Minute)
+	msg := "/w/x is in use by an AWS-write-capable session (or another session sits in this folder). Use a separate folder or worktree, or stop the other session."
+	boxes.wrapErr = fmt.Errorf("%w: %s", box.ErrWorkspaceHeld, msg)
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if !errors.Is(err, box.ErrWorkspaceHeld) || strings.Contains(err.Error(), "run on the host") || strings.Count(err.Error(), msg) != 1 {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// The exclusive flag rides the sidecar so a restart re-marks the box (it
+// would otherwise be treated as shared, idling for the TTL instead of being
+// removed with its session) and the session keeps its identity. A record that
+// predates the field reads as false.
+func TestSidecarRestoresExclusiveAndMarksTheBox(t *testing.T) {
+	l := elevLauncher()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	raw, err := os.ReadFile(path)
+	if err != nil || !regexp.MustCompile(`"exclusive":\s*true`).Match(raw) {
+		t.Fatalf("sidecar lacks exclusive true: %v\n%s", err, raw)
+	}
+
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	boxes2 := &fakeBoxes{}
+	m2.SetBoxes(boxes2)
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if !r.Exclusive {
+		t.Fatal("restored session lost Exclusive")
+	}
+	if !reflect.DeepEqual(boxes2.marked, []string{"ab-box-test"}) {
+		t.Fatalf("marked = %v, want the session's box", boxes2.marked)
+	}
+}
+
+func TestPlainSidecarRecordIsNotExclusive(t *testing.T) {
+	var md sessionMeta
+	if err := json.Unmarshal([]byte(`{"agent":"aws","runtime":"box","box":"ab-box-x"}`), &md); err != nil || md.Exclusive {
+		t.Fatalf("old record: err=%v exclusive=%v", err, md.Exclusive)
 	}
 }

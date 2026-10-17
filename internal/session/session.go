@@ -322,6 +322,9 @@ type Session struct {
 	// AWSNonce is this spawn's broker-token nonce (set iff AWS is). Immutable,
 	// read without the lock. Never put it on the wire: Info leaves it out.
 	AWSNonce string
+	// Exclusive: this session's box is its own (an elevate binding). Immutable;
+	// the broker refuses a grant without it.
+	Exclusive bool
 
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
@@ -1013,6 +1016,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	var boxName string
 	var nonce string
+	var exclusive bool
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
@@ -1053,6 +1057,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
 			key.Binding = binding.Hash()
+			if binding.Elevate != nil {
+				// An elevatable binding gets a box of its own (M3b §7.1):
+				// processes in a shared box can read each other's broker token
+				// from /proc, and an elevated token must not be readable by
+				// another session.
+				key.Session = id
+			}
 		}
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {
@@ -1060,7 +1071,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// again would print the remedy twice. A containment-check failure
 			// gets no "run on the host" hint either: that is the one thing to
 			// push the user away from right after containment failed.
-			if errors.Is(err, box.ErrUnboxableWorkspace) || errors.Is(err, box.ErrBoxUnavailable) {
+			if errors.Is(err, box.ErrUnboxableWorkspace) || errors.Is(err, box.ErrBoxUnavailable) || errors.Is(err, box.ErrWorkspaceHeld) {
 				return nil, err
 			}
 			// Name the way out: a silent failure here is what makes people
@@ -1069,6 +1080,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				spec.Cwd, err, config.RuntimeHost)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
+		exclusive = key.Session != ""
 		if bundleHash != "" {
 			// Logged per spawn so a box still carrying an older bundle is
 			// visible rather than silent.
@@ -1127,6 +1139,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.ConfigDir = cfgDir
 	sess.AWS = binding
 	sess.AWSNonce = nonce
+	sess.Exclusive = exclusive
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	sess.replyable = replyable
@@ -1139,7 +1152,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1551,6 +1564,14 @@ func (m *Manager) adoptSurvivingBoxes(aliveIDs []string, meta map[string]session
 			continue
 		}
 		boxes.AdoptBox(md.Box)
+		if md.Exclusive {
+			// The sidecar is the only memory of which boxes are exclusive: an
+			// adopted box is otherwise shared, so it would idle for the TTL
+			// instead of being removed with its session.
+			if mx, ok := boxes.(interface{ MarkExclusive(string) }); ok {
+				mx.MarkExclusive(md.Box)
+			}
+		}
 	}
 }
 
@@ -1592,6 +1613,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.ConfigDir = md.ConfigDir
 	sess.AWS = md.AWS
 	sess.AWSNonce = md.AWSNonce
+	sess.Exclusive = md.Exclusive
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.

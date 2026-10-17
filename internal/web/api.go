@@ -71,7 +71,7 @@ var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 	log.Printf("spawn agent=%q: %v", agent, err)
 	switch {
-	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable),
+	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),
 		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),

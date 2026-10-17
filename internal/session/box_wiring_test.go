@@ -45,6 +45,7 @@ type fakeBoxes struct {
 	adopts   int
 	kills    int
 	adopted  []string
+	marked   []string // MarkExclusive calls
 
 	wrapErr    error // returned by Wrap when set
 	prepares   int
@@ -105,6 +106,12 @@ func (f *fakeBoxes) AdoptBox(name string) {
 	defer f.mu.Unlock()
 	f.adopts++
 	f.adopted = append(f.adopted, name)
+}
+
+func (f *fakeBoxes) MarkExclusive(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.marked = append(f.marked, name)
 }
 
 func (f *fakeBoxes) ReleaseBox(string) {

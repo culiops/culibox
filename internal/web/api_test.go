@@ -737,6 +737,27 @@ func TestSpawnErrShowsUnboxableWorkspace(t *testing.T) {
 	}
 }
 
+// A workspace refusal names the conflicting box and path; the user needs it
+// to pick another folder, so it is shown rather than hidden.
+func TestSpawnErrShowsWorkspaceHeld(t *testing.T) {
+	wrapped := fmt.Errorf("%w: /w is in use by an AWS-write-capable session. Use a separate folder or worktree, or stop the other session.", box.ErrWorkspaceHeld)
+	a := &API{Sessions: &mockSvc{spawnErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
+	var got struct {
+		Error string `json:"error"`
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code %d want 400", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	if got.Error != wrapped.Error() {
+		t.Fatalf("error = %q, want %q", got.Error, wrapped.Error())
+	}
+}
+
 // TestRestartErrHidesDetailByDefault: /restart's unrecognised-error branch
 // also goes through writeSpawnErr (see the brief's "(restart <id>)" agent
 // label) — same hide-the-detail contract applies there too.
