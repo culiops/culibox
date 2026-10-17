@@ -100,7 +100,7 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 
 func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false)
 	joined := strings.Join(got, " ")
 	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude,"} {
 		if strings.Contains(joined, forbidden) {
@@ -120,7 +120,7 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 
 func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}})
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false)
 	if !containsPair(got, "--mount", "type=bind,src=/data/bundle,dst=/opt/agent-bundle,readonly") {
 		t.Fatalf("extra mounts must be readonly binds: %q", strings.Join(got, " "))
 	}
@@ -179,7 +179,7 @@ func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
 
 func TestRunArgsAreHardened(t *testing.T) {
 	m := newTestManager(t)
-	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil), " ")
+	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil, false), " ")
 	for _, want := range []string{"--cap-drop=ALL", "no-new-privileges", "--read-only", "--pids-limit", "--init"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing hardening %q in %q", want, joined)
@@ -189,14 +189,14 @@ func TestRunArgsAreHardened(t *testing.T) {
 
 func TestSysboxRuntimeOnlyWhenDetected(t *testing.T) {
 	plain := newTestManager(t)
-	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil), " "), "sysbox") {
+	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil, false), " "), "sysbox") {
 		t.Fatal("must not request sysbox when it is not installed")
 	}
 	if plain.Runtime() != runtimeRunc {
 		t.Fatalf("Runtime() = %q, want %q", plain.Runtime(), runtimeRunc)
 	}
 	withSysbox := newTestManagerWithSysbox(t)
-	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil), " "), "--runtime="+runtimeSysbox) {
+	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil, false), " "), "--runtime="+runtimeSysbox) {
 		t.Fatal("expected --runtime=sysbox-runc when detected")
 	}
 	if withSysbox.Runtime() != runtimeSysbox {
@@ -326,7 +326,7 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	if _, err := m.ensureStateDir("ab-box-abc", nil); err != nil {
 		t.Fatal(err)
 	}
-	args := m.runArgs("ab-box-abc", "/w", nil)
+	args := m.runArgs("ab-box-abc", "/w", nil, false)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "ab-state-") {
 		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)

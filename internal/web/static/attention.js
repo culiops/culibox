@@ -42,6 +42,16 @@ function cardContent(s) {
   return { text: v.summary || "No summary", ask: false, reply: !!v.replyable, enableReplies: !v.replyable };
 }
 
+// maskHint: the one-line note under text the server's display mask touched.
+// Empty unless the shown text really carries a "[masked:" token, so an
+// unmasked ask or peek never claims to be masked. The mask is display-only
+// (spec section 8): AskFull is never masked and never goes through this.
+function maskHint(text) {
+  return String(text == null ? "" : text).includes("[masked:")
+    ? "Display mask: the agent and its transcript still hold the original."
+    : "";
+}
+
 // attentionTitle: the tab title. The waiting count goes FIRST so it survives a
 // tab strip that truncates from the right.
 function attentionTitle(n, env) {
@@ -239,5 +249,5 @@ function staleExpanded(s, seenAskFull) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
-    sha256Hex, answerState, answerErrorText, staleExpanded };
+    sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"github.com/culiops/agent-box/internal/broker"
+	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -72,6 +73,10 @@ type AWSStatusAdapter struct {
 	Get    func(id string) (session.Info, bool)
 	Stats  func(id string) (broker.Stats, bool)
 	Recent func(id string, limit int) ([]broker.Row, error)
+	// Egress reports the session's proxy counters; nil = egress control is not
+	// running, and the reply carries no egress object. ok is false until the
+	// session's first tunnel or denial, which reads as zeros, never a hidden row.
+	Egress func(id string) (egress.Stats, bool)
 }
 
 // AWSStatus is ok only for a known session that has an AWS binding.
@@ -90,8 +95,13 @@ func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) {
 	if rows == nil {
 		rows = []broker.Row{}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"label": info.AWS.Label, "account_id": info.AWS.AccountID, "role_arn": info.AWS.RoleARN,
 		"prod": info.AWS.Prod, "stats": stats, "recent": rows,
-	}, true
+	}
+	if a.Egress != nil {
+		es, _ := a.Egress(id)
+		out["egress"] = map[string]any{"mode": "allowlist", "allowed": es.Allowed, "denied": es.Denied}
+	}
+	return out, true
 }

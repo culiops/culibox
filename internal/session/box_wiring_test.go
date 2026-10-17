@@ -39,6 +39,7 @@ type fakeBoxes struct {
 	lastAcct string // account the last Wrap was called with
 	lastKey  box.BoxKey
 	lastEnv  []string
+	lastArgv []string
 	lastRO   []box.Mount
 	releases int
 	adopts   int
@@ -87,6 +88,7 @@ func (f *fakeBoxes) Wrap(_ context.Context, _ string, _ string, key box.BoxKey, 
 	f.lastAcct = key.Account
 	f.lastKey = key
 	f.lastEnv = append([]string(nil), env...)
+	f.lastArgv = append([]string(nil), argv...)
 	f.lastRO = append([]box.Mount(nil), extraRO...)
 	f.order.add("wrap")
 	if f.wrapErr != nil {

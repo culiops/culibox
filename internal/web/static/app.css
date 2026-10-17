@@ -555,6 +555,10 @@
        "Show the full message" toggle. */
     #sessions .nbody .peektxt { cursor: pointer; }
     #sessions .peektxt.ask { font-weight: 600; }
+    /* The display-mask note under an ask/peek/summary (syncMaskHint). A <p> in
+       the card, the peek row, the reply sheet and the mobile card, so the
+       default block margins are reset once here. */
+    .maskhint { margin: 4px 0 0; overflow-wrap: anywhere; }
     #sessions .nacts { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
     /* The full command an ask card's Yes/No answers (spec §2.5): monospace,
        wrapped. No max-height/overflow (final fix wave, I2): Yes/No must not
@@ -2103,6 +2107,7 @@
         letter-spacing: .08em; color: var(--muted); }
       #sheet-modal .msgbox { margin: 8px 14px 0; padding-left: 12px; border-left: 2px solid var(--rule);
         font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; }
+      #sheet-modal .sheet-body > .maskhint { margin: 4px 14px 0; }
       /* Enable-replies toggle (I1): the only control that grants a session
          reply permission — mirrors the desktop peek composer's .peek-optin. */
       #sheet-modal .sheet-optin { display: flex; align-items: center; gap: 9px;

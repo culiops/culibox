@@ -224,3 +224,20 @@ test("readAWSFields: omitted when role is empty; trims and splits the allowlist"
     source_profile: "x", role_arn: ARN, region: "ap-southeast-1",
     s3_read: ["culishop-tfstate", "culishop-logs/AWSLogs/"], label: "", prod: true });
 });
+
+test("readAWSFields keeps egress_allow, one host per line", () => {
+  const f = { "pf-aws-role": "arn:aws:iam::226198813800:role/agentbox-agent", "pf-aws-egress": " a.example.com \n\n*.b.example.com" };
+  assert.deepStrictEqual(readAWSFields((id) => f[id] || "").egress_allow, ["a.example.com", "*.b.example.com"]);
+});
+
+test("readAWSFields: no egress hosts saves none, so the binding hash (and the box name) does not move", () => {
+  const role = { "pf-aws-role": "arn:aws:iam::226198813800:role/agentbox-agent" };
+  for (const raw of [undefined, "", "  \n \n"]) {
+    const f = Object.assign({}, role, { "pf-aws-egress": raw });
+    const out = readAWSFields((id) => f[id] || "");
+    // Empty is the only shape the server hashes like a pre-egress binding
+    // (omitempty); anything non-empty here would rename existing boxes.
+    assert.ok(!out.egress_allow || out.egress_allow.length === 0);
+    assert.ok(!("egress_allow" in JSON.parse(JSON.stringify(out))) || JSON.parse(JSON.stringify(out)).egress_allow.length === 0);
+  }
+});

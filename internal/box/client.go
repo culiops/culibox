@@ -50,6 +50,20 @@ func (c CLIClient) run(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// RunInput is run with stdin. It exists to hand a credential to `docker exec -i`
+// without putting it in argv (world-readable through ps) or in the environment.
+// The error carries the command's output but never the stdin payload, and the
+// payload is not logged here.
+func (c CLIClient) RunInput(ctx context.Context, args []string, stdin string) (string, error) {
+	cmd := c.command(ctx, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker %s: %w: %s", args[0], err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Run starts a detached container and returns its id.
 func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 	return c.run(ctx, args...)

@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, awsStatsRows } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow } = require("../static/steerrail.js");
 // The real tierBadge, not a hand-written stand-in: the point of the change these
 // tests cover is that the rail consumes tier.js's verdict rather than deriving a
 // second one, so a fixture that agreed with the rail but not with tier.js would
@@ -194,4 +194,16 @@ test("awsStatsRows: last error is its own wrapping row, verbatim", () => {
   const rows = awsStatsRows({ stats: { mints: 3, last_mint: "0001-01-01T00:00:00Z", last_error: err } }, 0);
   assert.deepStrictEqual(rows[1], { k: "error", v: err, wrap: true });
   assert.strictEqual(awsStatsRows({ stats: { mints: 3, last_mint: "0001-01-01T00:00:00Z", last_error: "" } }, 0).length, 1);
+});
+
+test("egressRow: absent without the egress object; allowlist and the denied count otherwise", () => {
+  assert.strictEqual(egressRow(null), null);
+  assert.strictEqual(egressRow({ stats: {} }), null);
+  assert.deepStrictEqual(egressRow({ egress: { mode: "allowlist", denied: 0 } }), { k: "egress", v: "allowlist \u00b7 0 denied since start", wrap: true });
+  assert.deepStrictEqual(egressRow({ egress: { mode: "allowlist", denied: 3 } }), { k: "egress", v: "allowlist \u00b7 3 denied since start", wrap: true });
+});
+
+test("egressRow: a missing or non-numeric denied count reads as zero, never NaN", () => {
+  assert.strictEqual(egressRow({ egress: { mode: "allowlist" } }).v, "allowlist \u00b7 0 denied since start");
+  assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: "x" } }).v, "allowlist \u00b7 0 denied since start");
 });

@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded } = require("../static/attention.js");
+const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -200,4 +200,23 @@ test("staleExpanded: a turn card that gains an ask since expand is stale", () =>
 test("staleExpanded: no seenAskFull recorded never stales on ask_full alone", () => {
   const s = { activity: "waiting", need: "turn", summary: "done" };
   assert.strictEqual(staleExpanded(s, undefined), false);
+});
+
+test("maskHint names a display mask only when something was masked", () => {
+  assert.strictEqual(maskHint("plain"), "");
+  assert.strictEqual(maskHint(undefined), "");
+  assert.strictEqual(maskHint(null), "");
+  assert.strictEqual(maskHint("a [masked-ish] thing"), "");
+  assert.strictEqual(maskHint("key [masked:aws-key-id] here"), "Display mask: the agent and its transcript still hold the original.");
+});
+
+test("a masked ask reaches the notification as the tool name only", () => {
+  assert.strictEqual(notifyBody({ need: "ask", ask: "Bash(echo [masked:aws-key-id])" }), "asks: Bash");
+  assert.strictEqual(cardContent({ need: "ask", ask: "Bash(echo [masked:aws-key-id])" }).text, "Bash(echo [masked:aws-key-id])");
+});
+
+test("the hint follows the shown text, not ask_full: the real command is never the masked one", () => {
+  const s = { need: "ask", ask: "Bash(echo [masked:aws-key-id])", ask_full: "echo AKIAABCDEFGHIJKLMNOP" };
+  assert.notStrictEqual(maskHint(cardContent(s).text), "");
+  assert.strictEqual(maskHint(s.ask_full), "");
 });

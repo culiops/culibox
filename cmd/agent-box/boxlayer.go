@@ -12,6 +12,7 @@ import (
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/egress"
 )
 
 // verifyTimeout bounds the containment probe of a new box. The spawn holds the
@@ -171,6 +172,34 @@ func (l *boxLayer) verify(ctx context.Context, name string) error {
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 	}
 	return nil
+}
+
+// egressExec runs the egress probe's script in the named box. The credential
+// goes to `node -e` on stdin only (docker exec -i), never in argv or env.
+func (l *boxLayer) egressExec(name string) egress.ExecInput {
+	return func(ctx context.Context, script, stdin string) (string, error) {
+		return l.cli.RunInput(ctx, []string{"exec", "-i", name, "node", "-e", script}, stdin)
+	}
+}
+
+// egressVerify is box.Egress.Verify: it proves a bound box is contained by the
+// egress network and allowlist, by running the probe inside the real container
+// against the live proxy. It runs instead of verify for bound boxes. Fail
+// closed: a proxy that cannot start or a probe that cannot run is a refusal.
+func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, name string) error {
+	return func(ctx context.Context, name string) error {
+		ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+		defer cancel()
+		ep, err := svc.Ready(ctx)
+		if err != nil {
+			return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
+		}
+		err = egress.Probe(ctx, svc.Proxy(), name, egress.ProbeTarget{ProxyHost: ep.ProxyHost, Port: ep.Port}, l.egressExec(name))
+		if err != nil {
+			return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
+		}
+		return nil
+	}
 }
 
 // vmStopped reports a darwin VM that is not running. Background passes check it

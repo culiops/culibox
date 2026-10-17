@@ -367,6 +367,24 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 
+	// Egress control (M3c): bound boxes reach the network only through the
+	// allowlist proxy. Not fatal when it cannot start: bound profiles then refuse
+	// to spawn, and the rest of the console keeps working. Before Reconcile, and
+	// the box hooks before it too, so reattached bound boxes find them.
+	var egressSvc *egressService
+	if layer != nil && brokerSvc != nil {
+		svc, err := startEgress(dataDir, layer, cfg, runtime.GOOS, mgr.Get)
+		switch {
+		case err != nil:
+			log.Printf("egress control disabled (%v); profiles with an AWS binding will refuse to spawn", err)
+		default:
+			egressSvc = svc
+			mgr.SetEgress(svc.Svc)
+			boxes.SetEgress(box.Egress{Network: svc.Svc.Network(), Verify: layer.egressVerify(svc.Svc)})
+			log.Printf("egress control: network %s, port %d", svc.Svc.Network(), cfg.EgressPortOrDefault())
+		}
+	}
+
 	// Release attach clients on the way out instead of leaving it to SIGHUP (see
 	// awaitShutdown). SIGHUP itself is one of the signals: closing the terminal
 	// tab that runs `agent-box serve` must take this path too, unless serve was
@@ -443,10 +461,17 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
 	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd}
-	var stopBroker func(context.Context)
+	var stopBroker, stopEgress func(context.Context)
 	if brokerSvc != nil {
-		api.AWS = brokerSvc.Status // only when running: a nil service must read as "no broker", not a typed nil
+		status := brokerSvc.Status // only when running: a nil service must read as "no broker", not a typed nil
+		if egressSvc != nil {
+			status.Egress = egressSvc.Stats // nil otherwise: no egress object in the reply
+		}
+		api.AWS = status
 		stopBroker = brokerSvc.Stop
+	}
+	if egressSvc != nil {
+		stopEgress = egressSvc.Stop
 	}
 	srv := &web.Server{
 		API:        api,
@@ -559,6 +584,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 				_ = analyticsSvc.Close()
 			}
 		},
+		StopEgress:   stopEgress,
 		StopBroker:   stopBroker,
 		ShutdownHTTP: httpSrv.Shutdown,
 	}, log.Printf)

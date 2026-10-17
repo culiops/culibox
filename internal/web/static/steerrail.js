@@ -114,6 +114,19 @@ function awsStatsRows(st, nowMs) {
   return rows;
 }
 
+// egressRow: the egress proxy's line for the focused session, from the same
+// GET /api/sessions/{id}/aws response (spec correction 4: there is no separate
+// session-info panel). The server omits `egress` when the session has no
+// egress at all, so absent means no row, not "0 denied". denied is coerced so a
+// missing or garbled count reads 0 rather than NaN. The count is the daemon's
+// in-memory tally, so it says "since start": after a restart it restarts at 0
+// while egress_audit keeps the history.
+function egressRow(st) {
+  const e = st && st.egress;
+  if (!e) return null;
+  return { k: "egress", v: "allowlist \u00b7 " + (Number(e.denied) || 0) + " denied since start", wrap: true };
+}
+
 // ctxFill: the context meter. The server omits pct when the window maximum is
 // unknown or already exceeded, so a present pct is its verdict and outranks a
 // local division; with neither, the bar is not drawn at all rather than drawn
@@ -257,7 +270,7 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const awsRows = s.aws ? [...awsRailRows(s), ...awsStatsRows(awsRailCache.get(s.id), Date.now())] : null;
+  const awsRows = s.aws ? [...awsRailRows(s), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))] : null;
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, awsRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
@@ -587,5 +600,5 @@ function repaintSteerRail() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows };
+  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow };
 }

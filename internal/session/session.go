@@ -198,6 +198,24 @@ type BrokerHooks interface {
 	Forget(sessionID string)
 }
 
+// EgressHooks is what spawning a bound session needs from the egress proxy,
+// kept as an interface so this package does not import it. A nil EgressHooks
+// means egress control is not running, and bound profiles are refused: a bound
+// box with no proxy in front of it would have the open network the allowlist
+// exists to close.
+type EgressHooks interface {
+	// SpawnEnv readies the egress path (network + listener) and returns the env
+	// (NAME=value) that points a bound box's tools at the proxy, carrying this
+	// spawn's token. Values reach the box by name only (box.Wrap's `-e NAME`).
+	SpawnEnv(ctx context.Context, sessionID, nonce string) ([]string, error)
+	// StripEnv names every variable a bound session must not inherit: proxy
+	// settings that would point elsewhere or exempt hosts.
+	StripEnv() []string
+	// Forget drops the proxy's per-session state (counters, open tunnels) once
+	// the session has left the registry.
+	Forget(sessionID string)
+}
+
 // brokerTokenEnv carries the session's token into its box (the broker
 // package's TokenEnv; this package does not import it).
 const brokerTokenEnv = "AGENTBOX_BROKER_TOKEN"
@@ -767,6 +785,7 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	egress    EgressHooks // nil = egress control not running; bound profiles are refused
 	home      string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir  string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 
@@ -802,6 +821,13 @@ func (m *Manager) SetBundles(b Bundles) {
 func (m *Manager) SetBroker(h BrokerHooks) {
 	m.mu.Lock()
 	m.broker = h
+	m.mu.Unlock()
+}
+
+// SetEgress installs the egress-proxy hooks. Call once at boot, with SetBroker.
+func (m *Manager) SetEgress(h EgressHooks) {
+	m.mu.Lock()
+	m.egress = h
 	m.mu.Unlock()
 }
 
@@ -916,6 +942,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	m.mu.Lock()
 	brk := m.broker
+	eg := m.egress
 	m.mu.Unlock()
 	if binding != nil {
 		if runtime != config.RuntimeBox {
@@ -923,6 +950,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		if brk == nil {
 			return nil, fmt.Errorf("profile %q has an AWS binding but the credential broker is not running", spec.Agent)
+		}
+		if eg == nil {
+			// ErrBoxUnavailable: a containment refusal the UI shows verbatim.
+			return nil, fmt.Errorf("%w: profile %q has an AWS binding but egress control is not running, so it cannot spawn",
+				box.ErrBoxUnavailable, spec.Agent)
 		}
 	}
 
@@ -992,18 +1024,32 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, fmt.Errorf("spawn %s: preparing AWS access: %w", spec.Agent, err)
 			}
 			nonce = brk.NewNonce()
+			// The proxy URL carries a token derived from this same nonce, so a
+			// restored session's box keeps working. A failure here refuses the
+			// spawn: no proxy, no network, no session.
+			ectx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			penv, err := eg.SpawnEnv(ectx, id, nonce)
+			cancel()
+			if err != nil {
+				// Shown to the user (writeSpawnErr): these are operator remedies
+				// (a network to remove, a port in use), and the token is only
+				// derived after Ready succeeds, so it can never be in err.
+				return nil, fmt.Errorf("%w: spawn %s: preparing egress: %w", box.ErrBoxUnavailable, spec.Agent, err)
+			}
 			// Strip before adding: whatever the profile or daemon env says about
 			// AWS must neither bypass credential_process nor shadow a broker
 			// value. The broker's own names are stripped too, so each is set
 			// exactly once, by the broker.
 			strip := append(slices.Clone(brk.StripEnv()), brokerTokenEnv) // never append into the hooks' own slice
-			for _, kv := range benv {
+			strip = append(strip, eg.StripEnv()...)
+			for _, kv := range slices.Concat(benv, penv) {
 				if i := strings.IndexByte(kv, '='); i > 0 {
 					strip = append(strip, kv[:i])
 				}
 			}
 			env = withoutEnv(env, strip)
 			env = append(env, benv...)
+			env = append(env, penv...)
 			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
 			key.Binding = binding.Hash()
@@ -1111,6 +1157,22 @@ func (m *Manager) brokerForget(s *Session) {
 	m.mu.Unlock()
 	if brk != nil {
 		brk.Forget(s.ID)
+	}
+}
+
+// egressForget drops a bound session's proxy state (counters, open tunnels).
+// Like brokerForget it runs after the registry delete, so the proxy's session
+// lookup already reports the id as not live: a CONNECT that races the end is
+// refused, not re-admitted after the forget.
+func (m *Manager) egressForget(s *Session) {
+	if s.AWS == nil {
+		return
+	}
+	m.mu.Lock()
+	eg := m.egress
+	m.mu.Unlock()
+	if eg != nil {
+		eg.Forget(s.ID)
 	}
 }
 
@@ -1230,6 +1292,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		m.mu.Unlock()
 		m.peekForget(id) // the cached transcript parse dies with the session
 		m.brokerForget(sess)
+		m.egressForget(sess)
 		if sc != nil {
 			sc.remove(id) // a naturally-exited session is gone for good
 		}
@@ -1376,6 +1439,7 @@ func (m *Manager) removeSession(id string, s *Session) {
 	m.mu.Unlock()
 	m.peekForget(id) // the cached transcript parse dies with the session
 	m.brokerForget(s)
+	m.egressForget(s)
 	if sc != nil {
 		sc.remove(id)
 	}

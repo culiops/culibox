@@ -125,6 +125,15 @@ func (c Config) BrokerPortOrDefault() int {
 	return 9071
 }
 
+// EgressPortOrDefault is the egress proxy's TCP port (Linux: on the egress
+// network's gateway IP; macOS: on 127.0.0.1).
+func (c Config) EgressPortOrDefault() int {
+	if c.EgressPort > 0 {
+		return c.EgressPort
+	}
+	return 9072
+}
+
 // Config is the top-level app configuration.
 type Config struct {
 	BindAddr    string `json:"bind_addr"`
@@ -163,6 +172,7 @@ type Config struct {
 	BoxVMCPUs         int    `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → 4
 	BoxVMMemoryGiB    int    `json:"box_vm_memory_gib,omitempty"`    // macOS box VM; 0 → 4
 	BrokerPort        int    `json:"broker_port,omitempty"`          // macOS: credential broker TCP port on 127.0.0.1; 0 → 9071
+	EgressPort        int    `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
 
 	Analytics AnalyticsConfig `json:"analytics,omitempty"`
 }
@@ -286,6 +296,12 @@ func (c Config) Validate() error {
 	}
 	if c.BrokerPort < 0 || c.BrokerPort > 65535 {
 		return fmt.Errorf("config: broker_port %d out of range (want 1-65535, or 0 for the default)", c.BrokerPort)
+	}
+	if c.EgressPort < 0 || c.EgressPort > 65535 {
+		return fmt.Errorf("config: egress_port %d out of range (want 1-65535, or 0 for the default)", c.EgressPort)
+	}
+	if c.EgressPortOrDefault() == c.BrokerPortOrDefault() {
+		return fmt.Errorf("config: egress_port %d must differ from broker_port", c.EgressPortOrDefault())
 	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {

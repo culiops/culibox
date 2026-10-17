@@ -1,6 +1,9 @@
 package broker
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"testing"
@@ -82,5 +85,18 @@ func TestParseTokenParsesFromTheRight(t *testing.T) {
 	sid, n, ok := ParseToken(testSecret, tok)
 	if !ok || sid != "a.b" || n != nonce {
 		t.Fatalf("got %q %q %v", sid, n, ok)
+	}
+}
+
+// The refactor onto sesstoken must not change a single byte: live PROD
+// sessions hold tokens minted by the old code.
+func TestBrokerTokenBytesUnchanged(t *testing.T) {
+	sec := []byte("0123456789abcdef0123456789abcdef")
+	n := "00112233445566778899aabbccddeeff"
+	h := hmac.New(sha256.New, sec)
+	h.Write([]byte("broker\x00claude-3\x00" + n))
+	want := "claude-3." + n + "." + hex.EncodeToString(h.Sum(nil))
+	if got := Token(sec, "claude-3", n); got != want {
+		t.Fatalf("Token = %q, want %q", got, want)
 	}
 }

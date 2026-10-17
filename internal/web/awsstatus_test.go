@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/broker"
+	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/session"
 )
 
@@ -104,5 +105,38 @@ func TestAWSStatusAdapterNoStatsNoRows(t *testing.T) {
 	// A fresh session has never minted, and a failing audit store must not take the status down.
 	if !strings.Contains(string(raw), `"recent":[]`) || !strings.Contains(string(raw), `"mints":0`) {
 		t.Fatalf("status %s", raw)
+	}
+}
+
+func TestAWSStatusIncludesEgress(t *testing.T) {
+	info := map[string]session.Info{"claude-3": {ID: "claude-3", AWS: &session.AWSInfo{Label: "x"}}}
+	decode := func(ad AWSStatusAdapter) map[string]json.RawMessage {
+		t.Helper()
+		st, ok := ad.AWSStatus("claude-3")
+		if !ok {
+			t.Fatal("bound session reported no status")
+		}
+		raw, _ := json.Marshal(st)
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	ad := awsAdapter(info, nil, nil, nil)
+	if _, has := decode(ad)["egress"]; has {
+		t.Error("nil Egress must leave the egress key out")
+	}
+
+	ad.Egress = func(id string) (egress.Stats, bool) { return egress.Stats{Allowed: 2, Denied: 1}, true }
+	if got := string(decode(ad)["egress"]); got != `{"allowed":2,"denied":1,"mode":"allowlist"}` {
+		t.Errorf("egress = %s", got)
+	}
+
+	// No tunnel or denial yet (Stats ok=false): zeros, never a missing row.
+	ad.Egress = func(id string) (egress.Stats, bool) { return egress.Stats{}, false }
+	if got := string(decode(ad)["egress"]); got != `{"allowed":0,"denied":0,"mode":"allowlist"}` {
+		t.Errorf("egress before any traffic = %s", got)
 	}
 }
