@@ -135,6 +135,15 @@ type Options struct {
 	Reachable func(ctx context.Context) bool
 }
 
+// Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""). With an
+// empty Network or a nil Verify, such a box is refused: it must never start on
+// an open network, or be used unverified.
+type Egress struct {
+	Network  string
+	Verify   func(ctx context.Context, box string) error // runs INSTEAD of Options.Verify for these boxes
+	AddHosts []string                                    // --add-host values (darwin: "host.lima.internal:192.168.5.2")
+}
+
 // Manager tracks one box per workspace and keeps their lifecycle honest.
 type Manager struct {
 	opts    Options
@@ -155,6 +164,8 @@ type Manager struct {
 	// drift marks boxes whose counter disagreed with the registry at the last
 	// sweep (guarded by mu).
 	drift map[string]bool
+	// egress is set once at boot by SetEgress (guarded by mu).
+	egress Egress
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -187,6 +198,21 @@ func New(opts Options) (*Manager, error) {
 		m.runtime = runtimeSysbox
 	}
 	return m, nil
+}
+
+// SetEgress configures the egress fence for bound boxes. Call it once at boot,
+// before Reconcile and before any bound spawn.
+func (m *Manager) SetEgress(e Egress) {
+	e.AddHosts = append([]string(nil), e.AddHosts...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.egress = e
+}
+
+func (m *Manager) egressConfig() Egress {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.egress
 }
 
 // Runtime reports the detected isolation runtime, for the UI badge.
@@ -448,7 +474,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
-	if err := m.ensure(ctx, name, real, extraRO); err != nil {
+	if err := m.ensure(ctx, name, real, extraRO, key.Binding != ""); err != nil {
 		return nil, nil, "", err
 	}
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
@@ -461,7 +487,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount) error {
+func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, bound bool) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -471,6 +497,20 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 		delete(m.timers, name)
 	}
 	m.mu.Unlock()
+
+	// verify is this box's containment check. A bound box is checked by the
+	// egress probe INSTEAD of Options.Verify (the loopback/DNS check unbound
+	// boxes get): the two describe opposite network policies. A bound box that
+	// has no egress control to be checked by never starts.
+	verify := m.opts.Verify
+	if bound {
+		e := m.egressConfig()
+		if e.Network == "" || e.Verify == nil {
+			m.rearmIfIdle(name)
+			return fmt.Errorf("%w: egress control is not running, so a box with AWS access cannot start", ErrBoxUnavailable)
+		}
+		verify = e.Verify
+	}
 
 	st, err := m.opts.Client.Inspect(ctx, name)
 	if err != nil {
@@ -487,13 +527,34 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 		}
 		st = StateMissing
 	}
-	if st == StateRunning && m.opts.Verify != nil && !m.isVerified(name) {
+	if st == StateRunning && verify != nil && !m.isVerified(name) {
 		// Found, not created, by this process: adopted after a restart, or left
 		// running by a failed removal. Never trust it unchecked.
-		if err := m.opts.Verify(ctx, name); err != nil {
-			return m.refuseUnverified(ctx, name, err)
+		if err := verify(ctx, name); err != nil {
+			if !bound {
+				return m.refuseUnverified(ctx, name, err)
+			}
+			// A bound box from before egress control (M3a) fails the probe on its
+			// first spawn after the upgrade. With sessions still running in it,
+			// removing it would kill them: refuse the spawn and leave it be.
+			m.unverify(name)
+			m.mu.Lock()
+			live := m.active[name]
+			m.mu.Unlock()
+			if live > 0 {
+				m.rearmIfIdle(name) // no-op while sessions are live
+				return fmt.Errorf("%w: box %s was started before egress control (or failed its egress check) and still runs %d session(s); end them, then spawn again",
+					ErrBoxUnavailable, name, live)
+			}
+			// Idle: nothing to lose. Remove it and recreate it on the egress network.
+			if stopErr := m.opts.Client.Stop(ctx, name); stopErr != nil {
+				m.rearmIfIdle(name)
+				return fmt.Errorf("%w: box %s failed its egress check and could not be removed: %v", ErrBoxUnavailable, name, stopErr)
+			}
+			st = StateMissing
+		} else {
+			m.markVerified(name)
 		}
-		m.markVerified(name)
 	}
 	if st == StateMissing {
 		for _, p := range append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...) {
@@ -506,14 +567,14 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount)
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, bound)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: starting %s: %w", name, err)
 		}
-		if m.opts.Verify != nil {
-			if err := m.opts.Verify(ctx, name); err != nil {
+		if verify != nil {
+			if err := verify(ctx, name); err != nil {
 				return m.refuseUnverified(ctx, name, err)
 			}
 			m.markVerified(name)

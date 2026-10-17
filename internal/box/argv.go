@@ -31,7 +31,9 @@ var hostOnlyEnv = map[string]bool{
 // and never the docker socket, the host home, or ~/.ssh. The workspace mounts at
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
+// bound (an AWS binding) adds the egress network flags; bound=false output is
+// byte-identical to what it was before egress control existed.
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound bool) []string {
 	args := []string{
 		"run", "-d", "--init",
 		"--name", boxName,
@@ -53,6 +55,16 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount) []string {
 	// Extra binds are always read-only. The caller chooses what, never whether.
 	for _, mt := range extraRO {
 		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
+	}
+	// A box with an AWS binding joins the egress network instead of the default
+	// bridge. Both values come from constants and validated config, never from
+	// a session, and neither is a secret. An unbound box gets neither flag.
+	if bound {
+		e := m.egressConfig()
+		args = append(args, "--network", e.Network)
+		for _, h := range e.AddHosts {
+			args = append(args, "--add-host", h)
+		}
 	}
 	if m.runtime == runtimeSysbox {
 		args = append(args, "--runtime="+runtimeSysbox)
