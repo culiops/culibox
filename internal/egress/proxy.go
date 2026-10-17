@@ -776,3 +776,15 @@ func closeWrite(c net.Conn) {
 	}
 	c.Close()
 }
+
+// probeSeen is what the probe principal user has done so far, without retiring
+// it. The 200 of an allowed tunnel is written before it is counted, so Probe
+// uses this to let that last count land before it reads done().
+func (p *Proxy) probeSeen(user string) ProbeResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pp := p.probes[user]; pp != nil {
+		return ProbeResult{Allowed: pp.allowed, Denied: pp.denied}
+	}
+	return ProbeResult{}
+}
