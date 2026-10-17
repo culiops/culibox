@@ -205,7 +205,7 @@ func (s *Server) Handler() http.Handler {
 	root.Handle("/ws/", s.authGuard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.Terminal.ServeHTTP(w, r)
 	})))
-	root.Handle("/", s.authGuard(csrfGuard(protected)))
+	root.Handle("/", s.authGuard(csrfGuard(protected, s.API.auditCSRFRefusal)))
 	// Outermost: every route, static and /login included, is Host-checked first.
 	return newHostGuard(s.AllowedHosts, nil).wrap(root)
 }
@@ -223,7 +223,11 @@ func (s *Server) Handler() http.Handler {
 //
 // Reads are deliberately not blocked: a cross-site GET cannot change state, and
 // the response is opaque to the caller anyway.
-func csrfGuard(next http.Handler) http.Handler {
+//
+// onRefuse, when set, is told about every request the guard itself turns away
+// (before any handler runs), so a refusal the handler would have audited is not
+// lost. Behaviour for the request is unchanged by it.
+func csrfGuard(next http.Handler, onRefuse func(*http.Request)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodOptions:
@@ -235,6 +239,9 @@ func csrfGuard(next http.Handler) http.Handler {
 			return
 		}
 		if !sameOrigin(r) {
+			if onRefuse != nil {
+				onRefuse(r)
+			}
 			writeErr(w, http.StatusForbidden, "forbidden")
 			return
 		}

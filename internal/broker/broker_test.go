@@ -637,3 +637,20 @@ func TestRefusalReasonsAreAuditedButTheReplyIsUniform(t *testing.T) {
 		t.Fatalf("rows %d", len(rec.rows))
 	}
 }
+
+// The socket the boxes can reach serves credentials and nothing else: elevation
+// and sign-in are web-only, behind a signed-in browser session.
+func TestBrokerSocketHasNoElevationRoute(t *testing.T) {
+	b, _, _, _ := setup(t, map[string]SessionView{"s": live()})
+	for _, p := range []string{"/v1/elevate", "/v1/credentials/elevate", "/v1/sso-login", "/v1/elevation", "/api/sessions/s/aws/elevate", "/"} {
+		for _, m := range []string{http.MethodPost, http.MethodDelete, http.MethodGet} {
+			r := httptest.NewRequest(m, p, strings.NewReader(`{"minutes":60}`))
+			r.Header.Set("Authorization", "Bearer x")
+			w := httptest.NewRecorder()
+			b.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusNotFound {
+				t.Errorf("%s %s: %d, want 404", m, p, w.Code)
+			}
+		}
+	}
+}

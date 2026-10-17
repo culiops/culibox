@@ -40,6 +40,9 @@ type API struct {
 	Sessions   SessionService
 	DefaultCwd string           // used when a spawn request omits cwd (e.g. $HOME)
 	AWS        AWSStatusService // nil = the credential broker is not running; /aws is a 404
+	// Elevation serves the write-window and AWS sign-in endpoints; nil = the
+	// credential broker is not running, and they are 404.
+	Elevation ElevationService
 }
 
 // AWSStatusService reports a session's AWS binding, broker counters and recent
@@ -151,6 +154,16 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}
+		return
+	}
+	// POST|DELETE /api/sessions/{id}/aws/elevate and POST .../aws/sso-login:
+	// before the /aws suffix check below, which would not match them anyway.
+	if sid, ok := strings.CutSuffix(id, elevateSuffix); ok {
+		a.handleElevate(w, r, sid)
+		return
+	}
+	if sid, ok := strings.CutSuffix(id, ssoLoginSuffix); ok {
+		a.handleSSOLogin(w, r, sid)
 		return
 	}
 	// GET /api/sessions/{id}/aws — the session's AWS binding, broker counters and
