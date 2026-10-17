@@ -412,3 +412,31 @@ func TestOpenSurvivesOneAccountFailingToProvision(t *testing.T) {
 		t.Fatalf("other accounts must still be re-provisioned: %v", err)
 	}
 }
+
+// Re-provision runs on every startup, so a ~/.claude.json caught mid-write (or
+// otherwise invalid) must not wipe every account's MCP servers.
+func TestProvisionKeepsMCPWhenSourceInvalid(t *testing.T) {
+	s, _ := newStore(t)
+	src := filepath.Join(filepath.Dir(s.defaultDir), ".claude.json")
+	os.WriteFile(src, []byte(`{"mcpServers":{"remote":{"url":"https://mcp.example/x"}}}`), 0o600)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(r.ConfigDir, MCPFileName)
+	os.WriteFile(src, []byte(`{"mcpServers":{"rem`), 0o600)
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readJSON(t, mcpPath)["mcpServers"].(map[string]any)["remote"]; !ok {
+		t.Fatal("invalid source wiped the account's MCP servers")
+	}
+	// An absent source is a real "no servers": the copy is emptied.
+	os.Remove(src)
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(readJSON(t, mcpPath)["mcpServers"].(map[string]any)); n != 0 {
+		t.Fatalf("absent source left %d servers", n)
+	}
+}

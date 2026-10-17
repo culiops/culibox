@@ -40,7 +40,8 @@ func (s *Store) ScriptPath() string { return filepath.Join(s.dataDir, binDir, sc
 
 // provision makes r's config dir ready. It never clobbers: only entries listed
 // in the manifest are ever removed, and every write goes through the Store's
-// dataDir root so a planted symlink cannot redirect it. Called with s.mu held.
+// dataDir root so a planted symlink cannot redirect it. Called with s.mu held,
+// or from Open before the Store is shared.
 func (s *Store) provision(r Resolved) error {
 	if err := s.root.MkdirAll(binDir, 0o700); err != nil {
 		return err
@@ -150,15 +151,21 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 	}
 	// Same shape filter the boxed bundle uses: a server with literal env values
 	// or ${VAR} substitution is dropped rather than copied onto disk.
-	servers, _ := bundle.FilterMCP(bundle.DefaultMCPFile(s.defaultDir), hostProber{})
-	b, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
-	if err != nil {
-		return err
+	src := bundle.DefaultMCPFile(s.defaultDir)
+	servers, drops := bundle.FilterMCP(src, hostProber{})
+	if mcpSourceUnreadable(src, drops) && man.MCP {
+		// The source exists but could not be read or parsed (e.g. mid-write at a
+		// restart): keep the last good copy rather than wiping every server.
+	} else {
+		b, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := writeFileAtomic(cr, MCPFileName, b, 0o600); err != nil {
+			return err
+		}
+		man.MCP = true
 	}
-	if err := writeFileAtomic(cr, MCPFileName, b, 0o600); err != nil {
-		return err
-	}
-	man.MCP = true
 	if err := s.syncDelegate(cr, &man); err != nil {
 		return err
 	}
@@ -236,4 +243,18 @@ func appendUnique(xs []string, x string) []string {
 		}
 	}
 	return append(xs, x)
+}
+
+// mcpSourceUnreadable reports whether FilterMCP dropped the whole file ("*")
+// although it exists: unreadable or invalid JSON, as opposed to absent.
+func mcpSourceUnreadable(path string, drops []bundle.Drop) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	for _, d := range drops {
+		if d.Name == "*" {
+			return true
+		}
+	}
+	return false
 }
