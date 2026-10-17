@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/culiops/agent-box/internal/mask"
 )
 
 var (
@@ -307,7 +309,7 @@ func parsePeekTailCut(b []byte, cut bool, created time.Time) (Peek, bool) {
 		if !foundText && rec.Message.Role == "assistant" {
 			for j := len(bs) - 1; j >= 0; j-- {
 				if bs[j].Type == "text" && strings.TrimSpace(bs[j].Text) != "" {
-					p.Text = bs[j].Text
+					p.Text = mask.Display(bs[j].Text)
 					foundText = true
 					break
 				}
@@ -419,7 +421,7 @@ func askLine(name string, input json.RawMessage) string {
 	}
 	s := name
 	if arg != "" {
-		s = name + "(" + cleanArg(arg) + ")"
+		s = name + "(" + cleanArg(mask.Display(arg)) + ")"
 	}
 	if r := []rune(s); len(r) > askMax {
 		s = string(r[:askMax-1]) + "…"
