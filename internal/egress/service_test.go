@@ -3,15 +3,20 @@ package egress
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
 // addrListener is a listener that never accepts but reports the address it was asked for.
@@ -322,5 +327,127 @@ func TestDefaultMaxConnsIsTheNamedConstant(t *testing.T) {
 	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: newFakeDocker(), GOOS: "linux"})
 	if s.maxConns != MaxProxyConns {
 		t.Fatalf("maxConns = %d", s.maxConns)
+	}
+}
+
+func envMap(t *testing.T, env []string) map[string]string {
+	t.Helper()
+	m := map[string]string{}
+	for _, kv := range env {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			t.Fatalf("malformed env entry %q", kv)
+		}
+		if _, dup := m[kv[:i]]; dup {
+			t.Fatalf("%s set twice in %q", kv[:i], env)
+		}
+		m[kv[:i]] = kv[i+1:]
+	}
+	return m
+}
+
+func TestSpawnEnvURLAndStrip(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	nonce := sesstoken.NewNonce()
+	env, err := s.SpawnEnv(context.Background(), "claude-1", nonce)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := envMap(t, env)
+	u, err := url.Parse(m["HTTPS_PROXY"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Scheme != "http" || u.Host != "172.21.0.1:9072" || u.User.Username() != "claude-1" {
+		t.Fatalf("HTTPS_PROXY = %q", m["HTTPS_PROXY"])
+	}
+	pass, _ := u.User.Password()
+	sid, n, ok := sesstoken.Parse(sesstoken.DomainEgress, []byte("0123456789abcdef0123456789abcdef"), pass)
+	if !ok || sid != "claude-1" || n != nonce {
+		t.Fatalf("password does not parse under DomainEgress: ok=%v sid=%q nonce=%q", ok, sid, n)
+	}
+	if _, _, ok := sesstoken.Parse(sesstoken.DomainBroker, []byte("0123456789abcdef0123456789abcdef"), pass); ok {
+		t.Fatal("the egress password parses as a broker token")
+	}
+	if m["https_proxy"] != m["HTTPS_PROXY"] {
+		t.Fatalf("https_proxy %q != HTTPS_PROXY %q", m["https_proxy"], m["HTTPS_PROXY"])
+	}
+	for _, n := range []string{"HTTP_PROXY", "http_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY"} {
+		if v, ok := m[n]; ok {
+			t.Fatalf("Linux env sets %s=%q", n, v)
+		}
+	}
+	// Spec 7.1: both shrink the allowlist without breaking the workload.
+	if m["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] != "1" || m["CHECKPOINT_DISABLE"] != "1" {
+		t.Fatalf("measured env missing: %v", env)
+	}
+	// Every name set is stripped first, so a spawn sets each exactly once.
+	strip := s.StripEnv()
+	for name := range m {
+		if !slices.Contains(strip, name) {
+			t.Fatalf("StripEnv lacks %s (set by SpawnEnv)", name)
+		}
+	}
+	for _, want := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY"} {
+		if !slices.Contains(strip, want) {
+			t.Fatalf("StripEnv lacks %s: %v", want, strip)
+		}
+	}
+	// The returned slices are the caller's own.
+	strip[0] = "X"
+	if s.StripEnv()[0] == "X" {
+		t.Fatal("StripEnv aliases internal state")
+	}
+}
+
+func TestSpawnEnvDarwinHostAndNoProxy(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "darwin", Instance: "DEV", Port: 9072,
+		Want: Want{Subnet: "172.29.72.0/24"}, ProxyHost: "host.lima.internal", NoProxy: "host.lima.internal",
+		ExtraEnv: []string{"FOO=bar", "CHECKPOINT_DISABLE=1"}, Listen: lr.listen})
+	defer s.Close(context.Background())
+	env, err := s.SpawnEnv(context.Background(), "s1", sesstoken.NewNonce())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := envMap(t, env) // fails on a duplicate: ExtraEnv must not double the measured names
+	if !strings.HasSuffix(m["HTTPS_PROXY"], "@host.lima.internal:9072") {
+		t.Fatalf("HTTPS_PROXY = %q", m["HTTPS_PROXY"])
+	}
+	if m["NO_PROXY"] != "host.lima.internal" || m["no_proxy"] != "host.lima.internal" || m["FOO"] != "bar" {
+		t.Fatalf("env = %v", env)
+	}
+	if !slices.Contains(s.StripEnv(), "FOO") {
+		t.Fatal("ExtraEnv names are not stripped")
+	}
+	if _, ok := m["HTTP_PROXY"]; ok {
+		t.Fatal("darwin sets HTTP_PROXY")
+	}
+}
+
+// Fail closed: a service that cannot become ready gives no env at all.
+func TestSpawnEnvFailsWhenNotReady(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{err: errors.New("address in use")}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	env, err := s.SpawnEnv(context.Background(), "s1", sesstoken.NewNonce())
+	if err == nil || env != nil {
+		t.Fatalf("env=%v err=%v, want an error and no env", env, err)
+	}
+}
+
+func TestServiceForgetReachesTheProxy(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	s := linuxService(f, lr)
+	defer s.Close(context.Background())
+	p := s.Proxy()
+	p.mu.Lock()
+	p.stats["s1"] = &Stats{}
+	p.mu.Unlock()
+	s.Forget("s1")
+	if _, ok := p.Stats("s1"); ok {
+		t.Fatal("Forget left the session's counters at the proxy")
 	}
 }

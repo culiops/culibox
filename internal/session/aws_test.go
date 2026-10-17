@@ -1,7 +1,9 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -20,12 +22,13 @@ import (
 // and its own AWS profile selector.
 type awsLauncher struct {
 	tieredLauncher
-	binding *config.AWSBinding
+	binding  *config.AWSBinding
+	extraEnv []string // appended to the built env (e.g. a profile's own proxy settings)
 }
 
 func (l awsLauncher) Build(launcher.SpawnSpec) ([]string, []string, error) {
-	return l.argv, []string{"TERM=xterm", "AWS_ACCESS_KEY_ID=AKIASTATIC", "AWS_PROFILE=host-admin",
-		"AGENTBOX_BROKER_TOKEN=forged"}, nil
+	return l.argv, append([]string{"TERM=xterm", "AWS_ACCESS_KEY_ID=AKIASTATIC", "AWS_PROFILE=host-admin",
+		"AGENTBOX_BROKER_TOKEN=forged"}, l.extraEnv...), nil
 }
 
 func (l awsLauncher) AWSFor(agent string) *config.AWSBinding {
@@ -101,15 +104,70 @@ func (f *fakeBrokerHooks) forgotten(id string) bool {
 	return slices.Contains(f.forgot, id)
 }
 
-func boundManager(t *testing.T, argv []string, runtime string, retention time.Duration) (*Manager, *fakeBoxes, *fakeBrokerHooks) {
+func boundManager(t *testing.T, argv []string, runtime string, retention time.Duration) (*Manager, *fakeBoxes, *fakeBrokerHooks, *fakeEgressHooks) {
+	return boundManagerEnv(t, argv, runtime, retention, nil)
+}
+
+func boundManagerEnv(t *testing.T, argv []string, runtime string, retention time.Duration, extraEnv []string) (*Manager, *fakeBoxes, *fakeBrokerHooks, *fakeEgressHooks) {
 	t.Helper()
-	m := NewManager(awsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: runtime}, binding: testBinding()},
+	m := NewManager(awsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: runtime}, binding: testBinding(), extraEnv: extraEnv},
 		nil, 1<<16, retention)
 	boxes := &fakeBoxes{}
 	m.SetBoxes(boxes)
 	hooks := &fakeBrokerHooks{}
 	m.SetBroker(hooks)
-	return m, boxes, hooks
+	eg := &fakeEgressHooks{}
+	m.SetEgress(eg)
+	return m, boxes, hooks, eg
+}
+
+type fakeEgressHooks struct {
+	mu     sync.Mutex
+	calls  int
+	forgot []string
+	err    error
+	// liveAtForget, when set, is asked (with the id) at Forget time; the answer
+	// is recorded so a test can pin "not live before Forget".
+	liveAtForget func(id string) bool
+	wasLive      []bool
+}
+
+func (f *fakeEgressHooks) SpawnEnv(_ context.Context, id, nonce string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	u := "http://" + id + ":etok-" + nonce + "@172.21.0.1:9072"
+	return []string{"HTTPS_PROXY=" + u, "https_proxy=" + u, "CHECKPOINT_DISABLE=1"}, nil
+}
+
+func (f *fakeEgressHooks) StripEnv() []string {
+	return []string{"HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "ALL_PROXY"}
+}
+
+func (f *fakeEgressHooks) Forget(id string) {
+	var live bool
+	if f.liveAtForget != nil {
+		live = f.liveAtForget(id)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.forgot = append(f.forgot, id)
+	f.wasLive = append(f.wasLive, live)
+}
+
+func (f *fakeEgressHooks) forgotten(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.forgot, id)
+}
+
+func (f *fakeEgressHooks) spawnCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 func envNamed(env []string, name string) []string {
@@ -123,7 +181,7 @@ func envNamed(env []string, name string) []string {
 }
 
 func TestBoundSpawnGetsBrokerEnvMountsTokenAndItsOwnBox(t *testing.T) {
-	m, boxes, hooks := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	m, boxes, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +230,7 @@ func TestBoundSpawnGetsBrokerEnvMountsTokenAndItsOwnBox(t *testing.T) {
 // An unbound profile on the same manager keeps today's box key, env and wire
 // shape, and never touches the broker.
 func TestUnboundSpawnIgnoresTheBroker(t *testing.T) {
-	m, boxes, hooks := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	m, boxes, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -215,7 +273,7 @@ func TestBoundProfileRefusedOnHostTier(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			m, boxes, hooks := boundManager(t, []string{"sh", "-c", "sleep 30"}, c.tier, time.Minute)
+			m, boxes, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, c.tier, time.Minute)
 			if c.noBoxes {
 				m.SetBoxes(nil)
 			}
@@ -271,6 +329,7 @@ func TestSidecarRestoresTheBinding(t *testing.T) {
 	}
 	m.SetBoxes(&fakeBoxes{})
 	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -310,7 +369,7 @@ func TestSidecarRestoresTheBinding(t *testing.T) {
 // and so is one pruned after its retention.
 func TestRemovedBoundSessionIsForgottenByTheBroker(t *testing.T) {
 	t.Run("kill", func(t *testing.T) {
-		m, _, hooks := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+		m, _, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
 		s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
@@ -326,7 +385,7 @@ func TestRemovedBoundSessionIsForgottenByTheBroker(t *testing.T) {
 		}
 	})
 	t.Run("retention prune", func(t *testing.T) {
-		m, _, hooks := boundManager(t, []string{"sh", "-c", "exit 0"}, config.RuntimeBox, 20*time.Millisecond)
+		m, _, hooks, _ := boundManager(t, []string{"sh", "-c", "exit 0"}, config.RuntimeBox, 20*time.Millisecond)
 		s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
 		if err != nil {
 			t.Fatal(err)
@@ -347,7 +406,7 @@ func TestRemovedBoundSessionIsForgottenByTheBroker(t *testing.T) {
 // Restart re-spawns through Spawn, so the replacement gets its own nonce and a
 // token for its own id; the old session's state is forgotten.
 func TestRestartOfABoundSessionGetsAFreshToken(t *testing.T) {
-	m, boxes, hooks := boundManager(t, []string{"sh", "-c", "exit 0"}, config.RuntimeBox, time.Minute)
+	m, boxes, hooks, _ := boundManager(t, []string{"sh", "-c", "exit 0"}, config.RuntimeBox, time.Minute)
 	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
 	ns, err := m.Restart(old.ID)
 	if err != nil {
@@ -363,5 +422,185 @@ func TestRestartOfABoundSessionGetsAFreshToken(t *testing.T) {
 	}
 	if !hooks.forgotten(old.ID) {
 		t.Fatal("the replaced session's broker state was not forgotten")
+	}
+}
+
+// A profile that sets its own proxy (or exempts hosts) must not steer a bound
+// box: the egress names are stripped, then set exactly once with this spawn's
+// token.
+func TestBoundSpawnGetsProxyEnvOnce(t *testing.T) {
+	m, boxes, _, eg := boundManagerEnv(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute,
+		[]string{"HTTPS_PROXY=http://evil:1", "https_proxy=http://evil:1", "NO_PROXY=*", "ALL_PROXY=socks5://evil:1", "CHECKPOINT_DISABLE=0"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	u := "http://" + s.ID + ":etok-" + fakeNonce + "@172.21.0.1:9072"
+	if got := envNamed(boxes.lastEnv, "HTTPS_PROXY"); !reflect.DeepEqual(got, []string{"HTTPS_PROXY=" + u}) {
+		t.Fatalf("HTTPS_PROXY env = %q, want exactly this spawn's", got)
+	}
+	if got := envNamed(boxes.lastEnv, "https_proxy"); !reflect.DeepEqual(got, []string{"https_proxy=" + u}) {
+		t.Fatalf("https_proxy env = %q", got)
+	}
+	for _, n := range []string{"NO_PROXY", "no_proxy", "ALL_PROXY", "HTTP_PROXY"} {
+		if got := envNamed(boxes.lastEnv, n); len(got) != 0 {
+			t.Fatalf("%s survived into a bound box: %q", n, got)
+		}
+	}
+	if got := envNamed(boxes.lastEnv, "CHECKPOINT_DISABLE"); !reflect.DeepEqual(got, []string{"CHECKPOINT_DISABLE=1"}) {
+		t.Fatalf("CHECKPOINT_DISABLE = %q, want the egress hooks' value only", got)
+	}
+	if !slices.Contains(boxes.lastEnv, "TERM=xterm") {
+		t.Fatal("an unrelated var was lost")
+	}
+	if eg.spawnCalls() != 1 {
+		t.Fatalf("SpawnEnv calls = %d, want 1", eg.spawnCalls())
+	}
+	// The proxy credential rides the env only, never the argv.
+	for _, a := range boxes.lastArgv {
+		if strings.Contains(a, "etok-") {
+			t.Fatalf("egress token in argv: %q", a)
+		}
+	}
+}
+
+func TestBoundSpawnRefusedWithoutEgress(t *testing.T) {
+	m := NewManager(awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox},
+		binding: testBinding()}, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	hooks := &fakeBrokerHooks{}
+	m.SetBroker(hooks) // the broker is up; only egress is missing
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a bound profile spawned with no egress control")
+	}
+	if !strings.Contains(err.Error(), "egress control is not running") {
+		t.Fatalf("err = %v, want the egress refusal", err)
+	}
+	if boxes.prepares != 0 || boxes.wraps != 0 {
+		t.Fatalf("refused spawn touched the box layer: prepares=%d wraps=%d", boxes.prepares, boxes.wraps)
+	}
+	if n, tk, bf := hooks.calls(); n+tk+bf != 0 {
+		t.Fatalf("refused spawn minted broker state: nonce=%d token=%d boxFor=%d", n, tk, bf)
+	}
+	if len(m.List()) != 0 {
+		t.Fatal("refused spawn left a session behind")
+	}
+}
+
+func TestBoundSpawnEgressErrorRefuses(t *testing.T) {
+	m, boxes, _, eg := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	eg.err = errors.New("egress network missing")
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a bound profile spawned although egress was not ready")
+	}
+	if !strings.Contains(err.Error(), "preparing egress") || !strings.Contains(err.Error(), "egress network missing") {
+		t.Fatalf("err = %v", err)
+	}
+	if boxes.wraps != 0 {
+		t.Fatalf("wraps = %d, want 0", boxes.wraps)
+	}
+	if len(m.List()) != 0 {
+		t.Fatal("refused spawn left a session behind")
+	}
+}
+
+// D3: an unbound session's env is byte-identical to today's, including a
+// profile that sets its own proxy.
+func TestUnboundSpawnNeverTouchesEgress(t *testing.T) {
+	profile := []string{"HTTPS_PROXY=http://corp:3128", "NO_PROXY=internal", "CHECKPOINT_DISABLE=0"}
+	m, boxes, _, eg := boundManagerEnv(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute, profile)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	want := append([]string{"TERM=xterm", "AWS_ACCESS_KEY_ID=AKIASTATIC", "AWS_PROFILE=host-admin", "AGENTBOX_BROKER_TOKEN=forged"}, profile...)
+	if !reflect.DeepEqual(boxes.lastEnv, want) {
+		t.Fatalf("unbound env changed:\n got %q\nwant %q", boxes.lastEnv, want)
+	}
+	if eg.spawnCalls() != 0 {
+		t.Fatalf("unbound spawn called SpawnEnv %d times", eg.spawnCalls())
+	}
+	if err := m.Kill(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(eg.forgot) != 0 {
+		t.Fatalf("an unbound session has no egress state to forget: %v", eg.forgot)
+	}
+}
+
+// Forget runs on every way a session ends, and only once Lookup would already
+// refuse it (the Task 7 ordering): a CONNECT racing the end finds no session.
+func TestBoundSessionGoneForgetsEgress(t *testing.T) {
+	t.Run("kill", func(t *testing.T) {
+		m, _, _, eg := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+		eg.liveAtForget = func(id string) bool { _, ok := m.Get(id); return ok }
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if eg.forgotten(s.ID) {
+			t.Fatal("forgotten while still live")
+		}
+		if err := m.Kill(s.ID); err != nil {
+			t.Fatal(err)
+		}
+		if !eg.forgotten(s.ID) {
+			t.Fatal("Kill did not forget the session at the proxy")
+		}
+		if slices.Contains(eg.wasLive, true) {
+			t.Fatal("Forget ran while the session was still registered")
+		}
+	})
+	t.Run("retention prune", func(t *testing.T) {
+		m, _, _, eg := boundManager(t, []string{"sh", "-c", "exit 0"}, config.RuntimeBox, 20*time.Millisecond)
+		eg.liveAtForget = func(id string) bool { _, ok := m.Get(id); return ok }
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for !eg.forgotten(s.ID) {
+			if time.Now().After(deadline) {
+				t.Fatal("pruned session was never forgotten")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		eg.mu.Lock()
+		defer eg.mu.Unlock()
+		if slices.Contains(eg.wasLive, true) {
+			t.Fatal("Forget ran while the session was still registered")
+		}
+	})
+	t.Run("restart", func(t *testing.T) {
+		m, _, _, eg := boundManager(t, []string{"sh", "-c", "exit 0"}, config.RuntimeBox, time.Minute)
+		old := exitedSession(t, m, launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+		ns, err := m.Restart(old.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = m.Kill(ns.ID) })
+		if !eg.forgotten(old.ID) {
+			t.Fatal("the replaced session was not forgotten at the proxy")
+		}
+	})
+}
+
+func TestInfoNeverCarriesTheEgressToken(t *testing.T) {
+	m, _, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	b, _ := json.Marshal(s.Info())
+	if strings.Contains(string(b), "etok-") || strings.Contains(string(b), "@172.21.0.1") {
+		t.Fatalf("Info leaks the egress token or proxy URL: %s", b)
 	}
 }
