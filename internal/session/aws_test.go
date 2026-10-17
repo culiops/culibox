@@ -57,6 +57,32 @@ type fakeBrokerHooks struct {
 	boxForCalls int
 	forgot      []string
 	next        int
+	state       map[string]struct {
+		until time.Time
+		sso   string
+	}
+}
+
+func (f *fakeBrokerHooks) setState(id string, until time.Time, sso string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state == nil {
+		f.state = map[string]struct {
+			until time.Time
+			sso   string
+		}{}
+	}
+	f.state[id] = struct {
+		until time.Time
+		sso   string
+	}{until, sso}
+}
+
+func (f *fakeBrokerHooks) AWSState(id string) (time.Time, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.state[id]
+	return st.until, st.sso
 }
 
 func (f *fakeBrokerHooks) NewNonce() string {
@@ -713,5 +739,77 @@ func TestPlainSidecarRecordIsNotExclusive(t *testing.T) {
 	var md sessionMeta
 	if err := json.Unmarshal([]byte(`{"agent":"aws","runtime":"box","box":"ab-box-x"}`), &md); err != nil || md.Exclusive {
 		t.Fatalf("old record: err=%v exclusive=%v", err, md.Exclusive)
+	}
+}
+
+func TestApplyAWSState(t *testing.T) {
+	until := time.Unix(1_800_003_600, 0)
+	cases := []struct {
+		name          string
+		need          string
+		until         time.Time
+		sso, wantNeed string
+	}{
+		{"nothing", "", time.Time{}, "", ""},
+		{"sso on a quiet session", "", time.Time{}, "culi-sso", "sso"},
+		{"sso beats turn", "turn", time.Time{}, "culi-sso", "sso"},
+		{"ask beats sso", "ask", time.Time{}, "culi-sso", "ask"},
+		{"elevated only", "", until, "", ""},
+	}
+	for _, c := range cases {
+		in := Info{Activity: "working", Need: c.need, AWS: &AWSInfo{Label: "sandbox"}}
+		applyAWSState(&in, c.until, c.sso)
+		if in.Need != c.wantNeed || in.Activity != "working" || in.AWS.SSOExpired != c.sso {
+			t.Errorf("%s: need=%q activity=%q sso=%q", c.name, in.Need, in.Activity, in.AWS.SSOExpired)
+		}
+		if c.until.IsZero() != (in.AWS.ElevatedUntil == nil) || (in.AWS.ElevatedUntil != nil && !in.AWS.ElevatedUntil.Equal(c.until)) {
+			t.Errorf("%s: until %v", c.name, in.AWS.ElevatedUntil)
+		}
+	}
+	plain := Info{Need: "turn"}
+	applyAWSState(&plain, until, "culi-sso") // no binding: nothing to apply
+	if plain.Need != "turn" || plain.AWS != nil {
+		t.Fatalf("an unbound session is untouched: %+v", plain)
+	}
+}
+
+func TestListCarriesTheBrokerState(t *testing.T) {
+	m, _, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	hooks.setState(s.ID, time.Unix(1_800_003_600, 0), "culi-sso")
+	var got Info
+	for _, i := range m.List() {
+		if i.ID == s.ID {
+			got = i
+		}
+	}
+	if got.Need != "sso" || got.AWS.SSOExpired != "culi-sso" || got.AWS.ElevatedUntil == nil {
+		t.Fatalf("List: %+v aws=%+v", got, got.AWS)
+	}
+	b, _ := json.Marshal(got)
+	if !strings.Contains(string(b), `"sso_expired":"culi-sso"`) || !strings.Contains(string(b), `"elevated_until":`) {
+		t.Fatalf("wire: %s", b)
+	}
+}
+
+func TestInfoCarriesTheElevateBlockButNoSourceProfile(t *testing.T) {
+	m, _, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	m.launcher = awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, binding: elevTestBinding()}
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	in := s.Info()
+	if in.AWS.Elevate == nil || in.AWS.Elevate.RoleARN != elevTestBinding().Elevate.RoleARN || in.AWS.Elevate.MaxMinutes != 60 {
+		t.Fatalf("elevate %+v", in.AWS.Elevate)
+	}
+	b, _ := json.Marshal(in)
+	if strings.Contains(string(b), "sandbox-admin") || strings.Contains(string(b), "source_profile") {
+		t.Fatalf("Info names how it authenticates: %s", b)
 	}
 }

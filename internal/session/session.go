@@ -196,6 +196,10 @@ type BrokerHooks interface {
 	// Forget drops the broker's per-session state (cache, stats) once a
 	// session is gone from the registry.
 	Forget(sessionID string)
+	// AWSState is the broker-held state a session list shows: when the
+	// session's write window ends (zero = none) and the sign-in a human must
+	// renew on the host ("" = none). Read-only; it takes only the broker's lock.
+	AWSState(sessionID string) (elevatedUntil time.Time, ssoExpired string)
 }
 
 // EgressHooks is what spawning a bound session needs from the egress proxy,
@@ -227,6 +231,23 @@ type AWSInfo struct {
 	AccountID string `json:"account_id"`
 	RoleARN   string `json:"role_arn"`
 	Prod      bool   `json:"prod"`
+	// Elevate is the write role a human may widen the session to; absent when
+	// the binding allows none. It names no source profile: how the daemon signs
+	// in stays off the list (the sign-in command travels only in GET .../aws).
+	Elevate *ElevateInfo `json:"elevate,omitempty"`
+	// ElevatedUntil is when the live write window ends; absent with none.
+	// Filled by List only.
+	ElevatedUntil *time.Time `json:"elevated_until,omitempty"`
+	// SSOExpired is the sign-in key the session waits on a human to renew;
+	// absent with none. Filled by List only.
+	SSOExpired string `json:"sso_expired,omitempty"`
+}
+
+// ElevateInfo is the wire view of a binding's elevate block.
+type ElevateInfo struct {
+	RoleARN    string `json:"role_arn"`
+	MaxMinutes int    `json:"max_minutes"`
+	AllowIAM   bool   `json:"allow_iam"`
 }
 
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
@@ -278,7 +299,9 @@ type Info struct {
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
 	// Need says why a waiting claude session needs you: "ask" (blocked on a
-	// permission/choice prompt) or "turn" (it finished its turn). Empty for
+	// permission/choice prompt) or "turn" (it finished its turn); or "sso" (a
+	// bound session, claude or not, whose AWS sign-in on the host has expired;
+	// it replaces "" and "turn", never "ask"). Empty for
 	// every other session, including a waiting one whose transcript cannot be
 	// read — that one is still amber, just without a label. Like the registry
 	// raise itself (see needOf), filled by List only.
@@ -700,6 +723,9 @@ func (s *Session) Info() Info {
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod}
+		if e := s.AWS.Elevate; e != nil {
+			in.AWS.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
+		}
 	}
 	return in
 }
@@ -1317,6 +1343,11 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 
 // List returns all sessions, oldest first.
 func (m *Manager) List() []Info {
+	brk := func() BrokerHooks {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.broker
+	}()
 	// The critical section is a closure so the unlock is a defer again: it used
 	// to be an explicit Unlock (so PeekFor, which takes the same non-reentrant
 	// mutex, could run after it), which meant a panic inside s.Info() would
@@ -1350,8 +1381,30 @@ func (m *Manager) List() []Info {
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull
 		}
+		if out[i].AWS != nil && brk != nil {
+			until, sso := brk.AWSState(out[i].ID)
+			applyAWSState(&out[i], until, sso)
+		}
 	}
 	return out
+}
+
+// applyAWSState folds the broker's state into a listed bound session. A
+// pending sign-in makes Need "sso" — over "" and "turn", never over "ask",
+// whose card has a prompt to answer — for any bound session, claude or not.
+// Activity is left alone: the row keeps saying what the agent is doing.
+func applyAWSState(in *Info, until time.Time, sso string) {
+	if in.AWS == nil {
+		return
+	}
+	if !until.IsZero() {
+		u := until
+		in.AWS.ElevatedUntil = &u
+	}
+	in.AWS.SSOExpired = sso
+	if sso != "" && in.Need != "ask" {
+		in.Need = "sso"
+	}
 }
 
 // Get returns a live session by id.
