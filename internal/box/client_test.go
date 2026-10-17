@@ -119,3 +119,22 @@ func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestListBoxesParsesTheClaimLabels(t *testing.T) {
+	out := "ab-box-1\trunning\t/w/a\t2026-10-15 10:00:00 +0000 UTC\tDEV\t1\t1\n" +
+		"ab-box-2\trunning\t/w/b\t2026-10-15 10:00:00 +0000 UTC\tPROD\t\t\n" +
+		"ab-box-3\texited\t/w/c\t2026-10-14 09:00:00 +0000 UTC\tPROD\t\t1"
+	bin, log := fakeDocker(t, map[string]string{"ps": out}, nil)
+	got, err := CLIClient{Bin: bin}.ListBoxes(context.Background(), LabelInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].Instance != "DEV" || !got[0].Exclusive || !got[0].Claims ||
+		got[1].Instance != "PROD" || got[1].Exclusive || got[1].Claims || !got[2].Claims || got[2].Exclusive {
+		t.Fatalf("parse: %+v", got)
+	}
+	b, _ := os.ReadFile(log)
+	if !strings.Contains(string(b), "label="+LabelInstance) || strings.Contains(string(b), "label="+LabelInstance+"=") {
+		t.Fatalf("the filter must be the label key alone, so every instance is listed: %s", b)
+	}
+}

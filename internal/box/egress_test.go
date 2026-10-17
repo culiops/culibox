@@ -13,12 +13,13 @@ import (
 
 func okVerify(context.Context, string) error { return nil }
 
-// D3: a box without an AWS binding is byte-identical to what it was before
-// egress control existed, whether or not egress is configured.
-func TestUnboundRunArgsUnchanged(t *testing.T) {
+// D3 (M3c) plus M3b: an unbound box gets no egress flags; its only change since
+// M3c is the claims label (M3b spec correction 8a), which is a label, not a
+// network, mount or env change.
+func TestUnboundRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify, AddHosts: []string{"host.lima.internal:192.168.5.2"}})
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false)
 	if slices.Contains(got, "--network") || slices.Contains(got, "--add-host") {
 		t.Fatalf("unbound box got egress flags: %q", got)
 	}
@@ -27,6 +28,7 @@ func TestUnboundRunArgsUnchanged(t *testing.T) {
 		"--name", "ab-box-abc",
 		"--label", LabelWorkspace + "=/home/claude/proj",
 		"--label", LabelInstance + "=TEST",
+		"--label", LabelClaims + "=1",
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
@@ -45,7 +47,7 @@ func TestUnboundRunArgsUnchanged(t *testing.T) {
 func TestBoundRunArgsJoinEgressNetwork(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify, AddHosts: []string{"host.lima.internal:192.168.5.2"}})
-	got := m.runArgs("ab-box-abc", "/w", nil, true)
+	got := m.runArgs("ab-box-abc", "/w", nil, true, false)
 	if !containsPair(got, "--network", "agentbox-egress-TEST") || !containsPair(got, "--add-host", "host.lima.internal:192.168.5.2") {
 		t.Fatalf("runArgs = %q", got)
 	}

@@ -104,14 +104,23 @@ func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
 
 // ListBoxes returns every container carrying the label, running or not.
 func (c CLIClient) ListBoxes(ctx context.Context, label string) ([]BoxInfo, error) {
-	out, err := c.run(ctx, "ps", "-a", "--filter", "label="+label, "--format",
-		"{{.Names}}\t{{.State}}\t{{.Label \""+LabelWorkspace+"\"}}\t{{.CreatedAt}}")
+	out, err := c.run(ctx, "ps", "-a", "--filter", "label="+label, "--format", boxListFormat)
 	if err != nil || out == "" {
 		return nil, err
 	}
+	return parseBoxList(out), nil
+}
+
+// boxListFormat is the --format of ListBoxes; parseBoxList reads it back.
+const boxListFormat = "{{.Names}}\t{{.State}}\t{{.Label \"" + LabelWorkspace + "\"}}\t{{.CreatedAt}}" +
+	"\t{{.Label \"" + LabelInstance + "\"}}\t{{.Label \"" + LabelExclusive + "\"}}\t{{.Label \"" + LabelClaims + "\"}}"
+
+// parseBoxList reads boxListFormat output. Missing trailing fields read as
+// empty, so output from before the label columns existed still parses.
+func parseBoxList(out string) []BoxInfo {
 	var boxes []BoxInfo
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.SplitN(line, "\t", 4)
+		f := strings.SplitN(line, "\t", 7)
 		if len(f) < 2 {
 			continue
 		}
@@ -122,9 +131,18 @@ func (c CLIClient) ListBoxes(ctx context.Context, label string) ([]BoxInfo, erro
 		if len(f) > 3 {
 			b.Created, _ = time.Parse("2006-01-02 15:04:05 -0700 MST", f[3])
 		}
+		if len(f) > 4 {
+			b.Instance = f[4]
+		}
+		if len(f) > 5 {
+			b.Exclusive = f[5] == "1"
+		}
+		if len(f) > 6 {
+			b.Claims = f[6] == "1"
+		}
 		boxes = append(boxes, b)
 	}
-	return boxes, nil
+	return boxes
 }
 
 // ListByLabel returns container names carrying the label, running or not, so

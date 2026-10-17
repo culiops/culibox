@@ -31,6 +31,11 @@ import (
 const (
 	LabelWorkspace = "io.culiops.agent-box.workspace"
 	LabelInstance  = "io.culiops.agent-box.instance"
+	// LabelExclusive marks a box another spawn must not share a folder with;
+	// LabelClaims marks a box created by a build that enforces exclusive
+	// workspaces, so older boxes (without it) are known not to honour claims.
+	LabelExclusive = "io.culiops.agent-box.exclusive"
+	LabelClaims    = "io.culiops.agent-box.claims"
 	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
@@ -66,6 +71,8 @@ const (
 type BoxInfo struct {
 	Name, Workspace, State string // State is docker's .State: running, exited, created, ...
 	Created                time.Time
+	Instance               string // the instance label (DEV/PROD), "" when absent
+	Exclusive, Claims      bool   // the exclusive / claims labels (see LabelExclusive)
 }
 
 // ErrUnboxableWorkspace marks a refusal the user can act on directly: the
@@ -221,8 +228,10 @@ func (m *Manager) Runtime() string { return m.runtime }
 // BoxKey is everything besides the workspace that decides which box a session
 // runs in. Account is the agent account name ("" or "default" for the default
 // account). Binding is the hash of the session's AWS binding (config.AWSBinding
-// Hash), "" for a session without one.
-type BoxKey struct{ Account, Binding string }
+// Hash), "" for a session without one. Session is the session id for a binding
+// with elevate (M3b): such a box belongs to one session and is removed when it
+// ends. It is empty for every other session.
+type BoxKey struct{ Account, Binding, Session string }
 
 // boxName derives the container name from the canonical workspace path.
 // Symlinks are resolved so two spellings of one directory never produce two
@@ -248,6 +257,9 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	}
 	if k.Binding != "" {
 		key += "\x00aws:" + k.Binding
+	}
+	if k.Session != "" {
+		key += "\x00session:" + k.Session
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
@@ -474,7 +486,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
-	if err := m.ensure(ctx, name, real, extraRO, key.Binding != ""); err != nil {
+	if err := m.ensure(ctx, name, real, extraRO, key.Binding != "", key.Session != ""); err != nil {
 		return nil, nil, "", err
 	}
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
@@ -487,7 +499,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, bound bool) error {
+func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, bound, exclusive bool) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -567,7 +579,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, bound)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, bound, exclusive)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)

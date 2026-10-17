@@ -32,13 +32,16 @@ var hostOnlyEnv = map[string]bool{
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
 // bound (an AWS binding) adds the egress network flags; bound=false output is
-// byte-identical to what it was before egress control existed.
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound bool) []string {
+// unchanged by it, except for the claims label every box carries: claims=1 tells other agent-box instances on this docker
+// daemon that this build enforces exclusive workspaces; exclusive=1 marks a box
+// another spawn must not share a folder with.
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound, exclusive bool) []string {
 	args := []string{
 		"run", "-d", "--init",
 		"--name", boxName,
 		"--label", LabelWorkspace + "=" + cwd,
 		"--label", LabelInstance + "=" + m.opts.Instance,
+		"--label", LabelClaims + "=1",
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
@@ -51,6 +54,9 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound bool) []st
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
 		"--mount", bindMount(m.stateDir(boxName), boxHome, false),
+	}
+	if exclusive {
+		args = append(args, "--label", LabelExclusive+"=1")
 	}
 	// Extra binds are always read-only. The caller chooses what, never whether.
 	for _, mt := range extraRO {
