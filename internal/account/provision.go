@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/culiops/agent-box/internal/bundle"
 )
@@ -19,6 +20,10 @@ var statuslineScript []byte
 const (
 	manifestName = ".agentbox-manifest.json"
 	scriptName   = "statusline-ratelimits.sh"
+	// DelegateFileName holds the default account's statusLine command; the
+	// embedded script runs it (after harvesting rate limits) so every account's
+	// footer matches the default's.
+	DelegateFileName = ".agentbox-statusline-delegate"
 )
 
 // manifest records what agent-box itself created in an account's config dir.
@@ -26,6 +31,8 @@ const (
 type manifest struct {
 	Links []string `json:"links,omitempty"` // symlink names agent-box created
 	MCP   bool     `json:"mcp,omitempty"`   // agent-box wrote MCPFileName
+	// Delegate: agent-box wrote DelegateFileName (the default account's statusLine command).
+	Delegate bool `json:"delegate,omitempty"`
 }
 
 // ScriptPath is where the embedded rate-limits statusLine script lives.
@@ -121,6 +128,11 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 				return err
 			}
 		}
+		if man.Delegate {
+			if err := cr.Remove(DelegateFileName); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return err
+			}
+		}
 		return writeManifest(cr, manifest{})
 	}
 	for _, n := range bundle.AllowlistNames() {
@@ -147,7 +159,53 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 		return err
 	}
 	man.MCP = true
+	if err := s.syncDelegate(cr, &man); err != nil {
+		return err
+	}
 	return writeManifest(cr, man)
+}
+
+// defaultStatusLineCommand returns the default account's statusLine command,
+// or "" when there is none worth delegating to (missing/invalid settings, not
+// a command-type statusLine, empty, or our own script).
+func (s *Store) defaultStatusLineCommand() string {
+	b, err := os.ReadFile(filepath.Join(s.defaultDir, "settings.json"))
+	if err != nil {
+		return ""
+	}
+	var m struct {
+		StatusLine struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		} `json:"statusLine"`
+	}
+	if json.Unmarshal(b, &m) != nil {
+		return ""
+	}
+	c := m.StatusLine.Command
+	if m.StatusLine.Type != "command" || strings.TrimSpace(c) == "" || c == s.ScriptPath() {
+		return ""
+	}
+	return c
+}
+
+// syncDelegate writes (or, if agent-box wrote it earlier, removes) the delegate
+// file for an account that inherits personal config.
+func (s *Store) syncDelegate(cr *os.Root, man *manifest) error {
+	if cmd := s.defaultStatusLineCommand(); cmd != "" {
+		if err := writeFileAtomic(cr, DelegateFileName, []byte(cmd), 0o600); err != nil {
+			return err
+		}
+		man.Delegate = true
+		return nil
+	}
+	if man.Delegate {
+		if err := cr.Remove(DelegateFileName); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		man.Delegate = false
+	}
+	return nil
 }
 
 // hostProber resolves stdio MCP commands against the host PATH: an account

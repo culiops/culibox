@@ -202,3 +202,156 @@ func TestProvisionRefusesPlantedSymlinkOutsideDataDir(t *testing.T) {
 		t.Fatalf("file outside the data dir was written: %s", b)
 	}
 }
+
+func writeDefaultSettings(t *testing.T, s *Store, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.defaultDir, "settings.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProvisionWritesStatusLineDelegate(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/home/u/.claude/statusline-command.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(r.ConfigDir, DelegateFileName)
+	b, err := os.ReadFile(p)
+	if err != nil || string(b) != "/home/u/.claude/statusline-command.sh" {
+		t.Fatalf("delegate = %q %v", b, err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("delegate mode = %v", fi.Mode().Perm())
+	}
+	if m := readJSON(t, filepath.Join(r.ConfigDir, manifestName)); m["delegate"] != true {
+		t.Fatalf("manifest = %v", m)
+	}
+	// The account's own statusLine still points at our script, unchanged.
+	sl := readJSON(t, filepath.Join(r.ConfigDir, "settings.json"))["statusLine"].(map[string]any)
+	if sl["command"] != s.ScriptPath() {
+		t.Fatalf("statusLine = %v", sl)
+	}
+	// Idempotent: re-provisioning keeps the same content and manifest flag.
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if b2, _ := os.ReadFile(p); string(b2) != string(b) {
+		t.Fatalf("delegate changed on re-provision: %q", b2)
+	}
+	if m := readJSON(t, filepath.Join(r.ConfigDir, manifestName)); m["delegate"] != true {
+		t.Fatalf("manifest after re-provision = %v", m)
+	}
+}
+
+func TestProvisionNoDelegateWithoutUsableStatusLine(t *testing.T) {
+	cases := map[string]func(*Store) string{
+		"no settings":   func(*Store) string { return "" },
+		"no statusLine": func(*Store) string { return `{"theme":"dark"}` },
+		"empty command": func(*Store) string { return `{"statusLine":{"type":"command","command":"  "}}` },
+		"not a command": func(*Store) string { return `{"statusLine":{"type":"static","command":"x"}}` },
+		"our own path": func(s *Store) string {
+			return `{"statusLine":{"type":"command","command":"` + s.ScriptPath() + `"}}`
+		},
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, _ := newStore(t)
+			if b := body(s); b != "" {
+				writeDefaultSettings(t, s, b)
+			}
+			r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(filepath.Join(r.ConfigDir, DelegateFileName)); err == nil {
+				t.Fatal("delegate must not be written")
+			}
+		})
+	}
+}
+
+func TestProvisionNoDelegateWhenInheritOff(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ConfigDir, DelegateFileName)); err == nil {
+		t.Fatal("delegate written although inherit is off")
+	}
+}
+
+func TestProvisionRemovesDelegateWhenInheritFlipsOff(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(r.ConfigDir, DelegateFileName)
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(p); err == nil {
+		t.Fatal("delegate should be removed when inherit is off")
+	}
+}
+
+func TestProvisionRemovesDelegateWhenDefaultDropsStatusLine(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDefaultSettings(t, s, `{}`)
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ConfigDir, DelegateFileName)); err == nil {
+		t.Fatal("stale delegate kept")
+	}
+}
+
+func TestProvisionKeepsDelegateAgentBoxDidNotWrite(t *testing.T) {
+	s, data := newStore(t)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	os.MkdirAll(cfg, 0o700)
+	hand := filepath.Join(cfg, DelegateFileName)
+	os.WriteFile(hand, []byte("/mine.sh"), 0o600)
+	// Default has no statusLine, then inherit flips off: neither path may delete it.
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(hand); string(b) != "/mine.sh" {
+		t.Fatalf("hand-made delegate touched: %q", b)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(hand); string(b) != "/mine.sh" {
+		t.Fatalf("hand-made delegate removed on toggle-off: %q", b)
+	}
+}
+
+func TestProvisionRefusesPlantedDelegateSymlink(t *testing.T) {
+	s, data := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	os.MkdirAll(cfg, 0o700)
+	outside := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(outside, []byte("keep"), 0o600)
+	os.Symlink(outside, filepath.Join(cfg, DelegateFileName))
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep" {
+		t.Fatalf("file outside the data dir was written: %s", b)
+	}
+}

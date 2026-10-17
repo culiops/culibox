@@ -18,8 +18,15 @@
 # THEN point agent-box at it — the default rate_limits_file is abtop's path, not
 # this one — in the agent-box config:
 #   { "rate_limits_file": "/home/you/.claude/agent-box-rate-limits.json" }
-# A statusLine command must also PRINT the status line itself; this one prints a
-# tiny summary so wiring it doesn't blank your status line.
+#
+# FOOTER: the harvest is a side effect; what this script PRINTS is the footer.
+# agent-box keeps every account's footer identical to the default account's:
+#   1. if $CLAUDE_CONFIG_DIR/.agentbox-statusline-delegate exists (agent-box writes
+#      it for accounts that inherit personal config, holding the default account's
+#      statusLine command), run that command with the same stdin and print its output;
+#   2. otherwise (or if it fails / prints nothing) print the default format itself:
+#        <model> | ~/<cwd basename> | effort <level>
+# Must never error or print a traceback: a broken statusLine blanks the footer.
 set -euo pipefail
 
 INPUT=""
@@ -29,24 +36,55 @@ while IFS= read -r -t 5 line || [ -n "$line" ]; do
 done
 [ -z "$INPUT" ] && exit 0
 
-printf '%s' "$INPUT" | python3 -c '
+# Harvest rate limits (side effect) and compute the fallback footer line.
+FALLBACK=$(printf '%s' "$INPUT" | python3 -c '
 import sys, json, time, os
-data = json.load(sys.stdin)
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(data, dict):
+    sys.exit(0)
 rl = data.get("rate_limits") or {}
 out = {"source": "agent-box", "updated_at": int(time.time())}
-line = []
 for key in ("five_hour", "seven_day"):
     w = rl.get(key)
     if not w:
         continue
     out[key] = {"used_percentage": w.get("used_percentage", 0), "resets_at": w.get("resets_at", 0)}
-    line.append("%s %s%%" % ("5h" if key == "five_hour" else "wk", w.get("used_percentage", 0)))
 cfg = os.environ.get("CLAUDE_CONFIG_DIR", os.path.join(os.path.expanduser("~"), ".claude"))
 try:
     with open(os.path.join(cfg, "agent-box-rate-limits.json"), "w") as f:
         json.dump(out, f)
 except OSError:
     pass
-# Print the status line so wiring this does not blank it.
-print(" · ".join(line))
-' 2>/dev/null || true
+model = (data.get("model") or {}).get("display_name") or "unknown"
+cwd = (data.get("workspace") or {}).get("current_dir") or data.get("cwd") or ""
+base = os.path.basename(cwd.rstrip("/")) or cwd
+line = "%s | ~/%s" % (model, base)
+effort = (data.get("effort") or {}).get("level")
+if effort:
+    line += " | effort %s" % effort
+print(line)
+' 2>/dev/null || true)
+
+CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+DELEGATE="$CFG/.agentbox-statusline-delegate"
+# AGENTBOX_STATUSLINE_DELEGATING catches indirect recursion; the name check
+# catches a delegate that points straight back at this script.
+if [ -s "$DELEGATE" ] && [ -z "${AGENTBOX_STATUSLINE_DELEGATING:-}" ]; then
+  CMD=$(cat "$DELEGATE" 2>/dev/null || true)
+  case "$CMD" in
+    "") ;;
+    *statusline-ratelimits.sh*) ;;
+    *)
+      OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || OUT=""
+      if [ -n "$OUT" ]; then
+        printf '%s\n' "$OUT"
+        exit 0
+      fi
+      ;;
+  esac
+fi
+[ -n "$FALLBACK" ] && printf '%s\n' "$FALLBACK"
+exit 0
