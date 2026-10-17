@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -343,10 +342,7 @@ func (l *AgentLauncher) AWSFor(agent string) *config.AWSBinding {
 	if !ok || cfg.AWS == nil {
 		return nil
 	}
-	c := *cfg.AWS
-	c.S3Read = slices.Clone(cfg.AWS.S3Read)
-	c.EgressAllow = slices.Clone(cfg.AWS.EgressAllow)
-	return &c
+	return cfg.AWS.Clone()
 }
 
 // Build composes (argv, env) for the agent per its base policy + env + secrets.
