@@ -323,7 +323,10 @@ func TestSSOExpiredIsActionable(t *testing.T) {
 	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
 	fm.err = fmt.Errorf("%w: token expired", ErrSSOExpired)
 	w := call(b, tokA("claude-3"))
-	if w.Code != 503 || !strings.Contains(w.Body.String(), `aws sso login --profile sandbox-admin`) {
+	var body struct{ Error string }
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	const want = `SSO session for profile "sandbox-admin" expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile sandbox-admin" on the host).`
+	if w.Code != 503 || body.Error != want {
 		t.Fatalf("status %d body %s", w.Code, w.Body)
 	}
 	if rec.rows[len(rec.rows)-1].Outcome != OutcomeSSOExpired {

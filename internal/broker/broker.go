@@ -114,6 +114,11 @@ type Broker struct {
 	after      func(time.Duration, func()) stopper
 	claimCheck func(sessionID string) error
 	appr       ApprovalRecorder // nil when rec cannot store approvals: every grant is refused
+
+	// SSO expiry (sso.go); guarded by mu.
+	srcKeys map[string]string    // source profile -> its sourceKey, read once
+	ssoBad  map[string]time.Time // sourceKey -> when a mint last failed on it
+	ssoNeed map[string]string    // session id -> the sourceKey that session's mint failed on
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -136,6 +141,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		cache: map[string]cached{}, mintTimes: map[string][]time.Time{}, stats: map[string]*Stats{},
 		denied: map[deniedKey]*deniedState{},
 		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
+		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[string]string{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b
@@ -167,6 +173,7 @@ func (b *Broker) Forget(sessionID string) {
 		delete(b.elev, sessionID)
 	}
 	delete(b.dropped, sessionID)
+	delete(b.ssoNeed, sessionID)
 	delete(b.refused, refusedKey{sessionID, CredCookie})
 	delete(b.refused, refusedKey{sessionID, CredBearer})
 	delete(b.refused, refusedKey{sessionID, credNone})
@@ -247,8 +254,12 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		c, err := b.minter.Mint(r.Context(), MintInput{SourceProfile: bnd.SourceProfile, Region: bnd.Region,
 			RoleARN: p.role, SessionName: base.SourceIdentity, Policy: policy, Duration: credTTL})
 		if errors.Is(err, ErrSSOExpired) {
+			key := b.SourceKeyOf(bnd.SourceProfile)
+			b.mu.Lock()
+			b.ssoBad[key], b.ssoNeed[sid] = now, key
+			b.mu.Unlock()
 			boxMsg := fmt.Sprintf(
-				`SSO session for profile %q expired — run "aws sso login --profile %s" on the host, then retry`,
+				`SSO session for profile %q expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile %s" on the host).`,
 				bnd.SourceProfile, bnd.SourceProfile)
 			hostMsg := boxMsg
 			var me *MintError
@@ -271,7 +282,11 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		key := b.SourceKeyOf(bnd.SourceProfile)
 		b.mu.Lock()
+		if _, bad := b.ssoBad[key]; bad { // STS accepted this sign-in, so every session waiting on it can retry
+			b.clearSSOLocked(key)
+		}
 		if p.elevated {
 			// The hard bound (spec §5.2): a write credential never outlives the window
 			// it was minted under, and is never handed out for a window that changed
