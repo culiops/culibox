@@ -995,10 +995,17 @@ func TestSourceCheck(t *testing.T) {
 		{"127.0.0.1:40000", subnet, false},
 		{"172.21.0.5:40000", netip.Prefix{}, false},
 		{"garbage", subnet, false},
+		{"10.0.0.5:40000", netip.MustParsePrefix("0.0.0.0/0"), false},
 	}
 	for _, c := range cases {
 		if got := sourceOK(c.remote, c.subnet, gw); got != c.want {
 			t.Errorf("sourceOK(%q, %v) = %v, want %v", c.remote, c.subnet, got, c.want)
+		}
+	}
+	// A gateway that is invalid, unspecified or outside the subnet fails closed.
+	for _, g := range []netip.Addr{{}, netip.MustParseAddr("0.0.0.0"), netip.MustParseAddr("::"), netip.MustParseAddr("10.9.9.9")} {
+		if sourceOK("172.21.0.5:40000", subnet, g) {
+			t.Errorf("gateway %v: a source passed", g)
 		}
 	}
 
@@ -1018,10 +1025,10 @@ func TestSourceCheck(t *testing.T) {
 
 func TestDefaultAllowMatchesSpec(t *testing.T) {
 	want := []string{"api.anthropic.com", "*.amazonaws.com", "registry.terraform.io", "releases.hashicorp.com", "github.com"}
-	if !reflect.DeepEqual(DefaultAllow, want) {
-		t.Fatalf("DefaultAllow = %q, want spec §7.1's %q", DefaultAllow, want)
+	if got := DefaultAllow(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultAllow() = %q, want spec §7.1's %q", got, want)
 	}
-	for _, p := range DefaultAllow {
+	for _, p := range DefaultAllow() {
 		if err := hostmatch.ValidPattern(p); err != nil {
 			t.Errorf("%q: %v", p, err)
 		}
@@ -1029,17 +1036,23 @@ func TestDefaultAllowMatchesSpec(t *testing.T) {
 }
 
 func TestEffective(t *testing.T) {
-	if got := Effective(nil); !reflect.DeepEqual(got, DefaultAllow) {
+	if got := Effective(nil); !reflect.DeepEqual(got, DefaultAllow()) {
 		t.Fatalf("Effective(nil) = %q", got)
 	}
 	b := bound()
 	got := Effective(b)
-	if !reflect.DeepEqual(got, append(slices.Clone(DefaultAllow), "extra.example.org")) {
+	if !reflect.DeepEqual(got, append(DefaultAllow(), "extra.example.org")) {
 		t.Fatalf("Effective = %q", got)
 	}
-	got[0] = "mutated"
-	if DefaultAllow[0] != "api.anthropic.com" || Effective(nil)[0] != "api.anthropic.com" {
-		t.Fatal("Effective aliases DefaultAllow")
+	// Nothing a caller holds aliases the policy or the binding.
+	got[0], got[len(got)-1] = "mutated", "mutated"
+	d := DefaultAllow()
+	d[1] = "*.com"
+	n := Effective(nil)
+	n[0] = "mutated"
+	if DefaultAllow()[0] != "api.anthropic.com" || DefaultAllow()[1] != "*.amazonaws.com" ||
+		Effective(nil)[0] != "api.anthropic.com" || b.EgressAllow[0] != "extra.example.org" {
+		t.Fatal("a returned allowlist aliases DefaultAllow or the binding")
 	}
 }
 
@@ -1077,5 +1090,175 @@ func TestTokenIsEgressDomain(t *testing.T) {
 	}
 	if _, _, ok := sesstoken.Parse(sesstoken.DomainBroker, testSecret, h.p.Token("s1", nonceA)); ok {
 		t.Fatal("egress token verifies as a broker token")
+	}
+}
+
+// The positive end-to-end path: a remote inside the subnet that is not the
+// gateway passes the source check (loopback stands in for the egress network).
+func TestSourceCheckPassesInsideTheSubnet(t *testing.T) {
+	h := newHarness(t, nil)
+	h.p.SetNetwork(netip.MustParsePrefix("127.0.0.0/8"), netip.MustParseAddr("127.0.0.2"), true)
+	code, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("remote 127.0.0.1 in 127.0.0.0/8, gateway 127.0.0.2: status %d", code)
+	}
+	echoRoundTrip(t, c, "ok")
+	c.Close()
+	// The remote is the gateway → refused.
+	h.p.SetNetwork(netip.MustParsePrefix("127.0.0.0/8"), netip.MustParseAddr("127.0.0.1"), true)
+	if code, _ := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA)); code != 407 {
+		t.Fatalf("remote == gateway: status %d", code)
+	}
+	// checkSource with an invalid or unspecified gateway or subnet refuses everyone.
+	for _, n := range []struct {
+		subnet netip.Prefix
+		gw     netip.Addr
+	}{
+		{netip.MustParsePrefix("127.0.0.0/8"), netip.Addr{}},
+		{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParseAddr("0.0.0.0")},
+		{netip.Prefix{}, netip.MustParseAddr("127.0.0.2")},
+		{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParseAddr("127.0.0.2")},
+	} {
+		h.p.SetNetwork(n.subnet, n.gw, true)
+		if code, _ := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA)); code != 407 {
+			t.Fatalf("SetNetwork(%v, %v, true): status %d, want 407", n.subnet, n.gw, code)
+		}
+	}
+}
+
+// A session that ends while its CONNECT is between auth and the tunnel (here:
+// blocked in the dial) must not get a tunnel, and Forget must leave no stats.
+func TestForgetDuringDialGetsNoTunnel(t *testing.T) {
+	h := newHarness(t, nil)
+	entered, release := make(chan struct{}), make(chan struct{})
+	h.dialErr = func(netip.AddrPort) error {
+		close(entered)
+		<-release
+		return nil
+	}
+	type result struct {
+		code int
+		err  error
+	}
+	res := make(chan result, 1)
+	tok := h.tok("s1", nonceA)
+	go func() {
+		c, err := net.DialTimeout("tcp", h.addr, 2*time.Second)
+		if err != nil {
+			res <- result{err: err}
+			return
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(5 * time.Second))
+		io.WriteString(c, "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\nProxy-Authorization: "+basic("s1", tok)+"\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(c), &http.Request{Method: "CONNECT"})
+		if err != nil {
+			res <- result{err: err}
+			return
+		}
+		res <- result{code: resp.StatusCode}
+	}()
+	<-entered
+	v := h.views["s1"]
+	v.Live = false
+	h.setView("s1", v)
+	h.p.Forget("s1")
+	close(release)
+	r := <-res
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if r.code != http.StatusProxyAuthRequired {
+		t.Fatalf("status %d, want 407: the session ended before its tunnel opened", r.code)
+	}
+	row := h.onlyRow(t)
+	if row.Outcome != OutcomeBadAuth || row.SessionID != "s1" || row.BytesUp != 0 || row.BytesDown != 0 {
+		t.Fatalf("row = %+v", row)
+	}
+	h.p.mu.Lock()
+	open := len(h.p.tunnels)
+	h.p.mu.Unlock()
+	if open != 0 {
+		t.Fatalf("%d tunnels registered", open)
+	}
+	if st, ok := h.p.Stats("s1"); ok {
+		t.Fatalf("Forget left a stats entry: %+v", st)
+	}
+	// A later denial for the forgotten spawn does not re-create it either.
+	h.connect(t, "example.com:443", "s1", tok)
+	if st, ok := h.p.Stats("s1"); ok {
+		t.Fatalf("stats re-created after Forget: %+v", st)
+	}
+}
+
+// Forget also wins over a denial path that authenticated before it.
+func TestForgetThenRespawnCountsAgain(t *testing.T) {
+	h := newHarness(t, nil)
+	h.connect(t, "example.com:443", "s1", h.tok("s1", nonceA))
+	h.p.Forget("s1")
+	// The id is reused by a new spawn with a new nonce: it is counted afresh.
+	h.setView("s1", SessionView{Nonce: nonceB, Box: "box-1", Boxed: true, Live: true, AWS: bound()})
+	_, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceB))
+	c.Close()
+	if st, ok := h.p.Stats("s1"); !ok || st != (Stats{Allowed: 1}) {
+		t.Fatalf("stats = %+v, %v", st, ok)
+	}
+}
+
+// failConn's writes always fail, as if the client vanished before the 200.
+type failConn struct{ net.Conn }
+
+func (failConn) Write([]byte) (int, error) { return 0, errors.New("broken pipe") }
+
+type hijackRecorder struct {
+	http.ResponseWriter
+	conn net.Conn
+}
+
+func (h hijackRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return h.conn, bufio.NewReadWriter(bufio.NewReader(strings.NewReader("")), bufio.NewWriter(io.Discard)), nil
+}
+
+func TestFailed200IsNotAnAllowedTunnel(t *testing.T) {
+	h := newHarness(t, nil)
+	a, b := net.Pipe()
+	defer b.Close()
+	req := &http.Request{Method: http.MethodConnect, RequestURI: "api.anthropic.com:443", Host: "api.anthropic.com:443",
+		RemoteAddr: "127.0.0.1:5555", Header: http.Header{"Proxy-Authorization": {basic("s1", h.tok("s1", nonceA))}}}
+	req = req.WithContext(context.Background())
+	h.p.ServeHTTP(hijackRecorder{conn: failConn{a}}, req)
+	if st, _ := h.p.Stats("s1"); st.Allowed != 0 {
+		t.Fatalf("stats = %+v: a tunnel whose 200 never reached the client was counted", st)
+	}
+	if r := h.onlyRow(t); r.Outcome != OutcomeDialError || r.BytesUp != 0 || r.BytesDown != 0 {
+		t.Fatalf("row = %+v", r)
+	}
+	// Same for a probe principal.
+	user, pass, done := h.p.ProbeCredential("box-9")
+	req.Header.Set("Proxy-Authorization", basic(user, pass))
+	a2, b2 := net.Pipe()
+	defer b2.Close()
+	h.p.ServeHTTP(hijackRecorder{conn: failConn{a2}}, req)
+	if res := done(); res.Allowed != 0 {
+		t.Fatalf("probe result %+v", res)
+	}
+}
+
+func TestDefaultResolverAsksForTheFQDN(t *testing.T) {
+	var asked []string
+	orig := lookupNetIP
+	lookupNetIP = func(_ context.Context, network, host string) ([]netip.Addr, error) {
+		asked = append(asked, network+" "+host)
+		return []netip.Addr{publicAddr}, nil
+	}
+	defer func() { lookupNetIP = orig }()
+	h := newHarness(t, nil, func(o *Options) { o.Resolve = nil })
+	code, c := h.connect(t, "API.anthropic.com.:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	c.Close()
+	if !reflect.DeepEqual(asked, []string{"ip api.anthropic.com."}) {
+		t.Fatalf("resolver asked %q; a rooted name keeps resolv.conf search domains out", asked)
 	}
 }

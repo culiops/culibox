@@ -31,7 +31,14 @@ const (
 	deniedWindow      = time.Second
 	challenge         = `Basic realm="agent-box"`
 	established       = "HTTP/1.1 200 Connection Established\r\n\r\n"
+	// revoked answers a CONNECT whose session ended after it authenticated;
+	// the connection is already hijacked, so it is written raw.
+	revoked = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: " + challenge +
+		"\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
 )
+
+// lookupNetIP is the system resolver; a variable so a test can see what it is asked.
+var lookupNetIP = net.DefaultResolver.LookupNetIP
 
 // SessionView is what the proxy needs to know about a session.
 type SessionView struct {
@@ -48,7 +55,7 @@ type Options struct {
 	Secret      []byte
 	Lookup      Lookup
 	Audit       Recorder
-	Resolve     func(ctx context.Context, host string) ([]netip.Addr, error)  // nil → net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	Resolve     func(ctx context.Context, host string) ([]netip.Addr, error)  // nil → the system resolver, asked for host + "." (rooted)
 	Dial        func(ctx context.Context, a netip.AddrPort) (net.Conn, error) // nil → (&net.Dialer{}).DialContext(ctx, "tcp", a.String())
 	ProbeHost   string                                                        // "" → "api.anthropic.com"
 	Now         func() time.Time                                              // audit timestamps, throttle and probe expiry; nil → time.Now
@@ -83,6 +90,7 @@ type Proxy struct {
 	total       int
 	tunnels     map[*tunnel]struct{}
 	stats       map[string]*Stats
+	epoch       map[string]uint64 // bumped by Forget: a request authenticated before it can no longer open a tunnel or count
 	probes      map[string]*probePrincipal
 	denied      map[deniedKey]*deniedState
 	lastPrune   time.Time
@@ -124,7 +132,9 @@ type deniedState struct {
 func New(o Options) *Proxy {
 	if o.Resolve == nil {
 		o.Resolve = func(ctx context.Context, host string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+			// Rooted, so resolv.conf search domains (this host has
+			// openstacklocal and a tailnet suffix) are never tried.
+			return lookupNetIP(ctx, "ip", host+".")
 		}
 	}
 	if o.Dial == nil {
@@ -147,7 +157,7 @@ func New(o Options) *Proxy {
 	if o.Global <= 0 {
 		o.Global = defaultGlobal
 	}
-	p := &Proxy{o: o, open: map[string]int{}, tunnels: map[*tunnel]struct{}{}, stats: map[string]*Stats{},
+	p := &Proxy{o: o, open: map[string]int{}, tunnels: map[*tunnel]struct{}{}, stats: map[string]*Stats{}, epoch: map[string]uint64{},
 		probes: map[string]*probePrincipal{}, denied: map[deniedKey]*deniedState{}}
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 8 << 10,
@@ -206,10 +216,13 @@ func (p *Proxy) Stats(id string) (Stats, bool) {
 }
 
 // Forget drops a gone session's counters and closes any tunnel it still holds.
+// A CONNECT that authenticated before Forget (and is still resolving or
+// dialling) gets no tunnel and counts nothing.
 func (p *Proxy) Forget(id string) {
 	var ts []*tunnel
 	p.mu.Lock()
 	delete(p.stats, id)
+	p.epoch[id]++
 	for t := range p.tunnels {
 		if t.sid == id {
 			ts = append(ts, t)
@@ -264,6 +277,7 @@ type principal struct {
 	key   string // cap and throttle key
 	probe *probePrincipal
 	user  string
+	epoch uint64 // p.epoch[sid] when authenticated
 }
 
 type authVerdict int
@@ -320,7 +334,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
 			return
 		}
-		p.countDenied(pr.sid)
+		p.countDenied(pr)
 		p.refuse(w, http.StatusForbidden, row, OutcomeDenied, pr.key)
 		return
 	}
@@ -350,7 +364,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	pub := PublicAddrs(addrs, subnet)
 	if len(pub) == 0 {
-		p.countDenied(pr.sid)
+		p.countDenied(pr)
 		p.refuse(w, http.StatusForbidden, row, OutcomePrivateAddr, pr.key)
 		return
 	}
@@ -382,29 +396,45 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	begin := time.Now()
 	conn.SetDeadline(time.Time{}) // the server's header deadline would otherwise kill the tunnel
 	t := &tunnel{sid: pr.sid, client: conn, up: up}
-	if !p.register(t, pr) {
+	if err := p.register(t, pr); err != nil {
+		if err == errRevoked {
+			conn.SetWriteDeadline(time.Now().Add(time.Second))
+			conn.Write([]byte(revoked))
+			p.recordDenied(withOutcome(row, OutcomeBadAuth), pr.key)
+		}
 		t.close()
 		return
 	}
-	var upN, downN int64
+	defer func() {
+		t.close()
+		p.mu.Lock()
+		delete(p.tunnels, t)
+		p.mu.Unlock()
+	}()
 	conn.SetWriteDeadline(time.Now().Add(p.o.IdleTimeout))
-	if _, err := conn.Write([]byte(established)); err == nil {
-		// A client may pipeline its TLS ClientHello right behind the CONNECT.
-		if n := brw.Reader.Buffered(); n > 0 {
-			b, _ := brw.Reader.Peek(n)
-			up.SetWriteDeadline(time.Now().Add(p.o.IdleTimeout))
-			k, _ := up.Write(b)
-			upN += int64(k)
-		}
-		u, d := splice(conn, up, p.o.IdleTimeout)
-		upN, downN = upN+u, d
+	if _, err := conn.Write([]byte(established)); err != nil {
+		// The client never saw its tunnel: not an allowed tunnel. The dial
+		// worked, so this is the closest outcome to "could not be set up".
+		p.recordDenied(withOutcome(row, OutcomeDialError), pr.key)
+		return
 	}
-	t.close()
-	p.mu.Lock()
-	delete(p.tunnels, t)
-	p.mu.Unlock()
-	row.Outcome, row.BytesUp, row.BytesDown, row.Duration = OutcomeAllowed, upN, downN, time.Since(begin)
+	p.countAllowed(pr)
+	var upN int64
+	// A client may pipeline its TLS ClientHello right behind the CONNECT.
+	if n := brw.Reader.Buffered(); n > 0 {
+		b, _ := brw.Reader.Peek(n)
+		up.SetWriteDeadline(time.Now().Add(p.o.IdleTimeout))
+		k, _ := up.Write(b)
+		upN += int64(k)
+	}
+	u, downN := splice(conn, up, p.o.IdleTimeout)
+	row.Outcome, row.BytesUp, row.BytesDown, row.Duration = OutcomeAllowed, upN+u, downN, time.Since(begin)
 	p.record(row)
+}
+
+func withOutcome(r Row, o Outcome) Row {
+	r.Outcome = o
+	return r
 }
 
 // refuse answers a refused request and audits it (throttled).
@@ -431,10 +461,12 @@ func (p *Proxy) sourceAllowed(remote string) bool {
 	return !check || sourceOK(remote, subnet, gw)
 }
 
-// sourceOK: remote is inside subnet and is not the gateway. An invalid subnet
-// or an unparsable remote is never ok.
+// sourceOK: remote is inside subnet and is not the gateway. It fails closed:
+// an invalid or /0 subnet, an invalid or unspecified gateway, a gateway outside
+// the subnet, or an unparsable remote is never ok.
 func sourceOK(remote string, subnet netip.Prefix, gw netip.Addr) bool {
-	if !subnet.IsValid() {
+	gw = gw.WithZone("").Unmap()
+	if !subnet.IsValid() || subnet.Bits() == 0 || !gw.IsValid() || gw.IsUnspecified() || !subnet.Contains(gw) {
 		return false
 	}
 	ap, err := netip.ParseAddrPort(remote)
@@ -442,7 +474,7 @@ func sourceOK(remote string, subnet netip.Prefix, gw netip.Addr) bool {
 		return false
 	}
 	a := ap.Addr().WithZone("").Unmap()
-	return subnet.Contains(a) && a != gw.WithZone("").Unmap()
+	return subnet.Contains(a) && a != gw
 }
 
 // authenticate checks Proxy-Authorization. On authBad, the returned principal
@@ -476,12 +508,17 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 	if sid != user || p.o.Lookup == nil {
 		return bad, authBad
 	}
+	// Captured before Lookup: a Forget that follows a "live" answer is then
+	// always seen by register as a changed epoch.
+	p.mu.Lock()
+	epoch := p.epoch[sid]
+	p.mu.Unlock()
 	v, found := p.o.Lookup(sid)
 	if !found || !v.Live || !v.Boxed || v.AWS == nil || v.Nonce == "" ||
 		subtle.ConstantTimeCompare([]byte(v.Nonce), []byte(nonce)) != 1 {
 		return bad, authBad
 	}
-	return principal{sid: sid, box: v.Box, allow: Effective(v.AWS), key: sid}, authOK
+	return principal{sid: sid, box: v.Box, allow: Effective(v.AWS), key: sid, epoch: epoch}, authOK
 }
 
 // basicAuth parses the one Proxy-Authorization header. present is false only
@@ -535,12 +572,29 @@ func (p *Proxy) useProbe(pr principal, allowed bool) bool {
 	return true
 }
 
-func (p *Proxy) countDenied(sid string) {
-	if sid == "" {
-		return
-	}
+// currentLocked: pr is a session principal whose session has not been
+// forgotten since it authenticated.
+func (p *Proxy) currentLocked(pr principal) bool {
+	return pr.sid != "" && p.epoch[pr.sid] == pr.epoch
+}
+
+func (p *Proxy) countDenied(pr principal) {
 	p.mu.Lock()
-	p.statsLocked(sid).Denied++
+	if p.currentLocked(pr) {
+		p.statsLocked(pr.sid).Denied++
+	}
+	p.mu.Unlock()
+}
+
+// countAllowed runs once the 200 has reached the client.
+func (p *Proxy) countAllowed(pr principal) {
+	p.mu.Lock()
+	if p.currentLocked(pr) {
+		p.statsLocked(pr.sid).Allowed++
+	}
+	if pr.probe != nil {
+		pr.probe.allowed++
+	}
 	p.mu.Unlock()
 }
 
@@ -576,22 +630,25 @@ func (p *Proxy) release(key string) {
 	p.wg.Done()
 }
 
-// register makes t closable by Close and Forget and counts it as allowed.
-func (p *Proxy) register(t *tunnel, pr principal) bool {
+// register makes t closable by Close and Forget. errClosed: the proxy is
+// closing; errRevoked: the session was forgotten after it authenticated.
+func (p *Proxy) register(t *tunnel, pr principal) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
-		return false
+		return errClosed
+	}
+	if pr.probe == nil && !p.currentLocked(pr) {
+		return errRevoked
 	}
 	p.tunnels[t] = struct{}{}
-	if pr.sid != "" {
-		p.statsLocked(pr.sid).Allowed++
-	}
-	if pr.probe != nil {
-		pr.probe.allowed++
-	}
-	return true
+	return nil
 }
+
+var (
+	errClosed  = errors.New("proxy closed")
+	errRevoked = errors.New("session ended")
+)
 
 // recordDenied writes at most one row per (outcome, key) per second, so a
 // looping or hostile client cannot grow the audit store without bound, and one
