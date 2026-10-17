@@ -111,20 +111,33 @@ func (c CLIClient) ListBoxes(ctx context.Context, label string) ([]BoxInfo, erro
 	return parseBoxList(out), nil
 }
 
-// boxListFormat is the --format of ListBoxes; parseBoxList reads it back.
+// boxListFormat is the --format of ListBoxes; parseBoxList reads it back. It
+// ends with a fixed terminator field: the CLI output is trimmed, which eats the
+// trailing tabs of a last row with empty labels, and the terminator is how a
+// complete row is told from a short or over-long one.
 const boxListFormat = "{{.Names}}\t{{.State}}\t{{.Label \"" + LabelWorkspace + "\"}}\t{{.CreatedAt}}" +
-	"\t{{.Label \"" + LabelInstance + "\"}}\t{{.Label \"" + LabelExclusive + "\"}}\t{{.Label \"" + LabelClaims + "\"}}"
+	"\t{{.Label \"" + LabelInstance + "\"}}\t{{.Label \"" + LabelExclusive + "\"}}\t{{.Label \"" + LabelClaims + "\"}}" +
+	"\t" + boxListEnd
 
-// parseBoxList reads boxListFormat output. Missing trailing fields read as
-// empty, so output from before the label columns existed still parses.
+const (
+	boxListEnd    = "."
+	boxListFields = 8
+)
+
+// parseBoxList reads boxListFormat output. A row is readable only when it has
+// exactly the format's fields and ends with the terminator; anything else (a tab
+// or newline inside a label of a container agent-box did not create, or output
+// in another format) is still parsed best-effort, for display, but marked
+// Unreadable so no safety check trusts its labels.
 func parseBoxList(out string) []BoxInfo {
 	var boxes []BoxInfo
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.SplitN(line, "\t", 7)
+		f := strings.Split(line, "\t")
 		if len(f) < 2 {
 			continue
 		}
 		b := BoxInfo{Name: f[0], State: f[1]}
+		b.Unreadable = len(f) != boxListFields || f[boxListFields-1] != boxListEnd
 		if len(f) > 2 {
 			b.Workspace = f[2]
 		}

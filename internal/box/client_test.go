@@ -121,20 +121,52 @@ func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
 }
 
 func TestListBoxesParsesTheClaimLabels(t *testing.T) {
-	out := "ab-box-1\trunning\t/w/a\t2026-10-15 10:00:00 +0000 UTC\tDEV\t1\t1\n" +
-		"ab-box-2\trunning\t/w/b\t2026-10-15 10:00:00 +0000 UTC\tPROD\t\t\n" +
-		"ab-box-3\texited\t/w/c\t2026-10-14 09:00:00 +0000 UTC\tPROD\t\t1"
+	out := "ab-box-1\trunning\t/w/a\t2026-10-15 10:00:00 +0000 UTC\tDEV\t1\t1\t.\n" +
+		"ab-box-2\trunning\t/w/b\t2026-10-15 10:00:00 +0000 UTC\tPROD\t\t\t.\n" +
+		"ab-box-3\texited\t/w/c\t2026-10-14 09:00:00 +0000 UTC\tPROD\t\t1\t."
 	bin, log := fakeDocker(t, map[string]string{"ps": out}, nil)
 	got, err := CLIClient{Bin: bin}.ListBoxes(context.Background(), LabelInstance)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 3 || got[0].Instance != "DEV" || !got[0].Exclusive || !got[0].Claims ||
-		got[1].Instance != "PROD" || got[1].Exclusive || got[1].Claims || !got[2].Claims || got[2].Exclusive {
+		got[1].Instance != "PROD" || got[1].Exclusive || got[1].Claims || !got[2].Claims || got[2].Exclusive ||
+		got[0].Unreadable || got[1].Unreadable || got[2].Unreadable {
 		t.Fatalf("parse: %+v", got)
 	}
 	b, _ := os.ReadFile(log)
 	if !strings.Contains(string(b), "label="+LabelInstance) || strings.Contains(string(b), "label="+LabelInstance+"=") {
 		t.Fatalf("the filter must be the label key alone, so every instance is listed: %s", b)
+	}
+}
+
+// The listing also returns containers agent-box did not create, whose labels can
+// hold tabs and newlines. Such a row must be flagged, never read as clean.
+func TestParseBoxListFlagsRowsItCannotSplit(t *testing.T) {
+	const created = "2026-10-15 10:00:00 +0000 UTC"
+	out := strings.Join([]string{
+		"ab-box-tab\trunning\t/w/a\tb\t" + created + "\tPROD\t1\t1\t.", // tab inside the workspace
+		"ab-box-nl\trunning\t/w/a",                                     // newline inside the workspace...
+		"b\t" + created + "\tPROD\t1\t1\t.",                            // ...and the rest of that row
+		"ab-box-old\trunning\t/w/c\t" + created + "\tPROD",             // another format
+		"ab-box-ok\trunning\t/w/d\t" + created + "\tPROD\t\t\t.",       // empty labels, last row
+	}, "\n")
+	got := parseBoxList(strings.TrimSpace(out))
+	if len(got) != 5 {
+		t.Fatalf("rows: %+v", got)
+	}
+	for i := 0; i < 4; i++ {
+		if !got[i].Unreadable {
+			t.Errorf("row %d must be unreadable: %+v", i, got[i])
+		}
+	}
+	if got[1].Name != "ab-box-nl" || got[1].State != "running" {
+		t.Errorf("a split row keeps its name and state: %+v", got[1])
+	}
+	if got[2].State == "running" {
+		t.Errorf("the tail of a split row must not read as running: %+v", got[2])
+	}
+	if got[4].Unreadable || got[4].Workspace != "/w/d" || got[4].Instance != "PROD" {
+		t.Errorf("a complete row with empty labels: %+v", got[4])
 	}
 }
