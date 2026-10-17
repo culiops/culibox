@@ -319,6 +319,8 @@ class Cell {
   // operator drops the caret.
   syncNeeds() {
     const t = this.activeTab;
+    // The tab's activity is fed through needsYou (app.js refreshSessions), so this
+    // frames a session with an expired AWS sign-in as well as a waiting one.
     const needs = !!(t && t.kind === "terminal" && typeof t.activity === "function" && t.activity() === "waiting");
     this.el.classList.toggle("needs", needs);
     const key = needs ? String(t.id) : "";

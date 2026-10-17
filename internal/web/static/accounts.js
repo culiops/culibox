@@ -144,7 +144,9 @@ function awsBadgeEl(s) {
   const ab = awsBadge(s);
   if (!ab) return null;
   const b = document.createElement("span");
-  b.className = "bdg aws" + (ab.prod ? " prod" : "");
+  // write is a separate axis from prod: an open write window is amber, and a
+  // production binding that is writing is red with the amber ring.
+  b.className = "bdg aws" + (ab.prod ? " prod" : "") + (ab.write ? " write" : "");
   b.textContent = ab.text;
   b.title = ab.title;
   return b;

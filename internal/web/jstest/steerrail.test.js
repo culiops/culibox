@@ -42,6 +42,13 @@ test("a waiting session is alert; the focused one is on; both at once is legal",
   assert.strictEqual(q.on, false);
 });
 
+test("an expired AWS sign-in is alert even while the agent is working", () => {
+  const [, s] = railItems([{ id: "a", name: "n", activity: "working", need: "sso" }], {});
+  assert.strictEqual(s.alert, true);
+  assert.match(s.label, /waiting for you/);
+  assert.strictEqual(s.name, "n", "the tab title never carries the suffix");
+});
+
 test("alert follows the activity, never the focus", () => {
   const [, s] = railItems([{ id: "a", name: "n", activity: "working" }], { focusedId: "a" });
   assert.strictEqual(s.on, true);

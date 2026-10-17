@@ -149,3 +149,12 @@ test("rowSig changes on every field a row or card renders, and only those", () =
   }
   assert.strictEqual(rowSig(Object.assign({}, base, { created: "later" }), local), s0, "unrendered field");
 });
+
+test("rowSig moves with the AWS binding and with the SSO card's local state", () => {
+  const base = { id: "a", name: "n", activity: "working", need: "sso", aws: { label: "sandbox", account_id: "1", sso_expired: "corp" } };
+  const local = { sso: "" };
+  const s0 = rowSig(base, local);
+  const elevated = Object.assign({}, base, { aws: Object.assign({}, base.aws, { elevated_until: "2026-10-17T10:00:00Z" }) });
+  assert.notStrictEqual(rowSig(elevated, local), s0, "a grant repaints the write badge");
+  assert.notStrictEqual(rowSig(base, { sso: "waiting~ABCD-EFGH" }), s0, "a sign-in flow moving on repaints the card");
+});

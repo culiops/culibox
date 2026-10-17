@@ -36,6 +36,8 @@ function chipModel(tabs, focused, activityOf, statusOf) {
     const label = t.name || t.id;
     const rawStatus = statusOf ? statusOf(t) : null;
     const status = rawStatus && rawStatus !== "connected" ? rawStatus : "";
+    // activityOf is the tab's activity, which app.js feeds through needsYou, so an
+    // expired AWS sign-in already reads "waiting" here.
     return { kind: "terminal", label, title: label, on, wait: activity === "waiting", closable: on, status };
   });
 }

@@ -61,6 +61,8 @@ function sendState(s) {
   if (s.pending) {
     return { enabled: false, reason: "Session is inside a tool call. Open the tab to answer it." };
   }
+  // Not needsYou on purpose: a send is only accepted while the agent itself is
+  // waiting (the server's canReply), and an expired sign-in does not change that.
   if (s.activity !== "waiting") {
     return { enabled: false, reason: notWaitingReason(s.activity) };
   }
