@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -345,7 +346,7 @@ func TestUnauditedExtendRemovesTheOverlay(t *testing.T) {
 	if _, err := b.Elevate("aws-1", cookie(60)); !errors.Is(err, ErrElevateRefused) {
 		t.Fatalf("got %v", err)
 	}
-	if _, on := b.Elevation("aws-1"); on || !(*ts)[0].stopped || !(*ts)[1].stopped {
+	if _, on := b.Elevation("aws-1"); on || !(*ts)[0].stopped || len(*ts) != 1 {
 		t.Fatal("a failed extend left the window in force or a timer running")
 	}
 }
@@ -360,3 +361,151 @@ func TestNoApprovalRecorderRefusesEveryGrant(t *testing.T) {
 type onlyRows struct{}
 
 func (onlyRows) Record(Row) error { return nil }
+
+// blockRec holds RecordApproval until released, so a test can look at the
+// broker while a grant's row is still being written.
+type blockRec struct {
+	*memRec
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *blockRec) RecordApproval(a ApprovalRow) error {
+	if a.Action == ActionGranted || a.Action == ActionExtended {
+		r.entered <- struct{}{}
+		<-r.release
+	}
+	return r.memRec.RecordApproval(a)
+}
+
+func blockedBroker(t *testing.T) (*Broker, *blockRec, *time.Time) {
+	t.Helper()
+	now := time.Unix(1_800_000_000, 0)
+	rec := &blockRec{memRec: &memRec{}, entered: make(chan struct{}), release: make(chan struct{})}
+	b := New(secret, func(string) (SessionView, bool) { return liveElev(), true }, &fakeMinter{now: func() time.Time { return now }}, rec)
+	b.now = func() time.Time { return now }
+	withTimers(b)
+	return b, rec, &now
+}
+
+func elevatedNow(b *Broker, sid string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.elevatedLocked(sid, now)
+	return ok
+}
+
+// A grant is pending until its row is written: the mint predicate says no, the
+// view reports no window, and a second grant is refused rather than racing it.
+func TestPendingGrantIsNotElevatedUntilItsRowIsWritten(t *testing.T) {
+	b, rec, now := blockedBroker(t)
+	done := make(chan error, 1)
+	go func() { _, err := b.Elevate("aws-1", cookie(60)); done <- err }()
+	<-rec.entered
+	b.mu.Lock()
+	pending := b.elev["aws-1"] != nil && b.elev["aws-1"].pending
+	b.mu.Unlock()
+	if !pending || elevatedNow(b, "aws-1", *now) {
+		t.Fatalf("pending=%v elevated=%v; want pending and not elevated", pending, elevatedNow(b, "aws-1", *now))
+	}
+	if v, on := b.Elevation("aws-1"); on || v.Active {
+		t.Fatalf("a pending grant is reported as a window: %+v", v)
+	}
+	if _, err := b.Elevate("aws-1", cookie(30)); !errors.Is(err, ErrElevateRefused) || !strings.Contains(err.Error(), "still being recorded") {
+		t.Fatalf("a second grant while pending: %v", err)
+	}
+	rec.release <- struct{}{}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !elevatedNow(b, "aws-1", *now) {
+		t.Fatal("the written grant is not elevated")
+	}
+	if v, on := b.Elevation("aws-1"); !on || !v.Active {
+		t.Fatalf("%+v", v)
+	}
+}
+
+// An extend leaves the old window exactly as it was until the extended row is
+// written; only then do the new until and generation apply.
+func TestExtendTakesEffectOnlyAfterItsRowIsWritten(t *testing.T) {
+	b, rec, now := blockedBroker(t)
+	var wg sync.WaitGroup
+	grant := func(min int) {
+		wg.Add(1)
+		go func() { defer wg.Done(); b.Elevate("aws-1", cookie(min)) }()
+		<-rec.entered
+	}
+	grant(30)
+	rec.release <- struct{}{}
+	wg.Wait()
+	first, _ := b.Elevation("aws-1")
+	grant(60) // extend, blocked in the audit write
+	if v, _ := b.Elevation("aws-1"); !v.Until.Equal(first.Until) || !elevatedNow(b, "aws-1", *now) {
+		t.Fatalf("the old window changed before the extended row was written: %+v", v)
+	}
+	rec.release <- struct{}{}
+	wg.Wait()
+	if v, _ := b.Elevation("aws-1"); !v.Until.Equal(now.Add(time.Hour)) || !v.GrantedAt.Equal(first.GrantedAt) {
+		t.Fatalf("after the row: %+v", v)
+	}
+}
+
+func TestElevatedPredicateNeedsSixteenMinutes(t *testing.T) {
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(30))
+	if !elevatedNow(b, "aws-1", now.Add(14*time.Minute)) || elevatedNow(b, "aws-1", now.Add(15*time.Minute)) {
+		t.Fatal("elevated needs at least 16 minutes left: 30-14=16 yes, 30-15=15 no")
+	}
+	if elevatedNow(b, "nobody", *now) {
+		t.Fatal("no window, elevated")
+	}
+}
+
+// The window is measured from after the claim check, not before it.
+func TestWindowStartsAfterTheClaimCheck(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	ts := withTimers(b)
+	b.SetClaimCheck(func(string) error { *now = now.Add(10 * time.Second); return nil })
+	start := *now
+	v, err := b.Elevate("aws-1", cookie(30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := start.Add(10*time.Second + 30*time.Minute)
+	if !v.Until.Equal(want) || !v.GrantedAt.Equal(start.Add(10*time.Second)) || (*ts)[0].d != 30*time.Minute ||
+		!rec.appr[0].Time.Equal(start.Add(10*time.Second)) {
+		t.Fatalf("%+v timer %v row %v", v, (*ts)[0].d, rec.appr[0].Time)
+	}
+}
+
+func TestReasonRejectsSeparatorsAndFormatCharactersAndIsShownAsStored(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	for name, r := range map[string]string{"line sep": "a\u2028b", "para sep": "a\u2029b", "bidi override": "a\u202eb", "zero-width joiner": "a\u200db"} {
+		*now = now.Add(2 * time.Second)
+		if _, err := b.Elevate("aws-1", ElevateRequest{Minutes: 30, Cred: CredCookie, Reason: r}); !errors.Is(err, ErrElevateRefused) {
+			t.Errorf("%s accepted: %v", name, err)
+		}
+	}
+	v, err := b.Elevate("aws-1", ElevateRequest{Minutes: 30, Cred: CredCookie, Reason: "  apply   the vpc  "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rec.appr[len(rec.appr)-1].Reason; v.Reason != "apply the vpc" || got != v.Reason {
+		t.Fatalf("view %q, row %q", v.Reason, got)
+	}
+}
+
+func TestDropAuditsAFixedLabelForFreeTextCred(t *testing.T) {
+	b, _, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(30))
+	if _, ok := b.Drop("aws-1", "Bearer s3cr3t free text"); !ok {
+		t.Fatal("drop")
+	}
+	if got := rec.appr[len(rec.appr)-1]; got.Action != ActionDropped || got.Cred != credNone {
+		t.Fatalf("%+v", got)
+	}
+}

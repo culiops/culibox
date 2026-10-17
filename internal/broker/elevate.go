@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -54,6 +55,7 @@ type elevation struct {
 	lastExp          time.Time // latest Expiration of an elevated credential handed out
 	reason           string
 	gen              uint64 // bumped on every grant/extend; a stale timer or mint compares it
+	pending          bool   // granted but its approval row is not written yet: grants nothing, reported as no window
 	timer            stopper
 	row              ApprovalRow // identifiers of the grant, for the rows written later (no Time/Action)
 }
@@ -93,7 +95,9 @@ func validReason(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) { // < 0x20, 0x7f and the C1 range
+		// Control characters, line/paragraph separators (U+2028/9) and format
+		// characters (bidi overrides, zero-width joiners) are not "one line".
+		if unicode.IsControl(r) || unicode.In(r, unicode.Zl, unicode.Zp, unicode.Cf) {
 			return false
 		}
 	}
@@ -144,37 +148,81 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 		}
 	}
 
+	// The claim check can take a while: the window is measured from here.
+	now = b.now()
+	row.Time = now
+	row.Reason = normalizeReason(req.Reason) // what is stored is what is shown
 	until := now.Add(time.Duration(req.Minutes) * time.Minute)
 	action := ActionGranted
+
 	b.mu.Lock()
 	old := b.elev[sid]
-	e := &elevation{until: until, grantedAt: now, reason: req.Reason, row: row}
-	if old != nil {
-		action = ActionExtended
-		old.timer.Stop()
-		e.grantedAt, e.lastExp = old.grantedAt, old.lastExp
+	if old != nil && old.pending {
+		b.mu.Unlock()
+		return refuse("a grant for this session is still being recorded; try again in a moment")
 	}
-	b.gen++
-	gen := b.gen
-	e.gen = gen
-	e.timer = b.after(until.Sub(now), func() { b.expire(sid, gen) })
-	b.elev[sid] = e
-	delete(b.dropped, sid)
-	view := viewOf(e)
+	var gen uint64
+	if old == nil {
+		// A new window starts pending: it grants nothing (elevatedLocked) until its
+		// approval row is written. An extend leaves the old window as it is, in force
+		// and unchanged, until its own row is written.
+		b.gen++
+		gen = b.gen
+		e := &elevation{until: until, grantedAt: now, reason: row.Reason, row: row, gen: gen, pending: true}
+		e.timer = b.after(until.Sub(now), func() { b.expire(sid, gen) })
+		b.elev[sid] = e
+		delete(b.dropped, sid)
+	} else {
+		action, gen = ActionExtended, old.gen
+	}
 	b.mu.Unlock()
 
 	row.Action, row.Until = action, until
 	if err := b.appr.RecordApproval(row); err != nil {
 		b.mu.Lock()
-		if cur := b.elev[sid]; cur != nil && cur.gen == gen {
+		if cur := b.elev[sid]; cur != nil && cur.gen == gen { // fail closed, extend included
 			b.endLocked(sid, cur, now)
 		}
 		b.mu.Unlock()
 		log.Printf("broker: approval audit write failed (%v); grant for %s withdrawn", err, sid)
 		return ElevationView{}, fmt.Errorf("%w: the grant could not be audited, so it was not made", ErrElevateRefused)
 	}
-	return view, nil
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	cur := b.elev[sid]
+	if cur == nil || cur.gen != gen { // dropped, expired or forgotten while the row was written
+		log.Printf("broker: window for %s ended before its %s row took effect", sid, action)
+		return ElevationView{}, fmt.Errorf("%w: the write window ended before the grant took effect", ErrElevateRefused)
+	}
+	if action == ActionGranted {
+		cur.pending = false
+		return viewOf(cur), nil
+	}
+	cur.timer.Stop() // the extend takes effect now: new until, new gen, new timer
+	b.gen++
+	ng := b.gen
+	ne := &elevation{until: until, grantedAt: cur.grantedAt, lastExp: cur.lastExp, reason: row.Reason, row: row, gen: ng}
+	ne.timer = b.after(until.Sub(now), func() { b.expire(sid, ng) })
+	b.elev[sid] = ne
+	return viewOf(ne), nil
 }
+
+// elevatedLocked is the one predicate the mint path uses to decide whether a
+// credential may be write-capable (spec §5.2): a window exists, its approval row
+// has been written (not pending), and at least minElevatedRemaining is left.
+// Caller holds b.mu.
+func (b *Broker) elevatedLocked(sid string, now time.Time) (*elevation, bool) {
+	e := b.elev[sid]
+	if e == nil || e.pending || e.until.Sub(now) < minElevatedRemaining {
+		return nil, false
+	}
+	return e, true
+}
+
+// normalizeReason collapses whitespace to single spaces, as the audit store does,
+// so the reason shown is the reason recorded.
+func normalizeReason(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func viewOf(e *elevation) ElevationView {
 	return ElevationView{Active: true, Until: e.until, GrantedAt: e.grantedAt, Reason: e.reason}
@@ -234,13 +282,18 @@ func (b *Broker) Drop(sid, cred string) (ElevationView, bool) {
 	return view, true
 }
 
-// Elevation reports a session's window: Active while one exists; after a drop,
+// Elevation reports a session's window: Active while one is in force. A grant
+// whose approval row is still being written (pending) is not reported: it is not
+// in force. After a drop, after a drop,
 // LastValid (and ok) until the last write credential issued has expired.
 func (b *Broker) Elevation(sid string) (ElevationView, bool) {
 	now := b.now()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if e := b.elev[sid]; e != nil {
+		if e.pending {
+			return ElevationView{}, false
+		}
 		return viewOf(e), true
 	}
 	if lv, ok := b.dropped[sid]; ok {
