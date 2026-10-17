@@ -143,3 +143,83 @@ func TestValidateRefusesABadBrokerPort(t *testing.T) {
 		}
 	}
 }
+
+func TestEgressAllowValidated(t *testing.T) {
+	b := goodBinding()
+	b.EgressAllow = []string{"registry.npmjs.org", "*.githubusercontent.com"}
+	if err := b.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range [][]string{{"*.com"}, {"1.1.1.1"}, {"Example.com"}, {"a.com\nb"}, make([]string, 33)} {
+		c := goodBinding()
+		c.EgressAllow = bad
+		if c.Validate() == nil {
+			t.Errorf("accepted egress_allow %q", bad)
+		}
+	}
+}
+
+// A binding without egress_allow must hash byte-identically to the pre-egress
+// code: a changed hash renames the box and orphans every existing bound box.
+// The hex values were computed on the code before egress_allow existed.
+func TestHashGoldenWithoutEgressAllow(t *testing.T) {
+	a := goodBinding()
+	b := goodBinding()
+	b.S3Read = []string{"y-bucket", "x-bucket"}
+	b.Prod = true
+	if got := a.Hash(); got != "e7e58e9b264b" {
+		t.Errorf("hash a = %s, want e7e58e9b264b", got)
+	}
+	if got := b.Hash(); got != "d9a3e8ba3e7b" {
+		t.Errorf("hash b = %s, want d9a3e8ba3e7b", got)
+	}
+	a.EgressAllow = []string{}
+	if got := a.Hash(); got != "e7e58e9b264b" {
+		t.Errorf("empty egress_allow hash = %s, want e7e58e9b264b", got)
+	}
+}
+
+// An empty egress_allow must hash exactly as before, so the M3a boxes keep
+// their names; a non-empty one is a set (order-insensitive) and changes the hash.
+func TestHashWithEgressAllow(t *testing.T) {
+	b := goodBinding()
+	before := b.Hash()
+	b.EgressAllow = []string{}
+	if b.Hash() != before {
+		t.Fatal("empty egress_allow changed the hash")
+	}
+	b.EgressAllow = []string{"a.example.com", "b.example.com"}
+	c := goodBinding()
+	c.EgressAllow = []string{"b.example.com", "a.example.com"}
+	if b.Hash() == before || b.Hash() != c.Hash() {
+		t.Fatalf("hash: before %s, ab %s, ba %s", before, b.Hash(), c.Hash())
+	}
+	if c.EgressAllow[0] != "b.example.com" {
+		t.Fatal("Hash must not reorder the caller's slice")
+	}
+}
+
+func TestEgressPort(t *testing.T) {
+	if (Config{}).EgressPortOrDefault() != 9072 || (Config{EgressPort: 9100}).EgressPortOrDefault() != 9100 {
+		t.Fatal("egress_port default/override")
+	}
+	for _, bad := range []int{-1, 70000, 9071} {
+		c := validCfg()
+		c.EgressPort = bad
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "egress_port") {
+			t.Errorf("egress_port %d: err = %v", bad, err)
+		}
+	}
+	c := validCfg()
+	c.BrokerPort, c.EgressPort = 9200, 9200
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "egress_port") {
+		t.Errorf("equal ports: err = %v", err)
+	}
+	for _, ok := range []int{0, 1, 9072, 65535} {
+		c := validCfg()
+		c.EgressPort = ok
+		if err := c.Validate(); err != nil {
+			t.Errorf("egress_port %d refused: %v", ok, err)
+		}
+	}
+}

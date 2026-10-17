@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/culiops/agent-box/internal/awsscope"
+	"github.com/culiops/agent-box/internal/hostmatch"
 )
 
 // AWSBinding gives a boxed profile AWS access through the credential broker.
@@ -22,7 +23,13 @@ type AWSBinding struct {
 	S3Read        []string `json:"s3_read,omitempty"`
 	Label         string   `json:"label,omitempty"`
 	Prod          bool     `json:"prod,omitempty"`
+	// EgressAllow adds hosts (exact or *.suffix) to the egress proxy's default
+	// allowlist for this binding's boxes. omitempty keeps a binding without it
+	// hashing exactly as it did before egress existed.
+	EgressAllow []string `json:"egress_allow,omitempty"`
 }
+
+const maxEgressAllow = 32
 
 var profileNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
@@ -41,18 +48,31 @@ func (b AWSBinding) Validate() error {
 	if len(b.Label) > 40 {
 		return errors.New("aws.label is longer than 40 characters")
 	}
+	if len(b.EgressAllow) > maxEgressAllow {
+		return fmt.Errorf("aws.egress_allow has more than %d entries", maxEgressAllow)
+	}
+	for i, p := range b.EgressAllow {
+		if err := hostmatch.ValidPattern(p); err != nil {
+			return fmt.Errorf("aws.egress_allow[%d] %q: %v", i, p, err)
+		}
+	}
 	if _, err := awsscope.SessionPolicy(awsscope.PartitionOf(b.RoleARN), b.S3Read); err != nil {
 		return fmt.Errorf("aws: %w", err)
 	}
 	return nil
 }
 
-// Hash is 12 hex characters over the whole binding; the S3 allowlist is
-// compared as a set, so its order does not matter.
+// Hash is 12 hex characters over the whole binding; the S3 and egress
+// allowlists are compared as sets, so their order does not matter.
 func (b AWSBinding) Hash() string {
 	c := b
 	c.S3Read = slices.Clone(b.S3Read)
 	slices.Sort(c.S3Read)
+	c.EgressAllow = slices.Clone(b.EgressAllow)
+	slices.Sort(c.EgressAllow)
+	if len(c.EgressAllow) == 0 {
+		c.EgressAllow = nil // [] and nil must marshal alike, and like the pre-egress hash
+	}
 	j, _ := json.Marshal(c)
 	sum := sha256.Sum256(j)
 	return hex.EncodeToString(sum[:6])
