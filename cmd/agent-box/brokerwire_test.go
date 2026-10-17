@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -167,5 +169,97 @@ func TestStartBrokerListenFailureIsNotFatal(t *testing.T) {
 		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false })
 	if !errors.Is(err, errBrokerListen) {
 		t.Fatalf("err = %v, want errBrokerListen", err)
+	}
+}
+
+// The lookup the broker uses carries Exclusive from the session: without it
+// every grant is refused "box is shared".
+func TestBrokerLookupCarriesExclusive(t *testing.T) {
+	dataDir := t.TempDir()
+	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1"), "aws-2": boundSess("aws-2")}
+	sessions["aws-1"].AWSNonce = wireNonce
+	sessions["aws-2"].AWSNonce = wireNonce
+	sessions["aws-2"].Exclusive = false
+	lookAWSBefore := lookAWS
+	lookAWS = func() (string, error) { return "", errors.New("none") }
+	defer func() { lookAWS = lookAWSBefore }()
+	svc, err := startBroker(dataDir, dataDir, "linux", 0,
+		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		func(string) (session.Info, bool) { return session.Info{}, false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	if svc.SSO != nil {
+		t.Error("no aws CLI: the runner must be nil")
+	}
+	// The grant gets as far as the exclusive check only through the lookup's
+	// Exclusive: a shared box is refused on it, an exclusive one is not.
+	_, err = svc.Hooks.B.Elevate("aws-2", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie})
+	if err == nil || !strings.Contains(err.Error(), "shared") {
+		t.Errorf("non-exclusive session: %v", err)
+	}
+	_, err = svc.Hooks.B.Elevate("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie})
+	if err != nil && strings.Contains(err.Error(), "shared") {
+		t.Errorf("exclusive session refused as shared: %v", err)
+	}
+}
+
+// Stop closes the sign-in runner before the audit store: a flow it kills writes
+// its sso_login_failed row while the store is still open.
+func TestStopClosesTheSignInRunnerBeforeTheAuditStore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script stand-in for the aws CLI")
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "aws")
+	// Prints a device code like the real CLI, then waits to be killed.
+	script := "#!/bin/sh\ncat <<'EOF'\nBrowser will not be automatically opened.\nPlease visit the following URL:\n\n" +
+		"https://d-0000000000.awsapps.com/start/#/device\n\nThen enter the code:\n\nABCD-EFGH\n\n" +
+		"Alternatively, you may visit the following URL which will autofill the code upon loading:\n" +
+		"https://d-0000000000.awsapps.com/start/#/device?user_code=ABCD-EFGH\nEOF\nexec /bin/sleep 600\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lookAWSBefore := lookAWS
+	lookAWS = func() (string, error) { return fake, nil }
+	defer func() { lookAWS = lookAWSBefore }()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
+
+	dataDir := t.TempDir()
+	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1")}
+	svc, err := startBroker(dataDir, dataDir, "linux", 0,
+		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		func(string) (session.Info, bool) { return session.Info{}, false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	defer func() {
+		if !stopped {
+			svc.Stop(context.Background())
+		}
+	}()
+	if svc.SSO == nil {
+		t.Fatal("aws resolved but no runner")
+	}
+	brk := svc.Hooks.B
+	es := elevationService{brk: brk, runner: svc.SSO, get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok }}
+	st, err := es.SSOLogin("aws-1")
+	if err != nil || st.Code != "ABCD-EFGH" {
+		t.Fatalf("start: %+v %v", st, err)
+	}
+	svc.Stop(context.Background())
+	stopped = true
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM approval_audit WHERE session_id = 'aws-1' AND action = 'sso_login_failed'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("sso_login_failed rows after Stop: %d (%v)", n, err)
 	}
 }

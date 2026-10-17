@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/ssologin"
 	"github.com/culiops/agent-box/internal/web"
 )
 
@@ -29,8 +32,13 @@ var errBrokerListen = errors.New("credential broker disabled")
 type brokerService struct {
 	Hooks  broker.Hooks         // installed on the session manager
 	Status web.AWSStatusAdapter // behind GET /api/sessions/{id}/aws; serve adds the egress counters
+	SSO    *ssologin.Runner     // the in-UI AWS sign-in; nil when the aws CLI is not on the daemon's PATH
 	Stop   func(context.Context)
 }
+
+// lookAWS finds the aws CLI once at boot; a variable so tests can point it at a
+// fake.
+var lookAWS = func() (string, error) { return exec.LookPath("aws") }
 
 // startBroker brings the credential broker up: the persisted HMAC secret, the
 // audit store, the listener and the HTTP server. dataDir holds broker.secret and
@@ -59,7 +67,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 			return broker.SessionView{}, false
 		}
 		return broker.SessionView{Agent: s.Agent, Nonce: s.AWSNonce, Boxed: s.Runtime == config.RuntimeBox,
-			Live: !s.Exited(), AWS: s.AWS}, true
+			Live: !s.Exited(), AWS: s.AWS, Exclusive: s.Exclusive}, true
 	}, broker.STSMinter{}, audit)
 
 	ep, err := broker.Listen(goos, stateRoot, port)
@@ -73,10 +81,24 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 			log.Printf("credential broker stopped: %v", err)
 		}
 	}()
+	// The aws CLI is resolved once. Without it the SSO card offers the host
+	// command only (the endpoint answers 502 with it).
+	var sso *ssologin.Runner
+	if bin, err := lookAWS(); err != nil {
+		log.Printf("aws CLI not found on PATH; the SSO card will offer the host command only")
+	} else {
+		sso = ssologin.New(bin, os.Environ())
+	}
 	return &brokerService{
 		Hooks:  broker.Hooks{B: brk, StateRoot: stateRoot, EP: ep},
 		Status: web.AWSStatusAdapter{Get: info, Stats: brk.Stats, Recent: audit.ForSession},
+		SSO:    sso,
 		Stop: func(ctx context.Context) {
+			// First: a killed sign-in writes its sso_login_failed row, and the
+			// audit store must still be open for it.
+			if sso != nil {
+				sso.Close()
+			}
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next
 			}
