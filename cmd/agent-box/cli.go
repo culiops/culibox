@@ -106,6 +106,10 @@ func shutdownSignalsFor(ignored func(os.Signal) bool) []os.Signal {
 type shutdownSteps struct {
 	DetachAll     func() int // release attach clients; returns how many
 	StopAnalytics func()
+	// StopEgress stops the egress proxy (waiting for every tunnel to be audited)
+	// and closes its audit store. Nil when egress control is not running. It runs
+	// before the broker: a tunnel in flight is not worth keeping once we drain.
+	StopEgress func(context.Context)
 	// StopBroker stops the credential broker and closes its audit store. Nil when
 	// the broker is not running (no containment layer, or it could not listen).
 	StopBroker   func(context.Context)
@@ -126,6 +130,9 @@ func awaitShutdown(stop <-chan os.Signal, s shutdownSteps, logf func(string, ...
 	s.StopAnalytics()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if s.StopEgress != nil {
+		s.StopEgress(ctx)
+	}
 	if s.StopBroker != nil {
 		s.StopBroker(ctx)
 	}

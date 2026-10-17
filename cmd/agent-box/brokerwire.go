@@ -28,7 +28,7 @@ var errBrokerListen = errors.New("credential broker disabled")
 // needs from it.
 type brokerService struct {
 	Hooks  broker.Hooks         // installed on the session manager
-	Status web.AWSStatusService // behind GET /api/sessions/{id}/aws
+	Status web.AWSStatusAdapter // behind GET /api/sessions/{id}/aws; serve adds the egress counters
 	Stop   func(context.Context)
 }
 
