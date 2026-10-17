@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
 func testHooks(t *testing.T) Hooks {
@@ -43,7 +44,7 @@ func TestHooksBoxForRefusesAnInvalidBinding(t *testing.T) {
 func TestHooksTokenNonceStripForget(t *testing.T) {
 	h := testHooks(t)
 	n := h.NewNonce()
-	if !validNonce(n) || n == h.NewNonce() {
+	if !sesstoken.ValidNonce(n) || n == h.NewNonce() {
 		t.Fatalf("nonce %q is malformed or repeated", n)
 	}
 	if h.Token("claude-3", n) != Token(secret, "claude-3", n) {
