@@ -112,6 +112,18 @@ func Overlaps(a, b string) bool {
 	return under(a, b) || under(b, a)
 }
 
+// holdsWorkspace reports whether a box in that docker state keeps its folder
+// mounted: a paused or restarting box resumes into it, so it counts like a
+// running one. Exited, created and dead boxes do not.
+func holdsWorkspace(state string) bool {
+	return state == "running" || state == "paused" || state == "restarting"
+}
+
+// knownWorkspace reports whether a foreign container's workspace label is a
+// path the overlap check can compare. agent-box writes absolute resolved paths,
+// so an empty or relative label is something else's and is taken to overlap.
+func knownWorkspace(w string) bool { return filepath.IsAbs(w) }
+
 // UnderMount reports whether path (absolute, symlinks resolved) is at or below
 // one of mounts. Component-wise, so /Users/ab is not under /Users/a.
 func UnderMount(path string, mounts []string) bool {
@@ -647,7 +659,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 //
 // Rows can come from containers agent-box did not create, so the check fails
 // closed on what it cannot read: an unreadable row conflicts with every spawn,
-// and a running box with no workspace label is taken to overlap. cwd is the
+// and a live box with no usable workspace label is taken to overlap. cwd is the
 // symlink-resolved workspace. Caller holds opMu.
 func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bool) error {
 	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance) // the key alone: every instance
@@ -655,14 +667,14 @@ func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bo
 		return fmt.Errorf("%w: listing boxes for the workspace check: %v", ErrBoxUnavailable, err)
 	}
 	for _, b := range boxes {
-		if b.Name == name || b.State != "running" {
+		if b.Name == name || !holdsWorkspace(b.State) {
 			continue
 		}
 		if b.Unreadable {
 			return fmt.Errorf("%w: container %q carries agent-box labels that cannot be read, so it may be using %s. "+
 				"Remove that container, or use a separate folder or worktree.", ErrWorkspaceHeld, b.Name, cwd)
 		}
-		if b.Workspace != "" && !Overlaps(b.Workspace, cwd) {
+		if knownWorkspace(b.Workspace) && !Overlaps(b.Workspace, cwd) {
 			continue
 		}
 		if !exclusive && !b.Exclusive {
@@ -727,7 +739,7 @@ func (m *Manager) idleTTL(name string) time.Duration {
 // box, of any instance, over a folder that overlaps cwd. One from a build that
 // does not enforce claims (no claims label) is named as such. self is the
 // session's own box. Like claimCheck it fails closed: an unreadable row, or a
-// running box with no workspace label, blocks.
+// live (running, paused or restarting) box with no usable workspace label, blocks.
 func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -738,14 +750,14 @@ func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, e
 		return "", fmt.Errorf("box: listing boxes: %w", err)
 	}
 	for _, b := range boxes {
-		if b.Name == self || b.State != "running" {
+		if b.Name == self || !holdsWorkspace(b.State) {
 			continue
 		}
 		switch {
 		case b.Unreadable:
 			return fmt.Sprintf("container %q carries agent-box labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
-		case b.Workspace == "":
-			return fmt.Sprintf("a box (instance %s) has no workspace label, so it may use %s; stop it first", b.Instance, real), nil
+		case !knownWorkspace(b.Workspace):
+			return fmt.Sprintf("a box (instance %s) has no usable workspace label, so it may use %s; stop it first", b.Instance, real), nil
 		case !Overlaps(b.Workspace, real):
 			continue
 		case !b.Claims:

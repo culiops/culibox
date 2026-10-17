@@ -68,6 +68,10 @@ func Args(profile string) []string {
 	return []string{"sso", "login", "--profile", profile, "--use-device-code", "--no-browser"}
 }
 
+// ValidProfile reports whether p is a profile name the sign-in will run with:
+// callers check it before putting a name in a command a human will paste.
+func ValidProfile(p string) bool { return validProfile(p) }
+
 func validProfile(p string) bool { return profileRe.MatchString(p) && !strings.HasPrefix(p, "-") }
 
 // curatedEnv keeps, in input order, only the variables the CLI needs. The

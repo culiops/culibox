@@ -203,7 +203,7 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 	b.gen++
 	ng := b.gen
 	ne := &elevation{until: until, grantedAt: cur.grantedAt, lastExp: cur.lastExp, reason: row.Reason, row: row, gen: ng}
-	ne.timer = b.after(until.Sub(now), func() { b.expire(sid, ng) })
+	ne.timer = b.after(until.Sub(b.now()), func() { b.expire(sid, ng) }) // the write took time: measure what is left now
 	b.elev[sid] = ne
 	return viewOf(ne), nil
 }
@@ -284,8 +284,8 @@ func (b *Broker) Drop(sid, cred string) (ElevationView, bool) {
 
 // Elevation reports a session's window: Active while one is in force. A grant
 // whose approval row is still being written (pending) is not reported: it is not
-// in force. After a drop, after a drop,
-// LastValid (and ok) until the last write credential issued has expired.
+// in force. After a drop, it reports LastValid (and ok) until the last write
+// credential issued has expired.
 func (b *Broker) Elevation(sid string) (ElevationView, bool) {
 	now := b.now()
 	b.mu.Lock()

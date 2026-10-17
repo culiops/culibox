@@ -1392,12 +1392,13 @@ func (m *Manager) List() []Info {
 // applyAWSState folds the broker's state into a listed bound session. A
 // pending sign-in makes Need "sso" — over "" and "turn", never over "ask",
 // whose card has a prompt to answer — for any bound session, claude or not.
-// Activity is left alone: the row keeps saying what the agent is doing.
+// Activity is left alone: the row keeps saying what the agent is doing. An
+// exited session shows no write window: nothing can mint with it any more.
 func applyAWSState(in *Info, until time.Time, sso string) {
 	if in.AWS == nil {
 		return
 	}
-	if !until.IsZero() {
+	if !until.IsZero() && !in.Exited {
 		u := until
 		in.AWS.ElevatedUntil = &u
 	}

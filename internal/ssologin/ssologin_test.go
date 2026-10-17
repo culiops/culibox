@@ -28,14 +28,24 @@ func fixture(t *testing.T) string {
 	return s
 }
 
-func waitUntil(t *testing.T, cond func() bool) {
-	t.Helper()
+// waitUntil polls cond for up to 2 s and reports whether it held. It never
+// touches t, so it is safe from any goroutine.
+func waitUntil(cond func() bool) bool {
 	deadline := time.Now().Add(2 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatal("condition not met within 2s")
+			return false
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	return true
+}
+
+// mustWait fails the test (from the test goroutine only) when cond does not hold in time.
+func mustWait(t *testing.T, cond func() bool) {
+	t.Helper()
+	if !waitUntil(cond) {
+		t.Fatal("condition not met within 2s")
 	}
 }
 
@@ -208,7 +218,7 @@ func TestStartReturnsTheCodeThenCompletes(t *testing.T) {
 		t.Fatalf("argv %q", got)
 	}
 	fs.last().exit(nil)
-	waitUntil(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateOK })
+	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateOK })
 	mu.Lock()
 	defer mu.Unlock()
 	if !slices.Equal(calls, []bool{true}) {
@@ -239,7 +249,7 @@ func TestUnparsedOutputKillsAndFailsOnce(t *testing.T) {
 	if !errors.Is(err, ErrUnparsed) || !fs.last().killed() {
 		t.Fatalf("err %v killed %v", err, fs.last().killed())
 	}
-	waitUntil(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateFailed })
+	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateFailed })
 	mu.Lock()
 	defer mu.Unlock()
 	if n != 1 || detail != "unparsed output" {
@@ -260,7 +270,7 @@ func TestAnExitWithoutACodeReportsTheExitStatus(t *testing.T) {
 	if !errors.Is(err, ErrUnparsed) {
 		t.Fatalf("err %v", err)
 	}
-	waitUntil(t, func() bool { s, _ := r.Status("k"); return s.State == StateFailed })
+	mustWait(t, func() bool { s, _ := r.Status("k"); return s.State == StateFailed })
 	mu.Lock()
 	defer mu.Unlock()
 	if detail != "exit status 3" {
@@ -274,8 +284,8 @@ func TestTheFlowIsCappedAndKilled(t *testing.T) {
 	var mu sync.Mutex
 	var detail string
 	r.Start("culi-sso", "sandbox-admin", func(ok bool, d string) { mu.Lock(); detail = d; mu.Unlock() })
-	waitUntil(t, func() bool { return fs.last().killed() })
-	waitUntil(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateFailed })
+	mustWait(t, func() bool { return fs.last().killed() })
+	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateFailed })
 	mu.Lock()
 	defer mu.Unlock()
 	if !strings.Contains(detail, "timed out") {
@@ -288,7 +298,7 @@ func TestFinishedFlowsAreForgotten(t *testing.T) {
 	r.keepDone = 30 * time.Millisecond
 	r.Start("culi-sso", "sandbox-admin", func(bool, string) {})
 	fs.last().exit(nil)
-	waitUntil(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateOK })
+	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateOK })
 	time.Sleep(60 * time.Millisecond)
 	if _, ok := r.Status("culi-sso"); ok {
 		t.Fatal("a finished flow outlived keepDone")
@@ -317,7 +327,7 @@ func TestCloseKillsEveryFlowAndLeaksNothing(t *testing.T) {
 	if _, err := r.Start("c", "p3", func(bool, string) {}); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Start after Close: %v", err)
 	}
-	waitUntil(t, func() bool { return runtime.NumGoroutine() <= base })
+	mustWait(t, func() bool { return runtime.NumGoroutine() <= base })
 }
 
 // The real starter kills the whole group, so a child the CLI forks dies too.
@@ -343,16 +353,16 @@ func TestRealProcessGroupIsKilled(t *testing.T) {
 	if !found {
 		t.Fatalf("output %q", seen.String())
 	}
-	waitUntil(t, func() bool { _, err := os.Stat(pidFile); return err == nil })
+	mustWait(t, func() bool { _, err := os.Stat(pidFile); return err == nil })
 	var child int
-	waitUntil(t, func() bool {
+	mustWait(t, func() bool {
 		raw, _ := os.ReadFile(pidFile)
 		child = atoi(strings.TrimSpace(string(raw)))
 		return child > 0
 	})
 	p.Kill()
 	_ = p.Wait()
-	waitUntil(t, func() bool { return syscall.Kill(child, 0) == syscall.ESRCH })
+	mustWait(t, func() bool { return syscall.Kill(child, 0) == syscall.ESRCH })
 }
 
 // End to end through the real starter with a stand-in binary, never the real aws.
@@ -368,7 +378,7 @@ func TestRunnerWithARealProcess(t *testing.T) {
 	if err != nil || st.Code != "ABCD-EFGH" || !st.URITrusted {
 		t.Fatalf("Start = %+v %v", st, err)
 	}
-	waitUntil(t, func() bool { s, _ := r.Status("k"); return s.State == StateOK })
+	mustWait(t, func() bool { s, _ := r.Status("k"); return s.State == StateOK })
 }
 
 func abs(t *testing.T, rel string) string {
@@ -433,12 +443,12 @@ func TestAGrandchildDoesNotOutliveTheLeader(t *testing.T) {
 	}
 	_ = p.Wait()
 	var child int
-	waitUntil(t, func() bool {
+	mustWait(t, func() bool {
 		raw, _ := os.ReadFile(pidFile)
 		child = atoi(strings.TrimSpace(string(raw)))
 		return child > 0
 	})
-	waitUntil(t, func() bool { return syscall.Kill(child, 0) == syscall.ESRCH })
+	mustWait(t, func() bool { return syscall.Kill(child, 0) == syscall.ESRCH })
 }
 
 func TestAHugeLineDoesNotStallTheReader(t *testing.T) {
@@ -463,7 +473,7 @@ func TestAHugeLineDoesNotStallTheReader(t *testing.T) {
 				t.Fatalf("err %v", err)
 			}
 			// Either way the whole output was drained and the flow ends.
-			waitUntil(t, func() bool { s, _ := r.Status("k"); return s.State != StateWaiting })
+			mustWait(t, func() bool { s, _ := r.Status("k"); return s.State != StateWaiting })
 		})
 	}
 }
@@ -476,7 +486,7 @@ func TestALastLineWithoutANewline(t *testing.T) {
 		t.Fatalf("Start = %+v %v", st, err)
 	}
 	fs.last().exit(nil) // EOF: the unterminated line is parsed at the end
-	waitUntil(t, func() bool {
+	mustWait(t, func() bool {
 		s, _ := r.Status("k")
 		return s.State == StateOK && strings.Contains(s.URI, "user_code=ABCD-EFGH")
 	})
@@ -486,8 +496,9 @@ func TestACodeLineWithoutANewlineIsReadAtEOF(t *testing.T) {
 	r, fs := newFakeRunner(t)
 	fs.output = "https://d-0000000000.awsapps.com/start/#/device\nABCD-EFGH"
 	go func() {
-		waitUntil(t, func() bool { return fs.starts() == 1 })
-		fs.last().exit(nil)
+		if waitUntil(func() bool { return fs.starts() == 1 }) { // on a miss Start fails the test itself
+			fs.last().exit(nil)
+		}
 	}()
 	st, err := r.Start("k", "p", func(bool, string) {})
 	if err != nil || st.Code != "ABCD-EFGH" {

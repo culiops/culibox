@@ -451,6 +451,33 @@ func TestExtendTakesEffectOnlyAfterItsRowIsWritten(t *testing.T) {
 	}
 }
 
+// An extend's timer is armed for what is left after the approval write, not
+// from the clock read before it.
+func TestExtendTimerIsMeasuredAfterTheApprovalWrite(t *testing.T) {
+	b, rec, now := blockedBroker(t)
+	ts := withTimers(b)
+	var wg sync.WaitGroup
+	grant := func(min int) {
+		wg.Add(1)
+		go func() { defer wg.Done(); b.Elevate("aws-1", cookie(min)) }()
+		<-rec.entered
+	}
+	grant(30)
+	rec.release <- struct{}{}
+	wg.Wait()
+	grant(60) // extend: until = start+60m, then the row write takes 5 s
+	*now = now.Add(5 * time.Second)
+	rec.release <- struct{}{}
+	wg.Wait()
+	last := (*ts)[len(*ts)-1]
+	if want := time.Hour - 5*time.Second; last.d != want {
+		t.Fatalf("extend timer %v, want %v", last.d, want)
+	}
+	if v, _ := b.Elevation("aws-1"); !v.Until.Equal(now.Add(-5 * time.Second).Add(time.Hour)) {
+		t.Fatalf("until moved: %+v", v)
+	}
+}
+
 func TestElevatedPredicateNeedsSixteenMinutes(t *testing.T) {
 	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
 	withTimers(b)

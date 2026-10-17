@@ -9,13 +9,17 @@ const sourceKeyTimeout = 5 * time.Second
 
 // SourceKeyer is what a Minter implements to say which SSO session a source
 // profile signs in with. A Minter without it keys every profile on its own name.
+// A non-nil error means the config could not be read: the key returned is then
+// only the profile's own name, a fallback for this call.
 type SourceKeyer interface {
-	SourceKey(ctx context.Context, profile string) string
+	SourceKey(ctx context.Context, profile string) (string, error)
 }
 
 // SourceKeyOf is the profile's sourceKey (its sso_session, else the profile
 // name), read from the minter once per profile and cached: the host's config is
-// not re-read on every credential request.
+// not re-read on every credential request. Only a successful read is cached; a
+// failed or timed-out one uses the profile name for this call alone, so a
+// transient error cannot pin the wrong key.
 func (b *Broker) SourceKeyOf(profile string) string {
 	b.mu.Lock()
 	k, ok := b.srcKeys[profile]
@@ -27,9 +31,11 @@ func (b *Broker) SourceKeyOf(profile string) string {
 	if kr, ok := b.minter.(SourceKeyer); ok { // outside mu: it reads files
 		ctx, cancel := context.WithTimeout(context.Background(), sourceKeyTimeout)
 		defer cancel()
-		if got := kr.SourceKey(ctx, profile); got != "" {
-			k = got
+		got, err := kr.SourceKey(ctx, profile)
+		if err != nil || got == "" {
+			return k
 		}
+		k = got
 	}
 	b.mu.Lock()
 	b.srcKeys[profile] = k

@@ -766,6 +766,11 @@ func TestApplyAWSState(t *testing.T) {
 			t.Errorf("%s: until %v", c.name, in.AWS.ElevatedUntil)
 		}
 	}
+	gone := Info{Exited: true, AWS: &AWSInfo{Label: "sandbox"}}
+	applyAWSState(&gone, until, "")
+	if gone.AWS.ElevatedUntil != nil {
+		t.Fatalf("an exited session must not show a write window: %v", gone.AWS.ElevatedUntil)
+	}
 	plain := Info{Need: "turn"}
 	applyAWSState(&plain, until, "culi-sso") // no binding: nothing to apply
 	if plain.Need != "turn" || plain.AWS != nil {

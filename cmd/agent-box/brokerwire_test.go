@@ -199,9 +199,62 @@ func TestBrokerLookupCarriesExclusive(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "shared") {
 		t.Errorf("non-exclusive session: %v", err)
 	}
-	_, err = svc.Hooks.B.Elevate("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie})
-	if err != nil && strings.Contains(err.Error(), "shared") {
-		t.Errorf("exclusive session refused as shared: %v", err)
+	v, err := svc.Hooks.B.Elevate("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "x", Cred: broker.CredCookie})
+	if err != nil || !v.Active {
+		t.Errorf("exclusive live bound session must be granted: %+v, %v", v, err)
+	}
+}
+
+// The elevation service maps the grant's reason, confirm label and credential
+// kind into the broker's request: three adjacent strings that a transposition
+// would break silently.
+func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
+	dataDir := t.TempDir()
+	prod := boundSess("aws-1")
+	prod.AWSNonce = wireNonce
+	prod.AWS.Prod, prod.AWS.Label = true, "x"
+	sessions := map[string]*session.Session{"aws-1": prod}
+	lookAWSBefore := lookAWS
+	lookAWS = func() (string, error) { return "", errors.New("none") }
+	defer func() { lookAWS = lookAWSBefore }()
+	svc, err := startBroker(dataDir, dataDir, "linux", 0,
+		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		func(string) (session.Info, bool) { return session.Info{}, false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	blockMsg := ""
+	e := elevationService{brk: svc.Hooks.B, get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		blocker: func(context.Context, string, string) (string, error) { return blockMsg, nil }}
+	svc.Hooks.B.SetClaimCheck(e.claimCheck)
+
+	refused := func(what, want string, err error) {
+		t.Helper()
+		if !errors.Is(err, broker.ErrElevateRefused) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v (want a refusal containing %q)", what, err, want)
+		}
+	}
+	_, err = e.Grant("aws-1", 30, strings.Repeat("r", 201), "x", broker.CredCookie)
+	refused("201-char reason", "one line", err)
+	_, err = e.Grant("aws-1", 30, "apply", "wrong", broker.CredCookie)
+	refused("wrong label", "type the binding label", err)
+	_, err = e.Grant("aws-1", 30, "apply", "apply", broker.CredCookie) // label and reason transposed would pass this
+	refused("label equal to the reason", "type the binding label", err)
+	_, err = e.Grant("aws-1", 30, "apply", "x", broker.CredBearer)
+	refused("bearer credential", "signed-in browser", err)
+
+	blockMsg = "another box (instance PROD) uses /w/proj"
+	_, err = e.Grant("aws-1", 30, "apply", "x", broker.CredCookie)
+	refused("claim check", blockMsg, err)
+	if strings.Contains(err.Error(), "could not check") {
+		t.Errorf("the claim-check message was replaced: %v", err)
+	}
+
+	blockMsg = ""
+	v, err := e.Grant("aws-1", 30, "apply vpc", "x", broker.CredCookie)
+	if err != nil || !v.Active || v.Reason != "apply vpc" {
+		t.Fatalf("a correct grant: %+v, %v", v, err)
 	}
 }
 

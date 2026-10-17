@@ -32,9 +32,10 @@ var hostOnlyEnv = map[string]bool{
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
 // bound (an AWS binding) adds the egress network flags; bound=false output is
-// unchanged by it, except for the claims label every box carries: claims=1 tells other agent-box instances on this docker
-// daemon that this build enforces exclusive workspaces; exclusive=1 marks a box
-// another spawn must not share a folder with.
+// unchanged by it, except for the claims label every box carries.
+// claims=1 tells other agent-box instances on this docker daemon that this build
+// enforces exclusive workspaces; exclusive=1 marks a box another spawn must not
+// share a folder with.
 func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound, exclusive bool) []string {
 	args := []string{
 		"run", "-d", "--init",

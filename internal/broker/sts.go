@@ -74,16 +74,20 @@ func sharedFileOpts() []func(*awsconfig.LoadOptions) error {
 
 // SourceKey names the SSO session a source profile signs in with: profiles on
 // one sso_session expire together and one sign-in fixes them all. A legacy
-// profile (no sso_session) or an unreadable one keys on its own name.
-func (STSMinter) SourceKey(ctx context.Context, profile string) string {
+// profile (no sso_session) keys on its own name; so does an unreadable one, but
+// that comes back with the read error so the caller does not cache it.
+func (STSMinter) SourceKey(ctx context.Context, profile string) (string, error) {
 	cfgs, creds := sharedFiles()
 	sc, err := awsconfig.LoadSharedConfigProfile(ctx, profile, func(o *awsconfig.LoadSharedConfigOptions) {
 		o.ConfigFiles, o.CredentialsFiles = cfgs, creds
 	})
-	if err == nil && sc.SSOSessionName != "" {
-		return sc.SSOSessionName
+	if err != nil {
+		return profile, err
 	}
-	return profile
+	if sc.SSOSessionName != "" {
+		return sc.SSOSessionName, nil
+	}
+	return profile, nil
 }
 
 // assumeRoleInput carries the session name as both RoleSessionName and

@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,16 +10,20 @@ import (
 
 type keyedMinter struct {
 	*fakeMinter
-	keys  map[string]string
-	reads int
+	keys   map[string]string
+	reads  int
+	keyErr error
 }
 
-func (k *keyedMinter) SourceKey(_ context.Context, profile string) string {
+func (k *keyedMinter) SourceKey(_ context.Context, profile string) (string, error) {
 	k.reads++
-	if s, ok := k.keys[profile]; ok {
-		return s
+	if k.keyErr != nil {
+		return profile, k.keyErr
 	}
-	return profile
+	if s, ok := k.keys[profile]; ok {
+		return s, nil
+	}
+	return profile, nil
 }
 
 func ssoSetup(t *testing.T) (*Broker, *keyedMinter, *memRec) {
@@ -127,14 +132,14 @@ func TestSTSMinterSourceKeyReadsTheSSOSession(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", cfg)
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	m := STSMinter{}
-	if got := m.SourceKey(context.Background(), "p1"); got != "culi-sso" {
-		t.Fatalf("p1 → %q", got)
+	if got, err := m.SourceKey(context.Background(), "p1"); got != "culi-sso" || err != nil {
+		t.Fatalf("p1 → %q, %v", got, err)
 	}
-	if got := m.SourceKey(context.Background(), "legacy"); got != "legacy" {
-		t.Fatalf("legacy → %q", got)
+	if got, err := m.SourceKey(context.Background(), "legacy"); got != "legacy" || err != nil {
+		t.Fatalf("legacy → %q, %v", got, err)
 	}
-	if got := m.SourceKey(context.Background(), "missing"); got != "missing" {
-		t.Fatalf("missing → %q", got)
+	if got, err := m.SourceKey(context.Background(), "missing"); got != "missing" || err == nil {
+		t.Fatalf("missing → %q, %v (an unreadable profile keys on its name but reports the error)", got, err)
 	}
 }
 
@@ -149,5 +154,23 @@ func TestSharedFilesFollowTheEnvironmentLikeMint(t *testing.T) {
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
 	if cfgs, creds := sharedFiles(); cfgs != nil || creds != nil {
 		t.Fatalf("unset env must defer to the SDK defaults, got %v %v", cfgs, creds)
+	}
+}
+
+// A SourceKey read that failed is not cached: the profile name serves that call
+// only, and the next call reads again and keeps the real key.
+func TestSourceKeyOfDoesNotCacheAFailedRead(t *testing.T) {
+	b, km, _ := ssoSetup(t)
+	km.keyErr = errors.New("config unreadable")
+	if got := b.SourceKeyOf("sandbox-admin"); got != "sandbox-admin" {
+		t.Fatalf("a failed read keys on the profile for this call: %q", got)
+	}
+	km.keyErr = nil
+	if got := b.SourceKeyOf("sandbox-admin"); got != "culi-sso" {
+		t.Fatalf("the failure was cached: %q", got)
+	}
+	reads := km.reads
+	if got := b.SourceKeyOf("sandbox-admin"); got != "culi-sso" || km.reads != reads {
+		t.Fatalf("a good read must be cached: %q after %d extra reads", got, km.reads-reads)
 	}
 }

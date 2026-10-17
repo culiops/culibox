@@ -193,3 +193,82 @@ func TestSSOStatusReportsTheFlowAndTheCommand(t *testing.T) {
 		t.Fatalf("%+v %v", st, ok)
 	}
 }
+
+// An exited session that is still listed: no new grant, no sign-in, but Drop
+// still lowers power (the overlay outlives the session until it expires).
+func TestDropWorksForAnExitedSessionButNothingElseDoes(t *testing.T) {
+	sess := boundSess("aws-1")
+	exited := true
+	e := elevationService{brk: testBroker(t), get: func(string) (*session.Session, bool) { return sess, true },
+		exited: func(*session.Session) bool { return exited }}
+	if _, err := e.Drop("aws-1", broker.CredCookie); err != nil {
+		t.Fatalf("Drop of an exited session: %v", err)
+	}
+	if _, err := e.Grant("aws-1", 30, "x", "", broker.CredCookie); !errors.Is(err, web.ErrElevationUnknown) {
+		t.Errorf("Grant of an exited session: %v", err)
+	}
+	if _, err := e.SSOLogin("aws-1"); !errors.Is(err, web.ErrElevationUnknown) {
+		t.Errorf("SSOLogin of an exited session: %v", err)
+	}
+	host := boundSess("h-1")
+	host.Runtime = config.RuntimeHost
+	e.get = func(string) (*session.Session, bool) { return host, true }
+	if _, err := e.Drop("h-1", broker.CredCookie); !errors.Is(err, web.ErrElevationUnknown) {
+		t.Errorf("Drop on a host-tier session: %v", err)
+	}
+}
+
+// The command a human pastes into a shell is built only from a name the sign-in
+// accepts: a sidecar-restored binding is not re-validated at load.
+func TestSignInCommandOnlyForAValidProfile(t *testing.T) {
+	bad := boundSess("aws-1")
+	bad.AWS.SourceProfile = "x; rm -rf ~"
+	r := &fakeRunner{status: &ssologin.State{State: "waiting", Code: "ABCD-EFGH"}}
+	e := elevationService{brk: testBroker(t), runner: r, get: func(string) (*session.Session, bool) { return bad, true }}
+	_, err := e.SSOLogin("aws-1")
+	var le *web.SSOLoginError
+	if !errors.As(err, &le) || le.Command != "" {
+		t.Fatalf("an invalid profile must carry no command: %v", err)
+	}
+	if r.profile != "" {
+		t.Errorf("the runner was started with %q", r.profile)
+	}
+	e.runner = nil
+	if _, err := e.SSOLogin("aws-1"); !errors.As(err, &le) || le.Command != "" {
+		t.Fatalf("no CLI and an invalid profile: %v", err)
+	}
+	e.runner = r
+	if st, ok := e.ssoStatus("aws-1"); ok && st.Command != "" {
+		t.Errorf("status carries %q for an invalid profile", st.Command)
+	}
+	for _, p := range []string{"-x", "a b", "a$(b)", ""} {
+		if hostLoginCommand(p) != "" {
+			t.Errorf("hostLoginCommand(%q) built a command", p)
+		}
+	}
+	if hostLoginCommand("sandbox-admin") != "aws sso login --profile sandbox-admin" {
+		t.Error("a valid profile must build the command")
+	}
+}
+
+// GET .../aws polls grantContext every 3 s during a sign-in: it must not list
+// boxes for a session nothing can be granted on.
+func TestGrantContextSkipsTheBoxListingWhereNothingCanBeGranted(t *testing.T) {
+	calls := 0
+	blocker := func(context.Context, string, string) (string, error) { calls++; return "", nil }
+	exitedSess, noElev, host := boundSess("e-1"), boundSess("n-1"), boundSess("h-1")
+	noElev.AWS.Elevate = nil
+	host.Runtime = config.RuntimeHost
+	sessions := map[string]*session.Session{"e-1": exitedSess, "n-1": noElev, "h-1": host, "ok": boundSess("ok")}
+	e := elevationService{get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		blocker: blocker, exited: func(s *session.Session) bool { return s == exitedSess }}
+	for _, id := range []string{"e-1", "n-1", "h-1", "missing"} {
+		if gc := e.grantContext(id); calls != 0 || gc.HostSessions == nil || gc.Blocked != "" {
+			t.Fatalf("%s: listed boxes (%d calls) or returned %+v", id, calls, gc)
+		}
+	}
+	e.grantContext("ok")
+	if calls != 1 {
+		t.Fatalf("a live elevatable session must be checked once, got %d", calls)
+	}
+}

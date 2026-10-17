@@ -269,6 +269,30 @@ func TestRunningBoxWithoutWorkspaceLabel(t *testing.T) {
 	}
 }
 
+// A paused or restarting box keeps its folder and resumes into it, so it holds
+// the workspace like a running one; a relative workspace label on a container
+// agent-box did not write is as unreadable as an empty one.
+func TestPausedBoxAndRelativeLabelHoldTheWorkspace(t *testing.T) {
+	m, f := boundMgr(t)
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	for _, state := range []string{"paused", "restarting"} {
+		f.others = []BoxInfo{{Name: "ab-box-p", State: state, Workspace: real, Instance: "PROD", Claims: true}}
+		if _, err := wrapIn(m, dir, "elev-"+state, true); !errors.Is(err, ErrWorkspaceHeld) {
+			t.Fatalf("an exclusive spawn next to a %s box on the same folder: %v", state, err)
+		}
+	}
+	f.others = []BoxInfo{{Name: "ab-box-rel", State: "running", Workspace: "w/proj", Instance: "PROD", Claims: true}}
+	if _, err := wrapIn(m, t.TempDir(), "elev-rel", true); !errors.Is(err, ErrWorkspaceHeld) {
+		t.Fatalf("an exclusive spawn next to a box with a relative workspace label: %v", err)
+	}
+	f.others = []BoxInfo{{Name: "ab-box-x", State: "exited", Workspace: real, Instance: "PROD", Claims: true},
+		{Name: "ab-box-y", State: "created", Workspace: "rel", Instance: "PROD"}}
+	if _, err := wrapIn(m, dir, "elev-ok", true); err != nil {
+		t.Fatalf("exited and created boxes hold nothing: %v", err)
+	}
+}
+
 // The check and the docker run sit under one opMu hold, so two exclusive
 // spawns into one folder at once cannot both pass.
 func TestConcurrentExclusiveSpawnsOneWins(t *testing.T) {
@@ -377,6 +401,18 @@ func TestGrantBlocker(t *testing.T) {
 	f.others[0] = BoxInfo{Name: "ab-box-nolabel", State: "running", Instance: "PROD", Claims: true}
 	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
 		t.Fatal("a running box with no workspace label must block a grant")
+	}
+	f.others[0] = BoxInfo{Name: "ab-box-rel", State: "running", Workspace: "w/proj", Instance: "PROD", Claims: true}
+	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
+		t.Fatal("a box with a relative workspace label must block a grant")
+	}
+	f.others[0] = BoxInfo{Name: "ab-box-paused", State: "paused", Workspace: real, Instance: "PROD", Claims: true}
+	if why, _ := m.GrantBlocker(context.Background(), dir, self); why == "" {
+		t.Fatal("a paused box over the folder must block a grant")
+	}
+	f.others[0].State = "exited"
+	if why, _ := m.GrantBlocker(context.Background(), dir, self); why != "" {
+		t.Fatalf("an exited box holds nothing: %q", why)
 	}
 	f.listErr = errors.New("down")
 	if _, err := m.GrantBlocker(context.Background(), dir, self); err == nil {
