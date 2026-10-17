@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields, elevActions } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -182,6 +182,10 @@ test("actionFailText: 429 (ErrTooSoon) gets its own text for any action", () => 
 });
 
 const ARN = "arn:aws:iam::123456789012:role/agentbox-agent";
+const NOW = Date.parse("2027-01-15T08:00:00Z");
+const iso = (min) => new Date(NOW + min * 60000).toISOString();
+const ELEV = { label: "sandbox", account_id: "226198813800", role_arn: ARN, prod: false,
+  elevate: { role_arn: "arn:aws:iam::226198813800:role/agentbox-agent-write", max_minutes: 60, allow_iam: false } };
 
 test("roleName is the last path segment of a role ARN", () => {
   assert.strictEqual(roleName(ARN), "agentbox-agent");
@@ -194,14 +198,14 @@ test("awsBadge: label, account fallback, prod flag", () => {
   assert.strictEqual(awsBadge({}), null);
   assert.strictEqual(awsBadge(null), null);
   assert.deepStrictEqual(awsBadge({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }),
-    { text: "sandbox", prod: false, title: "AWS 123456789012 · agentbox-agent · read-only" });
+    { text: "sandbox", prod: false, write: false, title: "AWS 123456789012 · agentbox-agent · read-only" });
   assert.strictEqual(awsBadge({ aws: { label: "", account_id: "123456789012", role_arn: ARN, prod: true } }).text, "aws:123456789012");
   assert.strictEqual(awsBadge({ aws: { label: "prd", account_id: "1", role_arn: "x", prod: true } }).prod, true);
 });
 
 test("awsRailRows: short rows that wrap, and a production chip that is its own row", () => {
-  assert.deepStrictEqual(awsRailRows({}), []);
-  assert.deepStrictEqual(awsRailRows({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }), [
+  assert.deepStrictEqual(awsRailRows({}, null, NOW), []);
+  assert.deepStrictEqual(awsRailRows({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }, null, NOW), [
     { k: "aws", v: "sandbox · 123456789012", wrap: true },
     { k: "role", v: "agentbox-agent", wrap: true },
     { k: "scope", v: "read-only" },
@@ -240,4 +244,57 @@ test("readAWSFields: no egress hosts saves none, so the binding hash (and the bo
     assert.ok(!out.egress_allow || out.egress_allow.length === 0);
     assert.ok(!("egress_allow" in JSON.parse(JSON.stringify(out))) || JSON.parse(JSON.stringify(out)).egress_allow.length === 0);
   }
+});
+
+test("awsBadge: write state, and prod keeps its red with the write outline", () => {
+  assert.deepStrictEqual(awsBadge({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }, NOW),
+    { text: "sandbox", prod: false, write: false, title: "AWS 123456789012 · agentbox-agent · read-only" });
+  const w = awsBadge({ aws: { ...ELEV, elevated_until: iso(17) } }, NOW);
+  assert.strictEqual(w.write, true);
+  assert.strictEqual(w.text, "sandbox · write");
+  assert.match(w.title, /agentbox-agent-write · write until \d\d:\d\d$/);
+  assert.strictEqual(awsBadge({ aws: { ...ELEV, elevated_until: iso(-1) } }, NOW).write, false); // a stale list entry is not write
+  const pw = awsBadge({ aws: { ...ELEV, prod: true, elevated_until: iso(17) } }, NOW);
+  assert.ok(pw.prod && pw.write);
+  assert.strictEqual(awsBadge({ aws: { ...ELEV, label: "", elevated_until: iso(17) } }, NOW).text, "aws:226198813800 · write");
+});
+
+test("awsRailRows: scope row by state", () => {
+  const scope = (aws, st) => awsRailRows({ aws }, st, NOW).find((r) => r.k === "scope");
+  assert.deepStrictEqual(scope(ELEV, null), { k: "scope", v: "read-only" });
+  const el = scope({ ...ELEV, elevated_until: iso(17) }, null);
+  assert.match(el.v, /^write · until \d\d:\d\d \(17 min\)$/);
+  assert.strictEqual(el.chip, "bdg aws write");
+  assert.match(scope({ ...ELEV, elevated_until: iso(12) }, null).v, /\(12 min\) · new credentials read-only$/);
+  assert.doesNotMatch(scope({ ...ELEV, elevated_until: iso(16) }, null).v, /new credentials/); // 16 min still mints
+  assert.match(scope({ ...ELEV, elevated_until: iso(15) }, null).v, /new credentials read-only$/);
+  assert.match(scope(ELEV, { elevation: { active: false, last_valid: iso(9) } }).v, /^read-only · issued write creds valid until \d\d:\d\d$/);
+  assert.deepStrictEqual(scope(ELEV, { elevation: { active: false, last_valid: iso(-1) } }), { k: "scope", v: "read-only" });
+  const role = awsRailRows({ aws: { ...ELEV, elevated_until: iso(17) } }, null, NOW).find((r) => r.k === "role");
+  assert.strictEqual(role.v, "agentbox-agent-write"); // while elevated, the rail names the role in use
+  assert.strictEqual(awsRailRows({ aws: ELEV }, null, NOW).find((r) => r.k === "role").v, "agentbox-agent");
+});
+
+test("elevActions", () => {
+  assert.deepStrictEqual(elevActions(ELEV, NOW), { elevate: true, extend: false, drop: false });
+  assert.deepStrictEqual(elevActions({ ...ELEV, elevated_until: iso(25) }, NOW), { elevate: false, extend: false, drop: true });
+  assert.deepStrictEqual(elevActions({ ...ELEV, elevated_until: iso(19) }, NOW), { elevate: false, extend: true, drop: true });
+  assert.deepStrictEqual(elevActions({ ...ELEV, elevated_until: iso(20) }, NOW), { elevate: false, extend: false, drop: true });
+  assert.deepStrictEqual(elevActions({ label: "x" }, NOW), { elevate: false, extend: false, drop: false });
+  assert.deepStrictEqual(elevActions(undefined, NOW), { elevate: false, extend: false, drop: false });
+});
+
+test("readAWSFields: the elevate block round-trips, and is absent without a write role", () => {
+  const f = { "pf-aws-role": ARN, "pf-aws-profile": "sandbox-admin", "pf-aws-region": "ap-southeast-1",
+    "pf-aws-elev-role": " arn:aws:iam::226198813800:role/agentbox-agent-write ", "pf-aws-elev-max": "30", "pf-aws-elev-iam": true };
+  assert.deepStrictEqual(readAWSFields((id) => f[id]).elevate,
+    { role_arn: "arn:aws:iam::226198813800:role/agentbox-agent-write", max_minutes: 30, allow_iam: true });
+  assert.strictEqual(readAWSFields((id) => ({ ...f, "pf-aws-elev-role": "" })[id]).elevate, undefined);
+  assert.deepStrictEqual(readAWSFields((id) => ({ ...f, "pf-aws-elev-max": "", "pf-aws-elev-iam": false })[id]).elevate,
+    { role_arn: "arn:aws:iam::226198813800:role/agentbox-agent-write", max_minutes: 60 });
+});
+
+test("rowClasses: an SSO need is a needs-you row", () => {
+  assert.ok(rowClasses({ activity: "working", need: "sso" }, {}).includes("needs"));
+  assert.ok(!rowClasses({ activity: "working" }, {}).includes("needs"));
 });

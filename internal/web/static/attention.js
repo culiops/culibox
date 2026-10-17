@@ -4,10 +4,25 @@
 // title/favicon, and which sessions just started needing you. DOM wiring lives
 // in app.js; everything here is testable under node --test.
 
+// needsYou: the one definition of "this session wants the operator". An expired
+// AWS sign-in counts even while the agent is still running: its AWS calls fail
+// until someone signs in, and nothing about the agent's activity says so.
+function needsYou(s) {
+  return !!s && (s.activity === "waiting" || s.need === "sso");
+}
+
+// ssoExpiredText: the SSO card's sentence, shared by cardContent and the card
+// model in elevation.js so the two cannot drift.
+function ssoExpiredText(s) {
+  const src = s && s.aws && s.aws.sso_expired;
+  return "AWS sign-in expired" + (src ? " (" + src + ")" : "") + ". This session's AWS calls fail until you sign in.";
+}
+
 // needLabel: the human word for WHY a waiting session needs you. "" when it is
 // not waiting, or waiting without a known need (the caller falls back to the
 // activity's own title).
 function needLabel(s) {
+  if (s && s.need === "sso") return "AWS sign-in";
   if (!s || s.activity !== "waiting") return "";
   if (s.need === "ask") return "asks";
   if (s.need === "turn") return "your turn";
@@ -33,6 +48,11 @@ function needLabel(s) {
 //    purpose: neither has a real answer path from this card.
 function cardContent(s) {
   const v = s || {};
+  // An SSO need outranks turn/ask for WHICH card shows, but it must not take
+  // the reply box away from a replyable session (spec 8.2).
+  if (v.need === "sso") {
+    return { text: ssoExpiredText(v), sso: true, ask: false, reply: !!v.replyable, enableReplies: false };
+  }
   if (v.need === "ask") {
     return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: !!v.claude && !v.replyable };
   }
@@ -70,7 +90,7 @@ function needsTransitions(prevIds, sessions) {
   const next = new Set();
   const fired = [];
   for (const s of Array.isArray(sessions) ? sessions : []) {
-    if (!s || s.activity !== "waiting") continue;
+    if (!needsYou(s)) continue;
     next.add(s.id);
     if (prevIds && !prevIds.has(s.id)) fired.push(s);
   }
@@ -109,6 +129,8 @@ function setNotifyWanted(v) {
 // known need) keeps the one-line summary, unchanged.
 function notifyBody(s) {
   const v = s || {};
+  // No profile, no command: OS notification history is outside our access control.
+  if (v.need === "sso") return "AWS sign-in expired";
   if (v.need === "ask") {
     const ask = v.ask || v.summary || "";
     if (!ask) return "Waiting for you";
@@ -241,13 +263,13 @@ function answerErrorText(status, errMsg) {
 // including a turn card that just became an ask (seenAskFull was "" then) —
 // and it must collapse so the new prompt gets read again before Yes/No unlock.
 function staleExpanded(s, seenAskFull) {
-  if (!s || s.activity !== "waiting") return true;
+  if (!needsYou(s)) return true;
   if (seenAskFull === undefined) return false;
   return (s.ask_full || "") !== seenAskFull;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+  module.exports = { needsYou, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

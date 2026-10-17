@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
+const { needsYou, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -219,4 +219,32 @@ test("the hint follows the shown text, not ask_full: the real command is never t
   const s = { need: "ask", ask: "Bash(echo [masked:aws-key-id])", ask_full: "echo AKIAABCDEFGHIJKLMNOP" };
   assert.notStrictEqual(maskHint(cardContent(s).text), "");
   assert.strictEqual(maskHint(s.ask_full), "");
+});
+
+test("an SSO need: needs you, labelled, its own card, its own notification text", () => {
+  const s = { id: "aws-1", activity: "working", need: "sso", aws: { sso_expired: "culi-sso" } };
+  assert.ok(needsYou(s));
+  assert.ok(!needsYou({ activity: "working" }));
+  assert.ok(needsYou({ activity: "waiting" }));
+  assert.ok(!needsYou(null));
+  assert.strictEqual(needLabel(s), "AWS sign-in");
+  assert.deepStrictEqual(cardContent(s), { text: "AWS sign-in expired (culi-sso). This session's AWS calls fail until you sign in.",
+    sso: true, ask: false, reply: false, enableReplies: false });
+  assert.strictEqual(notifyBody(s), "AWS sign-in expired");
+  const first = needsTransitions(null, [s]);
+  assert.deepStrictEqual([...first.next], ["aws-1"]);
+  const t = needsTransitions(new Set(), [s]);
+  assert.deepStrictEqual(t.fired.map((x) => x.id), ["aws-1"]);
+  assert.strictEqual(staleExpanded(s, undefined), false);
+  assert.strictEqual(staleExpanded({ ...s, need: undefined }, undefined), true); // sign-in done and agent running: stale
+});
+
+test("an SSO card keeps the reply box of a replyable session (spec 8.2)", () => {
+  const s = { id: "aws-1", activity: "waiting", need: "sso", claude: true, replyable: true, summary: "Done with the plan", aws: { sso_expired: "culi-sso" } };
+  const c = cardContent(s);
+  assert.strictEqual(c.sso, true);
+  assert.strictEqual(c.reply, true);
+  assert.strictEqual(c.enableReplies, false);
+  assert.strictEqual(cardContent({ ...s, replyable: false }).reply, false);
+  assert.ok(!cardContent(s).text.includes("Done with the plan")); // the SSO sentence, not the turn summary
 });
