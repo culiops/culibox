@@ -202,3 +202,241 @@ func TestProvisionRefusesPlantedSymlinkOutsideDataDir(t *testing.T) {
 		t.Fatalf("file outside the data dir was written: %s", b)
 	}
 }
+
+func writeDefaultSettings(t *testing.T, s *Store, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(s.defaultDir, "settings.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProvisionWritesStatusLineDelegate(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/home/u/.claude/statusline-command.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(r.ConfigDir, DelegateFileName)
+	b, err := os.ReadFile(p)
+	if err != nil || string(b) != "/home/u/.claude/statusline-command.sh" {
+		t.Fatalf("delegate = %q %v", b, err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("delegate mode = %v", fi.Mode().Perm())
+	}
+	if m := readJSON(t, filepath.Join(r.ConfigDir, manifestName)); m["delegate"] != true {
+		t.Fatalf("manifest = %v", m)
+	}
+	// The account's own statusLine still points at our script, unchanged.
+	sl := readJSON(t, filepath.Join(r.ConfigDir, "settings.json"))["statusLine"].(map[string]any)
+	if sl["command"] != s.ScriptPath() {
+		t.Fatalf("statusLine = %v", sl)
+	}
+	// Idempotent: re-provisioning keeps the same content and manifest flag.
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if b2, _ := os.ReadFile(p); string(b2) != string(b) {
+		t.Fatalf("delegate changed on re-provision: %q", b2)
+	}
+	if m := readJSON(t, filepath.Join(r.ConfigDir, manifestName)); m["delegate"] != true {
+		t.Fatalf("manifest after re-provision = %v", m)
+	}
+}
+
+func TestProvisionNoDelegateWithoutUsableStatusLine(t *testing.T) {
+	cases := map[string]func(*Store) string{
+		"no settings":   func(*Store) string { return "" },
+		"no statusLine": func(*Store) string { return `{"theme":"dark"}` },
+		"empty command": func(*Store) string { return `{"statusLine":{"type":"command","command":"  "}}` },
+		"not a command": func(*Store) string { return `{"statusLine":{"type":"static","command":"x"}}` },
+		"our own path": func(s *Store) string {
+			return `{"statusLine":{"type":"command","command":"` + s.ScriptPath() + `"}}`
+		},
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, _ := newStore(t)
+			if b := body(s); b != "" {
+				writeDefaultSettings(t, s, b)
+			}
+			r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(filepath.Join(r.ConfigDir, DelegateFileName)); err == nil {
+				t.Fatal("delegate must not be written")
+			}
+		})
+	}
+}
+
+func TestProvisionNoDelegateWhenInheritOff(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ConfigDir, DelegateFileName)); err == nil {
+		t.Fatal("delegate written although inherit is off")
+	}
+}
+
+func TestProvisionRemovesDelegateWhenInheritFlipsOff(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(r.ConfigDir, DelegateFileName)
+	if _, err := os.Stat(p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(p); err == nil {
+		t.Fatal("delegate should be removed when inherit is off")
+	}
+}
+
+func TestProvisionRemovesDelegateWhenDefaultDropsStatusLine(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDefaultSettings(t, s, `{}`)
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ConfigDir, DelegateFileName)); err == nil {
+		t.Fatal("stale delegate kept")
+	}
+}
+
+func TestProvisionKeepsDelegateAgentBoxDidNotWrite(t *testing.T) {
+	s, data := newStore(t)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	os.MkdirAll(cfg, 0o700)
+	hand := filepath.Join(cfg, DelegateFileName)
+	os.WriteFile(hand, []byte("/mine.sh"), 0o600)
+	// Default has no statusLine, then inherit flips off: neither path may delete it.
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(hand); string(b) != "/mine.sh" {
+		t.Fatalf("hand-made delegate touched: %q", b)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(hand); string(b) != "/mine.sh" {
+		t.Fatalf("hand-made delegate removed on toggle-off: %q", b)
+	}
+}
+
+func TestProvisionRefusesPlantedDelegateSymlink(t *testing.T) {
+	s, data := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	cfg := filepath.Join(data, "accounts", "work", "claude")
+	os.MkdirAll(cfg, 0o700)
+	outside := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(outside, []byte("keep"), 0o600)
+	os.Symlink(outside, filepath.Join(cfg, DelegateFileName))
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep" {
+		t.Fatalf("file outside the data dir was written: %s", b)
+	}
+}
+
+func TestOpenReprovisionsExistingAccounts(t *testing.T) {
+	s, data := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Roll the account back to what an older build left behind: stale script,
+	// no delegate file, manifest without the delegate flag.
+	if err := os.WriteFile(s.ScriptPath(), []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(filepath.Join(r.ConfigDir, DelegateFileName))
+	os.WriteFile(filepath.Join(r.ConfigDir, manifestName), []byte(`{"mcp":true}`), 0o600)
+	def := s.defaultDir
+	s.Close()
+
+	s2, err := Open(filepath.Join(data, "accounts.json"), data, def)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if b, _ := os.ReadFile(s2.ScriptPath()); string(b) != string(statuslineScript) {
+		t.Fatal("stale script not refreshed on Open")
+	}
+	if b, err := os.ReadFile(filepath.Join(r.ConfigDir, DelegateFileName)); err != nil || string(b) != "/x/sl.sh" {
+		t.Fatalf("delegate after Open = %q %v", b, err)
+	}
+}
+
+func TestOpenSurvivesOneAccountFailingToProvision(t *testing.T) {
+	s, data := newStore(t)
+	writeDefaultSettings(t, s, `{"statusLine":{"type":"command","command":"/x/sl.sh"}}`)
+	bad, err := s.Create(Account{Name: "bad", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	good, err := s.Create(Account{Name: "good", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt bad's settings.json so provision refuses it; remove good's delegate.
+	os.WriteFile(filepath.Join(bad.ConfigDir, "settings.json"), []byte("{not json"), 0o600)
+	os.Remove(filepath.Join(good.ConfigDir, DelegateFileName))
+	def := s.defaultDir
+	s.Close()
+
+	s2, err := Open(filepath.Join(data, "accounts.json"), data, def)
+	if err != nil {
+		t.Fatalf("Open must not fail on one bad account: %v", err)
+	}
+	defer s2.Close()
+	if _, err := os.Stat(filepath.Join(good.ConfigDir, DelegateFileName)); err != nil {
+		t.Fatalf("other accounts must still be re-provisioned: %v", err)
+	}
+}
+
+// Re-provision runs on every startup, so a ~/.claude.json caught mid-write (or
+// otherwise invalid) must not wipe every account's MCP servers.
+func TestProvisionKeepsMCPWhenSourceInvalid(t *testing.T) {
+	s, _ := newStore(t)
+	src := filepath.Join(filepath.Dir(s.defaultDir), ".claude.json")
+	os.WriteFile(src, []byte(`{"mcpServers":{"remote":{"url":"https://mcp.example/x"}}}`), 0o600)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpPath := filepath.Join(r.ConfigDir, MCPFileName)
+	os.WriteFile(src, []byte(`{"mcpServers":{"rem`), 0o600)
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := readJSON(t, mcpPath)["mcpServers"].(map[string]any)["remote"]; !ok {
+		t.Fatal("invalid source wiped the account's MCP servers")
+	}
+	// An absent source is a real "no servers": the copy is emptied.
+	os.Remove(src)
+	if _, err := s.Update("work", "", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(readJSON(t, mcpPath)["mcpServers"].(map[string]any)); n != 0 {
+		t.Fatalf("absent source left %d servers", n)
+	}
+}
