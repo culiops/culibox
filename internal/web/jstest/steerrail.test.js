@@ -199,11 +199,11 @@ test("awsStatsRows: last error is its own wrapping row, verbatim", () => {
 test("egressRow: absent without the egress object; allowlist and the denied count otherwise", () => {
   assert.strictEqual(egressRow(null), null);
   assert.strictEqual(egressRow({ stats: {} }), null);
-  assert.deepStrictEqual(egressRow({ egress: { mode: "allowlist", denied: 0 } }), { k: "egress", v: "allowlist \u00b7 0 denied" });
-  assert.deepStrictEqual(egressRow({ egress: { mode: "allowlist", denied: 3 } }), { k: "egress", v: "allowlist \u00b7 3 denied" });
+  assert.deepStrictEqual(egressRow({ egress: { mode: "allowlist", denied: 0 } }), { k: "egress", v: "allowlist \u00b7 0 denied since start", wrap: true });
+  assert.deepStrictEqual(egressRow({ egress: { mode: "allowlist", denied: 3 } }), { k: "egress", v: "allowlist \u00b7 3 denied since start", wrap: true });
 });
 
 test("egressRow: a missing or non-numeric denied count reads as zero, never NaN", () => {
-  assert.strictEqual(egressRow({ egress: { mode: "allowlist" } }).v, "allowlist \u00b7 0 denied");
-  assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: "x" } }).v, "allowlist \u00b7 0 denied");
+  assert.strictEqual(egressRow({ egress: { mode: "allowlist" } }).v, "allowlist \u00b7 0 denied since start");
+  assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: "x" } }).v, "allowlist \u00b7 0 denied since start");
 });

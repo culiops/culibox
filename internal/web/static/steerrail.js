@@ -118,11 +118,13 @@ function awsStatsRows(st, nowMs) {
 // GET /api/sessions/{id}/aws response (spec correction 4: there is no separate
 // session-info panel). The server omits `egress` when the session has no
 // egress at all, so absent means no row, not "0 denied". denied is coerced so a
-// missing or garbled count reads 0 rather than NaN.
+// missing or garbled count reads 0 rather than NaN. The count is the daemon's
+// in-memory tally, so it says "since start": after a restart it restarts at 0
+// while egress_audit keeps the history.
 function egressRow(st) {
   const e = st && st.egress;
   if (!e) return null;
-  return { k: "egress", v: "allowlist \u00b7 " + (Number(e.denied) || 0) + " denied" };
+  return { k: "egress", v: "allowlist \u00b7 " + (Number(e.denied) || 0) + " denied since start", wrap: true };
 }
 
 // ctxFill: the context meter. The server omits pct when the window maximum is

@@ -222,6 +222,8 @@ func (p *Proxy) Forget(id string) {
 	var ts []*tunnel
 	p.mu.Lock()
 	delete(p.stats, id)
+	// Never deleted: an in-flight request may still hold epoch 0. One small
+	// entry per ended bound session over the daemon's life is accepted.
 	p.epoch[id]++
 	for t := range p.tunnels {
 		if t.sid == id {

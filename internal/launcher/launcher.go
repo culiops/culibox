@@ -345,6 +345,7 @@ func (l *AgentLauncher) AWSFor(agent string) *config.AWSBinding {
 	}
 	c := *cfg.AWS
 	c.S3Read = slices.Clone(cfg.AWS.S3Read)
+	c.EgressAllow = slices.Clone(cfg.AWS.EgressAllow)
 	return &c
 }
 
