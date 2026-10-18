@@ -278,12 +278,14 @@ func TestKillingAHostSessionDoesNotTouchTheBoxLayer(t *testing.T) {
 type fakeBundles struct {
 	order    *callLog // optional: shared with fakeBoxes to pin call order
 	askedBin string
+	calls    int
 	mounts   []box.Mount
 	flags    []string
 }
 
 func (f *fakeBundles) For(bin string) ([]box.Mount, []string, string, error) {
 	f.askedBin = bin
+	f.calls++
 	f.order.add("bundle")
 	return f.mounts, f.flags, "deadbeef", nil
 }
@@ -306,6 +308,40 @@ func TestBoxedSpawnAppliesTheConfigBundle(t *testing.T) {
 	}
 	if wraps, _, _ := boxes.counts(); wraps != 1 {
 		t.Fatalf("expected one wrap, got %d", wraps)
+	}
+}
+
+// unresolvedBinLauncher cannot name the agent binary.
+type unresolvedBinLauncher struct{ tieredLauncher }
+
+func (unresolvedBinLauncher) BinFor(launcher.SpawnSpec) (string, error) {
+	return "", errors.New("no such profile bin")
+}
+
+// The bundle's mounts belong to the box, not to the agent (brain #131): a box is
+// shared by every session with its key, whatever bin each runs, so the bundle is
+// consulted even when the bin is unknown, and its mounts reach Wrap.
+func TestBoxedSpawnWithAnUnknownBinStillGetsTheBoxMounts(t *testing.T) {
+	m := NewManager(unresolvedBinLauncher{tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}},
+		nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	want := box.Mount{Host: "/b", Box: "/opt/agent-bundle"}
+	bundles := &fakeBundles{mounts: []box.Mount{want}}
+	m.SetBundles(bundles)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if bundles.calls != 1 {
+		t.Fatalf("bundle consulted %d times, want 1", bundles.calls)
+	}
+	boxes.mu.Lock()
+	ro := boxes.lastRO
+	boxes.mu.Unlock()
+	if len(ro) != 1 || ro[0] != want {
+		t.Fatalf("Wrap got mounts %+v, want the bundle's %+v", ro, want)
 	}
 }
 
