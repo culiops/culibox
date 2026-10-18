@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/mask"
 )
 
 // inheritedSettingsKeys are the only settings.json keys an InheritPersonal
@@ -19,12 +21,26 @@ import (
 // Claude Code does not read) is left behind on purpose.
 var inheritedSettingsKeys = []string{"effortLevel", "enabledPlugins", "env", "hooks", "model", "permissions"}
 
-// inheritedEnvRefused reports env names that must never be copied into an
-// account: the same rules a session's environment already follows (every AB_*
-// daemon variable, and the provider credential variables an account supplies
-// for itself).
-func inheritedEnvRefused(name string) bool {
-	return strings.HasPrefix(name, "AB_") || IsAuthEnv(name)
+// inheritedEnvRefused reports env entries that must never be copied into an
+// account. By name: the rules a session's environment already follows (every
+// AB_* daemon variable, and the provider credential variables an account
+// supplies for itself). By shape: a value the display mask recognises as a
+// credential (sk-ant-, ghp_, AKIA, PEM...), whatever the variable is called.
+func inheritedEnvRefused(name string, value any) bool {
+	if strings.HasPrefix(name, "AB_") || IsAuthEnv(name) {
+		return true
+	}
+	v, isStr := value.(string)
+	return isStr && mask.Display(v) != v
+}
+
+func isInheritableKey(k string) bool {
+	for _, x := range inheritedSettingsKeys {
+		if x == k {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultInheritable returns the inheritable keys of the default account's
@@ -40,7 +56,7 @@ func (s *Store) defaultInheritable() (map[string]any, bool) {
 		return nil, false
 	}
 	var all map[string]any
-	if json.Unmarshal(b, &all) != nil {
+	if json.Unmarshal(b, &all) != nil || all == nil { // a bare `null` parses to nil: as unreadable as bad JSON
 		return nil, false
 	}
 	out := map[string]any{}
@@ -57,7 +73,7 @@ func (s *Store) defaultInheritable() (map[string]any, bool) {
 			kept := map[string]any{}
 			var dropped []string
 			for n, ev := range env {
-				if inheritedEnvRefused(n) {
+				if inheritedEnvRefused(n, ev) {
 					dropped = append(dropped, n)
 					continue
 				}
@@ -65,7 +81,7 @@ func (s *Store) defaultInheritable() (map[string]any, bool) {
 			}
 			sort.Strings(dropped)
 			for _, n := range dropped { // names only, never values
-				log.Printf("account settings: env %s not inherited (daemon or credential variable)", n)
+				log.Printf("account settings: env %s not inherited (daemon variable, credential name or credential-shaped value)", n)
 			}
 			if len(kept) == 0 && len(env) > 0 {
 				continue // nothing safe to copy
@@ -111,7 +127,9 @@ func (s *Store) syncSettings(cr *os.Root, on bool, man *manifest) error {
 		next[k] = v
 	}
 	for _, k := range man.Settings {
-		if _, keep := want[k]; !keep {
+		// The manifest is a file on disk: it may only authorise removing keys
+		// this feature can copy, never statusLine or anything the user owns.
+		if _, keep := want[k]; !keep && isInheritableKey(k) {
 			delete(next, k)
 		}
 	}

@@ -327,3 +327,188 @@ func TestRefreshUnknownAccount(t *testing.T) {
 		t.Fatalf("default is a no-op: %v", err)
 	}
 }
+
+// A manifest is a file on disk the user (or a box that reached it) can edit. It
+// may only ever authorise removing the six inheritable keys, never statusLine
+// or anything else in settings.json.
+func TestInheritIgnoresTamperedManifestKeys(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"model":"opus"}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := settingsOf(t, r)
+	m["theme"] = "dark"
+	m["hooks"] = map[string]any{"stale": true}
+	writeSettings(t, r, m)
+	if err := os.WriteFile(filepath.Join(r.ConfigDir, manifestName),
+		[]byte(`{"settings":["statusLine","theme","hooks","model"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Refresh("work"); err != nil {
+		t.Fatal(err)
+	}
+	got := settingsOf(t, r)
+	if got["statusLine"] == nil || got["theme"] != "dark" {
+		t.Fatalf("a tampered manifest removed a key it does not own: %v", got)
+	}
+	if got["hooks"] != nil || got["model"] != "opus" {
+		t.Fatalf("listed inheritable keys must still follow the default: %v", got)
+	}
+	if !reflect.DeepEqual(recordedKeys(t, r), []string{"model"}) {
+		t.Fatalf("recorded = %v", recordedKeys(t, r))
+	}
+	// Same through the off path.
+	if err := os.WriteFile(filepath.Join(r.ConfigDir, manifestName), []byte(`{"settings":["statusLine","theme"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := settingsOf(t, r); got["statusLine"] == nil || got["theme"] != "dark" {
+		t.Fatalf("off path removed a foreign key: %v", got)
+	}
+}
+
+// A default settings.json holding a bare `null` parses without error to a nil
+// map; it is as unreadable as invalid JSON and must not withdraw the copy.
+func TestInheritKeepsCopyWhenDefaultSettingsIsNotAnObject(t *testing.T) {
+	for _, body := range []string{`null`, `[]`, `"x"`, `7`} {
+		s, _ := newStore(t)
+		writeDefaultSettings(t, s, `{"model":"opus","hooks":{"a":1}}`)
+		r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeDefaultSettings(t, s, body)
+		if err := s.Refresh("work"); err != nil {
+			t.Fatal(err)
+		}
+		if got := settingsOf(t, r); got["model"] != "opus" || got["hooks"] == nil {
+			t.Fatalf("default %s wiped the copy: %v", body, got)
+		}
+	}
+}
+
+// By shape, not just by name: a credential under a harmless name is refused too.
+func TestInheritRefusesCredentialShapedEnvValues(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"env":{
+      "CLAUDE_CODE_SUBAGENT_MODEL":"sonnet",
+      "HARMLESS_NAME":"sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
+      "ALSO_FINE":"ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+      "AWS_THING":"AKIAABCDEFGHIJKLMNOP"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := settingsOf(t, r)["env"].(map[string]any)
+	if !reflect.DeepEqual(keysOf(env), []string{"CLAUDE_CODE_SUBAGENT_MODEL"}) {
+		t.Fatalf("env = %v", env)
+	}
+	raw, _ := os.ReadFile(filepath.Join(r.ConfigDir, "settings.json"))
+	for _, secret := range []string{"sk-ant-api03", "ghp_abcdef", "AKIAABCDEF"} {
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("%q reached the account's settings.json", secret)
+		}
+	}
+}
+
+func TestInheritLinksPluginsAndRecordsIt(t *testing.T) {
+	s, _ := newStore(t)
+	os.MkdirAll(filepath.Join(s.defaultDir, "plugins", "cache"), 0o700)
+	os.WriteFile(filepath.Join(s.defaultDir, "plugins", "installed_plugins.json"), []byte(`{"version":2,"plugins":{}}`), 0o600)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, err := os.Readlink(filepath.Join(r.ConfigDir, "plugins"))
+	if err != nil || tgt != filepath.Join(s.defaultDir, "plugins") {
+		t.Fatalf("plugins link = %q %v", tgt, err)
+	}
+	if m := readJSON(t, filepath.Join(r.ConfigDir, manifestName)); !reflect.DeepEqual(m["links"], []any{"plugins"}) {
+		t.Fatalf("manifest = %v", m)
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ConfigDir, "plugins")); err == nil {
+		t.Fatal("plugins link must go when inherit is off")
+	}
+	if _, err := os.Stat(filepath.Join(s.defaultDir, "plugins", "installed_plugins.json")); err != nil {
+		t.Fatal("toggling off must never touch the default's plugins")
+	}
+}
+
+// A real plugins dir already in the account (marketplaces the account fetched
+// itself) is never replaced; only the two entries that resolve installed
+// plugins are linked into it, and only those are removed again.
+func TestInheritLinksPluginEntriesIntoExistingPluginsDir(t *testing.T) {
+	s, data := newStore(t)
+	os.MkdirAll(filepath.Join(s.defaultDir, "plugins", "cache"), 0o700)
+	os.WriteFile(filepath.Join(s.defaultDir, "plugins", "installed_plugins.json"), []byte(`{}`), 0o600)
+	mine := filepath.Join(data, "accounts", "work", "claude", "plugins")
+	os.MkdirAll(filepath.Join(mine, "marketplaces"), 0o700)
+	os.WriteFile(filepath.Join(mine, "known_marketplaces.json"), []byte(`{}`), 0o600)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Lstat(mine); fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("an existing plugins dir was replaced")
+	}
+	for _, n := range []string{"installed_plugins.json", "cache"} {
+		if tgt, err := os.Readlink(filepath.Join(mine, n)); err != nil || tgt != filepath.Join(s.defaultDir, "plugins", n) {
+			t.Fatalf("%s link = %q %v", n, tgt, err)
+		}
+	}
+	if _, err := s.Update("work", "", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"installed_plugins.json", "cache"} {
+		if _, err := os.Lstat(filepath.Join(mine, n)); err == nil {
+			t.Fatalf("%s link must go when inherit is off", n)
+		}
+	}
+	for _, n := range []string{"known_marketplaces.json", "marketplaces"} {
+		if _, err := os.Lstat(filepath.Join(mine, n)); err != nil {
+			t.Fatalf("the account's own %s was removed", n)
+		}
+	}
+	_ = r
+}
+
+// An account plugins dir that holds none of the resolving entries (only
+// something stray) gets all four linked, so the plugins actually load.
+func TestInheritCompletesAnAccountPluginsDirThatLacksTheEntries(t *testing.T) {
+	s, data := newStore(t)
+	dp := filepath.Join(s.defaultDir, "plugins")
+	os.MkdirAll(filepath.Join(dp, "cache"), 0o700)
+	os.MkdirAll(filepath.Join(dp, "marketplaces"), 0o700)
+	for _, f := range []string{"installed_plugins.json", "known_marketplaces.json"} {
+		os.WriteFile(filepath.Join(dp, f), []byte(`{}`), 0o600)
+	}
+	mine := filepath.Join(data, "accounts", "work", "claude", "plugins")
+	os.MkdirAll(mine, 0o700)
+	os.WriteFile(filepath.Join(mine, "stray.json"), []byte(`{}`), 0o600)
+	if _, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"installed_plugins.json", "cache", "known_marketplaces.json", "marketplaces"} {
+		if tgt, err := os.Readlink(filepath.Join(mine, n)); err != nil || tgt != filepath.Join(dp, n) {
+			t.Fatalf("%s link = %q %v", n, tgt, err)
+		}
+	}
+}
+
+func TestInheritWithoutDefaultPluginsLinksNothing(t *testing.T) {
+	s, _ := newStore(t)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(r.ConfigDir, "plugins")); err == nil {
+		t.Fatal("no default plugins: nothing to link")
+	}
+}
