@@ -54,7 +54,15 @@ const (
 // Mount is an extra read-only bind the caller wants in the box. Passed in rather
 // than discovered here, so this package keeps knowing nothing about agents or
 // config and the deny-by-default mount rule stays visible in one function.
-type Mount struct{ Host, Box string }
+//
+// Optional marks a mount the session runs without (a config overlay), as
+// opposed to one its argv or env points into. It only matters when a running
+// box with live sessions lacks it: a missing optional mount is tolerated there,
+// a missing required one refuses the spawn (see reuseMounts).
+type Mount struct {
+	Host, Box string
+	Optional  bool
+}
 
 // State is what docker says about a box container. Stopped is not Missing: an
 // exited container keeps its name, so treating it as absent makes the next
@@ -145,6 +153,10 @@ type Client interface {
 	ListByLabel(ctx context.Context, label string) ([]string, error)
 	Stop(ctx context.Context, name string) error
 	HasRuntime(ctx context.Context, name string) bool
+	// Mounts lists the in-box destinations of the box's bind mounts, as docker
+	// reports them: the truth for every box, adopted ones and ones created by an
+	// older build included.
+	Mounts(ctx context.Context, name string) ([]string, error)
 }
 
 // Options configures a Manager.
@@ -587,6 +599,15 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		}
 		st = StateMissing
 	}
+	if st == StateRunning {
+		// Mounts are fixed at `docker run`, and the box key does not say which
+		// agent will run in the box, so check the box can serve this spawn
+		// before anything else trusts it (brain #131).
+		if st, err = m.reuseMounts(ctx, name, cwd, extraRO); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
+	}
 	if st == StateRunning && verify != nil && !m.isVerified(name) {
 		// Found, not created, by this process: adopted after a restart, or left
 		// running by a failed removal. Never trust it unchecked.
@@ -648,6 +669,78 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 	}
 	m.touchMarker(name)
 	return nil
+}
+
+// reuseMounts decides whether a running box can serve a spawn that asks for
+// extraRO, and answers the state ensure should continue from: StateRunning to
+// reuse it, StateMissing once it was removed to be recreated.
+//
+// The comparison is on in-box destinations, read from docker rather than
+// remembered, so a box adopted after a restart or created by an older build is
+// judged by what it really mounts. Host sources are not compared: a box keeps
+// the bundle it was started with (session.go logs that per spawn), and a
+// source spelled differently by docker must not turn every reuse into a
+// recreate.
+//
+//   - Exactly what this spawn would create: reuse.
+//   - Idle (no session of this process uses it): removed and recreated, for a
+//     missing mount and an extra one alike, so an idle box always matches what
+//     a fresh one would be. Its home is a host directory keyed by the box name,
+//     which does not change, so nothing the agent kept is lost.
+//   - Live: never removed (M3b spec correction 6). Reused when only optional
+//     mounts are missing (the sessions already in it run without them too);
+//     refused with the remedy when a required one is missing, because the agent
+//     would start pointed at a path that is not there.
+//
+// Caller holds opMu.
+func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, extraRO []Mount) (State, error) {
+	have, err := m.opts.Client.Mounts(ctx, name)
+	if err != nil {
+		return StateRunning, fmt.Errorf("box: reading the mounts of %s: %w", name, err)
+	}
+	got := map[string]bool{}
+	for _, d := range have {
+		if d = filepath.Clean(d); d != cwd && d != boxHome { // the two every box has
+			got[d] = true
+		}
+	}
+	want := map[string]bool{}
+	var missing, required []string
+	for _, mt := range extraRO {
+		d := filepath.Clean(mt.Box)
+		want[d] = true
+		if got[d] {
+			continue
+		}
+		missing = append(missing, d)
+		if !mt.Optional {
+			required = append(required, d)
+		}
+	}
+	extra := false
+	for d := range got {
+		if !want[d] {
+			extra = true
+			break
+		}
+	}
+	if len(missing) == 0 && !extra {
+		return StateRunning, nil
+	}
+	m.mu.Lock()
+	live := m.active[name]
+	m.mu.Unlock()
+	if live > 0 {
+		if len(required) == 0 {
+			return StateRunning, nil
+		}
+		return StateRunning, fmt.Errorf("%w: box %s was started without %s, which this session needs, and still runs %d session(s); end them, then spawn again",
+			ErrBoxUnavailable, name, strings.Join(required, ", "), live)
+	}
+	if err := m.removeIdle(ctx, name); err != nil {
+		return StateRunning, fmt.Errorf("box: removing idle %s to recreate it with this session's mounts: %w", name, err)
+	}
+	return StateMissing, nil
 }
 
 // claimCheck enforces exclusive workspaces across every agent-box instance on

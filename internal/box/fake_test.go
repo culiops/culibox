@@ -36,10 +36,18 @@ type fakeClient struct {
 	// filter, as docker would for `--filter label=<key>`.
 	others  []BoxInfo
 	listErr error
+
+	// mounts holds the bind destinations of each box, as `docker inspect`
+	// reports them: recorded from every --mount of a Run, or set by a test to
+	// stand for a box created by an older build. mountsErr fails Mounts.
+	mounts    map[string][]string
+	mountsErr error
+	mountsN   int // Mounts calls
 }
 
 func newFake() *fakeClient {
-	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{}}
+	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{},
+		mounts: map[string][]string{}}
 }
 
 func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
@@ -49,10 +57,17 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	f.runArgs = append(f.runArgs, args)
 	var name string
 	lbl := map[string]string{}
+	var dsts []string
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "--name":
 			name = args[i+1]
+		case "--mount":
+			for _, opt := range strings.Split(args[i+1], ",") {
+				if d, ok := strings.CutPrefix(opt, "dst="); ok {
+					dsts = append(dsts, d)
+				}
+			}
 		case "--label":
 			if k, v, ok := strings.Cut(args[i+1], "="); ok {
 				lbl[k] = v
@@ -71,6 +86,7 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	}
 	if name != "" {
 		f.labels[name] = lbl
+		f.mounts[name] = dsts
 	}
 	return "container-id", nil
 }
@@ -160,6 +176,16 @@ func (f *fakeClient) Stop(_ context.Context, name string) error {
 	delete(f.running, name)
 	delete(f.exited, name)
 	return nil
+}
+
+func (f *fakeClient) Mounts(_ context.Context, name string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.mountsN++
+	if f.mountsErr != nil {
+		return nil, f.mountsErr
+	}
+	return append([]string(nil), f.mounts[name]...), nil
 }
 
 func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {

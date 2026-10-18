@@ -102,6 +102,34 @@ func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
 	}
 }
 
+// Mounts reports the destinations of a box's bind mounts. Binds only: they are
+// all runArgs creates, while a tmpfs or an image-declared volume is not a mount
+// the caller asked for. Stdout only, like Inspect, so a CLI warning is never
+// read as a mount.
+func (c CLIClient) Mounts(ctx context.Context, name string) ([]string, error) {
+	out, err := c.command(ctx, "inspect", "-f", `{{range .Mounts}}{{.Type}}|{{.Destination}}{{"\n"}}{{end}}`, name).Output()
+	if err != nil {
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+		}
+		return nil, fmt.Errorf("docker inspect: %w: %s", err, stderr)
+	}
+	return parseMounts(string(out)), nil
+}
+
+// parseMounts reads Mounts' "type|destination" lines, keeping the binds.
+func parseMounts(out string) []string {
+	var dsts []string
+	for _, line := range strings.Split(out, "\n") {
+		if typ, dst, ok := strings.Cut(strings.TrimSpace(line), "|"); ok && typ == "bind" && dst != "" {
+			dsts = append(dsts, dst)
+		}
+	}
+	return dsts
+}
+
 // ListBoxes returns every container carrying the label, running or not.
 func (c CLIClient) ListBoxes(ctx context.Context, label string) ([]BoxInfo, error) {
 	out, err := c.run(ctx, "ps", "-a", "--filter", "label="+label, "--format", boxListFormat)
