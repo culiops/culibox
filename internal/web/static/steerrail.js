@@ -120,9 +120,9 @@ function awsStatsRows(st, nowMs) {
   return rows;
 }
 
-// egressRow: the egress proxy's line for the focused session, from the same
-// GET /api/sessions/{id}/aws response (spec correction 4: there is no separate
-// session-info panel). The server omits `egress` when the session has no
+// egressRow: the egress proxy's line for the focused session, from the
+// GET /api/sessions/{id}/aws response (AWS-bound) or /egress (unbound box); both
+// carry the same {egress:{mode,denied}} object. The server omits `egress` when the session has no
 // egress at all, so absent means no row, not "0 denied". denied is coerced so a
 // missing or garbled count reads 0 rather than NaN. The count is the daemon's
 // in-memory tally, so it says "since start": after a restart it restarts at 0
@@ -130,7 +130,8 @@ function awsStatsRows(st, nowMs) {
 function egressRow(st) {
   const e = st && st.egress;
   if (!e) return null;
-  return { k: "egress", v: "allowlist \u00b7 " + (Number(e.denied) || 0) + " denied since start", wrap: true };
+  const mode = e.mode === "open" ? "open" : "allowlist";
+  return { k: "egress", v: mode + " \u00b7 " + (Number(e.denied) || 0) + " denied since start", wrap: true };
 }
 
 // ctxFill: the context meter. The server omits pct when the window maximum is
@@ -225,6 +226,7 @@ function renderSteerRail() {
   }
   // 1 and 2 — who this is, and how full its window is.
   if (s.aws) loadAwsRailStats(s.id);
+  else if (s.egress) loadEgressRailStats(s.id);
   renderSteerFacts(s);
   // A half-open grant panel belongs to one session; focusing another drops it.
   if (elevPanelFor !== s.id) elevPanelFor = null;
@@ -273,6 +275,25 @@ function loadAwsRailStats(id) {
     .finally(() => awsRailInflight.delete(id));
 }
 
+// The egress line for a box WITHOUT an AWS binding: /aws is 204 for it, so it
+// reads /egress instead. Same shape as the AWS cache above and its own map, so
+// the two can never be drawn for the wrong session.
+const egressRailCache = new Map();
+const egressRailInflight = new Set();
+function loadEgressRailStats(id) {
+  if (egressRailInflight.has(id)) return;
+  egressRailInflight.add(id);
+  fetch("/api/sessions/" + encodeURIComponent(id) + "/egress")
+    .then((res) => (res.status === 200 ? res.json() : null), () => undefined)
+    .then((st) => {
+      if (st === undefined) return;
+      if (st === null) egressRailCache.delete(id); else egressRailCache.set(id, st);
+      const cur = typeof railSession === "function" ? railSession() : null;
+      if (cur && cur.id === id) renderSteerFacts(cur);
+    })
+    .finally(() => egressRailInflight.delete(id));
+}
+
 function renderSteerFacts(s) {
   const head = document.getElementById("steer-head");
   const ctx = document.getElementById("steer-ctx");
@@ -280,7 +301,8 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const awsRows = s.aws ? [...awsRailRows(s, awsRailCache.get(s.id), Date.now()), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))] : null;
+  const awsRows = s.aws ? [...awsRailRows(s, awsRailCache.get(s.id), Date.now()), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))]
+    : s.egress ? [egressRow(egressRailCache.get(s.id))] : null;
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, awsRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,

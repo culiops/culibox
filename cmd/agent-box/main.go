@@ -496,6 +496,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 	if egressSvc != nil {
 		stopEgress = egressSvc.Stop
+		api.Egress = web.EgressStatusAdapter{Get: web.ManagerService{M: mgr}.Get, Stats: egressSvc.Stats}
 	}
 	srv := &web.Server{
 		API:        api,

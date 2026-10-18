@@ -114,9 +114,9 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		"label": info.AWS.Label, "account_id": info.AWS.AccountID, "role_arn": info.AWS.RoleARN,
 		"prod": info.AWS.Prod, "stats": stats, "recent": rows,
 	}
-	if a.Egress != nil {
+	if a.Egress != nil && info.Egress != "" {
 		es, _ := a.Egress(id)
-		out["egress"] = map[string]any{"mode": "allowlist", "allowed": es.Allowed, "denied": es.Denied}
+		out["egress"] = map[string]any{"mode": info.Egress, "allowed": es.Allowed, "denied": es.Denied}
 	}
 	if e := info.AWS.Elevate; e != nil {
 		gc := GrantContext{}
@@ -151,4 +151,23 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		}
 	}
 	return out, true
+}
+
+// EgressStatusAdapter serves the egress line for a boxed session, bound to AWS
+// or not. It is ok only for a known session that has egress control.
+type EgressStatusAdapter struct {
+	Get   func(id string) (session.Info, bool)
+	Stats func(id string) (egress.Stats, bool)
+}
+
+// EgressStatus is ok only for a known session whose Info.Egress is set. Stats
+// is false until the session has had a tunnel or a denial; that reads as zeros,
+// not as a missing line.
+func (a EgressStatusAdapter) EgressStatus(id string) (any, bool) {
+	info, ok := a.Get(id)
+	if !ok || info.Egress == "" {
+		return nil, false
+	}
+	es, _ := a.Stats(id)
+	return map[string]any{"egress": map[string]any{"mode": info.Egress, "allowed": es.Allowed, "denied": es.Denied}}, true
 }
