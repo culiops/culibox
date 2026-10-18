@@ -407,3 +407,16 @@ func TestAnswerHashMatchesTheWebClientVector(t *testing.T) {
 		t.Fatal("a wrong hash matched")
 	}
 }
+
+// replyable is forced true (answerManager does it) so this proves Answer
+// refuses on the kill-switch itself; nothing may reach the PTY.
+func TestAnswerRefusedWhenRepliesDisabled(t *testing.T) {
+	m, r, _ := answerManager(t)
+	m.SetRepliesEnabled(false)
+	if err := m.Answer("s1", "yes", hexSHA(s1Ask)); !errors.Is(err, ErrRepliesDisabled) {
+		t.Fatalf("err=%v want ErrRepliesDisabled", err)
+	}
+	if got := written(t, r); got != "" {
+		t.Errorf("PTY received %q, want nothing", got)
+	}
+}

@@ -64,6 +64,7 @@ func (l *ctlLauncher) last() launcher.SpawnSpec {
 func newCtlManager(t *testing.T, l *ctlLauncher) (*Manager, string) {
 	t.Helper()
 	m := NewManager(l, nil, 1<<16, time.Minute)
+	m.SetRepliesEnabled(true) // spawn/restart tests assume the feature is on; the off switch has its own tests
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	if err := m.SetSidecarPath(path); err != nil {
 		t.Fatal(err)
@@ -230,5 +231,25 @@ func TestBoxedSpawnHandsBundleFlagsToBuild(t *testing.T) {
 	defer m.Kill(h.ID)
 	if got := l.last().ExtraArgs; len(got) != 0 {
 		t.Fatalf("a host spawn got bundle flags %q", got)
+	}
+}
+
+// The kill-switch beats both the profile default and the spawn override, and
+// what lands in the sidecar is the effective value.
+func TestSpawnNeverReplyableWhenRepliesDisabled(t *testing.T) {
+	yes := true
+	l := &ctlLauncher{argv: []string{"sleep", "30"}, bin: "/usr/bin/claude", replyDefault: true}
+	m, path := newCtlManager(t, l)
+	m.SetRepliesEnabled(false)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "a", Cwd: t.TempDir(), Replyable: &yes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if s.Info().Replyable {
+		t.Error("Info().Replyable=true with the kill-switch off")
+	}
+	if sidecarEntry(t, path, s.ID).Replyable {
+		t.Error("sidecar Replyable=true with the kill-switch off")
 	}
 }

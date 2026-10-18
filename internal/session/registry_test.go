@@ -70,6 +70,7 @@ func newLocatorManager(t *testing.T) (*Manager, string) {
 			return v, ok
 		},
 	}
+	m.SetRepliesEnabled(true) // the reply tests exercise the feature; the off switch has its own tests
 	for _, id := range []string{"s1", "s2"} {
 		m.sessions[id] = &Session{ID: id, Agent: "claude", Cwd: locCwd, Bin: "/usr/bin/claude",
 			Created: time.Now().Add(-time.Hour), agentKind: true, submitted: true}

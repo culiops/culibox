@@ -293,9 +293,15 @@ func (m *Manager) Answer(id, choice, askSHA256 string) error {
 	if s != nil {
 		bin = s.Bin
 	}
+	repliesOn := m.repliesOn
 	m.mu.Unlock()
 	if s == nil {
 		return ErrNoSession
+	}
+	// Kill-switch first: remote Yes/No shares the reply opt-in, so a stale
+	// replyable=true must not let a key reach the PTY while replies are off.
+	if !repliesOn {
+		return ErrRepliesDisabled
 	}
 	if !isClaudeBin(bin) {
 		return ErrNotClaude
