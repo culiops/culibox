@@ -54,7 +54,15 @@ const (
 // Mount is an extra read-only bind the caller wants in the box. Passed in rather
 // than discovered here, so this package keeps knowing nothing about agents or
 // config and the deny-by-default mount rule stays visible in one function.
-type Mount struct{ Host, Box string }
+//
+// Optional marks a mount the session runs without (a config overlay), as
+// opposed to one its argv or env points into. It only matters when a running
+// box with live sessions lacks it: a missing optional mount is tolerated there,
+// a missing required one refuses the spawn (see reuseMounts).
+type Mount struct {
+	Host, Box string
+	Optional  bool
+}
 
 // State is what docker says about a box container. Stopped is not Missing: an
 // exited container keeps its name, so treating it as absent makes the next
@@ -145,6 +153,10 @@ type Client interface {
 	ListByLabel(ctx context.Context, label string) ([]string, error)
 	Stop(ctx context.Context, name string) error
 	HasRuntime(ctx context.Context, name string) bool
+	// InspectMounts is Inspect plus the in-box destinations of the box's bind
+	// mounts, as docker reports them: the truth for every box, adopted ones and
+	// ones created by an older build included. Mounts are nil unless running.
+	InspectMounts(ctx context.Context, name string) (State, []string, error)
 }
 
 // Options configures a Manager.
@@ -272,7 +284,16 @@ func (m *Manager) Runtime() string { return m.runtime }
 // Hash), "" for a session without one. Session is the session id for a binding
 // with elevate (M3b): such a box belongs to one session and is removed when it
 // ends. It is empty for every other session.
-type BoxKey struct{ Account, Binding, Session string }
+//
+// PartialMounts is not part of the identity (boxName ignores it): it says the
+// caller could not compute every mount it asked for, because the config bundle
+// failed to build. A box carrying more than such a spawn asks for is then not
+// taken as differing from it, so a failed build never strips an idle box of the
+// bundle the next spawn will want back (see reuseMounts).
+type BoxKey struct {
+	Account, Binding, Session string
+	PartialMounts             bool
+}
 
 // boxName derives the container name from the canonical workspace path.
 // Symlinks are resolved so two spellings of one directory never produce two
@@ -527,7 +548,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
-	if err := m.ensure(ctx, name, real, extraRO, key.Binding != "", key.Session != ""); err != nil {
+	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != ""); err != nil {
 		return nil, nil, "", err
 	}
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
@@ -540,7 +561,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, bound, exclusive bool) error {
+func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, partial, bound, exclusive bool) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -572,7 +593,8 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		return err
 	}
 
-	st, err := m.opts.Client.Inspect(ctx, name)
+	// One docker call answers both whether the box runs and what it mounts.
+	st, have, err := m.opts.Client.InspectMounts(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
@@ -586,6 +608,25 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			return fmt.Errorf("box: removing stopped %s: %w", name, err)
 		}
 		st = StateMissing
+	}
+	if st == StateRunning {
+		// Mounts are fixed at `docker run`, and the box key does not say which
+		// agent will run in the box, so check the box can serve this spawn
+		// before anything else trusts it (brain #131).
+		if st, err = m.reuseMounts(ctx, name, cwd, have, extraRO, partial); err != nil {
+			m.rearmIfIdle(name)
+			return err
+		}
+		// Removing the box took a docker call, and DEV and PROD share the
+		// daemon: another instance may have claimed the folder meanwhile. Check
+		// again, so the window before `docker run` is no wider than a fresh
+		// box's.
+		if st == StateMissing {
+			if err := m.claimCheck(ctx, name, cwd, exclusive); err != nil {
+				m.rearmIfIdle(name)
+				return err
+			}
+		}
 	}
 	if st == StateRunning && verify != nil && !m.isVerified(name) {
 		// Found, not created, by this process: adopted after a restart, or left
@@ -648,6 +689,79 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 	}
 	m.touchMarker(name)
 	return nil
+}
+
+// reuseMounts decides whether a running box can serve a spawn that asks for
+// extraRO, and answers the state ensure should continue from: StateRunning to
+// reuse it, StateMissing once it was removed to be recreated.
+//
+// have is the box's bind destinations as docker reported them. The comparison
+// is on in-box destinations, read from docker rather than remembered, so a box adopted after a restart or created by an older build is
+// judged by what it really mounts. Host sources are not compared: a box keeps
+// the bundle it was started with (session.go logs that per spawn), and a
+// source spelled differently by docker must not turn every reuse into a
+// recreate.
+//
+//   - Exactly what this spawn would create: reuse.
+//   - Idle (no session of this process uses it): removed and recreated, for a
+//     missing mount and an extra one alike, so an idle box always matches what
+//     a fresh one would be. With partial (the caller could not compute all its
+//     mounts) an extra mount is not a difference: "not asked for" then means
+//     "unknown", not "must go". Its home is a host directory keyed by the box name,
+//     which does not change, so nothing the agent kept is lost.
+//   - Live: never removed (M3b spec correction 6). Reused when only optional
+//     mounts are missing (the sessions already in it run without them too);
+//     refused with the remedy when a required one is missing, because the agent
+//     would start pointed at a path that is not there.
+//
+// Caller holds opMu.
+func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []string, extraRO []Mount, partial bool) (State, error) {
+	got := map[string]bool{}
+	for _, d := range have {
+		if d = filepath.Clean(d); d != cwd && d != boxHome { // the two every box has
+			got[d] = true
+		}
+	}
+	want := map[string]bool{}
+	var missing, required []string
+	for _, mt := range extraRO {
+		d := filepath.Clean(mt.Box)
+		want[d] = true
+		if got[d] {
+			continue
+		}
+		missing = append(missing, d)
+		if !mt.Optional {
+			required = append(required, d)
+		}
+	}
+	extra := false
+	for d := range got {
+		if partial {
+			break
+		}
+		if !want[d] {
+			extra = true
+			break
+		}
+	}
+	if len(missing) == 0 && !extra {
+		return StateRunning, nil
+	}
+	m.mu.Lock()
+	live := m.active[name]
+	m.mu.Unlock()
+	if live > 0 {
+		if len(required) == 0 {
+			return StateRunning, nil
+		}
+		return StateRunning, fmt.Errorf("%w: box %s was started without %s, which this session needs, and still runs %d session(s); end them, then spawn again",
+			ErrBoxUnavailable, name, strings.Join(required, ", "), live)
+	}
+	if err := m.removeIdle(ctx, name); err != nil {
+		return StateRunning, fmt.Errorf("box: removing idle %s to recreate it with this session's mounts: %w", name, err)
+	}
+	return StateMissing, nil
 }
 
 // claimCheck enforces exclusive workspaces across every agent-box instance on

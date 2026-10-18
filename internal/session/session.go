@@ -253,9 +253,10 @@ type ElevateInfo struct {
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
 // no bundle: sessions still run, just without user config.
 type Bundles interface {
-	// For returns the read-only mounts and the extra argv flags a boxed agent
-	// needs, plus the bundle hash for the log line. An empty bin match yields no
-	// mounts and no flags.
+	// For returns the read-only mounts a box carries (the same for every bin,
+	// because sessions of different bins share a box) and the extra argv flags
+	// bin's agent needs, plus the bundle hash for the log line. A bin with no
+	// layout (a shell, or "" when unresolved) gets the mounts and no flags.
 	For(bin string) (mounts []box.Mount, flags []string, hash string, err error)
 }
 
@@ -1000,20 +1001,27 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 
 	// The bundle is resolved BEFORE Build: its flags must sit ahead of the "--"
 	// that ends options (a first message follows it), and Build alone owns the
-	// argv order. Its mounts are fixed when Wrap starts the container below.
+	// argv order. Its mounts are fixed when Wrap starts the container below, and
+	// they are the box's, not the agent's: every boxed spawn asks, whatever its
+	// bin, so a box a shell starts already carries what a claude session that
+	// reuses it will need (brain #131). Only the flags depend on bin.
 	var mounts []box.Mount
 	var bundleHash string
+	var bundleFailed bool // mounts unknown, not empty: see box.BoxKey.PartialMounts
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		bundles := m.bundles
 		m.mu.Unlock()
 		// A non-default account gets the personal config only when it opted in:
-		// the bundle carries the default login's skills and MCP servers.
-		if bundles != nil && bin != "" && (acct.IsDefault || acct.InheritPersonal) {
+		// the bundle carries the default login's skills and MCP servers. The
+		// account is part of the box key, so this gate never differs between
+		// two sessions that share a box.
+		if bundles != nil && (acct.IsDefault || acct.InheritPersonal) {
 			var flags []string
 			var err error
 			mounts, flags, bundleHash, err = bundles.For(bin)
 			if err != nil {
+				bundleFailed = true
 				log.Printf("spawn %s: config bundle unavailable (%v); the box will run without user config", spec.Agent, err)
 			}
 			spec.ExtraArgs = append(spec.ExtraArgs, flags...)
@@ -1047,7 +1055,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		key := box.BoxKey{Account: acctName}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed}
 		if binding != nil {
 			bm, benv, err := brk.BoxFor(*binding)
 			if err != nil {

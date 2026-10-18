@@ -278,12 +278,19 @@ func TestKillingAHostSessionDoesNotTouchTheBoxLayer(t *testing.T) {
 type fakeBundles struct {
 	order    *callLog // optional: shared with fakeBoxes to pin call order
 	askedBin string
+	calls    int
 	mounts   []box.Mount
 	flags    []string
+	err      error // returned, with no mounts or flags, when set
 }
 
 func (f *fakeBundles) For(bin string) ([]box.Mount, []string, string, error) {
 	f.askedBin = bin
+	f.calls++
+	if f.err != nil {
+		f.order.add("bundle")
+		return nil, nil, "", f.err
+	}
 	f.order.add("bundle")
 	return f.mounts, f.flags, "deadbeef", nil
 }
@@ -306,6 +313,67 @@ func TestBoxedSpawnAppliesTheConfigBundle(t *testing.T) {
 	}
 	if wraps, _, _ := boxes.counts(); wraps != 1 {
 		t.Fatalf("expected one wrap, got %d", wraps)
+	}
+}
+
+// unresolvedBinLauncher cannot name the agent binary.
+type unresolvedBinLauncher struct{ tieredLauncher }
+
+func (unresolvedBinLauncher) BinFor(launcher.SpawnSpec) (string, error) {
+	return "", errors.New("no such profile bin")
+}
+
+// The bundle's mounts belong to the box, not to the agent (brain #131): a box is
+// shared by every session with its key, whatever bin each runs, so the bundle is
+// consulted even when the bin is unknown, and its mounts reach Wrap.
+func TestBoxedSpawnWithAnUnknownBinStillGetsTheBoxMounts(t *testing.T) {
+	m := NewManager(unresolvedBinLauncher{tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}},
+		nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	want := box.Mount{Host: "/b", Box: "/opt/agent-bundle"}
+	bundles := &fakeBundles{mounts: []box.Mount{want}}
+	m.SetBundles(bundles)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if bundles.calls != 1 {
+		t.Fatalf("bundle consulted %d times, want 1", bundles.calls)
+	}
+	boxes.mu.Lock()
+	ro := boxes.lastRO
+	boxes.mu.Unlock()
+	if len(ro) != 1 || ro[0] != want {
+		t.Fatalf("Wrap got mounts %+v, want the bundle's %+v", ro, want)
+	}
+}
+
+// Review round 1: a bundle that failed to build yields no mounts, which means
+// "unknown", not "none". The box layer must be told, or it strips the bundle
+// from an idle box it could have reused.
+func TestBundleFailureMarksTheMountsPartial(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{{"bundle ok", nil, false}, {"bundle failed", errors.New("walking ~/.claude: permission denied"), true}} {
+		t.Run(c.name, func(t *testing.T) {
+			m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+			m.SetBundles(&fakeBundles{err: c.err, mounts: []box.Mount{{Host: "/b", Box: "/opt/agent-bundle"}}})
+			s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Kill(s.ID)
+			boxes.mu.Lock()
+			got := boxes.lastKey.PartialMounts
+			boxes.mu.Unlock()
+			if got != c.want {
+				t.Fatalf("PartialMounts = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 

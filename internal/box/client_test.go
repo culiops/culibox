@@ -101,6 +101,7 @@ func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
 	ctx := context.Background()
 	_, _ = c.Run(ctx, []string{"run", "-d", "x"})
 	_, _ = c.Inspect(ctx, "x")
+	_, _, _ = c.InspectMounts(ctx, "x")
 	_, _ = c.ListByLabel(ctx, "l")
 	_, _ = c.ListBoxes(ctx, "l")
 	_ = c.Stop(ctx, "x")
@@ -110,8 +111,8 @@ func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
-	if len(lines) != 6 {
-		t.Fatalf("want 6 docker calls, got %d: %q", len(lines), lines)
+	if len(lines) != 7 {
+		t.Fatalf("want 7 docker calls, got %d: %q", len(lines), lines)
 	}
 	for _, l := range lines {
 		if !strings.HasPrefix(l, "--host unix:///v/docker.sock --config /v/docker ") {
@@ -168,5 +169,38 @@ func TestParseBoxListFlagsRowsItCannotSplit(t *testing.T) {
 	}
 	if got[4].Unreadable || got[4].Workspace != "/w/d" || got[4].Instance != "PROD" {
 		t.Errorf("a complete row with empty labels: %+v", got[4])
+	}
+}
+
+// One docker call answers both questions ensure asks of a box. The running flag
+// is the first line; only bind mounts count; a stopped or missing box reports
+// no mounts, and the stderr rules of Inspect hold unchanged.
+func TestInspectMountsReadsStateAndBindsFromOneCall(t *testing.T) {
+	cases := []struct {
+		name, stdout, errs string
+		code               int
+		want               State
+		mounts             []string
+		err                bool
+	}{
+		{"running", "true\nbind|/w\ntmpfs|/tmp\nbind|/home/agent\nvolume|/v\nbind|/opt/agent-bundle", "", 0,
+			StateRunning, []string{"/w", "/home/agent", "/opt/agent-bundle"}, false},
+		{"running no mounts", "true", "", 0, StateRunning, nil, false},
+		{"stopped", "false\nbind|/w", "", 0, StateStopped, nil, false},
+		{"missing", "", "Error: No such object: ab-box-x", 1, StateMissing, nil, false},
+		{"daemon down", "", "Cannot connect to the Docker daemon", 1, StateMissing, nil, true},
+		{"warning on stderr", "true\nbind|/w", "WARNING: a deprecated thing", 0, StateRunning, []string{"/w"}, false},
+		{"unexpected first line", "bind|/w\ntrue", "", 0, StateMissing, nil, true},
+	}
+	for _, c := range cases {
+		bin, log := fakeDockerStderr(t, map[string]string{"inspect": c.stdout}, map[string]string{"inspect": c.errs}, map[string]int{"inspect": c.code})
+		st, mounts, err := CLIClient{Bin: bin}.InspectMounts(context.Background(), "ab-box-x")
+		if st != c.want || (err != nil) != c.err || strings.Join(mounts, ",") != strings.Join(c.mounts, ",") {
+			t.Fatalf("%s: got (%v, %v, %v), want (%v, %v, err=%v)", c.name, st, mounts, err, c.want, c.mounts, c.err)
+		}
+		b, _ := os.ReadFile(log)
+		if !strings.Contains(string(b), "{{.State.Running}}{{range .Mounts}}") {
+			t.Fatalf("%s: one inspect must ask for state and mounts together: %s", c.name, b)
+		}
 	}
 }

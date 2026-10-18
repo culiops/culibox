@@ -20,7 +20,8 @@ type fakeClient struct {
 	running    map[string]bool
 	exited     map[string]bool // present but not running
 	inspectErr error
-	stopFails  int // the next N Stop calls fail and leave the container running
+	stopFails  int               // the next N Stop calls fail and leave the container running
+	stopHook   func(name string) // runs after Stop removed the box, with no lock held
 	sysbox     bool
 
 	// inspectHook runs inside Inspect, before it answers and with no lock held,
@@ -36,10 +37,18 @@ type fakeClient struct {
 	// filter, as docker would for `--filter label=<key>`.
 	others  []BoxInfo
 	listErr error
+
+	// mounts holds the bind destinations of each box, as `docker inspect`
+	// reports them: recorded from every --mount of a Run, or set by a test to
+	// stand for a box created by an older build. mountsErr fails InspectMounts
+	// for a running box.
+	mounts    map[string][]string
+	mountsErr error
 }
 
 func newFake() *fakeClient {
-	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{}}
+	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{},
+		mounts: map[string][]string{}}
 }
 
 func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
@@ -49,10 +58,17 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	f.runArgs = append(f.runArgs, args)
 	var name string
 	lbl := map[string]string{}
+	var dsts []string
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "--name":
 			name = args[i+1]
+		case "--mount":
+			for _, opt := range strings.Split(args[i+1], ",") {
+				if d, ok := strings.CutPrefix(opt, "dst="); ok {
+					dsts = append(dsts, d)
+				}
+			}
 		case "--label":
 			if k, v, ok := strings.Cut(args[i+1], "="); ok {
 				lbl[k] = v
@@ -71,6 +87,7 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	}
 	if name != "" {
 		f.labels[name] = lbl
+		f.mounts[name] = dsts
 	}
 	return "container-id", nil
 }
@@ -159,7 +176,25 @@ func (f *fakeClient) Stop(_ context.Context, name string) error {
 	}
 	delete(f.running, name)
 	delete(f.exited, name)
+	if hook := f.stopHook; hook != nil {
+		f.mu.Unlock()
+		hook(name)
+		f.mu.Lock()
+	}
 	return nil
+}
+
+func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []string, error) {
+	st, err := f.Inspect(ctx, name)
+	if err != nil || st != StateRunning {
+		return st, nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mountsErr != nil {
+		return StateMissing, nil, f.mountsErr
+	}
+	return st, append([]string(nil), f.mounts[name]...), nil
 }
 
 func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {
