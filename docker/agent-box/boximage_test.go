@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -240,5 +242,122 @@ func TestNextDatedTagSkipsNamedTakenTags(t *testing.T) {
 	got, err := Docker{Bin: bin}.NextDatedTag(context.Background(), "r", now, "r:2026-10-18", "r:2026-10-18.2")
 	if err != nil || got != "r:2026-10-18.3" {
 		t.Fatalf("got %q, %v", got, err)
+	}
+}
+
+// dockerfileInstructions joins backslash-continued lines into one instruction
+// each and drops comment lines.
+func dockerfileInstructions() []string {
+	var out []string
+	var cur strings.Builder
+	for _, line := range strings.Split(string(dockerfile), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if cur.Len() == 0 && (trimmed == "" || strings.HasPrefix(trimmed, "#")) {
+			continue
+		}
+		if strings.HasSuffix(trimmed, "\\") {
+			cur.WriteString(strings.TrimSuffix(trimmed, "\\"))
+			cur.WriteString(" ")
+			continue
+		}
+		cur.WriteString(trimmed)
+		out = append(out, cur.String())
+		cur.Reset()
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+func TestDockerfileVerifiesEveryDownload(t *testing.T) {
+	// A download is a curl invocation (curl followed by an option), not the
+	// word "curl" in an apt package list.
+	curlCall := regexp.MustCompile(`\bcurl\s+-`)
+	sha := regexp.MustCompile(`^[0-9a-f]{64}$`)
+	downloads := 0
+	for _, in := range dockerfileInstructions() {
+		switch {
+		case strings.HasPrefix(in, "RUN ") && curlCall.MatchString(in):
+			downloads++
+			if !strings.Contains(in, "sha256sum -c") {
+				t.Errorf("download without sha256sum -c: %.120s", in)
+			}
+		case strings.HasPrefix(in, "ARG "):
+			name, val, _ := strings.Cut(strings.TrimPrefix(in, "ARG "), "=")
+			if strings.Contains(name, "SHA256") && !sha.MatchString(val) {
+				t.Errorf("ARG %s is not a 64-hex sha256: %q", name, val)
+			}
+		}
+	}
+	if downloads < 5 {
+		t.Errorf("found %d downloads, want at least 5 (aws, terraform, go, abduco, codebase-memory)", downloads)
+	}
+}
+
+func TestDockerfileGoMatchesGoMod(t *testing.T) {
+	mod, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^go\s+(\S+)\s*$`).FindSubmatch(mod)
+	if m == nil {
+		t.Fatal("no go directive in go.mod")
+	}
+	want := "ARG GO_VERSION=" + string(m[1])
+	found := false
+	for _, in := range dockerfileInstructions() {
+		if in == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Dockerfile has no %q (go.mod and the image toolchain must agree)", want)
+	}
+}
+
+func TestDockerfileDeclaresCodebaseMemory(t *testing.T) {
+	var line string
+	for _, in := range dockerfileInstructions() {
+		if strings.Contains(in, "printf") && strings.Contains(in, "/etc/agent-box/mcp.json") {
+			line = in
+		}
+	}
+	if line == "" {
+		t.Fatal("no printf writing /etc/agent-box/mcp.json")
+	}
+	i, j := strings.Index(line, "'{"), strings.LastIndex(line, "}'")
+	if i < 0 || j < i {
+		t.Fatalf("no quoted JSON in %q", line)
+	}
+	var doc struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(line[i+1:j+1]), &doc); err != nil {
+		t.Fatalf("mcp.json payload is not JSON: %v", err)
+	}
+	if got := doc.MCPServers["codebase-memory"]["command"]; got != "/usr/local/bin/codebase-memory-mcp" {
+		t.Errorf("codebase-memory command = %v", got)
+	}
+}
+
+func TestDockerfileSetsGoEnvUnderHome(t *testing.T) {
+	for _, want := range []string{
+		"GOPATH=/home/agent/go",
+		"GOMODCACHE=/home/agent/go/pkg/mod",
+		"GOCACHE=/home/agent/.cache/go-build",
+		"GOTMPDIR=/home/agent/.cache/go-tmp",
+		"GOTOOLCHAIN=local",
+		"PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH",
+	} {
+		if !strings.Contains(string(dockerfile), want) {
+			t.Errorf("Dockerfile does not set %s", want)
+		}
+	}
+}
+
+func TestDockerfilePinsCodebaseMemoryVersion(t *testing.T) {
+	if !strings.Contains(string(dockerfile), "\nARG CBM_VERSION=0.10.8\n") {
+		t.Error("Dockerfile does not pin ARG CBM_VERSION=0.10.8")
 	}
 }

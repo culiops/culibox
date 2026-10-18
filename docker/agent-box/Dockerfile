@@ -3,6 +3,26 @@
 # What is NOT here is the point. No host home, no ~/.ssh, no docker socket, no
 # inherited daemon environment — the console mounts exactly the project
 # directory and a per-box state volume, and forwards environment by name.
+# --- abduco (builder stage) ---
+# abduco is not packaged for bookworm (abduco 0.6-1 exists in forky/sid only), so
+# it is built from the upstream release on the same base image, and only the
+# binary is copied into the final image. Pinned by version AND SHA256:
+#   https://github.com/martanne/abduco/releases/download/v0.6/abduco-0.6.tar.gz
+# To bump: change ABDUCO_VERSION, download the tarball, recompute the sum and
+# compare it with Homebrew's Formula/a/abduco.rb.
+FROM node:24-bookworm-slim AS abduco-build
+ARG ABDUCO_VERSION=0.6
+ARG ABDUCO_SHA256=c90909e13fa95770b5afc3b59f311b3d3d2fdfae23f9569fa4f96a3e192a35f4
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      gcc make libc6-dev curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    curl -fsSL "https://github.com/martanne/abduco/releases/download/v${ABDUCO_VERSION}/abduco-${ABDUCO_VERSION}.tar.gz" -o /tmp/abduco.tar.gz; \
+    echo "${ABDUCO_SHA256}  /tmp/abduco.tar.gz" | sha256sum -c -; \
+    tar -C /tmp -xzf /tmp/abduco.tar.gz; \
+    make -C "/tmp/abduco-${ABDUCO_VERSION}"; \
+    install -D -m 0755 "/tmp/abduco-${ABDUCO_VERSION}/abduco" /out/abduco
+
 FROM node:24-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -50,6 +70,71 @@ RUN set -eu; \
     unzip -q /tmp/terraform.zip -d /usr/local/bin; rm -f /tmp/terraform.zip; \
     terraform version
 
+# --- Go ---
+# Go 1.26.5, pinned by version AND per-arch SHA256 (from go.dev's release list):
+#   https://go.dev/dl/go1.26.5.linux-amd64.tar.gz
+#   https://go.dev/dl/go1.26.5.linux-arm64.tar.gz
+# To bump: take the new version and sums from
+#   https://go.dev/dl/?mode=json&include=all
+# and keep GO_VERSION equal to the `go` directive in go.mod (a test enforces it).
+ARG GO_VERSION=1.26.5
+ARG GO_SHA256_AMD64=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+ARG GO_SHA256_ARM64=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=amd64; sum="$GO_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$GO_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${a}.tar.gz" -o /tmp/go.tar.gz; \
+    echo "${sum}  /tmp/go.tar.gz" | sha256sum -c -; \
+    tar -C /usr/local -xzf /tmp/go.tar.gz; rm -f /tmp/go.tar.gz; \
+    /usr/local/go/bin/go version
+# Everything Go writes lives under the box home (a per-box bind mount). The
+# directories are NOT created here: the home is a bind mount, so nothing the
+# image creates under /home/agent is visible at run time. Go creates GOCACHE and
+# GOMODCACHE itself; GOTMPDIR must exist, so the entrypoint creates it.
+# GOTOOLCHAIN=local makes a go.mod asking for a newer Go fail loudly instead of
+# downloading an unpinned toolchain through the proxy.
+ENV GOPATH=/home/agent/go
+ENV GOMODCACHE=/home/agent/go/pkg/mod
+ENV GOCACHE=/home/agent/.cache/go-build
+ENV GOTMPDIR=/home/agent/.cache/go-tmp
+ENV GOTOOLCHAIN=local
+ENV PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH
+
+# --- abduco ---
+# Built in the abduco-build stage above (see there for source, pin and bump).
+COPY --from=abduco-build /out/abduco /usr/local/bin/abduco
+RUN abduco -v 2>&1 | grep -q 'abduco-0.6'
+
+# --- codebase-memory-mcp ---
+# v0.10.8, pinned by version AND per-arch SHA256 of the release's *-portable build:
+#   https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/codebase-memory-mcp-linux-amd64-portable.tar.gz
+#   https://github.com/DeusData/codebase-memory-mcp/releases/download/v0.10.8/codebase-memory-mcp-linux-arm64-portable.tar.gz
+# Why portable: the release's plain linux build is dynamically linked and needs
+# GLIBC_2.38, but bookworm ships 2.36. The portable build is statically linked,
+# so it runs here; the build asserts that. The host's `codebase-memory-mcp
+# --version` is the source of truth for which version to pin.
+# To bump: take the sums from the release's checksums.txt, cross-checked against
+# the GitHub asset digests, then change CBM_VERSION.
+ARG CBM_VERSION=0.10.8
+ARG CBM_SHA256_AMD64=6eef49652bc0c7820f43114125044d40bf7f4d97c11b2592f6b0f6a307702325
+ARG CBM_SHA256_ARM64=5697d986d9716c913163b4bff7b3a294287f3b843e993bc1ff71e78dcdc21781
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=amd64; sum="$CBM_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$CBM_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/DeusData/codebase-memory-mcp/releases/download/v${CBM_VERSION}/codebase-memory-mcp-linux-${a}-portable.tar.gz" -o /tmp/cbm.tar.gz; \
+    echo "${sum}  /tmp/cbm.tar.gz" | sha256sum -c -; \
+    mkdir /tmp/cbm; tar -C /tmp/cbm -xzf /tmp/cbm.tar.gz; \
+    install -m 0755 /tmp/cbm/codebase-memory-mcp /usr/local/bin/codebase-memory-mcp; \
+    rm -rf /tmp/cbm /tmp/cbm.tar.gz; \
+    ldd /usr/local/bin/codebase-memory-mcp 2>&1 | grep -q 'not a dynamic executable'; \
+    codebase-memory-mcp --version | grep -q "${CBM_VERSION}"
+
 RUN npm install -g @anthropic-ai/claude-code
 
 # The console always runs the box with `--user <daemon uid>` and bind-mounts a
@@ -63,7 +148,21 @@ RUN groupadd -g "$GID" agent \
     && mkdir -p /home/agent/.claude \
     && chown -R "$UID:$GID" /home/agent
 
+# MCP servers the image itself provides. agent-box merges this file into the
+# session's MCP bundle (it is read by a probe run with --entrypoint sh). No
+# "env": the default cache $HOME/.cache/codebase-memory-mcp is already in the
+# box home.
+RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{"type":"stdio","command":"/usr/local/bin/codebase-memory-mcp","args":[]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["codebase-memory"].command' /etc/agent-box/mcp.json
+
+# Entrypoint: create $GOTMPDIR at container start, then exec the arguments. The
+# box home is a bind mount of the box's state dir, so the directory cannot be
+# made at build time, and Go refuses a missing GOTMPDIR (spec correction 5).
+# agent-box always passes `sleep infinity`; the probes override --entrypoint.
+RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
+
 USER agent
 ENV HOME=/home/agent
 ENV SHELL=/bin/bash
 WORKDIR /home/agent
+ENTRYPOINT ["/usr/local/bin/agent-box-entrypoint"]
+CMD ["bash"]
