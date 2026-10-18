@@ -15,6 +15,7 @@ import (
 	"io"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -132,13 +133,17 @@ func Repo(image string) (string, error) {
 
 // NextDatedTag returns the first tag of repo that the daemon does not hold:
 // <repo>:<UTC date>, then .2 to .9. A dated tag is immutable, so a taken one
-// is never reused.
-func (d Docker) NextDatedTag(ctx context.Context, repo string, now time.Time) (string, error) {
+// is never reused. taken names tags to skip even when the daemon lacks them: a
+// configured pin counts as taken, so a rebuild never builds the pin itself.
+func (d Docker) NextDatedTag(ctx context.Context, repo string, now time.Time, taken ...string) (string, error) {
 	day := now.UTC().Format("2006-01-02")
 	for i := 1; i <= 9; i++ {
 		tag := repo + ":" + day
 		if i > 1 {
 			tag += fmt.Sprintf(".%d", i)
+		}
+		if slices.Contains(taken, tag) {
+			continue
 		}
 		st, err := d.Inspect(ctx, tag)
 		if err != nil {
@@ -214,6 +219,8 @@ func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) 
 	return false, fmt.Sprintf("pinned to %s, built from an older Dockerfile than this agent-box (fine to keep); agent-box box setup -rebuild builds a new dated tag you can pin", image)
 }
 
+// mustRepo drops Repo's error: it is only called for a dated image, which
+// IsDated has already shown is not a digest ref.
 func mustRepo(image string) string {
 	r, _ := Repo(image)
 	return r

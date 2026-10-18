@@ -232,3 +232,13 @@ func TestCheckForPinned(t *testing.T) {
 		t.Fatalf("current pin: (%v, %q)", fatal, msg)
 	}
 }
+
+// A tag the caller names as taken is skipped even when the daemon lacks it.
+func TestNextDatedTagSkipsNamedTakenTags(t *testing.T) {
+	bin, _ := fakeDocker(t, presentScript())
+	now := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
+	got, err := Docker{Bin: bin}.NextDatedTag(context.Background(), "r", now, "r:2026-10-18", "r:2026-10-18.2")
+	if err != nil || got != "r:2026-10-18.3" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+}

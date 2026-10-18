@@ -59,7 +59,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 			return 0
 		}
 		if pinned {
-			fmt.Fprintf(w, "WARN image: %s (linux/%s): %s\n", image, st.Arch, msg)
+			fmt.Fprintf(w, "WARN image: %s\n", imageLine(image, st.Arch, msg))
 			return 0
 		}
 	}
@@ -72,7 +72,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 		fmt.Fprintln(w, "FAIL image: box_image is a digest; agent-box cannot build it")
 		return 1
 	}
-	dated, err := d.NextDatedTag(ctx, repo, now)
+	dated, err := d.NextDatedTag(ctx, repo, now, image)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
 		return 1
@@ -112,14 +112,26 @@ func boxImageStatus(ctx context.Context, d boximage.Docker, image string, w io.W
 	}
 	switch fatal, msg := st.CheckFor(image, arch); {
 	case fatal:
-		fmt.Fprintf(w, "FAIL image: %s: %s\n", image, msg)
+		fmt.Fprintf(w, "FAIL image: %s\n", imageLine(image, "", msg))
 		return 1
 	case msg != "":
-		fmt.Fprintf(w, "WARN image: %s (linux/%s): %s\n", image, st.Arch, msg)
+		fmt.Fprintf(w, "WARN image: %s\n", imageLine(image, st.Arch, msg))
 	default:
 		fmt.Fprintf(w, "image: %s is current (linux/%s)\n", image, st.Arch)
 	}
 	return 0
+}
+
+// imageLine words a status line about image. A pinned-image message already
+// names the image, so it is not prefixed with it again.
+func imageLine(image, arch, msg string) string {
+	if strings.Contains(msg, image) {
+		return msg
+	}
+	if arch != "" {
+		return fmt.Sprintf("%s (linux/%s): %s", image, arch, msg)
+	}
+	return image + ": " + msg
 }
 
 // boxListStatus prints every agent-box box container, all instances. Session

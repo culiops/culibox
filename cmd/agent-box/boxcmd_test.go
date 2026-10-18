@@ -175,3 +175,34 @@ func TestBoxSetupDigestRefCannotBeBuilt(t *testing.T) {
 		t.Fatalf("log %q out %q", argvLog(t, log), w.String())
 	}
 }
+
+// A missing pin must never be built in place, even though its dated tag is
+// free: the pin counts as taken, so -rebuild takes the next suffix.
+func TestBoxSetupMissingPinRebuildNeverBuildsThePin(t *testing.T) {
+	d, log := setupDocker(t, nil)
+	var w bytes.Buffer
+	if rc := boxSetupImage(context.Background(), d, datedRef, true, setupNow, &w); rc != 0 {
+		t.Fatalf("rc %d: %s", rc, w.String())
+	}
+	b := buildLines(argvLog(t, log))
+	if len(b) != 1 || strings.Count(b[0], "-t ") != 1 || !strings.Contains(b[0], "-t "+datedRef+".2 -") {
+		t.Fatalf("build argv: %v", b)
+	}
+	if strings.Contains(b[0], ":base") || strings.Contains(b[0], "-t "+datedRef+" ") {
+		t.Fatalf("a missing pin was built in place: %s", b[0])
+	}
+	if !strings.Contains(w.String(), "stays on "+datedRef) {
+		t.Fatalf("output: %s", w.String())
+	}
+}
+
+func TestBoxStatusPinnedMissingDoesNotRepeatTheImage(t *testing.T) {
+	d, _ := setupDocker(t, nil)
+	var w bytes.Buffer
+	if rc := boxImageStatus(context.Background(), d, datedRef, &w); rc != 1 {
+		t.Fatalf("rc %d: %s", rc, w.String())
+	}
+	if strings.Contains(w.String(), datedRef+": pinned") || !strings.HasPrefix(w.String(), "FAIL image: pinned box image "+datedRef) {
+		t.Fatalf("output: %s", w.String())
+	}
+}
