@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/culiops/agent-box/internal/auth"
@@ -45,8 +46,58 @@ func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 		if !ok {
 			return egress.SessionView{}, false
 		}
-		return egress.SessionView{Nonce: s.AWSNonce, Box: s.Box, Boxed: s.Runtime == config.RuntimeBox,
+		return egress.SessionView{Nonce: s.EgressNonce, Box: s.Box, Boxed: s.Runtime == config.RuntimeBox,
 			Live: !s.Exited(), AWS: s.AWS}, true
+	}
+}
+
+// egressServiceOptions is the Linux service configuration: an internal-only
+// network on which boxes cannot reach each other, loopback kept off the proxy, and the one env var the measured gate
+// G2 needs for plain Node fetch to honour HTTPS_PROXY. The other measured env
+// (hooks.go measuredEnv) is added by the service itself.
+func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d egress.Docker) egress.ServiceOptions {
+	return egress.ServiceOptions{
+		Proxy:    proxy,
+		Docker:   d,
+		GOOS:     goos,
+		Instance: cfg.BoxInstance(),
+		Port:     cfg.EgressPortOrDefault(),
+		Want:     egress.Want{Internal: true, NoICC: true},
+		NoProxy:  "localhost,127.0.0.1,::1",
+		ExtraEnv: []string{"NODE_USE_ENV_PROXY=1"},
+	}
+}
+
+// bridgeBoxes picks, from `docker ps --format '{{.Names}}\t{{.Networks}}'`
+// output, every box whose network set is not exactly {network}.
+func bridgeBoxes(psOut, network string) []string {
+	var out []string
+	for _, line := range strings.Split(psOut, "\n") {
+		name, nets, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok || name == "" {
+			continue
+		}
+		if nets != network {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// warnBridgeBoxes logs the boxes of this instance that are still on the old
+// bridge (or on it as well as the egress network). They keep running; new
+// spawns into them are refused while they run sessions, and they are recreated
+// when idle. A docker error is logged, never fatal.
+func warnBridgeBoxes(ctx context.Context, d egress.Docker, instance, network string) {
+	out, err := d.Run(ctx, []string{"ps", "--filter", "label=" + egress.InstanceLabel + "=" + instance,
+		"--format", "{{.Names}}\t{{.Networks}}"})
+	if err != nil {
+		log.Printf("egress: could not list boxes to check their network: %v", err)
+		return
+	}
+	if names := bridgeBoxes(out, network); len(names) > 0 {
+		log.Printf("egress: boxes still outside %s (new spawns in them are refused while they run sessions; recreated when idle): %s",
+			network, strings.Join(names, ", "))
 	}
 }
 
@@ -76,14 +127,12 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 		return nil, fmt.Errorf("egress audit store: %w", err)
 	}
 	proxy := egress.New(egress.Options{Secret: sec.Secret(), Lookup: egressLookup(get), Audit: audit})
-	svc := egress.NewService(egress.ServiceOptions{
-		Proxy:    proxy,
-		Docker:   layer.cli,
-		GOOS:     goos,
-		Instance: cfg.BoxInstance(),
-		Port:     cfg.EgressPortOrDefault(),
-		Want:     egress.Want{Internal: true},
-	})
+	svc := egress.NewService(egressServiceOptions(cfg, goos, proxy, layer.cli))
+	// Learn the host's own addresses once now; Ready refreshes them on every
+	// call and refuses when they cannot be read, so a failure here only logs.
+	if err := svc.RefreshHostAddrs(); err != nil {
+		log.Printf("egress: could not read the host's addresses (%v); boxes are refused until they can be", err)
+	}
 
 	// Spec correction 10: an existing network means bound sessions may be
 	// running, so the listener comes up now. Otherwise the first bound spawn

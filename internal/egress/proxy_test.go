@@ -477,11 +477,10 @@ func TestUserMustEqualTokenSession(t *testing.T) {
 	}
 }
 
-func TestDeadUnboxedUnboundOrStaleNonceIs407(t *testing.T) {
+func TestDeadUnboxedOrStaleNonceIs407(t *testing.T) {
 	views := map[string]SessionView{
 		"dead":    {Nonce: nonceA, Box: "b", Boxed: true, Live: false, AWS: bound()},
 		"unboxed": {Nonce: nonceA, Box: "b", Boxed: false, Live: true, AWS: bound()},
-		"unbound": {Nonce: nonceA, Box: "b", Boxed: true, Live: true, AWS: nil},
 		"stale":   {Nonce: nonceB, Box: "b", Boxed: true, Live: true, AWS: bound()},
 		"nonce0":  {Nonce: "", Box: "b", Boxed: true, Live: true, AWS: bound()},
 		"unknown": {},
@@ -1096,7 +1095,10 @@ func TestTokenIsEgressDomain(t *testing.T) {
 // The positive end-to-end path: a remote inside the subnet that is not the
 // gateway passes the source check (loopback stands in for the egress network).
 func TestSourceCheckPassesInsideTheSubnet(t *testing.T) {
-	h := newHarness(t, nil)
+	h := newHarness(t, nil, func(o *Options) {
+		// s1's box is at the address every test connection comes from.
+		o.BoxAddr = func(context.Context, string) (netip.Addr, error) { return netip.MustParseAddr("127.0.0.1"), nil }
+	})
 	h.p.SetNetwork(netip.MustParsePrefix("127.0.0.0/8"), netip.MustParseAddr("127.0.0.2"), true)
 	code, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
 	if code != 200 {
@@ -1260,5 +1262,143 @@ func TestDefaultResolverAsksForTheFQDN(t *testing.T) {
 	c.Close()
 	if !reflect.DeepEqual(asked, []string{"ip api.anthropic.com."}) {
 		t.Fatalf("resolver asked %q; a rooted name keeps resolv.conf search domains out", asked)
+	}
+}
+
+var hostAddr = netip.MustParseAddr("93.184.216.34")
+
+func openView() SessionView {
+	return SessionView{Nonce: nonceA, Box: "box-1", Boxed: true, Live: true, AWS: nil}
+}
+
+func TestOpenModeAllowsAnyPublicHostname(t *testing.T) {
+	addr := netip.MustParseAddr("93.184.216.34")
+	h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{addr} })
+	h.setView("s1", openView())
+	code, c := h.connect(t, "example.com:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	echoRoundTrip(t, c, "open")
+	c.Close()
+	if got, want := h.dials(), []netip.AddrPort{netip.AddrPortFrom(addr, 443)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("dialled %v, want %v", got, want)
+	}
+	if r := h.onlyRow(t); r.Outcome != OutcomeAllowed || r.Host != "example.com" || r.SessionID != "s1" {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
+func TestOpenModeStillRefuses(t *testing.T) {
+	cases := []struct {
+		name, target, resolves string
+		code                   int
+		outcome                Outcome
+	}{
+		{"ipv4 literal", "1.1.1.1:443", "", 403, OutcomeDenied},
+		{"ipv6 literal", "[::1]:443", "", 403, OutcomeDenied},
+		{"port 80", "example.com:80", "", 405, OutcomeBadMethod},
+		{"rfc1918", "example.com:443", "10.0.0.1", 403, OutcomePrivateAddr},
+		{"cgnat", "example.com:443", "100.100.1.1", 403, OutcomePrivateAddr},
+		{"loopback", "example.com:443", "127.0.0.1", 403, OutcomePrivateAddr},
+		{"link-local", "example.com:443", "169.254.1.1", 403, OutcomePrivateAddr},
+		{"v6 loopback", "example.com:443", "::1", 403, OutcomePrivateAddr},
+		{"host address", "example.com:443", hostAddr.String(), 403, OutcomePrivateAddr},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, func(string) []netip.Addr {
+				if tc.resolves == "" {
+					return []netip.Addr{publicAddr}
+				}
+				return []netip.Addr{netip.MustParseAddr(tc.resolves)}
+			})
+			h.p.SetHostAddrs([]netip.Addr{hostAddr})
+			h.setView("s1", openView())
+			code, _ := h.connect(t, tc.target, "s1", h.tok("s1", nonceA))
+			if code != tc.code {
+				t.Fatalf("status %d, want %d", code, tc.code)
+			}
+			if r := h.onlyRow(t); r.Outcome != tc.outcome {
+				t.Fatalf("row = %+v, want outcome %s", r, tc.outcome)
+			}
+			if len(h.dials()) != 0 {
+				t.Fatal("dialled")
+			}
+		})
+	}
+}
+
+func TestHostAddrsRefusedInBoundModeToo(t *testing.T) {
+	h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{hostAddr} })
+	h.p.SetHostAddrs([]netip.Addr{hostAddr})
+	code, _ := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
+	if code != 403 {
+		t.Fatalf("status %d", code)
+	}
+	if r := h.onlyRow(t); r.Outcome != OutcomePrivateAddr {
+		t.Fatalf("row = %+v", r)
+	}
+	if st, _ := h.p.Stats("s1"); st.Denied != 1 {
+		t.Fatalf("stats = %+v, want the refusal counted", st)
+	}
+	code, _ = h.connect(t, "registry.npmjs.org:443", "s1", h.tok("s1", nonceA))
+	if code != 403 {
+		t.Fatalf("bound is not open: status %d", code)
+	}
+	// Refused by the allowlist (denied), not by the address check.
+	if rows := h.waitRows(t, 2); len(rows) != 2 || rows[1].Outcome != OutcomeDenied || rows[1].Host != "registry.npmjs.org" {
+		t.Fatalf("rows = %+v", rows)
+	}
+	if len(h.dials()) != 0 {
+		t.Fatal("dialled")
+	}
+}
+
+func TestBoundModeUnallowlistedStaysDenied(t *testing.T) {
+	h := newHarness(t, nil)
+	h.p.SetHostAddrs([]netip.Addr{hostAddr})
+	code, _ := h.connect(t, "registry.npmjs.org:443", "s1", h.tok("s1", nonceA))
+	if code != 403 {
+		t.Fatalf("status %d", code)
+	}
+	if r := h.onlyRow(t); r.Outcome != OutcomeDenied {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
+func TestMixedAnswerSkipsHostAddrs(t *testing.T) {
+	good := netip.MustParseAddr("8.8.8.8")
+	h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{hostAddr, good} })
+	h.p.SetHostAddrs([]netip.Addr{hostAddr})
+	h.setView("s1", openView())
+	code, c := h.connect(t, "example.com:443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	c.Close()
+	if got, want := h.dials(), []netip.AddrPort{netip.AddrPortFrom(good, 443)}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("dialled %v, want %v", got, want)
+	}
+}
+
+func TestModeFollowsTheCurrentView(t *testing.T) {
+	h := newHarness(t, nil)
+	tok := h.tok("s1", nonceA)
+	setAWS := func(b *config.AWSBinding) {
+		v := h.views["s1"]
+		v.AWS = b
+		h.setView("s1", v)
+	}
+	for i, step := range []struct {
+		aws  *config.AWSBinding
+		want int
+	}{{bound(), 403}, {nil, 200}, {bound(), 403}} {
+		setAWS(step.aws)
+		code, c := h.connect(t, "example.com:443", "s1", tok)
+		if code != step.want {
+			t.Fatalf("step %d: status %d, want %d", i, code, step.want)
+		}
+		c.Close()
 	}
 }

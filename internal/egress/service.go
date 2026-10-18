@@ -23,6 +23,7 @@ type ServiceOptions struct {
 	NoProxy   string                                           // darwin: "host.lima.internal"
 	ExtraEnv  []string                                         // from Task 1's verdict (Task 11 fills it)
 	Listen    func(network, addr string) (net.Listener, error) // nil → net.Listen; tests inject
+	HostAddrs func() ([]netip.Addr, error)                     // the host's own addresses the proxy never dials; nil → HostAddrs
 }
 
 // Endpoint is where a box reaches the proxy.
@@ -47,7 +48,33 @@ func NewService(o ServiceOptions) *Service {
 	if o.Listen == nil {
 		o.Listen = net.Listen
 	}
+	if o.HostAddrs == nil {
+		o.HostAddrs = HostAddrs
+	}
+	if o.Proxy != nil && o.Docker != nil {
+		// Each principal is bound to its own box: the proxy learns a box's
+		// address on this instance's egress network from docker.
+		d, network := o.Docker, NetworkName(o.Instance)
+		o.Proxy.setBoxAddr(func(ctx context.Context, box string) (netip.Addr, error) {
+			return BoxAddr(ctx, d, box, network)
+		})
+	}
 	return &Service{o: o, maxConns: MaxProxyConns}
+}
+
+// RefreshHostAddrs reads the host's interface addresses and hands them to the
+// proxy. It fails when the read fails or yields no address: without them the
+// proxy cannot keep a box off the host's own interfaces.
+func (s *Service) RefreshHostAddrs() error {
+	a, err := s.o.HostAddrs()
+	if err != nil {
+		return fmt.Errorf("egress: read host interface addresses: %w", err)
+	}
+	if len(a) == 0 {
+		return errors.New("egress: host has no interface addresses; refusing to serve")
+	}
+	s.o.Proxy.SetHostAddrs(a)
+	return nil
 }
 
 // Network is the docker network's name.
@@ -63,8 +90,9 @@ func (s *Service) Exists(ctx context.Context) bool {
 	return err == nil && ok
 }
 
-// Ready is idempotent: it ensures the network (refusing a wrong one), points the
-// proxy at it, and starts listening once. Any failure leaves nothing listening
+// Ready is idempotent: it ensures the network (refusing a wrong one), refreshes
+// the host's own addresses (every call, so an address that appears later is
+// refused too), points the proxy at the network, and starts listening once. Any failure leaves nothing listening
 // that was not already, and a later call retries.
 func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	s.mu.Lock()
@@ -74,6 +102,9 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	}
 	n, err := EnsureNetwork(ctx, s.o.Docker, s.Network(), s.o.Instance, s.o.Want)
 	if err != nil {
+		return Endpoint{}, err
+	}
+	if err := s.RefreshHostAddrs(); err != nil {
 		return Endpoint{}, err
 	}
 	if s.ln != nil {

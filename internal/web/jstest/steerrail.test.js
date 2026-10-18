@@ -214,3 +214,10 @@ test("egressRow: a missing or non-numeric denied count reads as zero, never NaN"
   assert.strictEqual(egressRow({ egress: { mode: "allowlist" } }).v, "allowlist \u00b7 0 denied since start");
   assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: "x" } }).v, "allowlist \u00b7 0 denied since start");
 });
+
+test("egressRow: open mode says open and counts denials; anything else stays allowlist", () => {
+  assert.strictEqual(egressRow({ egress: { mode: "open", denied: 2 } }).v, "open \u00b7 2 denied since start");
+  assert.strictEqual(egressRow({ egress: { mode: "open", denied: "x" } }).v, "open \u00b7 0 denied since start");
+  assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: 2 } }).v, "allowlist \u00b7 2 denied since start");
+  assert.strictEqual(egressRow({ egress: { denied: 1 } }).v, "allowlist \u00b7 1 denied since start");
+});

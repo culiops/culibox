@@ -112,7 +112,7 @@ func TestAWSStatusAdapterNoStatsNoRows(t *testing.T) {
 }
 
 func TestAWSStatusIncludesEgress(t *testing.T) {
-	info := map[string]session.Info{"claude-3": {ID: "claude-3", AWS: &session.AWSInfo{Label: "x"}}}
+	info := map[string]session.Info{"claude-3": {ID: "claude-3", Egress: "allowlist", AWS: &session.AWSInfo{Label: "x"}}}
 	decode := func(ad AWSStatusAdapter) map[string]json.RawMessage {
 		t.Helper()
 		st, ok := ad.AWSStatus("claude-3")
@@ -254,5 +254,78 @@ func TestAWSStatusHidesTheDeviceCodeFromNonCookieCallers(t *testing.T) {
 	st, _ := ad.AWSStatus("claude-3")
 	if raw, _ := json.Marshal(st); strings.Contains(string(raw), "ABCD-EFGH") {
 		t.Errorf("AWSStatus without a credential kind leaks the code: %s", raw)
+	}
+}
+
+// The egress object's mode is Info.Egress, not a constant; a session without
+// egress control (Info.Egress "") carries no egress object at all.
+func TestAWSStatusEgressModeFromInfo(t *testing.T) {
+	decode := func(mode string) map[string]json.RawMessage {
+		t.Helper()
+		info := map[string]session.Info{"claude-3": {ID: "claude-3", Egress: mode, AWS: &session.AWSInfo{Label: "x"}}}
+		ad := awsAdapter(info, nil, nil, nil)
+		ad.Egress = func(id string) (egress.Stats, bool) { return egress.Stats{Allowed: 1, Denied: 4}, true }
+		st, ok := ad.AWSStatus("claude-3")
+		if !ok {
+			t.Fatal("bound session reported no status")
+		}
+		raw, _ := json.Marshal(st)
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if got := string(decode("allowlist")["egress"]); got != `{"allowed":1,"denied":4,"mode":"allowlist"}` {
+		t.Errorf("allowlist: egress = %s", got)
+	}
+	if got := string(decode("open")["egress"]); got != `{"allowed":1,"denied":4,"mode":"open"}` {
+		t.Errorf("open: egress = %s", got)
+	}
+	if _, has := decode("")["egress"]; has {
+		t.Error(`Info.Egress "" must leave the egress key out`)
+	}
+}
+
+func TestEgressStatusRoute(t *testing.T) {
+	info := map[string]session.Info{
+		"box-1":  {ID: "box-1", Egress: "open"},
+		"host-1": {ID: "host-1"},
+	}
+	svc := EgressStatusAdapter{
+		Get: func(id string) (session.Info, bool) { i, ok := info[id]; return i, ok },
+		Stats: func(id string) (egress.Stats, bool) {
+			if id == "box-1" {
+				return egress.Stats{Allowed: 3, Denied: 2}, true
+			}
+			return egress.Stats{}, false
+		},
+	}
+	do := func(a *API, method, id string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		a.handleSession(w, httptest.NewRequest(method, "/api/sessions/"+id+"/egress", nil))
+		return w
+	}
+	if w := do(&API{Sessions: &mockSvc{}}, "GET", "box-1"); w.Code != 404 || !strings.Contains(w.Body.String(), "egress control not enabled") {
+		t.Errorf("nil service: %d %s", w.Code, w.Body)
+	}
+	a := &API{Sessions: &mockSvc{}, Egress: svc}
+	if w := do(a, "POST", "box-1"); w.Code != 405 {
+		t.Errorf("POST: %d", w.Code)
+	}
+	for _, id := range []string{"nope", "host-1"} {
+		if w := do(a, "GET", id); w.Code != 204 {
+			t.Errorf("%s: %d %s", id, w.Code, w.Body)
+		}
+	}
+	w := do(a, "GET", "box-1")
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"egress":{"allowed":3,"denied":2,"mode":"open"}}` {
+		t.Errorf("box-1: %d %s", w.Code, w.Body)
+	}
+	// A box with no tunnel yet (Stats ok=false) still has a line: zeros.
+	info["box-2"] = session.Info{ID: "box-2", Egress: "open"}
+	w = do(a, "GET", "box-2")
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"egress":{"allowed":0,"denied":0,"mode":"open"}}` {
+		t.Errorf("box-2: %d %s", w.Code, w.Body)
 	}
 }

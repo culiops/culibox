@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,6 +14,10 @@ import (
 const InstanceLabel = "io.culiops.agent-box.instance"
 
 const dockerTimeout = 30 * time.Second
+
+// iccOption is the bridge driver option for inter-container traffic. Absent,
+// a bridge network lets its containers reach each other.
+const iccOption = "com.docker.network.bridge.enable_icc"
 
 // Docker is the part of the docker CLI the network code needs. args are the
 // arguments after "docker"; box.CLIClient satisfies it.
@@ -26,12 +31,14 @@ type Net struct {
 	Gateway  netip.Addr
 	Subnet   netip.Prefix
 	Internal bool
+	NoICC    bool // docker reports inter-container traffic explicitly off
 }
 
 // Want is what the platform needs from the network.
 type Want struct {
 	Internal bool   // Linux: true
 	Subnet   string // darwin: the fixed egress subnet; "" = docker chooses
+	NoICC    bool   // Linux: true, boxes on the network must not reach each other
 }
 
 // NetworkName is the per-instance network name; every byte outside
@@ -56,6 +63,7 @@ func run(ctx context.Context, d Docker, args ...string) (string, error) {
 
 type inspected struct {
 	Internal bool
+	Options  map[string]string
 	IPAM     struct {
 		Config []struct{ Subnet, Gateway string }
 	}
@@ -88,6 +96,12 @@ func InspectNetwork(ctx context.Context, d Docker, name string) (Net, bool, erro
 		return Net{}, false, fmt.Errorf("egress: network %s: unreadable inspect output: %w", name, err)
 	}
 	n := Net{Name: name, Internal: in.Internal}
+	// Only an explicit, parsable "false" counts as off.
+	if v, ok := in.Options[iccOption]; ok {
+		if on, perr := strconv.ParseBool(v); perr == nil && !on {
+			n.NoICC = true
+		}
+	}
 	for _, c := range in.IPAM.Config {
 		p, perr := netip.ParsePrefix(c.Subnet)
 		if perr != nil || !p.Addr().Unmap().Is4() {
@@ -103,7 +117,8 @@ func InspectNetwork(ctx context.Context, d Docker, name string) (Net, bool, erro
 }
 
 // EnsureNetwork returns the named network, creating it when absent, and refuses
-// one that does not match w: an open network must never be used for bound boxes.
+// one that does not match w: an open network, or one on which boxes can reach
+// each other, must never be used for boxes.
 func EnsureNetwork(ctx context.Context, d Docker, name, instance string, w Want) (Net, error) {
 	n, ok, err := InspectNetwork(ctx, d, name)
 	if err != nil {
@@ -113,6 +128,9 @@ func EnsureNetwork(ctx context.Context, d Docker, name, instance string, w Want)
 		args := []string{"network", "create", "--driver", "bridge"}
 		if w.Internal {
 			args = append(args, "--internal")
+		}
+		if w.NoICC {
+			args = append(args, "-o", iccOption+"=false")
 		}
 		if w.Subnet != "" {
 			args = append(args, "--subnet", w.Subnet)
@@ -136,8 +154,12 @@ func EnsureNetwork(ctx context.Context, d Docker, name, instance string, w Want)
 		}
 	}
 	if n.Internal != w.Internal {
-		return Net{}, fmt.Errorf("egress network %s exists with internal=%v; agent-box will not use an open network for bound boxes. Remove it (docker network rm %s) and retry",
+		return Net{}, fmt.Errorf("egress network %s exists with internal=%v; agent-box will not use an open network for boxes. Remove it (docker network rm %s) and retry",
 			name, n.Internal, name)
+	}
+	if w.NoICC && !n.NoICC {
+		return Net{}, fmt.Errorf("egress network %s exists with inter-container traffic on (%s); agent-box will not use a network on which boxes can reach each other. Remove it (docker network rm %s) and retry",
+			name, iccOption, name)
 	}
 	if w.Subnet != "" {
 		want, perr := netip.ParsePrefix(w.Subnet)

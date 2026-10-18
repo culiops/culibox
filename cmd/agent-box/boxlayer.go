@@ -51,6 +51,7 @@ type boxLayer struct {
 	cli        box.CLIClient
 	img        boximage.Docker
 	image      string // the fallback box image (box_image)
+	goos       string // runtime.GOOS as the layer was built; linux fences and guards every box
 	stateRoot  string // where box homes and the bundle live; resolved on darwin
 }
 
@@ -65,7 +66,7 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 	if err != nil {
 		return nil, err
 	}
-	l := &boxLayer{dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir}
+	l := &boxLayer{goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir}
 	if goos == "darwin" {
 		colima, err := boxvm.LookColima(cfg.ColimaBin)
 		if err != nil {
@@ -101,6 +102,10 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		IdleTTL:    cfg.BoxIdleTTL(),
 		StateRoot:  l.stateRoot,
 		Client:     l.cli,
+		// Linux: every box sits on the egress network and has its guard files
+		// read-only in place. darwin keeps its default network and Verify.
+		EgressAll:    l.goos == "linux",
+		GuardInPlace: l.goos == "linux",
 	}
 	if l.vm != nil {
 		o.Prepare = l.prepare

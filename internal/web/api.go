@@ -43,6 +43,17 @@ type API struct {
 	// Elevation serves the write-window and AWS sign-in endpoints; nil = the
 	// credential broker is not running, and they are 404.
 	Elevation ElevationService
+	// Egress serves GET /api/sessions/{id}/egress, the rail's egress line for a
+	// box that has no AWS binding; nil = egress control is not running, and the
+	// route is a 404.
+	Egress EgressStatusService
+}
+
+// EgressStatusService reports a boxed session's egress mode and proxy counters.
+// ok is false for a session that is unknown or has no egress control (a host
+// session). It carries the mode and two counts, never the session's token.
+type EgressStatusService interface {
+	EgressStatus(sessionID string) (status any, ok bool)
 }
 
 // AWSStatusService reports a session's AWS binding, broker counters and recent
@@ -195,6 +206,25 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			st, ok = a.AWS.AWSStatus(sid)
 		}
 		if ok {
+			writeJSON(w, http.StatusOK, st)
+		} else {
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return
+	}
+	// GET /api/sessions/{id}/egress — the egress line for a box without AWS
+	// access (the /aws route is 204 for it). 204 when the session is unknown or
+	// has no egress control; 404 when egress control is not running.
+	if strings.HasSuffix(id, "/egress") {
+		if a.Egress == nil {
+			writeErr(w, http.StatusNotFound, "egress control not enabled")
+			return
+		}
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		if st, ok := a.Egress.EgressStatus(strings.TrimSuffix(id, "/egress")); ok {
 			writeJSON(w, http.StatusOK, st)
 		} else {
 			w.WriteHeader(http.StatusNoContent)

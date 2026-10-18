@@ -61,6 +61,9 @@ type sessionMeta struct {
 	// nonce: without it the box's token stops verifying after a restart.
 	AWS      *config.AWSBinding `json:"aws,omitempty"`
 	AWSNonce string             `json:"aws_nonce,omitempty"`
+	// EgressNonce is the spawn's egress-token nonce (any boxed session with
+	// egress). Records from before A1 lack it; restore backfills AWSNonce.
+	EgressNonce string `json:"egress_nonce,omitempty"`
 	// Exclusive: the session's box is its own (an elevate binding). Records
 	// written before M3b have no key and read as false.
 	Exclusive bool `json:"exclusive,omitempty"`

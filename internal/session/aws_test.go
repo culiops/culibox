@@ -150,6 +150,21 @@ func boundManagerEnv(t *testing.T, argv []string, runtime string, retention time
 	return m, boxes, hooks, eg
 }
 
+// unboundEgressManager is boundManagerEnv with no AWS binding anywhere and
+// egress required for every boxed spawn (what Linux boot configures).
+func unboundEgressManager(t *testing.T, argv []string, runtime string, extraEnv []string) (*Manager, *fakeBoxes, *fakeEgressHooks) {
+	t.Helper()
+	m := NewManager(awsLauncher{tieredLauncher: tieredLauncher{argv: argv, runtime: runtime}, binding: nil, extraEnv: extraEnv},
+		nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	m.SetBroker(&fakeBrokerHooks{})
+	eg := &fakeEgressHooks{}
+	m.SetEgress(eg)
+	m.SetEgressAll(true)
+	return m, boxes, eg
+}
+
 type fakeEgressHooks struct {
 	mu     sync.Mutex
 	calls  int
@@ -465,7 +480,7 @@ func TestBoundSpawnGetsProxyEnvOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
-	u := "http://" + s.ID + ":etok-" + fakeNonce + "@172.21.0.1:9072"
+	u := "http://" + s.ID + ":etok-" + s.EgressNonce + "@172.21.0.1:9072"
 	if got := envNamed(boxes.lastEnv, "HTTPS_PROXY"); !reflect.DeepEqual(got, []string{"HTTPS_PROXY=" + u}) {
 		t.Fatalf("HTTPS_PROXY env = %q, want exactly this spawn's", got)
 	}
@@ -549,7 +564,7 @@ func TestBoundSpawnEgressErrorRefuses(t *testing.T) {
 
 // D3: an unbound session's env is byte-identical to today's, including a
 // profile that sets its own proxy.
-func TestUnboundSpawnNeverTouchesEgress(t *testing.T) {
+func TestUnboundSpawnWithoutEgressAllNeverTouchesEgress(t *testing.T) {
 	profile := []string{"HTTPS_PROXY=http://corp:3128", "NO_PROXY=internal", "CHECKPOINT_DISABLE=0"}
 	m, boxes, _, eg := boundManagerEnv(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute, profile)
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
@@ -639,6 +654,236 @@ func TestInfoNeverCarriesTheEgressToken(t *testing.T) {
 	b, _ := json.Marshal(s.Info())
 	if strings.Contains(string(b), "etok-") || strings.Contains(string(b), "@172.21.0.1") {
 		t.Fatalf("Info leaks the egress token or proxy URL: %s", b)
+	}
+}
+
+// Task 5: every Linux boxed session (egressAll) gets its own egress nonce and
+// the proxy env, bound or not. An unbound one is "open": the proxy admits any
+// host but still authenticates the session.
+func TestUnboundSpawnGetsOpenEgressEnv(t *testing.T) {
+	profile := []string{"HTTPS_PROXY=http://corp:3128", "NO_PROXY=internal"}
+	m, boxes, eg := unboundEgressManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, profile)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if s.EgressNonce == "" {
+		t.Fatal("no egress nonce")
+	}
+	u := "http://" + s.ID + ":etok-" + s.EgressNonce + "@172.21.0.1:9072"
+	if got := envNamed(boxes.lastEnv, "HTTPS_PROXY"); !reflect.DeepEqual(got, []string{"HTTPS_PROXY=" + u}) {
+		t.Fatalf("HTTPS_PROXY env = %q, want exactly this spawn's", got)
+	}
+	if got := envNamed(boxes.lastEnv, "NO_PROXY"); len(got) != 0 {
+		t.Fatalf("the profile's NO_PROXY survived: %q", got)
+	}
+	if !slices.Contains(boxes.lastEnv, "TERM=xterm") {
+		t.Fatal("an unrelated var was lost")
+	}
+	if eg.spawnCalls() != 1 {
+		t.Fatalf("SpawnEnv calls = %d, want 1", eg.spawnCalls())
+	}
+	if got := s.Info().Egress; got != "open" {
+		t.Fatalf("Info.Egress = %q, want open", got)
+	}
+	// No broker token is minted for an unbound box; the profile's forged one is
+	// still stripped only for bound spawns, so the count of names must not grow.
+	if got := envNamed(boxes.lastEnv, "AGENTBOX_BROKER_TOKEN"); !reflect.DeepEqual(got, []string{"AGENTBOX_BROKER_TOKEN=forged"}) {
+		t.Fatalf("broker token env changed for an unbound spawn: %q", got)
+	}
+}
+
+func TestUnboundBoxedSpawnRefusedWithoutEgress(t *testing.T) {
+	m := NewManager(awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}},
+		nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	m.SetEgressAll(true)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a boxed spawn started with no egress control")
+	}
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "egress control is not running") {
+		t.Fatalf("err = %v, want an ErrBoxUnavailable egress refusal", err)
+	}
+	if boxes.prepares != 0 || boxes.wraps != 0 {
+		t.Fatalf("refused spawn touched the box layer: prepares=%d wraps=%d", boxes.prepares, boxes.wraps)
+	}
+	if len(m.List()) != 0 {
+		t.Fatal("refused spawn left a session behind")
+	}
+}
+
+func TestBoundSpawnEgressNonceIsNotTheAWSNonce(t *testing.T) {
+	m, boxes, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if s.EgressNonce == "" || s.EgressNonce == s.AWSNonce {
+		t.Fatalf("EgressNonce=%q AWSNonce=%q: must be set and distinct", s.EgressNonce, s.AWSNonce)
+	}
+	if got := envNamed(boxes.lastEnv, "HTTPS_PROXY"); len(got) != 1 || !strings.Contains(got[0], "etok-"+s.EgressNonce+"@") {
+		t.Fatalf("HTTPS_PROXY = %q, want the egress nonce", got)
+	}
+	if got := envNamed(boxes.lastEnv, brokerTokenEnv); len(got) != 1 || got[0] != brokerTokenEnv+"="+hooks.Token(s.ID, s.AWSNonce) {
+		t.Fatalf("broker token = %q, want one carrying AWSNonce", got)
+	}
+	if got := s.Info().Egress; got != "allowlist" {
+		t.Fatalf("Info.Egress = %q, want allowlist", got)
+	}
+}
+
+func TestHostTierSpawnGetsNoEgress(t *testing.T) {
+	m, _, eg := unboundEgressManager(t, []string{"sh", "-c", `printf '<%s>\n' "$HTTPS_PROXY"; sleep 30`},
+		config.RuntimeHost, []string{"HTTPS_PROXY=http://corp:3128"})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	// The profile's own proxy reaches the host process untouched.
+	out, cancel, _ := s.Subscribe()
+	defer cancel()
+	var b strings.Builder
+	deadline := time.After(3 * time.Second)
+	for !strings.Contains(b.String(), ">") {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				t.Fatalf("session ended; output %q", b.String())
+			}
+			b.WriteString(string(chunk))
+		case <-deadline:
+			t.Fatalf("no output; got %q", b.String())
+		}
+	}
+	if !strings.Contains(b.String(), "<http://corp:3128>") {
+		t.Fatalf("host session's HTTPS_PROXY: output %q, want the profile's http://corp:3128", b.String())
+	}
+	if eg.spawnCalls() != 0 {
+		t.Fatalf("host spawn called SpawnEnv %d times", eg.spawnCalls())
+	}
+	if s.EgressNonce != "" || s.Info().Egress != "" {
+		t.Fatalf("host session has egress state: nonce=%q egress=%q", s.EgressNonce, s.Info().Egress)
+	}
+}
+
+func TestSidecarRestoresEgressNonce(t *testing.T) {
+	l := awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}}
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	m.SetEgress(&fakeEgressHooks{})
+	m.SetEgressAll(true)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if md := sidecarEntry(t, path, s.ID); md.EgressNonce == "" || md.EgressNonce != s.EgressNonce {
+		t.Fatalf("sidecar egress nonce = %q, want %q", md.EgressNonce, s.EgressNonce)
+	}
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(&fakeBoxes{})
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if r.EgressNonce != s.EgressNonce {
+		t.Fatalf("restored egress nonce = %q, want %q", r.EgressNonce, s.EgressNonce)
+	}
+	if r.Info().Egress != "open" {
+		t.Fatalf("restored Info.Egress = %q", r.Info().Egress)
+	}
+}
+
+// Spec correction 7: a bound session written before A1 minted its proxy token
+// over AWSNonce, so a restore with no egress_nonce adopts it.
+func TestPreA1BoundSidecarBackfillsEgressNonce(t *testing.T) {
+	l := awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, binding: testBinding()}
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	// Rewrite the record the way a pre-A1 daemon left it: no egress_nonce.
+	md := sidecarEntry(t, path, s.ID)
+	md.EgressNonce = ""
+	m.sidecar.put(s.ID, md)
+	if got := sidecarEntry(t, path, s.ID); got.EgressNonce != "" || got.AWSNonce == "" {
+		t.Fatalf("setup: record = %+v", got)
+	}
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(&fakeBoxes{})
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if r.EgressNonce == "" || r.EgressNonce != r.AWSNonce {
+		t.Fatalf("EgressNonce=%q AWSNonce=%q, want the backfill", r.EgressNonce, r.AWSNonce)
+	}
+	if r.Info().Egress != "allowlist" {
+		t.Fatalf("Info.Egress = %q", r.Info().Egress)
+	}
+}
+
+func TestUnboundSessionGoneForgetsEgress(t *testing.T) {
+	m, _, eg := unboundEgressManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, nil)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Kill(s.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !eg.forgotten(s.ID) {
+		t.Fatal("Kill did not forget the unbound session at the proxy")
+	}
+}
+
+func TestInfoNeverCarriesTheEgressNonce(t *testing.T) {
+	m, _, _ := unboundEgressManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, nil)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	b, _ := json.Marshal(s.Info())
+	if strings.Contains(string(b), s.EgressNonce) || strings.Contains(string(b), "etok-") {
+		t.Fatalf("Info leaks the egress nonce: %s", b)
 	}
 }
 

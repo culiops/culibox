@@ -153,7 +153,13 @@ agent-box starts shells and agents on your machine, so authentication is never o
 
 - The `host` tier is not contained. A host session is you, with an agent.
 - The adversary in scope is an agent running arbitrary userspace commands in a box. A kernel-level escape is out of scope.
-- Boxes have normal outbound network access. There is no egress filtering yet.
+- On Linux, boxes reach the network only through agent-box's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. A public IP that is NAT'd to the host but not on one of its interfaces is not known to agent-box. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. macOS boxes still have normal outbound access.
+- A box started in place sees the workspace root's `.git`, `.claude/` and any top-level `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only, so it cannot commit there or edit them. Repos with submodules, or whose git config sets `core.worktree` or `core.bare` to anything but false, are refused. When `core.hooksPath` is nested (for example `.husky/_`), the whole top-level directory that holds it (`.husky/`) is read-only in the box.
+- Those guards cover top-level names only, and block direct writes to them only. They do not make a workspace safe to hand back to the host:
+  - The same names in subdirectories are writable: a box can edit an existing `sub/CLAUDE.md`, `sub/.mcp.json` or `sub/.claude/settings.json` (hooks), and a host session started in `sub/` loads them.
+  - A box can create an absent `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json`, and a new `.git` anywhere in the workspace, including its root when it is not a repo. Servers in a new `.mcp.json` still need Claude Code's project-MCP approval, unless you auto-approve project servers.
+  - A read-only file can still run writable workspace code: a git hook that calls a repo script or reads a tool config such as `.pre-commit-config.yaml`, a `.claude` hook that runs `./scripts/…`, an `@import` in `CLAUDE.md`.
+  - So after a boxed session, review changes and untracked files (`git status`, `git diff`) before you run host git or a host-tier session there.
 - It is a single-user tool. There are no roles or per-user permissions.
 - Sessions that share one box (same workspace and same AWS binding) can read each other's process environment, so attribution between them is best effort. Two sessions in the same folder share it read-write, so a session without the AWS binding can plant a file that a bound session then runs. Give a bound session its own workspace.
 - Read access can still pull data into a transcript that `ReadOnlyAccess` allows and the session policy does not deny (Lambda code URLs, Athena and Glue results, CloudWatch Logs, and others). Use the broker with a sandbox or lab account for now, not production.
@@ -171,7 +177,7 @@ Only one agent-box can serve a data root at a time.
 
 ## Roadmap
 
-- Egress allowlist for boxes (in progress, not yet released).
+- Egress allowlist for macOS boxes (Linux boxes have it).
 
 ## Development
 

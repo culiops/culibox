@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -188,10 +189,28 @@ type Options struct {
 	// Reachable reports whether the daemon answers; false = down, and the idle
 	// sweep skips instead of reaping on a failed list. nil = assume reachable.
 	Reachable func(ctx context.Context) bool
+	// EgressAll fences every box: it joins Egress.Network and is checked by
+	// Egress.Verify instead of Options.Verify (Linux). false: only bound boxes
+	// are fenced (darwin), and an unbound box keeps the default network.
+	EgressAll bool
+	// GuardInPlace binds the workspace root's .git, .claude/, CLAUDE.md,
+	// CLAUDE.local.md, AGENTS.md, .mcp.json and an in-workspace core.hooksPath
+	// directory read-only onto themselves in every box (see inPlaceMounts), so a
+	// box cannot write those top-level names directly. It does not stop
+	// everything host git or a host-tier agent later runs or loads: the same
+	// names in subdirectories stay writable (sub/CLAUDE.md, sub/.mcp.json,
+	// sub/.claude/settings.json, loaded by a host session started in sub/), a
+	// box can still create an absent CLAUDE.md, CLAUDE.local.md, AGENTS.md or
+	// .mcp.json and a .git anywhere in the workspace, and a guarded file can
+	// still call writable workspace code (a hook running a repo script, a
+	// CLAUDE.md @import). A workspace whose guards cannot be derived exactly is
+	// refused.
+	GuardInPlace bool
 }
 
-// Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""). With an
-// empty Network or a nil Verify, such a box is refused: it must never start on
+// Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""), and
+// every box when Options.EgressAll is set. With an empty Network or a nil
+// Verify, such a box is refused: it must never start on
 // an open network, or be used unverified.
 type Egress struct {
 	Network  string
@@ -260,8 +279,9 @@ func New(opts Options) (*Manager, error) {
 	return m, nil
 }
 
-// SetEgress configures the egress fence for bound boxes. Call it once at boot,
-// before Reconcile and before any bound spawn.
+// SetEgress configures the egress fence: for every box when EgressAll is set,
+// otherwise for bound boxes only. Call it once at boot, before Reconcile and
+// before any boxed spawn.
 func (m *Manager) SetEgress(e Egress) {
 	e.AddHosts = append([]string(nil), e.AddHosts...)
 	m.mu.Lock()
@@ -548,6 +568,17 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
+	if m.opts.GuardInPlace {
+		// Derived from the resolved path, which is what docker mounts. Appended
+		// as ordinary read-only extras, so MountUnsafe, reuseMounts (a live box
+		// without a guard is refused, an idle one recreated) and runArgs all see
+		// them. Clip: never write into the caller's backing array.
+		guard, err := inPlaceMounts(real)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		extraRO = append(slices.Clip(extraRO), guard...)
+	}
 	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != ""); err != nil {
 		return nil, nil, "", err
 	}
@@ -572,16 +603,21 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 	}
 	m.mu.Unlock()
 
-	// verify is this box's containment check. A bound box is checked by the
-	// egress probe INSTEAD of Options.Verify (the loopback/DNS check unbound
-	// boxes get): the two describe opposite network policies. A bound box that
-	// has no egress control to be checked by never starts.
+	// verify is this box's containment check. A fenced box (an AWS binding, or
+	// any box when EgressAll is on) is checked by the egress probe INSTEAD of
+	// Options.Verify (the loopback/DNS check unfenced boxes get): the two
+	// describe opposite network policies. A fenced box that has no egress
+	// control to be checked by never starts.
+	fenced := bound || m.opts.EgressAll
 	verify := m.opts.Verify
-	if bound {
+	if fenced {
 		e := m.egressConfig()
 		if e.Network == "" || e.Verify == nil {
 			m.rearmIfIdle(name)
-			return fmt.Errorf("%w: egress control is not running, so a box with AWS access cannot start", ErrBoxUnavailable)
+			if bound {
+				return fmt.Errorf("%w: egress control is not running, so a box with AWS access cannot start", ErrBoxUnavailable)
+			}
+			return fmt.Errorf("%w: egress control is not running, so this box cannot start", ErrBoxUnavailable)
 		}
 		verify = e.Verify
 	}
@@ -632,10 +668,11 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		// Found, not created, by this process: adopted after a restart, or left
 		// running by a failed removal. Never trust it unchecked.
 		if err := verify(ctx, name); err != nil {
-			if !bound {
+			if !fenced {
 				return m.refuseUnverified(ctx, name, err)
 			}
-			// A bound box from before egress control (M3a) fails the probe on its
+			// A fenced box from before egress control (a bound one from M3a, or
+			// on Linux any box from before EgressAll) fails the probe on its
 			// first spawn after the upgrade. With sessions still running in it,
 			// removing it would kill them: refuse the spawn and leave it be.
 			m.unverify(name)
@@ -668,7 +705,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, bound, exclusive)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)

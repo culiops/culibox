@@ -1,10 +1,15 @@
-// Package egress is the egress proxy for boxes that carry an AWS binding: the
-// only way out of their network. It accepts CONNECT host:443 only, authenticates
-// each tunnel to a live bound session, matches the host against the session's
-// allowlist, dials only public addresses, and audits every tunnel.
+// Package egress is the egress proxy for every boxed Linux session: the only
+// way out of its network. It accepts CONNECT host:443 only, authenticates each
+// tunnel to a live boxed session, matches the host against the session's AWS
+// allowlist (a session without an AWS binding runs in open mode and skips only
+// that match), dials only public addresses that are not the host's own, and
+// audits every tunnel.
 package egress
 
-import "net/netip"
+import (
+	"net"
+	"net/netip"
+)
 
 // refused lists ranges a tunnel may never dial. The netip predicates in
 // PublicAddrs already cover loopback, RFC 1918 / fc00::/7, link-local,
@@ -80,4 +85,48 @@ func usable(a netip.Addr, boxNet netip.Prefix) bool {
 		}
 	}
 	return !(boxNet.IsValid() && boxNet.Contains(a))
+}
+
+// WithoutAddrs returns addrs minus every address in drop, keeping order. Both
+// sides are compared after WithZone("").Unmap(), so ::ffff:a.b.c.d equals
+// a.b.c.d and a zone never hides a match. The addresses returned are as given.
+func WithoutAddrs(addrs, drop []netip.Addr) []netip.Addr {
+	if len(drop) == 0 {
+		return addrs
+	}
+	set := make(map[netip.Addr]struct{}, len(drop))
+	for _, d := range drop {
+		set[d.WithZone("").Unmap()] = struct{}{}
+	}
+	var out []netip.Addr
+	for _, a := range addrs {
+		if _, hit := set[a.WithZone("").Unmap()]; !hit {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// HostAddrs is every unicast address of every interface of this host, unmapped
+// and without zone. The proxy never dials these: a box may not reach the
+// daemon, a sibling service or the docker API through its own public name.
+func HostAddrs() ([]netip.Addr, error) {
+	as, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, err
+	}
+	var out []netip.Addr
+	for _, a := range as {
+		var ip net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if addr, ok := netip.AddrFromSlice(ip); ok {
+			out = append(out, addr.WithZone("").Unmap())
+		}
+	}
+	return out, nil
 }

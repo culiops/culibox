@@ -31,12 +31,13 @@ var hostOnlyEnv = map[string]bool{
 // and never the docker socket, the host home, or ~/.ssh. The workspace mounts at
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
-// bound (an AWS binding) adds the egress network flags; bound=false output is
-// unchanged by it, except for the claims label every box carries.
+// fenced (an AWS binding, or any box when EgressAll is on) adds the egress
+// network flags; fenced=false output is unchanged by it, except for the claims
+// label every box carries.
 // claims=1 tells other agent-box instances on this docker daemon that this build
 // enforces exclusive workspaces; exclusive=1 marks a box another spawn must not
 // share a folder with.
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound, exclusive bool) []string {
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool) []string {
 	args := []string{
 		"run", "-d", "--init",
 		"--name", boxName,
@@ -63,10 +64,10 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, bound, exclusive
 	for _, mt := range extraRO {
 		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
 	}
-	// A box with an AWS binding joins the egress network instead of the default
-	// bridge. Both values come from constants and validated config, never from
-	// a session, and neither is a secret. An unbound box gets neither flag.
-	if bound {
+	// A fenced box joins the egress network instead of the default bridge. Both
+	// values come from constants and validated config, never from a session, and
+	// neither is a secret. An unfenced box gets neither flag.
+	if fenced {
 		e := m.egressConfig()
 		args = append(args, "--network", e.Network)
 		for _, h := range e.AddHosts {

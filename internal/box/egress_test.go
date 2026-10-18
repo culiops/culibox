@@ -13,10 +13,10 @@ import (
 
 func okVerify(context.Context, string) error { return nil }
 
-// D3 (M3c) plus M3b: an unbound box gets no egress flags; its only change since
+// D3 (M3c) plus M3b: an unfenced box (unbound, EgressAll off: darwin) gets no egress flags; its only change since
 // M3c is the claims label (M3b spec correction 8a), which is a label, not a
 // network, mount or env change.
-func TestUnboundRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
+func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify, AddHosts: []string{"host.lima.internal:192.168.5.2"}})
 	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false)
@@ -184,6 +184,126 @@ func TestPreEgressIdleBoxThatCannotBeRemovedIsRefused(t *testing.T) {
 	}
 	if f.runs() != 0 {
 		t.Fatal("must not docker run over a box that could not be removed")
+	}
+}
+
+// newFencedManager is a Linux-shaped manager: EgressAll on, so every box is
+// fenced, with the given egress check. Options.Verify is left nil.
+func newFencedManager(t *testing.T, verify func(context.Context, string) error) (*Manager, *fakeClient) {
+	t.Helper()
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "culiops/agent-box:base", Instance: "TEST", IdleTTL: time.Hour,
+		StateRoot: t.TempDir(), Client: f, EgressAll: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verify != nil {
+		m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: verify})
+	}
+	return m, f
+}
+
+func TestUnboundBoxJoinsEgressNetworkWhenEgressAll(t *testing.T) {
+	m, f := newFencedManager(t, okVerify)
+	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{}, []string{"sh"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.runs() != 1 || !containsPair(f.runArgs[0], "--network", "agentbox-egress-TEST") {
+		t.Fatalf("unbound box not on the egress network: %q", f.runArgs)
+	}
+}
+
+func TestUnboundBoxUsesEgressVerifyWhenEgressAll(t *testing.T) {
+	var optsN, egressN int
+	f := newFake()
+	m, err := New(Options{DockerBin: "/d", Image: "culiops/agent-box:base", Instance: "TEST", IdleTTL: time.Hour,
+		StateRoot: t.TempDir(), Client: f, EgressAll: true,
+		Verify: func(context.Context, string) error { optsN++; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetEgress(Egress{Network: "n", Verify: func(context.Context, string) error { egressN++; return nil }})
+	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{}, []string{"sh"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if optsN != 0 || egressN != 1 {
+		t.Fatalf("Options.Verify=%d Egress.Verify=%d, want 0 and 1", optsN, egressN)
+	}
+}
+
+func TestUnboundWrapRefusedWithoutEgressWhenEgressAll(t *testing.T) {
+	m, f := newFencedManager(t, nil)
+	_, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{}, []string{"sh"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "egress control is not running") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "AWS") {
+		t.Fatalf("an unbound box's refusal must not talk about AWS: %v", err)
+	}
+	if f.runs() != 0 {
+		t.Fatal("docker run happened without egress control")
+	}
+}
+
+func TestPreEgressUnboundBoxWithLiveSessionsIsRefused(t *testing.T) {
+	m, f := newFencedManager(t, func(context.Context, string) error { return errors.New("direct egress open") })
+	dir := t.TempDir()
+	name, _ := m.boxName(dir, BoxKey{})
+	f.running[name] = true
+	m.AdoptBox(name)
+	_, _, _, err := m.Wrap(context.Background(), dir, "s2", BoxKey{}, []string{"sh"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "still runs 1 session") {
+		t.Fatalf("err = %v", err)
+	}
+	if f.stops() != 0 {
+		t.Fatal("a box with a live session was removed")
+	}
+	m.mu.Lock()
+	n := m.active[name]
+	m.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("active = %d, want 1", n)
+	}
+}
+
+func TestPreEgressUnboundIdleBoxIsRecreatedOnNetwork(t *testing.T) {
+	calls := 0
+	m, f := newFencedManager(t, func(context.Context, string) error {
+		calls++
+		if calls == 1 {
+			return errors.New("direct egress open")
+		}
+		return nil
+	})
+	dir := t.TempDir()
+	name, _ := m.boxName(dir, BoxKey{})
+	f.running[name] = true // an unfenced box left by an older build, no live session
+	if _, _, _, err := m.Wrap(context.Background(), dir, "s1", BoxKey{}, []string{"sh"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 1 || f.runs() != 1 || calls != 2 {
+		t.Fatalf("stops=%d runs=%d verifies=%d, want 1/1/2", f.stops(), f.runs(), calls)
+	}
+	if !containsPair(f.runArgs[0], "--network", "agentbox-egress-TEST") {
+		t.Fatalf("recreated box is not on the egress network: %q", f.runArgs[0])
+	}
+	if !m.isVerified(name) {
+		t.Fatal("the recreated box should be verified")
+	}
+}
+
+func TestEgressAllOffKeepsUnboundOnBridge(t *testing.T) {
+	var optsN, egressN int
+	m, f := newVerifyCountingManager(t, func(context.Context, string) error { optsN++; return nil })
+	m.SetEgress(Egress{Network: "n", Verify: func(context.Context, string) error { egressN++; return nil }})
+	if _, _, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{}, []string{"sh"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.runArgs[0], "--network") {
+		t.Fatalf("unbound box left the default network with EgressAll off: %q", f.runArgs[0])
+	}
+	if optsN != 1 || egressN != 0 {
+		t.Fatalf("Options.Verify=%d Egress.Verify=%d, want 1 and 0", optsN, egressN)
 	}
 }
 

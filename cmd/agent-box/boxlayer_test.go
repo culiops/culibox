@@ -186,6 +186,16 @@ func TestLinuxLayerHasNoVMAndNoDockerArgs(t *testing.T) {
 	}
 }
 
+func TestBoxLayerOptionsFenceLinuxOnly(t *testing.T) {
+	cfg := config.Config{DockerBin: "/bin/sh"}
+	if o := (&boxLayer{goos: "linux"}).options(cfg); !o.EgressAll || !o.GuardInPlace {
+		t.Errorf("linux must fence and guard every box: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
+	}
+	if o := (&boxLayer{goos: "darwin"}).options(cfg); o.EgressAll || o.GuardInPlace {
+		t.Errorf("darwin keeps its default network: EgressAll=%v GuardInPlace=%v", o.EgressAll, o.GuardInPlace)
+	}
+}
+
 func TestDarwinLayerPinsTheVM(t *testing.T) {
 	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
 	root := t.TempDir()
