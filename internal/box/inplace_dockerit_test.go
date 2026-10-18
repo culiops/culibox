@@ -175,7 +175,21 @@ func itMustFail(t *testing.T, bin, box, ws, attack string) {
 	case 125, 126, 127:
 		t.Errorf("attack %q did not run (exit %d): %s", attack, code, strings.TrimSpace(out))
 	default:
-		t.Logf("refused (exit %d): %-60s %s", code, attack, strings.TrimSpace(out))
+		// A refusal must be the guard's. ENOENT means the thing attacked is not
+		// there (Wrap stopped creating .claude, say) and proves nothing; and the
+		// text must be one of the kernel's refusals for a read-only bind mount
+		// (EROFS for writes, EBUSY for rename/remove of a mount point, EACCES).
+		out = strings.TrimSpace(out)
+		if strings.Contains(out, "No such file or directory") {
+			t.Errorf("attack %q failed vacuously (exit %d), the target is missing: %s", attack, code, out)
+			return
+		}
+		if !strings.Contains(out, "Read-only file system") && !strings.Contains(out, "Device or resource busy") &&
+			!strings.Contains(out, "Permission denied") {
+			t.Errorf("attack %q failed (exit %d) for a reason that is not the guard: %s", attack, code, out)
+			return
+		}
+		t.Logf("refused (exit %d): %-60s %s", code, attack, out)
 	}
 }
 
@@ -224,8 +238,6 @@ func TestInPlaceAttacksFailInARealBox(t *testing.T) {
 	attacks := []string{
 		`echo x > .git/hooks/post-checkout`,
 		`git config core.fsmonitor "touch ` + mark + `"`,
-		`mv .git .git-old`,
-		`echo ../evil > .git/commondir`,
 		`echo {} > .claude/settings.json`,
 		`mv .claude .c2`,
 		`rmdir .claude`,
@@ -233,6 +245,8 @@ func TestInPlaceAttacksFailInARealBox(t *testing.T) {
 		`rm CLAUDE.md`,
 		`echo x > .githooks/pre-commit`,
 		`git commit --allow-empty -m x`,
+		`echo ../evil > .git/commondir`, // after the commit: unguarded, it would break git for the rest
+		`mv .git .git-old`,              // last: unguarded, it would hide every attack after it
 	}
 	for _, a := range attacks {
 		itMustFail(t, bin, box, ws, a)
@@ -265,8 +279,9 @@ func TestInPlaceAttacksFailInARealBox(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(ws, "newfile")); err != nil || string(b) != "ok\n" {
 		t.Errorf("control write did not land: %q (%v)", b, err)
 	}
-	if n := strings.TrimSpace(itMustGit(t, ws, "rev-list", "--count", "HEAD")); n != "1" {
-		t.Errorf("a commit landed: %s commits", n)
+	// Not fatal: a guard regression must still reach the subtests below.
+	if n, err := itGit(t, ws, "rev-list", "--count", "HEAD"); err != nil || n != "1" {
+		t.Errorf("a commit landed or history is unreadable: count=%q err=%v", n, err)
 	}
 
 	// A hooks directory below the workspace root: binding only the leaf could be
