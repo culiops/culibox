@@ -86,7 +86,8 @@ function menuItems(s) {
   if (v.cwd) items.push({ id: "copycwd", label: "Copy working directory", danger: false });
   items.push({ id: "newpane", label: "Open in new pane", danger: false });
   if (canInterrupt(v)) items.push({ id: "interrupt", label: "Interrupt", danger: false });
-  if (v.claude && !v.exited) {
+  // Kill-switch: no reply opt-in item (the palette derives from this list).
+  if (globalThis.repliesEnabled === true && v.claude && !v.exited) {
     items.push(v.replyable
       ? { id: "replies-off", label: "Stop replies", danger: false }
       : { id: "replies-on", label: "Allow replies", danger: false });

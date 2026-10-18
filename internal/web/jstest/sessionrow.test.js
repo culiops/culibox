@@ -1,4 +1,6 @@
 "use strict";
+// Replies are ON for the assertions below; the kill-switch group at the end turns them off.
+globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
 const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions } =
@@ -318,3 +320,21 @@ test("awsSig moves on grant, drop and lapse, and on nothing else", () => {
   assert.notStrictEqual(awsSig({ aws: { ...ELEV, prod: true } }, NOW), s0);
   assert.strictEqual(awsSig({ aws: { ...ELEV, role_arn: "other" } }, NOW), s0, "fields the chip does not draw");
 });
+
+// Kill-switch: the reply menu items close unless globalThis.repliesEnabled is the boolean true.
+for (const off of [undefined, "true"]) {
+  test("menu and palette offer no reply actions when repliesEnabled is " + String(off), () => {
+    if (off === undefined) delete globalThis.repliesEnabled; else globalThis.repliesEnabled = off;
+    try {
+      for (const s of [{ claude: true }, { claude: true, replyable: true }]) {
+        assert.ok(!menuItems(s).some((i) => i.id.startsWith("replies-")));
+        assert.ok(!paletteActionItems(s).some((i) => i.id.startsWith("replies-")));
+      }
+      // the rest of the menu is untouched
+      assert.ok(menuItems({ claude: true }).some((i) => i.id === "duplicate"));
+      assert.ok(paletteActionItems({ claude: true }).some((i) => i.id === "rename"));
+    } finally {
+      globalThis.repliesEnabled = true;
+    }
+  });
+}
