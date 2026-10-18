@@ -90,12 +90,12 @@ var dataReadDenies = []string{
 	"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
 }
 
-// SessionPolicy is the "investigate" scope: everything the role allows, minus
-// S3 object reads outside the allowlist, secret/parameter values, DynamoDB
-// items, and KMS decryption other than through S3.
-func SessionPolicy(partition string, s3Read []string) (string, error) {
+// investigateStatements are the "investigate" scope's statements, in order:
+// Allow *, then S3 object reads outside the allowlist, secret/parameter values,
+// DynamoDB items, and KMS decryption other than through S3 denied.
+func investigateStatements(partition string, s3Read []string) ([]statement, error) {
 	if !partitionRe.MatchString(partition) {
-		return "", fmt.Errorf("session policy: partition %q is not aws, aws-cn or aws-us-gov", partition)
+		return nil, fmt.Errorf("session policy: partition %q is not aws, aws-cn or aws-us-gov", partition)
 	}
 	s3 := statement{Effect: "Deny", Action: []string{"s3:GetObject", "s3:GetObjectVersion"}}
 	if len(s3Read) == 0 {
@@ -103,7 +103,7 @@ func SessionPolicy(partition string, s3Read []string) (string, error) {
 	}
 	for _, e := range s3Read {
 		if err := ValidS3Entry(e); err != nil {
-			return "", err
+			return nil, err
 		}
 		s3.NotResource = append(s3.NotResource, "arn:"+partition+":s3:::"+e+"*")
 	}
@@ -113,22 +113,71 @@ func SessionPolicy(partition string, s3Read []string) (string, error) {
 			s3.NotResource[i] = strings.TrimSuffix(r, "*") + "/*"
 		}
 	}
-	doc := struct {
-		Version   string      `json:"Version"`
-		Statement []statement `json:"Statement"`
-	}{"2012-10-17", []statement{
+	return []statement{
 		{Effect: "Allow", Action: "*", Resource: "*"},
 		s3,
 		{Effect: "Deny", Action: dataReadDenies, Resource: "*"},
 		{Effect: "Deny", Action: "kms:Decrypt", Resource: "*",
 			Condition: map[string]any{"StringNotLike": map[string]string{"kms:ViaService": "s3.*.amazonaws.com"}}},
-	}}
+	}, nil
+}
+
+// marshalPolicy renders statements as a policy document and enforces STS's
+// size limit; what names the policy in the size error.
+func marshalPolicy(st []statement, what string) (string, error) {
+	doc := struct {
+		Version   string      `json:"Version"`
+		Statement []statement `json:"Statement"`
+	}{"2012-10-17", st}
 	b, err := json.Marshal(doc)
 	if err != nil {
 		return "", err
 	}
 	if len(b) > MaxPolicyChars {
-		return "", fmt.Errorf("the s3_read allowlist makes the session policy %d characters; STS allows %d — use fewer or shorter entries", len(b), MaxPolicyChars)
+		return "", fmt.Errorf("the s3_read allowlist makes the %s %d characters; STS allows %d — use fewer or shorter entries", what, len(b), MaxPolicyChars)
 	}
 	return string(b), nil
+}
+
+// SessionPolicy is the "investigate" scope: everything the role allows, minus
+// S3 object reads outside the allowlist, secret/parameter values, DynamoDB
+// items, and KMS decryption other than through S3.
+func SessionPolicy(partition string, s3Read []string) (string, error) {
+	st, err := investigateStatements(partition, s3Read)
+	if err != nil {
+		return "", err
+	}
+	return marshalPolicy(st, "session policy")
+}
+
+// elevatedGuardDenies keep an elevation window a real bound and keep Prove
+// intact (spec §6 item 3). AssumeRole* in particular stops a chained
+// credential from outliving the window by up to an hour.
+var elevatedGuardDenies = []string{
+	"sts:AssumeRole*", "sts:GetFederationToken", "sts:GetSessionToken",
+	"iam:CreateAccessKey", "iam:CreateLoginProfile", "iam:UpdateLoginProfile",
+	"iam:CreateServiceSpecificCredential", "iam:UploadSSHPublicKey",
+	"cloudtrail:StopLogging", "cloudtrail:DeleteTrail", "cloudtrail:UpdateTrail", "cloudtrail:PutEventSelectors",
+}
+
+// iamWriteDenies are the IAM write prefixes denied unless allow_iam. PassRole
+// is deliberately not among them.
+var iamWriteDenies = []string{"iam:Create*", "iam:Delete*", "iam:Put*", "iam:Attach*", "iam:Detach*",
+	"iam:Update*", "iam:Add*", "iam:Remove*", "iam:Tag*", "iam:Untag*", "iam:Set*", "iam:Change*"}
+
+// ElevatedPolicy is the session policy for a write-role mint (M3b): the
+// investigate statements unchanged (elevation adds writes, never data reads),
+// the guard denies, and the IAM write denies unless allowIAM.
+func ElevatedPolicy(partition string, s3Read []string, allowIAM bool) (string, error) {
+	st, err := investigateStatements(partition, s3Read)
+	if err != nil {
+		return "", err
+	}
+	st = append(st,
+		statement{Effect: "Deny", Action: elevatedGuardDenies, Resource: "*"},
+		statement{Effect: "Deny", Action: "iam:*", Resource: "arn:" + partition + ":iam::*:role/agentbox-*"})
+	if !allowIAM {
+		st = append(st, statement{Effect: "Deny", Action: iamWriteDenies, Resource: "*"})
+	}
+	return marshalPolicy(st, "elevated session policy")
 }

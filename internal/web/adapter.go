@@ -77,10 +77,25 @@ type AWSStatusAdapter struct {
 	// running, and the reply carries no egress object. ok is false until the
 	// session's first tunnel or denial, which reads as zeros, never a hidden row.
 	Egress func(id string) (egress.Stats, bool)
+	// Elevation is the session's write window (ok false: none and nothing issued
+	// still valid); nil = elevation is not wired, and the reply has no elevation.
+	Elevation func(id string) (broker.ElevationView, bool)
+	// SSO is the session's AWS sign-in state, with the host command and any
+	// running flow; nil or ok false leaves the reply without an sso object.
+	SSO func(id string) (SSOStatus, bool)
+	// Grant fills the grant panel's host-session warning and any refusal reason.
+	// It is called only for a binding that can elevate (it lists boxes).
+	Grant func(id string) GrantContext
 }
 
-// AWSStatus is ok only for a known session that has an AWS binding.
-func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) {
+// AWSStatus is the status for a caller that is not a signed-in browser session:
+// the sign-in code and URL are left out.
+func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) { return a.AWSStatusFor(id, false) }
+
+// AWSStatusFor is ok only for a known session that has an AWS binding. The
+// device sign-in code and URL are in the reply only when cookie is true: they
+// are shown to the browser session that asked for the flow, not to a token.
+func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	info, ok := a.Get(id)
 	if !ok || info.AWS == nil {
 		return nil, false
@@ -102,6 +117,38 @@ func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) {
 	if a.Egress != nil {
 		es, _ := a.Egress(id)
 		out["egress"] = map[string]any{"mode": "allowlist", "allowed": es.Allowed, "denied": es.Denied}
+	}
+	if e := info.AWS.Elevate; e != nil {
+		gc := GrantContext{}
+		if a.Grant != nil {
+			gc = a.Grant(id)
+		}
+		if gc.HostSessions == nil {
+			gc.HostSessions = []HostSession{} // [] on the wire, never null
+		}
+		el := map[string]any{
+			"role_arn": e.RoleARN, "max_minutes": e.MaxMinutes, "allow_iam": e.AllowIAM,
+			"host_sessions": gc.HostSessions,
+		}
+		if gc.Blocked != "" {
+			el["blocked"] = gc.Blocked
+		}
+		out["elevate"] = el
+	}
+	if a.Elevation != nil {
+		if v, ok := a.Elevation(id); ok {
+			out["elevation"] = v
+		}
+	}
+	if a.SSO != nil {
+		if s, ok := a.SSO(id); ok {
+			if s.Login != nil && !cookie {
+				l := *s.Login
+				l.URI, l.Code, l.URITrusted = "", "", false
+				s.Login = &l
+			}
+			out["sso"] = s
+		}
 	}
 	return out, true
 }

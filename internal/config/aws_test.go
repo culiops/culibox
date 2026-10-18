@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -221,5 +222,110 @@ func TestEgressPort(t *testing.T) {
 		if err := c.Validate(); err != nil {
 			t.Errorf("egress_port %d refused: %v", ok, err)
 		}
+	}
+}
+
+func elevBinding() *AWSBinding {
+	b := goodBinding()
+	b.Elevate = &AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write"}
+	return b
+}
+
+func TestElevateValidate(t *testing.T) {
+	if err := elevBinding().Validate(); err != nil {
+		t.Fatalf("good elevate refused: %v", err)
+	}
+	cases := map[string]func(*AWSBinding){
+		"bad arn":         func(b *AWSBinding) { b.Elevate.RoleARN = "arn:aws:iam::123456789012:user/x" },
+		"other account":   func(b *AWSBinding) { b.Elevate.RoleARN = "arn:aws:iam::999999999999:role/agentbox-agent-write" },
+		"other partition": func(b *AWSBinding) { b.Elevate.RoleARN = "arn:aws-cn:iam::123456789012:role/agentbox-agent-write" },
+		"same role":       func(b *AWSBinding) { b.Elevate.RoleARN = b.RoleARN },
+		"max 45":          func(b *AWSBinding) { b.Elevate.MaxMinutes = 45 },
+		"max 90":          func(b *AWSBinding) { b.Elevate.MaxMinutes = 90 },
+		"prod no label":   func(b *AWSBinding) { b.Prod, b.Label = true, "" },
+	}
+	for name, mut := range cases {
+		b := elevBinding()
+		mut(b)
+		if err := b.Validate(); err == nil || !strings.Contains(err.Error(), "aws.") {
+			t.Errorf("%s: want an aws.* error, got %v", name, err)
+		}
+	}
+	for _, m := range []int{0, 30, 60} {
+		b := elevBinding()
+		b.Elevate.MaxMinutes = m
+		if err := b.Validate(); err != nil {
+			t.Errorf("max_minutes %d refused: %v", m, err)
+		}
+	}
+	b := elevBinding()
+	b.Prod, b.Label = true, "prod-acct"
+	if err := b.Validate(); err != nil {
+		t.Errorf("prod with a label refused: %v", err)
+	}
+}
+
+func TestElevateMaxDefaultsToSixty(t *testing.T) {
+	if (AWSElevate{}).Max() != 60 || (AWSElevate{MaxMinutes: 30}).Max() != 30 {
+		t.Fatal("Max")
+	}
+}
+
+// elevate is part of the scope, so part of the hash and the box key. The
+// pre-M3b golden values (TestHashGoldenWithoutEgressAllow) must still hold.
+func TestHashCoversElevate(t *testing.T) {
+	base := goodBinding().Hash()
+	if base != "e7e58e9b264b" {
+		t.Fatalf("pre-M3b hash moved: %s", base)
+	}
+	seen := map[string]string{"none": base}
+	for name, e := range map[string]*AWSElevate{
+		"elevate":    {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write"},
+		"other role": {RoleARN: "arn:aws:iam::123456789012:role/other-write"},
+		"max 30":     {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", MaxMinutes: 30},
+		"allow iam":  {RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", AllowIAM: true},
+	} {
+		b := goodBinding()
+		b.Elevate = e
+		h := b.Hash()
+		for other, oh := range seen {
+			if oh == h {
+				t.Errorf("%s hashes like %s", name, other)
+			}
+		}
+		seen[name] = h
+	}
+	a, b := elevBinding(), elevBinding()
+	b.Elevate.MaxMinutes = 60
+	if a.Hash() != b.Hash() {
+		t.Error("max_minutes 0 and 60 mean the same window and must share a box key")
+	}
+	if a.Elevate.MaxMinutes != 0 {
+		t.Error("Hash must not modify the binding")
+	}
+}
+
+func TestCloneIsDeep(t *testing.T) {
+	a := elevBinding()
+	a.EgressAllow = []string{"registry.npmjs.org"}
+	c := a.Clone()
+	c.S3Read[0], c.EgressAllow[0], c.Elevate.RoleARN = "x", "y", "z"
+	if a.S3Read[0] == "x" || a.EgressAllow[0] == "y" || a.Elevate.RoleARN == "z" {
+		t.Fatal("Clone shares memory with the original")
+	}
+	if (&AWSBinding{}).Clone().Elevate != nil {
+		t.Fatal("a nil elevate must stay nil")
+	}
+}
+
+func TestElevateJSONRoundTrip(t *testing.T) {
+	in := `{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::123456789012:role/agentbox-agent","region":"ap-southeast-1","elevate":{"role_arn":"arn:aws:iam::123456789012:role/agentbox-agent-write","max_minutes":30}}`
+	var b AWSBinding
+	if err := json.Unmarshal([]byte(in), &b); err != nil || b.Elevate == nil || b.Elevate.MaxMinutes != 30 || b.Elevate.AllowIAM {
+		t.Fatalf("decode: %+v %v", b, err)
+	}
+	out, _ := json.Marshal(goodBinding())
+	if strings.Contains(string(out), "elevate") {
+		t.Fatalf("a binding without elevate must not marshal the key: %s", out)
 	}
 }

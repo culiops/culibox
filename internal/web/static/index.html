@@ -95,6 +95,7 @@
     </main>
     <aside id="steer-rail" class="rail" aria-label="Session detail" hidden>
       <div class="rsec" id="steer-head"></div>
+      <div class="rsec" id="steer-elev" hidden></div>
       <div class="rsec" id="steer-ctx"></div>
       <div class="rsec" id="steer-attr"></div>
       <div class="rsec grow" id="steer-msg"></div>
@@ -291,6 +292,17 @@
               <input id="pf-aws-label" class="fld" type="text" maxlength="40" placeholder="sandbox" autocomplete="off"></div>
             <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-aws-prod"> production</label></div>
           </div>
+          <div class="frow">
+            <div class="fcol"><label class="flab" for="pf-aws-elev-role">Write role for elevation (empty = no elevation)</label>
+              <input id="pf-aws-elev-role" class="fld" type="text" placeholder="arn:aws:iam::&lt;account&gt;:role/agentbox-agent-write" autocomplete="off" spellcheck="false"></div>
+          </div>
+          <div class="frow">
+            <div class="fcol"><label class="flab" for="pf-aws-elev-max">Longest window</label>
+              <select id="pf-aws-elev-max" class="fld"><option value="60">60 min</option><option value="30">30 min</option></select></div>
+            <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-aws-elev-iam"> allow IAM writes</label></div>
+          </div>
+          <p class="tiny" id="pf-aws-elev-help">The window bounds the agent's credentials, not everything it sets up. Even with IAM writes off, it can create access that outlives the window through resource policies (an S3 bucket policy, a KMS grant, an EC2 key pair, a Lambda function URL).</p>
+          <p class="warnbox tiny" id="pf-aws-elev-warn" hidden>With IAM writes on, an agent that can create a role can make one that trusts an outside account, which outlives the window. The window then bounds these credentials, not what the agent can set up.</p>
         </div>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
@@ -525,6 +537,7 @@
   <script src="/sessionrow.js"></script>
   <script src="/reconcile.js"></script>
   <script src="/attention.js"></script>
+  <script src="/elevation.js"></script>
   <script src="/profileform.js"></script>
   <script src="/steerrail.js"></script>
   <script src="/envrows.js"></script>

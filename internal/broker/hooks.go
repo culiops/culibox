@@ -2,6 +2,7 @@ package broker
 
 import (
 	"slices"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
@@ -37,3 +38,13 @@ func (h Hooks) StripEnv() []string { return slices.Clone(StripEnv()) }
 
 // Forget drops the broker's per-session state.
 func (h Hooks) Forget(id string) { h.B.Forget(id) }
+
+// AWSState is what a session list shows of the broker's per-session state: the
+// end of the live write window (zero when none) and the sign-in key awaiting a
+// human ("" when none).
+func (h Hooks) AWSState(id string) (until time.Time, ssoExpired string) {
+	if v, ok := h.B.Elevation(id); ok && v.Active {
+		until = v.Until
+	}
+	return until, h.B.SSOExpired(id)
+}

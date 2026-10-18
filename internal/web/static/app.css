@@ -199,6 +199,40 @@
        command to run) wraps instead of clipping. */
     .kv .bdg { align-self: center; }
     .kv.wrap .v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
+    /* Write elevation (steer rail, desktop only): the Elevate/Extend/Drop buttons
+       and the inline grant panel. #steer-elev is a .rsec; hidden when the binding
+       has no write role. */
+    #steer-elev .elevbtns { display: flex; flex-wrap: wrap; gap: 7px; }
+    #steer-elev p { margin: 6px 0 0; }
+    .elevpanel { display: flex; flex-direction: column; gap: 10px; }
+    .elevpanel .fcol { flex: none; }
+    .elevpanel .elevtitle { margin: 0; font-size: 12px; font-weight: 700; }
+    .elevpanel .fld { width: 100%; box-sizing: border-box; }
+    .elevpanel .warnbox { margin-top: 0; padding: 8px 10px; }
+    .elevpanel .warnbox p { margin: 0 0 4px; }
+    .elevpanel .warnbox ul { margin: 0; padding-left: 16px; overflow-wrap: anywhere; }
+    .elevpanel .elev-err { color: var(--danger); overflow-wrap: anywhere; }
+    .elevpanel .elev-err[hidden] { display: none; }
+    .elevpanel p { margin: 0; overflow-wrap: anywhere; }
+    /* The SSO sign-in card (needs-you, desktop and mobile): the device code is the
+       thing to read and type, so it is large and monospace and selects whole. */
+    .ssocard .ssocode {
+      margin: 8px 0 0; padding: 6px 8px; font: 700 20px/1.3 ui-monospace, Menlo, monospace;
+      letter-spacing: .12em; user-select: all; background: var(--surface-2); border: 1px solid var(--border);
+      color: var(--fg); overflow-wrap: anywhere;
+    }
+    .ssocard .ssonote { margin: 6px 0 0; font-size: 0.8em; color: var(--muted); overflow-wrap: anywhere; }
+    .ssocard .ssocmd {
+      margin: 7px 0 0; padding: 6px 8px; font: 12px/1.45 ui-monospace, Menlo, monospace;
+      white-space: pre-wrap; word-break: break-all; background: var(--surface-2);
+      border: 1px solid var(--border); color: var(--fg);
+    }
+    .ssocard .ssolink { color: var(--accent); overflow-wrap: anywhere; }
+    .ssocard .ssotxt { margin: 0; overflow-wrap: anywhere; }
+    .ssocard.mssocard { margin: 8px 0; }
+    /* Stacked, full width: a phone has no room for two buttons in a row. */
+    .ssocard.mssocard .nacts { display: flex; flex-direction: column; gap: 7px; margin-top: 9px; }
+    .ssocard.mssocard .btn { min-height: var(--tap); width: 100%; box-sizing: border-box; }
     .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
     .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }
     .attr { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 4px 0; }
@@ -478,8 +512,21 @@
        the same --danger the env banner's PROD uses. Label is free text, so a
        long one is ellipsized; the title carries account and role. */
     .bdg.aws { color: var(--fg); border-color: var(--border); flex: none;
-               max-width: 16ch; overflow: hidden; text-overflow: ellipsis; }
+               display: inline-flex; max-width: 22ch; min-width: 0; overflow: hidden; }
+    /* The label ellipsizes; the write state is its own element and never does. */
+    .bdg.aws .awslab { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bdg.aws .awsw { flex: none; white-space: pre; }
     .bdg.aws.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
+    .bdg.aws.write { color: var(--warn); border-color: var(--warn); }
+    /* Production while writing: red label, amber word, a filled amber-tinted chip
+       and a 2px ring, so it cannot be read as a plain prod or a plain write chip. */
+    .bdg.aws.prod.write { color: var(--danger); border-color: var(--danger); background: var(--warn-bg);
+                          box-shadow: 0 0 0 2px var(--warn); }
+    .bdg.aws.prod.write .awsw { color: var(--warn-fg); font-weight: 700; }
+    /* The rail's scope chip carries a sentence (until HH:MM (N min) · new credentials
+       read-only), so inside a .kv row it takes the row's width and wraps. */
+    .kv .bdg.aws { display: block; flex: 0 1 auto; max-width: none; white-space: normal; overflow: visible;
+                   text-overflow: clip; text-align: right; overflow-wrap: anywhere; line-height: 1.5; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }
     #sessions .empty { color: var(--muted); padding: 10px; font-size: 13px; }
     /* Session summary: the row's third line, under the name and the meta. Muted and clipped to a

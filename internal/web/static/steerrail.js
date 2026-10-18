@@ -9,11 +9,17 @@
 // square with no accessible name is a control a screen reader announces as
 // "button" and nothing more.
 
+function railNeedsYou(s) {
+  return (typeof needsYou === "function" ? needsYou : require("./attention.js").needsYou)(s);
+}
+
 function railItems(sessions, ctx) {
   const c = ctx || {};
   const out = [{ kind: "toggle", label: "Show sidebar", glyph: "☰", on: false, alert: false }];
   for (const s of sessions || []) {
-    const waiting = s && s.activity === "waiting";
+    // needsYou, not activity alone: an expired AWS sign-in wants the operator
+    // while the agent still reads "working".
+    const waiting = railNeedsYou(s);
     const name = (s && (s.name || s.id)) || "";
     out.push({
       kind: "session",
@@ -210,6 +216,7 @@ function renderSteerRail() {
     ctx.replaceChildren();
     attr.replaceChildren();
     msg.replaceChildren();
+    resetElevSection();
     // The composer is gone, so nothing may re-gate it: both of the handles the
     // poll looks for go with it. An expando survives replaceChildren.
     delete msg.dataset.sid;
@@ -219,6 +226,9 @@ function renderSteerRail() {
   // 1 and 2 — who this is, and how full its window is.
   if (s.aws) loadAwsRailStats(s.id);
   renderSteerFacts(s);
+  // A half-open grant panel belongs to one session; focusing another drops it.
+  if (elevPanelFor !== s.id) elevPanelFor = null;
+  renderElevSection(s);
 
   // 3 — where the context went. On demand: this is a full transcript scan, so
   // a focus change clears the rows rather than carrying one agent's tools over
@@ -258,7 +268,7 @@ function loadAwsRailStats(id) {
       if (st === undefined) return;
       if (st === null) awsRailCache.delete(id); else awsRailCache.set(id, st);
       const cur = typeof railSession === "function" ? railSession() : null;
-      if (cur && cur.id === id) renderSteerFacts(cur);
+      if (cur && cur.id === id) { renderSteerFacts(cur); renderElevSection(cur); }
     })
     .finally(() => awsRailInflight.delete(id));
 }
@@ -270,13 +280,13 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const awsRows = s.aws ? [...awsRailRows(s), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))] : null;
+  const awsRows = s.aws ? [...awsRailRows(s, awsRailCache.get(s.id), Date.now()), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))] : null;
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, awsRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
     meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
-    JSON.stringify(s.aws || null)].join("|");
+    (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null)].join("|");
   if (key === steerFactsKey) return;
   steerFactsKey = key;
 
@@ -571,6 +581,305 @@ function renderMsgSection(s) {
   };
 }
 
+// --- Write elevation (M3b) --------------------------------------------------
+//
+// #steer-elev holds the Elevate / Extend / Drop buttons and the inline grant
+// panel. It is NOT repainted with the facts: the facts section repaints on every
+// poll, and a panel with a half-typed reason or a typed production label would
+// be wiped by it. This section rebuilds only when its key changes (what the
+// buttons or the panel show), and whatever the operator has typed survives a
+// rebuild through elevDraft. The countdown lives in the scope row, which is the
+// part that does repaint. The rail is hidden on mobile, so this is desktop-only.
+let elevKey = "";
+// The session whose grant panel is open. Module-level so a key-changing repaint
+// keeps the panel open; a focus change to another session drops it.
+let elevPanelFor = null;
+let elevBusy = null;                      // id with a grant/drop request in flight
+let elevErr = { id: "", text: "" };       // the panel's inline error line
+let elevDraft = { id: "", minutes: 0, reason: "", label: "" };
+
+function resetElevSection() {
+  elevKey = "";
+  elevPanelFor = null;
+  elevBusy = null;
+  elevErr = { id: "", text: "" };
+  elevDraft = { id: "", minutes: 0, reason: "", label: "" };
+  const el = document.getElementById("steer-elev");
+  if (el) { el.replaceChildren(); el.hidden = true; }
+}
+
+// elevRepaint forces a rebuild for session id, if it is still the one in focus.
+function elevRepaint(id) {
+  elevKey = "";
+  const cur = typeof railSession === "function" ? railSession() : null;
+  if (cur && cur.id === id) renderElevSection(cur);
+}
+
+function renderElevSection(s) {
+  const el = document.getElementById("steer-elev");
+  if (!el) return;
+  const st = awsRailCache.get(s.id) || null;
+  const gp = s.aws ? grantPanel(s.aws, st) : null;
+  if (!gp) {
+    // No write role on the binding (or no binding at all): no section.
+    if (elevKey || !el.hidden) resetElevSection();
+    return;
+  }
+  const now = Date.now();
+  const acts = elevActions(s.aws, now);
+  const open = elevPanelFor === s.id && (acts.elevate || acts.extend);
+  const key = [s.id, s.aws.elevated_until || "", acts.extend, acts.elevate,
+    (st && st.elevation && st.elevation.last_valid) || "", gp.blocked,
+    gp.hostSessions.length, gp.hostSessions.map((h) => h && h.name).join(","),
+    open, elevBusy === s.id, elevErr.id === s.id ? elevErr.text : ""].join("|");
+  if (key === elevKey) return;
+  elevKey = key;
+  el.hidden = false;
+  el.replaceChildren(railTitle("Write access"),
+    open ? buildElevPanel(s, gp, !acts.elevate) : buildElevButtons(s, gp, acts));
+}
+
+function elevButton(text, cls, onclick, disabled) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = cls;
+  b.textContent = text;
+  b.disabled = !!disabled;
+  b.classList.toggle("off", !!disabled);
+  b.onclick = onclick;
+  return b;
+}
+
+function buildElevButtons(s, gp, acts) {
+  const wrap = document.createElement("div");
+  const busy = elevBusy === s.id;
+  const row = document.createElement("div");
+  row.className = "elevbtns";
+  if (acts.elevate) row.appendChild(elevButton("Elevate", "btn", () => openElevPanel(s.id), busy));
+  if (acts.extend) row.appendChild(elevButton("Extend", "btn", () => openElevPanel(s.id), busy));
+  if (acts.drop) row.appendChild(elevButton("Drop", "btn", () => dropElevation(s), busy));
+  wrap.appendChild(row);
+  if (acts.elevate) {
+    const p = document.createElement("p");
+    p.className = "tiny mut";
+    p.textContent = "Read-only now. Elevate gives this session " + gp.role + " for a limited time.";
+    wrap.appendChild(p);
+  }
+  return wrap;
+}
+
+function openElevPanel(id) {
+  elevPanelFor = id;
+  elevErr = { id: "", text: "" };
+  elevDraft = { id: id, minutes: 0, reason: "", label: "" };
+  // The host-session list and any blocker are read when the panel opens, not
+  // trusted from whenever the rail was last focused.
+  loadAwsRailStats(id);
+  elevRepaint(id);
+}
+
+function closeElevPanel(id) {
+  elevPanelFor = null;
+  elevErr = { id: "", text: "" };
+  elevDraft = { id: "", minutes: 0, reason: "", label: "" };
+  elevRepaint(id);
+}
+
+// buildElevPanel: every server- or operator-supplied string (the production
+// label, the role, host-session names, the blocker, the error) goes in through
+// textContent.
+function buildElevPanel(s, gp, extend) {
+  if (elevDraft.id !== s.id) elevDraft = { id: s.id, minutes: 0, reason: "", label: "" };
+  const box = document.createElement("div");
+  box.className = "elevpanel";
+  box.setAttribute("role", "group");
+  const title = extend ? "Extend write access" : "Grant write access";
+  box.setAttribute("aria-label", title);
+
+  const ttl = document.createElement("p");
+  ttl.className = "elevtitle";
+  ttl.textContent = title;
+  box.appendChild(ttl);
+
+  // The window: one button per offered length, the longest preselected.
+  let minutes = gp.windows.includes(elevDraft.minutes) ? elevDraft.minutes : gp.windows[gp.windows.length - 1];
+  elevDraft.minutes = minutes;
+  const wcol = document.createElement("div");
+  wcol.className = "fcol";
+  const wlab = document.createElement("span");
+  wlab.className = "flab";
+  wlab.textContent = "Window";
+  const seg = document.createElement("div");
+  seg.className = "seg";
+  seg.setAttribute("role", "group");
+  seg.setAttribute("aria-label", "Window");
+  const segBtns = gp.windows.map((w) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = w + " min";
+    b.onclick = () => {
+      minutes = w;
+      elevDraft.minutes = w;
+      sync();
+    };
+    seg.appendChild(b);
+    return [w, b];
+  });
+  wcol.append(wlab, seg);
+  box.appendChild(wcol);
+
+  const rcol = document.createElement("div");
+  rcol.className = "fcol";
+  const rlab = document.createElement("label");
+  rlab.className = "flab";
+  rlab.htmlFor = "elev-reason";
+  rlab.textContent = "Reason (optional)";
+  const reason = document.createElement("input");
+  reason.id = "elev-reason";
+  reason.className = "fld";
+  reason.type = "text";
+  reason.maxLength = 200;
+  reason.autocomplete = "off";
+  reason.value = elevDraft.reason;
+  reason.oninput = () => { elevDraft.reason = reason.value; };
+  rcol.append(rlab, reason);
+  box.appendChild(rcol);
+
+  let typed = null;
+  if (gp.needLabel) {
+    const lcol = document.createElement("div");
+    lcol.className = "fcol";
+    const llab = document.createElement("label");
+    llab.className = "flab";
+    llab.htmlFor = "elev-label";
+    llab.textContent = 'Type "' + gp.label + '" to confirm';
+    typed = document.createElement("input");
+    typed.id = "elev-label";
+    typed.className = "fld";
+    typed.type = "text";
+    typed.autocomplete = "off";
+    typed.spellcheck = false;
+    typed.value = elevDraft.label;
+    typed.oninput = () => { elevDraft.label = typed.value; sync(); };
+    lcol.append(llab, typed);
+    box.appendChild(lcol);
+  }
+
+  if (gp.hostSessions.length) {
+    const warn = document.createElement("div");
+    warn.className = "warnbox";
+    const lead = document.createElement("p");
+    lead.textContent = "These sessions run on the host and can bypass elevation controls:";
+    const ul = document.createElement("ul");
+    for (const h of gp.hostSessions) {
+      const li = document.createElement("li");
+      li.textContent = (h && (h.name || h.id)) || "";
+      ul.appendChild(li);
+    }
+    warn.append(lead, ul);
+    box.appendChild(warn);
+  }
+
+  const role = document.createElement("p");
+  role.className = "tiny mut";
+  role.textContent = "Role: " + gp.role;
+  box.appendChild(role);
+
+  if (gp.blocked) {
+    const warn = document.createElement("div");
+    warn.className = "warnbox";
+    warn.textContent = gp.blocked;
+    box.appendChild(warn);
+  }
+
+  const err = document.createElement("p");
+  err.className = "tiny elev-err";
+  err.setAttribute("role", "alert");
+  err.textContent = elevErr.id === s.id ? elevErr.text : "";
+  err.hidden = !err.textContent;
+  box.appendChild(err);
+
+  const row = document.createElement("div");
+  row.className = "elevbtns";
+  const grant = elevButton("Grant write", "btn pri", () => submitElevGrant(s, gp));
+  const cancel = elevButton("Cancel", "btn", () => closeElevPanel(s.id), elevBusy === s.id);
+  row.append(grant, cancel);
+  box.appendChild(row);
+
+  // One place decides what is pressed and whether Grant is live, so the look
+  // and the real disabled attribute cannot disagree. A blocker or an unmatched
+  // production label closes it; the server re-checks all of it.
+  function sync() {
+    for (const [w, b] of segBtns) {
+      b.classList.toggle("on", w === minutes);
+      b.setAttribute("aria-pressed", w === minutes ? "true" : "false");
+    }
+    const ok = !gp.blocked && elevBusy !== s.id && (!gp.needLabel || (typed && typed.value === gp.label));
+    grant.disabled = !ok;
+    grant.classList.toggle("off", !ok);
+  }
+  sync();
+  return box;
+}
+
+// submitElevGrant: POST the grant (an extension is the same endpoint). The
+// browser adds Origin itself; the server accepts only a signed-in browser.
+async function submitElevGrant(s, gp) {
+  if (elevBusy) return;
+  const id = s.id;
+  elevBusy = id;
+  elevErr = { id: "", text: "" };
+  elevRepaint(id);
+  let status = 0;
+  let body = null;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(grantBody(elevDraft.minutes, elevDraft.reason, elevDraft.label, gp.needLabel)),
+    });
+    status = res.status;
+    try { body = await res.json(); } catch (_) { body = null; }
+  } catch (_) { status = 0; }
+  elevBusy = null;
+  if (status === 200) {
+    elevPanelFor = null;
+    elevErr = { id: "", text: "" };
+    elevDraft = { id: "", minutes: 0, reason: "", label: "" };
+    loadAwsRailStats(id);
+    if (typeof refreshSessions === "function") refreshSessions();
+  } else {
+    elevErr = { id: id, text: grantErrorText(status, body && body.error) };
+  }
+  elevRepaint(id);
+}
+
+// dropElevation: lowering power needs no panel and no label.
+async function dropElevation(s) {
+  if (elevBusy) return;
+  const id = s.id;
+  elevBusy = id;
+  elevRepaint(id);
+  let status = 0;
+  let body = null;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", { method: "DELETE" });
+    status = res.status;
+    try { body = await res.json(); } catch (_) { body = null; }
+  } catch (_) { status = 0; }
+  elevBusy = null;
+  if (status === 200) {
+    showToast(dropToast(body && body.elevation));
+    loadAwsRailStats(id);
+    if (typeof refreshSessions === "function") refreshSessions();
+  } else {
+    showToast(status === 0 ? "Drop failed: no connection."
+      : status === 404 || status === 410 ? "That session is gone."
+        : "Drop failed (" + status + ").", { error: true });
+  }
+  elevRepaint(id);
+}
+
 // repaintSteerRail is the poll's entry point. It refreshes everything that can
 // be refreshed WITHOUT rebuilding the composer: the facts, the last message's
 // text, and the composer's own gate. The composer itself is never rebuilt from
@@ -589,6 +898,7 @@ function repaintSteerRail() {
   // another session's state is the mix-up worth refusing.
   if (!s || s.id !== el.dataset.sid) return;
   renderSteerFacts(s);
+  renderElevSection(s);
   // The last message in place, not through a rebuild: the composer below it
   // holds the caret.
   const txt = el.querySelector(".peektxt");

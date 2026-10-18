@@ -196,6 +196,10 @@ type BrokerHooks interface {
 	// Forget drops the broker's per-session state (cache, stats) once a
 	// session is gone from the registry.
 	Forget(sessionID string)
+	// AWSState is the broker-held state a session list shows: when the
+	// session's write window ends (zero = none) and the sign-in a human must
+	// renew on the host ("" = none). Read-only; it takes only the broker's lock.
+	AWSState(sessionID string) (elevatedUntil time.Time, ssoExpired string)
 }
 
 // EgressHooks is what spawning a bound session needs from the egress proxy,
@@ -227,6 +231,23 @@ type AWSInfo struct {
 	AccountID string `json:"account_id"`
 	RoleARN   string `json:"role_arn"`
 	Prod      bool   `json:"prod"`
+	// Elevate is the write role a human may widen the session to; absent when
+	// the binding allows none. It names no source profile: how the daemon signs
+	// in stays off the list (the sign-in command travels only in GET .../aws).
+	Elevate *ElevateInfo `json:"elevate,omitempty"`
+	// ElevatedUntil is when the live write window ends; absent with none.
+	// Filled by List only.
+	ElevatedUntil *time.Time `json:"elevated_until,omitempty"`
+	// SSOExpired is the sign-in key the session waits on a human to renew;
+	// absent with none. Filled by List only.
+	SSOExpired string `json:"sso_expired,omitempty"`
+}
+
+// ElevateInfo is the wire view of a binding's elevate block.
+type ElevateInfo struct {
+	RoleARN    string `json:"role_arn"`
+	MaxMinutes int    `json:"max_minutes"`
+	AllowIAM   bool   `json:"allow_iam"`
 }
 
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
@@ -278,7 +299,9 @@ type Info struct {
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
 	// Need says why a waiting claude session needs you: "ask" (blocked on a
-	// permission/choice prompt) or "turn" (it finished its turn). Empty for
+	// permission/choice prompt) or "turn" (it finished its turn); or "sso" (a
+	// bound session, claude or not, whose AWS sign-in on the host has expired;
+	// it replaces "" and "turn", never "ask"). Empty for
 	// every other session, including a waiting one whose transcript cannot be
 	// read — that one is still amber, just without a label. Like the registry
 	// raise itself (see needOf), filled by List only.
@@ -322,6 +345,9 @@ type Session struct {
 	// AWSNonce is this spawn's broker-token nonce (set iff AWS is). Immutable,
 	// read without the lock. Never put it on the wire: Info leaves it out.
 	AWSNonce string
+	// Exclusive: this session's box is its own (an elevate binding). Immutable;
+	// the broker refuses a grant without it.
+	Exclusive bool
 
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
@@ -697,6 +723,9 @@ func (s *Session) Info() Info {
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod}
+		if e := s.AWS.Elevate; e != nil {
+			in.AWS.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
+		}
 	}
 	return in
 }
@@ -1013,6 +1042,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	var boxName string
 	var nonce string
+	var exclusive bool
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
@@ -1053,6 +1083,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
 			key.Binding = binding.Hash()
+			if binding.Elevate != nil {
+				// An elevatable binding gets a box of its own (M3b §7.1):
+				// processes in a shared box can read each other's broker token
+				// from /proc, and an elevated token must not be readable by
+				// another session.
+				key.Session = id
+			}
 		}
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {
@@ -1060,7 +1097,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// again would print the remedy twice. A containment-check failure
 			// gets no "run on the host" hint either: that is the one thing to
 			// push the user away from right after containment failed.
-			if errors.Is(err, box.ErrUnboxableWorkspace) || errors.Is(err, box.ErrBoxUnavailable) {
+			if errors.Is(err, box.ErrUnboxableWorkspace) || errors.Is(err, box.ErrBoxUnavailable) || errors.Is(err, box.ErrWorkspaceHeld) {
 				return nil, err
 			}
 			// Name the way out: a silent failure here is what makes people
@@ -1069,6 +1106,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				spec.Cwd, err, config.RuntimeHost)
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
+		exclusive = key.Session != ""
 		if bundleHash != "" {
 			// Logged per spawn so a box still carrying an older bundle is
 			// visible rather than silent.
@@ -1127,6 +1165,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.ConfigDir = cfgDir
 	sess.AWS = binding
 	sess.AWSNonce = nonce
+	sess.Exclusive = exclusive
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	sess.replyable = replyable
@@ -1139,7 +1178,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1304,6 +1343,11 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 
 // List returns all sessions, oldest first.
 func (m *Manager) List() []Info {
+	brk := func() BrokerHooks {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.broker
+	}()
 	// The critical section is a closure so the unlock is a defer again: it used
 	// to be an explicit Unlock (so PeekFor, which takes the same non-reentrant
 	// mutex, could run after it), which meant a panic inside s.Info() would
@@ -1337,8 +1381,31 @@ func (m *Manager) List() []Info {
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull
 		}
+		if out[i].AWS != nil && brk != nil {
+			until, sso := brk.AWSState(out[i].ID)
+			applyAWSState(&out[i], until, sso)
+		}
 	}
 	return out
+}
+
+// applyAWSState folds the broker's state into a listed bound session. A
+// pending sign-in makes Need "sso" — over "" and "turn", never over "ask",
+// whose card has a prompt to answer — for any bound session, claude or not.
+// Activity is left alone: the row keeps saying what the agent is doing. An
+// exited session shows no write window: nothing can mint with it any more.
+func applyAWSState(in *Info, until time.Time, sso string) {
+	if in.AWS == nil {
+		return
+	}
+	if !until.IsZero() && !in.Exited {
+		u := until
+		in.AWS.ElevatedUntil = &u
+	}
+	in.AWS.SSOExpired = sso
+	if sso != "" && in.Need != "ask" {
+		in.Need = "sso"
+	}
 }
 
 // Get returns a live session by id.
@@ -1551,6 +1618,14 @@ func (m *Manager) adoptSurvivingBoxes(aliveIDs []string, meta map[string]session
 			continue
 		}
 		boxes.AdoptBox(md.Box)
+		if md.Exclusive {
+			// The sidecar is the only memory of which boxes are exclusive: an
+			// adopted box is otherwise shared, so it would idle for the TTL
+			// instead of being removed with its session.
+			if mx, ok := boxes.(interface{ MarkExclusive(string) }); ok {
+				mx.MarkExclusive(md.Box)
+			}
+		}
 	}
 }
 
@@ -1592,6 +1667,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.ConfigDir = md.ConfigDir
 	sess.AWS = md.AWS
 	sess.AWSNonce = md.AWSNonce
+	sess.Exclusive = md.Exclusive
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart.

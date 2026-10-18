@@ -1,8 +1,10 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/ssologin"
 )
 
 func awsAdapter(info map[string]session.Info, rows []broker.Row, rowsErr error, gotLimit *int) AWSStatusAdapter {
@@ -138,5 +141,118 @@ func TestAWSStatusIncludesEgress(t *testing.T) {
 	ad.Egress = func(id string) (egress.Stats, bool) { return egress.Stats{}, false }
 	if got := string(decode(ad)["egress"]); got != `{"allowed":0,"denied":0,"mode":"allowlist"}` {
 		t.Errorf("egress before any traffic = %s", got)
+	}
+}
+
+func TestAWSStatusCarriesElevateElevationAndSSO(t *testing.T) {
+	info := map[string]session.Info{
+		"claude-3": {ID: "claude-3", AWS: &session.AWSInfo{Label: "sandbox", RoleARN: "arn:aws:iam::1:role/r",
+			Elevate: &session.ElevateInfo{RoleARN: "arn:aws:iam::1:role/w", MaxMinutes: 60, AllowIAM: true}}},
+		"claude-4": {ID: "claude-4", AWS: &session.AWSInfo{Label: "plain"}},
+	}
+	grantCalls := 0
+	ad := awsAdapter(info, nil, nil, nil)
+	ad.Grant = func(id string) GrantContext {
+		grantCalls++
+		return GrantContext{Blocked: "another box uses this folder"}
+	}
+	ad.Elevation = func(id string) (broker.ElevationView, bool) {
+		return broker.ElevationView{Active: true, Until: time.Unix(1_800_003_600, 0).UTC()}, true
+	}
+	ad.SSO = func(id string) (SSOStatus, bool) {
+		return SSOStatus{Expired: true, Source: "example-sso", Command: "aws sso login --profile p",
+			Login: &ssologin.State{State: "waiting", Code: "ABCD-EFGH"}}, true
+	}
+	decode := func(id string) map[string]any {
+		t.Helper()
+		st, ok := ad.AWSStatusFor(id, true)
+		if !ok {
+			t.Fatal("bound session reported no status")
+		}
+		raw, _ := json.Marshal(st)
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	m := decode("claude-3")
+	el, _ := m["elevate"].(map[string]any)
+	if el["role_arn"] != "arn:aws:iam::1:role/w" || el["max_minutes"] != float64(60) || el["allow_iam"] != true ||
+		el["blocked"] != "another box uses this folder" {
+		t.Fatalf("elevate %v", el)
+	}
+	if hs, ok := el["host_sessions"].([]any); !ok || len(hs) != 0 {
+		t.Fatalf("an empty host_sessions encodes as [], got %v", el["host_sessions"])
+	}
+	if e, _ := m["elevation"].(map[string]any); e["until"] == nil || e["active"] != true {
+		t.Fatalf("elevation %v", m["elevation"])
+	}
+	sso, _ := m["sso"].(map[string]any)
+	login, _ := sso["login"].(map[string]any)
+	if sso["command"] != "aws sso login --profile p" || login["code"] != "ABCD-EFGH" || sso["expired"] != true {
+		t.Fatalf("sso %v", sso)
+	}
+
+	if grantCalls != 1 {
+		t.Fatalf("Grant called %d times for one elevatable session", grantCalls)
+	}
+	m = decode("claude-4")
+	if _, has := m["elevate"]; has || grantCalls != 1 {
+		t.Fatalf("an unelevatable session has no elevate key and costs no Grant call: %v calls=%d", m["elevate"], grantCalls)
+	}
+
+	// Host sessions listed by the service reach the wire as id and name.
+	ad.Grant = func(string) GrantContext {
+		return GrantContext{HostSessions: []HostSession{{ID: "zsh-1", Name: "work"}}}
+	}
+	raw, _ := json.Marshal(func() any { st, _ := ad.AWSStatus("claude-3"); return st }())
+	if !strings.Contains(string(raw), `"host_sessions":[{"id":"zsh-1","name":"work"}]`) || strings.Contains(string(raw), `"blocked"`) {
+		t.Fatalf("%s", raw)
+	}
+
+	// Without the funcs wired the reply carries neither key (older wiring).
+	plain := awsAdapter(info, nil, nil, nil)
+	st, _ := plain.AWSStatus("claude-3")
+	raw, _ = json.Marshal(st)
+	if strings.Contains(string(raw), `"elevation"`) || strings.Contains(string(raw), `"sso"`) {
+		t.Fatalf("%s", raw)
+	}
+}
+
+// The device code and URL belong to the browser session that started the flow:
+// a bearer token reading the same status gets the state, not the code.
+func TestAWSStatusHidesTheDeviceCodeFromNonCookieCallers(t *testing.T) {
+	info := map[string]session.Info{"claude-3": {ID: "claude-3", AWS: &session.AWSInfo{Label: "sandbox"}}}
+	ad := awsAdapter(info, nil, nil, nil)
+	ad.SSO = func(id string) (SSOStatus, bool) {
+		return SSOStatus{Expired: true, Command: "aws sso login --profile p", Login: &ssologin.State{
+			State: "waiting", URI: "https://acme.awsapps.com/start/#/device", URITrusted: true, Code: "ABCD-EFGH",
+			Expires: time.Unix(1_800_000_600, 0).UTC()}}, true
+	}
+	get := func(kind credKind) string {
+		a := &API{Sessions: &mockSvc{}, AWS: ad}
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", "/api/sessions/claude-3/aws", nil)
+		a.handleSession(w, r.WithContext(context.WithValue(r.Context(), credKindKey, kind)))
+		if w.Code != 200 {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	for _, kind := range []credKind{credBearer, credNone} {
+		b := get(kind)
+		if strings.Contains(b, "ABCD-EFGH") || strings.Contains(b, "awsapps.com") || !strings.Contains(b, `"state":"waiting"`) ||
+			!strings.Contains(b, `"expires"`) || !strings.Contains(b, `"command":"aws sso login --profile p"`) {
+			t.Errorf("kind %d: %s", kind, b)
+		}
+	}
+	if b := get(credCookie); !strings.Contains(b, "ABCD-EFGH") || !strings.Contains(b, "acme.awsapps.com") {
+		t.Errorf("the cookie session gets the code: %s", b)
+	}
+	// The bare AWSStatus (no credential known) fails closed.
+	st, _ := ad.AWSStatus("claude-3")
+	if raw, _ := json.Marshal(st); strings.Contains(string(raw), "ABCD-EFGH") {
+		t.Errorf("AWSStatus without a credential kind leaks the code: %s", raw)
 	}
 }

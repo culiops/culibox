@@ -77,6 +77,7 @@ function sessionGroups(sessions, statusFn) {
   const buckets = { "needs-you": [], running: [], idle: [] };
   for (const s of sessions || []) {
     const st = statusFn ? statusFn(s) : s.status;
+    // statusFn maps a session that needsYou (waiting, or an expired AWS sign-in) to "waiting".
     if (st === "waiting") buckets["needs-you"].push(s);
     else if (st === "working") buckets.running.push(s);
     else buckets.idle.push(s);

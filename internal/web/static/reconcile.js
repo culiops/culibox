@@ -96,6 +96,9 @@ function rowSig(s, local) {
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
     !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,
     l.boxRuntime || "", !!l.sending, !!l.expanded, !!l.answering,
+    // The AWS chip (label, prod, the amber write state) and the SSO card's text
+    // read the binding; elevated_until appears and goes with a grant and a drop.
+    l.sso || "", v.aws ? JSON.stringify(v.aws) : "",
   ]);
 }
 

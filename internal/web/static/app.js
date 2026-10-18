@@ -424,7 +424,7 @@ function renderMobileChips() {
       // Reuse activity.js's own class map (the same one the session row and the
       // tab-bar dot use) rather than re-deriving a state string.
       const a = (typeof activityClass === "function" && typeof t.activity === "function")
-        ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+        ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : { cls: "dot unknown", title: "" };
       const dot = document.createElement("span");
       dot.className = a.cls;
       dot.setAttribute("aria-hidden", "true");
@@ -561,7 +561,8 @@ function renderTermTopbar() {
     if (st) { st.textContent = ""; st.hidden = true; }
     return;
   }
-  const a = (t && typeof t.activity === "function") ? activityClass(t.activity()) : { cls: "dot unknown", title: "" };
+  const a = (t && typeof t.activity === "function")
+    ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : { cls: "dot unknown", title: "" };
   dot.className = a.cls;
   dot.title = a.title;
   nm.textContent = t ? (t.name || t.id) : "";
@@ -1253,7 +1254,7 @@ async function togglePeek(li, s) {
   // The block is rendered for every claude session, so it only wears the amber
   // when the row does. Same condition rowClasses uses for the row's own "needs
   // you" class: yellow means an agent is waiting on you and nothing else.
-  peek.className = s.activity === "waiting" ? "peek needs" : "peek";
+  peek.className = needsYou(s) ? "peek needs" : "peek";
   li.after(peek);
 
   const body = document.createElement("div");
@@ -1411,7 +1412,7 @@ function renderSession(s, opts) {
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
-  const act = activityClass(s.activity);
+  const act = sessionDot(s);
   const adot = document.createElement("span");
   adot.className = act.cls;
   // Someone else is holding this session from another browser. It rides ON the
@@ -1545,9 +1546,33 @@ function renderSession(s, opts) {
 }
 
 // renderDesktopEntry: what the desktop list renders for one session — the
-// needs-you card for a waiting session, the plain row otherwise.
+// needs-you card for a session that needs you (waiting, or an expired AWS
+// sign-in), the plain row otherwise.
 function renderDesktopEntry(s) {
-  return s.activity === "waiting" ? renderSession(s, { card: true }) : renderSession(s);
+  return needsYou(s) ? renderSession(s, { card: true }) : renderSession(s);
+}
+
+// buildCardComposer: the one-line reply composer a desktop needs-you card
+// carries — the ask/turn body and the SSO body build it the same way.
+function buildCardComposer(s) {
+  return buildReplyComposer(s, {
+    replyable: () => s.replyable,
+    pending: () => s.need === "ask",
+    ariaLabel: "Reply to " + (s.name || s.id),
+    submitOnEnter: true,
+    afterSend: () => {
+      // No forced rebuild here: pendingSends IS already part of rowSig (via
+      // rowLocal's `sending`), so refreshSessions()'s own reconcile already
+      // rebuilds this card whenever anything it renders actually changed —
+      // typically `activity` itself, moving off "waiting" once the send
+      // lands. A forced rebuild used to run unconditionally here and
+      // clobbered this exact card's `why` text (just set by the send's failure
+      // path, or left blank on success) with whatever a
+      // freshly-built composer's gate reason says — hiding the one error
+      // message an operator most needs to see right after a failed send.
+      refreshSessions();
+    },
+  });
 }
 
 // renderNeedsBody builds the expanded part of a desktop needs-you card
@@ -1558,6 +1583,8 @@ function renderDesktopEntry(s) {
 // between the two callers.
 function renderNeedsBody(s) {
   const c = cardContent(s);
+  // An expired AWS sign-in outranks turn/ask for which card shows.
+  if (c.sso) return renderSSOBody(s, { mobile: false });
   const body = document.createElement("div");
   body.className = "nbody";
   // The text block doubles as the expand/collapse control — the sidebar's old
@@ -1599,24 +1626,7 @@ function renderNeedsBody(s) {
 
   let composer = null;
   if (c.reply) {
-    composer = buildReplyComposer(s, {
-      replyable: () => s.replyable,
-      pending: () => s.need === "ask",
-      ariaLabel: "Reply to " + (s.name || s.id),
-      submitOnEnter: true,
-      afterSend: () => {
-        // No forced rebuild here: pendingSends IS already part of rowSig (via
-        // rowLocal's `sending`), so refreshSessions()'s own reconcile already
-        // rebuilds this card whenever anything it renders actually changed —
-        // typically `activity` itself, moving off "waiting" once the send
-        // lands. A forced rebuild used to run unconditionally here and
-        // clobbered this exact card's `why` text (just set by the onFail
-        // callback above, or left blank on success) with whatever a
-        // freshly-built composer's gate reason says — hiding the one error
-        // message an operator most needs to see right after a failed send.
-        refreshSessions();
-      },
-    });
+    composer = buildCardComposer(s);
     body.appendChild(composer.form);
     composer.refresh();
   }
@@ -1717,7 +1727,7 @@ function renderNeedsCard(s) {
 
   const hdr = document.createElement("div");
   hdr.className = "hdr";
-  const act = activityClass(s.activity);
+  const act = sessionDot(s);
   const dot = document.createElement("span");
   dot.className = act.cls;
   dot.setAttribute("role", "img");
@@ -1734,9 +1744,34 @@ function renderNeedsCard(s) {
   // call Task 4's sheet header already made for the identical reason.
   const wt = document.createElement("span");
   wt.className = "wt";
-  wt.textContent = "waiting";
+  wt.textContent = s.need === "sso" ? needLabel(s) : "waiting";
   hdr.appendChild(wt);
   li.appendChild(hdr);
+
+  // An expired AWS sign-in gets its own card body. It keeps the Reply… row for a
+  // replyable session (spec 8.2), but not the 1/2/3 quick replies, which answer
+  // a prompt that is not there.
+  if (cardContent(s).sso) {
+    li.appendChild(renderSSOBody(s, { mobile: true }));
+    const swide = document.createElement("div");
+    swide.className = "wide";
+    if (s.replyable) {
+      const sreply = document.createElement("button");
+      sreply.type = "button";
+      sreply.className = "btn pri";
+      sreply.textContent = "Reply…";
+      sreply.onclick = () => openReplySheet(s);
+      swide.appendChild(sreply);
+    }
+    const sterm = document.createElement("button");
+    sterm.type = "button";
+    sterm.className = "btn";
+    sterm.textContent = "Open terminal";
+    sterm.onclick = () => openTerminal(s.id, s.name);
+    swide.appendChild(sterm);
+    li.appendChild(swide);
+    return li;
+  }
 
   const msg = document.createElement("div");
   msg.className = "msg";
@@ -1785,6 +1820,284 @@ function renderNeedsCard(s) {
 
   return li;
 }
+// --- AWS sign-in expired (M3b): the SSO needs-you card ------------------------
+//
+// A boxed session whose AWS sign-in lapsed shows this card instead of the
+// ask/turn one (cardContent decides). "Sign in" starts a device-code flow on the
+// host (the daemon runs `aws sso login`); the code and page URL come back to
+// this browser session only. While a flow is open ONE 3 s poll per session reads
+// GET .../aws until it ends; the poller is dropped the moment the session leaves
+// the list or stops needing a sign-in (pruneSSO, from refreshSessions), so no
+// timer outlives its card.
+const ssoFlows = new Map();        // id -> login state {state, uri, uri_trusted, code, expires} | {fallback: command}
+const ssoStatus = new Map();       // id -> last GET .../aws body (carries the host command)
+const ssoStatusAsked = new Set();  // ids whose status was requested (one fetch per card lifetime)
+const ssoStatusFailed = new Map(); // id -> failed status fetches, so a failure moves the card's rowSig and a later render retries
+const ssoPollers = new Map();      // id -> interval handle, only while a flow is open
+const ssoPolling = new Set();      // ids with a poll request in flight
+const ssoStarting = new Set();     // ids whose sign-in POST is in flight
+const SSO_POLL_MS = 3000;
+
+function ssoPath(id, tail) { return "/api/sessions/" + encodeURIComponent(id) + "/aws" + (tail || ""); }
+function ssoCommand(id) {
+  const st = ssoStatus.get(id);
+  return (st && st.sso && st.sso.command) || "";
+}
+
+// ssoLocalSig: what the SSO card reads beyond the session record, for rowSig, so
+// a flow moving on (code arrived, signed in, failed) rebuilds the card and
+// nothing else does.
+function ssoLocalSig(id) {
+  const f = ssoFlows.get(id) || {};
+  return [f.state || "", f.code || "", f.uri || "", f.uri_trusted ? 1 : 0, f.expires || "", f.fallback || "",
+    ssoStatus.has(id) ? 1 : 0, ssoStatusFailed.get(id) || 0, ssoCommand(id), ssoStarting.has(id) ? 1 : 0].join("~");
+}
+
+const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to retry if it stopped.";
+
+// ssoAdopt: take a GET .../aws body: cache it and follow the flow it carries.
+function ssoAdopt(id, body) {
+  ssoStatus.set(id, body || {});
+  const login = body && body.sso && body.sso.login;
+  const cur = ssoFlows.get(id);
+  if (login) {
+    ssoFlows.set(id, login);
+    if (login.state === "waiting") startSSOPoll(id);
+  } else if (cur && !cur.fallback) {
+    ssoFlows.delete(id); // the server no longer holds this flow
+  }
+}
+
+// ensureSSOStatus: fetch the host command (and any flow already running, e.g.
+// after a reload) when the card renders. A failed fetch (network, non-200, bad
+// JSON) stores nothing and clears "asked", so the next render of the card asks
+// again; ssoStatusFailed is in the card's rowSig, so that render comes with the
+// next list poll: one retry per poll, never a tight loop.
+function ensureSSOStatus(id) {
+  if (ssoStatus.has(id) || ssoStatusAsked.has(id)) return;
+  ssoStatusAsked.add(id);
+  fetch(ssoPath(id)).then((res) => (res.status === 200 ? res.json() : null), () => null).catch(() => null).then((body) => {
+    const s = lastSessions.find((x) => x.id === id);
+    if (!s || s.need !== "sso") return; // the card went away while this was in flight
+    if (!body || typeof body !== "object") {
+      ssoStatusAsked.delete(id);
+      ssoStatusFailed.set(id, (ssoStatusFailed.get(id) || 0) + 1);
+      return; // the next poll's rowSig sees the counter move and re-renders
+    }
+    ssoStatusFailed.delete(id);
+    ssoAdopt(id, body);
+    refreshSessions();
+  });
+}
+
+function startSSOPoll(id) {
+  if (ssoPollers.has(id)) return;
+  ssoPollers.set(id, setInterval(() => ssoPollTick(id, false), SSO_POLL_MS));
+}
+function stopSSOPoll(id) {
+  const h = ssoPollers.get(id);
+  if (h !== undefined) clearInterval(h);
+  ssoPollers.delete(id);
+}
+
+// ssoPollTick: one read of the flow. `last` is pruneSSO's final look after the
+// need cleared: a finished sign-in clears the need before the poller sees "ok",
+// so this is the only place the success toast can still come from. It never
+// writes the maps (the card is gone).
+async function ssoPollTick(id, last) {
+  if (ssoPolling.has(id)) return;
+  ssoPolling.add(id);
+  let status = 0;
+  let body = null;
+  try {
+    const res = await fetch(ssoPath(id));
+    status = res.status;
+    if (status === 200) body = await res.json();
+  } catch (_) { /* transient: keep polling */ }
+  ssoPolling.delete(id);
+  if (status === 404 || status === 410) { stopSSOPoll(id); return; }
+  if (!body) return;
+  const login = body.sso && body.sso.login;
+  const state = login ? login.state : "";
+  if (last) {
+    if (state === "ok") showToast(SSO_DONE_TOAST);
+    return;
+  }
+  if (!ssoPollers.has(id)) return; // stopped while the request was in flight
+  const before = ssoLocalSig(id);
+  ssoAdopt(id, body);
+  if (state !== "waiting") {
+    stopSSOPoll(id);
+    if (state === "ok") showToast(SSO_DONE_TOAST);
+  }
+  if (ssoLocalSig(id) !== before || state !== "waiting") refreshSessions();
+}
+
+// pruneSSO: drop SSO state (and any poller) for a session that left the list or
+// no longer needs a sign-in.
+function pruneSSO() {
+  const byId = new Map(lastSessions.map((s) => [s.id, s]));
+  const ids = new Set([...ssoFlows.keys(), ...ssoStatus.keys(), ...ssoStatusAsked, ...ssoStatusFailed.keys(), ...ssoPollers.keys()]);
+  for (const id of ids) {
+    const s = byId.get(id);
+    if (s && s.need === "sso") continue;
+    if (ssoPollers.has(id)) {
+      stopSSOPoll(id);
+      if (s) ssoPollTick(id, true);
+    }
+    ssoFlows.delete(id);
+    ssoStatus.delete(id);
+    ssoStatusAsked.delete(id);
+    ssoStatusFailed.delete(id);
+  }
+}
+
+// ssoSignIn: start the device-code flow. 502 means the daemon could not run the
+// sign-in here; the body carries the command the human can run on the host.
+async function ssoSignIn(s) {
+  const id = s.id;
+  if (ssoStarting.has(id)) return;
+  ssoStarting.add(id);
+  let status = 0;
+  let body = null;
+  try {
+    const res = await fetch(ssoPath(id, "/sso-login"), { method: "POST" });
+    status = res.status;
+    try { body = await res.json(); } catch (_) { body = null; }
+  } catch (_) { status = 0; }
+  ssoStarting.delete(id);
+  if (status === 200 && body && body.login) {
+    ssoFlows.set(id, body.login);
+    if (body.login.state === "waiting") startSSOPoll(id);
+    else if (body.login.state === "ok") showToast(SSO_DONE_TOAST);
+  } else if (status === 502) {
+    ssoFlows.set(id, { fallback: (body && body.command) || ssoCommand(id) });
+  } else {
+    showToast(status === 0 ? "Sign-in failed: no connection."
+      : status === 403 ? "Only a signed-in browser session can start an AWS sign-in."
+        : status === 404 || status === 410 ? "That session is gone."
+          : "Sign-in failed (" + status + ").", { error: true });
+  }
+  refreshSessions();
+}
+
+// ssoModel: ssoCard's model, fed from the page's own flow/status caches.
+function ssoModel(s) {
+  const flow = ssoFlows.get(s.id);
+  const m = ssoCard(s, { sso: { command: ssoCommand(s.id), login: flow && !flow.fallback ? flow : null } });
+  m.fallback = flow && flow.fallback ? flow.fallback : "";
+  if (!m.command) m.command = m.fallback;
+  return m;
+}
+
+function ssoNote(text) {
+  const p = document.createElement("p");
+  p.className = "ssonote";
+  p.textContent = text;
+  return p;
+}
+
+// renderSSOBody builds the SSO card's body for the desktop card and the mobile
+// card (`mobile`: no composer or Open of its own, the mobile card has its own
+// Reply…/Open row). Every server-provided string (the card text, the code, the
+// URL, the command) goes in through textContent; the URL becomes a link only
+// when ssoCard says it is trusted, and its href is set as a property.
+function renderSSOBody(s, opts) {
+  const mobile = !!(opts && opts.mobile);
+  ensureSSOStatus(s.id);
+  const m = ssoModel(s);
+  const body = document.createElement("div");
+  body.className = mobile ? "ssocard mssocard" : "nbody ssocard";
+
+  const txt = document.createElement("div");
+  txt.className = "ssotxt";
+  txt.textContent = m.text;
+  body.appendChild(txt);
+
+  const l = m.login;
+  if (l && l.state === "waiting") {
+    if (l.code) {
+      const code = document.createElement("div");
+      code.className = "ssocode";
+      code.setAttribute("aria-label", "Sign-in code");
+      code.textContent = l.code;
+      body.appendChild(code);
+    }
+    const note = ssoNote("");
+    if (l.link) {
+      const a = document.createElement("a");
+      a.className = "ssolink";
+      a.textContent = "Open sign-in page";
+      a.href = l.link;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      note.appendChild(a);
+    } else if (l.plain) {
+      note.appendChild(document.createTextNode("Sign-in page: " + l.plain));
+    }
+    if (l.expires) {
+      const t = hhmm(l.expires);
+      if (t) note.appendChild(document.createTextNode((note.childNodes.length ? " · " : "") + "expires " + t));
+    }
+    if (note.childNodes.length) body.appendChild(note);
+  } else if (l && l.state === "failed") {
+    body.appendChild(ssoNote("Sign-in did not finish. Try again, or run the host command."));
+  } else if (m.fallback) {
+    body.appendChild(ssoNote("Sign-in from here is not available right now; run this on the host:"));
+  }
+
+  const waiting = !!(l && l.state === "waiting");
+  const acts = document.createElement("div");
+  acts.className = "nacts";
+  const signIn = document.createElement("button");
+  signIn.type = "button";
+  signIn.className = "btn pri";
+  signIn.textContent = waiting ? "Waiting for sign-in…" : l && l.state === "failed" ? "Try again" : "Sign in";
+  signIn.disabled = waiting || ssoStarting.has(s.id);
+  signIn.classList.toggle("off", signIn.disabled);
+  signIn.onclick = () => ssoSignIn(s);
+  acts.appendChild(signIn);
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "btn";
+  copy.textContent = "Copy host command";
+  copy.disabled = !m.command;
+  copy.classList.toggle("off", copy.disabled);
+  copy.onclick = () => copyText(m.command, (ok) => {
+    showToast(ok ? "Command copied" : "Could not copy. Select the command and copy it.", { error: !ok });
+  });
+  acts.appendChild(copy);
+
+  if (!mobile) {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "btn";
+    open.textContent = "Open";
+    open.onclick = () => openTerminal(s.id, s.name);
+    acts.appendChild(open);
+  }
+  body.appendChild(acts);
+
+  // Always shown as text as well: the clipboard can be unavailable here (plain
+  // HTTP, an iframe), and the command is what the human types on the host.
+  if (m.command) {
+    const cmd = document.createElement("pre");
+    cmd.className = "ssocmd";
+    cmd.textContent = m.command;
+    body.appendChild(cmd);
+  }
+
+  // P8: an SSO card does not take the reply box away from a replyable session.
+  if (!mobile && m.reply) {
+    const composer = buildCardComposer(s);
+    body.appendChild(composer.form);
+    composer.refresh();
+    body.appendChild(composer.why);
+  }
+  return body;
+}
+
 // editing guards the inline rename: while true, the background poll must NOT
 // re-render the list (that would destroy the input + focus) and a stray click
 // must not open a pane.
@@ -1846,7 +2159,7 @@ let lastSessions = [];
 // waiting for input right now. Derived from lastSessions rather than a
 // separate count so it can never drift from what the list itself would show.
 function waitingCount() {
-  return lastSessions.reduce((n, s) => n + (s.activity === "waiting" ? 1 : 0), 0);
+  return lastSessions.reduce((n, s) => n + (needsYou(s) ? 1 : 0), 0);
 }
 
 // selectedSessionId: which row is "selected". Selected means the focused pane
@@ -1888,6 +2201,7 @@ function rowLocal(s) {
     sending: pendingSends.has(s.id),
     expanded: cardExpanded.has(s.id),
     answering: pendingAnswers.has(s.id),
+    sso: ssoLocalSig(s.id),
   };
 }
 
@@ -2024,15 +2338,26 @@ async function refreshSessions() {
       }
     }
   }
+  pruneSSO();
   signalAttention();
   notifyTransitions();
   // Push each session's activity onto its open terminal tab (a different axis
   // from the tab's connection status). setActivity is a no-op when unchanged, so
   // this only re-renders a bar whose dot actually moved.
-  const actById = new Map(lastSessions.map((s) => [s.id, s.activity]));
+  // A session that needs you for a non-activity reason (an expired AWS sign-in)
+  // reads "waiting" on its tab too, so the tab dot, the chip strip and the pane's
+  // amber frame (chipmodel.js, tabs.js) follow needsYou without each knowing why.
+  // The tab also carries tabNeedWhy so its dot says "AWS sign-in needed", not
+  // "waiting for input", for an agent that is still working.
+  const actById = new Map(lastSessions.map((s) => [s.id, needsYou(s) ? "waiting" : s.activity]));
+  const whyById = new Map(lastSessions.map((s) => [s.id, tabNeedWhy(s)]));
   // A tab whose session has left the list (killed/pruned) would otherwise keep
   // its last dot — a stale green "working" on a dead agent. Fall back to "done".
-  eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done"); });
+  eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done", whyById.get(t.id) || ""); });
+  // The tab strip keeps its AWS chip until told to rebuild: repaint it when a
+  // grant, a drop or a lapsed window changes what it draws.
+  const sessById = new Map(lastSessions.map((s) => [s.id, s]));
+  eachTerminal((t) => { if (typeof t.setAwsSig === "function") t.setAwsSig(awsSig(sessById.get(t.id))); });
   // Repaint every open pane's answer-strip control state (disabled/.off/title)
   // against the session list this poll just refreshed. setActivity above is a
   // no-op when activity is unchanged, so a pane whose replyable flag was
@@ -2082,7 +2407,7 @@ async function refreshSessions() {
     const rows = lastSessions.map((s) => renderSession(s));
     rowById = new Map(lastSessions.map((s, i) => [s.id, rows[i]]));
     const nodes = [];
-    for (const g of sessionGroups(lastSessions, (s) => s.activity)) {
+    for (const g of sessionGroups(lastSessions, (s) => (needsYou(s) ? "waiting" : s.activity))) {
       const h = document.createElement("li");
       h.className = g.key === "needs-you" ? "mhd needs" : "mhd";
       h.innerHTML = '<span>' + g.label + '</span><span class="count">' + g.count + '</span>';
@@ -2422,6 +2747,10 @@ function paintPfAccount(value) {
 function syncPfAccountWarn() {
   $("pf-account-warn").hidden = !($("pf-account").value && segValue($("pf-runtime")) === "host");
 }
+// syncPfElevWarn: the IAM-writes warning shows exactly while the box is ticked.
+function syncPfElevWarn() {
+  $("pf-aws-elev-warn").hidden = !$("pf-aws-elev-iam").checked;
+}
 // syncPfReplyable shows "Allow replies by default" only for a claude binary:
 // replies are claude-only on the server, and a default nothing honours is a
 // setting that lies.
@@ -2433,6 +2762,9 @@ function syncPfReplyable() {
 // rowsToConfig turns them back into the two fields the server stores.
 let pfEnvRows = [];
 let pfExplicitBox = false;
+// The stored profile's box override (image). The editor has no box field, so it
+// is carried through unchanged; see boxToSend.
+let pfLoadedBox = null;
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
@@ -2441,6 +2773,7 @@ function fillForm(p) {
   // remember it was explicit: saving it as blank would hand the tier back to
   // the instance default.
   pfExplicitBox = p.runtime === "box";
+  pfLoadedBox = p.box || null;
   renderPfRuntime(segFromRuntime(p.runtime));
   renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
@@ -2457,6 +2790,12 @@ function fillForm(p) {
   $("pf-aws-egress").value = (aws.egress_allow || []).join("\n");
   $("pf-aws-label").value = aws.label || "";
   $("pf-aws-prod").checked = !!aws.prod;
+  const elev = aws.elevate || {};
+  $("pf-aws-elev-role").value = elev.role_arn || "";
+  // max_minutes 0/absent means the default window; the select offers only 30 and 60.
+  $("pf-aws-elev-max").value = String(elev.max_minutes === 30 ? 30 : 60);
+  $("pf-aws-elev-iam").checked = !!elev.allow_iam;
+  syncPfElevWarn();
   syncPfReplyable();
   syncEditorActions();
 }
@@ -2518,6 +2857,8 @@ function readForm() {
   // message answers the one case left, an AWS binding saved on the host tier.
   const rt = runtimeToSend(segValue($("pf-runtime")), pfExplicitBox, !!aws);
   if (rt) p.runtime = rt;
+  const bx = boxToSend(pfLoadedBox);
+  if (bx) p.box = bx;
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -2666,6 +3007,7 @@ $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });
 $("pf-account").addEventListener("change", syncPfAccountWarn);
+$("pf-aws-elev-iam").addEventListener("change", syncPfElevWarn);
 // pf-runtime's own change is handled by renderPfRuntime's buildSeg onChange —
 // a .seg is buttons, not a form control, so it has no native "change" event.
 // workspacesCache backs the tier-aware re-render: switching Runtime must be able
@@ -3348,7 +3690,7 @@ function openActionsSheet(s) {
   openSheet(function (body) {
     const shd = document.createElement("div");
     shd.className = "shd";
-    const act = activityClass(s.activity);
+    const act = sessionDot(s);
     const dot = document.createElement("span");
     dot.className = act.cls;
     dot.setAttribute("aria-hidden", "true");
@@ -3432,7 +3774,7 @@ function openReplySheet(s) {
     // straight from the M1 card still says which session it is talking to.
     const shd = document.createElement("div");
     shd.className = "shd";
-    const sact = activityClass(s.activity);
+    const sact = sessionDot(s);
     const sdot = document.createElement("span");
     sdot.className = sact.cls;
     sdot.setAttribute("aria-hidden", "true");

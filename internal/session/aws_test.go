@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -54,6 +57,32 @@ type fakeBrokerHooks struct {
 	boxForCalls int
 	forgot      []string
 	next        int
+	state       map[string]struct {
+		until time.Time
+		sso   string
+	}
+}
+
+func (f *fakeBrokerHooks) setState(id string, until time.Time, sso string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state == nil {
+		f.state = map[string]struct {
+			until time.Time
+			sso   string
+		}{}
+	}
+	f.state[id] = struct {
+		until time.Time
+		sso   string
+	}{until, sso}
+}
+
+func (f *fakeBrokerHooks) AWSState(id string) (time.Time, string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := f.state[id]
+	return st.until, st.sso
 }
 
 func (f *fakeBrokerHooks) NewNonce() string {
@@ -610,5 +639,182 @@ func TestInfoNeverCarriesTheEgressToken(t *testing.T) {
 	b, _ := json.Marshal(s.Info())
 	if strings.Contains(string(b), "etok-") || strings.Contains(string(b), "@172.21.0.1") {
 		t.Fatalf("Info leaks the egress token or proxy URL: %s", b)
+	}
+}
+
+func elevTestBinding() *config.AWSBinding {
+	b := testBinding()
+	b.Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write"}
+	return b
+}
+
+func elevLauncher() awsLauncher {
+	return awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, binding: elevTestBinding()}
+}
+
+func TestElevatableSpawnGetsItsOwnBoxAndIsExclusive(t *testing.T) {
+	m, boxes, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	m.launcher = elevLauncher()
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if boxes.lastKey.Session != s.ID || boxes.lastKey.Binding != elevTestBinding().Hash() || !s.Exclusive {
+		t.Fatalf("key %+v exclusive %v", boxes.lastKey, s.Exclusive)
+	}
+}
+
+func TestPlainBoundSpawnIsNotExclusive(t *testing.T) {
+	m, boxes, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if boxes.lastKey.Session != "" || s.Exclusive {
+		t.Fatalf("a binding without elevate shares boxes as before: %+v", boxes.lastKey)
+	}
+}
+
+func TestWorkspaceHeldReachesTheUserVerbatim(t *testing.T) {
+	m, boxes, _, _ := boundManager(t, []string{"sh"}, config.RuntimeBox, time.Minute)
+	msg := "/w/x is in use by an AWS-write-capable session (or another session sits in this folder). Use a separate folder or worktree, or stop the other session."
+	boxes.wrapErr = fmt.Errorf("%w: %s", box.ErrWorkspaceHeld, msg)
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if !errors.Is(err, box.ErrWorkspaceHeld) || strings.Contains(err.Error(), "run on the host") || strings.Count(err.Error(), msg) != 1 {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// The exclusive flag rides the sidecar so a restart re-marks the box (it
+// would otherwise be treated as shared, idling for the TTL instead of being
+// removed with its session) and the session keeps its identity. A record that
+// predates the field reads as false.
+func TestSidecarRestoresExclusiveAndMarksTheBox(t *testing.T) {
+	l := elevLauncher()
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	raw, err := os.ReadFile(path)
+	if err != nil || !regexp.MustCompile(`"exclusive":\s*true`).Match(raw) {
+		t.Fatalf("sidecar lacks exclusive true: %v\n%s", err, raw)
+	}
+
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	boxes2 := &fakeBoxes{}
+	m2.SetBoxes(boxes2)
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if !r.Exclusive {
+		t.Fatal("restored session lost Exclusive")
+	}
+	if !reflect.DeepEqual(boxes2.marked, []string{"ab-box-test"}) {
+		t.Fatalf("marked = %v, want the session's box", boxes2.marked)
+	}
+}
+
+func TestPlainSidecarRecordIsNotExclusive(t *testing.T) {
+	var md sessionMeta
+	if err := json.Unmarshal([]byte(`{"agent":"aws","runtime":"box","box":"ab-box-x"}`), &md); err != nil || md.Exclusive {
+		t.Fatalf("old record: err=%v exclusive=%v", err, md.Exclusive)
+	}
+}
+
+func TestApplyAWSState(t *testing.T) {
+	until := time.Unix(1_800_003_600, 0)
+	cases := []struct {
+		name          string
+		need          string
+		until         time.Time
+		sso, wantNeed string
+	}{
+		{"nothing", "", time.Time{}, "", ""},
+		{"sso on a quiet session", "", time.Time{}, "example-sso", "sso"},
+		{"sso beats turn", "turn", time.Time{}, "example-sso", "sso"},
+		{"ask beats sso", "ask", time.Time{}, "example-sso", "ask"},
+		{"elevated only", "", until, "", ""},
+	}
+	for _, c := range cases {
+		in := Info{Activity: "working", Need: c.need, AWS: &AWSInfo{Label: "sandbox"}}
+		applyAWSState(&in, c.until, c.sso)
+		if in.Need != c.wantNeed || in.Activity != "working" || in.AWS.SSOExpired != c.sso {
+			t.Errorf("%s: need=%q activity=%q sso=%q", c.name, in.Need, in.Activity, in.AWS.SSOExpired)
+		}
+		if c.until.IsZero() != (in.AWS.ElevatedUntil == nil) || (in.AWS.ElevatedUntil != nil && !in.AWS.ElevatedUntil.Equal(c.until)) {
+			t.Errorf("%s: until %v", c.name, in.AWS.ElevatedUntil)
+		}
+	}
+	gone := Info{Exited: true, AWS: &AWSInfo{Label: "sandbox"}}
+	applyAWSState(&gone, until, "")
+	if gone.AWS.ElevatedUntil != nil {
+		t.Fatalf("an exited session must not show a write window: %v", gone.AWS.ElevatedUntil)
+	}
+	plain := Info{Need: "turn"}
+	applyAWSState(&plain, until, "example-sso") // no binding: nothing to apply
+	if plain.Need != "turn" || plain.AWS != nil {
+		t.Fatalf("an unbound session is untouched: %+v", plain)
+	}
+}
+
+func TestListCarriesTheBrokerState(t *testing.T) {
+	m, _, hooks, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	hooks.setState(s.ID, time.Unix(1_800_003_600, 0), "example-sso")
+	var got Info
+	for _, i := range m.List() {
+		if i.ID == s.ID {
+			got = i
+		}
+	}
+	if got.Need != "sso" || got.AWS.SSOExpired != "example-sso" || got.AWS.ElevatedUntil == nil {
+		t.Fatalf("List: %+v aws=%+v", got, got.AWS)
+	}
+	b, _ := json.Marshal(got)
+	if !strings.Contains(string(b), `"sso_expired":"example-sso"`) || !strings.Contains(string(b), `"elevated_until":`) {
+		t.Fatalf("wire: %s", b)
+	}
+}
+
+func TestInfoCarriesTheElevateBlockButNoSourceProfile(t *testing.T) {
+	m, _, _, _ := boundManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeBox, time.Minute)
+	m.launcher = awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, binding: elevTestBinding()}
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "aws", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	in := s.Info()
+	if in.AWS.Elevate == nil || in.AWS.Elevate.RoleARN != elevTestBinding().Elevate.RoleARN || in.AWS.Elevate.MaxMinutes != 60 {
+		t.Fatalf("elevate %+v", in.AWS.Elevate)
+	}
+	b, _ := json.Marshal(in)
+	if strings.Contains(string(b), "sandbox-admin") || strings.Contains(string(b), "source_profile") {
+		t.Fatalf("Info names how it authenticates: %s", b)
 	}
 }

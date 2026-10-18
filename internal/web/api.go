@@ -40,12 +40,23 @@ type API struct {
 	Sessions   SessionService
 	DefaultCwd string           // used when a spawn request omits cwd (e.g. $HOME)
 	AWS        AWSStatusService // nil = the credential broker is not running; /aws is a 404
+	// Elevation serves the write-window and AWS sign-in endpoints; nil = the
+	// credential broker is not running, and they are 404.
+	Elevation ElevationService
 }
 
 // AWSStatusService reports a session's AWS binding, broker counters and recent
 // audit rows. ok is false for a session that is unknown or has no binding.
 type AWSStatusService interface {
 	AWSStatus(sessionID string) (status any, ok bool)
+}
+
+// credAwareAWSStatus is an AWSStatusService that can tell a signed-in browser
+// session from any other caller. The device sign-in code and URL are returned
+// only to the cookie session (a bearer token must not read them), so the
+// status of the /aws route goes through this when the service has it.
+type credAwareAWSStatus interface {
+	AWSStatusFor(sessionID string, cookie bool) (status any, ok bool)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -71,7 +82,7 @@ var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 	log.Printf("spawn agent=%q: %v", agent, err)
 	switch {
-	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable),
+	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),
 		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),
@@ -153,6 +164,16 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// POST|DELETE /api/sessions/{id}/aws/elevate and POST .../aws/sso-login:
+	// before the /aws suffix check below, which would not match them anyway.
+	if sid, ok := strings.CutSuffix(id, elevateSuffix); ok {
+		a.handleElevate(w, r, sid)
+		return
+	}
+	if sid, ok := strings.CutSuffix(id, ssoLoginSuffix); ok {
+		a.handleSSOLogin(w, r, sid)
+		return
+	}
 	// GET /api/sessions/{id}/aws — the session's AWS binding, broker counters and
 	// recent audit rows. 204 when the session is unknown or has no binding; 404
 	// when the broker is not running.
@@ -165,7 +186,15 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		if st, ok := a.AWS.AWSStatus(strings.TrimSuffix(id, "/aws")); ok {
+		sid := strings.TrimSuffix(id, "/aws")
+		var st any
+		var ok bool
+		if cs, isCS := a.AWS.(credAwareAWSStatus); isCS {
+			st, ok = cs.AWSStatusFor(sid, credKindOf(r) == credCookie)
+		} else {
+			st, ok = a.AWS.AWSStatus(sid)
+		}
+		if ok {
 			writeJSON(w, http.StatusOK, st)
 		} else {
 			w.WriteHeader(http.StatusNoContent)

@@ -380,3 +380,16 @@ func TestAWSForReturnsTheProfileBinding(t *testing.T) {
 		t.Fatal("AWSFor must return a deep copy")
 	}
 }
+
+func TestAWSForClonesElevate(t *testing.T) {
+	b := &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::226198813800:role/a", Region: "ap-southeast-1",
+		Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::226198813800:role/a-write", MaxMinutes: 30}}
+	l := New([]config.AgentConfig{{Name: "c", Bin: "claude", AWS: b}}, fakeResolver{}, nil)
+	got := l.AWSFor("c")
+	got.Elevate.RoleARN = "mutated"
+	got.Elevate.MaxMinutes = 60
+	again := l.AWSFor("c")
+	if again.Elevate == nil || again.Elevate.RoleARN != "arn:aws:iam::226198813800:role/a-write" || again.Elevate.MaxMinutes != 30 {
+		t.Fatalf("AWSFor must deep-copy Elevate, got %+v", again.Elevate)
+	}
+}

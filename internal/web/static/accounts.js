@@ -144,9 +144,23 @@ function awsBadgeEl(s) {
   const ab = awsBadge(s);
   if (!ab) return null;
   const b = document.createElement("span");
-  b.className = "bdg aws" + (ab.prod ? " prod" : "");
-  b.textContent = ab.text;
+  // write is a separate axis from prod: an open write window is amber, and a
+  // production binding that is writing is red with the amber ring.
+  b.className = "bdg aws" + (ab.prod ? " prod" : "") + (ab.write ? " write" : "");
   b.title = ab.title;
+  const parts = badgeParts(ab);
+  const lab = document.createElement("span");
+  lab.className = "awslab";
+  lab.textContent = parts.label;
+  b.appendChild(lab);
+  // The write state is its own element so a long label ellipsizes first and the
+  // word "write" is never the part that is cut.
+  if (parts.write) {
+    const w = document.createElement("span");
+    w.className = "awsw";
+    w.textContent = " · write";
+    b.appendChild(w);
+  }
   return b;
 }
 

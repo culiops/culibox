@@ -18,23 +18,54 @@ import (
 type fakeMinter struct {
 	mu    sync.Mutex
 	calls []MintInput
+	exps  []time.Time // the Expiration handed out for each call (zero when it failed)
 	err   error
 	now   func() time.Time
+	exp   func(MintInput) time.Time // overrides the returned Expiration
+	hook  func(MintInput)           // runs inside Mint after the call is recorded, without mu held
 }
 
 func (f *fakeMinter) Mint(_ context.Context, in MintInput) (Creds, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, in)
-	if f.err != nil {
-		return Creds{}, f.err
+	f.exps = append(f.exps, time.Time{})
+	i, err, hook := len(f.calls)-1, f.err, f.hook
+	f.mu.Unlock()
+	if hook != nil {
+		hook(in)
 	}
-	return Creds{AccessKeyID: "ASIAFAKE", SecretAccessKey: "s", SessionToken: "t", Expiration: f.now().Add(in.Duration)}, nil
+	if err != nil {
+		return Creds{}, err
+	}
+	exp := f.now().Add(in.Duration)
+	if f.exp != nil {
+		exp = f.exp(in)
+	}
+	f.mu.Lock()
+	f.exps[i] = exp
+	f.mu.Unlock()
+	return Creds{AccessKeyID: "ASIAFAKE", SecretAccessKey: "s", SessionToken: "t", Expiration: exp}, nil
 }
 
+// expOf is the Expiration handed out for call i; calls0Exp for the first call.
+func (f *fakeMinter) expOf(i int) time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.exps[i] }
+func (f *fakeMinter) calls0Exp() time.Time  { return f.expOf(0) }
+
 type memRec struct {
-	mu   sync.Mutex
-	rows []Row
+	mu      sync.Mutex
+	rows    []Row
+	appr    []ApprovalRow
+	apprErr error
+}
+
+func (m *memRec) RecordApproval(r ApprovalRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.apprErr != nil {
+		return m.apprErr
+	}
+	m.appr = append(m.appr, r)
+	return nil
 }
 
 func (m *memRec) Record(r Row) error {
@@ -292,7 +323,10 @@ func TestSSOExpiredIsActionable(t *testing.T) {
 	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
 	fm.err = fmt.Errorf("%w: token expired", ErrSSOExpired)
 	w := call(b, tokA("claude-3"))
-	if w.Code != 503 || !strings.Contains(w.Body.String(), `aws sso login --profile sandbox-admin`) {
+	var body struct{ Error string }
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	const want = `SSO session for profile "sandbox-admin" expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile sandbox-admin" on the host).`
+	if w.Code != 503 || body.Error != want {
 		t.Fatalf("status %d body %s", w.Code, w.Body)
 	}
 	if rec.rows[len(rec.rows)-1].Outcome != OutcomeSSOExpired {
@@ -408,6 +442,35 @@ func TestNothingSecretLeaksIntoErrorsOrAuditRows(t *testing.T) {
 	fm.err = nil
 	call(b, tok)
 	bodies = append(bodies, call(b, Token(secret, "claude-3", nonceB)).Body.String())
+	// An elevated mint (and its approval row) must leak nothing either.
+	eb, efm, erec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(eb)
+	if _, err := eb.Elevate("aws-1", cookie(60)); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(eb, tokA("aws-1")); w.Code != 200 || efm.calls[0].RoleARN != writeRole {
+		t.Fatalf("elevated mint: %d %+v", w.Code, efm.calls)
+	}
+	etok := tokA("aws-1")
+	emac := etok[strings.LastIndexByte(etok, '.')+1:]
+	var elevRows []any
+	for _, r := range erec.rows {
+		elevRows = append(elevRows, r)
+	}
+	for _, r := range erec.appr {
+		elevRows = append(elevRows, r)
+	}
+	if len(erec.rows) == 0 || len(erec.appr) == 0 {
+		t.Fatalf("want mint and approval rows, got %d and %d", len(erec.rows), len(erec.appr))
+	}
+	for _, r := range elevRows {
+		j, _ := json.Marshal(r)
+		for _, bad := range []string{emac, nonceA, "ASIAFAKE", `"s"`, `"t"`} {
+			if strings.Contains(string(j), bad) {
+				t.Fatalf("elevated audit row leaked %q: %s", bad, j)
+			}
+		}
+	}
 	for _, body := range bodies {
 		if strings.Contains(body, mac) || strings.Contains(body, nonceA) {
 			t.Fatalf("error body echoed the token: %s", body)
@@ -572,5 +635,22 @@ func TestRefusalReasonsAreAuditedButTheReplyIsUniform(t *testing.T) {
 	}
 	if len(rec.rows) != len(cases) {
 		t.Fatalf("rows %d", len(rec.rows))
+	}
+}
+
+// The socket the boxes can reach serves credentials and nothing else: elevation
+// and sign-in are web-only, behind a signed-in browser session.
+func TestBrokerSocketHasNoElevationRoute(t *testing.T) {
+	b, _, _, _ := setup(t, map[string]SessionView{"s": live()})
+	for _, p := range []string{"/v1/elevate", "/v1/credentials/elevate", "/v1/sso-login", "/v1/elevation", "/api/sessions/s/aws/elevate", "/"} {
+		for _, m := range []string{http.MethodPost, http.MethodDelete, http.MethodGet} {
+			r := httptest.NewRequest(m, p, strings.NewReader(`{"minutes":60}`))
+			r.Header.Set("Authorization", "Bearer x")
+			w := httptest.NewRecorder()
+			b.Handler().ServeHTTP(w, r)
+			if w.Code != http.StatusNotFound {
+				t.Errorf("%s %s: %d, want 404", m, p, w.Code)
+			}
+		}
 	}
 }

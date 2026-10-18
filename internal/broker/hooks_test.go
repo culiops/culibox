@@ -3,6 +3,7 @@ package broker
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/sesstoken"
@@ -57,5 +58,29 @@ func TestHooksTokenNonceStripForget(t *testing.T) {
 	h.Forget("claude-3")
 	if _, ok := h.B.Stats("claude-3"); ok {
 		t.Fatal("Forget left the session's stats behind")
+	}
+}
+
+func TestHooksAWSState(t *testing.T) {
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	h := Hooks{B: b}
+	if until, sso := h.AWSState("aws-1"); !until.IsZero() || sso != "" {
+		t.Fatalf("a quiet session reports %v %q", until, sso)
+	}
+	v, err := b.Elevate("aws-1", cookie(30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	b.ssoNeed["aws-1"] = "example-sso"
+	b.mu.Unlock()
+	until, sso := h.AWSState("aws-1")
+	if !until.Equal(v.Until) || !until.Equal(now.Add(30*time.Minute)) || sso != "example-sso" {
+		t.Fatalf("AWSState = %v %q", until, sso)
+	}
+	h.Forget("aws-1")
+	if until, sso := h.AWSState("aws-1"); !until.IsZero() || sso != "" {
+		t.Fatalf("Forget left %v %q", until, sso)
 	}
 }

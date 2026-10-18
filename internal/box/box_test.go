@@ -2,11 +2,14 @@ package box
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -100,7 +103,7 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 
 func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false)
 	joined := strings.Join(got, " ")
 	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude,"} {
 		if strings.Contains(joined, forbidden) {
@@ -120,7 +123,7 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 
 func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false, false)
 	if !containsPair(got, "--mount", "type=bind,src=/data/bundle,dst=/opt/agent-bundle,readonly") {
 		t.Fatalf("extra mounts must be readonly binds: %q", strings.Join(got, " "))
 	}
@@ -179,7 +182,7 @@ func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
 
 func TestRunArgsAreHardened(t *testing.T) {
 	m := newTestManager(t)
-	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil, false), " ")
+	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil, false, false), " ")
 	for _, want := range []string{"--cap-drop=ALL", "no-new-privileges", "--read-only", "--pids-limit", "--init"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing hardening %q in %q", want, joined)
@@ -189,14 +192,14 @@ func TestRunArgsAreHardened(t *testing.T) {
 
 func TestSysboxRuntimeOnlyWhenDetected(t *testing.T) {
 	plain := newTestManager(t)
-	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil, false), " "), "sysbox") {
+	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil, false, false), " "), "sysbox") {
 		t.Fatal("must not request sysbox when it is not installed")
 	}
 	if plain.Runtime() != runtimeRunc {
 		t.Fatalf("Runtime() = %q, want %q", plain.Runtime(), runtimeRunc)
 	}
 	withSysbox := newTestManagerWithSysbox(t)
-	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil, false), " "), "--runtime="+runtimeSysbox) {
+	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil, false, false), " "), "--runtime="+runtimeSysbox) {
 		t.Fatal("expected --runtime=sysbox-runc when detected")
 	}
 	if withSysbox.Runtime() != runtimeSysbox {
@@ -326,7 +329,7 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	if _, err := m.ensureStateDir("ab-box-abc", nil); err != nil {
 		t.Fatal(err)
 	}
-	args := m.runArgs("ab-box-abc", "/w", nil, false)
+	args := m.runArgs("ab-box-abc", "/w", nil, false, false)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "ab-state-") {
 		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)
@@ -1025,5 +1028,55 @@ func TestWorkspaceOverlappingDataRootIsRefused(t *testing.T) {
 	}
 	if reason := ProtectedOverlap(abc, []ProtectedDir{DataDirProtected(root)}); reason != "" {
 		t.Fatalf("%s is not inside %s: %q", abc, root, reason)
+	}
+}
+
+// A key without Session must name the box exactly as before M3b: existing
+// boxes (and their homes) keep their names across the upgrade.
+func TestBoxNameWithoutSessionUnchanged(t *testing.T) {
+	m := newTestManager(t)
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	abs, _ := filepath.Abs(real)
+	for _, k := range []BoxKey{{}, {Account: "work"}, {Binding: "abc123abc123"}, {Account: "work", Binding: "abc123abc123"}} {
+		key := "TEST\x00" + abs
+		if k.Account != "" {
+			key += "\x00" + k.Account
+		}
+		if k.Binding != "" {
+			key += "\x00aws:" + k.Binding
+		}
+		sum := sha256.Sum256([]byte(key))
+		want := "ab-box-" + hex.EncodeToString(sum[:6])
+		if got, _ := m.boxName(dir, k); got != want {
+			t.Errorf("%+v: %s, want %s", k, got, want)
+		}
+	}
+}
+
+func TestSessionKeyGivesEachSessionItsOwnBox(t *testing.T) {
+	m := newTestManager(t)
+	dir := t.TempDir()
+	k := BoxKey{Binding: "abc123abc123"}
+	shared, _ := m.boxName(dir, k)
+	k.Session = "aws-1"
+	a, _ := m.boxName(dir, k)
+	k.Session = "aws-2"
+	b, _ := m.boxName(dir, k)
+	if a == shared || b == shared || a == b {
+		t.Fatalf("names must differ per session: shared=%s a=%s b=%s", shared, a, b)
+	}
+}
+
+func TestExclusiveRunArgsCarryTheLabels(t *testing.T) {
+	m := newTestManager(t)
+	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify})
+	got := m.runArgs("ab-box-x", "/w", nil, true, true)
+	if !containsPair(got, "--label", LabelExclusive+"=1") || !containsPair(got, "--label", LabelClaims+"=1") {
+		t.Fatalf("exclusive box lacks its labels: %q", got)
+	}
+	plain := m.runArgs("ab-box-y", "/w", nil, true, false)
+	if slices.Contains(plain, LabelExclusive+"=1") || !containsPair(plain, "--label", LabelClaims+"=1") {
+		t.Fatalf("a shared bound box: claims yes, exclusive no: %q", plain)
 	}
 }

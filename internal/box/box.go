@@ -31,6 +31,11 @@ import (
 const (
 	LabelWorkspace = "io.culiops.agent-box.workspace"
 	LabelInstance  = "io.culiops.agent-box.instance"
+	// LabelExclusive marks a box another spawn must not share a folder with;
+	// LabelClaims marks a box created by a build that enforces exclusive
+	// workspaces, so older boxes (without it) are known not to honour claims.
+	LabelExclusive = "io.culiops.agent-box.exclusive"
+	LabelClaims    = "io.culiops.agent-box.claims"
 	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
@@ -66,6 +71,13 @@ const (
 type BoxInfo struct {
 	Name, Workspace, State string // State is docker's .State: running, exited, created, ...
 	Created                time.Time
+	Instance               string // the instance label (DEV/PROD), "" when absent
+	Exclusive, Claims      bool   // the exclusive / claims labels (see LabelExclusive)
+	// Unreadable marks a row that did not split into the listing's fields: a tab
+	// or newline inside a label of a container agent-box did not create (this
+	// package refuses such workspace paths). Its workspace, instance and flags
+	// are then guesses, so the workspace checks treat it as a conflict.
+	Unreadable bool
 }
 
 // ErrUnboxableWorkspace marks a refusal the user can act on directly: the
@@ -80,6 +92,37 @@ var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 // message carries the remedy (a command, a path) and is shown to the user, so it
 // must never contain env values or secrets.
 var ErrBoxUnavailable = errors.New("containment unavailable")
+
+// ErrWorkspaceHeld marks a boxed spawn refused because its folder overlaps a
+// box it must not share with (M3b §7.2). Its message names only the folder the
+// user picked and the remedy, so it is shown to them.
+var ErrWorkspaceHeld = errors.New("workspace held")
+
+// Overlaps reports whether two workspaces share files: equal, or one is an
+// ancestor of the other, compared component-wise. Callers pass absolute,
+// symlink-resolved paths; Clean takes care of trailing slashes and dot segments.
+func Overlaps(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	under := func(p, dir string) bool {
+		return strings.HasPrefix(p, strings.TrimSuffix(dir, string(filepath.Separator))+string(filepath.Separator))
+	}
+	return under(a, b) || under(b, a)
+}
+
+// holdsWorkspace reports whether a box in that docker state keeps its folder
+// mounted: a paused or restarting box resumes into it, so it counts like a
+// running one. Exited, created and dead boxes do not.
+func holdsWorkspace(state string) bool {
+	return state == "running" || state == "paused" || state == "restarting"
+}
+
+// knownWorkspace reports whether a foreign container's workspace label is a
+// path the overlap check can compare. agent-box writes absolute resolved paths,
+// so an empty or relative label is something else's and is taken to overlap.
+func knownWorkspace(w string) bool { return filepath.IsAbs(w) }
 
 // UnderMount reports whether path (absolute, symlinks resolved) is at or below
 // one of mounts. Component-wise, so /Users/ab is not under /Users/a.
@@ -166,6 +209,10 @@ type Manager struct {
 	drift map[string]bool
 	// egress is set once at boot by SetEgress (guarded by mu).
 	egress Egress
+	// exclusive marks boxes that belong to one session (BoxKey.Session, M3b):
+	// they are removed as soon as their last session is released, with no
+	// idle-TTL reuse. Set by ensure and, after a restart, by MarkExclusive.
+	exclusive map[string]bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -191,8 +238,9 @@ func New(opts Options) (*Manager, error) {
 		active:  map[string]int{},
 		timers:  map[string]*time.Timer{},
 
-		verified: map[string]bool{},
-		drift:    map[string]bool{},
+		verified:  map[string]bool{},
+		drift:     map[string]bool{},
+		exclusive: map[string]bool{},
 	}
 	if opts.Client.HasRuntime(context.Background(), runtimeSysbox) {
 		m.runtime = runtimeSysbox
@@ -221,8 +269,10 @@ func (m *Manager) Runtime() string { return m.runtime }
 // BoxKey is everything besides the workspace that decides which box a session
 // runs in. Account is the agent account name ("" or "default" for the default
 // account). Binding is the hash of the session's AWS binding (config.AWSBinding
-// Hash), "" for a session without one.
-type BoxKey struct{ Account, Binding string }
+// Hash), "" for a session without one. Session is the session id for a binding
+// with elevate (M3b): such a box belongs to one session and is removed when it
+// ends. It is empty for every other session.
+type BoxKey struct{ Account, Binding, Session string }
 
 // boxName derives the container name from the canonical workspace path.
 // Symlinks are resolved so two spellings of one directory never produce two
@@ -248,6 +298,9 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	}
 	if k.Binding != "" {
 		key += "\x00aws:" + k.Binding
+	}
+	if k.Session != "" {
+		key += "\x00session:" + k.Session
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
@@ -474,7 +527,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
-	if err := m.ensure(ctx, name, real, extraRO, key.Binding != ""); err != nil {
+	if err := m.ensure(ctx, name, real, extraRO, key.Binding != "", key.Session != ""); err != nil {
 		return nil, nil, "", err
 	}
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
@@ -487,7 +540,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, bound bool) error {
+func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, bound, exclusive bool) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -510,6 +563,13 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			return fmt.Errorf("%w: egress control is not running, so a box with AWS access cannot start", ErrBoxUnavailable)
 		}
 		verify = e.Verify
+	}
+
+	// Under opMu with the docker run below, so two spawns in this process
+	// cannot both pass the check.
+	if err := m.claimCheck(ctx, name, cwd, exclusive); err != nil {
+		m.rearmIfIdle(name)
+		return err
 	}
 
 	st, err := m.opts.Client.Inspect(ctx, name)
@@ -567,7 +627,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, bound)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, bound, exclusive)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)
@@ -583,8 +643,129 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 	// Count the session only once the box is genuinely usable, so a failed spawn
 	// cannot leak a reference that keeps the box alive forever.
 	m.acquire(name)
+	if exclusive {
+		m.MarkExclusive(name)
+	}
 	m.touchMarker(name)
 	return nil
+}
+
+// claimCheck enforces exclusive workspaces across every agent-box instance on
+// this docker daemon (DEV and PROD share it). An exclusive spawn conflicts with
+// any running box over an overlapping folder; any other spawn conflicts only
+// with an exclusive one. An idle box of this instance is removed instead of
+// blocking, whichever side is exclusive (spec correction 6); if that removal
+// fails, the spawn is refused. A failed listing refuses (correction 9).
+//
+// Rows can come from containers agent-box did not create, so the check fails
+// closed on what it cannot read: an unreadable row conflicts with every spawn,
+// and a live box with no usable workspace label is taken to overlap. cwd is the
+// symlink-resolved workspace. Caller holds opMu.
+func (m *Manager) claimCheck(ctx context.Context, name, cwd string, exclusive bool) error {
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance) // the key alone: every instance
+	if err != nil {
+		return fmt.Errorf("%w: listing boxes for the workspace check: %v", ErrBoxUnavailable, err)
+	}
+	for _, b := range boxes {
+		if b.Name == name || !holdsWorkspace(b.State) {
+			continue
+		}
+		if b.Unreadable {
+			return fmt.Errorf("%w: container %q carries agent-box labels that cannot be read, so it may be using %s. "+
+				"Remove that container, or use a separate folder or worktree.", ErrWorkspaceHeld, b.Name, cwd)
+		}
+		if knownWorkspace(b.Workspace) && !Overlaps(b.Workspace, cwd) {
+			continue
+		}
+		if !exclusive && !b.Exclusive {
+			continue
+		}
+		if b.Instance == m.opts.Instance && m.idle(b.Name) && m.removeIdle(ctx, b.Name) == nil {
+			continue
+		}
+		return fmt.Errorf("%w: %s is in use by an AWS-write-capable session (or another session sits in this folder). "+
+			"Use a separate folder or worktree, or stop the other session.", ErrWorkspaceHeld, cwd)
+	}
+	return nil
+}
+
+// idle reports whether no session of this process uses the box.
+func (m *Manager) idle(name string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.active[name] == 0
+}
+
+// removeIdle removes an idle box that stands in a spawn's way, with its idle
+// timer and exclusive mark. Caller holds opMu, which also orders it against the
+// timer's own stopIfIdle.
+func (m *Manager) removeIdle(ctx context.Context, name string) error {
+	m.unverify(name)
+	if err := m.opts.Client.Stop(ctx, name); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t, ok := m.timers[name]; ok {
+		t.Stop()
+		delete(m.timers, name)
+	}
+	delete(m.exclusive, name)
+	return nil
+}
+
+// MarkExclusive records that a box belongs to one session, so it is removed at
+// release rather than kept for its idle TTL. ensure marks the boxes it starts;
+// the session layer calls this for a box adopted after a restart.
+func (m *Manager) MarkExclusive(name string) {
+	if name == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.exclusive[name] = true
+}
+
+// idleTTL is how long an idle box is kept: zero for an exclusive one, which
+// is never reused. Caller holds mu.
+func (m *Manager) idleTTL(name string) time.Duration {
+	if m.exclusive[name] {
+		return 0
+	}
+	return m.opts.IdleTTL
+}
+
+// GrantBlocker names why a grant must wait, or "" (M3b §7.3): any other running
+// box, of any instance, over a folder that overlaps cwd. One from a build that
+// does not enforce claims (no claims label) is named as such. self is the
+// session's own box. Like claimCheck it fails closed: an unreadable row, or a
+// live (running, paused or restarting) box with no usable workspace label, blocks.
+func (m *Manager) GrantBlocker(ctx context.Context, cwd, self string) (string, error) {
+	real, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
+	}
+	boxes, err := m.opts.Client.ListBoxes(ctx, LabelInstance)
+	if err != nil {
+		return "", fmt.Errorf("box: listing boxes: %w", err)
+	}
+	for _, b := range boxes {
+		if b.Name == self || !holdsWorkspace(b.State) {
+			continue
+		}
+		switch {
+		case b.Unreadable:
+			return fmt.Sprintf("container %q carries agent-box labels that cannot be read, so it may use %s; remove it first", b.Name, real), nil
+		case !knownWorkspace(b.Workspace):
+			return fmt.Sprintf("a box (instance %s) has no usable workspace label, so it may use %s; stop it first", b.Instance, real), nil
+		case !Overlaps(b.Workspace, real):
+			continue
+		case !b.Claims:
+			return fmt.Sprintf("a box started by an older agent-box (instance %s) uses %s; stop it or upgrade that instance first", b.Instance, b.Workspace), nil
+		}
+		return fmt.Sprintf("another box (instance %s) uses %s; stop the session in it first", b.Instance, b.Workspace), nil
+	}
+	return "", nil
 }
 
 // refuseUnverified handles a box that failed its containment check: it is
@@ -644,7 +825,7 @@ func (m *Manager) rearmIfIdle(name string) {
 	if t, ok := m.timers[name]; ok {
 		t.Stop()
 	}
-	m.timers[name] = time.AfterFunc(m.opts.IdleTTL, func() { m.stopIfIdle(name) })
+	m.timers[name] = time.AfterFunc(m.idleTTL(name), func() { m.stopIfIdle(name) })
 }
 
 // KillSession terminates a session's process INSIDE the box. Signals do not
@@ -672,7 +853,8 @@ func (m *Manager) acquire(name string) {
 
 // Release records that a session for this workspace ended. On the last one it
 // arms the idle timer; the box outlives its sessions by IdleTTL so returning to
-// a project does not pay start-up again.
+// a project does not pay start-up again. An exclusive box is removed at once
+// (M3b spec correction 7): it belongs to the session that just ended.
 func (m *Manager) ReleaseBox(name string) {
 	if name == "" {
 		return
@@ -689,7 +871,7 @@ func (m *Manager) ReleaseBox(name string) {
 	if t, ok := m.timers[name]; ok {
 		t.Stop()
 	}
-	m.timers[name] = time.AfterFunc(m.opts.IdleTTL, func() { m.stopIfIdle(name) })
+	m.timers[name] = time.AfterFunc(m.idleTTL(name), func() { m.stopIfIdle(name) })
 }
 
 // stopIfIdle re-checks under the lock, so a session started during the idle
@@ -709,6 +891,9 @@ func (m *Manager) stopIfIdle(name string) {
 	m.mu.Unlock()
 	m.unverify(name)
 	_ = m.opts.Client.Stop(context.Background(), name)
+	m.mu.Lock()
+	delete(m.exclusive, name)
+	m.mu.Unlock()
 }
 
 // AdoptBox re-registers a box whose session survived a daemon restart, so the
@@ -816,7 +1001,7 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 				t.Stop()
 			}
 			name := b.Name
-			m.timers[name] = time.AfterFunc(m.opts.IdleTTL, func() { m.stopIfIdle(name) })
+			m.timers[name] = time.AfterFunc(m.idleTTL(name), func() { m.stopIfIdle(name) })
 			m.mu.Unlock()
 			rep.Corrected = append(rep.Corrected, SweepAction{b.Name,
 				fmt.Sprintf("counter said %d live session(s), the registry says 0 on two sweeps; idle timer armed", count)})
@@ -837,5 +1022,10 @@ func (m *Manager) remove(ctx context.Context, name string) error {
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		return fmt.Errorf("box: sweep removing %s: %w", name, err)
 	}
+	m.mu.Lock()
+	if m.active[name] == 0 { // no release will come to clear it
+		delete(m.exclusive, name)
+	}
+	m.mu.Unlock()
 	return nil
 }

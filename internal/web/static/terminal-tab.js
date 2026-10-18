@@ -406,7 +406,16 @@ class TerminalTab {
   setTitle(name) { this.name = name || this.id; this.onUpdate?.(); }
   setStatus(t) { this.statusText = t; this.onUpdate?.(); }
   activity() { return this.activityState; }
-  setActivity(a) { if (a !== this.activityState) { this.activityState = a; this.onUpdate?.(); } }
+  // needWhy: why the tab reads "waiting" when the agent is not ("sso"), else "".
+  needWhy() { return this.needWhyState || ""; }
+  setActivity(a, why = "") {
+    if (a !== this.activityState || why !== this.needWhy()) { this.activityState = a; this.needWhyState = why; this.onUpdate?.(); }
+  }
+  // setAwsSig: the strip draws the session's AWS chip from the session list, not
+  // from the tab, so it only learns of a grant/drop through this.
+  setAwsSig(k) {
+    if (k !== (this._awsSig || "")) { this._awsSig = k; this.onUpdate?.(); }
+  }
   usage() { return this.usageData; }
   setUsage(u) {
     // Re-render only when the readout actually moved, so a poll that returns the

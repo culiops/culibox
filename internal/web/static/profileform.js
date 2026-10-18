@@ -83,6 +83,14 @@ function runtimeToSend(seg, storedExplicitBox, hasAWS) {
   return storedExplicitBox || hasAWS ? "box" : "";
 }
 
+// boxToSend: the stored profile's box override, sent back on save. The editor
+// has no box field, and a save that omits it erases the override (and so
+// changes the box): follow-up A4. Only a non-empty image is an override.
+function boxToSend(loaded) {
+  const img = loaded && typeof loaded.image === "string" ? loaded.image.trim() : "";
+  return img ? { image: img } : undefined;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend };
+  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend };
 }

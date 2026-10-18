@@ -27,15 +27,38 @@ type fakeClient struct {
 	// so a test can land an event exactly in the window between the sweep's
 	// snapshot and its re-check without racing real goroutines.
 	inspectHook func(name string)
+
+	// labels holds every --label k=v of each Run, keyed by --name, so ListBoxes
+	// reports the workspace/instance/exclusive/claims labels docker would.
+	labels map[string]map[string]string
+	// others are boxes of another instance (or foreign rows carrying the
+	// instance label). ListBoxes returns them only for the bare LabelInstance
+	// filter, as docker would for `--filter label=<key>`.
+	others  []BoxInfo
+	listErr error
 }
 
-func newFake() *fakeClient { return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}} }
+func newFake() *fakeClient {
+	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{}}
+}
 
 func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runCount++
 	f.runArgs = append(f.runArgs, args)
+	var name string
+	lbl := map[string]string{}
+	for i := 0; i+1 < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			name = args[i+1]
+		case "--label":
+			if k, v, ok := strings.Cut(args[i+1], "="); ok {
+				lbl[k] = v
+			}
+		}
+	}
 	for i, a := range args {
 		if a == "--name" && i+1 < len(args) {
 			if f.exited[args[i+1]] {
@@ -45,6 +68,9 @@ func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
 			f.running[args[i+1]] = true
 			delete(f.exited, args[i+1])
 		}
+	}
+	if name != "" {
+		f.labels[name] = lbl
 	}
 	return "container-id", nil
 }
@@ -69,26 +95,40 @@ func (f *fakeClient) Inspect(_ context.Context, name string) (State, error) {
 	return StateMissing, nil
 }
 
-func (f *fakeClient) ListBoxes(_ context.Context, _ string) ([]BoxInfo, error) {
+func (f *fakeClient) ListBoxes(_ context.Context, filter string) ([]BoxInfo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	info := func(n, st string) BoxInfo {
+		b := BoxInfo{Name: n, State: st}
+		if l := f.labels[n]; l != nil {
+			b.Workspace, b.Instance = l[LabelWorkspace], l[LabelInstance]
+			b.Exclusive, b.Claims = l[LabelExclusive] == "1", l[LabelClaims] == "1"
+		}
+		return b
+	}
 	var out []BoxInfo
 	for _, n := range f.existing {
 		st := "exited"
 		if f.running[n] {
 			st = "running"
 		}
-		out = append(out, BoxInfo{Name: n, State: st})
+		out = append(out, info(n, st))
 	}
 	for n := range f.running {
 		if !contains(f.existing, n) {
-			out = append(out, BoxInfo{Name: n, State: "running"})
+			out = append(out, info(n, "running"))
 		}
 	}
 	for n := range f.exited {
 		if !contains(f.existing, n) && !f.running[n] {
-			out = append(out, BoxInfo{Name: n, State: "exited"})
+			out = append(out, info(n, "exited"))
 		}
+	}
+	if filter == LabelInstance {
+		out = append(out, f.others...)
 	}
 	return out, nil
 }

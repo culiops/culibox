@@ -467,8 +467,19 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		if egressSvc != nil {
 			status.Egress = egressSvc.Stats // nil otherwise: no egress object in the reply
 		}
-		api.AWS = status
 		stopBroker = brokerSvc.Stop
+		if boxes != nil {
+			es := elevationService{brk: brokerSvc.Hooks.B, get: mgr.Get, list: mgr.List, blocker: boxes.GrantBlocker}
+			if brokerSvc.SSO != nil { // a nil *Runner must stay a nil interface
+				es.runner = brokerSvc.SSO
+			}
+			brokerSvc.Hooks.B.SetClaimCheck(es.claimCheck)
+			api.Elevation = es
+			status.Elevation = brokerSvc.Hooks.B.Elevation
+			status.SSO = es.ssoStatus
+			status.Grant = es.grantContext
+		}
+		api.AWS = status
 	}
 	if egressSvc != nil {
 		stopEgress = egressSvc.Stop

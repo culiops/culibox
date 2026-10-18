@@ -33,7 +33,7 @@ function rowClasses(s, ctx) {
   const out = ["srow"];
   if (c.killing) { out.push("killing"); return out; }
   if (s && c.selectedId && s.id === c.selectedId) out.push("sel");
-  if (s && s.activity === "waiting") out.push("needs");
+  if (s && (s.activity === "waiting" || s.need === "sso")) out.push("needs");
   return out;
 }
 
@@ -143,34 +143,129 @@ function roleName(arn) {
   return i >= 0 ? arn.slice(i + 1) : (arn || "");
 }
 
+// hhmm: the local clock face of an ISO instant, "" when unparseable. Same
+// local-time idiom as startedText in steerrail.js.
+function hhmm(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const d = new Date(t);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
+}
+
+// minutesLeft: whole minutes until iso (negative once past), null when iso is
+// not a time.
+function minutesLeft(iso, nowMs) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  return Math.floor((t - nowMs) / 60000);
+}
+
+// isElevated: the session's write window is open. The list entry carries
+// elevated_until only while the daemon holds a window; the comparison guards a
+// stale entry between two polls, so a lapsed window never paints as write.
+function isElevated(a, nowMs) {
+  return !!a && !!a.elevated_until && Date.parse(a.elevated_until) > nowMs;
+}
+
+// NEW_CRED_MIN: below this many minutes left the broker mints no more write
+// credentials (elevated mints need 16 min), so the row says so.
+const NEW_CRED_MIN = 16;
+// EXTEND_UNDER: Extend is offered when fewer than this many minutes are left.
+const EXTEND_UNDER = 20;
+
 // awsBadge: the short chip. Red (prod) is the operator's own flag on the
-// binding, not something inferred from the account.
-function awsBadge(s) {
+// binding, not something inferred from the account. `write` is a separate axis
+// (amber outline), so a prod binding that is writing is both.
+function awsBadge(s, nowMs = Date.now()) {
   const a = s && s.aws;
   if (!a) return null;
+  const base = a.label || ("aws:" + a.account_id);
+  if (isElevated(a, nowMs)) {
+    return {
+      text: base + " · write",
+      prod: !!a.prod,
+      write: true,
+      title: "AWS " + a.account_id + " · " + roleName(a.elevate && a.elevate.role_arn) + " · write until " + hhmm(a.elevated_until),
+    };
+  }
   return {
-    text: a.label || ("aws:" + a.account_id),
+    text: base,
     prod: !!a.prod,
+    write: false,
     title: "AWS " + a.account_id + " · " + roleName(a.role_arn) + " · read-only",
   };
+}
+
+// WRITE_SUFFIX is what awsBadge appends while a window is open.
+const WRITE_SUFFIX = " · write";
+
+// badgeParts: the badge text as {label, write}, so the renderer can let the
+// label ellipsize while the word "write" never does (it is the one part of the
+// chip that must always be readable).
+function badgeParts(ab) {
+  if (!ab) return null;
+  const text = String(ab.text || "");
+  if (ab.write && text.endsWith(WRITE_SUFFIX)) return { label: text.slice(0, -WRITE_SUFFIX.length), write: true };
+  return { label: text, write: false };
+}
+
+// awsSig: everything the AWS chip draws, as one string. A terminal tab keeps its
+// strip until something tells it to rebuild; this is what tells it when a grant,
+// a drop or a lapsed window changed the chip.
+function awsSig(s, nowMs = Date.now()) {
+  const a = s && s.aws;
+  if (!a) return "";
+  return [a.label || "", a.account_id || "", !!a.prod, isElevated(a, nowMs) ? a.elevated_until : ""].join("|");
+}
+
+// scopeRow: the scope row of the steer rail. Under a live window it reads the
+// clock and minutes left (the elevation view only carries last_valid after a
+// drop, so an active window is described from the list entry's elevated_until).
+// After a drop, credentials already issued may outlive the grant: say until when.
+function scopeRow(a, st, nowMs) {
+  if (isElevated(a, nowMs)) {
+    const m = minutesLeft(a.elevated_until, nowMs);
+    let v = "write · until " + hhmm(a.elevated_until) + " (" + m + " min)";
+    if (m < NEW_CRED_MIN) v += " · new credentials read-only";
+    return { k: "scope", v: v, chip: "bdg aws write", wrap: true };
+  }
+  const e = st && st.elevation;
+  if (e && e.active === false && e.last_valid && Date.parse(e.last_valid) > nowMs) {
+    return { k: "scope", v: "read-only · issued write creds valid until " + hhmm(e.last_valid), wrap: true };
+  }
+  return { k: "scope", v: "read-only" };
 }
 
 // awsRailRows: the steer rail's view of the binding, as short rows rather than
 // one long line: the rail's value cell is ~260px, and a single
 // "label · account · role · read-only" string was ellipsized so that the end of
 // it (read-only, production) was exactly what the reader could not see. The
-// identifiers wrap; "read-only" is its own row; production is a row of its own
-// drawn as the red chip, so no label length can push it out of view.
-function awsRailRows(s) {
+// identifiers wrap; the scope is its own row; production is a row of its own
+// drawn as the red chip, so no label length can push it out of view. While
+// elevated, the role row names the write role in use.
+function awsRailRows(s, st, nowMs = Date.now()) {
   const a = s && s.aws;
   if (!a) return [];
+  const elevated = isElevated(a, nowMs);
   const rows = [
     { k: "aws", v: a.label ? a.label + " · " + a.account_id : String(a.account_id), wrap: true },
-    { k: "role", v: roleName(a.role_arn), wrap: true },
-    { k: "scope", v: "read-only" },
+    { k: "role", v: roleName(elevated && a.elevate ? a.elevate.role_arn : a.role_arn), wrap: true },
+    scopeRow(a, st, nowMs),
   ];
   if (a.prod) rows.push({ k: "prod", v: "production", chip: "bdg aws prod" });
   return rows;
+}
+
+// elevActions: which of Elevate / Extend / Drop the rail offers. Elevate needs
+// a write role on the binding and no open window; Extend only near the end of a
+// window (fewer than EXTEND_UNDER min left); Drop whenever a window is open.
+function elevActions(a, nowMs = Date.now()) {
+  const on = isElevated(a, nowMs);
+  return {
+    elevate: !!a && !!a.elevate && !on,
+    extend: on && minutesLeft(a.elevated_until, nowMs) < EXTEND_UNDER,
+    drop: on,
+  };
 }
 
 // readAWSFields: the profile editor's AWS block as the object the server
@@ -192,9 +287,17 @@ function readAWSFields(get) {
   // Only when there are hosts: an empty list must not reach the server, so a
   // binding without extra hosts keeps its pre-egress hash (and its box name).
   if (egress.length) out.egress_allow = egress;
+  // The write role is optional: without one the binding is read-only and the
+  // block is absent. A blank or non-numeric max falls back to the 60 min default.
+  const elevRole = String(get("pf-aws-elev-role") || "").trim();
+  if (elevRole) {
+    out.elevate = { role_arn: elevRole, max_minutes: Number(get("pf-aws-elev-max")) || 60 };
+    if (get("pf-aws-elev-iam")) out.elevate.allow_iam = true;
+  }
   return out;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields };
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields,
+    hhmm, minutesLeft, isElevated, elevActions };
 }
