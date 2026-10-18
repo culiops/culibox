@@ -73,10 +73,10 @@ func TestHooksAWSState(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.mu.Lock()
-	b.ssoNeed["aws-1"] = "culi-sso"
+	b.ssoNeed["aws-1"] = "example-sso"
 	b.mu.Unlock()
 	until, sso := h.AWSState("aws-1")
-	if !until.Equal(v.Until) || !until.Equal(now.Add(30*time.Minute)) || sso != "culi-sso" {
+	if !until.Equal(v.Until) || !until.Equal(now.Add(30*time.Minute)) || sso != "example-sso" {
 		t.Fatalf("AWSState = %v %q", until, sso)
 	}
 	h.Forget("aws-1")

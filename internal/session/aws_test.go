@@ -751,9 +751,9 @@ func TestApplyAWSState(t *testing.T) {
 		sso, wantNeed string
 	}{
 		{"nothing", "", time.Time{}, "", ""},
-		{"sso on a quiet session", "", time.Time{}, "culi-sso", "sso"},
-		{"sso beats turn", "turn", time.Time{}, "culi-sso", "sso"},
-		{"ask beats sso", "ask", time.Time{}, "culi-sso", "ask"},
+		{"sso on a quiet session", "", time.Time{}, "example-sso", "sso"},
+		{"sso beats turn", "turn", time.Time{}, "example-sso", "sso"},
+		{"ask beats sso", "ask", time.Time{}, "example-sso", "ask"},
 		{"elevated only", "", until, "", ""},
 	}
 	for _, c := range cases {
@@ -772,7 +772,7 @@ func TestApplyAWSState(t *testing.T) {
 		t.Fatalf("an exited session must not show a write window: %v", gone.AWS.ElevatedUntil)
 	}
 	plain := Info{Need: "turn"}
-	applyAWSState(&plain, until, "culi-sso") // no binding: nothing to apply
+	applyAWSState(&plain, until, "example-sso") // no binding: nothing to apply
 	if plain.Need != "turn" || plain.AWS != nil {
 		t.Fatalf("an unbound session is untouched: %+v", plain)
 	}
@@ -785,18 +785,18 @@ func TestListCarriesTheBrokerState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
-	hooks.setState(s.ID, time.Unix(1_800_003_600, 0), "culi-sso")
+	hooks.setState(s.ID, time.Unix(1_800_003_600, 0), "example-sso")
 	var got Info
 	for _, i := range m.List() {
 		if i.ID == s.ID {
 			got = i
 		}
 	}
-	if got.Need != "sso" || got.AWS.SSOExpired != "culi-sso" || got.AWS.ElevatedUntil == nil {
+	if got.Need != "sso" || got.AWS.SSOExpired != "example-sso" || got.AWS.ElevatedUntil == nil {
 		t.Fatalf("List: %+v aws=%+v", got, got.AWS)
 	}
 	b, _ := json.Marshal(got)
-	if !strings.Contains(string(b), `"sso_expired":"culi-sso"`) || !strings.Contains(string(b), `"elevated_until":`) {
+	if !strings.Contains(string(b), `"sso_expired":"example-sso"`) || !strings.Contains(string(b), `"elevated_until":`) {
 		t.Fatalf("wire: %s", b)
 	}
 }

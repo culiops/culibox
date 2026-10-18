@@ -160,7 +160,7 @@ func TestAWSStatusCarriesElevateElevationAndSSO(t *testing.T) {
 		return broker.ElevationView{Active: true, Until: time.Unix(1_800_003_600, 0).UTC()}, true
 	}
 	ad.SSO = func(id string) (SSOStatus, bool) {
-		return SSOStatus{Expired: true, Source: "culi-sso", Command: "aws sso login --profile p",
+		return SSOStatus{Expired: true, Source: "example-sso", Command: "aws sso login --profile p",
 			Login: &ssologin.State{State: "waiting", Code: "ABCD-EFGH"}}, true
 	}
 	decode := func(id string) map[string]any {

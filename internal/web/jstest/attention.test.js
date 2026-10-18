@@ -222,13 +222,13 @@ test("the hint follows the shown text, not ask_full: the real command is never t
 });
 
 test("an SSO need: needs you, labelled, its own card, its own notification text", () => {
-  const s = { id: "aws-1", activity: "working", need: "sso", aws: { sso_expired: "culi-sso" } };
+  const s = { id: "aws-1", activity: "working", need: "sso", aws: { sso_expired: "example-sso" } };
   assert.ok(needsYou(s));
   assert.ok(!needsYou({ activity: "working" }));
   assert.ok(needsYou({ activity: "waiting" }));
   assert.ok(!needsYou(null));
   assert.strictEqual(needLabel(s), "AWS sign-in");
-  assert.deepStrictEqual(cardContent(s), { text: "AWS sign-in expired (culi-sso). This session's AWS calls fail until you sign in.",
+  assert.deepStrictEqual(cardContent(s), { text: "AWS sign-in expired (example-sso). This session's AWS calls fail until you sign in.",
     sso: true, ask: false, reply: false, enableReplies: false });
   assert.strictEqual(notifyBody(s), "AWS sign-in expired");
   const first = needsTransitions(null, [s]);
@@ -240,7 +240,7 @@ test("an SSO need: needs you, labelled, its own card, its own notification text"
 });
 
 test("an SSO card keeps the reply box of a replyable session (spec 8.2)", () => {
-  const s = { id: "aws-1", activity: "waiting", need: "sso", claude: true, replyable: true, summary: "Done with the plan", aws: { sso_expired: "culi-sso" } };
+  const s = { id: "aws-1", activity: "waiting", need: "sso", claude: true, replyable: true, summary: "Done with the plan", aws: { sso_expired: "example-sso" } };
   const c = cardContent(s);
   assert.strictEqual(c.sso, true);
   assert.strictEqual(c.reply, true);

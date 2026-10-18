@@ -47,11 +47,11 @@ test("trustedSSOURL mirrors the server's allowlist", () => {
 });
 
 test("ssoCard: text names the sso session; link only when trusted; command from the status", () => {
-  const s = { id: "aws-1", need: "sso", aws: { sso_expired: "culi-sso" } };
-  const st = { sso: { expired: true, source: "culi-sso", command: "aws sso login --profile sandbox-admin",
+  const s = { id: "aws-1", need: "sso", aws: { sso_expired: "example-sso" } };
+  const st = { sso: { expired: true, source: "example-sso", command: "aws sso login --profile sandbox-admin",
     login: { state: "waiting", uri: "https://device.sso.ap-southeast-1.amazonaws.com/?user_code=ABCD-EFGH", uri_trusted: true, code: "ABCD-EFGH", expires: "2027-01-15T08:25:00Z" } } };
   const c = ssoCard(s, st);
-  assert.strictEqual(c.text, "AWS sign-in expired (culi-sso). This session's AWS calls fail until you sign in.");
+  assert.strictEqual(c.text, "AWS sign-in expired (example-sso). This session's AWS calls fail until you sign in.");
   assert.strictEqual(c.command, "aws sso login --profile sandbox-admin");
   assert.deepStrictEqual(c.login, { state: "waiting", link: st.sso.login.uri, plain: "", code: "ABCD-EFGH", expires: "2027-01-15T08:25:00Z" });
   const evil = { sso: { ...st.sso, login: { ...st.sso.login, uri: "https://evil.example/", uri_trusted: true } } };
@@ -63,7 +63,7 @@ test("ssoCard: text names the sso session; link only when trusted; command from 
 });
 
 test("ssoCard keeps the reply affordance of a replyable session (spec 8.2)", () => {
-  const sso = { id: "aws-1", need: "sso", claude: true, aws: { sso_expired: "culi-sso" } };
+  const sso = { id: "aws-1", need: "sso", claude: true, aws: { sso_expired: "example-sso" } };
   assert.strictEqual(ssoCard({ ...sso, replyable: true }, null).reply, true);
   assert.strictEqual(ssoCard({ ...sso, replyable: false }, null).reply, false);
   assert.strictEqual(ssoCard({ id: "x", need: "sso" }, null).text,

@@ -209,7 +209,7 @@ func TestStartReturnsTheCodeThenCompletes(t *testing.T) {
 	r, fs := newFakeRunner(t)
 	var calls []bool
 	var mu sync.Mutex
-	st, err := r.Start("culi-sso", "sandbox-admin", func(ok bool, _ string) { mu.Lock(); calls = append(calls, ok); mu.Unlock() })
+	st, err := r.Start("example-sso", "sandbox-admin", func(ok bool, _ string) { mu.Lock(); calls = append(calls, ok); mu.Unlock() })
 	if err != nil || st.State != StateWaiting || st.Code != "ABCD-EFGH" || !st.URITrusted || st.Expires.IsZero() ||
 		!strings.Contains(st.URI, "user_code=ABCD-EFGH") {
 		t.Fatalf("Start = %+v %v", st, err)
@@ -218,7 +218,7 @@ func TestStartReturnsTheCodeThenCompletes(t *testing.T) {
 		t.Fatalf("argv %q", got)
 	}
 	fs.last().exit(nil)
-	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateOK })
+	mustWait(t, func() bool { s, _ := r.Status("example-sso"); return s.State == StateOK })
 	mu.Lock()
 	defer mu.Unlock()
 	if !slices.Equal(calls, []bool{true}) {
@@ -228,8 +228,8 @@ func TestStartReturnsTheCodeThenCompletes(t *testing.T) {
 
 func TestSingleFlightPerKey(t *testing.T) {
 	r, fs := newFakeRunner(t)
-	a, _ := r.Start("culi-sso", "sandbox-admin", func(bool, string) {})
-	b, _ := r.Start("culi-sso", "sandbox-ro", func(bool, string) {})
+	a, _ := r.Start("example-sso", "sandbox-admin", func(bool, string) {})
+	b, _ := r.Start("example-sso", "sandbox-ro", func(bool, string) {})
 	if fs.starts() != 1 || a.Code != b.Code {
 		t.Fatalf("a second click must return the running flow: %d starts", fs.starts())
 	}
@@ -245,11 +245,11 @@ func TestUnparsedOutputKillsAndFailsOnce(t *testing.T) {
 	var mu sync.Mutex
 	var n int
 	var detail string
-	_, err := r.Start("culi-sso", "sandbox-admin", func(ok bool, d string) { mu.Lock(); n++; detail = d; mu.Unlock() })
+	_, err := r.Start("example-sso", "sandbox-admin", func(ok bool, d string) { mu.Lock(); n++; detail = d; mu.Unlock() })
 	if !errors.Is(err, ErrUnparsed) || !fs.last().killed() {
 		t.Fatalf("err %v killed %v", err, fs.last().killed())
 	}
-	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateFailed })
+	mustWait(t, func() bool { s, _ := r.Status("example-sso"); return s.State == StateFailed })
 	mu.Lock()
 	defer mu.Unlock()
 	if n != 1 || detail != "unparsed output" {
@@ -283,9 +283,9 @@ func TestTheFlowIsCappedAndKilled(t *testing.T) {
 	r.flowTimeout = 80 * time.Millisecond
 	var mu sync.Mutex
 	var detail string
-	r.Start("culi-sso", "sandbox-admin", func(ok bool, d string) { mu.Lock(); detail = d; mu.Unlock() })
+	r.Start("example-sso", "sandbox-admin", func(ok bool, d string) { mu.Lock(); detail = d; mu.Unlock() })
 	mustWait(t, func() bool { return fs.last().killed() })
-	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateFailed })
+	mustWait(t, func() bool { s, _ := r.Status("example-sso"); return s.State == StateFailed })
 	mu.Lock()
 	defer mu.Unlock()
 	if !strings.Contains(detail, "timed out") {
@@ -296,11 +296,11 @@ func TestTheFlowIsCappedAndKilled(t *testing.T) {
 func TestFinishedFlowsAreForgotten(t *testing.T) {
 	r, fs := newFakeRunner(t)
 	r.keepDone = 30 * time.Millisecond
-	r.Start("culi-sso", "sandbox-admin", func(bool, string) {})
+	r.Start("example-sso", "sandbox-admin", func(bool, string) {})
 	fs.last().exit(nil)
-	mustWait(t, func() bool { s, _ := r.Status("culi-sso"); return s.State == StateOK })
+	mustWait(t, func() bool { s, _ := r.Status("example-sso"); return s.State == StateOK })
 	time.Sleep(60 * time.Millisecond)
-	if _, ok := r.Status("culi-sso"); ok {
+	if _, ok := r.Status("example-sso"); ok {
 		t.Fatal("a finished flow outlived keepDone")
 	}
 }
