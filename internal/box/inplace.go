@@ -162,15 +162,29 @@ func ensureClaudeDir(root *os.Root, ws string) (fs.FileInfo, error) {
 }
 
 // hooksGuard reads the config git uses for this checkout (rule 6) and returns
-// the hooks directory to bind read-only: the core.hooksPath target when it lies
-// in the workspace outside the other guards, "" otherwise (rule 7).
+// the directory to bind read-only so the hooks git runs stay out of the box's
+// reach, "" for none (rule 7).
+//
+// Without <ws>/.git the workspace may be a subdirectory of a repository, whose
+// rules then still apply to it: host git at that repository's root recurses
+// into submodules under ws (D11) and runs hooks from a core.hooksPath under ws.
 func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
-	if gitFi == nil {
-		return "", nil // not a repository root: no config of its own
-	}
-	var cfgs [][]byte
-	var defHooks string
-	if gitFi.IsDir() {
+	var (
+		top      string // the worktree root core.hooksPath is relative to
+		cfgs     [][]byte
+		defHooks string
+	)
+	switch {
+	case gitFi == nil:
+		var err error
+		if top, err = enclosingRepo(ws); err != nil || top == "" {
+			return "", err
+		}
+		if cfgs, defHooks, err = enclosingConfig(ws, top); err != nil {
+			return "", err
+		}
+	case gitFi.IsDir():
+		top = ws
 		// A commondir makes git read config and hooks from wherever it points,
 		// not from .git/config. A main checkout never has one.
 		if _, err := root.Lstat(filepath.Join(".git", "commondir")); err == nil {
@@ -187,17 +201,18 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 			cfgs = append(cfgs, b)
 		}
 		defHooks = filepath.Join(ws, ".git", "hooks")
-	} else {
-		gitdir, common, err := resolveGitfile(root, ws)
+	default:
+		top = ws
+		b, err := readInRoot(root, ws, ".git")
 		if err != nil {
 			return "", err
 		}
-		for _, p := range []string{filepath.Join(common, "config"), filepath.Join(gitdir, "config.worktree")} {
-			b, err := readOutside(ws, p)
-			if err != nil {
-				return "", err
-			}
-			cfgs = append(cfgs, b)
+		gitdir, common, err := resolveGitfile(ws, ws, b)
+		if err != nil {
+			return "", err
+		}
+		if cfgs, err = outsideConfigs(ws, gitdir, common); err != nil {
+			return "", err
 		}
 		defHooks = filepath.Join(common, "hooks")
 	}
@@ -210,7 +225,7 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 		c := parseGitCore(b)
 		if c.bad {
 			return "", refuseInPlace("the git config of %s cannot be parsed, so its core.hooksPath cannot be known. "+
-				"Fix it (git config --list shows where), or %s", ws, lowerFirst(inPlaceTrustedHost))
+				"Fix it (git config --list shows where), or %s", top, lowerFirst(inPlaceTrustedHost))
 		}
 		core.include = core.include || c.include
 		if c.hooksSet {
@@ -219,22 +234,102 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 	}
 	if core.include {
 		return "", refuseInPlace("the git config of %s has an [include] or [includeIf] section, which can point git at "+
-			"a file a box can write. Remove it, or %s", ws, lowerFirst(inPlaceTrustedHost))
+			"a file a box can write. Remove it, or %s", top, lowerFirst(inPlaceTrustedHost))
 	}
 	target := defHooks
 	if core.hooksSet {
 		var err error
-		if target, err = hooksTarget(ws, core.hooksPath); err != nil {
+		if target, err = hooksTarget(top, core.hooksPath); err != nil {
 			return "", err
 		}
 	}
 	return guardHooksDir(root, ws, target)
 }
 
+// enclosingRepo is the nearest ancestor of ws holding a .git (directory, file
+// or link): the repository root host git finds from inside ws. "" when there
+// is none up to /.
+func enclosingRepo(ws string) (string, error) {
+	for dir := filepath.Dir(ws); ; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			return dir, nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return "", unreadable(filepath.Join(dir, ".git"), err)
+		}
+		if dir == filepath.Dir(dir) {
+			return "", nil
+		}
+	}
+}
+
+// enclosingConfig applies the repository rules to top, the repository ws is a
+// subdirectory of: submodules refuse, and its config is read as git reads it.
+// Everything here is outside ws, so plain reads; anything leading back into ws
+// is refused by gitPathOutside and readOutside.
+func enclosingConfig(ws, top string) (cfgs [][]byte, defHooks string, err error) {
+	if _, err := os.Lstat(filepath.Join(top, ".gitmodules")); err == nil {
+		return nil, "", refuseInPlace("%s is inside the repository %s, which has submodules (.gitmodules); a box could "+
+			"redirect a submodule's git directory and host git would run what it plants. %s", ws, top, inPlaceTrustedHost)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, "", unreadable(filepath.Join(top, ".git"), err)
+	}
+	dotgit := filepath.Join(top, ".git")
+	real, err := gitPathOutside(ws, dotgit, dotgit, false)
+	if err != nil {
+		return nil, "", err
+	}
+	fi, err := os.Stat(real)
+	if err != nil {
+		return nil, "", unreadable(dotgit, err)
+	}
+	var gitdir, common string
+	if fi.IsDir() {
+		if _, err := os.Lstat(filepath.Join(real, "commondir")); err == nil {
+			return nil, "", refuseInPlace("%s has a commondir file, so git reads its config and hooks from elsewhere. "+
+				"Remove it, or %s", dotgit, lowerFirst(inPlaceTrustedHost))
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, "", unreadable(filepath.Join(real, "commondir"), err)
+		}
+		gitdir, common = real, real
+	} else {
+		b, err := readOutside(ws, dotgit)
+		if err != nil {
+			return nil, "", err
+		}
+		if gitdir, common, err = resolveGitfile(ws, top, b); err != nil {
+			return nil, "", err
+		}
+	}
+	// A workspace inside the git directory itself writes its config and hooks.
+	for _, d := range []string{gitdir, common} {
+		if UnderMount(ws, []string{d}) {
+			return nil, "", refuseInPlace("%s is inside the git directory %s, where a box could write its config and hooks. "+
+				"Pick the repository's working tree instead, or %s", ws, d, lowerFirst(inPlaceTrustedHost))
+		}
+	}
+	if cfgs, err = outsideConfigs(ws, gitdir, common); err != nil {
+		return nil, "", err
+	}
+	return cfgs, filepath.Join(common, "hooks"), nil
+}
+
+// outsideConfigs reads <common>/config and <gitdir>/config.worktree.
+func outsideConfigs(ws, gitdir, common string) ([][]byte, error) {
+	var cfgs [][]byte
+	for _, p := range []string{filepath.Join(common, "config"), filepath.Join(gitdir, "config.worktree")} {
+		b, err := readOutside(ws, p)
+		if err != nil {
+			return nil, err
+		}
+		cfgs = append(cfgs, b)
+	}
+	return cfgs, nil
+}
+
 // hooksTarget is where git looks for hooks given core.hooksPath hp, as an
 // absolute path, or "" for a place that can never be in a workspace. Relative
-// paths are relative to the worktree root, which ws is when it holds .git.
-func hooksTarget(ws, hp string) (string, error) {
+// paths are relative to top, the worktree root.
+func hooksTarget(top, hp string) (string, error) {
 	switch {
 	case hp == "":
 		return "", nil // git then looks in "/" (measured, git 2.43)
@@ -244,7 +339,7 @@ func hooksTarget(ws, hp string) (string, error) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", refuseInPlace("core.hooksPath of %s is %q, and the home directory it names is unknown (%v). "+
-				"Spell it out in full, or %s", ws, hp, err, lowerFirst(inPlaceTrustedHost))
+				"Spell it out in full, or %s", top, hp, err, lowerFirst(inPlaceTrustedHost))
 		}
 		return filepath.Join(home, hp[1:]), nil
 	case strings.HasPrefix(hp, "~"):
@@ -252,23 +347,31 @@ func hooksTarget(ws, hp string) (string, error) {
 		u, err := user.Lookup(name)
 		if err != nil {
 			return "", refuseInPlace("core.hooksPath of %s is %q, and that user's home is unknown (%v). "+
-				"Spell it out in full, or %s", ws, hp, err, lowerFirst(inPlaceTrustedHost))
+				"Spell it out in full, or %s", top, hp, err, lowerFirst(inPlaceTrustedHost))
 		}
 		return filepath.Join(u.HomeDir, rest), nil
 	case filepath.IsAbs(hp):
 		return filepath.Clean(hp), nil
 	default:
-		return filepath.Join(ws, hp), nil
+		return filepath.Join(top, hp), nil
 	}
 }
 
-// guardHooksDir decides about the hooks directory target (absolute; "" none).
+// guardHooksDir decides about the hooks directory target (absolute; "" none)
+// and returns the directory to bind read-only, "" for none.
+//
 // Inside the workspace, every component from ws down must be a real directory:
 // a symlink is a redirect the box could re-point, and a missing one is a
 // directory the box could create. Under .git or .claude it is already read-only
 // and needs no mount of its own, but a symlink there still leads out into what
 // the box can write. Outside, it is resolved: a host symlink (which the box
 // cannot touch) leading back in is judged at the real path.
+//
+// What is bound is the FIRST component under ws, not the leaf. A mount point
+// cannot be renamed (EBUSY), but its parent can: with only tools/hooks bound,
+// `mv tools tools2 && mkdir -p tools/hooks` plants hooks at the very path host
+// git runs (measured in a box, fix round 1). A direct child of ws is safe
+// because ws itself is a mount point.
 func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 	if target == "" {
 		return "", nil
@@ -324,27 +427,24 @@ func guardHooksDir(root *os.Root, ws, target string) (string, error) {
 	if covered {
 		return "", nil
 	}
-	return target, nil
+	return filepath.Join(ws, first), nil
 }
 
-// resolveGitfile parses <ws>/.git as a gitfile and returns the real git
-// directory and common directory it leads to. Either one inside the workspace
-// is box-writable, so it is refused, however it is spelled.
-func resolveGitfile(root *os.Root, ws string) (gitdir, common string, err error) {
-	gf := filepath.Join(ws, ".git")
-	b, err := readInRoot(root, ws, ".git")
-	if err != nil {
-		return "", "", err
-	}
+// resolveGitfile parses a gitfile's contents b (the .git file of the worktree
+// at base) and returns the real git directory and common directory it leads
+// to. Either one inside the workspace ws is box-writable, so it is refused,
+// however it is spelled.
+func resolveGitfile(ws, base string, b []byte) (gitdir, common string, err error) {
+	gf := filepath.Join(base, ".git")
 	line := strings.TrimRight(string(b), "\r\n")
 	dir, ok := strings.CutPrefix(line, "gitdir: ")
 	if !ok || dir == "" || strings.ContainsAny(dir, "\n\x00") {
 		return "", "", refuseInPlace("%s is not a gitfile (one \"gitdir: <path>\" line). Fix it, or %s", gf, lowerFirst(inPlaceTrustedHost))
 	}
 	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(ws, dir)
+		dir = filepath.Join(base, dir)
 	}
-	if gitdir, err = gitPathOutside(ws, filepath.Clean(dir), gf+" (gitdir)"); err != nil {
+	if gitdir, err = gitPathOutside(ws, filepath.Clean(dir), gf+" (gitdir)", true); err != nil {
 		return "", "", err
 	}
 	common = gitdir
@@ -357,16 +457,17 @@ func resolveGitfile(root *os.Root, ws string) (gitdir, common string, err error)
 		if !filepath.IsAbs(c) {
 			c = filepath.Join(gitdir, c)
 		}
-		if common, err = gitPathOutside(ws, filepath.Clean(c), filepath.Join(gitdir, "commondir")); err != nil {
+		if common, err = gitPathOutside(ws, filepath.Clean(c), filepath.Join(gitdir, "commondir"), true); err != nil {
 			return "", "", err
 		}
 	}
 	return gitdir, common, nil
 }
 
-// gitPathOutside resolves p, a git directory named by what, and refuses it
-// when it is in the workspace (as spelled, or once resolved) or missing.
-func gitPathOutside(ws, p, what string) (string, error) {
+// gitPathOutside resolves p, a git path named by what, and refuses it when it
+// is in the workspace (as spelled, or once resolved), missing, or (wantDir) not
+// a directory.
+func gitPathOutside(ws, p, what string, wantDir bool) (string, error) {
 	if UnderMount(p, []string{ws}) {
 		return "", refuseInPlace("%s points git at %s, inside the workspace, where a box can write its config and hooks. %s",
 			what, p, inPlaceTrustedHost)
@@ -380,7 +481,7 @@ func gitPathOutside(ws, p, what string) (string, error) {
 		return "", refuseInPlace("%s points git at %s, which leads into the workspace, where a box can write its config and hooks. %s",
 			what, p, inPlaceTrustedHost)
 	}
-	if fi, err := os.Stat(real); err != nil || !fi.IsDir() {
+	if fi, err := os.Stat(real); wantDir && (err != nil || !fi.IsDir()) {
 		return "", refuseInPlace("%s points git at %s, which is not a directory. Fix it, or %s", what, p, lowerFirst(inPlaceTrustedHost))
 	}
 	return real, nil

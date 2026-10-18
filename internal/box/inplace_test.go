@@ -115,16 +115,114 @@ func TestInPlaceNoGit(t *testing.T) {
 	wantMounts(t, ws, got, ".claude")
 }
 
+// A workspace below a repository root is still under that repository's rules:
+// host git at the root recurses into submodules under ws and runs hooks from a
+// core.hooksPath under ws, both of which the box could plant.
 func TestInPlaceSubdirOfRepo(t *testing.T) {
+	cases := []struct {
+		name   string
+		setup  func(t *testing.T, repo string) // ws = <repo>/sub exists
+		mounts []string                        // relative to ws, besides .claude
+		refuse string                          // a substring of the refusal; "" = none
+	}{
+		{name: "plain subdir", setup: func(t *testing.T, repo string) { gitRepo(t, repo, "[core]\n\tbare = false\n") }},
+		{name: "enclosing hooksPath into ws", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "[core]\n\thooksPath = sub/hooks\n")
+			mkdirs(t, filepath.Join(repo, "sub", "hooks"))
+		}, mounts: []string{"hooks"}},
+		{name: "enclosing hooksPath nested in ws", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "[core]\n\thooksPath = sub/tools/hooks\n")
+			mkdirs(t, filepath.Join(repo, "sub", "tools", "hooks"))
+		}, mounts: []string{"tools"}},
+		{name: "enclosing hooksPath outside ws", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "[core]\n\thooksPath = .githooks\n")
+			mkdirs(t, filepath.Join(repo, ".githooks"))
+		}},
+		{name: "enclosing hooksPath missing in ws", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "[core]\n\thooksPath = sub/hooks\n")
+		}, refuse: "does not exist"},
+		{name: "enclosing hooksPath is ws", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "[core]\n\thooksPath = sub\n")
+		}, refuse: "workspace itself"},
+		{name: "enclosing submodules", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "")
+			writeFile(t, filepath.Join(repo, ".gitmodules"), "[submodule \"lib\"]\n\tpath = sub/lib\n")
+		}, refuse: "trusted host"},
+		{name: "enclosing include", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "[include]\n\tpath = x\n")
+		}, refuse: "include"},
+		{name: "enclosing config leads into ws", setup: func(t *testing.T, repo string) {
+			gitRepo(t, repo, "")
+			writeFile(t, filepath.Join(repo, "sub", "cfg"), "")
+			if err := os.Remove(filepath.Join(repo, ".git", "config")); err != nil {
+				t.Fatal(err)
+			}
+			symlink(t, "../sub/cfg", filepath.Join(repo, ".git", "config"))
+		}, refuse: "leads into the workspace"},
+		{name: "enclosing worktree gitfile", setup: func(t *testing.T, repo string) {
+			main := repo + "-main"
+			t.Cleanup(func() { os.RemoveAll(main) })
+			gd := filepath.Join(main, ".git", "worktrees", "wt")
+			mkdirs(t, gd)
+			writeFile(t, filepath.Join(main, ".git", "config"), "[core]\n\thooksPath = sub/hooks\n")
+			writeFile(t, filepath.Join(gd, "commondir"), "../..\n")
+			writeFile(t, filepath.Join(repo, ".git"), "gitdir: "+gd+"\n")
+			mkdirs(t, filepath.Join(repo, "sub", "hooks"))
+		}, mounts: []string{"hooks"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := realTemp(t)
+			ws := filepath.Join(repo, "sub")
+			mkdirs(t, ws)
+			tc.setup(t, repo)
+			got, err := inPlaceMounts(ws)
+			if tc.refuse != "" {
+				if !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), tc.refuse) {
+					t.Fatalf("want ErrUnboxableWorkspace mentioning %q, got %v (mounts %v)", tc.refuse, err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, append([]string{".claude"}, tc.mounts...)...)
+		})
+	}
+}
+
+// A workspace inside the enclosing repository's git directory writes its
+// config and hooks directly.
+func TestInPlaceRefusesWorkspaceInsideGitDir(t *testing.T) {
 	repo := realTemp(t)
-	gitRepo(t, repo, "[core]\n\thooksPath = sub/hooks\n")
-	ws := filepath.Join(repo, "sub")
+	gitRepo(t, repo, "")
+	ws := filepath.Join(repo, ".git", "info")
 	mkdirs(t, ws)
+	if _, err := inPlaceMounts(ws); !errors.Is(err, ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "git directory") {
+		t.Fatalf("want ErrUnboxableWorkspace for a workspace inside .git, got %v", err)
+	}
+}
+
+// Fix round 1, measured in a real box (--cap-drop ALL, non-root): with only the
+// leaf ws/tools/hooks bound read-only, `mv tools/hooks` fails (EBUSY: a mount
+// point), but `mv tools tools2 && mkdir -p tools/hooks && echo PLANTED >
+// tools/hooks/pre-commit` succeeds, and host git then runs the planted hook. So
+// a nested hooks dir is guarded by binding its top-level dir under ws, which
+// cannot be renamed because ws itself is a mount point.
+func TestInPlaceNestedHooksBindTheirTopDir(t *testing.T) {
+	ws := realTemp(t)
+	gitRepo(t, ws, "[core]\n\thooksPath = tools/git/hooks\n")
+	mkdirs(t, filepath.Join(ws, "tools", "git", "hooks"))
 	got, err := inPlaceMounts(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantMounts(t, ws, got, ".claude")
+	for _, mt := range got {
+		if mt.Box == filepath.Join(ws, "tools", "git", "hooks") || mt.Box == filepath.Join(ws, "tools", "git") {
+			t.Fatalf("a nested mount can be renamed away with its parent; bind %s instead: %v", filepath.Join(ws, "tools"), got)
+		}
+	}
+	wantMounts(t, ws, got, ".git", ".claude", "tools")
 }
 
 func TestInPlaceCreatesClaudeDir(t *testing.T) {
@@ -159,8 +257,18 @@ func TestInPlaceHooksPath(t *testing.T) {
 			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, ".githooks")) }, mounts: []string{".githooks"}},
 		{name: "absolute inside", hooks: func(ws string) string { return filepath.Join(ws, ".githooks") },
 			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, ".githooks")) }, mounts: []string{".githooks"}},
+		// Nested: the top-level dir is bound, not the leaf (see TestInPlaceNestedHooksBindTheirTopDir).
 		{name: "nested relative", hooks: func(string) string { return "tools/hooks" },
-			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, "tools", "hooks")) }, mounts: []string{"tools/hooks"}},
+			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, "tools", "hooks")) }, mounts: []string{"tools"}},
+		{name: "husky v9", hooks: func(string) string { return ".husky/_" },
+			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, ".husky", "_")) }, mounts: []string{".husky"}},
+		{name: "nested symlinked leaf", hooks: func(string) string { return "tools/hooks" },
+			setup: func(t *testing.T, ws string) {
+				mkdirs(t, filepath.Join(ws, "tools", "real"))
+				symlink(t, "real", filepath.Join(ws, "tools", "hooks"))
+			}, refuse: true},
+		{name: "nested missing", hooks: func(string) string { return "tools/hooks" },
+			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, "tools")) }, refuse: true},
 		{name: "inside .git", hooks: func(string) string { return ".git/hooks" }},
 		{name: "absolute inside .git", hooks: func(ws string) string { return filepath.Join(ws, ".git", "hooks") }},
 		{name: "inside .claude", hooks: func(string) string { return ".claude/hooks" }},
