@@ -1412,7 +1412,7 @@ function renderSession(s, opts) {
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
-  const act = activityClass(s.activity);
+  const act = sessionDot(s);
   const adot = document.createElement("span");
   adot.className = act.cls;
   // Someone else is holding this session from another browser. It rides ON the
@@ -1727,7 +1727,7 @@ function renderNeedsCard(s) {
 
   const hdr = document.createElement("div");
   hdr.className = "hdr";
-  const act = activityClass(s.activity);
+  const act = sessionDot(s);
   const dot = document.createElement("span");
   dot.className = act.cls;
   dot.setAttribute("role", "img");
@@ -2354,6 +2354,10 @@ async function refreshSessions() {
   // A tab whose session has left the list (killed/pruned) would otherwise keep
   // its last dot — a stale green "working" on a dead agent. Fall back to "done".
   eachTerminal((t) => { t.setActivity(actById.has(t.id) ? actById.get(t.id) : "done", whyById.get(t.id) || ""); });
+  // The tab strip keeps its AWS chip until told to rebuild: repaint it when a
+  // grant, a drop or a lapsed window changes what it draws.
+  const sessById = new Map(lastSessions.map((s) => [s.id, s]));
+  eachTerminal((t) => { if (typeof t.setAwsSig === "function") t.setAwsSig(awsSig(sessById.get(t.id))); });
   // Repaint every open pane's answer-strip control state (disabled/.off/title)
   // against the session list this poll just refreshed. setActivity above is a
   // no-op when activity is unchanged, so a pane whose replyable flag was
@@ -3686,7 +3690,7 @@ function openActionsSheet(s) {
   openSheet(function (body) {
     const shd = document.createElement("div");
     shd.className = "shd";
-    const act = activityClass(s.activity);
+    const act = sessionDot(s);
     const dot = document.createElement("span");
     dot.className = act.cls;
     dot.setAttribute("aria-hidden", "true");
@@ -3770,7 +3774,7 @@ function openReplySheet(s) {
     // straight from the M1 card still says which session it is talking to.
     const shd = document.createElement("div");
     shd.className = "shd";
-    const sact = activityClass(s.activity);
+    const sact = sessionDot(s);
     const sdot = document.createElement("span");
     sdot.className = sact.cls;
     sdot.setAttribute("aria-hidden", "true");

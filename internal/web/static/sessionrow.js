@@ -196,6 +196,28 @@ function awsBadge(s, nowMs = Date.now()) {
   };
 }
 
+// WRITE_SUFFIX is what awsBadge appends while a window is open.
+const WRITE_SUFFIX = " · write";
+
+// badgeParts: the badge text as {label, write}, so the renderer can let the
+// label ellipsize while the word "write" never does (it is the one part of the
+// chip that must always be readable).
+function badgeParts(ab) {
+  if (!ab) return null;
+  const text = String(ab.text || "");
+  if (ab.write && text.endsWith(WRITE_SUFFIX)) return { label: text.slice(0, -WRITE_SUFFIX.length), write: true };
+  return { label: text, write: false };
+}
+
+// awsSig: everything the AWS chip draws, as one string. A terminal tab keeps its
+// strip until something tells it to rebuild; this is what tells it when a grant,
+// a drop or a lapsed window changed the chip.
+function awsSig(s, nowMs = Date.now()) {
+  const a = s && s.aws;
+  if (!a) return "";
+  return [a.label || "", a.account_id || "", !!a.prod, isElevated(a, nowMs) ? a.elevated_until : ""].join("|");
+}
+
 // scopeRow: the scope row of the steer rail. Under a live window it reads the
 // clock and minutes left (the elevation view only carries last_valid after a
 // drop, so an active window is described from the list entry's elevated_until).
@@ -276,6 +298,6 @@ function readAWSFields(get) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields,
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields,
     hhmm, minutesLeft, isElevated, elevActions };
 }

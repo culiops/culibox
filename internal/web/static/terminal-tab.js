@@ -411,6 +411,11 @@ class TerminalTab {
   setActivity(a, why = "") {
     if (a !== this.activityState || why !== this.needWhy()) { this.activityState = a; this.needWhyState = why; this.onUpdate?.(); }
   }
+  // setAwsSig: the strip draws the session's AWS chip from the session list, not
+  // from the tab, so it only learns of a grant/drop through this.
+  setAwsSig(k) {
+    if (k !== (this._awsSig || "")) { this._awsSig = k; this.onUpdate?.(); }
+  }
   usage() { return this.usageData; }
   setUsage(u) {
     // Re-render only when the readout actually moved, so a poll that returns the

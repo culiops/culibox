@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { needsYou, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
+const { needsYou, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
 
 test("needLabel names the two needs, and nothing that is not waiting", () => {
   assert.strictEqual(needLabel({ activity: "waiting", need: "ask" }), "asks");
@@ -257,4 +257,11 @@ test("tabNeedWhy is sso only while the agent itself is not waiting", () => {
   assert.strictEqual(tabNeedWhy({ activity: "working" }), "");
   assert.ok(needsYou({ activity: "working", need: "sso" }), "still needs-you everywhere");
   assert.strictEqual(tabNeedWhy(null), "");
+});
+
+test("sessionDot: an SSO session reads as waiting, with its reason, on every dot", () => {
+  assert.deepStrictEqual(sessionDot({ activity: "idle", need: "sso" }), { cls: "dot waiting", title: "AWS sign-in needed" });
+  assert.deepStrictEqual(sessionDot({ activity: "working", need: "sso" }), { cls: "dot waiting", title: "AWS sign-in needed" });
+  assert.deepStrictEqual(sessionDot({ activity: "waiting", need: "turn" }), { cls: "dot waiting", title: "waiting for input" });
+  assert.deepStrictEqual(sessionDot({ activity: "idle" }), { cls: "dot idle", title: "idle" });
 });

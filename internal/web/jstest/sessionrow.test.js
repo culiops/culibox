@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, awsRailRows, readAWSFields, elevActions } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -297,4 +297,24 @@ test("readAWSFields: the elevate block round-trips, and is absent without a writ
 test("rowClasses: an SSO need is a needs-you row", () => {
   assert.ok(rowClasses({ activity: "working", need: "sso" }, {}).includes("needs"));
   assert.ok(!rowClasses({ activity: "working" }, {}).includes("needs"));
+});
+
+test("badgeParts splits the write state from the label so only the label can be cut", () => {
+  assert.strictEqual(badgeParts(null), null);
+  assert.deepStrictEqual(badgeParts(awsBadge({ aws: { ...ELEV, elevated_until: iso(17) } }, NOW)), { label: "sandbox", write: true });
+  assert.deepStrictEqual(badgeParts(awsBadge({ aws: { ...ELEV, label: "sandbox-prod", prod: true, elevated_until: iso(17) } }, NOW)), { label: "sandbox-prod", write: true });
+  assert.deepStrictEqual(badgeParts(awsBadge({ aws: ELEV }, NOW)), { label: "sandbox", write: false });
+  // A label that itself ends in " · write" is not a write state when the window is closed.
+  assert.deepStrictEqual(badgeParts({ text: "x · write", write: false }), { label: "x · write", write: false });
+});
+
+test("awsSig moves on grant, drop and lapse, and on nothing else", () => {
+  const base = { aws: ELEV };
+  const s0 = awsSig(base, NOW);
+  assert.strictEqual(awsSig({}, NOW), "");
+  const granted = awsSig({ aws: { ...ELEV, elevated_until: iso(17) } }, NOW);
+  assert.notStrictEqual(granted, s0, "a grant repaints the tab chip");
+  assert.strictEqual(awsSig({ aws: { ...ELEV, elevated_until: iso(-1) } }, NOW), s0, "a lapsed window reads as dropped");
+  assert.notStrictEqual(awsSig({ aws: { ...ELEV, prod: true } }, NOW), s0);
+  assert.strictEqual(awsSig({ aws: { ...ELEV, role_arn: "other" } }, NOW), s0, "fields the chip does not draw");
 });

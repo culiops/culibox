@@ -19,6 +19,16 @@ function tabNeedWhy(s) {
   return s && s.need === "sso" && s.activity !== "waiting" ? "sso" : "";
 }
 
+// sessionDot: the activity dot (class + title) for a session on every surface
+// that draws one. A session that needsYou for a non-activity reason (an expired
+// AWS sign-in) reads as waiting, and says why, so the sheet header, the list row
+// and the cards agree with the tab's dot.
+function sessionDot(s) {
+  const act = typeof activityClass === "function" ? activityClass : require("./activity.js").activityClass;
+  const v = s || {};
+  return act(needsYou(v) ? "waiting" : v.activity, tabNeedWhy(v));
+}
+
 // ssoExpiredText: the SSO card's sentence, shared by cardContent and the card
 // model in elevation.js so the two cannot drift.
 function ssoExpiredText(s) {
@@ -277,7 +287,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+  module.exports = { needsYou, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }
