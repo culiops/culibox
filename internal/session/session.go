@@ -30,6 +30,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
 // Env composition (base policy, Claude-marker stripping, secret injection) lives
@@ -322,6 +323,10 @@ type Info struct {
 	// AWS is the binding the session was spawned with; nil (absent) for an
 	// unbound session, so its wire shape is unchanged.
 	AWS *AWSInfo `json:"aws,omitempty"`
+	// Egress is the session's network posture: "allowlist" (bound, only its
+	// binding's hosts), "open" (unbound, any host through the authenticated
+	// proxy) or "" (no egress control: host tier). Never the nonce.
+	Egress string `json:"egress,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -346,6 +351,10 @@ type Session struct {
 	// AWSNonce is this spawn's broker-token nonce (set iff AWS is). Immutable,
 	// read without the lock. Never put it on the wire: Info leaves it out.
 	AWSNonce string
+	// EgressNonce is this spawn's egress-token nonce, set for every session
+	// whose box has egress (bound or open). Immutable, read without the lock.
+	// Never put it on the wire: Info leaves it out.
+	EgressNonce string
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
@@ -722,6 +731,12 @@ func (s *Session) Info() Info {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
+	switch {
+	case s.EgressNonce != "" && s.AWS != nil:
+		in.Egress = "allowlist"
+	case s.EgressNonce != "":
+		in.Egress = "open"
+	}
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod}
 		if e := s.AWS.Elevate; e != nil {
@@ -821,6 +836,7 @@ type Manager struct {
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
 	egress    EgressHooks // nil = egress control not running; bound profiles are refused
+	egressAll bool        // every boxed spawn needs egress (Linux); see SetEgressAll
 	home      string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir  string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 	repliesOn bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
@@ -873,6 +889,15 @@ func (m *Manager) SetBroker(h BrokerHooks) {
 func (m *Manager) SetEgress(h EgressHooks) {
 	m.mu.Lock()
 	m.egress = h
+	m.mu.Unlock()
+}
+
+// SetEgressAll makes egress mandatory for every boxed spawn, bound or not: an
+// unbound box gets the same proxy env in open mode, and is refused when egress
+// control is not running. Call once at boot (Linux), with SetEgress.
+func (m *Manager) SetEgressAll(all bool) {
+	m.mu.Lock()
+	m.egressAll = all
 	m.mu.Unlock()
 }
 
@@ -988,7 +1013,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	m.mu.Lock()
 	brk := m.broker
 	eg := m.egress
+	egressAll := m.egressAll
 	m.mu.Unlock()
+	needEgress := runtime == config.RuntimeBox && (binding != nil || egressAll)
 	if binding != nil {
 		if runtime != config.RuntimeBox {
 			return nil, fmt.Errorf("profile %q has an AWS binding, so it can only run in a box, never on the host tier", spec.Agent)
@@ -1001,6 +1028,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: profile %q has an AWS binding but egress control is not running, so it cannot spawn",
 				box.ErrBoxUnavailable, spec.Agent)
 		}
+	} else if needEgress && eg == nil {
+		// Fail closed before Prepare: a box with no proxy in front of it would
+		// have the open network the egress control exists to close.
+		return nil, fmt.Errorf("%w: egress control is not running, so no box can start", box.ErrBoxUnavailable)
 	}
 
 	if runtime == config.RuntimeBox {
@@ -1064,24 +1095,31 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// Containment is applied here, between the launcher and the process start,
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	var boxName string
-	var nonce string
+	var nonce, enonce string
 	var exclusive bool
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
 		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed}
+		var bm []box.Mount
+		var benv, penv []string
 		if binding != nil {
-			bm, benv, err := brk.BoxFor(*binding)
+			var err error
+			bm, benv, err = brk.BoxFor(*binding)
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing AWS access: %w", spec.Agent, err)
 			}
 			nonce = brk.NewNonce()
-			// The proxy URL carries a token derived from this same nonce, so a
+		}
+		if needEgress {
+			// The proxy URL carries a token derived from this nonce, so a
 			// restored session's box keeps working. A failure here refuses the
 			// spawn: no proxy, no network, no session.
+			enonce = sesstoken.NewNonce()
 			ectx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			penv, err := eg.SpawnEnv(ectx, id, nonce)
+			var err error
+			penv, err = eg.SpawnEnv(ectx, id, enonce)
 			cancel()
 			if err != nil {
 				// Shown to the user (writeSpawnErr): these are operator remedies
@@ -1089,6 +1127,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				// derived after Ready succeeds, so it can never be in err.
 				return nil, fmt.Errorf("%w: spawn %s: preparing egress: %w", box.ErrBoxUnavailable, spec.Agent, err)
 			}
+		}
+		if binding != nil {
 			// Strip before adding: whatever the profile or daemon env says about
 			// AWS must neither bypass credential_process nor shadow a broker
 			// value. The broker's own names are stripped too, so each is set
@@ -1113,6 +1153,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				// another session.
 				key.Session = id
 			}
+		} else if needEgress {
+			// Open mode: the same proxy env, no broker. The profile's own proxy
+			// settings are stripped so each name is set exactly once.
+			strip := slices.Clone(eg.StripEnv())
+			for _, kv := range penv {
+				if i := strings.IndexByte(kv, '='); i > 0 {
+					strip = append(strip, kv[:i])
+				}
+			}
+			env = withoutEnv(env, strip)
+			env = append(env, penv...)
 		}
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {
@@ -1192,6 +1243,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.ConfigDir = cfgDir
 	sess.AWS = binding
 	sess.AWSNonce = nonce
+	sess.EgressNonce = enonce
 	sess.Exclusive = exclusive
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
@@ -1205,7 +1257,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, Exclusive: exclusive})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, EgressNonce: enonce, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1226,12 +1278,12 @@ func (m *Manager) brokerForget(s *Session) {
 	}
 }
 
-// egressForget drops a bound session's proxy state (counters, open tunnels).
+// egressForget drops a session's proxy state (counters, open tunnels).
 // Like brokerForget it runs after the registry delete, so the proxy's session
 // lookup already reports the id as not live: a CONNECT that races the end is
 // refused, not re-admitted after the forget.
 func (m *Manager) egressForget(s *Session) {
-	if s.AWS == nil {
+	if s.EgressNonce == "" {
 		return
 	}
 	m.mu.Lock()
@@ -1694,6 +1746,11 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.ConfigDir = md.ConfigDir
 	sess.AWS = md.AWS
 	sess.AWSNonce = md.AWSNonce
+	sess.EgressNonce = md.EgressNonce
+	if sess.EgressNonce == "" && md.AWSNonce != "" {
+		// A bound session from before A1 minted its proxy token over AWSNonce.
+		sess.EgressNonce = md.AWSNonce
+	}
 	sess.Exclusive = md.Exclusive
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
