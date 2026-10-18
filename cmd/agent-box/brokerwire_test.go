@@ -316,3 +316,40 @@ func TestStopClosesTheSignInRunnerBeforeTheAuditStore(t *testing.T) {
 		t.Fatalf("sso_login_failed rows after Stop: %d (%v)", n, err)
 	}
 }
+
+// A write window open when the daemon went down has no terminal approval row;
+// startBroker writes one (`ended`), once, however many times it starts.
+func TestStartBrokerClosesWindowsLeftOpenByTheLastRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket transport")
+	}
+	dataDir := t.TempDir()
+	seed, err := broker.OpenAudit(filepath.Join(dataDir, "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.RecordApproval(broker.ApprovalRow{Time: time.Now(), SessionID: "aws-1", Profile: "aws",
+		AccountID: "123456789012", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write",
+		Action: broker.ActionGranted, Until: time.Now().Add(time.Hour), Minutes: 60, Reason: "apply", Cred: "cookie"}); err != nil {
+		t.Fatal(err)
+	}
+	seed.Close()
+	for i := 0; i < 2; i++ {
+		svc, err := startBroker(dataDir, dataDir, "linux", 0,
+			func(string) (*session.Session, bool) { return nil, false },
+			func(string) (session.Info, bool) { return session.Info{}, false })
+		if err != nil {
+			t.Fatal(err)
+		}
+		svc.Stop(context.Background())
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM approval_audit WHERE session_id = 'aws-1' AND action = 'ended'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("ended rows after two starts: %d (%v)", n, err)
+	}
+}

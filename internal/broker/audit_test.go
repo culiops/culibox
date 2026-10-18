@@ -2,6 +2,7 @@ package broker
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -184,5 +185,176 @@ func TestApprovalRowCarriesNoSecrets(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("ApprovalRow fields %v, want %v", got, want)
+	}
+}
+
+// approvalActions returns a session's approval rows' actions in write order.
+func approvalActions(t *testing.T, a *Audit, sid string) []string {
+	t.Helper()
+	rows, err := a.db.Query(`SELECT action FROM approval_audit WHERE session_id = ? ORDER BY id`, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func grantRow(sid string, action Action, at time.Time, until time.Time) ApprovalRow {
+	return ApprovalRow{Time: at, SessionID: sid, Profile: "aws", AccountID: "123456789012",
+		RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write", Action: action, Until: until, Minutes: 30,
+		Reason: "apply vpc", Cred: "cookie"}
+}
+
+func TestEndOpenWindowsWritesOneEndedRowAndIsIdempotent(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	now := time.Unix(1_800_000_000, 0)
+	// Granted, then extended (the extended row is the live one), then a refused
+	// row after it, which must not hide the open window.
+	for _, r := range []ApprovalRow{
+		grantRow("s1", ActionGranted, now.Add(-20*time.Minute), now.Add(10*time.Minute)),
+		grantRow("s1", ActionExtended, now.Add(-5*time.Minute), now.Add(25*time.Minute)),
+		grantRow("s1", ActionRefused, now.Add(-time.Minute), time.Time{}),
+	} {
+		if err := a.RecordApproval(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := a.EndOpenWindows(now)
+	if err != nil || n != 1 {
+		t.Fatalf("first restart: n=%d err=%v", n, err)
+	}
+	if got := approvalActions(t, a, "s1"); !slices.Equal(got, []string{"granted", "extended", "refused", "ended"}) {
+		t.Fatalf("actions: %v", got)
+	}
+	var profile, account, role, reason, cred string
+	var until, ts int64
+	if err := a.db.QueryRow(`SELECT ts, profile, account_id, role_arn, until, reason, cred FROM approval_audit WHERE action = 'ended'`).
+		Scan(&ts, &profile, &account, &role, &until, &reason, &cred); err != nil {
+		t.Fatal(err)
+	}
+	if ts != now.Unix() || profile != "aws" || account != "123456789012" || role != "arn:aws:iam::123456789012:role/agentbox-agent-write" ||
+		until != now.Add(25*time.Minute).Unix() || reason != "daemon restart" || cred != "none" {
+		t.Fatalf("ended row: ts=%d %s %s %s until=%d %q %q", ts, profile, account, role, until, reason, cred)
+	}
+	// A second start finds the terminal row and writes nothing.
+	if n, err := a.EndOpenWindows(now.Add(time.Minute)); err != nil || n != 0 {
+		t.Fatalf("second restart: n=%d err=%v", n, err)
+	}
+	if got := approvalActions(t, a, "s1"); len(got) != 4 {
+		t.Fatalf("second restart wrote rows: %v", got)
+	}
+}
+
+func TestEndOpenWindowsLeavesFinishedWindowsAlone(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	now := time.Unix(1_800_000_000, 0)
+	until := now.Add(10 * time.Minute)
+	for _, r := range []ApprovalRow{
+		grantRow("dropped", ActionGranted, now.Add(-10*time.Minute), until),
+		grantRow("dropped", ActionDropped, now.Add(-5*time.Minute), until),
+		grantRow("expired", ActionGranted, now.Add(-40*time.Minute), now.Add(-10*time.Minute)),
+		grantRow("expired", ActionExpired, now.Add(-10*time.Minute), now.Add(-10*time.Minute)),
+		// regranted after a drop, then ended: the old grant row is not "latest".
+		grantRow("again", ActionGranted, now.Add(-30*time.Minute), now.Add(-20*time.Minute)),
+		grantRow("again", ActionDropped, now.Add(-25*time.Minute), now.Add(-20*time.Minute)),
+		{Time: now.Add(-time.Minute), SessionID: "signin", Action: ActionSSOLoginOK},
+	} {
+		if err := a.RecordApproval(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := a.EndOpenWindows(now); err != nil || n != 0 {
+		t.Fatalf("n=%d err=%v, want no rows for finished windows", n, err)
+	}
+}
+
+// A window whose time ran out while the daemon was down never had its expiry
+// timer fire: it gets an `expired` row stamped at its end, not `ended`.
+func TestEndOpenWindowsWritesExpiredForALapsedWindow(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	now := time.Unix(1_800_000_000, 0)
+	until := now.Add(-10 * time.Minute)
+	if err := a.RecordApproval(grantRow("s2", ActionGranted, now.Add(-40*time.Minute), until)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := a.EndOpenWindows(now); err != nil || n != 1 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	var ts int64
+	var cred string
+	if err := a.db.QueryRow(`SELECT ts, cred FROM approval_audit WHERE action = 'expired'`).Scan(&ts, &cred); err != nil || ts != until.Unix() || cred != "" {
+		t.Fatalf("expired row: ts=%d cred=%q err=%v", ts, cred, err)
+	}
+	if n, _ := a.EndOpenWindows(now); n != 0 {
+		t.Fatalf("second restart wrote %d rows", n)
+	}
+}
+
+// A failing write is logged and skipped; the call returns the error and the
+// other sessions' rows are still written.
+func TestEndOpenWindowsFailsSoft(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	now := time.Unix(1_800_000_000, 0)
+	if err := a.RecordApproval(grantRow("s3", ActionGranted, now.Add(-time.Minute), now.Add(time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	// Make every further insert fail.
+	if _, err := a.db.Exec(`CREATE TRIGGER no_more BEFORE INSERT ON approval_audit BEGIN SELECT RAISE(ABORT, 'full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	n, err := a.EndOpenWindows(now)
+	if err == nil || n != 0 {
+		t.Fatalf("n=%d err=%v, want the write error and no rows", n, err)
+	}
+	// The gap is retried once the store works again.
+	if _, err := a.db.Exec(`DROP TRIGGER no_more`); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := a.EndOpenWindows(now); err != nil || n != 1 {
+		t.Fatalf("retry: n=%d err=%v", n, err)
+	}
+}
+
+func TestOpenAuditRestrictsFilePermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	// An older run left the files world-readable, with WAL siblings.
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.WriteFile(path+suffix, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if fi, err := os.Stat(path + suffix); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v %v, want 0600", path+suffix, fi, err)
+		}
 	}
 }

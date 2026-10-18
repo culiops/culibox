@@ -29,15 +29,13 @@ role (an administrator permission set does). Then:
 
 ```bash
 aws sts get-caller-identity --profile <profile> || aws sso login --profile <profile>
-terraform init
+terraform init   # add -lockfile=readonly to keep the committed provider pins
 terraform validate
 AWS_PROFILE=<profile> terraform plan -var 'sso_permission_sets=["<PermissionSet>"]' \
   -state="$HOME/.local/state/agentbox/agent-role.tfstate" -out tf.plan
 AWS_PROFILE=<profile> terraform apply -state="$HOME/.local/state/agentbox/agent-role.tfstate" tf.plan
 rm -f tf.plan
 ```
-
-(Add `-lockfile=readonly` to `terraform init` to keep the committed provider pins.)
 
 Keep the state outside this checkout (the `-state` path above, or your own backend), so it
 outlives the checkout. Check first that no role of that name exists
@@ -98,13 +96,13 @@ value for `elevate.role_arn`):
 
 ```json
 "aws": {
-  "source_profile": "sandbox-admin",
-  "role_arn": "arn:aws:iam::226198813800:role/agentbox-agent",
-  "region": "ap-southeast-1",
-  "s3_read": ["culishop-tfstate"],
+  "source_profile": "<profile>",
+  "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent",
+  "region": "<region>",
+  "s3_read": ["<state-bucket>"],
   "label": "sandbox",
   "elevate": {
-    "role_arn": "arn:aws:iam::226198813800:role/agentbox-agent-write",
+    "role_arn": "arn:aws:iam::123456789012:role/agentbox-agent-write",
     "max_minutes": 60,
     "allow_iam": false
   }
@@ -142,8 +140,11 @@ IAM console -> Roles -> `agentbox-agent-write` -> *Revoke sessions* -> *Revoke a
 sessions*. That attaches a deny on `aws:TokenIssueTime` to the role; remove the policy
 `AWSRevokeOlderSessions` afterwards if you want to keep it tidy.
 
-Check without the console what is attached (the revoke policy shows up here):
+Check without the console (with credentials for the account): the revoke policy is an inline policy, so
+`list-role-policies` shows it; the managed policies (`write_policy_arns`) are listed by
+`list-attached-role-policies`.
 
 ```bash
-aws iam list-role-policies --role-name agentbox-agent-write
+aws iam list-role-policies --role-name agentbox-agent-write           # inline: the revoke policy appears here
+aws iam list-attached-role-policies --role-name agentbox-agent-write  # managed attachments
 ```

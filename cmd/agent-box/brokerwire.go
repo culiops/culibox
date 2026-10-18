@@ -61,6 +61,13 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 	if err != nil {
 		return nil, fmt.Errorf("audit store: %w", err)
 	}
+	// Write windows live in memory only, so a restart ended any that were open.
+	// Give them their terminal audit row; never block or fail startup on it.
+	if n, err := audit.EndOpenWindows(time.Now()); err != nil {
+		log.Printf("broker: closing write windows left open by the last run: %v", err)
+	} else if n > 0 {
+		log.Printf("broker: wrote %d terminal audit row(s) for write windows open at the last shutdown", n)
+	}
 	brk := broker.New(sec.Secret(), func(id string) (broker.SessionView, bool) {
 		s, ok := get(id)
 		if !ok {

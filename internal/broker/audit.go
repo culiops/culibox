@@ -3,6 +3,8 @@ package broker
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite"
@@ -45,6 +47,7 @@ const (
 	ActionExtended       Action = "extended"
 	ActionDropped        Action = "dropped"
 	ActionExpired        Action = "expired"
+	ActionEnded          Action = "ended" // a write window cut short because the daemon restarted
 	ActionRefused        Action = "refused"
 	ActionSSOLoginOK     Action = "sso_login_ok"
 	ActionSSOLoginFailed Action = "sso_login_failed"
@@ -117,6 +120,14 @@ func OpenAudit(path string) (*Audit, error) {
 		db.Close()
 		return nil, fmt.Errorf("audit migrate: %w", err)
 	}
+	// SQLite creates the file 0644; it records who was granted write access and
+	// why, so only the owner may read it. The -wal/-shm siblings exist while the
+	// store is open and are tightened the same way.
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		if err := os.Chmod(path+suffix, 0o600); err != nil && !os.IsNotExist(err) {
+			log.Printf("broker: audit store permissions (%s): %v", path+suffix, err)
+		}
+	}
 	return &Audit{db: db}, nil
 }
 
@@ -166,6 +177,72 @@ func (a *Audit) RecordApproval(r ApprovalRow) error {
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, string(r.Action), until, r.Minutes,
 		sanitizeN(r.Reason, maxReasonBytes), r.Cred, sanitize(r.Error))
 	return err
+}
+
+// windowActionsSQL lists the rows that decide whether a write window is in
+// force: the two that open or lengthen one and the three that end one. Refused
+// and sign-in rows are not part of a window's life and are ignored.
+const windowActionsSQL = `('granted','extended','dropped','expired','ended')`
+
+// EndOpenWindows closes the audit trail of write windows a restart cut short.
+// The elevation overlay lives in memory only (by design), so after a restart no
+// window is in force, but a window whose latest window row is still granted or
+// extended has no terminal row. For each such session it writes one:
+//
+//   - until > now: `ended`, reason "daemon restart", cred "none": the window was
+//     still open when the daemon went down.
+//   - until <= now: `expired`, stamped at until: the window ran out while the
+//     daemon was down, so its expiry timer never wrote the row.
+//
+// Idempotent: the written row becomes the session's latest window row, so the
+// next start finds nothing to do. One pass over the granted/extended rows, each
+// checked with an indexed lookup on idx_approval_session. A failed write is
+// logged and skipped (the gap is retried at the next start); the first error is
+// returned for the caller to log. It returns the number of rows written.
+func (a *Audit) EndOpenWindows(now time.Time) (int, error) {
+	rows, err := a.db.Query(`SELECT session_id, profile, account_id, role_arn, until, reason
+		FROM approval_audit a
+		WHERE action IN ('granted','extended')
+		  AND id = (SELECT id FROM approval_audit
+		            WHERE session_id = a.session_id AND action IN ` + windowActionsSQL + `
+		            ORDER BY ts DESC, id DESC LIMIT 1)`)
+	if err != nil {
+		return 0, err
+	}
+	var open []ApprovalRow
+	for rows.Next() {
+		var r ApprovalRow
+		var until int64
+		if err := rows.Scan(&r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &until, &r.Reason); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		r.Until = time.Unix(until, 0)
+		open = append(open, r)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	written := 0
+	var firstErr error
+	for _, r := range open {
+		if r.Until.After(now) {
+			r.Time, r.Action, r.Cred, r.Reason = now, ActionEnded, credNone, "daemon restart"
+		} else {
+			r.Time, r.Action, r.Cred = r.Until, ActionExpired, ""
+		}
+		if err := a.RecordApproval(r); err != nil {
+			log.Printf("broker: audit: closing the window of %s after restart: %v", r.SessionID, err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		written++
+	}
+	return written, firstErr
 }
 
 func b2i(b bool) int {
