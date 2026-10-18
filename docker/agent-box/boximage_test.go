@@ -341,17 +341,28 @@ func TestDockerfileDeclaresCodebaseMemory(t *testing.T) {
 	}
 }
 
+// Each value must be an ENV instruction of its own, not text anywhere in the
+// file: a comment naming GOTOOLCHAIN=local must not keep this green after the
+// ENV line itself is deleted. GOFLAGS=-modcacherw keeps Go's module cache
+// writable, so the box home stays deletable and box-state reclaim works.
 func TestDockerfileSetsGoEnvUnderHome(t *testing.T) {
+	env := map[string]bool{}
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "ENV ") {
+			env[strings.TrimPrefix(in, "ENV ")] = true
+		}
+	}
 	for _, want := range []string{
 		"GOPATH=/home/agent/go",
 		"GOMODCACHE=/home/agent/go/pkg/mod",
 		"GOCACHE=/home/agent/.cache/go-build",
 		"GOTMPDIR=/home/agent/.cache/go-tmp",
 		"GOTOOLCHAIN=local",
+		"GOFLAGS=-modcacherw",
 		"PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH",
 	} {
-		if !strings.Contains(string(dockerfile), want) {
-			t.Errorf("Dockerfile does not set %s", want)
+		if !env[want] {
+			t.Errorf("Dockerfile has no instruction ENV %s", want)
 		}
 	}
 }

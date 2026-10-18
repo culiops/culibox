@@ -108,6 +108,8 @@ ENV GOMODCACHE=/home/agent/go/pkg/mod
 ENV GOCACHE=/home/agent/.cache/go-build
 ENV GOTMPDIR=/home/agent/.cache/go-tmp
 ENV GOTOOLCHAIN=local
+# The module cache must stay deletable so the box home is reclaimed (Go makes it read-only by default).
+ENV GOFLAGS=-modcacherw
 ENV PATH=/usr/local/go/bin:/home/agent/go/bin:$PATH
 
 # --- abduco ---
