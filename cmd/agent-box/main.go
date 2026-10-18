@@ -298,7 +298,8 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 
 	mgr := session.NewManager(lnch, adapter, 128*1024, 5*time.Minute)
-	mgr.SetPaths(home, dataDir) // where transcripts live: host ~/.claude, boxed <dataDir>/boxstate/<box>
+	mgr.SetPaths(home, dataDir)               // where transcripts live: host ~/.claude, boxed <dataDir>/boxstate/<box>
+	mgr.SetRepliesEnabled(cfg.RepliesEnabled) // before Reconcile: restore reads it
 	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
 		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
 	}
@@ -624,6 +625,7 @@ func configureServer(srv *web.Server, cfg config.Config) {
 	archiveBytes, archiveFiles := cfg.ArchiveLimits()
 	srv.AllowedHosts = cfg.HostAllowlist()
 	srv.EnvLabel = cfg.EnvLabel
+	srv.RepliesEnabled = cfg.RepliesEnabled
 	srv.EnvColor = cfg.EnvColor
 	srv.MaxUploadBytes = cfg.UploadLimit()
 	srv.MaxArchiveBytes = archiveBytes

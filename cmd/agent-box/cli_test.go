@@ -329,3 +329,18 @@ func TestParseBoxSubcommands(t *testing.T) {
 		}
 	}
 }
+
+// The kill-switch must reach the Server (it feeds /api/meta, which the client
+// reads to fail closed), and stay off when the config is silent.
+func TestConfigureServer_RepliesEnabledWired(t *testing.T) {
+	on := &web.Server{}
+	configureServer(on, config.Config{BindAddr: "127.0.0.1:8899", RepliesEnabled: true})
+	if !on.RepliesEnabled {
+		t.Error("RepliesEnabled not wired")
+	}
+	off := &web.Server{}
+	configureServer(off, config.Config{BindAddr: "127.0.0.1:8899"})
+	if off.RepliesEnabled {
+		t.Error("RepliesEnabled on without config")
+	}
+}

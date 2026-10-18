@@ -286,7 +286,8 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, session.ErrNoSession):
 			writeErr(w, http.StatusNotFound, err.Error())
-		case errors.Is(err, session.ErrNotReplyable), errors.Is(err, session.ErrNotClaude):
+		case errors.Is(err, session.ErrNotReplyable), errors.Is(err, session.ErrNotClaude),
+			errors.Is(err, session.ErrRepliesDisabled):
 			writeErr(w, http.StatusForbidden, err.Error())
 		// ErrNoTranscript joins the two "not right now" reasons rather than the
 		// "never" ones: the transcript may well become readable on the next poll.
@@ -346,7 +347,8 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 		case errors.Is(err, session.ErrNoSession):
 			writeErr(w, http.StatusNotFound, "no such session")
-		case errors.Is(err, session.ErrNotClaude), errors.Is(err, session.ErrNotReplyable):
+		case errors.Is(err, session.ErrNotClaude), errors.Is(err, session.ErrNotReplyable),
+			errors.Is(err, session.ErrRepliesDisabled):
 			writeErr(w, http.StatusForbidden, err.Error())
 		case errors.Is(err, session.ErrNotLive):
 			// Mirrors /interrupt: a died-between-the-guard-and-the-write race is

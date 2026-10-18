@@ -36,6 +36,9 @@ type Server struct {
 	Terminal  http.Handler
 	EnvLabel  string // shown as the UI env badge; empty → no badge
 	EnvColor  string // CSS color for the env badge/strip
+	// RepliesEnabled mirrors config replies_enabled and is published in
+	// /api/meta so the client fails closed (reply UI off until it says true).
+	RepliesEnabled bool
 	// BoxRuntime is the detected isolation runtime ("runc"/"sysbox-runc"), or ""
 	// when containment is unavailable and every session runs on the host tier.
 	BoxRuntime string
@@ -134,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 			"shell_profile": s.quickShell(),
 			"box_runtime":   s.BoxRuntime,
 			"analytics":     s.Analytics != nil,
+			"replies":       s.RepliesEnabled,
 		}
 		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
 		// account has data so the client shows nothing rather than an empty widget.

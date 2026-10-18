@@ -974,3 +974,27 @@ func TestSessionAWSStatus(t *testing.T) {
 		t.Fatalf("no broker: code %d want 404", rec.Code)
 	}
 }
+
+// The kill-switch refusal is a 403 on every reply endpoint. /message and
+// /answer would otherwise fall through to the 410 "session is gone" arm, which
+// would tell the client a live session had died.
+func TestRepliesDisabledEndpoints403(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	cases := []struct {
+		name string
+		svc  *mockSvc
+		req  *http.Request
+	}{
+		{"replyable", &mockSvc{setReplyableErr: session.ErrRepliesDisabled}, replyableReq(`{"replyable":true}`)},
+		{"message", &mockSvc{sendMessageErr: session.ErrRepliesDisabled}, messageReq(`{"text":"hello"}`)},
+		{"answer", &mockSvc{answerErr: session.ErrRepliesDisabled},
+			postReq("/api/sessions/x-1/answer", `{"choice":"yes","ask_sha256":"`+sha+`"}`)},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		(&API{Sessions: c.svc}).handleSession(rec, c.req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: code %d want 403, body %s", c.name, rec.Code, rec.Body)
+		}
+	}
+}
