@@ -1,0 +1,544 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"syscall"
+	"testing"
+)
+
+// realTemp is t.TempDir() with symlinks resolved, as Wrap hands inPlaceMounts.
+func realTemp(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func mkdirs(t *testing.T, paths ...string) {
+	t.Helper()
+	for _, p := range paths {
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func writeFile(t *testing.T, p, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func symlink(t *testing.T, target, at string) {
+	t.Helper()
+	if err := os.Symlink(target, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gitRepo makes ws a repository the way `git init` leaves it, with cfg as its
+// .git/config.
+func gitRepo(t *testing.T, ws, cfg string) {
+	t.Helper()
+	mkdirs(t, filepath.Join(ws, ".git", "hooks"))
+	writeFile(t, filepath.Join(ws, ".git", "config"), cfg)
+}
+
+// wantMounts compares the set of in-box paths with ws joined to rels, and
+// checks every guard is a required self-bind.
+func wantMounts(t *testing.T, ws string, got []Mount, rels ...string) {
+	t.Helper()
+	var have, want []string
+	for _, mt := range got {
+		if mt.Host != mt.Box || mt.Optional {
+			t.Errorf("guard %+v must be a required self-bind", mt)
+		}
+		have = append(have, mt.Box)
+	}
+	for _, r := range rels {
+		want = append(want, filepath.Join(ws, r))
+	}
+	sort.Strings(have)
+	sort.Strings(want)
+	if strings.Join(have, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("guard mounts:\n got  %q\n want %q", have, want)
+	}
+}
+
+func TestInPlaceGitDirWorkspace(t *testing.T) {
+	ws := realTemp(t)
+	gitRepo(t, ws, "[core]\n\tbare = false\n")
+	for _, f := range []string{"CLAUDE.md", "CLAUDE.local.md", ".mcp.json"} {
+		writeFile(t, filepath.Join(ws, f), "x")
+	}
+	got, err := inPlaceMounts(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMounts(t, ws, got, ".git", ".claude", "CLAUDE.md", "CLAUDE.local.md", ".mcp.json")
+}
+
+func TestInPlaceGitFileWorktree(t *testing.T) {
+	tmp := realTemp(t)
+	gitdir := filepath.Join(tmp, "main", ".git", "worktrees", "wt")
+	mkdirs(t, gitdir)
+	writeFile(t, filepath.Join(tmp, "main", ".git", "config"), "[core]\n\thooksPath = .githooks\n")
+	writeFile(t, filepath.Join(gitdir, "commondir"), "../..\n")
+	ws := filepath.Join(tmp, "ws")
+	mkdirs(t, filepath.Join(ws, ".githooks"))
+	writeFile(t, filepath.Join(ws, ".git"), "gitdir: "+gitdir+"\n")
+	got, err := inPlaceMounts(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMounts(t, ws, got, ".git", ".claude", ".githooks")
+}
+
+func TestInPlaceNoGit(t *testing.T) {
+	ws := realTemp(t)
+	got, err := inPlaceMounts(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMounts(t, ws, got, ".claude")
+}
+
+func TestInPlaceSubdirOfRepo(t *testing.T) {
+	repo := realTemp(t)
+	gitRepo(t, repo, "[core]\n\thooksPath = sub/hooks\n")
+	ws := filepath.Join(repo, "sub")
+	mkdirs(t, ws)
+	got, err := inPlaceMounts(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMounts(t, ws, got, ".claude")
+}
+
+func TestInPlaceCreatesClaudeDir(t *testing.T) {
+	// The mode asked for is 0755; pin the umask so the test does not depend on
+	// the caller's. No test in this package runs in parallel.
+	defer syscall.Umask(syscall.Umask(0o022))
+	ws := realTemp(t)
+	if _, err := inPlaceMounts(ws); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Lstat(filepath.Join(ws, ".claude"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.IsDir() || fi.Mode().Perm() != 0o755 {
+		t.Fatalf("want a 0755 directory, got %v", fi.Mode())
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		t.Fatalf("want .claude owned by uid %d, got %+v", os.Getuid(), fi.Sys())
+	}
+}
+
+func TestInPlaceHooksPath(t *testing.T) {
+	cases := []struct {
+		name   string
+		hooks  func(ws string) string // the core.hooksPath value
+		setup  func(t *testing.T, ws string)
+		mounts []string // besides .git and .claude; nil + refuse=false: none
+		refuse bool
+	}{
+		{name: "relative", hooks: func(string) string { return ".githooks" },
+			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, ".githooks")) }, mounts: []string{".githooks"}},
+		{name: "absolute inside", hooks: func(ws string) string { return filepath.Join(ws, ".githooks") },
+			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, ".githooks")) }, mounts: []string{".githooks"}},
+		{name: "nested relative", hooks: func(string) string { return "tools/hooks" },
+			setup: func(t *testing.T, ws string) { mkdirs(t, filepath.Join(ws, "tools", "hooks")) }, mounts: []string{"tools/hooks"}},
+		{name: "inside .git", hooks: func(string) string { return ".git/hooks" }},
+		{name: "absolute inside .git", hooks: func(ws string) string { return filepath.Join(ws, ".git", "hooks") }},
+		{name: "inside .claude", hooks: func(string) string { return ".claude/hooks" }},
+		{name: "dev null", hooks: func(string) string { return "/dev/null" }},
+		{name: "home", hooks: func(string) string { return "~/hooks" }},
+		{name: "outside", hooks: func(string) string { return "../outside" }},
+		{name: "missing", hooks: func(string) string { return ".githooks" }, refuse: true},
+		{name: "workspace root", hooks: func(string) string { return "." }, refuse: true},
+		{name: "a file", hooks: func(string) string { return ".githooks" },
+			setup: func(t *testing.T, ws string) { writeFile(t, filepath.Join(ws, ".githooks"), "x") }, refuse: true},
+		{name: "symlinked parent", hooks: func(string) string { return "link/.githooks" },
+			setup: func(t *testing.T, ws string) {
+				mkdirs(t, filepath.Join(ws, "real", ".githooks"))
+				symlink(t, "real", filepath.Join(ws, "link"))
+			}, refuse: true},
+		{name: "symlinked target", hooks: func(string) string { return ".githooks" },
+			setup: func(t *testing.T, ws string) {
+				mkdirs(t, filepath.Join(ws, "real"))
+				symlink(t, "real", filepath.Join(ws, ".githooks"))
+			}, refuse: true},
+		// The default hooks directory, linked out of the read-only .git into
+		// files the box can write.
+		{name: "symlinked .git/hooks", hooks: func(string) string { return "" },
+			setup: func(t *testing.T, ws string) {
+				mkdirs(t, filepath.Join(ws, "githooks"))
+				if err := os.Remove(filepath.Join(ws, ".git", "hooks")); err != nil {
+					t.Fatal(err)
+				}
+				symlink(t, "../githooks", filepath.Join(ws, ".git", "hooks"))
+			}, refuse: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := realTemp(t)
+			cfg := "[core]\n\tbare = false\n"
+			if hp := tc.hooks(ws); hp != "" {
+				cfg += "\thooksPath = " + hp + "\n"
+			}
+			gitRepo(t, ws, cfg)
+			if tc.setup != nil {
+				tc.setup(t, ws)
+			}
+			got, err := inPlaceMounts(ws)
+			if tc.refuse {
+				if !errors.Is(err, ErrUnboxableWorkspace) {
+					t.Fatalf("want ErrUnboxableWorkspace, got %v (mounts %v)", err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantMounts(t, ws, got, append([]string{".git", ".claude"}, tc.mounts...)...)
+		})
+	}
+}
+
+// A ~ path expands to the home directory, as git expands it: one that lands
+// inside the workspace is guarded like any other.
+func TestInPlaceHooksPathTildeInsideWorkspace(t *testing.T) {
+	home := realTemp(t)
+	t.Setenv("HOME", home)
+	ws := filepath.Join(home, "proj")
+	gitRepo(t, ws, "[core]\n\thooksPath = ~/proj/.githooks\n")
+	mkdirs(t, filepath.Join(ws, ".githooks"))
+	got, err := inPlaceMounts(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMounts(t, ws, got, ".git", ".claude", ".githooks")
+}
+
+// A hooksPath spelled outside the workspace that a HOST symlink (one the box
+// cannot replace) leads back into it is guarded at its real path.
+func TestInPlaceHooksPathThroughHostSymlink(t *testing.T) {
+	tmp := realTemp(t)
+	ws := filepath.Join(tmp, "ws")
+	symlink(t, ws, filepath.Join(tmp, "alias"))
+	gitRepo(t, ws, "[core]\n\thooksPath = "+filepath.Join(tmp, "alias", ".githooks")+"\n")
+	mkdirs(t, filepath.Join(ws, ".githooks"))
+	got, err := inPlaceMounts(ws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantMounts(t, ws, got, ".git", ".claude", ".githooks")
+
+	// ... and refused when what it points at does not exist yet: the box could
+	// create it.
+	if err := os.Remove(filepath.Join(ws, ".githooks")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inPlaceMounts(ws); !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("want ErrUnboxableWorkspace for a missing hooks dir behind a host symlink, got %v", err)
+	}
+}
+
+func TestInPlaceRefuses(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, ws string)
+		msg   string // a substring the refusal must carry, besides the path
+	}{
+		{"submodules", func(t *testing.T, ws string) {
+			gitRepo(t, ws, "")
+			writeFile(t, filepath.Join(ws, ".gitmodules"), "")
+		}, "trusted host"},
+		{"symlinked .git", func(t *testing.T, ws string) {
+			gitRepo(t, filepath.Join(ws, "real"), "")
+			symlink(t, "real/.git", filepath.Join(ws, ".git"))
+		}, ".git"},
+		{"symlinked .claude", func(t *testing.T, ws string) {
+			mkdirs(t, filepath.Join(ws, "real"))
+			symlink(t, "real", filepath.Join(ws, ".claude"))
+		}, ".claude"},
+		{"symlinked CLAUDE.md", func(t *testing.T, ws string) {
+			writeFile(t, filepath.Join(ws, "doc.md"), "x")
+			symlink(t, "doc.md", filepath.Join(ws, "CLAUDE.md"))
+		}, "CLAUDE.md"},
+		{"symlinked CLAUDE.local.md", func(t *testing.T, ws string) {
+			symlink(t, "nowhere.md", filepath.Join(ws, "CLAUDE.local.md"))
+		}, "CLAUDE.local.md"},
+		{"symlinked AGENTS.md", func(t *testing.T, ws string) {
+			writeFile(t, filepath.Join(ws, "doc.md"), "x")
+			symlink(t, "doc.md", filepath.Join(ws, "AGENTS.md"))
+		}, "AGENTS.md"},
+		{"symlinked .mcp.json", func(t *testing.T, ws string) {
+			writeFile(t, filepath.Join(ws, "m.json"), "{}")
+			symlink(t, "m.json", filepath.Join(ws, ".mcp.json"))
+		}, ".mcp.json"},
+		{"include", func(t *testing.T, ws string) { gitRepo(t, ws, "[include]\n\tpath = x\n") }, "include"},
+		{"includeIf", func(t *testing.T, ws string) { gitRepo(t, ws, "[includeIf \"gitdir:/x\"]\n\tpath = y\n") }, "include"},
+		{"gitdir inside the workspace", func(t *testing.T, ws string) {
+			mkdirs(t, filepath.Join(ws, "evil"))
+			writeFile(t, filepath.Join(ws, "evil", "config"), "")
+			writeFile(t, filepath.Join(ws, ".git"), "gitdir: ./evil\n")
+		}, "gitdir"},
+		{"gitdir leading back in through a host symlink", func(t *testing.T, ws string) {
+			mkdirs(t, filepath.Join(ws, "evil"))
+			alias := filepath.Join(filepath.Dir(ws), filepath.Base(ws)+"-alias")
+			symlink(t, ws, alias)
+			t.Cleanup(func() { os.Remove(alias) })
+			writeFile(t, filepath.Join(ws, ".git"), "gitdir: "+filepath.Join(alias, "evil")+"\n")
+		}, "gitdir"},
+		{"gitdir that does not exist", func(t *testing.T, ws string) {
+			writeFile(t, filepath.Join(ws, ".git"), "gitdir: /nonexistent/agent-box-test/wt\n")
+		}, "gitdir"},
+		{"not a gitfile", func(t *testing.T, ws string) {
+			writeFile(t, filepath.Join(ws, ".git"), "hello\n")
+		}, "gitdir"},
+		{"commondir inside the workspace", func(t *testing.T, ws string) {
+			gd := filepath.Join(filepath.Dir(ws), filepath.Base(ws)+"-gd")
+			mkdirs(t, gd, filepath.Join(ws, "evil"))
+			t.Cleanup(func() { os.RemoveAll(gd) })
+			writeFile(t, filepath.Join(gd, "commondir"), filepath.Join(ws, "evil")+"\n")
+			writeFile(t, filepath.Join(ws, ".git"), "gitdir: "+gd+"\n")
+		}, "commondir"},
+		{".git directory with a commondir", func(t *testing.T, ws string) {
+			gitRepo(t, ws, "")
+			writeFile(t, filepath.Join(ws, ".git", "commondir"), "../evil\n")
+		}, "commondir"},
+		{"symlinked .git/config", func(t *testing.T, ws string) {
+			gitRepo(t, ws, "")
+			writeFile(t, filepath.Join(ws, "cfg"), "")
+			if err := os.Remove(filepath.Join(ws, ".git", "config")); err != nil {
+				t.Fatal(err)
+			}
+			symlink(t, "../cfg", filepath.Join(ws, ".git", "config"))
+		}, "config"},
+		{"include in config.worktree", func(t *testing.T, ws string) {
+			gitRepo(t, ws, "")
+			writeFile(t, filepath.Join(ws, ".git", "config.worktree"), "[include]\npath = x\n")
+		}, "include"},
+		{"unparsable config", func(t *testing.T, ws string) {
+			gitRepo(t, ws, "[core]\n\thooksPath = \"open\n")
+		}, "config"},
+		{"CLAUDE.md is a directory", func(t *testing.T, ws string) {
+			mkdirs(t, filepath.Join(ws, "CLAUDE.md"))
+		}, "CLAUDE.md"},
+		{".claude is a file", func(t *testing.T, ws string) {
+			writeFile(t, filepath.Join(ws, ".claude"), "x")
+		}, ".claude"},
+		{".git is a fifo", func(t *testing.T, ws string) {
+			if err := syscall.Mkfifo(filepath.Join(ws, ".git"), 0o644); err != nil {
+				t.Skip("mkfifo:", err)
+			}
+		}, ".git"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ws := realTemp(t)
+			tc.setup(t, ws)
+			got, err := inPlaceMounts(ws)
+			if !errors.Is(err, ErrUnboxableWorkspace) {
+				t.Fatalf("want ErrUnboxableWorkspace, got %v (mounts %v)", err, got)
+			}
+			if !strings.Contains(err.Error(), ws) || !strings.Contains(err.Error(), tc.msg) {
+				t.Fatalf("the refusal must name %s and %q: %v", ws, tc.msg, err)
+			}
+		})
+	}
+}
+
+func TestInPlaceRefusesUnreadableConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-000 file")
+	}
+	ws := realTemp(t)
+	gitRepo(t, ws, "[core]\n")
+	cfg := filepath.Join(ws, ".git", "config")
+	if err := os.Chmod(cfg, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(cfg, 0o644) })
+	if _, err := inPlaceMounts(ws); !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("want ErrUnboxableWorkspace for an unreadable config, got %v", err)
+	}
+}
+
+func TestGitConfigCore(t *testing.T) {
+	cases := []struct {
+		name, in string
+		hooks    string
+		include  bool
+	}{
+		{"case-insensitive", "[CORE]\n\tHOOKSPATH = a\n", "a", false},
+		{"subsection is not core", "[core \"x\"]\nhooksPath=b\n", "", false},
+		{"dotted subsection is not core", "[core.x]\nhooksPath=b\n", "", false},
+		{"last wins", "[core]\nhooksPath = a\n[core]\nhooksPath = b\n", "b", false},
+		{"other section after", "[core]\nhooksPath = a\n[other]\nhooksPath = b\n", "a", false},
+		{"quoted with comment", "[core]\nhooksPath = \"q q\" ; c\n", "q q", false},
+		{"commented out", "[core]\n# hooksPath=z\n", "", false},
+		{"semicolon comment", "[core]\n; hooksPath=z\n", "", false},
+		{"key on the header line", "[core] hooksPath = h\n", "h", false},
+		{"internal spaces kept", "[core]\nhooksPath = a  b\t\n", "a  b", false},
+		{"continuation", "[core]\nhooksPath = a\\\nb\n", "ab", false},
+		{"escaped quote", "[core]\nhooksPath = a\\\"b\n", "a\"b", false},
+		{"crlf", "[core]\r\nhooksPath = c\r\n", "c", false},
+		{"no trailing newline", "[core]\nhooksPath = e", "e", false},
+		{"include", "[include]\npath = x\n", "", true},
+		{"includeIf", "[includeIf \"gitdir:/x\"]\npath = y\n", "", true},
+		{"include any case", "[IncludeIf \"onbranch:m\"]\n", "", true},
+		{"no config", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hp, inc := gitConfigCore([]byte(tc.in))
+			if hp != tc.hooks || inc != tc.include {
+				t.Fatalf("gitConfigCore(%q) = %q, %v; want %q, %v", tc.in, hp, inc, tc.hooks, tc.include)
+			}
+		})
+	}
+}
+
+// Malformed config is refused rather than half-read: git itself stops at the
+// bad line, so a reader that carried on could miss the value git uses.
+func TestGitConfigMalformed(t *testing.T) {
+	for _, in := range []string{
+		"[core]\nhooksPath = \"open\n",
+		"[core\nhooksPath = a\n",
+		"[ core]\n",
+		"[core]\nhooksPath # c\n",
+		"[core]\n1key = a\n",
+		"[core]\nhooksPath = a\\q\n",
+		"[core]\nhooksPath\n", // a bare key is boolean true: no path, and git dies on it
+	} {
+		if !parseGitCore([]byte(in)).bad {
+			t.Errorf("parseGitConfigCore(%q) accepted malformed config", in)
+		}
+	}
+}
+
+func guardMgr(t *testing.T, on bool) (*Manager, *fakeClient) {
+	t.Helper()
+	m, f := newTestManagerWithFake(t)
+	m.opts.GuardInPlace = on
+	return m, f
+}
+
+func TestWrapGuardOnlyWhenEnabled(t *testing.T) {
+	ctx := context.Background()
+
+	m, f := guardMgr(t, false)
+	ws := realTemp(t)
+	gitRepo(t, ws, "")
+	if _, _, _, err := m.Wrap(ctx, ws, "s1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if hasDst(f.runArgs[0], filepath.Join(ws, ".claude")) || hasDst(f.runArgs[0], filepath.Join(ws, ".git")) {
+		t.Fatalf("guards are off by default: %q", f.runArgs[0])
+	}
+	if _, err := os.Lstat(filepath.Join(ws, ".claude")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("with guards off nothing is created in the workspace: %v", err)
+	}
+
+	m, f = guardMgr(t, true)
+	ws = realTemp(t)
+	gitRepo(t, ws, "")
+	// Spare capacity: appending the guards must not write into the caller's array.
+	caller := make([]Mount, 1, 8)
+	caller[0] = bundleRoot
+	if _, _, _, err := m.Wrap(ctx, ws, "s2", BoxKey{}, []string{"claude"}, nil, caller); err != nil {
+		t.Fatal(err)
+	}
+	if spare := caller[:2]; spare[1] != (Mount{}) {
+		t.Fatalf("Wrap wrote its guards into the caller's slice: %+v", spare)
+	}
+	args := f.runArgs[0]
+	g := filepath.Join(ws, ".git")
+	if !containsPair(args, "--mount", "type=bind,src="+g+",dst="+g+",readonly") {
+		t.Fatalf("want .git bound read-only onto itself: %q", args)
+	}
+	if !containsPair(args, "--mount", "type=bind,src="+filepath.Join(ws, ".claude")+",dst="+filepath.Join(ws, ".claude")+",readonly") ||
+		!hasDst(args, bundleRoot.Box) {
+		t.Fatalf("want .claude guarded and the caller's mounts kept: %q", args)
+	}
+}
+
+// The workspace is spelled through a symlink: the guards are derived from, and
+// mounted at, its resolved path.
+func TestWrapGuardsTheResolvedWorkspace(t *testing.T) {
+	m, f := guardMgr(t, true)
+	tmp := realTemp(t)
+	ws := filepath.Join(tmp, "ws")
+	gitRepo(t, ws, "")
+	symlink(t, ws, filepath.Join(tmp, "alias"))
+	if _, _, _, err := m.Wrap(context.Background(), filepath.Join(tmp, "alias"), "s1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !hasDst(f.runArgs[0], filepath.Join(ws, ".git")) {
+		t.Fatalf("want the guard at the resolved path: %q", f.runArgs[0])
+	}
+}
+
+func TestLiveBoxWithoutGuardMountsIsRefused(t *testing.T) {
+	m, f := guardMgr(t, true)
+	ws := realTemp(t)
+	gitRepo(t, ws, "")
+	name := mustBoxName(t, m, ws)
+	f.running[name] = true
+	f.mounts[name] = []string{ws, boxHome} // created before the guards existed
+	m.AdoptBox(name)
+	_, _, _, err := m.Wrap(context.Background(), ws, "s2", BoxKey{}, []string{"bash"}, nil, nil)
+	if !errors.Is(err, ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "was started without") || !strings.Contains(err.Error(), ".claude") {
+		t.Fatalf("the refusal must name the missing guard: %v", err)
+	}
+	if f.stops() != 0 || f.runs() != 0 {
+		t.Fatalf("a box with a live session must not be touched: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+func TestIdleBoxWithoutGuardMountsIsRecreated(t *testing.T) {
+	m, f := guardMgr(t, true)
+	ws := realTemp(t)
+	gitRepo(t, ws, "")
+	name := mustBoxName(t, m, ws)
+	f.running[name] = true
+	f.mounts[name] = []string{ws, boxHome}
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 1 || f.runs() != 1 || !hasDst(f.runArgs[0], filepath.Join(ws, ".git")) {
+		t.Fatalf("want the idle box recreated with its guards: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+func TestWrapRefusesSubmoduleWorkspaceBeforeDocker(t *testing.T) {
+	m, f := guardMgr(t, true)
+	ws := realTemp(t)
+	gitRepo(t, ws, "")
+	writeFile(t, filepath.Join(ws, ".gitmodules"), "[submodule \"lib\"]\n")
+	_, _, _, err := m.Wrap(context.Background(), ws, "s1", BoxKey{}, []string{"bash"}, nil, nil)
+	if !errors.Is(err, ErrUnboxableWorkspace) {
+		t.Fatalf("want ErrUnboxableWorkspace, got %v", err)
+	}
+	if f.runs() != 0 || f.stops() != 0 {
+		t.Fatalf("the refusal comes before any docker call: runs=%d stops=%d", f.runs(), f.stops())
+	}
+}

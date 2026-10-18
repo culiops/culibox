@@ -39,6 +39,10 @@ var pathEscapes = map[string]int{
 	"internal/web/profiles.go os.UserHomeDir": 1,
 	// Refuses $HOME as a boxed workspace (it would mount the whole home).
 	"internal/box/box.go os.UserHomeDir": 1,
+	// Expands a "~" / "~user" core.hooksPath the way host git does, to decide
+	// whether the hooks dir lies in an in-place workspace (a read, never a write).
+	"internal/box/inplace.go os.UserHomeDir": 1,
+	"internal/box/inplace.go HomeDir":        1,
 	// darwin caps a socket path at 103 bytes, so the socket dir cannot live in the
 	// data root there; it is still derived from it (a hash) and holds only sockets.
 	"internal/abduco/socketpath.go literal /tmp": 1,

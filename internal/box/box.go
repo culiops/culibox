@@ -21,6 +21,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -192,6 +193,12 @@ type Options struct {
 	// Egress.Verify instead of Options.Verify (Linux). false: only bound boxes
 	// are fenced (darwin), and an unbound box keeps the default network.
 	EgressAll bool
+	// GuardInPlace binds the workspace's .git, .claude/, CLAUDE.md,
+	// CLAUDE.local.md, AGENTS.md, .mcp.json and an in-workspace core.hooksPath
+	// directory read-only onto themselves in every box (see inPlaceMounts), so a
+	// box cannot plant what host git or a host-tier agent later runs or loads.
+	// A workspace whose guards cannot be derived exactly is refused.
+	GuardInPlace bool
 }
 
 // Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""), and
@@ -552,6 +559,17 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
+	}
+	if m.opts.GuardInPlace {
+		// Derived from the resolved path, which is what docker mounts. Appended
+		// as ordinary read-only extras, so MountUnsafe, reuseMounts (a live box
+		// without a guard is refused, an idle one recreated) and runArgs all see
+		// them. Clip: never write into the caller's backing array.
+		guard, err := inPlaceMounts(real)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		extraRO = append(slices.Clip(extraRO), guard...)
 	}
 	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != ""); err != nil {
 		return nil, nil, "", err
