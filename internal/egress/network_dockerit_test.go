@@ -99,8 +99,8 @@ func TestRealDockerICCOffIsolatesBoxes(t *testing.T) {
 	if !n.Internal || !n.NoICC {
 		t.Fatalf("network: %+v", n)
 	}
-	// The refusal path against the real daemon: the same network wanted with
-	// ICC off is accepted again, and inspect read the option back.
+	// Ensuring the same network again against the real daemon is accepted:
+	// inspect read the ICC-off option back.
 	if _, err := EnsureNetwork(ctx, cliDocker{}, name, instance, Want{Internal: true, NoICC: true}); err != nil {
 		t.Fatal(err)
 	}

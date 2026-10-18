@@ -193,15 +193,18 @@ type Options struct {
 	// Egress.Verify instead of Options.Verify (Linux). false: only bound boxes
 	// are fenced (darwin), and an unbound box keeps the default network.
 	EgressAll bool
-	// GuardInPlace binds the workspace's .git, .claude/, CLAUDE.md,
+	// GuardInPlace binds the workspace root's .git, .claude/, CLAUDE.md,
 	// CLAUDE.local.md, AGENTS.md, .mcp.json and an in-workspace core.hooksPath
 	// directory read-only onto themselves in every box (see inPlaceMounts), so a
-	// box cannot write those names directly. It does not stop everything host
-	// git or a host-tier agent later runs or loads: a box can still create an
-	// absent CLAUDE.md, CLAUDE.local.md, AGENTS.md or .mcp.json and a .git
-	// anywhere in the workspace, and a guarded file can still call writable
-	// workspace code (a hook running a repo script, a CLAUDE.md @import). A
-	// workspace whose guards cannot be derived exactly is refused.
+	// box cannot write those top-level names directly. It does not stop
+	// everything host git or a host-tier agent later runs or loads: the same
+	// names in subdirectories stay writable (sub/CLAUDE.md, sub/.mcp.json,
+	// sub/.claude/settings.json, loaded by a host session started in sub/), a
+	// box can still create an absent CLAUDE.md, CLAUDE.local.md, AGENTS.md or
+	// .mcp.json and a .git anywhere in the workspace, and a guarded file can
+	// still call writable workspace code (a hook running a repo script, a
+	// CLAUDE.md @import). A workspace whose guards cannot be derived exactly is
+	// refused.
 	GuardInPlace bool
 }
 

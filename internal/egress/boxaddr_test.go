@@ -95,12 +95,12 @@ func TestBoundBoxCannotUseAnOpenSessionsToken(t *testing.T) {
 	if r.Outcome != OutcomeBadAuth || r.SessionID != "s3" || r.Box != "" {
 		t.Fatalf("row = %+v", r)
 	}
-	stale := h.rows.all()[0]
+	mismatch := h.rows.all()[0]
 	h2, _, _ := boundHarness(t)
 	h2.connect(t, "exfil.example.net:443", "s3", h2.tok("s3", nonceA)) // wrong nonce
-	if s := h2.onlyRow(t); s.Outcome != stale.Outcome || s.SessionID != stale.SessionID || s.Box != stale.Box ||
-		s.Host != stale.Host || s.Port != stale.Port {
-		t.Fatalf("mismatch row %+v differs from a stale-token row %+v", stale, s)
+	if stale := h2.onlyRow(t); stale.Outcome != mismatch.Outcome || stale.SessionID != mismatch.SessionID ||
+		stale.Box != mismatch.Box || stale.Host != mismatch.Host || stale.Port != mismatch.Port {
+		t.Fatalf("mismatch row %+v differs from a stale-token row %+v", mismatch, stale)
 	}
 }
 
