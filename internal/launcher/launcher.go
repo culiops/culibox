@@ -160,6 +160,13 @@ type AccountResolver interface {
 	Resolve(name string) (account.Resolved, error)
 }
 
+// accountRefresher is optionally implemented by the resolver: Refresh brings a
+// named account's config dir up to date with the default's (settings, MCP
+// servers) so a new session sees changes made since the daemon started.
+type accountRefresher interface {
+	Refresh(name string) error
+}
+
 var (
 	// ErrCodexAccount: codex accounts validate and are stored, but cannot spawn yet.
 	ErrCodexAccount = errors.New("codex accounts are not supported yet")
@@ -195,7 +202,17 @@ func (l *AgentLauncher) AccountFor(spec SpawnSpec) (account.Resolved, error) {
 		}
 		return account.Resolved{}, fmt.Errorf("%w %q (accounts not configured)", account.ErrUnknown, name)
 	}
-	return r.Resolve(name)
+	res, err := r.Resolve(name)
+	if err != nil {
+		return res, err
+	}
+	if rf, ok := r.(accountRefresher); ok && !res.IsDefault {
+		// A failed refresh leaves the previous copy in place; the spawn goes on.
+		if err := rf.Refresh(name); err != nil {
+			log.Printf("account %q: refresh before spawn failed (continuing): %v", name, err)
+		}
+	}
+	return res, nil
 }
 
 // checkAccount refuses combinations that would mix credentials. boxed is the

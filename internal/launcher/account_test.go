@@ -338,3 +338,38 @@ func TestBuild_SameProfileWithoutLoginStillRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+type refreshingAccounts struct {
+	fakeAccounts
+	refreshed []string
+	err       error
+}
+
+func (r *refreshingAccounts) Refresh(n string) error {
+	r.refreshed = append(r.refreshed, n)
+	return r.err
+}
+
+func TestAccountFor_RefreshesNamedAccountBeforeSpawn(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Account: "work"}}, fakeResolver{}, nil)
+	ra := &refreshingAccounts{fakeAccounts: fakeAccounts{"work": workAcct("/w")}}
+	l.SetAccounts(ra)
+	if r, err := l.AccountFor(SpawnSpec{Agent: "c"}); err != nil || r.Name != "work" {
+		t.Fatalf("AccountFor = %+v, %v", r, err)
+	}
+	if !reflect.DeepEqual(ra.refreshed, []string{"work"}) {
+		t.Fatalf("refreshed = %v", ra.refreshed)
+	}
+	// The default account has nothing to refresh.
+	if _, err := l.AccountFor(SpawnSpec{Agent: "c", Account: account.Default}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.refreshed) != 1 {
+		t.Fatalf("default account refreshed: %v", ra.refreshed)
+	}
+	// A failing refresh must not block the spawn.
+	ra.err = errors.New("disk full")
+	if r, err := l.AccountFor(SpawnSpec{Agent: "c"}); err != nil || r.Name != "work" {
+		t.Fatalf("refresh failure blocked the spawn: %+v, %v", r, err)
+	}
+}

@@ -33,6 +33,9 @@ type manifest struct {
 	MCP   bool     `json:"mcp,omitempty"`   // agent-box wrote MCPFileName
 	// Delegate: agent-box wrote DelegateFileName (the default account's statusLine command).
 	Delegate bool `json:"delegate,omitempty"`
+	// Settings: the settings.json keys copied from the default account. Only
+	// these are ever removed again.
+	Settings []string `json:"settings,omitempty"`
 }
 
 // ScriptPath is where the embedded rate-limits statusLine script lives.
@@ -134,6 +137,9 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 				return err
 			}
 		}
+		if err := s.syncSettings(cr, false, &man); err != nil {
+			return err
+		}
 		return writeManifest(cr, manifest{})
 	}
 	for _, n := range bundle.AllowlistNames() {
@@ -167,6 +173,9 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 		man.MCP = true
 	}
 	if err := s.syncDelegate(cr, &man); err != nil {
+		return err
+	}
+	if err := s.syncSettings(cr, true, &man); err != nil {
 		return err
 	}
 	return writeManifest(cr, man)
