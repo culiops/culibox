@@ -14,7 +14,7 @@ import (
 )
 
 func ok() boxFacts {
-	return boxFacts{SetUp: true, MacOSMajor: 14, ColimaVer: "0.8.1", ServerArch: "arm64", ProbeRan: true,
+	return boxFacts{SetUp: true, MacOSMajor: 14, ColimaVer: "0.8.1", ServerArch: "arm64", ProbeRan: true, ImageName: "culiops/agent-box:base",
 		Status: boxvm.Status{Running: true, MountType: "virtiofs", Driver: "macOS Virtualization.Framework"},
 		Image:  boximage.ImageState{Present: true, Arch: "arm64", Hash: boximage.Hash()}}
 }

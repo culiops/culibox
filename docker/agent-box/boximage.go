@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"regexp"
 	"strings"
+	"time"
 )
 
 //go:embed Dockerfile
@@ -66,10 +68,14 @@ func contextTar() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Build builds the image for the daemon's own architecture. --platform and
-// --pull are not optional: a local node:* tag of another arch once produced an
-// emulated box about 8x slower, with no error anywhere.
-func (d Docker) Build(ctx context.Context, image string, w io.Writer) error {
+// Build builds the image for the daemon's own architecture and gives it every
+// name in tags. --platform and --pull are not optional: a local node:* tag of
+// another arch once produced an emulated box about 8x slower, with no error
+// anywhere.
+func (d Docker) Build(ctx context.Context, tags []string, w io.Writer) error {
+	if len(tags) == 0 {
+		return errors.New("docker build: no image tag given")
+	}
 	arch, err := d.ServerArch(ctx)
 	if err != nil {
 		return err
@@ -78,14 +84,71 @@ func (d Docker) Build(ctx context.Context, image string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	cmd := d.command(ctx, "build", "--pull", "--platform", "linux/"+arch,
-		"--label", LabelHash+"="+Hash(), "-t", image, "-")
+	args := []string{"build", "--pull", "--platform", "linux/" + arch, "--label", LabelHash + "=" + Hash()}
+	for _, t := range tags {
+		args = append(args, "-t", t)
+	}
+	cmd := d.command(ctx, append(args, "-")...)
 	cmd.Stdin = bytes.NewReader(tarball)
 	cmd.Stdout, cmd.Stderr = w, w
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker build %s: %w", image, err)
+		return fmt.Errorf("docker build %s: %w", strings.Join(tags, ", "), err)
 	}
 	return nil
+}
+
+// datedTag is what a build date looks like as a tag: YYYY-MM-DD, with .2 to .9
+// when that day's tag is taken.
+var datedTag = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}(\.[2-9])?$`)
+
+// splitTag cuts a ref at its tag: the part after the last ":" that follows the
+// last "/" (a ":" before that is a registry port).
+func splitTag(image string) (repo, tag string) {
+	slash := strings.LastIndex(image, "/")
+	if colon := strings.LastIndex(image, ":"); colon > slash {
+		return image[:colon], image[colon+1:]
+	}
+	return image, ""
+}
+
+// IsDated reports whether image is pinned: a tag in the dated form that Build
+// callers mint. A digest ref is not a dated tag.
+func IsDated(image string) bool {
+	if strings.Contains(image, "@") {
+		return false
+	}
+	_, tag := splitTag(image)
+	return datedTag.MatchString(tag)
+}
+
+// Repo is the ref without its tag. A digest ref has no tag to drop, so it errors.
+func Repo(image string) (string, error) {
+	if strings.Contains(image, "@") {
+		return "", fmt.Errorf("%s is a digest, not a repo:tag", image)
+	}
+	repo, _ := splitTag(image)
+	return repo, nil
+}
+
+// NextDatedTag returns the first tag of repo that the daemon does not hold:
+// <repo>:<UTC date>, then .2 to .9. A dated tag is immutable, so a taken one
+// is never reused.
+func (d Docker) NextDatedTag(ctx context.Context, repo string, now time.Time) (string, error) {
+	day := now.UTC().Format("2006-01-02")
+	for i := 1; i <= 9; i++ {
+		tag := repo + ":" + day
+		if i > 1 {
+			tag += fmt.Sprintf(".%d", i)
+		}
+		st, err := d.Inspect(ctx, tag)
+		if err != nil {
+			return "", err
+		}
+		if !st.Present {
+			return tag, nil
+		}
+	}
+	return "", fmt.Errorf("every dated tag of %s for %s is taken", repo, day)
 }
 
 // ImageState is what the daemon holds under the image name.
@@ -133,4 +196,25 @@ func (s ImageState) Check(serverArch string) (fatal bool, msg string) {
 		return false, "box image is older than this agent-box; run `agent-box box setup -rebuild`"
 	}
 	return false, ""
+}
+
+// CheckFor is Check for the configured image. A dated tag is pinned: agent-box
+// never builds, rebuilds or pulls it, so a missing one is fatal with advice to
+// pin a present tag, and a stale one is fine to keep.
+func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) {
+	if !IsDated(image) {
+		return s.Check(serverArch)
+	}
+	switch {
+	case !s.Present:
+		return true, fmt.Sprintf("pinned box image %s is missing; agent-box never rebuilds or pulls a pinned tag: set box_image to a present dated tag (docker images %s), or run agent-box box setup -rebuild and pin the tag it prints", image, mustRepo(image))
+	case s.Arch != serverArch || s.Hash == Hash():
+		return s.Check(serverArch)
+	}
+	return false, fmt.Sprintf("pinned to %s, built from an older Dockerfile than this agent-box (fine to keep); agent-box box setup -rebuild builds a new dated tag you can pin", image)
+}
+
+func mustRepo(image string) string {
+	r, _ := Repo(image)
+	return r
 }

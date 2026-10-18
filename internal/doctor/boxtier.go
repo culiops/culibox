@@ -69,6 +69,7 @@ type boxFacts struct {
 	Status      boxvm.Status
 	StatusErr   error
 	ServerArch  string
+	ImageName   string // the configured box_image
 	Image       boximage.ImageState
 	ImageErr    error
 	ProbeErr    error // only gathered when the VM runs; nil = blocked
@@ -140,7 +141,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 	}
 	if f.ImageErr != nil {
 		out = append(out, Result{Fail, "box image", f.ImageErr.Error()})
-	} else if fatal, msg := f.Image.Check(f.ServerArch); fatal {
+	} else if fatal, msg := f.Image.CheckFor(f.ImageName, f.ServerArch); fatal {
 		out = append(out, Result{Fail, "box image", msg})
 	} else if msg != "" {
 		out = append(out, Result{Warn, "box image", msg})
@@ -202,6 +203,7 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 		return f
 	}
 	image := c.BoxImageOrDefault()
+	f.ImageName = image
 	f.Image, f.ImageErr = img.Inspect(ctx, image)
 	if f.ImageErr == nil && f.Image.Present {
 		f.ProbeRan = true

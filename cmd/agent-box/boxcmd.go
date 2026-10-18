@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strings"
 	"time"
 
 	boximage "github.com/culiops/agent-box/docker/agent-box"
@@ -26,7 +27,7 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	ctx := context.Background()
 	switch a.Sub {
 	case "setup":
-		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), a.Rebuild, w)
+		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), w)
 	case "status":
 		rc := boxImageStatus(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), w)
 		return max(rc, boxListStatus(ctx, box.CLIClient{Bin: bin}, w))
@@ -36,8 +37,10 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	}
 }
 
-// boxSetupImage builds the image unless a current, native one is present.
-func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild bool, w io.Writer) int {
+// boxSetupImage builds the image unless a current, native one is present. Every
+// build also gets a dated tag. A dated box_image is pinned: it is never built,
+// rebuilt or moved, and -rebuild on it builds a new dated tag instead.
+func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, w io.Writer) int {
 	arch, err := d.ServerArch(ctx)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
@@ -48,16 +51,48 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
 		return 1
 	}
-	if fatal, msg := st.Check(arch); !rebuild && !fatal && msg == "" {
-		fmt.Fprintf(w, "PASS image: %s is current (linux/%s)\n", image, arch)
-		return 0
+	pinned := boximage.IsDated(image)
+	fatal, msg := st.CheckFor(image, arch)
+	if !rebuild && !fatal {
+		if msg == "" {
+			fmt.Fprintf(w, "PASS image: %s is current (linux/%s)\n", image, arch)
+			return 0
+		}
+		if pinned {
+			fmt.Fprintf(w, "WARN image: %s (linux/%s): %s\n", image, st.Arch, msg)
+			return 0
+		}
 	}
-	fmt.Fprintf(w, "building %s for linux/%s ...\n", image, arch)
-	if err := d.Build(ctx, image, w); err != nil {
+	if !rebuild && fatal && pinned {
+		fmt.Fprintf(w, "FAIL image: %s\n", msg)
+		return 1
+	}
+	repo, err := boximage.Repo(image)
+	if err != nil {
+		fmt.Fprintln(w, "FAIL image: box_image is a digest; agent-box cannot build it")
+		return 1
+	}
+	dated, err := d.NextDatedTag(ctx, repo, now)
+	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(w, "PASS image: built %s (linux/%s, dockerfile %s)\n", image, arch, boximage.Hash())
+	tags := []string{dated}
+	if !pinned {
+		tags = append(tags, image)
+	}
+	fmt.Fprintf(w, "building %s for linux/%s ...\n", strings.Join(tags, ", "), arch)
+	if err := d.Build(ctx, tags, w); err != nil {
+		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(w, "PASS image: built %s (linux/%s, dockerfile %s)\n", dated, arch, boximage.Hash())
+	if pinned {
+		fmt.Fprintf(w, "this config stays on %s until you set \"box_image\": \"%s\"\n", image, dated)
+		return 0
+	}
+	fmt.Fprintf(w, "PASS image: %s now points at %s\n", image, dated)
+	fmt.Fprintf(w, "pin this instance: set \"box_image\": \"%s\" in its config\n", dated)
 	return 0
 }
 
@@ -75,7 +110,7 @@ func boxImageStatus(ctx context.Context, d boximage.Docker, image string, w io.W
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
 		return 1
 	}
-	switch fatal, msg := st.Check(arch); {
+	switch fatal, msg := st.CheckFor(image, arch); {
 	case fatal:
 		fmt.Fprintf(w, "FAIL image: %s: %s\n", image, msg)
 		return 1

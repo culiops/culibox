@@ -83,6 +83,8 @@ For the contained default, build the box image and write a config. On Linux:
 ./agent-box box setup      # builds the box image with your local Docker
 ```
 
+`box setup` tags every build with its date (for example `culiops/agent-box:2026-10-18`) and prints that tag and how to pin it.
+
 On macOS, `box setup` also creates the VM; see [docs/MACOS.md](docs/MACOS.md).
 
 Put this in `~/.local/share/agent-box/config.json`:
@@ -120,7 +122,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `allowed_hosts` | `[]` | Extra `Host` values to answer to, such as a reverse proxy's hostname. |
 | `default_cwd` | your home | Default workspace. Must not be your home when anything runs boxed. |
 | `default_runtime` | `box` | Tier for agents that do not set their own: `box` or `host`. With no config file at all, the built-in default is `host`. |
-| `box_image` | `culiops/agent-box:base` | Image used for boxes. |
+| `box_image` | `culiops/agent-box:base` | Image used for boxes. Set it to a dated tag to pin an instance; agent-box never rebuilds or pulls a pinned tag. |
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
 | `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |
