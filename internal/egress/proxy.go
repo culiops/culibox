@@ -40,7 +40,9 @@ const (
 // lookupNetIP is the system resolver; a variable so a test can see what it is asked.
 var lookupNetIP = net.DefaultResolver.LookupNetIP
 
-// SessionView is what the proxy needs to know about a session.
+// SessionView is what the proxy needs to know about a session. AWS == nil means
+// open mode: the session is boxed but has no AWS binding, so any public
+// hostname is allowed on 443 (every other check still applies).
 type SessionView struct {
 	Nonce       string
 	Box         string
@@ -48,7 +50,8 @@ type SessionView struct {
 	AWS         *config.AWSBinding
 }
 
-// Lookup resolves a session id; ok is false for an unknown session.
+// Lookup resolves a session id; ok is false for an unknown session. It is asked
+// on every CONNECT, so a session's mode follows its current view.
 type Lookup func(id string) (SessionView, bool)
 
 type Options struct {
@@ -84,6 +87,7 @@ type Proxy struct {
 	mu          sync.Mutex
 	closed      bool
 	subnet      netip.Prefix
+	hostAddrs   []netip.Addr // the host's own interface addresses: never dialled
 	gw          netip.Addr
 	checkSource bool
 	open        map[string]int // slots held per principal key
@@ -171,6 +175,20 @@ func New(o Options) *Proxy {
 func (p *Proxy) SetNetwork(subnet netip.Prefix, gw netip.Addr, checkSource bool) {
 	p.mu.Lock()
 	p.subnet, p.gw, p.checkSource = subnet, gw, checkSource
+	p.mu.Unlock()
+}
+
+// SetHostAddrs records the host's own interface addresses, which no tunnel may
+// dial in any mode. It stores a normalised copy.
+func (p *Proxy) SetHostAddrs(a []netip.Addr) {
+	c := make([]netip.Addr, 0, len(a))
+	for _, x := range a {
+		if x.IsValid() {
+			c = append(c, x.WithZone("").Unmap())
+		}
+	}
+	p.mu.Lock()
+	p.hostAddrs = c
 	p.mu.Unlock()
 }
 
@@ -276,6 +294,7 @@ type principal struct {
 	sid   string // MAC-verified session id; "" for a probe principal
 	box   string
 	allow []string
+	open  bool   // open mode: no AWS binding, so no allowlist
 	key   string // cap and throttle key
 	probe *probePrincipal
 	user  string
@@ -331,7 +350,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		row.Host = name
 	}
-	if !ok || !hostmatch.Match(pr.allow, name) {
+	if !ok || !(pr.open || hostmatch.Match(pr.allow, name)) {
 		if pr.probe != nil && !p.useProbe(pr, false) {
 			p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
 			return
@@ -362,9 +381,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.mu.Lock()
-	subnet := p.subnet
+	subnet, hostAddrs := p.subnet, p.hostAddrs
 	p.mu.Unlock()
-	pub := PublicAddrs(addrs, subnet)
+	pub := WithoutAddrs(PublicAddrs(addrs, subnet), hostAddrs)
 	if len(pub) == 0 {
 		p.countDenied(pr)
 		p.refuse(w, http.StatusForbidden, row, OutcomePrivateAddr, pr.key)
@@ -516,11 +535,17 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 	epoch := p.epoch[sid]
 	p.mu.Unlock()
 	v, found := p.o.Lookup(sid)
-	if !found || !v.Live || !v.Boxed || v.AWS == nil || v.Nonce == "" ||
+	if !found || !v.Live || !v.Boxed || v.Nonce == "" ||
 		subtle.ConstantTimeCompare([]byte(v.Nonce), []byte(nonce)) != 1 {
 		return bad, authBad
 	}
-	return principal{sid: sid, box: v.Box, allow: Effective(v.AWS), key: sid, epoch: epoch}, authOK
+	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
+	if v.AWS == nil {
+		pr.open = true
+	} else {
+		pr.allow = Effective(v.AWS)
+	}
+	return pr, authOK
 }
 
 // basicAuth parses the one Proxy-Authorization header. present is false only

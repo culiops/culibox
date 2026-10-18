@@ -3,10 +3,12 @@ package egress
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"net/url"
 	"slices"
@@ -449,5 +451,62 @@ func TestServiceForgetReachesTheProxy(t *testing.T) {
 	s.Forget("s1")
 	if _, ok := p.Stats("s1"); ok {
 		t.Fatal("Forget left the session's counters at the proxy")
+	}
+}
+
+func TestReadyRefreshesHostAddrs(t *testing.T) {
+	var calls, dials atomic.Int32
+	hostAddr := netip.MustParseAddr("93.184.216.34")
+	px := New(Options{Secret: []byte("0123456789abcdef0123456789abcdef"), Audit: &memRec{},
+		Lookup: func(string) (SessionView, bool) {
+			return SessionView{Nonce: nonceA, Box: "b", Boxed: true, Live: true}, true
+		},
+		Resolve: func(context.Context, string) ([]netip.Addr, error) { return []netip.Addr{hostAddr}, nil },
+		Dial:    func(context.Context, netip.AddrPort) (net.Conn, error) { dials.Add(1); return nil, errors.New("no") }})
+	f, lr := newFakeDocker(), &listenRec{}
+	s := NewService(ServiceOptions{Proxy: px, Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen,
+		HostAddrs: func() ([]netip.Addr, error) { calls.Add(1); return []netip.Addr{hostAddr}, nil }})
+	defer s.Close(context.Background())
+	for i := 1; i <= 2; i++ {
+		if _, err := s.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if int(calls.Load()) != i {
+			t.Fatalf("after %d Ready calls HostAddrs ran %d times", i, calls.Load())
+		}
+	}
+	if lr.count() != 1 {
+		t.Fatalf("listens: %d", lr.count())
+	}
+	// Drive the handler directly: the fake listener never accepts.
+	req := httptest.NewRequest(http.MethodConnect, "example.com:443", nil)
+	req.RequestURI = "example.com:443"
+	req.RemoteAddr = "172.21.0.5:40000"
+	req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("s1:"+px.Token("s1", nonceA))))
+	rec := httptest.NewRecorder()
+	px.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || dials.Load() != 0 {
+		t.Fatalf("status %d, dials %d: a name resolving to the host must be refused", rec.Code, dials.Load())
+	}
+}
+
+func TestReadyFailsClosedWhenHostAddrsUnreadable(t *testing.T) {
+	for name, fn := range map[string]func() ([]netip.Addr, error){
+		"error": func() ([]netip.Addr, error) { return nil, errors.New("netlink down") },
+		"empty": func() ([]netip.Addr, error) { return nil, nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, lr := newFakeDocker(), &listenRec{}
+			s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+				Want: Want{Internal: true}, Listen: lr.listen, HostAddrs: fn})
+			defer s.Close(context.Background())
+			if _, err := s.Ready(context.Background()); err == nil {
+				t.Fatal("Ready succeeded without the host's addresses")
+			}
+			if lr.count() != 0 {
+				t.Fatal("listened without the host's addresses")
+			}
+		})
 	}
 }

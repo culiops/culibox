@@ -68,3 +68,44 @@ func TestPublicAddrsStricter(t *testing.T) {
 		t.Errorf("zone not stripped: %v", got)
 	}
 }
+
+func TestWithoutAddrs(t *testing.T) {
+	a := func(ss ...string) []netip.Addr {
+		var out []netip.Addr
+		for _, s := range ss {
+			out = append(out, netip.MustParseAddr(s))
+		}
+		return out
+	}
+	cases := []struct {
+		name           string
+		in, drop, want []netip.Addr
+	}{
+		{"mapped dropped by plain", a("::ffff:93.184.216.34", "8.8.8.8"), a("93.184.216.34"), a("8.8.8.8")},
+		{"plain dropped by mapped", a("93.184.216.34", "8.8.8.8"), a("::ffff:93.184.216.34"), a("8.8.8.8")},
+		{"zoned dropped by plain", a("fe80::1%eth0", "2606:4700::1111"), a("fe80::1"), a("2606:4700::1111")},
+		{"plain dropped by zoned", a("fe80::1", "2606:4700::1111"), a("fe80::1%eth0"), a("2606:4700::1111")},
+		{"order kept", a("9.9.9.9", "93.184.216.34", "8.8.8.8", "1.1.1.1"), a("93.184.216.34"), a("9.9.9.9", "8.8.8.8", "1.1.1.1")},
+		{"nothing to drop", a("9.9.9.9", "8.8.8.8"), nil, a("9.9.9.9", "8.8.8.8")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := WithoutAddrs(tc.in, tc.drop)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("WithoutAddrs = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestHostAddrsListsInterfaceAddrsUnmapped(t *testing.T) {
+	got, err := HostAddrs()
+	if err != nil {
+		t.Skipf("no interface addresses here: %v", err)
+	}
+	for _, a := range got {
+		if !a.IsValid() || a.Is4In6() || a.Zone() != "" {
+			t.Fatalf("address %v is not normalised", a)
+		}
+	}
+}
