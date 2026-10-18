@@ -228,6 +228,8 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 				"Fix it (git config --list shows where), or %s", top, lowerFirst(inPlaceTrustedHost))
 		}
 		core.include = core.include || c.include
+		core.worktree = core.worktree || c.worktree
+		core.bare = core.bare || c.bare
 		if c.hooksSet {
 			core.hooksPath, core.hooksSet = c.hooksPath, true
 		}
@@ -235,6 +237,16 @@ func hooksGuard(root *os.Root, ws string, gitFi fs.FileInfo) (string, error) {
 	if core.include {
 		return "", refuseInPlace("the git config of %s has an [include] or [includeIf] section, which can point git at "+
 			"a file a box can write. Remove it, or %s", top, lowerFirst(inPlaceTrustedHost))
+	}
+	// git resolves a relative core.hooksPath against core.worktree, and a bare
+	// repository has no worktree: neither is modelled, so neither is guessed at.
+	if core.worktree {
+		return "", refuseInPlace("the git config of %s sets core.worktree, so where git runs hooks from cannot be "+
+			"derived exactly. %s", top, inPlaceTrustedHost)
+	}
+	if core.bare {
+		return "", refuseInPlace("the git config of %s sets core.bare to something other than false, so where git runs "+
+			"hooks from cannot be derived exactly. %s", top, inPlaceTrustedHost)
 	}
 	target := defHooks
 	if core.hooksSet {
@@ -607,6 +619,8 @@ type gitCore struct {
 	hooksPath string
 	hooksSet  bool // core.hooksPath appears (last value wins)
 	include   bool // an [include] or [includeIf …] section
+	worktree  bool // core.worktree appears, with any value
+	bare      bool // core.bare appears with anything but an explicit false
 	bad       bool // git would reject the file; nothing after the error is read
 }
 
@@ -684,6 +698,12 @@ func parseGitCore(data []byte) (c gitCore) {
 			}
 			val, hasVal = v, true
 		}
+		if section == "core" && key.String() == "worktree" {
+			c.worktree = true
+		}
+		if section == "core" && key.String() == "bare" && !(hasVal && gitFalse(val)) {
+			c.bare = true // a bare key is boolean true
+		}
 		if section == "core" && key.String() == "hookspath" {
 			if !hasVal {
 				c.bad = true // a bare key is boolean true: git dies on it
@@ -692,6 +712,16 @@ func parseGitCore(data []byte) (c gitCore) {
 			c.hooksPath, c.hooksSet = val, true
 		}
 	}
+}
+
+// gitFalse: v is one of git's spellings of boolean false. An empty value is
+// false to git too, but is not accepted here: only a spelled-out false is.
+func gitFalse(v string) bool {
+	switch strings.ToLower(v) {
+	case "false", "no", "off", "0":
+		return true
+	}
+	return false
 }
 
 type cfgScanner struct {

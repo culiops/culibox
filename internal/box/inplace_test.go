@@ -650,3 +650,84 @@ func TestWrapRefusesSubmoduleWorkspaceBeforeDocker(t *testing.T) {
 		t.Fatalf("the refusal comes before any docker call: runs=%d stops=%d", f.runs(), f.stops())
 	}
 }
+
+// Spec correction 12: git resolves a relative core.hooksPath against
+// core.worktree when it is set, and a bare repository has no worktree at all;
+// neither is modelled, so either one in the effective config (the workspace's
+// or the enclosing repository's, config or config.worktree) refuses. core.bare
+// is accepted only when it is explicitly false, which `git init` writes into
+// every repository.
+func TestInPlaceRefusesCoreWorktreeAndBare(t *testing.T) {
+	refusing := map[string]string{
+		"worktree":           "[core]\n\tworktree = /elsewhere\n",
+		"worktree relative":  "[core]\n\tworktree = ..\n",
+		"worktree empty":     "[core]\n\tworktree =\n",
+		"worktree any case":  "[Core]\n\tWorkTree = /x\n",
+		"bare true":          "[core]\n\tbare = true\n",
+		"bare bare key":      "[core]\n\tbare\n",
+		"bare yes":           "[core]\n\tbare = yes\n",
+		"bare 1":             "[core]\n\tbare = 1\n",
+		"bare false then on": "[core]\n\tbare = false\n\tbare = on\n",
+		"bare garbage":       "[core]\n\tbare = maybe\n",
+	}
+	accepted := map[string]string{
+		"bare false":          "[core]\n\tbare = false\n",
+		"bare False":          "[core]\n\tBARE = False\n",
+		"bare no":             "[core]\n\tbare = no\n",
+		"bare off":            "[core]\n\tbare = off\n",
+		"bare 0":              "[core]\n\tbare = 0\n",
+		"worktree subsection": "[core \"x\"]\n\tworktree = /x\n\tbare = true\n",
+	}
+	// where writes cfg into one of the four config files git reads for ws.
+	wheres := map[string]func(t *testing.T, ws, cfg string){
+		"ws config": func(t *testing.T, ws, cfg string) { gitRepo(t, ws, cfg) },
+		"ws config.worktree": func(t *testing.T, ws, cfg string) {
+			gitRepo(t, ws, "[core]\n\tbare = false\n")
+			writeFile(t, filepath.Join(ws, ".git", "config.worktree"), cfg)
+		},
+		"enclosing config": func(t *testing.T, ws, cfg string) {
+			gitRepo(t, filepath.Dir(ws), cfg)
+		},
+		"enclosing config.worktree": func(t *testing.T, ws, cfg string) {
+			gitRepo(t, filepath.Dir(ws), "[core]\n\tbare = false\n")
+			writeFile(t, filepath.Join(filepath.Dir(ws), ".git", "config.worktree"), cfg)
+		},
+	}
+	for wname, where := range wheres {
+		for name, cfg := range refusing {
+			t.Run(wname+"/"+name, func(t *testing.T) {
+				ws := filepath.Join(realTemp(t), "sub")
+				mkdirs(t, ws)
+				where(t, ws, cfg)
+				got, err := inPlaceMounts(ws)
+				if !errors.Is(err, ErrUnboxableWorkspace) {
+					t.Fatalf("want ErrUnboxableWorkspace, got %v (mounts %v)", err, got)
+				}
+				key := "core.worktree"
+				if strings.HasPrefix(name, "bare") {
+					key = "core.bare"
+				}
+				if !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "trusted host") {
+					t.Fatalf("the refusal must name %s and the way out: %v", key, err)
+				}
+				top := ws
+				if strings.HasPrefix(wname, "enclosing") {
+					top = filepath.Dir(ws)
+				}
+				if !strings.Contains(err.Error(), top) {
+					t.Fatalf("the refusal must name %s: %v", top, err)
+				}
+			})
+		}
+		for name, cfg := range accepted {
+			t.Run(wname+"/"+name, func(t *testing.T) {
+				ws := filepath.Join(realTemp(t), "sub")
+				mkdirs(t, ws)
+				where(t, ws, cfg)
+				if _, err := inPlaceMounts(ws); err != nil {
+					t.Fatalf("want no refusal: %v", err)
+				}
+			})
+		}
+	}
+}
