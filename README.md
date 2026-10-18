@@ -153,7 +153,9 @@ agent-box starts shells and agents on your machine, so authentication is never o
 
 - The `host` tier is not contained. A host session is you, with an agent.
 - The adversary in scope is an agent running arbitrary userspace commands in a box. A kernel-level escape is out of scope.
-- Boxes have normal outbound network access. There is no egress filtering yet.
+- On Linux, boxes reach the network only through agent-box's CONNECT proxy: port 443, hostnames only, never private or host addresses. AWS-bound boxes are limited to an allowlist. macOS boxes still have normal outbound access.
+- A box started in place sees `.git`, `.claude/`, `CLAUDE.md`, `AGENTS.md` and `.mcp.json` read-only, so it cannot commit there. Repos with submodules are refused. When `core.hooksPath` is nested (for example `.husky/_`), the whole top-level directory that holds it (`.husky/`) is read-only in the box.
+- The guards cover top-level names only. A box can create an absent `CLAUDE.md`, `CLAUDE.local.md` or `AGENTS.md`, or a new `.git` anywhere in the workspace, including its root when it is not a repo. After a boxed session, review untracked files (`git status`) before you run host git or a host-tier session there.
 - It is a single-user tool. There are no roles or per-user permissions.
 - Sessions that share one box (same workspace and same AWS binding) can read each other's process environment, so attribution between them is best effort. Two sessions in the same folder share it read-write, so a session without the AWS binding can plant a file that a bound session then runs. Give a bound session its own workspace.
 - Read access can still pull data into a transcript that `ReadOnlyAccess` allows and the session policy does not deny (Lambda code URLs, Athena and Glue results, CloudWatch Logs, and others). Use the broker with a sandbox or lab account for now, not production.
@@ -171,7 +173,7 @@ Only one agent-box can serve a data root at a time.
 
 ## Roadmap
 
-- Egress allowlist for boxes (in progress, not yet released).
+- Egress allowlist for macOS boxes (Linux boxes have it).
 
 ## Development
 

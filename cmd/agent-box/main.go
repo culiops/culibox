@@ -370,14 +370,21 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 
-	// Egress control (M3c): bound boxes reach the network only through the
-	// allowlist proxy. Not fatal when it cannot start: bound profiles then refuse
-	// to spawn, and the rest of the console keeps working. Before Reconcile, and
-	// the box hooks before it too, so reattached bound boxes find them.
+	// Egress control: on Linux every box reaches the network only through the
+	// allowlist proxy (bound or not), so it starts without the broker. Not fatal
+	// when it cannot start: boxed spawns then refuse, and the rest of the console
+	// keeps working. Before Reconcile, and the box hooks before it too, so
+	// reattached boxes find them.
 	var egressSvc *egressService
-	if layer != nil && brokerSvc != nil {
+	if layer != nil {
+		if runtime.GOOS == "linux" {
+			// Set whether or not egress starts: without it every boxed spawn is refused.
+			mgr.SetEgressAll(true)
+		}
 		svc, err := startEgress(dataDir, layer, cfg, runtime.GOOS, mgr.Get)
 		switch {
+		case err != nil && runtime.GOOS == "linux":
+			log.Printf("egress control disabled (%v); every boxed spawn will be refused", err)
 		case err != nil:
 			log.Printf("egress control disabled (%v); profiles with an AWS binding will refuse to spawn", err)
 		default:
@@ -412,6 +419,9 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		// never starts the VM, and an unreachable docker must not read as "no
 		// boxes".
 		layer.bootReconcile(context.Background())
+		if egressSvc != nil {
+			warnBridgeBoxes(context.Background(), layer.cli, cfg.BoxInstance(), egressSvc.Svc.Network())
+		}
 		go func() {
 			t := time.NewTicker(24 * time.Hour)
 			defer t.Stop()

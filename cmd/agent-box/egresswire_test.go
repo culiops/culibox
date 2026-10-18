@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -98,8 +101,9 @@ func TestStartEgressDarwinUnsupported(t *testing.T) {
 
 func TestEgressLookup(t *testing.T) {
 	sessions := map[string]*session.Session{
-		"claude-3": {ID: "claude-3", Box: "agent-box-x", Runtime: config.RuntimeBox, AWS: wireBinding(), AWSNonce: egressNonce},
-		"claude-4": {ID: "claude-4", Runtime: config.RuntimeHost, AWS: wireBinding(), AWSNonce: egressNonce},
+		"claude-3": {ID: "claude-3", Box: "agent-box-x", Runtime: config.RuntimeBox, AWS: wireBinding(), AWSNonce: "broker-only", EgressNonce: egressNonce},
+		"claude-4": {ID: "claude-4", Runtime: config.RuntimeHost, AWS: wireBinding(), EgressNonce: egressNonce},
+		"claude-5": {ID: "claude-5", Box: "agent-box-y", Runtime: config.RuntimeBox, EgressNonce: egressNonce},
 	}
 	look := egressLookup(func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok })
 
@@ -110,10 +114,61 @@ func TestEgressLookup(t *testing.T) {
 	if v, ok := look("claude-4"); !ok || v.Boxed {
 		t.Errorf("host-tier session must not read as boxed: %+v %v", v, ok)
 	}
+	// An unbound boxed session is open mode: no AWS binding, still boxed and live.
+	if v, ok := look("claude-5"); !ok || !v.Boxed || !v.Live || v.AWS != nil || v.Nonce != egressNonce {
+		t.Errorf("unbound boxed session: %+v %v", v, ok)
+	}
 	// Left the registry: unknown, so the proxy refuses it (no stale admit).
 	delete(sessions, "claude-3")
 	if _, ok := look("claude-3"); ok {
 		t.Error("a session that left the registry must be unknown")
+	}
+}
+
+func TestEgressServiceOptionsLinux(t *testing.T) {
+	o := egressServiceOptions(config.Config{EnvLabel: "DEV"}, "linux", nil, nil)
+	if o.NoProxy != "localhost,127.0.0.1,::1" || !o.Want.Internal || o.GOOS != "linux" || o.Instance != "DEV" {
+		t.Fatalf("options: %+v", o)
+	}
+	// Gate G2: plain Node fetch needs NODE_USE_ENV_PROXY=1 to honour HTTPS_PROXY.
+	if want := []string{"NODE_USE_ENV_PROXY=1"}; !reflect.DeepEqual(o.ExtraEnv, want) {
+		t.Fatalf("ExtraEnv = %q, want %q", o.ExtraEnv, want)
+	}
+}
+
+func TestBridgeBoxes(t *testing.T) {
+	out := "ab-box-1\tbridge\nab-box-2\tagentbox-egress-DEV\nab-box-3\tbridge,agentbox-egress-DEV\n\n"
+	got := bridgeBoxes(out, "agentbox-egress-DEV")
+	if want := []string{"ab-box-1", "ab-box-3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bridgeBoxes = %q, want %q", got, want)
+	}
+	if got := bridgeBoxes("", "n"); len(got) != 0 {
+		t.Errorf("empty listing: %q", got)
+	}
+}
+
+func TestWarnBridgeBoxesQueriesThisInstanceOnly(t *testing.T) {
+	bin, argv := fakeDockerScript(t, `printf 'ab-box-1\tbridge\n'`)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	warnBridgeBoxes(context.Background(), box.CLIClient{Bin: bin}, "DEV", "agentbox-egress-DEV")
+	b, _ := os.ReadFile(argv)
+	if !strings.Contains(string(b), "--filter label=io.culiops.agent-box.instance=DEV") {
+		t.Errorf("argv %q must filter to this instance", b)
+	}
+	if !strings.Contains(buf.String(), "egress: boxes still outside agentbox-egress-DEV") || !strings.Contains(buf.String(), "ab-box-1") {
+		t.Errorf("log %q", buf.String())
+	}
+}
+
+func TestWarnBridgeBoxesDockerErrorIsNotFatal(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	warnBridgeBoxes(context.Background(), box.CLIClient{Bin: "/bin/false"}, "DEV", "agentbox-egress-DEV")
+	if strings.Contains(buf.String(), "boxes still outside") {
+		t.Errorf("nothing to warn about on a docker error: %q", buf.String())
 	}
 }
 
