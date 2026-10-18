@@ -196,8 +196,12 @@ type Options struct {
 	// GuardInPlace binds the workspace's .git, .claude/, CLAUDE.md,
 	// CLAUDE.local.md, AGENTS.md, .mcp.json and an in-workspace core.hooksPath
 	// directory read-only onto themselves in every box (see inPlaceMounts), so a
-	// box cannot plant what host git or a host-tier agent later runs or loads.
-	// A workspace whose guards cannot be derived exactly is refused.
+	// box cannot write those names directly. It does not stop everything host
+	// git or a host-tier agent later runs or loads: a box can still create an
+	// absent CLAUDE.md, CLAUDE.local.md, AGENTS.md or .mcp.json and a .git
+	// anywhere in the workspace, and a guarded file can still call writable
+	// workspace code (a hook running a repo script, a CLAUDE.md @import). A
+	// workspace whose guards cannot be derived exactly is refused.
 	GuardInPlace bool
 }
 
@@ -272,8 +276,9 @@ func New(opts Options) (*Manager, error) {
 	return m, nil
 }
 
-// SetEgress configures the egress fence for bound boxes. Call it once at boot,
-// before Reconcile and before any bound spawn.
+// SetEgress configures the egress fence: for every box when EgressAll is set,
+// otherwise for bound boxes only. Call it once at boot, before Reconcile and
+// before any boxed spawn.
 func (m *Manager) SetEgress(e Egress) {
 	e.AddHosts = append([]string(nil), e.AddHosts...)
 	m.mu.Lock()

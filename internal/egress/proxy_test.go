@@ -1346,7 +1346,8 @@ func TestHostAddrsRefusedInBoundModeToo(t *testing.T) {
 	if code != 403 {
 		t.Fatalf("bound is not open: status %d", code)
 	}
-	if rows := h.waitRows(t, 1); rows[len(rows)-1].Outcome != OutcomePrivateAddr && rows[len(rows)-1].Outcome != OutcomeDenied {
+	// Refused by the allowlist (denied), not by the address check.
+	if rows := h.waitRows(t, 2); len(rows) != 2 || rows[1].Outcome != OutcomeDenied || rows[1].Host != "registry.npmjs.org" {
 		t.Fatalf("rows = %+v", rows)
 	}
 	if len(h.dials()) != 0 {

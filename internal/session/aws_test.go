@@ -738,13 +738,32 @@ func TestBoundSpawnEgressNonceIsNotTheAWSNonce(t *testing.T) {
 }
 
 func TestHostTierSpawnGetsNoEgress(t *testing.T) {
-	m, boxes, eg := unboundEgressManager(t, []string{"sh", "-c", "sleep 30"}, config.RuntimeHost, []string{"HTTPS_PROXY=http://corp:3128"})
+	m, _, eg := unboundEgressManager(t, []string{"sh", "-c", `printf '<%s>\n' "$HTTPS_PROXY"; sleep 30`},
+		config.RuntimeHost, []string{"HTTPS_PROXY=http://corp:3128"})
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
-	_ = boxes
+	// The profile's own proxy reaches the host process untouched.
+	out, cancel, _ := s.Subscribe()
+	defer cancel()
+	var b strings.Builder
+	deadline := time.After(3 * time.Second)
+	for !strings.Contains(b.String(), ">") {
+		select {
+		case chunk, ok := <-out:
+			if !ok {
+				t.Fatalf("session ended; output %q", b.String())
+			}
+			b.WriteString(string(chunk))
+		case <-deadline:
+			t.Fatalf("no output; got %q", b.String())
+		}
+	}
+	if !strings.Contains(b.String(), "<http://corp:3128>") {
+		t.Fatalf("host session's HTTPS_PROXY: output %q, want the profile's http://corp:3128", b.String())
+	}
 	if eg.spawnCalls() != 0 {
 		t.Fatalf("host spawn called SpawnEnv %d times", eg.spawnCalls())
 	}

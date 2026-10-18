@@ -283,7 +283,7 @@ func enclosingConfig(ws, top string) (cfgs [][]byte, defHooks string, err error)
 		return nil, "", refuseInPlace("%s is inside the repository %s, which has submodules (.gitmodules); a box could "+
 			"redirect a submodule's git directory and host git would run what it plants. %s", ws, top, inPlaceTrustedHost)
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, "", unreadable(filepath.Join(top, ".git"), err)
+		return nil, "", unreadable(filepath.Join(top, ".gitmodules"), err)
 	}
 	dotgit := filepath.Join(top, ".git")
 	real, err := gitPathOutside(ws, dotgit, dotgit, false)
