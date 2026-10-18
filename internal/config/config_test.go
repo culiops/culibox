@@ -302,6 +302,34 @@ func TestValidateRejectsUnknownDefaultRuntime(t *testing.T) {
 	}
 }
 
+func TestValidateBoxLimits(t *testing.T) {
+	agents := `"agents":[{"name":"a","bin":"b"}]`
+	p := writeTemp(t, `{"bind_addr":"127.0.0.1:1","box_pids_limit":2048,"box_tmp_size":"2g",`+agents+`}`)
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BoxPidsLimit != 2048 || c.BoxTmpSize != "2g" {
+		t.Fatalf("limits not parsed: %+v", c)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid limits rejected: %v", err)
+	}
+	for _, tc := range []struct{ cfg, key string }{
+		{`"box_tmp_size":"2g,exec"`, "box_tmp_size"},
+		{`"box_pids_limit":10`, "box_pids_limit"},
+	} {
+		c, err := Load(writeTemp(t, `{"bind_addr":"127.0.0.1:1",`+tc.cfg+`,`+agents+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = c.Validate()
+		if err == nil || !strings.Contains(err.Error(), tc.key) {
+			t.Errorf("%s: want an error naming %s, got %v", tc.cfg, tc.key, err)
+		}
+	}
+}
+
 // config.example.json is what docs/MACOS.md points readers at: it must load and
 // show allowed_hosts.
 func TestExampleConfigLoadsAndShowsAllowedHosts(t *testing.T) {

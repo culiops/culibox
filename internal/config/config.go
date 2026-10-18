@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // Base env policies for a spawned agent.
@@ -168,6 +170,8 @@ type Config struct {
 	BundleSource      string `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
+	BoxPidsLimit      int    `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
+	BoxTmpSize        string `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
 	ColimaBin         string `json:"colima_bin,omitempty"`           // macOS: default "colima"
 	BoxVMCPUs         int    `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → 4
@@ -294,6 +298,9 @@ func (c Config) Validate() error {
 	}
 	if err := validImageRef(c.BoxImage); err != nil {
 		return fmt.Errorf("config: box_image: %w", err)
+	}
+	if err := box.ValidateLimits(c.BoxPidsLimit, c.BoxTmpSize); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	if c.BrokerPort < 0 || c.BrokerPort > 65535 {
 		return fmt.Errorf("config: broker_port %d out of range (want 1-65535, or 0 for the default)", c.BrokerPort)
