@@ -381,3 +381,30 @@ func TestFileDirsTerminatesOnASymlinkLoop(t *testing.T) {
 		}
 	}
 }
+
+// The personal config dir refuses the dir itself, an ancestor and anything
+// inside (hook scripts live in subdirectories), but not a sibling.
+func TestPersonalConfigDirRefusesIsContainsAndInside(t *testing.T) {
+	home := t.TempDir()
+	personal := filepath.Join(home, ".claude")
+	hooks := filepath.Join(personal, "hooks")
+	proj := filepath.Join(home, "proj")
+	for _, d := range []string{hooks, proj} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dirs := []ProtectedDir{PersonalConfigDirProtected(personal)}
+	for ws, want := range map[string]string{
+		personal: "it is the personal config directory",
+		home:     "it contains the personal config directory",
+		hooks:    "it is inside the personal config directory",
+	} {
+		if r := ProtectedOverlap(ws, dirs); !strings.Contains(r, want) {
+			t.Errorf("%s: want %q, got %q", ws, want, r)
+		}
+	}
+	if r := ProtectedOverlap(proj, dirs); r != "" {
+		t.Fatalf("a sibling must stay boxable: %q", r)
+	}
+}

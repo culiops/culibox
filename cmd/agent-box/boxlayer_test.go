@@ -652,7 +652,7 @@ func TestProtectedDirsReachTheBoxManager(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := t.TempDir()
 	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(cfgDir, "config.json")},
-		filepath.Join(root, "profiles.json"))
+		filepath.Join(root, "profiles.json"), "")
 	if len(prot) != 2 || prot[0].What != "agent-box's data directory" || prot[1].What != "agent-box's config directory" {
 		t.Fatalf("want data root + the outside config dir, deduped: %+v", prot)
 	}
@@ -691,7 +691,7 @@ func TestProtectedDirsFollowSymlinkedConfigAndProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(xdgDir, "config.json")},
-		filepath.Join(root, "profiles.json"))
+		filepath.Join(root, "profiles.json"), "")
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
 	if err != nil {
 		t.Fatal(err)
@@ -725,7 +725,7 @@ func TestProfilesInHomeLeavesProjectsBoxable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(home, "profiles.json"))
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(home, "profiles.json"), "")
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
 	if err != nil {
 		t.Fatal(err)
@@ -738,5 +738,33 @@ func TestProfilesInHomeLeavesProjectsBoxable(t *testing.T) {
 	}
 	if reason, bad := l.boxes.Unboxable(filepath.Join(root, "vm")); !bad || !strings.Contains(reason, "inside agent-box's data directory") {
 		t.Fatalf("inside the data root must stay refused: %q %v", reason, bad)
+	}
+}
+
+// The default account's config dir holds hooks and scripts that host sessions
+// execute, and settings.json that inheriting accounts copy from. A box mounted
+// over it, or anywhere inside it, could plant code that later runs on the host.
+func TestProtectedDirsIncludeThePersonalConfigDir(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(t.TempDir(), "data")
+	personal := filepath.Join(home, ".claude")
+	proj := filepath.Join(home, "proj")
+	for _, d := range []string{root, filepath.Join(personal, "hooks"), proj} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(root, "profiles.json"), personal)
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range []string{personal, filepath.Join(personal, "hooks")} {
+		if reason, bad := l.boxes.Unboxable(ws); !bad || !strings.Contains(reason, "personal config directory") {
+			t.Errorf("%s must be refused: %q %v", ws, reason, bad)
+		}
+	}
+	if reason, bad := l.boxes.Unboxable(proj); bad {
+		t.Fatalf("a sibling project of ~/.claude must stay boxable: %q", reason)
 	}
 }

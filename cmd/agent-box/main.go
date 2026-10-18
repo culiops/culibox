@@ -107,9 +107,11 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 // (cfgFiles: -config, the ~/.config fallback) and of the profiles file
 // (profiles_path may be anywhere). Both files are read through symlinks, so
 // every hop's directory and the target's count (box.FileDirs). A box that
-// could write any of them could change the binaries agent-box runs.
-func protectedDirs(dataDir string, cfgFiles []string, profilesPath string) []box.ProtectedDir {
-	out := []box.ProtectedDir{box.DataDirProtected(dataDir)}
+// could write any of them could change the binaries agent-box runs. personalDir
+// is the default account's config dir (~/.claude): host sessions run its hooks
+// and inheriting accounts copy its settings, so a box must not write there.
+func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir string) []box.ProtectedDir {
+	out := []box.ProtectedDir{box.DataDirProtected(dataDir), box.PersonalConfigDirProtected(personalDir)}
 	for _, f := range cfgFiles {
 		for _, d := range box.FileDirs(f) {
 			out = append(out, box.ConfigDirProtected(d))
@@ -307,7 +309,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	boxRuntime := ""
 	var layer *boxLayer
 	var boxes *box.Manager
-	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir))
+	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource())
 	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}, protected); err != nil {
 		// Not fatal: without containment the console still runs, on the host
 		// tier, and says so rather than pretending to be contained.

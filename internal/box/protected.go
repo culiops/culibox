@@ -46,6 +46,15 @@ func ProfilesDirProtected(p string) ProtectedDir {
 		"holds the profiles that name the binaries sessions run and whether they are contained", false}
 }
 
+// PersonalConfigDirProtected is the default account's config dir (~/.claude).
+// Its settings.json hooks and hook scripts run on the host in every host-tier
+// session, and inheriting agent accounts copy that settings.json. Inside is
+// set: the scripts a hook names sit in subdirectories.
+func PersonalConfigDirProtected(p string) ProtectedDir {
+	return ProtectedDir{p, "the personal config directory",
+		"holds the hooks, scripts and settings that host sessions and inheriting accounts run", true}
+}
+
 // DedupeProtected drops later entries that name an earlier entry's directory
 // (same spelling and same resolved path), so one directory is reported once,
 // under its first meaning. An entry that refuses more (Inside) is never
