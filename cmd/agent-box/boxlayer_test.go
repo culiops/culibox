@@ -129,8 +129,9 @@ func resolved(t *testing.T, p string) string {
 
 const blockedProbe = "DNS ok\nBLOCKED host.lima.internal ECONNREFUSED\nBLOCKED 192.168.5.2 ETIMEDOUT\n"
 
-// shortRoot is a data root short enough for macOS's 104-byte socket paths
-// (t.TempDir embeds the test name and overflows them).
+// shortRoot is a data root short enough for unix socket paths (104 bytes on
+// macOS, 108 on Linux): t.TempDir embeds the test name and lives under
+// GOTMPDIR, which the box image sets to a long path, so it overflows them.
 func shortRoot(t *testing.T) string {
 	t.Helper()
 	d, err := os.MkdirTemp("/tmp", "bl")
