@@ -44,7 +44,7 @@ func TestEveryBinGetsTheSameBoxMounts(t *testing.T) {
 			t.Fatalf("%q mounts %+v, want claude's %+v", bin, bm, cm)
 		}
 		for i := range bm {
-			if bm[i] != cm[i] {
+			if bm[i].Host != cm[i].Host || bm[i].Box != cm[i].Box {
 				t.Fatalf("%q mount %d = %+v, want %+v", bin, i, bm[i], cm[i])
 			}
 		}
@@ -57,6 +57,8 @@ func TestEveryBinGetsTheSameBoxMounts(t *testing.T) {
 // The flags point into the bundle root, so a box without it cannot run claude
 // at all; the ~/.claude overlays are config the agent runs without. That is
 // what lets the box layer refuse the first and tolerate the second on a live box.
+// A shell reads none of it, so for a shell even the root is optional: it must
+// never be refused a box over a mount it does not use (review round 1).
 func TestOnlyTheBundleRootIsARequiredMount(t *testing.T) {
 	ms, _, _, err := providerForTest(t).For("claude")
 	if err != nil {
@@ -75,5 +77,23 @@ func TestOnlyTheBundleRootIsARequiredMount(t *testing.T) {
 	}
 	if root != 1 || len(ms) < 2 {
 		t.Fatalf("want the root once plus the overlays, got %+v", ms)
+	}
+}
+
+func TestNothingIsRequiredForABinWithoutALayout(t *testing.T) {
+	p := providerForTest(t)
+	for _, bin := range []string{"bash", "/usr/bin/zsh", ""} {
+		ms, _, _, err := p.For(bin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ms) == 0 {
+			t.Fatalf("%q must still get the box mounts", bin)
+		}
+		for _, mt := range ms {
+			if !mt.Optional {
+				t.Fatalf("%q: %+v must be optional for a bin that never reads it", bin, mt)
+			}
+		}
 	}
 }

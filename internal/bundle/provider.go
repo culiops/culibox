@@ -29,13 +29,16 @@ func NewProvider(m *Manager) *Provider { return &Provider{m: m} }
 //   - Flags belong to the AGENT: only bin's own layout, so a shell profile is
 //     never handed agent flags.
 //
-// The bundle root is required (the flags point into it); the per-agent config
-// overlays are Optional, so a box that lacks one stays usable while it runs.
+// For an agent the bundle root is required (its flags point into it) and the
+// config overlays are Optional, so a box that lacks one stays usable while it
+// runs. For a bin without a layout every mount is Optional: a shell reads none
+// of them, so it must never be refused a box that lacks them.
 func (p *Provider) For(bin string) ([]box.Mount, []string, string, error) {
 	built, err := p.m.Ensure()
 	if err != nil {
 		return nil, nil, "", err
 	}
+	layout, agent := LayoutFor(bin)
 	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
 	var mounts []box.Mount
 	seen := map[string]bool{}
@@ -45,11 +48,11 @@ func (p *Provider) For(bin string) ([]box.Mount, []string, string, error) {
 				continue
 			}
 			seen[mt.Box] = true
-			mounts = append(mounts, box.Mount{Host: mt.Host, Box: mt.Box, Optional: mt.Box != BoxBundleDir})
+			mounts = append(mounts, box.Mount{Host: mt.Host, Box: mt.Box, Optional: !agent || mt.Box != BoxBundleDir})
 		}
 	}
 	var flags []string
-	if layout, ok := LayoutFor(bin); ok {
+	if agent {
 		flags = layout.Flags(built.Dir)
 	}
 	return mounts, flags, built.Hash, nil
