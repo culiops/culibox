@@ -338,3 +338,58 @@ func TestBuild_SameProfileWithoutLoginStillRefused(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+type refreshingAccounts struct {
+	fakeAccounts
+	refreshed []string
+	err       error
+}
+
+func (r *refreshingAccounts) Refresh(n string) error {
+	r.refreshed = append(r.refreshed, n)
+	return r.err
+}
+
+func TestBuild_RefreshesHostAccountOncePerSpawn(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Account: "work"}}, fakeResolver{}, nil)
+	ra := &refreshingAccounts{fakeAccounts: fakeAccounts{"work": workAcct(t.TempDir())}}
+	l.SetAccounts(ra)
+	// AccountFor is also called by the session manager before Build; it must
+	// not refresh on its own.
+	if _, err := l.AccountFor(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.refreshed) != 0 {
+		t.Fatalf("AccountFor refreshed: %v", ra.refreshed)
+	}
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ra.refreshed, []string{"work"}) {
+		t.Fatalf("refreshed = %v, want exactly one", ra.refreshed)
+	}
+	// The default account has nothing to refresh.
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Account: account.Default, Runtime: config.RuntimeHost}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.refreshed) != 1 {
+		t.Fatalf("default account refreshed: %v", ra.refreshed)
+	}
+	// A failing refresh must not block the spawn.
+	ra.err = errors.New("disk full")
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatalf("refresh failure blocked the spawn: %v", err)
+	}
+}
+
+func TestBuild_BoxedSpawnDoesNotRefreshTheAccount(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Account: "work"}}, fakeResolver{}, nil)
+	ra := &refreshingAccounts{fakeAccounts: fakeAccounts{"work": workAcct(t.TempDir())}}
+	l.SetAccounts(ra)
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.refreshed) != 0 {
+		t.Fatalf("a boxed spawn refreshed the host-side account dir: %v", ra.refreshed)
+	}
+}

@@ -122,3 +122,38 @@ func TestSettingsKeepListDropsEverythingDangerous(t *testing.T) {
 		}
 	}
 }
+
+// Account settings inheritance copies hooks/env/permissions/enabledPlugins into
+// HOST-tier account dirs only. The boxed bundle must stay exactly the keep-list:
+// pin the bytes so any widening shows up as a diff rather than a surprise.
+func TestBoxedSettingsOutputIsByteIdenticalDespiteInheritableKeys(t *testing.T) {
+	src := t.TempDir()
+	in := `{
+      "model":"opus","effortLevel":"high",
+      "statusLine":{"type":"command","command":"/home/u/.claude/statusline-command.sh"},
+      "hooks":{"PreToolUse":[{"matcher":"Bash"}]},
+      "env":{"CLAUDE_CODE_SUBAGENT_MODEL":"sonnet"},
+      "permissions":{"deny":["Read(.ssh/**)"]},
+      "enabledPlugins":{"superpowers@official":true},
+      "deny":["Read(.env*)"]}`
+	if err := os.WriteFile(filepath.Join(src, "settings.json"), []byte(in), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b := buildForTest(t, src)
+	got, err := os.ReadFile(filepath.Join(b.Dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{
+  "effortLevel": "high",
+  "model": "opus",
+  "statusLine": {
+    "command": "/home/u/.claude/statusline-command.sh",
+    "type": "command"
+  }
+}
+`
+	if string(got) != want {
+		t.Fatalf("boxed settings.json changed:\n%s", got)
+	}
+}
