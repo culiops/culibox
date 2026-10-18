@@ -127,7 +127,7 @@ func TestEgressLookup(t *testing.T) {
 
 func TestEgressServiceOptionsLinux(t *testing.T) {
 	o := egressServiceOptions(config.Config{EnvLabel: "DEV"}, "linux", nil, nil)
-	if o.NoProxy != "localhost,127.0.0.1,::1" || !o.Want.Internal || o.GOOS != "linux" || o.Instance != "DEV" {
+	if o.NoProxy != "localhost,127.0.0.1,::1" || !o.Want.Internal || !o.Want.NoICC || o.GOOS != "linux" || o.Instance != "DEV" {
 		t.Fatalf("options: %+v", o)
 	}
 	// Gate G2: plain Node fetch needs NODE_USE_ENV_PROXY=1 to honour HTTPS_PROXY.

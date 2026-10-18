@@ -52,7 +52,7 @@ func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 }
 
 // egressServiceOptions is the Linux service configuration: an internal-only
-// network, loopback kept off the proxy, and the one env var the measured gate
+// network on which boxes cannot reach each other, loopback kept off the proxy, and the one env var the measured gate
 // G2 needs for plain Node fetch to honour HTTPS_PROXY. The other measured env
 // (hooks.go measuredEnv) is added by the service itself.
 func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d egress.Docker) egress.ServiceOptions {
@@ -62,7 +62,7 @@ func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d
 		GOOS:     goos,
 		Instance: cfg.BoxInstance(),
 		Port:     cfg.EgressPortOrDefault(),
-		Want:     egress.Want{Internal: true},
+		Want:     egress.Want{Internal: true, NoICC: true},
 		NoProxy:  "localhost,127.0.0.1,::1",
 		ExtraEnv: []string{"NODE_USE_ENV_PROXY=1"},
 	}

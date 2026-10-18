@@ -65,6 +65,10 @@ type Options struct {
 	IdleTimeout time.Duration                                                 // 0 → 10m
 	PerSession  int                                                           // 0 → 32
 	Global      int                                                           // 0 → 256
+	// BoxAddr is a box's address on the egress network; with the source check
+	// on, a principal is accepted only from its own box's address. nil → the
+	// one Service installs (docker inspect); none at all refuses every CONNECT.
+	BoxAddr func(ctx context.Context, box string) (netip.Addr, error)
 }
 
 type Stats struct {
@@ -98,6 +102,9 @@ type Proxy struct {
 	probes      map[string]*probePrincipal
 	denied      map[deniedKey]*deniedState
 	lastPrune   time.Time
+	boxAddr     func(ctx context.Context, box string) (netip.Addr, error)
+	boxAddrs    map[string]*boxAddrEntry // box name → its last looked-up address
+	sidBox      map[string]string        // session id → its box, so Forget can drop the entry
 }
 
 type tunnel struct {
@@ -162,7 +169,8 @@ func New(o Options) *Proxy {
 		o.Global = defaultGlobal
 	}
 	p := &Proxy{o: o, open: map[string]int{}, tunnels: map[*tunnel]struct{}{}, stats: map[string]*Stats{}, epoch: map[string]uint64{},
-		probes: map[string]*probePrincipal{}, denied: map[deniedKey]*deniedState{}}
+		probes: map[string]*probePrincipal{}, denied: map[deniedKey]*deniedState{},
+		boxAddr: o.BoxAddr, boxAddrs: map[string]*boxAddrEntry{}, sidBox: map[string]string{}}
 	p.ctx, p.cancel = context.WithCancel(context.Background())
 	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 8 << 10,
 		IdleTimeout: 30 * time.Second}
@@ -171,7 +179,7 @@ func New(o Options) *Proxy {
 
 // SetNetwork records the egress network. subnet is refused as a dial target;
 // with checkSource (Linux) a connection is accepted only from inside subnet
-// and not from gw itself.
+// and not from gw itself, and a principal only from its own box's address.
 func (p *Proxy) SetNetwork(subnet netip.Prefix, gw netip.Addr, checkSource bool) {
 	p.mu.Lock()
 	p.subnet, p.gw, p.checkSource = subnet, gw, checkSource
@@ -240,6 +248,10 @@ func (p *Proxy) Forget(id string) {
 	var ts []*tunnel
 	p.mu.Lock()
 	delete(p.stats, id)
+	if b, ok := p.sidBox[id]; ok {
+		delete(p.sidBox, id)
+		p.dropBoxLocked(b)
+	}
 	// Never deleted: an in-flight request may still hold epoch 0. One small
 	// entry per ended bound session over the daemon's life is accepted.
 	p.epoch[id]++
@@ -273,6 +285,9 @@ func (p *Proxy) ProbeCredential(box string) (user, pass string, done func() Prob
 	}
 	pp.expires = now.Add(probeTTL)
 	p.probes[user] = pp
+	// A probe verifies a box that was just (re)created, maybe under the name
+	// of one whose address is cached: look it up afresh.
+	p.dropBoxLocked(box)
 	p.mu.Unlock()
 	var once sync.Once
 	var res ProbeResult
@@ -343,6 +358,24 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		row.SessionID = pr.sid
 		p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
 		return
+	}
+	// A principal is good only from its own box. Anything else is answered
+	// exactly as a bad or stale credential: nothing says the token was valid.
+	if !p.boxSourceAllowed(r.Context(), pr.box, r.RemoteAddr) {
+		if pr.probe != nil {
+			p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, "")
+			return
+		}
+		row.SessionID = pr.sid
+		p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
+		return
+	}
+	if pr.probe == nil {
+		p.mu.Lock()
+		if p.currentLocked(pr) {
+			p.sidBox[pr.sid] = pr.box
+		}
+		p.mu.Unlock()
 	}
 	row.SessionID, row.Box = pr.sid, pr.box
 

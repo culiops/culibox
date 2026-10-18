@@ -1095,7 +1095,10 @@ func TestTokenIsEgressDomain(t *testing.T) {
 // The positive end-to-end path: a remote inside the subnet that is not the
 // gateway passes the source check (loopback stands in for the egress network).
 func TestSourceCheckPassesInsideTheSubnet(t *testing.T) {
-	h := newHarness(t, nil)
+	h := newHarness(t, nil, func(o *Options) {
+		// s1's box is at the address every test connection comes from.
+		o.BoxAddr = func(context.Context, string) (netip.Addr, error) { return netip.MustParseAddr("127.0.0.1"), nil }
+	})
 	h.p.SetNetwork(netip.MustParsePrefix("127.0.0.0/8"), netip.MustParseAddr("127.0.0.2"), true)
 	code, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceA))
 	if code != 200 {

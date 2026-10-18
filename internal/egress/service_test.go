@@ -464,6 +464,7 @@ func TestReadyRefreshesHostAddrs(t *testing.T) {
 		Resolve: func(context.Context, string) ([]netip.Addr, error) { return []netip.Addr{hostAddr}, nil },
 		Dial:    func(context.Context, netip.AddrPort) (net.Conn, error) { dials.Add(1); return nil, errors.New("no") }})
 	f, lr := newFakeDocker(), &listenRec{}
+	f.boxes = map[string]string{"b": "172.21.0.5"}
 	s := NewService(ServiceOptions{Proxy: px, Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
 		Want: Want{Internal: true}, Listen: lr.listen,
 		HostAddrs: func() ([]netip.Addr, error) { calls.Add(1); return []netip.Addr{hostAddr}, nil }})
@@ -508,5 +509,55 @@ func TestReadyFailsClosedWhenHostAddrsUnreadable(t *testing.T) {
 				t.Fatal("listened without the host's addresses")
 			}
 		})
+	}
+}
+
+// The service gives the proxy its box addresses from docker: a CONNECT is held
+// to the address of its session's box on this instance's egress network.
+func TestServiceBindsTokensToTheirBoxThroughDocker(t *testing.T) {
+	var dials atomic.Int32
+	px := New(Options{Secret: []byte("0123456789abcdef0123456789abcdef"), Audit: &memRec{},
+		Lookup: func(string) (SessionView, bool) {
+			return SessionView{Nonce: nonceA, Box: "b", Boxed: true, Live: true}, true
+		},
+		Resolve: func(context.Context, string) ([]netip.Addr, error) { return []netip.Addr{publicAddr}, nil },
+		Dial:    func(context.Context, netip.AddrPort) (net.Conn, error) { dials.Add(1); return nil, errors.New("no") }})
+	f, lr := newFakeDocker(), &listenRec{}
+	f.boxes = map[string]string{"b": "172.21.0.5"}
+	s := NewService(ServiceOptions{Proxy: px, Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen,
+		HostAddrs: func() ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil }})
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	try := func(remote string) int {
+		req := httptest.NewRequest(http.MethodConnect, "example.com:443", nil)
+		req.RequestURI = "example.com:443"
+		req.RemoteAddr = remote
+		req.Header.Set("Proxy-Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte("s1:"+px.Token("s1", nonceA))))
+		rec := httptest.NewRecorder()
+		px.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := try("172.21.0.6:40000"); code != http.StatusProxyAuthRequired {
+		t.Fatalf("another box's address: status %d, want 407", code)
+	}
+	if code := try("172.21.0.5:40000"); code != http.StatusBadGateway || dials.Load() == 0 {
+		t.Fatalf("its own box: status %d dials %d, want the dial attempted (502)", code, dials.Load())
+	}
+	var inspects int
+	f.mu.Lock()
+	for _, c := range f.calls {
+		if len(c) > 0 && c[0] == "inspect" {
+			inspects++
+			if c[len(c)-1] != "b" {
+				t.Errorf("inspected %q", c)
+			}
+		}
+	}
+	f.mu.Unlock()
+	if inspects != 1 {
+		t.Fatalf("container inspects = %d, want 1", inspects)
 	}
 }

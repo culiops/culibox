@@ -18,18 +18,24 @@ type fakeDocker struct {
 	createErr error
 	// onCreate, when set, runs instead of storing the network (a concurrent create).
 	onCreate func(f *fakeDocker, name string)
-	nextGW   string // gateway handed to created networks; "" → 172.21.0.1
+	nextGW   string            // gateway handed to created networks; "" → 172.21.0.1
+	boxes    map[string]string // container name → its address on any network inspected
 }
 
 func newFakeDocker() *fakeDocker { return &fakeDocker{nets: map[string]string{}} }
 
 func inspectJSON(name string, internal bool, configs ...[2]string) string {
+	return inspectJSONOpts(name, internal, nil, configs...)
+}
+
+// inspectJSONOpts is inspectJSON with the network's driver options (nil: none).
+func inspectJSONOpts(name string, internal bool, opts map[string]string, configs ...[2]string) string {
 	type cfg struct{ Subnet, Gateway string }
 	var cs []cfg
 	for _, c := range configs {
 		cs = append(cs, cfg{c[0], c[1]})
 	}
-	b, _ := json.Marshal(map[string]any{"Name": name, "Internal": internal, "IPAM": map[string]any{"Config": cs}})
+	b, _ := json.Marshal(map[string]any{"Name": name, "Internal": internal, "Options": opts, "IPAM": map[string]any{"Config": cs}})
 	return string(b)
 }
 
@@ -37,6 +43,13 @@ func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, append([]string(nil), args...))
+	if len(args) == 6 && args[0] == "inspect" && args[1] == "--type" && args[2] == "container" {
+		ip, ok := f.boxes[args[5]]
+		if !ok {
+			return "", fmt.Errorf("Error: No such container: %s", args[5])
+		}
+		return `{"agentbox-egress-DEV":{"IPAddress":"` + ip + `"}}`, nil
+	}
 	if len(args) < 3 || args[0] != "network" {
 		return "", fmt.Errorf("fake docker: unexpected %v", args)
 	}
@@ -66,6 +79,7 @@ func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
 			return "", f.createErr
 		}
 		internal, subnet := false, "172.21.0.0/16"
+		opts := map[string]string{}
 		gw := f.nextGW
 		if gw == "" {
 			gw = "172.21.0.1"
@@ -74,13 +88,17 @@ func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
 			if a == "--internal" {
 				internal = true
 			}
+			if a == "-o" {
+				k, v, _ := strings.Cut(args[i+1], "=")
+				opts[k] = v
+			}
 			if a == "--subnet" {
 				subnet = args[i+1]
 				p := netip.MustParsePrefix(subnet)
 				gw = p.Addr().Next().String()
 			}
 		}
-		f.nets[name] = inspectJSON(name, internal, [2]string{subnet, gw})
+		f.nets[name] = inspectJSONOpts(name, internal, opts, [2]string{subnet, gw})
 		return "id123", nil
 	}
 	return "", fmt.Errorf("fake docker: unexpected %v", args)
@@ -307,5 +325,89 @@ func TestListenAddrNeverUnspecified(t *testing.T) {
 	}
 	if _, err := listenAddr("plan9", Net{Gateway: netip.MustParseAddr("172.21.0.1")}, 9072); err == nil {
 		t.Fatal("accepted an unsupported GOOS")
+	}
+}
+
+const iccOpt = "com.docker.network.bridge.enable_icc"
+
+// Spec correction 11: boxes on the egress network must not reach each other.
+func TestEnsureCreatesNetworkWithICCOff(t *testing.T) {
+	f := newFakeDocker()
+	n, err := EnsureNetwork(context.Background(), f, "agentbox-egress-DEV", "DEV", Want{Internal: true, NoICC: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := f.createCalls()[0]
+	if !has(c, "-o", iccOpt+"=false") || !has(c, "--internal") || c[len(c)-1] != "agentbox-egress-DEV" {
+		t.Fatalf("argv: %v", c)
+	}
+	if !n.NoICC {
+		t.Fatalf("net: %+v", n)
+	}
+	// Without the requirement no option is passed (darwin's design is separate).
+	g := newFakeDocker()
+	if _, err := EnsureNetwork(context.Background(), g, "x", "DEV", Want{Internal: true}); err != nil {
+		t.Fatal(err)
+	}
+	if has(g.createCalls()[0], "-o") {
+		t.Fatalf("argv: %v", g.createCalls()[0])
+	}
+}
+
+func TestInspectReadsICC(t *testing.T) {
+	cfg := [2]string{"172.21.0.0/16", "172.21.0.1"}
+	for name, c := range map[string]struct {
+		opts   map[string]string
+		wantNo bool
+	}{
+		"absent (bridge default: on)": {nil, false},
+		"other options only":          {map[string]string{"com.docker.network.bridge.name": "br0"}, false},
+		"false":                       {map[string]string{iccOpt: "false"}, true},
+		"true":                        {map[string]string{iccOpt: "true"}, false},
+		"unparsable":                  {map[string]string{iccOpt: "nope"}, false},
+	} {
+		f := newFakeDocker()
+		f.nets["x"] = inspectJSONOpts("x", true, c.opts, cfg)
+		n, ok, err := InspectNetwork(context.Background(), f, "x")
+		if err != nil || !ok {
+			t.Fatalf("%s: %v %v", name, ok, err)
+		}
+		if n.NoICC != c.wantNo {
+			t.Errorf("%s: NoICC = %v, want %v", name, n.NoICC, c.wantNo)
+		}
+	}
+}
+
+func TestEnsureRefusesExistingNetworkWithICCOn(t *testing.T) {
+	for name, opts := range map[string]map[string]string{
+		"option absent": nil,
+		"option true":   {iccOpt: "true"},
+	} {
+		f := newFakeDocker()
+		f.nets["agentbox-egress-DEV"] = inspectJSONOpts("agentbox-egress-DEV", true, opts, [2]string{"172.21.0.0/16", "172.21.0.1"})
+		_, err := EnsureNetwork(context.Background(), f, "agentbox-egress-DEV", "DEV", Want{Internal: true, NoICC: true})
+		if err == nil || !strings.Contains(err.Error(), "docker network rm agentbox-egress-DEV") ||
+			!strings.Contains(err.Error(), "inter-container") || !strings.Contains(err.Error(), "egress network agentbox-egress-DEV") {
+			t.Fatalf("%s: err: %v", name, err)
+		}
+		if len(f.createCalls()) != 0 {
+			t.Fatalf("%s: must not create over an existing network", name)
+		}
+	}
+	// ICC off: accepted.
+	f := newFakeDocker()
+	f.nets["n"] = inspectJSONOpts("n", true, map[string]string{iccOpt: "false"}, [2]string{"172.21.0.0/16", "172.21.0.1"})
+	if _, err := EnsureNetwork(context.Background(), f, "n", "DEV", Want{Internal: true, NoICC: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// m3: the internal=false refusal concerns every fenced box, not only bound ones.
+func TestOpenNetworkRefusalSaysBoxes(t *testing.T) {
+	f := newFakeDocker()
+	f.nets["n"] = inspectJSON("n", false, [2]string{"172.21.0.0/16", "172.21.0.1"})
+	_, err := EnsureNetwork(context.Background(), f, "n", "DEV", Want{Internal: true})
+	if err == nil || strings.Contains(err.Error(), "bound boxes") || !strings.Contains(err.Error(), "for boxes") {
+		t.Fatalf("err: %v", err)
 	}
 }

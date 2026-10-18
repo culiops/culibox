@@ -51,6 +51,14 @@ func NewService(o ServiceOptions) *Service {
 	if o.HostAddrs == nil {
 		o.HostAddrs = HostAddrs
 	}
+	if o.Proxy != nil && o.Docker != nil {
+		// Each principal is bound to its own box: the proxy learns a box's
+		// address on this instance's egress network from docker.
+		d, network := o.Docker, NetworkName(o.Instance)
+		o.Proxy.setBoxAddr(func(ctx context.Context, box string) (netip.Addr, error) {
+			return BoxAddr(ctx, d, box, network)
+		})
+	}
 	return &Service{o: o, maxConns: MaxProxyConns}
 }
 
