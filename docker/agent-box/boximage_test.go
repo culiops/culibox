@@ -361,3 +361,24 @@ func TestDockerfilePinsCodebaseMemoryVersion(t *testing.T) {
 		t.Error("Dockerfile does not pin ARG CBM_VERSION=0.10.8")
 	}
 }
+
+// scripts/lint.sh maps eslint's report back to source files with python3, so a
+// box without it cannot pass scripts/test.sh (measured in the A2b integration
+// run: "python3: not found", rc 127). It is installed in its own block.
+func TestDockerfileInstallsPython3InItsOwnBlock(t *testing.T) {
+	df := string(dockerfile)
+	i := strings.Index(df, "# --- python3 ---")
+	if i < 0 {
+		t.Fatal("Dockerfile has no '# --- python3 ---' block")
+	}
+	block := df[i:]
+	if j := strings.Index(block[1:], "\n# --- "); j >= 0 {
+		block = block[:j+1]
+	}
+	if !strings.Contains(block, "apt-get install -y --no-install-recommends python3") {
+		t.Errorf("python3 block does not install python3:\n%s", block)
+	}
+	if !strings.Contains(block, "rm -rf /var/lib/apt/lists/*") {
+		t.Errorf("python3 block leaves the apt lists in the image:\n%s", block)
+	}
+}

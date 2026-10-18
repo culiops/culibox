@@ -29,6 +29,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep jq less procps curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# --- python3 ---
+# scripts/lint.sh maps eslint's JSON report back to the source files with
+# python3, so a box without it cannot pass scripts/test.sh. Debian bookworm's
+# python3 package (no recommends); it moves with the base image's apt snapshot.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Cloud tooling for bound sessions. Credentials never live in the image: the
 # AWS CLI and terraform reach the agent-box broker through credential_process.
 #
