@@ -34,7 +34,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 
 - **Boxed runtime (the default).** Each project gets its own Docker container: only the project directory is mounted writable, with no host home, no `~/.ssh`, no Docker socket and no inherited daemon environment. The container runs as your uid, drops all capabilities, sets `no-new-privileges`, uses a read-only root filesystem and has a PID limit. Idle boxes are removed after a timeout. A `host` tier (no containment) exists for work that needs the machine, and you choose it explicitly.
 - **macOS.** Boxes run in agent-box's own [colima](https://github.com/abiosoft/colima) VM, separate from any Docker setup you already have. See [docs/MACOS.md](docs/MACOS.md).
-- **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied.
+- **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied. The box image can declare its own MCP servers in `/etc/agent-box/mcp.json`; they replace same-named servers from your config, and each replacement is recorded as a drop.
 - **Multiple accounts.** Run sessions under named agent accounts, each with its own config directory and its own token, kept apart from your personal login. Only Claude accounts can launch sessions.
 
 ### Cloud access, audit and secrets
@@ -83,6 +83,8 @@ For the contained default, build the box image and write a config. On Linux:
 ./agent-box box setup      # builds the box image with your local Docker
 ```
 
+`box setup` tags every build with its date (for example `culiops/agent-box:2026-10-18`) and prints that tag and how to pin it.
+
 On macOS, `box setup` also creates the VM; see [docs/MACOS.md](docs/MACOS.md).
 
 Put this in `~/.local/share/agent-box/config.json`:
@@ -120,8 +122,10 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `allowed_hosts` | `[]` | Extra `Host` values to answer to, such as a reverse proxy's hostname. |
 | `default_cwd` | your home | Default workspace. Must not be your home when anything runs boxed. |
 | `default_runtime` | `box` | Tier for agents that do not set their own: `box` or `host`. With no config file at all, the built-in default is `host`. |
-| `box_image` | `culiops/agent-box:base` | Image used for boxes. |
+| `box_image` | `culiops/agent-box:base` | Image used for boxes. Set it to a dated tag to pin an instance; agent-box never rebuilds or pulls a pinned tag. |
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
+| `box_pids_limit` | `512` | Max processes and threads per box. |
+| `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |
 | `docker_bin` | `docker` | Docker CLI to use. |
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
 | `data_dir` | the data root | Where state lives. |
@@ -133,6 +137,8 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `box_vm_cpus`, `box_vm_memory_gib` | 4, 4 | macOS box VM size. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
+
+`box_pids_limit` and `box_tmp_size` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
 Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `box.image`, `default_cwd`, `account` and `aws`. `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles.
 

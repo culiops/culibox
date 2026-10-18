@@ -1,10 +1,8 @@
 package bundle
 
 import (
-	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -29,7 +27,8 @@ func (DenyAllProber) Resolves(cmds []string) map[string]bool {
 	return out
 }
 
-// ImageProber asks the box image once per build whether each command exists.
+// ImageProber asks the box image once per build whether each command exists,
+// and which MCP servers the image declares (imagemcp.go).
 type ImageProber struct {
 	Docker string
 	// Args are global docker flags (--host, --config) placed before the
@@ -38,6 +37,8 @@ type ImageProber struct {
 	Image string
 }
 
+// Resolves keeps the plain Prober contract: every command false when the probe
+// fails. The Manager uses Probe instead, so a failure there is an error.
 func (p ImageProber) Resolves(cmds []string) map[string]bool {
 	out := make(map[string]bool, len(cmds))
 	for _, c := range cmds {
@@ -46,23 +47,11 @@ func (p ImageProber) Resolves(cmds []string) map[string]bool {
 	if len(cmds) == 0 || p.Docker == "" || p.Image == "" {
 		return out
 	}
-	// One container for the whole candidate set, not one per server.
-	var sb strings.Builder
-	for _, c := range cmds {
-		sb.WriteString("if command -v " + shellQuote(c) + " >/dev/null 2>&1; then echo OK " + shellQuote(c) + "; fi\n")
-	}
-	args := append(append([]string(nil), p.Args...), "run", "--rm", "--entrypoint", "sh", p.Image, "-c", sb.String())
-	cmd := exec.CommandContext(context.Background(), p.Docker, args...)
-	res, err := cmd.Output()
+	f, err := p.Probe(p.Image, cmds)
 	if err != nil {
 		return out
 	}
-	for _, line := range strings.Split(string(res), "\n") {
-		if name, ok := strings.CutPrefix(strings.TrimSpace(line), "OK "); ok {
-			out[name] = true
-		}
-	}
-	return out
+	return f.Resolves
 }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

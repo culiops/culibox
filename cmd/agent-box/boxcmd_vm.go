@@ -165,7 +165,7 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 		fmt.Fprintf(w, "WARN box VM: mount type %s (virtiofs is about 3.5x faster); run `agent-box box setup -recreate`\n", st.MountType)
 	}
 	fmt.Fprintf(w, "PASS box VM: running (%s, %s)\n", st.Driver, st.MountType)
-	if rc := boxSetupImage(ctx, l.img, l.image, a.Rebuild, w); rc != 0 {
+	if rc := boxSetupImage(ctx, l.img, l.image, a.Rebuild, time.Now(), w); rc != 0 {
 		return rc
 	}
 	pctx, cancel := context.WithTimeout(ctx, setupProbeTimeout)

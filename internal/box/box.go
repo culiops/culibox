@@ -206,6 +206,11 @@ type Options struct {
 	// CLAUDE.md @import). A workspace whose guards cannot be derived exactly is
 	// refused.
 	GuardInPlace bool
+	// PidsLimit caps processes and threads per box; 0 = DefaultPidsLimit.
+	// TmpSize is the size of the box's /tmp tmpfs ("512m", number + k/m/g);
+	// "" = DefaultTmpSize. New validates both (see ValidateLimits).
+	PidsLimit int
+	TmpSize   string
 }
 
 // Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""), and
@@ -256,6 +261,9 @@ func New(opts Options) (*Manager, error) {
 	}
 	if opts.Image == "" {
 		return nil, fmt.Errorf("box: an image is required")
+	}
+	if err := ValidateLimits(opts.PidsLimit, opts.TmpSize); err != nil {
+		return nil, fmt.Errorf("box: %w", err)
 	}
 	if opts.IdleTTL <= 0 {
 		opts.IdleTTL = 15 * time.Minute

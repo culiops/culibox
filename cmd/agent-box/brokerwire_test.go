@@ -53,7 +53,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	dataDir := t.TempDir()
+	dataDir := shortRoot(t) // holds broker/sock/broker.sock
 
 	sessions := map[string]*session.Session{
 		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, AWS: wireBinding(), AWSNonce: wireNonce},
@@ -126,7 +126,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 }
 
 func TestStartBrokerReusesItsSecretAcrossRestarts(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := shortRoot(t)
 	get := func(string) (*session.Session, bool) { return nil, false }
 	info := func(string) (session.Info, bool) { return session.Info{}, false }
 	a, err := startBroker(dataDir, dataDir, "linux", 0, get, info)
@@ -175,7 +175,7 @@ func TestStartBrokerListenFailureIsNotFatal(t *testing.T) {
 // The lookup the broker uses carries Exclusive from the session: without it
 // every grant is refused "box is shared".
 func TestBrokerLookupCarriesExclusive(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := shortRoot(t)
 	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1"), "aws-2": boundSess("aws-2")}
 	sessions["aws-1"].AWSNonce = wireNonce
 	sessions["aws-2"].AWSNonce = wireNonce
@@ -209,7 +209,7 @@ func TestBrokerLookupCarriesExclusive(t *testing.T) {
 // kind into the broker's request: three adjacent strings that a transposition
 // would break silently.
 func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
-	dataDir := t.TempDir()
+	dataDir := shortRoot(t)
 	prod := boundSess("aws-1")
 	prod.AWSNonce = wireNonce
 	prod.AWS.Prod, prod.AWS.Label = true, "x"
@@ -280,7 +280,7 @@ func TestStopClosesTheSignInRunnerBeforeTheAuditStore(t *testing.T) {
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
 
-	dataDir := t.TempDir()
+	dataDir := shortRoot(t)
 	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1")}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
@@ -323,7 +323,7 @@ func TestStartBrokerClosesWindowsLeftOpenByTheLastRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("unix socket transport")
 	}
-	dataDir := t.TempDir()
+	dataDir := shortRoot(t)
 	seed, err := broker.OpenAudit(filepath.Join(dataDir, "audit.db"))
 	if err != nil {
 		t.Fatal(err)

@@ -22,7 +22,7 @@ type ExecFunc func(ctx context.Context, script string) (string, error)
 func ThrowawayProbe(cli box.CLIClient, image string) ExecFunc {
 	return func(ctx context.Context, script string) (string, error) {
 		return cli.Run(ctx, []string{"run", "--rm", "--cap-drop=ALL", "--security-opt", "no-new-privileges",
-			"--read-only", "--entrypoint", "node", image, "-e", script})
+			"--read-only", "--pull=never", "--entrypoint", "node", image, "-e", script})
 	}
 }
 

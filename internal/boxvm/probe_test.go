@@ -99,7 +99,7 @@ func TestThrowawayProbeUsesTheGlobalArgsAndTheLockdownFlags(t *testing.T) {
 	b, _ := os.ReadFile(seen)
 	got := strings.Split(strings.TrimSpace(string(b)), "\n")
 	want := []string{"--host", "unix:///vm/docker.sock", "--config", "/data/docker", "run", "--rm", "--cap-drop=ALL",
-		"--security-opt", "no-new-privileges", "--read-only", "--entrypoint", "node", "img:tag", "-e", "console.log(1)"}
+		"--security-opt", "no-new-privileges", "--read-only", "--pull=never", "--entrypoint", "node", "img:tag", "-e", "console.log(1)"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("argv = %q\nwant   %q", got, want)
 	}

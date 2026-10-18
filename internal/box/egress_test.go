@@ -24,7 +24,7 @@ func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 		t.Fatalf("unbound box got egress flags: %q", got)
 	}
 	want := []string{
-		"run", "-d", "--init",
+		"run", "-d", "--init", "--pull=never",
 		"--name", "ab-box-abc",
 		"--label", LabelWorkspace + "=/home/claude/proj",
 		"--label", LabelInstance + "=TEST",

@@ -102,6 +102,8 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		IdleTTL:    cfg.BoxIdleTTL(),
 		StateRoot:  l.stateRoot,
 		Client:     l.cli,
+		PidsLimit:  cfg.BoxPidsLimit,
+		TmpSize:    cfg.BoxTmpSize,
 		// Linux: every box sits on the egress network and has its guard files
 		// read-only in place. darwin keeps its default network and Verify.
 		EgressAll:    l.goos == "linux",
@@ -158,7 +160,7 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 	}
 	// A stale image (older Dockerfile) only warns in doctor and still runs.
-	if fatal, msg := st.Check(arch); fatal {
+	if fatal, msg := st.CheckFor(l.image, arch); fatal {
 		return fmt.Errorf("%w: %s", box.ErrBoxUnavailable, msg)
 	}
 	return nil

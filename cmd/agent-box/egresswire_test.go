@@ -55,7 +55,7 @@ func TestStartEgressPersistsSecret(t *testing.T) {
 }
 
 func TestStartEgressSecretIsNotTheBrokerSecret(t *testing.T) {
-	dir := t.TempDir()
+	dir := shortRoot(t) // holds the broker socket
 	if _, err := startBroker(dir, dir, "linux", 0, noSessions, func(string) (session.Info, bool) { return session.Info{}, false }); err != nil {
 		t.Fatal(err)
 	}

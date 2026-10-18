@@ -38,8 +38,17 @@ var hostOnlyEnv = map[string]bool{
 // enforces exclusive workspaces; exclusive=1 marks a box another spawn must not
 // share a folder with.
 func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool) []string {
+	pids, tmpSize := m.opts.PidsLimit, m.opts.TmpSize
+	if pids == 0 {
+		pids = DefaultPidsLimit
+	}
+	if tmpSize == "" {
+		tmpSize = DefaultTmpSize
+	}
 	args := []string{
-		"run", "-d", "--init",
+		// --pull=never: a missing (e.g. deleted pinned) image must fail the spawn,
+		// not be fetched from Docker Hub under the same repo name.
+		"run", "-d", "--init", "--pull=never",
 		"--name", boxName,
 		"--label", LabelWorkspace + "=" + cwd,
 		"--label", LabelInstance + "=" + m.opts.Instance,
@@ -47,8 +56,8 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		"--cap-drop=ALL",
 		"--security-opt", "no-new-privileges",
 		"--read-only",
-		"--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m",
-		"--pids-limit", "512",
+		"--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=" + tmpSize,
+		"--pids-limit", strconv.Itoa(pids),
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"--mount", bindMount(cwd, cwd, false),
 		// The WHOLE home, not just ~/.claude. Claude Code's primary state file is

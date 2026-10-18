@@ -73,6 +73,7 @@ type Lock struct {
 	Hash    string            `json:"hash"`
 	Files   map[string]string `json:"files"`
 	Dropped []Drop            `json:"dropped,omitempty"`
+	ImageID string            `json:"image_id,omitempty"`
 }
 
 func (l Lock) hasDrop(kind, name string) bool {
@@ -122,7 +123,7 @@ func New(opts Options) (*Manager, error) {
 // changed. Reuse requires the lock file, which is written last — so a build that
 // died half-way cannot be mistaken for a complete one.
 func (m *Manager) Ensure() (*Built, error) {
-	hash, err := m.sourceHash()
+	hash, imageID, err := m.sourceHash()
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,7 @@ func (m *Manager) Ensure() (*Built, error) {
 	if lock, ok := readLock(dir); ok {
 		return &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}, nil
 	}
-	built, err := m.materialize(hash, dir)
+	built, err := m.materialize(hash, imageID, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -138,9 +139,17 @@ func (m *Manager) Ensure() (*Built, error) {
 }
 
 // sourceHash fingerprints only the allowlisted entries, following symlinks so
-// that editing a symlinked skill actually invalidates the cache.
-func (m *Manager) sourceHash() (string, error) {
+// that editing a symlinked skill actually invalidates the cache. With an
+// ImageProbe the box image ID is folded in too: the bundle depends on what the
+// image declares and contains, so a new image rebuilds it.
+func (m *Manager) sourceHash() (hash, imageID string, err error) {
 	h := sha256.New()
+	if ip, ok := m.opts.Prober.(ImageProbe); ok {
+		if imageID, err = ip.ImageID(); err != nil {
+			return "", "", fmt.Errorf("bundle: box image: %w", err)
+		}
+		fmt.Fprintf(h, "image\x00%s\n", imageID)
+	}
 	for _, e := range allowlist {
 		src := filepath.Join(m.opts.Source, e.rel)
 		_ = m.walkAllowed(src, e.rel, 0, map[string]bool{}, func(rel string, fi os.FileInfo) error {
@@ -156,7 +165,7 @@ func (m *Manager) sourceHash() (string, error) {
 	if fi, err := os.Stat(filepath.Join(m.opts.Source, "settings.json")); err == nil {
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
-	return hex.EncodeToString(h.Sum(nil))[:16], nil
+	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
 }
 
 // walkAllowed visits regular files under one allowlisted entry, following
@@ -227,7 +236,21 @@ func pathologicalTarget(source, target string) (string, bool) {
 
 // materialize builds into a temp dir and renames, writing the lock last as the
 // completion sentinel.
-func (m *Manager) materialize(hash, final string) (*Built, error) {
+func (m *Manager) materialize(hash, imageID, final string) (*Built, error) {
+	// The image is probed before anything is written. A failed probe publishes
+	// nothing: a cached bundle would pin "no image servers" and "every stdio
+	// server dropped" until the source changed, while an error lets the spawn
+	// run without a bundle and the next spawn retry.
+	prober := m.opts.Prober
+	var facts ImageFacts
+	if ip, ok := m.opts.Prober.(ImageProbe); ok {
+		var err error
+		if facts, err = ip.Probe(imageID, mcpCommands(m.opts.MCPFile)); err != nil {
+			return nil, fmt.Errorf("bundle: probing the box image: %w", err)
+		}
+		prober = resolvedProber(facts.Resolves)
+	}
+
 	if err := os.MkdirAll(m.opts.Root, 0o700); err != nil {
 		return nil, fmt.Errorf("bundle: creating root: %w", err)
 	}
@@ -237,7 +260,7 @@ func (m *Manager) materialize(hash, final string) (*Built, error) {
 	}
 	defer os.RemoveAll(tmp)
 
-	lock := Lock{Hash: hash, Files: map[string]string{}}
+	lock := Lock{Hash: hash, Files: map[string]string{}, ImageID: imageID}
 	addDrop := func(d Drop) { lock.Dropped = append(lock.Dropped, d) }
 	var files int
 	var bytes int64
@@ -278,8 +301,10 @@ func (m *Manager) materialize(hash, final string) (*Built, error) {
 		lock.Files["settings.json"] = sum
 	}
 
-	// mcp.json: shape-classified, never name-matched.
-	servers, mdrops := filterMCP(m.opts.MCPFile, m.opts.Prober)
+	// mcp.json: shape-classified, never name-matched; the image's own servers
+	// are merged in after the user filter.
+	servers, mdrops := filterMCP(m.opts.MCPFile, prober)
+	servers, mdrops = mergeImageMCP(servers, mdrops, facts)
 	lock.Dropped = append(lock.Dropped, mdrops...)
 	if sum, err := writeJSON(filepath.Join(tmp, mcpName), map[string]any{"mcpServers": servers}); err == nil {
 		lock.Files[mcpName] = sum
