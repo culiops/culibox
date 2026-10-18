@@ -162,7 +162,9 @@ type AccountResolver interface {
 
 // accountRefresher is optionally implemented by the resolver: Refresh brings a
 // named account's config dir up to date with the default's (settings, MCP
-// servers) so a new session sees changes made since the daemon started.
+// servers) so a new session sees changes made since the daemon started. Build
+// calls it once per host-tier spawn; AccountFor, which the session manager also
+// calls, never does.
 type accountRefresher interface {
 	Refresh(name string) error
 }
@@ -202,17 +204,7 @@ func (l *AgentLauncher) AccountFor(spec SpawnSpec) (account.Resolved, error) {
 		}
 		return account.Resolved{}, fmt.Errorf("%w %q (accounts not configured)", account.ErrUnknown, name)
 	}
-	res, err := r.Resolve(name)
-	if err != nil {
-		return res, err
-	}
-	if rf, ok := r.(accountRefresher); ok && !res.IsDefault {
-		// A failed refresh leaves the previous copy in place; the spawn goes on.
-		if err := rf.Refresh(name); err != nil {
-			log.Printf("account %q: refresh before spawn failed (continuing): %v", name, err)
-		}
-	}
-	return res, nil
+	return r.Resolve(name)
 }
 
 // checkAccount refuses combinations that would mix credentials. boxed is the
@@ -399,6 +391,19 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	}
 	if err := checkAccount(cfg, acct, boxed, spec.Login); err != nil {
 		return nil, nil, err
+	}
+	if !boxed && !acct.IsDefault {
+		// A boxed spawn never reads the account's host config dir (it gets the
+		// bundle), so refreshing it there would only do pointless work. A failed
+		// refresh leaves the previous copy in place; the spawn goes on.
+		l.mu.RLock()
+		r := l.accounts
+		l.mu.RUnlock()
+		if rf, ok := r.(accountRefresher); ok {
+			if err := rf.Refresh(acct.Name); err != nil {
+				log.Printf("account %q: refresh before spawn failed (continuing): %v", acct.Name, err)
+			}
+		}
 	}
 
 	basePolicy := cfg.BasePolicy()

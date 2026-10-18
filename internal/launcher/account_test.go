@@ -350,18 +350,26 @@ func (r *refreshingAccounts) Refresh(n string) error {
 	return r.err
 }
 
-func TestAccountFor_RefreshesNamedAccountBeforeSpawn(t *testing.T) {
+func TestBuild_RefreshesHostAccountOncePerSpawn(t *testing.T) {
 	l := New([]config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Account: "work"}}, fakeResolver{}, nil)
-	ra := &refreshingAccounts{fakeAccounts: fakeAccounts{"work": workAcct("/w")}}
+	ra := &refreshingAccounts{fakeAccounts: fakeAccounts{"work": workAcct(t.TempDir())}}
 	l.SetAccounts(ra)
-	if r, err := l.AccountFor(SpawnSpec{Agent: "c"}); err != nil || r.Name != "work" {
-		t.Fatalf("AccountFor = %+v, %v", r, err)
+	// AccountFor is also called by the session manager before Build; it must
+	// not refresh on its own.
+	if _, err := l.AccountFor(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.refreshed) != 0 {
+		t.Fatalf("AccountFor refreshed: %v", ra.refreshed)
+	}
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(ra.refreshed, []string{"work"}) {
-		t.Fatalf("refreshed = %v", ra.refreshed)
+		t.Fatalf("refreshed = %v, want exactly one", ra.refreshed)
 	}
 	// The default account has nothing to refresh.
-	if _, err := l.AccountFor(SpawnSpec{Agent: "c", Account: account.Default}); err != nil {
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Account: account.Default, Runtime: config.RuntimeHost}); err != nil {
 		t.Fatal(err)
 	}
 	if len(ra.refreshed) != 1 {
@@ -369,7 +377,19 @@ func TestAccountFor_RefreshesNamedAccountBeforeSpawn(t *testing.T) {
 	}
 	// A failing refresh must not block the spawn.
 	ra.err = errors.New("disk full")
-	if r, err := l.AccountFor(SpawnSpec{Agent: "c"}); err != nil || r.Name != "work" {
-		t.Fatalf("refresh failure blocked the spawn: %+v, %v", r, err)
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatalf("refresh failure blocked the spawn: %v", err)
+	}
+}
+
+func TestBuild_BoxedSpawnDoesNotRefreshTheAccount(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Account: "work"}}, fakeResolver{}, nil)
+	ra := &refreshingAccounts{fakeAccounts: fakeAccounts{"work": workAcct(t.TempDir())}}
+	l.SetAccounts(ra)
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ra.refreshed) != 0 {
+		t.Fatalf("a boxed spawn refreshed the host-side account dir: %v", ra.refreshed)
 	}
 }
