@@ -1007,6 +1007,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// reuses it will need (brain #131). Only the flags depend on bin.
 	var mounts []box.Mount
 	var bundleHash string
+	var bundleFailed bool // mounts unknown, not empty: see box.BoxKey.PartialMounts
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		bundles := m.bundles
@@ -1020,6 +1021,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			var err error
 			mounts, flags, bundleHash, err = bundles.For(bin)
 			if err != nil {
+				bundleFailed = true
 				log.Printf("spawn %s: config bundle unavailable (%v); the box will run without user config", spec.Agent, err)
 			}
 			spec.ExtraArgs = append(spec.ExtraArgs, flags...)
@@ -1053,7 +1055,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		key := box.BoxKey{Account: acctName}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed}
 		if binding != nil {
 			bm, benv, err := brk.BoxFor(*binding)
 			if err != nil {

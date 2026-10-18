@@ -281,11 +281,16 @@ type fakeBundles struct {
 	calls    int
 	mounts   []box.Mount
 	flags    []string
+	err      error // returned, with no mounts or flags, when set
 }
 
 func (f *fakeBundles) For(bin string) ([]box.Mount, []string, string, error) {
 	f.askedBin = bin
 	f.calls++
+	if f.err != nil {
+		f.order.add("bundle")
+		return nil, nil, "", f.err
+	}
 	f.order.add("bundle")
 	return f.mounts, f.flags, "deadbeef", nil
 }
@@ -342,6 +347,33 @@ func TestBoxedSpawnWithAnUnknownBinStillGetsTheBoxMounts(t *testing.T) {
 	boxes.mu.Unlock()
 	if len(ro) != 1 || ro[0] != want {
 		t.Fatalf("Wrap got mounts %+v, want the bundle's %+v", ro, want)
+	}
+}
+
+// Review round 1: a bundle that failed to build yields no mounts, which means
+// "unknown", not "none". The box layer must be told, or it strips the bundle
+// from an idle box it could have reused.
+func TestBundleFailureMarksTheMountsPartial(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		err  error
+		want bool
+	}{{"bundle ok", nil, false}, {"bundle failed", errors.New("walking ~/.claude: permission denied"), true}} {
+		t.Run(c.name, func(t *testing.T) {
+			m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+			m.SetBundles(&fakeBundles{err: c.err, mounts: []box.Mount{{Host: "/b", Box: "/opt/agent-bundle"}}})
+			s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Kill(s.ID)
+			boxes.mu.Lock()
+			got := boxes.lastKey.PartialMounts
+			boxes.mu.Unlock()
+			if got != c.want {
+				t.Fatalf("PartialMounts = %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 
