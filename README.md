@@ -26,7 +26,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 ### Run and steer
 
 - **Session persistence.** Agents run under [abduco](https://www.brain-dump.org/projects/abduco/), so they survive a restart of the agent-box daemon. On restart, agent-box re-attaches. Closing the browser or the terminal that runs `agent-box serve` does not kill sessions.
-- **Steer from the UI.** Interrupt a session, restart an exited one (Claude Code sessions on the host tier resume the same conversation), and, if you opt in per session, answer permission prompts or send a one-line reply from the needs-you card. This is limited to Claude Code sessions.
+- **Steer from the UI.** Interrupt a session, restart an exited one (Claude Code sessions on the host tier resume the same conversation), and, if `"replies_enabled": true` is set in config.json (off by default; restart to apply), answer permission prompts or send a one-line reply from the needs-you card. This is limited to Claude Code sessions.
 - **Profiles.** Agents are defined in the config file or created at runtime in the UI, with launch options (flags and env vars) as toggles on the spawn form. A quick-shell profile is detected from `$SHELL`.
 - **Files.** Browse, search, view, edit, upload, and download folders as an archive, with size and file-count caps.
 
