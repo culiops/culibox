@@ -472,6 +472,17 @@ function renderMsgSection(s) {
   if (!s.summary) txt.classList.add("mut");
   kids.push(txt);
 
+  // Replies off (server kill-switch, /api/meta): the section is the title and the
+  // text. No field, note or enable button is built. The sid and a no-op _refresh
+  // are still set, because repaintSteerRail bails out without them and the poll
+  // would stop updating the text and the facts above.
+  if (globalThis.repliesEnabled !== true) {
+    el.replaceChildren(...kids);
+    el.dataset.sid = s.id;
+    el._refresh = () => {};
+    return;
+  }
+
   const form = document.createElement("div");
   form.className = "rep";
   const input = document.createElement("input");

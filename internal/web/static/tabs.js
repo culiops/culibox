@@ -323,7 +323,9 @@ class Cell {
     // frames a session with an expired AWS sign-in as well as a waiting one.
     const needs = !!(t && t.kind === "terminal" && typeof t.activity === "function" && t.activity() === "waiting");
     this.el.classList.toggle("needs", needs);
-    const key = needs ? String(t.id) : "";
+    // The strip exists only while replies are on, and /api/meta answers after the
+    // first render, so the flag is part of the key; the amber frame above is not.
+    const key = needs ? String(t.id) + (globalThis.repliesEnabled === true ? ":r" : "") : "";
     if (key === this._needsKey) return;
     this._needsKey = key;
     if (this._strip) { this._strip.remove(); this._strip = null; }
@@ -360,8 +362,10 @@ class Cell {
 // than restating them: their order mirrors the server's own guard, and a
 // second copy would drift from it. Returns null when the session behind `tab`
 // is not a claude session (no /peek, /message or /replyable for it), or is
-// not found at all.
+// not found at all, or when replies are switched off server-side.
 function buildReplyStrip(tab) {
+  // Replies off (server kill-switch, /api/meta): no strip, so no hidden field.
+  if (globalThis.repliesEnabled !== true) return null;
   const rec = lastSessions.find((x) => x.id === tab.id);
   if (!rec || !rec.claude) return null;
 

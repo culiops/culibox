@@ -1285,6 +1285,11 @@ async function togglePeek(li, s) {
   li.dataset.peekPending = payload && payload.pending ? "1" : "";
   lastPeek = { id: s.id, text: st.text, muted: st.kind !== "text", pending: !!(payload && payload.pending) };
 
+  // Replies off (server kill-switch, /api/meta): the panel is the text only. The
+  // opt-in, the quick replies and the field are not built, so there is no hidden
+  // focusable input and nothing for replyFocused to guard.
+  if (globalThis.repliesEnabled !== true) return;
+
   // Quick replies. A waiting agent is almost always on a numbered prompt, and
   // the whole point of answering from the rail is not having to open a pane to
   // type one character. Each button sends its own digit and nothing else.
@@ -1755,7 +1760,7 @@ function renderNeedsCard(s) {
     li.appendChild(renderSSOBody(s, { mobile: true }));
     const swide = document.createElement("div");
     swide.className = "wide";
-    if (s.replyable) {
+    if (globalThis.repliesEnabled === true && s.replyable) {
       const sreply = document.createElement("button");
       sreply.type = "button";
       sreply.className = "btn pri";
@@ -1781,6 +1786,9 @@ function renderNeedsCard(s) {
   li.appendChild(msg);
   syncMaskHint(msg, msg.textContent);
 
+  // Replies off (server kill-switch, /api/meta): the card is the message plus
+  // Open terminal. No 1/2/3 row and no Reply… are built.
+  const repliesOn = globalThis.repliesEnabled === true;
   const qk = document.createElement("div");
   qk.className = "qk";
   // Same gate as the reply sheet and the desktop composer: a digit always
@@ -1791,31 +1799,37 @@ function renderNeedsCard(s) {
   // the server refuses a reply to). The server's canReply stays the
   // authoritative gate either way.
   const cardSt = sendState({ replyable: s.replyable, pending: s.need === "ask", activity: s.activity });
-  for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "btn";
-    b.textContent = digit + " " + word;
-    b.title = "Send " + digit;
-    b.disabled = !cardSt.enabled;
-    b.onclick = () => sendReplyFor(s, digit);
-    qk.appendChild(b);
+  if (repliesOn) {
+    for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn";
+      b.textContent = digit + " " + word;
+      b.title = "Send " + digit;
+      b.disabled = !cardSt.enabled;
+      b.onclick = () => sendReplyFor(s, digit);
+      qk.appendChild(b);
+    }
+    li.appendChild(qk);
   }
-  li.appendChild(qk);
 
   const wide = document.createElement("div");
   wide.className = "wide";
-  const reply = document.createElement("button");
-  reply.type = "button";
-  reply.className = "btn pri";
-  reply.textContent = "Reply…";
-  reply.onclick = () => openReplySheet(s);
   const term = document.createElement("button");
   term.type = "button";
   term.className = "btn";
   term.textContent = "Open terminal";
   term.onclick = () => openTerminal(s.id, s.name);
-  wide.append(reply, term);
+  if (repliesOn) {
+    const reply = document.createElement("button");
+    reply.type = "button";
+    reply.className = "btn pri";
+    reply.textContent = "Reply…";
+    reply.onclick = () => openReplySheet(s);
+    wide.append(reply, term);
+  } else {
+    wide.append(term);
+  }
   li.appendChild(wide);
 
   return li;
@@ -2198,6 +2212,9 @@ function rowLocal(s) {
     heldHere: !!tab && tab.status() === "connected",
     pct: u && typeof u.pct === "number" ? u.pct : null,
     boxRuntime: boxRuntime,
+    // The reply surfaces are built only when /api/meta says replies are on, and
+    // that answer lands after the first render, so it must move the signature.
+    replies: globalThis.repliesEnabled === true,
     sending: pendingSends.has(s.id),
     expanded: cardExpanded.has(s.id),
     answering: pendingAnswers.has(s.id),
@@ -2755,7 +2772,9 @@ function syncPfElevWarn() {
 // replies are claude-only on the server, and a default nothing honours is a
 // setting that lies.
 function syncPfReplyable() {
-  $("pf-replyable-row").hidden = !isClaudeBinName($("pf-bin").value);
+  // Replies off (server kill-switch, /api/meta): the opt-in row is hidden, so the
+  // save line below (which reads .hidden) never writes replyable.
+  $("pf-replyable-row").hidden = globalThis.repliesEnabled !== true || !isClaudeBinName($("pf-bin").value);
 }
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
@@ -3804,6 +3823,13 @@ function openReplySheet(s) {
     box.className = "msgbox";
     box.textContent = lastPeek && lastPeek.id === s.id ? lastPeek.text : "Loading…";
 
+    // Replies off (server kill-switch, /api/meta): the sheet is read-only — the
+    // header, the full text and Open terminal. No opt-in, Send or quick replies
+    // are built, so refresh() has nothing to paint and returns at once.
+    const repliesOn = globalThis.repliesEnabled === true;
+    const qkButtons = [];
+    let ta = null, send = null, note = null, optin = null, qk = null;
+
     // Enable-replies toggle (I1 regression fix). Replyable defaults false and
     // the ONLY control that grants it is this checkbox — pre-5c it lived in
     // the inline peek composer the desktop still shows; on mobile the summary
@@ -3814,60 +3840,61 @@ function openReplySheet(s) {
     // when the session is also waiting). The M4 mockup omitted this control,
     // but "UI fidelity never breaks function" — this restores a regressed
     // capability, kept compact and consistent with the sheet's style.
-    const optin = document.createElement("label");
-    optin.className = "sheet-optin";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.checked = !!s.replyable;
-    const optinText = document.createElement("span");
-    optinText.textContent = "Enable replies for this session";
-    optin.append(cb, optinText);
-    cb.onchange = async () => {
-      const want = cb.checked;
-      try {
-        const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ replyable: want }),
-        });
-        if (!res.ok) throw new Error(String(res.status));
-        s.replyable = want;
-      } catch (_) {
-        cb.checked = !want; // the server is the truth; put the box back
-        showToast("Could not change the reply setting", { error: true });
+    if (repliesOn) {
+      optin = document.createElement("label");
+      optin.className = "sheet-optin";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!s.replyable;
+      const optinText = document.createElement("span");
+      optinText.textContent = "Enable replies for this session";
+      optin.append(cb, optinText);
+      cb.onchange = async () => {
+        const want = cb.checked;
+        try {
+          const res = await fetch("/api/sessions/" + encodeURIComponent(s.id) + "/replyable", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ replyable: want }),
+          });
+          if (!res.ok) throw new Error(String(res.status));
+          s.replyable = want;
+        } catch (_) {
+          cb.checked = !want; // the server is the truth; put the box back
+          showToast("Could not change the reply setting", { error: true });
+        }
+        refresh();
+      };
+
+      // Quick replies: same three labels, same digit-only payload as the
+      // inline composer's qk row (togglePeek, above) — sent through the same
+      // doSend below, never a second copy of the send path.
+      qk = document.createElement("div");
+      qk.className = "qk";
+      for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "btn";
+        b.textContent = digit + " " + word;
+        b.title = "Send " + digit;
+        b.onclick = () => doSend(digit);
+        qk.appendChild(b);
+        qkButtons.push(b);
       }
-      refresh();
-    };
 
-    // Quick replies: same three labels, same digit-only payload as the
-    // inline composer's qk row (togglePeek, above) — sent through the same
-    // doSend below, never a second copy of the send path.
-    const qk = document.createElement("div");
-    qk.className = "qk";
-    const qkButtons = [];
-    for (const [digit, word] of [["1", "yes"], ["2", "always"], ["3", "no"]]) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "btn";
-      b.textContent = digit + " " + word;
-      b.title = "Send " + digit;
-      b.onclick = () => doSend(digit);
-      qk.appendChild(b);
-      qkButtons.push(b);
+      ta = document.createElement("textarea");
+      ta.className = "ta";
+      ta.rows = 3;
+      ta.placeholder = "Type a reply…";
+      // Restore an in-progress draft the same way the inline composer does —
+      // replyDraft is shared module state, so a draft started here survives a
+      // later desktop-width resize into the inline composer, and vice versa.
+      if (replyDraft && replyDraft.id === s.id) ta.value = replyDraft.text;
+      ta.addEventListener("input", () => {
+        replyDraft = { id: s.id, text: ta.value };
+        refresh();
+      });
     }
-
-    const ta = document.createElement("textarea");
-    ta.className = "ta";
-    ta.rows = 3;
-    ta.placeholder = "Type a reply…";
-    // Restore an in-progress draft the same way the inline composer does —
-    // replyDraft is shared module state, so a draft started here survives a
-    // later desktop-width resize into the inline composer, and vice versa.
-    if (replyDraft && replyDraft.id === s.id) ta.value = replyDraft.text;
-    ta.addEventListener("input", () => {
-      replyDraft = { id: s.id, text: ta.value };
-      refresh();
-    });
 
     const wide = document.createElement("div");
     wide.className = "wide";
@@ -3876,22 +3903,28 @@ function openReplySheet(s) {
     openT.className = "btn";
     openT.textContent = "Open terminal";
     openT.onclick = () => { closeSheet(); openTerminal(s.id, s.name); };
-    const send = document.createElement("button");
-    send.type = "button";
-    send.className = "btn pri";
-    send.textContent = "Send ↵";
-    send.onclick = () => doSend(ta.value);
-    wide.append(openT, send);
+    if (repliesOn) {
+      send = document.createElement("button");
+      send.type = "button";
+      send.className = "btn pri";
+      send.textContent = "Send ↵";
+      send.onclick = () => doSend(ta.value);
+      wide.append(openT, send);
 
-    const note = document.createElement("div");
-    note.className = "sheet-note";
+      note = document.createElement("div");
+      note.className = "sheet-note";
 
-    body.append(shd, flab, box, optin, qk, ta, wide, note);
+      body.append(shd, flab, box, optin, qk, ta, wide, note);
+    } else {
+      wide.append(openT);
+      body.append(shd, flab, box, wide);
+    }
 
     // refresh() is the ONE place send.disabled and the caption are decided —
     // see the function-level comment above. sendState/replyTextError are the
     // exact same peek.js functions the desktop composer's own refresh() uses.
     function refresh() {
+      if (!repliesOn) return; // read-only sheet: no Send, quick replies or caption to paint
       const st = sendState({ replyable: s.replyable, pending: pendingNow || s.need === "ask", activity: s.activity });
       const errCode = replyTextError(ta.value);
       const gateClosed = !st.enabled;
@@ -4157,6 +4190,7 @@ async function resolveCellNeighbour(cell) {
 async function currentShellProfile() {
   try {
     const meta = await api("/api/meta");
+    globalThis.repliesEnabled = !!(meta && meta.replies === true);
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
@@ -4280,6 +4314,8 @@ initMobileShell();
 (async function initEnv(retry = true) {
   try {
     const meta = await api("/api/meta");
+    // Whether replies are on gates every reply surface; closed until this answers.
+    globalThis.repliesEnabled = !!(meta && meta.replies === true);
     // Quick-shell profile first: it is independent of the env badge, so it must
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
@@ -4289,7 +4325,8 @@ initMobileShell();
     lastRateLimits = (meta && meta.rate_limits) || null;
     renderRateLimits(lastRateLimits); // account 5h/weekly meters in the header
     refreshSessions(); // re-render rows now that the tier label is known
-    if (window.shellProfile) cells.forEach((c) => c.renderBar()); // reveal +sh
+    if (globalThis.repliesEnabled && typeof renderSteerRail === "function") renderSteerRail(); // the rail was built before this answer
+    if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
@@ -4334,6 +4371,7 @@ setInterval(async () => {
   if (document.hidden) return;
   try {
     const m = await api("/api/meta");
+    globalThis.repliesEnabled = !!(m && m.replies === true);
     lastRateLimits = (m && m.rate_limits) || null;
     renderRateLimits(lastRateLimits);
   } catch (_) {}

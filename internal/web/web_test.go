@@ -217,6 +217,19 @@ func TestHandleMeta(t *testing.T) {
 	}
 }
 
+// "replies" is always present and fails closed: false unless the Server was
+// wired with the config kill-switch on.
+func TestHandleMetaReplies(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+		got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, Profiles: pm, RepliesEnabled: on})
+		v, present := got["replies"]
+		if !present || v != on {
+			t.Errorf("RepliesEnabled=%v: replies = %v (present=%v), want %v", on, v, present, on)
+		}
+	}
+}
+
 func TestHandleMetaRateLimits(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "rl.json")
 	os.WriteFile(f, []byte(`{"five_hour":{"used_percentage":80,"resets_at":1785654600},"seven_day":{"used_percentage":42,"resets_at":1786107600}}`), 0o644)

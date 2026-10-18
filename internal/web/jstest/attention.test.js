@@ -1,4 +1,6 @@
 "use strict";
+// Replies are ON for the assertions below; the kill-switch group at the end turns them off.
+globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
 const { needsYou, sessionDot, tabNeedWhy, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions, notifyAvailability, notifyChecked, notifyBody, notifyPoll, sha256Hex, answerState, answerErrorText, staleExpanded, maskHint } = require("../static/attention.js");
@@ -265,3 +267,32 @@ test("sessionDot: an SSO session reads as waiting, with its reason, on every dot
   assert.deepStrictEqual(sessionDot({ activity: "waiting", need: "turn" }), { cls: "dot waiting", title: "waiting for input" });
   assert.deepStrictEqual(sessionDot({ activity: "idle" }), { cls: "dot idle", title: "idle" });
 });
+
+// Kill-switch: the reply gates close unless globalThis.repliesEnabled is the boolean true.
+for (const off of [undefined, "true"]) {
+  test("reply gates in attention.js are closed when repliesEnabled is " + String(off), () => {
+    const turn = { activity: "waiting", need: "turn", claude: true, replyable: true, summary: "done" };
+    const turnNo = { activity: "waiting", need: "turn", claude: true, replyable: false, summary: "done" };
+    const ask = { activity: "waiting", need: "ask", ask: "Bash(x)", claude: true, replyable: false };
+    const askYes = { activity: "waiting", need: "ask", ask: "Bash(x)", claude: true, replyable: true };
+    const sso = { activity: "waiting", need: "sso", claude: true, replyable: true, aws: { sso_expired: "dev" } };
+    const onText = [turn, turnNo, ask, askYes, sso].map((s) => cardContent(s).text);
+    if (off === undefined) delete globalThis.repliesEnabled; else globalThis.repliesEnabled = off;
+    try {
+      [turn, turnNo, ask, askYes, sso].forEach((s, i) => {
+        const c = cardContent(s);
+        assert.strictEqual(c.reply, false, "reply " + i);
+        assert.strictEqual(c.enableReplies, false, "enableReplies " + i);
+        assert.strictEqual(c.text, onText[i], "text " + i);
+      });
+      assert.strictEqual(cardContent(sso).sso, true);
+      assert.strictEqual(cardContent(ask).ask, true);
+      const a = answerState({ need: "ask", replyable: true, ask_full: "x" }, true, "x");
+      assert.strictEqual(a.show, false);
+      assert.strictEqual(a.enabled, false);
+      assert.strictEqual(a.note, "");
+    } finally {
+      globalThis.repliesEnabled = true;
+    }
+  });
+}

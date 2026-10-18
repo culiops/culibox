@@ -164,6 +164,7 @@ type Config struct {
 	// per-agent setting can reach it — without this, an instance whose every
 	// configured agent is host still had a boxed shell profile.
 	DefaultRuntime    string `json:"default_runtime,omitempty"`      // box(default)|host
+	RepliesEnabled    bool   `json:"replies_enabled,omitempty"`      // kill-switch for reply + remote Yes/No; absent = off
 	BundleSource      string `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
 	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m

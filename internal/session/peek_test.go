@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,6 +215,7 @@ func newPeekTestManager(t *testing.T, cwd, body string) (*Manager, string) {
 		home:     home,
 		sessions: map[string]*Session{},
 	}
+	m.SetRepliesEnabled(true) // the reply tests exercise the feature; the off switch has its own tests
 	m.sessions["s1"] = &Session{
 		ID: "s1", Agent: "claude", Cwd: cwd, Bin: "/usr/local/bin/claude",
 		Created: time.Now().Add(-time.Hour),
@@ -534,5 +536,49 @@ func TestListReportsClaude(t *testing.T) {
 	m.sessions["s1"].Bin = "/bin/zsh"
 	if m.List()[0].Claude {
 		t.Error("Claude=true for a shell bin")
+	}
+}
+
+// The kill-switch (config replies_enabled, Manager.SetRepliesEnabled) refuses a
+// GRANT but never a revoke, so an operator can always take an opt-in back.
+func TestSetReplyableRefusedWhenRepliesDisabled(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	m.SetRepliesEnabled(false)
+	if err := m.SetReplyable("s1", true); !errors.Is(err, ErrRepliesDisabled) {
+		t.Fatalf("SetReplyable(true) err=%v want ErrRepliesDisabled", err)
+	}
+	if m.List()[0].Replyable {
+		t.Error("Replyable=true after a refused grant")
+	}
+	if err := m.SetReplyable("s1", false); err != nil {
+		t.Errorf("SetReplyable(false) err=%v want nil: revoking must always work", err)
+	}
+}
+
+// replyable is forced true on the struct (a stale state) so the test proves
+// SendMessage refuses on the switch itself, not via the replyable invariant.
+func TestSendMessageRefusedWhenRepliesDisabled(t *testing.T) {
+	body := `{"message":{"role":"assistant","content":[{"type":"text","text":"which file?"}]}}` + "\n"
+	m, _ := newPeekTestManager(t, "/tmp/proj", body)
+	m.SetRepliesEnabled(false)
+	s := m.sessions["s1"]
+	s.mu.Lock()
+	s.replyable = true
+	s.mu.Unlock()
+	r := pipeTo(t, s)
+	if err := m.SendMessage("s1", "hi"); !errors.Is(err, ErrRepliesDisabled) {
+		t.Fatalf("err=%v want ErrRepliesDisabled", err)
+	}
+	if got := written(t, r); got != "" {
+		t.Errorf("PTY received %q, want nothing", got)
+	}
+	// Control: the same state with the switch on does reach the PTY, so the
+	// refusal above is the switch and not some other guard.
+	m.SetRepliesEnabled(true)
+	if err := m.SendMessage("s1", "hi"); err != nil {
+		t.Fatalf("switch on: %v", err)
+	}
+	if got := written(t, r); got != "hi\r" {
+		t.Errorf("switch on: PTY received %q want %q", got, "hi\r")
 	}
 }

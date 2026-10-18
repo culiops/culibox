@@ -180,6 +180,22 @@ func TestConfigExampleValidates(t *testing.T) {
 	}
 }
 
+func TestConfigRepliesEnabledParse(t *testing.T) {
+	var on, absent Config
+	if err := json.Unmarshal([]byte(`{"replies_enabled":true}`), &on); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !on.RepliesEnabled {
+		t.Error("replies_enabled:true not parsed")
+	}
+	if err := json.Unmarshal([]byte(`{}`), &absent); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if absent.RepliesEnabled {
+		t.Error("absent replies_enabled must default to false")
+	}
+}
+
 func TestConfigEnvFieldsParse(t *testing.T) {
 	var c Config
 	if err := json.Unmarshal([]byte(`{"env_label":"PROD","env_color":"#b45309"}`), &c); err != nil {

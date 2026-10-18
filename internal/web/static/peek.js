@@ -55,6 +55,8 @@ function replyTextError(text) {
 // common blocked state was explained as "wait until it stops", about a session
 // that had already stopped and was waiting on the operator.
 function sendState(s) {
+  // Kill-switch first: with replies off there is nothing to explain, so no reason either.
+  if (globalThis.repliesEnabled !== true) return { enabled: false, reason: "" };
   if (!s || !s.replyable) {
     return { enabled: false, reason: "Enable replies for this session first." };
   }
@@ -94,6 +96,8 @@ function notWaitingReason(activity) {
 // control. True exactly when sendState's reason is the missing opt-in, for a
 // claude session that still runs (replies are claude-only on the server).
 function offerEnableReplies(s) {
+  // Kill-switch: never invite an opt-in the server would refuse.
+  if (globalThis.repliesEnabled !== true) return false;
   return !!s && s.claude === true && !s.replyable && !s.exited;
 }
 

@@ -1,4 +1,6 @@
 "use strict";
+// Replies are ON for the assertions below; the kill-switch group at the end turns them off.
+globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
 const {
@@ -91,3 +93,16 @@ test("spawnPayload sends login:true only when set (the Settings Log in session)"
   assert.strictEqual("login" in spawnPayload({ agent: "c", account: "work" }), false);
   assert.strictEqual("login" in spawnPayload({ agent: "c", login: false }), false);
 });
+
+// Kill-switch: the replies field closes unless globalThis.repliesEnabled is the boolean true.
+for (const off of [undefined, "true"]) {
+  test("replies field is hidden when repliesEnabled is " + String(off), () => {
+    if (off === undefined) delete globalThis.repliesEnabled; else globalThis.repliesEnabled = off;
+    try {
+      assert.strictEqual(repliesFieldVisible({ claude: true }), false);
+      assert.strictEqual(bypassWarningShown(Object.assign({}, claude, { bypass_args: true }), {}, true), false);
+    } finally {
+      globalThis.repliesEnabled = true;
+    }
+  });
+}

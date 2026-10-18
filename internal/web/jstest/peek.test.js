@@ -1,4 +1,6 @@
 "use strict";
+// Replies are ON for the assertions below; the kill-switch group at the end turns them off.
+globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
 const { peekState, replyTextError, sendState, notWaitingReason, offerEnableReplies } = require("../static/peek.js");
@@ -109,3 +111,16 @@ test("offerEnableReplies agrees with sendState's not-replyable reason", () => {
     }
   }
 });
+
+// Kill-switch: the reply gates close unless globalThis.repliesEnabled is the boolean true.
+for (const off of [undefined, "true"]) {
+  test("reply gates in peek.js are closed when repliesEnabled is " + String(off), () => {
+    if (off === undefined) delete globalThis.repliesEnabled; else globalThis.repliesEnabled = off;
+    try {
+      assert.strictEqual(offerEnableReplies({ claude: true, replyable: false }), false);
+      assert.deepEqual(sendState({ replyable: true, activity: "waiting" }), { enabled: false, reason: "" });
+    } finally {
+      globalThis.repliesEnabled = true;
+    }
+  });
+}

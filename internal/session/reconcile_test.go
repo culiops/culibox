@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ func writeSidecar(t *testing.T, dir string, m map[string]sessionMeta) string {
 func newReconcileManager(t *testing.T, fb *fakeBackend, sidecarPath string) *Manager {
 	t.Helper()
 	m := NewManager(fakeLauncher{}, fb, 1<<16, time.Minute)
+	m.SetRepliesEnabled(true) // restore tests assume the feature is on; the off switch has its own tests
 	if err := m.SetSidecarPath(sidecarPath); err != nil {
 		t.Fatal(err)
 	}
@@ -316,5 +318,77 @@ func TestResolveBinsMarksAgentKind(t *testing.T) {
 	m.ResolveBins()
 	if got := s.Info().Activity; got != "waiting" {
 		t.Fatalf("after ResolveBins: %q, want waiting (claude, pre-feature sidecar => submitted)", got)
+	}
+}
+
+// With the kill-switch off a restored session is not replyable in memory, but
+// the sidecar keeps the operator's opt-in: restore must not rewrite it, so
+// turning replies back on restores what they chose.
+func TestReconcileDropsReplyableWhenRepliesDisabled(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/work/proj", Created: time.Now(), Replyable: true},
+	})
+	m := newReconcileManager(t, fb, path)
+	m.SetRepliesEnabled(false)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	s, ok := m.Get("claude-2")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
+	if s.Info().Replyable {
+		t.Error("Replyable=true after Reconcile with the kill-switch off")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"replyable":true`) {
+		t.Errorf("sidecar lost the persisted opt-in: %s", b)
+	}
+}
+
+// A blocked ask restored with Replyable: true ships AskFull only while replies
+// are on. The on case is the control that keeps the off assertion from passing
+// vacuously on a fixture that never produced a blocked ask.
+func TestListOmitsAskFullWhenRepliesDisabled(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		on   bool
+		want string
+	}{{"on", true, "Bash(touch /tmp/a)"}, {"off", false, ""}} {
+		t.Run(c.name, func(t *testing.T) {
+			home := t.TempDir()
+			writeTxLines(t, home, locCwd, "aaaa-1", time.Now(), txUser("go"), txRec("assistant", txBash("touch /tmp/a")))
+			writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "waiting"))
+			fb := newFakeBackend()
+			fb.seedLive("claude-2")
+			path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+				"claude-2": {Agent: "claude", Cwd: locCwd, Created: time.Now().Add(-time.Hour), Replyable: true},
+			})
+			m := NewManager(&ctlLauncher{argv: []string{"x"}, bin: "/usr/bin/claude"},
+				pidBackend{fb, map[string]int{"claude-2": 101}}, 1<<16, time.Minute)
+			m.procStart = func(pid int) (string, bool) { return "5000", pid == 101 }
+			m.SetPaths(home, "")
+			m.SetRepliesEnabled(c.on)
+			if err := m.SetSidecarPath(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.Reconcile(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = m.Kill("claude-2") })
+			l := m.List()
+			if len(l) != 1 || l[0].Need != "ask" {
+				t.Fatalf("fixture drifted, want one blocked ask session: %+v", l)
+			}
+			if l[0].AskFull != c.want {
+				t.Errorf("AskFull=%q want %q", l[0].AskFull, c.want)
+			}
+		})
 	}
 }

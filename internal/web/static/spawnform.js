@@ -22,6 +22,8 @@ function promptFieldVisible(profile) {
 
 // repliesFieldVisible: replies are a claude-only feature on the server.
 function repliesFieldVisible(profile) {
+  // Kill-switch: a field the server would refuse is not shown.
+  if (globalThis.repliesEnabled !== true) return false;
   return !!(profile && profile.claude);
 }
 

@@ -758,6 +758,7 @@ func (m *Manager) SetReplyable(id string, v bool) error {
 	m.mu.Lock()
 	s := m.sessions[id]
 	sc := m.sidecar
+	repliesOn := m.repliesOn
 	var bin string
 	if s != nil {
 		bin = s.Bin // guarded by m.mu: ResolveBins backfills it post-reconcile
@@ -765,6 +766,10 @@ func (m *Manager) SetReplyable(id string, v bool) error {
 	m.mu.Unlock()
 	if s == nil {
 		return ErrNoSession
+	}
+	// Granting while the kill-switch is off is refused; revoking never is.
+	if v && !repliesOn {
+		return ErrRepliesDisabled
 	}
 	if v && !isClaudeBin(bin) {
 		return ErrNotClaude
@@ -818,6 +823,7 @@ type Manager struct {
 	egress    EgressHooks // nil = egress control not running; bound profiles are refused
 	home      string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir  string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	repliesOn bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -837,6 +843,15 @@ type Manager struct {
 func (m *Manager) SetPaths(home, stateDir string) {
 	m.mu.Lock()
 	m.home, m.stateDir = home, stateDir
+	m.mu.Unlock()
+}
+
+// SetRepliesEnabled sets the instance-wide reply kill-switch (config
+// replies_enabled). Call once at boot, before Reconcile and Spawn: both read it
+// to decide whether a session may be replyable. Default (never called) is off.
+func (m *Manager) SetRepliesEnabled(v bool) {
+	m.mu.Lock()
+	m.repliesOn = v
 	m.mu.Unlock()
 }
 
@@ -1134,7 +1149,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if rr, ok := m.launcher.(ReplyResolver); ok {
 		replyable = rr.ReplyableFor(spec)
 	}
-	replyable = replyable && isClaudeBin(bin)
+	// The kill-switch wins over the profile default and the spawn override.
+	m.mu.Lock()
+	repliesOn := m.repliesOn
+	m.mu.Unlock()
+	replyable = replyable && isClaudeBin(bin) && repliesOn
 	var opts map[string]any
 	if ar, ok := m.launcher.(OptionsResolver); ok {
 		opts = ar.AcceptedOptions(spec)
@@ -1678,8 +1697,10 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Exclusive = md.Exclusive
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
-	// merely surviving a restart.
-	sess.replyable = md.Replyable
+	// merely surviving a restart. With the kill-switch off the persisted value
+	// is dropped in memory only; the sidecar keeps it, so turning replies back
+	// on restores the operator's opt-ins.
+	sess.replyable = md.Replyable && m.repliesOn
 	sess.options = md.Options
 	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
 		sess.claudeSessionID = md.ClaudeSessionID

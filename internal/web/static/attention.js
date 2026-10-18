@@ -66,18 +66,20 @@ function needLabel(s) {
 //    purpose: neither has a real answer path from this card.
 function cardContent(s) {
   const v = s || {};
+  // Kill-switch: the text is the peek and stays; only the reply paths close.
+  const on = globalThis.repliesEnabled === true;
   // An SSO need outranks turn/ask for WHICH card shows, but it must not take
   // the reply box away from a replyable session (spec 8.2).
   if (v.need === "sso") {
-    return { text: ssoExpiredText(v), sso: true, ask: false, reply: !!v.replyable, enableReplies: false };
+    return { text: ssoExpiredText(v), sso: true, ask: false, reply: on && !!v.replyable, enableReplies: false };
   }
   if (v.need === "ask") {
-    return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: !!v.claude && !v.replyable };
+    return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: on && !!v.claude && !v.replyable };
   }
   if (!v.claude || !v.need) {
     return { text: v.summary || "Waiting for input.", ask: false, reply: false, enableReplies: false };
   }
-  return { text: v.summary || "No summary", ask: false, reply: !!v.replyable, enableReplies: !v.replyable };
+  return { text: v.summary || "No summary", ask: false, reply: on && !!v.replyable, enableReplies: on && !v.replyable };
 }
 
 // maskHint: the one-line note under text the server's display mask touched.
@@ -251,6 +253,8 @@ function sha256Hex(str) {
 function answerState(s, expanded, seenAskFull) {
   const off = { show: false, enabled: false, title: "", note: "" };
   const v = s || {};
+  // Kill-switch: no Yes/No and no "answer in the terminal" note either.
+  if (globalThis.repliesEnabled !== true) return off;
   if (v.need !== "ask" || !v.replyable) return off;
   if (!v.ask_full) return { show: false, enabled: false, title: "", note: "Answer this one in the terminal — the full prompt can't be shown here." };
   if (!expanded) return { show: true, enabled: false, title: "Expand to see the full command first", note: "" };

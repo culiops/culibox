@@ -16,9 +16,12 @@ import (
 var (
 	ErrNoSession    = errors.New("no such session")
 	ErrNotReplyable = errors.New("session has not opted in to messages")
-	ErrNotWaiting   = errors.New("session is not waiting for input")
-	ErrPending      = errors.New("session is inside a tool call")
-	ErrBadText      = errors.New("message text is empty, multi-line, or contains control characters")
+	// ErrRepliesDisabled: the instance-wide kill-switch (config replies_enabled)
+	// is off. Distinct from ErrNotReplyable, which is the per-session opt-in.
+	ErrRepliesDisabled = errors.New("replies are disabled on this instance")
+	ErrNotWaiting      = errors.New("session is not waiting for input")
+	ErrPending         = errors.New("session is inside a tool call")
+	ErrBadText         = errors.New("message text is empty, multi-line, or contains control characters")
 	// ErrNotClaude is the isClaudeBin seam the design names, enforced here in
 	// the session layer rather than in the HTTP handler or the UI: the reply
 	// path is the one place in this daemon that types into a live agent's
@@ -713,9 +716,15 @@ func (m *Manager) SendMessage(id, text string) error {
 	if s != nil {
 		bin = s.Bin // guarded by m.mu: ResolveBins backfills it post-reconcile
 	}
+	repliesOn := m.repliesOn
 	m.mu.Unlock()
 	if s == nil {
 		return ErrNoSession
+	}
+	// The kill-switch comes first and refuses outright, so a session that
+	// somehow still holds replyable=true (a stale state) cannot type into the PTY.
+	if !repliesOn {
+		return ErrRepliesDisabled
 	}
 	// Claude-only, enforced here rather than at the HTTP layer or in the UI.
 	// Every guard below is derived from a claude transcript; a raw $SHELL
