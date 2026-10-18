@@ -20,7 +20,8 @@ type fakeClient struct {
 	running    map[string]bool
 	exited     map[string]bool // present but not running
 	inspectErr error
-	stopFails  int // the next N Stop calls fail and leave the container running
+	stopFails  int               // the next N Stop calls fail and leave the container running
+	stopHook   func(name string) // runs after Stop removed the box, with no lock held
 	sysbox     bool
 
 	// inspectHook runs inside Inspect, before it answers and with no lock held,
@@ -39,10 +40,10 @@ type fakeClient struct {
 
 	// mounts holds the bind destinations of each box, as `docker inspect`
 	// reports them: recorded from every --mount of a Run, or set by a test to
-	// stand for a box created by an older build. mountsErr fails Mounts.
+	// stand for a box created by an older build. mountsErr fails InspectMounts
+	// for a running box.
 	mounts    map[string][]string
 	mountsErr error
-	mountsN   int // Mounts calls
 }
 
 func newFake() *fakeClient {
@@ -175,17 +176,25 @@ func (f *fakeClient) Stop(_ context.Context, name string) error {
 	}
 	delete(f.running, name)
 	delete(f.exited, name)
+	if hook := f.stopHook; hook != nil {
+		f.mu.Unlock()
+		hook(name)
+		f.mu.Lock()
+	}
 	return nil
 }
 
-func (f *fakeClient) Mounts(_ context.Context, name string) ([]string, error) {
+func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []string, error) {
+	st, err := f.Inspect(ctx, name)
+	if err != nil || st != StateRunning {
+		return st, nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.mountsN++
 	if f.mountsErr != nil {
-		return nil, f.mountsErr
+		return StateMissing, nil, f.mountsErr
 	}
-	return append([]string(nil), f.mounts[name]...), nil
+	return st, append([]string(nil), f.mounts[name]...), nil
 }
 
 func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {

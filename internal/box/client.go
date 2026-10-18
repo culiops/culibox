@@ -74,9 +74,28 @@ func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 // failure (an unreachable daemon, a stopped VM) is, because guessing "missing"
 // would send the caller into a docker run that cannot work either.
 func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
+	st, _, err := c.inspect(ctx, name, false)
+	return st, err
+}
+
+// InspectMounts is Inspect plus the box's bind destinations, from the same
+// docker call, so ensure pays one round trip under opMu, not two.
+func (c CLIClient) InspectMounts(ctx context.Context, name string) (State, []string, error) {
+	return c.inspect(ctx, name, true)
+}
+
+// inspectMountsFormat prints the running flag on the first line and one
+// "type|destination" line per mount after it.
+const inspectMountsFormat = `{{.State.Running}}{{range .Mounts}}{{"\n"}}{{.Type}}|{{.Destination}}{{end}}`
+
+func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (State, []string, error) {
+	format := "{{.State.Running}}"
+	if withMounts {
+		format = inspectMountsFormat
+	}
 	// Stdout only: a CLI or context warning on stderr must not be read as the
 	// answer, because "not exactly true" means Stopped and the caller removes it.
-	out, err := c.command(ctx, "inspect", "-f", "{{.State.Running}}", name).Output()
+	out, err := c.command(ctx, "inspect", "-f", format, name).Output()
 	if err != nil {
 		var stderr string
 		var ee *exec.ExitError
@@ -85,41 +104,27 @@ func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
 			// The wording's case differs between docker versions ("Error: No such
 			// object" vs "error: no such object"), so compare case-insensitively.
 			if l := strings.ToLower(stderr); strings.Contains(l, "no such object") || strings.Contains(l, "no such container") {
-				return StateMissing, nil
+				return StateMissing, nil, nil
 			}
 		}
-		return StateMissing, fmt.Errorf("docker inspect: %w: %s", err, stderr)
+		return StateMissing, nil, fmt.Errorf("docker inspect: %w: %s", err, stderr)
 	}
-	switch s := strings.TrimSpace(string(out)); s {
+	first, rest, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	switch s := strings.TrimSpace(first); s {
 	case "true":
-		return StateRunning, nil
+		return StateRunning, parseMounts(rest), nil
 	case "false":
-		return StateStopped, nil
+		return StateStopped, nil, nil
 	default:
 		// Fail closed: the caller force-removes a Stopped box, so an answer we
 		// cannot read must never be taken for one.
-		return StateMissing, fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
+		return StateMissing, nil, fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
 	}
 }
 
-// Mounts reports the destinations of a box's bind mounts. Binds only: they are
-// all runArgs creates, while a tmpfs or an image-declared volume is not a mount
-// the caller asked for. Stdout only, like Inspect, so a CLI warning is never
-// read as a mount.
-func (c CLIClient) Mounts(ctx context.Context, name string) ([]string, error) {
-	out, err := c.command(ctx, "inspect", "-f", `{{range .Mounts}}{{.Type}}|{{.Destination}}{{"\n"}}{{end}}`, name).Output()
-	if err != nil {
-		var stderr string
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			stderr = strings.TrimSpace(string(ee.Stderr))
-		}
-		return nil, fmt.Errorf("docker inspect: %w: %s", err, stderr)
-	}
-	return parseMounts(string(out)), nil
-}
-
-// parseMounts reads Mounts' "type|destination" lines, keeping the binds.
+// parseMounts reads InspectMounts' "type|destination" lines, keeping the binds:
+// they are all runArgs creates, while a tmpfs or an image-declared volume is not
+// a mount the caller asked for.
 func parseMounts(out string) []string {
 	var dsts []string
 	for _, line := range strings.Split(out, "\n") {

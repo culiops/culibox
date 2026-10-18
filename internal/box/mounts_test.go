@@ -3,6 +3,7 @@ package box
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -230,5 +231,137 @@ func TestParseMountsKeepsBindDestinationsOnly(t *testing.T) {
 	want := []string{"/w", "/home/agent", "/opt/agent-bundle"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("parseMounts = %v, want %v", got, want)
+	}
+}
+
+// Review round 1: what a shell asks for, the bundle root included, is optional:
+// a shell never reads it. A second shell next to a live box without the bundle
+// (a box from before the fix, or one started while the bundle failed) must keep
+// working exactly as it did before.
+func TestShellNextToALiveBoxWithoutTheBundleIsReused(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	if _, _, _, err := m.Wrap(ctx, dir, "bash-1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	shell := []Mount{{Host: bundleRoot.Host, Box: bundleRoot.Box, Optional: true}, bundleSkills}
+	if _, _, _, err := m.Wrap(ctx, dir, "bash-2", BoxKey{}, []string{"bash"}, nil, shell); err != nil {
+		t.Fatalf("a shell must not be refused for a mount it never reads: %v", err)
+	}
+	if f.stops() != 0 || f.runs() != 1 {
+		t.Fatalf("want the live box reused: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+// Review round 1: a spawn whose bundle failed to build asks for no bundle
+// mounts, but that is "unknown", not "none". Stripping the bundle from an idle
+// box on that basis would make every later claude spawn in it refuse while this
+// session lives.
+func TestPartialMountsNeverStripAnIdleBox(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	_, _, name, err := m.Wrap(ctx, dir, "claude-1", BoxKey{}, []string{"claude"}, nil, claudeMounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(name)
+	if _, _, _, err := m.Wrap(ctx, dir, "claude-2", BoxKey{PartialMounts: true}, []string{"claude"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 0 || f.runs() != 1 {
+		t.Fatalf("an idle box must not be recreated over mounts the caller could not compute: stops=%d runs=%d", f.stops(), f.runs())
+	}
+	if n, _ := m.boxName(dir, BoxKey{PartialMounts: true}); n != name {
+		t.Fatalf("PartialMounts must not change the box name: %s != %s", n, name)
+	}
+}
+
+// What a partial request does name is still checked: a bound spawn whose bundle
+// failed still needs its broker mounts.
+func TestPartialMountsStillRecreateAnIdleBoxMissingOne(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	_, _, name, err := m.Wrap(ctx, dir, "bash-1", BoxKey{}, []string{"bash"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(name)
+	if _, _, _, err := m.Wrap(ctx, dir, "claude-1", BoxKey{PartialMounts: true}, []string{"claude"}, nil, claudeMounts); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 1 || f.runs() != 2 {
+		t.Fatalf("a missing mount is still a mismatch: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+// Review round 1: removing our own idle box takes a docker call, and DEV and
+// PROD share the daemon, so another instance can start an exclusive box over
+// the folder in that window. The workspace check runs again before the new box
+// starts.
+func TestRecreateRechecksTheWorkspaceAfterRemoving(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	_, _, name, err := m.Wrap(ctx, dir, "bash-1", BoxKey{}, []string{"bash"}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.ReleaseBox(name)
+	real, _ := filepath.EvalSymlinks(dir)
+	f.stopHook = func(stopped string) {
+		if stopped == name {
+			f.mu.Lock()
+			f.others = []BoxInfo{{Name: "ab-box-prod1", Workspace: real, State: "running", Instance: "PROD", Exclusive: true, Claims: true}}
+			f.mu.Unlock()
+		}
+	}
+	if _, _, _, err := m.Wrap(ctx, dir, "claude-1", BoxKey{}, []string{"claude"}, nil, claudeMounts); !errors.Is(err, ErrWorkspaceHeld) {
+		t.Fatalf("want ErrWorkspaceHeld once another instance holds the folder, got %v", err)
+	}
+	if f.runs() != 1 {
+		t.Fatalf("no box may start over another instance's exclusive box: runs=%d", f.runs())
+	}
+}
+
+// A recreated box is a fresh box in every respect but its name: a bound,
+// exclusive one gets its egress network, its exclusive label, its verify, and
+// the exclusive mark that removes it when its session ends.
+func TestRecreatedIdleBoundExclusiveBoxKeepsItsLabels(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	verifies := 0
+	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: func(context.Context, string) error { verifies++; return nil }})
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	key := BoxKey{Binding: "abc123abc123", Session: "elev-1"}
+	name, err := m.boxName(dir, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Left over from before a restart, idle, created without the bundle.
+	f.running[name] = true
+	f.labels[name] = map[string]string{LabelWorkspace: real, LabelInstance: "TEST", LabelExclusive: "1", LabelClaims: "1"}
+	f.mounts[name] = []string{real, boxHome}
+	if _, _, _, err := m.Wrap(context.Background(), dir, "elev-1", key, []string{"claude"}, nil, claudeMounts); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 1 || f.runs() != 1 {
+		t.Fatalf("want the idle box removed and recreated: stops=%d runs=%d", f.stops(), f.runs())
+	}
+	args := f.runArgs[0]
+	if !containsPair(args, "--label", LabelExclusive+"=1") || !containsPair(args, "--network", "agentbox-egress-TEST") ||
+		!hasDst(args, bundleRoot.Box) {
+		t.Fatalf("recreated box lost its labels, network or mounts: %q", args)
+	}
+	if verifies != 1 {
+		t.Fatalf("the recreated box must pass the egress check: verifies=%d", verifies)
+	}
+	m.mu.Lock()
+	excl := m.exclusive[name]
+	m.mu.Unlock()
+	if !excl {
+		t.Fatal("the recreated box must be marked exclusive again")
 	}
 }
