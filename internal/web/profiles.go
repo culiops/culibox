@@ -3,9 +3,11 @@ package web
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/culiops/agent-box/internal/account"
@@ -121,14 +123,38 @@ func NewProfileManager(seeds []config.AgentConfig, options []config.OptionDef, d
 		m.optDefs[o.Key] = o
 	}
 	m.home, _ = os.UserHomeDir()
+	m.logLegacyBoxImages()
 	m.apply(m.merged())
 	return m
+}
+
+// logLegacyBoxImages names every profile that still carries the retired
+// per-profile box.image (merged ignores it). Once per profile per call: a
+// stored profile, and a seed it does not shadow.
+func (m *ProfileManager) logLegacyBoxImages() {
+	logIgnored := func(a config.AgentConfig) {
+		if img := a.Box.Image; strings.TrimSpace(img) != "" {
+			log.Printf("profile %q: ignoring box.image %q; boxes run the instance-wide box_image", a.Name, img)
+		}
+	}
+	stored := map[string]bool{}
+	for _, p := range m.store.List() {
+		stored[p.Name] = true
+		logIgnored(p)
+	}
+	for _, name := range m.seedOrder {
+		if !stored[name] {
+			logIgnored(m.seeds[name])
+		}
+	}
 }
 
 // scopeOptions returns a copy of a with any KNOWN option not applicable to its
 // bin removed, so a legacy stored profile can never emit an inapplicable flag/env
 // at spawn. Unknown keys are left as-is (the launcher already ignores them).
+// It also drops the retired per-profile Box, so no caller ever sees one.
 func (m *ProfileManager) scopeOptions(a config.AgentConfig) config.AgentConfig {
+	a.Box = config.BoxConfig{}
 	if len(a.Options) == 0 {
 		return a
 	}

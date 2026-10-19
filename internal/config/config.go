@@ -32,7 +32,9 @@ const (
 	RuntimeHost = "host"
 )
 
-// BoxConfig is the per-agent box override.
+// BoxConfig is the legacy per-agent box override. Nothing reads it: it stays so
+// a profile that carries box.image can be detected, refused on save and ignored
+// (with a log line) on load.
 type BoxConfig struct {
 	Image string `json:"image,omitempty"`
 }
@@ -88,7 +90,7 @@ type AgentConfig struct {
 	Secrets    []string          `json:"secrets,omitempty"`     // names resolved via SecretSources
 	Options    map[string]any    `json:"options,omitempty"`     // option key → default value (bool/enum)
 	Runtime    string            `json:"runtime,omitempty"`     // box(default)|host — separate axis from Base
-	Box        BoxConfig         `json:"box,omitempty"`         // per-agent box image override
+	Box        BoxConfig         `json:"box,omitempty"`         // legacy; refused on save, ignored on load (see BoxConfig)
 	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
@@ -319,9 +321,6 @@ func (c Config) Validate() error {
 		if a.Name == "" || a.Bin == "" {
 			return errors.New("config: each agent requires a name and bin")
 		}
-		if err := validImageRef(a.Box.Image); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
-		}
 		if seen[a.Name] {
 			return fmt.Errorf("config: duplicate agent name %q", a.Name)
 		}
@@ -418,8 +417,8 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	if a.Name == "" || a.Bin == "" {
 		return errors.New("profile requires a name and bin")
 	}
-	if err := validImageRef(a.Box.Image); err != nil {
-		return fmt.Errorf("profile %q: %w", a.Name, err)
+	if strings.TrimSpace(a.Box.Image) != "" {
+		return fmt.Errorf("profile %q: box.image is not per-profile; every box runs the instance-wide box_image (set it in the config)", a.Name)
 	}
 	switch a.BasePolicy() {
 	case BaseClean, BaseLogin, BaseInherit:
