@@ -232,6 +232,10 @@ type BrokerHooks interface {
 	// StripEnv names every variable a bound session must not inherit from its
 	// profile: static credentials and anything that would shadow the broker.
 	StripEnv() []string
+	// StripGitHubEnv names the extra variables a session with a GitHub binding
+	// must not inherit (static-token routes, git and gh settings). Applied only
+	// to such sessions, so an AWS-only session keeps its profile's own values.
+	StripGitHubEnv() []string
 	// Forget drops the broker's per-session state (cache, stats) once a
 	// session is gone from the registry.
 	Forget(sessionID string)
@@ -1315,6 +1319,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// exactly once, by the broker.
 			strip := append(slices.Clone(brk.StripEnv()), brokerTokenEnv) // never append into the hooks' own slice
 			strip = append(strip, eg.StripEnv()...)
+			if bs.GitHub != nil {
+				// Only a GitHub-bound session loses a profile's own GH_TOKEN and
+				// friends; an AWS-only session keeps them.
+				strip = append(strip, brk.StripGitHubEnv()...)
+			}
 			for _, kv := range slices.Concat(benv, penv) {
 				if i := strings.IndexByte(kv, '='); i > 0 {
 					strip = append(strip, kv[:i])

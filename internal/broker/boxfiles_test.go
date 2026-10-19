@@ -148,10 +148,7 @@ func TestStripEnvCoversEveryBypassAndEveryBrokerName(t *testing.T) {
 		"AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
 		"AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_ROLE_SESSION_NAME", "AWS_SHARED_CREDENTIALS_FILE",
 		"AWS_CONFIG_FILE", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
-		"AGENTBOX_BROKER", "AGENTBOX_BROKER_TOKEN", "TF_CLI_ARGS_plan",
-		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "GH_REPO",
-		"GH_HOST", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1",
-		"GIT_CONFIG_VALUE_1", "GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "AGENTBOX_GH_OWNERS"}
+		"AGENTBOX_BROKER", "AGENTBOX_BROKER_TOKEN", "TF_CLI_ARGS_plan"}
 	got := StripEnv()
 	if !sameSet(got, want) {
 		t.Fatalf("StripEnv = %q\nwant      %q", got, want)
@@ -343,19 +340,34 @@ func TestBoxEnvBothBindings(t *testing.T) {
 	}
 }
 
-func TestStripEnvCoversGitHub(t *testing.T) {
-	got := StripEnv()
+func TestStripGitHubEnvCoversGitHub(t *testing.T) {
+	got := StripGitHubEnv()
 	for _, n := range []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
 		"GH_CONFIG_DIR", "GH_REPO", "GH_HOST", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
 		"GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "AGENTBOX_GH_OWNERS"} {
 		if !slices.Contains(got, n) {
-			t.Errorf("StripEnv misses %s", n)
+			t.Errorf("StripGitHubEnv misses %s", n)
 		}
 	}
-	for _, kv := range GitHubEnv(*ghTwoOwners()) {
+	// Every name a GitHub-bound box gets from the broker is stripped first,
+	// by StripEnv and StripGitHubEnv together.
+	all := slices.Concat(StripEnv(), got)
+	for _, kv := range BoxEnv(config.Bindings{GitHub: ghTwoOwners()}, "unix:///x") {
 		name, _, _ := strings.Cut(kv, "=")
-		if !slices.Contains(got, name) {
-			t.Errorf("GitHubEnv sets %s but StripEnv does not strip it", name)
+		if !slices.Contains(all, name) {
+			t.Errorf("BoxEnv sets %s for a GitHub binding but nothing strips it", name)
+		}
+	}
+	// And StripEnv alone leaves a profile's own GitHub variables alone.
+	for _, n := range got {
+		if slices.Contains(StripEnv(), n) {
+			t.Errorf("StripEnv strips %s: an AWS-only session would lose it", n)
+		}
+	}
+	if len(got) > 0 {
+		got[0] = "MUTATED"
+		if StripGitHubEnv()[0] == "MUTATED" {
+			t.Fatal("StripGitHubEnv must return a fresh slice")
 		}
 	}
 }

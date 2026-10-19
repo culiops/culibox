@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -129,8 +130,12 @@ func (f *fakeBrokerHooks) CheckGitHub(config.GitHubBinding) error {
 }
 
 func (f *fakeBrokerHooks) StripEnv() []string {
-	return []string{"AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN"}
+	return broker.StripEnv()
 }
+
+// StripGitHubEnv is the real list, like StripEnv: the guard tests below are
+// about what the real lists do to a profile's env.
+func (f *fakeBrokerHooks) StripGitHubEnv() []string { return broker.StripGitHubEnv() }
 
 func (f *fakeBrokerHooks) Forget(id string) {
 	f.mu.Lock()

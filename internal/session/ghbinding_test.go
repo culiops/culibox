@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -43,10 +44,14 @@ func testGitHub() *config.GitHubBinding {
 	}}
 }
 
+// The profile also sets its own GitHub variables (as a secret would): an
+// AWS-only session must keep them, a GitHub-bound one must lose them.
 func ghLauncherFor(runtime string) ghLauncher {
 	return ghLauncher{awsLauncher: awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: runtime},
-		binding: testBinding()}, gh: testGitHub()}
+		binding: testBinding(), extraEnv: []string{"GH_TOKEN=ghp_profile", "GIT_TERMINAL_PROMPT=1"}}, gh: testGitHub()}
 }
+
+var etokRe = regexp.MustCompile(`etok-[0-9a-f]+@`)
 
 func ghManager(t *testing.T, runtime string) (*Manager, *fakeBoxes, *fakeBrokerHooks, *fakeEgressHooks) {
 	t.Helper()
@@ -187,14 +192,27 @@ func TestSpawnAWSOnlyUnchanged(t *testing.T) {
 	if hooks.checkCalls != 0 || hooks.lastBS.GitHub != nil {
 		t.Fatalf("an AWS-only spawn touched GitHub: checks=%d bs=%+v", hooks.checkCalls, hooks.lastBS)
 	}
-	env := boxes.lastEnv
-	for _, name := range []string{"AGENTBOX_GH_OWNERS", "GIT_TERMINAL_PROMPT"} {
-		if got := envNamed(env, name); len(got) != 0 {
-			t.Fatalf("AWS-only env grew %q", got)
-		}
+	// Literals captured from the pre-N1 code (main 3ecdc9e, same fixture, the
+	// real StripEnv list): the whole env and mounts, byte for byte. The profile's
+	// own GH_TOKEN and GIT_TERMINAL_PROMPT survive an AWS-only session. The only
+	// normalised part is the egress token's random nonce.
+	wantEnv := []string{"TERM=xterm", "GH_TOKEN=ghp_profile", "GIT_TERMINAL_PROMPT=1", "AWS_PROFILE=agentbox",
+		"AGENTBOX_BROKER=unix:///opt/agentbox-sock/broker.sock",
+		"HTTPS_PROXY=http://aws-1:etok-N@172.21.0.1:9072", "https_proxy=http://aws-1:etok-N@172.21.0.1:9072",
+		"CHECKPOINT_DISABLE=1",
+		"AGENTBOX_BROKER_TOKEN=tok-aws-1.0123456789abcdef0123456789abcdef"}
+	gotEnv := slices.Clone(boxes.lastEnv)
+	for i, kv := range gotEnv {
+		gotEnv[i] = etokRe.ReplaceAllString(kv, "etok-N@")
 	}
-	if got := envNamed(env, "AWS_PROFILE"); !reflect.DeepEqual(got, []string{"AWS_PROFILE=agentbox"}) {
-		t.Fatalf("AWS_PROFILE = %q", got)
+	if !slices.Equal(gotEnv, wantEnv) {
+		t.Fatalf("AWS-only env changed:\n got %#v\nwant %#v", gotEnv, wantEnv)
+	}
+	if want := []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"}}; !slices.Equal(boxes.lastRO, want) {
+		t.Fatalf("AWS-only mounts = %#v, want %#v", boxes.lastRO, want)
+	}
+	if boxes.lastKey.Session != "" || boxes.lastKey.Account != "" || boxes.lastKey.Binding != "1130ffad2979" {
+		t.Fatalf("AWS-only box key = %+v", boxes.lastKey)
 	}
 	if s.GitHub != nil || s.Info().GitHub != nil {
 		t.Fatal("an AWS-only session grew a GitHub view")
@@ -202,6 +220,24 @@ func TestSpawnAWSOnlyUnchanged(t *testing.T) {
 	b, _ := json.Marshal(s.Info())
 	if strings.Contains(string(b), `"github"`) {
 		t.Fatalf("AWS-only Info grew a github key: %s", b)
+	}
+}
+
+// The mirror of the guard above: a GitHub-bound session loses the profile's own
+// GitHub variables, and gets the broker's instead.
+func TestSpawnGitHubBoundStripsInheritedGitHubEnv(t *testing.T) {
+	m, boxes, _, _ := ghManager(t, config.RuntimeBox)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "gh", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	env := boxes.lastEnv
+	if got := envNamed(env, "GH_TOKEN"); len(got) != 0 {
+		t.Fatalf("a GitHub-bound box kept the profile's token: %q", got)
+	}
+	if got := envNamed(env, "GIT_TERMINAL_PROMPT"); !reflect.DeepEqual(got, []string{"GIT_TERMINAL_PROMPT=0"}) {
+		t.Fatalf("GIT_TERMINAL_PROMPT = %q, want only the broker's", got)
 	}
 }
 

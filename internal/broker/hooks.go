@@ -40,6 +40,9 @@ func (h Hooks) CheckGitHub(g config.GitHubBinding) error { return h.B.CheckGitHu
 // StripEnv is every variable a bound session must not inherit.
 func (h Hooks) StripEnv() []string { return slices.Clone(StripEnv()) }
 
+// StripGitHubEnv is what a session with a GitHub binding must also not inherit.
+func (h Hooks) StripGitHubEnv() []string { return StripGitHubEnv() }
+
 // Forget drops the broker's per-session state.
 func (h Hooks) Forget(id string) { h.B.Forget(id) }
 

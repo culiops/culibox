@@ -51,13 +51,19 @@ const TokenEnv = "AGENTBOX_BROKER_TOKEN"
 func StripEnv() []string {
 	return append(slices.Clone(StaticCredEnv),
 		"AWS_CONFIG_FILE", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION",
-		"AGENTBOX_BROKER", TokenEnv, "TF_CLI_ARGS_plan",
-		// GitHub: every static-token route around the broker, plus every name
-		// GitHubEnv sets (a profile must not repoint gh, git or the owner list).
-		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+		"AGENTBOX_BROKER", TokenEnv, "TF_CLI_ARGS_plan")
+}
+
+// StripGitHubEnv is what a session with a GitHub binding must also not inherit,
+// on top of StripEnv: every static-token route around the broker, plus every
+// name GitHubEnv sets (a profile must not repoint gh, git or the owner list).
+// It is kept apart from StripEnv so an AWS-only session keeps whatever GitHub
+// variables its profile sets.
+func StripGitHubEnv() []string {
+	return []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
 		"GH_CONFIG_DIR", "GH_REPO", "GH_HOST",
 		"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1",
-		"GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "AGENTBOX_GH_OWNERS")
+		"GIT_TERMINAL_PROMPT", "GH_PROMPT_DISABLED", "AGENTBOX_GH_OWNERS"}
 }
 
 // EnsureBindingDir writes <stateRoot>/broker/binding-<hash>/: aws-config when
