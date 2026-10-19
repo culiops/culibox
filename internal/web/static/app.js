@@ -2462,20 +2462,29 @@ let profiles = [];
 // button disabled under a caption that blames the config, and in dev, `air`
 // restarts the daemon under an open tab routinely. Retries once, like initEnv.
 let profilesLoaded = false;
+// Resolves true once profiles[] reflects the server, false when it could not be
+// fetched (profiles[] is then left as it was). The spawn dialog and saveProfile
+// both need to tell those apart.
 async function loadProfiles(retry = true) {
   try {
     profiles = (await api("/api/profiles")) || [];
     profilesLoaded = true;
+    // replaceChildren resets a <select> to its first option, so a refetch while
+    // the user has a profile picked would silently switch it.
+    const prev = $("agent").value;
     $("agent").replaceChildren(...profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.name; o.textContent = p.name;
       return o;
     }));
+    if (profiles.some((p) => p.name === prev)) $("agent").value = prev;
     renderProfileSeg();
     renderOptions();
     renderProfileList();
+    return true;
   } catch (_) {
     if (retry) setTimeout(() => loadProfiles(false), 2000);
+    return false;
   }
 }
 function currentProfile() {
@@ -2932,7 +2941,7 @@ async function saveProfile() {
   // stored profile can only disagree on screen if this step is skipped. The
   // write succeeded, so a failure here must not say "Save failed".
   try {
-    await loadProfiles();
+    if (!(await loadProfiles())) throw new Error("the profile list could not be refreshed");
     selectedProfile = p.name;
     fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
   } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
@@ -3564,7 +3573,12 @@ function updateRuntimeWarning() {
 // "Advanced…" elaborates the visible target instead of presenting a fresh form.
 // prefill (Duplicate, see spawnPrefill) is applied last, over those defaults —
 // only when its profile still exists.
-function openSpawnDialog(preselectAgent, prefill) {
+// It refetches profiles first: the form sends runtime/options/account/replyable
+// from profiles[], and the request value overrides the server's profile, so a
+// stale copy would silently revert an edit made from another tab. A failed
+// refresh still opens (the old copy is usable) but says so.
+async function openSpawnDialog(preselectAgent, prefill) {
+  const fresh = await loadProfiles(false);
   const last = loadLastSpawn();
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent
@@ -3609,6 +3623,7 @@ function openSpawnDialog(preselectAgent, prefill) {
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   openDialog("spawn-modal");
+  setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
 }
 
