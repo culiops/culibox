@@ -2727,9 +2727,9 @@ function renderPfOptions(current) {
 function renderPfRuntime(value) {
   const el = $("pf-runtime");
   buildSeg(el, [
-    { value: "", label: "box" },
+    { value: "box", label: "box" },
     { value: "host", label: "host", danger: true },
-  ], value || "", (v) => {
+  ], value || "box", (v) => {
     $("pf-runtime-warn").hidden = v !== "host";
     renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value));
     syncPfAccountWarn();
@@ -2780,7 +2780,9 @@ function syncPfReplyable() {
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
 let pfEnvRows = [];
-let pfExplicitBox = false;
+// The stored profile's own runtime string ("" when it names none), kept for
+// runtimeToSend's fallback.
+let pfStoredRuntime = "";
 // The stored profile's box override (image). The editor has no box field, so it
 // is carried through unchanged; see boxToSend.
 let pfLoadedBox = null;
@@ -2792,13 +2794,13 @@ function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
-  // A stored "box" has no button of its own (blank is the box button), so
-  // remember it was explicit: saving it as blank would hand the tier back to
-  // the instance default.
-  pfExplicitBox = p.runtime === "box";
+  pfStoredRuntime = p.runtime || "";
   pfLoadedBox = p.box || null;
   pfLoadedClone = p;
-  renderPfRuntime(segFromRuntime(p.runtime));
+  // A profile naming no tier runs on the instance default; /api/profiles has
+  // already resolved it, so the seg lights the tier it really runs on.
+  const resolved = (profiles.find((x) => x.name === p.name) || {}).runtime;
+  renderPfRuntime(segFromRuntime(p.runtime, resolved));
   renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
   pfEnvRows = envRows(p);
@@ -2875,11 +2877,11 @@ function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
   const aws = readAWSFields((id) => { const el = $(id); return el.type === "checkbox" ? el.checked : el.value; });
   if (aws) p.aws = aws;
-  // Blank means "use the default tier", which the server resolves to box. Sending
-  // it explicitly would hard-code today's default into every stored profile —
-  // except where it must be explicit (see runtimeToSend); the server's own
-  // message answers the one case left, an AWS binding saved on the host tier.
-  const rt = runtimeToSend(segValue($("pf-runtime")), pfExplicitBox, !!aws);
+  // The tier is always sent as shown (see runtimeToSend): a blank would let the
+  // instance default decide, and on a host-default instance that turns a profile
+  // the editor lit as "box" into a host one. The server's own message answers an
+  // AWS binding saved on the host tier.
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime);
   if (rt) p.runtime = rt;
   const bx = boxToSend(pfLoadedBox);
   if (bx) p.box = bx;
@@ -2925,7 +2927,15 @@ async function saveProfile() {
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) { setDialogError("settings-modal", "Save failed: " + e.message); return; }
-  await loadProfiles();
+  // Show what the server now holds, not what was typed: the editor and the
+  // stored profile can only disagree on screen if this step is skipped. The
+  // write succeeded, so a failure here must not say "Save failed".
+  try {
+    await loadProfiles();
+    selectedProfile = p.name;
+    fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
+  } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
+  renderProfileList();
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It reads the editor exactly as Save would, only the name

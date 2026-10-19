@@ -69,18 +69,23 @@ function awsFieldsState(locked, runtime) {
   return { disabled: !!locked || host, hint: host };
 }
 
-// The runtime seg has two buttons: "" (box, the instance default) and "host".
-// A stored profile can say runtime "box" explicitly — an AWS binding requires
-// it — and the seg would show neither button lit for that value.
-function segFromRuntime(runtime) { return runtime === "host" ? "host" : ""; }
+// The runtime seg has two buttons, "box" and "host", and one of them is always
+// lit. A stored "box"/"host" lights its own button. A profile naming no tier
+// runs on the instance default, which GET /api/profiles reports as `resolved`;
+// show that, or a host-default instance would light "box" for a profile that
+// really runs on the host. A new profile has no resolved tier: box.
+function segFromRuntime(stored, resolved) {
+  if (stored === "box" || stored === "host") return stored;
+  return resolved === "host" ? "host" : "box";
+}
 
-// What to send as runtime. Blank stays blank (the instance default decides),
-// except where "box" must be explicit: a profile stored as box, which a blank
-// would silently turn into the instance default (host on PROD), and any
-// profile with an AWS binding, which the server refuses without it.
-function runtimeToSend(seg, storedExplicitBox, hasAWS) {
-  if (seg) return seg;
-  return storedExplicitBox || hasAWS ? "box" : "";
+// What to send as runtime: the tier the seg shows, always. Sending it
+// explicitly is what keeps a profile on the tier the editor lit when the
+// instance default is host — a blank would hand the tier back to that default.
+// The stored value is a defensive fallback only; the seg always has a value.
+function runtimeToSend(seg, stored) {
+  if (seg === "box" || seg === "host") return seg;
+  return stored === "box" || stored === "host" ? stored : "";
 }
 
 // boxToSend: the stored profile's box override, sent back on save. The editor

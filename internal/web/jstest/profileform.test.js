@@ -65,14 +65,19 @@ test("the AWS block is off on a locked profile and on the host tier, never re-en
   assert.deepStrictEqual(awsFieldsState(true, "host"), { disabled: true, hint: true });
 });
 
-test("a stored runtime 'box' lights the box button; an AWS binding forces an explicit 'box'", () => {
-  assert.strictEqual(segFromRuntime("box"), "");
-  assert.strictEqual(segFromRuntime("host"), "host");
-  assert.strictEqual(segFromRuntime(undefined), "");
-  assert.strictEqual(runtimeToSend("", false, false), "");      // blank: the instance default decides
-  assert.strictEqual(runtimeToSend("", true, false), "box");    // stored as box: stays box
-  assert.strictEqual(runtimeToSend("", false, true), "box");    // AWS: the server refuses an empty runtime
-  assert.strictEqual(runtimeToSend("host", false, true), "host"); // the server's refusal is the message
+test("the editor lights the tier the profile really runs on", () => {
+  assert.strictEqual(segFromRuntime("box", "box"), "box");
+  assert.strictEqual(segFromRuntime("host", "host"), "host");
+  assert.strictEqual(segFromRuntime("", "host"), "host");     // blank on a host-default instance (PROD)
+  assert.strictEqual(segFromRuntime(undefined, "box"), "box");
+  assert.strictEqual(segFromRuntime(undefined, undefined), "box"); // new profile
+});
+
+test("the editor always sends the tier it shows", () => {
+  assert.strictEqual(runtimeToSend("box", ""), "box");
+  assert.strictEqual(runtimeToSend("host", "box"), "host");
+  assert.strictEqual(runtimeToSend("", "host"), "host");
+  assert.strictEqual(runtimeToSend("", ""), "");
 });
 
 test("boxToSend returns the stored image override and nothing else", () => {

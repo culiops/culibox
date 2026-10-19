@@ -131,6 +131,20 @@ func TestViewsRuntimeFallsBackToBox(t *testing.T) {
 	}
 }
 
+// The server half of the editor's tier fix: a profile stored as "box" stays box
+// on an instance whose default is host. The editor now always sends the tier it
+// shows, so this is what makes an explicit "box" survive the default.
+func TestViewsStoredBoxBeatsHostDefault(t *testing.T) {
+	fs := newFakeStore()
+	fs.m["p"] = config.AgentConfig{Name: "p", Bin: "claude", Runtime: config.RuntimeBox}
+	m := NewProfileManager(nil, nil, config.RuntimeHost, nil, fs, func([]config.AgentConfig) {})
+	for _, v := range m.Views() {
+		if v.Name == "p" && v.Runtime != config.RuntimeBox {
+			t.Errorf("a stored box must beat the host default, got %q", v.Runtime)
+		}
+	}
+}
+
 func TestViewsFilterOptionsByBin(t *testing.T) {
 	opts := []config.OptionDef{
 		{Key: "model", Label: "Model", Type: config.OptEnum, Choices: []string{"claude-opus-5"}, Flag: "--model", Bins: []string{"claude"}},
