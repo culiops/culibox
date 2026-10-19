@@ -36,6 +36,7 @@ func TestGitHubBindingValidate(t *testing.T) {
 		{"bad owner", func(b *GitHubBinding) { b.Owners[0].Owner = "-bad" }, "github.owners[0].owner"},
 		{"bad repo", func(b *GitHubBinding) { b.Owners[0].Repos = []string{"a/b"} }, "github.owners[0].repos[0]"},
 		{"dot repo", func(b *GitHubBinding) { b.Owners[0].Repos = []string{".."} }, "github.owners[0].repos[0]"},
+		{"single dot repo", func(b *GitHubBinding) { b.Owners[0].Repos = []string{"."} }, "github.owners[0].repos[0]"},
 		{"101 repos", func(b *GitHubBinding) { b.Owners[0].Repos = many }, "github.owners[0].repos"},
 		{"duplicate owner, case-insensitive", func(b *GitHubBinding) {
 			b.Owners = []GitHubOwner{ghOwner("CuliOps", "a"), ghOwner("culiops", "b")}

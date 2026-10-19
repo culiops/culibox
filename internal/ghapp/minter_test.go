@@ -67,6 +67,36 @@ func TestMinterUnknownApp(t *testing.T) {
 	}
 }
 
+func TestMinterRefusesEmptyOrWritePermissions(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
+	defer srv.Close()
+	p := writeKey(t, t.TempDir(), "k.pem", 0o600, false, genKey(t))
+	m := NewMinter([]config.GitHubApp{{Name: "app", ClientID: "cid", PrivateKey: config.KeyRef{Type: "file", Path: p}}}, Client{BaseURL: srv.URL})
+	cases := []struct {
+		name  string
+		perms map[string]string
+		want  string
+	}{
+		{"nil", nil, ""},
+		{"empty", map[string]string{}, ""},
+		{"write", map[string]string{"contents": "write"}, "contents"},
+		{"mixed", map[string]string{"metadata": "read", "issues": "admin"}, "issues"},
+	}
+	for _, tc := range cases {
+		_, err := m.Mint(context.Background(), MintInput{App: "app", Owner: "o", Repos: []string{"r"}, Permissions: tc.perms})
+		if err == nil {
+			t.Fatalf("%s: want error", tc.name)
+		}
+		if tc.want != "" && !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error %q does not name %q", tc.name, err, tc.want)
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("http calls = %d, want 0", n)
+	}
+}
+
 func TestMinterMintNeedsRepos(t *testing.T) {
 	m := NewMinter([]config.GitHubApp{{Name: "app"}}, Client{})
 	if _, err := m.Mint(context.Background(), MintInput{App: "app", Owner: "o"}); err == nil {

@@ -84,6 +84,16 @@ func (m *Minter) Mint(ctx context.Context, in MintInput) (Minted, error) {
 	if in.Owner == "" || len(in.Repos) == 0 {
 		return Minted{}, errors.New("mint needs an owner and at least one repository")
 	}
+	// Fail closed: an absent permissions object makes the API grant everything
+	// the installation has, and this package only ever mints read tokens.
+	if len(in.Permissions) == 0 {
+		return Minted{}, errors.New("mint needs an explicit read-only permission set")
+	}
+	for k, v := range in.Permissions {
+		if v != "read" {
+			return Minted{}, fmt.Errorf("permission %q must be \"read\", got %q", k, v)
+		}
+	}
 	a, key, err := m.key(in.App)
 	if err != nil {
 		return Minted{}, err
