@@ -41,6 +41,27 @@ type brokerService struct {
 // fake.
 var lookAWS = func() (string, error) { return exec.LookPath("aws") }
 
+// definedTokens returns a filter that keeps the entries whose name is in
+// entries, the list read at daemon start. A session carries the entries it was
+// spawned with, so an entry deleted from static_tokens since (the daemon was
+// restarted, the session was reattached) is dropped from its view and its
+// fetches are denied_scope; the entries' values are never re-read from here.
+func definedTokens(entries []config.StaticToken) func([]config.StaticToken) []config.StaticToken {
+	known := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		known[e.Name] = true
+	}
+	return func(in []config.StaticToken) []config.StaticToken {
+		var out []config.StaticToken
+		for _, e := range in {
+			if known[e.Name] {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+}
+
 // startBroker brings the credential broker up: the persisted HMAC secret, the
 // audit store, the listener and the HTTP server. dataDir holds broker.secret and
 // audit.db; stateRoot (symlink-resolved on darwin) holds the socket and the
@@ -48,7 +69,7 @@ var lookAWS = func() (string, error) { return exec.LookPath("aws") }
 // the caller (a broker without them could mint nothing or forge tokens); a
 // failure to listen wraps errBrokerListen.
 func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
-	info func(id string) (session.Info, bool), apps []config.GitHubApp) (*brokerService, error) {
+	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken) (*brokerService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "broker.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("broker secret: %w", err)
@@ -69,13 +90,14 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 	} else if n > 0 {
 		log.Printf("broker: wrote %d terminal audit row(s) for write windows open at the last shutdown", n)
 	}
+	defined := definedTokens(entries)
 	brk := broker.New(sec.Secret(), func(id string) (broker.SessionView, bool) {
 		s, ok := get(id)
 		if !ok {
 			return broker.SessionView{}, false
 		}
 		return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
-			Live: !s.Exited(), AWS: s.AWS, Exclusive: s.Exclusive}, true
+			Live: !s.Exited(), AWS: s.AWS, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}, true
 	}, broker.STSMinter{}, audit)
 	// github_apps is read once, at daemon start: a change needs a restart. With
 	// none configured the route keeps answering 503.

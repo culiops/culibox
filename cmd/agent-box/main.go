@@ -100,6 +100,18 @@ func serveHome(userHomeDir func() (string, error)) (string, error) {
 	return home, nil
 }
 
+// tokenVars names the daemon environment variables the static_tokens entries
+// read their values from (the `env` reference type), in entry order.
+func tokenVars(entries []config.StaticToken) []string {
+	var vars []string
+	for _, e := range entries {
+		if e.Value.Type == "env" && e.Value.Var != "" {
+			vars = append(vars, e.Value.Var)
+		}
+	}
+	return vars
+}
+
 // profilesPathFor is profiles_path, else profiles.json in the data dir.
 func profilesPathFor(cfg config.Config, dataDir string) string {
 	if cfg.ProfilesPath != "" {
@@ -227,7 +239,14 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 	lnch := launcher.New(agents, resolver, cfg.Options)
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
-	lnch.SetDaemonSecretEnv(cfg.PasswordEnv)
+	// A token entry's env-typed value variable lives in the daemon's env for the
+	// broker to read: like the password, it must never reach a session through
+	// an inherited base.
+	lnch.SetDaemonSecretEnv(append([]string{cfg.PasswordEnv}, tokenVars(cfg.StaticTokens)...)...)
+	lnch.SetStaticTokens(cfg.StaticTokens)
+	if n := len(cfg.StaticTokens); n > 0 {
+		log.Printf("static_tokens: %d entries (read at start; a change needs a restart)", n)
+	}
 
 	// Agent accounts: accounts.json lives inside the data dir (the store writes it
 	// through os.Root). The default account is the agent's own config dir.
@@ -382,7 +401,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	var brokerSvc *brokerService
 	if layer != nil {
 		svc, err := startBroker(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
-			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps)
+			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens)
 		switch {
 		case errors.Is(err, errBrokerListen):
 			log.Printf("%v (profiles with an AWS binding will refuse to spawn)", err)
@@ -490,6 +509,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	pm.SetGitHubApps(cfg.GitHubApps)
+	pm.SetStaticTokens(cfg.StaticTokens)
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works

@@ -138,6 +138,11 @@ func (f *fakeBrokerHooks) StripEnv() []string {
 // about what the real lists do to a profile's env.
 func (f *fakeBrokerHooks) StripGitHubEnv() []string { return broker.StripGitHubEnv() }
 
+// WriteSessionMCP is never reached by Task 9; Task 11 wires the call.
+func (f *fakeBrokerHooks) WriteSessionMCP(bs config.Bindings, key string, doc []byte) (string, error) {
+	return "/opt/agentbox/mcp-" + key + ".json", nil
+}
+
 func (f *fakeBrokerHooks) Forget(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
