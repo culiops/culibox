@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 const (
@@ -63,7 +65,7 @@ type entry struct {
 // Drop records something deliberately left out, so losing it is a named
 // decision rather than a silent degradation.
 type Drop struct {
-	Kind   string `json:"kind"` // "mcp" | "settings" | "symlink"
+	Kind   string `json:"kind"` // "mcp" | "settings" | "symlink" | "plugins" | "bundle"
 	Name   string `json:"name"`
 	Reason string `json:"reason"`
 }
@@ -91,6 +93,13 @@ type Built struct {
 	Hash   string
 	Lock   Lock
 	Reused bool
+
+	// The plugin verdict this bundle was built for. Not part of the lock: the
+	// plugin snapshot lives beside the bundle dirs, so the verdict is recomputed
+	// on every Ensure and carried here so the provider hands out exactly the
+	// mounts the bundle's settings were decided against.
+	pluginMounts []box.Mount
+	pluginDrops  []Drop
 }
 
 // Options configures a Manager.
@@ -123,18 +132,22 @@ func New(opts Options) (*Manager, error) {
 // changed. Reuse requires the lock file, which is written last — so a build that
 // died half-way cannot be mistaken for a complete one.
 func (m *Manager) Ensure() (*Built, error) {
-	hash, imageID, err := m.sourceHash()
+	// Decided once per Ensure so the hash, the settings and the mounts agree
+	// even if the host plugin dir changes mid-call.
+	ps := pluginSnapshot(m.opts.Source, m.opts.Root)
+	mounted := len(ps.mounts) > 0
+	hash, imageID, err := m.sourceHash(mounted)
 	if err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(m.opts.Root, hash)
+	var built *Built
 	if lock, ok := readLock(dir); ok {
-		return &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}, nil
-	}
-	built, err := m.materialize(hash, imageID, dir)
-	if err != nil {
+		built = &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}
+	} else if built, err = m.materialize(hash, imageID, dir, mounted); err != nil {
 		return nil, err
 	}
+	built.pluginMounts, built.pluginDrops = ps.mounts, ps.drops
 	return built, nil
 }
 
@@ -142,7 +155,21 @@ func (m *Manager) Ensure() (*Built, error) {
 // that editing a symlinked skill actually invalidates the cache. With an
 // ImageProbe the box image ID is folded in too: the bundle depends on what the
 // image declares and contains, so a new image rebuilds it.
-func (m *Manager) sourceHash() (hash, imageID string, err error) {
+//
+// pluginsMounted (the plugin VERDICT) is folded in because it decides whether
+// the bundle's settings carry enabledPlugins: a cached bundle must not keep the
+// key after the plugin set breaks, nor lack it after the set is fixed. Only the
+// verdict, never the snapshot fingerprints: the settings depend on nothing
+// else, and host claude rewrites known_marketplaces.json on routine checks, so
+// folding the snapshots in would make a new bundle dir per marketplace check.
+//
+// The mounts themselves come from the same Ensure (Built.pluginMounts), so a new
+// box always gets settings and snapshot mounts decided together. A live box that
+// is reused keeps the bundle dir and the snapshot dirs it was created with:
+// reuse compares mount destinations, not host paths, and neither kind of dir is
+// ever removed (no GC), so its settings and its plugins still match each other.
+// It sees a newer plugin snapshot only once it is recreated.
+func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err error) {
 	h := sha256.New()
 	if ip, ok := m.opts.Prober.(ImageProbe); ok {
 		if imageID, err = ip.ImageID(); err != nil {
@@ -165,6 +192,7 @@ func (m *Manager) sourceHash() (hash, imageID string, err error) {
 	if fi, err := os.Stat(filepath.Join(m.opts.Source, "settings.json")); err == nil {
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
+	fmt.Fprintf(h, "plugins\x00%t\n", pluginsMounted)
 	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
 }
 
@@ -236,7 +264,7 @@ func pathologicalTarget(source, target string) (string, bool) {
 
 // materialize builds into a temp dir and renames, writing the lock last as the
 // completion sentinel.
-func (m *Manager) materialize(hash, imageID, final string) (*Built, error) {
+func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) (*Built, error) {
 	// The image is probed before anything is written. A failed probe publishes
 	// nothing: a cached bundle would pin "no image servers" and "every stdio
 	// server dropped" until the source changed, while an error lets the spawn
@@ -296,6 +324,11 @@ func (m *Manager) materialize(hash, imageID, final string) (*Built, error) {
 
 	// settings.json: keep-list filtered, never copied verbatim.
 	settings, sdrops := filterSettings(filepath.Join(m.opts.Source, "settings.json"))
+	if !pluginsMounted {
+		// No extra drop row: the plugins drop (or the user's having no plugins)
+		// already explains why none load.
+		delete(settings, "enabledPlugins")
+	}
 	lock.Dropped = append(lock.Dropped, sdrops...)
 	if sum, err := writeJSON(filepath.Join(tmp, "settings.json"), settings); err == nil {
 		lock.Files["settings.json"] = sum

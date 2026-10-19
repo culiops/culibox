@@ -16,6 +16,11 @@ import (
 // write any secret into the bundle in plaintext. With a deny-list, a future
 // settings key would leak by default; with a keep-list it stays out until
 // someone decides otherwise.
+//
+// enabledPlugins is kept here but only reaches a box together with the plugin
+// mounts: without them the box git-clones the marketplace and installs unpinned
+// plugins from the network (measured 2026-10-19). materialize strips it unless
+// pluginMounts approved the set.
 var settingsKeepList = []string{
 	"model",
 	"effortLevel",
@@ -23,6 +28,7 @@ var settingsKeepList = []string{
 	"outputStyle",
 	"includeCoAuthoredBy",
 	"cleanupPeriodDays",
+	"enabledPlugins",
 }
 
 // filterSettings returns the keep-listed subset plus a Drop for everything else,

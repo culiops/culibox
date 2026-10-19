@@ -304,12 +304,12 @@ func TestValidateRejectsUnknownDefaultRuntime(t *testing.T) {
 
 func TestValidateBoxLimits(t *testing.T) {
 	agents := `"agents":[{"name":"a","bin":"b"}]`
-	p := writeTemp(t, `{"bind_addr":"127.0.0.1:1","box_pids_limit":2048,"box_tmp_size":"2g",`+agents+`}`)
+	p := writeTemp(t, `{"bind_addr":"127.0.0.1:1","box_pids_limit":2048,"box_tmp_size":"2g","box_memory":"2048m",`+agents+`}`)
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.BoxPidsLimit != 2048 || c.BoxTmpSize != "2g" {
+	if c.BoxPidsLimit != 2048 || c.BoxTmpSize != "2g" || c.BoxMemory != "2048m" {
 		t.Fatalf("limits not parsed: %+v", c)
 	}
 	if err := c.Validate(); err != nil {
@@ -318,6 +318,8 @@ func TestValidateBoxLimits(t *testing.T) {
 	for _, tc := range []struct{ cfg, key string }{
 		{`"box_tmp_size":"2g,exec"`, "box_tmp_size"},
 		{`"box_pids_limit":10`, "box_pids_limit"},
+		{`"box_memory":"1.5g"`, "box_memory"},
+		{`"box_memory":"512m"`, "box_memory"},
 	} {
 		c, err := Load(writeTemp(t, `{"bind_addr":"127.0.0.1:1",`+tc.cfg+`,`+agents+`}`))
 		if err != nil {

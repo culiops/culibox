@@ -192,11 +192,12 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 var pluginEntries = []string{"installed_plugins.json", "cache", "known_marketplaces.json", "marketplaces"}
 
 // inheritLinkNames is what an inheriting host account links from the default:
-// the bundle allowlist plus plugins. plugins is account-only (a box has no
-// plugin runtime). Linked as a whole so Claude Code's own writes (atomic
-// renames of installed_plugins.json) land in the default's dir, not in a
-// diverging copy. If the account already has a real plugins dir (marketplaces
-// it fetched itself), that dir is kept and only the pluginEntries it lacks are linked into it.
+// the bundle allowlist plus plugins. plugins is linked for host accounts only (a
+// box gets plugins through the bundle provider's read-only mounts, never through
+// this path). Linked as a whole so Claude Code's own writes (atomic renames of
+// installed_plugins.json) land in the default's dir, not in a diverging copy. If
+// the account already has a real plugins dir (marketplaces it fetched itself),
+// that dir is kept and only the pluginEntries it lacks are linked into it.
 func inheritLinkNames(cr *os.Root) []string {
 	names := bundle.AllowlistNames()
 	if fi, err := cr.Lstat("plugins"); err == nil && fi.IsDir() {

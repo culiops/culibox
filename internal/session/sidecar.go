@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -64,6 +65,10 @@ type sessionMeta struct {
 	// EgressNonce is the spawn's egress-token nonce (any boxed session with
 	// egress). Records from before A1 lack it; restore backfills AWSNonce.
 	EgressNonce string `json:"egress_nonce,omitempty"`
+	// BundleDrops is what the config bundle left out for this boxed session,
+	// kept so the UI still says so after a daemon restart. Records from before
+	// A3 lack it and read as none.
+	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
 	// Exclusive: the session's box is its own (an elevate binding). Records
 	// written before M3b have no key and read as false.
 	Exclusive bool `json:"exclusive,omitempty"`

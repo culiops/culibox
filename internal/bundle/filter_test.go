@@ -157,3 +157,26 @@ func TestBoxedSettingsOutputIsByteIdenticalDespiteInheritableKeys(t *testing.T) 
 		t.Fatalf("boxed settings.json changed:\n%s", got)
 	}
 }
+
+// enabledPlugins crosses the filter; whether it reaches the box is decided
+// separately, by whether the plugin set is actually mounted (see plugins.go).
+func TestEnabledPluginsSurvivesTheSettingsFilter(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(p, []byte(`{"enabledPlugins":{"superpowers@official":true},"hooks":{"Stop":[]},"env":{"T":"x"},"permissions":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kept, drops := filterSettings(p)
+	if _, ok := kept["enabledPlugins"]; !ok {
+		t.Fatalf("enabledPlugins must be kept: %v", kept)
+	}
+	for _, d := range drops {
+		if d.Name == "enabledPlugins" {
+			t.Fatalf("enabledPlugins must not be reported as dropped: %+v", d)
+		}
+	}
+	for _, bad := range []string{"hooks", "env", "permissions"} {
+		if _, ok := kept[bad]; ok {
+			t.Errorf("%q must still be dropped", bad)
+		}
+	}
+}

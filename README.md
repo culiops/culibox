@@ -32,9 +32,9 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 
 ### Contain
 
-- **Boxed runtime (the default).** Each project gets its own Docker container: only the project directory is mounted writable, with no host home, no `~/.ssh`, no Docker socket and no inherited daemon environment. The container runs as your uid, drops all capabilities, sets `no-new-privileges`, uses a read-only root filesystem and has a PID limit. Idle boxes are removed after a timeout. A `host` tier (no containment) exists for work that needs the machine, and you choose it explicitly.
+- **Boxed runtime (the default).** Each project gets its own Docker container: only the project directory is mounted writable, with no host home, no `~/.ssh`, no Docker socket and no inherited daemon environment. The container runs as your uid, drops all capabilities, sets `no-new-privileges`, uses a read-only root filesystem, and has a PID limit and a memory cap (`box_memory`). Idle boxes are removed after a timeout. A `host` tier (no containment) exists for work that needs the machine, and you choose it explicitly.
 - **macOS.** Boxes run in agent-box's own [colima](https://github.com/abiosoft/colima) VM, separate from any Docker setup you already have. See [docs/MACOS.md](docs/MACOS.md).
-- **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied. The box image can declare its own MCP servers in `/etc/agent-box/mcp.json`; they replace same-named servers from your config, and each replacement is recorded as a drop.
+- **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied. Your Claude Code plugins come along as a read-only, git-free copy. If any part of the plugin set is a symlink, or a marketplace URL in it carries credentials, the whole set is left out and recorded as a drop. The box image can declare its own MCP servers in `/etc/agent-box/mcp.json`; they replace same-named servers from your config, and each replacement is recorded as a drop. The image ships Chromium and the Playwright MCP server (`playwright`), which writes its output to `/tmp/playwright-mcp`.
 - **Multiple accounts.** Run sessions under named agent accounts, each with its own config directory and its own token, kept apart from your personal login. Only Claude accounts can launch sessions.
 
 ### Cloud access, audit and secrets
@@ -126,6 +126,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
 | `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |
+| `box_memory` | `4g` | RAM cap per box; number + k/m/g, at least `1g`. Swap is capped to the same value, so a box over its cap is killed rather than swapping the host. |
 | `docker_bin` | `docker` | Docker CLI to use. |
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
 | `data_dir` | the data root | Where state lives. |
@@ -138,7 +139,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
-`box_pids_limit` and `box_tmp_size` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
+`box_pids_limit`, `box_tmp_size` and `box_memory` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
 Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `box.image`, `default_cwd`, `account`, `aws`, `clone_of` and `clone_share` (see [Clone mode](#clone-mode)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles.
 

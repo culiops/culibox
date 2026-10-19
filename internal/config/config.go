@@ -174,6 +174,7 @@ type Config struct {
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	BoxPidsLimit      int    `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
 	BoxTmpSize        string `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
+	BoxMemory         string `json:"box_memory,omitempty"`           // box RAM cap (swap capped equal), number + k/m/g, min 1g; "" → 4g
 	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
 	ColimaBin         string `json:"colima_bin,omitempty"`           // macOS: default "colima"
 	BoxVMCPUs         int    `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → 4
@@ -301,7 +302,7 @@ func (c Config) Validate() error {
 	if err := validImageRef(c.BoxImage); err != nil {
 		return fmt.Errorf("config: box_image: %w", err)
 	}
-	if err := box.ValidateLimits(c.BoxPidsLimit, c.BoxTmpSize); err != nil {
+	if err := box.ValidateLimits(c.BoxPidsLimit, c.BoxTmpSize, c.BoxMemory); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	if c.BrokerPort < 0 || c.BrokerPort > 65535 {

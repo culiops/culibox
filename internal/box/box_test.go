@@ -472,6 +472,41 @@ func TestMountpointsInsideTheBoxHomeArePreCreated(t *testing.T) {
 	}
 }
 
+// Trap 1 (measured 2026-10-19): when Docker itself creates the parents of a
+// nested mountpoint they come out root-owned, so claude (the box user) gets
+// EACCES on ~/.claude/{sessions,projects} and loses its transcripts. The plugin
+// mounts sit two levels down, so their parents must be made here, as the daemon
+// user.
+func TestNestedPluginMountpointsCreateTheirParentsAsTheDaemonUser(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "installed_plugins.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := m.ensureStateDir("ab-box-eeeeeeeeeeee", []Mount{
+		{Host: filepath.Join(src, "installed_plugins.json"), Box: boxHome + "/.claude/plugins/installed_plugins.json", Optional: true},
+		{Host: filepath.Join(src, "cache"), Box: boxHome + "/.claude/plugins/cache", Optional: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{".claude", ".claude/plugins", ".claude/plugins/cache"} {
+		fi, err := os.Stat(filepath.Join(dir, rel))
+		if err != nil || !fi.IsDir() {
+			t.Fatalf("%s must be a directory made before docker runs: %v", rel, err)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+			t.Fatalf("%s is owned by uid %d, want the daemon user %d", rel, st.Uid, os.Getuid())
+		}
+	}
+	if fi, err := os.Stat(filepath.Join(dir, ".claude/plugins/installed_plugins.json")); err != nil || fi.IsDir() {
+		t.Fatalf("a file-typed plugin mount needs a file stub: %v", err)
+	}
+}
+
 // The bundle root mounts onto the box's read-only rootfs, not into the home.
 func TestMountpointsOutsideTheBoxHomeCreateNothing(t *testing.T) {
 	m, _ := newTestManagerWithFake(t)

@@ -2,14 +2,18 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -281,18 +285,19 @@ type fakeBundles struct {
 	calls    int
 	mounts   []box.Mount
 	flags    []string
+	drops    []bundle.Drop
 	err      error // returned, with no mounts or flags, when set
 }
 
-func (f *fakeBundles) For(bin string) ([]box.Mount, []string, string, error) {
+func (f *fakeBundles) For(bin string) (bundle.Grant, error) {
 	f.askedBin = bin
 	f.calls++
 	if f.err != nil {
 		f.order.add("bundle")
-		return nil, nil, "", f.err
+		return bundle.Grant{}, f.err
 	}
 	f.order.add("bundle")
-	return f.mounts, f.flags, "deadbeef", nil
+	return bundle.Grant{Mounts: f.mounts, Flags: f.flags, Hash: "deadbeef", Drops: f.drops}, nil
 }
 
 // The bundle's flags must reach the agent, and its mounts must reach the box.
@@ -485,5 +490,135 @@ func TestLiveBoxCountsCountsOnlyUnexitedBoxedSessions(t *testing.T) {
 	}
 	if got := m.LiveBoxCounts(); got["ab-box-test"] != 1 || len(got) != 1 {
 		t.Fatalf("want {ab-box-test:1} after one exits, got %v", got)
+	}
+}
+
+// A grant's drops are what the box's config bundle left out; Info carries them
+// in order so the UI can say so.
+func TestBoxedSpawnInfoCarriesBundleDrops(t *testing.T) {
+	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	want := []bundle.Drop{
+		{Kind: "mcp", Name: "github", Reason: "carries a credential"},
+		{Kind: "plugins", Name: "*", Reason: bundle.ReasonPluginsIncomplete},
+	}
+	m.SetBundles(&fakeBundles{drops: want})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if got := s.Info().BundleDrops; !slices.Equal(got, want) {
+		t.Fatalf("Info.BundleDrops = %+v, want %+v", got, want)
+	}
+	// The listing's copy must not alias the session's own.
+	s.Info().BundleDrops[0].Name = "mutated"
+	if got := s.Info().BundleDrops[0].Name; got != "github" {
+		t.Fatalf("Info shares the session's drop slice: name now %q", got)
+	}
+}
+
+// A bundle that fails to build is one drop row, not silence, and the error
+// text (which can carry host paths) stays in the log line.
+func TestBundleFailureIsOneDrop(t *testing.T) {
+	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	m.SetBundles(&fakeBundles{err: errors.New("read /home/claude/.claude/secret-path: boom")})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	in := s.Info()
+	want := []bundle.Drop{{Kind: "bundle", Name: "*", Reason: bundle.ReasonBundleFailed}}
+	if !slices.Equal(in.BundleDrops, want) {
+		t.Fatalf("BundleDrops = %+v, want %+v", in.BundleDrops, want)
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "secret-path") || strings.Contains(string(raw), "boom") {
+		t.Fatalf("the bundle error text reached Info: %s", raw)
+	}
+}
+
+// A host session has no bundle and so nothing to drop, even if a bundle layer
+// is installed.
+func TestHostSpawnHasNoBundleDrops(t *testing.T) {
+	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	m.SetBundles(&fakeBundles{drops: []bundle.Drop{{Kind: "mcp", Name: "x", Reason: "y"}}})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if got := s.Info().BundleDrops; len(got) != 0 {
+		t.Fatalf("host session has BundleDrops %+v", got)
+	}
+	raw, _ := json.Marshal(s.Info())
+	if strings.Contains(string(raw), "bundle_drops") {
+		t.Fatalf("host session wire shape carries bundle_drops: %s", raw)
+	}
+}
+
+// A non-default account that did not opt in skips the bundle on purpose. That
+// is a policy, not a drop: nothing was consulted, so nothing is recorded.
+func TestSkippedBundleRecordsNoDrops(t *testing.T) {
+	l := acctLauncher{
+		tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox},
+		acct:           workAccount(false),
+	}
+	m := NewManager(l, nil, 1<<16, time.Minute)
+	m.SetBoxes(&fakeBoxes{})
+	m.SetBundles(&fakeBundles{drops: []bundle.Drop{{Kind: "mcp", Name: "x", Reason: "y"}}})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if got := s.Info().BundleDrops; len(got) != 0 {
+		t.Fatalf("skipped bundle recorded drops %+v", got)
+	}
+}
+
+// Review focus 5: the drops ride the sidecar, as egress does, so a daemon
+// restart does not make a box look as if it kept everything.
+func TestBundleDropsSurviveRestore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	l := tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	want := []bundle.Drop{
+		{Kind: "settings", Name: "apiKeyHelper", Reason: "runs a host command"},
+		{Kind: "plugins", Name: "cache", Reason: bundle.ReasonPluginSymlink},
+	}
+	m.SetBundles(&fakeBundles{drops: want})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: t.TempDir(), Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if md := sidecarEntry(t, path, s.ID); !slices.Equal(md.BundleDrops, want) {
+		t.Fatalf("sidecar BundleDrops = %+v, want %+v", md.BundleDrops, want)
+	}
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(&fakeBoxes{})
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if got := r.Info().BundleDrops; !slices.Equal(got, want) {
+		t.Fatalf("restored BundleDrops = %+v, want %+v", got, want)
 	}
 }

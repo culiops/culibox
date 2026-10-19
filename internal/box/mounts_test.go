@@ -365,3 +365,50 @@ func TestRecreatedIdleBoundExclusiveBoxKeepsItsLabels(t *testing.T) {
 		t.Fatal("the recreated box must be marked exclusive again")
 	}
 }
+
+// Review Focus 2: a box created before plugins were mounted (or while the
+// plugin set was incomplete) has no plugin destinations. The plugin mounts are
+// Optional, so a live box is reused and that session simply runs without
+// plugins; an idle one is recreated with them.
+func TestLiveBoxWithoutPluginMountsIsReused(t *testing.T) {
+	plugins := []Mount{
+		{Host: "/h/plugins/installed_plugins.json", Box: "/home/agent/.claude/plugins/installed_plugins.json", Optional: true},
+		{Host: "/h/plugins/known_marketplaces.json", Box: "/home/agent/.claude/plugins/known_marketplaces.json", Optional: true},
+		{Host: "/h/plugins/cache", Box: "/home/agent/.claude/plugins/cache", Optional: true},
+		{Host: "/h/plugins/marketplaces", Box: "/home/agent/.claude/plugins/marketplaces", Optional: true},
+	}
+	withPlugins := append(append([]Mount(nil), claudeMounts...), plugins...)
+
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	ctx := context.Background()
+	if _, _, _, err := m.Wrap(ctx, dir, "claude-1", BoxKey{}, []string{"claude"}, nil, claudeMounts); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := m.Wrap(ctx, dir, "claude-2", BoxKey{}, []string{"claude"}, nil, withPlugins); err != nil {
+		t.Fatalf("a live box without the plugin mounts must be reused, not refused: %v", err)
+	}
+	if f.stops() != 0 || f.runs() != 1 {
+		t.Fatalf("want the live box reused: stops=%d runs=%d", f.stops(), f.runs())
+	}
+
+	m2, f2 := newTestManagerWithFake(t)
+	dir2 := t.TempDir()
+	_, _, name, err := m2.Wrap(ctx, dir2, "claude-1", BoxKey{}, []string{"claude"}, nil, claudeMounts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2.ReleaseBox(name)
+	if _, _, _, err := m2.Wrap(ctx, dir2, "claude-2", BoxKey{}, []string{"claude"}, nil, withPlugins); err != nil {
+		t.Fatal(err)
+	}
+	if f2.stops() != 1 || f2.runs() != 2 {
+		t.Fatalf("want the idle box recreated with the plugins: stops=%d runs=%d", f2.stops(), f2.runs())
+	}
+	last := f2.runArgs[len(f2.runArgs)-1]
+	for _, mt := range plugins {
+		if !hasDst(last, mt.Box) {
+			t.Fatalf("recreated box lacks %s: %v", mt.Box, last)
+		}
+	}
+}

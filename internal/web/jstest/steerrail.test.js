@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow } = require("../static/steerrail.js");
 // The real tierBadge, not a hand-written stand-in: the point of the change these
 // tests cover is that the rail consumes tier.js's verdict rather than deriving a
 // second one, so a fixture that agreed with the rail but not with tier.js would
@@ -220,4 +220,36 @@ test("egressRow: open mode says open and counts denials; anything else stays all
   assert.strictEqual(egressRow({ egress: { mode: "open", denied: "x" } }).v, "open \u00b7 0 denied since start");
   assert.strictEqual(egressRow({ egress: { mode: "allowlist", denied: 2 } }).v, "allowlist \u00b7 2 denied since start");
   assert.strictEqual(egressRow({ egress: { denied: 1 } }).v, "allowlist \u00b7 1 denied since start");
+});
+
+// bundle_drops: what the config bundle left out of a box. The toast is a glance,
+// so it names at most three; the rail has room, so it names all of them but
+// groups by reason rather than repeating one long reason per key.
+const drop = (kind, name, reason) => ({ kind, name, reason });
+
+test("dropLabel: a whole-kind drop (name *) is named by its kind, anything else by its name", () => {
+  assert.strictEqual(dropLabel(drop("settings", "*", "r")), "settings");
+  assert.strictEqual(dropLabel(drop("mcp", "playwright", "r")), "playwright");
+});
+
+test("toastDropsSuffix: empty for no drops; names at most three, then an ellipsis", () => {
+  assert.strictEqual(toastDropsSuffix([]), "");
+  assert.strictEqual(toastDropsSuffix(undefined), "");
+  const d = (n) => drop("skill", n, "r");
+  assert.strictEqual(toastDropsSuffix([d("a"), d("b"), d("c")]), " \u00b7 box left out 3: a, b, c");
+  assert.strictEqual(toastDropsSuffix([d("a"), d("b"), d("c"), d("d"), d("e")]), " \u00b7 box left out 5: a, b, c, \u2026");
+  assert.strictEqual(toastDropsSuffix([drop("settings", "*", "r")]), " \u00b7 box left out 1: settings");
+});
+
+test("dropsRow: null without drops; otherwise one wrapping row grouped by kind and reason in first-seen order", () => {
+  assert.strictEqual(dropsRow({}), null);
+  assert.strictEqual(dropsRow({ bundle_drops: [] }), null);
+  const row = dropsRow({ bundle_drops: [
+    drop("settings", "hooks", "r1"), drop("mcp", "playwright", "replaced by the image's playwright"),
+    drop("settings", "env", "r1"), drop("settings", "permissions", "r1"),
+  ] });
+  assert.deepStrictEqual(row, { k: "left out", v: "hooks, env, permissions \u2014 r1; playwright \u2014 replaced by the image's playwright", wrap: true });
+  // The same reason under two kinds is two groups: the kind is part of the key.
+  const two = dropsRow({ bundle_drops: [drop("skill", "a", "r"), drop("mcp", "b", "r")] });
+  assert.strictEqual(two.v, "a \u2014 r; b \u2014 r");
 });

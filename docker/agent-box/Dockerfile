@@ -146,6 +146,26 @@ RUN set -eu; \
 
 RUN npm install -g @anthropic-ai/claude-code
 
+# --- Playwright MCP + Chromium ---
+# Debian's chromium (apt-signed; security fixes arrive with every rebuild, and
+# there is no unhashed CDN download; the version moves with the base image's apt
+# snapshot, 155.0.8059.79 when measured, +278 MB) and @playwright/mcp from npm,
+# pinned by version. The package's binary is playwright-mcp, not
+# mcp-server-playwright. To bump: change PLAYWRIGHT_MCP_VERSION to a published
+# @playwright/mcp release, rebuild, and re-run the A3 browser measurement.
+# Findings this rests on (docs/superpowers/notes/2026-10-19-a3-measure.md):
+# Playwright already launches chromium with --no-sandbox and
+# --disable-dev-shm-usage, so no MCP --config file is needed, and a 64 MB
+# /dev/shm was enough. No browser-path variable is set: Playwright's bundled
+# browser is not used. The server is declared in /etc/agent-box/mcp.json
+# below.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.83
+RUN apt-get update && apt-get install -y --no-install-recommends chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
+    && chromium --version \
+    && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
+
 # The console always runs the box with `--user <daemon uid>` and bind-mounts a
 # host-owned directory as the home, so ownership is correct on any machine and
 # these values never decide anything at run time. They exist only so the image
@@ -161,7 +181,10 @@ RUN groupadd -g "$GID" agent \
 # session's MCP bundle (it is read by a probe run with --entrypoint sh). No
 # "env": the default cache $HOME/.cache/codebase-memory-mcp is already in the
 # box home.
-RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{"type":"stdio","command":"/usr/local/bin/codebase-memory-mcp","args":[]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["codebase-memory"].command' /etc/agent-box/mcp.json
+# playwright writes its output to /tmp/playwright-mcp (dies with the box, never
+# in a clone's working tree) and starts every browser with an in-memory profile
+# (--isolated), so no login persists in the box home.
+RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{"type":"stdio","command":"/usr/local/bin/codebase-memory-mcp","args":[]},"playwright":{"type":"stdio","command":"/usr/local/bin/playwright-mcp","args":["--headless","--isolated","--output-dir","/tmp/playwright-mcp","--browser","chromium","--executable-path","/usr/bin/chromium"]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["codebase-memory"].command' /etc/agent-box/mcp.json && jq -e '.mcpServers["playwright"].command' /etc/agent-box/mcp.json
 
 # Entrypoint: create $GOTMPDIR at container start, then exec the arguments. The
 # box home is a bind mount of the box's state dir, so the directory cannot be
@@ -173,5 +196,7 @@ USER agent
 ENV HOME=/home/agent
 ENV SHELL=/bin/bash
 WORKDIR /home/agent
+# The browser and the MCP must run as the box's own user, not only as root.
+RUN chromium --version && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
 ENTRYPOINT ["/usr/local/bin/agent-box-entrypoint"]
 CMD ["bash"]

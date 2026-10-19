@@ -40,12 +40,15 @@ var hostOnlyEnv = map[string]bool{
 // enforces exclusive workspaces; exclusive=1 marks a box another spawn must not
 // share a folder with.
 func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool) []string {
-	pids, tmpSize := m.opts.PidsLimit, m.opts.TmpSize
+	pids, tmpSize, memory := m.opts.PidsLimit, m.opts.TmpSize, m.opts.Memory
 	if pids == 0 {
 		pids = DefaultPidsLimit
 	}
 	if tmpSize == "" {
 		tmpSize = DefaultTmpSize
+	}
+	if memory == "" {
+		memory = DefaultMemory
 	}
 	args := []string{
 		// --pull=never: a missing (e.g. deleted pinned) image must fail the spawn,
@@ -60,6 +63,9 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		"--read-only",
 		"--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=" + tmpSize,
 		"--pids-limit", strconv.Itoa(pids),
+		// --memory-swap equal to --memory: no swap beyond the cap, so a box over
+		// it is OOM-killed rather than swapping the host.
+		"--memory", memory, "--memory-swap", memory,
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"--mount", bindMount(cwd, cwd, false),
 		// The WHOLE home, not just ~/.claude. Claude Code's primary state file is
