@@ -107,6 +107,15 @@ function cloneToSend(loaded) {
   return out;
 }
 
+// replyableToSend: whether a save writes replyable:true. A visible row is the
+// checkbox's word. A hidden row (replies off, or a non-claude bin) has no
+// checkbox to read, so it keeps the stored value: otherwise a save made while
+// the row is hidden silently drops a default the user set. Harmless for a
+// non-claude bin, since the server ignores replyable there.
+function replyableToSend(rowVisible, checked, stored) {
+  return rowVisible ? !!checked : !!stored;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend };
+  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend, replyableToSend };
 }

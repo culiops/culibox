@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend, replyableToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -97,4 +97,11 @@ test("cloneToSend returns the stored clone fields and nothing else", () => {
   for (const v of [undefined, null, {}, { clone_of: "" }, { clone_of: 42 }, { clone_share: ["a"] }]) {
     assert.strictEqual(cloneToSend(v), undefined, JSON.stringify(v));
   }
+});
+
+test("a hidden replies row keeps what the profile stored", () => {
+  assert.strictEqual(replyableToSend(false, false, true), true);
+  assert.strictEqual(replyableToSend(false, false, undefined), false);
+  assert.strictEqual(replyableToSend(true, false, true), false); // visible: the checkbox decides
+  assert.strictEqual(replyableToSend(true, true, false), true);
 });

@@ -2772,8 +2772,9 @@ function syncPfElevWarn() {
 // replies are claude-only on the server, and a default nothing honours is a
 // setting that lies.
 function syncPfReplyable() {
-  // Replies off (server kill-switch, /api/meta): the opt-in row is hidden, so the
-  // save line below (which reads .hidden) never writes replyable.
+  // Replies off (server kill-switch, /api/meta) or a non-claude bin: the row is
+  // hidden, and the save line below (see replyableToSend) keeps the stored value
+  // rather than dropping it.
   $("pf-replyable-row").hidden = globalThis.repliesEnabled !== true || !isClaudeBinName($("pf-bin").value);
 }
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
@@ -2906,7 +2907,7 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
   if (cwd) p.default_cwd = cwd;
-  if (!$("pf-replyable-row").hidden && $("pf-replyable").checked) p.replyable = true;
+  if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoadedClone && pfLoadedClone.replyable)) p.replyable = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
