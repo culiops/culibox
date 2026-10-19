@@ -134,6 +134,39 @@ function egressRow(st) {
   return { k: "egress", v: mode + " \u00b7 " + (Number(e.denied) || 0) + " denied since start", wrap: true };
 }
 
+// dropLabel: what one bundle drop is called on screen. A whole-kind drop has
+// name "*" (the settings file as a whole, say), which reads as noise, so it is
+// named by its kind. Any other name is a user config key and stays text.
+function dropLabel(d) {
+  return d.name === "*" ? d.kind : d.name;
+}
+
+// toastDropsSuffix: the spawn toast's tail for a boxed session whose config
+// bundle left things out (Info.bundle_drops). A toast is a glance, so it names
+// at most three and then an ellipsis; the rail has the full list. Absent or
+// empty is "", so a clean spawn reads exactly as it did.
+function toastDropsSuffix(drops) {
+  if (!drops || !drops.length) return "";
+  const names = drops.slice(0, 3).map(dropLabel);
+  return " \u00b7 box left out " + drops.length + ": " + names.join(", ") + (drops.length > 3 ? ", \u2026" : "");
+}
+
+// dropsRow: the rail's "left out" row. Drops are grouped by kind + reason in
+// first-seen order, so a dozen dropped settings keys that share one reason print
+// that reason once. null when there is nothing to say, like egressRow.
+function dropsRow(s) {
+  const drops = s && s.bundle_drops;
+  if (!drops || !drops.length) return null;
+  const groups = new Map();
+  for (const d of drops) {
+    const key = d.kind + "\u0000" + d.reason;
+    if (!groups.has(key)) groups.set(key, { reason: d.reason, labels: [] });
+    groups.get(key).labels.push(dropLabel(d));
+  }
+  const v = [...groups.values()].map((g) => g.labels.join(", ") + " \u2014 " + g.reason).join("; ");
+  return { k: "left out", v, wrap: true };
+}
+
 // ctxFill: the context meter. The server omits pct when the window maximum is
 // unknown or already exceeded, so a present pct is its verdict and outranks a
 // local division; with neither, the bar is not drawn at all rather than drawn
@@ -301,9 +334,12 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const awsRows = s.aws ? [...awsRailRows(s, awsRailCache.get(s.id), Date.now()), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))]
-    : s.egress ? [egressRow(egressRailCache.get(s.id))] : null;
-  const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, awsRows);
+  const egressRows = s.aws ? [...awsRailRows(s, awsRailCache.get(s.id), Date.now()), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))]
+    : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
+  // The bundle's drops ride after the egress row, and on a boxed session with
+  // no egress row at all; railMeta skips null rows.
+  const extraRows = [...egressRows, dropsRow(s)];
+  const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, extraRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
@@ -943,5 +979,5 @@ function repaintSteerRail() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow };
+  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow };
 }
