@@ -30,6 +30,20 @@
   "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only: CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",
   "bundle_source": "",
 
+  "comment_static_tokens": "A long-lived token a boxed profile may pick by name (profile field 'tokens'). The value is a file (0600, owned by you) or an env var of the daemon, never inline. config_env is NOT secret. egress lists the exact hosts the entry's boxes may reach. Read at daemon start only: a change needs a restart. See README, 'Static tokens for agents'.",
+  "static_tokens": [
+    {
+      "name": "grafana-example",
+      "provider": "grafana",
+      "label": "Grafana",
+      "value": { "type": "file", "path": "/etc/agent-box/tokens/grafana-example" },
+      "env": ["GRAFANA_SERVICE_ACCOUNT_TOKEN"],
+      "config_env": { "GRAFANA_URL": "https://grafana.example.com" },
+      "egress": [ { "host": "grafana.example.com" } ],
+      "mcp": { "server": "grafana-example", "command": "mcp-grafana" }
+    }
+  ],
+
   "comment_workspace": "default_cwd cannot be your home directory when anything runs contained: the workspace is a box's only writable mount, so a box there would mount your whole home. Point it at a projects directory.",
 
   "secret_sources": [
@@ -58,6 +72,13 @@
       "options": { "skip_permissions": true },
       "env": { "PATH": "/home/you/.nvm/versions/node/v24/bin:/usr/local/bin:/usr/bin:/bin" },
       "secrets": ["CLAUDE_CODE_OAUTH_TOKEN"]
+    },
+    {
+      "comment": "boxed profile with a static token: runtime must be 'box' explicitly. The agent fetches it per command: agentbox-env grafana-example -- CMD.",
+      "name": "claude-grafana",
+      "bin": "claude",
+      "runtime": "box",
+      "tokens": ["grafana-example"]
     }
   ]
 }
