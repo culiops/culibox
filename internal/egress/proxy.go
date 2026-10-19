@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,16 +41,21 @@ const (
 // lookupNetIP is the system resolver; a variable so a test can see what it is asked.
 var lookupNetIP = net.DefaultResolver.LookupNetIP
 
-// SessionView is what the proxy needs to know about a session. AWS == nil and
-// GitHub == nil together mean open mode: the session is boxed but has no
+// SessionView is what the proxy needs to know about a session. No AWS, no
+// GitHub and no Tokens together mean open mode: the session is boxed but has no
 // binding, so any public hostname is allowed on 443 (every other check still
-// applies). Either binding makes the session bound, with an allowlist.
+// applies). Any of them makes the session bound, with an allowlist. Tokens and
+// PATs are the session's spawn-time token entries: their hosts join the
+// allowlist, and their declared ports and private exceptions apply to exactly
+// those hosts.
 type SessionView struct {
 	Nonce       string
 	Box         string
 	Boxed, Live bool
 	AWS         *config.AWSBinding
 	GitHub      *config.GitHubBinding
+	Tokens      []config.StaticToken
+	PATs        []config.StaticToken
 }
 
 // Lookup resolves a session id; ok is false for an unknown session. It is asked
@@ -317,6 +323,51 @@ type principal struct {
 	probe  *probePrincipal
 	user   string
 	epoch  uint64 // p.epoch[sid] when authenticated
+	// ports maps an exact entry host to the extra (non-443) TLS ports its
+	// entries declare; private lists the (exact host, cidr) exceptions. Both
+	// are built once at authenticate; open and probe principals have neither.
+	ports   map[string]map[int]bool
+	private []privateRule
+}
+
+// privateRule is one token entry's private exception: the exact normalised
+// host, and the one cidr its resolved addresses may fall in.
+type privateRule struct {
+	host string
+	cidr netip.Prefix
+}
+
+// entryRules reads the declared ports and private exceptions out of a session's
+// token entries. A host or cidr that does not parse yields no rule (fail
+// closed); config validation has already refused such entries at load.
+func entryRules(lists ...[]config.StaticToken) (map[string]map[int]bool, []privateRule) {
+	var ports map[string]map[int]bool
+	var rules []privateRule
+	for _, list := range lists {
+		for _, e := range list {
+			for _, h := range e.Egress {
+				name, ok := hostmatch.Normalize(h.Host)
+				if !ok {
+					continue
+				}
+				if port := h.EffectivePort(); port != 443 {
+					if ports == nil {
+						ports = map[string]map[int]bool{}
+					}
+					if ports[name] == nil {
+						ports[name] = map[int]bool{}
+					}
+					ports[name][port] = true
+				}
+				if h.Private {
+					if c, err := netip.ParsePrefix(h.CIDR); err == nil {
+						rules = append(rules, privateRule{host: name, cidr: c.Masked()})
+					}
+				}
+			}
+		}
+	}
+	return ports, rules
 }
 
 type authVerdict int
@@ -342,7 +393,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	row.Host, row.Port = auditHost(host), auditPort(port)
-	if port != "443" {
+	// Canonical decimal 1-65535 only ("0443", "+443" and the like are junk);
+	// which numbers a session may use is decided after it authenticates.
+	portN, perr := strconv.Atoi(port)
+	if perr != nil || portN < 1 || portN > 65535 || strconv.Itoa(portN) != port {
 		p.refuse(w, http.StatusMethodNotAllowed, row, OutcomeBadMethod, "")
 		return
 	}
@@ -386,6 +440,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		row.Host = name
 	}
+	// 443 is fine for every allowed host; any other port only for the exact
+	// host of a token entry that declares it. Open mode and probes have none.
+	if portN != 443 && !pr.ports[name][portN] {
+		p.refuse(w, http.StatusMethodNotAllowed, row, OutcomeBadMethod, pr.key)
+		return
+	}
 	if !ok || !(pr.open || hostmatch.Match(pr.allow, name) || (pr.github && GitHubResultsHost(name))) {
 		if pr.probe != nil && !p.useProbe(pr, false) {
 			p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
@@ -419,17 +479,28 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mu.Lock()
 	subnet, hostAddrs := p.subnet, p.hostAddrs
 	p.mu.Unlock()
-	pub := WithoutAddrs(PublicAddrs(addrs, subnet), hostAddrs)
+	// Dial set: the public addresses, plus (only for a host with a private
+	// exception, matched exactly) its in-cidr private ones. The box subnet is
+	// out of both, and the host's own addresses are removed last.
+	pub := PublicAddrs(addrs, subnet)
+	var priv []netip.Addr
+	for _, rule := range pr.private {
+		if rule.host == name {
+			priv = append(priv, PrivateAddrs(addrs, rule.cidr, subnet)...)
+		}
+	}
+	pub = WithoutAddrs(append(pub, priv...), hostAddrs)
 	if len(pub) == 0 {
 		p.countDenied(pr)
 		p.refuse(w, http.StatusForbidden, row, OutcomePrivateAddr, pr.key)
 		return
 	}
 	var up net.Conn
+	var viaPrivate bool // the address that answered came from the private set
 	dctx, dcancel := context.WithTimeout(ctx, dialTimeout)
 	for _, a := range pub {
-		if c, err := p.o.Dial(dctx, netip.AddrPortFrom(a, 443)); err == nil {
-			up = c
+		if c, err := p.o.Dial(dctx, netip.AddrPortFrom(a, uint16(portN))); err == nil {
+			up, viaPrivate = c, slices.Contains(priv, a)
 			break
 		}
 	}
@@ -486,6 +557,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	u, downN := splice(conn, up, p.o.IdleTimeout)
 	row.Outcome, row.BytesUp, row.BytesDown, row.Duration = OutcomeAllowed, upN+u, downN, time.Since(begin)
+	if viaPrivate {
+		row.Outcome = OutcomeAllowedPrivate
+	}
 	p.record(row)
 }
 
@@ -576,11 +650,13 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		return bad, authBad
 	}
 	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
-	if v.AWS == nil && v.GitHub == nil {
+	bs := config.Bindings{AWS: v.AWS, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs}
+	if !bs.Any() {
 		pr.open = true
 	} else {
-		pr.allow = Effective(v.AWS, v.GitHub)
+		pr.allow = Effective(bs)
 		pr.github = v.GitHub != nil
+		pr.ports, pr.private = entryRules(v.Tokens, v.PATs)
 	}
 	return pr, authOK
 }

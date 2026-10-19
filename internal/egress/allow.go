@@ -64,18 +64,27 @@ func GitHubResultsHost(host string) bool {
 	return m != nil && m[1] != missingResultsShard
 }
 
-// Effective is the allowlist for a session with bindings aws and gh:
-// DefaultAllow, plus aws.EgressAllow, plus (for gh) GitHubAllow and
-// gh.EgressAllow, as a fresh slice that aliases none of them. Nil bindings add
-// nothing, so AWS-only and unbound sessions get exactly what they always did.
-func Effective(aws *config.AWSBinding, gh *config.GitHubBinding) []string {
+// Effective is the allowlist for a session with bindings bs: DefaultAllow, plus
+// AWS.EgressAllow, plus (for GitHub) GitHubAllow and GitHub.EgressAllow, plus
+// every host of every bound token entry (Tokens, then PATs), as a fresh slice
+// that aliases none of them. Nothing bound adds nothing, so AWS-only and
+// unbound sessions get exactly what they always did. Entry hosts are exact
+// names, so they never widen into a wildcard.
+func Effective(bs config.Bindings) []string {
 	out := DefaultAllow()
-	if aws != nil {
-		out = append(out, aws.EgressAllow...)
+	if bs.AWS != nil {
+		out = append(out, bs.AWS.EgressAllow...)
 	}
-	if gh != nil {
+	if bs.GitHub != nil {
 		out = append(out, GitHubAllow()...)
-		out = append(out, gh.EgressAllow...)
+		out = append(out, bs.GitHub.EgressAllow...)
+	}
+	for _, list := range [][]config.StaticToken{bs.Tokens, bs.PATs} {
+		for _, e := range list {
+			for _, h := range e.Egress {
+				out = append(out, h.Host)
+			}
+		}
 	}
 	return out
 }

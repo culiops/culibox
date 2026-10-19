@@ -47,7 +47,7 @@ func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 			return egress.SessionView{}, false
 		}
 		return egress.SessionView{Nonce: s.EgressNonce, Box: s.Box, Boxed: s.Runtime == config.RuntimeBox,
-			Live: !s.Exited(), AWS: s.AWS, GitHub: s.GitHub}, true
+			Live: !s.Exited(), AWS: s.AWS, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs}, true
 	}
 }
 
@@ -65,6 +65,9 @@ func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d
 		Want:     egress.Want{Internal: true, NoICC: true},
 		NoProxy:  "localhost,127.0.0.1,::1",
 		ExtraEnv: []string{"NODE_USE_ENV_PROXY=1"},
+		// Only for the overlap WARN: the proxy reads each session's own
+		// spawn-time entries through the lookup.
+		StaticTokens: cfg.StaticTokens,
 	}
 }
 

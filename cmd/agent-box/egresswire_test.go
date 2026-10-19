@@ -104,6 +104,8 @@ func TestEgressLookup(t *testing.T) {
 		"claude-3": {ID: "claude-3", Box: "agent-box-x", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: "broker-only", EgressNonce: egressNonce},
 		"claude-4": {ID: "claude-4", Runtime: config.RuntimeHost, AWS: wireBinding(), EgressNonce: egressNonce},
 		"claude-5": {ID: "claude-5", Box: "agent-box-y", Runtime: config.RuntimeBox, EgressNonce: egressNonce},
+		"claude-6": {ID: "claude-6", Box: "agent-box-z", Runtime: config.RuntimeBox, EgressNonce: egressNonce,
+			Tokens: []config.StaticToken{{Name: "sentry"}}, PATs: []config.StaticToken{{Name: "gh-pat-acme"}}},
 	}
 	look := egressLookup(func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok })
 
@@ -117,6 +119,10 @@ func TestEgressLookup(t *testing.T) {
 	// An unbound boxed session is open mode: no AWS binding, still boxed and live.
 	if v, ok := look("claude-5"); !ok || !v.Boxed || !v.Live || v.AWS != nil || v.Nonce != egressNonce {
 		t.Errorf("unbound boxed session: %+v %v", v, ok)
+	}
+	// The spawn-time token entries reach the proxy, which binds on them.
+	if v, ok := look("claude-6"); !ok || len(v.Tokens) != 1 || v.Tokens[0].Name != "sentry" || len(v.PATs) != 1 || v.PATs[0].Name != "gh-pat-acme" {
+		t.Errorf("token session: %+v %v", v, ok)
 	}
 	// Left the registry: unknown, so the proxy refuses it (no stale admit).
 	delete(sessions, "claude-3")
