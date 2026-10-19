@@ -354,6 +354,11 @@ type Bundles interface {
 	// bin's agent needs, plus the bundle hash for the log line. A bin with no
 	// layout (a shell, or "" when unresolved) gets the mounts and no flags.
 	For(bin string) (bundle.Grant, error)
+	// SessionMCP builds the MCP config of a boxed claude session that binds token
+	// entries declaring MCP servers: the bundle's servers (when includeUser), the
+	// entries' and the image's. drops is the bundle grant's; the result's Drops
+	// is what to report.
+	SessionMCP(includeUser bool, drops []bundle.Drop, entries []bundle.EntryServer) (bundle.SessionMCP, error)
 }
 
 // TokenInfo is the wire view of one bound static-token entry: what it is called
@@ -1330,6 +1335,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			}
 			spec.ExtraArgs = append(spec.ExtraArgs, g.Flags...)
 		}
+		// A token entry's MCP server lives in a config of this session's own,
+		// which replaces the shared bundle's path. Claude only: it is the agent
+		// that reads --mcp-config, and a shell is never handed agent flags.
+		if len(bs.Tokens) > 0 && isClaudeBin(bin) {
+			flags, drops, err := m.tokenMCP(spec, brk, bs, bundles, acct.IsDefault || acct.InheritPersonal, bundleFailed, bundleDrops)
+			if err != nil {
+				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
+			}
+			spec.ExtraArgs, bundleDrops = flags, drops
+		}
 	}
 
 	argv, env, err := m.launcher.Build(spec)
@@ -1545,6 +1560,69 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// tokenMCP writes the session's own MCP config when a bound token entry declares
+// a box-side server, and returns the agent's extra args pointing at it plus the
+// drops to report. The config replaces the shared bundle's, whose servers it
+// carries when includeUser says the account may have them; a session whose
+// account does not inherit them gets a config of entry and image servers only,
+// confined with --strict-mcp-config like every boxed claude.
+//
+// bundles is nil with the bundle off, and bundleFailed means the bundle could
+// not be built for this spawn: both still write the entries, unprobed and with
+// no image servers.
+func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.Bindings, bundles Bundles,
+	includeUser, bundleFailed bool, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
+	bound := make(map[string]bool, len(bs.Tokens))
+	for _, e := range bs.Tokens {
+		bound[e.Name] = true
+	}
+	var entries []bundle.EntryServer
+	drops = slices.Clone(drops)
+	for _, e := range bs.Tokens {
+		if e.MCP == nil {
+			continue
+		}
+		args, err := config.EntryMCPArgs(e, bound)
+		if err != nil {
+			drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.MCP.Server, Reason: err.Error()})
+			continue
+		}
+		entries = append(entries, bundle.EntryServer{Server: e.MCP.Server, Entry: e.Name, Command: e.MCP.Command, Args: args})
+	}
+	if len(entries) == 0 {
+		// Nothing to add (no entry declares a server, or each was left out): the
+		// session keeps the bundle's own flags, byte for byte.
+		return spec.ExtraArgs, drops, nil
+	}
+
+	var sm bundle.SessionMCP
+	if bundles == nil || bundleFailed {
+		log.Printf("spawn %s: no config bundle, so token MCP servers are written unprobed and without the image's servers", spec.Agent)
+		servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, entries)
+		doc, err := bundle.MarshalSessionMCP(servers)
+		if err != nil {
+			return nil, nil, err
+		}
+		sm = bundle.SessionMCP{Doc: doc, Key: "nobundle", Drops: d}
+	} else {
+		var err error
+		if sm, err = bundles.SessionMCP(includeUser, drops, entries); err != nil {
+			return nil, nil, err
+		}
+	}
+	path, err := brk.WriteSessionMCP(bs, sm.Key, sm.Doc)
+	if err != nil {
+		return nil, nil, err
+	}
+	args := slices.Clone(spec.ExtraArgs) // never write into the caller's slice
+	if i := slices.Index(args, "--mcp-config"); i >= 0 && i+1 < len(args) {
+		args[i+1] = path
+	} else {
+		args = append(args, "--mcp-config", path, "--strict-mcp-config")
+	}
+	return args, sm.Drops, nil
 }
 
 // bindingKinds lists the kinds of binding present, in a fixed order.

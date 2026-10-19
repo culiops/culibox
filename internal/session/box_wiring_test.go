@@ -301,6 +301,31 @@ type fakeBundles struct {
 	flags    []string
 	drops    []bundle.Drop
 	err      error // returned, with no mounts or flags, when set
+
+	// SessionMCP: what it was asked, and what it answers (a zero smcp answers a
+	// plain document whose drops are the ones it was given).
+	smcpCalls       int
+	smcpIncludeUser bool
+	smcpDrops       []bundle.Drop
+	smcpEntries     []bundle.EntryServer
+	smcp            bundle.SessionMCP
+	smcpErr         error
+}
+
+func (f *fakeBundles) SessionMCP(includeUser bool, drops []bundle.Drop, entries []bundle.EntryServer) (bundle.SessionMCP, error) {
+	f.smcpCalls++
+	f.smcpIncludeUser, f.smcpDrops, f.smcpEntries = includeUser, drops, entries
+	if f.smcpErr != nil {
+		return bundle.SessionMCP{}, f.smcpErr
+	}
+	if f.smcp.Key != "" {
+		return f.smcp, nil
+	}
+	key := "deadbeef-i"
+	if includeUser {
+		key = "deadbeef-u"
+	}
+	return bundle.SessionMCP{Doc: []byte(`{"mcpServers":{}}`), Key: key, Drops: drops}, nil
 }
 
 func (f *fakeBundles) For(bin string) (bundle.Grant, error) {

@@ -61,6 +61,9 @@ type fakeBrokerHooks struct {
 	lastBS      config.Bindings // what BoxFor was last asked for
 	forgot      []string
 	revoked     []string // RevokeGitHub calls, in order
+	mcpKeys     []string // WriteSessionMCP calls: the key and the document
+	mcpDocs     []string
+	mcpErr      error
 	next        int
 	state       map[string]struct {
 		until time.Time
@@ -138,8 +141,16 @@ func (f *fakeBrokerHooks) StripEnv() []string {
 // about what the real lists do to a profile's env.
 func (f *fakeBrokerHooks) StripGitHubEnv() []string { return broker.StripGitHubEnv() }
 
-// WriteSessionMCP is never reached by Task 9; Task 11 wires the call.
+// WriteSessionMCP records what it was asked to write and answers with the path
+// the real hook would: the file's name in the box's binding dir.
 func (f *fakeBrokerHooks) WriteSessionMCP(bs config.Bindings, key string, doc []byte) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mcpErr != nil {
+		return "", f.mcpErr
+	}
+	f.mcpKeys = append(f.mcpKeys, key)
+	f.mcpDocs = append(f.mcpDocs, string(doc))
 	return "/opt/agentbox/mcp-" + key + ".json", nil
 }
 

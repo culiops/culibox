@@ -485,3 +485,17 @@ func TestTokenVarsListsEnvReferences(t *testing.T) {
 		t.Fatal("no entries, no vars")
 	}
 }
+
+func TestEntryMCPCommandsAddsTheLauncher(t *testing.T) {
+	entries := []config.StaticToken{
+		{Name: "a"},
+		{Name: "b", MCP: &config.TokenMCP{Server: "grafana", Command: "mcp-grafana"}},
+		{Name: "c", MCP: &config.TokenMCP{Server: "sentry", Command: "mcp-server-sentry"}},
+	}
+	if got := strings.Join(entryMCPCommands(entries), ","); got != "agentbox-env,mcp-grafana,mcp-server-sentry" {
+		t.Fatalf("entryMCPCommands = %q", got)
+	}
+	if entryMCPCommands(entries[:1]) != nil || entryMCPCommands(nil) != nil {
+		t.Fatal("no entry server, nothing extra to probe")
+	}
+}

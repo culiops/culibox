@@ -373,6 +373,9 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			Root:    filepath.Join(layer.stateRoot, "bundle"),
 			MCPFile: bundle.DefaultMCPFile(src),
 			Prober:  layer.prober(cfg.BoxImageOrDefault()),
+			// Probed with the user's MCP commands, so a token entry's server is
+			// only offered to a session when the image can run it.
+			EntryCommands: entryMCPCommands(cfg.StaticTokens),
 		})
 		if err != nil {
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
@@ -777,4 +780,20 @@ func reclaimBoxState(ctx context.Context, boxes *box.Manager) {
 			"left unwritable (chmod it back), otherwise an old root-owned stub that has "+
 			"to be removed as its owner. New boxes create neither.", err)
 	}
+}
+
+// entryMCPCommands lists what the token entries' MCP servers run in the box:
+// agentbox-env, which launches them, and each entry's own command. Empty when
+// no entry declares a server, so such a daemon probes nothing extra.
+func entryMCPCommands(ts []config.StaticToken) []string {
+	var cmds []string
+	for _, t := range ts {
+		if t.MCP != nil {
+			cmds = append(cmds, t.MCP.Command)
+		}
+	}
+	if len(cmds) == 0 {
+		return nil
+	}
+	return append([]string{"agentbox-env"}, cmds...)
 }
