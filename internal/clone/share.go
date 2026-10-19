@@ -138,9 +138,12 @@ func mountpoint(dir, rel string, isDir bool) error {
 
 // MemoryMount is the host project memory of of, read-only at the box claude's
 // memory dir for dir (spec §6.3, correction 5): memRoot/projects/<slug(of)>/memory
-// when it is a real directory (Lstat). Optional: a convenience the session runs
+// when memRoot is absolute and it is a real directory (Lstat). Optional: a convenience the session runs
 // without, never a reason to refuse a spawn.
 func MemoryMount(memRoot, of, dir string) (box.Mount, bool) {
+	if !filepath.IsAbs(memRoot) { // "" or relative would be read against the daemon's cwd
+		return box.Mount{}, false
+	}
 	host := filepath.Join(memRoot, "projects", claudeProjectSlug(of), "memory")
 	if st, err := os.Lstat(host); err != nil || !st.IsDir() {
 		return box.Mount{}, false

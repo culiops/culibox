@@ -38,7 +38,15 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 	case !st.IsDir():
 		return refuse("is not a directory")
 	}
-	if of == "/" || isHomeOrAbove(of, home) {
+	if !filepath.IsAbs(home) {
+		return refuse(fmt.Sprintf("cannot be checked against the home directory (home %q is not an absolute path)", home))
+	}
+	if of == "/" {
+		return refuse("is the home directory or above it; clone a repo, not the home")
+	}
+	if above, err := isHomeOrAbove(of, home); err != nil {
+		return refuse("cannot be checked against the home directory: " + err.Error())
+	} else if above {
 		return refuse("is the home directory or above it; clone a repo, not the home")
 	}
 	root, err := os.OpenRoot(of)
@@ -65,19 +73,24 @@ func CheckOf(of, home string, protected []box.ProtectedDir) error {
 }
 
 // isHomeOrAbove reports whether of is home or an ancestor of it, comparing both
-// as spelled and resolved.
-func isHomeOrAbove(of, home string) bool {
-	if home == "" {
-		return false
+// as spelled and resolved. A path that cannot be resolved is an error.
+func isHomeOrAbove(of, home string) (bool, error) {
+	ofs, err := spellings(of)
+	if err != nil {
+		return false, err
 	}
-	for _, o := range spellings(of) {
-		for _, h := range spellings(home) {
+	homes, err := spellings(home)
+	if err != nil {
+		return false, err
+	}
+	for _, o := range ofs {
+		for _, h := range homes {
 			if under(h, o) {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // CheckProfile is the save-time check of a clone profile: CheckOf, an existing

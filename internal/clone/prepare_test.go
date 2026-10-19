@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -123,6 +124,13 @@ func TestCheckOfRefuses(t *testing.T) {
 			err := CheckOf(path, home, protected)
 			if !errors.Is(err, box.ErrUnboxableWorkspace) {
 				t.Fatalf("CheckOf = %v, want ErrUnboxableWorkspace", err)
+			}
+		})
+	}
+	for _, home := range []string{"", "relative/home"} {
+		t.Run("home "+strconv.Quote(home), func(t *testing.T) {
+			if err := CheckOf(makeOf(t, false), home, nil); !errors.Is(err, box.ErrUnboxableWorkspace) {
+				t.Fatalf("CheckOf with home %q = %v, want ErrUnboxableWorkspace", home, err)
 			}
 		})
 	}
@@ -343,6 +351,25 @@ func TestCheckProfile(t *testing.T) {
 				t.Fatalf("CheckProfile = %v, want ErrUnboxableWorkspace", err)
 			}
 		})
+	}
+}
+
+func TestMemoryMountNeedsAnAbsoluteRoot(t *testing.T) {
+	f := newShareFixture(t)
+	if _, ok := MemoryMount(f.mem, f.of, f.dir); !ok {
+		t.Fatal("absolute memory root: no mount")
+	}
+	// A relative root would be Lstat'd against the daemon's cwd: run from a dir
+	// where it resolves, so only the IsAbs check can refuse it.
+	rel, err := filepath.Rel(filepath.Dir(f.mem), f.mem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(filepath.Dir(f.mem))
+	for _, root := range []string{"", rel} {
+		if m, ok := MemoryMount(root, f.of, f.dir); ok {
+			t.Errorf("MemoryMount(%q) = %+v, want none", root, m)
+		}
 	}
 }
 

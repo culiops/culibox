@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -52,4 +53,66 @@ func TestBoxOwned(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBoxOwnedFailsClosed: a path that cannot be resolved (other than a tail
+// that does not exist yet) may be inside the clone through a link nobody can
+// read, so it is reported as owned, never as "not owned".
+func TestBoxOwnedFailsClosed(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "box-clones", "work")
+	mustMkdir(t, filepath.Join(dir, "sub"))
+	clones := []config.Clone{{Of: filepath.Join(base, "of"), Dir: dir}}
+
+	loop := filepath.Join(base, "loop")
+	mustSymlink(t, "loop", loop) // ELOOP
+	file := filepath.Join(base, "file")
+	mustWrite(t, file, "x") // ENOTDIR below it
+	dangling := filepath.Join(base, "dangling")
+	mustSymlink(t, filepath.Join(dir, "new"), dangling) // into the clone, target absent
+	chain := filepath.Join(base, "chain")
+	mustSymlink(t, "dangling", chain) // a relative link to the dangling one
+
+	cases := []struct {
+		name, cwd, msg string
+	}{
+		{"a self-loop symlink", filepath.Join(loop, "x"), "cannot be resolved"},
+		{"a path below a regular file", filepath.Join(file, "x"), "cannot be resolved"},
+		{"a dangling symlink into the clone", dangling, "is inside the clone"},
+		{"under a dangling symlink into the clone", filepath.Join(dangling, "deeper"), "is inside the clone"},
+		{"a relative link to a dangling link into the clone", chain, "is inside the clone"},
+	}
+	if os.Geteuid() != 0 { // root reads a mode-0 dir, so EACCES needs a non-root run
+		locked := filepath.Join(base, "locked")
+		mustMkdir(t, filepath.Join(locked, "inner"))
+		if err := os.Chmod(locked, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+		cases = append(cases, struct{ name, cwd, msg string }{"an unreadable component", filepath.Join(locked, "inner"), "cannot be resolved"})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, owned := BoxOwned(tc.cwd, clones)
+			if !owned {
+				t.Fatalf("BoxOwned(%q) = not owned, want owned", tc.cwd)
+			}
+			if !strings.Contains(msg, tc.cwd) || !strings.Contains(msg, tc.msg) {
+				t.Errorf("message %q does not name %q and %q", msg, tc.cwd, tc.msg)
+			}
+		})
+	}
+
+	t.Run("an unresolvable clone dir", func(t *testing.T) {
+		bad := []config.Clone{{Of: "/x", Dir: filepath.Join(loop, "clone")}}
+		msg, owned := BoxOwned(filepath.Join(base, "box-clones"), bad)
+		if !owned || !strings.Contains(msg, "cannot be resolved") {
+			t.Fatalf("BoxOwned = %v %q, want owned: the clone dir cannot be resolved", owned, msg)
+		}
+	})
+	t.Run("an unrelated path is still not owned", func(t *testing.T) {
+		if msg, owned := BoxOwned(filepath.Join(base, "box-clones"), clones); owned {
+			t.Fatalf("BoxOwned = owned (%q)", msg)
+		}
+	})
 }
