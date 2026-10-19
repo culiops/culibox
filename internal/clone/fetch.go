@@ -158,14 +158,15 @@ type FetchResult struct {
 // BundleArgs is the docker argv (after "docker") of the bundle container: no
 // network, no capabilities, a read-only rootfs, the clone and clone_of's .git
 // mounted read-only, and no box label (a box label would make claimCheck read
-// it as a box, spec correction 9). GIT_ALTERNATE_OBJECT_DIRECTORIES lets the
+// it as a box, spec correction 9). --pull=never: a deleted pinned tag must fail,
+// never be pulled from a registry by name. GIT_ALTERNATE_OBJECT_DIRECTORIES lets the
 // range ^<baseSHA> resolve when clone_of's base moved past what the clone has
 // (correction 7).
 func BundleArgs(r FetchRequest, baseSHA string) []string {
 	of, dir := r.Clone.Of, r.Clone.Dir
 	gitDir := of + "/.git"
 	return []string{
-		"run", "--rm", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"run", "--rm", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", boxTmp + ":rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 		"--label", "io.culiops.agent-box.clonefetch=" + r.Instance,
@@ -233,6 +234,11 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
 		return res, unusable("is not a clean absolute path")
 	}
+	// Every ancestor too, as at spawn: a box that owns one could swap it for a
+	// link and make the bundle container read a different repo.
+	if err := checkParents(c); err != nil {
+		return res, err
+	}
 	st, lerr := os.Lstat(c.Dir)
 	switch {
 	case lerr != nil:
@@ -249,7 +255,7 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	}
 
 	hostGit := func(args ...string) ([]byte, error) {
-		out, err := g.Run(ctx, c.Of, CleanEnv(), args...)
+		out, err := g.Run(ctx, c.Of, CleanEnv(), hardened(args...)...)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -491,6 +497,6 @@ func strictIndexPack(ctx context.Context, g Git, of, bundle, packOut string) err
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return err
 	}
-	_, err = sg.RunStdin(ctx, of, CleanEnv(), f, "index-pack", "--strict", "--fix-thin", "--stdin", packOut)
+	_, err = sg.RunStdin(ctx, of, CleanEnv(), f, hardened("index-pack", "--strict", "--fix-thin", "--stdin", packOut)...)
 	return err
 }

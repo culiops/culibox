@@ -27,7 +27,6 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
-	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
@@ -489,7 +488,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
-	pm.SetCloneCheck(func(c config.Clone) error { return clone.CheckProfile(c, home, protected) })
+	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works

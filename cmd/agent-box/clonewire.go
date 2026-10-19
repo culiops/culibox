@@ -50,6 +50,12 @@ func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory boo
 	if !usableDir(c.Dir) {
 		return box.CloneMounts{}, fmt.Errorf("%w: clone dir %q is not an absolute clean path", box.ErrUnboxableWorkspace, c.Dir)
 	}
+	// A clone_of the box can write is a host code-execution path (it plants
+	// .git hooks the host's fetch then fires): refuse it before anything is
+	// recorded or created.
+	if err := h.checkOf(c.Of); err != nil {
+		return box.CloneMounts{}, err
+	}
 	// Record BEFORE creating anything, so a crash between creation and record
 	// cannot leave a box-written clone that nothing remembers. A record that
 	// cannot be written fails the spawn.
@@ -74,7 +80,39 @@ func (h *cloneHooks) BoxOwned(cwd string) (string, bool) {
 	return clone.BoxOwned(cwd, all)
 }
 
-func usableDir(d string) bool { return filepath.IsAbs(d) && filepath.Clean(d) == d }
+// checkOf refuses a clone_of that is box-owned: another profile's clone dir, a
+// dir in the durable clone-dirs record, or anything inside one. The owning box
+// can plant .git/hooks or core.hooksPath there, so a host git run in it (the
+// clone's origin read, `clone fetch`) would execute box-written code. The same
+// ownership logic as the host-tier guard; a corrupt record fails closed.
+func (h *cloneHooks) checkOf(of string) error {
+	if why, owned := h.BoxOwned(of); owned {
+		return fmt.Errorf("%w: clone_of %s is box-owned (%s); a clone must be made from a host-owned repo",
+			box.ErrUnboxableWorkspace, of, why)
+	}
+	return nil
+}
+
+// cloneSaveCheck is the save-time check of a clone profile's repo: the disk
+// box-owned clone_of refusal, then the disk checks of clone.CheckProfile. h is nil
+// where clone mode does not exist (not Linux), which leaves only CheckProfile.
+func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) func(config.Clone) error {
+	return func(c config.Clone) error {
+		if h != nil {
+			if err := h.checkOf(c.Of); err != nil {
+				return err
+			}
+		}
+		return clone.CheckProfile(c, home, protected)
+	}
+}
+
+// usableDir reports whether d is an absolute clean path with no control
+// character (a newline would split a record line).
+func usableDir(d string) bool {
+	return filepath.IsAbs(d) && filepath.Clean(d) == d &&
+		!strings.ContainsFunc(d, func(r rune) bool { return r < 0x20 || r == 0x7f })
+}
 
 // recorded reads the record. A missing file is an empty record; a symlink at
 // the path, a read error or a malformed line is an error.
@@ -112,6 +150,9 @@ func (h *cloneHooks) readLocked() ([]string, error) {
 // it and renaming over it (the rename replaces, never follows, a symlink at the
 // final path).
 func (h *cloneHooks) record(dir string) error {
+	if !usableDir(dir) {
+		return fmt.Errorf("%q is not an absolute clean path without control characters", dir)
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	dirs, err := h.readLocked()

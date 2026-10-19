@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -58,7 +59,7 @@ func TestBundleArgs(t *testing.T) {
 	sha := strings.Repeat("ab", 20)
 	got := BundleArgs(r, sha)
 	want := []string{
-		"run", "--rm", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"run", "--rm", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonefetch=DEV",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/src/of/.git/objects",
@@ -677,5 +678,67 @@ func TestExecDockerCancelLeavesNoGoroutine(t *testing.T) {
 	}
 	if n := runtime.NumGoroutine(); n > before {
 		t.Errorf("goroutines: %d before, %d after", before, n)
+	}
+}
+
+// hardenedPrefix is what every host git call in clone_of must start with.
+var hardenedPrefix = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+
+// The host repo is user-owned, but a hook planted in it (through a box-writable
+// clone_of, or any other way) must still never run during a fetch: git 2.43
+// runs reference-transaction on the ref update of `fetch`.
+func TestFetchDoesNotRunRepoHooks(t *testing.T) {
+	x := newFetchFx(t)
+	marker := filepath.Join(t.TempDir(), "hook-ran")
+	hook := filepath.Join(x.of, ".git", "hooks", "reference-transaction")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// core.hooksPath in the repo's config is the other planting route.
+	fixtureGit(t, x.of, "config", "core.hooksPath", filepath.Dir(hook))
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a repo hook ran on the host during clone fetch")
+	}
+	if _, err := x.ofRev("refs/heads/box/feat"); err != nil {
+		t.Fatalf("the fetch itself must still succeed: %v", err)
+	}
+}
+
+func TestFetchHostGitCallsAreHardened(t *testing.T) {
+	x := newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	if len(x.rec.calls) == 0 {
+		t.Fatal("no host git call was recorded")
+	}
+	for _, c := range x.rec.calls {
+		if !slices.Equal(c.args[:min(len(c.args), len(hardenedPrefix))], hardenedPrefix) {
+			t.Errorf("git %v does not start with %v", c.args, hardenedPrefix)
+		}
+	}
+}
+
+// Every ancestor of the clone dir is re-checked at fetch time, as at spawn: a
+// box that owns an ancestor could swap it for a link and make the bundle
+// container read a different repo.
+func TestFetchRefusesASymlinkedParent(t *testing.T) {
+	x := newFetchFx(t)
+	real := filepath.Dir(x.req.Clone.Dir)
+	link := filepath.Join(t.TempDir(), "link")
+	mustSymlink(t, real, link)
+	x.req.Clone.Dir = filepath.Join(link, filepath.Base(x.req.Clone.Dir))
+	_, err := x.fetch()
+	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is a symlink") {
+		t.Fatalf("want a refusal naming the symlinked parent, got %v", err)
+	}
+	if x.dock.calls != 0 {
+		t.Fatal("docker ran with a symlinked parent above the clone")
 	}
 }

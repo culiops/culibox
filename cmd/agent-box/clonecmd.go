@@ -4,14 +4,18 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/store"
 )
 
@@ -82,11 +86,35 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 	if c == nil {
 		return fail("profile %q has no clone_of", a.Profile)
 	}
+	// clone_of must be host-owned: a box-written .git there would run its hooks
+	// in the host git calls below. Same live-profiles + clone-dirs-record check
+	// as the daemon, read-only.
+	all := st.List()
+	have := map[string]bool{}
+	for _, s := range all {
+		have[s.Name] = true
+	}
+	for _, s := range cfg.Agents {
+		if !have[s.Name] {
+			all = append(all, s)
+		}
+	}
+	owner := &cloneHooks{
+		clones: func() []config.Clone { return launcher.ClonesOf(all) },
+		file:   filepath.Join(dataDir, cloneDirsFile),
+	}
+	if err := owner.checkOf(c.Of); err != nil {
+		return fail("%v", err)
+	}
 	g, d, err := cloneBackends(cfg)
 	if err != nil {
 		return fail("%v", err)
 	}
-	res, err := cloneFetch(context.Background(), g, d, clone.FetchRequest{
+	// Ctrl-C / SIGTERM cancel the fetch so its deferred cleanup runs: without
+	// this the process dies at once and leaves up to 512 MiB under clone-fetch.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	res, err := cloneFetch(ctx, g, d, clone.FetchRequest{
 		Clone:     *c,
 		Branch:    a.Branch,
 		Base:      a.Base,

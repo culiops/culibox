@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
@@ -219,5 +222,70 @@ func TestRunCloneOutputQuotesTheRepoPath(t *testing.T) {
 	want := "review: git -C '/my repos/it'\\''s' log -p main..box/b; merge per your review policy\n"
 	if rc != 0 || !strings.HasSuffix(out, want) {
 		t.Fatalf("rc=%d out=%q want suffix %q", rc, out, want)
+	}
+}
+
+// A profile whose clone_of is another profile's clone (or a recorded clone dir)
+// would let a box plant git hooks that the host's fetch then runs.
+func TestRunCloneRefusesBoxOwnedCloneOf(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{
+		cloneProfile("victim", "/src/real", "/clones/victim"),
+		cloneProfile("evil", "/clones/victim", "/clones/evil"),
+		cloneProfile("nested", "/clones/victim/sub/repo", "/clones/nested"),
+		cloneProfile("recorded", "/clones/gone/repo", "/clones/rec"),
+	})
+	if err := os.WriteFile(filepath.Join(e.data, cloneDirsFile), []byte("/clones/gone\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"evil", "nested", "recorded"} {
+		rc, out := runCloneArgs(e, p, "b", "main")
+		if rc != 1 || !strings.Contains(out, "is box-owned") || !strings.Contains(out, "a clone must be made from a host-owned repo") {
+			t.Errorf("%s: rc=%d out=%q", p, rc, out)
+		}
+	}
+	if e.req.Branch != "" {
+		t.Fatal("Fetch ran for a box-owned clone_of")
+	}
+	// The victim itself (host-owned clone_of) still works.
+	if rc, out := runCloneArgs(e, "victim", "b", "main"); rc != 0 {
+		t.Fatalf("victim: rc=%d out=%q", rc, out)
+	}
+}
+
+func TestRunCloneCorruptRecordFailsClosed(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	if err := os.WriteFile(filepath.Join(e.data, cloneDirsFile), []byte("not/absolute\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	if rc != 1 || !strings.Contains(out, "is box-owned") || e.req.Branch != "" {
+		t.Fatalf("rc=%d out=%q", rc, out)
+	}
+}
+
+// Ctrl-C must cancel the fetch's context, not kill the process before the
+// bundle temp file is cleaned up.
+func TestRunCloneCancelsOnInterrupt(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/src/r", "/clones/r")})
+	// Swallow the signal in the test process either way, so the unfixed code
+	// fails this test instead of killing the test binary.
+	swallow := make(chan os.Signal, 1)
+	signal.Notify(swallow, os.Interrupt)
+	defer signal.Stop(swallow)
+	cancelled := false
+	cloneFetch = func(ctx context.Context, _ clone.Git, _ clone.Docker, _ clone.FetchRequest) (clone.FetchResult, error) {
+		if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			cancelled = true
+		case <-time.After(3 * time.Second):
+		}
+		return clone.FetchResult{}, ctx.Err()
+	}
+	rc, _ := runCloneArgs(e, "p", "b", "main")
+	if !cancelled || rc != 1 {
+		t.Fatalf("cancelled=%v rc=%d; SIGINT must cancel the fetch context", cancelled, rc)
 	}
 }

@@ -376,9 +376,19 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 // error behaviour. A profile with no usable directory has none to guard.
 func (l *AgentLauncher) Clones() []config.Clone {
 	l.mu.RLock()
-	defer l.mu.RUnlock()
-	var out []config.Clone
+	agents := make([]config.AgentConfig, 0, len(l.agents))
 	for _, cfg := range l.agents {
+		agents = append(agents, cfg)
+	}
+	l.mu.RUnlock()
+	return ClonesOf(agents)
+}
+
+// ClonesOf is Clones over an explicit profile list, for callers (the
+// `clone fetch` command) that read the profiles without a launcher.
+func ClonesOf(agents []config.AgentConfig) []config.Clone {
+	var out []config.Clone
+	for _, cfg := range agents {
 		if cfg.CloneOf == "" {
 			continue
 		}

@@ -178,3 +178,85 @@ func TestUnreadableRecordFailsClosed(t *testing.T) {
 		t.Fatalf("a symlinked record must report owned, got %q, %v", why, owned)
 	}
 }
+
+// A clone_of the box can write is a host code-execution path: the box plants
+// .git/hooks or core.hooksPath there and the host's next git run in it fires
+// them. Prepare, the save check and `clone fetch` all refuse it.
+func TestPrepareRefusesBoxOwnedCloneOf(t *testing.T) {
+	home := t.TempDir()
+	otherClone := filepath.Join(home, "work", "other-clone")
+	mine := filepath.Join(home, "work", "mine")
+	if err := os.MkdirAll(otherClone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	prep := func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, error) {
+		called = true
+		return box.CloneMounts{}, nil
+	}
+
+	// (a) another live profile's clone dir, and a repo nested in it.
+	h := testHooks(t, func() []config.Clone {
+		return []config.Clone{{Of: filepath.Join(home, "repo"), Dir: otherClone}}
+	})
+	h.prepare = prep
+	for _, of := range []string{otherClone, filepath.Join(otherClone, "nested", "repo")} {
+		_, err := h.Prepare(context.Background(), config.Clone{Of: of, Dir: mine}, false)
+		if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is box-owned") ||
+			!strings.Contains(err.Error(), "a clone must be made from a host-owned repo") {
+			t.Errorf("clone_of %s: want the box-owned refusal, got %v", of, err)
+		}
+	}
+	if called {
+		t.Fatal("clone.Prepare ran for a box-owned clone_of")
+	}
+	if b, _ := os.ReadFile(h.file); strings.Contains(string(b), mine) {
+		t.Fatalf("a refused spawn recorded its dir: %q", b)
+	}
+
+	// (a) a dir known only from the clone-dirs record (its profile is gone).
+	h = testHooks(t, noClones)
+	h.prepare = prep
+	if err := h.record(otherClone); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Prepare(context.Background(), config.Clone{Of: otherClone, Dir: mine}, false); !errors.Is(err, box.ErrUnboxableWorkspace) {
+		t.Fatalf("a recorded clone dir as clone_of: want ErrUnboxableWorkspace, got %v", err)
+	}
+	if called {
+		t.Fatal("clone.Prepare ran for a recorded clone dir as clone_of")
+	}
+
+	// A host-owned repo is fine.
+	if _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "repo"), Dir: mine}, false); err != nil || !called {
+		t.Fatalf("a host-owned clone_of must pass: err=%v called=%v", err, called)
+	}
+}
+
+func TestCloneSaveCheckRefusesBoxOwnedCloneOf(t *testing.T) {
+	home := t.TempDir()
+	otherClone := filepath.Join(home, "work", "other-clone")
+	h := testHooks(t, func() []config.Clone {
+		return []config.Clone{{Of: filepath.Join(home, "repo"), Dir: otherClone}}
+	})
+	check := cloneSaveCheck(h, home, nil)
+	err := check(config.Clone{Of: otherClone, Dir: filepath.Join(home, "work", "mine")})
+	if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is box-owned") {
+		t.Fatalf("save of a profile cloning another clone: want the box-owned refusal, got %v", err)
+	}
+}
+
+func TestRecordRefusesControlCharacters(t *testing.T) {
+	h := testHooks(t, noClones)
+	for _, d := range []string{"/a\nb", "/a\x00b", "/a\rb", "/a\x7fb"} {
+		if err := h.record(d); err == nil {
+			t.Errorf("record(%q) accepted a control character", d)
+		}
+	}
+	if b, _ := os.ReadFile(h.file); len(b) != 0 {
+		t.Fatalf("record file = %q, want nothing written", b)
+	}
+	if usableDir("/a\nb") {
+		t.Error("usableDir accepts a newline")
+	}
+}

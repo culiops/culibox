@@ -59,6 +59,19 @@ func CleanEnv() []string {
 	}
 }
 
+// hardenFlags are the git options every host git call in a user repo
+// (clone_of) starts with. A hook (reference-transaction fires on the ref update
+// of fetch; measured, git 2.43) or an fsmonitor command planted in that repo's
+// .git must never run on the host, whatever the repo's own config says: a
+// command-line -c beats the repo config.
+var hardenFlags = []string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}
+
+// hardened is args with hardenFlags in front, before the subcommand (and before
+// any caller -c, which is for the fetch's fsck options).
+func hardened(args ...string) []string {
+	return append(append([]string{}, hardenFlags...), args...)
+}
+
 // StdinGit is a Git that can also feed a command's standard input. Only the
 // fetch path needs it (index-pack --stdin of a bundle's pack); it lives here so
 // this file stays the only place git is executed.

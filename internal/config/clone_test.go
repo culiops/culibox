@@ -149,3 +149,25 @@ func TestValidateRunsCloneChecksForSeedsAndProfiles(t *testing.T) {
 		t.Errorf("Config.Validate: %v", err)
 	}
 }
+
+func TestCloneRefusesControlCharacters(t *testing.T) {
+	for _, in := range []string{"a\nb", "a\x00b", "a\tb", "a\x1bb", "a\x7fb", "\n"} {
+		if _, err := ParseShare(in); err == nil || !strings.Contains(err.Error(), "control character") {
+			t.Errorf("ParseShare(%q) = %v; want a control-character error", in, err)
+		}
+	}
+	for _, field := range []string{"clone_of", "default_cwd"} {
+		for _, bad := range []string{"/r/a\nb", "/r/a\x00b", "/r/a\x7fb", "/r/a\rb"} {
+			a := cloneAgent()
+			if field == "clone_of" {
+				a.CloneOf = bad
+			} else {
+				a.DefaultCwd = bad
+			}
+			err := validateClone(a)
+			if err == nil || !strings.Contains(err.Error(), "control character") {
+				t.Errorf("%s %q: want a control-character error, got %v", field, bad, err)
+			}
+		}
+	}
+}

@@ -32,19 +32,19 @@ func BoxOwned(cwd string, clones []config.Clone) (string, bool) {
 		// Fail closed: a path that cannot be resolved may reach the clone through
 		// a link nobody can read, so it is owned until proven otherwise.
 		if cwdErr != nil {
-			return cwd + " cannot be resolved (" + cwdErr.Error() + "); refusing a host session there in case it is inside the clone " +
-				c.Dir + " of a clone-mode profile (use agent-box clone fetch)", true
+			return cwd + " cannot be resolved (" + cwdErr.Error() + "); refusing a host session there in case it is inside the box-owned clone " +
+				c.Dir + " (use agent-box clone fetch)", true
 		}
 		dirSp, err := spellings(c.Dir)
 		if err != nil {
-			return "the clone " + c.Dir + " of a clone-mode profile cannot be resolved (" + err.Error() + "); refusing a host session at " +
+			return "the box-owned clone " + c.Dir + " cannot be resolved (" + err.Error() + "); refusing a host session at " +
 				cwd + " in case it is inside it (use agent-box clone fetch)", true
 		}
 		for _, p := range cwdSp {
 			for _, d := range dirSp {
 				if under(p, d) {
-					return cwd + " is inside the clone " + c.Dir +
-						" of a clone-mode profile; host tools must never run there (use agent-box clone fetch)", true
+					return cwd + " is inside the box-owned clone " + c.Dir +
+						"; host tools must never run there (use agent-box clone fetch)", true
 				}
 			}
 		}

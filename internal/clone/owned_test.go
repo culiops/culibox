@@ -78,9 +78,9 @@ func TestBoxOwnedFailsClosed(t *testing.T) {
 	}{
 		{"a self-loop symlink", filepath.Join(loop, "x"), "cannot be resolved"},
 		{"a path below a regular file", filepath.Join(file, "x"), "cannot be resolved"},
-		{"a dangling symlink into the clone", dangling, "is inside the clone"},
-		{"under a dangling symlink into the clone", filepath.Join(dangling, "deeper"), "is inside the clone"},
-		{"a relative link to a dangling link into the clone", chain, "is inside the clone"},
+		{"a dangling symlink into the clone", dangling, "is inside the box-owned clone"},
+		{"under a dangling symlink into the clone", filepath.Join(dangling, "deeper"), "is inside the box-owned clone"},
+		{"a relative link to a dangling link into the clone", chain, "is inside the box-owned clone"},
 	}
 	if os.Geteuid() != 0 { // root reads a mode-0 dir, so EACCES needs a non-root run
 		locked := filepath.Join(base, "locked")
@@ -115,4 +115,19 @@ func TestBoxOwnedFailsClosed(t *testing.T) {
 			t.Fatalf("BoxOwned = owned (%q)", msg)
 		}
 	})
+}
+
+// The message must be accurate for a dir known only from the clone-dirs record
+// (no profile, so no "clone-mode profile" to speak of).
+func TestBoxOwnedMessageNamesTheClone(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "recorded")
+	mustMkdir(t, dir)
+	msg, owned := BoxOwned(filepath.Join(dir, "sub"), []config.Clone{{Dir: dir}})
+	if !owned || !strings.Contains(msg, "inside the box-owned clone "+dir) {
+		t.Fatalf("message = %q, owned %v; want it to name the box-owned clone", msg, owned)
+	}
+	if strings.Contains(msg, "profile") {
+		t.Errorf("message %q mentions a profile; a recorded dir has none", msg)
+	}
 }

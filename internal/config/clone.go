@@ -34,6 +34,9 @@ func ParseShare(s string) (string, error) {
 	if strings.Contains(s, ":") {
 		return "", fmt.Errorf("clone_share %q: \":\" is not allowed", s)
 	}
+	if hasControl(s) {
+		return "", fmt.Errorf("clone_share %q: control characters are not allowed", s)
+	}
 	if !utf8.ValidString(s) {
 		return "", fmt.Errorf("clone_share %q: must be valid UTF-8", s)
 	}
@@ -147,7 +150,17 @@ func validateClone(a AgentConfig) error {
 	return nil
 }
 
+// hasControl reports whether s holds a C0 control character or DEL. Such a
+// byte would split a line of the clone-dirs record, make Hash's NUL separator
+// ambiguous, or smuggle terminal escapes into messages.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
+}
+
 func absClean(field, p string) error {
+	if hasControl(p) {
+		return fmt.Errorf("%s %q: control characters are not allowed", field, p)
+	}
 	if !filepath.IsAbs(p) {
 		return fmt.Errorf("%s %q must be an absolute path", field, p)
 	}

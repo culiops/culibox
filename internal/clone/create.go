@@ -124,7 +124,7 @@ func globalEnv(home string) []string {
 // configGet reads one key from the named scope; exit 1 means unset, an empty
 // value counts as unset.
 func configGet(ctx context.Context, g Git, dir string, env []string, scope, key string) (val string, found bool, err error) {
-	out, err := g.Run(ctx, dir, env, "config", scope, "--get", key)
+	out, err := g.Run(ctx, dir, env, hardened("config", scope, "--get", key)...)
 	if err != nil {
 		if code, ok := exitCode(err); ok && code == 1 {
 			return "", false, nil
