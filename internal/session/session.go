@@ -1076,23 +1076,33 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(CloneResolver); ok {
 		c, err := r.CloneFor(spec.Agent)
 		if err != nil {
-			return nil, fmt.Errorf("profile %q: %w", spec.Agent, err)
+			// ErrBoxUnavailable so the UI shows which profile and why.
+			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 		}
 		cl = c
 	}
+	// Both checks compare an absolute path: a relative cwd never compares as
+	// under an absolute clone dir, yet the process resolves it against the
+	// daemon's own cwd. Fail closed when it cannot be made absolute.
+	absCwd, absErr := filepath.Abs(spec.Cwd)
 	switch {
 	case cl != nil:
 		if runtime != config.RuntimeBox {
-			return nil, fmt.Errorf("profile %q is a clone-mode profile, so it can only run in a box, never on the host tier", spec.Agent)
+			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+			return nil, fmt.Errorf("%w: profile %q is a clone-mode profile, so it can only run in a box, never on the host tier",
+				box.ErrUnboxableWorkspace, spec.Agent)
 		}
 		if ch == nil {
 			return nil, fmt.Errorf("%w: clone mode is not available on this host (Linux only)", box.ErrBoxUnavailable)
 		}
-		if filepath.Clean(spec.Cwd) != cl.Dir {
+		if absErr != nil || absCwd != cl.Dir {
 			return nil, fmt.Errorf("%w: profile %q runs only in its clone %s, not %s", box.ErrUnboxableWorkspace, spec.Agent, cl.Dir, spec.Cwd)
 		}
 	case runtime != config.RuntimeBox && ch != nil:
-		if reason, owned := ch.BoxOwned(spec.Cwd); owned {
+		if absErr != nil {
+			return nil, fmt.Errorf("%w: cannot resolve working directory %q: %v", box.ErrBoxOwned, spec.Cwd, absErr)
+		}
+		if reason, owned := ch.BoxOwned(absCwd); owned {
 			return nil, fmt.Errorf("%w: %s", box.ErrBoxOwned, reason)
 		}
 	}

@@ -187,6 +187,9 @@ func TestCloneSpawnRefusedOnHostTier(t *testing.T) {
 			if !strings.Contains(err.Error(), "clone-mode profile") || !strings.Contains(err.Error(), "never on the host tier") {
 				t.Fatalf("err = %v", err)
 			}
+			if !errors.Is(err, box.ErrUnboxableWorkspace) {
+				t.Fatalf("err = %v, want ErrUnboxableWorkspace so the UI shows it", err)
+			}
 			if hooks.nPrepares() != 0 || boxes.wraps != 0 {
 				t.Fatalf("refused spawn prepared=%d wrapped=%d", hooks.nPrepares(), boxes.wraps)
 			}
@@ -279,6 +282,9 @@ func TestCloneSpawnBadCloneConfigIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `profile "clone"`) || !strings.Contains(err.Error(), "clone_of must be absolute") {
 		t.Fatalf("err = %v", err)
+	}
+	if !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("err = %v, want ErrBoxUnavailable so the UI shows it", err)
 	}
 	if hooks.nPrepares() != 0 || boxes.wraps != 0 {
 		t.Fatal("a refused spawn went on")
@@ -379,4 +385,51 @@ func TestRestartReentersTheCloneRefusals(t *testing.T) {
 	if hooks.nPrepares() != 0 {
 		t.Fatal("Prepare ran for a refused restart")
 	}
+}
+
+// A relative cwd never compares as under an absolute clone dir, but the process
+// resolves it against the daemon's cwd: BoxOwned must see the absolute path.
+func TestHostSpawnRelativeCwdIsCheckedAbsolute(t *testing.T) {
+	l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}}
+	hooks := &fakeCloneHooks{owned: "inside a clone"}
+	m, boxes := cloneManager(t, l, hooks)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Join("..", filepath.Base(wd)) // resolves to wd, but is spelled relatively
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: rel})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a relative cwd bypassed the box-owned check")
+	}
+	if !errors.Is(err, box.ErrBoxOwned) {
+		t.Fatalf("err = %v, want ErrBoxOwned", err)
+	}
+	if len(hooks.ownedChecks) != 1 || hooks.ownedChecks[0] != wd {
+		t.Fatalf("BoxOwned saw %q, want the absolute %q", hooks.ownedChecks, wd)
+	}
+	if len(m.List()) != 0 || boxes.wraps != 0 {
+		t.Fatal("a refused spawn left a session")
+	}
+}
+
+// The clone-profile cwd comparison is also made on the absolute path.
+func TestCloneSpawnAcceptsItsCloneSpelledRelatively(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel, err := filepath.Rel(wd, dir)
+	if err != nil || filepath.IsAbs(rel) {
+		t.Skipf("no relative spelling of %s from %s: %v", dir, wd, err)
+	}
+	hooks := &fakeCloneHooks{}
+	m, _ := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: rel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = m.Kill(s.ID)
 }
