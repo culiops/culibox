@@ -287,28 +287,36 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		if _, bad := b.ssoBad[key]; bad { // STS accepted this sign-in, so every session waiting on it can retry
 			b.clearSSOLocked(key)
 		}
+		why := b.discardReasonLocked(sid, p, c, now)
+		b.mu.Unlock()
+		if why != "" {
+			bad := row
+			bad.Outcome, bad.Error = OutcomeSTSError, why
+			b.record(bad)
+			continue
+		}
+		// The minted row is written before the credential leaves (fail closed, as
+		// a grant is): a credential with no audit row is never handed out, and is
+		// not cached, so the next request mints and audits afresh.
+		row.Outcome, row.Expires = OutcomeMinted, c.Expiration
+		if err := b.rec.Record(row); err != nil {
+			log.Printf("broker: audit write failed (%v); credential for %s withheld", err, sid) // the row holds identifiers only
+			b.mu.Lock()
+			b.statsLocked(sid).LastError = "the credential could not be audited, so it was not issued"
+			b.mu.Unlock()
+			replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this credential, so it was not issued; retry shortly")
+			return
+		}
+		b.mu.Lock()
+		// Checked again: the window may have changed while the row was written.
+		if why := b.discardReasonLocked(sid, p, c, now); why != "" {
+			b.mu.Unlock()
+			bad := row
+			bad.Outcome, bad.Expires, bad.Error = OutcomeSTSError, time.Time{}, why+" (after its minted row was written)"
+			b.record(bad)
+			continue
+		}
 		if p.elevated {
-			// The hard bound (spec §5.2): a write credential never outlives the window
-			// it was minted under, and is never handed out for a window that changed
-			// while STS was being called. Either way it is discarded, not cached, and
-			// the box gets a read-only credential instead.
-			e := b.elev[sid]
-			var why string
-			switch {
-			case !c.Expiration.After(now): // an absent or past Expiration proves nothing about the bound
-				why = "elevated credential has no usable expiration; minted read-only instead"
-			case c.Expiration.After(p.until):
-				why = "elevated credential would outlive the window; minted read-only instead"
-			case e == nil || e.gen != p.gen:
-				why = "the elevation changed during the mint; minted read-only instead"
-			}
-			if why != "" {
-				b.mu.Unlock()
-				bad := row
-				bad.Outcome, bad.Error = OutcomeSTSError, why
-				b.record(bad)
-				continue
-			}
 			b.noteElevatedExp(sid, c.Expiration) // same critical section as the check: a drop now sees it
 		}
 		b.cache[sid] = cached{creds: c, nonce: nonce, scopeKey: p.key}
@@ -316,13 +324,32 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		st.Mints++
 		st.LastMint, st.LastError = now, ""
 		b.mu.Unlock()
-		row.Outcome, row.Expires = OutcomeMinted, c.Expiration
-		b.record(row)
 		writeCreds(w, c)
 		return
 	}
 	// Unreachable: attempt 1 is read-only and always returns. Fail closed if that changes.
 	b.fail(w, base, OutcomeSTSError, http.StatusBadGateway, "no credential could be minted")
+}
+
+// discardReasonLocked says why a freshly minted elevated credential must be
+// discarded rather than handed out ("" = keep it). The hard bound (spec §5.2):
+// a write credential never outlives the window it was minted under, and is
+// never handed out for a window that changed while STS was being called.
+// Either way it is discarded, not cached, and the box gets read-only instead.
+func (b *Broker) discardReasonLocked(sid string, p mintPlan, c Creds, now time.Time) string {
+	if !p.elevated {
+		return ""
+	}
+	e := b.elev[sid]
+	switch {
+	case !c.Expiration.After(now): // an absent or past Expiration proves nothing about the bound
+		return "elevated credential has no usable expiration; minted read-only instead"
+	case c.Expiration.After(p.until):
+		return "elevated credential would outlive the window; minted read-only instead"
+	case e == nil || e.gen != p.gen:
+		return "the elevation changed during the mint; minted read-only instead"
+	}
+	return ""
 }
 
 // mintPlan is what one mint attempt will ask STS for. key is the cache key: the
