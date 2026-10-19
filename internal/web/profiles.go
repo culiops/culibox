@@ -97,6 +97,19 @@ func (m *ProfileManager) SetGitHubApps(apps []config.GitHubApp) {
 	m.mu.Unlock()
 }
 
+// GitHubAppNames are the names of the instance's github_apps connections, for
+// the profile editor's App picker. Names only: the client id and the key path
+// stay on the host. Never nil, so it encodes as [].
+func (m *ProfileManager) GitHubAppNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, len(m.ghApps))
+	for i, a := range m.ghApps {
+		names[i] = a.Name
+	}
+	return names
+}
+
 // SetAccounts installs the account resolver used by Save. Call at boot.
 func (m *ProfileManager) SetAccounts(r launcher.AccountResolver) {
 	m.mu.Lock()

@@ -139,6 +139,11 @@ func (s *Server) Handler() http.Handler {
 			"analytics":     s.Analytics != nil,
 			"replies":       s.RepliesEnabled,
 		}
+		// The App names the profile editor offers; [] when none are defined.
+		meta["github_apps"] = []string{}
+		if s.Profiles != nil {
+			meta["github_apps"] = s.Profiles.GitHubAppNames()
+		}
 		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
 		// account has data so the client shows nothing rather than an empty widget.
 		if m := s.rateLimitsByAccount(); len(m) > 0 {

@@ -258,7 +258,7 @@ function renderSteerRail() {
     return;
   }
   // 1 and 2 — who this is, and how full its window is.
-  if (s.aws) loadAwsRailStats(s.id);
+  if (s.aws || s.github) loadAwsRailStats(s.id);
   else if (s.egress) loadEgressRailStats(s.id);
   renderSteerFacts(s);
   // A half-open grant panel belongs to one session; focusing another drops it.
@@ -334,7 +334,12 @@ function renderSteerFacts(s) {
   const tab = typeof terminalTabFor === "function" ? terminalTabFor(s.id) : null;
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
-  const egressRows = s.aws ? [...awsRailRows(s, awsRailCache.get(s.id), Date.now()), ...awsStatsRows(awsRailCache.get(s.id), Date.now()), egressRow(awsRailCache.get(s.id))]
+  // /aws serves AWS-bound and GH-bound sessions alike (one broker, one audit
+  // log), so a GH-only box takes its token rows and egress line from the same
+  // cache; the AWS rows and counters are the AWS binding's own.
+  const brokerSt = awsRailCache.get(s.id);
+  const egressRows = s.aws || s.github
+    ? [...awsRailRows(s, brokerSt, Date.now()), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []), ...ghRailRows(brokerSt), egressRow(brokerSt)]
     : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
   // The bundle's drops ride after the egress row, and on a boxed session with
   // no egress row at all; railMeta skips null rows.
@@ -344,7 +349,7 @@ function renderSteerFacts(s) {
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
     meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
-    (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null)].join("|");
+    (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null), JSON.stringify(s.github || null)].join("|");
   if (key === steerFactsKey) return;
   steerFactsKey = key;
 
@@ -978,6 +983,37 @@ function repaintSteerRail() {
   el._refresh(s);
 }
 
+// ghRowText: one broker audit row for a GH installation token, as a line of the
+// steer rail. The payload carries no token (there is none to carry), only who it
+// was minted for, how many repos, the outcome and when it lapses. A revoked row
+// is just "revoked": its expiry is the original one and says nothing new. A
+// refusal has no live expiry, so "until" appears only for a minted token.
+function ghRowText(row) {
+  const r = row || {};
+  const parts = ["GitHub", String(r.subject || "")];
+  if (r.outcome === "revoked") return parts.concat("revoked").join(" · ");
+  const n = Number(r.repos) || 0;
+  parts.push(n + (n === 1 ? " repo" : " repos"), String(r.outcome || "").replace(/_/g, " "));
+  if (r.outcome === "minted") {
+    const t = Date.parse(r.expires);
+    if (Number.isFinite(t) && t > Date.UTC(2000, 0, 1)) {
+      const d = new Date(t);
+      parts.push("until " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"));
+    }
+  }
+  return parts.join(" · ");
+}
+
+// ghRailRows: the GH rows of GET /api/sessions/{id}/aws `recent` (the reply
+// carries AWS and GH audit rows together, told apart by provider). Capped so a
+// busy session cannot push the rail's other sections off screen.
+const GH_RAIL_ROWS = 5;
+function ghRailRows(st) {
+  const recent = st && Array.isArray(st.recent) ? st.recent : [];
+  return recent.filter((r) => r && r.provider === "github").slice(0, GH_RAIL_ROWS)
+    .map((r) => ({ k: "github", v: ghRowText(r), wrap: true }));
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow };
+  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, ghRowText, ghRailRows };
 }

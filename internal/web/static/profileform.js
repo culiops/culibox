@@ -113,6 +113,44 @@ function replyableToSend(rowVisible, checked, stored) {
   return rowVisible ? !!checked : !!stored;
 }
 
+// The GH block (N1). The permission list and the defaults mirror
+// config.githubPermissionKeys / DefaultGitHubPermissions: every one is read-only,
+// and the server refuses anything else, so the form only ever sends "read".
+const GH_PERMS = ["actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"];
+const GH_DEFAULT_PERMS = ["actions", "checks", "contents", "pull_requests", "issues", "metadata"];
+
+// ghPermsChecked: which permission boxes a stored binding lights. No stored
+// permissions means the defaults, exactly as the server reads it.
+function ghPermsChecked(binding) {
+  const stored = binding && binding.permissions && Object.keys(binding.permissions);
+  const on = stored && stored.length ? stored : GH_DEFAULT_PERMS;
+  return Object.fromEntries(GH_PERMS.map((k) => [k, on.includes(k)]));
+}
+
+// ghBindingFromForm: the editor's GH block as the object the server stores, or
+// undefined when no owner row has anything in it (an empty block means "no
+// binding", not an invalid one). fields = { owners: [{owner, app, repos}],
+// permissions: {key: checked} } with repos the textarea's raw text. A row that is
+// only half filled is kept, so the server's validation names what is missing. A
+// permission set equal to the defaults is left out, so a default binding keeps
+// the same stored shape (and the same box key) however the boxes were clicked.
+function ghBindingFromForm(fields) {
+  const rows = ((fields && fields.owners) || []).map((r) => ({
+    owner: String(r.owner || "").trim(),
+    app: String(r.app || "").trim(),
+    repos: String(r.repos || "").split(/[\s,]+/).filter(Boolean),
+  })).filter((r) => r.owner || r.repos.length);
+  if (!rows.length) return undefined;
+  const out = { owners: rows };
+  const perms = (fields && fields.permissions) || {};
+  const on = GH_PERMS.filter((k) => perms[k]);
+  const isDefault = on.length === GH_DEFAULT_PERMS.length && GH_DEFAULT_PERMS.every((k) => on.includes(k));
+  if (!isDefault) out.permissions = Object.fromEntries(on.map((k) => [k, "read"]));
+  // The editor has no field for the binding's extra egress hosts; carry them.
+  if (fields && Array.isArray(fields.egress_allow) && fields.egress_allow.length) out.egress_allow = fields.egress_allow.slice();
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend };
+  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm };
 }
