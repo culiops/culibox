@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -58,11 +59,24 @@ func CleanEnv() []string {
 	}
 }
 
+// StdinGit is a Git that can also feed a command's standard input. Only the
+// fetch path needs it (index-pack --stdin of a bundle's pack); it lives here so
+// this file stays the only place git is executed.
+type StdinGit interface {
+	Git
+	RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error)
+}
+
 // Run executes git with stdin closed and env as the whole environment. stdout
 // is capped at 16 MiB (more is an error, not a truncation); the error carries
 // at most 8 KiB of stderr. A non-zero exit is an *exec.ExitError under the
 // returned error (errors.As).
 func (g ExecGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return g.RunStdin(ctx, dir, env, nil, args...)
+}
+
+// RunStdin is Run with stdin read from the given reader (nil = closed).
+func (g ExecGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
 	argv := make([]string, 0, len(args)+2)
 	if dir != "" {
 		argv = append(argv, "-C", dir)
@@ -71,6 +85,7 @@ func (g ExecGit) Run(ctx context.Context, dir string, env []string, args ...stri
 	cmd := exec.CommandContext(ctx, g.Bin, argv...)
 	cmd.Env = append([]string{}, env...) // non-nil: an empty env is empty, not the process env
 	cmd.WaitDelay = 5 * time.Second
+	cmd.Stdin = stdin
 	out := &capBuffer{max: maxGitStdout}
 	errb := &capBuffer{max: maxGitStderr}
 	cmd.Stdout, cmd.Stderr = out, errb

@@ -36,6 +36,9 @@ func TestSanitize(t *testing.T) {
 	if got := sanitize("a\x1b]52;c;x\x07b\x7f\u0085  c\x00"); got != "a?]52;c;x?b????c?" {
 		t.Errorf("sanitize = %q", got)
 	}
+	if got := sanitize("a\u202eb\u202ac\u2066d\u2069e\u2065f\u202f"); got != "a?b?c?d?e\u2065f\u202f" {
+		t.Errorf("bidi controls: %q", got)
+	}
 	if got := sanitize("héllo ✓"); got != "héllo ✓" {
 		t.Errorf("sanitize mangled printable text: %q", got)
 	}
@@ -134,6 +137,14 @@ func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Wri
 		return fmt.Errorf("docker run: %w: %s", runErr, strings.TrimSpace(errb.String()))
 	}
 	return nil
+}
+
+// RunStdin records the call and forwards it, so recGit satisfies StdinGit.
+func (r *recGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, call{dir, slices.Clone(env), slices.Clone(args)})
+	r.mu.Unlock()
+	return r.g.(StdinGit).RunStdin(ctx, dir, env, stdin, args...)
 }
 
 type fetchFx struct {
@@ -344,11 +355,105 @@ func TestFetchWarnings(t *testing.T) {
 	if !strings.Contains(joined, "2 commit(s) carry an AI attribution trailer (Co-Authored-By / Generated with); strip them before any push") {
 		t.Errorf("no attribution warning:\n%s", joined)
 	}
-	if !strings.Contains(joined, "box/feat changes shared (local-only) paths: CLAUDE.md, docs/superpowers/plan.md") {
+	if !strings.Contains(joined, "box/feat changes shared (local-only) paths: ") ||
+		!strings.Contains(joined, "CLAUDE.md") || !strings.Contains(joined, "docs/superpowers/plan.md") {
 		t.Errorf("no shared-paths warning:\n%s", joined)
 	}
 	if strings.Contains(joined, "docs/other.md") || strings.Contains(joined, "feat.txt") {
 		t.Errorf("warning names a path outside the shares:\n%s", joined)
+	}
+}
+
+func TestFetchWarnsOnShareFileAddedThenRemoved(t *testing.T) {
+	x := newFetchFx(t)
+	x.req.Clone.Shares = []string{"CLAUDE.md"}
+	x.commitInClone("CLAUDE.md", "local", "add shared file")
+	x.inClone("rm", "-q", "CLAUDE.md")
+	x.inClone("commit", "-q", "-m", "remove it again")
+	res, err := x.fetch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "box/feat changes shared (local-only) paths: CLAUDE.md") {
+		t.Errorf("a share file in the branch history was not reported: %q", res.Warnings)
+	}
+	// Listed once even though two commits touch it.
+	if w := strings.Join(res.Warnings, "\n"); strings.Contains(w, "CLAUDE.md, CLAUDE.md") {
+		t.Errorf("path listed twice: %s", w)
+	}
+}
+
+// gitIn runs host git in dir with stdin, for building crafted objects in tests.
+func gitIn(t *testing.T, dir, stdin string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = CleanEnv()
+	cmd.Stdin = strings.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// git does not fsck the objects of a bundle fetch (measured on git 2.43), so a
+// commit whose author has no email must be stopped by the index-pack step.
+func TestFetchRefusesObjectsThatFailStrictChecks(t *testing.T) {
+	x := newFetchFx(t)
+	dir := x.req.Clone.Dir
+	tree := gitIn(t, dir, "", "rev-parse", "HEAD^{tree}")
+	parent := gitIn(t, dir, "", "rev-parse", "HEAD")
+	commit := "tree " + tree + "\nparent " + parent + "\nauthor No Email 1700000000 +0000\ncommitter F <f@x> 1700000000 +0000\n\nbad\n"
+	sha := gitIn(t, dir, commit, "hash-object", "-t", "commit", "-w", "--literally", "--stdin")
+	gitIn(t, dir, "", "update-ref", "refs/heads/feat", sha)
+	chk := exec.Command("git", "-C", dir, "fsck", "--strict", "--no-dangling")
+	chk.Env = CleanEnv()
+	if out, err := chk.CombinedOutput(); err == nil || !strings.Contains(string(out), "missingEmail") {
+		t.Fatalf("the fixture commit is not the broken object this test needs: %v: %s", err, out)
+	}
+	_, err := x.fetch()
+	if err == nil || !strings.Contains(err.Error(), "strict checks") {
+		t.Fatalf("err = %v, want a strict-check refusal", err)
+	}
+	if _, err := x.ofRev("refs/heads/box/feat"); err == nil {
+		t.Error("box/feat exists after a refused fetch")
+	}
+	x.tempEmpty()
+}
+
+func TestPackOffset(t *testing.T) {
+	write := func(content string) *os.File {
+		f, err := os.Create(filepath.Join(t.TempDir(), "b"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { f.Close() })
+		f.WriteString(content)
+		f.Seek(0, io.SeekStart)
+		return f
+	}
+	sha := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name, in string
+		want     int64
+		bad      string
+	}{
+		{"v2", "# v2 git bundle\n-" + sha + " c\n" + sha + " refs/heads/x\n\nPACK", int64(len("# v2 git bundle\n-" + sha + " c\n" + sha + " refs/heads/x\n\n")), ""},
+		{"v2 empty header", "# v2 git bundle\n\nPACK", int64(len("# v2 git bundle\n\n")), ""},
+		{"v3", "# v3 git bundle\n@object-format=sha1\n" + sha + " refs/heads/x\n\nPACK", int64(len("# v3 git bundle\n@object-format=sha1\n" + sha + " refs/heads/x\n\n")), ""},
+		{"v3 filter", "# v3 git bundle\n@filter=blob:none\n\nPACK", 0, "not supported"},
+		{"v1", "# v1 git bundle\n\nPACK", 0, "not a git bundle"},
+		{"garbage", "PACK\x00\x00", 0, "bundle"},
+		{"no blank line", "# v2 git bundle\n" + sha + " refs/heads/x\n", 0, "truncated"},
+		{"long line", "# v2 git bundle\n" + strings.Repeat("x", 70<<10) + "\n\n", 0, "too long"},
+	} {
+		got, err := packOffset(write(tc.in))
+		switch {
+		case tc.bad != "" && (err == nil || !strings.Contains(err.Error(), tc.bad)):
+			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.bad)
+		case tc.bad == "" && (err != nil || got != tc.want):
+			t.Errorf("%s: off = %d, %v; want %d", tc.name, got, err, tc.want)
+		}
 	}
 }
 
@@ -444,15 +549,20 @@ func writeScript(t *testing.T, body string) string {
 	return p
 }
 
-func TestExecDockerStreamsStdoutAndCapsStderr(t *testing.T) {
-	bin := writeScript(t, `printf 'DATA'; i=0; while [ $i -lt 2000 ]; do printf 'xxxxxxxxxx' >&2; i=$((i+1)); done; printf '\033]52;c;evil\007' >&2; exit 3`)
+func TestExecDockerStreamsStdoutAndKeepsStderrTail(t *testing.T) {
+	// 20000 bytes of noise, then an escape sequence and the real fatal line: the
+	// kept tail must hold the escape (so sanitizing is exercised) and the last line.
+	bin := writeScript(t, `printf 'DATA'; i=0; while [ $i -lt 2000 ]; do printf 'xxxxxxxxxx' >&2; i=$((i+1)); done; printf '\033]52;c;evil\007\nfatal: the final line\n' >&2; exit 3`)
 	var out bytes.Buffer
 	err := ExecDocker{Bin: bin}.RunStream(context.Background(), []string{"run"}, &out)
 	if out.String() != "DATA" {
 		t.Errorf("stdout = %q", out.String())
 	}
 	if err == nil || strings.ContainsAny(err.Error(), "\x1b\x07") || len(err.Error()) > 600 {
-		t.Fatalf("err = %q (%d bytes)", err, len(fmt.Sprint(err)))
+		t.Fatalf("err = %q", err)
+	}
+	if !strings.Contains(err.Error(), "?]52;c;evil?") || !strings.Contains(err.Error(), "fatal: the final line") {
+		t.Errorf("err = %q, want the sanitized escape and the final line", err)
 	}
 }
 

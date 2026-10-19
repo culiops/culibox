@@ -48,8 +48,8 @@ func ValidBranch(b string) error {
 }
 
 // sanitize makes box-written text safe to print on the host terminal: C0
-// controls, DEL, C1 controls and the U+2028/U+2029 line separators become "?",
-// and at most 200 runes are kept. Every string a box can influence (commit
+// controls, DEL, C1 controls, the U+2028/U+2029 line separators and the bidi
+// controls (U+202A-202E, U+2066-2069) become "?", and at most 200 runes are kept. Every string a box can influence (commit
 // subjects, branch names, bundle-container stderr) goes through it.
 func sanitize(s string) string { return sanitizeN(s, 200) }
 
@@ -61,7 +61,8 @@ func sanitizeN(s string, max int) string {
 			break
 		}
 		switch {
-		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == ' ', r == ' ':
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f, r == 0x2028, r == 0x2029,
+			r >= 0x202a && r <= 0x202e, r >= 0x2066 && r <= 0x2069:
 			r = '?'
 		}
 		b.WriteRune(r) // invalid UTF-8 became U+FFFD in the range loop

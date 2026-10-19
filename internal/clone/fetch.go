@@ -1,6 +1,7 @@
 package clone
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -20,8 +21,9 @@ import (
 
 // The return path (spec §6.4, D9). Code leaves a clone only as a git bundle
 // made inside a throwaway container with no network, whose only output is
-// stdout into a temp file the host created. The host then verifies the bundle
-// and fetches it into clone_of with fsck on. The host never runs git against
+// stdout into a temp file the host created. The host then verifies the bundle,
+// strict-checks its pack with index-pack (git does not fsck a bundle fetch) and
+// fetches it into clone_of. The host never runs git against
 // the clone's .git: a planted commondir, alternates or symlinked ref there
 // would otherwise pull an unrelated private repo into the main repo.
 
@@ -60,8 +62,9 @@ type Docker interface {
 type ExecDocker struct{ Bin string }
 
 // RunStream runs docker with args. stdout is copied to the writer as it
-// arrives, never held whole in memory. stderr is capped at 8 KiB, and the
-// error carries only its last 200 runes, sanitized (box-written text). A
+// arrives, never held whole in memory. stderr keeps its last 8 KiB (the final
+// "fatal:" line is the useful one), and the error carries only its last 200
+// runes, sanitized (box-written text). A
 // failing writer or a cancelled ctx stops the container (SIGTERM, which the
 // docker CLI forwards, then a kill after 10s) and leaves no goroutine behind.
 func (d ExecDocker) RunStream(ctx context.Context, args []string, stdout io.Writer) error {
@@ -71,14 +74,14 @@ func (d ExecDocker) RunStream(ctx context.Context, args []string, stdout io.Writ
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	sink := &stopOnError{w: stdout, stop: cancel}
-	errb := &capBuffer{max: maxDockerStderr}
+	errb := &tailBuffer{max: maxDockerStderr}
 	cmd.Stdout, cmd.Stderr = sink, errb
 	err := cmd.Run()
 	if sink.err != nil {
 		return fmt.Errorf("docker run: writing its output: %w", sink.err)
 	}
 	if err != nil {
-		return fmt.Errorf("docker run: %w: %s", err, sanitize(tailRunes(strings.TrimSpace(errb.buf.String()), maxErrRunes)))
+		return fmt.Errorf("docker run: %w: %s", err, sanitize(tailRunes(strings.TrimSpace(errb.String()), maxErrRunes)))
 	}
 	return nil
 }
@@ -100,6 +103,27 @@ func (s *stopOnError) Write(p []byte) (int, error) {
 		s.stop()
 	}
 	return n, err
+}
+
+// tailBuffer keeps the last max bytes written and swallows the rest.
+type tailBuffer struct {
+	b   []byte
+	max int
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.b = append(t.b, p...)
+	if len(t.b) > 2*t.max { // amortised: trim in chunks, not on every write
+		t.b = append(t.b[:0], t.b[len(t.b)-t.max:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	if len(t.b) > t.max {
+		return string(t.b[len(t.b)-t.max:])
+	}
+	return string(t.b)
 }
 
 func tailRunes(s string, n int) string {
@@ -283,7 +307,18 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		return res, fmt.Errorf("clone fetch: the bundle does not verify: %w", err)
 	}
 
-	// 7. Into clone_of as box/<branch>, forced, fsck on.
+	// 6b. git does not fsck the objects of a bundle fetch (measured, git 2.43:
+	// fetch.fsckObjects/transfer.fsckObjects pass a commit with no author
+	// email), so the pack goes through index-pack --strict first. A failure
+	// leaves no ref; index-pack drops the pack it refused.
+	if err := strictIndexPack(ctx, g, c.Of, tmp); err != nil {
+		if ctx.Err() != nil {
+			return res, fmt.Errorf("clone fetch: %w", ctx.Err())
+		}
+		return res, fmt.Errorf("clone fetch: the bundle's objects fail git's strict checks: %s", sanitizeN(err.Error(), maxLongErr))
+	}
+
+	// 7. Into clone_of as box/<branch>, forced.
 	ref := "refs/heads/box/" + r.Branch
 	if _, err := hostGit("-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true",
 		"fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
@@ -334,12 +369,20 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	// 9. Paths at or under a share are the host's local-only files: a box
 	// commit touching one (git add -f) would publish it on a push.
 	if len(c.Shares) > 0 {
-		out, err = hostGit("diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", base, ref)
+		// log, not a tree diff: a share file added then removed inside the
+		// branch is still in its history, and a push would publish it.
+		out, err = hostGit("log", "--no-ext-diff", "--no-textconv", "--format=", "--name-only", "-z",
+			"--diff-merges=first-parent", base+".."+ref)
 		if err != nil {
 			return res, fmt.Errorf("clone fetch: fetched %s but cannot list its files: %w", ref, err)
 		}
+		seen := map[string]bool{}
 		var hit []string
 		for _, p := range strings.Split(string(out), "\x00") {
+			if seen[p] {
+				continue
+			}
+			seen[p] = true
 			for _, s := range c.Shares {
 				if p == s || strings.HasPrefix(p, s+"/") {
 					hit = append(hit, sanitize(p))
@@ -358,4 +401,88 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		}
 	}
 	return res, nil
+}
+
+const (
+	maxBundleHeader     = 1 << 20  // bytes of header (prerequisites, refs) before the pack
+	maxBundleHeaderLine = 64 << 10 // one header line
+)
+
+// packOffset returns where the pack starts in a bundle file: after the header's
+// terminating blank line. It accepts the "# v2 git bundle" and "# v3 git
+// bundle" signatures (v3 may carry "@object-format=..." capability lines) and
+// refuses anything else, including a filtered (partial) v3 bundle.
+func packOffset(f *os.File) (int64, error) {
+	br := bufio.NewReaderSize(f, 4096)
+	var off int64
+	readLine := func() (string, error) {
+		line, err := br.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			return "", errors.New("bundle header line too long")
+		}
+		if err != nil {
+			return "", errors.New("bundle header is truncated")
+		}
+		off += int64(len(line))
+		if off > maxBundleHeader {
+			return "", errors.New("bundle header too long")
+		}
+		return string(line[:len(line)-1]), nil
+	}
+	sig, err := readLine()
+	if err != nil {
+		return 0, err
+	}
+	switch sig {
+	case "# v2 git bundle":
+	case "# v3 git bundle":
+		for {
+			peek, perr := br.Peek(1)
+			if perr != nil || peek[0] != '@' {
+				break
+			}
+			line, err := readLine()
+			if err != nil {
+				return 0, err
+			}
+			if !strings.HasPrefix(line, "@object-format=") {
+				return 0, fmt.Errorf("bundle capability %q is not supported", sanitize(line))
+			}
+		}
+	default:
+		return 0, fmt.Errorf("not a git bundle (signature %q)", sanitize(sig))
+	}
+	for {
+		line, err := readLine()
+		if err != nil {
+			return 0, err
+		}
+		if line == "" {
+			return off, nil
+		}
+	}
+}
+
+// strictIndexPack feeds the pack inside the bundle file to `git index-pack
+// --strict --fix-thin --stdin` in of, which fscks every object (missingEmail,
+// badTree, a .gitmodules trick...) and completes a thin pack from of's objects.
+func strictIndexPack(ctx context.Context, g Git, of, bundle string) error {
+	sg, ok := g.(StdinGit)
+	if !ok {
+		return errors.New("this git runner cannot take stdin")
+	}
+	f, err := os.Open(bundle)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	off, err := packOffset(f)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Seek(off, io.SeekStart); err != nil {
+		return err
+	}
+	_, err = sg.RunStdin(ctx, of, CleanEnv(), f, "index-pack", "--strict", "--fix-thin", "--stdin")
+	return err
 }
