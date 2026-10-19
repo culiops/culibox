@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -729,5 +730,32 @@ func TestInPlaceRefusesCoreWorktreeAndBare(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGitConfigValues(t *testing.T) {
+	cases := []struct {
+		name, in, section, key string
+		want                   []string
+		ok                     bool
+	}{
+		{"one", "[remote \"origin\"]\n\turl = /a\n", "remote.origin", "url", []string{"/a"}, true},
+		{"two in order", "[remote \"origin\"]\n\turl = /a\n\turl = /b\n", "remote.origin", "url", []string{"/a", "/b"}, true},
+		{"subsection case is kept", "[remote \"Origin\"]\n\turl = /a\n", "remote.origin", "url", nil, true},
+		{"section name is case-insensitive", "[REMOTE \"origin\"]\n\turl = /a\n", "remote.origin", "url", []string{"/a"}, true},
+		{"key is case-insensitive", "[remote \"origin\"]\n\tURL = /a\n", "remote.origin", "url", []string{"/a"}, true},
+		{"key on the header line", "[remote \"origin\"] url=/b\n", "remote.origin", "url", []string{"/b"}, true},
+		{"other section ignored", "[core]\n\turl = /x\n[remote \"origin\"]\n\tfetch = f\n", "remote.origin", "url", nil, true},
+		{"matching bare key", "[remote \"origin\"]\n\turl\n", "remote.origin", "url", nil, false},
+		{"other bare key", "[core]\n\tbare\n[remote \"origin\"]\n\turl = /a\n", "remote.origin", "url", []string{"/a"}, true},
+		{"unterminated section", "[remote \"origin\"\n\turl = /a\n", "remote.origin", "url", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := GitConfigValues([]byte(c.in), c.section, c.key)
+			if ok != c.ok || !slices.Equal(got, c.want) {
+				t.Fatalf("GitConfigValues(%q, %q, %q) = %q, %v; want %q, %v", c.in, c.section, c.key, got, ok, c.want, c.ok)
+			}
+		})
 	}
 }

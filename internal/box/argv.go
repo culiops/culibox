@@ -70,6 +70,7 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		args = append(args, "--label", LabelExclusive+"=1")
 	}
 	// Extra binds are always read-only. The caller chooses what, never whether.
+	// That includes a clone-mode box's mounts (BoxKey.Clone): none is writable.
 	for _, mt := range extraRO {
 		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
 	}

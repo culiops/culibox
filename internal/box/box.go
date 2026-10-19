@@ -102,6 +102,12 @@ var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 // must never contain env values or secrets.
 var ErrBoxUnavailable = errors.New("containment unavailable")
 
+// ErrBoxOwned marks a host-tier spawn refused because its directory is a clone
+// that a box owns: the box can rewrite anything in it, so the host must not run
+// an agent (or git, or a build) there. Its message names the path the user
+// picked and the remedy, so it is shown to them.
+var ErrBoxOwned = errors.New("box-owned directory")
+
 // ErrWorkspaceHeld marks a boxed spawn refused because its folder overlaps a
 // box it must not share with (M3b §7.2). Its message names only the folder the
 // user picked and the remedy, so it is shown to them.
@@ -318,9 +324,26 @@ func (m *Manager) Runtime() string { return m.runtime }
 // failed to build. A box carrying more than such a spawn asks for is then not
 // taken as differing from it, so a failed build never strips an idle box of the
 // bundle the next spawn will want back (see reuseMounts).
+//
+// Clone is set by the session layer for a clone-mode profile (nil for every
+// other spawn). Its hash is part of the identity: reuseMounts compares in-box
+// destinations only, so without it a profile whose clone_of changed, with the
+// same default_cwd and share list, would reuse a box still mounting the old
+// repo's files.
 type BoxKey struct {
 	Account, Binding, Session string
 	PartialMounts             bool
+	Clone                     *CloneMounts
+}
+
+// CloneMounts is the clone-mode part of a BoxKey. Hash identifies the clone spec
+// (config.Clone.Hash); RO are the read-only mounts the clone needs: the source
+// repo's .git, the shared paths and the memory dir. Wrap appends them to the
+// extra read-only binds. A clone adds no writable bind (spec D12): the only
+// writable mounts of a box stay its workspace and its home.
+type CloneMounts struct {
+	Hash string
+	RO   []Mount
 }
 
 // boxName derives the container name from the canonical workspace path.
@@ -332,6 +355,7 @@ type BoxKey struct {
 // An AWS binding hash is mixed in last, so a session without a binding never
 // shares a box with one that has a binding, sessions with the same binding
 // share, and an unbound session's name is unchanged from before bindings.
+// A clone-mode spec hash goes after those, so a non-clone name is unchanged too.
 func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -350,6 +374,9 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	}
 	if k.Session != "" {
 		key += "\x00session:" + k.Session
+	}
+	if k.Clone != nil {
+		key += "\x00clone:" + k.Clone.Hash
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
@@ -576,7 +603,18 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("box: resolving workspace %q: %w", cwd, err)
 	}
-	if m.opts.GuardInPlace {
+	if key.Clone != nil {
+		if key.Clone.Hash == "" {
+			return nil, nil, "", errors.New("box: a clone-mode spawn needs the clone's hash")
+		}
+		// Ordinary read-only extras: MountUnsafe, reuseMounts (a live box missing
+		// a required clone mount is refused, an idle one recreated) and runArgs
+		// all see them, and runArgs renders every extra read-only.
+		extraRO = append(slices.Clip(extraRO), key.Clone.RO...)
+	}
+	// A clone workspace is the box's own tree, rewritable by the box by design;
+	// guarding its .git/.claude would only protect the box from itself.
+	if m.opts.GuardInPlace && key.Clone == nil {
 		// Derived from the resolved path, which is what docker mounts. Appended
 		// as ordinary read-only extras, so MountUnsafe, reuseMounts (a live box
 		// without a guard is refused, an idle one recreated) and runArgs all see

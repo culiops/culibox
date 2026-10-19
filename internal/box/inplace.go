@@ -714,6 +714,75 @@ func parseGitCore(data []byte) (c gitCore) {
 	}
 }
 
+// GitConfigValues returns every value of section.key in one git config file, in
+// order, read with the same parser as parseGitCore. section is named as git
+// names it: the base lowercased, a quoted subsection with its case kept
+// ("remote.origin"); key is lowercase. ok is false when git would reject the
+// file (nothing after the error is read, so a value could be hidden behind it),
+// or when a matching key has no value at all (git dies reading it as a string).
+func GitConfigValues(data []byte, section, key string) (vals []string, ok bool) {
+	s := &cfgScanner{s: strings.TrimPrefix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\xef\xbb\xbf")}
+	cur := ""
+	comment := false
+	for {
+		ch, eof := s.next()
+		if ch == '\n' {
+			if eof {
+				return vals, true
+			}
+			comment = false
+			continue
+		}
+		if comment || cfgSpace(ch) {
+			continue
+		}
+		if ch == '#' || ch == ';' {
+			comment = true
+			continue
+		}
+		if ch == '[' {
+			name, ok := s.section()
+			if !ok {
+				return nil, false
+			}
+			cur = name
+			continue
+		}
+		if !cfgAlpha(ch) {
+			return nil, false
+		}
+		var k strings.Builder
+		k.WriteByte(cfgLower(ch))
+		for {
+			ch, eof = s.next()
+			if eof || !cfgKeyChar(ch) {
+				break
+			}
+			k.WriteByte(cfgLower(ch))
+		}
+		for ch == ' ' || ch == '\t' {
+			ch, _ = s.next()
+		}
+		match := cur == section && k.String() == key
+		if ch == '\n' { // a bare key
+			if match {
+				return nil, false
+			}
+			continue
+		}
+		if ch != '=' {
+			return nil, false
+		}
+		v, ok := s.value()
+		if !ok {
+			return nil, false
+		}
+		if match {
+			vals = append(vals, v)
+		}
+	}
+}
+
 // gitFalse: v is one of git's spellings of boolean false. An empty value is
 // false to git too, but is not accepted here: only a spelled-out false is.
 func gitFalse(v string) bool {
