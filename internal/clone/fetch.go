@@ -1,0 +1,361 @@
+package clone
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/config"
+)
+
+// The return path (spec §6.4, D9). Code leaves a clone only as a git bundle
+// made inside a throwaway container with no network, whose only output is
+// stdout into a temp file the host created. The host then verifies the bundle
+// and fetches it into clone_of with fsck on. The host never runs git against
+// the clone's .git: a planted commondir, alternates or symlinked ref there
+// would otherwise pull an unrelated private repo into the main repo.
+
+var (
+	maxBundleBytes int64 = 512 << 20 // a bigger bundle is refused, not truncated
+	fetchTimeout         = 10 * time.Minute
+)
+
+// boxTmp is the bundle container's own tmpfs and HOME, not a host path.
+const boxTmp = "/tmp"
+
+// maxDockerStderr caps the stderr kept from the docker CLI; the error carries
+// the last maxErrRunes of it, sanitized.
+const (
+	maxDockerStderr = 8 << 10
+	maxErrRunes     = 200
+	maxLongErr      = 600
+	maxWarnPaths    = 10
+)
+
+var (
+	shaRE  = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
+	hexRE  = regexp.MustCompile(`^[0-9a-f]{4,64}$`)
+	attrRE = regexp.MustCompile(`(?i)co-authored-by:|generated with`)
+
+	errBundleTooBig = errors.New("bundle too large")
+)
+
+// Docker runs one docker CLI invocation, streaming its stdout to a writer.
+type Docker interface {
+	RunStream(ctx context.Context, args []string, stdout io.Writer) error
+}
+
+// ExecDocker is the real Docker, running the docker binary at Bin (resolve it
+// with box.LookDocker).
+type ExecDocker struct{ Bin string }
+
+// RunStream runs docker with args. stdout is copied to the writer as it
+// arrives, never held whole in memory. stderr is capped at 8 KiB, and the
+// error carries only its last 200 runes, sanitized (box-written text). A
+// failing writer or a cancelled ctx stops the container (SIGTERM, which the
+// docker CLI forwards, then a kill after 10s) and leaves no goroutine behind.
+func (d ExecDocker) RunStream(ctx context.Context, args []string, stdout io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, d.Bin, args...)
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	cmd.WaitDelay = 10 * time.Second
+	sink := &stopOnError{w: stdout, stop: cancel}
+	errb := &capBuffer{max: maxDockerStderr}
+	cmd.Stdout, cmd.Stderr = sink, errb
+	err := cmd.Run()
+	if sink.err != nil {
+		return fmt.Errorf("docker run: writing its output: %w", sink.err)
+	}
+	if err != nil {
+		return fmt.Errorf("docker run: %w: %s", err, sanitize(tailRunes(strings.TrimSpace(errb.buf.String()), maxErrRunes)))
+	}
+	return nil
+}
+
+// stopOnError remembers the first write error and stops the command, so a full
+// sink does not leave the child blocked on a pipe nobody reads.
+type stopOnError struct {
+	w    io.Writer
+	stop func()
+	err  error
+}
+
+func (s *stopOnError) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	if err != nil {
+		if s.err == nil {
+			s.err = err
+		}
+		s.stop()
+	}
+	return n, err
+}
+
+func tailRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[len(r)-n:])
+}
+
+// FetchRequest is one `clone fetch`.
+type FetchRequest struct {
+	Clone    config.Clone
+	Branch   string // branch in the clone to bring home
+	Base     string // branch in clone_of the range starts after (usually main)
+	Image    string // the box image the bundle container runs
+	Instance string // this daemon's instance label
+	TempDir  string // where the bundle temp file is made (under the data root)
+
+	Home      string             // the host user's home (CheckOf)
+	Protected []box.ProtectedDir // dirs no mount may be, contain or sit in
+}
+
+// FetchResult is what came home.
+type FetchResult struct {
+	Ref      string // refs/heads/box/<Branch> in clone_of
+	BaseSHA  string
+	Commits  []string // "<hash> <subject>", newest first, sanitized
+	Warnings []string
+}
+
+// BundleArgs is the docker argv (after "docker") of the bundle container: no
+// network, no capabilities, a read-only rootfs, the clone and clone_of's .git
+// mounted read-only, and no box label (a box label would make claimCheck read
+// it as a box, spec correction 9). GIT_ALTERNATE_OBJECT_DIRECTORIES lets the
+// range ^<baseSHA> resolve when clone_of's base moved past what the clone has
+// (correction 7).
+func BundleArgs(r FetchRequest, baseSHA string) []string {
+	of, dir := r.Clone.Of, r.Clone.Dir
+	gitDir := of + "/.git"
+	return []string{
+		"run", "--rm", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"--tmpfs", boxTmp + ":rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
+		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
+		"--label", "io.culiops.agent-box.clonefetch=" + r.Instance,
+		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1",
+		"-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitDir + "/objects",
+		"--mount", "type=bind,src=" + dir + ",dst=" + dir + ",readonly",
+		"--mount", "type=bind,src=" + gitDir + ",dst=" + gitDir + ",readonly",
+		"--entrypoint", "git", r.Image,
+		"-C", dir, "bundle", "create", "-", "refs/heads/" + r.Branch, "^" + baseSHA,
+	}
+}
+
+// capWriter writes to a file and fails once more than max bytes would be
+// written. Name is explicit (not an embedded *os.File) so io.Copy cannot reach
+// the file's ReadFrom and bypass the cap.
+type capWriter struct {
+	f   *os.File
+	max int64
+	n   int64
+	err error
+}
+
+func (c *capWriter) Name() string { return c.f.Name() }
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	if c.n+int64(len(p)) > c.max {
+		c.err = errBundleTooBig
+		return 0, c.err
+	}
+	n, err := c.f.Write(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// Fetch brings branch r.Branch of the clone home as refs/heads/box/<Branch> in
+// clone_of, through a bundle made in a network-less container. Every host git
+// call runs in clone_of with CleanEnv(), never in the clone. Any error leaves
+// no ref changed by a half-checked bundle and no temp file behind.
+func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResult, err error) {
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+	c := r.Clone
+
+	// 1. Names that reach a ref path, a refspec and an argv.
+	if err := ValidBranch(r.Branch); err != nil {
+		return res, err
+	}
+	if err := ValidBranch(r.Base); err != nil {
+		return res, err
+	}
+	if r.Image == "" || strings.HasPrefix(r.Image, "-") {
+		return res, fmt.Errorf("clone fetch: the box image %q is not usable", sanitize(r.Image))
+	}
+
+	// 2. Paths that are mounted into the container.
+	if err := CheckOf(c.Of, r.Home, r.Protected); err != nil {
+		return res, err
+	}
+	unusable := func(why string) error {
+		return fmt.Errorf("%w: clone %s %s", box.ErrUnboxableWorkspace, c.Dir, why)
+	}
+	if !filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir {
+		return res, unusable("is not a clean absolute path")
+	}
+	st, lerr := os.Lstat(c.Dir)
+	switch {
+	case lerr != nil:
+		return res, unusable("cannot be read: " + sanitize(lerr.Error()))
+	case st.Mode()&fs.ModeSymlink != 0:
+		return res, unusable("is a symlink; use the resolved path")
+	case !st.IsDir():
+		return res, unusable("is not a directory")
+	}
+	for _, p := range []string{c.Dir, filepath.Join(c.Of, ".git")} {
+		if why := box.MountUnsafe(p); why != "" {
+			return res, fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, p, why)
+		}
+	}
+
+	hostGit := func(args ...string) ([]byte, error) {
+		out, err := g.Run(ctx, c.Of, CleanEnv(), args...)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			// git's own text can name refs and subjects a box wrote.
+			return nil, errors.New(sanitizeN(err.Error(), maxLongErr))
+		}
+		return out, nil
+	}
+
+	// 3. The base, as a SHA from clone_of.
+	out, err := hostGit("rev-parse", "--verify", "--end-of-options", "refs/heads/"+r.Base+"^{commit}")
+	if err != nil {
+		return res, fmt.Errorf("base branch %s in %s: %w", r.Base, c.Of, err)
+	}
+	base := strings.TrimSpace(string(out))
+	if !shaRE.MatchString(base) {
+		return res, fmt.Errorf("base branch %s in %s: unexpected rev-parse output", r.Base, c.Of)
+	}
+
+	// 4. A fresh 0600 temp file the host chose; removed on every path out.
+	if err := os.MkdirAll(r.TempDir, 0o700); err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	f, err := os.CreateTemp(r.TempDir, "bundle-*")
+	if err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	tmp := f.Name()
+	defer func() { f.Close(); os.Remove(tmp) }()
+
+	// 5. The bundle, made in the container. Success is the exit status alone:
+	// an empty range exits 128 but has already written a header to stdout.
+	cw := &capWriter{f: f, max: maxBundleBytes}
+	runErr := d.RunStream(ctx, BundleArgs(r, base), cw)
+	if cw.err != nil {
+		return res, fmt.Errorf("clone fetch: the bundle is larger than %d bytes; refusing it", maxBundleBytes)
+	}
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return res, fmt.Errorf("clone fetch: %w", ctx.Err())
+		}
+		msg := sanitizeN(runErr.Error(), maxLongErr)
+		if strings.Contains(runErr.Error(), "empty bundle") {
+			return res, fmt.Errorf("nothing to fetch: %s has no commits that %s lacks", r.Branch, r.Base)
+		}
+		return res, fmt.Errorf("clone fetch: bundling %s in the container: %s", r.Branch, msg)
+	}
+	if err := f.Close(); err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+
+	// 6. The bundle must be complete against clone_of.
+	if _, err := hostGit("bundle", "verify", tmp); err != nil {
+		return res, fmt.Errorf("clone fetch: the bundle does not verify: %w", err)
+	}
+
+	// 7. Into clone_of as box/<branch>, forced, fsck on.
+	ref := "refs/heads/box/" + r.Branch
+	if _, err := hostGit("-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true",
+		"fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
+		tmp, "+refs/heads/"+r.Branch+":"+ref); err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	res = FetchResult{Ref: ref, BaseSHA: base}
+
+	// 8. What came: sanitized lines, and the attribution trailers a push must not carry.
+	out, err = hostGit("log", "--no-show-signature", "--format=%h%x09%s%x00%B%x1e", base+".."+ref)
+	if err != nil {
+		return res, fmt.Errorf("clone fetch: fetched %s but cannot list it: %w", ref, err)
+	}
+	attributed := 0
+	var body strings.Builder
+	flush := func() {
+		if attrRE.MatchString(body.String()) {
+			attributed++
+		}
+		body.Reset()
+	}
+	started := false
+	for _, rec := range strings.Split(string(out), "\x1e") {
+		rec = strings.TrimLeft(rec, "\n")
+		head, rest, hasBody := strings.Cut(rec, "\x00")
+		h, subj, ok := strings.Cut(head, "\t")
+		if ok && hasBody && hexRE.MatchString(h) {
+			if started {
+				flush()
+			}
+			started = true
+			res.Commits = append(res.Commits, sanitize(h+" "+subj))
+			body.WriteString(rest)
+			continue
+		}
+		// Not a record start: a box put the separator inside a message. Keep it
+		// with the previous commit so a trailer cannot hide behind it.
+		body.WriteString(rec)
+	}
+	if started {
+		flush()
+	}
+	if attributed > 0 {
+		res.Warnings = append(res.Warnings, fmt.Sprintf(
+			"%d commit(s) carry an AI attribution trailer (Co-Authored-By / Generated with); strip them before any push", attributed))
+	}
+
+	// 9. Paths at or under a share are the host's local-only files: a box
+	// commit touching one (git add -f) would publish it on a push.
+	if len(c.Shares) > 0 {
+		out, err = hostGit("diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", base, ref)
+		if err != nil {
+			return res, fmt.Errorf("clone fetch: fetched %s but cannot list its files: %w", ref, err)
+		}
+		var hit []string
+		for _, p := range strings.Split(string(out), "\x00") {
+			for _, s := range c.Shares {
+				if p == s || strings.HasPrefix(p, s+"/") {
+					hit = append(hit, sanitize(p))
+					break
+				}
+			}
+		}
+		if len(hit) > 0 {
+			more := ""
+			if len(hit) > maxWarnPaths {
+				more = fmt.Sprintf(" (and %d more)", len(hit)-maxWarnPaths)
+				hit = hit[:maxWarnPaths]
+			}
+			res.Warnings = append(res.Warnings, fmt.Sprintf("box/%s changes shared (local-only) paths: %s%s",
+				r.Branch, strings.Join(hit, ", "), more))
+		}
+	}
+	return res, nil
+}
