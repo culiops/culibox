@@ -2,6 +2,7 @@ package broker
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -444,5 +445,144 @@ func TestAuditProviderOutcomeValues(t *testing.T) {
 		if string(o) != s {
 			t.Errorf("outcome %q != %q", o, s)
 		}
+	}
+}
+
+func TestAuditStaticRowRoundTrip(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.Record(Row{Time: time.Unix(20, 0), SessionID: "st-1", Profile: "p", Provider: ProviderStatic,
+		Subject: "grafana-cloud", Outcome: OutcomeFetched}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Record(Row{Time: time.Unix(21, 0), SessionID: "st-1", Profile: "p", Provider: ProviderStatic,
+		Subject: "grafana-cloud", Outcome: OutcomeUnresolved, Error: "file missing"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.ForSession("st-1", 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	if rows[1].Provider != "static" || rows[1].Subject != "grafana-cloud" || rows[1].Outcome != "fetched" {
+		t.Fatalf("fetched row: %+v", rows[1])
+	}
+	if rows[0].Outcome != "unresolved" || rows[0].Error != "file missing" {
+		t.Fatalf("unresolved row: %+v", rows[0])
+	}
+}
+
+func TestAuditPATRowCarriesEntry(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.Record(Row{Time: time.Unix(30, 0), SessionID: "pat-1", Provider: ProviderGitHub,
+		Subject: "culiops", Entry: "gh-pat", Outcome: OutcomeFetched}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.ForSession("pat-1", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	if rows[0].Entry != "gh-pat" || rows[0].Provider != "github" || rows[0].Subject != "culiops" {
+		t.Fatalf("round trip: %+v", rows[0])
+	}
+}
+
+// A store written before N3 has no entry column; opening it adds the column and
+// its rows read back with an empty Entry.
+func TestAuditOldDBGetsEntryColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(m3aSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE credential_audit ADD COLUMN elevated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE credential_audit ADD COLUMN provider TEXT NOT NULL DEFAULT 'aws'`,
+		`ALTER TABLE credential_audit ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE credential_audit ADD COLUMN installation INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE credential_audit ADD COLUMN repos INTEGER NOT NULL DEFAULT 0`,
+		`INSERT INTO credential_audit (ts, session_id, outcome, provider, subject) VALUES (1, 'pre-n3', 'minted', 'github', 'culiops')`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.Close()
+	first, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	a, err := OpenAudit(path) // reopening must be idempotent
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	rows, err := a.ForSession("pre-n3", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	if rows[0].Entry != "" || rows[0].Provider != "github" || rows[0].Subject != "culiops" {
+		t.Fatalf("old row: %+v", rows[0])
+	}
+}
+
+func TestForSessionProviderAndExcept(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	const sid = "mix-1"
+	for i := 0; i < 30; i++ {
+		if err := a.Record(Row{Time: time.Unix(int64(100+i), 0), SessionID: sid, Provider: ProviderStatic,
+			Subject: fmt.Sprintf("tok-%d", i), Outcome: OutcomeFetched}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if err := a.Record(Row{Time: time.Unix(int64(10+i), 0), SessionID: sid, Outcome: OutcomeMinted}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Another session's static row must not leak in.
+	if err := a.Record(Row{Time: time.Unix(500, 0), SessionID: "other", Provider: ProviderStatic, Outcome: OutcomeFetched}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := a.ForSessionExcept(sid, ProviderStatic, 20)
+	if err != nil || len(other) != 3 {
+		t.Fatalf("except static: %+v %v", other, err)
+	}
+	for _, r := range other {
+		if r.Provider != ProviderAWS {
+			t.Fatalf("except static returned %+v", r)
+		}
+	}
+	if !other[0].Time.After(other[2].Time) {
+		t.Fatalf("not newest first: %+v", other)
+	}
+	st, err := a.ForSessionProvider(sid, ProviderStatic, 5)
+	if err != nil || len(st) != 5 {
+		t.Fatalf("static: %+v %v", st, err)
+	}
+	for i, r := range st {
+		if want := fmt.Sprintf("tok-%d", 29-i); r.Subject != want {
+			t.Fatalf("static[%d] = %q, want %q", i, r.Subject, want)
+		}
+	}
+}
+
+func TestAuditStaticOutcomeValues(t *testing.T) {
+	if OutcomeFetched != "fetched" || OutcomeUnresolved != "unresolved" || ProviderStatic != "static" {
+		t.Fatalf("%q %q %q", OutcomeFetched, OutcomeUnresolved, ProviderStatic)
 	}
 }
