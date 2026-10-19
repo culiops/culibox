@@ -1,0 +1,171 @@
+# Builds the agent-box image for linux/amd64 and linux/arm64 on native runners
+# and publishes it to the public package ghcr.io/culiops/agent-box.
+#
+# Shape: each arch builds and pushes BY DIGEST (no tag), then one job merges
+# the two digests into a multi-arch index tagged <YYYY-MM-DD>-<7-char sha> and
+# `base`. The job summary prints the index digest; agent-box configs pin that
+# digest, never a tag (a tag is mutable).
+#
+# Supply chain (docker/agent-box/workflow_test.go guards this):
+#   - every action is pinned by full commit SHA, the release in a comment
+#   - no pull-request trigger of any kind: merges here are local, and a fork
+#     must never be able to run a job that can push
+#   - GITHUB_TOKEN is read-only except in the two jobs that push
+#   - the token goes to docker/login-action only: never a build-arg or a
+#     secret mount, so nothing secret can reach a layer or the cache
+#   - provenance and SBOM attestations are off (spec 7a.7): the index then
+#     holds exactly the two arch manifests
+#
+# Runners: Linux arm64 standard hosted runners are free and generally
+# available for PUBLIC repositories (label ubuntu-24.04-arm):
+# https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/
+#
+# Label parity: the label is computed exactly as boximage.Hash() does, the
+# first 12 hex of the Dockerfile's sha256. TestHashMatchesShellPipeline in
+# docker/agent-box/boximage_test.go proves the two computations agree.
+name: box-image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/agent-box/**"
+      - ".github/workflows/box-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time, and never cancel one midway: a half-pushed manifest list
+# is worse than a queued run.
+concurrency:
+  group: box-image
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/culiops/agent-box
+
+jobs:
+  build:
+    name: build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Label = first 12 hex of the Dockerfile sha256
+        id: label
+        run: |
+          set -euo pipefail
+          echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The image is about 4 GB uncompressed. mode=max for two arches can pass
+      # GitHub's 10 GB per-repo cache, which then evicts the oldest entries:
+      # accepted, a cold build is only slower (about 10 minutes).
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker/agent-box
+          file: docker/agent-box/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          pull: true
+          labels: io.culiops.agent-box.dockerfile=${{ steps.label.outputs.dockerfile }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/digests"
+          touch "${RUNNER_TEMP}/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: merge manifest list
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: digest-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch index and tag it
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          set -euo pipefail
+          # Exactly one digest per arch, or the index would be incomplete.
+          files=(*)
+          test "${#files[@]}" -eq 2
+          refs=()
+          for d in "${files[@]}"; do refs+=("${IMAGE}@sha256:${d}"); done
+          docker buildx imagetools create \
+            --annotation "index:org.opencontainers.image.source=https://github.com/culiops/agent-box" \
+            -t "${IMAGE}:$(date -u +%F)-${GITHUB_SHA::7}" \
+            -t "${IMAGE}:base" \
+            "${refs[@]}"
+
+      - name: Print the index digest in the job summary
+        run: |
+          set -euo pipefail
+          meta="$(docker buildx imagetools inspect "${IMAGE}:base" --format '{{json .Manifest}}')"
+          digest="$(jq -r '.digest' <<<"${meta}")"
+          platforms="$(jq -r '.manifests[] | "- " + .platform.os + "/" + .platform.architecture' <<<"${meta}")"
+          test "$(grep -c '^- linux/' <<<"${platforms}")" -eq 2
+          {
+            echo "### agent-box image"
+            echo
+            echo "Pin this digest as \`box_image\`:"
+            echo
+            echo '```'
+            echo "${IMAGE}@${digest}"
+            echo '```'
+            echo
+            echo "Platforms:"
+            echo "${platforms}"
+          } >> "$GITHUB_STEP_SUMMARY"

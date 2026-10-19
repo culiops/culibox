@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
@@ -17,6 +19,22 @@ import (
 func TestHashIsStableAndShort(t *testing.T) {
 	if Hash() != Hash() || len(Hash()) != 12 {
 		t.Fatalf("Hash() = %q", Hash())
+	}
+}
+
+// The CI workflow computes the label with
+// `sha256sum docker/agent-box/Dockerfile | cut -c1-12`; this is that computation.
+func TestHashMatchesShellPipeline(t *testing.T) {
+	b, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(b, dockerfile) {
+		t.Fatal("the embedded dockerfile differs from Dockerfile on disk")
+	}
+	sum := sha256.Sum256(b)
+	if got := hex.EncodeToString(sum[:])[:12]; got != Hash() {
+		t.Fatalf("sha256(Dockerfile)[:12] = %q, Hash() = %q", got, Hash())
 	}
 }
 
