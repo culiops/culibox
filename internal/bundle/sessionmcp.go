@@ -1,12 +1,30 @@
 package bundle
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+
+	"github.com/culiops/agent-box/internal/box"
 )
+
+const (
+	// BoxSessionMCPDir is where the directory holding a session's personal-server
+	// MCP config is mounted (read-only) inside a box.
+	BoxSessionMCPDir = "/opt/agent-session-mcp"
+	// sessionMCPDir sits beside the bundle dirs under Options.Root. It is not a
+	// bundle dir and never part of one: a bundle's identity is its content hash.
+	sessionMCPDir = "session-mcp"
+)
+
+var sessionMCPKeyRe = regexp.MustCompile(`^[0-9a-z-]{1,64}$`)
 
 // entryLauncher is the in-box command that fetches an entry's token and runs the
 // real server with it: the generated config names it and never a value.
@@ -114,6 +132,94 @@ func (p *Provider) SessionMCP(includeUser bool, drops []Drop, entries []EntrySer
 		return SessionMCP{}, err
 	}
 	return SessionMCP{Doc: doc, Key: built.Hash + suffix, Drops: drops}, nil
+}
+
+// A config that carries the user's personal servers must never be readable from
+// a box whose account did not opt into personal config. The binding dir cannot
+// hold it: it is keyed by the binding alone and mounted into every account's box
+// with that binding. So the personal config gets a directory of its own, keyed
+// by the binding, that only a box which already receives the personal bundle
+// mounts (the session layer gates both on the same account test). A config with
+// only entry and image servers is not personal and stays in the binding dir.
+
+// SessionMCPMount ensures the personal-config directory for a binding and
+// returns the mount that exposes it. The caller adds it only to boxes of an
+// account that inherits the personal config, for every agent bin: a box is
+// shared by the bins of one workspace and its mounts are fixed at start.
+func (p *Provider) SessionMCPMount(bindingKey string) (box.Mount, error) {
+	dir, root, err := p.ensureSessionMCPDir(bindingKey)
+	if err != nil {
+		return box.Mount{}, err
+	}
+	_ = root.Close()
+	return box.Mount{Host: dir, Box: BoxSessionMCPDir}, nil
+}
+
+// WriteSessionMCP writes one personal-server config into that directory and
+// returns where the box sees it. The write goes through os.Root and replaces
+// atomically: a symlink planted at the name is replaced, never followed.
+func (p *Provider) WriteSessionMCP(bindingKey, key string, doc []byte) (string, error) {
+	if !sessionMCPKeyRe.MatchString(key) {
+		return "", fmt.Errorf("bundle: bad session key %q", key)
+	}
+	dir, root, err := p.ensureSessionMCPDir(bindingKey)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	name := "mcp-" + key + ".json"
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("bundle: %w", err)
+	}
+	rel, err := filepath.Rel(p.m.opts.Root, dir)
+	if err != nil {
+		return "", fmt.Errorf("bundle: %w", err)
+	}
+	tmp := filepath.Join(rel, "."+name+"."+hex.EncodeToString(nonce[:])+".tmp")
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return "", fmt.Errorf("bundle: writing %s: %w", name, err)
+	}
+	_, err = f.Write(doc)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = root.Rename(tmp, filepath.Join(rel, name))
+	}
+	if err != nil {
+		_ = root.Remove(tmp)
+		return "", fmt.Errorf("bundle: writing %s: %w", name, err)
+	}
+	return BoxSessionMCPDir + "/" + name, nil
+}
+
+// ensureSessionMCPDir creates the binding's directory (0700) under Root through
+// os.Root and returns its path with the open root, which the caller closes.
+func (p *Provider) ensureSessionMCPDir(bindingKey string) (string, *os.Root, error) {
+	if !sessionMCPKeyRe.MatchString(bindingKey) {
+		return "", nil, fmt.Errorf("bundle: bad binding key %q", bindingKey)
+	}
+	if err := os.MkdirAll(p.m.opts.Root, 0o700); err != nil {
+		return "", nil, fmt.Errorf("bundle: creating root: %w", err)
+	}
+	root, err := os.OpenRoot(p.m.opts.Root)
+	if err != nil {
+		return "", nil, fmt.Errorf("bundle: opening root: %w", err)
+	}
+	rel := filepath.Join(sessionMCPDir, bindingKey)
+	for _, d := range []string{sessionMCPDir, rel} {
+		if err := root.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			_ = root.Close()
+			return "", nil, fmt.Errorf("bundle: %w", err)
+		}
+	}
+	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
+		_ = root.Close()
+		return "", nil, fmt.Errorf("bundle: %s is not a plain directory", rel)
+	}
+	return filepath.Join(p.m.opts.Root, rel), root, nil
 }
 
 // MarshalSessionMCP renders a composed server set as the file claude reads.

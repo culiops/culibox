@@ -359,6 +359,13 @@ type Bundles interface {
 	// entries' and the image's. drops is the bundle grant's; the result's Drops
 	// is what to report.
 	SessionMCP(includeUser bool, drops []bundle.Drop, entries []bundle.EntryServer) (bundle.SessionMCP, error)
+	// SessionMCPMount and WriteSessionMCP carry a session config that holds the
+	// user's personal servers (includeUser). It must not go in the binding dir,
+	// which every account's box with that binding mounts, so it has a directory
+	// of its own that only a box of an inheriting account mounts. bindingKey is
+	// the binding's hash.
+	SessionMCPMount(bindingKey string) (box.Mount, error)
+	WriteSessionMCP(bindingKey, key string, doc []byte) (boxPath string, err error)
 }
 
 // TokenInfo is the wire view of one bound static-token entry: what it is called
@@ -1338,8 +1345,21 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// A token entry's MCP server lives in a config of this session's own,
 		// which replaces the shared bundle's path. Claude only: it is the agent
 		// that reads --mcp-config, and a shell is never handed agent flags.
+		includeUser := acct.IsDefault || acct.InheritPersonal
+		if bundles != nil && !bundleFailed && includeUser && hasTokenMCP(bs.Tokens) {
+			// Whatever the bin: a box is shared by the bins of a workspace and its
+			// mounts are fixed at start, like the bundle's. Only boxes of an
+			// account that inherits the personal config get it (the config in it
+			// names the user's own servers).
+			mt, err := bundles.SessionMCPMount(bs.Hash())
+			if err != nil {
+				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
+			}
+			mt.Optional = !isClaudeBin(bin)
+			mounts = append(slices.Clip(mounts), mt)
+		}
 		if len(bs.Tokens) > 0 && isClaudeBin(bin) {
-			flags, drops, err := m.tokenMCP(spec, brk, bs, bundles, acct.IsDefault || acct.InheritPersonal, bundleFailed, bundleDrops)
+			flags, drops, err := m.tokenMCP(spec, brk, bs, bundles, includeUser, bundleFailed, bundleDrops)
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
 			}
@@ -1612,7 +1632,14 @@ func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.B
 			return nil, nil, err
 		}
 	}
-	path, err := brk.WriteSessionMCP(bs, sm.Key, sm.Doc)
+	// A document with the user's servers goes only where inheriting boxes look.
+	var path string
+	var err error
+	if bundles != nil && !bundleFailed && includeUser {
+		path, err = bundles.WriteSessionMCP(bs.Hash(), sm.Key, sm.Doc)
+	} else {
+		path, err = brk.WriteSessionMCP(bs, sm.Key, sm.Doc)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1623,6 +1650,11 @@ func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.B
 		args = append(args, "--mcp-config", path, "--strict-mcp-config")
 	}
 	return args, sm.Drops, nil
+}
+
+// hasTokenMCP reports whether any bound entry declares a box-side MCP server.
+func hasTokenMCP(ts []config.StaticToken) bool {
+	return slices.ContainsFunc(ts, func(e config.StaticToken) bool { return e.MCP != nil })
 }
 
 // bindingKinds lists the kinds of binding present, in a fixed order.

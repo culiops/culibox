@@ -319,3 +319,69 @@ func TestSessionMCPFileHasNoValue(t *testing.T) {
 		t.Fatalf("session mcp files = %d", files)
 	}
 }
+
+// The personal config gets a directory of its own under the bundle root: not a
+// bundle dir (a bundle's identity is its content hash), 0600 files, and a
+// symlink planted at a name is replaced, never followed.
+func TestSessionMCPPersonalDir(t *testing.T) {
+	m, _ := entryManager(t, map[string]bool{"npx": true}, nil)
+	p := NewProvider(m)
+	b := mustEnsure(t, m)
+	before, _ := os.ReadDir(b.Dir)
+
+	mt, err := p.SessionMCPMount("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mt.Box != BoxSessionMCPDir || mt.Host != filepath.Join(m.opts.Root, "session-mcp", "abc123") || mt.Optional {
+		t.Fatalf("mount = %+v", mt)
+	}
+	got, err := p.WriteSessionMCP("abc123", "h-u", []byte(`{"v":1}`))
+	if err != nil || got != BoxSessionMCPDir+"/mcp-h-u.json" {
+		t.Fatalf("%q, %v", got, err)
+	}
+	file := filepath.Join(mt.Host, "mcp-h-u.json")
+	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("%v %v", fi, err)
+	}
+	if after, _ := os.ReadDir(b.Dir); len(after) != len(before) {
+		t.Fatalf("the bundle dir changed: %d -> %d entries", len(before), len(after))
+	}
+
+	// A symlink planted at the file name is replaced, and its target untouched.
+	outside := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(file)
+	if err := os.Symlink(outside, file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.WriteSessionMCP("abc123", "h-u", []byte(`{"v":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outside); string(b) != "keep" {
+		t.Fatalf("the symlink target was written: %q", b)
+	}
+	if fi, _ := os.Lstat(file); fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the symlink was kept")
+	}
+
+	// A symlink in place of the binding's directory is refused.
+	_ = os.RemoveAll(mt.Host)
+	if err := os.Symlink(t.TempDir(), mt.Host); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.WriteSessionMCP("abc123", "h-u", []byte("x")); err == nil {
+		t.Fatal("wrote through a symlinked directory")
+	}
+
+	for _, bad := range []string{"", "../x", "A", "a/b", strings.Repeat("a", 65)} {
+		if _, err := p.SessionMCPMount(bad); err == nil {
+			t.Fatalf("binding key %q accepted", bad)
+		}
+	}
+	if _, err := p.WriteSessionMCP("abc123", "../k", nil); err == nil {
+		t.Fatal("a path-like key was accepted")
+	}
+}

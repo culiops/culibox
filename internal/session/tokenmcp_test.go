@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -76,7 +77,7 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		b := &fakeBundles{flags: bundleFlags}
 		m.SetBundles(b)
 		spawnTok(t, m)
-		want := []string{"--mcp-config", "/opt/agentbox/mcp-deadbeef-u.json", "--settings", "/opt/agent-bundle/settings.json",
+		want := []string{"--mcp-config", "/opt/agent-session-mcp/mcp-deadbeef-u.json", "--settings", "/opt/agent-bundle/settings.json",
 			"--setting-sources", "user", "--strict-mcp-config"}
 		if got := boxes.lastArgv[len(boxes.lastArgv)-len(want):]; !slices.Equal(got, want) {
 			t.Fatalf("argv tail = %q, want %q", got, want)
@@ -92,8 +93,23 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 			!slices.Equal(e.Args, []string{"grafana-prod", "--", "mcp-grafana"}) {
 			t.Fatalf("entry server = %+v", e)
 		}
-		if len(hooks.mcpKeys) != 1 || hooks.mcpKeys[0] != "deadbeef-u" {
-			t.Fatalf("written keys = %q", hooks.mcpKeys)
+		// The document names the user's servers, so it goes to the bundle layer's
+		// own directory, never the binding dir that every account's box mounts.
+		bk := config.Bindings{Tokens: []config.StaticToken{grafanaEntry()}}.Hash()
+		if !slices.Equal(b.writeKeys, []string{bk + "/deadbeef-u"}) || len(hooks.mcpKeys) != 0 {
+			t.Fatalf("bundle writes = %q, binding-dir writes = %q", b.writeKeys, hooks.mcpKeys)
+		}
+		if !slices.Equal(b.mountKeys, []string{bk}) {
+			t.Fatalf("mount asks = %q", b.mountKeys)
+		}
+		var mounted bool
+		for _, mt := range boxes.lastRO {
+			if mt.Box == bundle.BoxSessionMCPDir && mt.Host == "/b/session-mcp/"+bk && !mt.Optional {
+				mounted = true
+			}
+		}
+		if !mounted {
+			t.Fatalf("the personal-config dir is not mounted: %+v", boxes.lastRO)
 		}
 		// The bundle's own flags slice must never be edited in place.
 		if bundleFlags[1] != "/opt/agent-bundle/mcp.json" {
@@ -106,13 +122,13 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		b := &fakeBundles{flags: bundleFlags}
 		m.SetBundles(b)
 		spawnTok(t, m)
-		if got := argAfter(boxes.lastArgv, "--mcp-config"); got != "/opt/agentbox/mcp-deadbeef-u.json" || !b.smcpIncludeUser {
+		if got := argAfter(boxes.lastArgv, "--mcp-config"); got != "/opt/agent-session-mcp/mcp-deadbeef-u.json" || !b.smcpIncludeUser {
 			t.Fatalf("--mcp-config %q includeUser=%v", got, b.smcpIncludeUser)
 		}
 	})
 
 	t.Run("non-inheriting account: entry and image servers, confined", func(t *testing.T) {
-		m, boxes, _ := mcpManager(t, "claude", workAccount(false), grafanaEntry())
+		m, boxes, hooks := mcpManager(t, "claude", workAccount(false), grafanaEntry())
 		b := &fakeBundles{flags: bundleFlags}
 		m.SetBundles(b)
 		spawnTok(t, m)
@@ -126,6 +142,15 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		if b.smcpIncludeUser {
 			t.Fatal("includeUser must be false")
 		}
+		// Not personal: the binding dir, and no personal-config mount at all.
+		if len(hooks.mcpKeys) != 1 || hooks.mcpKeys[0] != "deadbeef-i" || len(b.writeKeys) != 0 || len(b.mountKeys) != 0 {
+			t.Fatalf("binding-dir writes = %q, bundle writes = %q, mounts = %q", hooks.mcpKeys, b.writeKeys, b.mountKeys)
+		}
+		for _, mt := range boxes.lastRO {
+			if mt.Box == bundle.BoxSessionMCPDir {
+				t.Fatalf("a non-inheriting box mounts the personal config dir: %+v", mt)
+			}
+		}
 		if slices.Contains(boxes.lastArgv, "--settings") {
 			t.Fatalf("a non-inheriting account got the bundle's settings: %q", boxes.lastArgv)
 		}
@@ -136,6 +161,17 @@ func TestSpawnTokenMCPFlags(t *testing.T) {
 		b := &fakeBundles{}
 		m.SetBundles(b)
 		spawnTok(t, m)
+		// The box is shared with claude sessions, so it carries the same mount,
+		// optional for a shell, and nothing is written.
+		var shellMount *box.Mount
+		for i := range boxes.lastRO {
+			if boxes.lastRO[i].Box == bundle.BoxSessionMCPDir {
+				shellMount = &boxes.lastRO[i]
+			}
+		}
+		if shellMount == nil || !shellMount.Optional || len(b.writeKeys) != 0 {
+			t.Fatalf("shell mount = %+v, writes = %q", shellMount, b.writeKeys)
+		}
 		if slices.Contains(boxes.lastArgv, "--mcp-config") || slices.Contains(boxes.lastArgv, "--strict-mcp-config") {
 			t.Fatalf("a shell got MCP flags: %q", boxes.lastArgv)
 		}
@@ -260,8 +296,19 @@ func TestSpawnTokenMCPFailureRefusesTheSpawn(t *testing.T) {
 			t.Fatal("a box was started for a refused spawn")
 		}
 	})
-	t.Run("write", func(t *testing.T) {
-		m, boxes, hooks := mcpManager(t, "claude", account.DefaultResolved(""), grafanaEntry())
+	t.Run("write, personal config", func(t *testing.T) {
+		m, boxes, _ := mcpManager(t, "claude", account.DefaultResolved(""), grafanaEntry())
+		m.SetBundles(&fakeBundles{flags: bundleFlags, writeErr: errors.New("disk full")})
+		_, err := m.Spawn(launcher.SpawnSpec{Agent: "tok", Cwd: t.TempDir()})
+		if err == nil || !strings.Contains(err.Error(), "preparing token MCP servers: disk full") {
+			t.Fatalf("err = %v", err)
+		}
+		if boxes.wraps != 0 {
+			t.Fatal("a box was started for a refused spawn")
+		}
+	})
+	t.Run("write, binding dir", func(t *testing.T) {
+		m, boxes, hooks := mcpManager(t, "claude", workAccount(false), grafanaEntry())
 		m.SetBundles(&fakeBundles{flags: bundleFlags})
 		hooks.mcpErr = errors.New("disk full")
 		_, err := m.Spawn(launcher.SpawnSpec{Agent: "tok", Cwd: t.TempDir()})
