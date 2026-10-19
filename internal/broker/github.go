@@ -36,6 +36,7 @@ type bindingKind int
 const (
 	kindAWS bindingKind = iota
 	kindGitHub
+	kindStatic
 )
 
 // ghKey scopes the token cache: one token per session and owner.
@@ -327,7 +328,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		writeGitHubToken(w, c.token, c.expires)
 		return
 	}
-	if !b.allowMintLocked(sid, now) {
+	if !b.allowLocked(sid, bucketMint, now) {
 		b.mu.Unlock()
 		row := base
 		row.Outcome = OutcomeRateLimited

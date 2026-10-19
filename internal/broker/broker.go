@@ -15,6 +15,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 )
 
 const (
@@ -23,6 +24,10 @@ const (
 	mintsPerMinute = 10
 	maxErrLen      = 300 // bytes of minter error text kept in a reply or audit row
 )
+
+// staticFetchesPerMinute is the static-token bucket, apart from the mint
+// bucket: a PAT has no cache, so every git or gh call fetches.
+const staticFetchesPerMinute = 60
 
 // SessionView is what the broker needs to know about a session. Nonce is the
 // per-spawn secret the session's token was issued with (see Token).
@@ -36,6 +41,10 @@ type SessionView struct {
 	Exclusive bool
 	AWS       *config.AWSBinding
 	GitHub    *config.GitHubBinding
+	// Tokens are the static-token entries the session may fetch by name; PATs
+	// are the entries its GitHub owners use as a personal access token.
+	Tokens []config.StaticToken
+	PATs   []config.StaticToken
 }
 
 // Lookup resolves a session id; ok is false for an unknown session.
@@ -97,10 +106,13 @@ type Broker struct {
 	minter Minter
 	rec    Recorder
 	now    func() time.Time
+	// resolve reads a static token's value at fetch time; set before the broker
+	// serves (SetResolver), credref.Default{} until then.
+	resolve credref.Resolver
 
 	mu        sync.Mutex
 	cache     map[string]cached
-	mintTimes map[string][]time.Time
+	mintTimes map[bucketKey][]time.Time
 	stats     map[string]*Stats
 	denied    map[deniedKey]*deniedState
 	lastPrune time.Time
@@ -149,8 +161,8 @@ type deniedState struct {
 const deniedWindow = time.Second
 
 func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
-	b := &Broker{secret: secret, lookup: lookup, minter: m, rec: rec, now: time.Now,
-		cache: map[string]cached{}, mintTimes: map[string][]time.Time{}, stats: map[string]*Stats{},
+	b := &Broker{secret: secret, lookup: lookup, minter: m, rec: rec, now: time.Now, resolve: credref.Default{},
+		cache: map[string]cached{}, mintTimes: map[bucketKey][]time.Time{}, stats: map[string]*Stats{},
 		denied: map[deniedKey]*deniedState{},
 		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[string]string{},
@@ -179,7 +191,8 @@ func (b *Broker) Stats(sessionID string) (Stats, bool) {
 func (b *Broker) Forget(sessionID string) {
 	b.mu.Lock()
 	delete(b.cache, sessionID)
-	delete(b.mintTimes, sessionID)
+	delete(b.mintTimes, bucketKey{sessionID, bucketMint})
+	delete(b.mintTimes, bucketKey{sessionID, bucketStatic})
 	delete(b.stats, sessionID)
 	if e := b.elev[sessionID]; e != nil {
 		e.timer.Stop()
@@ -199,6 +212,7 @@ func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/credentials", b.serveCredentials)
 	mux.HandleFunc("/v1/github/token", b.serveGitHubToken)
+	mux.HandleFunc("/v1/static/token", b.serveStaticToken)
 	return mux
 }
 
@@ -244,7 +258,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			writeCreds(w, c.creds)
 			return
 		}
-		if attempt == 0 && !b.allowMintLocked(sid, now) { // the fallback mint is not a second request
+		if attempt == 0 && !b.allowLocked(sid, bucketMint, now) { // the fallback mint is not a second request
 			b.mu.Unlock()
 			row := base
 			row.Outcome = OutcomeRateLimited
@@ -456,18 +470,38 @@ func (b *Broker) statsLocked(sid string) *Stats {
 	return s
 }
 
-func (b *Broker) allowMintLocked(sid string, now time.Time) bool {
-	kept := b.mintTimes[sid][:0]
-	for _, t := range b.mintTimes[sid] {
+// bucket names one of a session's rate windows. Mints (AWS credentials and
+// GitHub App tokens) and static-token fetches are counted apart, so a burst of
+// one never starves the other.
+type bucket int
+
+const (
+	bucketMint bucket = iota
+	bucketStatic
+)
+
+type bucketKey struct {
+	sid  string
+	kind bucket
+}
+
+func (b *Broker) allowLocked(sid string, k bucket, now time.Time) bool {
+	limit := mintsPerMinute
+	if k == bucketStatic {
+		limit = staticFetchesPerMinute
+	}
+	key := bucketKey{sid, k}
+	kept := b.mintTimes[key][:0]
+	for _, t := range b.mintTimes[key] {
 		if now.Sub(t) < time.Minute {
 			kept = append(kept, t)
 		}
 	}
-	if len(kept) >= mintsPerMinute {
-		b.mintTimes[sid] = kept
+	if len(kept) >= limit {
+		b.mintTimes[key] = kept
 		return false
 	}
-	b.mintTimes[sid] = append(kept, now)
+	b.mintTimes[key] = append(kept, now)
 	return true
 }
 
@@ -530,6 +564,8 @@ func refusalReason(sv SessionView, found bool, nonce string, k bindingKind) stri
 	case !sv.Boxed:
 		return "not boxed"
 	case k == kindAWS && sv.AWS == nil, k == kindGitHub && sv.GitHub == nil:
+		return "no binding"
+	case k == kindStatic && len(sv.Tokens) == 0:
 		return "no binding"
 	case sv.Nonce == "" || subtle.ConstantTimeCompare([]byte(sv.Nonce), []byte(nonce)) != 1:
 		return "nonce mismatch"

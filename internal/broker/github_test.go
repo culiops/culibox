@@ -250,7 +250,7 @@ func TestGitHubAPIErrorRecorded(t *testing.T) {
 	}
 	fg.err = &ghapp.APIError{Status: 500, Msg: strings.Repeat("e", 2000)}
 	b.mu.Lock()
-	b.mintTimes = map[string][]time.Time{}
+	b.mintTimes = map[bucketKey][]time.Time{}
 	b.mu.Unlock()
 	ghCall(b, tokA("s"), ghBody)
 	if n := len(rec.rows[len(rec.rows)-1].Error); n > maxErrLen+8 {

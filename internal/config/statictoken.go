@@ -83,6 +83,9 @@ var (
 	}
 )
 
+// ValidTokenName reports whether s is a well-formed static-token entry name.
+func ValidTokenName(s string) bool { return tokenNameRe.MatchString(s) }
+
 // tokenDeniedExact are names that change how a program runs or where it
 // connects. Names that only carry a token (GH_TOKEN, GITHUB_TOKEN, ...) are
 // allowed on purpose: delivering them is the point of an entry.
