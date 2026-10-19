@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -54,6 +55,16 @@ type fakeCloneHooks struct {
 	prepareErr  error
 	owned       string // non-empty = BoxOwned reports this reason
 	ownedChecks []string
+	origin      string // HostOrigin's answer
+	originErr   error
+	originOf    []string // the clone_of paths HostOrigin was asked about
+}
+
+func (f *fakeCloneHooks) HostOrigin(_ context.Context, of string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.originOf = append(f.originOf, of)
+	return f.origin, f.originErr
 }
 
 func (f *fakeCloneHooks) Prepare(_ context.Context, c config.Clone, withMemory bool) (box.CloneMounts, error) {
@@ -432,4 +443,72 @@ func TestCloneSpawnAcceptsItsCloneSpelledRelatively(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = m.Kill(s.ID)
+}
+
+// cloneGHLauncher gives the clone profile a GitHub binding too.
+type cloneGHLauncher struct {
+	cloneLauncher
+	gh *config.GitHubBinding
+}
+
+func (l cloneGHLauncher) GitHubFor(agent string) *config.GitHubBinding {
+	if agent != "clone" || l.gh == nil {
+		return nil
+	}
+	return l.gh.Clone()
+}
+
+func spawnCloneGH(t *testing.T, gh *config.GitHubBinding, hooks *fakeCloneHooks) (*fakeBoxes, error) {
+	t.Helper()
+	cl, dir := testCloneLauncher(t, config.RuntimeBox)
+	m := NewManager(cloneGHLauncher{cloneLauncher: cl, gh: gh}, nil, 1<<16, time.Minute)
+	boxes := &fakeBoxes{}
+	m.SetBoxes(boxes)
+	m.SetClone(hooks)
+	m.SetBroker(&fakeBrokerHooks{})
+	m.SetEgress(&fakeEgressHooks{})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err == nil {
+		t.Cleanup(func() { _ = m.Kill(s.ID) })
+	}
+	return boxes, err
+}
+
+func TestSpawnCloneSetsGHRepo(t *testing.T) {
+	bound := &config.GitHubBinding{Owners: []config.GitHubOwner{
+		{Owner: "culiops", App: "main", Repos: []string{"agent-box", "other"}},
+	}}
+	cases := []struct {
+		name   string
+		hooks  *fakeCloneHooks
+		binds  *config.GitHubBinding
+		want   []string
+		wantOf bool // HostOrigin must have been asked about clone_of
+	}{
+		{"origin in binding", &fakeCloneHooks{origin: "https://github.com/culiops/agent-box.git"}, bound, []string{"GH_REPO=culiops/agent-box"}, true},
+		{"ssh form, other case", &fakeCloneHooks{origin: "git@github.com:Culiops/Agent-Box.git"}, bound, []string{"GH_REPO=Culiops/Agent-Box"}, true},
+		{"repo not in binding", &fakeCloneHooks{origin: "https://github.com/culiops/secret"}, bound, nil, true},
+		{"owner not in binding", &fakeCloneHooks{origin: "https://github.com/evil/agent-box"}, bound, nil, true},
+		{"not a github origin", &fakeCloneHooks{origin: "/srv/git/agent-box.git"}, bound, nil, true},
+		{"no origin", &fakeCloneHooks{}, bound, nil, true},
+		{"origin read fails", &fakeCloneHooks{originErr: errors.New("boom")}, bound, nil, true},
+		{"no github binding", &fakeCloneHooks{origin: "https://github.com/culiops/agent-box"}, nil, nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			boxes, err := spawnCloneGH(t, c.binds, c.hooks)
+			if err != nil {
+				t.Fatalf("spawn must succeed whatever the origin says: %v", err)
+			}
+			if got := envNamed(boxes.lastEnv, "GH_REPO"); !slices.Equal(got, c.want) {
+				t.Fatalf("GH_REPO env = %q, want %q", got, c.want)
+			}
+			if c.wantOf && !slices.Equal(c.hooks.originOf, []string{"/home/u/repo"}) {
+				t.Fatalf("HostOrigin asked about %q, want the host repo only", c.hooks.originOf)
+			}
+			if !c.wantOf && len(c.hooks.originOf) != 0 {
+				t.Fatalf("HostOrigin called for a session without a GitHub binding: %q", c.hooks.originOf)
+			}
+		})
+	}
 }

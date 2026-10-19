@@ -488,3 +488,56 @@ func TestEnsureCloneRefusesSymlinkInParentChain(t *testing.T) {
 		})
 	}
 }
+
+// fakeOriginGit answers every call with out/err and records the calls.
+type fakeOriginGit struct {
+	out   string
+	err   error
+	calls []call
+}
+
+func (f *fakeOriginGit) Run(_ context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, call{dir, slices.Clone(env), slices.Clone(args)})
+	return []byte(f.out), f.err
+}
+
+func TestHostOriginURLUsesHardenedGit(t *testing.T) {
+	g := &fakeOriginGit{out: "https://github.com/culiops/agent-box.git\n"}
+	got, err := HostOriginURL(context.Background(), g, "/home/u/repo")
+	if err != nil || got != "https://github.com/culiops/agent-box.git" {
+		t.Fatalf("HostOriginURL = %q, %v", got, err)
+	}
+	if len(g.calls) != 1 {
+		t.Fatalf("%d git calls, want 1", len(g.calls))
+	}
+	c := g.calls[0]
+	if c.dir != "/home/u/repo" {
+		t.Fatalf("dir = %q, want the host repo", c.dir)
+	}
+	if !slices.Contains(c.args, "core.hooksPath=/dev/null") || !slices.Contains(c.args, "core.fsmonitor=false") {
+		t.Fatalf("args %q lack the hardening flags", c.args)
+	}
+	if !slices.Equal(c.env, CleanEnv()) {
+		t.Fatalf("env = %q, want CleanEnv", c.env)
+	}
+	if !slices.Contains(c.args, "remote.origin.url") || !slices.Contains(c.args, "--local") {
+		t.Fatalf("args %q do not read the local remote.origin.url", c.args)
+	}
+}
+
+func TestHostOriginURLUnsetIsEmpty(t *testing.T) {
+	rec := newRec(t)
+	of := makeOf(t, true) // a repo with no remotes at all
+	got, err := HostOriginURL(context.Background(), rec, of)
+	if got != "" || err != nil {
+		t.Fatalf("unset origin = %q, %v; want empty, nil", got, err)
+	}
+	fixtureGit(t, of, "remote", "add", "origin", "git@github.com:culiops/agent-box.git")
+	if got, err := HostOriginURL(context.Background(), rec, of); err != nil || got != "git@github.com:culiops/agent-box.git" {
+		t.Fatalf("set origin = %q, %v", got, err)
+	}
+	g := &fakeOriginGit{err: errors.New("boom")}
+	if _, err := HostOriginURL(context.Background(), g, "/home/u/repo"); err == nil {
+		t.Fatal("a failure other than unset must be an error")
+	}
+}

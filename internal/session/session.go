@@ -210,6 +210,36 @@ type CloneHooks interface {
 	// BoxOwned reports whether cwd is inside any profile's clone, with the
 	// reason a host-tier spawn there is refused.
 	BoxOwned(cwd string) (reason string, owned bool)
+	// HostOrigin is the host repo's remote.origin.url ("" when unset). It reads
+	// `of`, the user's repo, never the box's clone.
+	HostOrigin(ctx context.Context, of string) (string, error)
+}
+
+// cloneGHRepo is "owner/repo" for a clone-mode box when the host repo's origin
+// is a GitHub repository the binding covers, else "". In a clone the box's
+// origin is a host path, so gh cannot find the repo on its own. Any failure
+// only costs the GH_REPO hint, never the spawn.
+func cloneGHRepo(h CloneHooks, of string, g *config.GitHubBinding) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	origin, err := h.HostOrigin(ctx, of)
+	if err != nil {
+		log.Printf("session: clone_of %s: cannot read its origin, so no GH_REPO: %v", of, err)
+		return ""
+	}
+	owner, repo, ok := config.ParseGitHubRepo(origin)
+	if !ok {
+		if origin != "" {
+			log.Printf("session: clone_of %s: origin is not a plain GitHub repository, so no GH_REPO", of)
+		}
+		return ""
+	}
+	entry, ok := g.OwnerEntry(owner)
+	if !ok || !slices.ContainsFunc(entry.Repos, func(r string) bool { return strings.EqualFold(r, repo) }) {
+		log.Printf("session: clone_of %s: origin %s/%s is outside the GitHub binding, so no GH_REPO", of, owner, repo)
+		return ""
+	}
+	return owner + "/" + repo
 }
 
 // BrokerHooks is what spawning a bound session needs from the credential
@@ -1337,6 +1367,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			env = append(env, benv...)
 			env = append(env, penv...)
 			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
+			if cl != nil && bs.GitHub != nil {
+				// After the strip, which drops a profile's own GH_REPO.
+				if repo := cloneGHRepo(ch, cl.Of, bs.GitHub); repo != "" {
+					env = append(env, "GH_REPO="+repo)
+				}
+			}
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
 			key.Binding = bs.Hash()
 			if binding != nil && binding.Elevate != nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -266,4 +267,56 @@ func (b Bindings) Hash() string {
 	}
 	sum := sha256.Sum256([]byte(aws + "\x00" + b.GitHub.Hash()))
 	return hex.EncodeToString(sum[:6])
+}
+
+// ParseGitHubRepo reads owner and repo out of a remote URL. It accepts only the
+// host github.com (any case), in three spellings: https://github.com/o/r,
+// git@github.com:o/r and ssh://git@github.com/o/r, each with an optional ".git"
+// and, for the URL forms, a trailing slash. A URL that carries credentials, a
+// port, a query, a fragment or any further path segment is refused rather than
+// cleaned: the answer feeds GH_REPO, so a remote that is not plainly a GitHub
+// repository must yield nothing.
+func ParseGitHubRepo(raw string) (owner, repo string, ok bool) {
+	var path string
+	switch {
+	case strings.HasPrefix(raw, "git@"):
+		// scp-like: git@github.com:owner/repo
+		host, rest, found := strings.Cut(raw[len("git@"):], ":")
+		if !found || !strings.EqualFold(host, "github.com") {
+			return "", "", false
+		}
+		path = rest
+	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "ssh://"):
+		u, err := url.Parse(raw)
+		if err != nil || !strings.EqualFold(u.Hostname(), "github.com") || u.Port() != "" ||
+			u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+			return "", "", false
+		}
+		switch u.Scheme {
+		case "https":
+			if u.User != nil {
+				return "", "", false
+			}
+		case "ssh":
+			if _, hasPw := u.User.Password(); u.User == nil || u.User.Username() != "git" || hasPw {
+				return "", "", false
+			}
+		}
+		if !strings.HasPrefix(u.Path, "/") {
+			return "", "", false
+		}
+		path = u.Path[1:]
+	default:
+		return "", "", false
+	}
+	path = strings.TrimSuffix(path, "/")
+	owner, repo, found := strings.Cut(path, "/")
+	if !found || strings.Contains(repo, "/") {
+		return "", "", false
+	}
+	repo = strings.TrimSuffix(repo, ".git")
+	if !ValidGitHubOwner(owner) || !ValidGitHubRepo(repo) {
+		return "", "", false
+	}
+	return owner, repo, true
 }

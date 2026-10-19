@@ -245,3 +245,57 @@ func TestGitHubOwnerEntryFoldsCase(t *testing.T) {
 		t.Fatal("unexpected hit")
 	}
 }
+
+func TestParseGitHubRepo(t *testing.T) {
+	ok := []struct{ in, owner, repo string }{
+		{"https://github.com/culiops/agent-box", "culiops", "agent-box"},
+		{"https://github.com/culiops/agent-box.git", "culiops", "agent-box"},
+		{"https://github.com/culiops/agent-box/", "culiops", "agent-box"},
+		{"https://github.com/culiops/agent-box.git/", "culiops", "agent-box"},
+		{"https://GitHub.com/culiops/agent-box", "culiops", "agent-box"},
+		{"git@github.com:culiops/agent-box.git", "culiops", "agent-box"},
+		{"git@github.com:culiops/agent-box", "culiops", "agent-box"},
+		{"ssh://git@github.com/culiops/agent-box.git", "culiops", "agent-box"},
+		{"ssh://git@github.com/culiops/agent-box", "culiops", "agent-box"},
+	}
+	for _, c := range ok {
+		o, r, good := ParseGitHubRepo(c.in)
+		if !good || o != c.owner || r != c.repo {
+			t.Errorf("ParseGitHubRepo(%q) = %q, %q, %v; want %q, %q, true", c.in, o, r, good, c.owner, c.repo)
+		}
+	}
+	bad := []string{
+		"",
+		"/home/u/repo",
+		"https://gitlab.com/culiops/agent-box",
+		"git@gitlab.com:culiops/agent-box.git",
+		"https://github.com.evil.com/culiops/agent-box",
+		"https://evil.com/github.com/culiops/agent-box",
+		"git@github.com.evil.com:culiops/agent-box.git",
+		"https://github.com/-bad/agent-box",
+		"https://github.com/culiops/agent box",
+		"https://github.com/culiops",
+		"https://github.com/culiops/agent-box/extra",
+		"https://github.com/culiops/agent-box/pulls",
+		"https://github.com/culiops/..",
+		"https://github.com/culiops/.git",
+		"https://user:pw@github.com/culiops/agent-box",
+		"https://token@github.com/culiops/agent-box",
+		"https://github.com:8443/culiops/agent-box",
+		"https://github.com/culiops/agent-box?x=1",
+		"https://github.com/culiops/agent-box#frag",
+		"http://github.com/culiops/agent-box",
+		"ssh://git@github.com:22/culiops/agent-box",
+		"ssh://root@github.com/culiops/agent-box",
+		"git@github.com:culiops/agent-box/extra",
+		"git@github.com:/culiops/agent-box",
+		"root@github.com:culiops/agent-box",
+		"file:///srv/git/github.com/culiops/agent-box",
+		"https://github.com/culiops/agent-box\n",
+	}
+	for _, in := range bad {
+		if o, r, good := ParseGitHubRepo(in); good {
+			t.Errorf("ParseGitHubRepo(%q) = %q, %q, true; want refusal", in, o, r)
+		}
+	}
+}

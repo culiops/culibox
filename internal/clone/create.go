@@ -135,6 +135,15 @@ func configGet(ctx context.Context, g Git, dir string, env []string, scope, key 
 	return val, val != "", nil
 }
 
+// HostOriginURL is the host repo's own remote.origin.url ("" when unset). It
+// reads `of`, the user's repo, never a box clone: a box owns its clone's .git,
+// and git run there would honour whatever the box planted. The read goes
+// through hardened(), so a hook or fsmonitor in `of` cannot run either.
+func HostOriginURL(ctx context.Context, g Git, of string) (string, error) {
+	url, _, err := configGet(ctx, g, of, CleanEnv(), "--local", "remote.origin.url")
+	return url, err
+}
+
 // checkParents refuses a c.Dir whose parent chain holds a symlink. MkdirAll,
 // MkdirTemp and docker's mount all follow links, so a link planted by another
 // box that can write above the clone would make the host create the clone, and
