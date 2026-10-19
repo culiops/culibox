@@ -290,8 +290,8 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 15 {
-		t.Errorf("found %d downloads, want at least 15 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet)", downloads)
+	if downloads < 17 {
+		t.Errorf("found %d downloads, want at least 17 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key)", downloads)
 	}
 }
 
@@ -734,6 +734,7 @@ func TestDockerfileFrequentPinsLast(t *testing.T) {
 			after = append(after, tb.arg+suffix)
 		}
 	}
+	after = append(after, "TFENV_VERSION=", "TFENV_SHA256=")
 	for _, line := range strings.Split(df, "\n") {
 		if strings.HasPrefix(line, "ARG GH_") {
 			after = append(after, strings.SplitAfter(strings.TrimPrefix(line, "ARG "), "=")[0])
@@ -812,5 +813,150 @@ func TestDockerfileSourceLabel(t *testing.T) {
 	}
 	if last := strings.LastIndex(df, "\nFROM "); i < last {
 		t.Error("the source label must be in the final stage")
+	}
+}
+
+// stageInstructions returns the instructions of the stage whose FROM line
+// matches header, up to (not including) the next FROM.
+func stageInstructions(t *testing.T, header *regexp.Regexp) []string {
+	t.Helper()
+	var out []string
+	in := false
+	for _, ins := range dockerfileInstructions() {
+		if strings.HasPrefix(ins, "FROM ") {
+			if in {
+				break
+			}
+			in = header.MatchString(ins)
+			continue
+		}
+		if in {
+			out = append(out, ins)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no stage matching %v", header)
+	}
+	return out
+}
+
+const hashicorpKeyFpr = "C874011F0AB405110D02105534365D9472D7468F"
+
+// tfenv only checks HashiCorp's signature when a use-gpgv file says so, and then
+// against the keyring file in its own tree. The key is fetched in a builder
+// stage, pinned by sha256 AND by fingerprint, and replaces tfenv's bundled
+// (expired) keyring.
+func TestDockerfileTfenvVerifiesSignatures(t *testing.T) {
+	stage := strings.Join(stageInstructions(t, regexp.MustCompile(`^FROM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS hashicorp-key$`)), "\n")
+	for _, want := range []string{
+		"ARG HASHICORP_KEY_FPR=" + hashicorpKeyFpr,
+		"ARG HASHICORP_KEY_SHA256=",
+		"https://www.hashicorp.com/.well-known/pgp-key.txt",
+		"sha256sum -c",
+		"gpg --show-keys --with-colons",
+		`"${HASHICORP_KEY_FPR}"`,
+		"gpg --dearmor",
+		"/out/hashicorp-keys.pgp",
+	} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("hashicorp-key stage lacks %q", want)
+		}
+	}
+	// gnupg is for the builder only.
+	final := dockerfileInstructions()
+	copyAt, extractAt, gpgvAt := -1, -1, -1
+	for i, in := range final {
+		switch {
+		case strings.HasPrefix(in, "COPY --from=hashicorp-key") && strings.Contains(in, "/out/hashicorp-keys.pgp /opt/tfenv/share/hashicorp-keys.pgp"):
+			copyAt = i
+		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/opt/tfenv") && strings.Contains(in, "--strip-components=1"):
+			extractAt = i
+		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "use-gpgv"):
+			gpgvAt = i
+			if !strings.Contains(in, "trust-tfenv: yes") {
+				t.Errorf("use-gpgv must say \"trust-tfenv: yes\": %.200s", in)
+			}
+			if !strings.Contains(in, "chmod 0644 /var/lib/tfenv/use-gpgv") {
+				t.Errorf("use-gpgv must be chmod 0644 (root-owned; the sticky dir stops other uids deleting it)")
+			}
+		}
+	}
+	if copyAt < 0 {
+		t.Fatal("final stage does not COPY --from=hashicorp-key the keyring over /opt/tfenv/share/hashicorp-keys.pgp")
+	}
+	if extractAt < 0 || copyAt < extractAt {
+		t.Error("the keyring COPY must come after the tfenv tarball is extracted, or the extract overwrites it")
+	}
+	if gpgvAt < 0 {
+		t.Error("no RUN writes /var/lib/tfenv/use-gpgv")
+	}
+	for _, in := range final {
+		if strings.Contains(in, "use-gnupg") {
+			t.Errorf("use-gnupg takes precedence over use-gpgv in tfenv; the Dockerfile must not create it: %.120s", in)
+		}
+	}
+}
+
+// The default version is a file in the state dir, never TFENV_TERRAFORM_VERSION:
+// that variable outranks a repo's .terraform-version.
+func TestDockerfileTfenvDefaultIsAFileNotEnv(t *testing.T) {
+	df := string(dockerfile)
+	for _, in := range dockerfileInstructions() {
+		if strings.Contains(in, "TFENV_TERRAFORM_VERSION") {
+			t.Errorf("Dockerfile sets TFENV_TERRAFORM_VERSION, which overrides a repo's .terraform-version: %.120s", in)
+		}
+	}
+	if !strings.Contains(df, "\nENV TFENV_CONFIG_DIR=/var/lib/tfenv\n") {
+		t.Error("ENV TFENV_CONFIG_DIR=/var/lib/tfenv is not set")
+	}
+	if !strings.Contains(df, "\nENV TFENV_ROOT=/opt/tfenv\n") {
+		t.Error("ENV TFENV_ROOT=/opt/tfenv is not set")
+	}
+	// The effective PATH is the LAST ENV PATH= line; it must put the tfenv shim
+	// ahead of /usr/local/bin/terraform.
+	last := ""
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "ENV PATH=") {
+			last = in
+		}
+	}
+	if !strings.HasPrefix(last, "ENV PATH=/opt/tfenv/bin:") {
+		t.Errorf("the final ENV PATH must start with /opt/tfenv/bin:, got %q", last)
+	}
+	seed := regexp.MustCompile(`(?s)RUN .*/var/lib/tfenv/versions/\$\{TERRAFORM_VERSION\}.*ln -s /usr/local/bin/terraform /var/lib/tfenv/versions/\$\{TERRAFORM_VERSION\}/terraform.*"\$\{TERRAFORM_VERSION\}" > /var/lib/tfenv/version`)
+	var block string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/var/lib/tfenv/version") {
+			block = in
+		}
+	}
+	if !seed.MatchString(block) {
+		t.Errorf("no RUN pre-seeds versions/${TERRAFORM_VERSION}/terraform as a symlink to /usr/local/bin/terraform and writes ${TERRAFORM_VERSION} to /var/lib/tfenv/version: %.300s", block)
+	}
+	for _, want := range []string{"chmod 1777 /var/lib/tfenv", "chmod 0666 /var/lib/tfenv/version"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("state-dir RUN lacks %q", want)
+		}
+	}
+	if !strings.Contains(block, `terraform version | grep -q "v${TERRAFORM_VERSION}"`) {
+		t.Error("the state-dir RUN must check, through the shim, that terraform reports v${TERRAFORM_VERSION}")
+	}
+}
+
+func TestDockerfileTfenvPinned(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	m, gh := strings.Index(df, marker), strings.Index(df, "# --- gh (GitHub CLI) ---")
+	if strings.Count(df, "\nARG TFENV_VERSION=") != 1 || strings.Count(df, "\nARG TFENV_SHA256=") != 1 {
+		t.Fatal("want exactly one ARG TFENV_VERSION and one ARG TFENV_SHA256 (the tarball is arch-independent)")
+	}
+	for _, a := range []string{"\nARG TFENV_VERSION=", "\nARG TFENV_SHA256=", "\nENV TFENV_CONFIG_DIR="} {
+		if i := strings.Index(df, a); i < m || i > gh {
+			t.Errorf("%q must sit after the marker and before the gh block", strings.TrimSpace(a))
+		}
+	}
+	// HASHICORP_KEY_* belong to the builder stage, ahead of the final stage.
+	if i := strings.Index(df, "\nARG HASHICORP_KEY_SHA256="); i < 0 || i > strings.LastIndex(df, "\nFROM ") {
+		t.Error("ARG HASHICORP_KEY_SHA256 must be in the hashicorp-key builder stage")
 	}
 }

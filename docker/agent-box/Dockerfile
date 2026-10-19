@@ -32,6 +32,35 @@ RUN set -eu; \
     make -C "/tmp/abduco-${ABDUCO_VERSION}"; \
     install -D -m 0755 "/tmp/abduco-${ABDUCO_VERSION}/abduco" /out/abduco
 
+# --- HashiCorp release-signing key (builder stage) ---
+# tfenv checks the signature on a terraform release's SHA256SUMS only against a
+# keyring we hand it. This stage fetches HashiCorp's key and turns it into that
+# keyring; gnupg stays in this stage and never reaches the final image.
+#   key:  https://www.hashicorp.com/.well-known/pgp-key.txt
+#   fpr:  C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F (key id 72D7468F)
+# The fingerprint was cross-checked against https://www.hashicorp.com/trust/security
+# ("release archives") and against the .72D7468F suffix tfenv looks for on
+# terraform_<v>_SHA256SUMS.72D7468F.sig; the same key's signatures were verified on
+# a real release with the resulting keyring. The file is pinned by sha256 AND the
+# build asserts the primary key's fingerprint equals HASHICORP_KEY_FPR.
+# HashiCorp extending the key's expiry changes the file (and so this sum): that is
+# a manual bump, not a failure to work around. (tfenv's own bundled copy of the
+# key expired on 2026-04-18, which is why it is replaced.)
+FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS hashicorp-key
+ARG HASHICORP_KEY_FPR=C874011F0AB405110D02105534365D9472D7468F
+ARG HASHICORP_KEY_SHA256=c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065
+RUN apt-get update && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    curl -fsSL "https://www.hashicorp.com/.well-known/pgp-key.txt" -o /tmp/hashicorp-key.txt; \
+    echo "${HASHICORP_KEY_SHA256}  /tmp/hashicorp-key.txt" | sha256sum -c -; \
+    keys="$(gpg --show-keys --with-colons /tmp/hashicorp-key.txt)"; \
+    [ "$(printf '%s\n' "$keys" | grep -c '^pub:')" = 1 ]; \
+    fpr="$(printf '%s\n' "$keys" | awk -F: '$1=="pub"{p=1} p&&$1=="fpr"{print $10; exit}')"; \
+    [ "$fpr" = "${HASHICORP_KEY_FPR}" ]; \
+    mkdir -p /out; gpg --dearmor -o /out/hashicorp-keys.pgp /tmp/hashicorp-key.txt; \
+    [ -s /out/hashicorp-keys.pgp ]
+
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 
 # Links the published ghcr package to this repository.
@@ -415,6 +444,62 @@ RUN set -eu; \
     ln -s "$d/tflint-ruleset-aws" "$t/.tflint.d/plugins/github.com/terraform-linters/tflint-ruleset-aws/${TFLINT_RULESET_AWS_VERSION}/tflint-ruleset-aws"; \
     HOME="$t" tflint --config /etc/agent-box/tflint.hcl --version | grep -q "ruleset.aws (${TFLINT_RULESET_AWS_VERSION})"; \
     rm -rf "$t"
+
+# --- tfenv ---
+# tfenv 3.2.2 (released 2026-04-28), pinned by version AND sha256 (the tarball is
+# arch-independent). tfenv publishes no checksums file, so the sum was computed
+# from the downloaded tag tarball and cross-checked by diffing the extracted tree
+# against `git clone --depth 1 --branch v3.2.2 https://github.com/tfutils/tfenv`
+# (identical; tag commit de6ce2e809c155cbc5e2cfeb3b1bef151244e045):
+#   https://github.com/tfutils/tfenv/archive/refs/tags/v3.2.2.tar.gz
+# To bump: take a release at least two weeks old, recompute the sum, diff the tree
+# against the tag, and re-read libexec/tfenv-install (the use-gpgv path below).
+#
+# Layout. The box runs as an arbitrary --user uid, so code and state are split:
+#   TFENV_ROOT=/opt/tfenv        code + share/hashicorp-keys.pgp, root-owned, 0755
+#   TFENV_CONFIG_DIR=/var/lib/tfenv   state, mode 1777 (sticky): any uid can create
+#     versions/<v>, .install-lock-<v>, version.prev and rewrite `version` (0666),
+#     but nobody except root can delete or rename root's files, notably use-gpgv.
+# The default terraform is the already-verified /usr/local/bin/terraform, linked
+# in as versions/${TERRAFORM_VERSION}: no download at build or run time. The
+# default is the `version` FILE, never TFENV_TERRAFORM_VERSION, which would
+# override a repo's own .terraform-version.
+#
+# Signature verification is opt-in in tfenv: only if use-gpgv (or use-gnupg) exists
+# does `tfenv install` run `gpgv --keyring share/hashicorp-keys.pgp` over
+# SHA256SUMS + its .sig (a failure exits non-zero), before sha256 of the zip is
+# checked against those verified sums. Without the file tfenv only WARNS and
+# installs on sums alone. `trust-tfenv: yes` makes it use the keyring above, which
+# is the fingerprint-checked HashiCorp key from the hashicorp-key stage replacing
+# tfenv's bundled one. gpgv comes with apt in the base image.
+# THREAT MODEL (spec 7b.4): this protects a download from a tampered mirror or a
+# MITM. It does not stop the agent from turning verification off (it can create
+# use-gnupg, or fetch any binary it likes): the agent has a shell and a network.
+ARG TFENV_VERSION=3.2.2
+ARG TFENV_SHA256=c9c8b2e2588cf026aafa9803dfdefdfc7aa258577c24ea9624fe53f764edea47
+RUN set -eu; \
+    curl -fsSL "https://github.com/tfutils/tfenv/archive/refs/tags/v${TFENV_VERSION}.tar.gz" -o /tmp/tfenv.tar.gz; \
+    echo "${TFENV_SHA256}  /tmp/tfenv.tar.gz" | sha256sum -c -; \
+    mkdir /opt/tfenv; tar -C /opt/tfenv --strip-components=1 -xzf /tmp/tfenv.tar.gz; rm -f /tmp/tfenv.tar.gz; \
+    chown -R root:root /opt/tfenv; chmod -R go-w,a+rX /opt/tfenv
+COPY --from=hashicorp-key /out/hashicorp-keys.pgp /opt/tfenv/share/hashicorp-keys.pgp
+ENV TFENV_ROOT=/opt/tfenv
+ENV TFENV_CONFIG_DIR=/var/lib/tfenv
+# The shim must come before /usr/local/bin/terraform; this is the effective PATH.
+ENV PATH=/opt/tfenv/bin:$PATH
+RUN set -eu; \
+    command -v gpgv >/dev/null; \
+    mkdir -p /var/lib/tfenv/versions/${TERRAFORM_VERSION}; \
+    ln -s /usr/local/bin/terraform /var/lib/tfenv/versions/${TERRAFORM_VERSION}/terraform; \
+    printf 'trust-tfenv: yes\n' > /var/lib/tfenv/use-gpgv; \
+    echo "${TERRAFORM_VERSION}" > /var/lib/tfenv/version; \
+    chown -R root:root /var/lib/tfenv; \
+    chown root:root /opt/tfenv/share/hashicorp-keys.pgp; chmod 0644 /opt/tfenv/share/hashicorp-keys.pgp; \
+    chmod 0644 /var/lib/tfenv/use-gpgv; \
+    chmod 0666 /var/lib/tfenv/version; \
+    chmod 1777 /var/lib/tfenv /var/lib/tfenv/versions; \
+    tfenv --version | grep -q "${TFENV_VERSION}"; \
+    terraform version | grep -q "v${TERRAFORM_VERSION}"
 
 # --- gh (GitHub CLI) ---
 # gh 2.102.0 (released 2026-09-30), pinned by version AND per-arch SHA256. Both
