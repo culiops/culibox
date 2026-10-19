@@ -631,13 +631,19 @@ func gitConfigCore(data []byte) (hooksPath string, include bool) {
 	return c.hooksPath, c.include
 }
 
-// parseGitCore follows git's own config parser (config.c, git 2.43): section and
-// key names case-insensitive, a subsection in quotes (case kept) or after a dot,
-// # and ; comments outside quotes, double quotes, \-escapes (\t \b \n \\ \" and
-// line continuation), and runs of unquoted whitespace inside a value kept as
-// spaces. A key may follow its section header on the same line. Anything git
-// would reject marks the file bad rather than being skipped.
-func parseGitCore(data []byte) (c gitCore) {
+// cfgEntries walks a git config file with git's own parser (config.c, git 2.43):
+// section and key names case-insensitive, a subsection in quotes (case kept) or
+// after a dot, # and ; comments outside quotes, double quotes, \-escapes (\t \b
+// \n \\ \" and line continuation), and runs of unquoted whitespace inside a value
+// kept as spaces. A key may follow its section header on the same line.
+//
+// It calls fn for every key, in order, with the section as git names it (the base
+// lowercased, a subsection with its case kept: "remote.origin"), the lowercased
+// key, and its value; hasVal is false for a bare key (boolean true). fn returns
+// true to stop the walk early. include reports whether an [include] or
+// [includeIf …] section was seen before the walk ended. ok is false when git
+// would reject the file: nothing after the error is read, rather than skipped.
+func cfgEntries(data []byte, fn func(section, key, val string, hasVal bool) (stop bool)) (include, ok bool) {
 	s := &cfgScanner{s: strings.TrimPrefix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\xef\xbb\xbf")}
 	section := ""
 	comment := false
@@ -645,7 +651,7 @@ func parseGitCore(data []byte) (c gitCore) {
 		ch, eof := s.next()
 		if ch == '\n' {
 			if eof {
-				return c
+				return include, true
 			}
 			comment = false
 			continue
@@ -660,18 +666,16 @@ func parseGitCore(data []byte) (c gitCore) {
 		if ch == '[' {
 			name, ok := s.section()
 			if !ok {
-				c.bad = true
-				return c
+				return include, false
 			}
 			section = name
 			if base, _, _ := strings.Cut(name, "."); base == "include" || base == "includeif" {
-				c.include = true
+				include = true
 			}
 			continue
 		}
 		if !cfgAlpha(ch) {
-			c.bad = true
-			return c
+			return include, false
 		}
 		var key strings.Builder
 		key.WriteByte(cfgLower(ch))
@@ -688,99 +692,72 @@ func parseGitCore(data []byte) (c gitCore) {
 		val, hasVal := "", false
 		if ch != '\n' {
 			if ch != '=' {
-				c.bad = true
-				return c
+				return include, false
 			}
 			v, ok := s.value()
 			if !ok {
-				c.bad = true
-				return c
+				return include, false
 			}
 			val, hasVal = v, true
 		}
-		if section == "core" && key.String() == "worktree" {
-			c.worktree = true
-		}
-		if section == "core" && key.String() == "bare" && !(hasVal && gitFalse(val)) {
-			c.bare = true // a bare key is boolean true
-		}
-		if section == "core" && key.String() == "hookspath" {
-			if !hasVal {
-				c.bad = true // a bare key is boolean true: git dies on it
-				return c
-			}
-			c.hooksPath, c.hooksSet = val, true
+		if fn(section, key.String(), val, hasVal) {
+			return include, true
 		}
 	}
 }
 
-// GitConfigValues returns every value of section.key in one git config file, in
-// order, read with the same parser as parseGitCore. section is named as git
-// names it: the base lowercased, a quoted subsection with its case kept
-// ("remote.origin"); key is lowercase. ok is false when git would reject the
-// file (nothing after the error is read, so a value could be hidden behind it),
-// or when a matching key has no value at all (git dies reading it as a string).
-func GitConfigValues(data []byte, section, key string) (vals []string, ok bool) {
-	s := &cfgScanner{s: strings.TrimPrefix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\xef\xbb\xbf")}
-	cur := ""
-	comment := false
-	for {
-		ch, eof := s.next()
-		if ch == '\n' {
-			if eof {
-				return vals, true
+// parseGitCore reads what the guard derivation needs from a git config file
+// (see cfgEntries for the parser). Anything git would reject marks it bad.
+func parseGitCore(data []byte) (c gitCore) {
+	include, ok := cfgEntries(data, func(section, key, val string, hasVal bool) bool {
+		switch {
+		case section == "core" && key == "worktree":
+			c.worktree = true
+		case section == "core" && key == "bare":
+			if !(hasVal && gitFalse(val)) {
+				c.bare = true // a bare key is boolean true
 			}
-			comment = false
-			continue
-		}
-		if comment || cfgSpace(ch) {
-			continue
-		}
-		if ch == '#' || ch == ';' {
-			comment = true
-			continue
-		}
-		if ch == '[' {
-			name, ok := s.section()
-			if !ok {
-				return nil, false
+		case section == "core" && key == "hookspath":
+			if !hasVal {
+				c.bad = true // a bare key is boolean true: git dies on it
+				return true
 			}
-			cur = name
-			continue
+			c.hooksPath, c.hooksSet = val, true
 		}
-		if !cfgAlpha(ch) {
-			return nil, false
-		}
-		var k strings.Builder
-		k.WriteByte(cfgLower(ch))
-		for {
-			ch, eof = s.next()
-			if eof || !cfgKeyChar(ch) {
-				break
-			}
-			k.WriteByte(cfgLower(ch))
-		}
-		for ch == ' ' || ch == '\t' {
-			ch, _ = s.next()
-		}
-		match := cur == section && k.String() == key
-		if ch == '\n' { // a bare key
-			if match {
-				return nil, false
-			}
-			continue
-		}
-		if ch != '=' {
-			return nil, false
-		}
-		v, ok := s.value()
-		if !ok {
-			return nil, false
-		}
-		if match {
-			vals = append(vals, v)
-		}
+		return false
+	})
+	c.include = include
+	if !ok {
+		c.bad = true
 	}
+	return c
+}
+
+// GitConfigValues returns every value of section.key in one git config file, in
+// order. section is named as git names it: the base lowercased, a quoted
+// subsection with its case kept ("remote.origin"); key is lowercase. ok is
+// false when the list cannot be trusted to be complete or valid: git would
+// reject the file (nothing after the error is read, so a value could hide behind
+// it), the file has an [include] or [includeIf …] section (git would also read
+// values from the included file), or a matching key has no value at all (git
+// dies reading it as a string).
+func GitConfigValues(data []byte, section, key string) (vals []string, ok bool) {
+	bare := false
+	include, valid := cfgEntries(data, func(sec, k, val string, hasVal bool) bool {
+		if sec != section || k != key {
+			return false
+		}
+		if !hasVal {
+			bare = true
+			return true
+		}
+		vals = append(vals, val)
+		return false
+	})
+	if !valid || include || bare {
+		return nil, false
+	}
+	return vals, true
 }
 
 // gitFalse: v is one of git's spellings of boolean false. An empty value is

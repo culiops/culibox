@@ -748,6 +748,9 @@ func TestGitConfigValues(t *testing.T) {
 		{"other section ignored", "[core]\n\turl = /x\n[remote \"origin\"]\n\tfetch = f\n", "remote.origin", "url", nil, true},
 		{"matching bare key", "[remote \"origin\"]\n\turl\n", "remote.origin", "url", nil, false},
 		{"other bare key", "[core]\n\tbare\n[remote \"origin\"]\n\turl = /a\n", "remote.origin", "url", []string{"/a"}, true},
+		{"include section", "[include]\n\tpath = other\n[remote \"origin\"]\n\turl = /a\n", "remote.origin", "url", nil, false},
+		{"includeIf section", "[remote \"origin\"]\n\turl = /a\n[includeIf \"gitdir:/x/\"]\n\tpath = other\n", "remote.origin", "url", nil, false},
+		{"empty file", "", "remote.origin", "url", nil, true},
 		{"unterminated section", "[remote \"origin\"\n\turl = /a\n", "remote.origin", "url", nil, false},
 	}
 	for _, c := range cases {
