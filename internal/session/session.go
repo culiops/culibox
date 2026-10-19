@@ -186,6 +186,12 @@ type AWSResolver interface {
 	AWSFor(agent string) *config.AWSBinding
 }
 
+// GitHubResolver is implemented by launchers that know a profile's GitHub
+// binding. Optional, like AWSResolver.
+type GitHubResolver interface {
+	GitHubFor(agent string) *config.GitHubBinding
+}
+
 // CloneResolver is implemented by launchers that know a profile's clone spec.
 // Optional, like AWSResolver: without it no session is a clone session. A nil,
 // nil answer means the profile has no clone_of.
@@ -220,6 +226,9 @@ type BrokerHooks interface {
 	// mounts and the env (NAME=value) that point a box's AWS and GitHub tooling at the
 	// broker. The values reach the box by name only (box.Wrap's `-e NAME`).
 	BoxFor(bs config.Bindings) (mounts []box.Mount, env []string, err error)
+	// CheckGitHub reports whether every App a GitHub binding names is usable
+	// (configured, key readable, installed). Doctor-style: never key bytes.
+	CheckGitHub(g config.GitHubBinding) error
 	// StripEnv names every variable a bound session must not inherit from its
 	// profile: static credentials and anything that would shadow the broker.
 	StripEnv() []string
@@ -271,6 +280,13 @@ type AWSInfo struct {
 	// SSOExpired is the sign-in key the session waits on a human to renew;
 	// absent with none. Filled by List only.
 	SSOExpired string `json:"sso_expired,omitempty"`
+}
+
+// GitHubInfo is the wire view of a session's GitHub binding: which owners and
+// how many repositories it can reach, never an App, a token or a nonce.
+type GitHubInfo struct {
+	Owners []string `json:"owners"`
+	Repos  int      `json:"repos"`
 }
 
 // ElevateInfo is the wire view of a binding's elevate block.
@@ -352,6 +368,9 @@ type Info struct {
 	// AWS is the binding the session was spawned with; nil (absent) for an
 	// unbound session, so its wire shape is unchanged.
 	AWS *AWSInfo `json:"aws,omitempty"`
+	// GitHub is the GitHub binding the session was spawned with; nil (absent)
+	// without one, so an AWS-only or unbound session's wire shape is unchanged.
+	GitHub *GitHubInfo `json:"github,omitempty"`
 	// Egress is the session's network posture: "allowlist" (bound, only its
 	// binding's hosts), "open" (unbound, any host through the authenticated
 	// proxy) or "" (no egress control: host tier). Never the nonce.
@@ -382,9 +401,13 @@ type Session struct {
 	// AWS is the binding the session was spawned with; immutable, read without
 	// the lock. A later profile edit never changes a running session's scope.
 	AWS *config.AWSBinding
-	// AWSNonce is this spawn's broker-token nonce (set iff AWS is). Immutable,
-	// read without the lock. Never put it on the wire: Info leaves it out.
-	AWSNonce string
+	// GitHub is the GitHub binding the session was spawned with; immutable,
+	// read without the lock, like AWS.
+	GitHub *config.GitHubBinding
+	// BrokerNonce is this spawn's broker-token nonce (set iff the session has
+	// any binding). Immutable, read without the lock. Never put it on the wire:
+	// Info leaves it out.
+	BrokerNonce string
 	// EgressNonce is this spawn's egress-token nonce, set for every session
 	// whose box has egress (bound or open). Immutable, read without the lock.
 	// Never put it on the wire: Info leaves it out.
@@ -770,7 +793,7 @@ func (s *Session) Info() Info {
 	}
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
 	switch {
-	case s.EgressNonce != "" && s.AWS != nil:
+	case s.EgressNonce != "" && s.Bindings().Any():
 		in.Egress = "allowlist"
 	case s.EgressNonce != "":
 		in.Egress = "open"
@@ -782,7 +805,21 @@ func (s *Session) Info() Info {
 			in.AWS.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
 		}
 	}
+	if g := s.GitHub; g != nil {
+		gi := &GitHubInfo{Owners: make([]string, len(g.Owners))}
+		for i, o := range g.Owners {
+			gi.Owners[i] = o.Owner
+			gi.Repos += len(o.Repos)
+		}
+		in.GitHub = gi
+	}
 	return in
+}
+
+// Bindings is the set of credential bindings the session was spawned with.
+// Immutable, so it needs no lock.
+func (s *Session) Bindings() config.Bindings {
+	return config.Bindings{AWS: s.AWS, GitHub: s.GitHub}
 }
 
 // claudeSID returns the last validated Claude conversation id ("" if none).
@@ -1071,27 +1108,34 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// (the profile's tier, a per-spawn "host" override, or containment being
 	// unavailable) would hand the agent the host's own AWS access, and no token
 	// is minted for a spawn that is refused.
+	// A GitHub binding is the same: bound means "has any binding".
 	var binding *config.AWSBinding
 	if r, ok := m.launcher.(AWSResolver); ok {
 		binding = r.AWSFor(spec.Agent)
 	}
+	var ghBinding *config.GitHubBinding
+	if r, ok := m.launcher.(GitHubResolver); ok {
+		ghBinding = r.GitHubFor(spec.Agent)
+	}
+	bs := config.Bindings{AWS: binding, GitHub: ghBinding}
 	m.mu.Lock()
 	brk := m.broker
 	eg := m.egress
 	egressAll := m.egressAll
 	m.mu.Unlock()
-	needEgress := runtime == config.RuntimeBox && (binding != nil || egressAll)
-	if binding != nil {
+	needEgress := runtime == config.RuntimeBox && (bs.Any() || egressAll)
+	if bs.Any() {
+		kind := bindingKind(bs)
 		if runtime != config.RuntimeBox {
-			return nil, fmt.Errorf("profile %q has an AWS binding, so it can only run in a box, never on the host tier", spec.Agent)
+			return nil, fmt.Errorf("profile %q has %s, so it can only run in a box, never on the host tier", spec.Agent, kind)
 		}
 		if brk == nil {
-			return nil, fmt.Errorf("profile %q has an AWS binding but the credential broker is not running", spec.Agent)
+			return nil, fmt.Errorf("profile %q has %s but the credential broker is not running", spec.Agent, kind)
 		}
 		if eg == nil {
 			// ErrBoxUnavailable: a containment refusal the UI shows verbatim.
-			return nil, fmt.Errorf("%w: profile %q has an AWS binding but egress control is not running, so it cannot spawn",
-				box.ErrBoxUnavailable, spec.Agent)
+			return nil, fmt.Errorf("%w: profile %q has %s but egress control is not running, so it cannot spawn",
+				box.ErrBoxUnavailable, spec.Agent, kind)
 		}
 	} else if needEgress && eg == nil {
 		// Fail closed before Prepare: a box with no proxy in front of it would
@@ -1234,11 +1278,17 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts}
 		var bm []box.Mount
 		var benv, penv []string
-		if binding != nil {
+		if bs.Any() {
+			if bs.GitHub != nil {
+				// Doctor-style and secret-free, so its message can be shown as is.
+				if err := brk.CheckGitHub(*bs.GitHub); err != nil {
+					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+				}
+			}
 			var err error
-			bm, benv, err = brk.BoxFor(config.Bindings{AWS: binding})
+			bm, benv, err = brk.BoxFor(bs)
 			if err != nil {
-				return nil, fmt.Errorf("spawn %s: preparing AWS access: %w", spec.Agent, err)
+				return nil, fmt.Errorf("spawn %s: preparing %s access: %w", spec.Agent, bindingNames(bs), err)
 			}
 			nonce = brk.NewNonce()
 		}
@@ -1258,7 +1308,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, fmt.Errorf("%w: spawn %s: preparing egress: %w", box.ErrBoxUnavailable, spec.Agent, err)
 			}
 		}
-		if binding != nil {
+		if bs.Any() {
 			// Strip before adding: whatever the profile or daemon env says about
 			// AWS must neither bypass credential_process nor shadow a broker
 			// value. The broker's own names are stripped too, so each is set
@@ -1275,8 +1325,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			env = append(env, penv...)
 			env = append(env, brokerTokenEnv+"="+brk.Token(id, nonce))
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
-			key.Binding = binding.Hash()
-			if binding.Elevate != nil {
+			key.Binding = bs.Hash()
+			if binding != nil && binding.Elevate != nil {
 				// An elevatable binding gets a box of its own (M3b §7.1):
 				// processes in a shared box can read each other's broker token
 				// from /proc, and an elevated token must not be readable by
@@ -1372,7 +1422,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Account = acctName
 	sess.ConfigDir = cfgDir
 	sess.AWS = binding
-	sess.AWSNonce = nonce
+	sess.GitHub = ghBinding
+	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
 	sess.Exclusive = exclusive
@@ -1388,17 +1439,42 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, GitHub: ghBinding, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
+}
+
+// bindingKind names a binding set for a refusal: "an AWS binding", "a GitHub
+// binding" or "AWS and GitHub bindings".
+func bindingKind(bs config.Bindings) string {
+	switch {
+	case bs.AWS != nil && bs.GitHub != nil:
+		return "AWS and GitHub bindings"
+	case bs.GitHub != nil:
+		return "a GitHub binding"
+	default:
+		return "an AWS binding"
+	}
+}
+
+// bindingNames is bindingKind without the article, for "preparing X access".
+func bindingNames(bs config.Bindings) string {
+	switch {
+	case bs.AWS != nil && bs.GitHub != nil:
+		return "AWS and GitHub"
+	case bs.GitHub != nil:
+		return "GitHub"
+	default:
+		return "AWS"
+	}
 }
 
 // brokerForget drops a bound session's broker state (cached credentials,
 // stats) once it has left the registry. Called after the delete, so the
 // broker's lookup already refuses the id.
 func (m *Manager) brokerForget(s *Session) {
-	if s.AWS == nil {
+	if !s.Bindings().Any() {
 		return
 	}
 	m.mu.Lock()
@@ -1876,11 +1952,12 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Account = md.Account
 	sess.ConfigDir = md.ConfigDir
 	sess.AWS = md.AWS
-	sess.AWSNonce = md.AWSNonce
+	sess.GitHub = md.GitHub
+	sess.BrokerNonce = md.BrokerNonce
 	sess.EgressNonce = md.EgressNonce
-	if sess.EgressNonce == "" && md.AWSNonce != "" {
-		// A bound session from before A1 minted its proxy token over AWSNonce.
-		sess.EgressNonce = md.AWSNonce
+	if sess.EgressNonce == "" && md.BrokerNonce != "" {
+		// A bound session from before A1 minted its proxy token over BrokerNonce.
+		sess.EgressNonce = md.BrokerNonce
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.Exclusive = md.Exclusive

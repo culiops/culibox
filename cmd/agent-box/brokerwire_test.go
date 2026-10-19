@@ -56,8 +56,8 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 	dataDir := shortRoot(t) // holds broker/sock/broker.sock
 
 	sessions := map[string]*session.Session{
-		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, AWS: wireBinding(), AWSNonce: wireNonce},
-		"claude-4": {ID: "claude-4", Agent: "claude", Runtime: config.RuntimeHost, AWS: wireBinding(), AWSNonce: wireNonce},
+		"claude-3": {ID: "claude-3", Agent: "claude", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: wireNonce},
+		"claude-4": {ID: "claude-4", Agent: "claude", Runtime: config.RuntimeHost, AWS: wireBinding(), BrokerNonce: wireNonce},
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
@@ -177,8 +177,8 @@ func TestStartBrokerListenFailureIsNotFatal(t *testing.T) {
 func TestBrokerLookupCarriesExclusive(t *testing.T) {
 	dataDir := shortRoot(t)
 	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1"), "aws-2": boundSess("aws-2")}
-	sessions["aws-1"].AWSNonce = wireNonce
-	sessions["aws-2"].AWSNonce = wireNonce
+	sessions["aws-1"].BrokerNonce = wireNonce
+	sessions["aws-2"].BrokerNonce = wireNonce
 	sessions["aws-2"].Exclusive = false
 	lookAWSBefore := lookAWS
 	lookAWS = func() (string, error) { return "", errors.New("none") }
@@ -211,7 +211,7 @@ func TestBrokerLookupCarriesExclusive(t *testing.T) {
 func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
 	dataDir := shortRoot(t)
 	prod := boundSess("aws-1")
-	prod.AWSNonce = wireNonce
+	prod.BrokerNonce = wireNonce
 	prod.AWS.Prod, prod.AWS.Label = true, "x"
 	sessions := map[string]*session.Session{"aws-1": prod}
 	lookAWSBefore := lookAWS

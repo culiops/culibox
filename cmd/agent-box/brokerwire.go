@@ -73,7 +73,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 		if !ok {
 			return broker.SessionView{}, false
 		}
-		return broker.SessionView{Agent: s.Agent, Nonce: s.AWSNonce, Boxed: s.Runtime == config.RuntimeBox,
+		return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
 			Live: !s.Exited(), AWS: s.AWS, Exclusive: s.Exclusive}, true
 	}, broker.STSMinter{}, audit)
 

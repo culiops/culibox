@@ -57,13 +57,16 @@ type sessionMeta struct {
 	// from it). Stored rather than recomputed so it survives the account
 	// being edited or removed while the session still runs.
 	ConfigDir string `json:"config_dir,omitempty"`
-	// AWS is the binding the session was spawned with, so a profile edit never
-	// changes a running session's scope, and AWSNonce is that spawn's token
-	// nonce: without it the box's token stops verifying after a restart.
-	AWS      *config.AWSBinding `json:"aws,omitempty"`
-	AWSNonce string             `json:"aws_nonce,omitempty"`
+	// AWS and GitHub are the bindings the session was spawned with, so a profile
+	// edit never changes a running session's scope, and BrokerNonce is that
+	// spawn's token nonce: without it the box's token stops verifying after a
+	// restart. The JSON key stays "aws_nonce": records written before GitHub
+	// bindings existed must still restore.
+	AWS         *config.AWSBinding    `json:"aws,omitempty"`
+	GitHub      *config.GitHubBinding `json:"github,omitempty"`
+	BrokerNonce string                `json:"aws_nonce,omitempty"`
 	// EgressNonce is the spawn's egress-token nonce (any boxed session with
-	// egress). Records from before A1 lack it; restore backfills AWSNonce.
+	// egress). Records from before A1 lack it; restore backfills BrokerNonce.
 	EgressNonce string `json:"egress_nonce,omitempty"`
 	// BundleDrops is what the config bundle left out for this boxed session,
 	// kept so the UI still says so after a daemon restart. Records from before
