@@ -103,6 +103,10 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 // missing one for the daemon's architecture and never builds it. An image that
 // is already there is only checked, never re-pulled.
 func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, st boximage.ImageState, rebuild bool, w io.Writer) int {
+	if !strings.Contains(image, "@sha256:") {
+		// A registry tag can be moved by whoever pushes it; only a digest pins.
+		fmt.Fprintf(w, "WARN image: %s is a mutable tag; pin box_image by digest (ghcr.io/culiops/agent-box@sha256:…)\n", image)
+	}
 	if rebuild {
 		fmt.Fprintf(w, "FAIL image: %s comes from a registry; agent-box pulls it and never builds it\n", image)
 		return 1

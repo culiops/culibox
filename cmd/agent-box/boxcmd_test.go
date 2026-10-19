@@ -229,6 +229,29 @@ func TestBoxSetupRemoteMissingPulls(t *testing.T) {
 	}
 }
 
+func TestBoxSetupRemoteTagWarnsMutable(t *testing.T) {
+	tagRef := "ghcr.io/culiops/agent-box:base"
+	d, _ := setupDocker(t, nil, map[string]string{tagRef: current()})
+	var w bytes.Buffer
+	if rc := boxSetupImage(context.Background(), d, tagRef, false, setupNow, &w); rc != 0 {
+		t.Fatalf("rc %d: %s", rc, w.String())
+	}
+	if want := "WARN image: " + tagRef + " is a mutable tag; pin box_image by digest (ghcr.io/culiops/agent-box@sha256:…)"; !strings.Contains(w.String(), want) {
+		t.Fatalf("output missing %q:\n%s", want, w.String())
+	}
+}
+
+func TestBoxSetupRemoteDigestDoesNotWarnMutable(t *testing.T) {
+	d, _ := setupDocker(t, nil, map[string]string{remoteRef: current()})
+	var w bytes.Buffer
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 0 {
+		t.Fatalf("rc %d: %s", rc, w.String())
+	}
+	if strings.Contains(w.String(), "mutable tag") {
+		t.Fatalf("a digest ref was called a mutable tag:\n%s", w.String())
+	}
+}
+
 func TestBoxSetupRemotePullFailureNeverBuilds(t *testing.T) {
 	d, log := setupDocker(t, nil)
 	var w bytes.Buffer
