@@ -112,8 +112,9 @@ func TestNothingIsRequiredForABinWithoutALayout(t *testing.T) {
 func TestProviderGrantCarriesPluginsAndLockDrops(t *testing.T) {
 	src := realisticSource(t)
 	pluginTree(t, src)
+	snapRoot := t.TempDir()
 	mk := func() *Provider {
-		m, err := New(Options{Source: src, Root: t.TempDir(), MCPFile: src + "/../.claude.json", Prober: fakeProber{"npx": true, "node": true}})
+		m, err := New(Options{Source: src, Root: snapRoot, MCPFile: src + "/../.claude.json", Prober: fakeProber{"npx": true, "node": true}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,9 +129,13 @@ func TestProviderGrantCarriesPluginsAndLockDrops(t *testing.T) {
 	for _, mt := range g.Mounts {
 		has[mt.Box] = mt
 	}
-	for _, w := range wantPluginMounts(src) {
-		if got, ok := has[w.Box]; !ok || got != w {
-			t.Fatalf("grant lacks plugin mount %+v (have %+v)", w, g.Mounts)
+	for _, boxPath := range pluginBoxPaths {
+		got, ok := has[boxPath]
+		if !ok || !got.Optional {
+			t.Fatalf("grant lacks optional plugin mount %s (have %+v)", boxPath, g.Mounts)
+		}
+		if !strings.HasPrefix(got.Host, filepath.Join(snapRoot, "plugins-")) {
+			t.Fatalf("%s must be served from the snapshot, not the host dir: %s", boxPath, got.Host)
 		}
 	}
 	if _, ok := has[BoxBundleDir]; !ok || len(g.Mounts) < 4+2 {

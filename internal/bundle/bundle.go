@@ -94,10 +94,10 @@ type Built struct {
 	Lock   Lock
 	Reused bool
 
-	// The plugin verdict this bundle was built for. Not part of the lock: plugins
-	// are mounted live from the host rather than copied, so the verdict is
-	// recomputed on every Ensure and carried here so the provider hands out
-	// exactly the mounts the bundle's settings were decided against.
+	// The plugin verdict this bundle was built for. Not part of the lock: the
+	// plugin snapshot lives beside the bundle dirs, so the verdict is recomputed
+	// on every Ensure and carried here so the provider hands out exactly the
+	// mounts the bundle's settings were decided against.
 	pluginMounts []box.Mount
 	pluginDrops  []Drop
 }
@@ -134,9 +134,9 @@ func New(opts Options) (*Manager, error) {
 func (m *Manager) Ensure() (*Built, error) {
 	// Decided once per Ensure so the hash, the settings and the mounts agree
 	// even if the host plugin dir changes mid-call.
-	pmounts, pdrops := pluginMounts(m.opts.Source)
-	mounted := len(pmounts) > 0
-	hash, imageID, err := m.sourceHash(mounted)
+	ps := pluginSnapshot(m.opts.Source, m.opts.Root)
+	mounted := len(ps.mounts) > 0
+	hash, imageID, err := m.sourceHash(ps.token)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (m *Manager) Ensure() (*Built, error) {
 	} else if built, err = m.materialize(hash, imageID, dir, mounted); err != nil {
 		return nil, err
 	}
-	built.pluginMounts, built.pluginDrops = pmounts, pdrops
+	built.pluginMounts, built.pluginDrops = ps.mounts, ps.drops
 	return built, nil
 }
 
@@ -156,10 +156,12 @@ func (m *Manager) Ensure() (*Built, error) {
 // ImageProbe the box image ID is folded in too: the bundle depends on what the
 // image declares and contains, so a new image rebuilds it.
 //
-// pluginsMounted is folded in because it decides whether the bundle's settings
-// carry enabledPlugins: a cached bundle must not keep the key after the plugin
-// set breaks, nor lack it after the set is fixed.
-func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err error) {
+// pluginToken (the plugin snapshot's fingerprint, "" when nothing is mounted) is
+// folded in because it decides whether the bundle's settings carry
+// enabledPlugins: a cached bundle must not keep the key after the plugin set
+// breaks, nor lack it after the set is fixed, and it stays paired with the
+// snapshot the mounts point into.
+func (m *Manager) sourceHash(pluginToken string) (hash, imageID string, err error) {
 	h := sha256.New()
 	if ip, ok := m.opts.Prober.(ImageProbe); ok {
 		if imageID, err = ip.ImageID(); err != nil {
@@ -182,7 +184,10 @@ func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err err
 	if fi, err := os.Stat(filepath.Join(m.opts.Source, "settings.json")); err == nil {
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
-	fmt.Fprintf(h, "plugins\x00%t\n", pluginsMounted)
+	if pluginToken == "" {
+		pluginToken = "none"
+	}
+	fmt.Fprintf(h, "plugins\x00%s\n", pluginToken)
 	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
 }
 
