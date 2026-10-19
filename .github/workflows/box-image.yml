@@ -13,8 +13,14 @@
 #   - GITHUB_TOKEN is read-only except in the two jobs that push
 #   - the token goes to docker/login-action only: never a build-arg or a
 #     secret mount, so nothing secret can reach a layer or the cache
-#   - provenance and SBOM attestations are off (spec 7a.7): the index then
-#     holds exactly the two arch manifests
+#   - provenance and SBOM attestations are off: the index then holds exactly the
+#     two arch manifests, which is what the merge job counts and the job summary
+#     reports
+#   - both jobs run on main only (job-level `if`), so a workflow_dispatch from
+#     another branch can never move the `base` tag or the dated tag
+#   - the BuildKit engine is pinned by image digest (driver-opts), not left at
+#     the mutable moby/buildkit:buildx-stable-1 tag: it runs every RUN and holds
+#     the push credentials
 #
 # Runners: Linux arm64 standard hosted runners are free and generally
 # available for PUBLIC repositories (label ubuntu-24.04-arm):
@@ -48,6 +54,7 @@ env:
 jobs:
   build:
     name: build ${{ matrix.arch }}
+    if: github.ref == 'refs/heads/main'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
@@ -72,7 +79,12 @@ jobs:
           set -euo pipefail
           echo "dockerfile=$(sha256sum docker/agent-box/Dockerfile | cut -c1-12)" >> "$GITHUB_OUTPUT"
 
+      # BuildKit v0.33.1 (released 2026-09-30, the latest stable at least two
+      # weeks old on 2026-10-19), pinned by its INDEX digest (covers amd64 and
+      # arm64). Read with: docker buildx imagetools inspect moby/buildkit:v0.33.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -116,6 +128,7 @@ jobs:
   merge:
     name: merge manifest list
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -127,8 +140,10 @@ jobs:
           path: ${{ runner.temp }}/digests
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
+      # No setup-buildx here: this job only runs `docker buildx imagetools`, which
+      # talks to the registry directly and needs no builder, so no BuildKit
+      # engine is started (and none has to be pinned). The runner's own docker
+      # buildx plugin is enough.
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
