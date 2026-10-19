@@ -49,13 +49,9 @@ function execCopy(text) {
 // forever; without a deadline that silently killed the reconnect loop.
 const PROBE_MS = 4000;
 
-// timedFetch is fetch with a hard deadline. AbortSignal.timeout is not in every
-// browser this may be opened from, so fall back to an AbortController + timer.
+// timedFetch is fetch with a hard deadline (see deadlineSignal).
 function timedFetch(path, ms) {
-  if (AbortSignal.timeout) return fetch(path, { signal: AbortSignal.timeout(ms) });
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), ms);
-  return fetch(path, { signal: ac.signal }).finally(() => clearTimeout(t));
+  return fetch(path, { signal: deadlineSignal(ms) });
 }
 
 // sessionStatus returns the server-side status of a session ("live" | "exited" |
@@ -2462,20 +2458,31 @@ let profiles = [];
 // button disabled under a caption that blames the config, and in dev, `air`
 // restarts the daemon under an open tab routinely. Retries once, like initEnv.
 let profilesLoaded = false;
+// Resolves true once profiles[] reflects the server, false when it could not be
+// fetched (profiles[] is then left as it was). The spawn dialog and saveProfile
+// both need to tell those apart.
 async function loadProfiles(retry = true) {
   try {
-    profiles = (await api("/api/profiles")) || [];
+    // A stalled response must not hang openSpawnDialog, which awaits this: a
+    // timeout is just a failed refresh.
+    profiles = (await api("/api/profiles", { signal: deadlineSignal(5000) })) || [];
     profilesLoaded = true;
+    // replaceChildren resets a <select> to its first option, so a refetch while
+    // the user has a profile picked would silently switch it.
+    const prev = $("agent").value;
     $("agent").replaceChildren(...profiles.map((p) => {
       const o = document.createElement("option");
       o.value = p.name; o.textContent = p.name;
       return o;
     }));
+    if (profiles.some((p) => p.name === prev)) $("agent").value = prev;
     renderProfileSeg();
     renderOptions();
     renderProfileList();
+    return true;
   } catch (_) {
     if (retry) setTimeout(() => loadProfiles(false), 2000);
+    return false;
   }
 }
 function currentProfile() {
@@ -2727,9 +2734,9 @@ function renderPfOptions(current) {
 function renderPfRuntime(value) {
   const el = $("pf-runtime");
   buildSeg(el, [
-    { value: "", label: "box" },
+    { value: "box", label: "box" },
     { value: "host", label: "host", danger: true },
-  ], value || "", (v) => {
+  ], value || "box", (v) => {
     $("pf-runtime-warn").hidden = v !== "host";
     renderPfWorkspaceOptions(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value));
     syncPfAccountWarn();
@@ -2772,15 +2779,18 @@ function syncPfElevWarn() {
 // replies are claude-only on the server, and a default nothing honours is a
 // setting that lies.
 function syncPfReplyable() {
-  // Replies off (server kill-switch, /api/meta): the opt-in row is hidden, so the
-  // save line below (which reads .hidden) never writes replyable.
+  // Replies off (server kill-switch, /api/meta) or a non-claude bin: the row is
+  // hidden, and the save line below (see replyableToSend) keeps the stored value
+  // rather than dropping it.
   $("pf-replyable-row").hidden = globalThis.repliesEnabled !== true || !isClaudeBinName($("pf-bin").value);
 }
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
 let pfEnvRows = [];
-let pfExplicitBox = false;
+// The stored profile's own runtime string ("" when it names none), kept for
+// runtimeToSend's fallback.
+let pfStoredRuntime = "";
 // The stored profile's box override (image). The editor has no box field, so it
 // is carried through unchanged; see boxToSend.
 let pfLoadedBox = null;
@@ -2792,13 +2802,13 @@ function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
-  // A stored "box" has no button of its own (blank is the box button), so
-  // remember it was explicit: saving it as blank would hand the tier back to
-  // the instance default.
-  pfExplicitBox = p.runtime === "box";
+  pfStoredRuntime = p.runtime || "";
   pfLoadedBox = p.box || null;
   pfLoadedClone = p;
-  renderPfRuntime(segFromRuntime(p.runtime));
+  // A profile naming no tier runs on the instance default; /api/profiles has
+  // already resolved it, so the seg lights the tier it really runs on.
+  const resolved = (profiles.find((x) => x.name === p.name) || {}).runtime;
+  renderPfRuntime(segFromRuntime(p.runtime, resolved));
   renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
   pfEnvRows = envRows(p);
@@ -2875,11 +2885,11 @@ function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
   const aws = readAWSFields((id) => { const el = $(id); return el.type === "checkbox" ? el.checked : el.value; });
   if (aws) p.aws = aws;
-  // Blank means "use the default tier", which the server resolves to box. Sending
-  // it explicitly would hard-code today's default into every stored profile —
-  // except where it must be explicit (see runtimeToSend); the server's own
-  // message answers the one case left, an AWS binding saved on the host tier.
-  const rt = runtimeToSend(segValue($("pf-runtime")), pfExplicitBox, !!aws);
+  // The tier is always sent as shown (see runtimeToSend): a blank would let the
+  // instance default decide, and on a host-default instance that turns a profile
+  // the editor lit as "box" into a host one. The server's own message answers an
+  // AWS binding saved on the host tier.
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime);
   if (rt) p.runtime = rt;
   const bx = boxToSend(pfLoadedBox);
   if (bx) p.box = bx;
@@ -2904,7 +2914,7 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
   if (cwd) p.default_cwd = cwd;
-  if (!$("pf-replyable-row").hidden && $("pf-replyable").checked) p.replyable = true;
+  if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoadedClone && pfLoadedClone.replyable)) p.replyable = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
@@ -2925,7 +2935,17 @@ async function saveProfile() {
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) { setDialogError("settings-modal", "Save failed: " + e.message); return; }
-  await loadProfiles();
+  // Show what the server now holds, not what was typed: the editor and the
+  // stored profile can only disagree on screen if this step is skipped. The
+  // write succeeded, so a failure here must not say "Save failed".
+  try {
+    // No background retry: one that succeeds later would leave the "Saved, but
+    // reloading it failed" line on screen next to a good list.
+    if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
+    selectedProfile = p.name;
+    fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
+  } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
+  renderProfileList();
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It reads the editor exactly as Save would, only the name
@@ -3365,6 +3385,10 @@ function updateTierExplain() {
 // or "" when containment is unavailable. Empty means every session is host tier,
 // and the tier chooser is hidden rather than offering a choice that does nothing.
 let boxRuntime = "";
+// metaLoaded: /api/meta has answered at least once. boxRuntime is "" both for a
+// box-less instance and before meta loads, so "no containment here" may only be
+// concluded after a positive answer (see readForm); until then it fails closed.
+let metaLoaded = false;
 
 // The last spawn is remembered only to PRE-FILL the form, never to act on its
 // own: the form is always shown, so a stale value can be seen and changed
@@ -3553,7 +3577,22 @@ function updateRuntimeWarning() {
 // "Advanced…" elaborates the visible target instead of presenting a fresh form.
 // prefill (Duplicate, see spawnPrefill) is applied last, over those defaults —
 // only when its profile still exists.
-function openSpawnDialog(preselectAgent, prefill) {
+// It refetches profiles first: the form sends runtime/options/account/replyable
+// from profiles[], and the request value overrides the server's profile, so a
+// stale copy would silently revert an edit made from another tab. A failed
+// refresh still opens (the old copy is usable) but says so.
+// A second open while the first awaits the refetch would run the body twice, and
+// the second pass would re-apply profile defaults over what was typed meanwhile.
+let spawnOpening = false;
+async function openSpawnDialog(preselectAgent, prefill) {
+  if (spawnOpening) return;
+  spawnOpening = true;
+  let fresh;
+  try {
+    fresh = await loadProfiles(false);
+  } finally {
+    spawnOpening = false;
+  }
   const last = loadLastSpawn();
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent
@@ -3598,6 +3637,7 @@ function openSpawnDialog(preselectAgent, prefill) {
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   openDialog("spawn-modal");
+  setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
 }
 
@@ -4199,6 +4239,7 @@ async function currentShellProfile() {
     globalThis.repliesEnabled = !!(meta && meta.replies === true);
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
+    metaLoaded = true;
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
   return window.shellProfile;
@@ -4326,6 +4367,7 @@ initMobileShell();
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
+    metaLoaded = true;
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     lastRateLimits = (meta && meta.rate_limits) || null;

@@ -38,7 +38,10 @@ type SessionService interface {
 // API holds the HTTP handlers for sessions.
 type API struct {
 	Sessions   SessionService
-	DefaultCwd string           // used when a spawn request omits cwd (e.g. $HOME)
+	DefaultCwd string // used when a spawn request omits cwd (e.g. $HOME)
+	// ProfileCwd returns the named profile's default_cwd ("" = none); a spawn
+	// that omits cwd uses it before DefaultCwd. nil = no profile defaults.
+	ProfileCwd func(agent string) string
 	AWS        AWSStatusService // nil = the credential broker is not running; /aws is a 404
 	// Elevation serves the write-window and AWS sign-in endpoints; nil = the
 	// credential broker is not running, and they are 404.
@@ -138,6 +141,12 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		cwd := strings.TrimSpace(req.Cwd)
+		// An omitted cwd means "the profile's own": the UI pre-fills it, but an API
+		// client (or a clone profile whose default_cwd is the clone) would otherwise
+		// land in DefaultCwd. No existence check — a clone's first spawn creates it.
+		if cwd == "" && a.ProfileCwd != nil {
+			cwd = strings.TrimSpace(a.ProfileCwd(req.Agent))
+		}
 		if cwd == "" {
 			cwd = a.DefaultCwd // default working dir ($HOME unless configured)
 		}

@@ -623,6 +623,61 @@ func TestSpawnAcceptsTheHostTierOverride(t *testing.T) {
 	}
 }
 
+// spawnCwd POSTs body to a handler whose ProfileCwd is pc and returns the cwd
+// the session service was asked to spawn in.
+func spawnCwd(t *testing.T, pc func(string) string, body string) string {
+	t.Helper()
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc, DefaultCwd: "/tmp", ProfileCwd: pc}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body)
+	}
+	return svc.spawnedCwd
+}
+
+func TestSpawnOmittedCwdUsesProfileDefault(t *testing.T) {
+	pc := func(agent string) string {
+		if agent == "p" {
+			return "/srv/clone"
+		}
+		return ""
+	}
+	if got := spawnCwd(t, pc, `{"agent":"p"}`); got != "/srv/clone" {
+		t.Fatalf("cwd = %q, want the profile's default_cwd /srv/clone", got)
+	}
+}
+
+func TestSpawnWhitespaceCwdUsesProfileDefault(t *testing.T) {
+	pc := func(string) string { return "/srv/clone" }
+	if got := spawnCwd(t, pc, `{"agent":"p","cwd":"   "}`); got != "/srv/clone" {
+		t.Fatalf("cwd = %q, want /srv/clone", got)
+	}
+}
+
+func TestSpawnOmittedCwdNoProfileDefault(t *testing.T) {
+	for _, v := range []string{"", "  "} {
+		pc := func(string) string { return v }
+		if got := spawnCwd(t, pc, `{"agent":"p"}`); got != "/tmp" {
+			t.Fatalf("ProfileCwd=%q: cwd = %q, want DefaultCwd /tmp", v, got)
+		}
+	}
+}
+
+func TestSpawnExplicitCwdNotRewritten(t *testing.T) {
+	pc := func(string) string { return "/srv/clone" }
+	if got := spawnCwd(t, pc, `{"agent":"p","cwd":"/elsewhere"}`); got != "/elsewhere" {
+		t.Fatalf("cwd = %q, want the explicit /elsewhere", got)
+	}
+}
+
+func TestSpawnNilProfileCwd(t *testing.T) {
+	if got := spawnCwd(t, nil, `{"agent":"p"}`); got != "/tmp" {
+		t.Fatalf("cwd = %q, want DefaultCwd /tmp", got)
+	}
+}
+
 func TestAPI_ListCarriesNeedOnlyWhenSet(t *testing.T) {
 	m := &mockSvc{list: []session.Info{
 		{ID: "a", Activity: "waiting", Claude: true, Need: "ask", Ask: "Bash(x)"},

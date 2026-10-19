@@ -451,3 +451,41 @@ func TestClonesCoverInvalidSpecsWithUsableDir(t *testing.T) {
 		t.Fatalf("CloneFor must still refuse the invalid spec, got %+v, %v", cl, err)
 	}
 }
+
+// RequestedRuntime reports only what was ASKED for — unlike RuntimeFor it never
+// invents box as a last resort, so "nothing asked" stays distinguishable.
+func TestRequestedRuntime(t *testing.T) {
+	cases := []struct {
+		name      string
+		profile   string
+		spec      string
+		defaultRT string
+		agent     string
+		want      string
+		wantErr   bool
+	}{
+		{name: "spec host beats profile box", profile: config.RuntimeBox, spec: config.RuntimeHost, want: config.RuntimeHost},
+		{name: "blank spec uses profile box", profile: config.RuntimeBox, want: config.RuntimeBox},
+		{name: "blank spec and profile use instance default", defaultRT: config.RuntimeBox, want: config.RuntimeBox},
+		{name: "profile beats instance default", profile: config.RuntimeHost, defaultRT: config.RuntimeBox, want: config.RuntimeHost},
+		{name: "nothing asked", want: ""},
+		{name: "unknown agent", agent: "nope", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			l := boxedLauncher(t, []config.AgentConfig{{Name: "claude", Bin: "claude", Runtime: c.profile}})
+			l.SetDefaultRuntime(c.defaultRT)
+			agent := c.agent
+			if agent == "" {
+				agent = "claude"
+			}
+			got, err := l.RequestedRuntime(SpawnSpec{Agent: agent, Runtime: c.spec})
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, c.wantErr)
+			}
+			if got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}

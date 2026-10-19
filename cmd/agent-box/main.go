@@ -499,7 +499,14 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	if rateLimitsFile == "" {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
-	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd}
+	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd,
+		ProfileCwd: func(name string) string {
+			p, ok := pm.Get(name)
+			if !ok {
+				return ""
+			}
+			return strings.TrimSpace(p.DefaultCwd)
+		}}
 	var stopBroker, stopEgress func(context.Context)
 	if brokerSvc != nil {
 		status := brokerSvc.Status // only when running: a nil service must read as "no broker", not a typed nil

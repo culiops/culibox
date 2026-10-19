@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend, replyableToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -65,14 +65,28 @@ test("the AWS block is off on a locked profile and on the host tier, never re-en
   assert.deepStrictEqual(awsFieldsState(true, "host"), { disabled: true, hint: true });
 });
 
-test("a stored runtime 'box' lights the box button; an AWS binding forces an explicit 'box'", () => {
-  assert.strictEqual(segFromRuntime("box"), "");
-  assert.strictEqual(segFromRuntime("host"), "host");
-  assert.strictEqual(segFromRuntime(undefined), "");
-  assert.strictEqual(runtimeToSend("", false, false), "");      // blank: the instance default decides
-  assert.strictEqual(runtimeToSend("", true, false), "box");    // stored as box: stays box
-  assert.strictEqual(runtimeToSend("", false, true), "box");    // AWS: the server refuses an empty runtime
-  assert.strictEqual(runtimeToSend("host", false, true), "host"); // the server's refusal is the message
+test("the editor lights the tier the profile really runs on", () => {
+  assert.strictEqual(segFromRuntime("box", "box"), "box");
+  assert.strictEqual(segFromRuntime("host", "host"), "host");
+  assert.strictEqual(segFromRuntime("", "host"), "host");     // blank on a host-default instance (PROD)
+  assert.strictEqual(segFromRuntime(undefined, "box"), "box");
+  assert.strictEqual(segFromRuntime(undefined, undefined), "box"); // new profile
+});
+
+test("the editor always sends the tier it shows", () => {
+  assert.strictEqual(runtimeToSend("box", "", true), "box");
+  assert.strictEqual(runtimeToSend("host", "box", true), "host");
+  assert.strictEqual(runtimeToSend("", "host", true), "host");
+  assert.strictEqual(runtimeToSend("", "", true), "");
+});
+
+test("with no box layer, an unset tier lit as box stays unset", () => {
+  // The seg lights box for a blank profile whose default resolves to box; sending
+  // it would pin a profile that cannot spawn on an instance without containment.
+  assert.strictEqual(runtimeToSend("box", "", false), "");
+  assert.strictEqual(runtimeToSend("box", "box", false), "box"); // explicit stays explicit
+  assert.strictEqual(runtimeToSend("host", "", false), "host");
+  assert.strictEqual(runtimeToSend("box", "", true), "box");
 });
 
 test("boxToSend returns the stored image override and nothing else", () => {
@@ -92,4 +106,11 @@ test("cloneToSend returns the stored clone fields and nothing else", () => {
   for (const v of [undefined, null, {}, { clone_of: "" }, { clone_of: 42 }, { clone_share: ["a"] }]) {
     assert.strictEqual(cloneToSend(v), undefined, JSON.stringify(v));
   }
+});
+
+test("a hidden replies row keeps what the profile stored", () => {
+  assert.strictEqual(replyableToSend(false, false, true), true);
+  assert.strictEqual(replyableToSend(false, false, undefined), false);
+  assert.strictEqual(replyableToSend(true, false, true), false); // visible: the checkbox decides
+  assert.strictEqual(replyableToSend(true, true, false), true);
 });
