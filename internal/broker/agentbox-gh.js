@@ -22,28 +22,42 @@ function fail(msg) {
   process.exit(1);
 }
 
-// repoSpec parses [HOST/]OWNER/REPO as gh accepts it. Another host than
-// github.com is not ours to answer for.
+// A host other than github.com is not ours to answer for: the token is a
+// github.com installation token and must never be sent anywhere else, so such a
+// target runs the real gh unminted.
+const isOtherHost = (h) => !!h && h.toLowerCase() !== 'github.com';
+
+// repoSpec parses [HOST/]OWNER/REPO as gh accepts it. A spec naming another
+// host is { other: true }.
 function repoSpec(s) {
   if (!s) return null;
   const p = s.split('/');
-  if (p.length === 3 && p[0].toLowerCase() === 'github.com') p.shift();
+  if (p.length === 3 && isOtherHost(p[0])) return { other: true };
+  if (p.length === 3) p.shift();
   if (p.length !== 2 || !p[0] || !p[1]) return null;
   return { owner: p[0], repo: p[1] };
 }
 
+// repoFromArgv returns the first -R/--repo target (or { other: true } when any
+// flag points at another host, --hostname included).
 function repoFromArgv(argv) {
+  let found = null;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--') return null;
+    if (a === '--') break;
     let v = null;
+    let host = null;
     if (a === '-R' || a === '--repo') v = argv[i + 1];
     else if (a.startsWith('--repo=')) v = a.slice('--repo='.length);
     else if (a.startsWith('-R') && !a.startsWith('--')) v = a.slice(2);
+    else if (a === '--hostname') host = argv[i + 1];
+    else if (a.startsWith('--hostname=')) host = a.slice('--hostname='.length);
+    if (isOtherHost(host)) return { other: true };
     const r = repoSpec(v);
-    if (r) return r;
+    if (r && r.other) return r;
+    if (r && !found) found = r;
   }
-  return null;
+  return found;
 }
 
 const remoteRes = [
@@ -63,6 +77,7 @@ function repoFromOrigin() {
 }
 
 function resolve(argv) {
+  if (isOtherHost(process.env.GH_HOST)) return { other: true };
   const r = repoFromArgv(argv) || repoSpec(process.env.GH_REPO) || repoFromOrigin();
   if (r) return r;
   const first = (process.env.AGENTBOX_GH_OWNERS || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
@@ -107,21 +122,27 @@ function mint(payload, cb) {
   req.end(body);
 }
 
+function runGh(args, env) {
+  const child = spawn(realGh, args, { env, stdio: 'inherit' });
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
+  child.on('error', (e) => {
+    process.stderr.write('agentbox: cannot run gh (' + e.message + ')\n');
+    process.exit(127);
+  });
+  child.on('close', (code, signal) => {
+    process.exit(signal ? 128 + (os.constants.signals[signal] || 0) : code);
+  });
+}
+
 function main() {
   if (!ep || !tok) fail('not an agent-box GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
   const args = process.argv.slice(2);
   const r = resolve(args);
   if (!r) fail('cannot tell which GitHub owner to use (no -R, GH_REPO, origin remote or AGENTBOX_GH_OWNERS)');
+  // Another host: no broker call, no token. The box holds no credential for it.
+  if (r.other) return runGh(args, { ...process.env });
   mint(r.repo ? { owner: r.owner, repo: r.repo } : { owner: r.owner }, (token) => {
-    const child = spawn(realGh, args, { env: { ...process.env, GH_TOKEN: token }, stdio: 'inherit' });
-    for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => child.kill(sig));
-    child.on('error', (e) => {
-      process.stderr.write('agentbox: cannot run gh (' + e.message + ')\n');
-      process.exit(127);
-    });
-    child.on('close', (code, signal) => {
-      process.exit(signal ? 128 + (os.constants.signals[signal] || 0) : code);
-    });
+    runGh(args, { ...process.env, GH_TOKEN: token });
   });
 }
 

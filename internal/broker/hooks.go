@@ -34,7 +34,8 @@ func (h Hooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
 }
 
 // CheckGitHub is the broker's doctor-style check that a GitHub binding's Apps
-// are usable. It never returns key bytes.
+// are usable: each App is configured and its key loads. It makes no network
+// call and never returns key bytes.
 func (h Hooks) CheckGitHub(g config.GitHubBinding) error { return h.B.CheckGitHub(g) }
 
 // StripEnv is every variable a bound session must not inherit.

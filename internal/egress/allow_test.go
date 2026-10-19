@@ -54,20 +54,26 @@ func TestEffectiveGitHub(t *testing.T) {
 }
 
 func TestGitHubResultsHost(t *testing.T) {
-	cases := map[string]bool{
-		"productionresultssa13.blob.core.windows.net":          true,
-		"productionresultssa1.blob.core.windows.net":           true,
-		"productionresultssa999.blob.core.windows.net":         true,
-		"evil.blob.core.windows.net":                           false,
-		"productionresultssa.blob.core.windows.net":            false,
-		"productionresultssa1234.blob.core.windows.net":        false,
-		"productionresultssa13.blob.core.windows.net.evil.com": false,
-		"xproductionresultssa13.blob.core.windows.net":         false,
-		"": false,
+	host := func(n string) string { return "productionresultssa" + n + ".blob.core.windows.net" }
+	// Measured 2026-10-19: 0..199 resolve except 22; the rest are NXDOMAIN.
+	for _, n := range []string{"0", "1", "9", "13", "16", "21", "23", "99", "100", "199"} {
+		if !GitHubResultsHost(host(n)) {
+			t.Errorf("GitHubResultsHost(%q) = false, want true", host(n))
+		}
 	}
-	for host, want := range cases {
-		if got := GitHubResultsHost(host); got != want {
-			t.Errorf("GitHubResultsHost(%q) = %v, want %v", host, got, want)
+	for _, n := range []string{"22", "200", "250", "999", "01", "007", "00", "1000", "1234", "-1", "1a", ""} {
+		if GitHubResultsHost(host(n)) {
+			t.Errorf("GitHubResultsHost(%q) = true, want false", host(n))
+		}
+	}
+	for _, h := range []string{
+		"evil.blob.core.windows.net",
+		"productionresultssa13.blob.core.windows.net.evil.com",
+		"xproductionresultssa13.blob.core.windows.net",
+		"",
+	} {
+		if GitHubResultsHost(h) {
+			t.Errorf("GitHubResultsHost(%q) = true, want false", h)
 		}
 	}
 }

@@ -33,8 +33,13 @@ func DefaultAllow() []string {
 //     which GitHubResultsHost matches.
 //
 // The shard rule is never *.blob.core.windows.net: that would admit every Azure
-// customer's storage account and widen exfiltration. Hosts GitHub adds later
-// show up in the denied-host audit.
+// customer's storage account and widen exfiltration. Nor is it "any number":
+// DNS measured 2026-10-19 from a test host shows N = 0..199 resolving except 22,
+// while 200, 250, 999 and leading-zero spellings (01, 007) are NXDOMAIN. Names
+// nobody owns in Azure's shared storage namespace are registrable by anyone,
+// so admitting them would hand an agent an exfiltration path. Shards GitHub
+// adds later (N >= 200) show up in the denied-host audit and can be added by
+// re-measuring.
 func GitHubAllow() []string {
 	return []string{
 		"api.github.com",
@@ -43,12 +48,21 @@ func GitHubAllow() []string {
 	}
 }
 
-var githubResultsHostRe = regexp.MustCompile(`^productionresultssa[0-9]{1,3}\.blob\.core\.windows\.net$`)
+// The number is 0, or 1-99, or 100-199: no leading zeros, nothing above 199.
+var githubResultsHostRe = regexp.MustCompile(`^productionresultssa(0|[1-9][0-9]?|1[0-9]{2})\.blob\.core\.windows\.net$`)
+
+// missingResultsShard is the one number in 0..199 that does not exist in DNS
+// (measured 2026-10-19), so it is registrable by anyone and must stay denied.
+const missingResultsShard = "22"
 
 // GitHubResultsHost reports whether host (already normalised) is one of
-// GitHub's Actions-log storage shards. The proxy applies it only to GitHub
-// bound sessions.
-func GitHubResultsHost(host string) bool { return githubResultsHostRe.MatchString(host) }
+// GitHub's Actions-log storage shards: productionresultssa0 to
+// productionresultssa199 except 22 (see GitHubAllow). The proxy applies it only
+// to GitHub bound sessions.
+func GitHubResultsHost(host string) bool {
+	m := githubResultsHostRe.FindStringSubmatch(host)
+	return m != nil && m[1] != missingResultsShard
+}
 
 // Effective is the allowlist for a session with bindings aws and gh:
 // DefaultAllow, plus aws.EgressAllow, plus (for gh) GitHubAllow and

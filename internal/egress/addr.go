@@ -1,7 +1,7 @@
 // Package egress is the egress proxy for every boxed Linux session: the only
 // way out of its network. It accepts CONNECT host:443 only, authenticates each
 // tunnel to a live boxed session, matches the host against the session's AWS
-// allowlist (a session without an AWS binding runs in open mode and skips only
+// allowlist (a session without any binding runs in open mode and skips only
 // that match), dials only public addresses that are not the host's own, and
 // audits every tunnel.
 package egress

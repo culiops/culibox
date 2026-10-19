@@ -257,7 +257,7 @@ type BrokerHooks interface {
 	// broker. The values reach the box by name only (box.Wrap's `-e NAME`).
 	BoxFor(bs config.Bindings) (mounts []box.Mount, env []string, err error)
 	// CheckGitHub reports whether every App a GitHub binding names is usable
-	// (configured, key readable, installed). Doctor-style: never key bytes.
+	// (configured, key loads; no network call). Doctor-style: never key bytes.
 	CheckGitHub(g config.GitHubBinding) error
 	// StripEnv names every variable a bound session must not inherit from its
 	// profile: static credentials and anything that would shadow the broker.

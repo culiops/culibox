@@ -223,7 +223,7 @@ A boxed profile can carry a `github` binding. The credential broker then mints s
 ]
 ```
 
-The key is never copied into a box. agent-box checks that it can read the key when a bound session spawns, and refuses the spawn if it cannot.
+The key is never copied into a box. agent-box reads the key file once per daemon run and caches it after the first load, so after you rotate or change the key file, restart agent-box. When a bound session spawns, agent-box checks that the App is configured and its key loads (no network call), and refuses the spawn if not.
 
 **3. Add the binding to a profile.** Set `"runtime": "box"` explicitly, then fill in the GitHub section of the profile form, or write it in `config.json`:
 
@@ -250,10 +250,11 @@ The box image must include `gh`: use an image built from this version (tag `2026
 - `git` over HTTPS to `github.com` asks the broker for a token through a credential helper. Nothing is stored and no token is in the environment.
 - `gh` is a thin wrapper that fetches a token for the repo's owner and sets `GH_TOKEN` only on the real `gh` process it starts. In a clone-mode box, `GH_REPO` is set from the host repo's `origin` when that repo is in the binding, because the box's own `origin` is a host path.
 - Each token lasts one hour (GitHub's fixed lifetime for installation tokens), covers only the repos you listed and the read permissions you chose, and is reused until 10 minutes before it expires.
+- Two sessions with an identical binding share one box and one uid, so their audit rows are effectively per box. That is no scope escalation: both hold the same scope.
 - Every mint is written to the audit log (`audit.db`) with the session, owner and installation, never the token. If that row cannot be written, no token is returned.
 - Tokens are revoked at GitHub when the agent exits or you kill the session, and on a clean daemon shutdown. If the daemon crashes, they are left to expire, at most one hour later.
 
-**Egress.** A GitHub-bound box may also reach `api.github.com`, `codeload.github.com`, `results-receiver.actions.githubusercontent.com` and `productionresultssa<N>.blob.core.windows.net` (the exact numbered Actions log shards, never `*.blob.core.windows.net`), plus the binding's `egress_allow`. `github.com` is already in the default allowlist.
+**Egress.** A GitHub-bound box may also reach `api.github.com`, `codeload.github.com`, `results-receiver.actions.githubusercontent.com` and `productionresultssa<N>.blob.core.windows.net` (the Actions log shards `productionresultssa0` to `productionresultssa199` except 22, never `*.blob.core.windows.net`), plus the binding's `egress_allow`. `github.com` is already in the default allowlist.
 
 **What this does and does not protect against**
 

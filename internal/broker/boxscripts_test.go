@@ -239,6 +239,48 @@ func TestGhWrapperOwnerResolution(t *testing.T) {
 	}
 }
 
+// A target on another host than github.com must never get a github.com token:
+// the real gh runs unminted (no broker call, no GH_TOKEN).
+func TestGhWrapperOtherHostRunsUnminted(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-gh.js")
+	real := fakeGh(t, "0")
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  []string
+	}{
+		{"-R host", []string{"-R", "ghe.example.org/a/b", "pr", "list"}, nil},
+		{"-R glued host", []string{"pr", "list", "-Rghe.example.org/a/b"}, nil},
+		{"--repo= host", []string{"--repo=ghe.example.org/a/b", "pr", "list"}, nil},
+		{"GH_REPO host", []string{"pr", "list"}, []string{"GH_REPO=ghe.example.org/a/b"}},
+		{"GH_HOST", []string{"pr", "list"}, []string{"GH_HOST=ghe.example.org"}},
+		{"GH_HOST with -R", []string{"-R", "a/b", "pr", "list"}, []string{"GH_HOST=ghe.example.org"}},
+		{"--hostname", []string{"api", "--hostname", "ghe.example.org", "user"}, nil},
+		{"--hostname=", []string{"api", "--hostname=ghe.example.org", "user"}, nil},
+	} {
+		before := len(f.calls())
+		env := append(append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=culiops,CuliOps2"), tc.env...)
+		out, stderr, code := runNode(t, t.TempDir(), "", append([]string{js}, tc.args...), env...)
+		if code != 0 || stderr != "" {
+			t.Fatalf("%s: code=%d stderr=%q", tc.name, code, stderr)
+		}
+		if !strings.Contains(out, "TOKEN=\n") || !strings.Contains(out, "ARGV="+strings.Join(tc.args, " ")+"\n") {
+			t.Fatalf("%s: out=%q (want the real gh run with an empty GH_TOKEN)", tc.name, out)
+		}
+		if n := len(f.calls()); n != before {
+			t.Fatalf("%s: broker was called (%v)", tc.name, f.calls())
+		}
+	}
+	// GH_HOST=github.com is the default host: still minted.
+	before := len(f.calls())
+	env := append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=culiops", "GH_HOST=github.com")
+	out, _, code := runNode(t, t.TempDir(), "", []string{js, "-R", "a/b", "pr", "list"}, env...)
+	if code != 0 || !strings.Contains(out, "TOKEN=ghs_tok_a\n") || len(f.calls()) != before+1 {
+		t.Fatalf("GH_HOST=github.com: code=%d out=%q", code, out)
+	}
+}
+
 func gitIn(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	c := exec.Command("git", args...)
