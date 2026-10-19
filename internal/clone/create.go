@@ -35,11 +35,17 @@ func originURL(of string) string { return of }
 // result is renamed into place, so git never writes through a path a box could
 // have planted a link at, and a failed clone leaves nothing behind.
 func EnsureClone(ctx context.Context, g Git, c config.Clone, home string) (created bool, err error) {
+	if err := checkParents(c); err != nil {
+		return false, err
+	}
 	if exists, err := checkExisting(c); exists || err != nil {
 		return false, err
 	}
 	createMu.Lock()
 	defer createMu.Unlock()
+	if err := checkParents(c); err != nil { // again, right before anything is created
+		return false, err
+	}
 	if exists, err := checkExisting(c); exists || err != nil { // lost a race to another spawn
 		return false, err
 	}
@@ -127,6 +133,34 @@ func configGet(ctx context.Context, g Git, dir string, env []string, scope, key 
 	}
 	val = strings.TrimRight(string(out), "\r\n")
 	return val, val != "", nil
+}
+
+// checkParents refuses a c.Dir whose parent chain holds a symlink. MkdirAll,
+// MkdirTemp and docker's mount all follow links, so a link planted by another
+// box that can write above the clone would make the host create the clone, and
+// a box later mount it read-write, wherever the link points. Every component
+// that exists is Lstat'd from the root down; absent ones are the ones agent-box
+// is about to create itself. A check, not a lock: defence in depth.
+func checkParents(c config.Clone) error {
+	cur := string(filepath.Separator)
+	for _, part := range strings.Split(filepath.Dir(c.Dir), string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		cur = filepath.Join(cur, part)
+		st, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%w: cannot inspect %s above the clone: %v", box.ErrUnboxableWorkspace, cur, err)
+		}
+		if st.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s is a symlink; agent-box creates clones only under real directories (use the resolved path in default_cwd)",
+				box.ErrUnboxableWorkspace, cur)
+		}
+	}
+	return nil
 }
 
 // checkExisting inspects c.Dir without git. exists is false only when c.Dir is

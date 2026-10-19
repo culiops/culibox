@@ -401,15 +401,90 @@ func TestEnsureCloneConcurrent(t *testing.T) {
 	}
 }
 
+// A variable git reads from the environment must reach it only when the caller
+// put it in env: nil/CleanEnv must not fall back to the process environment.
 func TestExecGitUsesExactlyTheGivenEnv(t *testing.T) {
-	t.Setenv("AB_SENTINEL", "x")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'abtest.sentinel=AB_SENTINEL'")
 	g, err := NewExecGit()
 	if err != nil {
 		t.Skip("no git on PATH")
 	}
-	// A nil env must mean an empty env, not the process env.
-	out, err := g.Run(context.Background(), "", nil, "var", "GIT_COMMITTER_IDENT")
-	if err == nil && strings.Contains(string(out), "AB_SENTINEL") {
-		t.Fatal("process env reached git")
+	ctx := context.Background()
+	for name, env := range map[string][]string{"CleanEnv": CleanEnv(), "nil": nil} {
+		out, err := g.Run(ctx, "", env, "config", "--get", "abtest.sentinel")
+		if code, ok := exitCode(err); !ok || code != 1 {
+			t.Errorf("%s: err = %v, want exit 1 (abtest.sentinel unset)", name, err)
+		}
+		if strings.Contains(string(out), "AB_SENTINEL") {
+			t.Errorf("%s: process env reached git: %q", name, out)
+		}
+	}
+	// Control: the same variable passed explicitly IS seen, so the probe can fail.
+	out, err := g.Run(ctx, "", append(CleanEnv(), "GIT_CONFIG_PARAMETERS='abtest.sentinel=AB_SENTINEL'"), "config", "--get", "abtest.sentinel")
+	if err != nil || !strings.Contains(string(out), "AB_SENTINEL") {
+		t.Fatalf("control: out=%q err=%v; the probe cannot see an env var, so the test proves nothing", out, err)
+	}
+}
+
+func TestEnsureCloneRefusesSymlinkInParentChain(t *testing.T) {
+	const of = "/srv/of"
+	mkTarget := func(t *testing.T) (base, target string) {
+		base = t.TempDir()
+		target = filepath.Join(base, "target")
+		if err := os.Mkdir(target, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return base, target
+	}
+	for _, tc := range []struct {
+		name  string
+		build func(t *testing.T, base, target string) string // returns c.Dir
+	}{
+		{"absent dir, parent is a link", func(t *testing.T, base, target string) string {
+			if err := os.Symlink(target, filepath.Join(base, "link")); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(base, "link", "c")
+		}},
+		{"absent dir, grandparent is a link and the parent does not exist", func(t *testing.T, base, target string) string {
+			if err := os.Symlink(target, filepath.Join(base, "link")); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(base, "link", "new", "c")
+		}},
+		{"existing valid clone behind a linked parent", func(t *testing.T, base, target string) string {
+			if err := os.MkdirAll(filepath.Join(target, "c", ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cfg := "[remote \"origin\"]\n\turl = " + of + "\n"
+			if err := os.WriteFile(filepath.Join(target, "c", ".git", "config"), []byte(cfg), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(base, "link")); err != nil {
+				t.Fatal(err)
+			}
+			return filepath.Join(base, "link", "c")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := newRec(t)
+			base, target := mkTarget(t)
+			dir := tc.build(t, base, target)
+			before, _ := os.ReadDir(target)
+			created, err := EnsureClone(context.Background(), rec, config.Clone{Of: of, Dir: dir}, t.TempDir())
+			if created || !errors.Is(err, box.ErrUnboxableWorkspace) {
+				t.Fatalf("created=%v err=%v, want ErrUnboxableWorkspace", created, err)
+			}
+			if !strings.Contains(err.Error(), "is a symlink; agent-box creates clones only under real directories") {
+				t.Errorf("message: %v", err)
+			}
+			if len(rec.calls) != 0 {
+				t.Errorf("%d git calls, want 0", len(rec.calls))
+			}
+			after, _ := os.ReadDir(target)
+			if len(after) != len(before) {
+				t.Errorf("link target changed: %d entries before, %d after", len(before), len(after))
+			}
+		})
 	}
 }
