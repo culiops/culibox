@@ -597,10 +597,11 @@ func TestDropDuringTheAuditWriteDiscardsTheElevatedCredential(t *testing.T) {
 	b.Elevate("aws-1", cookie(60))
 	hr := &hookRec{memRec: rec}
 	b.rec = hr
+	var dropView ElevationView
 	hr.hook = func(r Row) {
 		if r.Outcome == OutcomeMinted && r.Elevated {
 			hr.hook = nil
-			b.Drop("aws-1", CredCookie)
+			dropView, _ = b.Drop("aws-1", CredCookie)
 		}
 	}
 	if w := call(b, tokA("aws-1")); w.Code != 200 {
@@ -615,6 +616,12 @@ func TestDropDuringTheAuditWriteDiscardsTheElevatedCredential(t *testing.T) {
 	}
 	if !discarded {
 		t.Fatalf("no discard row: %+v", rec.rows)
+	}
+	if !dropView.LastValid.IsZero() {
+		t.Fatalf("drop reports write creds valid until %v, but none was handed out", dropView.LastValid)
+	}
+	if v, _ := b.Elevation("aws-1"); !v.LastValid.IsZero() || v.Active {
+		t.Fatalf("after the discard: %+v", v)
 	}
 }
 

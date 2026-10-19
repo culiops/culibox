@@ -308,7 +308,9 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		b.mu.Lock()
-		// Checked again: the window may have changed while the row was written.
+		// Checked again: the window may have changed while the row was written. The
+		// request-time now is enough: a drop, extend or expiry changes gen or removes
+		// the window, and the bound itself compares Expiration with p.until.
 		if why := b.discardReasonLocked(sid, p, c, now); why != "" {
 			b.mu.Unlock()
 			bad := row
