@@ -239,6 +239,10 @@ type BrokerHooks interface {
 	// Forget drops the broker's per-session state (cache, stats) once a
 	// session is gone from the registry.
 	Forget(sessionID string)
+	// RevokeGitHub revokes, at GitHub, the installation tokens minted for the
+	// session. It returns at once (the broker revokes in the background) and
+	// is idempotent. Called when the agent exits, not when it merely detaches.
+	RevokeGitHub(sessionID string)
 	// AWSState is the broker-held state a session list shows: when the
 	// session's write window ends (zero = none) and the sign-in a human must
 	// renew on the host ("" = none). Read-only; it takes only the broker's lock.
@@ -1494,6 +1498,23 @@ func (m *Manager) brokerForget(s *Session) {
 	}
 }
 
+// brokerRevoke revokes a session's GitHub tokens at GitHub the moment its agent
+// has exited, rather than when retention prunes it: nothing is left to use
+// them, and they would otherwise live on for up to the retention window. It
+// returns at once (the broker revokes in the background) and is a no-op for a
+// session without a GitHub binding.
+func (m *Manager) brokerRevoke(s *Session) {
+	if s.GitHub == nil {
+		return
+	}
+	m.mu.Lock()
+	brk := m.broker
+	m.mu.Unlock()
+	if brk != nil {
+		brk.RevokeGitHub(s.ID)
+	}
+}
+
 // egressForget drops a session's proxy state (counters, open tunnels).
 // Like brokerForget it runs after the registry delete, so the proxy's session
 // lookup already reports the id as not live: a CONNECT that races the end is
@@ -1610,6 +1631,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			// alive inside its box, so releasing there would arm the idle timer
 			// and stop the box under a session we intend to recover.
 			m.releaseSessionBox(sess)
+			m.brokerRevoke(sess)
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}

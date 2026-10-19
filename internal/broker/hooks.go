@@ -46,6 +46,9 @@ func (h Hooks) StripGitHubEnv() []string { return StripGitHubEnv() }
 // Forget drops the broker's per-session state.
 func (h Hooks) Forget(id string) { h.B.Forget(id) }
 
+// RevokeGitHub revokes the session's GitHub tokens at GitHub, in the background.
+func (h Hooks) RevokeGitHub(id string) { h.B.RevokeGitHub(id) }
+
 // AWSState is what a session list shows of the broker's per-session state: the
 // end of the live write window (zero when none) and the sign-in key awaiting a
 // human ("" when none).

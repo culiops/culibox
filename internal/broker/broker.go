@@ -128,7 +128,9 @@ type Broker struct {
 	ghFlight map[string]map[*ghFlight]struct{} // mints between Mint and the listing; Forget marks them dead
 
 	ghRevokeTimeout time.Duration  // total budget of one RevokeGitHub; New sets 5s, tests shrink it
-	revokeWG        sync.WaitGroup // every revoke goroutine; tests Wait on it
+	ghTokenTimeout  time.Duration  // cap on one GitHub Revoke call; New sets 2s, tests shrink it
+	revokeWG        sync.WaitGroup // every revoke goroutine; RevokeAllGitHub and tests Wait on it
+	closing         bool           // RevokeAllGitHub ran: /v1/github/token mints nothing more
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -153,8 +155,8 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[string]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
-		ghRevokeTimeout: ghRevokeTimeout,
-		after:           func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
+		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
+		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b
 }

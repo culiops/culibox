@@ -106,6 +106,10 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 			if sso != nil {
 				sso.Close()
 			}
+			// Before the server closes: after this the route answers 503 and
+			// mints nothing, so no token can be issued past the revoke. The
+			// audit store is still open for its rows.
+			brk.RevokeAllGitHub(ctx)
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next
 			}

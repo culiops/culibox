@@ -60,6 +60,7 @@ type fakeBrokerHooks struct {
 	checkCalls  int
 	lastBS      config.Bindings // what BoxFor was last asked for
 	forgot      []string
+	revoked     []string // RevokeGitHub calls, in order
 	next        int
 	state       map[string]struct {
 		until time.Time
@@ -141,6 +142,24 @@ func (f *fakeBrokerHooks) Forget(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.forgot = append(f.forgot, id)
+}
+
+func (f *fakeBrokerHooks) RevokeGitHub(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revoked = append(f.revoked, id)
+}
+
+func (f *fakeBrokerHooks) revokes(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, r := range f.revoked {
+		if r == id {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeBrokerHooks) calls() (nonces, tokens, boxFor int) {

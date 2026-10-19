@@ -503,6 +503,8 @@ func TestGitHubTokenNeverLogged(t *testing.T) {
 func mintN(t *testing.T, b *Broker, now *time.Time, sid string, n int) []string {
 	t.Helper()
 	var toks []string
+	start := *now
+	defer func() { *now = start }() // back to the start: no listed token is past its expiry yet
 	for range n {
 		w := ghCall(b, tokA(sid), ghBody)
 		if w.Code != 200 {
