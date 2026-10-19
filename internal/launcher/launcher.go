@@ -367,17 +367,25 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 	return cfg.Clone()
 }
 
-// Clones returns the clone spec of every profile whose clone parses, ordered by
-// directory. It feeds the box-owned-directory check. A profile whose clone no
-// longer validates is skipped (one bad profile must not blank the others) and
-// is refused on its own spawn through CloneFor.
+// Clones returns the clone spec of every profile with clone_of set and an
+// absolute, clean default_cwd, ordered by directory. It feeds the host-tier
+// box-owned-directory check, which must cover a directory a box may have
+// written even when the profile's clone spec no longer validates (a
+// hand-edited profiles.json): such a profile contributes {Of, Dir} without
+// shares, and is refused on its own spawn through CloneFor, which keeps its
+// error behaviour. A profile with no usable directory has none to guard.
 func (l *AgentLauncher) Clones() []config.Clone {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	var out []config.Clone
 	for _, cfg := range l.agents {
+		if cfg.CloneOf == "" {
+			continue
+		}
 		if cl, err := cfg.Clone(); err == nil && cl != nil {
 			out = append(out, *cl)
+		} else if d := cfg.DefaultCwd; filepath.IsAbs(d) && filepath.Clean(d) == d {
+			out = append(out, config.Clone{Of: cfg.CloneOf, Dir: d})
 		}
 	}
 	slices.SortFunc(out, func(a, b config.Clone) int { return strings.Compare(a.Dir, b.Dir) })

@@ -415,14 +415,39 @@ func TestCloneForAndClones(t *testing.T) {
 		t.Fatalf("an invalid stored clone must error, got %+v, %v", cl, err)
 	}
 
+	// "bad" has an invalid clone_of but an absolute, clean dir: its dir is still
+	// box-owned, so Clones covers it even though CloneFor refuses it.
 	all := l.Clones()
-	if len(all) != 1 || all[0].Dir != "/home/u/clones/repo" {
-		t.Fatalf("Clones() = %+v, want only the valid one", all)
+	if len(all) != 2 || all[0].Dir != "/home/u/clones/bad" || all[1].Dir != "/home/u/clones/repo" {
+		t.Fatalf("Clones() = %+v, want bad and good by dir", all)
+	}
+	if len(all[1].Shares) != 1 {
+		t.Fatalf("a valid clone keeps its shares, got %+v", all[1])
 	}
 	// The copy is the caller's own: a later profile edit or a mutation here
 	// must not reach the stored profile.
 	cl.Shares[0] = "mutated"
 	if again, _ := l.CloneFor("good"); again.Shares[0] != "CLAUDE.md" {
 		t.Fatal("CloneFor must return a copy")
+	}
+}
+
+// Clones feeds the host-tier box-owned guard, so it must cover the dir of a
+// profile whose clone spec no longer validates (a hand-edited profiles.json),
+// while skipping a dir it cannot trust as a path.
+func TestClonesCoverInvalidSpecsWithUsableDir(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "badshare", Bin: "claude", CloneOf: "/home/u/repo", DefaultCwd: "/home/u/c/badshare", CloneShare: []string{"../x", "a:rw"}},
+		{Name: "reldir", Bin: "claude", CloneOf: "/home/u/repo", DefaultCwd: "c/rel"},
+		{Name: "uncleandir", Bin: "claude", CloneOf: "/home/u/repo", DefaultCwd: "/home/u/c/../c/unclean"},
+		{Name: "nodir", Bin: "claude", CloneOf: "/home/u/repo"},
+		{Name: "plain", Bin: "claude", DefaultCwd: "/home/u/c/plain"},
+	}, fakeResolver{}, nil)
+	all := l.Clones()
+	if len(all) != 1 || all[0].Dir != "/home/u/c/badshare" || all[0].Of != "/home/u/repo" {
+		t.Fatalf("Clones() = %+v, want only badshare", all)
+	}
+	if cl, err := l.CloneFor("badshare"); cl != nil || err == nil {
+		t.Fatalf("CloneFor must still refuse the invalid spec, got %+v, %v", cl, err)
 	}
 }
