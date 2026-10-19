@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -352,6 +353,35 @@ func (l *AgentLauncher) AWSFor(agent string) *config.AWSBinding {
 		return nil
 	}
 	return cfg.AWS.Clone()
+}
+
+// CloneFor returns a copy of the profile's clone spec, or nil, nil for a profile
+// without clone_of (or an unknown one). A stored clone that no longer validates
+// is an error, never a partial spec: the spawn is refused rather than run
+// against a half-understood clone.
+func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, nil
+	}
+	return cfg.Clone()
+}
+
+// Clones returns the clone spec of every profile whose clone parses, ordered by
+// directory. It feeds the box-owned-directory check. A profile whose clone no
+// longer validates is skipped (one bad profile must not blank the others) and
+// is refused on its own spawn through CloneFor.
+func (l *AgentLauncher) Clones() []config.Clone {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	var out []config.Clone
+	for _, cfg := range l.agents {
+		if cl, err := cfg.Clone(); err == nil && cl != nil {
+			out = append(out, *cl)
+		}
+	}
+	slices.SortFunc(out, func(a, b config.Clone) int { return strings.Compare(a.Dir, b.Dir) })
+	return out
 }
 
 // Build composes (argv, env) for the agent per its base policy + env + secrets.

@@ -85,15 +85,18 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // writeSpawnErr maps a Spawn or Restart failure. A refusal that names only
-// what the caller just sent (a workspace that cannot be contained, a first
-// message that was refused, an account that cannot run the profile) or a containment remedy (ErrBoxUnavailable: a
-// command or path, never an env value) is shown; anything else stays generic
+// what the caller just sent (a workspace that cannot be contained, a directory
+// that belongs to a clone-mode box, a first message that was refused, an
+// account that cannot run the profile) or a containment remedy
+// (ErrBoxUnavailable: a command or path, never an env value) is shown;
+// anything else stays generic
 // and the detail goes to the server log only. None of these messages carries
 // the prompt text.
 func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 	log.Printf("spawn agent=%q: %v", agent, err)
 	switch {
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
+		errors.Is(err, box.ErrBoxOwned),
 		errors.Is(err, launcher.ErrBadPrompt),
 		errors.Is(err, launcher.ErrPromptUnsupported),
 		errors.Is(err, launcher.ErrCodexAccount), errors.Is(err, account.ErrUnknown),

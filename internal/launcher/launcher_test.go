@@ -393,3 +393,36 @@ func TestAWSForClonesElevate(t *testing.T) {
 		t.Fatalf("AWSFor must deep-copy Elevate, got %+v", again.Elevate)
 	}
 }
+
+func TestCloneForAndClones(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "good", Bin: "claude", CloneOf: "/home/u/repo", DefaultCwd: "/home/u/clones/repo", CloneShare: []string{"CLAUDE.md"}},
+		{Name: "bad", Bin: "claude", CloneOf: "relative/repo", DefaultCwd: "/home/u/clones/bad"},
+		{Name: "plain", Bin: "claude"},
+	}, fakeResolver{}, nil)
+
+	cl, err := l.CloneFor("good")
+	if err != nil || cl == nil || cl.Of != "/home/u/repo" || cl.Dir != "/home/u/clones/repo" || len(cl.Shares) != 1 {
+		t.Fatalf("CloneFor(good) = %+v, %v", cl, err)
+	}
+	if cl, err := l.CloneFor("plain"); cl != nil || err != nil {
+		t.Fatalf("a profile without clone_of must give nil, nil; got %+v, %v", cl, err)
+	}
+	if cl, err := l.CloneFor("missing"); cl != nil || err != nil {
+		t.Fatalf("an unknown profile must give nil, nil; got %+v, %v", cl, err)
+	}
+	if cl, err := l.CloneFor("bad"); cl != nil || err == nil {
+		t.Fatalf("an invalid stored clone must error, got %+v, %v", cl, err)
+	}
+
+	all := l.Clones()
+	if len(all) != 1 || all[0].Dir != "/home/u/clones/repo" {
+		t.Fatalf("Clones() = %+v, want only the valid one", all)
+	}
+	// The copy is the caller's own: a later profile edit or a mutation here
+	// must not reach the stored profile.
+	cl.Shares[0] = "mutated"
+	if again, _ := l.CloneFor("good"); again.Shares[0] != "CLAUDE.md" {
+		t.Fatal("CloneFor must return a copy")
+	}
+}
