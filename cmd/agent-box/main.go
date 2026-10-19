@@ -27,6 +27,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
@@ -330,11 +331,15 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
+	// bundleSrc stays empty with the bundle off or no layer; clone mode reads it
+	// below as the memory root.
+	bundleSrc := ""
 	if layer != nil && cfg.BundleSource != "off" {
 		src := bundle.ExpandTilde(cfg.BundleSource)
 		if src == "" {
 			src = bundle.DefaultSource()
 		}
+		bundleSrc = src
 		// Root is under the layer's state root: on macOS the symlink-resolved
 		// data root, the spelling the VM mounts, since the bundle is mounted
 		// into boxes.
@@ -350,6 +355,16 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			mgr.SetBundles(bundle.NewProvider(bm))
 			log.Printf("config bundle source: %s", src)
 		}
+	}
+
+	// Clone mode (Linux + containment only). The profile list is read through
+	// the launcher on every call, so a profile saved after boot is covered.
+	// Before Reconcile, like the box hooks. The interface must never hold a nil
+	// *cloneHooks, so SetClone runs only for a real value.
+	if h, err := newCloneHooks(runtime.GOOS, layer, home, bundleSrc, protected, lnch.Clones); err != nil {
+		log.Printf("clone mode unavailable (%v); clone-mode profiles are refused", err)
+	} else if h != nil {
+		mgr.SetClone(h)
 	}
 
 	// Credential broker (M3a): only with containment, because a bound session
@@ -463,6 +478,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	pm.SetCloneCheck(func(c config.Clone) error { return clone.CheckProfile(c, home, protected) })
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
