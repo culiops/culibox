@@ -527,3 +527,88 @@ func TestDockerfileChecksBrowserAsAgent(t *testing.T) {
 		t.Error("no RUN after USER agent asserts chromium --version")
 	}
 }
+
+func TestIsRemote(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for _, c := range []struct {
+		ref  string
+		want bool
+	}{
+		{"ghcr.io/culiops/agent-box" + digest, true},
+		{"culiops/agent-box" + digest, true}, // a digest is never buildable
+		{"ghcr.io/culiops/agent-box:base", true},
+		{"ghcr.io/culiops/agent-box:2026-10-20-abc1234", true},
+		{"localhost/x:1", true},
+		{"registry:5000/x:1", true},
+		{"culiops/agent-box:base", false},
+		{"culiops/agent-box:2026-10-18", false},
+		{"agent-box", false},
+		{"", false},
+	} {
+		if got := IsRemote(c.ref); got != c.want {
+			t.Errorf("IsRemote(%q) = %v, want %v", c.ref, got, c.want)
+		}
+	}
+}
+
+// A pulled box must be the daemon's own architecture: an index digest on an
+// arm64 daemon otherwise runs whatever docker picks, silently emulated.
+func TestPullPinsPlatform(t *testing.T) {
+	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	bin, log := fakeDocker(t, "echo pulling\n")
+	var out bytes.Buffer
+	d := Docker{Bin: bin, Args: []string{"--host", "unix:///s"}}
+	if err := d.Pull(context.Background(), ref, "arm64", &out); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if want := "--host unix:///s pull --platform linux/arm64 ghcr.io/culiops/agent-box@sha256:"; !strings.Contains(string(b), want) {
+		t.Fatalf("pull argv missing %q: %s", want, b)
+	}
+	if !strings.Contains(out.String(), "pulling") {
+		t.Fatalf("docker output did not reach the writer: %q", out.String())
+	}
+
+	bad, _ := fakeDocker(t, "echo 'manifest unknown' >&2; exit 1\n")
+	err := Docker{Bin: bad}.Pull(context.Background(), ref, "arm64", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "manifest unknown") {
+		t.Fatalf("want an error carrying docker's stderr, got %v", err)
+	}
+}
+
+func TestCheckForRemote(t *testing.T) {
+	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	cases := []struct {
+		name  string
+		s     ImageState
+		fatal bool
+		has   []string
+		exact string // checked only when set
+	}{
+		{"missing", ImageState{}, true, []string{"agent-box box setup", "pull"}, ""},
+		{"wrong arch", ImageState{Present: true, Arch: "amd64", Hash: Hash()}, true, []string{"amd64", "arm64"}, ""},
+		{"stale", ImageState{Present: true, Arch: "arm64", Hash: "0123456789ab"}, false, nil,
+			"this image was built from an older Dockerfile; pull a newer digest from ghcr"},
+		{"current", ImageState{Present: true, Arch: "arm64", Hash: Hash()}, false, nil, ""},
+	}
+	for _, c := range cases {
+		fatal, msg := c.s.CheckFor(ref, "arm64")
+		if fatal != c.fatal {
+			t.Errorf("%s: fatal = %v, want %v (%s)", c.name, fatal, c.fatal, msg)
+		}
+		for _, w := range c.has {
+			if !strings.Contains(msg, w) {
+				t.Errorf("%s: msg %q lacks %q", c.name, msg, w)
+			}
+		}
+		if c.name == "stale" || c.name == "current" {
+			want := c.exact
+			if msg != want {
+				t.Errorf("%s: msg = %q, want %q", c.name, msg, want)
+			}
+		}
+		if strings.Contains(msg, "-rebuild") {
+			t.Errorf("%s: a remote image is never rebuilt, msg %q", c.name, msg)
+		}
+	}
+}
