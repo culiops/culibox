@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -82,6 +83,18 @@ type ProfileManager struct {
 	// cloneCheck is the disk-side check of a clone profile's repo (clone.CheckOf,
 	// wired at boot); nil = pure validation only. Spawn re-checks.
 	cloneCheck func(config.Clone) error
+	// ghApps are the instance's github_apps connections (config.GitHubApps),
+	// wired at boot, so a profile cannot be saved naming an App that does not
+	// exist. nil = none defined.
+	ghApps []config.GitHubApp
+}
+
+// SetGitHubApps installs the instance's GitHub App connections, which Save
+// checks a profile's github binding against. Call at boot.
+func (m *ProfileManager) SetGitHubApps(apps []config.GitHubApp) {
+	m.mu.Lock()
+	m.ghApps = slices.Clone(apps)
+	m.mu.Unlock()
 }
 
 // SetAccounts installs the account resolver used by Save. Call at boot.
@@ -269,6 +282,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := config.CheckGitHubApps(p, m.ghApps); err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 	if err := m.checkAccount(p); err != nil {
 		return err
 	}

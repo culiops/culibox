@@ -489,6 +489,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
+	pm.SetGitHubApps(cfg.GitHubApps)
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
