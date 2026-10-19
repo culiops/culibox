@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -25,7 +26,11 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, map[string]string{"name": p.Name})
+		created := struct {
+			Name     string   `json:"name"`
+			Warnings []string `json:"warnings,omitempty"`
+		}{p.Name, shareWarnings(p)}
+		writeJSON(w, http.StatusCreated, created)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -57,6 +62,10 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if warnings := shareWarnings(p); len(warnings) > 0 {
+			writeJSON(w, http.StatusOK, map[string][]string{"warnings": warnings})
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
 		if err := s.Profiles.Delete(name); err != nil {
@@ -76,6 +85,16 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 // handleOptions serves GET /api/options — the option definitions for the editor.
 func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.Profiles.OptionDefs())
+}
+
+// shareWarnings are the saved profile's secret-looking clone shares. Each is
+// logged as well as returned: the share is the user's call, so the save stands.
+func shareWarnings(p config.AgentConfig) []string {
+	warnings := config.ShareWarnings(p.CloneShare)
+	for _, w := range warnings {
+		log.Printf("profile %q: %s", p.Name, w)
+	}
+	return warnings
 }
 
 func decodeProfile(w http.ResponseWriter, r *http.Request) (config.AgentConfig, error) {

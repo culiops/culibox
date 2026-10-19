@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -357,5 +358,68 @@ func TestProfileSaveAccountWithoutResolver(t *testing.T) {
 	}
 	if err := pm.Save(config.AgentConfig{Name: "b", Bin: "claude", Account: "default"}); err != nil {
 		t.Errorf("explicit default rejected: %v", err)
+	}
+}
+
+func cloneProfile(runtime string) config.AgentConfig {
+	return config.AgentConfig{
+		Name: "cl", Bin: "claude", Runtime: runtime,
+		CloneOf: "/home/u/repo", DefaultCwd: "/home/u/clones/repo",
+	}
+}
+
+func TestSaveCloneProfileNeedsBoxTier(t *testing.T) {
+	fs := newFakeStore()
+	pm := NewProfileManager(nil, nil, config.RuntimeHost, nil, fs, func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+
+	err := pm.Save(cloneProfile(""))
+	if err == nil || !strings.Contains(err.Error(), `clone mode needs runtime "box" (this instance defaults to host)`) {
+		t.Fatalf("a clone profile on a host-default instance with no runtime must be refused, got %v", err)
+	}
+	if _, ok := fs.Get("cl"); ok {
+		t.Fatal("a refused profile must not be stored")
+	}
+	if err := pm.Save(cloneProfile(config.RuntimeBox)); err != nil {
+		t.Fatalf("an explicit box clone profile must save: %v", err)
+	}
+	if _, ok := fs.Get("cl"); !ok {
+		t.Fatal("the box clone profile was not stored")
+	}
+}
+
+func TestSaveCloneProfileRunsCloneCheck(t *testing.T) {
+	fs := newFakeStore()
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, fs, func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+
+	var got []config.Clone
+	boom := errors.New("repo is not cloneable")
+	pm.SetCloneCheck(func(c config.Clone) error { got = append(got, c); return boom })
+	p := cloneProfile("")
+	p.CloneShare = []string{"docs"}
+	if err := pm.Save(p); !errors.Is(err, boom) {
+		t.Fatalf("the check's error must be returned, got %v", err)
+	}
+	if len(got) != 1 || got[0].Of != "/home/u/repo" || got[0].Dir != "/home/u/clones/repo" || len(got[0].Shares) != 1 || got[0].Shares[0] != "docs" {
+		t.Fatalf("the check must get the parsed clone, got %+v", got)
+	}
+	if _, ok := fs.Get("cl"); ok {
+		t.Fatal("a profile the check refused must not be stored")
+	}
+
+	// A passing check stores; a non-clone profile never calls the check.
+	pm.SetCloneCheck(func(c config.Clone) error { return nil })
+	if err := pm.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	pm.SetCloneCheck(func(c config.Clone) error { t.Fatal("check called for a non-clone profile"); return nil })
+	if err := pm.Save(config.AgentConfig{Name: "plain", Bin: "bash"}); err != nil {
+		t.Fatal(err)
+	}
+	// nil = pure validation only.
+	pm.SetCloneCheck(nil)
+	if err := pm.Save(p); err != nil {
+		t.Fatal(err)
 	}
 }

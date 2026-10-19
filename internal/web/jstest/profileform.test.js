@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -80,5 +80,16 @@ test("boxToSend returns the stored image override and nothing else", () => {
   assert.deepStrictEqual(boxToSend({ image: "  img:1  " }), { image: "img:1" });
   for (const v of [undefined, null, {}, { image: "" }, { image: "   " }, { image: 42 }]) {
     assert.strictEqual(boxToSend(v), undefined, JSON.stringify(v));
+  }
+});
+
+test("cloneToSend returns the stored clone fields and nothing else", () => {
+  const loaded = { clone_of: "/r", clone_share: ["a"], other: 1 };
+  const got = cloneToSend(loaded);
+  assert.deepStrictEqual(got, { clone_of: "/r", clone_share: ["a"] });
+  assert.notStrictEqual(got.clone_share, loaded.clone_share); // a copy, not the loaded array
+  assert.deepStrictEqual(cloneToSend({ clone_of: "/r" }), { clone_of: "/r" }); // clone_share omitted when absent
+  for (const v of [undefined, null, {}, { clone_of: "" }, { clone_of: 42 }, { clone_share: ["a"] }]) {
+    assert.strictEqual(cloneToSend(v), undefined, JSON.stringify(v));
   }
 });
