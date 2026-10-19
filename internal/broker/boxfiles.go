@@ -2,11 +2,13 @@ package broker
 
 import (
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -22,6 +24,17 @@ var clientScript []byte
 //
 //go:embed agentbox-gh.js
 var ghScript []byte
+
+// envScript is the in-box env wrapper: it fetches the named static tokens from
+// the broker and runs one command with them (agentbox-env NAME... -- CMD).
+// Only a binding with static tokens gets it, with TokensFile beside it.
+//
+//go:embed agentbox-env.js
+var envScript []byte
+
+// TokensFile is the non-secret listing of a binding's tokens, in the binding
+// dir (so /opt/agentbox/tokens.json in the box); `agentbox-env --list` reads it.
+const TokensFile = "tokens.json"
 
 // GHConfigDir is gh's config dir in a bound box: a path that dies with the box,
 // so nothing gh writes there (hosts.yml, caches) outlives the session.
@@ -71,7 +84,9 @@ func StripGitHubEnv() []string {
 
 // EnsureBindingDir writes <stateRoot>/broker/binding-<hash>/: aws-config when
 // there is an AWS binding, agentbox-cred.js always, agentbox-gh.js when there is
-// a GitHub binding. The bindings are validated first (a hand-edited profiles.json
+// a GitHub binding, agentbox-env.js and tokens.json when there are static tokens
+// (PAT entries go through the gh/git helpers and do not count). The bindings
+// and each token entry are validated first (a hand-edited profiles.json
 // is not re-validated at load, and Region is formatted into an INI file). With
 // only an AWS binding the directory and its contents are what they always were.
 // All writes go through os.Root, so a symlink planted at any level is refused
@@ -87,6 +102,11 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 	}
 	if bs.GitHub != nil {
 		if err := bs.GitHub.Validate(); err != nil {
+			return "", fmt.Errorf("broker: %w", err)
+		}
+	}
+	for _, t := range bs.Tokens {
+		if err := t.Validate(); err != nil {
 			return "", fmt.Errorf("broker: %w", err)
 		}
 	}
@@ -116,12 +136,98 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 	if bs.GitHub != nil {
 		files = append(files, file{"agentbox-gh.js", ghScript})
 	}
+	if len(bs.Tokens) > 0 {
+		files = append(files, file{"agentbox-env.js", envScript}, file{TokensFile, TokensListing(bs.Tokens)})
+	}
 	for _, f := range files {
 		if err := replaceFile(root, rel, f.name, f.data); err != nil {
 			return "", fmt.Errorf("broker: writing %s: %w", f.name, err)
 		}
 	}
 	return filepath.Join(stateRoot, rel), nil
+}
+
+// tokenListEntry is one row of tokens.json: everything `agentbox-env --list`
+// shows and nothing secret. There is deliberately no field for the value
+// reference (env var name or file path).
+type tokenListEntry struct {
+	Name        string            `json:"name"`
+	Provider    string            `json:"provider,omitempty"`
+	Label       string            `json:"label,omitempty"`
+	Prod        bool              `json:"prod,omitempty"`
+	Description string            `json:"description,omitempty"`
+	Env         []string          `json:"env"`
+	ConfigEnv   map[string]string `json:"config_env,omitempty"`
+	Egress      []tokenListHost   `json:"egress"`
+	MCPServer   string            `json:"mcp_server,omitempty"`
+}
+
+type tokenListHost struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port,omitempty"` // only when not 443
+	Private bool   `json:"private,omitempty"`
+}
+
+// TokensListing is the JSON the box shows for `agentbox-env --list`: per entry
+// its name, labels, the variable names it sets, the config values (not secret
+// by definition), the hosts it may reach and its MCP server name. Never the
+// value, the variable or file that holds it, or a cidr.
+func TokensListing(ts []config.StaticToken) []byte {
+	out := make([]tokenListEntry, len(ts))
+	for i, t := range ts {
+		e := tokenListEntry{Name: t.Name, Provider: t.Provider, Label: t.Label, Prod: t.Prod, Description: t.Description,
+			Env: slices.Clone(t.Env), ConfigEnv: t.ConfigEnv, Egress: make([]tokenListHost, len(t.Egress))}
+		if e.Env == nil {
+			e.Env = []string{}
+		}
+		for j, h := range t.Egress {
+			e.Egress[j] = tokenListHost{Host: h.Host, Private: h.Private}
+			if p := h.EffectivePort(); p != 443 {
+				e.Egress[j].Port = p
+			}
+		}
+		if t.MCP != nil {
+			e.MCPServer = t.MCP.Server
+		}
+		out[i] = e
+	}
+	b, err := json.Marshal(out)
+	if err != nil { // plain strings, ints and bools: cannot happen
+		return []byte("[]\n")
+	}
+	return append(b, '\n')
+}
+
+var sessionKeyRe = regexp.MustCompile(`^[0-9a-z-]{1,40}$`)
+
+// WriteSessionMCP writes one session's MCP config file into the binding dir
+// (ensuring the dir first, by the same path as a spawn) and returns where the
+// box sees it. The key names the session and must be plain; the write goes
+// through os.Root, so a symlink planted at the name is replaced, never followed.
+// The file is 0600 and is not secret-bearing: the MCP servers it names run
+// under agentbox-env, which fetches their tokens.
+func WriteSessionMCP(stateRoot string, bs config.Bindings, key string, doc []byte) (string, error) {
+	if !sessionKeyRe.MatchString(key) {
+		return "", fmt.Errorf("broker: bad session key %q", key)
+	}
+	dir, err := EnsureBindingDir(stateRoot, bs)
+	if err != nil {
+		return "", err
+	}
+	root, err := os.OpenRoot(stateRoot)
+	if err != nil {
+		return "", fmt.Errorf("broker: opening state root: %w", err)
+	}
+	defer root.Close()
+	rel, err := filepath.Rel(stateRoot, dir)
+	if err != nil {
+		return "", fmt.Errorf("broker: %w", err)
+	}
+	name := "mcp-" + key + ".json"
+	if err := replaceFile(root, rel, name, doc); err != nil {
+		return "", fmt.Errorf("broker: writing %s: %w", name, err)
+	}
+	return BoxDir + "/" + name, nil
 }
 
 // replaceFile atomically replaces dir/name inside root. The temp name is unique
