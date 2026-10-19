@@ -228,11 +228,11 @@ RUN groupadd -g "$GID" agent \
 RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{"type":"stdio","command":"/usr/local/bin/codebase-memory-mcp","args":[]},"playwright":{"type":"stdio","command":"/usr/local/bin/playwright-mcp","args":["--headless","--isolated","--output-dir","/tmp/playwright-mcp","--browser","chromium","--executable-path","/usr/bin/chromium"]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["codebase-memory"].command' /etc/agent-box/mcp.json && jq -e '.mcpServers["playwright"].command' /etc/agent-box/mcp.json
 
 # Entrypoint: at container start, create $GOTMPDIR and the tflint home fallback,
-# then exec the arguments. The box home is a bind mount of the box's state dir, so
+# seed and re-arm the tfenv state in the home (see the tfenv block), then exec the arguments. The box home is a bind mount of the box's state dir, so
 # none of this can be made at build time, and Go refuses a missing GOTMPDIR (spec
 # correction 5).
 # agent-box always passes `sleep infinity`; the probes override --entrypoint.
-RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' '# tflint AWS ruleset: default config, only when the home has none (a repo .tflint.hcl still wins).' '[ -e "$HOME/.tflint.hcl" ] || cp /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl" 2>/dev/null' '# Link each baked plugin version into the home plugin dir, at the path tflint looks for (see the tflint block below).' 'for p in /opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/*/tflint-ruleset-aws; do [ -e "$p" ] || continue; d="$HOME/.tflint.d/plugins/${p#/opt/tflint/plugins/}"; [ -e "$d" ] || { mkdir -p "${d%/*}" && ln -s "$p" "$d"; } 2>/dev/null; done' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
+RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' '# tflint AWS ruleset: default config, only when the home has none (a repo .tflint.hcl still wins).' '[ -e "$HOME/.tflint.hcl" ] || cp /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl" 2>/dev/null' '# Link each baked plugin version into the home plugin dir, at the path tflint looks for (see the tflint block below).' 'for p in /opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/*/tflint-ruleset-aws; do [ -e "$p" ] || continue; d="$HOME/.tflint.d/plugins/${p#/opt/tflint/plugins/}"; [ -e "$d" ] || { mkdir -p "${d%/*}" && ln -s "$p" "$d"; } 2>/dev/null; done' '# tfenv: state lives in the box home (the image is read-only); code, keyring and defaults are root-owned under /opt/tfenv. Every start re-arms signature checks and seeds the default version.' 'if [ -n "${TFENV_CONFIG_DIR:-}" ]; then' '  mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null' '  rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null' '  [ -e "$TFENV_CONFIG_DIR/version" ] || cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null' '  v=$(cat /opt/tfenv/default-version 2>/dev/null)' '  [ -z "$v" ] || [ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] || { mkdir -p "$TFENV_CONFIG_DIR/versions/$v" && ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"; } 2>/dev/null' 'fi' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
 
 # === frequently bumped pins (keep last) ===
 # Everything below moves faster than the heavy layers above, so a version bump
@@ -455,15 +455,20 @@ RUN set -eu; \
 # To bump: take a release at least two weeks old, recompute the sum, diff the tree
 # against the tag, and re-read libexec/tfenv-install (the use-gpgv path below).
 #
-# Layout. The box runs as an arbitrary --user uid, so code and state are split:
-#   TFENV_ROOT=/opt/tfenv        code + share/hashicorp-keys.pgp, root-owned, 0755
-#   TFENV_CONFIG_DIR=/var/lib/tfenv   state, mode 1777 (sticky): any uid can create
-#     versions/<v>, .install-lock-<v>, version.prev and rewrite `version` (0666),
-#     but nobody except root can delete or rename root's files, notably use-gpgv.
-# The default terraform is the already-verified /usr/local/bin/terraform, linked
-# in as versions/${TERRAFORM_VERSION}: no download at build or run time. The
-# default is the `version` FILE, never TFENV_TERRAFORM_VERSION, which would
-# override a repo's own .terraform-version.
+# Layout. Boxes run with --read-only and an arbitrary --user uid; the only writable
+# places are /tmp, the workspace and the box home (a bind mount, so nothing in the
+# image layer is ever writable at run time). Code and state are therefore split:
+#   TFENV_ROOT=/opt/tfenv      code, share/hashicorp-keys.pgp, default-version and
+#     use-gpgv (root-owned, 0755/0644, read-only at run time)
+#   TFENV_CONFIG_DIR=/home/agent/.tfenv   state, in the writable box home: versions/<v>,
+#     .install-lock-<v>, version, version.prev, and use-gpgv
+# The entrypoint seeds that state on EVERY box start: it copies /opt/tfenv/use-gpgv
+# in (removing a use-gnupg, which tfenv would check first), creates `version` from
+# /opt/tfenv/default-version only if absent (so `tfenv use` survives restarts), and
+# links the already-verified /usr/local/bin/terraform in as
+# versions/<default>/terraform: no download at build or run time. The default is the
+# `version` FILE, never TFENV_TERRAFORM_VERSION, which would override a repo's own
+# .terraform-version.
 #
 # Signature verification is opt-in in tfenv: only if use-gpgv (or use-gnupg) exists
 # does `tfenv install` run `gpgv --keyring share/hashicorp-keys.pgp` over
@@ -473,8 +478,10 @@ RUN set -eu; \
 # is the fingerprint-checked HashiCorp key from the hashicorp-key stage replacing
 # tfenv's bundled one. gpgv comes with apt in the base image.
 # THREAT MODEL (spec 7b.4): this protects a download from a tampered mirror or a
-# MITM. It does not stop the agent from turning verification off (it can create
-# use-gnupg, or fetch any binary it likes): the agent has a shell and a network.
+# MITM. It does not stop the agent from turning verification off (it owns the home,
+# so it can delete use-gpgv or create use-gnupg mid-session, or just fetch any
+# binary it likes): the agent has a shell and a network. The entrypoint re-arms the
+# check at the next box start; that is accepted (spec 7b.4).
 ARG TFENV_VERSION=3.2.2
 ARG TFENV_SHA256=c9c8b2e2588cf026aafa9803dfdefdfc7aa258577c24ea9624fe53f764edea47
 RUN set -eu; \
@@ -484,22 +491,24 @@ RUN set -eu; \
     chown -R root:root /opt/tfenv; chmod -R go-w,a+rX /opt/tfenv
 COPY --from=hashicorp-key /out/hashicorp-keys.pgp /opt/tfenv/share/hashicorp-keys.pgp
 ENV TFENV_ROOT=/opt/tfenv
-ENV TFENV_CONFIG_DIR=/var/lib/tfenv
+ENV TFENV_CONFIG_DIR=/home/agent/.tfenv
 # The shim must come before /usr/local/bin/terraform; this is the effective PATH.
 ENV PATH=/opt/tfenv/bin:$PATH
+# Root-owned defaults the entrypoint copies into the home. The check runs the REAL
+# entrypoint against throwaway dirs, so it proves the seeding and the shim, and
+# leaves nothing in the image (GOTMPDIR is unset so it does not create the Go dir).
 RUN set -eu; \
     command -v gpgv >/dev/null; \
-    mkdir -p /var/lib/tfenv/versions/${TERRAFORM_VERSION}; \
-    ln -s /usr/local/bin/terraform /var/lib/tfenv/versions/${TERRAFORM_VERSION}/terraform; \
-    printf 'trust-tfenv: yes\n' > /var/lib/tfenv/use-gpgv; \
-    echo "${TERRAFORM_VERSION}" > /var/lib/tfenv/version; \
-    chown -R root:root /var/lib/tfenv; \
     chown root:root /opt/tfenv/share/hashicorp-keys.pgp; chmod 0644 /opt/tfenv/share/hashicorp-keys.pgp; \
-    chmod 0644 /var/lib/tfenv/use-gpgv; \
-    chmod 0666 /var/lib/tfenv/version; \
-    chmod 1777 /var/lib/tfenv /var/lib/tfenv/versions; \
+    printf 'trust-tfenv: yes\n' > /opt/tfenv/use-gpgv; \
+    echo "${TERRAFORM_VERSION}" > /opt/tfenv/default-version; \
+    chown root:root /opt/tfenv/use-gpgv /opt/tfenv/default-version; \
+    chmod 0644 /opt/tfenv/use-gpgv /opt/tfenv/default-version; \
     tfenv --version | grep -q "${TFENV_VERSION}"; \
-    terraform version | grep -q "v${TERRAFORM_VERSION}"
+    mkdir -p /tmp/tfenv-check-home; \
+    env -u GOTMPDIR HOME=/tmp/tfenv-check-home TFENV_CONFIG_DIR=/tmp/tfenv-check /usr/local/bin/agent-box-entrypoint true; \
+    TFENV_CONFIG_DIR=/tmp/tfenv-check terraform version | grep -q "v${TERRAFORM_VERSION}"; \
+    rm -rf /tmp/tfenv-check /tmp/tfenv-check-home
 
 # --- gh (GitHub CLI) ---
 # gh 2.102.0 (released 2026-09-30), pinned by version AND per-arch SHA256. Both

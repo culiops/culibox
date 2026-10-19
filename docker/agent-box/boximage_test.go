@@ -871,13 +871,13 @@ func TestDockerfileTfenvVerifiesSignatures(t *testing.T) {
 			copyAt = i
 		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/opt/tfenv") && strings.Contains(in, "--strip-components=1"):
 			extractAt = i
-		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "use-gpgv"):
+		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /opt/tfenv/use-gpgv"):
 			gpgvAt = i
 			if !strings.Contains(in, "trust-tfenv: yes") {
 				t.Errorf("use-gpgv must say \"trust-tfenv: yes\": %.200s", in)
 			}
-			if !strings.Contains(in, "chmod 0644 /var/lib/tfenv/use-gpgv") {
-				t.Errorf("use-gpgv must be chmod 0644 (root-owned; the sticky dir stops other uids deleting it)")
+			if !strings.Contains(in, "chown root:root /opt/tfenv/use-gpgv") || !strings.Contains(in, "chmod 0644 /opt/tfenv/use-gpgv") {
+				t.Errorf("/opt/tfenv/use-gpgv must be root-owned 0644")
 			}
 		}
 	}
@@ -888,26 +888,33 @@ func TestDockerfileTfenvVerifiesSignatures(t *testing.T) {
 		t.Error("the keyring COPY must come after the tfenv tarball is extracted, or the extract overwrites it")
 	}
 	if gpgvAt < 0 {
-		t.Error("no RUN writes /var/lib/tfenv/use-gpgv")
+		t.Error("no RUN writes /opt/tfenv/use-gpgv")
 	}
 	for _, in := range final {
-		if strings.Contains(in, "use-gnupg") {
-			t.Errorf("use-gnupg takes precedence over use-gpgv in tfenv; the Dockerfile must not create it: %.120s", in)
+		// use-gnupg takes precedence over use-gpgv in tfenv: only the entrypoint's
+		// rm -f may mention it.
+		if strings.Contains(in, "use-gnupg") && !strings.Contains(in, `rm -f "$TFENV_CONFIG_DIR/use-gnupg"`) {
+			t.Errorf("use-gnupg must only ever be removed: %.120s", in)
 		}
 	}
 }
 
-// The default version is a file in the state dir, never TFENV_TERRAFORM_VERSION:
-// that variable outranks a repo's .terraform-version.
+// Boxes run --read-only: the only writable places are /tmp, the workspace and
+// the box home. tfenv state therefore lives in the home, seeded by the
+// entrypoint from root-owned defaults under /opt/tfenv. The default version is a
+// file, never TFENV_TERRAFORM_VERSION, which outranks a repo's .terraform-version.
 func TestDockerfileTfenvDefaultIsAFileNotEnv(t *testing.T) {
 	df := string(dockerfile)
 	for _, in := range dockerfileInstructions() {
 		if strings.Contains(in, "TFENV_TERRAFORM_VERSION") {
 			t.Errorf("Dockerfile sets TFENV_TERRAFORM_VERSION, which overrides a repo's .terraform-version: %.120s", in)
 		}
+		if strings.Contains(in, "/var/lib/tfenv") {
+			t.Errorf("no tfenv state in the (read-only) image layer: %.120s", in)
+		}
 	}
-	if !strings.Contains(df, "\nENV TFENV_CONFIG_DIR=/var/lib/tfenv\n") {
-		t.Error("ENV TFENV_CONFIG_DIR=/var/lib/tfenv is not set")
+	if !strings.Contains(df, "\nENV TFENV_CONFIG_DIR=/home/agent/.tfenv\n") {
+		t.Error("ENV TFENV_CONFIG_DIR must be under the writable box home (/home/agent/.tfenv)")
 	}
 	if !strings.Contains(df, "\nENV TFENV_ROOT=/opt/tfenv\n") {
 		t.Error("ENV TFENV_ROOT=/opt/tfenv is not set")
@@ -923,23 +930,59 @@ func TestDockerfileTfenvDefaultIsAFileNotEnv(t *testing.T) {
 	if !strings.HasPrefix(last, "ENV PATH=/opt/tfenv/bin:") {
 		t.Errorf("the final ENV PATH must start with /opt/tfenv/bin:, got %q", last)
 	}
-	seed := regexp.MustCompile(`(?s)RUN .*/var/lib/tfenv/versions/\$\{TERRAFORM_VERSION\}.*ln -s /usr/local/bin/terraform /var/lib/tfenv/versions/\$\{TERRAFORM_VERSION\}/terraform.*"\$\{TERRAFORM_VERSION\}" > /var/lib/tfenv/version`)
 	var block string
 	for _, in := range dockerfileInstructions() {
-		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/var/lib/tfenv/version") {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/opt/tfenv/default-version") && !strings.Contains(in, "agent-box-entrypoint &&") {
 			block = in
 		}
 	}
-	if !seed.MatchString(block) {
-		t.Errorf("no RUN pre-seeds versions/${TERRAFORM_VERSION}/terraform as a symlink to /usr/local/bin/terraform and writes ${TERRAFORM_VERSION} to /var/lib/tfenv/version: %.300s", block)
-	}
-	for _, want := range []string{"chmod 1777 /var/lib/tfenv", "chmod 0666 /var/lib/tfenv/version"} {
+	for _, want := range []string{
+		`echo "${TERRAFORM_VERSION}" > /opt/tfenv/default-version`,
+		"chmod 0644 /opt/tfenv/use-gpgv /opt/tfenv/default-version",
+		// the build-time proof: the REAL entrypoint seeds a throwaway dir, then the shim runs
+		"TFENV_CONFIG_DIR=/tmp/tfenv-check /usr/local/bin/agent-box-entrypoint true",
+		`TFENV_CONFIG_DIR=/tmp/tfenv-check terraform version | grep -q "v${TERRAFORM_VERSION}"`,
+		"rm -rf /tmp/tfenv-check",
+	} {
 		if !strings.Contains(block, want) {
-			t.Errorf("state-dir RUN lacks %q", want)
+			t.Errorf("tfenv RUN lacks %q: %.300s", want, block)
 		}
 	}
-	if !strings.Contains(block, `terraform version | grep -q "v${TERRAFORM_VERSION}"`) {
-		t.Error("the state-dir RUN must check, through the shim, that terraform reports v${TERRAFORM_VERSION}")
+}
+
+// The entrypoint runs on every start: it re-arms signature checking (use-gpgv is
+// copied unconditionally, a use-gnupg is removed) and seeds the default version
+// and its symlink only when absent. Each step's failure is non-fatal. It must not
+// reference build ARGs.
+func TestDockerfileTfenvEntrypointSeedsHome(t *testing.T) {
+	var entry string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /usr/local/bin/agent-box-entrypoint") {
+			entry = in
+		}
+	}
+	if entry == "" {
+		t.Fatal("no RUN writes the entrypoint")
+	}
+	for _, want := range []string{
+		`if [ -n "${TFENV_CONFIG_DIR:-}" ]; then`,
+		`mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null`,
+		`rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null`,
+		`[ -e "$TFENV_CONFIG_DIR/version" ] || cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null`,
+		`v=$(cat /opt/tfenv/default-version 2>/dev/null)`,
+		`[ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] ||`,
+		`ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"`,
+	} {
+		if !strings.Contains(entry, want) {
+			t.Errorf("entrypoint lacks %s", want)
+		}
+	}
+	// use-gpgv is copied unconditionally: never behind a [ -e ] guard.
+	if strings.Contains(entry, `[ -e "$TFENV_CONFIG_DIR/use-gpgv" ] ||`) {
+		t.Error("use-gpgv must be re-armed on every start, not only when absent")
+	}
+	if strings.Contains(entry, "${TERRAFORM_VERSION}") || strings.Contains(entry, "$TERRAFORM_VERSION") {
+		t.Error("the entrypoint must not reference build ARGs; it reads /opt/tfenv/default-version")
 	}
 }
 
