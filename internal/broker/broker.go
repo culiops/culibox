@@ -35,6 +35,7 @@ type SessionView struct {
 	// refused without it.
 	Exclusive bool
 	AWS       *config.AWSBinding
+	GitHub    *config.GitHubBinding
 }
 
 // Lookup resolves a session id; ok is false for an unknown session.
@@ -119,6 +120,11 @@ type Broker struct {
 	srcKeys map[string]string    // source profile -> its sourceKey, read once
 	ssoBad  map[string]time.Time // sourceKey -> when a mint last failed on it
 	ssoNeed map[string]string    // session id -> the sourceKey that session's mint failed on
+
+	// GitHub tokens (github.go); gh is set before the broker serves, the maps are guarded by mu.
+	gh       GitHubMinter
+	ghCache  map[ghKey]ghCached
+	ghIssued map[string][]issued // every token minted for a session, until it is revoked
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -142,6 +148,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		denied: map[deniedKey]*deniedState{},
 		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[string]string{},
+		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b
@@ -174,6 +181,7 @@ func (b *Broker) Forget(sessionID string) {
 	}
 	delete(b.dropped, sessionID)
 	delete(b.ssoNeed, sessionID)
+	b.forgetGitHubLocked(sessionID)
 	delete(b.refused, refusedKey{sessionID, CredCookie})
 	delete(b.refused, refusedKey{sessionID, CredBearer})
 	delete(b.refused, refusedKey{sessionID, credNone})
@@ -182,6 +190,7 @@ func (b *Broker) Forget(sessionID string) {
 func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/credentials", b.serveCredentials)
+	mux.HandleFunc("/v1/github/token", b.serveGitHubToken)
 	return mux
 }
 
@@ -205,7 +214,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	// A nonce mismatch must NOT forget: the live session under this id is someone
 	// else's, and a stale token must not reset its cache or rate-limit window.
-	if reason := refusalReason(sv, found, nonce); reason != "" {
+	if reason := refusalReason(sv, found, nonce, kindAWS); reason != "" {
 		b.recordDenied(Row{Time: now, SessionID: sid, Outcome: OutcomeDeniedSession, Error: reason})
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
 		return
@@ -504,7 +513,7 @@ func suppressedNote(reason string, n int) string {
 
 // refusalReason names why a session may not mint ("" = it may). Stored in the
 // audit row only; the HTTP reply is deliberately uniform.
-func refusalReason(sv SessionView, found bool, nonce string) string {
+func refusalReason(sv SessionView, found bool, nonce string, k bindingKind) string {
 	switch {
 	case !found:
 		return "unknown session"
@@ -512,7 +521,7 @@ func refusalReason(sv SessionView, found bool, nonce string) string {
 		return "not live"
 	case !sv.Boxed:
 		return "not boxed"
-	case sv.AWS == nil:
+	case k == kindAWS && sv.AWS == nil, k == kindGitHub && sv.GitHub == nil:
 		return "no binding"
 	case sv.Nonce == "" || subtle.ConstantTimeCompare([]byte(sv.Nonce), []byte(nonce)) != 1:
 		return "nonce mismatch"

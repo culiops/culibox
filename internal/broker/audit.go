@@ -30,6 +30,12 @@ const (
 	OutcomeRevokeFailed Outcome = "revoke_failed"
 )
 
+// Credential providers, as stored in Row.Provider.
+const (
+	ProviderAWS    = "aws"
+	ProviderGitHub = "github"
+)
+
 // Row is one audited credential request. It never carries credential values or
 // broker tokens — only identifiers and the outcome.
 type Row struct {
@@ -181,7 +187,7 @@ func (a *Audit) Record(r Row) error {
 	}
 	provider := r.Provider
 	if provider == "" {
-		provider = "aws"
+		provider = ProviderAWS
 	}
 	_, err := a.db.Exec(`INSERT INTO credential_audit
 		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
