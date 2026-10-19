@@ -107,6 +107,22 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 	for _, warn := range res.Warnings {
 		fmt.Fprintf(w, "WARN: %s\n", warn)
 	}
-	fmt.Fprintf(w, "review: git -C %s log -p %s..%s; merge per your review policy\n", c.Of, a.Base, ref)
+	fmt.Fprintf(w, "review: git -C %s log -p %s..%s; merge per your review policy\n", shellQuote(c.Of), a.Base, ref)
 	return 0
+}
+
+// shellQuote makes s safe to paste into a shell: left bare when it has only
+// safe characters, else in single quotes with embedded quotes escaped.
+func shellQuote(s string) string {
+	safe := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./@%+=:,-", r)) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

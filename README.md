@@ -151,9 +151,9 @@ Two profile fields turn it on:
 | Field | Meaning |
 |---|---|
 | `clone_of` | Absolute path of the host repo to copy. It must be a plain git repo with a `.git` directory (no worktree, no `commondir`, no `objects/info/alternates`), not a symlink, and not your home directory or any directory above it. |
-| `clone_share` | Up to 8 paths, relative to `clone_of`, that the box can read. Example: `["CLAUDE.md", "docs/superpowers"]`. |
+| `clone_share` | Up to 8 paths, relative to `clone_of`, that the box can read. Example: `["CLAUDE.md", "docs/notes"]`. |
 
-The profile's `default_cwd` is the clone's directory. It must be outside `clone_of`, and the profile must be boxed (`runtime: "host"` is refused). The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
+The profile's `default_cwd` is the clone's directory. The two must not overlap: neither may be inside the other. The profile must be boxed: `runtime: "host"` is refused, and so is a profile that sets no runtime while the instance's `default_runtime` is `host`, both when you save it and when you spawn it. The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
 
 **What the box gets**
 

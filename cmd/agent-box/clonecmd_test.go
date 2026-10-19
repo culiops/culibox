@@ -211,3 +211,13 @@ func TestRunCloneUnreadableStore(t *testing.T) {
 		t.Fatalf("profiles.json was modified: %q", b)
 	}
 }
+
+func TestRunCloneOutputQuotesTheRepoPath(t *testing.T) {
+	e := newCloneEnv(t, nil, []config.AgentConfig{cloneProfile("p", "/my repos/it's", "/clones/r")})
+	e.res = clone.FetchResult{Ref: "refs/heads/box/b", Commits: []string{"abc1234 x"}}
+	rc, out := runCloneArgs(e, "p", "b", "main")
+	want := "review: git -C '/my repos/it'\\''s' log -p main..box/b; merge per your review policy\n"
+	if rc != 0 || !strings.HasSuffix(out, want) {
+		t.Fatalf("rc=%d out=%q want suffix %q", rc, out, want)
+	}
+}
