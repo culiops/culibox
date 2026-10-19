@@ -72,6 +72,13 @@ func main() {
 	if args.Cmd == "box" {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
 	}
+	if args.Cmd == "clone" {
+		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		os.Exit(runClone(args, cfg, home, cfgFiles, os.Stdout))
+	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
 	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if err != nil {

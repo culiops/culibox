@@ -22,7 +22,9 @@ import (
 // profile that created the clone: editing the profile (dropping clone_of,
 // changing default_cwd) or deleting it must not hand a box-written tree to a
 // host-tier session. One absolute clean path per line, mode 0600. There is no
-// release command: delete the directory or remove its line.
+// release command: only removing the line releases a dir. Deleting the
+// directory does not, because the box-owned check also covers paths that do not
+// exist yet.
 const cloneDirsFile = "clone-dirs"
 
 // cloneHooks is the daemon's session.CloneHooks: it hands the session manager

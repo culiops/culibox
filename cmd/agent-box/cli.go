@@ -21,19 +21,23 @@ const usage = `usage:
   agent-box box setup [-rebuild] [-recreate [-force]]  build the box image (macOS: also the box VM)
   agent-box box status                                 list boxes (macOS: and the box VM)
   agent-box box stop [-force]                          macOS: stop the box VM
+  agent-box clone fetch [-config <path>] [-base <branch>] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>
 
 Everything agent-box writes, its config.json included, lives in one data root:
 $AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "box"
-	Sub        string // box: "setup" | "stop" | "status"
+	Cmd        string // "serve" | "doctor" | "box" | "clone"
+	Sub        string // box: "setup" | "stop" | "status"; clone: "fetch"
 	ConfigPath string
-	ConfigSet  bool // -config given explicitly
-	Rebuild    bool // box setup
-	Recreate   bool // box setup
-	Force      bool // box stop, box setup -recreate
+	ConfigSet  bool   // -config given explicitly
+	Rebuild    bool   // box setup
+	Recreate   bool   // box setup
+	Force      bool   // box stop, box setup -recreate
+	Profile    string // clone fetch: the clone-mode profile
+	Branch     string // clone fetch: the branch in the clone to bring home
+	Base       string // clone fetch: the branch in clone_of the range starts after (default main)
 }
 
 // parseArgs reads argv without the program name. No subcommand means serve, so
@@ -55,6 +59,14 @@ func parseArgs(argv []string) (cliArgs, error) {
 		if sub != "setup" && sub != "stop" && sub != "status" {
 			return cliArgs{}, fmt.Errorf("unknown box subcommand %q", sub)
 		}
+	case "clone":
+		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+			return cliArgs{}, errors.New("clone needs a subcommand: fetch")
+		}
+		sub, argv = argv[0], argv[1:]
+		if sub != "fetch" {
+			return cliArgs{}, fmt.Errorf("unknown clone subcommand %q", sub)
+		}
 	default:
 		return cliArgs{}, fmt.Errorf("unknown command %q", cmd)
 	}
@@ -64,10 +76,19 @@ func parseArgs(argv []string) (cliArgs, error) {
 	rebuild := fs.Bool("rebuild", false, "box setup: rebuild the image even if it is current")
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	force := fs.Bool("force", false, "box stop, box setup -recreate: go ahead even with boxes running or the VM state unknown")
+	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}
-	if fs.NArg() > 0 {
+	var profile, branch string
+	if cmd == "clone" {
+		// Flags come before the two positionals; the flag package stops at the
+		// first positional, so a late flag lands here as a third argument.
+		if fs.NArg() != 2 {
+			return cliArgs{}, errors.New("clone fetch needs exactly <profile> <branch> after its flags")
+		}
+		profile, branch = fs.Arg(0), fs.Arg(1)
+	} else if fs.NArg() > 0 {
 		return cliArgs{}, errors.New("unexpected arguments: " + strings.Join(fs.Args(), " "))
 	}
 	if (*rebuild || *recreate) && sub != "setup" {
@@ -76,10 +97,25 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if *force && sub != "stop" && !(sub == "setup" && *recreate) {
 		return cliArgs{}, errors.New("-force only applies to box stop and box setup -recreate")
 	}
-	set := false
-	fs.Visit(func(f *flag.Flag) { set = set || f.Name == "config" })
+	set, baseSet := false, false
+	fs.Visit(func(f *flag.Flag) {
+		set = set || f.Name == "config"
+		baseSet = baseSet || f.Name == "base"
+	})
+	if baseSet && cmd != "clone" {
+		return cliArgs{}, errors.New("-base only applies to clone fetch")
+	}
+	if cmd == "clone" {
+		if baseSet && *base == "" {
+			return cliArgs{}, errors.New("-base needs a branch name")
+		}
+		if !baseSet {
+			*base = "main"
+		}
+	}
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
-		Rebuild: *rebuild, Recreate: *recreate, Force: *force}, nil
+		Rebuild: *rebuild, Recreate: *recreate, Force: *force,
+		Profile: profile, Branch: branch, Base: *base}, nil
 }
 
 // shutdownSignals end the daemon through DetachAll. SIGHUP is the one a laptop

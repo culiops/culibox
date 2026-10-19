@@ -142,6 +142,65 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 
 Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `box.image`, `default_cwd`, `account` and `aws`. `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles.
 
+## Clone mode
+
+Clone mode lets a boxed agent work on a private copy of one of your repos. Nothing the box writes reaches the original except through `agent-box clone fetch`, which brings a branch home for you to review. Linux only for now.
+
+Two profile fields turn it on:
+
+| Field | Meaning |
+|---|---|
+| `clone_of` | Absolute path of the host repo to copy. It must be a plain git repo with a `.git` directory (no worktree, no `commondir`, no `objects/info/alternates`), not a symlink, and not your home directory or any directory above it. |
+| `clone_share` | Up to 8 paths, relative to `clone_of`, that the box can read. Example: `["CLAUDE.md", "docs/superpowers"]`. |
+
+The profile's `default_cwd` is the clone's directory. It must be outside `clone_of`, and the profile must be boxed (`runtime: "host"` is refused). The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
+
+**What the box gets**
+
+| In the box | Mode | What it is |
+|---|---|---|
+| the clone directory | read-write | The box's own copy of the repo, and the workspace. |
+| the clone's `.git` | read-write | Part of that copy. The box commits here. |
+| `<clone_of>/.git` | read-only | The original's history, so `git fetch origin` inside the box works. The box cannot change it. |
+| each `clone_share` path | read-only | The original's file, shown at the same path inside the clone. |
+| the host's Claude memory for `clone_of`, if any | read-only | So the boxed agent starts with what you already told Claude about this repo. |
+
+Everything else is as in any boxed session: no host home, no Docker socket, egress only through the proxy.
+
+**Shares are read-only, and readable.** There is no writable share: a `:rw` suffix is refused by name, and so is any other `:`. A share path must be relative and clean, cannot be `.git`, cannot nest inside another share, and no part of its path may be a symlink. The box can read everything you share and has internet egress, so never share secrets. agent-box warns for names like `.env*`, `*.pem`, `*.key` and `config*.json`, but it does not stop you. Files the box writes for you (plans, notes) go in a directory inside the clone, such as `docs/handover/box/`, that your `.gitignore` excludes; they never travel in a fetch.
+
+**Bringing code home**
+
+```sh
+agent-box clone fetch [-config <path>] [-base <branch>] <profile> <branch>
+```
+
+The flags come before the two names. `-base` defaults to `main`. agent-box makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and never merges: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
+
+```text
+fetched box/feat-x (2 commit(s) not on main):
+  abc1234 add the thing
+  def5678 fix the thing
+review: git -C /home/me/repo log -p main..box/feat-x; merge per your review policy
+```
+
+Commit subjects are printed with control characters replaced, because a box wrote them. Bundles over 512 MiB are refused. The container runs the global `box_image`.
+
+**Refusals**
+
+- A host-tier session is refused anywhere inside a clone, including a subdirectory or a path that does not exist yet. The box wrote those files, and host-tier tools would trust them. A host-tier session at `clone_of` or at a share source is fine.
+- agent-box records every directory it has used as a clone in `<data dir>/clone-dirs`, one path per line. A recorded directory stays box-owned even after its profile is edited or deleted. Deleting the directory does not release it. To release one, remove its line from `<data dir>/clone-dirs`. An unreadable record refuses every host-tier spawn until it is fixed.
+- A spawn is refused, never partly started, if `clone_of`, a share source or a mountpoint is unsafe: a symlink on the path, a path inside the data root or a config directory, or an existing clone whose `origin` is not `clone_of`.
+- Changing `clone_of`, `default_cwd` or `clone_share` gives the profile a new box rather than reusing the old one.
+
+**Known limits**
+
+- Never run a host-tier agent session in a directory above the clones (for example your home). Claude Code lazily loads nested `CLAUDE.md` and `.claude/` files from any subdirectory it reads, so files a box wrote under a clone could steer a host agent. Keep clones outside every tree where host sessions run.
+- Your own shell inside a clone cannot be policed. A box can plant git hooks, config and aliases in the clone's `.git`, so never run git or other host tools there. Review through `clone_of` after a fetch, not in the clone.
+- A file you copy out of a clone by hand might be a symlink the box planted, and `cp` would copy its target. Check that it is a regular file first.
+- The box and the host share a disk. A box can fill it; there is no per-box quota.
+- agent-box's file editor follows links inside box-written directories. Treat a clone's contents as untrusted when you open them in the UI.
+
 ## Security model
 
 agent-box starts shells and agents on your machine, so authentication is never optional.
