@@ -124,7 +124,11 @@ type Broker struct {
 	// GitHub tokens (github.go); gh is set before the broker serves, the maps are guarded by mu.
 	gh       GitHubMinter
 	ghCache  map[ghKey]ghCached
-	ghIssued map[string][]issued // every token minted for a session, until it is revoked
+	ghIssued map[string][]issued               // every token minted for a session, until it is revoked
+	ghFlight map[string]map[*ghFlight]struct{} // mints between Mint and the listing; Forget marks them dead
+
+	ghRevokeTimeout time.Duration  // total budget of one RevokeGitHub; New sets 5s, tests shrink it
+	revokeWG        sync.WaitGroup // every revoke goroutine; tests Wait on it
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -148,8 +152,9 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		denied: map[deniedKey]*deniedState{},
 		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[string]string{},
-		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{},
-		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
+		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
+		ghRevokeTimeout: ghRevokeTimeout,
+		after:           func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b
 }
@@ -171,7 +176,6 @@ func (b *Broker) Stats(sessionID string) (Stats, bool) {
 // session is removed, so per-session state does not outlive the session.
 func (b *Broker) Forget(sessionID string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	delete(b.cache, sessionID)
 	delete(b.mintTimes, sessionID)
 	delete(b.stats, sessionID)
@@ -181,10 +185,12 @@ func (b *Broker) Forget(sessionID string) {
 	}
 	delete(b.dropped, sessionID)
 	delete(b.ssoNeed, sessionID)
-	b.forgetGitHubLocked(sessionID)
+	toks := b.forgetGitHubLocked(sessionID)
 	delete(b.refused, refusedKey{sessionID, CredCookie})
 	delete(b.refused, refusedKey{sessionID, CredBearer})
 	delete(b.refused, refusedKey{sessionID, credNone})
+	b.mu.Unlock()
+	b.revokeAsync(sessionID, toks) // never under b.mu: it is HTTP
 }
 
 func (b *Broker) Handler() http.Handler {

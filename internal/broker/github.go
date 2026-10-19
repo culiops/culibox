@@ -58,6 +58,14 @@ type issued struct {
 	installation int64
 }
 
+// ghRevokeTimeout is the default total budget for revoking one session's tokens.
+const ghRevokeTimeout = 5 * time.Second
+
+// ghFlight marks one mint that has left b.mu for GitHub. Forget and
+// RevokeAllGitHub set dead, so a mint that returns after its session was torn
+// down is revoked instead of listed.
+type ghFlight struct{ dead bool }
+
 // SetGitHub installs the minter behind /v1/github/token. Call it before the
 // broker serves; until then the route answers 503.
 func (b *Broker) SetGitHub(m GitHubMinter) { b.gh = m }
@@ -81,14 +89,109 @@ func (b *Broker) CheckGitHub(g config.GitHubBinding) error {
 	return nil
 }
 
-// forgetGitHubLocked drops a session's GitHub state. b.mu must be held.
-func (b *Broker) forgetGitHubLocked(sid string) {
+// forgetGitHubLocked drops a session's GitHub state and returns the tokens the
+// caller must now revoke. b.mu must be held; the revoke itself must not be.
+func (b *Broker) forgetGitHubLocked(sid string) []issued {
 	for k := range b.ghCache {
 		if k.sid == sid {
 			delete(b.ghCache, k)
 		}
 	}
+	for f := range b.ghFlight[sid] {
+		f.dead = true
+	}
+	delete(b.ghFlight, sid)
+	toks := b.ghIssued[sid]
 	delete(b.ghIssued, sid)
+	return toks
+}
+
+// RevokeGitHub revokes, at GitHub, every token minted for the session and
+// forgets them. It returns at once; the revoking runs in one goroutine bounded
+// by ghRevokeTimeout. A second call finds nothing left to revoke.
+func (b *Broker) RevokeGitHub(sessionID string) {
+	b.mu.Lock()
+	toks := b.forgetGitHubLocked(sessionID)
+	b.mu.Unlock()
+	b.revokeAsync(sessionID, toks)
+}
+
+// RevokeAllGitHub revokes every session's tokens, synchronously, until ctx is
+// done. For daemon shutdown.
+func (b *Broker) RevokeAllGitHub(ctx context.Context) {
+	b.mu.Lock()
+	sids := map[string]struct{}{}
+	for sid := range b.ghIssued {
+		sids[sid] = struct{}{}
+	}
+	for sid := range b.ghFlight {
+		sids[sid] = struct{}{}
+	}
+	all := map[string][]issued{}
+	for sid := range sids {
+		all[sid] = b.forgetGitHubLocked(sid)
+	}
+	b.mu.Unlock()
+	for sid, toks := range all {
+		b.revokeTokens(ctx, sid, toks)
+	}
+}
+
+// revokeAsync revokes toks in one goroutine that ends within ghRevokeTimeout.
+func (b *Broker) revokeAsync(sid string, toks []issued) {
+	if len(toks) == 0 {
+		return
+	}
+	timeout := b.ghRevokeTimeout
+	b.revokeWG.Add(1)
+	go func() {
+		defer b.revokeWG.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		b.revokeTokens(ctx, sid, toks)
+	}()
+}
+
+// revokeTokens revokes each token and writes one revoked or revoke_failed row
+// per token. It never holds b.mu, and the rows never carry a token.
+func (b *Broker) revokeTokens(ctx context.Context, sid string, toks []issued) {
+	for _, t := range toks {
+		var err error
+		switch {
+		case b.gh == nil:
+			err = errors.New("GitHub is not configured")
+		case ctx.Err() != nil:
+			err = ctx.Err()
+		default:
+			err = b.gh.Revoke(ctx, t.value)
+		}
+		row := Row{Time: b.now(), SessionID: sid, Provider: ProviderGitHub, Subject: t.owner,
+			Installation: t.installation, Outcome: OutcomeRevoked}
+		if err != nil {
+			row.Outcome = OutcomeRevokeFailed
+			row.Error = sanitize(strings.ReplaceAll(err.Error(), t.value, "[token]"))
+		}
+		b.record(row)
+	}
+}
+
+// ghBeginLocked registers a mint that is about to leave b.mu. b.mu must be held.
+func (b *Broker) ghBeginLocked(sid string) *ghFlight {
+	f := &ghFlight{}
+	if b.ghFlight[sid] == nil {
+		b.ghFlight[sid] = map[*ghFlight]struct{}{}
+	}
+	b.ghFlight[sid][f] = struct{}{}
+	return f
+}
+
+func (b *Broker) ghEnd(sid string, f *ghFlight) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.ghFlight[sid], f)
+	if len(b.ghFlight[sid]) == 0 {
+		delete(b.ghFlight, sid)
+	}
 }
 
 type ghTokenRequest struct {
@@ -182,7 +285,9 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		replyErr(w, http.StatusTooManyRequests, fmt.Sprintf("more than %d credential mints in a minute; slow down", mintsPerMinute))
 		return
 	}
+	fl := b.ghBeginLocked(sid)
 	b.mu.Unlock()
+	defer b.ghEnd(sid, fl)
 
 	// Outside b.mu: this is an HTTP round trip to GitHub. Concurrent first
 	// requests may each mint; every token is listed in ghIssued below.
@@ -206,9 +311,22 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	if err := b.rec.Record(row); err != nil {
 		log.Printf("broker: audit write failed (%v); GitHub token for %s withheld", err, sid) // the row holds identifiers only
 		replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this credential, so it was not issued; retry shortly")
+		b.revokeAsync(sid, []issued{{value: m.Value, owner: entry.Owner, installation: m.InstallationID}}) // withheld, so kill it
 		return
 	}
+	// The session may have ended while GitHub was minting. Forget marks this
+	// mint dead (it closes the window between lookup and b.mu); lookup also
+	// catches a new spawn under the same id. lookup runs before b.mu, as it
+	// does everywhere else.
+	cur, curFound := b.lookup(sid)
+	stillLive := refusalReason(cur, curFound, nonce, kindGitHub) == ""
 	b.mu.Lock()
+	if fl.dead || !stillLive {
+		b.mu.Unlock()
+		b.revokeAsync(sid, []issued{{value: m.Value, owner: entry.Owner, installation: m.InstallationID}})
+		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding")
+		return
+	}
 	b.ghIssued[sid] = append(b.ghIssued[sid], issued{value: m.Value, owner: entry.Owner, installation: m.InstallationID})
 	b.ghCache[key] = ghCached{token: m.Value, expires: m.ExpiresAt, nonce: nonce, scopeKey: base.ScopeHash}
 	b.mu.Unlock()

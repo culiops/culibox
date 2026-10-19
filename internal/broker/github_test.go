@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -26,10 +27,22 @@ type fakeGH struct {
 	life  time.Duration // life of each token handed out
 	now   func() time.Time
 	n     int
+
+	revoked   []string                                    // tokens Revoke was called with
+	revokeErr error                                       // Revoke fails with this while set
+	revokeFn  func(ctx context.Context, tok string) error // overrides revokeErr when set
+	entered   chan struct{}                               // Mint signals here when it starts (if set)
+	block     chan struct{}                               // Mint waits for this to close (if set)
 }
 
 func (f *fakeGH) Check(string) error { return nil }
 func (f *fakeGH) Mint(_ context.Context, in ghapp.MintInput) (ghapp.Minted, error) {
+	if f.entered != nil {
+		f.entered <- struct{}{}
+	}
+	if f.block != nil {
+		<-f.block
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, in)
@@ -40,8 +53,22 @@ func (f *fakeGH) Mint(_ context.Context, in ghapp.MintInput) (ghapp.Minted, erro
 	return ghapp.Minted{Token: ghapp.Token{Value: fmt.Sprintf("ghs_FAKETOKEN%02d", f.n), ExpiresAt: f.now().Add(f.life)},
 		InstallationID: 777}, nil
 }
-func (f *fakeGH) Revoke(context.Context, string) error { return nil }
-func (f *fakeGH) callCount() int                       { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
+func (f *fakeGH) Revoke(ctx context.Context, tok string) error {
+	f.mu.Lock()
+	f.revoked = append(f.revoked, tok)
+	fn, err := f.revokeFn, f.revokeErr
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, tok)
+	}
+	return err
+}
+func (f *fakeGH) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
+func (f *fakeGH) revokedList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.revoked...)
+}
 
 func ghBinding() *config.GitHubBinding {
 	return &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "culiops", App: "bot", Repos: []string{"agent-box", "tech-advisor"}}}}
@@ -240,6 +267,10 @@ func TestGitHubMintedRowFailClosed(t *testing.T) {
 	}
 	if len(b.ghCache) != 0 || len(b.ghIssued["s"]) != 0 {
 		t.Fatalf("cache %v issued %v", b.ghCache, b.ghIssued)
+	}
+	b.revokeWG.Wait()
+	if got := fg.revokedList(); len(got) != 1 || got[0] != "ghs_FAKETOKEN01" {
+		t.Fatalf("the withheld token must be revoked: %v", got)
 	}
 	rec.recErr = nil
 	if w := ghCall(b, tokA("s"), ghBody); w.Code != 200 || fg.callCount() != 2 {
@@ -451,6 +482,7 @@ func TestGitHubTokenNeverLogged(t *testing.T) {
 	*now = now.Add(55 * time.Minute)
 	rec.recErr = errors.New("disk full") // the fail-closed path logs
 	ghCall(b, tokA("s"), ghBody)
+	b.revokeWG.Wait() // the withheld token's revoke also touches rec
 	rec.recErr = nil
 	fg.err = &ghapp.APIError{Status: 500, Msg: "bad"}
 	ghCall(b, tokA("s"), ghBody)
@@ -464,5 +496,197 @@ func TestGitHubTokenNeverLogged(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "audit write failed") {
 		t.Fatalf("the fail-closed path should have logged: %q", buf.String())
+	}
+}
+
+// mintN mints n distinct tokens for sid by letting the cached one go stale.
+func mintN(t *testing.T, b *Broker, now *time.Time, sid string, n int) []string {
+	t.Helper()
+	var toks []string
+	for range n {
+		w := ghCall(b, tokA(sid), ghBody)
+		if w.Code != 200 {
+			t.Fatalf("status %d: %s", w.Code, w.Body)
+		}
+		tk, _ := ghReply(t, w)
+		toks = append(toks, tk)
+		*now = now.Add(55 * time.Minute) // under the refresh margin: the next call re-mints
+	}
+	return toks
+}
+
+func revokeRows(rec *memRec) []Row {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	var out []Row
+	for _, r := range rec.rows {
+		if r.Outcome == OutcomeRevoked || r.Outcome == OutcomeRevokeFailed {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestForgetRevokesEveryIssuedToken(t *testing.T) {
+	b, fg, rec, now := ghSetup(t, map[string]SessionView{"s": ghLive()})
+	toks := mintN(t, b, now, "s", 3)
+	b.Forget("s")
+	b.revokeWG.Wait()
+	got := fg.revokedList()
+	if len(got) != 3 {
+		t.Fatalf("revoked %v want %v", got, toks)
+	}
+	for _, tk := range toks {
+		found := false
+		for _, g := range got {
+			found = found || g == tk
+		}
+		if !found {
+			t.Fatalf("%s not revoked: %v", tk, got)
+		}
+	}
+	rows := revokeRows(rec)
+	if len(rows) != 3 {
+		t.Fatalf("rows: %+v", rows)
+	}
+	for _, r := range rows {
+		if r.Outcome != OutcomeRevoked || r.Subject != "culiops" || r.SessionID != "s" || r.Provider != ProviderGitHub || r.Installation != 777 || r.Error != "" {
+			t.Fatalf("row: %+v", r)
+		}
+	}
+	if len(b.ghIssued) != 0 || len(b.ghCache) != 0 {
+		t.Fatalf("state left: %v %v", b.ghIssued, b.ghCache)
+	}
+}
+
+func TestRevokeFailureRecorded(t *testing.T) {
+	b, fg, rec, _ := ghSetup(t, map[string]SessionView{"s": ghLive()})
+	ghCall(b, tokA("s"), ghBody)
+	fg.revokeErr = errors.New("boom ghs_FAKETOKEN01 " + strings.Repeat("e", 1000))
+	b.RevokeGitHub("s")
+	b.revokeWG.Wait()
+	rows := revokeRows(rec)
+	if len(rows) != 1 || rows[0].Outcome != OutcomeRevokeFailed || rows[0].Subject != "culiops" || rows[0].Error == "" {
+		t.Fatalf("rows: %+v", rows)
+	}
+	if strings.Contains(rows[0].Error, "ghs_") || len(rows[0].Error) > maxErrLen+len("…") {
+		t.Fatalf("error row: %q", rows[0].Error)
+	}
+}
+
+func TestRevokeBoundedNoLeak(t *testing.T) {
+	b, fg, rec, _ := ghSetup(t, map[string]SessionView{"s": ghLive()})
+	ghCall(b, tokA("s"), ghBody)
+	fg.revokeFn = func(ctx context.Context, _ string) error { <-ctx.Done(); return ctx.Err() }
+	b.ghRevokeTimeout = 50 * time.Millisecond
+	base := runtime.NumGoroutine()
+	start := time.Now()
+	b.RevokeGitHub("s")
+	if d := time.Since(start); d > 10*time.Millisecond {
+		t.Fatalf("RevokeGitHub blocked %v", d)
+	}
+	done := make(chan struct{})
+	go func() { b.revokeWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("revoke goroutine outlived its timeout")
+	}
+	if rows := revokeRows(rec); len(rows) != 1 || rows[0].Outcome != OutcomeRevokeFailed {
+		t.Fatalf("rows: %+v", rows)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if n := runtime.NumGoroutine(); n > base+1 {
+		t.Fatalf("goroutines %d, baseline %d", n, base)
+	}
+}
+
+func TestRevokeAllGitHubRespectsCtx(t *testing.T) {
+	b, fg, _, _ := ghSetup(t, map[string]SessionView{"s1": ghLive(), "s2": ghLive()})
+	ghCall(b, tokA("s1"), ghBody)
+	ghCall(b, tokA("s2"), ghBody)
+	fg.revokeFn = func(ctx context.Context, _ string) error { <-ctx.Done(); return ctx.Err() }
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	b.RevokeAllGitHub(ctx)
+	if d := time.Since(start); d > 200*time.Millisecond {
+		t.Fatalf("RevokeAllGitHub took %v", d)
+	}
+	if len(b.ghIssued) != 0 || len(b.ghCache) != 0 {
+		t.Fatalf("state left: %v %v", b.ghIssued, b.ghCache)
+	}
+}
+
+func TestRevokeTwiceIsNoop(t *testing.T) {
+	b, fg, _, now := ghSetup(t, map[string]SessionView{"s": ghLive()})
+	mintN(t, b, now, "s", 2)
+	b.RevokeGitHub("s")
+	b.Forget("s")
+	b.RevokeGitHub("s")
+	b.revokeWG.Wait()
+	if got := fg.revokedList(); len(got) != 2 || got[0] == got[1] {
+		t.Fatalf("each token exactly once: %v", got)
+	}
+}
+
+// inFlightSetup starts a request for session "s" and returns once the fake
+// Mint is blocked (outside b.mu); finish releases it and returns the reply.
+func inFlightSetup(t *testing.T, sessions map[string]SessionView) (*Broker, *fakeGH, *memRec, func() *httptest.ResponseRecorder) {
+	b, fg, rec, _ := ghSetup(t, sessions)
+	fg.entered, fg.block = make(chan struct{}), make(chan struct{})
+	var w *httptest.ResponseRecorder
+	done := make(chan struct{})
+	go func() { w = ghCall(b, tokA("s"), ghBody); close(done) }()
+	<-fg.entered
+	finish := func() *httptest.ResponseRecorder { close(fg.block); <-done; b.revokeWG.Wait(); return w }
+	return b, fg, rec, finish
+}
+
+func TestInFlightMintAfterForgetIsRevoked(t *testing.T) {
+	b, fg, _, finish := inFlightSetup(t, map[string]SessionView{"s": ghLive()})
+	b.Forget("s")
+	w := finish()
+	if w.Code != 403 || strings.Contains(w.Body.String(), "ghs_") {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	if got := fg.revokedList(); len(got) != 1 || got[0] != "ghs_FAKETOKEN01" {
+		t.Fatalf("revoked %v", got)
+	}
+	if len(b.ghIssued["s"]) != 0 || len(b.ghCache) != 0 || len(b.ghFlight) != 0 {
+		t.Fatalf("state: %v %v %v", b.ghIssued, b.ghCache, b.ghFlight)
+	}
+}
+
+func TestInFlightMintAfterRevokeAllIsRevoked(t *testing.T) {
+	b, fg, rec, finish := inFlightSetup(t, map[string]SessionView{"s": ghLive()})
+	b.RevokeAllGitHub(context.Background())
+	w := finish()
+	if w.Code != 403 || len(fg.revokedList()) != 1 || len(b.ghIssued) != 0 {
+		t.Fatalf("status %d revoked %v", w.Code, fg.revokedList())
+	}
+	if rows := revokeRows(rec); len(rows) != 1 || rows[0].Outcome != OutcomeRevoked {
+		t.Fatalf("rows: %+v", rows)
+	}
+}
+
+func TestInFlightMintAfterRespawnIsRevoked(t *testing.T) {
+	sessions := map[string]SessionView{"s": ghLive()}
+	b, fg, _, finish := inFlightSetup(t, sessions)
+	sv := sessions["s"]
+	sv.Nonce = nonceB // a new spawn took the id, with no Forget
+	sessions["s"] = sv
+	w := finish()
+	if w.Code != 403 || len(fg.revokedList()) != 1 || len(b.ghIssued["s"]) != 0 || len(b.ghCache) != 0 {
+		t.Fatalf("status %d revoked %v", w.Code, fg.revokedList())
+	}
+}
+
+func TestInFlightMintOfAnotherSessionUnaffected(t *testing.T) {
+	b, fg, _, finish := inFlightSetup(t, map[string]SessionView{"s": ghLive(), "o": ghLive()})
+	b.Forget("o")
+	w := finish()
+	if w.Code != 200 || len(fg.revokedList()) != 0 || len(b.ghIssued["s"]) != 1 {
+		t.Fatalf("status %d revoked %v", w.Code, fg.revokedList())
 	}
 }
