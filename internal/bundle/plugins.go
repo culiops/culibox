@@ -3,6 +3,7 @@ package bundle
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -145,7 +146,7 @@ func pluginSnapshot(src, root string) pluginSet {
 		return incomplete
 	}
 
-	snap, token, err := publishSnapshot(pdir, root)
+	snap, token, err := publishSnapshot(pdir, fi, root)
 	if err != nil {
 		return incomplete
 	}
@@ -230,7 +231,7 @@ func walkNode(r *os.Root, rel string, fi fs.FileInfo, b *budget, visit func(stri
 	}
 	sort.Slice(ents, func(i, j int) bool { return ents[i].Name() < ents[j].Name() })
 	for _, ent := range ents {
-		if ent.Name() == ".git" {
+		if strings.EqualFold(ent.Name(), ".git") { // APFS/NTFS fold case
 			continue // dir, or the gitlink file of a worktree or submodule
 		}
 		child := filepath.Join(rel, ent.Name())
@@ -276,12 +277,17 @@ func fingerprint(h interface{ Sum([]byte) []byte }) string {
 // The directory is keyed by a fingerprint of the plugin tree ONLY, so editing a
 // skill never recopies it. Publishing follows materialize: build under .tmp-*
 // in root, write the completion marker last, rename into place.
-func publishSnapshot(pdir, root string) (dir, token string, err error) {
+func publishSnapshot(pdir string, checked fs.FileInfo, root string) (dir, token string, err error) {
 	src, err := os.OpenRoot(pdir)
 	if err != nil {
 		return "", "", err
 	}
 	defer src.Close()
+	// pdir was Lstat'd as a real directory before this open; if it was swapped
+	// for another directory in between, the verdict no longer describes it.
+	if st, err := src.Stat("."); err != nil || !os.SameFile(st, checked) {
+		return "", "", fmt.Errorf("bundle: %s changed between the check and the open", pdir)
+	}
 
 	h := sha256.New()
 	if err := walkPluginTree(src, &budget{}, func(rel string, fi fs.FileInfo) error {
@@ -325,11 +331,16 @@ func publishSnapshot(pdir, root string) (dir, token string, err error) {
 		return "", "", err
 	}
 	final := filepath.Join(root, "plugins-"+token)
-	if snapshotComplete(final, token) { // a concurrent Ensure published it first
-		return final, token, nil
+	// Rename onto an existing non-empty dir fails, so a sibling's complete
+	// snapshot is never replaced. Only an incomplete leftover (no matching
+	// marker, e.g. from a crash) is cleared, and a dir whose marker matches is
+	// never removed.
+	err = os.Rename(tmp, final)
+	if err != nil && !snapshotComplete(final, token) {
+		_ = os.RemoveAll(final)
+		err = os.Rename(tmp, final)
 	}
-	_ = os.RemoveAll(final) // an incomplete leftover
-	if err := os.Rename(tmp, final); err != nil {
+	if err != nil && !snapshotComplete(final, token) {
 		return "", "", fmt.Errorf("bundle: publishing %s: %w", final, err)
 	}
 	return final, token, nil
@@ -413,11 +424,45 @@ func snapshotCredentials(snap string) (entry string, found bool, err error) {
 		if err != nil || len(b) > maxCredFile {
 			return "", false, fmt.Errorf("bundle: %s cannot be checked", name)
 		}
-		if hasURLCredentials(b) {
+		// The rule runs on the DECODED strings: json escapes (https:\/\/tok@h,
+		// \u0040, \u002f) decode to a credentialed URL that a regex over the raw
+		// text never sees. A file that is not valid json cannot be vouched for,
+		// so it is refused the same way.
+		if decoded, ok := jsonHasURLCredentials(b); !ok || decoded {
 			return name, true, nil
 		}
 	}
 	return "", false, nil
+}
+
+// jsonHasURLCredentials decodes doc and applies hasURLCredentials to every
+// string in it, object keys included. ok is false when doc is not valid json.
+func jsonHasURLCredentials(doc []byte) (found, ok bool) {
+	var v any
+	if err := json.Unmarshal(doc, &v); err != nil {
+		return false, false
+	}
+	return anyStringHasCredentials(v), true
+}
+
+func anyStringHasCredentials(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return hasURLCredentials([]byte(t))
+	case []any:
+		for _, e := range t {
+			if anyStringHasCredentials(e) {
+				return true
+			}
+		}
+	case map[string]any:
+		for k, e := range t {
+			if hasURLCredentials([]byte(k)) || anyStringHasCredentials(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // urlAuthority matches scheme://authority@ where the authority runs to the first

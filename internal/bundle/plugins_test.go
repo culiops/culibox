@@ -358,8 +358,9 @@ func fifoForJSONEntry(t *testing.T, name string) {
 	if err := syscall.Mkfifo(p, 0o600); err != nil {
 		t.Skip("no mkfifo:", err)
 	}
+	root := t.TempDir()
 	done := make(chan pluginSet, 1)
-	go func() { ps, _ := snap(t, src); done <- ps }()
+	go func() { done <- pluginSnapshot(src, root) }() // no t.* off the test goroutine
 	select {
 	case ps := <-done:
 		if len(ps.mounts) != 0 || len(ps.drops) != 1 || ps.drops[0].Reason != ReasonPluginsIncomplete {
@@ -404,6 +405,9 @@ func TestSnapshotHasNoGitMetadataAnywhere(t *testing.T) {
 	writePluginFile(t, src, "cache/a/b/c/d/e/f/.git/config", "[credential]\n\thelper = store\n")
 	writePluginFile(t, src, "cache/a/sub/.git", "gitdir: ../../.git/modules/x\n")
 	writePluginFile(t, src, "cache/a/keep.txt", "kept")
+	// APFS and NTFS are case-insensitive: .GIT is the same directory there.
+	writePluginFile(t, src, "marketplaces/m/.GIT/config", gitConfig("https://tok3@h/y"))
+	writePluginFile(t, src, "cache/a/.Git", "gitdir: elsewhere\n")
 
 	ps, root := snap(t, src)
 	if len(ps.mounts) != 4 || len(ps.drops) != 0 {
@@ -412,7 +416,7 @@ func TestSnapshotHasNoGitMetadataAnywhere(t *testing.T) {
 	paths := snapshotPaths(t, filepath.Join(root, "plugins-"+ps.token))
 	for rel := range paths {
 		for _, part := range strings.Split(rel, string(filepath.Separator)) {
-			if part == ".git" {
+			if strings.EqualFold(part, ".git") {
 				t.Fatalf("snapshot contains git metadata: %s", rel)
 			}
 		}
@@ -486,26 +490,21 @@ func TestSnapshotSkipsFifosInsideTheTree(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(src, "plugins", "cache", "a", "pipe"), 0o600); err != nil {
 		t.Skip("no mkfifo:", err)
 	}
-	done := make(chan []string, 1)
-	go func() {
-		ps, root := snap(t, src)
-		var got []string
-		if len(ps.mounts) == 4 {
-			for p := range snapshotPaths(t, filepath.Join(root, "plugins-"+ps.token)) {
-				got = append(got, p)
-			}
-		}
-		done <- got
-	}()
+	root := t.TempDir()
+	done := make(chan pluginSet, 1)
+	go func() { done <- pluginSnapshot(src, root) }() // no t.* off the test goroutine
 	select {
-	case got := <-done:
+	case ps := <-done:
+		if len(ps.mounts) != 4 {
+			t.Fatalf("the set must still mount: %+v", ps)
+		}
 		var ok, pipe bool
-		for _, p := range got {
+		for p := range snapshotPaths(t, filepath.Join(root, "plugins-"+ps.token)) {
 			ok = ok || p == filepath.Join("cache", "a", "ok.txt")
 			pipe = pipe || filepath.Base(p) == "pipe"
 		}
 		if !ok || pipe {
-			t.Fatalf("want ok.txt copied and pipe skipped, got %v", got)
+			t.Fatalf("want ok.txt copied and pipe skipped (ok=%v pipe=%v)", ok, pipe)
 		}
 	case <-timeoutAfter(10):
 		t.Fatal("a FIFO hung the snapshot")
@@ -664,5 +663,101 @@ func TestCredentialedMarketplaceChangesHashAndStripsEnabledPlugins(t *testing.T)
 	}
 	if len(dirty.pluginMounts) != 0 || len(dirty.pluginDrops) != 1 {
 		t.Fatalf("grant must carry no mounts and one drop: %+v %+v", dirty.pluginMounts, dirty.pluginDrops)
+	}
+}
+
+// The check runs on the DECODED json, not the raw bytes: escapes decode to a
+// credentialed URL but do not match a regex over the file's text.
+func TestPluginMountsRefuseCredentialsHiddenByJSONEscapes(t *testing.T) {
+	for _, c := range []struct{ name, doc string }{
+		{"escaped slashes", `{"m":{"url":"https:\/\/tok@host/r"}}`},
+		{"unicode escaped slashes", `{"m":{"url":"https:\u002f\u002ftok@host/r"}}`},
+		{"unicode escaped scheme", `{"m":{"url":"\u0068ttps://tok@host/r"}}`},
+		{"unicode escaped at", `{"m":{"url":"https://tok\u0040host/r"}}`},
+		{"url as an object key", `{"https://tok@host/r":true}`},
+		{"nested in an array", `{"a":[{"b":["x","git+https://u:p@h/r"]}]}`},
+		{"not valid json", `{"m":{"url":"https://github.com/o/r"`},
+		{"not json at all", `https://github.com/o/r`},
+	} {
+		for _, file := range credentialFiles {
+			t.Run(c.name+" in "+file, func(t *testing.T) {
+				src := t.TempDir()
+				pluginTree(t, src)
+				writePluginFile(t, src, file, c.doc)
+				ps, _ := snap(t, src)
+				want := Drop{Kind: "plugins", Name: file, Reason: ReasonPluginCredentials}
+				if len(ps.mounts) != 0 || len(ps.drops) != 1 || ps.drops[0] != want {
+					t.Fatalf("want no mounts and exactly %+v, got %+v", want, ps)
+				}
+			})
+		}
+	}
+}
+
+// Escapes that decode to a harmless URL must not be refused.
+func TestPluginMountsAllowEscapedCredentialFreeJSON(t *testing.T) {
+	src := t.TempDir()
+	pluginTree(t, src)
+	writePluginFile(t, src, "known_marketplaces.json", `{"m":{"url":"https:\/\/github.com\/o\/r","ssh":"ssh://git\u0040h/o/r","n":3,"b":null}}`)
+	if ps, _ := snap(t, src); len(ps.mounts) != 4 || len(ps.drops) != 0 {
+		t.Fatalf("a credential-free escaped URL must mount: %+v", ps)
+	}
+}
+
+// The dir opened must be the one that was checked: if plugins/ is swapped for
+// another directory between the Lstat and the open, nothing is published.
+func TestPublishSnapshotRefusesASwappedPluginsDir(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	pluginTree(t, a)
+	pluginTree(t, b)
+	checked, err := os.Lstat(filepath.Join(a, "plugins"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if _, _, err := publishSnapshot(filepath.Join(b, "plugins"), checked, root); err == nil {
+		t.Fatal("a swapped plugins dir must be refused")
+	}
+	if ents, _ := os.ReadDir(root); len(ents) != 0 {
+		t.Fatalf("nothing may be published: %v", ents)
+	}
+	same, _ := os.Lstat(filepath.Join(a, "plugins"))
+	if _, _, err := publishSnapshot(filepath.Join(a, "plugins"), same, root); err != nil {
+		t.Fatalf("the checked dir itself must publish: %v", err)
+	}
+}
+
+// A sibling Ensure that publishes the same snapshot first must not make this
+// one fail, and its snapshot must never be deleted by us.
+func TestPublishSnapshotKeepsASiblingsCompleteSnapshot(t *testing.T) {
+	src := t.TempDir()
+	pluginTree(t, src)
+	root := t.TempDir()
+	pdir := filepath.Join(src, "plugins")
+	fi, _ := os.Lstat(pdir)
+	first, token, err := publishSnapshot(pdir, fi, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(first, "cache", "official", "sentinel")
+	if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Force the copy path again with the same content: the marker matches, so
+	// the existing complete dir must be returned untouched.
+	again, token2, err := publishSnapshot(pdir, fi, root)
+	if err != nil || again != first || token2 != token {
+		t.Fatalf("second publish: %v %q %q", err, again, token2)
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatal("a complete snapshot was removed or replaced")
+	}
+	// An incomplete leftover (no marker) IS replaced.
+	if err := os.Remove(filepath.Join(first, snapshotMarker)); err != nil {
+		t.Fatal(err)
+	}
+	healed, _, err := publishSnapshot(pdir, fi, root)
+	if err != nil || healed != first || !snapshotComplete(healed, token) {
+		t.Fatalf("an incomplete leftover must be replaced: %v", err)
 	}
 }
