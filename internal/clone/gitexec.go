@@ -1,0 +1,117 @@
+// Package clone creates and serves a boxed profile's clone of a host repo
+// (spec §6). This file holds the only place agent-box executes the host's git:
+// TestOnlyGitexecRunsGit fails if any other non-test file runs it.
+//
+// The rules that keep a box-owned .git from being a way onto the host:
+// git runs on the host only while a clone is being created (before any box has
+// seen it) or against the user's own repo, never with `-C <clone>`; and every
+// exec gets an explicit clean environment, never os.Environ().
+package clone
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+const (
+	maxGitStdout = 16 << 20 // a git call here prints a config value or a progress line, not a pack
+	maxGitStderr = 8 << 10  // error text kept in the returned error
+)
+
+// Git runs one host git command. dir == "" means no -C. env is used exactly:
+// an implementation must not add the process environment to it.
+type Git interface {
+	Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error)
+}
+
+// ExecGit is the real Git, running the binary at Bin.
+type ExecGit struct{ Bin string }
+
+// NewExecGit finds git on the daemon's PATH. This is the only LookPath("git")
+// in the codebase.
+func NewExecGit() (ExecGit, error) {
+	bin, err := exec.LookPath("git")
+	if err != nil {
+		return ExecGit{}, fmt.Errorf("git not found on PATH (clone mode needs the host git): %w", err)
+	}
+	return ExecGit{Bin: bin}, nil
+}
+
+// CleanEnv is the environment of every host git exec: no inherited variables
+// (no GIT_DIR, GIT_EXEC_PATH, GIT_SSH_COMMAND, credentials, proxies), no system
+// or user config, no prompts. Callers that need the user's global config
+// replace GIT_CONFIG_GLOBAL and HOME explicitly (see globalEnv).
+func CleanEnv() []string {
+	return []string{
+		"PATH=/usr/bin:/bin",
+		"LC_ALL=C",
+		"HOME=/nonexistent",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_PAGER=cat",
+	}
+}
+
+// Run executes git with stdin closed and env as the whole environment. stdout
+// is capped at 16 MiB (more is an error, not a truncation); the error carries
+// at most 8 KiB of stderr. A non-zero exit is an *exec.ExitError under the
+// returned error (errors.As).
+func (g ExecGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	argv := make([]string, 0, len(args)+2)
+	if dir != "" {
+		argv = append(argv, "-C", dir)
+	}
+	argv = append(argv, args...)
+	cmd := exec.CommandContext(ctx, g.Bin, argv...)
+	cmd.Env = append([]string{}, env...) // non-nil: an empty env is empty, not the process env
+	cmd.WaitDelay = 5 * time.Second
+	out := &capBuffer{max: maxGitStdout}
+	errb := &capBuffer{max: maxGitStderr}
+	cmd.Stdout, cmd.Stderr = out, errb
+	sub := ""
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", sub, err, strings.TrimSpace(errb.buf.String()))
+	}
+	if out.over {
+		return nil, fmt.Errorf("git %s: output larger than %d bytes", sub, maxGitStdout)
+	}
+	return out.buf.Bytes(), nil
+}
+
+// capBuffer keeps the first max bytes and swallows the rest, so a chatty child
+// never blocks on a full pipe; over reports that bytes were dropped.
+type capBuffer struct {
+	buf  bytes.Buffer
+	max  int
+	over bool
+}
+
+func (c *capBuffer) Write(p []byte) (int, error) {
+	if room := c.max - c.buf.Len(); len(p) <= room {
+		c.buf.Write(p)
+	} else {
+		if room > 0 {
+			c.buf.Write(p[:room])
+		}
+		c.over = true
+	}
+	return len(p), nil
+}
+
+// exitCode returns git's exit status when err is a non-zero exit.
+func exitCode(err error) (int, bool) {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), true
+	}
+	return 0, false
+}
