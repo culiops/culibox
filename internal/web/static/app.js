@@ -49,13 +49,9 @@ function execCopy(text) {
 // forever; without a deadline that silently killed the reconnect loop.
 const PROBE_MS = 4000;
 
-// timedFetch is fetch with a hard deadline. AbortSignal.timeout is not in every
-// browser this may be opened from, so fall back to an AbortController + timer.
+// timedFetch is fetch with a hard deadline (see deadlineSignal).
 function timedFetch(path, ms) {
-  if (AbortSignal.timeout) return fetch(path, { signal: AbortSignal.timeout(ms) });
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), ms);
-  return fetch(path, { signal: ac.signal }).finally(() => clearTimeout(t));
+  return fetch(path, { signal: deadlineSignal(ms) });
 }
 
 // sessionStatus returns the server-side status of a session ("live" | "exited" |
@@ -2469,7 +2465,7 @@ async function loadProfiles(retry = true) {
   try {
     // A stalled response must not hang openSpawnDialog, which awaits this: a
     // timeout is just a failed refresh.
-    profiles = (await api("/api/profiles", { signal: AbortSignal.timeout(5000) })) || [];
+    profiles = (await api("/api/profiles", { signal: deadlineSignal(5000) })) || [];
     profilesLoaded = true;
     // replaceChildren resets a <select> to its first option, so a refetch while
     // the user has a profile picked would silently switch it.
@@ -2893,7 +2889,7 @@ function readForm() {
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an
   // AWS binding saved on the host tier.
-  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !!boxRuntime);
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime);
   if (rt) p.runtime = rt;
   const bx = boxToSend(pfLoadedBox);
   if (bx) p.box = bx;
@@ -3389,6 +3385,10 @@ function updateTierExplain() {
 // or "" when containment is unavailable. Empty means every session is host tier,
 // and the tier chooser is hidden rather than offering a choice that does nothing.
 let boxRuntime = "";
+// metaLoaded: /api/meta has answered at least once. boxRuntime is "" both for a
+// box-less instance and before meta loads, so "no containment here" may only be
+// concluded after a positive answer (see readForm); until then it fails closed.
+let metaLoaded = false;
 
 // The last spawn is remembered only to PRE-FILL the form, never to act on its
 // own: the form is always shown, so a stale value can be seen and changed
@@ -4239,6 +4239,7 @@ async function currentShellProfile() {
     globalThis.repliesEnabled = !!(meta && meta.replies === true);
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
+    metaLoaded = true;
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
   return window.shellProfile;
@@ -4366,6 +4367,7 @@ initMobileShell();
     // be captured before the no-badge early return below.
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
+    metaLoaded = true;
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     lastRateLimits = (meta && meta.rate_limits) || null;

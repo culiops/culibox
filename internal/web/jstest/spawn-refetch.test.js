@@ -69,7 +69,7 @@ test("saveProfile surfaces a failed profile reload", () => {
 
 test("loadProfiles times out instead of hanging the spawn dialog", () => {
   const { text } = body("loadProfiles");
-  assert.match(text, /api\("\/api\/profiles",\s*\{\s*signal: AbortSignal\.timeout\(5000\)\s*\}\)/);
+  assert.match(text, /api\("\/api\/profiles",\s*\{\s*signal: deadlineSignal\(5000\)\s*\}\)/);
 });
 
 test("openSpawnDialog ignores a second open while the first awaits the refetch", () => {
@@ -91,5 +91,17 @@ test("saveProfile's reload does not schedule a background retry", () => {
 
 test("the editor passes whether a box layer exists to runtimeToSend", () => {
   const { text } = body("readForm");
-  assert.match(text, /runtimeToSend\(segValue\(\$\("pf-runtime"\)\), pfStoredRuntime, !!boxRuntime\)/);
+  assert.match(text, /runtimeToSend\(segValue\(\$\("pf-runtime"\)\), pfStoredRuntime, !metaLoaded \|\| !!boxRuntime\)/);
+});
+
+test("no caller uses AbortSignal.timeout directly; both go through deadlineSignal", () => {
+  assert.doesNotMatch(APP, /AbortSignal\.timeout/);
+  assert.match(body("timedFetch").text, /deadlineSignal\(ms\)/);
+});
+
+test("metaLoaded is set wherever boxRuntime is assigned from /api/meta", () => {
+  const assigns = APP.match(/boxRuntime = \(meta && meta\.box_runtime\) \|\| "";\s*\n\s*metaLoaded = true;/g) || [];
+  const all = APP.match(/boxRuntime = \(meta && meta\.box_runtime\) \|\| "";/g) || [];
+  assert.ok(all.length >= 2);
+  assert.strictEqual(assigns.length, all.length, "every meta assignment of boxRuntime must set metaLoaded");
 });
