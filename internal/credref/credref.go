@@ -18,6 +18,19 @@ import (
 // MaxValueBytes bounds a referenced value read from a file.
 const MaxValueBytes = 64 << 10
 
+// ErrEnvNotSet is what Resolve wraps when an env reference names a variable
+// that is unset or empty. Callers that only report on a reference (doctor) can
+// tell this apart from a bad file without matching message text.
+var ErrEnvNotSet = errors.New("environment variable is not set")
+
+// envNotSetError keeps the message callers already see and matches ErrEnvNotSet.
+type envNotSetError struct{ v string }
+
+func (e envNotSetError) Error() string {
+	return fmt.Sprintf("env var %q is not set in the agent-box daemon's environment", e.v)
+}
+func (e envNotSetError) Is(target error) bool { return target == ErrEnvNotSet }
+
 // Resolver turns a reference into its current bytes.
 type Resolver interface {
 	Resolve(ref config.KeyRef) ([]byte, error)
@@ -48,7 +61,7 @@ func (d Default) Resolve(ref config.KeyRef) ([]byte, error) {
 		}
 		v, ok := lookup(ref.Var)
 		if !ok || v == "" {
-			return nil, fmt.Errorf("env var %q is not set in the agent-box daemon's environment", ref.Var)
+			return nil, envNotSetError{ref.Var}
 		}
 		raw = []byte(v)
 	}

@@ -27,6 +27,7 @@ import (
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/procinfo"
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -156,6 +157,7 @@ func Checks(in Input) []Result {
 	sh, src := config.DetectShellSource()
 	out = append(out, Result{Pass, "shell", fmt.Sprintf("%s (from %s)", sh, src)})
 	out = append(out, checkAgents(c)...)
+	out = append(out, checkStaticTokens(c, credref.Default{})...)
 	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c))...)
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
