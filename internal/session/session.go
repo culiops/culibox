@@ -146,6 +146,14 @@ type RuntimeResolver interface {
 	RuntimeFor(spec launcher.SpawnSpec) (string, error)
 }
 
+// TierRequester is implemented by launchers that can say which tier a spawn
+// explicitly asked for (its own override, the profile's, or the instance
+// default), as opposed to the tier it would fall back to. Optional, like
+// RuntimeResolver.
+type TierRequester interface {
+	RequestedRuntime(launcher.SpawnSpec) (string, error)
+}
+
 // BinResolver is implemented by launchers that can name an agent's binary, which
 // is how a config-bundle layout is chosen. Optional, like RuntimeResolver.
 type BinResolver interface {
@@ -949,23 +957,37 @@ func (m *Manager) SetBoxes(b Boxes) {
 }
 
 // runtimeFor resolves the tier for a spawn. Without a tier-aware launcher or a
-// box layer the answer is host — containment is never assumed, only granted.
-func (m *Manager) runtimeFor(spec launcher.SpawnSpec) string {
+// box layer the answer is host — containment is never assumed, only granted,
+// and never silently withdrawn from a request that named it: with no box layer,
+// a spawn that asked for box (its own Runtime, else the profile's or instance's
+// tier via TierRequester) is refused rather than quietly run uncontained.
+func (m *Manager) runtimeFor(spec launcher.SpawnSpec) (string, error) {
 	m.mu.Lock()
 	boxes := m.boxes
 	m.mu.Unlock()
 	if boxes == nil {
-		return config.RuntimeHost
+		asked := spec.Runtime
+		if asked == "" {
+			if tr, ok := m.launcher.(TierRequester); ok {
+				if rt, err := tr.RequestedRuntime(spec); err == nil {
+					asked = rt
+				}
+			}
+		}
+		if asked == config.RuntimeBox {
+			return "", fmt.Errorf("%w: this session asks for runtime box, and this instance has no box layer (see the boot log); choose host explicitly or fix containment", box.ErrBoxUnavailable)
+		}
+		return config.RuntimeHost, nil
 	}
 	rr, ok := m.launcher.(RuntimeResolver)
 	if !ok {
-		return config.RuntimeHost
+		return config.RuntimeHost, nil
 	}
 	rt, err := rr.RuntimeFor(spec)
 	if err != nil || rt == "" {
-		return config.RuntimeHost
+		return config.RuntimeHost, nil
 	}
-	return rt
+	return rt, nil
 }
 
 // SetSidecarPath enables metadata persistence + restart reconcile by loading the
@@ -1009,7 +1031,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// launcher composes for the tier the session will actually run on. Deciding
 	// it in two places let a host-tier session be built with boxed semantics
 	// (curated env, no login wrap) whenever containment was unavailable.
-	runtime := m.runtimeFor(spec)
+	runtime, err := m.runtimeFor(spec)
+	if err != nil {
+		return nil, err
+	}
 	spec.Runtime = runtime
 
 	// Resolve the agent binary once, up front: it gates claude-only features

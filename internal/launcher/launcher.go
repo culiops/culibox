@@ -333,6 +333,28 @@ func (l *AgentLauncher) RuntimeFor(spec SpawnSpec) (string, error) {
 	return l.tierOf(cfg), nil
 }
 
+// RequestedRuntime reports the tier a spawn NAMED, as opposed to RuntimeFor's
+// effective one: the per-spawn override, else the profile's own tier, else the
+// instance default, else "" (nothing asked). RuntimeFor ends in box when nothing
+// is named; this does not, so a caller can tell "asked for box" from "got box
+// because nobody said otherwise".
+func (l *AgentLauncher) RequestedRuntime(spec SpawnSpec) (string, error) {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return "", fmt.Errorf("launcher: unknown agent %q", spec.Agent)
+	}
+	if spec.Runtime != "" {
+		return spec.Runtime, nil
+	}
+	if cfg.Runtime != "" {
+		return cfg.Runtime, nil
+	}
+	l.mu.RLock()
+	def := l.defaultRuntime
+	l.mu.RUnlock()
+	return def, nil
+}
+
 // BinFor reports the binary an agent profile runs. The session manager needs it
 // to choose a config-bundle layout; it deliberately does not parse argv, which
 // may be login-shell wrapped.
