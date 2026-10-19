@@ -309,8 +309,14 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 17 {
-		t.Errorf("found %d downloads, want at least 17 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key)", downloads)
+	if downloads < 18 {
+		t.Errorf("found %d downloads, want at least 18 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key, mcp-grafana)", downloads)
+	}
+	// The Sentry and Atlassian servers come from npm and PyPI, not curl: their
+	// pins are checked in TestDockerfilePinsMCPServers. No uv is downloaded in
+	// the image (it was only used offline to generate the Atlassian lock).
+	if !regexp.MustCompile(`(?m)^RUN .*mcp-grafana`).MatchString(strings.Join(dockerfileInstructions(), "\n")) {
+		t.Error("no download names mcp-grafana")
 	}
 }
 
@@ -410,6 +416,10 @@ func TestDockerfileInstallsPython3InItsOwnBlock(t *testing.T) {
 	}
 	if !strings.Contains(block, "rm -rf /var/lib/apt/lists/*") {
 		t.Errorf("python3 block leaves the apt lists in the image:\n%s", block)
+	}
+	// mcp-atlassian runs from a venv, and bookworm's python3 cannot make one without this.
+	if !regexp.MustCompile(`\spython3-venv(\s|$)`).MatchString(block) {
+		t.Errorf("python3 block does not install python3-venv:\n%s", block)
 	}
 }
 
@@ -686,6 +696,7 @@ var toolBatch = []struct{ arg, check string }{
 	{"TFLINT_RULESET_AWS", "tflint --config /etc/agent-box/tflint.hcl --version"},
 	{"JSONNET", "jsonnet --version"},
 	{"JSONNET", "jsonnetfmt --version"},
+	{"GRAFANA_MCP", "mcp-grafana --version"},
 }
 
 func TestDockerfileInstallsToolBatch(t *testing.T) {
@@ -753,7 +764,7 @@ func TestDockerfileFrequentPinsLast(t *testing.T) {
 			after = append(after, tb.arg+suffix)
 		}
 	}
-	after = append(after, "TFENV_VERSION=", "TFENV_SHA256=")
+	after = append(after, "TFENV_VERSION=", "TFENV_SHA256=", "SENTRY_MCP_VERSION=", "MCP_ATLASSIAN_VERSION=")
 	for _, line := range strings.Split(df, "\n") {
 		if strings.HasPrefix(line, "ARG GH_") {
 			after = append(after, strings.SplitAfter(strings.TrimPrefix(line, "ARG "), "=")[0])
@@ -1063,6 +1074,165 @@ func TestPublicFilesCiteNoLocalDocs(t *testing.T) {
 	for name, text := range map[string]string{"Dockerfile": string(dockerfile), "box-image.yml": string(wf)} {
 		if m := cite.FindString(text); m != "" {
 			t.Errorf("%s cites a local-only document: %q", name, m)
+		}
+	}
+}
+
+// agentbox-env is how a bound session asks the broker for a static token for one
+// command. The shim is a three-way branch: run the mounted script when the
+// session has a token binding, otherwise say so and exit 127.
+func TestDockerfileAgentboxEnvShim(t *testing.T) {
+	// The same path as broker.BoxDir + "/agentbox-env.js"; a broker test holds the
+	// two together.
+	const script = "/opt/agentbox/agentbox-env.js"
+	want := `printf '%s\n' '#!/bin/sh' '[ -f ` + script + ` ] && exec node ` + script + ` "$@"' 'echo "agentbox-env: this session has no token binding" >&2' 'exit 127' > /usr/local/bin/agentbox-env`
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "> /usr/local/bin/agentbox-env") {
+			continue
+		}
+		if !strings.Contains(in, want) {
+			t.Fatalf("shim RUN does not write the exact lines:\n got %s\nwant %s", in, want)
+		}
+		if !strings.Contains(in, "chmod 0755 /usr/local/bin/agentbox-env") {
+			t.Error("shim is not made executable")
+		}
+		// Render it as the image does and let sh parse it.
+		out := filepath.Join(t.TempDir(), "agentbox-env")
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(in, "RUN "), " > /usr/local/bin/agentbox-env")
+		if b, err := exec.Command("sh", "-c", cmd+" > "+out).CombinedOutput(); err != nil {
+			t.Fatalf("rendering the shim: %v: %s", err, b)
+		}
+		if b, err := exec.Command("sh", "-n", out).CombinedOutput(); err != nil {
+			t.Fatalf("sh -n on the shim: %v: %s", err, b)
+		}
+		return
+	}
+	t.Fatal("no RUN writes /usr/local/bin/agentbox-env")
+}
+
+// dockerfileBlock returns the text from a "# --- <name> ---" header to the next one.
+func dockerfileBlock(t *testing.T, header string) string {
+	t.Helper()
+	df := string(dockerfile)
+	i := strings.Index(df, header)
+	if i < 0 {
+		t.Fatalf("Dockerfile has no %q block", header)
+	}
+	block := df[i:]
+	if j := strings.Index(block[1:], "\n# --- "); j >= 0 {
+		block = block[:j+1]
+	}
+	return block
+}
+
+func TestDockerfilePinsMCPServers(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	for _, h := range []string{"# --- mcp-grafana ---", "# --- sentry-mcp ---", "# --- mcp-atlassian ---"} {
+		if i := strings.Index(df, h); i < strings.Index(df, marker) {
+			t.Errorf("%s must come after the marker", h)
+		}
+	}
+	// mcp-grafana: the toolBatch test covers the ARGs, the sum and the version
+	// check; here, the release asset and the archive layout.
+	graf := dockerfileBlock(t, "# --- mcp-grafana ---")
+	for _, want := range []string{"mcp-grafana_Linux_x86_64.tar.gz", "mcp-grafana_Linux_arm64.tar.gz", "GRAFANA_MCP_SHA256_AMD64", "GRAFANA_MCP_SHA256_ARM64"} {
+		if !strings.Contains(graf, want) {
+			t.Errorf("mcp-grafana block does not mention %s", want)
+		}
+	}
+	// sentry: pinned by version, binary resolved, the npm cache gone in the same RUN.
+	sentry := ""
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "npm install -g @sentry/mcp-server@${SENTRY_MCP_VERSION}") {
+			sentry = in
+		}
+	}
+	if sentry == "" {
+		t.Fatal("no RUN installs @sentry/mcp-server@${SENTRY_MCP_VERSION}")
+	}
+	if !strings.Contains(sentry, "npm cache clean --force") || !strings.Contains(sentry, "rm -rf /root/.npm") {
+		t.Errorf("the sentry RUN leaves the npm cache in the layer: %s", sentry)
+	}
+	if !strings.Contains(sentry, `sentry-mcp --version | grep -q "${SENTRY_MCP_VERSION}"`) {
+		t.Errorf("the sentry RUN does not check that sentry-mcp resolves at the pinned version: %s", sentry)
+	}
+	if !regexp.MustCompile(`(?m)^ARG SENTRY_MCP_VERSION=\d+\.\d+\.\d+$`).MatchString(df) {
+		t.Error("no ARG SENTRY_MCP_VERSION=<x.y.z>")
+	}
+	// atlassian: a hash-locked, wheels-only install into its own venv.
+	m := regexp.MustCompile(`(?m)^ARG MCP_ATLASSIAN_VERSION=(\d+\.\d+\.\d+)$`).FindStringSubmatch(df)
+	if m == nil {
+		t.Fatal("no ARG MCP_ATLASSIAN_VERSION=<x.y.z>")
+	}
+	var atl string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /tmp/req.txt") {
+			atl = in
+		}
+	}
+	if atl == "" {
+		t.Fatal("no RUN writes the Atlassian lock to /tmp/req.txt")
+	}
+	for _, want := range []string{
+		"python3 -m venv /opt/mcp-atlassian",
+		"/opt/mcp-atlassian/bin/pip install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r /tmp/req.txt",
+		"ln -s /opt/mcp-atlassian/bin/mcp-atlassian /usr/local/bin/mcp-atlassian",
+		`mcp-atlassian --version | grep -q "${MCP_ATLASSIAN_VERSION}"`,
+		"rm -f /tmp/req.txt",
+	} {
+		if !strings.Contains(atl, want) {
+			t.Errorf("the Atlassian RUN does not contain %q", want)
+		}
+	}
+	// The lock is the quoted printf arguments between the format and the redirect.
+	i := strings.Index(atl, "printf '%s\\n'")
+	j := strings.Index(atl, "> /tmp/req.txt")
+	if i < 0 || j < i {
+		t.Fatal("the Atlassian lock is not written by a printf of quoted lines to /tmp/req.txt")
+	}
+	var lines []string
+	for _, a := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(atl[i+len("printf '%s\\n'"):j], -1) {
+		lines = append(lines, a[1])
+	}
+	hash := regexp.MustCompile(`^--hash=sha256:[0-9a-f]{64}( \\)?$`)
+	pins, hashes := 0, 0
+	for n, l := range lines {
+		trim := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(trim, "#") || trim == "":
+		case strings.HasPrefix(trim, "--hash="):
+			hashes++
+			if !hash.MatchString(trim) {
+				t.Errorf("malformed hash line %q", trim)
+			}
+		default:
+			pins++
+			if !strings.Contains(trim, "==") || !strings.HasSuffix(trim, " \\") {
+				t.Errorf("lock line %q is not a `name==version \\` pin", trim)
+			}
+			if n+1 >= len(lines) || !strings.HasPrefix(strings.TrimSpace(lines[n+1]), "--hash=sha256:") {
+				t.Errorf("pin %q has no --hash=sha256: line", trim)
+			}
+		}
+	}
+	if pins == 0 || hashes < pins {
+		t.Errorf("lock has %d pins and %d hashes", pins, hashes)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "\nmcp-atlassian=="+m[1]+" \\") {
+		t.Errorf("the lock does not pin mcp-atlassian==%s (ARG MCP_ATLASSIAN_VERSION)", m[1])
+	}
+}
+
+// The image's own MCP file names only servers that need no credential. The
+// token-bound servers (Grafana, Sentry, Atlassian) are declared per session, by
+// the console, from a binding's token entries: a server in the image's file would
+// start without a token in every box.
+func TestDockerfileImageMCPHasNoTokenServers(t *testing.T) {
+	_, servers := mcpServersFromDockerfile(t)
+	for _, name := range []string{"grafana", "sentry", "atlassian"} {
+		if _, ok := servers[name]; ok {
+			t.Errorf("/etc/agent-box/mcp.json declares %q", name)
 		}
 	}
 }

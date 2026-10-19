@@ -641,3 +641,19 @@ func TestHooksWriteSessionMCP(t *testing.T) {
 		t.Fatalf("%q %v", p, err)
 	}
 }
+
+// The image's agentbox-env shim execs the script at a path the Dockerfile writes
+// by hand; the binding dir is mounted at BoxDir. Keep the two from drifting.
+func TestImageShimPathIsTheMountedScript(t *testing.T) {
+	df, err := os.ReadFile("../../docker/agent-box/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[ -f " + BoxDir + "/agentbox-env.js ] && exec node " + BoxDir + "/agentbox-env.js"
+	if !strings.Contains(string(df), want) {
+		t.Errorf("the Dockerfile's agentbox-env shim does not run %s/agentbox-env.js (want %q)", BoxDir, want)
+	}
+	if _, err := os.Stat("agentbox-env.js"); err != nil {
+		t.Errorf("the script the box mounts as agentbox-env.js is not in this package: %v", err)
+	}
+}
