@@ -46,7 +46,7 @@ func TestGitHubBindingValidate(t *testing.T) {
 		{"empty repos", func(b *GitHubBinding) { b.Owners[1].Repos = nil }, "github.owners[1].repos"},
 		{"duplicate repo", func(b *GitHubBinding) { b.Owners[0].Repos = []string{"a", "a"} }, "github.owners[0].repos[1]"},
 		{"zero owners", func(b *GitHubBinding) { b.Owners = nil }, "github.owners"},
-		{"empty app", func(b *GitHubBinding) { b.Owners[0].App = "" }, "github.owners[0].app"},
+		{"empty app", func(b *GitHubBinding) { b.Owners[0].App = "" }, "github.owners[0]: set exactly one of app or token"},
 		{"bad egress", func(b *GitHubBinding) { b.EgressAllow = []string{"not a host"} }, "github.egress_allow[0]"},
 		{"too many egress", func(b *GitHubBinding) {
 			for i := 0; i < maxEgressAllow+1; i++ {
@@ -335,5 +335,70 @@ func TestKeyRefValidate(t *testing.T) {
 	}
 	if !ValidEnvName("A_b1") || ValidEnvName("1A") || ValidEnvName("") || ValidEnvName("A-B") {
 		t.Error("ValidEnvName")
+	}
+}
+
+// The hashes below were captured before Bindings gained token fields. A session
+// with no tokens must keep its box key and binding directory across the upgrade.
+func TestBindingsHashGoldenWithoutTokens(t *testing.T) {
+	cases := []struct {
+		name string
+		b    Bindings
+		want string
+	}{
+		{"aws only", Bindings{AWS: goodBinding()}, "e7e58e9b264b"},
+		{"github only", Bindings{GitHub: goodGitHub()}, "448d3a22b6f6"},
+		{"aws and github", Bindings{AWS: goodBinding(), GitHub: goodGitHub()}, "198429c07173"},
+	}
+	for _, c := range cases {
+		got := c.b.Hash()
+		if got != c.want {
+			t.Errorf("%s: Hash = %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestGitHubOwnerExactlyOne(t *testing.T) {
+	cases := []struct {
+		name string
+		o    GitHubOwner
+		want string // "" = valid
+	}{
+		{"app only", GitHubOwner{Owner: "acme", App: "main", Repos: []string{"r"}}, ""},
+		{"token only", GitHubOwner{Owner: "acme", Token: "gh-pat-acme", Repos: []string{"r"}}, ""},
+		{"both", GitHubOwner{Owner: "acme", App: "main", Token: "gh-pat-acme", Repos: []string{"r"}}, "github.owners[0]: set exactly one of app or token"},
+		{"neither", GitHubOwner{Owner: "acme", Repos: []string{"r"}}, "github.owners[0]: set exactly one of app or token"},
+		{"bad token name", GitHubOwner{Owner: "acme", Token: "Not A Name", Repos: []string{"r"}}, "github.owners[0].token"},
+	}
+	for _, c := range cases {
+		err := (&GitHubBinding{Owners: []GitHubOwner{c.o}}).Validate()
+		if c.want == "" {
+			if err != nil {
+				t.Errorf("%s: want valid, got %v", c.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: want %q, got %v", c.name, c.want, err)
+		}
+	}
+	// {owner, token, repos} round-trips with no "app" collision and an App-only
+	// owner still marshals without a token key.
+	b, _ := json.Marshal(GitHubOwner{Owner: "a", App: "m", Repos: []string{"r"}})
+	if strings.Contains(string(b), "token") {
+		t.Errorf("App-only owner must not marshal a token key: %s", b)
+	}
+}
+
+func TestCheckGitHubAppsIgnoresTokenOwners(t *testing.T) {
+	a := AgentConfig{Name: "c", GitHub: &GitHubBinding{Owners: []GitHubOwner{
+		{Owner: "acme", Token: "gh-pat-acme", Repos: []string{"r"}},
+	}}}
+	if err := CheckGitHubApps(a, nil); err != nil {
+		t.Fatalf("a token owner names no App: %v", err)
+	}
+	a.GitHub.Owners = append(a.GitHub.Owners, GitHubOwner{Owner: "other", App: "ghost", Repos: []string{"r"}})
+	if err := CheckGitHubApps(a, nil); err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Fatalf("an App owner is still checked, got %v", err)
 	}
 }

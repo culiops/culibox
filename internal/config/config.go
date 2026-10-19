@@ -95,6 +95,7 @@ type AgentConfig struct {
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
 	GitHub     *GitHubBinding    `json:"github,omitempty"`      // credential-broker GitHub access (read-only installation tokens); boxed profiles only
+	Tokens     []string          `json:"tokens,omitempty"`      // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
 	CloneOf    string            `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
 	CloneShare []string          `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
 
@@ -387,6 +388,12 @@ func (c Config) Validate() error {
 		optDefs[o.Key] = o
 	}
 	for _, a := range c.Agents {
+		if err := validateTokens(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		if err := CheckTokens(a, c.StaticTokens, optDefs); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
 		for k, v := range a.Options {
 			def, ok := optDefs[k]
 			if !ok {
@@ -456,6 +463,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateGitHub(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateTokens(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateClone(a); err != nil {

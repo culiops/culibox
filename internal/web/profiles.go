@@ -87,6 +87,22 @@ type ProfileManager struct {
 	// wired at boot, so a profile cannot be saved naming an App that does not
 	// exist. nil = none defined.
 	ghApps []config.GitHubApp
+	// tokens are the instance's static_tokens entries (config.StaticTokens),
+	// wired at boot, so a profile cannot be saved naming an entry that does
+	// not exist. nil = none defined.
+	tokens []config.StaticToken
+}
+
+// SetStaticTokens installs the instance's static token entries, which Save
+// checks a profile's tokens and GitHub PAT owners against. Call at boot.
+func (m *ProfileManager) SetStaticTokens(entries []config.StaticToken) {
+	cp := make([]config.StaticToken, len(entries))
+	for i, e := range entries {
+		cp[i] = e.Clone()
+	}
+	m.mu.Lock()
+	m.tokens = cp
+	m.mu.Unlock()
 }
 
 // SetGitHubApps installs the instance's GitHub App connections, which Save
@@ -296,6 +312,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := config.CheckGitHubApps(p, m.ghApps); err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	if err := config.CheckTokens(p, m.tokens, m.optDefs); err != nil {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := m.checkAccount(p); err != nil {

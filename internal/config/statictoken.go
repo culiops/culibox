@@ -1,6 +1,9 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -340,4 +343,121 @@ func TokenByName(entries []StaticToken, name string) (StaticToken, bool) {
 		}
 	}
 	return StaticToken{}, false
+}
+
+// maxBoundTokens caps how many entries one profile may bind.
+const maxBoundTokens = 16
+
+// validateTokens checks a profile's tokens list on its own: boxed only, a
+// bounded count, no duplicates and well-formed names. Whether the entries exist
+// is CheckTokens' question. Like validateAWS, the runtime must be named "box":
+// an empty runtime means "the instance default", which may be host.
+func validateTokens(a AgentConfig) error {
+	if len(a.Tokens) == 0 {
+		return nil
+	}
+	if a.Runtime != RuntimeBox {
+		return errors.New("tokens require runtime: box (set it explicitly); the host tier cannot contain credentials")
+	}
+	if len(a.Tokens) > maxBoundTokens {
+		return fmt.Errorf("tokens: at most %d entries, got %d", maxBoundTokens, len(a.Tokens))
+	}
+	for i, n := range a.Tokens {
+		if !tokenNameRe.MatchString(n) {
+			return fmt.Errorf("tokens[%d] %q is not an entry name", i, n)
+		}
+		if slices.Contains(a.Tokens[:i], n) {
+			return fmt.Errorf("tokens[%d] %q is listed twice", i, n)
+		}
+	}
+	return nil
+}
+
+// CheckTokens refuses a profile that names entries the instance does not
+// define, binds an entry that is only usable as a GitHub PAT, or would set one
+// variable twice (an entry's variables against the profile's env, its secrets
+// and the env of any option that applies to its agent).
+func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]OptionDef) error {
+	var bound []StaticToken
+	for i, n := range a.Tokens {
+		e, ok := TokenByName(entries, n)
+		if !ok {
+			return fmt.Errorf("tokens[%d] %q is not defined in static_tokens", i, n)
+		}
+		if len(e.Egress) == 0 {
+			return fmt.Errorf("tokens[%d] %q has no egress hosts; it can only be a GitHub owner's token", i, n)
+		}
+		bound = append(bound, e)
+	}
+	if a.GitHub != nil {
+		for i, o := range a.GitHub.Owners {
+			if o.Token == "" {
+				continue
+			}
+			if _, ok := TokenByName(entries, o.Token); !ok {
+				return fmt.Errorf("github.owners[%d].token %q is not defined in static_tokens", i, o.Token)
+			}
+		}
+	}
+	for _, e := range bound {
+		for _, n := range e.Names() {
+			if _, set := a.Env[n]; set {
+				return fmt.Errorf("token %q sets %s, which the profile also sets as an env entry", e.Name, n)
+			}
+			if slices.Contains(a.Secrets, n) {
+				return fmt.Errorf("token %q sets %s, which the profile also sets as a secret", e.Name, n)
+			}
+			for _, k := range slices.Sorted(maps.Keys(optDefs)) {
+				if d := optDefs[k]; d.Env == n && d.AppliesTo(a.Bin) {
+					return fmt.Errorf("token %q sets %s, which the profile also sets as the env of option %q", e.Name, n, k)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// EntryMCPArgs is the argument list of `agentbox-env` for an entry's MCP
+// server: the entry, the other entries the server also reads, then the real
+// command. Every extra must be bound to the same profile, or the server would
+// start without a token it needs.
+func EntryMCPArgs(e StaticToken, bound map[string]bool) ([]string, error) {
+	if e.MCP == nil {
+		return nil, fmt.Errorf("entry %q has no mcp server", e.Name)
+	}
+	args := []string{e.Name}
+	for _, x := range e.MCP.Extra {
+		if !bound[x] {
+			return nil, fmt.Errorf("%s needs token %s, not bound to this profile", e.MCP.Server, x)
+		}
+		args = append(args, x)
+	}
+	args = append(args, "--", e.MCP.Command)
+	return append(args, e.MCP.Args...), nil
+}
+
+// DefHash is 12 hex over everything about an entry except where its value
+// lives. Name, label and the rest are covered because tokens.json, read by the
+// in-box list command, sits in the binding directory this hash keys.
+func (e StaticToken) DefHash() string {
+	c := e.Clone()
+	c.Value = KeyRef{}
+	j, _ := json.Marshal(c)
+	sum := sha256.Sum256(j)
+	return hex.EncodeToString(sum[:6])
+}
+
+// TokensHash is 12 hex over the entries a session binds as tokens and as GitHub
+// PATs. Order does not matter; the same entry in the two roles hashes apart.
+func TokensHash(tokens, pats []StaticToken) string {
+	lines := make([]string, 0, len(tokens)+len(pats))
+	for _, e := range tokens {
+		lines = append(lines, "t:"+e.Name+":"+e.DefHash())
+	}
+	for _, e := range pats {
+		lines = append(lines, "p:"+e.Name+":"+e.DefHash())
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return hex.EncodeToString(sum[:6])
 }
