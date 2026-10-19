@@ -52,6 +52,26 @@ var pluginEntries = []pluginEntry{
 // credentialFiles are the two small json files that can name a marketplace URL.
 var credentialFiles = []string{"installed_plugins.json", "known_marketplaces.json"}
 
+// pluginSlot is one snapshot dir: entries copied, keyed and reused together.
+type pluginSlot struct {
+	name    string
+	entries []pluginEntry
+}
+
+// pluginSlots splits the set so each part is recopied only when IT changes.
+// Host claude rewrites known_marketplaces.json (its lastUpdated) on routine
+// marketplace checks even when nothing else moved; with one fingerprint over
+// the whole set, each rewrite recopied cache/ and marketplaces/ (tens of MB)
+// into a new dir. cache/ and marketplaces/ therefore each get their own slot.
+// The two json files share one: together they are a few KB, so copying both
+// when either changes costs nothing, they are what the credential check reads,
+// and one dir per json pair halves the dirs that churn leaves behind.
+var pluginSlots = []pluginSlot{
+	{"json", pluginEntries[:2]},
+	{"cache", pluginEntries[2:3]},
+	{"marketplaces", pluginEntries[3:4]},
+}
+
 // Caps on what a snapshot may hold. Vars so a test can shrink them. Exceeding
 // either fails closed: nothing is published, and the set is dropped as
 // incomplete, so a snapshot is never partial.
@@ -64,18 +84,15 @@ var errPluginCap = errors.New("bundle: plugin set exceeds its size cap")
 
 // pluginSet is the one verdict about the host plugin set. The bundle's source
 // hash and settings and the provider's mounts and drops all take it from here,
-// so they cannot disagree.
+// so they cannot disagree. Only whether mounts is empty reaches the bundle hash.
 type pluginSet struct {
 	mounts []box.Mount
 	drops  []Drop
-	// token fingerprints the snapshot the mounts point into; "" when nothing is
-	// mounted. It feeds the bundle hash.
-	token string
 }
 
 // pluginSnapshot decides whether the plugin set is mounted into a box and, if
-// so, publishes a content-addressed COPY of it under root and points the mounts
-// there.
+// so, publishes a content-addressed COPY of each part of it under root and
+// points the mounts there.
 //
 // All or nothing. Measured 2026-10-18: a partial set "failed to load", and only
 // all four entries enable plugins. And nothing at the top may be a symlink:
@@ -102,8 +119,14 @@ type pluginSet struct {
 // installPath recorded in installed_plugins.json onto its own config dir
 // (measured 2026-10-19), so a second mount at the host path is unneeded.
 //
-// There is no garbage collection: like the bundle dirs, old snapshots stay. A
-// plugin change costs one new copy (about 38 MB on this host).
+// Each slot (see pluginSlots) is its own snapshot, keyed by its own
+// fingerprint, so a json rewrite costs a few KB and only a change under cache/
+// or marketplaces/ recopies that tree. The set is still all or nothing: every
+// slot must publish and pass, or nothing is mounted.
+//
+// There is no garbage collection yet: like the bundle dirs, old snapshots stay.
+// A change to cache/ or marketplaces/ costs one new copy of that tree (about 40
+// MB together on this host); a json rewrite costs one small dir.
 func pluginSnapshot(src, root string) pluginSet {
 	pdir := filepath.Join(src, "plugins")
 	incomplete := pluginSet{drops: []Drop{{Kind: KindPlugins, Name: "*", Reason: ReasonPluginsIncomplete}}}
@@ -147,12 +170,12 @@ func pluginSnapshot(src, root string) pluginSet {
 		return incomplete
 	}
 
-	snap, token, err := publishSnapshot(pdir, fi, root)
+	hosts, err := publishSnapshot(pdir, fi, root)
 	if err != nil {
 		return incomplete
 	}
 	// Checked in the COPY, which no one can change, rather than the host source.
-	if entry, found, err := snapshotCredentials(snap); err != nil {
+	if entry, found, err := snapshotCredentials(hosts); err != nil {
 		return incomplete
 	} else if found {
 		return pluginSet{drops: []Drop{{Kind: KindPlugins, Name: entry, Reason: ReasonPluginCredentials}}}
@@ -160,12 +183,12 @@ func pluginSnapshot(src, root string) pluginSet {
 	var mounts []box.Mount
 	for _, e := range pluginEntries {
 		mounts = append(mounts, box.Mount{
-			Host:     filepath.Join(snap, e.name),
+			Host:     hosts[e.name],
 			Box:      path.Join(boxHome, ".claude", "plugins", e.name),
 			Optional: true,
 		})
 	}
-	return pluginSet{mounts: mounts, token: token}
+	return pluginSet{mounts: mounts}
 }
 
 const snapshotMarker = ".complete"
@@ -187,13 +210,13 @@ func (b *budget) add(fi fs.FileInfo) error {
 	return nil
 }
 
-// walkPluginTree visits the four entries and everything below them, parents
-// before children, in name order. It never follows a symlink: every node is
+// walkPluginTree visits entries and everything below them, parents before
+// children, in name order. It never follows a symlink: every node is
 // Lstat'd, and a symlink is visited as a symlink. Any directory or file named
 // .git is skipped, as is anything that is not a regular file, directory or
 // symlink (FIFO, socket, device).
-func walkPluginTree(r *os.Root, b *budget, visit func(rel string, fi fs.FileInfo) error) error {
-	for _, e := range pluginEntries {
+func walkPluginTree(r *os.Root, entries []pluginEntry, b *budget, visit func(rel string, fi fs.FileInfo) error) error {
+	for _, e := range entries {
 		fi, err := r.Lstat(e.name)
 		if err != nil {
 			return err
@@ -272,79 +295,146 @@ func fingerprint(h interface{ Sum([]byte) []byte }) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// publishSnapshot returns the snapshot dir for the current plugin tree and its
-// fingerprint, copying the tree first if no complete snapshot for it exists.
+// slotState is one slot's way through publishSnapshot.
+type slotState struct {
+	slot  pluginSlot
+	token string // the fingerprint, then the copy's own
+	used  budget // what the fingerprint walk counted for this slot
+	final string
+	tmp   string // "" when a complete snapshot already exists
+}
+
+func (s *slotState) name(root string) string {
+	return filepath.Join(root, "plugins-"+s.slot.name+"-"+s.token)
+}
+
+// publishSnapshot returns, for each of the four entries, the path of its copy
+// in the snapshot of its slot, copying a slot first if no complete snapshot
+// for its current fingerprint exists.
 //
-// The directory is keyed by a fingerprint of the plugin tree ONLY, so editing a
-// skill never recopies it. Publishing follows materialize: build under .tmp-*
-// in root, write the completion marker last, rename into place.
-func publishSnapshot(pdir string, checked fs.FileInfo, root string) (dir, token string, err error) {
+// Each slot is keyed by a fingerprint of its own entries ONLY, so editing a
+// skill never recopies anything and a json rewrite never recopies cache/ or
+// marketplaces/. Publishing follows materialize: build under .tmp-* in root,
+// write the completion marker last, rename into place.
+//
+// All or nothing across slots: every slot to copy is built first, and only when
+// all of them built (and the caps held over the whole set) is any renamed into
+// place; on any failure every temp dir is removed and nothing new is published.
+func publishSnapshot(pdir string, checked fs.FileInfo, root string) (map[string]string, error) {
 	src, err := os.OpenRoot(pdir)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	defer src.Close()
 	// pdir was Lstat'd as a real directory before this open; if it was swapped
 	// for another directory in between, the verdict no longer describes it.
 	if st, err := src.Stat("."); err != nil || !os.SameFile(st, checked) {
-		return "", "", fmt.Errorf("bundle: %s changed between the check and the open", pdir)
+		return nil, fmt.Errorf("bundle: %s changed between the check and the open", pdir)
 	}
 
-	h := sha256.New()
-	if err := walkPluginTree(src, &budget{}, func(rel string, fi fs.FileInfo) error {
-		return describe(h, src, rel, fi)
-	}); err != nil {
-		return "", "", err
-	}
-	token = fingerprint(h)
-	if final := filepath.Join(root, "plugins-"+token); snapshotComplete(final, token) {
-		return final, token, nil
+	// Fingerprint every slot under ONE budget, so the caps bound the whole set
+	// before anything is copied.
+	var fp budget
+	states := make([]*slotState, len(pluginSlots))
+	for i, sl := range pluginSlots {
+		before := fp
+		h := sha256.New()
+		if err := walkPluginTree(src, sl.entries, &fp, func(rel string, fi fs.FileInfo) error {
+			return describe(h, src, rel, fi)
+		}); err != nil {
+			return nil, err
+		}
+		st := &slotState{slot: sl, token: fingerprint(h),
+			used: budget{fp.entries - before.entries, fp.bytes - before.bytes}}
+		st.final = st.name(root)
+		states[i] = st
 	}
 
-	if err := os.MkdirAll(root, 0o700); err != nil {
-		return "", "", err
+	// The copy budget starts with what the reused slots hold, so the published
+	// set as a whole stays under the caps even if the host grows between walks.
+	var cp budget
+	var todo []*slotState
+	for _, st := range states {
+		if snapshotComplete(st.final, st.token) {
+			cp.entries += st.used.entries
+			cp.bytes += st.used.bytes
+			continue
+		}
+		todo = append(todo, st)
 	}
-	tmp, err := os.MkdirTemp(root, ".tmp-plugins-")
-	if err != nil {
-		return "", "", err
+	if len(todo) > 0 {
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			return nil, err
+		}
 	}
-	defer os.RemoveAll(tmp)
-	dst, err := os.OpenRoot(tmp)
+	defer func() {
+		for _, st := range todo {
+			if st.tmp != "" {
+				_ = os.RemoveAll(st.tmp) // a no-op once renamed away
+			}
+		}
+	}()
+	for _, st := range todo {
+		if st.tmp, err = os.MkdirTemp(root, ".tmp-plugins-"); err != nil {
+			return nil, err
+		}
+		if err := copySlot(src, st, &cp); err != nil {
+			return nil, err
+		}
+		st.final = st.name(root)
+	}
+	for _, st := range todo {
+		if err := publishSlot(st.tmp, st.final, st.token); err != nil {
+			return nil, err
+		}
+	}
+
+	hosts := map[string]string{}
+	for _, st := range states {
+		for _, e := range st.slot.entries {
+			hosts[e.name] = filepath.Join(st.final, e.name)
+		}
+	}
+	return hosts, nil
+}
+
+// copySlot copies a slot's entries into st.tmp and writes its marker. The copy
+// walk computes its own fingerprint, and the snapshot is named for THAT
+// (st.token is replaced): if the host changed between the two walks, the name
+// still describes exactly what was copied.
+func copySlot(src *os.Root, st *slotState, b *budget) error {
+	dst, err := os.OpenRoot(st.tmp)
 	if err != nil {
-		return "", "", err
+		return err
 	}
 	defer dst.Close()
-
-	// The copy walk computes its own fingerprint, and the snapshot is named for
-	// THAT: if the host changed between the two walks, the name still describes
-	// exactly what was copied.
-	h2 := sha256.New()
-	if err := walkPluginTree(src, &budget{}, func(rel string, fi fs.FileInfo) error {
-		if err := describe(h2, src, rel, fi); err != nil {
+	h := sha256.New()
+	if err := walkPluginTree(src, st.slot.entries, b, func(rel string, fi fs.FileInfo) error {
+		if err := describe(h, src, rel, fi); err != nil {
 			return err
 		}
 		return copyNode(src, dst, rel, fi)
 	}); err != nil {
-		return "", "", err
+		return err
 	}
-	token = fingerprint(h2)
-	if err := dst.WriteFile(snapshotMarker, []byte(token+"\n"), 0o600); err != nil {
-		return "", "", err
-	}
-	final := filepath.Join(root, "plugins-"+token)
-	// Rename onto an existing non-empty dir fails, so a sibling's complete
-	// snapshot is never replaced. Only an incomplete leftover (no matching
-	// marker, e.g. from a crash) is cleared, and a dir whose marker matches is
-	// never removed.
-	err = os.Rename(tmp, final)
+	st.token = fingerprint(h)
+	return dst.WriteFile(snapshotMarker, []byte(st.token+"\n"), 0o600)
+}
+
+// publishSlot renames a built slot into place. Rename onto an existing
+// non-empty dir fails, so a sibling's complete snapshot is never replaced. Only
+// an incomplete leftover (no matching marker, e.g. from a crash) is cleared,
+// and a dir whose marker matches is never removed.
+func publishSlot(tmp, final, token string) error {
+	err := os.Rename(tmp, final)
 	if err != nil && !snapshotComplete(final, token) {
 		_ = os.RemoveAll(final)
 		err = os.Rename(tmp, final)
 	}
 	if err != nil && !snapshotComplete(final, token) {
-		return "", "", fmt.Errorf("bundle: publishing %s: %w", final, err)
+		return fmt.Errorf("bundle: publishing %s: %w", final, err)
 	}
-	return final, token, nil
+	return nil
 }
 
 func snapshotComplete(dir, token string) bool {
@@ -357,12 +447,19 @@ func snapshotComplete(dir, token string) bool {
 func copyNode(src, dst *os.Root, rel string, fi fs.FileInfo) error {
 	switch {
 	case fi.Mode()&os.ModeSymlink != 0:
-		// Recreated as a link with the same target string, not followed. A link
-		// inside the tree resolves in the box's mount namespace, where the host's
-		// home does not exist, so it cannot reach a host file.
+		// Never followed. Recreated, with the same target string, only when it
+		// stays inside its own entry. On Linux any link would resolve in the
+		// box's mount namespace, where the host's home does not exist; but on
+		// macOS the colima file-sharing layer was never checked for following
+		// links on the HOST side, so a link that leaves its entry is skipped
+		// rather than trusted to it. A skipped link is not a drop: the set still
+		// mounts, and the box just lacks that link.
 		target, err := src.Readlink(rel)
 		if err != nil {
 			return err
+		}
+		if !linkStaysInEntry(src, rel, target) {
+			return nil
 		}
 		return dst.Symlink(target, rel)
 	case fi.IsDir():
@@ -399,16 +496,53 @@ func copyNode(src, dst *os.Root, rel string, fi fs.FileInfo) error {
 	return nil
 }
 
+// linkStaysInEntry is true when the link at rel, with target, resolves inside
+// the entry rel belongs to (rel's first element): the target is relative, every
+// step of it resolved lexically from the link's dir stays inside that entry,
+// and no step before the last is itself a link. That last rule is what makes
+// the lexical answer the real one: cache/a/hop -> .. is inside, but a link
+// "hop/../../x" through it would climb from where hop really points, not from
+// where the text says. The source tree is the copy's source and is walked as is
+// (static plugin content), so checking it there is checking what is copied.
+func linkStaysInEntry(src *os.Root, rel, target string) bool {
+	if target == "" || filepath.IsAbs(target) {
+		return false
+	}
+	entry, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+	inside := func(p string) bool { return p == entry || strings.HasPrefix(p, entry+string(filepath.Separator)) }
+	cur := filepath.Dir(rel)
+	steps := strings.Split(filepath.ToSlash(target), "/")
+	for i, step := range steps {
+		switch step {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+		default:
+			cur = filepath.Join(cur, step)
+		}
+		if !inside(cur) {
+			return false
+		}
+		if i < len(steps)-1 {
+			if fi, err := src.Lstat(cur); err != nil || !fi.IsDir() {
+				return false // a link, or nothing there: cannot be vouched for
+			}
+		}
+	}
+	return true
+}
+
 // maxCredFile bounds the json files read for the credential check.
 const maxCredFile = 1 << 20
 
 // snapshotCredentials reads the two json files that can name a marketplace URL,
-// in the snapshot. entry is the file the credential was found in, never the URL.
-// A file that cannot be vouched for (not a regular file, unreadable, too big) is
-// an error, so the caller fails closed.
-func snapshotCredentials(snap string) (entry string, found bool, err error) {
+// in the snapshot (hosts maps each entry to its copy). entry is the file the
+// credential was found in, never the URL. A file that cannot be vouched for (not
+// a regular file, unreadable, too big) is an error, so the caller fails closed.
+func snapshotCredentials(hosts map[string]string) (entry string, found bool, err error) {
 	for _, name := range credentialFiles {
-		p := filepath.Join(snap, name)
+		p := hosts[name]
 		fi, err := os.Lstat(p)
 		if err != nil {
 			return "", false, err

@@ -23,9 +23,12 @@ type Grant struct {
 	Mounts []box.Mount
 	Flags  []string
 	Hash   string
-	// Drops is the lock's drops followed by the plugin drops. Plugins are mounted
-	// live from the host, not copied into the bundle (they are 38 MB and their
-	// installPaths are absolute), so their drops cannot live in the lock.
+	// Drops is the lock's drops followed by the plugin drops. The plugin set is
+	// not part of the bundle dir: it is a read-only, git-free snapshot copied
+	// beside it, one dir per part, so a plugin change recopies only that part;
+	// the bundle is rebuilt only when whether the set is mounted changes. Its
+	// drops are decided on every Ensure with the snapshot, so they cannot live
+	// in the lock.
 	Drops []Drop
 }
 

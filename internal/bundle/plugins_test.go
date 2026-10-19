@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // pluginTree writes a host plugins/ dir the way Claude Code leaves it: the four
@@ -40,6 +41,41 @@ func snap(t *testing.T, src string) (ps pluginSet, root string) {
 	return pluginSnapshot(src, root), root
 }
 
+// hostOf is the snapshot path the mount for entry name points at.
+func hostOf(t *testing.T, ps pluginSet, name string) string {
+	t.Helper()
+	for _, mt := range ps.mounts {
+		if filepath.Base(mt.Box) == name {
+			return mt.Host
+		}
+	}
+	t.Fatalf("no mount for %s in %+v", name, ps.mounts)
+	return ""
+}
+
+// setPaths is every path the mounts expose, keyed entry/rel the way the box
+// sees it under .claude/plugins.
+func setPaths(t *testing.T, ps pluginSet) map[string]os.FileMode {
+	t.Helper()
+	out := map[string]os.FileMode{}
+	for _, mt := range ps.mounts {
+		for rel, m := range snapshotPaths(t, mt.Host) {
+			out[filepath.Join(filepath.Base(mt.Box), rel)] = m
+		}
+	}
+	return out
+}
+
+// slotPrefix is the snapshot dir each entry lives in: the two small json files
+// share one, and each big tree has its own so it is recopied only when it
+// changes.
+var slotPrefix = map[string]string{
+	"installed_plugins.json":  "plugins-json-",
+	"known_marketplaces.json": "plugins-json-",
+	"cache":                   "plugins-cache-",
+	"marketplaces":            "plugins-marketplaces-",
+}
+
 // Measured 2026-10-19: claude rebases the absolute installPath in
 // installed_plugins.json onto its own config dir, so all plugins load with only
 // the home mounts. A second mount at the host's own path would be redundant and
@@ -58,10 +94,11 @@ func TestPluginMountsMountEachEntryOnce(t *testing.T) {
 		if mt.Box != pluginBoxPaths[i] || !mt.Optional {
 			t.Fatalf("mount %d = %+v, want optional %s", i, mt, pluginBoxPaths[i])
 		}
-		// Mounts point into the snapshot, never into the host config dir.
-		snapDir := filepath.Join(root, "plugins-"+ps.token)
-		if mt.Host != filepath.Join(snapDir, filepath.Base(mt.Box)) {
-			t.Fatalf("mount %d host %q is not inside %s", i, mt.Host, snapDir)
+		// Mounts point into the entry's own snapshot dir, never into the host
+		// config dir.
+		name, slot := filepath.Base(mt.Box), filepath.Dir(mt.Host)
+		if filepath.Base(mt.Host) != name || filepath.Dir(slot) != root || !strings.HasPrefix(filepath.Base(slot), slotPrefix[name]) {
+			t.Fatalf("mount %d host %q is not %s<hash>/%s under %s", i, mt.Host, slotPrefix[name], name, root)
 		}
 		if strings.HasPrefix(mt.Host, src) || strings.HasPrefix(mt.Box, src) {
 			t.Fatalf("%+v reaches the host config dir %s", mt, src)
@@ -72,11 +109,14 @@ func TestPluginMountsMountEachEntryOnce(t *testing.T) {
 			}
 		}
 	}
-	for _, never := range []string{"data", "store", "plugin-catalog-cache.json", "plugin-directory-cache-v2.json"} {
-		if _, err := os.Lstat(filepath.Join(root, "plugins-"+ps.token, never)); err == nil {
-			t.Fatalf("%q must never be copied into the snapshot", never)
+	filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		for _, never := range []string{"data", "store", "plugin-catalog-cache.json", "plugin-directory-cache-v2.json"} {
+			if err == nil && d.Name() == never {
+				t.Errorf("%q must never be copied into a snapshot: %s", never, p)
+			}
 		}
-	}
+		return nil
+	})
 }
 
 // No installed_plugins.json means the user has no plugins: that is not a fault
@@ -413,7 +453,7 @@ func TestSnapshotHasNoGitMetadataAnywhere(t *testing.T) {
 	if len(ps.mounts) != 4 || len(ps.drops) != 0 {
 		t.Fatalf("a git-bearing set still mounts (the git data is simply absent): %+v", ps)
 	}
-	paths := snapshotPaths(t, filepath.Join(root, "plugins-"+ps.token))
+	paths := snapshotPaths(t, root)
 	for rel := range paths {
 		for _, part := range strings.Split(rel, string(filepath.Separator)) {
 			if strings.EqualFold(part, ".git") {
@@ -421,13 +461,14 @@ func TestSnapshotHasNoGitMetadataAnywhere(t *testing.T) {
 			}
 		}
 	}
+	exposed := setPaths(t, ps)
 	for _, keep := range []string{"marketplaces/m/real.txt", "cache/a/keep.txt", "cache/a/sub"} {
-		if _, ok := paths[filepath.FromSlash(keep)]; !ok {
+		if _, ok := exposed[filepath.FromSlash(keep)]; !ok {
 			t.Fatalf("%s must be copied", keep)
 		}
 	}
 	// Nothing secret anywhere in the bytes either.
-	err := filepath.WalkDir(filepath.Join(root, "plugins-"+ps.token), func(p string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			b, _ := os.ReadFile(p)
 			if strings.Contains(string(b), "tok") || strings.Contains(string(b), "c2VjcmV0") {
@@ -441,8 +482,13 @@ func TestSnapshotHasNoGitMetadataAnywhere(t *testing.T) {
 	}
 }
 
-// 2: a symlink INSIDE the tree is recreated as a symlink with the same target
-// string and never followed, so a secret behind it never enters the snapshot.
+// 2: a symlink INSIDE the tree is never followed, so a secret behind it never
+// enters the snapshot. It is recreated, with the same target string, only when
+// it stays inside its own entry: relative, resolving lexically under that
+// entry, and not walking through another link (a link it went through would
+// make the lexical answer wrong). Anything else is skipped rather than handed
+// to a file-sharing layer that might follow it on the host (colima on macOS was
+// never checked). A skipped link is not a drop: the set still mounts.
 func TestSnapshotRecreatesSymlinksWithoutFollowing(t *testing.T) {
 	src := t.TempDir()
 	pluginTree(t, src)
@@ -450,29 +496,48 @@ func TestSnapshotRecreatesSymlinksWithoutFollowing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("TOP-SECRET-CONTENT"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	link := filepath.Join(src, "plugins", "cache", "official", "link")
-	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
-		t.Fatal(err)
+	writePluginFile(t, src, "cache/official/demo/1.0.0/CLAUDE.md", "# plugin")
+	writePluginFile(t, src, "cache/official/demo/1.0.0/sub/x.txt", "x")
+	writePluginFile(t, src, "marketplaces/official/m.txt", "m")
+	cache := filepath.Join(src, "plugins", "cache")
+	links := [][2]string{
+		{"official/link", outside},                                    // absolute, to a secret
+		{"abs", "/home/claude/.claude/plugins/cache/x"},               // absolute
+		{"official/demo/1.0.0/AGENTS.md", "CLAUDE.md"},                // the real tree's one link: kept
+		{"official/demo/1.0.0/up", "../../demo/1.0.0/sub/x.txt"},      // relative, in entry: kept
+		{"official/demo/1.0.0/hop", "../../.."},                       // resolves to cache/ itself: kept
+		{"official/demo/1.0.0/escape", "../../../../plugins/cache"},   // climbs out of cache
+		{"official/other-entry", "../../marketplaces/official/m.txt"}, // into another entry
+		{"official/demo/1.0.0/toroot", "../../../.."},                 // the plugins dir itself
+		{"official/demo/1.0.0/chained", "hop/../../x"},                // lexically in cache; via hop it climbs out
 	}
-	if err := os.Symlink(outside, link); err != nil {
-		t.Fatal(err)
+	for _, l := range links {
+		if err := os.Symlink(l[1], filepath.Join(cache, l[0])); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Symlink("/home/claude/.claude/plugins/cache/x", filepath.Join(src, "plugins", "cache", "abs")); err != nil {
-		t.Fatal(err)
+	ps, _ := snap(t, src)
+	if len(ps.mounts) != 4 || len(ps.drops) != 0 {
+		t.Fatalf("a link inside the tree does not void the set and is not a drop: %+v", ps)
 	}
-	ps, root := snap(t, src)
-	if len(ps.mounts) != 4 {
-		t.Fatalf("a link inside the tree does not void the set: %+v", ps)
+	snapCache := hostOf(t, ps, "cache")
+	for rel, want := range map[string]string{
+		"official/demo/1.0.0/AGENTS.md": "CLAUDE.md",
+		"official/demo/1.0.0/up":        "../../demo/1.0.0/sub/x.txt",
+		"official/demo/1.0.0/hop":       "../../..",
+	} {
+		got, err := os.Readlink(filepath.Join(snapCache, rel))
+		if err != nil || got != want {
+			t.Fatalf("in-entry link %s must keep its target string %q: %q %v", rel, want, got, err)
+		}
 	}
-	snapDir := filepath.Join(root, "plugins-"+ps.token)
-	got, err := os.Readlink(filepath.Join(snapDir, "cache", "official", "link"))
-	if err != nil || got != outside {
-		t.Fatalf("link must keep its target string: %q %v", got, err)
+	for _, rel := range []string{"official/link", "abs", "official/demo/1.0.0/escape", "official/other-entry",
+		"official/demo/1.0.0/toroot", "official/demo/1.0.0/chained"} {
+		if _, err := os.Lstat(filepath.Join(snapCache, rel)); err == nil {
+			t.Errorf("link %s leaves its entry and must be skipped", rel)
+		}
 	}
-	if got, err := os.Readlink(filepath.Join(snapDir, "cache", "abs")); err != nil || got != "/home/claude/.claude/plugins/cache/x" {
-		t.Fatalf("absolute link must keep its target string: %q %v", got, err)
-	}
-	filepath.WalkDir(snapDir, func(p string, d os.DirEntry, err error) error {
+	filepath.WalkDir(filepath.Dir(snapCache), func(p string, d os.DirEntry, err error) error {
 		if err == nil && d.Type().IsRegular() {
 			if b, _ := os.ReadFile(p); strings.Contains(string(b), "TOP-SECRET-CONTENT") {
 				t.Errorf("a symlink target's content was copied into %s", p)
@@ -499,7 +564,7 @@ func TestSnapshotSkipsFifosInsideTheTree(t *testing.T) {
 			t.Fatalf("the set must still mount: %+v", ps)
 		}
 		var ok, pipe bool
-		for p := range snapshotPaths(t, filepath.Join(root, "plugins-"+ps.token)) {
+		for p := range setPaths(t, ps) {
 			ok = ok || p == filepath.Join("cache", "a", "ok.txt")
 			pipe = pipe || filepath.Base(p) == "pipe"
 		}
@@ -523,8 +588,8 @@ func TestSnapshotNormalizesFileModes(t *testing.T) {
 	if err := os.Chmod(filepath.Join(src, "plugins", "cache", "a", "data.txt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ps, root := snap(t, src)
-	paths := snapshotPaths(t, filepath.Join(root, "plugins-"+ps.token))
+	ps, _ := snap(t, src)
+	paths := setPaths(t, ps)
 	if m := paths[filepath.Join("cache", "a", "run.sh")]; m != 0o755 {
 		t.Fatalf("run.sh mode %v, want 0755 with no setuid", m)
 	}
@@ -540,34 +605,139 @@ func TestSnapshotIsKeyedByThePluginTreeOnly(t *testing.T) {
 	pluginTree(t, src)
 	root := t.TempDir()
 	first := pluginSnapshot(src, root)
-	ino := func(token string) os.FileInfo {
-		fi, err := os.Stat(filepath.Join(root, "plugins-"+token, "installed_plugins.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return fi
-	}
-	before := ino(first.token)
+	before := slotStats(t, first)
 
 	if err := os.WriteFile(filepath.Join(src, "skills", "demo", "SKILL.md"), []byte("# edited"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	again := pluginSnapshot(src, root)
-	if again.token != first.token {
-		t.Fatal("editing a skill must not change the plugin snapshot")
+	for name, fi := range slotStats(t, again) {
+		if !sameSlot(before[name], fi) {
+			t.Fatalf("editing a skill must reuse the %s snapshot, not recopy it", name)
+		}
 	}
-	if !os.SameFile(before, ino(again.token)) {
-		t.Fatal("the snapshot must be reused, not recopied")
+}
+
+// slotStats Lstats the snapshot dir each entry's mount lives in.
+func slotStats(t *testing.T, ps pluginSet) map[string]os.FileInfo {
+	t.Helper()
+	out := map[string]os.FileInfo{}
+	for _, mt := range ps.mounts {
+		fi, err := os.Lstat(filepath.Dir(mt.Host))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[filepath.Base(mt.Box)] = fi
 	}
+	if len(out) != 4 {
+		t.Fatalf("want 4 mounted entries, got %+v", ps)
+	}
+	return out
+}
+
+// sameSlot is true when the snapshot dir is the very same one, untouched: same
+// inode, and its mtime unchanged (a recopy into it, or a replacement, changes one).
+func sameSlot(a, b os.FileInfo) bool {
+	return os.SameFile(a, b) && a.ModTime().Equal(b.ModTime())
+}
+
+// Host claude rewrites known_marketplaces.json (its lastUpdated) on routine
+// marketplace checks even when nothing changed. That must cost a copy of the two
+// small json files, never a recopy of cache/ and marketplaces/ (tens of MB), and
+// never a new bundle dir: the bundle folds in only whether plugins are mounted.
+func TestKnownMarketplacesRewriteRecopiesOnlyTheJSON(t *testing.T) {
+	for _, c := range []struct{ name, doc string }{
+		{"same bytes, new mtime", `{}`},
+		{"new bytes", `{"official":{"lastUpdated":"2026-10-19T05:25:45Z"}}`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := sourceWithEnabledPlugins(t)
+			pluginTree(t, src)
+			writePluginFile(t, src, "cache/official/demo/1.0.0/big.txt", "plugin body")
+			writePluginFile(t, src, "marketplaces/official/catalog.json", "{}")
+			b1 := buildForTest(t, src)
+			ps1 := pluginSet{mounts: b1.pluginMounts}
+			before := slotStats(t, ps1)
+
+			p := filepath.Join(src, "plugins", "known_marketplaces.json")
+			writePluginFile(t, src, "known_marketplaces.json", c.doc)
+			later := time.Now().Add(time.Hour)
+			if err := os.Chtimes(p, later, later); err != nil {
+				t.Fatal(err)
+			}
+			b2 := buildForTest(t, src)
+			ps2 := pluginSet{mounts: b2.pluginMounts}
+			after := slotStats(t, ps2)
+
+			for _, big := range []string{"cache", "marketplaces"} {
+				if hostOf(t, ps1, big) != hostOf(t, ps2, big) || !sameSlot(before[big], after[big]) {
+					t.Fatalf("a json rewrite must not recopy %s: %s -> %s", big, hostOf(t, ps1, big), hostOf(t, ps2, big))
+				}
+			}
+			if hostOf(t, ps1, "known_marketplaces.json") == hostOf(t, ps2, "known_marketplaces.json") {
+				t.Fatal("the json snapshot must follow the rewrite")
+			}
+			if got, _ := os.ReadFile(hostOf(t, ps2, "known_marketplaces.json")); string(got) != c.doc {
+				t.Fatalf("the new json snapshot holds %q, want %q", got, c.doc)
+			}
+			if b1.Dir != b2.Dir || b1.Hash != b2.Hash {
+				t.Fatalf("marketplace churn must not make a new bundle: %s -> %s", b1.Dir, b2.Dir)
+			}
+			if !b2.Reused {
+				t.Fatal("the bundle must be reused, not rebuilt")
+			}
+			for prefix, want := range map[string]int{"plugins-cache-": 1, "plugins-marketplaces-": 1, "plugins-json-": 2} {
+				if n := countPrefix(t, rootFor(t, src), prefix); n != want {
+					t.Fatalf("%d %s* dirs, want %d", n, prefix, want)
+				}
+			}
+		})
+	}
+}
+
+// A change under cache/ recopies cache/ alone.
+func TestCacheChangeRecopiesOnlyTheCache(t *testing.T) {
+	src := sourceWithEnabledPlugins(t)
+	pluginTree(t, src)
+	writePluginFile(t, src, "cache/official/demo/1.0.0/big.txt", "plugin body")
+	b1 := buildForTest(t, src)
+	ps1 := pluginSet{mounts: b1.pluginMounts}
+	before := slotStats(t, ps1)
 
 	writePluginFile(t, src, "cache/official/demo/1.0.0/new.txt", "new")
-	changed := pluginSnapshot(src, root)
-	if changed.token == first.token {
-		t.Fatal("editing a file under cache must produce a new snapshot")
+	b2 := buildForTest(t, src)
+	ps2 := pluginSet{mounts: b2.pluginMounts}
+	after := slotStats(t, ps2)
+
+	if hostOf(t, ps1, "cache") == hostOf(t, ps2, "cache") {
+		t.Fatal("editing a file under cache must produce a new cache snapshot")
 	}
-	if changed.mounts[2].Host == first.mounts[2].Host {
-		t.Fatal("the new snapshot must be a new dir")
+	if _, err := os.Stat(filepath.Join(hostOf(t, ps2, "cache"), "official", "demo", "1.0.0", "new.txt")); err != nil {
+		t.Fatal("the new cache snapshot must hold the new file")
 	}
+	for _, other := range []string{"installed_plugins.json", "known_marketplaces.json", "marketplaces"} {
+		if hostOf(t, ps1, other) != hostOf(t, ps2, other) || !sameSlot(before[other], after[other]) {
+			t.Fatalf("a cache change must not recopy %s", other)
+		}
+	}
+	if b1.Hash != b2.Hash {
+		t.Fatal("a cache change keeps the plugin verdict, so the bundle stays")
+	}
+}
+
+func countPrefix(t *testing.T, dir, prefix string) int {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), prefix) {
+			n++
+		}
+	}
+	return n
 }
 
 // 6: a snapshot is a copy. A file the host writes after Ensure never appears in
@@ -740,14 +910,14 @@ func TestPublishSnapshotRefusesASwappedPluginsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	if _, _, err := publishSnapshot(filepath.Join(b, "plugins"), checked, root); err == nil {
+	if _, err := publishSnapshot(filepath.Join(b, "plugins"), checked, root); err == nil {
 		t.Fatal("a swapped plugins dir must be refused")
 	}
 	if ents, _ := os.ReadDir(root); len(ents) != 0 {
 		t.Fatalf("nothing may be published: %v", ents)
 	}
 	same, _ := os.Lstat(filepath.Join(a, "plugins"))
-	if _, _, err := publishSnapshot(filepath.Join(a, "plugins"), same, root); err != nil {
+	if _, err := publishSnapshot(filepath.Join(a, "plugins"), same, root); err != nil {
 		t.Fatalf("the checked dir itself must publish: %v", err)
 	}
 }
@@ -760,29 +930,35 @@ func TestPublishSnapshotKeepsASiblingsCompleteSnapshot(t *testing.T) {
 	root := t.TempDir()
 	pdir := filepath.Join(src, "plugins")
 	fi, _ := os.Lstat(pdir)
-	first, token, err := publishSnapshot(pdir, fi, root)
+	first, err := publishSnapshot(pdir, fi, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sentinel := filepath.Join(first, "cache", "official", "sentinel")
+	sentinel := filepath.Join(first["cache"], "official", "sentinel")
 	if err := os.WriteFile(sentinel, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Force the copy path again with the same content: the marker matches, so
-	// the existing complete dir must be returned untouched.
-	again, token2, err := publishSnapshot(pdir, fi, root)
-	if err != nil || again != first || token2 != token {
-		t.Fatalf("second publish: %v %q %q", err, again, token2)
+	// Same content again: every marker matches, so the existing complete dirs
+	// are returned untouched.
+	again, err := publishSnapshot(pdir, fi, root)
+	if err != nil || again["cache"] != first["cache"] {
+		t.Fatalf("second publish: %v %q", err, again["cache"])
 	}
 	if _, err := os.Stat(sentinel); err != nil {
 		t.Fatal("a complete snapshot was removed or replaced")
 	}
-	// An incomplete leftover (no marker) IS replaced.
-	if err := os.Remove(filepath.Join(first, snapshotMarker)); err != nil {
+	// An incomplete leftover (no marker) IS replaced, and only that slot.
+	slot := filepath.Dir(first["cache"])
+	if err := os.Remove(filepath.Join(slot, snapshotMarker)); err != nil {
 		t.Fatal(err)
 	}
-	healed, _, err := publishSnapshot(pdir, fi, root)
-	if err != nil || healed != first || !snapshotComplete(healed, token) {
+	jsonSlot, _ := os.Lstat(filepath.Dir(first["installed_plugins.json"]))
+	healed, err := publishSnapshot(pdir, fi, root)
+	token := strings.TrimPrefix(filepath.Base(slot), "plugins-cache-")
+	if err != nil || healed["cache"] != first["cache"] || !snapshotComplete(slot, token) {
 		t.Fatalf("an incomplete leftover must be replaced: %v", err)
+	}
+	if now, _ := os.Lstat(filepath.Dir(healed["installed_plugins.json"])); !sameSlot(jsonSlot, now) {
+		t.Fatal("healing the cache slot must not touch the json slot")
 	}
 }

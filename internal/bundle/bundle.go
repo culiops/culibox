@@ -136,7 +136,7 @@ func (m *Manager) Ensure() (*Built, error) {
 	// even if the host plugin dir changes mid-call.
 	ps := pluginSnapshot(m.opts.Source, m.opts.Root)
 	mounted := len(ps.mounts) > 0
-	hash, imageID, err := m.sourceHash(ps.token)
+	hash, imageID, err := m.sourceHash(mounted)
 	if err != nil {
 		return nil, err
 	}
@@ -156,12 +156,20 @@ func (m *Manager) Ensure() (*Built, error) {
 // ImageProbe the box image ID is folded in too: the bundle depends on what the
 // image declares and contains, so a new image rebuilds it.
 //
-// pluginToken (the plugin snapshot's fingerprint, "" when nothing is mounted) is
-// folded in because it decides whether the bundle's settings carry
-// enabledPlugins: a cached bundle must not keep the key after the plugin set
-// breaks, nor lack it after the set is fixed, and it stays paired with the
-// snapshot the mounts point into.
-func (m *Manager) sourceHash(pluginToken string) (hash, imageID string, err error) {
+// pluginsMounted (the plugin VERDICT) is folded in because it decides whether
+// the bundle's settings carry enabledPlugins: a cached bundle must not keep the
+// key after the plugin set breaks, nor lack it after the set is fixed. Only the
+// verdict, never the snapshot fingerprints: the settings depend on nothing
+// else, and host claude rewrites known_marketplaces.json on routine checks, so
+// folding the snapshots in would make a new bundle dir per marketplace check.
+//
+// The mounts themselves come from the same Ensure (Built.pluginMounts), so a new
+// box always gets settings and snapshot mounts decided together. A live box that
+// is reused keeps the bundle dir and the snapshot dirs it was created with:
+// reuse compares mount destinations, not host paths, and neither kind of dir is
+// ever removed (no GC), so its settings and its plugins still match each other.
+// It sees a newer plugin snapshot only once it is recreated.
+func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err error) {
 	h := sha256.New()
 	if ip, ok := m.opts.Prober.(ImageProbe); ok {
 		if imageID, err = ip.ImageID(); err != nil {
@@ -184,10 +192,7 @@ func (m *Manager) sourceHash(pluginToken string) (hash, imageID string, err erro
 	if fi, err := os.Stat(filepath.Join(m.opts.Source, "settings.json")); err == nil {
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
-	if pluginToken == "" {
-		pluginToken = "none"
-	}
-	fmt.Fprintf(h, "plugins\x00%s\n", pluginToken)
+	fmt.Fprintf(h, "plugins\x00%t\n", pluginsMounted)
 	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
 }
 
