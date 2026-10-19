@@ -574,6 +574,70 @@ func TestElevatedMintUsesTheWriteRoleAndPolicy(t *testing.T) {
 	}
 }
 
+// An elevated credential whose audit row fails is not handed out, and does not
+// count toward the window's lastExp (it never left the host).
+func TestUnauditedElevatedMintIsNotHandedOut(t *testing.T) {
+	b, _, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(60))
+	rec.recErr = errors.New("disk full")
+	if w := call(b, tokA("aws-1")); w.Code != 503 || strings.Contains(w.Body.String(), "ASIAFAKE") {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	if got := lastExpOf(b, "aws-1"); !got.IsZero() {
+		t.Fatalf("lastExp %v for a credential never handed out", got)
+	}
+}
+
+// A drop that lands while the minted row is being written discards the
+// elevated credential: the box gets read-only, and the audit says why.
+func TestDropDuringTheAuditWriteDiscardsTheElevatedCredential(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	withTimers(b)
+	b.Elevate("aws-1", cookie(60))
+	hr := &hookRec{memRec: rec}
+	b.rec = hr
+	var dropView ElevationView
+	hr.hook = func(r Row) {
+		if r.Outcome == OutcomeMinted && r.Elevated {
+			hr.hook = nil
+			dropView, _ = b.Drop("aws-1", CredCookie)
+		}
+	}
+	if w := call(b, tokA("aws-1")); w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	if len(fm.calls) != 2 || fm.calls[1].RoleARN == writeRole {
+		t.Fatalf("expected a read-only fallback mint, calls %+v", fm.calls)
+	}
+	var discarded bool
+	for _, r := range rec.rows {
+		discarded = discarded || (r.Elevated && r.Outcome == OutcomeSTSError && strings.Contains(r.Error, "elevation changed"))
+	}
+	if !discarded {
+		t.Fatalf("no discard row: %+v", rec.rows)
+	}
+	if !dropView.LastValid.IsZero() {
+		t.Fatalf("drop reports write creds valid until %v, but none was handed out", dropView.LastValid)
+	}
+	if v, _ := b.Elevation("aws-1"); !v.LastValid.IsZero() || v.Active {
+		t.Fatalf("after the discard: %+v", v)
+	}
+}
+
+// hookRec runs hook (outside the inner recorder's lock) before each Record.
+type hookRec struct {
+	*memRec
+	hook func(Row)
+}
+
+func (h *hookRec) Record(r Row) error {
+	if h.hook != nil {
+		h.hook(r)
+	}
+	return h.memRec.Record(r)
+}
+
 func TestReadOnlyWithoutAnOverlay(t *testing.T) {
 	b, fm, rec, _ := setup(t, map[string]SessionView{"aws-1": liveElev()})
 	mintOnce(t, b)

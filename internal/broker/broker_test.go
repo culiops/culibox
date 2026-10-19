@@ -56,6 +56,7 @@ type memRec struct {
 	rows    []Row
 	appr    []ApprovalRow
 	apprErr error
+	recErr  error // fails every Record while set
 }
 
 func (m *memRec) RecordApproval(r ApprovalRow) error {
@@ -71,6 +72,9 @@ func (m *memRec) RecordApproval(r ApprovalRow) error {
 func (m *memRec) Record(r Row) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.recErr != nil {
+		return m.recErr
+	}
 	m.rows = append(m.rows, r)
 	return nil
 }
@@ -134,6 +138,30 @@ func TestMintsDownscopedPerSessionCredentials(t *testing.T) {
 		rec.rows[0].SessionID != "claude-3" || rec.rows[0].SourceIdentity != "agentbox-claude-3" ||
 		rec.rows[0].ScopeHash != binding().Hash() || rec.rows[0].Expires.IsZero() {
 		t.Fatalf("audit: %+v", rec.rows)
+	}
+}
+
+// A credential with no audit row is never handed out: the minted row is
+// written before the credential leaves, and a failed write fails closed
+// without caching, so the next request mints and audits afresh.
+func TestUnauditedMintIsNotHandedOut(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
+	rec.recErr = errors.New("disk full")
+	w := call(b, tokA("claude-3"))
+	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "ASIAFAKE") {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	st, _ := b.Stats("claude-3")
+	if st.Mints != 0 || st.LastError == "" {
+		t.Fatalf("stats %+v", st)
+	}
+	rec.recErr = nil
+	w = call(b, tokA("claude-3"))
+	if w.Code != 200 || len(fm.calls) != 2 || len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeMinted {
+		t.Fatalf("after recovery: status %d, mints %d, rows %+v", w.Code, len(fm.calls), rec.rows)
+	}
+	if st, _ = b.Stats("claude-3"); st.Mints != 1 || st.LastError != "" {
+		t.Fatalf("stats after recovery %+v", st)
 	}
 }
 
