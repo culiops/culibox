@@ -217,9 +217,9 @@ type BrokerHooks interface {
 	// Token is the bearer token the session's box presents to the broker.
 	Token(sessionID, nonce string) string
 	// BoxFor prepares the binding's host files and returns the read-only
-	// mounts and the env (NAME=value) that point a box's AWS tooling at the
+	// mounts and the env (NAME=value) that point a box's AWS and GitHub tooling at the
 	// broker. The values reach the box by name only (box.Wrap's `-e NAME`).
-	BoxFor(b config.AWSBinding) (mounts []box.Mount, env []string, err error)
+	BoxFor(bs config.Bindings) (mounts []box.Mount, env []string, err error)
 	// StripEnv names every variable a bound session must not inherit from its
 	// profile: static credentials and anything that would shadow the broker.
 	StripEnv() []string
@@ -1236,7 +1236,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		var benv, penv []string
 		if binding != nil {
 			var err error
-			bm, benv, err = brk.BoxFor(*binding)
+			bm, benv, err = brk.BoxFor(config.Bindings{AWS: binding})
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing AWS access: %w", spec.Agent, err)
 			}

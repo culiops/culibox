@@ -24,13 +24,13 @@ func (h Hooks) Token(id, nonce string) string { return h.B.Token(id, nonce) }
 
 // BoxFor writes the binding's per-binding files and returns the mounts and env
 // a bound box needs. It never modifies the endpoint's own mount slice.
-func (h Hooks) BoxFor(b config.AWSBinding) ([]box.Mount, []string, error) {
-	dir, err := EnsureBindingDir(h.StateRoot, b)
+func (h Hooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
+	dir, err := EnsureBindingDir(h.StateRoot, bs)
 	if err != nil {
 		return nil, nil, err
 	}
 	mounts := append([]box.Mount{{Host: dir, Box: BoxDir}}, h.EP.Mounts...)
-	return mounts, BoxEnv(b, h.EP.BoxURL), nil
+	return mounts, BoxEnv(bs, h.EP.BoxURL), nil
 }
 
 // StripEnv is every variable a bound session must not inherit.

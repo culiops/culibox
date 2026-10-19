@@ -103,7 +103,7 @@ func (f *fakeBrokerHooks) Token(id, nonce string) string {
 	return "tok-" + id + "." + nonce
 }
 
-func (f *fakeBrokerHooks) BoxFor(config.AWSBinding) ([]box.Mount, []string, error) {
+func (f *fakeBrokerHooks) BoxFor(config.Bindings) ([]box.Mount, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boxForCalls++
