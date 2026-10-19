@@ -214,9 +214,12 @@ type Options struct {
 	GuardInPlace bool
 	// PidsLimit caps processes and threads per box; 0 = DefaultPidsLimit.
 	// TmpSize is the size of the box's /tmp tmpfs ("512m", number + k/m/g);
-	// "" = DefaultTmpSize. New validates both (see ValidateLimits).
+	// "" = DefaultTmpSize. Memory is the box's RAM cap ("4g", number + k/m/g,
+	// at least 1g); swap is capped to the same value. "" = DefaultMemory.
+	// New validates all three (see ValidateLimits).
 	PidsLimit int
 	TmpSize   string
+	Memory    string
 }
 
 // Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""), and
@@ -268,7 +271,7 @@ func New(opts Options) (*Manager, error) {
 	if opts.Image == "" {
 		return nil, fmt.Errorf("box: an image is required")
 	}
-	if err := ValidateLimits(opts.PidsLimit, opts.TmpSize); err != nil {
+	if err := ValidateLimits(opts.PidsLimit, opts.TmpSize, opts.Memory); err != nil {
 		return nil, fmt.Errorf("box: %w", err)
 	}
 	if opts.IdleTTL <= 0 {

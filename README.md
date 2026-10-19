@@ -126,6 +126,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
 | `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |
+| `box_memory` | `4g` | RAM cap per box; number + k/m/g, at least `1g`. Swap is capped to the same value, so a box over its cap is killed rather than swapping the host. |
 | `docker_bin` | `docker` | Docker CLI to use. |
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
 | `data_dir` | the data root | Where state lives. |
@@ -138,7 +139,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
-`box_pids_limit` and `box_tmp_size` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
+`box_pids_limit`, `box_tmp_size` and `box_memory` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
 Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `box.image`, `default_cwd`, `account`, `aws`, `clone_of` and `clone_share` (see [Clone mode](#clone-mode)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles.
 

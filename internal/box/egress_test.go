@@ -34,6 +34,7 @@ func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 		"--read-only",
 		"--tmpfs", "/tmp:rw,nosuid,nodev,exec,size=512m",
 		"--pids-limit", "512",
+		"--memory", DefaultMemory, "--memory-swap", DefaultMemory,
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj",
 		"--mount", "type=bind,src=" + m.stateDir("ab-box-abc") + ",dst=" + boxHome,

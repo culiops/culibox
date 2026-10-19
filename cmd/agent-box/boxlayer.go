@@ -104,6 +104,7 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		Client:     l.cli,
 		PidsLimit:  cfg.BoxPidsLimit,
 		TmpSize:    cfg.BoxTmpSize,
+		Memory:     cfg.BoxMemory,
 		// Linux: every box sits on the egress network and has its guard files
 		// read-only in place. darwin keeps its default network and Verify.
 		EgressAll:    l.goos == "linux",
