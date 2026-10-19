@@ -666,7 +666,7 @@ func TestCredentialedMarketplaceChangesHashAndStripsEnabledPlugins(t *testing.T)
 	}
 }
 
-// The check runs on the DECODED json, not the raw bytes: escapes decode to a
+// The check runs on the DECODED json as well as the raw bytes: escapes decode to a
 // credentialed URL but do not match a regex over the file's text.
 func TestPluginMountsRefuseCredentialsHiddenByJSONEscapes(t *testing.T) {
 	for _, c := range []struct{ name, doc string }{
@@ -678,6 +678,31 @@ func TestPluginMountsRefuseCredentialsHiddenByJSONEscapes(t *testing.T) {
 		{"nested in an array", `{"a":[{"b":["x","git+https://u:p@h/r"]}]}`},
 		{"not valid json", `{"m":{"url":"https://github.com/o/r"`},
 		{"not json at all", `https://github.com/o/r`},
+	} {
+		for _, file := range credentialFiles {
+			t.Run(c.name+" in "+file, func(t *testing.T) {
+				src := t.TempDir()
+				pluginTree(t, src)
+				writePluginFile(t, src, file, c.doc)
+				ps, _ := snap(t, src)
+				want := Drop{Kind: "plugins", Name: file, Reason: ReasonPluginCredentials}
+				if len(ps.mounts) != 0 || len(ps.drops) != 1 || ps.drops[0] != want {
+					t.Fatalf("want no mounts and exactly %+v, got %+v", want, ps)
+				}
+			})
+		}
+	}
+}
+
+// A duplicate key decodes to only one of its values, but the raw file that is
+// mounted into the box still holds both: a credentialed value is refused
+// whichever position it is in.
+func TestPluginMountsRefuseCredentialsShadowedByDuplicateKeys(t *testing.T) {
+	for _, c := range []struct{ name, doc string }{
+		{"credential first", `{"m":{"url":"https://tok@host/r","url":"https://host/r"}}`},
+		{"credential last", `{"m":{"url":"https://host/r","url":"https://tok@host/r"}}`},
+		{"escaped credential first", `{"m":{"url":"https:\/\/tok@host/r","url":"https://host/r"}}`},
+		{"top-level duplicate", `{"u":"https://tok@h/r","u":"https://h/r"}`},
 	} {
 		for _, file := range credentialFiles {
 			t.Run(c.name+" in "+file, func(t *testing.T) {

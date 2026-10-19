@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -424,45 +425,37 @@ func snapshotCredentials(snap string) (entry string, found bool, err error) {
 		if err != nil || len(b) > maxCredFile {
 			return "", false, fmt.Errorf("bundle: %s cannot be checked", name)
 		}
-		// The rule runs on the DECODED strings: json escapes (https:\/\/tok@h,
-		// \u0040, \u002f) decode to a credentialed URL that a regex over the raw
-		// text never sees. A file that is not valid json cannot be vouched for,
-		// so it is refused the same way.
-		if decoded, ok := jsonHasURLCredentials(b); !ok || decoded {
+		if jsonHasURLCredentials(b) {
 			return name, true, nil
 		}
 	}
 	return "", false, nil
 }
 
-// jsonHasURLCredentials decodes doc and applies hasURLCredentials to every
-// string in it, object keys included. ok is false when doc is not valid json.
-func jsonHasURLCredentials(doc []byte) (found, ok bool) {
-	var v any
-	if err := json.Unmarshal(doc, &v); err != nil {
-		return false, false
+// jsonHasURLCredentials applies hasURLCredentials to doc, failing closed. It is
+// true when doc is not valid json (it cannot be vouched for), when the RAW bytes
+// carry a credentialed URL (the raw file is what the box can read), or when any
+// DECODED string token does: json escapes (https:\/\/tok@h, \u0040, \u002f)
+// decode to a credentialed URL that a regex over the raw text never sees. Every
+// token is checked, object keys and duplicate keys included, so a value shadowed
+// by a later duplicate is not lost the way it is when decoding into a map.
+func jsonHasURLCredentials(doc []byte) bool {
+	if !json.Valid(doc) || hasURLCredentials(doc) {
+		return true
 	}
-	return anyStringHasCredentials(v), true
-}
-
-func anyStringHasCredentials(v any) bool {
-	switch t := v.(type) {
-	case string:
-		return hasURLCredentials([]byte(t))
-	case []any:
-		for _, e := range t {
-			if anyStringHasCredentials(e) {
-				return true
-			}
+	dec := json.NewDecoder(bytes.NewReader(doc))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return false
 		}
-	case map[string]any:
-		for k, e := range t {
-			if hasURLCredentials([]byte(k)) || anyStringHasCredentials(e) {
-				return true
-			}
+		if err != nil {
+			return true
+		}
+		if s, ok := tok.(string); ok && hasURLCredentials([]byte(s)) {
+			return true
 		}
 	}
-	return false
 }
 
 // urlAuthority matches scheme://authority@ where the authority runs to the first
