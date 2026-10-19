@@ -71,6 +71,13 @@ func main() {
 	if args.Cmd == "box" {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
 	}
+	if args.Cmd == "clone" {
+		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		os.Exit(runClone(args, cfg, home, cfgFiles, os.Stdout))
+	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
 	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if err != nil {
@@ -330,11 +337,15 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
+	// bundleSrc stays empty with the bundle off or no layer; clone mode reads it
+	// below as the memory root.
+	bundleSrc := ""
 	if layer != nil && cfg.BundleSource != "off" {
 		src := bundle.ExpandTilde(cfg.BundleSource)
 		if src == "" {
 			src = bundle.DefaultSource()
 		}
+		bundleSrc = src
 		// Root is under the layer's state root: on macOS the symlink-resolved
 		// data root, the spelling the VM mounts, since the bundle is mounted
 		// into boxes.
@@ -350,6 +361,20 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			mgr.SetBundles(bundle.NewProvider(bm))
 			log.Printf("config bundle source: %s", src)
 		}
+	}
+
+	// Clone mode (Linux only). The profile list is read through the launcher on
+	// every call, so a profile saved after boot is covered. Before Reconcile,
+	// like the box hooks. Hooks are installed on Linux even when clone creation
+	// is unavailable (no layer, no git): the host-tier box-owned guard needs
+	// neither. The interface must never hold a nil *cloneHooks, so SetClone runs
+	// only for a real value.
+	h, err := newCloneHooks(runtime.GOOS, layer, home, bundleSrc, dataDir, protected, lnch.Clones)
+	if err != nil {
+		log.Printf("clone mode unavailable (%v); clone-mode profiles are refused", err)
+	}
+	if h != nil { // non-nil on Linux even when unavailable: the box-owned guard stays on
+		mgr.SetClone(h)
 	}
 
 	// Credential broker (M3a): only with containment, because a bound session
@@ -463,6 +488,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works

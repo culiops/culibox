@@ -56,6 +56,8 @@ var pathEscapes = map[string]int{
 	"cmd/agent-box/cli.go literal .config":      1,
 	// /tmp INSIDE the box: its tmpfs mount and the pid file kept on it.
 	"internal/box/argv.go literal /tmp": 2,
+	// The bundle container's own tmpfs and HOME (clone fetch), not a host path.
+	"internal/clone/fetch.go literal /tmp": 1,
 	// The file-search index skips or includes dirs under the home it browses.
 	"internal/web/fssearch.go literal .local":  1,
 	"internal/web/fssearch.go literal .config": 3,

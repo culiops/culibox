@@ -92,6 +92,8 @@ type AgentConfig struct {
 	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
+	CloneOf    string            `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
+	CloneShare []string          `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours
@@ -336,6 +338,9 @@ func (c Config) Validate() error {
 		if err := validateAWS(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
+		if err := validateClone(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
 	}
 	optDefs := map[string]OptionDef{}
 	for _, o := range c.Options {
@@ -426,6 +431,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 	}
 	if err := validateAWS(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateClone(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	for k, v := range a.Options {

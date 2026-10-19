@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -352,6 +353,53 @@ func (l *AgentLauncher) AWSFor(agent string) *config.AWSBinding {
 		return nil
 	}
 	return cfg.AWS.Clone()
+}
+
+// CloneFor returns a copy of the profile's clone spec, or nil, nil for a profile
+// without clone_of (or an unknown one). A stored clone that no longer validates
+// is an error, never a partial spec: the spawn is refused rather than run
+// against a half-understood clone.
+func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, nil
+	}
+	return cfg.Clone()
+}
+
+// Clones returns the clone spec of every profile with clone_of set and an
+// absolute, clean default_cwd, ordered by directory. It feeds the host-tier
+// box-owned-directory check, which must cover a directory a box may have
+// written even when the profile's clone spec no longer validates (a
+// hand-edited profiles.json): such a profile contributes {Of, Dir} without
+// shares, and is refused on its own spawn through CloneFor, which keeps its
+// error behaviour. A profile with no usable directory has none to guard.
+func (l *AgentLauncher) Clones() []config.Clone {
+	l.mu.RLock()
+	agents := make([]config.AgentConfig, 0, len(l.agents))
+	for _, cfg := range l.agents {
+		agents = append(agents, cfg)
+	}
+	l.mu.RUnlock()
+	return ClonesOf(agents)
+}
+
+// ClonesOf is Clones over an explicit profile list, for callers (the
+// `clone fetch` command) that read the profiles without a launcher.
+func ClonesOf(agents []config.AgentConfig) []config.Clone {
+	var out []config.Clone
+	for _, cfg := range agents {
+		if cfg.CloneOf == "" {
+			continue
+		}
+		if cl, err := cfg.Clone(); err == nil && cl != nil {
+			out = append(out, *cl)
+		} else if d := cfg.DefaultCwd; filepath.IsAbs(d) && filepath.Clean(d) == d {
+			out = append(out, config.Clone{Of: cfg.CloneOf, Dir: d})
+		}
+	}
+	slices.SortFunc(out, func(a, b config.Clone) int { return strings.Compare(a.Dir, b.Dir) })
+	return out
 }
 
 // Build composes (argv, env) for the agent per its base policy + env + secrets.

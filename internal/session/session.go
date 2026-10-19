@@ -177,6 +177,26 @@ type AWSResolver interface {
 	AWSFor(agent string) *config.AWSBinding
 }
 
+// CloneResolver is implemented by launchers that know a profile's clone spec.
+// Optional, like AWSResolver: without it no session is a clone session. A nil,
+// nil answer means the profile has no clone_of.
+type CloneResolver interface {
+	CloneFor(agent string) (*config.Clone, error)
+}
+
+// CloneHooks is what spawning a clone-mode session needs from the clone layer,
+// kept as an interface so this package does not import it. A nil CloneHooks
+// means clone mode is unavailable (Linux only), and clone profiles are refused.
+type CloneHooks interface {
+	// Prepare makes the clone ready on the host (creating it if absent) and
+	// returns the box identity and read-only mounts for it. withMemory adds the
+	// clone's claude memory mount, which only the default account gets.
+	Prepare(ctx context.Context, c config.Clone, withMemory bool) (box.CloneMounts, error)
+	// BoxOwned reports whether cwd is inside any profile's clone, with the
+	// reason a host-tier spawn there is refused.
+	BoxOwned(cwd string) (reason string, owned bool)
+}
+
 // BrokerHooks is what spawning a bound session needs from the credential
 // broker, kept as an interface so this package does not import it (the broker
 // adapter implements it). A nil BrokerHooks means the broker is not running,
@@ -837,6 +857,7 @@ type Manager struct {
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
 	egress    EgressHooks // nil = egress control not running; bound profiles are refused
 	egressAll bool        // every boxed spawn needs egress (Linux); see SetEgressAll
+	clone     CloneHooks  // nil = clone mode unavailable; clone profiles are refused
 	home      string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir  string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 	repliesOn bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
@@ -898,6 +919,14 @@ func (m *Manager) SetEgress(h EgressHooks) {
 func (m *Manager) SetEgressAll(all bool) {
 	m.mu.Lock()
 	m.egressAll = all
+	m.mu.Unlock()
+}
+
+// SetClone installs the clone-mode hooks. Call once at boot (Linux), with
+// SetBoxes. Nil means clone mode is unavailable: clone profiles are refused.
+func (m *Manager) SetClone(h CloneHooks) {
+	m.mu.Lock()
+	m.clone = h
 	m.mu.Unlock()
 }
 
@@ -1034,6 +1063,50 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		return nil, fmt.Errorf("%w: egress control is not running, so no box can start", box.ErrBoxUnavailable)
 	}
 
+	// A clone profile runs only in a box, only in its own clone. Refused before
+	// anything is prepared, built or created: the host tier would run the agent
+	// (and its tools) inside a tree a box can rewrite, and a spawn anywhere but
+	// the clone root would mount a subdirectory and leave the .git and the share
+	// mountpoints out (spec §6.1). The reverse also holds (§6.4): a host-tier
+	// spawn inside any clone is refused, because the clone is the box's.
+	var cl *config.Clone
+	m.mu.Lock()
+	ch := m.clone
+	m.mu.Unlock()
+	if r, ok := m.launcher.(CloneResolver); ok {
+		c, err := r.CloneFor(spec.Agent)
+		if err != nil {
+			// ErrBoxUnavailable so the UI shows which profile and why.
+			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+		}
+		cl = c
+	}
+	// Both checks compare an absolute path: a relative cwd never compares as
+	// under an absolute clone dir, yet the process resolves it against the
+	// daemon's own cwd. Fail closed when it cannot be made absolute.
+	absCwd, absErr := filepath.Abs(spec.Cwd)
+	switch {
+	case cl != nil:
+		if runtime != config.RuntimeBox {
+			// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+			return nil, fmt.Errorf("%w: profile %q is a clone-mode profile, so it can only run in a box, never on the host tier",
+				box.ErrUnboxableWorkspace, spec.Agent)
+		}
+		if ch == nil {
+			return nil, fmt.Errorf("%w: clone mode is not available on this host (Linux only)", box.ErrBoxUnavailable)
+		}
+		if absErr != nil || absCwd != cl.Dir {
+			return nil, fmt.Errorf("%w: profile %q runs only in its clone %s, not %s", box.ErrUnboxableWorkspace, spec.Agent, cl.Dir, spec.Cwd)
+		}
+	case runtime != config.RuntimeBox && ch != nil:
+		if absErr != nil {
+			return nil, fmt.Errorf("%w: cannot resolve working directory %q: %v", box.ErrBoxOwned, spec.Cwd, absErr)
+		}
+		if reason, owned := ch.BoxOwned(absCwd); owned {
+			return nil, fmt.Errorf("%w: %s", box.ErrBoxOwned, reason)
+		}
+	}
+
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
@@ -1043,6 +1116,21 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		if err := boxes.Prepare(context.Background()); err != nil {
 			return nil, err
 		}
+	}
+
+	// The clone is made (or verified) on the host only after every cheap
+	// refusal above, and before the box exists: Wrap's mounts are fixed at
+	// container start. Creating a repo copy can take minutes; the error is
+	// returned as is because it already carries its own remedy.
+	var cloneMounts *box.CloneMounts
+	if cl != nil {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		cm, err := ch.Prepare(cctx, *cl, acct.IsDefault)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		cloneMounts = &cm
 	}
 
 	// The bundle is resolved BEFORE Build: its flags must sit ahead of the "--"
@@ -1101,7 +1189,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts}
 		var bm []box.Mount
 		var benv, penv []string
 		if binding != nil {

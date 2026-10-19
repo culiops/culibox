@@ -2784,6 +2784,10 @@ let pfExplicitBox = false;
 // The stored profile's box override (image). The editor has no box field, so it
 // is carried through unchanged; see boxToSend.
 let pfLoadedBox = null;
+// The stored profile as loaded (GET /api/profiles/{name}, the full config): the
+// editor has no clone fields, so clone_of/clone_share are carried unchanged; see
+// cloneToSend.
+let pfLoadedClone = null;
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
@@ -2793,6 +2797,7 @@ function fillForm(p) {
   // the instance default.
   pfExplicitBox = p.runtime === "box";
   pfLoadedBox = p.box || null;
+  pfLoadedClone = p;
   renderPfRuntime(segFromRuntime(p.runtime));
   renderPfAccount(p.account || "");
   $("pf-args").value = (p.args || []).join("\n");
@@ -2878,6 +2883,7 @@ function readForm() {
   if (rt) p.runtime = rt;
   const bx = boxToSend(pfLoadedBox);
   if (bx) p.box = bx;
+  Object.assign(p, cloneToSend(pfLoadedClone));
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);

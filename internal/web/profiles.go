@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,12 +77,23 @@ type ProfileManager struct {
 	// accounts validates a profile's agent account on save; nil = only the
 	// default account exists. Spawn-time checkAccount stays the authority.
 	accounts launcher.AccountResolver
+	// cloneCheck is the disk-side check of a clone profile's repo (clone.CheckOf,
+	// wired at boot); nil = pure validation only. Spawn re-checks.
+	cloneCheck func(config.Clone) error
 }
 
 // SetAccounts installs the account resolver used by Save. Call at boot.
 func (m *ProfileManager) SetAccounts(r launcher.AccountResolver) {
 	m.mu.Lock()
 	m.accounts = r
+	m.mu.Unlock()
+}
+
+// SetCloneCheck installs the save-time check of a clone profile's repo. Call
+// at boot; nil leaves only the pure validation.
+func (m *ProfileManager) SetCloneCheck(f func(config.Clone) error) {
+	m.mu.Lock()
+	m.cloneCheck = f
 	m.mu.Unlock()
 }
 
@@ -223,6 +235,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 			}
 		}
 	}
+	if err := m.checkClone(p); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.checkAccount(p); err != nil {
@@ -233,6 +248,25 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	}
 	m.apply(m.merged())
 	return nil
+}
+
+// checkClone is the save-time form of the clone checks: a clone profile must
+// run boxed, and its repo must pass the installed disk check. Spawn re-checks.
+func (m *ProfileManager) checkClone(p config.AgentConfig) error {
+	c, err := p.Clone()
+	if err != nil || c == nil {
+		return err
+	}
+	if rt := (config.Config{DefaultRuntime: m.defaultRuntime}).RuntimeFor(p); rt != config.RuntimeBox {
+		return errors.New(`clone mode needs runtime "box" (this instance defaults to host)`)
+	}
+	m.mu.Lock()
+	check := m.cloneCheck
+	m.mu.Unlock()
+	if check == nil {
+		return nil
+	}
+	return check(*c)
 }
 
 // checkAccount is the early, friendly form of launcher.checkAccount: it rejects

@@ -1,7 +1,11 @@
 package web
 
 import (
+	"bytes"
+	"encoding/json"
+	"log"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -103,5 +107,65 @@ func TestProfileAWSBindingRoundTripsThroughTheAPI(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("GET lost %s: %s", want, rec.Body)
 		}
+	}
+}
+
+func TestProfilesAPIShareWarnings(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+	s := &Server{Profiles: pm}
+	body := func(share string) string {
+		return `{"name":"cl","bin":"claude","runtime":"box","clone_of":"/home/u/repo","default_cwd":"/home/u/clones/repo"` + share + `}`
+	}
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body(`,"clone_share":[".env"]`))))
+	if rec.Code != 201 {
+		t.Fatalf("POST code %d body %s", rec.Code, rec.Body)
+	}
+	var created struct {
+		Name     string   `json:"name"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.Name != "cl" || len(created.Warnings) != 1 {
+		t.Fatalf("POST body %s (%v), want name cl and 1 warning", rec.Body, err)
+	}
+	if !strings.Contains(logs.String(), created.Warnings[0]) {
+		t.Errorf("the warning must also be logged, log = %q", logs.String())
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/cl", strings.NewReader(body(`,"clone_share":[".env"]`))))
+	var updated struct {
+		Warnings []string `json:"warnings"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &updated) != nil || len(updated.Warnings) != 1 || updated.Warnings[0] != created.Warnings[0] {
+		t.Fatalf("PUT with the share: code %d body %s, want 200 with the same warning", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/cl", strings.NewReader(body(`,"clone_share":["docs"]`))))
+	if rec.Code != 204 || rec.Body.Len() != 0 {
+		t.Fatalf("PUT without a warning: code %d body %q, want 204 and no body", rec.Code, rec.Body)
+	}
+
+	// The editor loads GET /api/profiles/{name}, which carries the clone fields
+	// pfLoadedClone keeps (the list view does not).
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/cl", nil))
+	for _, want := range []string{`"clone_of":"/home/u/repo"`, `"clone_share":["docs"]`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("GET lost %s: %s", want, rec.Body)
+		}
+	}
+
+	// POST without a warning omits the field.
+	rec = httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(strings.Replace(body(""), `"cl"`, `"cl2"`, 1))))
+	if rec.Code != 201 || strings.Contains(rec.Body.String(), "warnings") {
+		t.Fatalf("POST without a warning: code %d body %s, want 201 and no warnings key", rec.Code, rec.Body)
 	}
 }

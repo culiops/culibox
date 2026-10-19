@@ -27,8 +27,10 @@ var hostOnlyEnv = map[string]bool{
 	"CODEX_HOME":        true,
 }
 
-// runArgs builds `docker run -d` for a box. Deny by default: exactly two mounts,
-// and never the docker socket, the host home, or ~/.ssh. The workspace mounts at
+// runArgs builds `docker run -d` for a box. Deny by default: exactly two
+// writable mounts (the workspace and the box home), and never the docker socket,
+// the host home, or ~/.ssh. Every extra bind, the in-place guards and a clone's
+// mounts included, is read-only. The workspace mounts at
 // its identical host path so the file tree, viewer, upload/download and terminal
 // link tokenizing keep working untouched, and agent-printed paths stay clickable.
 // fenced (an AWS binding, or any box when EgressAll is on) adds the egress
@@ -70,6 +72,7 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		args = append(args, "--label", LabelExclusive+"=1")
 	}
 	// Extra binds are always read-only. The caller chooses what, never whether.
+	// That includes a clone-mode box's mounts (BoxKey.Clone): none is writable.
 	for _, mt := range extraRO {
 		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
 	}

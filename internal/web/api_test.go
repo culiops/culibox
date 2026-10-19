@@ -934,6 +934,19 @@ func TestSpawnErrShowsBoxUnavailableMessage(t *testing.T) {
 	}
 }
 
+// ErrBoxOwned names the directory the caller just sent and the way out, so it
+// is shown as a 400 with its message.
+func TestWriteSpawnErrShowsBoxOwned(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeSpawnErr(rec, "claude", fmt.Errorf("%w: /c/clone is inside the clone /c/clone of a clone-mode profile", box.ErrBoxOwned))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "is inside the clone") {
+		t.Fatalf("the reason must reach the user: %s", rec.Body.String())
+	}
+}
+
 type fakeAWS map[string]any
 
 func (f fakeAWS) AWSStatus(id string) (any, bool) { v, ok := f[id]; return v, ok }
