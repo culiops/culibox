@@ -975,7 +975,7 @@ func (m *Manager) runtimeFor(spec launcher.SpawnSpec) (string, error) {
 			}
 		}
 		if asked == config.RuntimeBox {
-			return "", fmt.Errorf("%w: this session asks for runtime box, and this instance has no box layer (see the boot log); choose host explicitly or fix containment", box.ErrBoxUnavailable)
+			return "", fmt.Errorf("%w: this session asks for runtime box, and this instance has no box layer (see the boot log); set the profile's tier to host (or send runtime \"host\") or fix containment", box.ErrBoxUnavailable)
 		}
 		return config.RuntimeHost, nil
 	}

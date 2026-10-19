@@ -63,6 +63,33 @@ test("loadProfiles reports success/failure and keeps the picked profile", () => 
 
 test("saveProfile surfaces a failed profile reload", () => {
   const { text } = body("saveProfile");
-  assert.match(text, /if \(!\(await loadProfiles\(\)\)\) throw new Error\(/);
+  assert.match(text, /if \(!\(await loadProfiles\(false\)\)\) throw new Error\(/);
   assert.match(text, /Saved, but reloading it failed: /);
+});
+
+test("loadProfiles times out instead of hanging the spawn dialog", () => {
+  const { text } = body("loadProfiles");
+  assert.match(text, /api\("\/api\/profiles",\s*\{\s*signal: AbortSignal\.timeout\(5000\)\s*\}\)/);
+});
+
+test("openSpawnDialog ignores a second open while the first awaits the refetch", () => {
+  const { text } = body("openSpawnDialog");
+  const guard = text.search(/if \(spawnOpening\) return;/);
+  const set = text.search(/spawnOpening = true;/);
+  const load = text.indexOf("await loadProfiles(");
+  const fin = text.search(/finally\s*\{\s*spawnOpening = false;/);
+  assert.ok(guard >= 0 && guard < set && set < load, "guard, then set, then the await");
+  assert.ok(fin > load, "the guard is released in a finally after the await");
+  assert.match(APP, /let spawnOpening = false;/);
+});
+
+test("saveProfile's reload does not schedule a background retry", () => {
+  const { text } = body("saveProfile");
+  assert.match(text, /await loadProfiles\(false\)/);
+  assert.doesNotMatch(text, /loadProfiles\(\)/);
+});
+
+test("the editor passes whether a box layer exists to runtimeToSend", () => {
+  const { text } = body("readForm");
+  assert.match(text, /runtimeToSend\(segValue\(\$\("pf-runtime"\)\), pfStoredRuntime, !!boxRuntime\)/);
 });

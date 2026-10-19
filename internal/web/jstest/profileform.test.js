@@ -74,10 +74,19 @@ test("the editor lights the tier the profile really runs on", () => {
 });
 
 test("the editor always sends the tier it shows", () => {
-  assert.strictEqual(runtimeToSend("box", ""), "box");
-  assert.strictEqual(runtimeToSend("host", "box"), "host");
-  assert.strictEqual(runtimeToSend("", "host"), "host");
-  assert.strictEqual(runtimeToSend("", ""), "");
+  assert.strictEqual(runtimeToSend("box", "", true), "box");
+  assert.strictEqual(runtimeToSend("host", "box", true), "host");
+  assert.strictEqual(runtimeToSend("", "host", true), "host");
+  assert.strictEqual(runtimeToSend("", "", true), "");
+});
+
+test("with no box layer, an unset tier lit as box stays unset", () => {
+  // The seg lights box for a blank profile whose default resolves to box; sending
+  // it would pin a profile that cannot spawn on an instance without containment.
+  assert.strictEqual(runtimeToSend("box", "", false), "");
+  assert.strictEqual(runtimeToSend("box", "box", false), "box"); // explicit stays explicit
+  assert.strictEqual(runtimeToSend("host", "", false), "host");
+  assert.strictEqual(runtimeToSend("box", "", true), "box");
 });
 
 test("boxToSend returns the stored image override and nothing else", () => {

@@ -207,6 +207,20 @@ func TestSpawnWithoutBoxesFallsBackToHost(t *testing.T) {
 	}
 }
 
+// A session that asks for box on an instance without a box layer is refused,
+// and the message names the way out (the editor's tier, or the request's runtime).
+func TestSpawnAskingBoxWithoutBoxesIsRefusedActionably(t *testing.T) {
+	m := NewManager(tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeHost}, nil, 1<<16, time.Minute)
+	_, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})
+	if !errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("want ErrBoxUnavailable, got %v", err)
+	}
+	want := `this session asks for runtime box, and this instance has no box layer (see the boot log); set the profile's tier to host (or send runtime "host") or fix containment`
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("message = %q, want it to contain %q", err.Error(), want)
+	}
+}
+
 func TestKilledBoxedSessionReleasesItsBoxExactlyOnce(t *testing.T) {
 	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox})

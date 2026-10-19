@@ -2467,7 +2467,9 @@ let profilesLoaded = false;
 // both need to tell those apart.
 async function loadProfiles(retry = true) {
   try {
-    profiles = (await api("/api/profiles")) || [];
+    // A stalled response must not hang openSpawnDialog, which awaits this: a
+    // timeout is just a failed refresh.
+    profiles = (await api("/api/profiles", { signal: AbortSignal.timeout(5000) })) || [];
     profilesLoaded = true;
     // replaceChildren resets a <select> to its first option, so a refetch while
     // the user has a profile picked would silently switch it.
@@ -2891,7 +2893,7 @@ function readForm() {
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an
   // AWS binding saved on the host tier.
-  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime);
+  const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !!boxRuntime);
   if (rt) p.runtime = rt;
   const bx = boxToSend(pfLoadedBox);
   if (bx) p.box = bx;
@@ -2941,7 +2943,9 @@ async function saveProfile() {
   // stored profile can only disagree on screen if this step is skipped. The
   // write succeeded, so a failure here must not say "Save failed".
   try {
-    if (!(await loadProfiles())) throw new Error("the profile list could not be refreshed");
+    // No background retry: one that succeeds later would leave the "Saved, but
+    // reloading it failed" line on screen next to a good list.
+    if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
     selectedProfile = p.name;
     fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
   } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
@@ -3577,8 +3581,18 @@ function updateRuntimeWarning() {
 // from profiles[], and the request value overrides the server's profile, so a
 // stale copy would silently revert an edit made from another tab. A failed
 // refresh still opens (the old copy is usable) but says so.
+// A second open while the first awaits the refetch would run the body twice, and
+// the second pass would re-apply profile defaults over what was typed meanwhile.
+let spawnOpening = false;
 async function openSpawnDialog(preselectAgent, prefill) {
-  const fresh = await loadProfiles(false);
+  if (spawnOpening) return;
+  spawnOpening = true;
+  let fresh;
+  try {
+    fresh = await loadProfiles(false);
+  } finally {
+    spawnOpening = false;
+  }
   const last = loadLastSpawn();
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent

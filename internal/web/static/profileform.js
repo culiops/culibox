@@ -83,7 +83,12 @@ function segFromRuntime(stored, resolved) {
 // explicitly is what keeps a profile on the tier the editor lit when the
 // instance default is host — a blank would hand the tier back to that default.
 // The stored value is a defensive fallback only; the seg always has a value.
-function runtimeToSend(seg, stored) {
+// One exception: with no box layer, a profile naming no tier is lit "box" only
+// because a blank resolves to box there. Pinning it would make the profile
+// unspawnable (the server refuses an explicit box), so it stays blank and goes
+// back to box once containment exists. The seg still offers host.
+function runtimeToSend(seg, stored, boxAvailable) {
+  if (!boxAvailable && !stored && seg === "box") return "";
   if (seg === "box" || seg === "host") return seg;
   return stored === "box" || stored === "host" ? stored : "";
 }
