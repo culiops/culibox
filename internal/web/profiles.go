@@ -253,6 +253,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	if err := config.ValidateProfile(p, m.optDefs); err != nil {
 		return err
 	}
+	// ValidateProfile lets a whitespace-only box.image through; it is no image,
+	// so drop it rather than store a blank the config layer would ignore.
+	p.Box = config.BoxConfig{}
 	if p.DefaultCwd != "" {
 		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(p)
 		if rt == config.RuntimeBox {

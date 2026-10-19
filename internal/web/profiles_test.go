@@ -452,6 +452,17 @@ func TestProfileSaveRefusesBoxImage(t *testing.T) {
 	}
 }
 
+func TestProfileSaveDropsBlankBoxImage(t *testing.T) {
+	fs := newFakeStore()
+	m := NewProfileManager(nil, nil, "", nil, fs, func([]config.AgentConfig) {})
+	if err := m.Save(config.AgentConfig{Name: "p", Bin: "bash", Box: config.BoxConfig{Image: "  "}}); err != nil {
+		t.Fatalf("Save with a blank box.image: %v", err)
+	}
+	if p := fs.m["p"]; p.Box != (config.BoxConfig{}) {
+		t.Fatalf("stored Box = %+v, want it cleared", p.Box)
+	}
+}
+
 func TestLegacyBoxImageLoadsIgnoredAndLogged(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)

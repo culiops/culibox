@@ -172,7 +172,7 @@ type Config struct {
 	DefaultRuntime    string `json:"default_runtime,omitempty"`      // box(default)|host
 	RepliesEnabled    bool   `json:"replies_enabled,omitempty"`      // kill-switch for reply + remote Yes/No; absent = off
 	BundleSource      string `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
-	BoxImage          string `json:"box_image,omitempty"`            // fallback when an agent omits box.image
+	BoxImage          string `json:"box_image,omitempty"`            // the image every box runs; DefaultBoxImage when unset
 	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	BoxPidsLimit      int    `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
 	BoxTmpSize        string `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
@@ -223,10 +223,10 @@ func (c Config) BoxInstance() string {
 	return "default"
 }
 
-// DefaultBoxImage is the box image when neither the agent nor the config names one.
+// DefaultBoxImage is the box image every box runs when the config names none.
 const DefaultBoxImage = "culiops/agent-box:base"
 
-// BoxImageOrDefault is the configured fallback box image, or DefaultBoxImage.
+// BoxImageOrDefault is the instance-wide box image (box_image), or DefaultBoxImage.
 func (c Config) BoxImageOrDefault() string {
 	if c.BoxImage != "" {
 		return c.BoxImage
