@@ -76,6 +76,7 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 	for _, o := range cfg.Options {
 		defs[o.Key] = o
 	}
+	p.Box = config.BoxConfig{} // retired per-profile box.image: ignored on load, as in the daemon
 	if err := config.ValidateProfile(p, defs); err != nil {
 		return fail("%v", err)
 	}

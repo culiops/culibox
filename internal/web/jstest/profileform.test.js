@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend, replyableToSend } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -89,12 +89,26 @@ test("with no box layer, an unset tier lit as box stays unset", () => {
   assert.strictEqual(runtimeToSend("box", "", true), "box");
 });
 
-test("boxToSend returns the stored image override and nothing else", () => {
-  assert.deepStrictEqual(boxToSend({ image: "culiops/agent-box:m3a-test" }), { image: "culiops/agent-box:m3a-test" });
-  assert.deepStrictEqual(boxToSend({ image: "  img:1  " }), { image: "img:1" });
-  for (const v of [undefined, null, {}, { image: "" }, { image: "   " }, { image: 42 }]) {
-    assert.strictEqual(boxToSend(v), undefined, JSON.stringify(v));
+// The retired per-profile box.image: the server refuses a save that carries it,
+// so the editor must never send `box`. app.js needs a DOM and cannot be
+// require()d, so pin it at the source level (see profile-save-refill.test.js).
+test("readForm never sends a box override", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const app = fs.readFileSync(path.join(__dirname, "..", "static", "app.js"), "utf8");
+  const m = /function readForm\s*\(/.exec(app);
+  assert.ok(m, "readForm not found in app.js");
+  const open = app.indexOf("{", app.indexOf(")", m.index));
+  let depth = 0, end = -1;
+  for (let i = open; i < app.length && end < 0; i++) {
+    if (app[i] === "{") depth++;
+    else if (app[i] === "}" && --depth === 0) end = i;
   }
+  assert.ok(end > open, "unbalanced braces in readForm");
+  const b = app.slice(open, end + 1);
+  assert.doesNotMatch(b, /\bp\.box\b/);
+  assert.doesNotMatch(b, /boxToSend/);
+  assert.doesNotMatch(b, /pfLoadedBox/);
 });
 
 test("cloneToSend returns the stored clone fields and nothing else", () => {

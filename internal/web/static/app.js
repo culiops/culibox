@@ -2791,9 +2791,6 @@ let pfEnvRows = [];
 // The stored profile's own runtime string ("" when it names none), kept for
 // runtimeToSend's fallback.
 let pfStoredRuntime = "";
-// The stored profile's box override (image). The editor has no box field, so it
-// is carried through unchanged; see boxToSend.
-let pfLoadedBox = null;
 // The stored profile as loaded (GET /api/profiles/{name}, the full config): the
 // editor has no clone fields, so clone_of/clone_share are carried unchanged; see
 // cloneToSend.
@@ -2803,7 +2800,6 @@ function fillForm(p) {
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
   pfStoredRuntime = p.runtime || "";
-  pfLoadedBox = p.box || null;
   pfLoadedClone = p;
   // A profile naming no tier runs on the instance default; /api/profiles has
   // already resolved it, so the seg lights the tier it really runs on.
@@ -2891,8 +2887,6 @@ function readForm() {
   // AWS binding saved on the host tier.
   const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime);
   if (rt) p.runtime = rt;
-  const bx = boxToSend(pfLoadedBox);
-  if (bx) p.box = bx;
   Object.assign(p, cloneToSend(pfLoadedClone));
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;

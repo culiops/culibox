@@ -396,15 +396,6 @@ func TestValidate_BoxImage(t *testing.T) {
 			t.Fatalf("box_image %q must be refused for its image, got %v", bad, err)
 		}
 	}
-	// the per-agent override reaches the same docker argv
-	c := base()
-	c.Agents[0].Box.Image = "-v"
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "box image") {
-		t.Fatalf("per-agent box.image \"-v\" must be refused: %v", err)
-	}
-	if err := ValidateProfile(c.Agents[0], nil); err == nil || !strings.Contains(err.Error(), "box image") {
-		t.Fatalf("a profile with box.image \"-v\" must be refused: %v", err)
-	}
 }
 
 func TestBoxInstanceDefaultsToDefault(t *testing.T) {
@@ -413,5 +404,26 @@ func TestBoxInstanceDefaultsToDefault(t *testing.T) {
 	}
 	if got := (Config{EnvLabel: "PROD"}).BoxInstance(); got != "PROD" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+const boxImageRefusal = `profile "p": box.image is not per-profile; every box runs the instance-wide box_image (set it in the config)`
+
+func TestValidateProfileRefusesBoxImage(t *testing.T) {
+	err := ValidateProfile(AgentConfig{Name: "p", Bin: "bash", Box: BoxConfig{Image: "x:1"}}, nil)
+	if err == nil || err.Error() != boxImageRefusal {
+		t.Fatalf("got %v, want %q", err, boxImageRefusal)
+	}
+	if err := ValidateProfile(AgentConfig{Name: "p", Bin: "bash", Box: BoxConfig{Image: ""}}, nil); err != nil {
+		t.Fatalf("an empty box.image must stay valid, got %v", err)
+	}
+}
+
+// A config-file agent carrying a legacy box.image is ignored (and logged by the
+// profile manager), so even an unusable ref no longer fails the whole config.
+func TestValidateIgnoresAgentBoxImage(t *testing.T) {
+	c := Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "a", Bin: "a", Box: BoxConfig{Image: "--privileged"}}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("legacy agent box.image must not fail Validate, got %v", err)
 	}
 }

@@ -1,7 +1,9 @@
 package web
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,5 +437,67 @@ func TestSaveCloneProfileRunsCloneCheck(t *testing.T) {
 	pm.SetCloneCheck(nil)
 	if err := pm.Save(p); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestProfileSaveRefusesBoxImage(t *testing.T) {
+	fs := newFakeStore()
+	m := NewProfileManager(nil, nil, "", nil, fs, func([]config.AgentConfig) {})
+	err := m.Save(config.AgentConfig{Name: "p", Bin: "bash", Box: config.BoxConfig{Image: "x:1"}})
+	if err == nil || !strings.Contains(err.Error(), "box.image is not per-profile") {
+		t.Fatalf("got %v, want the box.image refusal", err)
+	}
+	if _, ok := fs.m["p"]; ok {
+		t.Fatal("a refused profile must not reach the store")
+	}
+}
+
+func TestProfileSaveDropsBlankBoxImage(t *testing.T) {
+	fs := newFakeStore()
+	m := NewProfileManager(nil, nil, "", nil, fs, func([]config.AgentConfig) {})
+	if err := m.Save(config.AgentConfig{Name: "p", Bin: "bash", Box: config.BoxConfig{Image: "  "}}); err != nil {
+		t.Fatalf("Save with a blank box.image: %v", err)
+	}
+	if p := fs.m["p"]; p.Box != (config.BoxConfig{}) {
+		t.Fatalf("stored Box = %+v, want it cleared", p.Box)
+	}
+}
+
+func TestLegacyBoxImageLoadsIgnoredAndLogged(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	fs := newFakeStore()
+	fs.m["old"] = config.AgentConfig{Name: "old", Bin: "bash", Box: config.BoxConfig{Image: "x:1"}}
+	seeds := []config.AgentConfig{{Name: "seed", Bin: "bash", Box: config.BoxConfig{Image: "y:2"}}}
+	var applied []config.AgentConfig
+	m := NewProfileManager(seeds, nil, "", nil, fs, func(a []config.AgentConfig) { applied = a })
+
+	for _, want := range []string{
+		`profile "old": ignoring box.image "x:1"; boxes run the instance-wide box_image`,
+		`profile "seed": ignoring box.image "y:2"; boxes run the instance-wide box_image`,
+	} {
+		if n := strings.Count(buf.String(), want); n != 1 {
+			t.Errorf("want exactly one log line %q, got %d in %q", want, n, buf.String())
+		}
+	}
+	if p, ok := m.Get("old"); !ok || p.Box != (config.BoxConfig{}) {
+		t.Fatalf("Get(old) = %+v, %v; want Box cleared", p, ok)
+	}
+	if len(applied) != 2 {
+		t.Fatalf("apply got %d profiles, want 2", len(applied))
+	}
+	for _, p := range applied {
+		if p.Box != (config.BoxConfig{}) {
+			t.Errorf("apply profile %q kept Box %+v", p.Name, p.Box)
+		}
+	}
+	if v := m.Views(); len(v) != 2 {
+		t.Fatalf("Views = %+v, want both profiles listed", v)
+	}
+	// Later merges (any Get/Views/Save) do not repeat the line.
+	if n := strings.Count(buf.String(), "ignoring box.image"); n != 2 {
+		t.Errorf("log lines after later reads = %d, want 2 total", n)
 	}
 }

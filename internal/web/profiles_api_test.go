@@ -169,3 +169,18 @@ func TestProfilesAPIShareWarnings(t *testing.T) {
 		t.Fatalf("POST without a warning: code %d body %s, want 201 and no warnings key", rec.Code, rec.Body)
 	}
 }
+
+func TestPUTProfileWithBoxImageIs400(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(`{"name":"p","bin":"bash"}`)))
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/p", strings.NewReader(`{"name":"p","bin":"bash","box":{"image":"x:1"}}`)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "box_image") {
+		t.Fatalf("PUT with box.image: code %d body %s, want 400 naming box_image", rec.Code, rec.Body)
+	}
+}

@@ -289,3 +289,15 @@ func TestRunCloneCancelsOnInterrupt(t *testing.T) {
 		t.Fatalf("cancelled=%v rc=%d; SIGINT must cancel the fetch context", cancelled, rc)
 	}
 }
+
+// A legacy profile still carrying the retired box.image loads with it ignored
+// everywhere else; the clone CLI reads the raw store/config, so it must too.
+func TestRunCloneIgnoresLegacyBoxImage(t *testing.T) {
+	p := cloneProfile("old", "/src/r", "/clones/r")
+	p.Box = config.BoxConfig{Image: "x:1"}
+	e := newCloneEnv(t, []config.AgentConfig{p}, nil)
+	rc, out := runCloneArgs(e, "old", "b", "main")
+	if rc != 0 {
+		t.Fatalf("rc=%d out=%q, want a legacy box.image ignored", rc, out)
+	}
+}

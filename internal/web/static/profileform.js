@@ -93,18 +93,10 @@ function runtimeToSend(seg, stored, boxAvailable) {
   return stored === "box" || stored === "host" ? stored : "";
 }
 
-// boxToSend: the stored profile's box override, sent back on save. The editor
-// has no box field, and a save that omits it erases the override (and so
-// changes the box): follow-up A4. Only a non-empty image is an override.
-function boxToSend(loaded) {
-  const img = loaded && typeof loaded.image === "string" ? loaded.image.trim() : "";
-  return img ? { image: img } : undefined;
-}
-
 // cloneToSend: the stored profile's clone fields, sent back on save. The editor
-// has no clone field either (same trap as boxToSend), and a save that omits
-// clone_of turns the profile into a plain boxed one. Only a non-empty clone_of
-// is a clone; clone_share is a copy and omitted when the profile has none.
+// has no clone field, and a save that omits clone_of turns the profile into a
+// plain boxed one. Only a non-empty clone_of is a clone; clone_share is a copy
+// and omitted when the profile has none.
 function cloneToSend(loaded) {
   if (!loaded || typeof loaded.clone_of !== "string" || !loaded.clone_of) return undefined;
   const out = { clone_of: loaded.clone_of };
@@ -122,5 +114,5 @@ function replyableToSend(rowVisible, checked, stored) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, boxToSend, cloneToSend, replyableToSend };
+  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend };
 }
