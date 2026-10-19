@@ -290,8 +290,8 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 5 {
-		t.Errorf("found %d downloads, want at least 5 (aws, terraform, go, abduco, codebase-memory)", downloads)
+	if downloads < 15 {
+		t.Errorf("found %d downloads, want at least 15 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet)", downloads)
 	}
 }
 
@@ -625,5 +625,192 @@ func TestCheckForRemote(t *testing.T) {
 		if strings.Contains(msg, "-rebuild") {
 			t.Errorf("%s: a remote image is never rebuilt, msg %q", c.name, msg)
 		}
+	}
+}
+
+// The base is pinned by digest, so a rebuild cannot silently follow a moved
+// tag. Every stage carries the same digest; bumping it is a manual edit.
+func TestDockerfilePinsBaseByDigest(t *testing.T) {
+	from := regexp.MustCompile(`^FROM node:24-bookworm-slim@sha256:([0-9a-f]{64})( AS \S+)?$`)
+	digest, n := "", 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "FROM ") {
+			continue
+		}
+		n++
+		m := from.FindStringSubmatch(in)
+		if m == nil {
+			t.Errorf("FROM is not node:24-bookworm-slim pinned by sha256 digest: %q", in)
+			continue
+		}
+		if digest == "" {
+			digest = m[1]
+		} else if m[1] != digest {
+			t.Errorf("FROM digests differ: %s vs %s", digest, m[1])
+		}
+	}
+	if n == 0 {
+		t.Fatal("no FROM instruction found")
+	}
+}
+
+// toolBatch is the SRE/k8s batch: every tool has a version ARG, both per-arch
+// sums, and a RUN whose version check greps the pinned version.
+var toolBatch = []struct{ arg, check string }{
+	{"KUBECTL", "kubectl version --client"},
+	{"HELM", "helm version"},
+	{"KUBECONFORM", "kubeconform -v"},
+	{"STERN", "stern --version"},
+	{"YQ", "yq --version"},
+	{"SHELLCHECK", "shellcheck --version"},
+	{"TFLINT", "tflint --version"},
+	{"TFLINT_RULESET_AWS", "tflint --config /etc/agent-box/tflint.hcl --version"},
+	{"JSONNET", "jsonnet --version"},
+	{"JSONNET", "jsonnetfmt --version"},
+}
+
+func TestDockerfileInstallsToolBatch(t *testing.T) {
+	df := string(dockerfile)
+	seen := map[string]bool{}
+	for _, tb := range toolBatch {
+		if !seen[tb.arg] {
+			seen[tb.arg] = true
+			for _, suffix := range []string{"_VERSION=", "_SHA256_AMD64=", "_SHA256_ARM64="} {
+				if !strings.Contains(df, "\nARG "+tb.arg+suffix) {
+					t.Errorf("Dockerfile has no ARG %s%s", tb.arg, suffix)
+				}
+			}
+		}
+		grep := regexp.MustCompile(regexp.QuoteMeta(tb.check) + `\s*\|\s*grep -q "[^"]*\$\{` + tb.arg + `_VERSION\}`)
+		found := false
+		for _, in := range dockerfileInstructions() {
+			if strings.HasPrefix(in, "RUN ") && grep.MatchString(in) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no RUN checks %q and greps ${%s_VERSION}", tb.check, tb.arg)
+		}
+	}
+}
+
+func TestDockerfileAptExtras(t *testing.T) {
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "apt-get install") {
+			continue
+		}
+		ok := true
+		for _, pkg := range []string{"make", "openssl", "dnsutils", "netcat-openbsd"} {
+			if !regexp.MustCompile(`\s` + pkg + `(\s|$)`).MatchString(in) {
+				ok = false
+			}
+		}
+		if ok {
+			if !strings.Contains(in, "rm -rf /var/lib/apt/lists/*") {
+				t.Errorf("apt extras block leaves the apt lists in the image: %s", in)
+			}
+			return
+		}
+	}
+	t.Error("no single RUN apt-get install names make, openssl, dnsutils and netcat-openbsd")
+}
+
+// Pins that move often sit after the marker so a bump rebuilds only the tail;
+// the heavy, rarely bumped toolchains sit before it.
+func TestDockerfileFrequentPinsLast(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	if strings.Count(df, marker) != 1 {
+		t.Fatalf("want exactly one %q", marker)
+	}
+	m := strings.Index(df, marker)
+	chromium := strings.Index(df, "apt-get install -y --no-install-recommends chromium")
+	if chromium < 0 || m < chromium {
+		t.Error("the marker must come after the chromium/playwright RUN")
+	}
+	var after []string
+	for _, tb := range toolBatch {
+		for _, suffix := range []string{"_VERSION=", "_SHA256_AMD64=", "_SHA256_ARM64="} {
+			after = append(after, tb.arg+suffix)
+		}
+	}
+	for _, line := range strings.Split(df, "\n") {
+		if strings.HasPrefix(line, "ARG GH_") {
+			after = append(after, strings.SplitAfter(strings.TrimPrefix(line, "ARG "), "=")[0])
+		}
+	}
+	for _, a := range after {
+		i := strings.Index(df, "\nARG "+a)
+		if i < 0 {
+			t.Errorf("no ARG %s", a)
+		} else if i < m {
+			t.Errorf("ARG %s is before the marker", a)
+		}
+	}
+	for _, a := range []string{"GO_VERSION=", "AWSCLI_VERSION=", "PLAYWRIGHT_MCP_VERSION="} {
+		i := strings.Index(df, "\nARG "+a)
+		if i < 0 || i > m {
+			t.Errorf("ARG %s must be before the marker", a)
+		}
+	}
+}
+
+// tflint's AWS ruleset is baked in; the box home is a bind mount, so the
+// per-home config and plugin link are made by the entrypoint. No env override
+// is set: both outrank a repo's own config or init path.
+func TestDockerfileTflintAWSDefaultIsAHomeFallback(t *testing.T) {
+	df := string(dockerfile)
+	for _, banned := range []string{"TFLINT_CONFIG_FILE", "TFLINT_PLUGIN_DIR"} {
+		if strings.Contains(df, banned) {
+			t.Errorf("Dockerfile mentions %s, which outranks a repo's own tflint setup", banned)
+		}
+	}
+	var hcl, entry string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /etc/agent-box/tflint.hcl") {
+			hcl = in
+		}
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /usr/local/bin/agent-box-entrypoint") {
+			entry = in
+		}
+	}
+	if hcl == "" {
+		t.Fatal("no RUN writes /etc/agent-box/tflint.hcl")
+	}
+	for _, want := range []string{`plugin "aws"`, `enabled = true`, `version = "%s"`,
+		`"${TFLINT_RULESET_AWS_VERSION}"`, `source = "github.com/terraform-linters/tflint-ruleset-aws"`} {
+		if !strings.Contains(hcl, want) {
+			t.Errorf("tflint.hcl RUN lacks %s: %s", want, hcl)
+		}
+	}
+	if entry == "" {
+		t.Fatal("no RUN writes the entrypoint")
+	}
+	for _, want := range []string{
+		`[ -e "$HOME/.tflint.hcl" ] || cp /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"`,
+		`$HOME/.tflint.d/plugins/`,
+		`[ -e "$d" ] ||`,
+		`ln -s "$p" "$d"`,
+		`/opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/`,
+	} {
+		if !strings.Contains(entry, want) {
+			t.Errorf("entrypoint lacks %s: %s", want, entry)
+		}
+	}
+	if !strings.Contains(df, "/opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/${TFLINT_RULESET_AWS_VERSION}") {
+		t.Error("the plugin is not baked at /opt/tflint/plugins/<source>/<version>")
+	}
+}
+
+// The label links the public ghcr package to this repository.
+func TestDockerfileSourceLabel(t *testing.T) {
+	df := string(dockerfile)
+	const label = `LABEL org.opencontainers.image.source="https://github.com/culiops/agent-box"`
+	i := strings.Index(df, label)
+	if i < 0 {
+		t.Fatalf("Dockerfile lacks %s", label)
+	}
+	if last := strings.LastIndex(df, "\nFROM "); i < last {
+		t.Error("the source label must be in the final stage")
 	}
 }
