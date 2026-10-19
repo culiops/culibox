@@ -239,6 +239,60 @@ func TestGhWrapperOwnerResolution(t *testing.T) {
 	}
 }
 
+// URL-form repos (what gh accepts and people paste) are parsed; a value that
+// is present but cannot be read fails closed instead of falling back to the
+// first owner, which for a PAT owner would be the wrong token.
+func TestGhWrapperURLFormRepo(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-gh.js")
+	real := fakeGh(t, "0")
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		env   []string
+		owner string
+		repo  string
+	}{
+		{"-R https", []string{"-R", "https://github.com/CuliOps/agent-box", "pr", "list"}, nil, "CuliOps", "agent-box"},
+		{"-R https .git slash", []string{"-R", "https://github.com/o/r.git/"}, nil, "o", "r"},
+		{"--repo= https", []string{"--repo=https://github.com/o/r"}, nil, "o", "r"},
+		{"GH_REPO scp", []string{"pr", "list"}, []string{"GH_REPO=git@github.com:culiops/agent-box.git"}, "culiops", "agent-box"},
+		{"HOST/O/R", []string{"-R", "github.com/o/r"}, nil, "o", "r"},
+	} {
+		before := len(f.calls())
+		env := append(append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=other"), tc.env...)
+		out, stderr, code := runNode(t, t.TempDir(), "", append([]string{js}, tc.args...), env...)
+		calls := f.calls()
+		if code != 0 || stderr != "" || len(calls) != before+1 || calls[before]["owner"] != tc.owner || calls[before]["repo"] != tc.repo {
+			t.Fatalf("%s: code=%d out=%q stderr=%q calls=%v", tc.name, code, out, stderr, calls)
+		}
+	}
+	// Another host in URL form: the real gh runs unminted.
+	before := len(f.calls())
+	env := append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=other")
+	out, stderr, code := runNode(t, t.TempDir(), "", []string{js, "-R", "https://gitlab.com/a/b", "pr", "list"}, env...)
+	if code != 0 || stderr != "" || !strings.Contains(out, "TOKEN=\n") || len(f.calls()) != before {
+		t.Fatalf("other host: code=%d out=%q stderr=%q calls=%v", code, out, stderr, f.calls())
+	}
+	// Unparseable: fail closed, no broker call, no fallback to AGENTBOX_GH_OWNERS.
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  []string
+	}{
+		{"-R no repo", []string{"-R", "https://github.com/a"}, nil},
+		{"--repo= no repo", []string{"--repo=https://github.com/a/"}, nil},
+		{"GH_REPO garbage", []string{"pr", "list"}, []string{"GH_REPO=https://github.com/"}},
+	} {
+		before := len(f.calls())
+		env := append(append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=other"), tc.env...)
+		out, stderr, code := runNode(t, t.TempDir(), "", append([]string{js}, tc.args...), env...)
+		if code != 1 || out != "" || !strings.Contains(stderr, "cannot read the repository in") || !strings.Contains(stderr, "use -R OWNER/REPO") || len(f.calls()) != before {
+			t.Fatalf("%s: code=%d out=%q stderr=%q calls=%v", tc.name, code, out, stderr, f.calls())
+		}
+	}
+}
+
 // A target on another host than github.com must never get a github.com token:
 // the real gh runs unminted (no broker call, no GH_TOKEN).
 func TestGhWrapperOtherHostRunsUnminted(t *testing.T) {

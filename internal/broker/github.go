@@ -77,13 +77,17 @@ type ghFlight struct{ dead bool }
 func (b *Broker) SetGitHub(m GitHubMinter) { b.gh = m }
 
 // CheckGitHub verifies, for every distinct App a binding names, that the host
-// can mint with it (key readable, App known).
+// can mint with it (key readable, App known). An owner that uses a PAT entry
+// needs no App, so a binding of only those passes with no minter configured.
 func (b *Broker) CheckGitHub(g config.GitHubBinding) error {
-	if b.gh == nil {
-		return errors.New("GitHub is not configured")
-	}
 	seen := map[string]bool{}
 	for _, o := range g.Owners {
+		if o.Token != "" {
+			continue
+		}
+		if b.gh == nil {
+			return errors.New("GitHub is not configured")
+		}
 		if seen[o.App] {
 			continue
 		}
@@ -260,10 +264,6 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding") // same text for every reason: no oracle to the box
 		return
 	}
-	if b.gh == nil {
-		replyErr(w, http.StatusServiceUnavailable, "GitHub is not configured on this agent-box host")
-		return
-	}
 
 	var req ghTokenRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGitHubBody))
@@ -301,12 +301,30 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		deny("owner not bound")
 		return
 	}
+	pat := entry.Token != ""
+	if pat && req.Repo == "" {
+		// A PAT is not narrowed at GitHub, so the repos check below is the only
+		// scope there is: an empty repo would skip it.
+		row := base
+		row.Subject, row.Outcome, row.Error = entry.Owner, OutcomeDeniedScope, "repo required for a PAT owner"
+		b.recordDenied(row)
+		replyErr(w, http.StatusForbidden, "name the repository: a personal access token is not scoped by agent-box")
+		return
+	}
 	if req.Repo != "" && !hasRepo(entry.Repos, req.Repo) {
 		deny("repo not bound")
 		return
 	}
 	base.Subject = entry.Owner
 	base.Repos = len(entry.Repos)
+	if pat {
+		b.serveGitHubPAT(w, base, sv, entry, sid, now, deny)
+		return
+	}
+	if b.gh == nil {
+		replyErr(w, http.StatusServiceUnavailable, "GitHub is not configured on this agent-box host")
+		return
+	}
 
 	key := ghKey{sid, strings.ToLower(entry.Owner)}
 	b.mu.Lock()
@@ -389,6 +407,54 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	writeGitHubToken(w, m.Value, m.ExpiresAt)
 }
 
+// serveGitHubPAT answers for an owner bound to a PAT entry: the value is read
+// at fetch time, never cached, listed or revoked (agent-box does not own it),
+// and the fetched row is written before it leaves (fail closed). It counts
+// against the static bucket: with no cache every git or gh call lands here.
+func (b *Broker) serveGitHubPAT(w http.ResponseWriter, base Row, sv SessionView, owner config.GitHubOwner,
+	sid string, now time.Time, deny func(string)) {
+	base.Entry = owner.Token
+	var pat config.StaticToken
+	found := false
+	for _, e := range sv.PATs {
+		if e.Name == owner.Token {
+			pat, found = e, true
+			break
+		}
+	}
+	if !found {
+		deny("token entry not defined")
+		return
+	}
+	b.mu.Lock()
+	allowed := b.allowLocked(sid, bucketStatic, now)
+	b.mu.Unlock()
+	if !allowed {
+		row := base
+		row.Outcome = OutcomeRateLimited
+		b.recordDenied(row)
+		replyErr(w, http.StatusTooManyRequests, fmt.Sprintf("more than %d token fetches in a minute; slow down", staticFetchesPerMinute))
+		return
+	}
+	value, err := b.resolve.Resolve(pat.Value)
+	if err != nil {
+		msg := sanitize(err.Error()) // names the reference, never the value
+		row := base
+		row.Outcome, row.Error = OutcomeUnresolved, msg
+		b.recordDenied(row)
+		replyErr(w, http.StatusServiceUnavailable, msg)
+		return
+	}
+	row := base
+	row.Outcome = OutcomeFetched
+	if err := b.rec.Record(row); err != nil {
+		log.Printf("broker: audit write failed (%v); GitHub PAT for %s withheld", err, sid) // the row holds identifiers only
+		replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this token fetch, so it was not issued; retry shortly")
+		return
+	}
+	writeGitHubToken(w, string(value), time.Time{})
+}
+
 // ghMintFailed maps a minter error to its outcome, audit row and reply.
 func (b *Broker) ghMintFailed(w http.ResponseWriter, base Row, owner string, err error) {
 	var se *ghapp.ScopeError
@@ -426,5 +492,9 @@ func hasRepo(repos []string, name string) bool {
 func writeGitHubToken(w http.ResponseWriter, token string, expires time.Time) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]string{"token": token, "expires_at": expires.UTC().Format(time.RFC3339)})
+	out := map[string]string{"token": token}
+	if !expires.IsZero() { // a PAT has no expiry the broker knows
+		out["expires_at"] = expires.UTC().Format(time.RFC3339)
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }

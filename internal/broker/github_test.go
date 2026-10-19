@@ -692,3 +692,168 @@ func TestInFlightMintOfAnotherSessionUnaffected(t *testing.T) {
 		t.Fatalf("status %d revoked %v", w.Code, fg.revokedList())
 	}
 }
+
+// patEntry is a token entry used only as a GitHub PAT: no egress, no env.
+func patEntry() config.StaticToken {
+	return config.StaticToken{Name: "gh-pat-acme", Value: config.KeyRef{Type: "env", Var: "ACME_GH_PAT"}}
+}
+
+func patBinding() *config.GitHubBinding {
+	return &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", Token: "gh-pat-acme", Repos: []string{"widgets", "gadgets"}}}}
+}
+
+func patLive() SessionView {
+	return SessionView{Agent: "c", Nonce: nonceA, Boxed: true, Live: true, GitHub: patBinding(), PATs: []config.StaticToken{patEntry()}}
+}
+
+const patBody = `{"owner":"acme","repo":"widgets"}`
+
+// patSetup has a resolver and a GitHub minter, to show a PAT never touches the minter.
+func patSetup(t *testing.T, sessions map[string]SessionView) (*Broker, *fakeResolver, *fakeGH, *memRec, *time.Time) {
+	t.Helper()
+	b, fg, rec, now := ghSetup(t, sessions)
+	fr := &fakeResolver{}
+	b.SetResolver(fr)
+	return b, fr, fg, rec, now
+}
+
+func TestGitHubPATOwnerHappyPath(t *testing.T) {
+	b, fr, fg, rec, _ := patSetup(t, map[string]SessionView{"claude-3": patLive()})
+	w := ghCall(b, tokA("claude-3"), patBody)
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := out["expires_at"]; has || len(out) != 1 || out["token"] != staticSecret {
+		t.Fatalf("reply: %s", w.Body)
+	}
+	if fr.count() != 1 || fr.refs[0] != patEntry().Value || fg.callCount() != 0 {
+		t.Fatalf("resolver calls %d refs %v mints %d", fr.count(), fr.refs, fg.callCount())
+	}
+	if len(rec.rows) != 1 {
+		t.Fatalf("rows: %+v", rec.rows)
+	}
+	r := rec.rows[0]
+	if r.Outcome != OutcomeFetched || r.Provider != ProviderGitHub || r.Subject != "acme" || r.Entry != "gh-pat-acme" ||
+		r.Repos != 2 || r.SessionID != "claude-3" || r.ScopeHash != patBinding().Hash() || !r.Expires.IsZero() {
+		t.Fatalf("row: %+v", r)
+	}
+	if j, _ := json.Marshal(r); strings.Contains(string(j), staticSecret) {
+		t.Fatalf("the audit row holds the value: %s", j)
+	}
+	if len(b.ghIssued) != 0 || len(b.ghCache) != 0 || len(b.ghFlight) != 0 {
+		t.Fatalf("a PAT must not be cached or listed: %v %v %v", b.ghIssued, b.ghCache, b.ghFlight)
+	}
+	// Every call fetches again: no cache.
+	if w := ghCall(b, tokA("claude-3"), patBody); w.Code != 200 || fr.count() != 2 {
+		t.Fatalf("second call: %d resolver %d", w.Code, fr.count())
+	}
+}
+
+func TestGitHubPATOwnerWithoutApps(t *testing.T) {
+	mixed := patLive()
+	mixed.GitHub = &config.GitHubBinding{Owners: append(patBinding().Owners,
+		config.GitHubOwner{Owner: "culiops", App: "bot", Repos: []string{"agent-box"}})}
+	b, _, _, _ := setup(t, map[string]SessionView{"s": mixed})
+	fr := &fakeResolver{}
+	b.SetResolver(fr) // no SetGitHub
+	if err := b.CheckGitHub(*patBinding()); err != nil {
+		t.Fatalf("a PAT-only binding needs no minter: %v", err)
+	}
+	if err := b.CheckGitHub(*mixed.GitHub); err == nil {
+		t.Fatal("an App owner still needs the minter")
+	}
+	if w := ghCall(b, tokA("s"), patBody); w.Code != 200 {
+		t.Fatalf("PAT owner: %d: %s", w.Code, w.Body)
+	}
+	w := ghCall(b, tokA("s"), ghBody)
+	if w.Code != 503 || !strings.Contains(w.Body.String(), "GitHub is not configured on this agent-box host") {
+		t.Fatalf("App owner: %d: %s", w.Code, w.Body)
+	}
+}
+
+func TestGitHubPATOwnerNeedsRepo(t *testing.T) {
+	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	w := ghCall(b, tokA("s"), `{"owner":"acme"}`)
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "name the repository: a personal access token is not scoped by agent-box") {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	if fr.count() != 0 || len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeDeniedScope ||
+		rec.rows[0].Error != "repo required for a PAT owner" || rec.rows[0].Subject != "acme" {
+		t.Fatalf("resolver %d rows %+v", fr.count(), rec.rows)
+	}
+}
+
+func TestGitHubPATRepoNotBoundAndEntryUndefined(t *testing.T) {
+	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	if w := ghCall(b, tokA("s"), `{"owner":"acme","repo":"other"}`); w.Code != 403 {
+		t.Fatalf("unbound repo: %d", w.Code)
+	}
+	gone := patLive()
+	gone.PATs = nil // the entry was deleted from config
+	b2, fr2, _, rec2, _ := patSetup(t, map[string]SessionView{"s": gone})
+	if w := ghCall(b2, tokA("s"), patBody); w.Code != 403 {
+		t.Fatalf("undefined entry: %d: %s", w.Code, w.Body)
+	}
+	if fr.count()+fr2.count() != 0 || rec.rows[0].Error != "repo not bound" ||
+		len(rec2.rows) != 1 || rec2.rows[0].Outcome != OutcomeDeniedScope || rec2.rows[0].Error != "token entry not defined" {
+		t.Fatalf("rows %+v %+v", rec.rows, rec2.rows)
+	}
+}
+
+func TestGitHubPATFailClosed(t *testing.T) {
+	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	rec.recErr = errors.New("disk full")
+	w := ghCall(b, tokA("s"), patBody)
+	if w.Code != 503 || strings.Contains(w.Body.String(), staticSecret) {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	rec.recErr = nil
+	if w := ghCall(b, tokA("s"), patBody); w.Code != 200 || fr.count() != 2 {
+		t.Fatalf("retry: %d", w.Code)
+	}
+}
+
+func TestGitHubPATUnresolved(t *testing.T) {
+	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	fr.err = errors.New("env var ACME_GH_PAT is not set")
+	w := ghCall(b, tokA("s"), patBody)
+	if w.Code != 503 || strings.Contains(w.Body.String(), staticSecret) {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeUnresolved || rec.rows[0].Subject != "acme" || rec.rows[0].Entry != "gh-pat-acme" {
+		t.Fatalf("rows %+v", rec.rows)
+	}
+}
+
+func TestGitHubPATUsesStaticBucket(t *testing.T) {
+	b, fr, _, _, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	for i := range mintsPerMinute + 1 { // more than the 10/min mint bucket
+		if w := ghCall(b, tokA("s"), patBody); w.Code != 200 {
+			t.Fatalf("fetch %d: %d: %s", i, w.Code, w.Body)
+		}
+	}
+	for range staticFetchesPerMinute - mintsPerMinute - 1 {
+		ghCall(b, tokA("s"), patBody)
+	}
+	if w := ghCall(b, tokA("s"), patBody); w.Code != 429 || fr.count() != staticFetchesPerMinute {
+		t.Fatalf("status %d resolved %d", w.Code, fr.count())
+	}
+}
+
+func TestForgetDoesNotRevokePAT(t *testing.T) {
+	b, _, fg, _, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	for range 3 {
+		if w := ghCall(b, tokA("s"), patBody); w.Code != 200 {
+			t.Fatalf("status %d", w.Code)
+		}
+	}
+	b.Forget("s")
+	b.revokeWG.Wait()
+	if got := fg.revokedList(); len(got) != 0 {
+		t.Fatalf("a PAT is never revoked: %v", got)
+	}
+}

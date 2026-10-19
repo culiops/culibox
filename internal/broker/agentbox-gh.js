@@ -27,14 +27,26 @@ function fail(msg) {
 // target runs the real gh unminted.
 const isOtherHost = (h) => !!h && h.toLowerCase() !== 'github.com';
 
-// repoSpec parses [HOST/]OWNER/REPO as gh accepts it. A spec naming another
-// host is { other: true }.
+// repoSpec parses what gh accepts for a repository: [HOST/]OWNER/REPO, a URL
+// (https://github.com/o/r[.git][/]) or the scp form git@github.com:o/r[.git].
+// A spec naming another host is { other: true }. A value that is present but
+// cannot be read is { bad: s }: the caller fails closed on it, because falling
+// back to another source could mint for the wrong owner (a PAT owner's token
+// is not scoped by GitHub, so the repo named here is the only scope).
 function repoSpec(s) {
   if (!s) return null;
+  const bad = { bad: s };
+  let m = /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?(?:\/(.*))?$/i.exec(s);
+  if (!m) m = /^(?:[^@/:]+@)?([^/:@]+):(.*)$/.exec(s);
+  if (m) {
+    if (isOtherHost(m[1])) return { other: true };
+    const p = (m[2] || '').replace(/\/$/, '').replace(/\.git$/i, '').split('/');
+    return p.length === 2 && p[0] && p[1] ? { owner: p[0], repo: p[1] } : bad;
+  }
   const p = s.split('/');
   if (p.length === 3 && isOtherHost(p[0])) return { other: true };
   if (p.length === 3) p.shift();
-  if (p.length !== 2 || !p[0] || !p[1]) return null;
+  if (p.length !== 2 || !p[0] || !p[1]) return bad;
   return { owner: p[0], repo: p[1] };
 }
 
@@ -54,7 +66,7 @@ function repoFromArgv(argv) {
     else if (a.startsWith('--hostname=')) host = a.slice('--hostname='.length);
     if (isOtherHost(host)) return { other: true };
     const r = repoSpec(v);
-    if (r && r.other) return r;
+    if (r && (r.other || r.bad)) return r;
     if (r && !found) found = r;
   }
   return found;
@@ -79,7 +91,7 @@ function repoFromOrigin() {
 function resolve(argv) {
   if (isOtherHost(process.env.GH_HOST)) return { other: true };
   const r = repoFromArgv(argv) || repoSpec(process.env.GH_REPO) || repoFromOrigin();
-  if (r) return r;
+  if (r) return r; // may be { bad } or { other }
   const first = (process.env.AGENTBOX_GH_OWNERS || '').split(',').map((s) => s.trim()).filter(Boolean)[0];
   return first ? { owner: first } : null;
 }
@@ -138,6 +150,7 @@ function main() {
   if (!ep || !tok) fail('not an agent-box GitHub session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
   const args = process.argv.slice(2);
   const r = resolve(args);
+  if (r && r.bad) fail('cannot read the repository in ' + JSON.stringify(r.bad) + '; use -R OWNER/REPO');
   if (!r) fail('cannot tell which GitHub owner to use (no -R, GH_REPO, origin remote or AGENTBOX_GH_OWNERS)');
   // Another host: no broker call, no token. The box holds no credential for it.
   if (r.other) return runGh(args, { ...process.env });
