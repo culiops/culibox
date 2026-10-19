@@ -221,7 +221,10 @@ func TestPrepareNoMemory(t *testing.T) {
 				t.Errorf("RO = %+v, want .git and the two shares only", cm.RO)
 			}
 			for _, m := range cm.RO {
-				if strings.HasPrefix(m.Box, "/home/agent/") {
+				// Not "/home/agent/": in a box Go's TMPDIR lives under /home/agent,
+				// so t.TempDir() share mounts would match. Memory is the only
+				// mount under the Claude projects dir.
+				if strings.HasPrefix(m.Box, "/home/agent/.claude/projects/") {
 					t.Errorf("unexpected memory mount %+v", m)
 				}
 			}
