@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -806,7 +807,9 @@ func TestDockerfileTflintAWSDefaultIsAHomeFallback(t *testing.T) {
 		t.Fatal("no RUN writes the entrypoint")
 	}
 	for _, want := range []string{
-		`[ -e "$HOME/.tflint.hcl" ] || cp /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"`,
+		// a regular file is the user's own; absent or any symlink (dangling too) is re-pointed
+		`if [ ! -e "$HOME/.tflint.hcl" ] || [ -L "$HOME/.tflint.hcl" ]; then rm -f "$HOME/.tflint.hcl"; ln -s /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"; fi`,
+		`find "$HOME/.tflint.d/plugins" -xtype l -delete`,
 		`$HOME/.tflint.d/plugins/`,
 		`[ -e "$d" ] ||`,
 		`ln -s "$p" "$d"`,
@@ -867,12 +870,12 @@ const hashicorpKeyFpr = "C874011F0AB405110D02105534365D9472D7468F"
 func TestDockerfileTfenvVerifiesSignatures(t *testing.T) {
 	stage := strings.Join(stageInstructions(t, regexp.MustCompile(`^FROM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS hashicorp-key$`)), "\n")
 	for _, want := range []string{
-		"ARG HASHICORP_KEY_FPR=" + hashicorpKeyFpr,
-		"ARG HASHICORP_KEY_SHA256=",
+		"ARG HASHICORP_PGP_FPR=" + hashicorpKeyFpr,
+		"ARG HASHICORP_PGP_SHA256=",
 		"https://www.hashicorp.com/.well-known/pgp-key.txt",
 		"sha256sum -c",
 		"gpg --show-keys --with-colons",
-		`"${HASHICORP_KEY_FPR}"`,
+		`"${HASHICORP_PGP_FPR}"`,
 		"gpg --dearmor",
 		"/out/hashicorp-keys.pgp",
 	} {
@@ -968,10 +971,12 @@ func TestDockerfileTfenvDefaultIsAFileNotEnv(t *testing.T) {
 	}
 }
 
-// The entrypoint runs on every start: it re-arms signature checking (use-gpgv is
-// copied unconditionally, a use-gnupg is removed) and seeds the default version
-// and its symlink only when absent. Each step's failure is non-fatal. It must not
-// reference build ARGs.
+// The entrypoint runs on every start against a home that may be weeks old: it
+// re-arms signature checking (use-gpgv is copied unconditionally, a use-gnupg is
+// removed; a failed copy says so on stderr), prunes default versions an earlier
+// image linked in, seeds the current default, and moves `version` with the image
+// only while the user has not changed it. Each step's failure is non-fatal. It
+// must not reference build ARGs.
 func TestDockerfileTfenvEntrypointSeedsHome(t *testing.T) {
 	var entry string
 	for _, in := range dockerfileInstructions() {
@@ -986,8 +991,13 @@ func TestDockerfileTfenvEntrypointSeedsHome(t *testing.T) {
 		`if [ -n "${TFENV_CONFIG_DIR:-}" ]; then`,
 		`mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null`,
 		`rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null`,
-		`[ -e "$TFENV_CONFIG_DIR/version" ] || cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null`,
+		`|| echo "agent-box: tfenv signature checks NOT armed (cannot write \$TFENV_CONFIG_DIR/use-gpgv)" >&2`,
 		`v=$(cat /opt/tfenv/default-version 2>/dev/null)`,
+		// links an earlier image seeded are pruned (only those pointing at the unversioned binary)
+		`for d in "$TFENV_CONFIG_DIR"/versions/*; do [ -n "$v" ] && [ "${d##*/}" != "$v" ] && [ "$(readlink "$d/terraform" 2>/dev/null)" = /usr/local/bin/terraform ] && rm -rf "$d" 2>/dev/null; done`,
+		// version follows the image unless the user changed it (marker rule)
+		`if [ ! -e "$TFENV_CONFIG_DIR/version" ] || cmp -s "$TFENV_CONFIG_DIR/version" "$TFENV_CONFIG_DIR/.agent-box-default"; then cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null; fi`,
+		`cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/.agent-box-default" 2>/dev/null`,
 		`[ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] ||`,
 		`ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"`,
 	} {
@@ -1016,8 +1026,43 @@ func TestDockerfileTfenvPinned(t *testing.T) {
 			t.Errorf("%q must sit after the marker and before the gh block", strings.TrimSpace(a))
 		}
 	}
-	// HASHICORP_KEY_* belong to the builder stage, ahead of the final stage.
-	if i := strings.Index(df, "\nARG HASHICORP_KEY_SHA256="); i < 0 || i > strings.LastIndex(df, "\nFROM ") {
-		t.Error("ARG HASHICORP_KEY_SHA256 must be in the hashicorp-key builder stage")
+	// HASHICORP_PGP_* belong to the builder stage, ahead of the final stage.
+	if i := strings.Index(df, "\nARG HASHICORP_PGP_SHA256="); i < 0 || i > strings.LastIndex(df, "\nFROM ") {
+		t.Error("ARG HASHICORP_PGP_SHA256 must be in the hashicorp-key builder stage")
+	}
+}
+
+// The entrypoint is a printf-built script: render it exactly as the image does
+// and let sh parse it, so a quoting slip fails here and not at the first box start.
+func TestDockerfileEntrypointIsValidShell(t *testing.T) {
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN printf ") || !strings.Contains(in, "> /usr/local/bin/agent-box-entrypoint") {
+			continue
+		}
+		out := filepath.Join(t.TempDir(), "entrypoint")
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(in, "RUN "), " > /usr/local/bin/agent-box-entrypoint")
+		if b, err := exec.Command("sh", "-c", cmd+" > "+out).CombinedOutput(); err != nil {
+			t.Fatalf("rendering the entrypoint: %v: %s", err, b)
+		}
+		if b, err := exec.Command("sh", "-n", out).CombinedOutput(); err != nil {
+			t.Fatalf("sh -n on the entrypoint: %v: %s", err, b)
+		}
+		return
+	}
+	t.Fatal("no RUN writes the entrypoint")
+}
+
+// The repo is public: a comment must stand alone, never cite a local-only design
+// document ("spec 7a.3") or a path under docs/superpowers.
+func TestPublicFilesCiteNoLocalDocs(t *testing.T) {
+	cite := regexp.MustCompile(`(?i)\(spec [\w. ]*\d|spec correction|docs/superpowers`)
+	wf, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"Dockerfile": string(dockerfile), "box-image.yml": string(wf)} {
+		if m := cite.FindString(text); m != "" {
+			t.Errorf("%s cites a local-only document: %q", name, m)
+		}
 	}
 }

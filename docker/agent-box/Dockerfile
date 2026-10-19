@@ -9,7 +9,7 @@
 #   docker buildx imagetools inspect node:24-bookworm-slim
 # Every stage must carry the same digest (a test enforces it). Bumping the base is
 # a manual edit of both FROM lines, which changes the Dockerfile hash on purpose.
-# RESIDUAL, accepted (spec 7a.3): apt packages (git, python3, chromium, make, ...)
+# RESIDUAL, accepted: apt packages (git, python3, chromium, make, ...)
 # follow the base image's apt snapshot, so they are only as pinned as the digest;
 # every non-apt download below is pinned by version AND sha256.
 # --- abduco (builder stage) ---
@@ -42,22 +42,22 @@ RUN set -eu; \
 # ("release archives") and against the .72D7468F suffix tfenv looks for on
 # terraform_<v>_SHA256SUMS.72D7468F.sig; the same key's signatures were verified on
 # a real release with the resulting keyring. The file is pinned by sha256 AND the
-# build asserts the primary key's fingerprint equals HASHICORP_KEY_FPR.
+# build asserts the primary key's fingerprint equals HASHICORP_PGP_FPR.
 # HashiCorp extending the key's expiry changes the file (and so this sum): that is
 # a manual bump, not a failure to work around. (tfenv's own bundled copy of the
 # key expired on 2026-04-18, which is why it is replaced.)
 FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS hashicorp-key
-ARG HASHICORP_KEY_FPR=C874011F0AB405110D02105534365D9472D7468F
-ARG HASHICORP_KEY_SHA256=c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065
+ARG HASHICORP_PGP_FPR=C874011F0AB405110D02105534365D9472D7468F
+ARG HASHICORP_PGP_SHA256=c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065
 RUN apt-get update && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN set -eu; \
     curl -fsSL "https://www.hashicorp.com/.well-known/pgp-key.txt" -o /tmp/hashicorp-key.txt; \
-    echo "${HASHICORP_KEY_SHA256}  /tmp/hashicorp-key.txt" | sha256sum -c -; \
+    echo "${HASHICORP_PGP_SHA256}  /tmp/hashicorp-key.txt" | sha256sum -c -; \
     keys="$(gpg --show-keys --with-colons /tmp/hashicorp-key.txt)"; \
     [ "$(printf '%s\n' "$keys" | grep -c '^pub:')" = 1 ]; \
     fpr="$(printf '%s\n' "$keys" | awk -F: '$1=="pub"{p=1} p&&$1=="fpr"{print $10; exit}')"; \
-    [ "$fpr" = "${HASHICORP_KEY_FPR}" ]; \
+    [ "$fpr" = "${HASHICORP_PGP_FPR}" ]; \
     mkdir -p /out; gpg --dearmor -o /out/hashicorp-keys.pgp /tmp/hashicorp-key.txt; \
     [ -s /out/hashicorp-keys.pgp ]
 
@@ -193,9 +193,8 @@ RUN npm install -g @anthropic-ai/claude-code
 # snapshot, 155.0.8059.79 when measured, +278 MB) and @playwright/mcp from npm,
 # pinned by version. The package's binary is playwright-mcp, not
 # mcp-server-playwright. To bump: change PLAYWRIGHT_MCP_VERSION to a published
-# @playwright/mcp release, rebuild, and re-run the A3 browser measurement.
-# Findings this rests on (docs/superpowers/notes/2026-10-19-a3-measure.md):
-# Playwright already launches chromium with --no-sandbox and
+# @playwright/mcp release, rebuild, and re-check that the browser starts inside a box.
+# Findings this rests on: Playwright already launches chromium with --no-sandbox and
 # --disable-dev-shm-usage, so no MCP --config file is needed, and a 64 MB
 # /dev/shm was enough. No browser-path variable is set: Playwright's bundled
 # browser is not used. The server is declared in /etc/agent-box/mcp.json
@@ -227,12 +226,14 @@ RUN groupadd -g "$GID" agent \
 # (--isolated), so no login persists in the box home.
 RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{"type":"stdio","command":"/usr/local/bin/codebase-memory-mcp","args":[]},"playwright":{"type":"stdio","command":"/usr/local/bin/playwright-mcp","args":["--headless","--isolated","--output-dir","/tmp/playwright-mcp","--browser","chromium","--executable-path","/usr/bin/chromium"]}}}' > /etc/agent-box/mcp.json && jq -e '.mcpServers["codebase-memory"].command' /etc/agent-box/mcp.json && jq -e '.mcpServers["playwright"].command' /etc/agent-box/mcp.json
 
-# Entrypoint: at container start, create $GOTMPDIR and the tflint home fallback,
-# seed and re-arm the tfenv state in the home (see the tfenv block), then exec the arguments. The box home is a bind mount of the box's state dir, so
-# none of this can be made at build time, and Go refuses a missing GOTMPDIR (spec
-# correction 5).
+# Entrypoint: at container start, create $GOTMPDIR, link the tflint default config
+# and plugin into the home, and seed and re-arm the tfenv state in the home (see
+# the tfenv block), then exec the arguments. The box home is a bind mount of the
+# box's state dir and persists across image bumps, so none of this can be made at
+# build time, and every step must also repair what an EARLIER image left behind.
+# Go refuses a missing GOTMPDIR, hence its mkdir.
 # agent-box always passes `sleep infinity`; the probes override --entrypoint.
-RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' '# tflint AWS ruleset: default config, only when the home has none (a repo .tflint.hcl still wins).' '[ -e "$HOME/.tflint.hcl" ] || cp /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl" 2>/dev/null' '# Link each baked plugin version into the home plugin dir, at the path tflint looks for (see the tflint block below).' 'for p in /opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/*/tflint-ruleset-aws; do [ -e "$p" ] || continue; d="$HOME/.tflint.d/plugins/${p#/opt/tflint/plugins/}"; [ -e "$d" ] || { mkdir -p "${d%/*}" && ln -s "$p" "$d"; } 2>/dev/null; done' '# tfenv: state lives in the box home (the image is read-only); code, keyring and defaults are root-owned under /opt/tfenv. Every start re-arms signature checks and seeds the default version.' 'if [ -n "${TFENV_CONFIG_DIR:-}" ]; then' '  mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null' '  rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null' '  [ -e "$TFENV_CONFIG_DIR/version" ] || cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null' '  v=$(cat /opt/tfenv/default-version 2>/dev/null)' '  [ -z "$v" ] || [ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] || { mkdir -p "$TFENV_CONFIG_DIR/versions/$v" && ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"; } 2>/dev/null' 'fi' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
+RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' '# tflint AWS ruleset: link the default config unless the home holds a REGULAR file (the user-owned one; a repo .tflint.hcl still wins). A symlink, dangling or not, is ours from an earlier start: re-point it, so a ruleset bump is picked up.' 'if [ ! -e "$HOME/.tflint.hcl" ] || [ -L "$HOME/.tflint.hcl" ]; then rm -f "$HOME/.tflint.hcl"; ln -s /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"; fi 2>/dev/null' '# Prune plugin links a ruleset bump left dangling, then link each baked plugin version at the path tflint looks for (see the tflint block below).' 'find "$HOME/.tflint.d/plugins" -xtype l -delete 2>/dev/null' 'for p in /opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/*/tflint-ruleset-aws; do [ -e "$p" ] || continue; d="$HOME/.tflint.d/plugins/${p#/opt/tflint/plugins/}"; [ -e "$d" ] || { mkdir -p "${d%/*}" && ln -s "$p" "$d"; } 2>/dev/null; done' '# tfenv: state lives in the box home (the image is read-only); code, keyring and defaults are root-owned under /opt/tfenv. Every start re-arms signature checks and seeds the default version.' 'if [ -n "${TFENV_CONFIG_DIR:-}" ]; then' '  mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null' '  rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null || echo "agent-box: tfenv signature checks NOT armed (cannot write \$TFENV_CONFIG_DIR/use-gpgv)" >&2' '  v=$(cat /opt/tfenv/default-version 2>/dev/null)' '  # Drop the default versions an EARLIER image linked in (versions/X/terraform -> /usr/local/bin/terraform, an unversioned path that now holds a newer binary). tfenv reinstalls such a version, signature-checked, when it is asked for.' '  for d in "$TFENV_CONFIG_DIR"/versions/*; do [ -n "$v" ] && [ "${d##*/}" != "$v" ] && [ "$(readlink "$d/terraform" 2>/dev/null)" = /usr/local/bin/terraform ] && rm -rf "$d" 2>/dev/null; done' '  [ -z "$v" ] || [ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] || { mkdir -p "$TFENV_CONFIG_DIR/versions/$v" && ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"; } 2>/dev/null' '  # Default version rule: .agent-box-default holds the default this script last wrote. If `version` is absent, or byte-equal to that marker (never changed by the user), it follows the image: write the new default into both. Otherwise the user chose a version (tfenv use): leave `version` alone, and still move the marker to the new default.' '  if [ ! -e "$TFENV_CONFIG_DIR/version" ] || cmp -s "$TFENV_CONFIG_DIR/version" "$TFENV_CONFIG_DIR/.agent-box-default"; then cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null; fi' '  cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/.agent-box-default" 2>/dev/null' 'fi' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
 
 # === frequently bumped pins (keep last) ===
 # Everything below moves faster than the heavy layers above, so a version bump
@@ -477,11 +478,14 @@ RUN set -eu; \
 # installs on sums alone. `trust-tfenv: yes` makes it use the keyring above, which
 # is the fingerprint-checked HashiCorp key from the hashicorp-key stage replacing
 # tfenv's bundled one. gpgv comes with apt in the base image.
-# THREAT MODEL (spec 7b.4): this protects a download from a tampered mirror or a
+# THREAT MODEL: this protects a download from a tampered mirror or a
 # MITM. It does not stop the agent from turning verification off (it owns the home,
 # so it can delete use-gpgv or create use-gnupg mid-session, or just fetch any
 # binary it likes): the agent has a shell and a network. The entrypoint re-arms the
-# check at the next box start; that is accepted (spec 7b.4).
+# check at the next box start; that is accepted. Likewise tfenv reads a repo's
+# .terraform-version without sanitising it, so a hostile repo can steer tfenv to
+# run a binary from the workspace; that is no worse than the repo's other
+# code-execution paths (committed providers, for one).
 ARG TFENV_VERSION=3.2.2
 ARG TFENV_SHA256=c9c8b2e2588cf026aafa9803dfdefdfc7aa258577c24ea9624fe53f764edea47
 RUN set -eu; \
