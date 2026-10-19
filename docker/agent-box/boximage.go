@@ -98,6 +98,23 @@ func (d Docker) Build(ctx context.Context, tags []string, w io.Writer) error {
 	return nil
 }
 
+// Pull fetches a remote image for the given architecture. --platform is not
+// optional here either: a multi-arch index digest otherwise resolves to
+// whatever docker picks, and an emulated box is slow with no error anywhere.
+// docker's output goes to w; it is also kept so a failure carries its cause.
+// Both streams share ONE writer: os/exec copies two distinct writers from two
+// goroutines, and w (a bytes.Buffer in tests) is not safe for concurrent use.
+func (d Docker) Pull(ctx context.Context, image, arch string, w io.Writer) error {
+	var out bytes.Buffer
+	cmd := d.command(ctx, "pull", "--platform", "linux/"+arch, image)
+	cmd.Stdout = io.MultiWriter(w, &out)
+	cmd.Stderr = cmd.Stdout
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker pull %s: %w: %s", image, err, strings.TrimSpace(out.String()))
+	}
+	return nil
+}
+
 // datedTag is what a build date looks like as a tag: YYYY-MM-DD, with .2 to .9
 // when that day's tag is taken.
 var datedTag = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}(\.[2-9])?$`)
@@ -120,6 +137,20 @@ func IsDated(image string) bool {
 	}
 	_, tag := splitTag(image)
 	return datedTag.MatchString(tag)
+}
+
+// IsRemote reports whether image names a registry, so it is pulled and never
+// built: any digest ref, or a ref whose first path component is a registry
+// host (it holds a "." or ":", or is localhost: docker's own rule).
+func IsRemote(image string) bool {
+	if strings.Contains(image, "@") {
+		return true
+	}
+	host, _, ok := strings.Cut(image, "/")
+	if !ok {
+		return false
+	}
+	return strings.ContainsAny(host, ".:") || host == "localhost"
 }
 
 // Repo is the ref without its tag. A digest ref has no tag to drop, so it errors.
@@ -203,10 +234,22 @@ func (s ImageState) Check(serverArch string) (fatal bool, msg string) {
 	return false, ""
 }
 
-// CheckFor is Check for the configured image. A dated tag is pinned: agent-box
+// CheckFor is Check for the configured image. A remote image is pulled by box
+// setup and never rebuilt, so its advice is to pull. A dated tag is pinned: agent-box
 // never builds, rebuilds or pulls it, so a missing one is fatal with advice to
 // pin a present tag, and a stale one is fine to keep.
 func (s ImageState) CheckFor(image, serverArch string) (fatal bool, msg string) {
+	if IsRemote(image) {
+		switch {
+		case !s.Present:
+			return true, fmt.Sprintf("box image %s is not on this daemon; run `agent-box box setup` to pull it", image)
+		case s.Arch != serverArch:
+			return true, fmt.Sprintf("box image %s is linux/%s but the daemon is %s; pin the multi-arch index digest and run `agent-box box setup`", image, s.Arch, serverArch)
+		case s.Hash != Hash():
+			return false, "this image was built from an older Dockerfile; pull a newer digest from ghcr"
+		}
+		return false, ""
+	}
 	if !IsDated(image) {
 		return s.Check(serverArch)
 	}

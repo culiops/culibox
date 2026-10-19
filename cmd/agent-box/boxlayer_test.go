@@ -398,6 +398,23 @@ func TestPrepareRefusesAMissingOrForeignImage(t *testing.T) {
 	}
 }
 
+// The spawn path is strict: a registry image that is not on the daemon is a
+// refusal that points at `box setup`, never a pull.
+func TestPrepareMissingRemoteImageNeverPulls(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	l.image = "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	err := l.prepare(context.Background())
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "agent-box box setup") {
+		t.Fatalf("a missing remote image must fail the spawn and name box setup: %v", err)
+	}
+	for _, line := range strings.Split(d.log(), "\n") {
+		if strings.Contains(line, "pull") {
+			t.Fatalf("spawn pulled an image: %s", d.log())
+		}
+	}
+}
+
 // Review focus 3: with the VM stopped, the boot pass and the daily reclaim
 // neither start the VM nor touch docker, and the sweep skips.
 func TestStoppedVMIsLeftAloneByBackgroundPasses(t *testing.T) {

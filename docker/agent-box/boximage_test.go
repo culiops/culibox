@@ -4,9 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -17,6 +20,22 @@ import (
 func TestHashIsStableAndShort(t *testing.T) {
 	if Hash() != Hash() || len(Hash()) != 12 {
 		t.Fatalf("Hash() = %q", Hash())
+	}
+}
+
+// The CI workflow computes the label with
+// `sha256sum docker/agent-box/Dockerfile | cut -c1-12`; this is that computation.
+func TestHashMatchesShellPipeline(t *testing.T) {
+	b, err := os.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(b, dockerfile) {
+		t.Fatal("the embedded dockerfile differs from Dockerfile on disk")
+	}
+	sum := sha256.Sum256(b)
+	if got := hex.EncodeToString(sum[:])[:12]; got != Hash() {
+		t.Fatalf("sha256(Dockerfile)[:12] = %q, Hash() = %q", got, Hash())
 	}
 }
 
@@ -290,8 +309,8 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 5 {
-		t.Errorf("found %d downloads, want at least 5 (aws, terraform, go, abduco, codebase-memory)", downloads)
+	if downloads < 17 {
+		t.Errorf("found %d downloads, want at least 17 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key)", downloads)
 	}
 }
 
@@ -525,5 +544,525 @@ func TestDockerfileChecksBrowserAsAgent(t *testing.T) {
 	}
 	if !ok {
 		t.Error("no RUN after USER agent asserts chromium --version")
+	}
+}
+
+func TestIsRemote(t *testing.T) {
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	for _, c := range []struct {
+		ref  string
+		want bool
+	}{
+		{"ghcr.io/culiops/agent-box" + digest, true},
+		{"culiops/agent-box" + digest, true}, // a digest is never buildable
+		{"ghcr.io/culiops/agent-box:base", true},
+		{"ghcr.io/culiops/agent-box:2026-10-20-abc1234", true},
+		{"localhost/x:1", true},
+		{"registry:5000/x:1", true},
+		{"culiops/agent-box:base", false},
+		{"culiops/agent-box:2026-10-18", false},
+		{"agent-box", false},
+		{"", false},
+	} {
+		if got := IsRemote(c.ref); got != c.want {
+			t.Errorf("IsRemote(%q) = %v, want %v", c.ref, got, c.want)
+		}
+	}
+}
+
+// A pulled box must be the daemon's own architecture: an index digest on an
+// arm64 daemon otherwise runs whatever docker picks, silently emulated.
+func TestPullPinsPlatform(t *testing.T) {
+	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	bin, log := fakeDocker(t, "echo pulling\n")
+	var out bytes.Buffer
+	d := Docker{Bin: bin, Args: []string{"--host", "unix:///s"}}
+	if err := d.Pull(context.Background(), ref, "arm64", &out); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	if want := "--host unix:///s pull --platform linux/arm64 ghcr.io/culiops/agent-box@sha256:"; !strings.Contains(string(b), want) {
+		t.Fatalf("pull argv missing %q: %s", want, b)
+	}
+	if !strings.Contains(out.String(), "pulling") {
+		t.Fatalf("docker output did not reach the writer: %q", out.String())
+	}
+
+	bad, _ := fakeDocker(t, "echo 'manifest unknown' >&2; exit 1\n")
+	err := Docker{Bin: bad}.Pull(context.Background(), ref, "arm64", io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "manifest unknown") {
+		t.Fatalf("want an error carrying docker's stderr, got %v", err)
+	}
+}
+
+// os/exec copies two distinct writers from two goroutines; a bytes.Buffer is
+// not safe for that, so Pull must hand it one stream. Meaningful under -race.
+func TestPullWritesTheWriterFromOneGoroutine(t *testing.T) {
+	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	bin, _ := fakeDocker(t, "i=0; while [ $i -lt 200 ]; do echo out$i; echo err$i >&2; i=$((i+1)); done; exit 1\n")
+	var out bytes.Buffer
+	err := Docker{Bin: bin}.Pull(context.Background(), ref, "arm64", &out)
+	if err == nil || !strings.Contains(err.Error(), "err199") {
+		t.Fatalf("want an error carrying docker's stderr, got %v", err)
+	}
+	if !strings.Contains(out.String(), "out199") || !strings.Contains(out.String(), "err199") {
+		t.Fatalf("both streams should reach the writer: %q", out.String())
+	}
+}
+
+func TestCheckForRemote(t *testing.T) {
+	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	cases := []struct {
+		name  string
+		s     ImageState
+		fatal bool
+		has   []string
+		exact string // checked only when set
+	}{
+		{"missing", ImageState{}, true, []string{"agent-box box setup", "pull"}, ""},
+		{"wrong arch", ImageState{Present: true, Arch: "amd64", Hash: Hash()}, true, []string{"amd64", "arm64"}, ""},
+		{"stale", ImageState{Present: true, Arch: "arm64", Hash: "0123456789ab"}, false, nil,
+			"this image was built from an older Dockerfile; pull a newer digest from ghcr"},
+		{"current", ImageState{Present: true, Arch: "arm64", Hash: Hash()}, false, nil, ""},
+	}
+	for _, c := range cases {
+		fatal, msg := c.s.CheckFor(ref, "arm64")
+		if fatal != c.fatal {
+			t.Errorf("%s: fatal = %v, want %v (%s)", c.name, fatal, c.fatal, msg)
+		}
+		for _, w := range c.has {
+			if !strings.Contains(msg, w) {
+				t.Errorf("%s: msg %q lacks %q", c.name, msg, w)
+			}
+		}
+		if c.name == "stale" || c.name == "current" {
+			want := c.exact
+			if msg != want {
+				t.Errorf("%s: msg = %q, want %q", c.name, msg, want)
+			}
+		}
+		if strings.Contains(msg, "-rebuild") {
+			t.Errorf("%s: a remote image is never rebuilt, msg %q", c.name, msg)
+		}
+	}
+}
+
+// The base is pinned by digest, so a rebuild cannot silently follow a moved
+// tag. Every stage carries the same digest; bumping it is a manual edit.
+func TestDockerfilePinsBaseByDigest(t *testing.T) {
+	from := regexp.MustCompile(`^FROM node:24-bookworm-slim@sha256:([0-9a-f]{64})( AS \S+)?$`)
+	digest, n := "", 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "FROM ") {
+			continue
+		}
+		n++
+		m := from.FindStringSubmatch(in)
+		if m == nil {
+			t.Errorf("FROM is not node:24-bookworm-slim pinned by sha256 digest: %q", in)
+			continue
+		}
+		if digest == "" {
+			digest = m[1]
+		} else if m[1] != digest {
+			t.Errorf("FROM digests differ: %s vs %s", digest, m[1])
+		}
+	}
+	if n == 0 {
+		t.Fatal("no FROM instruction found")
+	}
+}
+
+// toolBatch is the SRE/k8s batch: every tool has a version ARG, both per-arch
+// sums, and a RUN whose version check greps the pinned version.
+var toolBatch = []struct{ arg, check string }{
+	{"KUBECTL", "kubectl version --client"},
+	{"HELM", "helm version"},
+	{"KUBECONFORM", "kubeconform -v"},
+	{"STERN", "stern --version"},
+	{"YQ", "yq --version"},
+	{"SHELLCHECK", "shellcheck --version"},
+	{"TFLINT", "tflint --version"},
+	{"TFLINT_RULESET_AWS", "tflint --config /etc/agent-box/tflint.hcl --version"},
+	{"JSONNET", "jsonnet --version"},
+	{"JSONNET", "jsonnetfmt --version"},
+}
+
+func TestDockerfileInstallsToolBatch(t *testing.T) {
+	df := string(dockerfile)
+	seen := map[string]bool{}
+	for _, tb := range toolBatch {
+		if !seen[tb.arg] {
+			seen[tb.arg] = true
+			for _, suffix := range []string{"_VERSION=", "_SHA256_AMD64=", "_SHA256_ARM64="} {
+				if !strings.Contains(df, "\nARG "+tb.arg+suffix) {
+					t.Errorf("Dockerfile has no ARG %s%s", tb.arg, suffix)
+				}
+			}
+		}
+		grep := regexp.MustCompile(regexp.QuoteMeta(tb.check) + `\s*\|\s*grep -q "[^"]*\$\{` + tb.arg + `_VERSION\}`)
+		found := false
+		for _, in := range dockerfileInstructions() {
+			if strings.HasPrefix(in, "RUN ") && grep.MatchString(in) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("no RUN checks %q and greps ${%s_VERSION}", tb.check, tb.arg)
+		}
+	}
+}
+
+func TestDockerfileAptExtras(t *testing.T) {
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "apt-get install") {
+			continue
+		}
+		ok := true
+		for _, pkg := range []string{"make", "openssl", "dnsutils", "netcat-openbsd"} {
+			if !regexp.MustCompile(`\s` + pkg + `(\s|$)`).MatchString(in) {
+				ok = false
+			}
+		}
+		if ok {
+			if !strings.Contains(in, "rm -rf /var/lib/apt/lists/*") {
+				t.Errorf("apt extras block leaves the apt lists in the image: %s", in)
+			}
+			return
+		}
+	}
+	t.Error("no single RUN apt-get install names make, openssl, dnsutils and netcat-openbsd")
+}
+
+// Pins that move often sit after the marker so a bump rebuilds only the tail;
+// the heavy, rarely bumped toolchains sit before it.
+func TestDockerfileFrequentPinsLast(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	if strings.Count(df, marker) != 1 {
+		t.Fatalf("want exactly one %q", marker)
+	}
+	m := strings.Index(df, marker)
+	chromium := strings.Index(df, "apt-get install -y --no-install-recommends chromium")
+	if chromium < 0 || m < chromium {
+		t.Error("the marker must come after the chromium/playwright RUN")
+	}
+	var after []string
+	for _, tb := range toolBatch {
+		for _, suffix := range []string{"_VERSION=", "_SHA256_AMD64=", "_SHA256_ARM64="} {
+			after = append(after, tb.arg+suffix)
+		}
+	}
+	after = append(after, "TFENV_VERSION=", "TFENV_SHA256=")
+	for _, line := range strings.Split(df, "\n") {
+		if strings.HasPrefix(line, "ARG GH_") {
+			after = append(after, strings.SplitAfter(strings.TrimPrefix(line, "ARG "), "=")[0])
+		}
+	}
+	for _, a := range after {
+		i := strings.Index(df, "\nARG "+a)
+		if i < 0 {
+			t.Errorf("no ARG %s", a)
+		} else if i < m {
+			t.Errorf("ARG %s is before the marker", a)
+		}
+	}
+	for _, a := range []string{"GO_VERSION=", "AWSCLI_VERSION=", "PLAYWRIGHT_MCP_VERSION="} {
+		i := strings.Index(df, "\nARG "+a)
+		if i < 0 || i > m {
+			t.Errorf("ARG %s must be before the marker", a)
+		}
+	}
+}
+
+// tflint's AWS ruleset is baked in; the box home is a bind mount, so the
+// per-home config and plugin link are made by the entrypoint. No env override
+// is set: both outrank a repo's own config or init path.
+func TestDockerfileTflintAWSDefaultIsAHomeFallback(t *testing.T) {
+	df := string(dockerfile)
+	for _, banned := range []string{"TFLINT_CONFIG_FILE", "TFLINT_PLUGIN_DIR"} {
+		if strings.Contains(df, banned) {
+			t.Errorf("Dockerfile mentions %s, which outranks a repo's own tflint setup", banned)
+		}
+	}
+	var hcl, entry string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /etc/agent-box/tflint.hcl") {
+			hcl = in
+		}
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /usr/local/bin/agent-box-entrypoint") {
+			entry = in
+		}
+	}
+	if hcl == "" {
+		t.Fatal("no RUN writes /etc/agent-box/tflint.hcl")
+	}
+	for _, want := range []string{`plugin "aws"`, `enabled = true`, `version = "%s"`,
+		`"${TFLINT_RULESET_AWS_VERSION}"`, `source = "github.com/terraform-linters/tflint-ruleset-aws"`} {
+		if !strings.Contains(hcl, want) {
+			t.Errorf("tflint.hcl RUN lacks %s: %s", want, hcl)
+		}
+	}
+	if entry == "" {
+		t.Fatal("no RUN writes the entrypoint")
+	}
+	for _, want := range []string{
+		// a regular file is the user's own; absent or any symlink (dangling too) is re-pointed
+		`if [ ! -e "$HOME/.tflint.hcl" ] || [ -L "$HOME/.tflint.hcl" ]; then rm -f "$HOME/.tflint.hcl"; ln -s /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"; fi`,
+		`find "$HOME/.tflint.d/plugins" -xtype l -delete`,
+		`$HOME/.tflint.d/plugins/`,
+		`[ -e "$d" ] ||`,
+		`ln -s "$p" "$d"`,
+		`/opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/`,
+	} {
+		if !strings.Contains(entry, want) {
+			t.Errorf("entrypoint lacks %s: %s", want, entry)
+		}
+	}
+	if !strings.Contains(df, "/opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/${TFLINT_RULESET_AWS_VERSION}") {
+		t.Error("the plugin is not baked at /opt/tflint/plugins/<source>/<version>")
+	}
+}
+
+// The label links the public ghcr package to this repository.
+func TestDockerfileSourceLabel(t *testing.T) {
+	df := string(dockerfile)
+	const label = `LABEL org.opencontainers.image.source="https://github.com/culiops/agent-box"`
+	i := strings.Index(df, label)
+	if i < 0 {
+		t.Fatalf("Dockerfile lacks %s", label)
+	}
+	if last := strings.LastIndex(df, "\nFROM "); i < last {
+		t.Error("the source label must be in the final stage")
+	}
+}
+
+// stageInstructions returns the instructions of the stage whose FROM line
+// matches header, up to (not including) the next FROM.
+func stageInstructions(t *testing.T, header *regexp.Regexp) []string {
+	t.Helper()
+	var out []string
+	in := false
+	for _, ins := range dockerfileInstructions() {
+		if strings.HasPrefix(ins, "FROM ") {
+			if in {
+				break
+			}
+			in = header.MatchString(ins)
+			continue
+		}
+		if in {
+			out = append(out, ins)
+		}
+	}
+	if len(out) == 0 {
+		t.Fatalf("no stage matching %v", header)
+	}
+	return out
+}
+
+const hashicorpKeyFpr = "C874011F0AB405110D02105534365D9472D7468F"
+
+// tfenv only checks HashiCorp's signature when a use-gpgv file says so, and then
+// against the keyring file in its own tree. The key is fetched in a builder
+// stage, pinned by sha256 AND by fingerprint, and replaces tfenv's bundled
+// (expired) keyring.
+func TestDockerfileTfenvVerifiesSignatures(t *testing.T) {
+	stage := strings.Join(stageInstructions(t, regexp.MustCompile(`^FROM node:24-bookworm-slim@sha256:[0-9a-f]{64} AS hashicorp-key$`)), "\n")
+	for _, want := range []string{
+		"ARG HASHICORP_PGP_FPR=" + hashicorpKeyFpr,
+		"ARG HASHICORP_PGP_SHA256=",
+		"https://www.hashicorp.com/.well-known/pgp-key.txt",
+		"sha256sum -c",
+		"gpg --show-keys --with-colons",
+		`"${HASHICORP_PGP_FPR}"`,
+		"gpg --dearmor",
+		"/out/hashicorp-keys.pgp",
+	} {
+		if !strings.Contains(stage, want) {
+			t.Errorf("hashicorp-key stage lacks %q", want)
+		}
+	}
+	// gnupg is for the builder only.
+	final := dockerfileInstructions()
+	copyAt, extractAt, gpgvAt := -1, -1, -1
+	for i, in := range final {
+		switch {
+		case strings.HasPrefix(in, "COPY --from=hashicorp-key") && strings.Contains(in, "/out/hashicorp-keys.pgp /opt/tfenv/share/hashicorp-keys.pgp"):
+			copyAt = i
+		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/opt/tfenv") && strings.Contains(in, "--strip-components=1"):
+			extractAt = i
+		case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /opt/tfenv/use-gpgv"):
+			gpgvAt = i
+			if !strings.Contains(in, "trust-tfenv: yes") {
+				t.Errorf("use-gpgv must say \"trust-tfenv: yes\": %.200s", in)
+			}
+			if !strings.Contains(in, "chown root:root /opt/tfenv/use-gpgv") || !strings.Contains(in, "chmod 0644 /opt/tfenv/use-gpgv") {
+				t.Errorf("/opt/tfenv/use-gpgv must be root-owned 0644")
+			}
+		}
+	}
+	if copyAt < 0 {
+		t.Fatal("final stage does not COPY --from=hashicorp-key the keyring over /opt/tfenv/share/hashicorp-keys.pgp")
+	}
+	if extractAt < 0 || copyAt < extractAt {
+		t.Error("the keyring COPY must come after the tfenv tarball is extracted, or the extract overwrites it")
+	}
+	if gpgvAt < 0 {
+		t.Error("no RUN writes /opt/tfenv/use-gpgv")
+	}
+	for _, in := range final {
+		// use-gnupg takes precedence over use-gpgv in tfenv: only the entrypoint's
+		// rm -f may mention it.
+		if strings.Contains(in, "use-gnupg") && !strings.Contains(in, `rm -f "$TFENV_CONFIG_DIR/use-gnupg"`) {
+			t.Errorf("use-gnupg must only ever be removed: %.120s", in)
+		}
+	}
+}
+
+// Boxes run --read-only: the only writable places are /tmp, the workspace and
+// the box home. tfenv state therefore lives in the home, seeded by the
+// entrypoint from root-owned defaults under /opt/tfenv. The default version is a
+// file, never TFENV_TERRAFORM_VERSION, which outranks a repo's .terraform-version.
+func TestDockerfileTfenvDefaultIsAFileNotEnv(t *testing.T) {
+	df := string(dockerfile)
+	for _, in := range dockerfileInstructions() {
+		if strings.Contains(in, "TFENV_TERRAFORM_VERSION") {
+			t.Errorf("Dockerfile sets TFENV_TERRAFORM_VERSION, which overrides a repo's .terraform-version: %.120s", in)
+		}
+		if strings.Contains(in, "/var/lib/tfenv") {
+			t.Errorf("no tfenv state in the (read-only) image layer: %.120s", in)
+		}
+	}
+	if !strings.Contains(df, "\nENV TFENV_CONFIG_DIR=/home/agent/.tfenv\n") {
+		t.Error("ENV TFENV_CONFIG_DIR must be under the writable box home (/home/agent/.tfenv)")
+	}
+	if !strings.Contains(df, "\nENV TFENV_ROOT=/opt/tfenv\n") {
+		t.Error("ENV TFENV_ROOT=/opt/tfenv is not set")
+	}
+	// The effective PATH is the LAST ENV PATH= line; it must put the tfenv shim
+	// ahead of /usr/local/bin/terraform.
+	last := ""
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "ENV PATH=") {
+			last = in
+		}
+	}
+	if !strings.HasPrefix(last, "ENV PATH=/opt/tfenv/bin:") {
+		t.Errorf("the final ENV PATH must start with /opt/tfenv/bin:, got %q", last)
+	}
+	var block string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/opt/tfenv/default-version") && !strings.Contains(in, "agent-box-entrypoint &&") {
+			block = in
+		}
+	}
+	for _, want := range []string{
+		`echo "${TERRAFORM_VERSION}" > /opt/tfenv/default-version`,
+		"chmod 0644 /opt/tfenv/use-gpgv /opt/tfenv/default-version",
+		// the build-time proof: the REAL entrypoint seeds a throwaway dir, then the shim runs
+		"TFENV_CONFIG_DIR=/tmp/tfenv-check /usr/local/bin/agent-box-entrypoint true",
+		`TFENV_CONFIG_DIR=/tmp/tfenv-check terraform version | grep -q "v${TERRAFORM_VERSION}"`,
+		"rm -rf /tmp/tfenv-check",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("tfenv RUN lacks %q: %.300s", want, block)
+		}
+	}
+}
+
+// The entrypoint runs on every start against a home that may be weeks old: it
+// re-arms signature checking (use-gpgv is copied unconditionally, a use-gnupg is
+// removed; a failed copy says so on stderr), prunes default versions an earlier
+// image linked in, seeds the current default, and moves `version` with the image
+// only while the user has not changed it. Each step's failure is non-fatal. It
+// must not reference build ARGs.
+func TestDockerfileTfenvEntrypointSeedsHome(t *testing.T) {
+	var entry string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /usr/local/bin/agent-box-entrypoint") {
+			entry = in
+		}
+	}
+	if entry == "" {
+		t.Fatal("no RUN writes the entrypoint")
+	}
+	for _, want := range []string{
+		`if [ -n "${TFENV_CONFIG_DIR:-}" ]; then`,
+		`mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null`,
+		`rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null`,
+		`|| echo "agent-box: tfenv signature checks NOT armed (cannot write \$TFENV_CONFIG_DIR/use-gpgv)" >&2`,
+		`v=$(cat /opt/tfenv/default-version 2>/dev/null)`,
+		// links an earlier image seeded are pruned (only those pointing at the unversioned binary)
+		`for d in "$TFENV_CONFIG_DIR"/versions/*; do [ -n "$v" ] && [ "${d##*/}" != "$v" ] && [ "$(readlink "$d/terraform" 2>/dev/null)" = /usr/local/bin/terraform ] && rm -rf "$d" 2>/dev/null; done`,
+		// version follows the image unless the user changed it (marker rule)
+		`if [ ! -e "$TFENV_CONFIG_DIR/version" ] || cmp -s "$TFENV_CONFIG_DIR/version" "$TFENV_CONFIG_DIR/.agent-box-default"; then cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null; fi`,
+		`cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/.agent-box-default" 2>/dev/null`,
+		`[ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] ||`,
+		`ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"`,
+	} {
+		if !strings.Contains(entry, want) {
+			t.Errorf("entrypoint lacks %s", want)
+		}
+	}
+	// use-gpgv is copied unconditionally: never behind a [ -e ] guard.
+	if strings.Contains(entry, `[ -e "$TFENV_CONFIG_DIR/use-gpgv" ] ||`) {
+		t.Error("use-gpgv must be re-armed on every start, not only when absent")
+	}
+	if strings.Contains(entry, "${TERRAFORM_VERSION}") || strings.Contains(entry, "$TERRAFORM_VERSION") {
+		t.Error("the entrypoint must not reference build ARGs; it reads /opt/tfenv/default-version")
+	}
+}
+
+func TestDockerfileTfenvPinned(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	m, gh := strings.Index(df, marker), strings.Index(df, "# --- gh (GitHub CLI) ---")
+	if strings.Count(df, "\nARG TFENV_VERSION=") != 1 || strings.Count(df, "\nARG TFENV_SHA256=") != 1 {
+		t.Fatal("want exactly one ARG TFENV_VERSION and one ARG TFENV_SHA256 (the tarball is arch-independent)")
+	}
+	for _, a := range []string{"\nARG TFENV_VERSION=", "\nARG TFENV_SHA256=", "\nENV TFENV_CONFIG_DIR="} {
+		if i := strings.Index(df, a); i < m || i > gh {
+			t.Errorf("%q must sit after the marker and before the gh block", strings.TrimSpace(a))
+		}
+	}
+	// HASHICORP_PGP_* belong to the builder stage, ahead of the final stage.
+	if i := strings.Index(df, "\nARG HASHICORP_PGP_SHA256="); i < 0 || i > strings.LastIndex(df, "\nFROM ") {
+		t.Error("ARG HASHICORP_PGP_SHA256 must be in the hashicorp-key builder stage")
+	}
+}
+
+// The entrypoint is a printf-built script: render it exactly as the image does
+// and let sh parse it, so a quoting slip fails here and not at the first box start.
+func TestDockerfileEntrypointIsValidShell(t *testing.T) {
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN printf ") || !strings.Contains(in, "> /usr/local/bin/agent-box-entrypoint") {
+			continue
+		}
+		out := filepath.Join(t.TempDir(), "entrypoint")
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(in, "RUN "), " > /usr/local/bin/agent-box-entrypoint")
+		if b, err := exec.Command("sh", "-c", cmd+" > "+out).CombinedOutput(); err != nil {
+			t.Fatalf("rendering the entrypoint: %v: %s", err, b)
+		}
+		if b, err := exec.Command("sh", "-n", out).CombinedOutput(); err != nil {
+			t.Fatalf("sh -n on the entrypoint: %v: %s", err, b)
+		}
+		return
+	}
+	t.Fatal("no RUN writes the entrypoint")
+}
+
+// The repo is public: a comment must stand alone, never cite a local-only design
+// document ("spec 7a.3") or a path under docs/superpowers.
+func TestPublicFilesCiteNoLocalDocs(t *testing.T) {
+	cite := regexp.MustCompile(`(?i)\(spec [\w. ]*\d|spec correction|docs/superpowers`)
+	wf, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, text := range map[string]string{"Dockerfile": string(dockerfile), "box-image.yml": string(wf)} {
+		if m := cite.FindString(text); m != "" {
+			t.Errorf("%s cites a local-only document: %q", name, m)
+		}
 	}
 }

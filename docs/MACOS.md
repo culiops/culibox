@@ -63,7 +63,7 @@ lives under the data root (`<data root>/vm`). It never becomes your docker
 context and never edits `~/.ssh/config`.
 
     brew install colima docker
-    agent-box box setup        # once: creates the VM, builds the image natively, checks containment
+    agent-box box setup        # once: creates the VM, builds the image natively (or pulls it when `box_image` is a ghcr digest), checks containment
     agent-box doctor           # the "boxed tier", "box image" and "containment" lines
 
 - The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
