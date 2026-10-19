@@ -393,3 +393,137 @@ func TestDockerfileInstallsPython3InItsOwnBlock(t *testing.T) {
 		t.Errorf("python3 block leaves the apt lists in the image:\n%s", block)
 	}
 }
+
+// mcpServersFromDockerfile parses the one JSON document the image's
+// /etc/agent-box/mcp.json printf writes.
+func mcpServersFromDockerfile(t *testing.T) (string, map[string]map[string]any) {
+	t.Helper()
+	var line string
+	for _, in := range dockerfileInstructions() {
+		if strings.Contains(in, "printf") && strings.Contains(in, "/etc/agent-box/mcp.json") {
+			line = in
+		}
+	}
+	if line == "" {
+		t.Fatal("no printf writing /etc/agent-box/mcp.json")
+	}
+	i, j := strings.Index(line, "'{"), strings.LastIndex(line, "}'")
+	if i < 0 || j < i {
+		t.Fatalf("no quoted JSON in %q", line)
+	}
+	var doc struct {
+		MCPServers map[string]map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal([]byte(line[i+1:j+1]), &doc); err != nil {
+		t.Fatalf("mcp.json payload is not JSON: %v", err)
+	}
+	return line, doc.MCPServers
+}
+
+func TestDockerfilePinsPlaywrightMCPVersion(t *testing.T) {
+	df := string(dockerfile)
+	if !strings.Contains(df, "\nARG PLAYWRIGHT_MCP_VERSION=0.0.83\n") {
+		t.Error("Dockerfile does not pin ARG PLAYWRIGHT_MCP_VERSION=0.0.83")
+	}
+	found := false
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no RUN installs @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}")
+	}
+}
+
+func TestDockerfileDeclaresPlaywright(t *testing.T) {
+	line, servers := mcpServersFromDockerfile(t)
+	if got := servers["codebase-memory"]["command"]; got != "/usr/local/bin/codebase-memory-mcp" {
+		t.Errorf("codebase-memory command = %v", got)
+	}
+	pw, ok := servers["playwright"]
+	if !ok {
+		t.Fatal("mcp.json has no playwright server")
+	}
+	if pw["command"] != "/usr/local/bin/playwright-mcp" {
+		t.Errorf("playwright command = %v", pw["command"])
+	}
+	var args []string
+	for _, a := range pw["args"].([]any) {
+		s, _ := a.(string)
+		if strings.Contains(s, "/home/claude") {
+			t.Errorf("playwright arg %q names the host home", s)
+		}
+		args = append(args, s)
+	}
+	has := func(flag, val string) bool {
+		for i, a := range args {
+			if a == flag && (val == "" || (i+1 < len(args) && args[i+1] == val)) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, w := range [][2]string{
+		{"--headless", ""}, {"--isolated", ""},
+		{"--output-dir", "/tmp/playwright-mcp"},
+		{"--browser", "chromium"},
+		{"--executable-path", "/usr/bin/chromium"},
+	} {
+		if !has(w[0], w[1]) {
+			t.Errorf("playwright args %v lack %s %s", args, w[0], w[1])
+		}
+	}
+	// Both servers are checked at build time, not just written.
+	for _, name := range []string{"codebase-memory", "playwright"} {
+		if !strings.Contains(line, `jq -e '.mcpServers["`+name+`"].command'`) {
+			t.Errorf("mcp.json RUN has no jq -e check for %s", name)
+		}
+	}
+}
+
+func TestDockerfileInstallsBrowserInItsOwnBlock(t *testing.T) {
+	df := string(dockerfile)
+	i := strings.Index(df, "# --- Playwright MCP + Chromium ---")
+	if i < 0 {
+		t.Fatal("Dockerfile has no '# --- Playwright MCP + Chromium ---' block")
+	}
+	block := df[i:]
+	if j := strings.Index(block[1:], "\n# --- "); j >= 0 {
+		block = block[:j+1]
+	}
+	for _, want := range []string{
+		"apt-get install -y --no-install-recommends chromium",
+		"rm -rf /var/lib/apt/lists/*",
+		"npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}",
+		"chromium --version",
+		`playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"`,
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("browser block lacks %q:\n%s", want, block)
+		}
+	}
+	// Debian's browser was chosen: no bundled-browser download or path.
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "ENV ") && strings.Contains(in, "PLAYWRIGHT_BROWSERS_PATH") {
+			t.Error("Dockerfile sets PLAYWRIGHT_BROWSERS_PATH, but the Debian chromium is the chosen browser")
+		}
+	}
+}
+
+// The browser must run as the box's own user, not only as root at build time.
+func TestDockerfileChecksBrowserAsAgent(t *testing.T) {
+	user := ""
+	ok := false
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "USER ") {
+			user = strings.TrimPrefix(in, "USER ")
+		}
+		if user == "agent" && strings.HasPrefix(in, "RUN ") && strings.Contains(in, "chromium --version") {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Error("no RUN after USER agent asserts chromium --version")
+	}
+}
