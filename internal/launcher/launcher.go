@@ -377,6 +377,16 @@ func (l *AgentLauncher) AWSFor(agent string) *config.AWSBinding {
 	return cfg.AWS.Clone()
 }
 
+// GitHubFor returns a deep copy of the profile's GitHub binding, or nil for a
+// profile without one (or an unknown profile), for the same reason as AWSFor.
+func (l *AgentLauncher) GitHubFor(agent string) *config.GitHubBinding {
+	cfg, ok := l.agent(agent)
+	if !ok || cfg.GitHub == nil {
+		return nil
+	}
+	return cfg.GitHub.Clone()
+}
+
 // CloneFor returns a copy of the profile's clone spec, or nil, nil for a profile
 // without clone_of (or an unknown one). A stored clone that no longer validates
 // is an error, never a partial spec: the spawn is refused rather than run

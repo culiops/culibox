@@ -260,3 +260,27 @@ func TestRecordRefusesControlCharacters(t *testing.T) {
 		t.Error("usableDir accepts a newline")
 	}
 }
+
+func TestCloneHooksHostOriginRefusesBoxOwnedRepo(t *testing.T) {
+	g, err := clone.NewExecGit()
+	if err != nil {
+		t.Skip("git not on PATH")
+	}
+	home := t.TempDir()
+	dir := filepath.Join(home, "work", "clone")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := testHooks(t, func() []config.Clone { return []config.Clone{{Of: filepath.Join(home, "repo"), Dir: dir}} })
+	if _, err := h.HostOrigin(context.Background(), dir); err == nil {
+		t.Fatal("HostOrigin ran against a box-owned directory")
+	}
+	h.env.Git = g
+	if _, err := h.HostOrigin(context.Background(), dir); err == nil {
+		t.Fatal("HostOrigin ran against a box-owned directory with git available")
+	}
+	h.unavailable = "no containment layer"
+	if _, err := h.HostOrigin(context.Background(), filepath.Join(home, "repo")); err == nil {
+		t.Fatal("an unavailable clone layer must not read an origin")
+	}
+}

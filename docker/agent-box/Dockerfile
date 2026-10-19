@@ -77,6 +77,34 @@ RUN set -eu; \
     unzip -q /tmp/terraform.zip -d /usr/local/bin; rm -f /tmp/terraform.zip; \
     terraform version
 
+# --- gh (GitHub CLI) ---
+# gh 2.102.0 (released 2026-09-30), pinned by version AND per-arch SHA256. Both
+# sums were computed from the downloaded tarballs and match the release's
+# gh_2.102.0_checksums.txt and the GitHub asset digests:
+#   https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz
+#   https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_arm64.tar.gz
+# To bump: take a stable release at least two weeks old, download both tarballs,
+# recompute the sums and compare them with that release's checksums file.
+# It lives in /opt/gh and no token is ever set in the image. /usr/local/bin/gh is a
+# shim: when a GitHub-bound session mounts the broker's wrapper it runs that
+# (which fetches a short-lived token from the broker and runs the real gh);
+# otherwise it runs the real gh untouched.
+ARG GH_VERSION=2.102.0
+ARG GH_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
+ARG GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=amd64; sum="$GH_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$GH_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${a}.tar.gz" -o /tmp/gh.tar.gz; \
+    echo "${sum}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    mkdir /opt/gh; tar -C /opt/gh --strip-components=1 -xzf /tmp/gh.tar.gz; rm -f /tmp/gh.tar.gz; \
+    /opt/gh/bin/gh --version | grep -q "${GH_VERSION}"; \
+    printf '%s\n' '#!/bin/sh' '[ -f /opt/agentbox/agentbox-gh.js ] && exec node /opt/agentbox/agentbox-gh.js "$@"' 'exec /opt/gh/bin/gh "$@"' > /usr/local/bin/gh; \
+    chmod 0755 /usr/local/bin/gh
+
 # --- Go ---
 # Go 1.26.5, pinned by version AND per-arch SHA256 (from go.dev's release list):
 #   https://go.dev/dl/go1.26.5.linux-amd64.tar.gz

@@ -358,3 +358,91 @@ func TestOpenAuditRestrictsFilePermissions(t *testing.T) {
 		}
 	}
 }
+
+func TestAuditProviderRowRoundTrip(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.Record(Row{Time: time.Unix(10, 0), SessionID: "gh-1", Profile: "p", Provider: "github",
+		Subject: "culiops", Installation: 4242, Repos: 3, Outcome: OutcomeMinted}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.ForSession("gh-1", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	r := rows[0]
+	if r.Provider != "github" || r.Subject != "culiops" || r.Installation != 4242 || r.Repos != 3 {
+		t.Fatalf("round trip: %+v", r)
+	}
+}
+
+// A store written before N1 has no provider columns; opening it adds them and
+// its rows read back as AWS.
+func TestAuditOldDBMigrates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(m3aSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`ALTER TABLE credential_audit ADD COLUMN elevated INTEGER NOT NULL DEFAULT 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO credential_audit (ts, session_id, outcome) VALUES (1, 'pre-n1', 'minted')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	first, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	a, err := OpenAudit(path) // reopening must be idempotent
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	rows, err := a.ForSession("pre-n1", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	if rows[0].Provider != "aws" || rows[0].Subject != "" || rows[0].Installation != 0 || rows[0].Repos != 0 {
+		t.Fatalf("old row: %+v", rows[0])
+	}
+}
+
+func TestAuditEmptyProviderStoredAsAWS(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.Record(Row{Time: time.Unix(5, 0), SessionID: "aws-1", Outcome: OutcomeMinted}); err != nil {
+		t.Fatal(err)
+	}
+	var stored string
+	if err := a.db.QueryRow(`SELECT provider FROM credential_audit WHERE session_id = 'aws-1'`).Scan(&stored); err != nil || stored != "aws" {
+		t.Fatalf("stored provider %q, %v", stored, err)
+	}
+	rows, _ := a.ForSession("aws-1", 10)
+	if len(rows) != 1 || rows[0].Provider != "aws" {
+		t.Fatalf("rows: %+v", rows)
+	}
+}
+
+func TestAuditProviderOutcomeValues(t *testing.T) {
+	want := map[Outcome]string{
+		OutcomeDeniedScope: "denied_scope", OutcomeNotInstalled: "not_installed", OutcomeScopeError: "scope_error",
+		OutcomeGitHubError: "github_error", OutcomeRevoked: "revoked", OutcomeRevokeFailed: "revoke_failed",
+	}
+	for o, s := range want {
+		if string(o) != s {
+			t.Errorf("outcome %q != %q", o, s)
+		}
+	}
+}

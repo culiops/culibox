@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -55,7 +56,11 @@ type fakeBrokerHooks struct {
 	nonces      int
 	tokens      int
 	boxForCalls int
+	checkErr    error // CheckGitHub's answer
+	checkCalls  int
+	lastBS      config.Bindings // what BoxFor was last asked for
 	forgot      []string
+	revoked     []string // RevokeGitHub calls, in order
 	next        int
 	state       map[string]struct {
 		until time.Time
@@ -103,22 +108,58 @@ func (f *fakeBrokerHooks) Token(id, nonce string) string {
 	return "tok-" + id + "." + nonce
 }
 
-func (f *fakeBrokerHooks) BoxFor(config.AWSBinding) ([]box.Mount, []string, error) {
+func (f *fakeBrokerHooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boxForCalls++
-	return []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"}},
-		[]string{"AWS_PROFILE=agentbox", "AGENTBOX_BROKER=unix:///opt/agentbox-sock/broker.sock"}, nil
+	f.lastBS = bs
+	env := []string{"AGENTBOX_BROKER=unix:///opt/agentbox-sock/broker.sock"}
+	if bs.AWS != nil {
+		env = append([]string{"AWS_PROFILE=agentbox"}, env...)
+	}
+	if bs.GitHub != nil {
+		env = append(env, "GIT_TERMINAL_PROMPT=0", "AGENTBOX_GH_OWNERS=acme")
+	}
+	return []box.Mount{{Host: "/state/broker/binding-x", Box: "/opt/agentbox"}}, env, nil
+}
+
+func (f *fakeBrokerHooks) CheckGitHub(config.GitHubBinding) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checkCalls++
+	return f.checkErr
 }
 
 func (f *fakeBrokerHooks) StripEnv() []string {
-	return []string{"AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN"}
+	return broker.StripEnv()
 }
+
+// StripGitHubEnv is the real list, like StripEnv: the guard tests below are
+// about what the real lists do to a profile's env.
+func (f *fakeBrokerHooks) StripGitHubEnv() []string { return broker.StripGitHubEnv() }
 
 func (f *fakeBrokerHooks) Forget(id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.forgot = append(f.forgot, id)
+}
+
+func (f *fakeBrokerHooks) RevokeGitHub(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revoked = append(f.revoked, id)
+}
+
+func (f *fakeBrokerHooks) revokes(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, r := range f.revoked {
+		if r == id {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeBrokerHooks) calls() (nonces, tokens, boxFor int) {
@@ -251,8 +292,8 @@ func TestBoundSpawnGetsBrokerEnvMountsTokenAndItsOwnBox(t *testing.T) {
 	if !slices.Contains(env, "AGENTBOX_BROKER=unix:///opt/agentbox-sock/broker.sock") || !slices.Contains(env, "TERM=xterm") {
 		t.Fatalf("env %q lacks the broker URL or lost an unrelated var", env)
 	}
-	if s.AWS == nil || !reflect.DeepEqual(*s.AWS, *testBinding()) || s.AWSNonce != fakeNonce {
-		t.Fatalf("session AWS=%+v nonce=%q", s.AWS, s.AWSNonce)
+	if s.AWS == nil || !reflect.DeepEqual(*s.AWS, *testBinding()) || s.BrokerNonce != fakeNonce {
+		t.Fatalf("session AWS=%+v nonce=%q", s.AWS, s.BrokerNonce)
 	}
 	info := s.Info()
 	want := &AWSInfo{Label: "sandbox", AccountID: "226198813800", RoleARN: testBinding().RoleARN, Prod: false}
@@ -289,8 +330,8 @@ func TestUnboundSpawnIgnoresTheBroker(t *testing.T) {
 	if n, tk, bf := hooks.calls(); n+tk+bf != 0 {
 		t.Fatalf("unbound spawn called the broker: nonce=%d token=%d boxFor=%d", n, tk, bf)
 	}
-	if s.AWS != nil || s.AWSNonce != "" {
-		t.Fatalf("unbound session AWS=%+v nonce=%q", s.AWS, s.AWSNonce)
+	if s.AWS != nil || s.BrokerNonce != "" {
+		t.Fatalf("unbound session AWS=%+v nonce=%q", s.AWS, s.BrokerNonce)
 	}
 	b, _ := json.Marshal(s.Info())
 	if strings.Contains(string(b), `"aws"`) {
@@ -380,8 +421,8 @@ func TestSidecarRestoresTheBinding(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
 	md := sidecarEntry(t, path, s.ID)
-	if md.AWS == nil || !reflect.DeepEqual(*md.AWS, *testBinding()) || md.AWSNonce != fakeNonce {
-		t.Fatalf("sidecar entry AWS=%+v nonce=%q", md.AWS, md.AWSNonce)
+	if md.AWS == nil || !reflect.DeepEqual(*md.AWS, *testBinding()) || md.BrokerNonce != fakeNonce {
+		t.Fatalf("sidecar entry AWS=%+v nonce=%q", md.AWS, md.BrokerNonce)
 	}
 
 	fb.seedLive(s.ID)
@@ -401,8 +442,8 @@ func TestSidecarRestoresTheBinding(t *testing.T) {
 	if r.AWS == nil || !reflect.DeepEqual(*r.AWS, *testBinding()) {
 		t.Fatalf("restored AWS = %+v, want %+v", r.AWS, testBinding())
 	}
-	if r.AWSNonce != fakeNonce {
-		t.Fatalf("restored nonce = %q, want %q", r.AWSNonce, fakeNonce)
+	if r.BrokerNonce != fakeNonce {
+		t.Fatalf("restored nonce = %q, want %q", r.BrokerNonce, fakeNonce)
 	}
 	if r.Info().AWS == nil || r.Info().AWS.AccountID != "226198813800" {
 		t.Fatalf("restored Info.AWS = %+v", r.Info().AWS)
@@ -457,10 +498,10 @@ func TestRestartOfABoundSessionGetsAFreshToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(ns.ID) })
-	if ns.ID == old.ID || ns.AWSNonce == old.AWSNonce || ns.AWSNonce == "" {
-		t.Fatalf("restart reused id/nonce: old %s/%s new %s/%s", old.ID, old.AWSNonce, ns.ID, ns.AWSNonce)
+	if ns.ID == old.ID || ns.BrokerNonce == old.BrokerNonce || ns.BrokerNonce == "" {
+		t.Fatalf("restart reused id/nonce: old %s/%s new %s/%s", old.ID, old.BrokerNonce, ns.ID, ns.BrokerNonce)
 	}
-	want := []string{"AGENTBOX_BROKER_TOKEN=tok-" + ns.ID + "." + ns.AWSNonce}
+	want := []string{"AGENTBOX_BROKER_TOKEN=tok-" + ns.ID + "." + ns.BrokerNonce}
 	if got := envNamed(boxes.lastEnv, "AGENTBOX_BROKER_TOKEN"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("restarted token env = %q, want %q", got, want)
 	}
@@ -723,14 +764,14 @@ func TestBoundSpawnEgressNonceIsNotTheAWSNonce(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
-	if s.EgressNonce == "" || s.EgressNonce == s.AWSNonce {
-		t.Fatalf("EgressNonce=%q AWSNonce=%q: must be set and distinct", s.EgressNonce, s.AWSNonce)
+	if s.EgressNonce == "" || s.EgressNonce == s.BrokerNonce {
+		t.Fatalf("EgressNonce=%q BrokerNonce=%q: must be set and distinct", s.EgressNonce, s.BrokerNonce)
 	}
 	if got := envNamed(boxes.lastEnv, "HTTPS_PROXY"); len(got) != 1 || !strings.Contains(got[0], "etok-"+s.EgressNonce+"@") {
 		t.Fatalf("HTTPS_PROXY = %q, want the egress nonce", got)
 	}
-	if got := envNamed(boxes.lastEnv, brokerTokenEnv); len(got) != 1 || got[0] != brokerTokenEnv+"="+hooks.Token(s.ID, s.AWSNonce) {
-		t.Fatalf("broker token = %q, want one carrying AWSNonce", got)
+	if got := envNamed(boxes.lastEnv, brokerTokenEnv); len(got) != 1 || got[0] != brokerTokenEnv+"="+hooks.Token(s.ID, s.BrokerNonce) {
+		t.Fatalf("broker token = %q, want one carrying BrokerNonce", got)
 	}
 	if got := s.Info().Egress; got != "allowlist" {
 		t.Fatalf("Info.Egress = %q, want allowlist", got)
@@ -814,7 +855,7 @@ func TestSidecarRestoresEgressNonce(t *testing.T) {
 }
 
 // Spec correction 7: a bound session written before A1 minted its proxy token
-// over AWSNonce, so a restore with no egress_nonce adopts it.
+// over BrokerNonce, so a restore with no egress_nonce adopts it.
 func TestPreA1BoundSidecarBackfillsEgressNonce(t *testing.T) {
 	l := awsLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}, binding: testBinding()}
 	path := filepath.Join(t.TempDir(), "sessions.json")
@@ -835,7 +876,7 @@ func TestPreA1BoundSidecarBackfillsEgressNonce(t *testing.T) {
 	md := sidecarEntry(t, path, s.ID)
 	md.EgressNonce = ""
 	m.sidecar.put(s.ID, md)
-	if got := sidecarEntry(t, path, s.ID); got.EgressNonce != "" || got.AWSNonce == "" {
+	if got := sidecarEntry(t, path, s.ID); got.EgressNonce != "" || got.BrokerNonce == "" {
 		t.Fatalf("setup: record = %+v", got)
 	}
 	fb.seedLive(s.ID)
@@ -852,8 +893,8 @@ func TestPreA1BoundSidecarBackfillsEgressNonce(t *testing.T) {
 		t.Fatal("session not reattached")
 	}
 	t.Cleanup(func() { _ = m2.Kill(r.ID) })
-	if r.EgressNonce == "" || r.EgressNonce != r.AWSNonce {
-		t.Fatalf("EgressNonce=%q AWSNonce=%q, want the backfill", r.EgressNonce, r.AWSNonce)
+	if r.EgressNonce == "" || r.EgressNonce != r.BrokerNonce {
+		t.Fatalf("EgressNonce=%q BrokerNonce=%q, want the backfill", r.EgressNonce, r.BrokerNonce)
 	}
 	if r.Info().Egress != "allowlist" {
 		t.Fatalf("Info.Egress = %q", r.Info().Egress)

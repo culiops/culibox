@@ -1035,11 +1035,11 @@ func TestDefaultAllowMatchesSpec(t *testing.T) {
 }
 
 func TestEffective(t *testing.T) {
-	if got := Effective(nil); !reflect.DeepEqual(got, DefaultAllow()) {
-		t.Fatalf("Effective(nil) = %q", got)
+	if got := Effective(nil, nil); !reflect.DeepEqual(got, DefaultAllow()) {
+		t.Fatalf("Effective(nil, nil) = %q", got)
 	}
 	b := bound()
-	got := Effective(b)
+	got := Effective(b, nil)
 	if !reflect.DeepEqual(got, append(DefaultAllow(), "extra.example.org")) {
 		t.Fatalf("Effective = %q", got)
 	}
@@ -1047,10 +1047,10 @@ func TestEffective(t *testing.T) {
 	got[0], got[len(got)-1] = "mutated", "mutated"
 	d := DefaultAllow()
 	d[1] = "*.com"
-	n := Effective(nil)
+	n := Effective(nil, nil)
 	n[0] = "mutated"
 	if DefaultAllow()[0] != "api.anthropic.com" || DefaultAllow()[1] != "*.amazonaws.com" ||
-		Effective(nil)[0] != "api.anthropic.com" || b.EgressAllow[0] != "extra.example.org" {
+		Effective(nil, nil)[0] != "api.anthropic.com" || b.EgressAllow[0] != "extra.example.org" {
 		t.Fatal("a returned allowlist aliases DefaultAllow or the binding")
 	}
 }
@@ -1400,5 +1400,54 @@ func TestModeFollowsTheCurrentView(t *testing.T) {
 			t.Fatalf("step %d: status %d, want %d", i, code, step.want)
 		}
 		c.Close()
+	}
+}
+
+func ghView() SessionView {
+	return SessionView{Nonce: nonceA, Box: "box-1", Boxed: true, Live: true,
+		GitHub: &config.GitHubBinding{}}
+}
+
+func TestProxyGitHubSessionAllowsShard(t *testing.T) {
+	const shard = "productionresultssa9.blob.core.windows.net:443"
+	h := newHarness(t, nil)
+	h.setView("s1", ghView())
+	code, c := h.connect(t, shard, "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("github session: status %d", code)
+	}
+	c.Close()
+	if r := h.onlyRow(t); r.Outcome != OutcomeAllowed || r.Host != "productionresultssa9.blob.core.windows.net" {
+		t.Fatalf("row = %+v", r)
+	}
+
+	// The same host from an AWS-only session is denied and audited.
+	h2 := newHarness(t, nil)
+	code, _ = h2.connect(t, shard, "s1", h2.tok("s1", nonceA))
+	if code != 403 {
+		t.Fatalf("aws-only session: status %d, want 403", code)
+	}
+	if r := h2.onlyRow(t); r.Outcome != OutcomeDenied {
+		t.Fatalf("row = %+v", r)
+	}
+	if len(h2.dials()) != 0 {
+		t.Fatal("dialled")
+	}
+}
+
+// A GitHub-only binding is a bound session: it gets the allowlist, not open
+// mode (the HIGH finding: v.AWS == nil used to mean "unbound").
+func TestProxyGitHubOnlySessionNotOpen(t *testing.T) {
+	h := newHarness(t, nil)
+	h.setView("s1", ghView())
+	code, _ := h.connect(t, "example.com:443", "s1", h.tok("s1", nonceA))
+	if code != 403 {
+		t.Fatalf("status %d, want 403", code)
+	}
+	if r := h.onlyRow(t); r.Outcome != OutcomeDenied || r.Host != "example.com" {
+		t.Fatalf("row = %+v", r)
+	}
+	if len(h.dials()) != 0 {
+		t.Fatal("dialled")
 	}
 }

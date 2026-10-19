@@ -94,6 +94,7 @@ type AgentConfig struct {
 	DefaultCwd string            `json:"default_cwd,omitempty"` // optional default working dir; pre-fills the spawn form's workspace
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
+	GitHub     *GitHubBinding    `json:"github,omitempty"`      // credential-broker GitHub access (read-only installation tokens); boxed profiles only
 	CloneOf    string            `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
 	CloneShare []string          `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
 
@@ -164,6 +165,7 @@ type Config struct {
 	SecretSources   []SecretSource `json:"secret_sources,omitempty"`
 	Options         []OptionDef    `json:"options,omitempty"`
 	Agents          []AgentConfig  `json:"agents"`
+	GitHubApps      []GitHubApp    `json:"github_apps,omitempty"` // GitHub App connections that profile github bindings name
 
 	// DefaultRuntime is the tier for any agent that does not name one. It exists
 	// because the quick-shell profile is GENERATED, not configured, so no
@@ -316,6 +318,9 @@ func (c Config) Validate() error {
 	if c.EgressPortOrDefault() == c.BrokerPortOrDefault() {
 		return fmt.Errorf("config: egress_port %d must differ from broker_port", c.EgressPortOrDefault())
 	}
+	if err := ValidateGitHubApps(c.GitHubApps); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
 		if a.Name == "" || a.Bin == "" {
@@ -336,6 +341,12 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: agent %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 		}
 		if err := validateAWS(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		if err := validateGitHub(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		if err := CheckGitHubApps(a, c.GitHubApps); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if err := validateClone(a); err != nil {
@@ -431,6 +442,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 	}
 	if err := validateAWS(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateGitHub(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateClone(a); err != nil {

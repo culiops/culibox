@@ -65,6 +65,19 @@ func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory boo
 	return h.prepare(ctx, h.env, c, withMemory)
 }
 
+// HostOrigin reads the host repo's origin URL. `of` passed checkOf in Prepare,
+// and is checked again here so this call never runs the host's git in a repo a
+// box can write.
+func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) {
+	if h.unavailable != "" || h.env.Git == nil {
+		return "", fmt.Errorf("clone mode is unavailable (%s)", h.unavailable)
+	}
+	if err := h.checkOf(of); err != nil {
+		return "", err
+	}
+	return clone.HostOriginURL(ctx, h.env.Git, of)
+}
+
 // BoxOwned checks the live profiles' clones plus every recorded dir. An
 // unreadable or corrupt record fails closed: everything is reported owned.
 func (h *cloneHooks) BoxOwned(cwd string) (string, bool) {

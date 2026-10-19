@@ -56,7 +56,7 @@ func TestStartEgressPersistsSecret(t *testing.T) {
 
 func TestStartEgressSecretIsNotTheBrokerSecret(t *testing.T) {
 	dir := shortRoot(t) // holds the broker socket
-	if _, err := startBroker(dir, dir, "linux", 0, noSessions, func(string) (session.Info, bool) { return session.Info{}, false }); err != nil {
+	if _, err := startBroker(dir, dir, "linux", 0, noSessions, func(string) (session.Info, bool) { return session.Info{}, false }, nil); err != nil {
 		t.Fatal(err)
 	}
 	e, err := startEgress(dir, absentLayer(), config.Config{}, "linux", noSessions)
@@ -101,7 +101,7 @@ func TestStartEgressDarwinUnsupported(t *testing.T) {
 
 func TestEgressLookup(t *testing.T) {
 	sessions := map[string]*session.Session{
-		"claude-3": {ID: "claude-3", Box: "agent-box-x", Runtime: config.RuntimeBox, AWS: wireBinding(), AWSNonce: "broker-only", EgressNonce: egressNonce},
+		"claude-3": {ID: "claude-3", Box: "agent-box-x", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: "broker-only", EgressNonce: egressNonce},
 		"claude-4": {ID: "claude-4", Runtime: config.RuntimeHost, AWS: wireBinding(), EgressNonce: egressNonce},
 		"claude-5": {ID: "claude-5", Box: "agent-box-y", Runtime: config.RuntimeBox, EgressNonce: egressNonce},
 	}

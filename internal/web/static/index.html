@@ -305,6 +305,17 @@
           <p class="tiny" id="pf-aws-elev-help">The window bounds the agent's credentials, not everything it sets up. Even with IAM writes off, it can create access that outlives the window through resource policies (an S3 bucket policy, a KMS grant, an EC2 key pair, a Lambda function URL).</p>
           <p class="warnbox tiny" id="pf-aws-elev-warn" hidden>With IAM writes on, an agent that can create a role can make one that trusts an outside account, which outlives the window. The window then bounds these credentials, not what the agent can set up.</p>
         </div>
+        <div id="pf-gh-block">
+          <span class="flab">GitHub (boxed only)</span>
+          <p class="tiny mut" id="pf-gh-hint" hidden>GitHub needs runtime: box. The host tier cannot contain credentials.</p>
+          <p class="tiny mut" id="pf-gh-noapps" hidden>No GitHub App is defined. Add one under github_apps in config.json.</p>
+          <div id="pf-gh-owners"></div>
+          <button id="pf-gh-add" type="button" class="btn">+ owner</button>
+          <span class="flab" id="pf-gh-perms-lab">Read permissions</span>
+          <div id="pf-gh-perms" role="group" aria-labelledby="pf-gh-perms-lab"></div>
+          <p class="warnbox tiny" id="pf-gh-perm-err" role="alert" hidden></p>
+          <p class="tiny" id="pf-gh-help">Agents get 1-hour read-only tokens for these repos. The agent can read the token while it runs.</p>
+        </div>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
           <label class="pf-check"><input type="checkbox" id="pf-replyable"> Allow replies by default</label>

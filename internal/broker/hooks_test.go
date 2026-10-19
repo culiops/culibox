@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
@@ -17,7 +18,7 @@ func testHooks(t *testing.T) Hooks {
 
 func TestHooksBoxFor(t *testing.T) {
 	h := testHooks(t)
-	mounts, env, err := h.BoxFor(*binding())
+	mounts, env, err := h.BoxFor(awsOnly(*binding()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +38,7 @@ func TestHooksBoxForRefusesAnInvalidBinding(t *testing.T) {
 	h := testHooks(t)
 	b := *binding()
 	b.Region = "x\n[evil]"
-	if _, _, err := h.BoxFor(b); err == nil {
+	if _, _, err := h.BoxFor(awsOnly(b)); err == nil {
 		t.Fatal("an invalid binding was prepared")
 	}
 }
@@ -82,5 +83,19 @@ func TestHooksAWSState(t *testing.T) {
 	h.Forget("aws-1")
 	if until, sso := h.AWSState("aws-1"); !until.IsZero() || sso != "" {
 		t.Fatalf("Forget left %v %q", until, sso)
+	}
+}
+
+func TestHooksBoxForGitHub(t *testing.T) {
+	h := testHooks(t)
+	mounts, env, err := h.BoxFor(config.Bindings{GitHub: ghTwoOwners()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) != 2 || mounts[0].Box != BoxDir {
+		t.Fatalf("mounts %+v", mounts)
+	}
+	if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") || !slices.Contains(env, "AGENTBOX_GH_OWNERS=culiops,CuliOps2") {
+		t.Fatalf("env %q", env)
 	}
 }

@@ -92,12 +92,13 @@ type AWSStatusAdapter struct {
 // the sign-in code and URL are left out.
 func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) { return a.AWSStatusFor(id, false) }
 
-// AWSStatusFor is ok only for a known session that has an AWS binding. The
+// AWSStatusFor is ok only for a known session that has an AWS or a GitHub
+// binding (the credential broker's audit rows and counters serve both). The
 // device sign-in code and URL are in the reply only when cookie is true: they
 // are shown to the browser session that asked for the flow, not to a token.
 func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	info, ok := a.Get(id)
-	if !ok || info.AWS == nil {
+	if !ok || (info.AWS == nil && info.GitHub == nil) {
 		return nil, false
 	}
 	stats, _ := a.Stats(id)
@@ -110,15 +111,23 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	if rows == nil {
 		rows = []broker.Row{}
 	}
-	out := map[string]any{
-		"label": info.AWS.Label, "account_id": info.AWS.AccountID, "role_arn": info.AWS.RoleARN,
-		"prod": info.AWS.Prod, "stats": stats, "recent": rows,
+	out := map[string]any{"stats": stats, "recent": rows}
+	if info.AWS != nil {
+		out["label"], out["account_id"], out["role_arn"], out["prod"] = info.AWS.Label, info.AWS.AccountID, info.AWS.RoleARN, info.AWS.Prod
+	}
+	if g := info.GitHub; g != nil {
+		owners := g.Owners
+		if owners == nil {
+			owners = []string{} // [] on the wire, never null
+		}
+		out["github"] = map[string]any{"owners": owners, "repos": g.Repos}
 	}
 	if a.Egress != nil && info.Egress != "" {
 		es, _ := a.Egress(id)
 		out["egress"] = map[string]any{"mode": info.Egress, "allowed": es.Allowed, "denied": es.Denied}
 	}
-	if e := info.AWS.Elevate; e != nil {
+	if info.AWS != nil && info.AWS.Elevate != nil {
+		e := info.AWS.Elevate
 		gc := GrantContext{}
 		if a.Grant != nil {
 			gc = a.Grant(id)
@@ -135,12 +144,12 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		}
 		out["elevate"] = el
 	}
-	if a.Elevation != nil {
+	if a.Elevation != nil && info.AWS != nil {
 		if v, ok := a.Elevation(id); ok {
 			out["elevation"] = v
 		}
 	}
-	if a.SSO != nil {
+	if a.SSO != nil && info.AWS != nil {
 		if s, ok := a.SSO(id); ok {
 			if s.Login != nil && !cookie {
 				l := *s.Login

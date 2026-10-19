@@ -1134,6 +1134,21 @@
     #pf-aws-block { margin-top: 14px; }
     #pf-aws-block > .flab { display: block; margin-bottom: 6px; }
     #pf-aws-hint { margin: 0 0 8px; }
+    /* The GitHub block sits beside the AWS one and is closed by the same rules
+       (lock, host tier). Owner rows reuse .frow/.fcol, so they stack on a phone
+       with the rest of the editor. */
+    #pf-gh-block { margin-top: 14px; }
+    #pf-gh-block > .flab { display: block; margin-bottom: 6px; }
+    #pf-gh-hint, #pf-gh-noapps { margin: 0 0 8px; }
+    .pf-gh-owner { align-items: flex-start; }
+    .pf-gh-owner .fcol.app { flex: 0 0 150px; }
+    .pf-gh-owner .fcol.repos { flex: 2; }
+    .pf-gh-owner .fcol.rm { flex: none; padding-top: 22px; }
+    .pf-gh-app, .pf-gh-owner-name, .pf-gh-repos { width: 100%; box-sizing: border-box; }
+    .pf-gh-repos { resize: vertical; }
+    .pf-gh-rm { min-width: 36px; }
+    #pf-gh-add { margin-bottom: 14px; }
+    #pf-gh-perms { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 10px; }
     .fcol { flex: 1; min-width: 0; }
     .flab {
       font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
@@ -2026,7 +2041,22 @@
       #pf-options .fcol:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
       #pf-options input[type="checkbox"] { width: var(--tap); height: var(--tap); margin: 0; flex: none; }
       .pitem { min-height: var(--tap); }
-      .plist-foot .btn, #pf-env-add, #pf-secret-add { min-height: var(--tap); }
+      .plist-foot .btn, #pf-env-add, #pf-secret-add, #pf-gh-add { min-height: var(--tap); }
+      /* GitHub owner rows: the frow stacks, so the card's remove button goes
+         full width under its fields instead of hanging off a column. */
+      /* The desktop row is align-items:flex-start, which in this column-stacked
+         .frow shrinks every field to its content (a 96px App select). Rows are a
+         two-column grid instead: App beside a compact x on the first line, then
+         Owner and Repositories at full width, like the AWS block's fields. */
+      .frow.pf-gh-owner { display: grid; grid-template-columns: 1fr var(--tap); column-gap: 10px; align-items: stretch;
+                     padding-bottom: 6px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+      .pf-gh-owner .fcol { margin-bottom: 10px; }
+      .pf-gh-owner .fcol.app { flex: none; grid-column: 1; grid-row: 1; }
+      .pf-gh-owner .fcol.rm { padding-top: 0; grid-column: 2; grid-row: 1; align-self: end; }
+      .pf-gh-owner .fcol.own, .pf-gh-owner .fcol.repos { grid-column: 1 / -1; }
+      .pf-gh-owner .fcol.rm .btn { min-height: var(--tap); width: var(--tap); padding: 0; }
+      #pf-gh-perms .pf-check { min-height: var(--tap); }
+      #pf-gh-perms input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       /* The containment segments and the token row's own buttons are controls
          this slice added too; nothing else sizes them for a finger. A profile
          option can offer up to four choices (see renderPfOptions) and an

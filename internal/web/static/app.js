@@ -2784,6 +2784,106 @@ function syncPfReplyable() {
   // rather than dropping it.
   $("pf-replyable-row").hidden = globalThis.repliesEnabled !== true || !isClaudeBinName($("pf-bin").value);
 }
+// --- the GH block of the profile editor (N1) --------------------------------
+// ghApps: the instance's GH App names from /api/meta (names only; the client id
+// and key path never reach the browser). Loaded once at boot by initEnv.
+let ghApps = [];
+// The stored binding as loaded: the editor has no field for its extra egress
+// hosts, so they are carried unchanged on save (see ghBindingFromForm).
+let pfLoadedGh = null;
+let ghRowSeq = 0;
+function ghField(cls, labelText, ctrl) {
+  const col = document.createElement("div");
+  col.className = "fcol " + cls;
+  const id = "pf-gh-f" + (++ghRowSeq);
+  ctrl.id = id;
+  const lab = document.createElement("label");
+  lab.className = "flab";
+  lab.htmlFor = id;
+  lab.textContent = labelText;
+  col.append(lab, ctrl);
+  return col;
+}
+// renderGhOwners paints one row per owner: App picker, owner login, repos, and a
+// remove button. Rows are rebuilt from plain {owner, app, repos} objects, so
+// add and remove never lose what was typed in the other rows (readGhRows first).
+function renderGhOwners(rows) {
+  const host = $("pf-gh-owners");
+  host.replaceChildren();
+  rows.forEach((r, i) => {
+    const row = document.createElement("div");
+    row.className = "frow pf-gh-owner";
+    const sel = document.createElement("select");
+    sel.className = "fld pf-gh-app";
+    // A stored App that is no longer defined stays selectable, so opening and
+    // saving a profile never silently re-points it; the server then names it.
+    const names = ghApps.includes(r.app) || !r.app ? ghApps : [...ghApps, r.app];
+    if (!names.length) {
+      const o = document.createElement("option");
+      o.value = ""; o.textContent = "no App defined"; o.disabled = true;
+      sel.append(o);
+    }
+    for (const n of names) {
+      const o = document.createElement("option");
+      o.value = n; o.textContent = n;
+      sel.append(o);
+    }
+    sel.value = r.app || names[0] || "";
+    const owner = document.createElement("input");
+    owner.type = "text"; owner.className = "fld pf-gh-owner-name"; owner.placeholder = "culiops";
+    owner.autocomplete = "off"; owner.spellcheck = false; owner.value = r.owner || "";
+    const repos = document.createElement("textarea");
+    repos.className = "fld pf-gh-repos"; repos.rows = 2; repos.spellcheck = false;
+    repos.placeholder = "one per line or comma separated"; repos.value = r.repos || "";
+    const rm = document.createElement("button");
+    rm.type = "button"; rm.className = "btn pf-gh-rm"; rm.textContent = "×";
+    rm.setAttribute("aria-label", "Remove owner " + (i + 1));
+    rm.addEventListener("click", () => {
+      const cur = readGhRows();
+      cur.splice(i, 1);
+      renderGhOwners(cur);
+      syncEditorActions();
+    });
+    const rmCol = document.createElement("div");
+    rmCol.className = "fcol rm";
+    rmCol.append(rm);
+    row.append(ghField("app", "App", sel), ghField("own", "Owner", owner), ghField("repos", "Repositories", repos), rmCol);
+    host.append(row);
+  });
+  $("pf-gh-noapps").hidden = ghApps.length > 0;
+}
+function readGhRows() {
+  return [...$("pf-gh-owners").querySelectorAll(".pf-gh-owner")].map((row) => ({
+    owner: row.querySelector(".pf-gh-owner-name").value,
+    app: row.querySelector(".pf-gh-app").value,
+    repos: row.querySelector(".pf-gh-repos").value,
+  }));
+}
+function renderGhPerms(checked) {
+  const host = $("pf-gh-perms");
+  host.replaceChildren();
+  for (const k of GH_PERMS) {
+    const lab = document.createElement("label");
+    lab.className = "pf-check";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.dataset.perm = k; cb.checked = !!checked[k];
+    cb.addEventListener("change", () => { $("pf-gh-perm-err").hidden = true; });
+    lab.append(cb, document.createTextNode(k.replace(/_/g, " ")));
+    host.append(lab);
+  }
+}
+function readGhPerms() {
+  const out = {};
+  for (const cb of $("pf-gh-perms").querySelectorAll("input[data-perm]")) out[cb.dataset.perm] = cb.checked;
+  return out;
+}
+$("pf-gh-add").addEventListener("click", () => {
+  renderGhOwners([...readGhRows(), { owner: "", app: "", repos: "" }]);
+  syncEditorActions();
+  const last = $("pf-gh-owners").querySelector(".pf-gh-owner:last-child .pf-gh-owner-name");
+  if (last) last.focus();
+});
+
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
@@ -2826,6 +2926,10 @@ function fillForm(p) {
   $("pf-aws-elev-max").value = String(elev.max_minutes === 30 ? 30 : 60);
   $("pf-aws-elev-iam").checked = !!elev.allow_iam;
   syncPfElevWarn();
+  const gh = p.github || null;
+  pfLoadedGh = gh;
+  renderGhOwners(((gh && gh.owners) || []).map((o) => ({ owner: o.owner, app: o.app, repos: (o.repos || []).join("\n") })));
+  renderGhPerms(ghPermsChecked(gh));
   syncPfReplyable();
   syncEditorActions();
 }
@@ -2866,6 +2970,12 @@ function syncEditorActions() {
     f.disabled = aws.disabled;
   }
   $("pf-aws-hint").hidden = !aws.hint;
+  // The GH block closes on exactly the same terms (lock, host tier).
+  for (const f of $("pf-gh-block").querySelectorAll(".fld, .btn, input[type=checkbox]")) {
+    f.classList.toggle("off", aws.disabled);
+    f.disabled = aws.disabled;
+  }
+  $("pf-gh-hint").hidden = !aws.hint;
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
 // no-op; only grab focus when the dialog is actually on screen.
@@ -2881,6 +2991,8 @@ function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
   const aws = readAWSFields((id) => { const el = $(id); return el.type === "checkbox" ? el.checked : el.value; });
   if (aws) p.aws = aws;
+  const gh = ghBindingFromForm({ owners: readGhRows(), permissions: readGhPerms(), egress_allow: pfLoadedGh && pfLoadedGh.egress_allow });
+  if (gh) p.github = gh;
   // The tier is always sent as shown (see runtimeToSend): a blank would let the
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an
@@ -2920,6 +3032,11 @@ async function saveProfile() {
   if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
   const rowsErr = rowError(pfEnvRows);
   if (rowsErr) { setDialogError("settings-modal", rowsErr); return; }
+  // No permission ticked: shown on the GH block itself as well as in the dialog's line.
+  const ghErr = ghFormError({ owners: readGhRows(), permissions: readGhPerms() });
+  $("pf-gh-perm-err").textContent = ghErr;
+  $("pf-gh-perm-err").hidden = !ghErr;
+  if (ghErr) { setDialogError("settings-modal", ghErr); return; }
   // Containment is the one field whose consequence is worth naming before it is
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
@@ -4362,6 +4479,9 @@ initMobileShell();
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    ghApps = meta && Array.isArray(meta.github_apps) ? meta.github_apps : [];
+    renderGhOwners(readGhRows()); // the App pickers, now that the names are known
+    syncEditorActions();
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     lastRateLimits = (meta && meta.rate_limits) || null;

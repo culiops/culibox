@@ -40,6 +40,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 ### Cloud access, audit and secrets
 
 - **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`.
+- **GitHub access.** A boxed profile can carry a `github` binding. The broker mints one-hour, read-only GitHub App installation tokens scoped to the repos you list; `git` and `gh` in the box use them, and the box never holds a personal access token (see [GitHub access for agents](#github-access-for-agents)).
 - **Attribution and audit.** Credentials are minted with `SourceIdentity` and role session name `agentbox-<session id>`, so CloudTrail records the agent session rather than you. The broker also writes every mint, refusal and failure to a local SQLite audit log, with no credential values in it.
 - **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment or a file, injected only into the agent that declares them, and never logged.
 - **`agent-box doctor`.** Checks the machine and prints PASS, WARN or FAIL lines. It is read-only and prints no secrets, so the output is safe to paste into an issue.
@@ -137,6 +138,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `analytics.enabled` | `true` | Token and cost analytics. |
 | `box_vm_cpus`, `box_vm_memory_gib` | 4, 4 | macOS box VM size. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
+| `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
 `box_pids_limit`, `box_tmp_size` and `box_memory` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
@@ -205,6 +207,60 @@ Commit subjects are printed with control characters replaced, because a box wrot
 - A file you copy out of a clone by hand might be a symlink the box planted, and `cp` would copy its target. Check that it is a regular file first.
 - The box and the host share a disk. A box can fill it; there is no per-box quota.
 - agent-box's file editor follows links inside box-written directories. Treat a clone's contents as untrusted when you open them in the UI.
+
+## GitHub access for agents
+
+A boxed profile can carry a `github` binding. The credential broker then mints short-lived, read-only GitHub App installation tokens for the repositories you list, so the agent can `git clone`, `git fetch` and use `gh` without a personal access token in the box. Linux only for now: a bound profile is refused on macOS and on the host tier.
+
+**1. Create the GitHub App.** Give it read permissions only (agent-box never asks for write). Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
+
+**2. Store the private key.** Put the PEM file where the daemon user owns it, as a regular file (not a symlink) with mode `0600` or tighter. Then declare the App in `config.json` and restart agent-box (see the `github_apps` row in [Configuration](#configuration)):
+
+```json
+"github_apps": [
+  { "name": "my-org", "client_id": "Iv23liXXXXXXXXXXXXXX",
+    "private_key": { "type": "file", "path": "/home/me/.config/agent-box/my-org.pem" } }
+]
+```
+
+The key is never copied into a box. agent-box reads the key file once per daemon run and caches it after the first load, so after you rotate or change the key file, restart agent-box. When a bound session spawns, agent-box checks that the App is configured and its key loads (no network call), and refuses the spawn if not.
+
+**3. Add the binding to a profile.** Set `"runtime": "box"` explicitly, then fill in the GitHub section of the profile form, or write it in `config.json`:
+
+```json
+"github": {
+  "owners": [
+    { "owner": "my-org", "app": "my-org", "repos": ["api", "web"] }
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `owners[].owner` | The account or organisation that owns the repos. |
+| `owners[].app` | The `name` of a `github_apps` entry that is installed on that owner. |
+| `owners[].repos` | The repositories a token may reach (up to 100 per owner). |
+| `permissions` | Optional, read-only. The default is `actions`, `checks`, `contents`, `pull_requests`, `issues` and `metadata`; `statuses` can be added. Any value other than `"read"` is refused. |
+| `egress_allow` | Optional extra hosts for this binding's boxes, on top of the GitHub hosts below. |
+
+The box image must include `gh`: use an image built from this version (tag `2026-10-19.2` or later) and set `box_image` to it (see `box setup` above).
+
+**How the agent uses it**
+
+- `git` over HTTPS to `github.com` asks the broker for a token through a credential helper. Nothing is stored and no token is in the environment.
+- `gh` is a thin wrapper that fetches a token for the repo's owner and sets `GH_TOKEN` only on the real `gh` process it starts. In a clone-mode box, `GH_REPO` is set from the host repo's `origin` when that repo is in the binding, because the box's own `origin` is a host path.
+- Each token lasts one hour (GitHub's fixed lifetime for installation tokens), covers only the repos you listed and the read permissions you chose, and is reused until 10 minutes before it expires.
+- Two sessions with an identical binding share one box and one uid, so their audit rows are effectively per box. That is no scope escalation: both hold the same scope.
+- Every mint is written to the audit log (`audit.db`) with the session, owner and installation, never the token. If that row cannot be written, no token is returned.
+- Tokens are revoked at GitHub when the agent exits or you kill the session, and on a clean daemon shutdown. If the daemon crashes, they are left to expire, at most one hour later.
+
+**Egress.** A GitHub-bound box may also reach `api.github.com`, `codeload.github.com`, `results-receiver.actions.githubusercontent.com` and `productionresultssa<N>.blob.core.windows.net` (the Actions log shards `productionresultssa0` to `productionresultssa199` except 22, never `*.blob.core.windows.net`), plus the binding's `egress_allow`. `github.com` is already in the default allowlist.
+
+**What this does and does not protect against**
+
+- **The agent can read the token while it runs.** It can run `git credential fill`, read the `gh` child's environment, or call the broker socket itself. The helper design prevents accidental exposure only: the token is not inherited by every child process or MCP server, does not show up in `env` dumps and is not pasted into transcripts. It does not stop a deliberate read.
+- The real controls are the one-hour lifetime, the repo and read-only scope, the egress lock, the per-mint audit and revocation when the session ends.
+- **Residual: exfiltration through `github.com`.** It is open to every bound box, so an agent could push data to a repository it controls, using credentials it brought itself. This is not new and not fixed here.
 
 ## Security model
 

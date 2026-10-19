@@ -47,7 +47,7 @@ func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 			return egress.SessionView{}, false
 		}
 		return egress.SessionView{Nonce: s.EgressNonce, Box: s.Box, Boxed: s.Runtime == config.RuntimeBox,
-			Live: !s.Exited(), AWS: s.AWS}, true
+			Live: !s.Exited(), AWS: s.AWS, GitHub: s.GitHub}, true
 	}
 }
 
