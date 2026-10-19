@@ -20,6 +20,14 @@ const (
 	OutcomeSSOExpired    Outcome = "sso_expired"
 	OutcomeSTSError      Outcome = "sts_error"
 	OutcomeRateLimited   Outcome = "rate_limited"
+
+	// GitHub-provider outcomes.
+	OutcomeDeniedScope  Outcome = "denied_scope"
+	OutcomeNotInstalled Outcome = "not_installed"
+	OutcomeScopeError   Outcome = "scope_error"
+	OutcomeGitHubError  Outcome = "github_error"
+	OutcomeRevoked      Outcome = "revoked"
+	OutcomeRevokeFailed Outcome = "revoke_failed"
 )
 
 // Row is one audited credential request. It never carries credential values or
@@ -36,6 +44,12 @@ type Row struct {
 	Outcome        Outcome   `json:"outcome"`
 	Error          string    `json:"error,omitempty"`
 	Elevated       bool      `json:"elevated,omitempty"`
+	// Provider names the credential kind; empty is stored (and read back) as "aws".
+	Provider string `json:"provider,omitempty"`
+	// Subject is the GitHub owner the token was minted for.
+	Subject      string `json:"subject,omitempty"`
+	Installation int64  `json:"installation,omitempty"`
+	Repos        int    `json:"repos,omitempty"`
 }
 
 // Action classifies one row of the approval log: a human decision about write
@@ -120,6 +134,17 @@ func OpenAudit(path string) (*Audit, error) {
 		db.Close()
 		return nil, fmt.Errorf("audit migrate: %w", err)
 	}
+	for _, c := range [][2]string{
+		{"provider", "TEXT NOT NULL DEFAULT 'aws'"},
+		{"subject", "TEXT NOT NULL DEFAULT ''"},
+		{"installation", "INTEGER NOT NULL DEFAULT 0"},
+		{"repos", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if err := addColumnIfMissing(db, "credential_audit", c[0], c[1]); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("audit migrate: %w", err)
+		}
+	}
 	// SQLite creates the file 0644; it records who was granted write access and
 	// why, so only the owner may read it. The -wal/-shm siblings exist while the
 	// store is open and are tightened the same way.
@@ -154,10 +179,16 @@ func (a *Audit) Record(r Row) error {
 	if !r.Expires.IsZero() {
 		exp = r.Expires.Unix()
 	}
+	provider := r.Provider
+	if provider == "" {
+		provider = "aws"
+	}
 	_, err := a.db.Exec(`INSERT INTO credential_audit
-		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, r.SourceIdentity, r.ScopeHash, exp, string(r.Outcome), r.Error, b2i(r.Elevated))
+		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
+		 provider, subject, installation, repos)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, r.SourceIdentity, r.ScopeHash, exp, string(r.Outcome), r.Error, b2i(r.Elevated),
+		provider, r.Subject, r.Installation, r.Repos)
 	return err
 }
 
@@ -254,7 +285,8 @@ func b2i(b bool) int {
 
 // ForSession returns up to limit rows for a session, newest first.
 func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
-	rows, err := a.db.Query(`SELECT ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated
+	rows, err := a.db.Query(`SELECT ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
+		provider, subject, installation, repos
 		FROM credential_audit WHERE session_id = ? ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, limit)
 	if err != nil {
 		return nil, err
@@ -266,7 +298,8 @@ func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
 		var ts, exp int64
 		var o string
 		var elevated int
-		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &r.SourceIdentity, &r.ScopeHash, &exp, &o, &r.Error, &elevated); err != nil {
+		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &r.SourceIdentity, &r.ScopeHash, &exp, &o, &r.Error, &elevated,
+			&r.Provider, &r.Subject, &r.Installation, &r.Repos); err != nil {
 			return nil, err
 		}
 		r.Time, r.Outcome, r.Elevated = time.Unix(ts, 0), Outcome(o), elevated != 0
