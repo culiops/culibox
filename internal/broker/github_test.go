@@ -664,7 +664,7 @@ func TestInFlightMintAfterRevokeAllIsRevoked(t *testing.T) {
 	b, fg, rec, finish := inFlightSetup(t, map[string]SessionView{"s": ghLive()})
 	b.RevokeAllGitHub(context.Background())
 	w := finish()
-	if w.Code != 403 || len(fg.revokedList()) != 1 || len(b.ghIssued) != 0 {
+	if w.Code != 503 || len(fg.revokedList()) != 1 || len(b.ghIssued) != 0 {
 		t.Fatalf("status %d revoked %v", w.Code, fg.revokedList())
 	}
 	if rows := revokeRows(rec); len(rows) != 1 || rows[0].Outcome != OutcomeRevoked {

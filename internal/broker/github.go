@@ -151,12 +151,29 @@ func (b *Broker) RevokeAllGitHub(ctx context.Context) {
 }
 
 // revokeAsync revokes toks in one goroutine that ends within ghRevokeTimeout.
+//
+// Ordering: revokeWG.Add runs under b.mu and only while closing is false.
+// RevokeAllGitHub sets closing under b.mu before its revokeWG.Wait, so every
+// Add happens-before that Wait begins; an Add can never race a Wait (that is a
+// WaitGroup misuse and can panic). Once closing is set, nothing may be added:
+// the caller revokes inline instead. That caller is the HTTP handler of a
+// tombstoned mint (srv.Shutdown tracks it) or a late Forget, both bounded by
+// ghRevokeTimeout and the per-token timeout.
 func (b *Broker) revokeAsync(sid string, toks []issued) {
 	if len(toks) == 0 {
 		return
 	}
 	timeout := b.ghRevokeTimeout
+	b.mu.Lock()
+	if b.closing {
+		b.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		b.revokeTokens(ctx, sid, toks)
+		return
+	}
 	b.revokeWG.Add(1)
+	b.mu.Unlock()
 	go func() {
 		defer b.revokeWG.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -246,13 +263,6 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		replyErr(w, http.StatusServiceUnavailable, "GitHub is not configured on this agent-box host")
 		return
 	}
-	b.mu.Lock()
-	closing := b.closing
-	b.mu.Unlock()
-	if closing { // shutdown revoked everything: a token minted now would outlive the daemon
-		replyErr(w, http.StatusServiceUnavailable, "agent-box is shutting down")
-		return
-	}
 
 	var req ghTokenRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGitHubBody))
@@ -299,6 +309,18 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 
 	key := ghKey{sid, strings.ToLower(entry.Owner)}
 	b.mu.Lock()
+	// closing is tested here, in the same b.mu section that registers the
+	// flight, and not earlier: the box controls when its body arrives, so an
+	// earlier check could pass, RevokeAllGitHub could then sweep, and this
+	// request would register its flight after the sweep (never marked dead) and
+	// mint a token that outlives shutdown. RevokeAllGitHub sets closing under
+	// b.mu, so a flight registered below was registered before the sweep and is
+	// marked dead by it.
+	if b.closing {
+		b.mu.Unlock()
+		replyErr(w, http.StatusServiceUnavailable, "agent-box is shutting down")
+		return
+	}
 	if c, ok := b.ghCache[key]; ok && c.nonce == nonce && c.scopeKey == base.ScopeHash &&
 		c.expires.Sub(now) > ghRefreshMargin {
 		b.mu.Unlock()
@@ -349,9 +371,14 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 	cur, curFound := b.lookup(sid)
 	stillLive := refusalReason(cur, curFound, nonce, kindGitHub) == ""
 	b.mu.Lock()
-	if fl.dead || !stillLive {
+	if fl.dead || !stillLive || b.closing {
+		closing := b.closing
 		b.mu.Unlock()
 		b.revokeAsync(sid, []issued{{value: m.Value, owner: entry.Owner, installation: m.InstallationID, expires: m.ExpiresAt}})
+		if closing {
+			replyErr(w, http.StatusServiceUnavailable, "agent-box is shutting down")
+			return
+		}
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with a GitHub binding")
 		return
 	}

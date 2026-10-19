@@ -98,8 +98,11 @@ func TestBrokerStopRevokesAll(t *testing.T) {
 	if code, body := postGHToken(t, sock, tok); code != 200 {
 		t.Fatalf("mint: %d %s", code, body)
 	}
-	if len(fm.minted) != 1 {
-		t.Fatalf("minted %v", fm.minted)
+	fm.mu.Lock()
+	n := len(fm.minted)
+	fm.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("minted %d tokens, want 1", n)
 	}
 
 	svc.Stop(context.Background())
