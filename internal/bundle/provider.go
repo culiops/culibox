@@ -17,6 +17,18 @@ type Provider struct{ m *Manager }
 
 func NewProvider(m *Manager) *Provider { return &Provider{m: m} }
 
+// Grant is everything one spawn takes from the bundle: what the box mounts, what
+// the agent is passed, which bundle that is, and what was left out and why.
+type Grant struct {
+	Mounts []box.Mount
+	Flags  []string
+	Hash   string
+	// Drops is the lock's drops followed by the plugin drops. Plugins are mounted
+	// live from the host, not copied into the bundle (they are 38 MB and their
+	// installPaths are absolute), so their drops cannot live in the lock.
+	Drops []Drop
+}
+
 // For returns the box's mounts and the agent's flags. The two are deliberately
 // decided differently (brain #131):
 //
@@ -33,10 +45,13 @@ func NewProvider(m *Manager) *Provider { return &Provider{m: m} }
 // config overlays are Optional, so a box that lacks one stays usable while it
 // runs. For a bin without a layout every mount is Optional: a shell reads none
 // of them, so it must never be refused a box that lacks them.
-func (p *Provider) For(bin string) ([]box.Mount, []string, string, error) {
+//
+// The plugin mounts are always Optional: a live box created before plugins were
+// mounted is reused and its session runs without them, rather than being refused.
+func (p *Provider) For(bin string) (Grant, error) {
 	built, err := p.m.Ensure()
 	if err != nil {
-		return nil, nil, "", err
+		return Grant{}, err
 	}
 	layout, agent := LayoutFor(bin)
 	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
@@ -51,11 +66,18 @@ func (p *Provider) For(bin string) ([]box.Mount, []string, string, error) {
 			mounts = append(mounts, box.Mount{Host: mt.Host, Box: mt.Box, Optional: !agent || mt.Box != BoxBundleDir})
 		}
 	}
+	for _, mt := range built.pluginMounts {
+		if !seen[mt.Box] {
+			seen[mt.Box] = true
+			mounts = append(mounts, mt)
+		}
+	}
 	var flags []string
 	if agent {
 		flags = layout.Flags(built.Dir)
 	}
-	return mounts, flags, built.Hash, nil
+	drops := append(append([]Drop(nil), built.Lock.Dropped...), built.pluginDrops...)
+	return Grant{Mounts: mounts, Flags: flags, Hash: built.Hash, Drops: drops}, nil
 }
 
 // boxHome mirrors the box package's home path. Duplicated rather than imported

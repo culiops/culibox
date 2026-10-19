@@ -1,7 +1,12 @@
 package bundle
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 func providerForTest(t *testing.T) *Provider {
@@ -25,15 +30,17 @@ func providerForTest(t *testing.T) *Provider {
 // flags are the bin's own, so a shell is still never handed agent flags.
 func TestEveryBinGetsTheSameBoxMounts(t *testing.T) {
 	p := providerForTest(t)
-	cm, cf, ch, err := p.For("claude")
+	cg, err := p.For("claude")
 	if err != nil {
 		t.Fatal(err)
 	}
+	cm, cf, ch := cg.Mounts, cg.Flags, cg.Hash
 	for _, bin := range []string{"bash", "/usr/bin/zsh", ""} {
-		bm, bf, bh, err := p.For(bin)
+		bg, err := p.For(bin)
 		if err != nil {
 			t.Fatal(err)
 		}
+		bm, bf, bh := bg.Mounts, bg.Flags, bg.Hash
 		if len(bf) != 0 {
 			t.Fatalf("%q must not get agent flags: %v", bin, bf)
 		}
@@ -60,10 +67,11 @@ func TestEveryBinGetsTheSameBoxMounts(t *testing.T) {
 // A shell reads none of it, so for a shell even the root is optional: it must
 // never be refused a box over a mount it does not use (review round 1).
 func TestOnlyTheBundleRootIsARequiredMount(t *testing.T) {
-	ms, _, _, err := providerForTest(t).For("claude")
+	g, err := providerForTest(t).For("claude")
 	if err != nil {
 		t.Fatal(err)
 	}
+	ms := g.Mounts
 	root := 0
 	for _, mt := range ms {
 		if mt.Box == BoxBundleDir {
@@ -83,10 +91,11 @@ func TestOnlyTheBundleRootIsARequiredMount(t *testing.T) {
 func TestNothingIsRequiredForABinWithoutALayout(t *testing.T) {
 	p := providerForTest(t)
 	for _, bin := range []string{"bash", "/usr/bin/zsh", ""} {
-		ms, _, _, err := p.For(bin)
+		g, err := p.For(bin)
 		if err != nil {
 			t.Fatal(err)
 		}
+		ms := g.Mounts
 		if len(ms) == 0 {
 			t.Fatalf("%q must still get the box mounts", bin)
 		}
@@ -94,6 +103,93 @@ func TestNothingIsRequiredForABinWithoutALayout(t *testing.T) {
 			if !mt.Optional {
 				t.Fatalf("%q: %+v must be optional for a bin that never reads it", bin, mt)
 			}
+		}
+	}
+}
+
+// Plugins are mounted live from the host, so their drops cannot live in the
+// bundle lock; the Grant carries the lock's drops first, then the plugin ones.
+func TestProviderGrantCarriesPluginsAndLockDrops(t *testing.T) {
+	src := realisticSource(t)
+	pluginTree(t, src)
+	mk := func() *Provider {
+		m, err := New(Options{Source: src, Root: t.TempDir(), MCPFile: src + "/../.claude.json", Prober: fakeProber{"npx": true, "node": true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return NewProvider(m)
+	}
+	p := mk()
+	g, err := p.For("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := map[string]box.Mount{}
+	for _, mt := range g.Mounts {
+		has[mt.Box] = mt
+	}
+	for _, w := range wantPluginMounts(src) {
+		if got, ok := has[w.Box]; !ok || got != w {
+			t.Fatalf("grant lacks plugin mount %+v (have %+v)", w, g.Mounts)
+		}
+	}
+	if _, ok := has[BoxBundleDir]; !ok || len(g.Mounts) < 4+2 {
+		t.Fatalf("the bundle mounts must still be there: %+v", g.Mounts)
+	}
+	built, err := p.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(built.Lock.Dropped) == 0 {
+		t.Fatal("fixture must drop something (hooks, env) for this test to mean anything")
+	}
+	if len(g.Drops) != len(built.Lock.Dropped) {
+		t.Fatalf("complete set: drops are the lock's alone: %+v", g.Drops)
+	}
+	for i, d := range built.Lock.Dropped {
+		if g.Drops[i] != d {
+			t.Fatalf("drop %d = %+v, want the lock's %+v", i, g.Drops[i], d)
+		}
+	}
+
+	// A broken set: lock drops first, then exactly one plugin drop.
+	if err := os.RemoveAll(filepath.Join(src, "plugins", "cache")); err != nil {
+		t.Fatal(err)
+	}
+	g2, err := p.For("claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mt := range g2.Mounts {
+		if strings.HasPrefix(mt.Box, "/home/agent/.claude/plugins") {
+			t.Fatalf("an incomplete set must mount nothing: %+v", mt)
+		}
+	}
+	b2, err := p.m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(b2.Lock.Dropped)
+	if len(g2.Drops) != n+1 || g2.Drops[n].Kind != KindPlugins || g2.Drops[n].Name != "*" {
+		t.Fatalf("want lock drops then one plugins drop, got %+v", g2.Drops)
+	}
+	if g2.Drops[n].Reason != ReasonPluginsIncomplete {
+		t.Fatalf("reason %q", g2.Drops[n].Reason)
+	}
+
+	// A bin without a layout gets the same mounts, all optional, and no flags.
+	pluginTree(t, src)
+	gc, _ := p.For("claude")
+	gb, err := p.For("bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gb.Flags) != 0 || len(gb.Mounts) != len(gc.Mounts) {
+		t.Fatalf("bash: flags %v mounts %d, want none / %d", gb.Flags, len(gb.Mounts), len(gc.Mounts))
+	}
+	for _, mt := range gb.Mounts {
+		if !mt.Optional {
+			t.Fatalf("a shell must never be refused a box over %+v", mt)
 		}
 	}
 }

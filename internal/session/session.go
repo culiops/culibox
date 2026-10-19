@@ -28,6 +28,7 @@ import (
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/sesstoken"
@@ -278,7 +279,7 @@ type Bundles interface {
 	// because sessions of different bins share a box) and the extra argv flags
 	// bin's agent needs, plus the bundle hash for the log line. A bin with no
 	// layout (a shell, or "" when unresolved) gets the mounts and no flags.
-	For(bin string) (mounts []box.Mount, flags []string, hash string, err error)
+	For(bin string) (bundle.Grant, error)
 }
 
 // Info is a read-only snapshot for listing.
@@ -1151,14 +1152,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// account is part of the box key, so this gate never differs between
 		// two sessions that share a box.
 		if bundles != nil && (acct.IsDefault || acct.InheritPersonal) {
-			var flags []string
-			var err error
-			mounts, flags, bundleHash, err = bundles.For(bin)
+			g, err := bundles.For(bin)
 			if err != nil {
 				bundleFailed = true
 				log.Printf("spawn %s: config bundle unavailable (%v); the box will run without user config", spec.Agent, err)
 			}
-			spec.ExtraArgs = append(spec.ExtraArgs, flags...)
+			mounts, bundleHash = g.Mounts, g.Hash
+			spec.ExtraArgs = append(spec.ExtraArgs, g.Flags...)
 		}
 	}
 

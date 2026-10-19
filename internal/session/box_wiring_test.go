@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -284,15 +285,15 @@ type fakeBundles struct {
 	err      error // returned, with no mounts or flags, when set
 }
 
-func (f *fakeBundles) For(bin string) ([]box.Mount, []string, string, error) {
+func (f *fakeBundles) For(bin string) (bundle.Grant, error) {
 	f.askedBin = bin
 	f.calls++
 	if f.err != nil {
 		f.order.add("bundle")
-		return nil, nil, "", f.err
+		return bundle.Grant{}, f.err
 	}
 	f.order.add("bundle")
-	return f.mounts, f.flags, "deadbeef", nil
+	return bundle.Grant{Mounts: f.mounts, Flags: f.flags, Hash: "deadbeef"}, nil
 }
 
 // The bundle's flags must reach the agent, and its mounts must reach the box.
