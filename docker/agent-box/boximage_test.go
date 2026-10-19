@@ -1236,3 +1236,139 @@ func TestDockerfileImageMCPHasNoTokenServers(t *testing.T) {
 		}
 	}
 }
+
+// Claude Code is pinned to the npm `stable` tag's version, after the marker (it
+// moves fast), and the RUN proves the install is the pinned one.
+func TestDockerfilePinsClaudeCode(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	re := regexp.MustCompile(`(?m)^ARG CLAUDE_CODE_VERSION=(\S*)$`)
+	m := re.FindAllStringSubmatch(df, -1)
+	if len(m) != 1 {
+		t.Fatalf("want exactly one ARG CLAUDE_CODE_VERSION, got %d", len(m))
+	}
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(m[0][1]) {
+		t.Errorf("CLAUDE_CODE_VERSION %q is not an exact x.y.z", m[0][1])
+	}
+	if i := strings.Index(df, "\nARG CLAUDE_CODE_VERSION="); i < strings.Index(df, marker) {
+		t.Error("ARG CLAUDE_CODE_VERSION is before the marker")
+	}
+	installs := 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "@anthropic-ai/claude-code") {
+			continue
+		}
+		installs++
+		if !strings.Contains(in, "npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}") {
+			t.Errorf("claude-code install is not pinned to the ARG: %s", in)
+		}
+		if !strings.Contains(in, `claude --version | grep -q "${CLAUDE_CODE_VERSION}"`) {
+			t.Errorf("the RUN does not grep claude --version for the pin: %s", in)
+		}
+	}
+	if installs != 1 {
+		t.Errorf("want exactly one claude-code install RUN, got %d", installs)
+	}
+}
+
+// A later layer cannot remove an earlier layer's bytes (the 2026-10-19 scan found
+// ~170 MB of npm cache), so every global npm install cleans in its own RUN.
+func TestDockerfileNpmInstallsCleanInSameLayer(t *testing.T) {
+	n := 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "npm install -g") {
+			continue
+		}
+		n++
+		if !strings.Contains(in, "npm cache clean --force") || !strings.Contains(in, "rm -rf /root/.npm") {
+			t.Errorf("an npm install -g RUN does not clean the cache in the same layer: %.120s", in)
+		}
+	}
+	if n < 3 {
+		t.Errorf("found %d npm install -g RUNs, want at least claude-code, playwright, sentry", n)
+	}
+}
+
+// Update checks and telemetry are off before the first tool that would write a
+// residue file or phone home. GOTELEMETRY=off is deliberately absent: measured to
+// do nothing (the Go RUN removes /root/.config/go instead).
+func TestDockerfileTelemetryEnvFirst(t *testing.T) {
+	ins := dockerfileInstructions()
+	last := 0
+	for i, in := range ins {
+		if strings.HasPrefix(in, "FROM ") {
+			last = i
+		}
+	}
+	envAt, runAt := -1, -1
+	tool := regexp.MustCompile(`\b(terraform|go|claude) `)
+	for i, in := range ins[last:] {
+		if envAt < 0 && strings.HasPrefix(in, "ENV ") {
+			ok := true
+			for _, w := range []string{"DISABLE_UPDATES=1", "DO_NOT_TRACK=1", "GRAFANA_USAGE_STATS=disabled", "CHECKPOINT_DISABLE=1", "FASTMCP_CHECK_FOR_UPDATES=off"} {
+				ok = ok && strings.Contains(in, w)
+			}
+			if ok {
+				envAt = i
+			}
+		}
+		if runAt < 0 && strings.HasPrefix(in, "RUN ") && tool.MatchString(in) {
+			runAt = i
+		}
+	}
+	if envAt < 0 {
+		t.Fatal("no ENV line sets the update and telemetry opt-outs")
+	}
+	if runAt < 0 || envAt > runAt {
+		t.Errorf("the opt-out ENV (instruction %d) must come before the first terraform/go/claude RUN (%d)", envAt, runAt)
+	}
+	for _, in := range ins {
+		if strings.HasPrefix(in, "ENV ") && strings.Contains(in, "GOTELEMETRY") {
+			t.Error("GOTELEMETRY has no effect; the Go RUN removes /root/.config/go")
+		}
+	}
+}
+
+// The root-stage build leaves only the base image's two dotfiles in /root; the
+// last RUN before USER agent fails the build on anything else.
+func TestDockerfileRootAllowlistCheck(t *testing.T) {
+	ins := dockerfileInstructions()
+	at := -1
+	for i, in := range ins {
+		if in == "USER agent" {
+			at = i
+		}
+	}
+	if at < 1 {
+		t.Fatal("no USER agent")
+	}
+	prev := ins[at-1]
+	if !strings.HasPrefix(prev, "RUN ") {
+		t.Fatalf("the instruction before USER agent is not a RUN: %.80s", prev)
+	}
+	for _, w := range []string{"find /root -mindepth 1", "diff ", "/root/.bashrc", "/root/.profile"} {
+		if !strings.Contains(prev, w) {
+			t.Errorf("the final root RUN does not contain %q", w)
+		}
+	}
+	if strings.Index(prev, "rmdir /root/.ssh") > strings.Index(prev, "find /root -mindepth 1") {
+		t.Error("/root/.ssh must be removed before the allowlist check")
+	}
+	// The residue-creating RUNs clean in their own layer.
+	want := map[string]string{
+		"/usr/local/go/bin/go version":         "rm -rf /root/.config/go",
+		"terraform_${TERRAFORM_VERSION}_linux": "rm -rf /root/.terraform.d",
+		"/opt/gh/bin/gh --version":             "rm -rf /root/.local/state/gh",
+		"npm install -g @playwright/mcp":       "rm -rf /root/.npm",
+	}
+	for _, in := range ins {
+		if !strings.HasPrefix(in, "RUN ") {
+			continue
+		}
+		for marker, clean := range want {
+			if strings.Contains(in, marker) && !strings.Contains(in, clean) {
+				t.Errorf("the RUN with %q does not %q in the same layer", marker, clean)
+			}
+		}
+	}
+}

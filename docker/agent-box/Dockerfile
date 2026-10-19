@@ -70,6 +70,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep jq less procps curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# --- update checks and telemetry: off, before any tool below runs ---
+# The box has no use for self-update (the image is the pin) or for phoning home,
+# and several of these write files into /root at build time, which the last root
+# RUN refuses. Set before the first RUN that calls terraform, go or claude:
+#   DISABLE_UPDATES=1            Claude Code: no self-update (measured 2026-10-19 to
+#                                work as a process env, so no settings entry is needed)
+#   DO_NOT_TRACK=1               gh (device-id file), mcp-grafana, others
+#   GRAFANA_USAGE_STATS=disabled mcp-grafana's usage statistics
+#   CHECKPOINT_DISABLE=1         terraform's checkpoint call and its /root/.terraform.d
+#   FASTMCP_CHECK_FOR_UPDATES=off mcp-atlassian checks PyPI on every start otherwise
+# GOTELEMETRY=off is NOT set: measured to do nothing. The Go RUN runs
+# `go telemetry off` first (without it a background process rewrites the counter
+# files AFTER an rm -rf, measured 2026-10-19) and then removes /root/.config/go.
+ENV DISABLE_UPDATES=1 DO_NOT_TRACK=1 GRAFANA_USAGE_STATS=disabled CHECKPOINT_DISABLE=1 FASTMCP_CHECK_FOR_UPDATES=off
+
 # --- python3 ---
 # scripts/lint.sh maps eslint's JSON report back to the source files with
 # python3, so a box without it cannot pass scripts/test.sh. Debian bookworm's
@@ -118,7 +133,8 @@ RUN set -eu; \
     curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${a}.zip" -o /tmp/terraform.zip; \
     echo "${sum}  /tmp/terraform.zip" | sha256sum -c -; \
     unzip -q /tmp/terraform.zip -d /usr/local/bin; rm -f /tmp/terraform.zip; \
-    terraform version
+    terraform version; \
+    rm -rf /root/.terraform.d
 
 # --- Go ---
 # Go 1.26.5, pinned by version AND per-arch SHA256 (from go.dev's release list):
@@ -139,7 +155,10 @@ RUN set -eu; \
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${a}.tar.gz" -o /tmp/go.tar.gz; \
     echo "${sum}  /tmp/go.tar.gz" | sha256sum -c -; \
     tar -C /usr/local -xzf /tmp/go.tar.gz; rm -f /tmp/go.tar.gz; \
-    /usr/local/go/bin/go version
+    /usr/local/go/bin/go telemetry off; \
+    /usr/local/go/bin/go version; \
+    rm -rf /root/.config/go; \
+    [ ! -e /root/.config ] || rmdir /root/.config
 # Everything Go writes lives under the box home (a per-box bind mount). The
 # directories are NOT created here: the home is a bind mount, so nothing the
 # image creates under /home/agent is visible at run time. Go creates GOCACHE and
@@ -187,8 +206,6 @@ RUN set -eu; \
     ldd /usr/local/bin/codebase-memory-mcp 2>&1 | grep -q 'not a dynamic executable'; \
     codebase-memory-mcp --version | grep -q "${CBM_VERSION}"
 
-RUN npm install -g @anthropic-ai/claude-code
-
 # --- Playwright MCP + Chromium ---
 # Debian's chromium (apt-signed; security fixes arrive with every rebuild, and
 # there is no unhashed CDN download; the version moves with the base image's apt
@@ -205,6 +222,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN apt-get update && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
+    && npm cache clean --force && rm -rf /root/.npm \
     && chromium --version \
     && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
 
@@ -246,6 +264,20 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 # downloaded artefacts AND compared with the upstream checksums file and/or the
 # GitHub asset digest. To bump: change <TOOL>_VERSION, download both arch
 # artefacts, recompute both sums, compare them with the same sources.
+
+# --- Claude Code ---
+# @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
+# at (measured 2026-10-19: stable 2.1.292, latest 2.1.303). The `stable` tag is the
+# deliberate exception to the two-week rule: Anthropic's own soak period stands in
+# for ours, and it is a deliberate downgrade from `latest`. Self-update is off
+# (DISABLE_UPDATES above), so the image is the only way this version moves.
+# RESIDUAL, accepted (same class as @playwright/mcp): the package's dependency
+# tree resolves at build time. The npm cache is removed in the same RUN so it
+# never lands in a layer.
+# To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
+# CLAUDE_CODE_VERSION to `stable`, rebuild.
+ARG CLAUDE_CODE_VERSION=2.1.292
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # --- apt extras ---
 # make, dnsutils (dig) and netcat-openbsd (nc) are absent from the slim base;
@@ -514,7 +546,7 @@ RUN set -eu; \
     mkdir -p /tmp/tfenv-check-home; \
     env -u GOTMPDIR HOME=/tmp/tfenv-check-home TFENV_CONFIG_DIR=/tmp/tfenv-check /usr/local/bin/agent-box-entrypoint true; \
     TFENV_CONFIG_DIR=/tmp/tfenv-check terraform version | grep -q "v${TERRAFORM_VERSION}"; \
-    rm -rf /tmp/tfenv-check /tmp/tfenv-check-home
+    rm -rf /tmp/tfenv-check /tmp/tfenv-check-home /root/.terraform.d
 
 # --- gh (GitHub CLI) ---
 # gh 2.102.0 (released 2026-09-30), pinned by version AND per-arch SHA256. Both
@@ -541,6 +573,7 @@ RUN set -eu; \
     echo "${sum}  /tmp/gh.tar.gz" | sha256sum -c -; \
     mkdir /opt/gh; tar -C /opt/gh --strip-components=1 -xzf /tmp/gh.tar.gz; rm -f /tmp/gh.tar.gz; \
     /opt/gh/bin/gh --version | grep -q "${GH_VERSION}"; \
+    rm -rf /root/.local/state/gh; \
     printf '%s\n' '#!/bin/sh' '[ -f /opt/agentbox/agentbox-gh.js ] && exec node /opt/agentbox/agentbox-gh.js "$@"' 'exec /opt/gh/bin/gh "$@"' > /usr/local/bin/gh; \
     chmod 0755 /usr/local/bin/gh
 
@@ -884,6 +917,18 @@ RUN set -eu; \
     rm -f /tmp/req.txt; rm -rf /root/.cache/pip; \
     ln -s /opt/mcp-atlassian/bin/mcp-atlassian /usr/local/bin/mcp-atlassian; \
     mcp-atlassian --version | grep -q "${MCP_ATLASSIAN_VERSION}"
+
+# Nothing but the base image's two dotfiles may be left in /root: every RUN above
+# cleans after itself in its own layer (a later layer cannot remove an earlier
+# one's bytes), and this fails the build on anything that slipped through.
+# /root/.ssh is an empty directory some layer leaves behind; rmdir fails the build
+# if it ever holds something.
+RUN set -eu; \
+    [ ! -e /root/.ssh ] || rmdir /root/.ssh; \
+    find /root -mindepth 1 | sort > /tmp/rootls; \
+    printf '%s\n' /root/.bashrc /root/.profile | sort > /tmp/rootok; \
+    diff /tmp/rootok /tmp/rootls; \
+    rm /tmp/rootls /tmp/rootok
 
 USER agent
 ENV HOME=/home/agent
