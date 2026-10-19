@@ -40,14 +40,16 @@ const (
 // lookupNetIP is the system resolver; a variable so a test can see what it is asked.
 var lookupNetIP = net.DefaultResolver.LookupNetIP
 
-// SessionView is what the proxy needs to know about a session. AWS == nil means
-// open mode: the session is boxed but has no AWS binding, so any public
-// hostname is allowed on 443 (every other check still applies).
+// SessionView is what the proxy needs to know about a session. AWS == nil and
+// GitHub == nil together mean open mode: the session is boxed but has no
+// binding, so any public hostname is allowed on 443 (every other check still
+// applies). Either binding makes the session bound, with an allowlist.
 type SessionView struct {
 	Nonce       string
 	Box         string
 	Boxed, Live bool
 	AWS         *config.AWSBinding
+	GitHub      *config.GitHubBinding
 }
 
 // Lookup resolves a session id; ok is false for an unknown session. It is asked
@@ -306,14 +308,15 @@ func (p *Proxy) ProbeCredential(box string) (user, pass string, done func() Prob
 
 // principal is an authenticated caller: a session or a probe principal.
 type principal struct {
-	sid   string // MAC-verified session id; "" for a probe principal
-	box   string
-	allow []string
-	open  bool   // open mode: no AWS binding, so no allowlist
-	key   string // cap and throttle key
-	probe *probePrincipal
-	user  string
-	epoch uint64 // p.epoch[sid] when authenticated
+	sid    string // MAC-verified session id; "" for a probe principal
+	box    string
+	allow  []string
+	open   bool   // open mode: no binding at all, so no allowlist
+	github bool   // GitHub-bound: GitHub's Actions-log shard hosts are allowed
+	key    string // cap and throttle key
+	probe  *probePrincipal
+	user   string
+	epoch  uint64 // p.epoch[sid] when authenticated
 }
 
 type authVerdict int
@@ -383,7 +386,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		row.Host = name
 	}
-	if !ok || !(pr.open || hostmatch.Match(pr.allow, name)) {
+	if !ok || !(pr.open || hostmatch.Match(pr.allow, name) || (pr.github && GitHubResultsHost(name))) {
 		if pr.probe != nil && !p.useProbe(pr, false) {
 			p.refuse(w, http.StatusProxyAuthRequired, row, OutcomeBadAuth, pr.key)
 			return
@@ -573,10 +576,11 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		return bad, authBad
 	}
 	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
-	if v.AWS == nil {
+	if v.AWS == nil && v.GitHub == nil {
 		pr.open = true
 	} else {
-		pr.allow = Effective(v.AWS)
+		pr.allow = Effective(v.AWS, v.GitHub)
+		pr.github = v.GitHub != nil
 	}
 	return pr, authOK
 }
