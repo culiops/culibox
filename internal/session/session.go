@@ -348,6 +348,11 @@ type Info struct {
 	// binding's hosts), "open" (unbound, any host through the authenticated
 	// proxy) or "" (no egress control: host tier). Never the nonce.
 	Egress string `json:"egress,omitempty"`
+	// BundleDrops is what the box's config bundle left out and why (a config
+	// key, an MCP server, the plugin set, or the whole bundle). Boxed sessions
+	// whose bundle was consulted only; absent otherwise, so a host session's
+	// wire shape is unchanged. Reasons are fixed strings, never an error text.
+	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -376,6 +381,10 @@ type Session struct {
 	// whose box has egress (bound or open). Immutable, read without the lock.
 	// Never put it on the wire: Info leaves it out.
 	EgressNonce string
+	// BundleDrops is what the config bundle left out for this boxed session
+	// (see Info.BundleDrops). Immutable after publication, read without the
+	// lock; Info hands out a copy.
+	BundleDrops []bundle.Drop
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
@@ -758,6 +767,7 @@ func (s *Session) Info() Info {
 	case s.EgressNonce != "":
 		in.Egress = "open"
 	}
+	in.BundleDrops = slices.Clone(s.BundleDrops)
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod}
 		if e := s.AWS.Elevate; e != nil {
@@ -1143,6 +1153,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var mounts []box.Mount
 	var bundleHash string
 	var bundleFailed bool // mounts unknown, not empty: see box.BoxKey.PartialMounts
+	var bundleDrops []bundle.Drop
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		bundles := m.bundles
@@ -1155,9 +1166,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			g, err := bundles.For(bin)
 			if err != nil {
 				bundleFailed = true
+				// One row, not silence. The reason is a fixed string: err can
+				// carry host paths and stays in the log line above only.
+				bundleDrops = []bundle.Drop{{Kind: bundle.KindBundle, Name: "*", Reason: bundle.ReasonBundleFailed}}
 				log.Printf("spawn %s: config bundle unavailable (%v); the box will run without user config", spec.Agent, err)
 			}
 			mounts, bundleHash = g.Mounts, g.Hash
+			if err == nil {
+				bundleDrops = g.Drops
+			}
 			spec.ExtraArgs = append(spec.ExtraArgs, g.Flags...)
 		}
 	}
@@ -1332,6 +1349,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.AWS = binding
 	sess.AWSNonce = nonce
 	sess.EgressNonce = enonce
+	sess.BundleDrops = bundleDrops
 	sess.Exclusive = exclusive
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
@@ -1345,7 +1363,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, EgressNonce: enonce, Exclusive: exclusive})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1839,6 +1857,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 		// A bound session from before A1 minted its proxy token over AWSNonce.
 		sess.EgressNonce = md.AWSNonce
 	}
+	sess.BundleDrops = md.BundleDrops
 	sess.Exclusive = md.Exclusive
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
