@@ -576,6 +576,21 @@ func TestPullPinsPlatform(t *testing.T) {
 	}
 }
 
+// os/exec copies two distinct writers from two goroutines; a bytes.Buffer is
+// not safe for that, so Pull must hand it one stream. Meaningful under -race.
+func TestPullWritesTheWriterFromOneGoroutine(t *testing.T) {
+	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
+	bin, _ := fakeDocker(t, "i=0; while [ $i -lt 200 ]; do echo out$i; echo err$i >&2; i=$((i+1)); done; exit 1\n")
+	var out bytes.Buffer
+	err := Docker{Bin: bin}.Pull(context.Background(), ref, "arm64", &out)
+	if err == nil || !strings.Contains(err.Error(), "err199") {
+		t.Fatalf("want an error carrying docker's stderr, got %v", err)
+	}
+	if !strings.Contains(out.String(), "out199") || !strings.Contains(out.String(), "err199") {
+		t.Fatalf("both streams should reach the writer: %q", out.String())
+	}
+}
+
 func TestCheckForRemote(t *testing.T) {
 	ref := "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
 	cases := []struct {

@@ -101,13 +101,16 @@ func (d Docker) Build(ctx context.Context, tags []string, w io.Writer) error {
 // Pull fetches a remote image for the given architecture. --platform is not
 // optional here either: a multi-arch index digest otherwise resolves to
 // whatever docker picks, and an emulated box is slow with no error anywhere.
-// docker's output goes to w; stderr is also kept so a failure carries its cause.
+// docker's output goes to w; it is also kept so a failure carries its cause.
+// Both streams share ONE writer: os/exec copies two distinct writers from two
+// goroutines, and w (a bytes.Buffer in tests) is not safe for concurrent use.
 func (d Docker) Pull(ctx context.Context, image, arch string, w io.Writer) error {
-	var stderr bytes.Buffer
+	var out bytes.Buffer
 	cmd := d.command(ctx, "pull", "--platform", "linux/"+arch, image)
-	cmd.Stdout, cmd.Stderr = w, io.MultiWriter(w, &stderr)
+	cmd.Stdout = io.MultiWriter(w, &out)
+	cmd.Stderr = cmd.Stdout
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker pull %s: %w: %s", image, err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("docker pull %s: %w: %s", image, err, strings.TrimSpace(out.String()))
 	}
 	return nil
 }
