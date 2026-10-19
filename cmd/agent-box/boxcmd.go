@@ -51,6 +51,9 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
 		return 1
 	}
+	if boximage.IsRemote(image) {
+		return boxSetupRemote(ctx, d, image, arch, st, rebuild, w)
+	}
 	pinned := boximage.IsDated(image)
 	fatal, msg := st.CheckFor(image, arch)
 	if !rebuild && !fatal {
@@ -93,6 +96,51 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 	}
 	fmt.Fprintf(w, "PASS image: %s now points at %s\n", image, dated)
 	fmt.Fprintf(w, "pin this instance: set \"box_image\": \"%s\" in its config\n", dated)
+	return 0
+}
+
+// boxSetupRemote makes a digest or registry box_image present: it pulls a
+// missing one for the daemon's architecture and never builds it. An image that
+// is already there is only checked, never re-pulled.
+func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, st boximage.ImageState, rebuild bool, w io.Writer) int {
+	if rebuild {
+		fmt.Fprintf(w, "FAIL image: %s comes from a registry; agent-box pulls it and never builds it\n", image)
+		return 1
+	}
+	fatal, msg := st.CheckFor(image, arch)
+	if !fatal {
+		if msg == "" {
+			fmt.Fprintf(w, "PASS image: %s is current (linux/%s)\n", image, arch)
+		} else {
+			fmt.Fprintf(w, "WARN image: %s\n", imageLine(image, st.Arch, msg))
+		}
+		return 0
+	}
+	if st.Present {
+		// Present but unusable (wrong arch): pulling the same ref again would
+		// not change it. Say why, so the digest gets fixed.
+		fmt.Fprintf(w, "FAIL image: %s\n", msg)
+		return 1
+	}
+	fmt.Fprintf(w, "pulling %s for linux/%s ...\n", image, arch)
+	if err := d.Pull(ctx, image, arch, w); err != nil {
+		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		return 1
+	}
+	st, err := d.Inspect(ctx, image)
+	if err != nil {
+		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		return 1
+	}
+	fatal, msg = st.CheckFor(image, arch)
+	if fatal {
+		fmt.Fprintf(w, "FAIL image: %s\n", msg)
+		return 1
+	}
+	fmt.Fprintf(w, "PASS image: pulled %s (linux/%s)\n", image, arch)
+	if msg != "" {
+		fmt.Fprintf(w, "WARN image: %s\n", imageLine(image, st.Arch, msg))
+	}
 	return 0
 }
 
