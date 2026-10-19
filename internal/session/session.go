@@ -1167,7 +1167,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			if err != nil {
 				bundleFailed = true
 				// One row, not silence. The reason is a fixed string: err can
-				// carry host paths and stays in the log line above only.
+				// carry host paths and stays in the log line below only.
 				bundleDrops = []bundle.Drop{{Kind: bundle.KindBundle, Name: "*", Reason: bundle.ReasonBundleFailed}}
 				log.Printf("spawn %s: config bundle unavailable (%v); the box will run without user config", spec.Agent, err)
 			}
