@@ -2834,7 +2834,7 @@ function renderGhOwners(rows) {
     owner.autocomplete = "off"; owner.spellcheck = false; owner.value = r.owner || "";
     const repos = document.createElement("textarea");
     repos.className = "fld pf-gh-repos"; repos.rows = 2; repos.spellcheck = false;
-    repos.placeholder = "repo names, one per line or comma separated"; repos.value = r.repos || "";
+    repos.placeholder = "one per line or comma separated"; repos.value = r.repos || "";
     const rm = document.createElement("button");
     rm.type = "button"; rm.className = "btn pf-gh-rm"; rm.textContent = "×";
     rm.setAttribute("aria-label", "Remove owner " + (i + 1));
@@ -2847,7 +2847,7 @@ function renderGhOwners(rows) {
     const rmCol = document.createElement("div");
     rmCol.className = "fcol rm";
     rmCol.append(rm);
-    row.append(ghField("app", "App", sel), ghField("", "Owner", owner), ghField("repos", "Repositories", repos), rmCol);
+    row.append(ghField("app", "App", sel), ghField("own", "Owner", owner), ghField("repos", "Repositories", repos), rmCol);
     host.append(row);
   });
   $("pf-gh-noapps").hidden = ghApps.length > 0;
@@ -2867,6 +2867,7 @@ function renderGhPerms(checked) {
     lab.className = "pf-check";
     const cb = document.createElement("input");
     cb.type = "checkbox"; cb.dataset.perm = k; cb.checked = !!checked[k];
+    cb.addEventListener("change", () => { $("pf-gh-perm-err").hidden = true; });
     lab.append(cb, document.createTextNode(k.replace(/_/g, " ")));
     host.append(lab);
   }
@@ -3031,6 +3032,11 @@ async function saveProfile() {
   if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
   const rowsErr = rowError(pfEnvRows);
   if (rowsErr) { setDialogError("settings-modal", rowsErr); return; }
+  // No permission ticked: shown on the GH block itself as well as in the dialog's line.
+  const ghErr = ghFormError({ owners: readGhRows(), permissions: readGhPerms() });
+  $("pf-gh-perm-err").textContent = ghErr;
+  $("pf-gh-perm-err").hidden = !ghErr;
+  if (ghErr) { setDialogError("settings-modal", ghErr); return; }
   // Containment is the one field whose consequence is worth naming before it is
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);

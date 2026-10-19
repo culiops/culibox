@@ -151,6 +151,17 @@ function ghBindingFromForm(fields) {
   return out;
 }
 
+// ghFormError: the sentence that refuses a save, or "". An empty permission set
+// is not "the defaults" to the server (it refuses it too), and sending nothing
+// would read as the defaults, so a binding with no box ticked is stopped here.
+function ghFormError(fields) {
+  const b = ghBindingFromForm(fields);
+  if (b && b.permissions && Object.keys(b.permissions).length === 0) {
+    return "GitHub: tick at least one read permission, or the agent gets none.";
+  }
+  return "";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm };
+  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError };
 }

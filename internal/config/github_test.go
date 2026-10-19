@@ -31,6 +31,8 @@ func TestGitHubBindingValidate(t *testing.T) {
 		{"default permissions, two owners", func(b *GitHubBinding) {}, ""},
 		{"explicit default permissions", func(b *GitHubBinding) { b.Permissions = DefaultGitHubPermissions() }, ""},
 		{"statuses is allowed", func(b *GitHubBinding) { b.Permissions = map[string]string{"statuses": "read"} }, ""},
+		{"empty non-nil permissions", func(b *GitHubBinding) { b.Permissions = map[string]string{} }, "github.permissions: empty"},
+		{"nil permissions are the defaults", func(b *GitHubBinding) { b.Permissions = nil }, ""},
 		{"write permission", func(b *GitHubBinding) { b.Permissions = map[string]string{"contents": "write"} }, "github.permissions"},
 		{"unknown permission", func(b *GitHubBinding) { b.Permissions = map[string]string{"administration": "read"} }, "github.permissions"},
 		{"bad owner", func(b *GitHubBinding) { b.Owners[0].Owner = "-bad" }, "github.owners[0].owner"},

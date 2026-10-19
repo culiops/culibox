@@ -3,7 +3,7 @@
 // halves are pure functions so the rules can be read and tested without a DOM.
 const test = require("node:test");
 const assert = require("node:assert");
-const { ghBindingFromForm, ghPermsChecked, GH_PERMS, GH_DEFAULT_PERMS } = require("../static/profileform.js");
+const { ghBindingFromForm, ghFormError, ghPermsChecked, GH_PERMS, GH_DEFAULT_PERMS } = require("../static/profileform.js");
 const { ghRowText, ghRailRows } = require("../static/steerrail.js");
 
 const allDefaults = () => Object.fromEntries(GH_PERMS.map((k) => [k, GH_DEFAULT_PERMS.includes(k)]));
@@ -66,7 +66,18 @@ test("ghBindingFromForm carries the stored extra egress hosts the form has no fi
   assert.ok(!("egress_allow" in ghBindingFromForm({ owners: rows, permissions: allDefaults() })));
 });
 
-test("ghPermsChecked:a stored set lights exactly its keys, none stored lights the defaults", () => {
+test("an all-unchecked permission set is refused, not turned into the defaults", () => {
+  const none = Object.fromEntries(GH_PERMS.map((k) => [k, false]));
+  const rows = [{ owner: "acme", app: "main", repos: "api" }];
+  assert.deepStrictEqual(ghBindingFromForm({ owners: rows, permissions: none }).permissions, {});
+  assert.match(ghFormError({ owners: rows, permissions: none }), /tick at least one/);
+  // The defaults, a changed set, and no owner rows at all are all fine.
+  assert.strictEqual(ghFormError({ owners: rows, permissions: allDefaults() }), "");
+  assert.strictEqual(ghFormError({ owners: rows, permissions: { ...none, statuses: true } }), "");
+  assert.strictEqual(ghFormError({ owners: [{ owner: "", app: "main", repos: "" }], permissions: none }), "");
+});
+
+test("ghPermsChecked: a stored set lights exactly its keys, none stored lights the defaults", () => {
   assert.deepStrictEqual(ghPermsChecked(undefined), allDefaults());
   assert.deepStrictEqual(ghPermsChecked({ owners: [] }), allDefaults());
   const got = ghPermsChecked({ permissions: { contents: "read", statuses: "read" } });

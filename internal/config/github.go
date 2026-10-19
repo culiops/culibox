@@ -134,6 +134,11 @@ func (b GitHubBinding) Validate() error {
 			repos[r] = true
 		}
 	}
+	// Non-nil but empty is refused: EffectivePermissions would read it as the
+	// defaults, so a client that sent "none ticked" would silently get six reads.
+	if b.Permissions != nil && len(b.Permissions) == 0 {
+		return errors.New("github.permissions: empty; omit it for the defaults or tick at least one")
+	}
 	for _, k := range slices.Sorted(maps.Keys(b.Permissions)) {
 		if !slices.Contains(githubPermissionKeys, k) {
 			return fmt.Errorf("github.permissions: %q is not an allowed permission (want one of %s)", k, strings.Join(githubPermissionKeys, ", "))
