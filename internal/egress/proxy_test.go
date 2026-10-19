@@ -1465,6 +1465,7 @@ func tokenView() SessionView {
 func TestProxyPrivateExceptionExactHostOnly(t *testing.T) {
 	boxAddr := netip.MustParseAddr("172.18.0.9")
 	hostAddr := netip.MustParseAddr("203.0.113.77")
+	vpnAddr := netip.MustParseAddr("10.20.0.7") // the host's own VPN address, inside tokenView's cidr
 	priv := netip.MustParseAddr("10.20.1.5")
 	cases := []struct {
 		name, target string
@@ -1481,6 +1482,7 @@ func TestProxyPrivateExceptionExactHostOnly(t *testing.T) {
 		}, 403, OutcomePrivateAddr},
 		{"exact host outside cidr", "sentry.corp.example:8443", netip.MustParseAddr("10.99.0.1"), tokenView, 403, OutcomePrivateAddr},
 		{"host's own address", "sentry.corp.example:8443", hostAddr, tokenView, 403, OutcomePrivateAddr},
+		{"host's own address inside the cidr", "sentry.corp.example:8443", vpnAddr, tokenView, 403, OutcomePrivateAddr},
 		{"box subnet address", "sentry.corp.example:8443", boxAddr, tokenView, 403, OutcomePrivateAddr},
 		{"entry without a private exception", "acme.grafana.net:443", priv, tokenView, 403, OutcomePrivateAddr},
 	}
@@ -1488,7 +1490,7 @@ func TestProxyPrivateExceptionExactHostOnly(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{c.answer} })
 			h.p.SetNetwork(netip.MustParsePrefix("172.18.0.0/16"), netip.MustParseAddr("172.18.0.1"), false)
-			h.p.SetHostAddrs([]netip.Addr{hostAddr})
+			h.p.SetHostAddrs([]netip.Addr{hostAddr, vpnAddr})
 			h.setView("s1", c.view())
 			code, conn := h.connect(t, c.target, "s1", h.tok("s1", nonceA))
 			if code != c.wantCode {

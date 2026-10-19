@@ -357,6 +357,7 @@ The two share a variable name, which is fine: the agent picks one per command (`
 
 **Limits and operations**
 
+- A running session keeps the entry it was spawned with, even across a daemon restart. Deleting an entry stops its fetches but not its egress; kill the session to cut an agent off.
 - `static_tokens` is read at daemon start only: adding, removing or editing an entry needs a restart. The token itself is read at each fetch, so rotating a token file takes effect with no restart. An `env` reference is the daemon's environment, so changing it needs a restart too.
 - A session may fetch at most 60 tokens a minute; more are refused with a rate-limit error.
 - `agent-box doctor` prints a line per entry: whether its reference resolves (a file problem fails; an `env` variable unset in doctor's own shell is a warning, because the daemon reads its own environment) and a warning for a wide private `cidr`.

@@ -302,6 +302,9 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pat := entry.Token != ""
+	if pat {
+		base.Entry = entry.Token // every PAT row, denials included, names the entry
+	}
 	if pat && req.Repo == "" {
 		// A PAT is not narrowed at GitHub, so the repos check below is the only
 		// scope there is: an empty repo would skip it.

@@ -2844,7 +2844,7 @@ function renderGhOwners(rows) {
     sel.value = r.token ? "token:" + r.token : r.app ? "app:" + r.app : apps.length ? "app:" + apps[0] : pats.length ? "token:" + pats[0] : "";
     const note = document.createElement("p");
     note.className = "tiny pf-gh-pat-note";
-    note.textContent = "A personal access token is not narrowed by agent-box: the permissions above do not apply to it and it may reach more than these repositories. agent-box only checks that each request names one of them.";
+    note.textContent = "A personal access token is not narrowed by agent-box: the permissions above do not apply to it and it may reach more than these repositories. agent-box only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
     note.hidden = !sel.value.startsWith("token:");
     sel.addEventListener("change", () => { note.hidden = !sel.value.startsWith("token:"); });
     const owner = document.createElement("input");

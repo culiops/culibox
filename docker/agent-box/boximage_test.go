@@ -1327,6 +1327,18 @@ func TestDockerfileTelemetryEnvFirst(t *testing.T) {
 			t.Error("GOTELEMETRY has no effect; the Go RUN removes /root/.config/go")
 		}
 	}
+	// Without `go telemetry off` first, a background process rewrites the counter
+	// files after the rm -rf: it has to precede the first go invocation.
+	goRun := ""
+	for _, in := range ins {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/usr/local/go/bin/go version") {
+			goRun = in
+		}
+	}
+	off, ver := strings.Index(goRun, "go telemetry off"), strings.Index(goRun, "go version")
+	if goRun == "" || off < 0 || ver < 0 || off > ver {
+		t.Errorf("in the Go RUN, `go telemetry off` (%d) must precede `go version` (%d)", off, ver)
+	}
 }
 
 // The root-stage build leaves only the base image's two dotfiles in /root; the
@@ -1351,7 +1363,14 @@ func TestDockerfileRootAllowlistCheck(t *testing.T) {
 			t.Errorf("the final root RUN does not contain %q", w)
 		}
 	}
-	if strings.Index(prev, "rmdir /root/.ssh") > strings.Index(prev, "find /root -mindepth 1") {
+	// diff exits non-zero on a mismatch; only set -eu turns that into a failed build.
+	if !strings.HasPrefix(prev, "RUN set -eu;") {
+		t.Errorf("the final root RUN must start with set -eu so a diff mismatch fails the build: %.60s", prev)
+	}
+	rm, find := strings.Index(prev, "rmdir /root/.ssh"), strings.Index(prev, "find /root -mindepth 1")
+	if rm < 0 {
+		t.Error("the final root RUN does not rmdir /root/.ssh")
+	} else if rm > find {
 		t.Error("/root/.ssh must be removed before the allowlist check")
 	}
 	// The residue-creating RUNs clean in their own layer.

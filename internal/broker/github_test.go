@@ -782,7 +782,8 @@ func TestGitHubPATOwnerNeedsRepo(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 	if fr.count() != 0 || len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeDeniedScope ||
-		rec.rows[0].Error != "repo required for a PAT owner" || rec.rows[0].Subject != "acme" {
+		rec.rows[0].Error != "repo required for a PAT owner" || rec.rows[0].Subject != "acme" ||
+		rec.rows[0].Entry != "gh-pat-acme" {
 		t.Fatalf("resolver %d rows %+v", fr.count(), rec.rows)
 	}
 }
@@ -798,8 +799,9 @@ func TestGitHubPATRepoNotBoundAndEntryUndefined(t *testing.T) {
 	if w := ghCall(b2, tokA("s"), patBody); w.Code != 403 {
 		t.Fatalf("undefined entry: %d: %s", w.Code, w.Body)
 	}
-	if fr.count()+fr2.count() != 0 || rec.rows[0].Error != "repo not bound" ||
-		len(rec2.rows) != 1 || rec2.rows[0].Outcome != OutcomeDeniedScope || rec2.rows[0].Error != "token entry not defined" {
+	if fr.count()+fr2.count() != 0 || rec.rows[0].Error != "repo not bound" || rec.rows[0].Entry != "gh-pat-acme" ||
+		len(rec2.rows) != 1 || rec2.rows[0].Outcome != OutcomeDeniedScope || rec2.rows[0].Error != "token entry not defined" ||
+		rec2.rows[0].Entry != "gh-pat-acme" {
 		t.Fatalf("rows %+v %+v", rec.rows, rec2.rows)
 	}
 }

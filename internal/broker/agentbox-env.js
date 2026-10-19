@@ -23,7 +23,10 @@ const ep = process.env.AGENTBOX_BROKER || '';
 const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
 // Test-only overrides: the listing path, and the fetch timeout (default 10 s).
 const listFile = process.env.AGENTBOX_ENV_LIST_FILE || '/opt/agentbox/tokens.json';
-const timeoutMs = Number(process.env.AGENTBOX_ENV_TIMEOUT_MS) > 0 ? Number(process.env.AGENTBOX_ENV_TIMEOUT_MS) : 10000;
+// The override can only shorten the default: a non-finite or junk value is ignored,
+// a huge one is capped (Node turns an overflowing delay into a 1 ms timer).
+const timeoutOverride = Number(process.env.AGENTBOX_ENV_TIMEOUT_MS);
+const timeoutMs = Number.isFinite(timeoutOverride) && timeoutOverride > 0 ? Math.min(timeoutOverride, 10000) : 10000;
 
 const USAGE = 'usage: agentbox-env NAME [NAME...] -- CMD [ARGS...]\n       agentbox-env --list\n';
 

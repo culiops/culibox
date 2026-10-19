@@ -663,6 +663,24 @@ func TestAgentboxEnvTimeout(t *testing.T) {
 	}
 }
 
+// The override can only shorten the 10 s default: a non-finite, huge or junk value
+// must not become a timer that fires at once (Node clamps an overflowing delay to
+// 1 ms and warns). A broker that answers promptly is enough to see that.
+func TestAgentboxEnvTimeoutOverrideIsClamped(t *testing.T) {
+	for _, v := range []string{"Infinity", "1e20", "NaN", "-5", "abc", "5000"} {
+		t.Run(v, func(t *testing.T) {
+			f := newFakeTokenBroker(t)
+			f.static = map[string]staticReply{"grafana-cloud": grafanaReply()}
+			js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+			out, stderr, code := runNode(t, "", "", []string{js, "grafana-cloud", "--", "node", "-e",
+				"console.log(process.env.GRAFANA_URL)"}, append(brokerEnv(f), "AGENTBOX_ENV_TIMEOUT_MS="+v)...)
+			if code != 0 || out != "https://acme.grafana.net\n" || stderr != "" {
+				t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
+			}
+		})
+	}
+}
+
 func TestAgentboxEnvNoBrokerEnv(t *testing.T) {
 	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
 	_, stderr, code := runNode(t, "", "", []string{js, "a", "--", "node", "-e", "0"})

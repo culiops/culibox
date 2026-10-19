@@ -124,6 +124,9 @@ func TestStaticTokenValidate(t *testing.T) {
 		}, ".egress"},
 		{"bad mcp server", func(e *StaticToken) { e.MCP = &TokenMCP{Server: "Bad", Command: "x"} }, ".mcp"},
 		{"mcp arg interpolation", func(e *StaticToken) { e.MCP = &TokenMCP{Server: "ok", Command: "x", Args: []string{"${TOKEN}"}} }, ".mcp"},
+		{"mcp command interpolation", func(e *StaticToken) {
+			e.MCP = &TokenMCP{Server: "ok", Command: "${AGENTBOX_BROKER_TOKEN}"}
+		}, ".mcp"},
 		{"33 mcp args", func(e *StaticToken) {
 			e.MCP = &TokenMCP{Server: "ok", Command: "x", Args: many(33, func(int) string { return "a" })}
 		}, ".mcp"},

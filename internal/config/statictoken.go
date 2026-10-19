@@ -243,6 +243,9 @@ func (m TokenMCP) validate(self string) error {
 	if m.Command == "" || hasControl(m.Command) {
 		return errors.New("command is required and must not contain control characters")
 	}
+	if strings.Contains(m.Command, "${") {
+		return fmt.Errorf("command %q contains ${: interpolation is not allowed", m.Command)
+	}
 	if len(m.Args) > maxTokenMCPArgs {
 		return fmt.Errorf("at most %d args, got %d", maxTokenMCPArgs, len(m.Args))
 	}
