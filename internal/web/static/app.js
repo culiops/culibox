@@ -2788,6 +2788,9 @@ function syncPfReplyable() {
 // ghApps: the instance's GH App names from /api/meta (names only; the client id
 // and key path never reach the browser). Loaded once at boot by initEnv.
 let ghApps = [];
+// stEntries: the instance's static_tokens as /api/meta describes them (names,
+// env names, hosts; never a value or where it is read from). Loaded at boot.
+let stEntries = [];
 // The stored binding as loaded: the editor has no field for its extra egress
 // hosts, so they are carried unchanged on save (see ghBindingFromForm).
 let pfLoadedGh = null;
@@ -2804,8 +2807,8 @@ function ghField(cls, labelText, ctrl) {
   col.append(lab, ctrl);
   return col;
 }
-// renderGhOwners paints one row per owner: App picker, owner login, repos, and a
-// remove button. Rows are rebuilt from plain {owner, app, repos} objects, so
+// renderGhOwners paints one row per owner: App or token picker, owner login, repos, and a
+// remove button. Rows are rebuilt from plain {owner, app, token, repos} objects, so
 // add and remove never lose what was typed in the other rows (readGhRows first).
 function renderGhOwners(rows) {
   const host = $("pf-gh-owners");
@@ -2817,18 +2820,33 @@ function renderGhOwners(rows) {
     sel.className = "fld pf-gh-app";
     // A stored App that is no longer defined stays selectable, so opening and
     // saving a profile never silently re-points it; the server then names it.
-    const names = ghApps.includes(r.app) || !r.app ? ghApps : [...ghApps, r.app];
-    if (!names.length) {
+    // One picker for both kinds of owner: an App (values app:<name>) or a
+    // personal access token entry (token:<entry>); see readGhRows.
+    const apps = ghApps.includes(r.app) || !r.app ? ghApps : [...ghApps, r.app];
+    const pats = stEntries.map((e) => e.name);
+    if (r.token && !pats.includes(r.token)) pats.push(r.token);
+    if (!apps.length && !pats.length) {
       const o = document.createElement("option");
       o.value = ""; o.textContent = "no App defined"; o.disabled = true;
       sel.append(o);
     }
-    for (const n of names) {
-      const o = document.createElement("option");
-      o.value = n; o.textContent = n;
-      sel.append(o);
+    for (const [label, kind, list] of [["Apps", "app", apps], ["Personal access tokens", "token", pats]]) {
+      if (!list.length) continue;
+      const grp = document.createElement("optgroup");
+      grp.label = label;
+      for (const n of list) {
+        const o = document.createElement("option");
+        o.value = kind + ":" + n; o.textContent = n;
+        grp.append(o);
+      }
+      sel.append(grp);
     }
-    sel.value = r.app || names[0] || "";
+    sel.value = r.token ? "token:" + r.token : r.app ? "app:" + r.app : apps.length ? "app:" + apps[0] : pats.length ? "token:" + pats[0] : "";
+    const note = document.createElement("p");
+    note.className = "tiny pf-gh-pat-note";
+    note.textContent = "A personal access token is not narrowed by agent-box: the permissions above do not apply to it and it may reach more than these repositories. agent-box only checks that each request names one of them.";
+    note.hidden = !sel.value.startsWith("token:");
+    sel.addEventListener("change", () => { note.hidden = !sel.value.startsWith("token:"); });
     const owner = document.createElement("input");
     owner.type = "text"; owner.className = "fld pf-gh-owner-name"; owner.placeholder = "culiops";
     owner.autocomplete = "off"; owner.spellcheck = false; owner.value = r.owner || "";
@@ -2847,17 +2865,21 @@ function renderGhOwners(rows) {
     const rmCol = document.createElement("div");
     rmCol.className = "fcol rm";
     rmCol.append(rm);
-    row.append(ghField("app", "App", sel), ghField("own", "Owner", owner), ghField("repos", "Repositories", repos), rmCol);
+    row.append(ghField("app", "App", sel), ghField("own", "Owner", owner), ghField("repos", "Repositories", repos), rmCol, note);
     host.append(row);
   });
   $("pf-gh-noapps").hidden = ghApps.length > 0;
 }
 function readGhRows() {
-  return [...$("pf-gh-owners").querySelectorAll(".pf-gh-owner")].map((row) => ({
-    owner: row.querySelector(".pf-gh-owner-name").value,
-    app: row.querySelector(".pf-gh-app").value,
-    repos: row.querySelector(".pf-gh-repos").value,
-  }));
+  return [...$("pf-gh-owners").querySelectorAll(".pf-gh-owner")].map((row) => {
+    const pick = row.querySelector(".pf-gh-app").value;
+    return {
+      owner: row.querySelector(".pf-gh-owner-name").value,
+      app: pick.startsWith("app:") ? pick.slice(4) : "",
+      token: pick.startsWith("token:") ? pick.slice(6) : "",
+      repos: row.querySelector(".pf-gh-repos").value,
+    };
+  });
 }
 function renderGhPerms(checked) {
   const host = $("pf-gh-perms");
@@ -2878,11 +2900,62 @@ function readGhPerms() {
   return out;
 }
 $("pf-gh-add").addEventListener("click", () => {
-  renderGhOwners([...readGhRows(), { owner: "", app: "", repos: "" }]);
+  renderGhOwners([...readGhRows(), { owner: "", app: "", token: "", repos: "" }]);
   syncEditorActions();
   const last = $("pf-gh-owners").querySelector(".pf-gh-owner:last-child .pf-gh-owner-name");
   if (last) last.focus();
 });
+
+// --- the Tokens block of the profile editor (N3) ---------------------------
+// renderStPicker draws one checkbox per entry, plus one for each ticked name the
+// instance no longer defines (shown as "(not defined)"), so a save never drops
+// a stored name silently: the server refuses it by name instead.
+function renderStPicker(ticked) {
+  const host = $("pf-st-list");
+  host.replaceChildren();
+  const defined = new Set(stEntries.map((e) => e.name));
+  const groups = stGroups(stEntries);
+  const missing = (ticked || []).filter((n) => !defined.has(n)).sort();
+  if (missing.length) groups.push({ provider: "not defined", entries: missing.map((name) => ({ name, missing: true })) });
+  for (const g of groups) {
+    const head = document.createElement("span");
+    head.className = "tiny mut pf-st-group";
+    head.textContent = g.provider;
+    host.append(head);
+    for (const e of g.entries) {
+      const lab = document.createElement("label");
+      lab.className = "pf-check pf-st-entry";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.dataset.token = e.name; cb.checked = (ticked || []).includes(e.name);
+      cb.addEventListener("change", () => { $("pf-st-err").hidden = true; });
+      const text = document.createElement("span");
+      text.className = "pf-st-text";
+      const nm = document.createElement("span");
+      nm.textContent = e.missing ? e.name + " (not defined)" : e.label ? e.label + " · " + e.name : e.name;
+      text.append(nm);
+      if (e.prod) {
+        // The AWS production chip, so a production token reads as one.
+        const chip = document.createElement("span");
+        chip.className = "bdg aws prod";
+        chip.textContent = "production";
+        text.append(" ", chip);
+      }
+      for (const line of e.missing ? [] : [e.description, stEntryLine(e)]) {
+        if (!line) continue;
+        const d = document.createElement("span");
+        d.className = "tiny mut pf-st-line";
+        d.textContent = line;
+        text.append(d);
+      }
+      lab.append(cb, text);
+      host.append(lab);
+    }
+  }
+  $("pf-st-none").hidden = groups.length > 0;
+}
+function readStTicked() {
+  return [...$("pf-st-list").querySelectorAll("input[data-token]")].filter((cb) => cb.checked).map((cb) => cb.dataset.token);
+}
 
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
@@ -2928,8 +3001,10 @@ function fillForm(p) {
   syncPfElevWarn();
   const gh = p.github || null;
   pfLoadedGh = gh;
-  renderGhOwners(((gh && gh.owners) || []).map((o) => ({ owner: o.owner, app: o.app, repos: (o.repos || []).join("\n") })));
+  renderGhOwners(((gh && gh.owners) || []).map((o) => ({ owner: o.owner, app: o.app, token: o.token, repos: (o.repos || []).join("\n") })));
   renderGhPerms(ghPermsChecked(gh));
+  renderStPicker(Array.isArray(p.tokens) ? p.tokens : []);
+  $("pf-st-err").hidden = true;
   syncPfReplyable();
   syncEditorActions();
 }
@@ -2976,6 +3051,12 @@ function syncEditorActions() {
     f.disabled = aws.disabled;
   }
   $("pf-gh-hint").hidden = !aws.hint;
+  // And so does the Tokens block.
+  for (const f of $("pf-st-block").querySelectorAll(".fld, .btn, input[type=checkbox]")) {
+    f.classList.toggle("off", aws.disabled);
+    f.disabled = aws.disabled;
+  }
+  $("pf-st-hint").hidden = !aws.hint;
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
 // no-op; only grab focus when the dialog is actually on screen.
@@ -2993,6 +3074,8 @@ function readForm() {
   if (aws) p.aws = aws;
   const gh = ghBindingFromForm({ owners: readGhRows(), permissions: readGhPerms(), egress_allow: pfLoadedGh && pfLoadedGh.egress_allow });
   if (gh) p.github = gh;
+  const tokens = stTokensToSend(readStTicked());
+  if (tokens) p.tokens = tokens;
   // The tier is always sent as shown (see runtimeToSend): a blank would let the
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an
@@ -3043,9 +3126,18 @@ async function saveProfile() {
   if (ask && !(await askConfirm(ask))) return;
   const editing = profiles.some((x) => x.name === p.name && x.editable);
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
+  $("pf-st-err").hidden = true;
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-  } catch (e) { setDialogError("settings-modal", "Save failed: " + e.message); return; }
+  } catch (e) {
+    setDialogError("settings-modal", "Save failed: " + e.message);
+    // A refusal that names a token entry is also shown on the Tokens block.
+    if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
+      $("pf-st-err").textContent = String(e.message);
+      $("pf-st-err").hidden = false;
+    }
+    return;
+  }
   // Show what the server now holds, not what was typed: the editor and the
   // stored profile can only disagree on screen if this step is skipped. The
   // write succeeded, so a failure here must not say "Save failed".
@@ -4480,7 +4572,9 @@ initMobileShell();
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
     ghApps = meta && Array.isArray(meta.github_apps) ? meta.github_apps : [];
-    renderGhOwners(readGhRows()); // the App pickers, now that the names are known
+    stEntries = meta && Array.isArray(meta.static_tokens) ? meta.static_tokens : [];
+    renderStPicker(readStTicked()); // the Tokens picker, now that the entries are known
+    renderGhOwners(readGhRows()); // the App and token pickers, now that the names are known
     syncEditorActions();
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on

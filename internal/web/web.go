@@ -144,6 +144,12 @@ func (s *Server) Handler() http.Handler {
 		if s.Profiles != nil {
 			meta["github_apps"] = s.Profiles.GitHubAppNames()
 		}
+		// The static_tokens entries the Tokens picker offers (names and shape,
+		// never a value or its reference); [] when none are defined.
+		meta["static_tokens"] = []TokenMeta{}
+		if s.Profiles != nil {
+			meta["static_tokens"] = s.Profiles.StaticTokenMeta()
+		}
 		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
 		// account has data so the client shows nothing rather than an empty widget.
 		if m := s.rateLimitsByAccount(); len(m) > 0 {

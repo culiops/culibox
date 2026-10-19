@@ -253,3 +253,33 @@ test("dropsRow: null without drops; otherwise one wrapping row grouped by kind a
   const two = dropsRow({ bundle_drops: [drop("skill", "a", "r"), drop("mcp", "b", "r")] });
   assert.strictEqual(two.v, "a \u2014 r; b \u2014 r");
 });
+
+// N3: the steer rail's token rows. Only names, outcomes and times: the payload
+// has no value, variable name or path to print.
+const { stRowText, stRailRows } = require("../static/steerrail.js");
+
+test("stRowText: entry, outcome and the local clock", () => {
+  const time = "2026-10-19T14:05:00Z";
+  assert.strictEqual(stRowText({ provider: "static", subject: "sentry-corp", outcome: "fetched", time }), "Token \u00b7 sentry-corp \u00b7 fetched \u00b7 " + hhmm(time));
+  assert.strictEqual(stRowText({ subject: "sentry-corp", outcome: "denied_scope", time }), "Token \u00b7 sentry-corp \u00b7 denied scope \u00b7 " + hhmm(time));
+  assert.strictEqual(stRowText({ subject: "sentry-corp", outcome: "rate_limited", time }), "Token \u00b7 sentry-corp \u00b7 rate limited \u00b7 " + hhmm(time));
+  // a row with no usable time has no clock, never "Invalid Date"
+  assert.strictEqual(stRowText({ subject: "x", outcome: "fetched" }), "Token \u00b7 x \u00b7 fetched");
+  assert.doesNotMatch(stRowText({ subject: "x", outcome: "fetched", time, error: "tok-SECRET-1234" }), /SECRET/);
+});
+
+test("stRailRows: at most five fetch rows, then one row naming the bound entries", () => {
+  const static_recent = Array.from({ length: 8 }, (_, i) => ({ provider: "static", subject: "t" + i, outcome: "fetched", time: "2026-10-19T14:05:00Z" }));
+  const rows = stRailRows({ static_recent, tokens: [{ name: "sentry-corp" }, { name: "grafana-prd" }] });
+  assert.strictEqual(rows.length, 6);
+  assert.deepStrictEqual(rows[0], { k: "token", v: "Token \u00b7 t0 \u00b7 fetched \u00b7 " + hhmm("2026-10-19T14:05:00Z"), wrap: true });
+  assert.deepStrictEqual(rows[5], { k: "tokens", v: "sentry-corp, grafana-prd", wrap: true });
+  assert.deepStrictEqual(stRailRows(null), []);
+  assert.deepStrictEqual(stRailRows({}), []);
+});
+
+test("stRailRows: a production entry adds a row drawn as the AWS production chip", () => {
+  const rows = stRailRows({ static_recent: [], tokens: [{ name: "a" }, { name: "b", prod: true }] });
+  assert.deepStrictEqual(rows.map((r) => r.k), ["tokens", "prod tokens"]);
+  assert.deepStrictEqual(rows[1], { k: "prod tokens", v: "b", chip: "bdg aws prod", wrap: true });
+});

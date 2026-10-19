@@ -125,9 +125,15 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 		sso = ssologin.New(bin, os.Environ())
 	}
 	return &brokerService{
-		Hooks:  broker.Hooks{B: brk, StateRoot: stateRoot, EP: ep},
-		Status: web.AWSStatusAdapter{Get: info, Stats: brk.Stats, Recent: audit.ForSession},
-		SSO:    sso,
+		Hooks: broker.Hooks{B: brk, StateRoot: stateRoot, EP: ep},
+		Status: web.AWSStatusAdapter{Get: info, Stats: brk.Stats,
+			Recent: func(id string, n int) ([]broker.Row, error) {
+				return audit.ForSessionExcept(id, broker.ProviderStatic, n)
+			},
+			RecentStatic: func(id string, n int) ([]broker.Row, error) {
+				return audit.ForSessionProvider(id, broker.ProviderStatic, n)
+			}},
+		SSO: sso,
 		Stop: func(ctx context.Context) {
 			// First: a killed sign-in writes its sso_login_failed row, and the
 			// audit store must still be open for it.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -124,6 +125,54 @@ func (m *ProfileManager) GitHubAppNames() []string {
 		names[i] = a.Name
 	}
 	return names
+}
+
+// TokenHostMeta is one destination of a token entry, as the picker shows it.
+type TokenHostMeta struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"` // the TLS port: 443 when the entry declares none
+	Private bool   `json:"private,omitempty"`
+}
+
+// TokenMeta is what the profile editor may know of a static_tokens entry: its
+// name, how it is shown, where it may go and which env names it fills. Never
+// the value, the reference it is read from, or a config_env value.
+type TokenMeta struct {
+	Name          string          `json:"name"`
+	Provider      string          `json:"provider,omitempty"`
+	Label         string          `json:"label,omitempty"`
+	Prod          bool            `json:"prod,omitempty"`
+	Description   string          `json:"description,omitempty"`
+	Env           []string        `json:"env"`
+	ConfigEnvKeys []string        `json:"config_env_keys"`
+	Hosts         []TokenHostMeta `json:"hosts"`
+	MCPServer     string          `json:"mcp_server,omitempty"`
+}
+
+// StaticTokenMeta lists the instance's static_tokens entries for the profile
+// editor's Tokens picker, in config order. Never nil, so it encodes as [].
+func (m *ProfileManager) StaticTokenMeta() []TokenMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]TokenMeta, 0, len(m.tokens))
+	for _, e := range m.tokens {
+		tm := TokenMeta{Name: e.Name, Provider: e.Provider, Label: e.Label, Prod: e.Prod, Description: e.Description,
+			Env: slices.Clone(e.Env), ConfigEnvKeys: slices.Sorted(maps.Keys(e.ConfigEnv)), Hosts: []TokenHostMeta{}}
+		if tm.Env == nil {
+			tm.Env = []string{}
+		}
+		if tm.ConfigEnvKeys == nil {
+			tm.ConfigEnvKeys = []string{}
+		}
+		for _, h := range e.Egress {
+			tm.Hosts = append(tm.Hosts, TokenHostMeta{Host: h.Host, Port: h.EffectivePort(), Private: h.Private})
+		}
+		if e.MCP != nil {
+			tm.MCPServer = e.MCP.Server
+		}
+		out = append(out, tm)
+	}
+	return out
 }
 
 // SetAccounts installs the account resolver used by Save. Call at boot.

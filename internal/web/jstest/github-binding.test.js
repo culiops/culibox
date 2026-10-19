@@ -56,6 +56,21 @@ test("ghBindingFromForm sends a changed permission set as read, and only read", 
   for (const v of Object.values(got.permissions)) assert.strictEqual(v, "read");
 });
 
+test("ghBindingFromForm: a token row sends {owner, token, repos} with no app key", () => {
+  const got = ghBindingFromForm({
+    owners: [
+      { owner: " acme ", app: "main", token: " gh-pat-acme ", repos: "api web" },
+      { owner: "org", app: "main", token: "", repos: "x" },
+    ],
+    permissions: allDefaults(),
+  });
+  assert.deepStrictEqual(got.owners[0], { owner: "acme", token: "gh-pat-acme", repos: ["api", "web"] });
+  assert.ok(!("app" in got.owners[0]));
+  // An App row keeps its shape and gains no token key.
+  assert.deepStrictEqual(got.owners[1], { owner: "org", app: "main", repos: ["x"] });
+  assert.ok(!("token" in got.owners[1]));
+});
+
 test("ghBindingFromForm carries the stored extra egress hosts the form has no field for", () => {
   const rows = [{ owner: "acme", app: "main", repos: "api" }];
   const hosts = ["ghe.example.com"];
@@ -114,6 +129,11 @@ test("ghRowText: a refusal has its outcome and no expiry", () => {
 test("ghRowText prints only the fields it names", () => {
   const t = ghRowText({ provider: "github", subject: "acme", repos: 2, outcome: "minted", expires: "2026-10-19T14:05:00Z", error: "ghs_SECRET" });
   assert.doesNotMatch(t, /ghs_/);
+});
+
+test("ghRowText: a fetched PAT row names the entry and never a value", () => {
+  const row = { provider: "github", subject: "acme", entry: "gh-pat-acme", repos: 2, outcome: "fetched", error: "ghp_SECRET" };
+  assert.strictEqual(ghRowText(row), "GitHub \u00b7 acme \u00b7 2 repos \u00b7 fetched \u00b7 PAT gh-pat-acme");
 });
 
 test("ghRailRows: only github rows, in the order given, capped at five", () => {

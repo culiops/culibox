@@ -128,3 +128,34 @@ test("a hidden replies row keeps what the profile stored", () => {
   assert.strictEqual(replyableToSend(true, false, true), false); // visible: the checkbox decides
   assert.strictEqual(replyableToSend(true, true, false), true);
 });
+
+// N3: the Tokens block's pure rules.
+const { stGroups, stEntryLine, stTokensToSend } = require("../static/profileform.js");
+
+test("stGroups: providers sorted, entries without one under 'other' last, names sorted", () => {
+  const got = stGroups([
+    { name: "zeta" }, { name: "sentry-b", provider: "sentry" }, { name: "alpha", provider: "grafana" },
+    { name: "sentry-a", provider: "sentry" }, { name: "beta", provider: "" },
+  ]);
+  assert.deepStrictEqual(got.map((g) => g.provider), ["grafana", "sentry", "other"]);
+  assert.deepStrictEqual(got.map((g) => g.entries.map((e) => e.name)), [["alpha"], ["sentry-a", "sentry-b"], ["beta", "zeta"]]);
+  assert.deepStrictEqual(stGroups([]), []);
+  assert.deepStrictEqual(stGroups(undefined), []);
+});
+
+test("stEntryLine: env, config keys and hosts; the port only when not 443; (private) marked", () => {
+  const e = {
+    env: ["A", "B"], config_env_keys: ["K1"],
+    hosts: [{ host: "h1", port: 443 }, { host: "h2", port: 8443, private: true }],
+  };
+  assert.strictEqual(stEntryLine(e), "env A, B · config K1 · hosts h1, h2:8443 (private)");
+  assert.strictEqual(stEntryLine({ env: ["X"], config_env_keys: [], hosts: [] }), "env X");
+  assert.strictEqual(stEntryLine({ env: ["X"], hosts: [{ host: "h" }] }), "env X · hosts h");
+  assert.strictEqual(stEntryLine(undefined), "");
+});
+
+test("stTokensToSend: sorted, no repeats, undefined when none is ticked", () => {
+  assert.deepStrictEqual(stTokensToSend(["b", "a", "b"]), ["a", "b"]);
+  assert.strictEqual(stTokensToSend([]), undefined);
+  assert.strictEqual(stTokensToSend(undefined), undefined);
+});

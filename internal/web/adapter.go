@@ -65,14 +65,22 @@ func (a ManagerService) Restart(id string) (session.Info, error) {
 // query parameter: the audit store reads limit <= 0 as unlimited.
 const awsRecentRows = 20
 
+// staticRecentRows is how many static-token rows a status reply carries.
+const staticRecentRows = 5
+
 // AWSStatusAdapter answers GET /api/sessions/{id}/aws from the session
 // registry, the broker's counters and the audit store. It exposes the binding's
 // identifiers and outcomes only: never credentials, tokens or nonces (none of
 // which Info, Stats or Row carry).
 type AWSStatusAdapter struct {
-	Get    func(id string) (session.Info, bool)
-	Stats  func(id string) (broker.Stats, bool)
+	Get   func(id string) (session.Info, bool)
+	Stats func(id string) (broker.Stats, bool)
+	// Recent is the session's rows of every provider but static tokens, so a
+	// chatty token cannot crowd the AWS and GitHub history out of the reply.
 	Recent func(id string, limit int) ([]broker.Row, error)
+	// RecentStatic is the session's static-token rows (Subject = entry name);
+	// nil = none are read.
+	RecentStatic func(id string, limit int) ([]broker.Row, error)
 	// Egress reports the session's proxy counters; nil = egress control is not
 	// running, and the reply carries no egress object. ok is false until the
 	// session's first tunnel or denial, which reads as zeros, never a hidden row.
@@ -92,13 +100,13 @@ type AWSStatusAdapter struct {
 // the sign-in code and URL are left out.
 func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) { return a.AWSStatusFor(id, false) }
 
-// AWSStatusFor is ok only for a known session that has an AWS or a GitHub
-// binding (the credential broker's audit rows and counters serve both). The
+// AWSStatusFor is ok only for a known session that has an AWS, a GitHub or a
+// token binding (the credential broker's audit rows and counters serve them). The
 // device sign-in code and URL are in the reply only when cookie is true: they
 // are shown to the browser session that asked for the flow, not to a token.
 func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	info, ok := a.Get(id)
-	if !ok || (info.AWS == nil && info.GitHub == nil) {
+	if !ok || (info.AWS == nil && info.GitHub == nil && len(info.Tokens) == 0) {
 		return nil, false
 	}
 	stats, _ := a.Stats(id)
@@ -114,6 +122,19 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	out := map[string]any{"stats": stats, "recent": rows}
 	if info.AWS != nil {
 		out["label"], out["account_id"], out["role_arn"], out["prod"] = info.AWS.Label, info.AWS.AccountID, info.AWS.RoleARN, info.AWS.Prod
+	}
+	if len(info.Tokens) > 0 {
+		out["tokens"] = info.Tokens
+	}
+	if a.RecentStatic != nil && len(info.Tokens) > 0 {
+		srows, err := a.RecentStatic(id, staticRecentRows)
+		if err != nil {
+			log.Printf("aws status %s: reading static token rows: %v", id, err)
+		}
+		if srows == nil {
+			srows = []broker.Row{}
+		}
+		out["static_recent"] = srows
 	}
 	if g := info.GitHub; g != nil {
 		owners := g.Owners
