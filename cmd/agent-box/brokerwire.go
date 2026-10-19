@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/ghapp"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/ssologin"
 	"github.com/culiops/agent-box/internal/web"
@@ -47,7 +48,7 @@ var lookAWS = func() (string, error) { return exec.LookPath("aws") }
 // the caller (a broker without them could mint nothing or forge tokens); a
 // failure to listen wraps errBrokerListen.
 func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
-	info func(id string) (session.Info, bool)) (*brokerService, error) {
+	info func(id string) (session.Info, bool), apps []config.GitHubApp) (*brokerService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "broker.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("broker secret: %w", err)
@@ -76,6 +77,11 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 		return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
 			Live: !s.Exited(), AWS: s.AWS, Exclusive: s.Exclusive}, true
 	}, broker.STSMinter{}, audit)
+	// github_apps is read once, at daemon start: a change needs a restart. With
+	// none configured the route keeps answering 503.
+	if len(apps) > 0 {
+		brk.SetGitHub(ghapp.NewMinter(apps, ghapp.Client{}))
+	}
 
 	ep, err := broker.Listen(goos, stateRoot, port)
 	if err != nil {

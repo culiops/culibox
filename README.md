@@ -137,6 +137,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `analytics.enabled` | `true` | Token and cost analytics. |
 | `box_vm_cpus`, `box_vm_memory_gib` | 4, 4 | macOS box VM size. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
+| `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
 `box_pids_limit`, `box_tmp_size` and `box_memory` apply to boxes created after a restart; a running box keeps its limits until it is recreated.

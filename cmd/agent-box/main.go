@@ -382,7 +382,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	var brokerSvc *brokerService
 	if layer != nil {
 		svc, err := startBroker(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
-			mgr.Get, web.ManagerService{M: mgr}.Get)
+			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps)
 		switch {
 		case errors.Is(err, errBrokerListen):
 			log.Printf("%v (profiles with an AWS binding will refuse to spawn)", err)

@@ -66,7 +66,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 				return session.Info{}, false
 			}
 			return session.Info{ID: id, AWS: &session.AWSInfo{Label: "x"}}, true
-		})
+		}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +129,13 @@ func TestStartBrokerReusesItsSecretAcrossRestarts(t *testing.T) {
 	dataDir := shortRoot(t)
 	get := func(string) (*session.Session, bool) { return nil, false }
 	info := func(string) (session.Info, bool) { return session.Info{}, false }
-	a, err := startBroker(dataDir, dataDir, "linux", 0, get, info)
+	a, err := startBroker(dataDir, dataDir, "linux", 0, get, info, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tokA := a.Hooks.Token("claude-3", wireNonce)
 	a.Stop(context.Background())
-	b, err := startBroker(dataDir, dataDir, "linux", 0, get, info)
+	b, err := startBroker(dataDir, dataDir, "linux", 0, get, info, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestStartBrokerRefusesAShortSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := startBroker(dataDir, dataDir, "linux", 0,
-		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false })
+		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false }, nil)
 	if err == nil || errors.Is(err, errBrokerListen) || !strings.Contains(err.Error(), "broker secret") {
 		t.Fatalf("err = %v, want a fatal broker secret error", err)
 	}
@@ -166,7 +166,7 @@ func TestStartBrokerListenFailureIsNotFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := startBroker(dataDir, dataDir, "linux", 0,
-		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false })
+		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false }, nil)
 	if !errors.Is(err, errBrokerListen) {
 		t.Fatalf("err = %v, want errBrokerListen", err)
 	}
@@ -185,7 +185,7 @@ func TestBrokerLookupCarriesExclusive(t *testing.T) {
 	defer func() { lookAWS = lookAWSBefore }()
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false })
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
 	defer func() { lookAWS = lookAWSBefore }()
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false })
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestStopClosesTheSignInRunnerBeforeTheAuditStore(t *testing.T) {
 	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1")}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false })
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestStartBrokerClosesWindowsLeftOpenByTheLastRun(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		svc, err := startBroker(dataDir, dataDir, "linux", 0,
 			func(string) (*session.Session, bool) { return nil, false },
-			func(string) (session.Info, bool) { return session.Info{}, false })
+			func(string) (session.Info, bool) { return session.Info{}, false }, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -351,5 +351,51 @@ func TestStartBrokerClosesWindowsLeftOpenByTheLastRun(t *testing.T) {
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM approval_audit WHERE session_id = 'aws-1' AND action = 'ended'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("ended rows after two starts: %d (%v)", n, err)
+	}
+}
+
+// A GitHub-bound live boxed session is the only shape that reaches the minter
+// check in serveGitHubToken: an unknown session is refused with 403 before it.
+func TestStartBrokerWiresGitHub(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket transport")
+	}
+	sessions := map[string]*session.Session{
+		"gh-1": {ID: "gh-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce,
+			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{{Owner: "acme", App: "main", Repos: []string{"api"}}}}},
+	}
+	get := func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok }
+	info := func(string) (session.Info, bool) { return session.Info{}, false }
+	// The key file never exists: the minter loads keys lazily, so a configured
+	// App fails at mint time (502), while an unconfigured broker answers 503.
+	apps := []config.GitHubApp{{Name: "main", ClientID: "Iv1.x",
+		PrivateKey: config.KeyRef{Type: "file", Path: "/no/such/agent-box-test.pem"}}}
+
+	cases := []struct {
+		name string
+		apps []config.GitHubApp
+		want int
+		body string
+	}{
+		{"no apps: GitHub unconfigured", nil, http.StatusServiceUnavailable, "GitHub is not configured"},
+		{"apps: minter wired", apps, http.StatusBadGateway, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := shortRoot(t)
+			svc, err := startBroker(dataDir, dataDir, "linux", 0, get, info, tc.apps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer svc.Stop(context.Background())
+			sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+			code, body := postGHToken(t, sock, svc.Hooks.Token("gh-1", wireNonce))
+			if code != tc.want {
+				t.Fatalf("status %d (%s), want %d", code, body, tc.want)
+			}
+			if tc.body != "" && !strings.Contains(body, tc.body) {
+				t.Fatalf("body %q lacks %q", body, tc.body)
+			}
+		})
 	}
 }
