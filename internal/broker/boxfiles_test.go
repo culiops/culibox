@@ -372,3 +372,18 @@ func TestStripGitHubEnvCoversGitHub(t *testing.T) {
 		}
 	}
 }
+
+// config.TokenEnvDenied keeps its own copy of StaticCredEnv (config cannot
+// import broker); this keeps the two in step.
+func TestTokenEnvDeniedCoversStripEnv(t *testing.T) {
+	for _, n := range StaticCredEnv {
+		if !config.TokenEnvDenied(n) {
+			t.Errorf("config.TokenEnvDenied(%q) = false; add it to the deny-list in config/statictoken.go", n)
+		}
+	}
+	for _, n := range []string{"AWS_CONFIG_FILE", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", TokenEnv} {
+		if !config.TokenEnvDenied(n) {
+			t.Errorf("config.TokenEnvDenied(%q) = false", n)
+		}
+	}
+}

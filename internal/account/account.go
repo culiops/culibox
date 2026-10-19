@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+
+	"github.com/culiops/agent-box/internal/config"
 )
 
 const (
@@ -38,8 +40,7 @@ func IsAuthEnv(name string) bool {
 }
 
 var (
-	nameRe       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
-	secretNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,31}$`)
 
 	ErrUnknown = errors.New("unknown account")
 	ErrExists  = errors.New("account already exists")
@@ -84,7 +85,7 @@ func (a Account) Validate() error {
 	default:
 		return fmt.Errorf("account %q: invalid provider %q (want claude|codex)", a.Name, a.Provider)
 	}
-	if a.TokenSecret != "" && !secretNameRe.MatchString(a.TokenSecret) {
+	if a.TokenSecret != "" && !config.ValidEnvName(a.TokenSecret) {
 		return fmt.Errorf("account %q: invalid token secret name %q", a.Name, a.TokenSecret)
 	}
 	return nil

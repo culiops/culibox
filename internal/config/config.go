@@ -165,7 +165,8 @@ type Config struct {
 	SecretSources   []SecretSource `json:"secret_sources,omitempty"`
 	Options         []OptionDef    `json:"options,omitempty"`
 	Agents          []AgentConfig  `json:"agents"`
-	GitHubApps      []GitHubApp    `json:"github_apps,omitempty"` // GitHub App connections that profile github bindings name
+	GitHubApps      []GitHubApp    `json:"github_apps,omitempty"`   // GitHub App connections that profile github bindings name
+	StaticTokens    []StaticToken  `json:"static_tokens,omitempty"` // long-lived token entries that profile tokens name; read at daemon start
 
 	// DefaultRuntime is the tier for any agent that does not name one. It exists
 	// because the quick-shell profile is GENERATED, not configured, so no
@@ -320,6 +321,16 @@ func (c Config) Validate() error {
 	}
 	if err := ValidateGitHubApps(c.GitHubApps); err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+	if err := ValidateStaticTokens(c.StaticTokens); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if c.PasswordEnv != "" {
+		for _, e := range c.StaticTokens {
+			if e.Value.Type == "env" && e.Value.Var == c.PasswordEnv {
+				return fmt.Errorf("config: static_tokens[%q].value: env var %q is password_env, the login password, and cannot be a token", e.Name, c.PasswordEnv)
+			}
+		}
 	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
