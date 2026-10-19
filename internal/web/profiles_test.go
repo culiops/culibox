@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -499,5 +500,33 @@ func TestLegacyBoxImageLoadsIgnoredAndLogged(t *testing.T) {
 	// Later merges (any Get/Views/Save) do not repeat the line.
 	if n := strings.Count(buf.String(), "ignoring box.image"); n != 2 {
 		t.Errorf("log lines after later reads = %d, want 2 total", n)
+	}
+}
+
+func TestProfileSaveChecksTokens(t *testing.T) {
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	body := `{"name":"p","bin":"claude","runtime":"box","tokens":["sentry-corp"]}`
+
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "sentry-corp") {
+		t.Fatalf("an undefined entry must be a 400 naming it, got %d %s", rec.Code, rec.Body)
+	}
+
+	pm.SetStaticTokens([]config.StaticToken{{Name: "sentry-corp", Value: config.KeyRef{Type: "env", Var: "S"},
+		Env: []string{"SENTRY_ACCESS_TOKEN"}, Egress: []config.TokenEgress{{Host: "sentry.corp.example"}}}})
+	rec = httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
+	if rec.Code != 201 {
+		t.Fatalf("a defined entry should save, got %d %s", rec.Code, rec.Body)
+	}
+
+	// the manager keeps its own copy of the entries
+	entries := []config.StaticToken{{Name: "x", Env: []string{"A"}}}
+	pm.SetStaticTokens(entries)
+	entries[0].Env[0] = "CHANGED"
+	if pm.tokens[0].Env[0] != "A" {
+		t.Fatal("SetStaticTokens must clone")
 	}
 }

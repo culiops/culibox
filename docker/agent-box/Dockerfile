@@ -70,11 +70,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep jq less procps curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
+# --- update checks and telemetry: off, before any tool below runs ---
+# The box has no use for self-update (the image is the pin) or for phoning home,
+# and several of these write files into /root at build time, which the last root
+# RUN refuses. Set before the first RUN that calls terraform, go or claude:
+#   DISABLE_UPDATES=1            Claude Code: no self-update (measured 2026-10-19 to
+#                                work as a process env, so no settings entry is needed)
+#   DO_NOT_TRACK=1               gh (device-id file), mcp-grafana, others
+#   GRAFANA_USAGE_STATS=disabled mcp-grafana's usage statistics
+#   CHECKPOINT_DISABLE=1         terraform's checkpoint call and its /root/.terraform.d
+#   FASTMCP_CHECK_FOR_UPDATES=off mcp-atlassian checks PyPI on every start otherwise
+# GOTELEMETRY=off is NOT set: measured to do nothing. The Go RUN runs
+# `go telemetry off` first (without it a background process rewrites the counter
+# files AFTER an rm -rf, measured 2026-10-19) and then removes /root/.config/go.
+ENV DISABLE_UPDATES=1 DO_NOT_TRACK=1 GRAFANA_USAGE_STATS=disabled CHECKPOINT_DISABLE=1 FASTMCP_CHECK_FOR_UPDATES=off
+
 # --- python3 ---
 # scripts/lint.sh maps eslint's JSON report back to the source files with
 # python3, so a box without it cannot pass scripts/test.sh. Debian bookworm's
 # python3 package (no recommends); it moves with the base image's apt snapshot.
-RUN apt-get update && apt-get install -y --no-install-recommends python3 \
+# python3-venv is for the mcp-atlassian venv below (bookworm's python3 cannot make
+# one without it).
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Cloud tooling for bound sessions. Credentials never live in the image: the
@@ -116,7 +133,8 @@ RUN set -eu; \
     curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${a}.zip" -o /tmp/terraform.zip; \
     echo "${sum}  /tmp/terraform.zip" | sha256sum -c -; \
     unzip -q /tmp/terraform.zip -d /usr/local/bin; rm -f /tmp/terraform.zip; \
-    terraform version
+    terraform version; \
+    rm -rf /root/.terraform.d
 
 # --- Go ---
 # Go 1.26.5, pinned by version AND per-arch SHA256 (from go.dev's release list):
@@ -137,7 +155,10 @@ RUN set -eu; \
     curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${a}.tar.gz" -o /tmp/go.tar.gz; \
     echo "${sum}  /tmp/go.tar.gz" | sha256sum -c -; \
     tar -C /usr/local -xzf /tmp/go.tar.gz; rm -f /tmp/go.tar.gz; \
-    /usr/local/go/bin/go version
+    /usr/local/go/bin/go telemetry off; \
+    /usr/local/go/bin/go version; \
+    rm -rf /root/.config/go; \
+    [ ! -e /root/.config ] || rmdir /root/.config
 # Everything Go writes lives under the box home (a per-box bind mount). The
 # directories are NOT created here: the home is a bind mount, so nothing the
 # image creates under /home/agent is visible at run time. Go creates GOCACHE and
@@ -185,8 +206,6 @@ RUN set -eu; \
     ldd /usr/local/bin/codebase-memory-mcp 2>&1 | grep -q 'not a dynamic executable'; \
     codebase-memory-mcp --version | grep -q "${CBM_VERSION}"
 
-RUN npm install -g @anthropic-ai/claude-code
-
 # --- Playwright MCP + Chromium ---
 # Debian's chromium (apt-signed; security fixes arrive with every rebuild, and
 # there is no unhashed CDN download; the version moves with the base image's apt
@@ -203,6 +222,7 @@ ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN apt-get update && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
+    && npm cache clean --force && rm -rf /root/.npm \
     && chromium --version \
     && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
 
@@ -244,6 +264,20 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 # downloaded artefacts AND compared with the upstream checksums file and/or the
 # GitHub asset digest. To bump: change <TOOL>_VERSION, download both arch
 # artefacts, recompute both sums, compare them with the same sources.
+
+# --- Claude Code ---
+# @anthropic-ai/claude-code, pinned to the version the npm `stable` dist-tag points
+# at (measured 2026-10-19: stable 2.1.292, latest 2.1.303). The `stable` tag is the
+# deliberate exception to the two-week rule: Anthropic's own soak period stands in
+# for ours, and it is a deliberate downgrade from `latest`. Self-update is off
+# (DISABLE_UPDATES above), so the image is the only way this version moves.
+# RESIDUAL, accepted (same class as @playwright/mcp): the package's dependency
+# tree resolves at build time. The npm cache is removed in the same RUN so it
+# never lands in a layer.
+# To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
+# CLAUDE_CODE_VERSION to `stable`, rebuild.
+ARG CLAUDE_CODE_VERSION=2.1.292
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # --- apt extras ---
 # make, dnsutils (dig) and netcat-openbsd (nc) are absent from the slim base;
@@ -512,7 +546,7 @@ RUN set -eu; \
     mkdir -p /tmp/tfenv-check-home; \
     env -u GOTMPDIR HOME=/tmp/tfenv-check-home TFENV_CONFIG_DIR=/tmp/tfenv-check /usr/local/bin/agent-box-entrypoint true; \
     TFENV_CONFIG_DIR=/tmp/tfenv-check terraform version | grep -q "v${TERRAFORM_VERSION}"; \
-    rm -rf /tmp/tfenv-check /tmp/tfenv-check-home
+    rm -rf /tmp/tfenv-check /tmp/tfenv-check-home /root/.terraform.d
 
 # --- gh (GitHub CLI) ---
 # gh 2.102.0 (released 2026-09-30), pinned by version AND per-arch SHA256. Both
@@ -539,8 +573,362 @@ RUN set -eu; \
     echo "${sum}  /tmp/gh.tar.gz" | sha256sum -c -; \
     mkdir /opt/gh; tar -C /opt/gh --strip-components=1 -xzf /tmp/gh.tar.gz; rm -f /tmp/gh.tar.gz; \
     /opt/gh/bin/gh --version | grep -q "${GH_VERSION}"; \
+    rm -rf /root/.local/state/gh; \
     printf '%s\n' '#!/bin/sh' '[ -f /opt/agentbox/agentbox-gh.js ] && exec node /opt/agentbox/agentbox-gh.js "$@"' 'exec /opt/gh/bin/gh "$@"' > /usr/local/bin/gh; \
     chmod 0755 /usr/local/bin/gh
+
+# --- agentbox-env shim ---
+# `agentbox-env NAME -- CMD` runs CMD with the named static tokens in its env for
+# that one process (a token is never in the session env). The script is mounted
+# read-only with the session's binding at /opt/agentbox (the console's BoxDir);
+# this shim runs it when it is there. A session with no token binding has no
+# script, so the shim says so and exits 127, the same way a missing command does.
+RUN printf '%s\n' '#!/bin/sh' '[ -f /opt/agentbox/agentbox-env.js ] && exec node /opt/agentbox/agentbox-env.js "$@"' 'echo "agentbox-env: this session has no token binding" >&2' 'exit 127' > /usr/local/bin/agentbox-env \
+    && chmod 0755 /usr/local/bin/agentbox-env
+
+# --- mcp-grafana ---
+# mcp-grafana v2.0.0 (released 2026-10-01), the Grafana MCP server, pinned by version
+# AND per-arch SHA256. v2.0.0 rather than the newer v2.0.2 (2026-10-07) because of
+# the two-week rule: v2.0.2 was 12 days old when this was pinned. Both sums were
+# computed from the downloaded tarballs and match the release's checksums.txt and
+# the GitHub asset digests:
+#   https://github.com/grafana/mcp-grafana/releases/download/v2.0.0/mcp-grafana_2.0.0_checksums.txt
+#   https://github.com/grafana/mcp-grafana/releases/download/v2.0.0/mcp-grafana_Linux_x86_64.tar.gz
+#   https://github.com/grafana/mcp-grafana/releases/download/v2.0.0/mcp-grafana_Linux_arm64.tar.gz
+# The tarball is flat (the binary is at the archive root) and `mcp-grafana --version`
+# prints the bare version. It is NOT in /etc/agent-box/mcp.json: it needs a Grafana
+# URL and a token, so a session declares it only when it binds a token for it.
+# To bump: take a release at least two weeks old, download both tarballs, recompute
+# the sums and compare them with that release's checksums file.
+ARG GRAFANA_MCP_VERSION=2.0.0
+ARG GRAFANA_MCP_SHA256_AMD64=0a0dde2c882c24fedcce79a07d97b232f71730c744b84a09b6b0735c2ca3d024
+ARG GRAFANA_MCP_SHA256_ARM64=5b29581cad5ce21a0db67c655e5e7e71a9163b4e1ba1b518559baa3c54133a28
+RUN set -eu; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) a=x86_64; sum="$GRAFANA_MCP_SHA256_AMD64" ;; \
+      arm64) a=arm64; sum="$GRAFANA_MCP_SHA256_ARM64" ;; \
+      *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/grafana/mcp-grafana/releases/download/v${GRAFANA_MCP_VERSION}/mcp-grafana_Linux_${a}.tar.gz" -o /tmp/mcp-grafana.tar.gz; \
+    echo "${sum}  /tmp/mcp-grafana.tar.gz" | sha256sum -c -; \
+    mkdir /tmp/mcp-grafana; tar -C /tmp/mcp-grafana -xzf /tmp/mcp-grafana.tar.gz; \
+    install -m 0755 /tmp/mcp-grafana/mcp-grafana /usr/local/bin/mcp-grafana; rm -rf /tmp/mcp-grafana /tmp/mcp-grafana.tar.gz; \
+    mcp-grafana --version | grep -q "${GRAFANA_MCP_VERSION}"
+
+# --- sentry-mcp ---
+# @sentry/mcp-server 0.42.0 (published 2026-09-25) from npm, pinned by version. The
+# package's binary is sentry-mcp (`--version` prints `@sentry/mcp-server 0.42.0`);
+# it needs Node >= 22.13 (the base has 24) and adds about 136 MB. Not in
+# /etc/agent-box/mcp.json, for the same reason as mcp-grafana.
+# RESIDUAL, accepted (same class as @playwright/mcp above): the tarball ships no
+# npm-shrinkwrap.json or lockfile, so its transitive dependencies (the exact
+# @sentry/node 11.0.0-rc.0, and the ranges dotenv ^16.6.1 and zod ^4.4.3) resolve
+# at build time and are only as pinned as the npm registry. npm checks each tarball
+# against the registry's integrity field, but this build holds no integrity pin of
+# its own. The top-level integrity, for a manual check, from `npm view
+# @sentry/mcp-server@0.42.0 dist.integrity`:
+#   sha512-KmwfBOUMzJdcxeM9Iv6EN4XEjXbGyopTeKizgQr46pW35NTFTRBddVepZytVITS4pnx5pXj6bRHadSowaaRHQQ==
+# The npm cache is removed in the same RUN so it never lands in a layer.
+# To bump: change SENTRY_MCP_VERSION to a release at least two weeks old, compare
+# the new dist.integrity with the tarball's sha512, and re-check that
+# `sentry-mcp --version` still resolves.
+ARG SENTRY_MCP_VERSION=0.42.0
+RUN npm install -g @sentry/mcp-server@${SENTRY_MCP_VERSION} \
+    && npm cache clean --force && rm -rf /root/.npm \
+    && command -v sentry-mcp \
+    && sentry-mcp --version | grep -q "${SENTRY_MCP_VERSION}"
+
+# --- mcp-atlassian ---
+# mcp-atlassian 0.23.1 (uploaded to PyPI 2026-08-19), the Jira/Confluence MCP
+# server, in its own venv (python3-venv, see the python3 block), installed from a
+# HASH LOCK with `--require-hashes --only-binary :all: --no-deps`: pip refuses any
+# file whose sha256 is not in the lock, and builds nothing from source, so the
+# 106 transitive dependencies are pinned like the server itself. The build context
+# holds only this Dockerfile, so the lock is inlined below (about 250 lines) and
+# removed again in the same RUN. About 193 MB. Not in /etc/agent-box/mcp.json, for
+# the same reason as mcp-grafana.
+# The lock was generated offline on 2026-10-19 with uv 0.12.23 (not installed in
+# this image): `uv pip compile --python-version 3.11 --generate-hashes --no-build`
+# on `mcp-atlassian==0.23.1`, once with --python-platform x86_64-manylinux_2_28 and
+# once with aarch64-manylinux_2_28 (the two gave the identical 107 pins). uv lists
+# every wheel of every pin (about 1,600 lines), so each pin's hashes were then
+# trimmed to the wheels this image can install: cp311, abi3 or py3-none-any, on
+# manylinux x86_64 or aarch64 up to glibc 2.36 (taken from the PyPI JSON files API,
+# intersected with uv's hashes). A platform outside that set fails closed on a
+# missing hash. The amd64 install and `pip check` were run for real; the arm64
+# wheels were fetched with `pip download --require-hashes` but not executed.
+# To bump: change MCP_ATLASSIAN_VERSION to a release at least two weeks old,
+# regenerate both platform locks as above, re-trim, replace the printf lines below
+# (and the version in the lock's first pin), and re-run both arch installs.
+ARG MCP_ATLASSIAN_VERSION=0.23.1
+RUN set -eu; \
+    printf '%s\n' \
+      '# mcp-atlassian 0.23.1 hash lock for the agent-box image (cp311, py3-none-any, manylinux x86_64 + aarch64 wheels only).' \
+      '# Generated 2026-10-19: uv 0.12.23 `uv pip compile --python-platform {x86_64,aarch64}-manylinux_2_28 --python-version 3.11' \
+      '#   --generate-hashes --no-build` on `mcp-atlassian==0.23.1` (both platforms gave the identical 107 pins), then the hash list' \
+      '#   was trimmed to wheels installable on Debian bookworm / Python 3.11 on amd64 or arm64 (PyPI JSON files API, packaging.tags).' \
+      '# Install: pip install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r <this file>' \
+      'aiofile==3.12.3 \' \
+      '    --hash=sha256:5c1bcc9e929c50834608e8cc1a4cc1d7503eb60c15a535b779fd39e2f372c017' \
+      'annotated-types==0.8.0 \' \
+      '    --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0' \
+      'anyio==4.15.1 \' \
+      '    --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101' \
+      'async-timeout==5.0.1 \' \
+      '    --hash=sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c' \
+      'atlassian-python-api==4.0.7 \' \
+      '    --hash=sha256:46a70cb29eaab87c0a1697fccd3e25df1aa477e6aa4fb9ba936a9d46b425933c' \
+      'attrs==26.1.0 \' \
+      '    --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309' \
+      'authlib==1.9.1 \' \
+      '    --hash=sha256:8b9be8b1e5174dcbf5520e984f1a22dc2edae5b6e40a61d4cedbf86b97e9e69b' \
+      'backports-tarfile==1.2.0 \' \
+      '    --hash=sha256:77e284d754527b01fb1e6fa8a1afe577858ebe4e9dad8919e34c862cb399bc34' \
+      'beartype==0.23.1 \' \
+      '    --hash=sha256:4461b4dc57e3fdd6c8a8464b22cf118002eea107c33e9fef651c69068ab3cce3' \
+      'beautifulsoup4==4.15.0 \' \
+      '    --hash=sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9' \
+      'cachetools==7.2.3 \' \
+      '    --hash=sha256:85ef9d2703918bedf7f88caa0b06bb3bb7a71360eb0b05c20796b89fede6e30c' \
+      'caio==0.12.9 \' \
+      '    --hash=sha256:14483697a27aefd265decb4b595e70814d284f46bc352c75eb9e9dae94a7b398 \' \
+      '    --hash=sha256:bf12d4f014b2a33e642ed7905b5787656ede2fc24be21f7c086826ff0d32cec3 \' \
+      '    --hash=sha256:e10e3be34fca464cc5e27d3011e284fd0cde0cc488cda4742e765c8e9291647d' \
+      'cattrs==26.2.1 \' \
+      '    --hash=sha256:a12aaa3453dc8f633a815293179f08b7421ed18d2575c459c3c736f840beac24' \
+      'certifi==2026.10.18 \' \
+      '    --hash=sha256:73191c47aaa79da394e8fee2dbc2ec827432cab56311122c9e47abf79e390f62' \
+      'cffi==2.1.1 \' \
+      '    --hash=sha256:3311ed60d36f83378794e1009ac6258bafbf81f7888b4caa7b35a521e3f95813 \' \
+      '    --hash=sha256:34e261f78cb6ceaaa36f42f2613f4380d94d9c759a9c73c769ee6e0247364632' \
+      'charset-normalizer==3.5.2 \' \
+      '    --hash=sha256:1c50fe28bbc2ced33386f298650d91218076c05420e6cbd790b913adc41659e7 \' \
+      '    --hash=sha256:211d5a3eb6af8f513b8d4ca19a8c1b7accab1b5f0d3175f9826b03c1a920dc1f \' \
+      '    --hash=sha256:b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685 \' \
+      '    --hash=sha256:d19fbd981a488e22cd04883659ca6b08f50b5974f9fd7c95655ef6a043e5893f \' \
+      '    --hash=sha256:d760fe2a4d7c3b226cb9026d6a842868d52a7901bd98420e1baf14e80da85cf5' \
+      'click==8.5.0 \' \
+      '    --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360' \
+      'cryptography==50.0.2 \' \
+      '    --hash=sha256:0ddc924c04591c2811ca024d62ecad4f7f6f08af8939c211438f48a16bd23602 \' \
+      '    --hash=sha256:1981f1db4630889b9ef7803fadef12b056f428cb6b85c27ba57b774793b6093c \' \
+      '    --hash=sha256:4061c0079120205fb760c58acab6443e217307dcf05e3702cf970e0689972856 \' \
+      '    --hash=sha256:630ebfea3bf689d075f82316324ff7433dc447fe6bc1bfc76524b74b4a9567d2 \' \
+      '    --hash=sha256:79def8d059362e7831389ed3be0ecdf58a89386e1271e35dd9f5af84e81bffd0 \' \
+      '    --hash=sha256:87e9ce85beb6b328ba370cc6e6aea483c92617b4c95b1d33a49297eb662bfb04 \' \
+      '    --hash=sha256:9dab55f57c74c3cad24c323bacbbd04be4705ba6eb0d92e920b1fc4837ed5079 \' \
+      '    --hash=sha256:c5e67125c7dca78d199ec4e116aa93dbb83494808ecbb8211a2cb09b1bf41dbd \' \
+      '    --hash=sha256:dfe9763530994147d9af1def057a5b9658b00e8f8fe8743d144d1e0911c2e454 \' \
+      '    --hash=sha256:ee247f5c245c9a2fe7c8e2214e295918838e44e00a45a6718451e4004219e767 \' \
+      '    --hash=sha256:f21e8a22c8605750c7af886bab299a363721264061b4ac0a30efb73cfd58efc5 \' \
+      '    --hash=sha256:f9f6143a8c75945eb960d9eb98905a441394abfa24afaae239d514ffb2586480' \
+      'cyclopts==5.2.0 \' \
+      '    --hash=sha256:5da2a5d65164e03008621fc4795946b88a722b881398b5dfa58afa6218342cff' \
+      'deprecated==1.3.1 \' \
+      '    --hash=sha256:597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f' \
+      'dnspython==2.9.0 \' \
+      '    --hash=sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9' \
+      'docstring-parser==0.18.0 \' \
+      '    --hash=sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b' \
+      'email-validator==2.3.0 \' \
+      '    --hash=sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4' \
+      'exceptiongroup==1.3.1 \' \
+      '    --hash=sha256:a7a39a3bd276781e98394987d3a5701d0c4edffb633bb7a5144577f82c773598' \
+      'fakeredis==2.34.1 \' \
+      '    --hash=sha256:0107ec99d48913e7eec2a5e3e2403d1bd5f8aa6489d1a634571b975289c48f12' \
+      'fastmcp==3.4.9 \' \
+      '    --hash=sha256:8ec034ccb896a6b30cef25cbf499d93099482a03acf2c223e7db5531b22e88cb' \
+      'fastmcp-slim==3.4.9 \' \
+      '    --hash=sha256:f0442024dcaec56860faeb7863099eacbaa921596c88d5e6f9e7f6adc4c1aca4' \
+      'griffelib==2.3.2 \' \
+      '    --hash=sha256:8e710afededd5607f95bf3c8ccc175ee306e7084459faf27b9f9f44ef2a7a274' \
+      'h11==0.16.0 \' \
+      '    --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86' \
+      'httpcore==1.0.9 \' \
+      '    --hash=sha256:2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55' \
+      'httpx==0.28.1 \' \
+      '    --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad' \
+      'httpx-sse==0.4.3 \' \
+      '    --hash=sha256:0ac1c9fe3c0afad2e0ebb25a934a59f4c7823b60792691f779fad2c5568830fc' \
+      'idna==3.20 \' \
+      '    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c' \
+      'importlib-metadata==9.0.1 \' \
+      '    --hash=sha256:bba5600596a7e21f3eef53281cf28d6a5195634d2f2b78ff9501a3272c6eaab0' \
+      'jaraco-classes==3.4.0 \' \
+      '    --hash=sha256:f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790' \
+      'jaraco-context==6.1.2 \' \
+      '    --hash=sha256:bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535' \
+      'jaraco-functools==4.6.0 \' \
+      '    --hash=sha256:99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30' \
+      'jeepney==0.9.0 \' \
+      '    --hash=sha256:97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683' \
+      'jmespath==1.1.0 \' \
+      '    --hash=sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64' \
+      'joserfc==1.7.7 \' \
+      '    --hash=sha256:06979cfbab78bc802f14c0358f32969826cc26720e13cb38926ffdc86bc0cb2c' \
+      'jsonref==1.1.0 \' \
+      '    --hash=sha256:590dc7773df6c21cbf948b5dac07a72a251db28b0238ceecce0a2abfa8ec30a9' \
+      'jsonschema==4.26.0 \' \
+      '    --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce' \
+      'jsonschema-path==0.5.0 \' \
+      '    --hash=sha256:2790a070bc7abb08ea3dbe4d340ece4efadf639223001f020c7503229ba068e2' \
+      'jsonschema-specifications==2025.9.1 \' \
+      '    --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe' \
+      'keyring==25.7.0 \' \
+      '    --hash=sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f' \
+      'lxml==6.1.3 \' \
+      '    --hash=sha256:49fbc2682a9306135b7ec49e93f97f9c26689b9b7f96ed2742d8d6497e994d13 \' \
+      '    --hash=sha256:4a579dfb9c835f8ab47f4b8ed33440cbc75b806b73297208e6ec2a33e903740b \' \
+      '    --hash=sha256:527195c188d7d0af748cd48d220ab8cdc5cb99be3d49ac4d9be7324d8abf9bc0 \' \
+      '    --hash=sha256:ea2c01cdb16dc12156e455007c406dfaaece0c89aa4ba0e3b47586779f951d41' \
+      'markdown==3.11.1 \' \
+      '    --hash=sha256:f1fa378ba5d682900c9ecb55ccceacca936016dda7c3b27097e8ae03ff78feb5' \
+      'markdown-it-py==4.2.0 \' \
+      '    --hash=sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a' \
+      'markdown-to-confluence==0.6.4 \' \
+      '    --hash=sha256:3da8f89d50f70d0efa18b963f536ce1a8ac190f424d382e0da329b8e4c27e8d2' \
+      'markdownify==1.2.3 \' \
+      '    --hash=sha256:a189a0bedfd14009030fde5f85bb6f77c56897cb839b5c25315dd7d4e3e290ba' \
+      'mcp==1.30.0 \' \
+      '    --hash=sha256:666edb5009503e1047c9d60346a756f94b261f05cc2625f23d41c728ffc484d0' \
+      'mcp-atlassian==0.23.1 \' \
+      '    --hash=sha256:2c00820dabb6d39d9356025a52689cbc411ec4f7d7dd87a64589099084da471a' \
+      'mdurl==0.1.2 \' \
+      '    --hash=sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8' \
+      'more-itertools==11.2.1 \' \
+      '    --hash=sha256:35a7377edd1dd6608dcb2cdf534ded55ea32d49448875ad042cd3f879fb1ded0' \
+      'oauthlib==4.0.0 \' \
+      '    --hash=sha256:624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd' \
+      'openapi-pydantic==0.6.0 \' \
+      '    --hash=sha256:8bd6d548a250da37db96f461bcd52b3468e8834ad7d6db14b00a6b2ebbd163a3' \
+      'opentelemetry-api==1.45.1 \' \
+      '    --hash=sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb' \
+      'orjson==3.13.0 \' \
+      '    --hash=sha256:89bcf2d4bc6c9a7e1763c8cf534f38712e66b76a0fefda7fb7785462f0d635e4 \' \
+      '    --hash=sha256:dd9d9a101bd8dbfad112170f009cd155e52bb8c936468821a0d03cbb96c0e426' \
+      'outcome==1.3.0.post0 \' \
+      '    --hash=sha256:e771c5ce06d1415e356078d3bdd68523f284b4ce5419828922b6871e65eda82b' \
+      'packaging==26.3 \' \
+      '    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c' \
+      'pathable==0.6.0 \' \
+      '    --hash=sha256:82c4ca6c98c502ad12e0d4e9779b6210afee93c38990988c8c5d1b49bdcdf566' \
+      'pathspec==1.1.1 \' \
+      '    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189' \
+      'platformdirs==4.13.5 \' \
+      '    --hash=sha256:53d3ec4280b815c1e0b02edad7f9ee8fda1ba9c0865dd9c2e6e63849ce82fc1e' \
+      'py-key-value-aio==0.4.6 \' \
+      '    --hash=sha256:820b30c7959fc738ea3d00160cdb10cd258f51e38737b2add530defeea1ded77' \
+      'pycparser==3.11 \' \
+      '    --hash=sha256:51d5a8ba2be0bbe440b99d2112604c95bbbc3c2748a64260186c541e1729cd80' \
+      'pydantic==2.14.1 \' \
+      '    --hash=sha256:9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454' \
+      'pydantic-core==2.50.1 \' \
+      '    --hash=sha256:8812592c85d0edf423f10eadcef42716d71e8219085ad9e85b775057b7306133 \' \
+      '    --hash=sha256:94be440c03fede26969a5ce75468e0e6a9927a1b46d9b679ee8adc1b057b0350' \
+      'pydantic-settings==2.16.0 \' \
+      '    --hash=sha256:7e73acf7f61936a15e5a3b6eedaea29f133357faf7272f2607ba479b049dd7f2' \
+      'pygments==2.21.0 \' \
+      '    --hash=sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9' \
+      'pyjwt==2.15.1 \' \
+      '    --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193' \
+      'pymdown-extensions==12.3 \' \
+      '    --hash=sha256:345493a8e3497e24382902903a1c43a28e34a52f2b7571a1c9641429b820ca74' \
+      'pyperclip==1.11.0 \' \
+      '    --hash=sha256:299403e9ff44581cb9ba2ffeed69c7aa96a008622ad0c46cb575ca75b5b84273' \
+      'pysocks==1.7.1 \' \
+      '    --hash=sha256:2725bd0a9925919b9b51739eea5f9e2bae91e83288108a9ad338b2e3a4435ee5' \
+      'python-dateutil==2.9.0.post0 \' \
+      '    --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427' \
+      'python-dotenv==1.2.4 \' \
+      '    --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc' \
+      'python-multipart==0.0.32 \' \
+      '    --hash=sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23' \
+      'pyyaml==6.0.3 \' \
+      '    --hash=sha256:10892704fc220243f5305762e276552a0395f7beb4dbf9b14ec8fd43b57f126c \' \
+      '    --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d' \
+      'rapidfuzz==3.14.6 \' \
+      '    --hash=sha256:3781cf14f9fc933d7198c2b25a8bbbd1a62b752746d5cd26de14957edc0e802f \' \
+      '    --hash=sha256:3d5d90bae3c6fb7ea34da968c9f23070e8440edb827a28b242580e0108110b14' \
+      'redis==8.1.0 \' \
+      '    --hash=sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb' \
+      'referencing==0.37.0 \' \
+      '    --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231' \
+      'requests==2.34.2 \' \
+      '    --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0' \
+      'requests-oauthlib==2.0.0 \' \
+      '    --hash=sha256:7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36' \
+      'rich==15.0.0 \' \
+      '    --hash=sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb' \
+      'rich-rst==2.2.0 \' \
+      '    --hash=sha256:1ea1c43813dc4a8d86475fce27ffb74e0ada3d4656c9f8130ba2a59868055fe9' \
+      'rpds-py==2026.9.1 \' \
+      '    --hash=sha256:136a1c3fe4402b7008bc81cb62ee538481795b61a7e83df88dff3b3f02b726ff \' \
+      '    --hash=sha256:e01b3c878c8641913e688edd1b3f08658c6783d29cf6b826bd3c0d1ae7a1ffaa' \
+      'secretstorage==3.5.0 \' \
+      '    --hash=sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137' \
+      'six==1.17.0 \' \
+      '    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274' \
+      'sniffio==1.3.1 \' \
+      '    --hash=sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2' \
+      'sortedcontainers==2.4.0 \' \
+      '    --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0' \
+      'soupsieve==2.10 \' \
+      '    --hash=sha256:8596eb8967d744174820280fa62b4542a2e955bfaccca73ed8a13c6eb8e9b502' \
+      'sse-starlette==3.5.0 \' \
+      '    --hash=sha256:3e6e1070df3f0f5d9cea81496de92dbb72f6721871d99748ece67441dd8b7997' \
+      'starlette==1.9.0 \' \
+      '    --hash=sha256:fd3f159936e882d06c1108f84688f7cda2cf85fc6a592a50edbd175e882c2ddc' \
+      'thefuzz==0.22.1 \' \
+      '    --hash=sha256:59729b33556850b90e1093c4cf9e618af6f2e4c985df193fdf3c5b5cf02ca481' \
+      'trio==0.34.0 \' \
+      '    --hash=sha256:6c7c9f49917694dcdcd5f67abd168df5599eca480d61f29854d17a61a75c2f05' \
+      'truststore==0.10.5 \' \
+      '    --hash=sha256:9aaaedaefaf06d8b206278cf8b5012bc897f485a874503501e12d776df78951c' \
+      'types-cachetools==7.0.0.20260713 \' \
+      '    --hash=sha256:6db9bcc7a3840d39e91c04117d85a9d0937eacc9d14d12a873e2b01a2d24a71d' \
+      'types-python-dateutil==2.9.0.20260807 \' \
+      '    --hash=sha256:54aa3707350ed7a9cc0776fd2f6739679d6967d11b40150985e81edcb86df4db' \
+      'typing-extensions==4.16.0 \' \
+      '    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8' \
+      'typing-inspection==0.4.4 \' \
+      '    --hash=sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147' \
+      'uncalled-for==0.4.1 \' \
+      '    --hash=sha256:b611b38879d9fe5088297e7bb28f2ddd12d2d73dad933d93da107fb63eb4058e' \
+      'unidecode==1.4.0 \' \
+      '    --hash=sha256:c3c7606c27503ad8d501270406e345ddb480a7b5f38827eafe4fa82a137f0021' \
+      'urllib3==2.8.0 \' \
+      '    --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3' \
+      'uvicorn==0.54.0 \' \
+      '    --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf' \
+      'watchfiles==1.3.0 \' \
+      '    --hash=sha256:4af9c464d410e8c44b58ddf1cbec7c3a02c1cb2c6c80df9c74659ba2fbda0ab5 \' \
+      '    --hash=sha256:b5768b49e426fd5b550b012c866db347cdf15c398ef98dc557b6e6b72fa74cd1' \
+      'websockets==17.2 \' \
+      '    --hash=sha256:376a693697ddb695ea282ead76060f4847f90e564b12b4389f2c7589e6fadb9e \' \
+      '    --hash=sha256:6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae \' \
+      '    --hash=sha256:ecd63d0c7ed0d3d719c91b5a3861f0f0b3cec9bf223033ddf69d17aaac74bb6d' \
+      'wrapt==2.5.1 \' \
+      '    --hash=sha256:c25c594f58ecb676358d6d6b0ff068b8bbbc506dc831c6d17876460c66ce39c2 \' \
+      '    --hash=sha256:c6e6c226b1ca5402d7ae5fb34a0d21f1b49124fe4200e5884d1e19e53c47ac1d \' \
+      '    --hash=sha256:e85a9db9e5a5ccc326edb19e35a5106ba16e451d570a2ec8ea9deb1ea52a3c42' \
+      'zipp==4.1.1 \' \
+      '    --hash=sha256:8979f52d874162f485ff2981e3891f3a3317b7a3dd43ff1e1775b9304f307a9c' > /tmp/req.txt; \
+    python3 -m venv /opt/mcp-atlassian && /opt/mcp-atlassian/bin/pip install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r /tmp/req.txt; \
+    rm -f /tmp/req.txt; rm -rf /root/.cache/pip; \
+    ln -s /opt/mcp-atlassian/bin/mcp-atlassian /usr/local/bin/mcp-atlassian; \
+    mcp-atlassian --version | grep -q "${MCP_ATLASSIAN_VERSION}"
+
+# Nothing but the base image's two dotfiles may be left in /root: every RUN above
+# cleans after itself in its own layer (a later layer cannot remove an earlier
+# one's bytes), and this fails the build on anything that slipped through.
+# /root/.ssh is an empty directory some layer leaves behind; rmdir fails the build
+# if it ever holds something.
+RUN set -eu; \
+    [ ! -e /root/.ssh ] || rmdir /root/.ssh; \
+    find /root -mindepth 1 | sort > /tmp/rootls; \
+    printf '%s\n' /root/.bashrc /root/.profile | sort > /tmp/rootok; \
+    diff /tmp/rootok /tmp/rootls; \
+    rm /tmp/rootls /tmp/rootok
 
 USER agent
 ENV HOME=/home/agent

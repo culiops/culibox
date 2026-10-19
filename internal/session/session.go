@@ -192,6 +192,14 @@ type GitHubResolver interface {
 	GitHubFor(agent string) *config.GitHubBinding
 }
 
+// TokenResolver is implemented by launchers that know a profile's static-token
+// bindings: the entries it binds (tokens) and the entries its GitHub owners use
+// as personal access tokens (pats), each sorted by name, pats deduped. An error
+// names an entry the instance does not define. Optional, like AWSResolver.
+type TokenResolver interface {
+	TokensFor(agent string) (tokens, pats []config.StaticToken, err error)
+}
+
 // CloneResolver is implemented by launchers that know a profile's clone spec.
 // Optional, like AWSResolver: without it no session is a clone session. A nil,
 // nil answer means the profile has no clone_of.
@@ -277,6 +285,10 @@ type BrokerHooks interface {
 	// session's write window ends (zero = none) and the sign-in a human must
 	// renew on the host ("" = none). Read-only; it takes only the broker's lock.
 	AWSState(sessionID string) (elevatedUntil time.Time, ssoExpired string)
+	// WriteSessionMCP writes the session's own MCP config (the entry servers a
+	// token binding adds) into the binding dir and returns its path inside the
+	// box. key names the file; the document carries no secret.
+	WriteSessionMCP(bs config.Bindings, key string, doc []byte) (string, error)
 }
 
 // EgressHooks is what spawning a bound session needs from the egress proxy,
@@ -342,6 +354,28 @@ type Bundles interface {
 	// bin's agent needs, plus the bundle hash for the log line. A bin with no
 	// layout (a shell, or "" when unresolved) gets the mounts and no flags.
 	For(bin string) (bundle.Grant, error)
+	// SessionMCP builds the MCP config of a boxed claude session that binds token
+	// entries declaring MCP servers: the bundle's servers (when includeUser), the
+	// entries' and the image's. drops is the bundle grant's; the result's Drops
+	// is what to report.
+	SessionMCP(includeUser bool, drops []bundle.Drop, entries []bundle.EntryServer) (bundle.SessionMCP, error)
+	// SessionMCPMount and WriteSessionMCP carry a session config that holds the
+	// user's personal servers (includeUser). It must not go in the binding dir,
+	// which every account's box with that binding mounts, so it has a directory
+	// of its own that only a box of an inheriting account mounts. bindingKey is
+	// the binding's hash.
+	SessionMCPMount(bindingKey string) (box.Mount, error)
+	WriteSessionMCP(bindingKey, key string, doc []byte) (boxPath string, err error)
+}
+
+// TokenInfo is the wire view of one bound static-token entry: what it is called
+// and which MCP server uses it, never its value, its reference or its hosts.
+type TokenInfo struct {
+	Name      string `json:"name"`
+	Provider  string `json:"provider,omitempty"`
+	Label     string `json:"label,omitempty"`
+	Prod      bool   `json:"prod,omitempty"`
+	MCPServer string `json:"mcp_server,omitempty"`
 }
 
 // Info is a read-only snapshot for listing.
@@ -409,6 +443,9 @@ type Info struct {
 	// GitHub is the GitHub binding the session was spawned with; nil (absent)
 	// without one, so an AWS-only or unbound session's wire shape is unchanged.
 	GitHub *GitHubInfo `json:"github,omitempty"`
+	// Tokens are the static-token entries the session was spawned with; absent
+	// without any, so a session with none keeps its wire shape. Never a value.
+	Tokens []TokenInfo `json:"tokens,omitempty"`
 	// Egress is the session's network posture: "allowlist" (bound, only its
 	// binding's hosts), "open" (unbound, any host through the authenticated
 	// proxy) or "" (no egress control: host tier). Never the nonce.
@@ -442,6 +479,11 @@ type Session struct {
 	// GitHub is the GitHub binding the session was spawned with; immutable,
 	// read without the lock, like AWS.
 	GitHub *config.GitHubBinding
+	// Tokens are the static-token entries the session was spawned with and PATs
+	// the entries its GitHub owners use as personal access tokens (deep copies,
+	// sorted by name). Immutable and read without the lock, like AWS: a later
+	// edit to static_tokens never changes a running session's scope.
+	Tokens, PATs []config.StaticToken
 	// BrokerNonce is this spawn's broker-token nonce (set iff the session has
 	// any binding). Immutable, read without the lock. Never put it on the wire:
 	// Info leaves it out.
@@ -851,13 +893,20 @@ func (s *Session) Info() Info {
 		}
 		in.GitHub = gi
 	}
+	for _, e := range s.Tokens {
+		ti := TokenInfo{Name: e.Name, Provider: e.Provider, Label: e.Label, Prod: e.Prod}
+		if e.MCP != nil {
+			ti.MCPServer = e.MCP.Server
+		}
+		in.Tokens = append(in.Tokens, ti)
+	}
 	return in
 }
 
 // Bindings is the set of credential bindings the session was spawned with.
 // Immutable, so it needs no lock.
 func (s *Session) Bindings() config.Bindings {
-	return config.Bindings{AWS: s.AWS, GitHub: s.GitHub}
+	return config.Bindings{AWS: s.AWS, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs}
 }
 
 // claudeSID returns the last validated Claude conversation id ("" if none).
@@ -1155,7 +1204,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(GitHubResolver); ok {
 		ghBinding = r.GitHubFor(spec.Agent)
 	}
-	bs := config.Bindings{AWS: binding, GitHub: ghBinding}
+	var tokens, pats []config.StaticToken
+	if r, ok := m.launcher.(TokenResolver); ok {
+		var err error
+		tokens, pats, err = r.TokensFor(spec.Agent)
+		if err != nil {
+			// ErrBoxUnavailable so the UI shows which profile and why.
+			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
+		}
+	}
+	bs := config.Bindings{AWS: binding, GitHub: ghBinding, Tokens: tokens, PATs: pats}
 	m.mu.Lock()
 	brk := m.broker
 	eg := m.egress
@@ -1284,6 +1342,29 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			}
 			spec.ExtraArgs = append(spec.ExtraArgs, g.Flags...)
 		}
+		// A token entry's MCP server lives in a config of this session's own,
+		// which replaces the shared bundle's path. Claude only: it is the agent
+		// that reads --mcp-config, and a shell is never handed agent flags.
+		includeUser := acct.IsDefault || acct.InheritPersonal
+		if bundles != nil && !bundleFailed && includeUser && hasTokenMCP(bs.Tokens) {
+			// Whatever the bin: a box is shared by the bins of a workspace and its
+			// mounts are fixed at start, like the bundle's. Only boxes of an
+			// account that inherits the personal config get it (the config in it
+			// names the user's own servers).
+			mt, err := bundles.SessionMCPMount(bs.Hash())
+			if err != nil {
+				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
+			}
+			mt.Optional = !isClaudeBin(bin)
+			mounts = append(slices.Clip(mounts), mt)
+		}
+		if len(bs.Tokens) > 0 && isClaudeBin(bin) {
+			flags, drops, err := m.tokenMCP(spec, brk, bs, bundles, includeUser, bundleFailed, bundleDrops)
+			if err != nil {
+				return nil, fmt.Errorf("spawn %s: preparing token MCP servers: %w", spec.Agent, err)
+			}
+			spec.ExtraArgs, bundleDrops = flags, drops
+		}
 	}
 
 	argv, env, err := m.launcher.Build(spec)
@@ -1357,6 +1438,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				// Only a GitHub-bound session loses a profile's own GH_TOKEN and
 				// friends; an AWS-only session keeps them.
 				strip = append(strip, brk.StripGitHubEnv()...)
+			}
+			for _, e := range bs.Tokens {
+				// An entry's variables are delivered by agentbox-env, per child
+				// process: a profile's own value for one must not sit in the
+				// session env beside it.
+				strip = append(strip, e.Names()...)
 			}
 			for _, kv := range slices.Concat(benv, penv) {
 				if i := strings.IndexByte(kv, '='); i > 0 {
@@ -1472,6 +1559,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.ConfigDir = cfgDir
 	sess.AWS = binding
 	sess.GitHub = ghBinding
+	sess.Tokens, sess.PATs = tokens, pats
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
@@ -1488,35 +1576,134 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, GitHub: ghBinding, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
 }
 
+// tokenMCP writes the session's own MCP config when a bound token entry declares
+// a box-side server, and returns the agent's extra args pointing at it plus the
+// drops to report. The config replaces the shared bundle's, whose servers it
+// carries when includeUser says the account may have them; a session whose
+// account does not inherit them gets a config of entry and image servers only,
+// confined with --strict-mcp-config like every boxed claude.
+//
+// bundles is nil with the bundle off, and bundleFailed means the bundle could
+// not be built for this spawn: both still write the entries, unprobed and with
+// no image servers.
+func (m *Manager) tokenMCP(spec launcher.SpawnSpec, brk BrokerHooks, bs config.Bindings, bundles Bundles,
+	includeUser, bundleFailed bool, drops []bundle.Drop) ([]string, []bundle.Drop, error) {
+	bound := make(map[string]bool, len(bs.Tokens))
+	for _, e := range bs.Tokens {
+		bound[e.Name] = true
+	}
+	var entries []bundle.EntryServer
+	drops = slices.Clone(drops)
+	for _, e := range bs.Tokens {
+		if e.MCP == nil {
+			continue
+		}
+		args, err := config.EntryMCPArgs(e, bound)
+		if err != nil {
+			drops = append(drops, bundle.Drop{Kind: "mcp", Name: e.MCP.Server, Reason: err.Error()})
+			continue
+		}
+		entries = append(entries, bundle.EntryServer{Server: e.MCP.Server, Entry: e.Name, Command: e.MCP.Command, Args: args})
+	}
+	if len(entries) == 0 {
+		// Nothing to add (no entry declares a server, or each was left out): the
+		// session keeps the bundle's own flags, byte for byte.
+		return spec.ExtraArgs, drops, nil
+	}
+
+	var sm bundle.SessionMCP
+	if bundles == nil || bundleFailed {
+		log.Printf("spawn %s: no config bundle, so token MCP servers are written unprobed and without the image's servers", spec.Agent)
+		servers, d := bundle.ComposeSessionMCP(nil, nil, nil, drops, entries)
+		doc, err := bundle.MarshalSessionMCP(servers)
+		if err != nil {
+			return nil, nil, err
+		}
+		sm = bundle.SessionMCP{Doc: doc, Key: "nobundle", Drops: d}
+	} else {
+		var err error
+		if sm, err = bundles.SessionMCP(includeUser, drops, entries); err != nil {
+			return nil, nil, err
+		}
+	}
+	// A document with the user's servers goes only where inheriting boxes look.
+	var path string
+	var err error
+	if bundles != nil && !bundleFailed && includeUser {
+		path, err = bundles.WriteSessionMCP(bs.Hash(), sm.Key, sm.Doc)
+	} else {
+		path, err = brk.WriteSessionMCP(bs, sm.Key, sm.Doc)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	args := slices.Clone(spec.ExtraArgs) // never write into the caller's slice
+	if i := slices.Index(args, "--mcp-config"); i >= 0 && i+1 < len(args) {
+		args[i+1] = path
+	} else {
+		args = append(args, "--mcp-config", path, "--strict-mcp-config")
+	}
+	return args, sm.Drops, nil
+}
+
+// hasTokenMCP reports whether any bound entry declares a box-side MCP server.
+func hasTokenMCP(ts []config.StaticToken) bool {
+	return slices.ContainsFunc(ts, func(e config.StaticToken) bool { return e.MCP != nil })
+}
+
+// bindingKinds lists the kinds of binding present, in a fixed order.
+func bindingKinds(bs config.Bindings) []string {
+	var k []string
+	if bs.AWS != nil {
+		k = append(k, "AWS")
+	}
+	if bs.GitHub != nil {
+		k = append(k, "GitHub")
+	}
+	if len(bs.Tokens) > 0 {
+		k = append(k, "token")
+	}
+	return k
+}
+
+// joinKinds reads a list as prose: "AWS", "AWS and GitHub", "AWS, GitHub and token".
+func joinKinds(k []string) string {
+	if len(k) <= 1 {
+		return strings.Join(k, "")
+	}
+	return strings.Join(k[:len(k)-1], ", ") + " and " + k[len(k)-1]
+}
+
 // bindingKind names a binding set for a refusal: "an AWS binding", "a GitHub
-// binding" or "AWS and GitHub bindings".
+// binding", "a token binding", or for several "AWS and GitHub bindings" /
+// "AWS, GitHub and token bindings".
 func bindingKind(bs config.Bindings) string {
-	switch {
-	case bs.AWS != nil && bs.GitHub != nil:
-		return "AWS and GitHub bindings"
-	case bs.GitHub != nil:
-		return "a GitHub binding"
-	default:
+	switch k := bindingKinds(bs); len(k) {
+	case 0:
+		// Only an empty set gets here; keep the historical wording.
 		return "an AWS binding"
+	case 1:
+		if k[0] == "AWS" {
+			return "an AWS binding"
+		}
+		return "a " + k[0] + " binding"
+	default:
+		return joinKinds(k) + " bindings"
 	}
 }
 
 // bindingNames is bindingKind without the article, for "preparing X access".
 func bindingNames(bs config.Bindings) string {
-	switch {
-	case bs.AWS != nil && bs.GitHub != nil:
-		return "AWS and GitHub"
-	case bs.GitHub != nil:
-		return "GitHub"
-	default:
-		return "AWS"
+	if k := bindingKinds(bs); len(k) > 0 {
+		return joinKinds(k)
 	}
+	return "AWS"
 }
 
 // brokerForget drops a bound session's broker state (cached credentials,
@@ -2020,6 +2207,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.ConfigDir = md.ConfigDir
 	sess.AWS = md.AWS
 	sess.GitHub = md.GitHub
+	sess.Tokens, sess.PATs = md.Tokens, md.PATs
 	sess.BrokerNonce = md.BrokerNonce
 	sess.EgressNonce = md.EgressNonce
 	if sess.EgressNonce == "" && md.BrokerNonce != "" {

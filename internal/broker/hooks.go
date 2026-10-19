@@ -33,6 +33,12 @@ func (h Hooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
 	return mounts, BoxEnv(bs, h.EP.BoxURL), nil
 }
 
+// WriteSessionMCP writes a session's MCP config file into its binding dir and
+// returns the path the box sees it at.
+func (h Hooks) WriteSessionMCP(bs config.Bindings, key string, doc []byte) (string, error) {
+	return WriteSessionMCP(h.StateRoot, bs, key, doc)
+}
+
 // CheckGitHub is the broker's doctor-style check that a GitHub binding's Apps
 // are usable: each App is configured and its key loads. It makes no network
 // call and never returns key bytes.

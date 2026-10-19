@@ -7,15 +7,10 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"syscall"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 )
 
 // maxKeyBytes bounds the key file read; a 4096-bit PEM key is about 3.3 KB.
@@ -28,67 +23,11 @@ func LoadKey(ref config.KeyRef) (*rsa.PrivateKey, error) {
 	if ref.Type != "file" {
 		return nil, fmt.Errorf("private key: unsupported ref type %q (only \"file\")", ref.Type)
 	}
-	path := ref.Path
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("private key %q: path must be absolute", path)
-	}
-	root, err := os.OpenRoot(filepath.Dir(path))
+	data, err := credref.ReadFile(ref.Path, maxKeyBytes)
 	if err != nil {
-		return nil, fmt.Errorf("private key %q: %s", path, reason(err))
+		return nil, fmt.Errorf("private key %w", err)
 	}
-	defer root.Close()
-	base := filepath.Base(path)
-
-	fi, err := root.Lstat(base)
-	if err != nil {
-		return nil, fmt.Errorf("private key %q: %s", path, reason(err))
-	}
-	if err := checkKeyFile(path, fi); err != nil {
-		return nil, err
-	}
-	f, err := root.Open(base)
-	if err != nil {
-		return nil, fmt.Errorf("private key %q: %s", path, reason(err))
-	}
-	defer f.Close()
-	// Re-check the opened file: the name could have been swapped after Lstat.
-	fi2, err := f.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("private key %q: %s", path, reason(err))
-	}
-	if err := checkKeyFile(path, fi2); err != nil {
-		return nil, err
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxKeyBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("private key %q: read failed", path)
-	}
-	if len(data) > maxKeyBytes {
-		return nil, fmt.Errorf("private key %q: file too large", path)
-	}
-	return parseKey(path, data)
-}
-
-// reason strips the path off an *fs.PathError so the message names it once.
-func reason(err error) string {
-	var pe *fs.PathError
-	if errors.As(err, &pe) {
-		return pe.Err.Error()
-	}
-	return err.Error()
-}
-
-func checkKeyFile(path string, fi os.FileInfo) error {
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("private key %q: not a regular file (symlinks are refused)", path)
-	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("private key %q: not owned by the current user", path)
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("private key %q: mode %04o lets group or others in; use 0600", path, fi.Mode().Perm())
-	}
-	return nil
+	return parseKey(ref.Path, data)
 }
 
 func parseKey(path string, data []byte) (*rsa.PrivateKey, error) {

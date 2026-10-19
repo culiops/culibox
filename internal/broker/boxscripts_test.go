@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -24,6 +25,20 @@ type fakeTokenBroker struct {
 	auths  []string
 	status int // 0 = 200
 	sock   string
+	// static answers /v1/static/token per entry name; a name not in the map is
+	// 403. hang makes the route never answer (until the test ends).
+	static      map[string]staticReply
+	hang        bool
+	staticMu    sync.Mutex
+	stopped     chan struct{}
+	statics     []string // names asked for, in order
+	staticAuths []string
+}
+
+type staticReply struct {
+	Value     string            `json:"value"`
+	Env       []string          `json:"env"`
+	ConfigEnv map[string]string `json:"config_env"`
 }
 
 func newFakeTokenBroker(t *testing.T) *fakeTokenBroker {
@@ -36,7 +51,7 @@ func newFakeTokenBroker(t *testing.T) *fakeTokenBroker {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	f := &fakeTokenBroker{sock: filepath.Join(dir, "b.sock")}
+	f := &fakeTokenBroker{sock: filepath.Join(dir, "b.sock"), stopped: make(chan struct{})}
 	l, err := net.Listen("unix", f.sock)
 	if err != nil {
 		t.Fatal(err)
@@ -58,9 +73,34 @@ func newFakeTokenBroker(t *testing.T) *fakeTokenBroker {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": "ghs_tok_" + body["owner"], "expires_at": "2027-01-15T08:15:00Z"})
 	})
+	mux.HandleFunc("/v1/static/token", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]string
+		_ = json.Unmarshal(raw, &body)
+		f.staticMu.Lock()
+		f.statics = append(f.statics, body["name"])
+		f.staticAuths = append(f.staticAuths, r.Header.Get("Authorization"))
+		rep, ok := f.static[body["name"]]
+		hang := f.hang
+		f.staticMu.Unlock()
+		if hang {
+			select {
+			case <-f.stopped:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		if !ok {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "token " + body["name"] + " is not bound to this session"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(rep)
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(l)
 	t.Cleanup(func() { srv.Shutdown(context.Background()) })
+	t.Cleanup(func() { close(f.stopped) }) // runs before Shutdown, so a hung request cannot stall it
 	return f
 }
 
@@ -239,6 +279,60 @@ func TestGhWrapperOwnerResolution(t *testing.T) {
 	}
 }
 
+// URL-form repos (what gh accepts and people paste) are parsed; a value that
+// is present but cannot be read fails closed instead of falling back to the
+// first owner, which for a PAT owner would be the wrong token.
+func TestGhWrapperURLFormRepo(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-gh.js")
+	real := fakeGh(t, "0")
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		env   []string
+		owner string
+		repo  string
+	}{
+		{"-R https", []string{"-R", "https://github.com/CuliOps/agent-box", "pr", "list"}, nil, "CuliOps", "agent-box"},
+		{"-R https .git slash", []string{"-R", "https://github.com/o/r.git/"}, nil, "o", "r"},
+		{"--repo= https", []string{"--repo=https://github.com/o/r"}, nil, "o", "r"},
+		{"GH_REPO scp", []string{"pr", "list"}, []string{"GH_REPO=git@github.com:culiops/agent-box.git"}, "culiops", "agent-box"},
+		{"HOST/O/R", []string{"-R", "github.com/o/r"}, nil, "o", "r"},
+	} {
+		before := len(f.calls())
+		env := append(append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=other"), tc.env...)
+		out, stderr, code := runNode(t, t.TempDir(), "", append([]string{js}, tc.args...), env...)
+		calls := f.calls()
+		if code != 0 || stderr != "" || len(calls) != before+1 || calls[before]["owner"] != tc.owner || calls[before]["repo"] != tc.repo {
+			t.Fatalf("%s: code=%d out=%q stderr=%q calls=%v", tc.name, code, out, stderr, calls)
+		}
+	}
+	// Another host in URL form: the real gh runs unminted.
+	before := len(f.calls())
+	env := append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=other")
+	out, stderr, code := runNode(t, t.TempDir(), "", []string{js, "-R", "https://gitlab.com/a/b", "pr", "list"}, env...)
+	if code != 0 || stderr != "" || !strings.Contains(out, "TOKEN=\n") || len(f.calls()) != before {
+		t.Fatalf("other host: code=%d out=%q stderr=%q calls=%v", code, out, stderr, f.calls())
+	}
+	// Unparseable: fail closed, no broker call, no fallback to AGENTBOX_GH_OWNERS.
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  []string
+	}{
+		{"-R no repo", []string{"-R", "https://github.com/a"}, nil},
+		{"--repo= no repo", []string{"--repo=https://github.com/a/"}, nil},
+		{"GH_REPO garbage", []string{"pr", "list"}, []string{"GH_REPO=https://github.com/"}},
+	} {
+		before := len(f.calls())
+		env := append(append(brokerEnv(f), "AGENTBOX_GH_REAL="+real, "AGENTBOX_GH_OWNERS=other"), tc.env...)
+		out, stderr, code := runNode(t, t.TempDir(), "", append([]string{js}, tc.args...), env...)
+		if code != 1 || out != "" || !strings.Contains(stderr, "cannot read the repository in") || !strings.Contains(stderr, "use -R OWNER/REPO") || len(f.calls()) != before {
+			t.Fatalf("%s: code=%d out=%q stderr=%q calls=%v", tc.name, code, out, stderr, f.calls())
+		}
+	}
+}
+
 // A target on another host than github.com must never get a github.com token:
 // the real gh runs unminted (no broker call, no GH_TOKEN).
 func TestGhWrapperOtherHostRunsUnminted(t *testing.T) {
@@ -368,5 +462,229 @@ func TestGhWrapperForwardsSignals(t *testing.T) {
 	ee, ok := err.(*exec.ExitError)
 	if !ok || ee.ExitCode() != 130 {
 		t.Fatalf("wait: %v, want exit 130", err)
+	}
+}
+
+// ---- agentbox-env ----
+
+const fakeSecret = "tok-SECRET-1234"
+
+// listingTokens are two entries that exercise the listing: one with a label,
+// prod flag, description, config, a port and a private range, one with a file
+// value and a bare host. Neither value reference may reach the listing.
+func listingTokens() []config.StaticToken {
+	return []config.StaticToken{
+		{Name: "grafana-cloud", Provider: "grafana", Label: "Grafana", Prod: true, Description: "Dashboards and alerts",
+			Value:     config.KeyRef{Type: "env", Var: "GRAFANA_SA_TOKEN"},
+			Env:       []string{"GRAFANA_SERVICE_ACCOUNT_TOKEN"},
+			ConfigEnv: map[string]string{"GRAFANA_URL": "https://acme.grafana.net"},
+			Egress:    []config.TokenEgress{{Host: "acme.grafana.net"}, {Host: "sentry.corp.example", Port: 8443, Private: true, CIDR: "10.20.0.0/16"}},
+			MCP:       &config.TokenMCP{Server: "grafana", Command: "mcp-grafana"}},
+		{Name: "atlassian", Value: config.KeyRef{Type: "file", Path: "/home/u/.config/agent-box/atlassian.token"},
+			Env: []string{"JIRA_API_TOKEN"}, Egress: []config.TokenEgress{{Host: "acme.atlassian.net"}}},
+	}
+}
+
+func envScriptDir(t *testing.T) string {
+	t.Helper()
+	dir, err := EnsureBindingDir(t.TempDir(), config.Bindings{Tokens: listingTokens()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func grafanaReply() staticReply {
+	return staticReply{Value: fakeSecret, Env: []string{"GRAFANA_SERVICE_ACCOUNT_TOKEN"},
+		ConfigEnv: map[string]string{"GRAFANA_URL": "https://acme.grafana.net"}}
+}
+
+func TestAgentboxEnvRunsChildWithEnv(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.static = map[string]staticReply{"grafana-cloud": grafanaReply()}
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	out, stderr, code := runNode(t, "", "", []string{js, "grafana-cloud", "--", "node", "-e",
+		"console.log(process.env.GRAFANA_SERVICE_ACCOUNT_TOKEN + ' ' + process.env.GRAFANA_URL)"}, brokerEnv(f)...)
+	if code != 0 || out != fakeSecret+" https://acme.grafana.net\n" {
+		t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
+	}
+	if strings.Contains(stderr, fakeSecret) || strings.Contains(stderr, "SECRET") {
+		t.Fatalf("wrapper leaked the value: %q", stderr)
+	}
+	if got := f.staticAuths; len(got) != 1 || got[0] != "Bearer sess-tok" {
+		t.Fatalf("auth headers %v", got)
+	}
+	if got := f.statics; len(got) != 1 || got[0] != "grafana-cloud" {
+		t.Fatalf("broker saw %v", got)
+	}
+}
+
+func TestAgentboxEnvAbortsBeforeExec(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.static = map[string]staticReply{"grafana-cloud": grafanaReply()}
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, stderr, code := runNode(t, "", "", []string{js, "grafana-cloud", "other", "--", "node", "-e",
+		"require('fs').writeFileSync(process.argv[1], 'x')", marker}, brokerEnv(f)...)
+	if code != 1 || stderr != "agentbox-env: other: token other is not bound to this session\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the child ran although a fetch failed")
+	}
+	if strings.Contains(stderr, fakeSecret) {
+		t.Fatal("leaked")
+	}
+}
+
+func TestAgentboxEnvRefusesSharedName(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.static = map[string]staticReply{
+		"sentry-staging": {Value: fakeSecret, Env: []string{"SENTRY_AUTH_TOKEN"}},
+		"sentry-prod":    {Value: "tok-OTHER-5678", Env: []string{"SENTRY_AUTH_TOKEN"}},
+	}
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	marker := filepath.Join(t.TempDir(), "ran")
+	_, stderr, code := runNode(t, "", "", []string{js, "sentry-staging", "sentry-prod", "--", "node", "-e",
+		"require('fs').writeFileSync(process.argv[1], 'x')", marker}, brokerEnv(f)...)
+	if code != 1 || stderr != "agentbox-env: sentry-staging and sentry-prod both set SENTRY_AUTH_TOKEN; name one\n" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the child ran")
+	}
+	// A config_env clash counts too.
+	f.staticMu.Lock()
+	f.static = map[string]staticReply{
+		"a": {Value: "x", Env: []string{"A_TOKEN"}, ConfigEnv: map[string]string{"SHARED_URL": "1"}},
+		"b": {Value: "y", Env: []string{"B_TOKEN"}, ConfigEnv: map[string]string{"SHARED_URL": "2"}},
+	}
+	f.staticMu.Unlock()
+	_, stderr, code = runNode(t, "", "", []string{js, "a", "b", "--", "node", "-e", "0"}, brokerEnv(f)...)
+	if code != 1 || stderr != "agentbox-env: a and b both set SHARED_URL; name one\n" {
+		t.Fatalf("config clash: code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestAgentboxEnvUsage(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.static = map[string]staticReply{"a": grafanaReply()}
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	for _, args := range [][]string{
+		{},                                  // nothing
+		{"a", "node", "-e", "0"},            // no --
+		{"--", "node", "-e", "0"},           // no names
+		{"a", "--"},                         // no command
+		{"a", "a", "--", "node", "-e", "0"}, // a name twice
+	} {
+		_, stderr, code := runNode(t, "", "", append([]string{js}, args...), brokerEnv(f)...)
+		if code != 2 || !strings.HasPrefix(stderr, "usage: agentbox-env NAME [NAME...] -- CMD [ARGS...]") {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr)
+		}
+	}
+	if n := len(f.statics); n != 0 {
+		t.Fatalf("a usage error still called the broker %d times", n)
+	}
+}
+
+func TestAgentboxEnvExitAndSignal(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.static = map[string]staticReply{"grafana-cloud": grafanaReply()}
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	_, _, code := runNode(t, "", "", []string{js, "grafana-cloud", "--", "node", "-e", "process.exit(7)"}, brokerEnv(f)...)
+	if code != 7 {
+		t.Fatalf("child exit 7: wrapper exit %d", code)
+	}
+	// The child kills itself, so the test does not race a signal sent from outside.
+	_, _, code = runNode(t, "", "", []string{js, "grafana-cloud", "--", "node", "-e", "process.kill(process.pid, 'SIGTERM')"}, brokerEnv(f)...)
+	if code != 143 {
+		t.Fatalf("child killed by SIGTERM: wrapper exit %d, want 143", code)
+	}
+	// A command that does not exist is a spawn error: 127, and no value printed.
+	_, stderr, code := runNode(t, "", "", []string{js, "grafana-cloud", "--", "/nonexistent/agentbox-cmd"}, brokerEnv(f)...)
+	if code != 127 || strings.Contains(stderr, fakeSecret) || !strings.HasPrefix(stderr, "agentbox-env: cannot run ") {
+		t.Fatalf("spawn error: code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestAgentboxEnvList(t *testing.T) {
+	dir := envScriptDir(t)
+	f := newFakeTokenBroker(t)
+	f.static = map[string]staticReply{"grafana-cloud": grafanaReply()}
+	out, stderr, code := runNode(t, "", "", []string{filepath.Join(dir, "agentbox-env.js"), "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+filepath.Join(dir, TokensFile)) // no broker env: --list makes no call
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	for _, want := range []string{"grafana-cloud", "[Grafana]", "[prod]", "grafana", "Dashboards and alerts",
+		"GRAFANA_SERVICE_ACCOUNT_TOKEN", "GRAFANA_URL=https://acme.grafana.net",
+		"acme.grafana.net", "sentry.corp.example:8443 (private)", "mcp: grafana", "atlassian", "acme.atlassian.net"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("listing lacks %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{fakeSecret, "GRAFANA_SA_TOKEN", "/home/u/.config", "atlassian.token"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("listing shows %q:\n%s", bad, out)
+		}
+	}
+	if n := len(f.statics); n != 0 {
+		t.Fatalf("--list called the broker %d times", n)
+	}
+}
+
+func TestAgentboxEnvListMissingFile(t *testing.T) {
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	_, stderr, code := runNode(t, "", "", []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE="+filepath.Join(t.TempDir(), "none.json"))
+	if code != 1 || !strings.HasPrefix(stderr, "agentbox-env: cannot read the token list") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+}
+
+// The wrapper's own timeout is 10 s; AGENTBOX_ENV_TIMEOUT_MS shortens it for
+// this test only, so the suite does not wait the real 10 s.
+func TestAgentboxEnvTimeout(t *testing.T) {
+	f := newFakeTokenBroker(t)
+	f.hang = true
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	marker := filepath.Join(t.TempDir(), "ran")
+	start := time.Now()
+	_, stderr, code := runNode(t, "", "", []string{js, "grafana-cloud", "--", "node", "-e",
+		"require('fs').writeFileSync(process.argv[1], 'x')", marker},
+		append(brokerEnv(f), "AGENTBOX_ENV_TIMEOUT_MS=500")...)
+	if code != 1 || !strings.Contains(stderr, "timed out") || !strings.HasPrefix(stderr, "agentbox-env: grafana-cloud: ") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	if d := time.Since(start); d > 12*time.Second {
+		t.Fatalf("took %s", d)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the child ran")
+	}
+}
+
+// The override can only shorten the 10 s default: a non-finite, huge or junk value
+// must not become a timer that fires at once (Node clamps an overflowing delay to
+// 1 ms and warns). A broker that answers promptly is enough to see that.
+func TestAgentboxEnvTimeoutOverrideIsClamped(t *testing.T) {
+	for _, v := range []string{"Infinity", "1e20", "NaN", "-5", "abc", "5000"} {
+		t.Run(v, func(t *testing.T) {
+			f := newFakeTokenBroker(t)
+			f.static = map[string]staticReply{"grafana-cloud": grafanaReply()}
+			js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+			out, stderr, code := runNode(t, "", "", []string{js, "grafana-cloud", "--", "node", "-e",
+				"console.log(process.env.GRAFANA_URL)"}, append(brokerEnv(f), "AGENTBOX_ENV_TIMEOUT_MS="+v)...)
+			if code != 0 || out != "https://acme.grafana.net\n" || stderr != "" {
+				t.Fatalf("code=%d out=%q stderr=%q", code, out, stderr)
+			}
+		})
+	}
+}
+
+func TestAgentboxEnvNoBrokerEnv(t *testing.T) {
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	_, stderr, code := runNode(t, "", "", []string{js, "a", "--", "node", "-e", "0"})
+	if code != 1 || !strings.Contains(stderr, "AGENTBOX_BROKER") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }

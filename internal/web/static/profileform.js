@@ -129,17 +129,20 @@ function ghPermsChecked(binding) {
 
 // ghBindingFromForm: the editor's GH block as the object the server stores, or
 // undefined when no owner row has anything in it (an empty block means "no
-// binding", not an invalid one). fields = { owners: [{owner, app, repos}],
+// binding", not an invalid one). fields = { owners: [{owner, app | token, repos}],
 // permissions: {key: checked} } with repos the textarea's raw text. A row that is
 // only half filled is kept, so the server's validation names what is missing. A
 // permission set equal to the defaults is left out, so a default binding keeps
 // the same stored shape (and the same box key) however the boxes were clicked.
 function ghBindingFromForm(fields) {
-  const rows = ((fields && fields.owners) || []).map((r) => ({
-    owner: String(r.owner || "").trim(),
-    app: String(r.app || "").trim(),
-    repos: String(r.repos || "").split(/[\s,]+/).filter(Boolean),
-  })).filter((r) => r.owner || r.repos.length);
+  const rows = ((fields && fields.owners) || []).map((r) => {
+    const owner = String(r.owner || "").trim();
+    const token = String(r.token || "").trim();
+    const repos = String(r.repos || "").split(/[\s,]+/).filter(Boolean);
+    // An owner uses an App or a personal access token entry, never both: a
+    // token row carries no app key at all.
+    return token ? { owner, token, repos } : { owner, app: String(r.app || "").trim(), repos };
+  }).filter((r) => r.owner || r.repos.length);
   if (!rows.length) return undefined;
   const out = { owners: rows };
   const perms = (fields && fields.permissions) || {};
@@ -162,6 +165,47 @@ function ghFormError(fields) {
   return "";
 }
 
+// The Tokens block (N3). entries are /api/meta's static_tokens (names and
+// shape only; the value and where it is read from never reach the browser).
+
+// stGroups: the picker's groups, by provider. Providers sorted, an entry with
+// none under "other" last, names sorted inside each.
+function stGroups(entries) {
+  const by = new Map();
+  for (const e of entries || []) {
+    const key = (e && e.provider) || "other";
+    if (!by.has(key)) by.set(key, []);
+    by.get(key).push(e);
+  }
+  const keys = [...by.keys()].filter((k) => k !== "other").sort();
+  if (by.has("other")) keys.push("other");
+  return keys.map((provider) => ({
+    provider,
+    entries: by.get(provider).slice().sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+  }));
+}
+
+// stEntryLine: what an entry fills and where it may go, on one line:
+// "env A, B · config K1 · hosts h1, h2:8443 (private)". The port is shown only
+// when it is not 443. A part with nothing in it is left out.
+function stEntryLine(e) {
+  const x = e || {};
+  const parts = [];
+  if ((x.env || []).length) parts.push("env " + x.env.join(", "));
+  if ((x.config_env_keys || []).length) parts.push("config " + x.config_env_keys.join(", "));
+  if ((x.hosts || []).length) {
+    parts.push("hosts " + x.hosts.map((h) => h.host + (h.port && h.port !== 443 ? ":" + h.port : "") + (h.private ? " (private)" : "")).join(", "));
+  }
+  return parts.join(" · ");
+}
+
+// stTokensToSend: the ticked entry names as the profile's tokens field, sorted
+// and without repeats, or undefined when none is ticked (no tokens = no field).
+function stTokensToSend(checked) {
+  const names = [...new Set((checked || []).map((n) => String(n)).filter(Boolean))].sort();
+  return names.length ? names : undefined;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError };
+  module.exports = { stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError };
 }

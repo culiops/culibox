@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
 	"strconv"
 	"sync"
+
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // ServiceOptions configures the lazy "network + listener" pair for one instance.
@@ -24,6 +27,11 @@ type ServiceOptions struct {
 	ExtraEnv  []string                                         // from Task 1's verdict (Task 11 fills it)
 	Listen    func(network, addr string) (net.Listener, error) // nil → net.Listen; tests inject
 	HostAddrs func() ([]netip.Addr, error)                     // the host's own addresses the proxy never dials; nil → HostAddrs
+	// StaticTokens are the instance's token entries. Ready warns about each
+	// private cidr that overlaps the live box subnet (Docker picks the subnet
+	// on Linux, so config load cannot check it; the proxy never dials that
+	// subnet regardless).
+	StaticTokens []config.StaticToken
 }
 
 // Endpoint is where a box reaches the proxy.
@@ -138,6 +146,7 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	}
 	s.ln = l
 	s.ep = Endpoint{Net: n, ProxyHost: host, Port: port}
+	s.warnCIDROverlap(n.Subnet) // once: a later Ready returns early above
 	go func() {
 		if err := s.o.Proxy.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			// The accept loop died on its own: forget the listener so a later Ready retries.
@@ -150,6 +159,22 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 		}
 	}()
 	return s.ep, nil
+}
+
+// warnCIDROverlap logs one line per entry host whose private cidr overlaps the
+// box subnet. Those addresses are never dialled; the line tells the operator
+// why part of the declared range does not answer.
+func (s *Service) warnCIDROverlap(subnet netip.Prefix) {
+	if !subnet.IsValid() {
+		return
+	}
+	for _, e := range s.o.StaticTokens {
+		for _, h := range e.Egress {
+			if c, err := netip.ParsePrefix(h.CIDR); err == nil && c.Overlaps(subnet) {
+				log.Printf("egress: token entry %q private cidr %s overlaps the box subnet %s; those addresses are never dialled", e.Name, c, subnet)
+			}
+		}
+	}
 }
 
 // Close stops the listener and every tunnel, and waits until each has been

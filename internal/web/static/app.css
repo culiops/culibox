@@ -1148,6 +1148,20 @@
     .pf-gh-repos { resize: vertical; }
     .pf-gh-rm { min-width: 36px; }
     #pf-gh-add { margin-bottom: 14px; }
+    /* The note under a personal-access-token owner takes the row's full width. */
+    .pf-gh-owner { flex-wrap: wrap; }
+    .pf-gh-pat-note { flex: 1 0 100%; margin: 0 0 4px; }
+    /* The Tokens block sits beside the GitHub one and closes on the same terms.
+       Entries reuse .pf-check; the entry's own lines sit under its name. */
+    #pf-st-block { margin-top: 14px; }
+    #pf-st-block > .flab { display: block; margin-bottom: 6px; }
+    #pf-st-hint, #pf-st-none { margin: 0 0 8px; }
+    .pf-st-group { display: block; margin: 8px 0 2px; }
+    .pf-st-entry { align-items: flex-start; margin-bottom: 6px; }
+    .pf-st-entry input[type="checkbox"] { margin-top: 3px; flex: none; }
+    .pf-st-text { min-width: 0; overflow-wrap: anywhere; }
+    .pf-st-line { display: block; }
+    #pf-st-warn { margin-top: 8px; }
     #pf-gh-perms { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 10px; }
     .fcol { flex: 1; min-width: 0; }
     .flab {
@@ -2053,9 +2067,11 @@
       .pf-gh-owner .fcol { margin-bottom: 10px; }
       .pf-gh-owner .fcol.app { flex: none; grid-column: 1; grid-row: 1; }
       .pf-gh-owner .fcol.rm { padding-top: 0; grid-column: 2; grid-row: 1; align-self: end; }
-      .pf-gh-owner .fcol.own, .pf-gh-owner .fcol.repos { grid-column: 1 / -1; }
+      .pf-gh-owner .fcol.own, .pf-gh-owner .fcol.repos, .pf-gh-owner .pf-gh-pat-note { grid-column: 1 / -1; }
       .pf-gh-owner .fcol.rm .btn { min-height: var(--tap); width: var(--tap); padding: 0; }
       #pf-gh-perms .pf-check { min-height: var(--tap); }
+      .pf-st-entry { min-height: var(--tap); }
+      #pf-st-list input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       #pf-gh-perms input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       /* The containment segments and the token row's own buttons are controls
          this slice added too; nothing else sizes them for a finger. A profile

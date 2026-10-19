@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -370,5 +371,289 @@ func TestStripGitHubEnvCoversGitHub(t *testing.T) {
 		if StripGitHubEnv()[0] == "MUTATED" {
 			t.Fatal("StripGitHubEnv must return a fresh slice")
 		}
+	}
+}
+
+// config.TokenEnvDenied keeps its own copy of StaticCredEnv (config cannot
+// import broker); this keeps the two in step.
+func TestTokenEnvDeniedCoversStripEnv(t *testing.T) {
+	for _, n := range StaticCredEnv {
+		if !config.TokenEnvDenied(n) {
+			t.Errorf("config.TokenEnvDenied(%q) = false; add it to the deny-list in config/statictoken.go", n)
+		}
+	}
+	for _, n := range []string{"AWS_CONFIG_FILE", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION", TokenEnv} {
+		if !config.TokenEnvDenied(n) {
+			t.Errorf("config.TokenEnvDenied(%q) = false", n)
+		}
+	}
+}
+
+func tokenEntries() []config.StaticToken {
+	return []config.StaticToken{
+		{Name: "grafana-cloud", Provider: "grafana", Label: "Grafana", Prod: true,
+			Value:     config.KeyRef{Type: "env", Var: "GRAFANA_SA_TOKEN"},
+			Env:       []string{"GRAFANA_SERVICE_ACCOUNT_TOKEN"},
+			ConfigEnv: map[string]string{"GRAFANA_URL": "https://acme.grafana.net"},
+			Egress:    []config.TokenEgress{{Host: "acme.grafana.net"}, {Host: "a.corp.example", Port: 8443}, {Host: "b.corp.example", Port: 443}},
+			MCP:       &config.TokenMCP{Server: "grafana", Command: "mcp-grafana"}},
+		{Name: "atlassian", Value: config.KeyRef{Type: "file", Path: "/home/u/.config/agent-box/atlassian.token"},
+			Env: []string{"JIRA_API_TOKEN"}, Egress: []config.TokenEgress{{Host: "acme.atlassian.net"}}},
+	}
+}
+
+func fileModes(t *testing.T, dir string) map[string]os.FileMode {
+	t.Helper()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]os.FileMode{}
+	for _, e := range ents {
+		fi, err := e.Info()
+		if err != nil {
+			t.Fatal(err)
+		}
+		m[e.Name()] = fi.Mode().Perm()
+	}
+	return m
+}
+
+func TestEnsureBindingDirTokens(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{Tokens: tokenEntries()}
+	dir, err := EnsureBindingDir(root, bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != filepath.Join(root, "broker", "binding-"+bs.Hash()) {
+		t.Fatalf("dir %s", dir)
+	}
+	modes := fileModes(t, dir)
+	for _, n := range []string{"agentbox-cred.js", "agentbox-env.js", TokensFile} {
+		if m, ok := modes[n]; !ok || m != 0o600 {
+			t.Errorf("%s: present=%v mode=%v", n, ok, m)
+		}
+	}
+	if _, ok := modes["aws-config"]; ok {
+		t.Error("a tokens-only binding got an aws-config")
+	}
+	if _, ok := modes["agentbox-gh.js"]; ok {
+		t.Error("a tokens-only binding got the gh wrapper")
+	}
+	js, err := os.ReadFile(filepath.Join(dir, "agentbox-env.js"))
+	if err != nil || !bytes.Equal(js, envScript) {
+		t.Fatalf("agentbox-env.js: %v", err)
+	}
+	listing, err := os.ReadFile(filepath.Join(dir, TokensFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"GRAFANA_SA_TOKEN", "/home/u/.config", "atlassian.token", `"value"`, `"var"`, `"path"`} {
+		if strings.Contains(string(listing), bad) {
+			t.Errorf("tokens.json contains %q: %s", bad, listing)
+		}
+	}
+	if !strings.Contains(string(listing), "https://acme.grafana.net") {
+		t.Errorf("tokens.json lacks the config value: %s", listing)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(listing, &got); err != nil || len(got) != 2 {
+		t.Fatalf("tokens.json: %v %s", err, listing)
+	}
+	if got[0]["name"] != "grafana-cloud" || got[0]["label"] != "Grafana" || got[0]["prod"] != true ||
+		got[0]["mcp_server"] != "grafana" || got[1]["name"] != "atlassian" {
+		t.Fatalf("entry 0: %v", got[0])
+	}
+	eg := got[0]["egress"].([]any)
+	if len(eg) != 3 {
+		t.Fatalf("egress %v", eg)
+	}
+	if _, has := eg[0].(map[string]any)["port"]; has {
+		t.Errorf("port 443 listed: %v", eg[0])
+	}
+	if eg[1].(map[string]any)["port"] != float64(8443) {
+		t.Errorf("port 8443 missing: %v", eg[1])
+	}
+	if _, has := eg[2].(map[string]any)["port"]; has {
+		t.Errorf("explicit 443 listed: %v", eg[2])
+	}
+	if _, err := EnsureBindingDir(root, bs); err != nil { // idempotent
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureBindingDirTokensRefusesInvalidEntry(t *testing.T) {
+	root := t.TempDir()
+	bad := tokenEntries()
+	bad[0].Env = []string{"PATH"}
+	if _, err := EnsureBindingDir(root, config.Bindings{Tokens: bad}); err == nil {
+		t.Fatal("accepted an entry that carries a token in PATH")
+	}
+	if _, err := os.Stat(filepath.Join(root, "broker")); err == nil {
+		t.Fatal("created files for an invalid entry")
+	}
+}
+
+// A PAT-only GitHub binding goes through the gh/git helpers; it gets no env wrapper.
+func TestEnsureBindingDirPATsOnlyNoEnvFiles(t *testing.T) {
+	dir, err := EnsureBindingDir(t.TempDir(), config.Bindings{GitHub: ghTwoOwners(), PATs: tokenEntries()[1:]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n := range fileModes(t, dir) {
+		if n == "agentbox-env.js" || n == TokensFile {
+			t.Errorf("PAT-only binding got %s", n)
+		}
+	}
+}
+
+func TestEnsureBindingDirNoTokensUnchanged(t *testing.T) {
+	for name, bs := range map[string]config.Bindings{
+		"aws":    awsOnly(*binding()),
+		"github": {GitHub: ghTwoOwners()},
+	} {
+		dir, err := EnsureBindingDir(t.TempDir(), bs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"agentbox-cred.js"}
+		if bs.AWS != nil {
+			want = append(want, "aws-config")
+		}
+		if bs.GitHub != nil {
+			want = append(want, "agentbox-gh.js")
+		}
+		var got []string
+		for n := range fileModes(t, dir) {
+			got = append(got, n)
+		}
+		slices.Sort(got)
+		slices.Sort(want)
+		if !slices.Equal(got, want) {
+			t.Errorf("%s: files %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestTokensListingShape(t *testing.T) {
+	if got := string(TokensListing(nil)); got != "[]\n" {
+		t.Fatalf("empty listing %q", got)
+	}
+	got := string(TokensListing(tokenEntries()[1:]))
+	want := `[{"name":"atlassian","env":["JIRA_API_TOKEN"],"egress":[{"host":"acme.atlassian.net"}]}]` + "\n"
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	// A private entry says so, and never leaks its cidr.
+	p := string(TokensListing([]config.StaticToken{{Name: "x", Env: []string{"X"},
+		Egress: []config.TokenEgress{{Host: "h.corp.example", Private: true, CIDR: "10.0.0.0/8"}}}}))
+	if !strings.Contains(p, `"private":true`) || strings.Contains(p, "10.0.0.0") {
+		t.Fatalf("private entry: %s", p)
+	}
+}
+
+func TestWriteSessionMCP(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{Tokens: tokenEntries()}
+	boxPath, err := WriteSessionMCP(root, bs, "sess-1", []byte(`{"mcpServers":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if boxPath != BoxDir+"/mcp-sess-1.json" {
+		t.Fatalf("box path %s", boxPath)
+	}
+	p := filepath.Join(root, "broker", "binding-"+bs.Hash(), "mcp-sess-1.json")
+	fi, err := os.Stat(p)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("%v %v", fi, err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != `{"mcpServers":{}}` {
+		t.Fatalf("content %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(p), "agentbox-env.js")); err != nil {
+		t.Fatalf("binding dir was not ensured: %v", err)
+	}
+	if _, err := WriteSessionMCP(root, bs, "sess-1", []byte(`{"v":2}`)); err != nil { // replaces
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != `{"v":2}` {
+		t.Fatalf("not replaced: %q", b)
+	}
+}
+
+func TestWriteSessionMCPRefusesSymlink(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{Tokens: tokenEntries()}
+	dir, err := EnsureBindingDir(root, bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(target, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "mcp-k.json")); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = WriteSessionMCP(root, bs, "k", []byte("replaced"))
+	if b, _ := os.ReadFile(target); string(b) != "original" {
+		t.Fatalf("wrote through the planted symlink: %q", b)
+	}
+	// A symlink planted in place of the binding dir itself is refused outright.
+	root2 := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root2, "broker"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root2, "broker", "binding-"+bs.Hash())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteSessionMCP(root2, bs, "k", []byte("x")); err == nil {
+		t.Fatal("followed a planted binding-dir symlink")
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Fatal("wrote through the dir symlink")
+	}
+}
+
+func TestWriteSessionMCPBadKey(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{Tokens: tokenEntries()}
+	for _, k := range []string{"../x", "", "A", "a_b", "a.b", "a/b", strings.Repeat("a", 41)} {
+		if _, err := WriteSessionMCP(root, bs, k, []byte("x")); err == nil {
+			t.Errorf("accepted key %q", k)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "broker")); err == nil {
+		t.Error("a bad key still created the binding dir")
+	}
+	if _, err := WriteSessionMCP(root, bs, strings.Repeat("a", 40), []byte("x")); err != nil {
+		t.Errorf("rejected a 40-char key: %v", err)
+	}
+}
+
+func TestHooksWriteSessionMCP(t *testing.T) {
+	root := t.TempDir()
+	h := Hooks{StateRoot: root}
+	p, err := h.WriteSessionMCP(config.Bindings{Tokens: tokenEntries()}, "k1", []byte("{}"))
+	if err != nil || p != BoxDir+"/mcp-k1.json" {
+		t.Fatalf("%q %v", p, err)
+	}
+}
+
+// The image's agentbox-env shim execs the script at a path the Dockerfile writes
+// by hand; the binding dir is mounted at BoxDir. Keep the two from drifting.
+func TestImageShimPathIsTheMountedScript(t *testing.T) {
+	df, err := os.ReadFile("../../docker/agent-box/Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[ -f " + BoxDir + "/agentbox-env.js ] && exec node " + BoxDir + "/agentbox-env.js"
+	if !strings.Contains(string(df), want) {
+		t.Errorf("the Dockerfile's agentbox-env shim does not run %s/agentbox-env.js (want %q)", BoxDir, want)
+	}
+	if _, err := os.Stat("agentbox-env.js"); err != nil {
+		t.Errorf("the script the box mounts as agentbox-env.js is not in this package: %v", err)
 	}
 }

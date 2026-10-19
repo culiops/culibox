@@ -28,12 +28,18 @@ const (
 	OutcomeGitHubError  Outcome = "github_error"
 	OutcomeRevoked      Outcome = "revoked"
 	OutcomeRevokeFailed Outcome = "revoke_failed"
+
+	// Static-token outcomes: a value handed out, or an entry whose file or env
+	// reference could not be read.
+	OutcomeFetched    Outcome = "fetched"
+	OutcomeUnresolved Outcome = "unresolved"
 )
 
 // Credential providers, as stored in Row.Provider.
 const (
 	ProviderAWS    = "aws"
 	ProviderGitHub = "github"
+	ProviderStatic = "static"
 )
 
 // Row is one audited credential request. It never carries credential values or
@@ -56,6 +62,9 @@ type Row struct {
 	Subject      string `json:"subject,omitempty"`
 	Installation int64  `json:"installation,omitempty"`
 	Repos        int    `json:"repos,omitempty"`
+	// Entry names the tokens entry a fetch used (a static token, or the PAT entry
+	// behind a GitHub owner); empty for rows that used none.
+	Entry string `json:"entry,omitempty"`
 }
 
 // Action classifies one row of the approval log: a human decision about write
@@ -145,6 +154,7 @@ func OpenAudit(path string) (*Audit, error) {
 		{"subject", "TEXT NOT NULL DEFAULT ''"},
 		{"installation", "INTEGER NOT NULL DEFAULT 0"},
 		{"repos", "INTEGER NOT NULL DEFAULT 0"},
+		{"entry", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumnIfMissing(db, "credential_audit", c[0], c[1]); err != nil {
 			db.Close()
@@ -191,10 +201,10 @@ func (a *Audit) Record(r Row) error {
 	}
 	_, err := a.db.Exec(`INSERT INTO credential_audit
 		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-		 provider, subject, installation, repos)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 provider, subject, installation, repos, entry)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, r.SourceIdentity, r.ScopeHash, exp, string(r.Outcome), r.Error, b2i(r.Elevated),
-		provider, r.Subject, r.Installation, r.Repos)
+		provider, r.Subject, r.Installation, r.Repos, r.Entry)
 	return err
 }
 
@@ -289,11 +299,33 @@ func b2i(b bool) int {
 	return 0
 }
 
+// auditCols is the credential_audit column list every row query selects, in
+// the order queryRows reads it.
+const auditCols = `ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
+	provider, subject, installation, repos, entry`
+
 // ForSession returns up to limit rows for a session, newest first.
 func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
-	rows, err := a.db.Query(`SELECT ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-		provider, subject, installation, repos
+	return a.queryRows(`SELECT `+auditCols+`
 		FROM credential_audit WHERE session_id = ? ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, limit)
+}
+
+// ForSessionProvider returns up to limit rows of one provider for a session,
+// newest first.
+func (a *Audit) ForSessionProvider(sessionID, provider string, limit int) ([]Row, error) {
+	return a.queryRows(`SELECT `+auditCols+`
+		FROM credential_audit WHERE session_id = ? AND provider = ? ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, provider, limit)
+}
+
+// ForSessionExcept returns up to limit rows for a session whose provider is not
+// the given one, newest first, so a chatty provider cannot crowd out the rest.
+func (a *Audit) ForSessionExcept(sessionID, provider string, limit int) ([]Row, error) {
+	return a.queryRows(`SELECT `+auditCols+`
+		FROM credential_audit WHERE session_id = ? AND provider != ? ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, provider, limit)
+}
+
+func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
+	rows, err := a.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -305,7 +337,7 @@ func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
 		var o string
 		var elevated int
 		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &r.SourceIdentity, &r.ScopeHash, &exp, &o, &r.Error, &elevated,
-			&r.Provider, &r.Subject, &r.Installation, &r.Repos); err != nil {
+			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry); err != nil {
 			return nil, err
 		}
 		r.Time, r.Outcome, r.Elevated = time.Unix(ts, 0), Outcome(o), elevated != 0

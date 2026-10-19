@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,9 @@ import (
 const (
 	lockName = "bundle.lock"
 	mcpName  = "mcp.json"
+	// imageMCPName holds the image's own servers on their own, beside the merged
+	// mcp.json: a session's config needs them apart to rank image > entry > host.
+	imageMCPName = "image-mcp.json"
 	// maxLinkDepth bounds symlink following. A cycle must terminate rather than
 	// hang the daemon before a spawn.
 	maxLinkDepth = 8
@@ -76,6 +80,9 @@ type Lock struct {
 	Files   map[string]string `json:"files"`
 	Dropped []Drop            `json:"dropped,omitempty"`
 	ImageID string            `json:"image_id,omitempty"`
+	// EntryResolves is the probe's answer for Options.EntryCommands (agentbox-env
+	// and each token entry's MCP command). Absent when none were asked.
+	EntryResolves map[string]bool `json:"entry_resolves,omitempty"`
 }
 
 func (l Lock) hasDrop(kind, name string) bool {
@@ -110,6 +117,11 @@ type Options struct {
 	// config directory, not inside it, so it is named separately.
 	MCPFile string
 	Prober  Prober // decides whether a command exists in the box image
+	// EntryCommands are the commands token entries launch in the box
+	// (agentbox-env and each entry's MCP command). They are probed with the
+	// user's MCP commands and folded into the hash, so a new entry rebuilds the
+	// bundle and a session's MCP config can name what the image lacks.
+	EntryCommands []string
 }
 
 // Manager builds and caches bundles.
@@ -171,6 +183,13 @@ func (m *Manager) Ensure() (*Built, error) {
 // It sees a newer plugin snapshot only once it is recreated.
 func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err error) {
 	h := sha256.New()
+	// The layout version: v2 added image-mcp.json, so every bundle built before it
+	// rebuilds once. Bundle hashes are not part of the box key, so no box is
+	// recreated by that.
+	fmt.Fprintf(h, "layout\x00v2\n")
+	for _, c := range m.entryCommands() {
+		fmt.Fprintf(h, "entrycmd\x00%s\n", c)
+	}
 	if ip, ok := m.opts.Prober.(ImageProbe); ok {
 		if imageID, err = ip.ImageID(); err != nil {
 			return "", "", fmt.Errorf("bundle: box image: %w", err)
@@ -194,6 +213,13 @@ func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err err
 	}
 	fmt.Fprintf(h, "plugins\x00%t\n", pluginsMounted)
 	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
+}
+
+// entryCommands is the sorted, de-duplicated Options.EntryCommands.
+func (m *Manager) entryCommands() []string {
+	out := slices.Clone(m.opts.EntryCommands)
+	sort.Strings(out)
+	return slices.Compact(out)
 }
 
 // walkAllowed visits regular files under one allowlisted entry, following
@@ -270,10 +296,17 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) 
 	// server dropped" until the source changed, while an error lets the spawn
 	// run without a bundle and the next spawn retry.
 	prober := m.opts.Prober
+	entryCmds := m.entryCommands()
 	var facts ImageFacts
 	if ip, ok := m.opts.Prober.(ImageProbe); ok {
 		var err error
-		if facts, err = ip.Probe(imageID, mcpCommands(m.opts.MCPFile)); err != nil {
+		cmds := mcpCommands(m.opts.MCPFile)
+		for _, c := range entryCmds {
+			if !slices.Contains(cmds, c) {
+				cmds = append(cmds, c)
+			}
+		}
+		if facts, err = ip.Probe(imageID, cmds); err != nil {
 			return nil, fmt.Errorf("bundle: probing the box image: %w", err)
 		}
 		prober = resolvedProber(facts.Resolves)
@@ -289,6 +322,9 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) 
 	defer os.RemoveAll(tmp)
 
 	lock := Lock{Hash: hash, Files: map[string]string{}, ImageID: imageID}
+	if len(entryCmds) > 0 {
+		lock.EntryResolves = prober.Resolves(entryCmds)
+	}
 	addDrop := func(d Drop) { lock.Dropped = append(lock.Dropped, d) }
 	var files int
 	var bytes int64
@@ -337,10 +373,14 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) 
 	// mcp.json: shape-classified, never name-matched; the image's own servers
 	// are merged in after the user filter.
 	servers, mdrops := filterMCP(m.opts.MCPFile, prober)
-	servers, mdrops = mergeImageMCP(servers, mdrops, facts)
+	servers, mdrops, imageServers := mergeImageMCP(servers, mdrops, facts)
 	lock.Dropped = append(lock.Dropped, mdrops...)
 	if sum, err := writeJSON(filepath.Join(tmp, mcpName), map[string]any{"mcpServers": servers}); err == nil {
 		lock.Files[mcpName] = sum
+	}
+	// The image's servers alone, for the per-session config (sessionmcp.go).
+	if sum, err := writeJSON(filepath.Join(tmp, imageMCPName), map[string]any{"mcpServers": imageServers}); err == nil {
+		lock.Files[imageMCPName] = sum
 	}
 
 	// The lock is the completion sentinel and therefore written last.

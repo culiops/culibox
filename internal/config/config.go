@@ -95,6 +95,7 @@ type AgentConfig struct {
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
 	GitHub     *GitHubBinding    `json:"github,omitempty"`      // credential-broker GitHub access (read-only installation tokens); boxed profiles only
+	Tokens     []string          `json:"tokens,omitempty"`      // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
 	CloneOf    string            `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
 	CloneShare []string          `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
 
@@ -165,7 +166,8 @@ type Config struct {
 	SecretSources   []SecretSource `json:"secret_sources,omitempty"`
 	Options         []OptionDef    `json:"options,omitempty"`
 	Agents          []AgentConfig  `json:"agents"`
-	GitHubApps      []GitHubApp    `json:"github_apps,omitempty"` // GitHub App connections that profile github bindings name
+	GitHubApps      []GitHubApp    `json:"github_apps,omitempty"`   // GitHub App connections that profile github bindings name
+	StaticTokens    []StaticToken  `json:"static_tokens,omitempty"` // long-lived token entries that profile tokens name; read at daemon start
 
 	// DefaultRuntime is the tier for any agent that does not name one. It exists
 	// because the quick-shell profile is GENERATED, not configured, so no
@@ -321,6 +323,16 @@ func (c Config) Validate() error {
 	if err := ValidateGitHubApps(c.GitHubApps); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	if err := ValidateStaticTokens(c.StaticTokens); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if c.PasswordEnv != "" {
+		for _, e := range c.StaticTokens {
+			if e.Value.Type == "env" && e.Value.Var == c.PasswordEnv {
+				return fmt.Errorf("config: static_tokens[%q].value: env var %q is password_env, the login password, and cannot be a token", e.Name, c.PasswordEnv)
+			}
+		}
+	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
 		if a.Name == "" || a.Bin == "" {
@@ -376,6 +388,12 @@ func (c Config) Validate() error {
 		optDefs[o.Key] = o
 	}
 	for _, a := range c.Agents {
+		if err := validateTokens(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		if err := CheckTokens(a, c.StaticTokens, optDefs); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
 		for k, v := range a.Options {
 			def, ok := optDefs[k]
 			if !ok {
@@ -445,6 +463,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateGitHub(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateTokens(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateClone(a); err != nil {

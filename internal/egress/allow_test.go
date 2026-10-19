@@ -19,28 +19,28 @@ func TestEffectiveAWSOnlyUnchanged(t *testing.T) {
 		"github.com",
 		"extra.example.org",
 	}
-	if got := Effective(bound(), nil); !reflect.DeepEqual(got, want) {
-		t.Fatalf("Effective(aws, nil) = %q, want %q", got, want)
+	if got := Effective(config.Bindings{AWS: bound()}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Effective(aws) = %q, want %q", got, want)
 	}
-	if got := Effective(nil, nil); !reflect.DeepEqual(got, want[:5]) {
-		t.Fatalf("Effective(nil, nil) = %q, want %q", got, want[:5])
+	if got := Effective(config.Bindings{}); !reflect.DeepEqual(got, want[:5]) {
+		t.Fatalf("Effective(config.Bindings{}) = %q, want %q", got, want[:5])
 	}
 }
 
 func TestEffectiveGitHub(t *testing.T) {
 	gh := &config.GitHubBinding{EgressAllow: []string{"ghe.example.org"}}
-	got := Effective(nil, gh)
+	got := Effective(config.Bindings{GitHub: gh})
 	for _, h := range append(GitHubAllow(), "ghe.example.org") {
 		if !slices.Contains(got, h) {
-			t.Errorf("Effective(nil, gh) lacks %q: %q", h, got)
+			t.Errorf("Effective(config.Bindings{GitHub: gh}) lacks %q: %q", h, got)
 		}
 	}
 	for _, h := range DefaultAllow() {
 		if !slices.Contains(got, h) {
-			t.Errorf("Effective(nil, gh) lacks default %q", h)
+			t.Errorf("Effective(config.Bindings{GitHub: gh}) lacks default %q", h)
 		}
 	}
-	both := Effective(bound(), gh)
+	both := Effective(config.Bindings{AWS: bound(), GitHub: gh})
 	if !slices.Contains(both, "extra.example.org") || !slices.Contains(both, "api.github.com") {
 		t.Fatalf("Effective(aws, gh) = %q", both)
 	}
@@ -50,6 +50,27 @@ func TestEffectiveGitHub(t *testing.T) {
 	got[0] = "mutated"
 	if GitHubAllow()[0] != "api.github.com" || gh.EgressAllow[0] != "ghe.example.org" {
 		t.Fatal("a returned allowlist aliases the policy or the binding")
+	}
+}
+
+func TestEffectiveTokens(t *testing.T) {
+	tok := config.StaticToken{Name: "sentry", Egress: []config.TokenEgress{
+		{Host: "sentry.io"}, {Host: "sentry.corp.example", Port: 8443, Private: true, CIDR: "10.20.0.0/16"}}}
+	pat := config.StaticToken{Name: "gh-pat-acme", Egress: []config.TokenEgress{{Host: "ghe.acme.example"}}}
+	got := Effective(config.Bindings{AWS: bound(), Tokens: []config.StaticToken{tok}, PATs: []config.StaticToken{pat}})
+	for _, h := range []string{"sentry.io", "sentry.corp.example", "ghe.acme.example", "extra.example.org"} {
+		if !slices.Contains(got, h) {
+			t.Errorf("Effective lacks %q: %q", h, got)
+		}
+	}
+	// Order as today, token hosts last.
+	want := append(append(DefaultAllow(), "extra.example.org"), "sentry.io", "sentry.corp.example", "ghe.acme.example")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Effective = %q, want %q", got, want)
+	}
+	// Tokens alone make no GitHub binding: no GitHub hosts.
+	if slices.Contains(got, "api.github.com") {
+		t.Fatalf("tokens must not add GitHubAllow: %q", got)
 	}
 }
 

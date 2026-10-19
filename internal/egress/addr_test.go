@@ -109,3 +109,47 @@ func TestHostAddrsListsInterfaceAddrsUnmapped(t *testing.T) {
 		}
 	}
 }
+
+func TestPrivateAddrs(t *testing.T) {
+	cidr := netip.MustParsePrefix("10.20.0.0/16")
+	box := netip.MustParsePrefix("172.18.0.0/16")
+	parse := func(ss ...string) []netip.Addr {
+		var out []netip.Addr
+		for _, s := range ss {
+			out = append(out, netip.MustParseAddr(s))
+		}
+		return out
+	}
+	for _, s := range []string{"10.20.1.5", "::ffff:10.20.1.5"} {
+		got := PrivateAddrs(parse(s), cidr, box)
+		if want := parse("10.20.1.5"); !slices.Equal(got, want) {
+			t.Errorf("%s: got %v, want %v", s, got, want)
+		}
+	}
+	for _, s := range []string{"10.21.0.1", "127.0.0.1", "169.254.1.1", "172.18.0.5", "100.64.1.1", "8.8.8.8", "fe80::1%eth0"} {
+		if got := PrivateAddrs(parse(s), cidr, box); len(got) != 0 {
+			t.Errorf("%s was kept: %v", s, got)
+		}
+	}
+	// The cidr never overrides the box subnet, loopback or link-local, even
+	// when it contains them (the box subnet is unknown at config time).
+	if got := PrivateAddrs(parse("172.18.0.5"), netip.MustParsePrefix("172.16.0.0/12"), box); len(got) != 0 {
+		t.Errorf("box subnet address kept through an overlapping cidr: %v", got)
+	}
+	if got := PrivateAddrs(parse("127.0.0.1"), netip.MustParsePrefix("127.0.0.0/8"), box); len(got) != 0 {
+		t.Errorf("loopback kept: %v", got)
+	}
+	if got := PrivateAddrs(parse("fe80::1", "fd00::5"), netip.MustParsePrefix("fc00::/7"), box); !slices.Equal(got, parse("fd00::5")) {
+		t.Errorf("v6: %v", got)
+	}
+	// An invalid box subnet matches nothing; an invalid cidr keeps nothing.
+	if got := PrivateAddrs(parse("10.20.1.5"), cidr, netip.Prefix{}); len(got) != 1 {
+		t.Errorf("zero box prefix: %v", got)
+	}
+	if got := PrivateAddrs(parse("10.20.1.5"), netip.Prefix{}, box); len(got) != 0 {
+		t.Errorf("zero cidr: %v", got)
+	}
+	if got := PrivateAddrs([]netip.Addr{{}}, cidr, box); len(got) != 0 {
+		t.Errorf("zero Addr kept: %v", got)
+	}
+}

@@ -154,6 +154,8 @@ type AgentLauncher struct {
 	// daemonSecretEnv names daemon-only variables (without the AB_ prefix) that
 	// never reach a session through an inherited base.
 	daemonSecretEnv map[string]bool
+	// tokens are the instance's static-token entries, read once at boot.
+	tokens []config.StaticToken
 }
 
 // AccountResolver is the launcher's view of the account store.
@@ -385,6 +387,64 @@ func (l *AgentLauncher) GitHubFor(agent string) *config.GitHubBinding {
 		return nil
 	}
 	return cfg.GitHub.Clone()
+}
+
+// SetStaticTokens installs the instance's static-token entries (deep-copied).
+// Call once at boot: a change to static_tokens needs a restart.
+func (l *AgentLauncher) SetStaticTokens(entries []config.StaticToken) {
+	cp := make([]config.StaticToken, len(entries))
+	for i, e := range entries {
+		cp[i] = e.Clone()
+	}
+	l.mu.Lock()
+	l.tokens = cp
+	l.mu.Unlock()
+}
+
+// TokensFor returns deep copies of the entries a profile binds: tokens (its
+// `tokens` list) and pats (the entries its GitHub owners name), each sorted by
+// entry name, pats deduped by name, so Bindings.Hash does not depend on the
+// order the profile lists them. Both are nil for a profile with none (or an
+// unknown profile). A name no entry defines is an error, never a partial
+// binding: the spawn is refused rather than run with less than the profile asks.
+func (l *AgentLauncher) TokensFor(agent string) (tokens, pats []config.StaticToken, err error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, nil, nil
+	}
+	l.mu.RLock()
+	entries := l.tokens
+	l.mu.RUnlock()
+	find := func(n string) (config.StaticToken, error) {
+		e, ok := config.TokenByName(entries, n)
+		if !ok {
+			return config.StaticToken{}, fmt.Errorf("profile %q names token entry %q, which is not defined in static_tokens", agent, n)
+		}
+		return e, nil
+	}
+	for _, n := range cfg.Tokens {
+		e, err := find(n)
+		if err != nil {
+			return nil, nil, err
+		}
+		tokens = append(tokens, e)
+	}
+	if cfg.GitHub != nil {
+		for _, o := range cfg.GitHub.Owners {
+			if o.Token == "" || slices.ContainsFunc(pats, func(e config.StaticToken) bool { return e.Name == o.Token }) {
+				continue
+			}
+			e, err := find(o.Token)
+			if err != nil {
+				return nil, nil, err
+			}
+			pats = append(pats, e)
+		}
+	}
+	byName := func(a, b config.StaticToken) int { return strings.Compare(a.Name, b.Name) }
+	slices.SortFunc(tokens, byName)
+	slices.SortFunc(pats, byName)
+	return tokens, pats, nil
 }
 
 // CloneFor returns a copy of the profile's clone spec, or nil, nil for a profile

@@ -1035,11 +1035,11 @@ func TestDefaultAllowMatchesSpec(t *testing.T) {
 }
 
 func TestEffective(t *testing.T) {
-	if got := Effective(nil, nil); !reflect.DeepEqual(got, DefaultAllow()) {
-		t.Fatalf("Effective(nil, nil) = %q", got)
+	if got := Effective(config.Bindings{}); !reflect.DeepEqual(got, DefaultAllow()) {
+		t.Fatalf("Effective(config.Bindings{}) = %q", got)
 	}
 	b := bound()
-	got := Effective(b, nil)
+	got := Effective(config.Bindings{AWS: b})
 	if !reflect.DeepEqual(got, append(DefaultAllow(), "extra.example.org")) {
 		t.Fatalf("Effective = %q", got)
 	}
@@ -1047,10 +1047,10 @@ func TestEffective(t *testing.T) {
 	got[0], got[len(got)-1] = "mutated", "mutated"
 	d := DefaultAllow()
 	d[1] = "*.com"
-	n := Effective(nil, nil)
+	n := Effective(config.Bindings{})
 	n[0] = "mutated"
 	if DefaultAllow()[0] != "api.anthropic.com" || DefaultAllow()[1] != "*.amazonaws.com" ||
-		Effective(nil, nil)[0] != "api.anthropic.com" || b.EgressAllow[0] != "extra.example.org" {
+		Effective(config.Bindings{})[0] != "api.anthropic.com" || b.EgressAllow[0] != "extra.example.org" {
 		t.Fatal("a returned allowlist aliases DefaultAllow or the binding")
 	}
 }
@@ -1449,5 +1449,165 @@ func TestProxyGitHubOnlySessionNotOpen(t *testing.T) {
 	}
 	if len(h.dials()) != 0 {
 		t.Fatal("dialled")
+	}
+}
+
+// tokenView is a session bound to one static-token entry with a private
+// exception on sentry.corp.example (port 8443) and a public host.
+func tokenView() SessionView {
+	return SessionView{Nonce: nonceA, Box: "box-1", Boxed: true, Live: true,
+		Tokens: []config.StaticToken{{Name: "sentry", Egress: []config.TokenEgress{
+			{Host: "acme.grafana.net"},
+			{Host: "sentry.corp.example", Port: 8443, Private: true, CIDR: "10.20.0.0/16"},
+		}}}}
+}
+
+func TestProxyPrivateExceptionExactHostOnly(t *testing.T) {
+	boxAddr := netip.MustParseAddr("172.18.0.9")
+	hostAddr := netip.MustParseAddr("203.0.113.77")
+	vpnAddr := netip.MustParseAddr("10.20.0.7") // the host's own VPN address, inside tokenView's cidr
+	priv := netip.MustParseAddr("10.20.1.5")
+	cases := []struct {
+		name, target string
+		answer       netip.Addr
+		view         func() SessionView
+		wantCode     int
+		wantOutcome  Outcome
+	}{
+		{"exact host in cidr", "sentry.corp.example:8443", priv, tokenView, 200, OutcomeAllowedPrivate},
+		{"wildcard-allowed sibling gets no exception", "x.sentry.corp.example:443", priv, func() SessionView {
+			v := tokenView()
+			v.AWS = &config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/r", EgressAllow: []string{"*.sentry.corp.example"}}
+			return v
+		}, 403, OutcomePrivateAddr},
+		{"exact host outside cidr", "sentry.corp.example:8443", netip.MustParseAddr("10.99.0.1"), tokenView, 403, OutcomePrivateAddr},
+		{"host's own address", "sentry.corp.example:8443", hostAddr, tokenView, 403, OutcomePrivateAddr},
+		{"host's own address inside the cidr", "sentry.corp.example:8443", vpnAddr, tokenView, 403, OutcomePrivateAddr},
+		{"box subnet address", "sentry.corp.example:8443", boxAddr, tokenView, 403, OutcomePrivateAddr},
+		{"entry without a private exception", "acme.grafana.net:443", priv, tokenView, 403, OutcomePrivateAddr},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, func(string) []netip.Addr { return []netip.Addr{c.answer} })
+			h.p.SetNetwork(netip.MustParsePrefix("172.18.0.0/16"), netip.MustParseAddr("172.18.0.1"), false)
+			h.p.SetHostAddrs([]netip.Addr{hostAddr, vpnAddr})
+			h.setView("s1", c.view())
+			code, conn := h.connect(t, c.target, "s1", h.tok("s1", nonceA))
+			if code != c.wantCode {
+				t.Fatalf("status %d, want %d", code, c.wantCode)
+			}
+			if c.wantCode == 200 {
+				echoRoundTrip(t, conn, "private")
+				conn.Close()
+				if got := h.dials(); len(got) != 1 || got[0].Addr() != c.answer {
+					t.Fatalf("dialled %v", got)
+				}
+			} else if len(h.dials()) != 0 {
+				t.Fatalf("dialled %v", h.dials())
+			}
+			if r := h.onlyRow(t); r.Outcome != c.wantOutcome {
+				t.Fatalf("row = %+v, want outcome %s", r, c.wantOutcome)
+			}
+		})
+	}
+}
+
+// An answer mixing public and in-cidr addresses: the exception adds the in-cidr
+// ones after the public ones. When the public address fails to dial and a
+// private one answers, the tunnel is recorded as allowed_private.
+func TestProxyPrivateExceptionMixedAnswer(t *testing.T) {
+	priv, pub := netip.MustParseAddr("10.20.1.5"), publicAddr
+	h := newHarness(t, func(string) []netip.Addr {
+		return []netip.Addr{priv, netip.MustParseAddr("10.20.9.9"), netip.MustParseAddr("10.99.0.1"), pub}
+	})
+	h.setView("s1", tokenView())
+	h.mu.Lock()
+	h.dialErr = func(a netip.AddrPort) error {
+		if a.Addr() == pub {
+			return errors.New("unreachable")
+		}
+		return nil
+	}
+	h.mu.Unlock()
+	code, c := h.connect(t, "sentry.corp.example:8443", "s1", h.tok("s1", nonceA))
+	if code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	c.Close()
+	want := []netip.AddrPort{netip.AddrPortFrom(pub, 8443), netip.AddrPortFrom(priv, 8443)}
+	if got := h.dials(); !slices.Equal(got, want) {
+		t.Fatalf("dialled %v, want %v", got, want)
+	}
+	if r := h.onlyRow(t); r.Outcome != OutcomeAllowedPrivate {
+		t.Fatalf("row = %+v", r)
+	}
+}
+
+func TestProxyDeclaredPort(t *testing.T) {
+	cases := []struct {
+		name, target string
+		view         func() SessionView
+		wantCode     int
+		wantPort     uint16
+	}{
+		{"declared port on its host", "sentry.corp.example:8443", tokenView, 200, 8443},
+		{"default 443 on a token host", "acme.grafana.net:443", tokenView, 200, 443},
+		{"undeclared port on a token host", "acme.grafana.net:8443", tokenView, 405, 0},
+		{"another port on the declaring host", "sentry.corp.example:8444", tokenView, 405, 0},
+		{"declared host, 443 still fine", "sentry.corp.example:443", tokenView, 200, 443},
+		{"declared port on another host", "api.anthropic.com:8443", tokenView, 405, 0},
+		{"open mode", "example.com:8443", openView, 405, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, func(host string) []netip.Addr {
+				if host == "sentry.corp.example" && c.wantCode == 200 {
+					return []netip.Addr{netip.MustParseAddr("10.20.1.5")}
+				}
+				return []netip.Addr{publicAddr}
+			})
+			h.setView("s1", c.view())
+			code, conn := h.connect(t, c.target, "s1", h.tok("s1", nonceA))
+			if code != c.wantCode {
+				t.Fatalf("status %d, want %d", code, c.wantCode)
+			}
+			if c.wantCode == 200 {
+				conn.Close()
+				if got := h.dials(); len(got) != 1 || got[0].Port() != c.wantPort {
+					t.Fatalf("dialled %v, want port %d", got, c.wantPort)
+				}
+				return
+			}
+			if len(h.dials()) != 0 {
+				t.Fatalf("dialled %v", h.dials())
+			}
+			r := h.onlyRow(t)
+			if r.Outcome != OutcomeBadMethod || r.SessionID != "s1" {
+				t.Fatalf("row = %+v, want bad_method with the session id", r)
+			}
+		})
+	}
+}
+
+// Probe principals stay 443-only, and a malformed port is refused before auth.
+func TestProxyPortEdges(t *testing.T) {
+	h := newHarness(t, nil)
+	user, pass, done := h.p.ProbeCredential("box-1")
+	defer done()
+	code, _ := h.connect(t, "api.anthropic.com:8443", user, pass)
+	if code != 405 {
+		t.Fatalf("probe on 8443: status %d", code)
+	}
+	for _, target := range []string{"sentry.corp.example:65536", "sentry.corp.example:0", "sentry.corp.example:08443"} {
+		h2 := newHarness(t, nil)
+		h2.setView("s1", tokenView())
+		resp, _ := h2.connectAuth(t, target, basic("s1", h2.tok("s1", nonceA)), "")
+		assertRefusal(t, resp, 405)
+		if r := h2.onlyRow(t); r.Outcome != OutcomeBadMethod {
+			t.Fatalf("%s: row = %+v", target, r)
+		}
+		if len(h2.dials()) != 0 {
+			t.Fatalf("%s: dialled", target)
+		}
 	}
 }

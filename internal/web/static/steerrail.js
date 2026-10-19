@@ -258,7 +258,7 @@ function renderSteerRail() {
     return;
   }
   // 1 and 2 — who this is, and how full its window is.
-  if (s.aws || s.github) loadAwsRailStats(s.id);
+  if (s.aws || s.github || (s.tokens && s.tokens.length)) loadAwsRailStats(s.id);
   else if (s.egress) loadEgressRailStats(s.id);
   renderSteerFacts(s);
   // A half-open grant panel belongs to one session; focusing another drops it.
@@ -335,11 +335,11 @@ function renderSteerFacts(s) {
   const usage = tab && typeof tab.usage === "function" ? tab.usage() : null;
   const badge = tierBadge(s, boxRuntime);
   // /aws serves AWS-bound and GH-bound sessions alike (one broker, one audit
-  // log), so a GH-only box takes its token rows and egress line from the same
+  // log), so a GH-only box takes its GitHub rows and egress line from the same
   // cache; the AWS rows and counters are the AWS binding's own.
   const brokerSt = awsRailCache.get(s.id);
-  const egressRows = s.aws || s.github
-    ? [...awsRailRows(s, brokerSt, Date.now()), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []), ...ghRailRows(brokerSt), egressRow(brokerSt)]
+  const egressRows = s.aws || s.github || (s.tokens && s.tokens.length)
+    ? [...awsRailRows(s, brokerSt, Date.now()), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []), ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt)]
     : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
   // The bundle's drops ride after the egress row, and on a boxed session with
   // no egress row at all; railMeta skips null rows.
@@ -994,6 +994,7 @@ function ghRowText(row) {
   if (r.outcome === "revoked") return parts.concat("revoked").join(" · ");
   const n = Number(r.repos) || 0;
   parts.push(n + (n === 1 ? " repo" : " repos"), String(r.outcome || "").replace(/_/g, " "));
+  if (r.entry) parts.push("PAT " + String(r.entry));
   if (r.outcome === "minted") {
     const t = Date.parse(r.expires);
     if (Number.isFinite(t) && t > Date.UTC(2000, 0, 1)) {
@@ -1014,6 +1015,38 @@ function ghRailRows(st) {
     .map((r) => ({ k: "github", v: ghRowText(r), wrap: true }));
 }
 
+// stRowText: one static-token audit row as a line of the steer rail:
+// "Token · <entry> · <outcome> · HH:MM". Subject is the entry's name, never a
+// value; the payload carries no value, variable name or path to print.
+function stRowText(row) {
+  const r = row || {};
+  const parts = ["Token", String(r.subject || ""), String(r.outcome || "").replace(/_/g, " ")];
+  const t = Date.parse(r.time);
+  if (Number.isFinite(t) && t > Date.UTC(2000, 0, 1)) {
+    const d = new Date(t);
+    parts.push(String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"));
+  }
+  return parts.join(" · ");
+}
+
+// stRailRows: the token rows of GET /api/sessions/{id}/aws: the recent static
+// fetches (the reply keeps them apart from `recent`, so a chatty token cannot
+// push the AWS and GitHub rows out), then one row naming the bound entries,
+// and one flagging any production entry in the AWS prod chip's red. Capped so a
+// busy session cannot push the rail's other sections off screen.
+const ST_RAIL_ROWS = 5;
+function stRailRows(st) {
+  const recent = st && Array.isArray(st.static_recent) ? st.static_recent : [];
+  const rows = recent.slice(0, ST_RAIL_ROWS).map((r) => ({ k: "token", v: stRowText(r), wrap: true }));
+  const bound = st && Array.isArray(st.tokens) ? st.tokens : [];
+  if (bound.length) {
+    rows.push({ k: "tokens", v: bound.map((t) => t.name).join(", "), wrap: true });
+    const prod = bound.filter((t) => t.prod);
+    if (prod.length) rows.push({ k: "prod tokens", v: prod.map((t) => t.name).join(", "), chip: "bdg aws prod", wrap: true });
+  }
+  return rows;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, ghRowText, ghRailRows };
 }

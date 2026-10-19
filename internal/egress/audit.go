@@ -18,6 +18,10 @@ const (
 	OutcomeBadAuth     Outcome = "bad_auth"
 	OutcomeBadMethod   Outcome = "bad_method"
 	OutcomePrivateAddr Outcome = "private_addr"
+	// OutcomeAllowedPrivate: an allowed tunnel whose dialled address came from
+	// a token entry's private exception (exact host + cidr), not from the
+	// public set. Visible in the audit so a private reach is never silent.
+	OutcomeAllowedPrivate Outcome = "allowed_private"
 	// OutcomeDialError: the host is allowed but the upstream dial failed.
 	// Recording that as "allowed" would be a lie.
 	OutcomeDialError Outcome = "dial_error"

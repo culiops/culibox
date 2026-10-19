@@ -309,8 +309,14 @@ func TestDockerfileVerifiesEveryDownload(t *testing.T) {
 			}
 		}
 	}
-	if downloads < 17 {
-		t.Errorf("found %d downloads, want at least 17 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key)", downloads)
+	if downloads < 18 {
+		t.Errorf("found %d downloads, want at least 18 (aws, terraform, gh, go, abduco, codebase-memory, kubectl, helm, kubeconform, stern, yq, shellcheck, tflint, tflint-ruleset-aws, jsonnet, tfenv, hashicorp key, mcp-grafana)", downloads)
+	}
+	// The Sentry and Atlassian servers come from npm and PyPI, not curl: their
+	// pins are checked in TestDockerfilePinsMCPServers. No uv is downloaded in
+	// the image (it was only used offline to generate the Atlassian lock).
+	if !regexp.MustCompile(`(?m)^RUN .*mcp-grafana`).MatchString(strings.Join(dockerfileInstructions(), "\n")) {
+		t.Error("no download names mcp-grafana")
 	}
 }
 
@@ -410,6 +416,10 @@ func TestDockerfileInstallsPython3InItsOwnBlock(t *testing.T) {
 	}
 	if !strings.Contains(block, "rm -rf /var/lib/apt/lists/*") {
 		t.Errorf("python3 block leaves the apt lists in the image:\n%s", block)
+	}
+	// mcp-atlassian runs from a venv, and bookworm's python3 cannot make one without this.
+	if !regexp.MustCompile(`\spython3-venv(\s|$)`).MatchString(block) {
+		t.Errorf("python3 block does not install python3-venv:\n%s", block)
 	}
 }
 
@@ -686,6 +696,7 @@ var toolBatch = []struct{ arg, check string }{
 	{"TFLINT_RULESET_AWS", "tflint --config /etc/agent-box/tflint.hcl --version"},
 	{"JSONNET", "jsonnet --version"},
 	{"JSONNET", "jsonnetfmt --version"},
+	{"GRAFANA_MCP", "mcp-grafana --version"},
 }
 
 func TestDockerfileInstallsToolBatch(t *testing.T) {
@@ -753,7 +764,7 @@ func TestDockerfileFrequentPinsLast(t *testing.T) {
 			after = append(after, tb.arg+suffix)
 		}
 	}
-	after = append(after, "TFENV_VERSION=", "TFENV_SHA256=")
+	after = append(after, "TFENV_VERSION=", "TFENV_SHA256=", "SENTRY_MCP_VERSION=", "MCP_ATLASSIAN_VERSION=")
 	for _, line := range strings.Split(df, "\n") {
 		if strings.HasPrefix(line, "ARG GH_") {
 			after = append(after, strings.SplitAfter(strings.TrimPrefix(line, "ARG "), "=")[0])
@@ -1063,6 +1074,320 @@ func TestPublicFilesCiteNoLocalDocs(t *testing.T) {
 	for name, text := range map[string]string{"Dockerfile": string(dockerfile), "box-image.yml": string(wf)} {
 		if m := cite.FindString(text); m != "" {
 			t.Errorf("%s cites a local-only document: %q", name, m)
+		}
+	}
+}
+
+// agentbox-env is how a bound session asks the broker for a static token for one
+// command. The shim is a three-way branch: run the mounted script when the
+// session has a token binding, otherwise say so and exit 127.
+func TestDockerfileAgentboxEnvShim(t *testing.T) {
+	// The same path as broker.BoxDir + "/agentbox-env.js"; a broker test holds the
+	// two together.
+	const script = "/opt/agentbox/agentbox-env.js"
+	want := `printf '%s\n' '#!/bin/sh' '[ -f ` + script + ` ] && exec node ` + script + ` "$@"' 'echo "agentbox-env: this session has no token binding" >&2' 'exit 127' > /usr/local/bin/agentbox-env`
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "> /usr/local/bin/agentbox-env") {
+			continue
+		}
+		if !strings.Contains(in, want) {
+			t.Fatalf("shim RUN does not write the exact lines:\n got %s\nwant %s", in, want)
+		}
+		if !strings.Contains(in, "chmod 0755 /usr/local/bin/agentbox-env") {
+			t.Error("shim is not made executable")
+		}
+		// Render it as the image does and let sh parse it.
+		out := filepath.Join(t.TempDir(), "agentbox-env")
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(in, "RUN "), " > /usr/local/bin/agentbox-env")
+		if b, err := exec.Command("sh", "-c", cmd+" > "+out).CombinedOutput(); err != nil {
+			t.Fatalf("rendering the shim: %v: %s", err, b)
+		}
+		if b, err := exec.Command("sh", "-n", out).CombinedOutput(); err != nil {
+			t.Fatalf("sh -n on the shim: %v: %s", err, b)
+		}
+		return
+	}
+	t.Fatal("no RUN writes /usr/local/bin/agentbox-env")
+}
+
+// dockerfileBlock returns the text from a "# --- <name> ---" header to the next one.
+func dockerfileBlock(t *testing.T, header string) string {
+	t.Helper()
+	df := string(dockerfile)
+	i := strings.Index(df, header)
+	if i < 0 {
+		t.Fatalf("Dockerfile has no %q block", header)
+	}
+	block := df[i:]
+	if j := strings.Index(block[1:], "\n# --- "); j >= 0 {
+		block = block[:j+1]
+	}
+	return block
+}
+
+func TestDockerfilePinsMCPServers(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	for _, h := range []string{"# --- mcp-grafana ---", "# --- sentry-mcp ---", "# --- mcp-atlassian ---"} {
+		if i := strings.Index(df, h); i < strings.Index(df, marker) {
+			t.Errorf("%s must come after the marker", h)
+		}
+	}
+	// mcp-grafana: the toolBatch test covers the ARGs, the sum and the version
+	// check; here, the release asset and the archive layout.
+	graf := dockerfileBlock(t, "# --- mcp-grafana ---")
+	for _, want := range []string{"mcp-grafana_Linux_x86_64.tar.gz", "mcp-grafana_Linux_arm64.tar.gz", "GRAFANA_MCP_SHA256_AMD64", "GRAFANA_MCP_SHA256_ARM64"} {
+		if !strings.Contains(graf, want) {
+			t.Errorf("mcp-grafana block does not mention %s", want)
+		}
+	}
+	// sentry: pinned by version, binary resolved, the npm cache gone in the same RUN.
+	sentry := ""
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "npm install -g @sentry/mcp-server@${SENTRY_MCP_VERSION}") {
+			sentry = in
+		}
+	}
+	if sentry == "" {
+		t.Fatal("no RUN installs @sentry/mcp-server@${SENTRY_MCP_VERSION}")
+	}
+	if !strings.Contains(sentry, "npm cache clean --force") || !strings.Contains(sentry, "rm -rf /root/.npm") {
+		t.Errorf("the sentry RUN leaves the npm cache in the layer: %s", sentry)
+	}
+	if !strings.Contains(sentry, `sentry-mcp --version | grep -q "${SENTRY_MCP_VERSION}"`) {
+		t.Errorf("the sentry RUN does not check that sentry-mcp resolves at the pinned version: %s", sentry)
+	}
+	if !regexp.MustCompile(`(?m)^ARG SENTRY_MCP_VERSION=\d+\.\d+\.\d+$`).MatchString(df) {
+		t.Error("no ARG SENTRY_MCP_VERSION=<x.y.z>")
+	}
+	// atlassian: a hash-locked, wheels-only install into its own venv.
+	m := regexp.MustCompile(`(?m)^ARG MCP_ATLASSIAN_VERSION=(\d+\.\d+\.\d+)$`).FindStringSubmatch(df)
+	if m == nil {
+		t.Fatal("no ARG MCP_ATLASSIAN_VERSION=<x.y.z>")
+	}
+	var atl string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "> /tmp/req.txt") {
+			atl = in
+		}
+	}
+	if atl == "" {
+		t.Fatal("no RUN writes the Atlassian lock to /tmp/req.txt")
+	}
+	for _, want := range []string{
+		"python3 -m venv /opt/mcp-atlassian",
+		"/opt/mcp-atlassian/bin/pip install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r /tmp/req.txt",
+		"ln -s /opt/mcp-atlassian/bin/mcp-atlassian /usr/local/bin/mcp-atlassian",
+		`mcp-atlassian --version | grep -q "${MCP_ATLASSIAN_VERSION}"`,
+		"rm -f /tmp/req.txt",
+	} {
+		if !strings.Contains(atl, want) {
+			t.Errorf("the Atlassian RUN does not contain %q", want)
+		}
+	}
+	// The lock is the quoted printf arguments between the format and the redirect.
+	i := strings.Index(atl, "printf '%s\\n'")
+	j := strings.Index(atl, "> /tmp/req.txt")
+	if i < 0 || j < i {
+		t.Fatal("the Atlassian lock is not written by a printf of quoted lines to /tmp/req.txt")
+	}
+	var lines []string
+	for _, a := range regexp.MustCompile(`'([^']*)'`).FindAllStringSubmatch(atl[i+len("printf '%s\\n'"):j], -1) {
+		lines = append(lines, a[1])
+	}
+	hash := regexp.MustCompile(`^--hash=sha256:[0-9a-f]{64}( \\)?$`)
+	pins, hashes := 0, 0
+	for n, l := range lines {
+		trim := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(trim, "#") || trim == "":
+		case strings.HasPrefix(trim, "--hash="):
+			hashes++
+			if !hash.MatchString(trim) {
+				t.Errorf("malformed hash line %q", trim)
+			}
+		default:
+			pins++
+			if !strings.Contains(trim, "==") || !strings.HasSuffix(trim, " \\") {
+				t.Errorf("lock line %q is not a `name==version \\` pin", trim)
+			}
+			if n+1 >= len(lines) || !strings.HasPrefix(strings.TrimSpace(lines[n+1]), "--hash=sha256:") {
+				t.Errorf("pin %q has no --hash=sha256: line", trim)
+			}
+		}
+	}
+	if pins == 0 || hashes < pins {
+		t.Errorf("lock has %d pins and %d hashes", pins, hashes)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "\nmcp-atlassian=="+m[1]+" \\") {
+		t.Errorf("the lock does not pin mcp-atlassian==%s (ARG MCP_ATLASSIAN_VERSION)", m[1])
+	}
+}
+
+// The image's own MCP file names only servers that need no credential. The
+// token-bound servers (Grafana, Sentry, Atlassian) are declared per session, by
+// the console, from a binding's token entries: a server in the image's file would
+// start without a token in every box.
+func TestDockerfileImageMCPHasNoTokenServers(t *testing.T) {
+	_, servers := mcpServersFromDockerfile(t)
+	for _, name := range []string{"grafana", "sentry", "atlassian"} {
+		if _, ok := servers[name]; ok {
+			t.Errorf("/etc/agent-box/mcp.json declares %q", name)
+		}
+	}
+}
+
+// Claude Code is pinned to the npm `stable` tag's version, after the marker (it
+// moves fast), and the RUN proves the install is the pinned one.
+func TestDockerfilePinsClaudeCode(t *testing.T) {
+	df := string(dockerfile)
+	const marker = "# === frequently bumped pins (keep last) ==="
+	re := regexp.MustCompile(`(?m)^ARG CLAUDE_CODE_VERSION=(\S*)$`)
+	m := re.FindAllStringSubmatch(df, -1)
+	if len(m) != 1 {
+		t.Fatalf("want exactly one ARG CLAUDE_CODE_VERSION, got %d", len(m))
+	}
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(m[0][1]) {
+		t.Errorf("CLAUDE_CODE_VERSION %q is not an exact x.y.z", m[0][1])
+	}
+	if i := strings.Index(df, "\nARG CLAUDE_CODE_VERSION="); i < strings.Index(df, marker) {
+		t.Error("ARG CLAUDE_CODE_VERSION is before the marker")
+	}
+	installs := 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "@anthropic-ai/claude-code") {
+			continue
+		}
+		installs++
+		if !strings.Contains(in, "npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}") {
+			t.Errorf("claude-code install is not pinned to the ARG: %s", in)
+		}
+		if !strings.Contains(in, `claude --version | grep -q "${CLAUDE_CODE_VERSION}"`) {
+			t.Errorf("the RUN does not grep claude --version for the pin: %s", in)
+		}
+	}
+	if installs != 1 {
+		t.Errorf("want exactly one claude-code install RUN, got %d", installs)
+	}
+}
+
+// A later layer cannot remove an earlier layer's bytes (the 2026-10-19 scan found
+// ~170 MB of npm cache), so every global npm install cleans in its own RUN.
+func TestDockerfileNpmInstallsCleanInSameLayer(t *testing.T) {
+	n := 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "npm install -g") {
+			continue
+		}
+		n++
+		if !strings.Contains(in, "npm cache clean --force") || !strings.Contains(in, "rm -rf /root/.npm") {
+			t.Errorf("an npm install -g RUN does not clean the cache in the same layer: %.120s", in)
+		}
+	}
+	if n < 3 {
+		t.Errorf("found %d npm install -g RUNs, want at least claude-code, playwright, sentry", n)
+	}
+}
+
+// Update checks and telemetry are off before the first tool that would write a
+// residue file or phone home. GOTELEMETRY=off is deliberately absent: measured to
+// do nothing (the Go RUN removes /root/.config/go instead).
+func TestDockerfileTelemetryEnvFirst(t *testing.T) {
+	ins := dockerfileInstructions()
+	last := 0
+	for i, in := range ins {
+		if strings.HasPrefix(in, "FROM ") {
+			last = i
+		}
+	}
+	envAt, runAt := -1, -1
+	tool := regexp.MustCompile(`\b(terraform|go|claude) `)
+	for i, in := range ins[last:] {
+		if envAt < 0 && strings.HasPrefix(in, "ENV ") {
+			ok := true
+			for _, w := range []string{"DISABLE_UPDATES=1", "DO_NOT_TRACK=1", "GRAFANA_USAGE_STATS=disabled", "CHECKPOINT_DISABLE=1", "FASTMCP_CHECK_FOR_UPDATES=off"} {
+				ok = ok && strings.Contains(in, w)
+			}
+			if ok {
+				envAt = i
+			}
+		}
+		if runAt < 0 && strings.HasPrefix(in, "RUN ") && tool.MatchString(in) {
+			runAt = i
+		}
+	}
+	if envAt < 0 {
+		t.Fatal("no ENV line sets the update and telemetry opt-outs")
+	}
+	if runAt < 0 || envAt > runAt {
+		t.Errorf("the opt-out ENV (instruction %d) must come before the first terraform/go/claude RUN (%d)", envAt, runAt)
+	}
+	for _, in := range ins {
+		if strings.HasPrefix(in, "ENV ") && strings.Contains(in, "GOTELEMETRY") {
+			t.Error("GOTELEMETRY has no effect; the Go RUN removes /root/.config/go")
+		}
+	}
+	// Without `go telemetry off` first, a background process rewrites the counter
+	// files after the rm -rf: it has to precede the first go invocation.
+	goRun := ""
+	for _, in := range ins {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "/usr/local/go/bin/go version") {
+			goRun = in
+		}
+	}
+	off, ver := strings.Index(goRun, "go telemetry off"), strings.Index(goRun, "go version")
+	if goRun == "" || off < 0 || ver < 0 || off > ver {
+		t.Errorf("in the Go RUN, `go telemetry off` (%d) must precede `go version` (%d)", off, ver)
+	}
+}
+
+// The root-stage build leaves only the base image's two dotfiles in /root; the
+// last RUN before USER agent fails the build on anything else.
+func TestDockerfileRootAllowlistCheck(t *testing.T) {
+	ins := dockerfileInstructions()
+	at := -1
+	for i, in := range ins {
+		if in == "USER agent" {
+			at = i
+		}
+	}
+	if at < 1 {
+		t.Fatal("no USER agent")
+	}
+	prev := ins[at-1]
+	if !strings.HasPrefix(prev, "RUN ") {
+		t.Fatalf("the instruction before USER agent is not a RUN: %.80s", prev)
+	}
+	for _, w := range []string{"find /root -mindepth 1", "diff ", "/root/.bashrc", "/root/.profile"} {
+		if !strings.Contains(prev, w) {
+			t.Errorf("the final root RUN does not contain %q", w)
+		}
+	}
+	// diff exits non-zero on a mismatch; only set -eu turns that into a failed build.
+	if !strings.HasPrefix(prev, "RUN set -eu;") {
+		t.Errorf("the final root RUN must start with set -eu so a diff mismatch fails the build: %.60s", prev)
+	}
+	rm, find := strings.Index(prev, "rmdir /root/.ssh"), strings.Index(prev, "find /root -mindepth 1")
+	if rm < 0 {
+		t.Error("the final root RUN does not rmdir /root/.ssh")
+	} else if rm > find {
+		t.Error("/root/.ssh must be removed before the allowlist check")
+	}
+	// The residue-creating RUNs clean in their own layer.
+	want := map[string]string{
+		"/usr/local/go/bin/go version":         "rm -rf /root/.config/go",
+		"terraform_${TERRAFORM_VERSION}_linux": "rm -rf /root/.terraform.d",
+		"/opt/gh/bin/gh --version":             "rm -rf /root/.local/state/gh",
+		"npm install -g @playwright/mcp":       "rm -rf /root/.npm",
+	}
+	for _, in := range ins {
+		if !strings.HasPrefix(in, "RUN ") {
+			continue
+		}
+		for marker, clean := range want {
+			if strings.Contains(in, marker) && !strings.Contains(in, clean) {
+				t.Errorf("the RUN with %q does not %q in the same layer", marker, clean)
+			}
 		}
 	}
 }

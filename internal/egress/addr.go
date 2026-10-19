@@ -57,9 +57,7 @@ func mustPrefixes(ss ...string) []netip.Prefix {
 // address). Anything that is not a global unicast address, or falls in refused
 // or inside boxNet, is dropped. An invalid boxNet matches nothing.
 func PublicAddrs(addrs []netip.Addr, boxNet netip.Prefix) []netip.Addr {
-	if boxNet.IsValid() && boxNet.Addr().Is4In6() && boxNet.Bits() >= 96 {
-		boxNet = netip.PrefixFrom(boxNet.Addr().Unmap(), boxNet.Bits()-96)
-	}
+	boxNet = unmapPrefix(boxNet)
 	var out []netip.Addr
 	for _, a := range addrs {
 		if !a.IsValid() {
@@ -67,6 +65,46 @@ func PublicAddrs(addrs []netip.Addr, boxNet netip.Prefix) []netip.Addr {
 		}
 		a = a.WithZone("").Unmap()
 		if !usable(a, boxNet) {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// unmapPrefix turns a 4-in-6 prefix (::ffff:a.b.c.d/n, n >= 96) into its IPv4
+// form, so it matches the unmapped addresses it is compared with.
+func unmapPrefix(p netip.Prefix) netip.Prefix {
+	if p.IsValid() && p.Addr().Is4In6() && p.Bits() >= 96 {
+		return netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+	}
+	return p
+}
+
+// PrivateAddrs returns the addresses of addrs a token entry's private exception
+// may dial, in input order: those inside cidr that are private (RFC 1918 or
+// fc00::/7) and not inside boxNet. Each is unmapped and zone-stripped first,
+// like PublicAddrs. Loopback, link-local, multicast and unspecified are always
+// dropped, whatever cidr says, and so is the box subnet: its address is not
+// known when the config is loaded, so this is where "an exception can never
+// reach the box network" holds. An invalid cidr keeps nothing; an invalid boxNet
+// matches nothing. The host's own addresses are removed by the caller
+// (WithoutAddrs), as for public ones.
+func PrivateAddrs(addrs []netip.Addr, cidr, boxNet netip.Prefix) []netip.Addr {
+	boxNet = unmapPrefix(boxNet)
+	var out []netip.Addr
+	for _, a := range addrs {
+		if !a.IsValid() {
+			continue
+		}
+		a = a.WithZone("").Unmap()
+		if !cidr.Contains(a) || !a.IsPrivate() {
+			continue
+		}
+		if a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsMulticast() || a.IsUnspecified() {
+			continue
+		}
+		if boxNet.IsValid() && boxNet.Contains(a) {
 			continue
 		}
 		out = append(out, a)

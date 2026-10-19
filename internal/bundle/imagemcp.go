@@ -163,28 +163,30 @@ func mcpCommands(path string) []string {
 
 // mergeImageMCP adds the servers the box image declares to the filtered user
 // servers. An image server replaces a same-named user server, kept or dropped,
-// and the replacement is recorded as a drop.
+// and the replacement is recorded as a drop. The third result is the image's
+// servers alone (never nil), written as image-mcp.json.
 //
 // Image servers skip the user filter on purpose: the image is as trusted as the
 // agent-box binary. The filter exists to keep the user's secrets off disk and to
 // drop commands missing from the image, and neither applies to the image's own
 // declarations.
-func mergeImageMCP(user map[string]any, drops []Drop, f ImageFacts) (map[string]any, []Drop) {
+func mergeImageMCP(user map[string]any, drops []Drop, f ImageFacts) (map[string]any, []Drop, map[string]any) {
+	image := map[string]any{}
 	if !f.HasMCP {
-		return user, drops
+		return user, drops, image
 	}
 	if len(f.MCP) > maxImageMCPBytes {
 		return user, append(drops, Drop{Kind: "mcp", Name: "image",
-			Reason: "the box image's " + ImageMCPPath + " is larger than 64 KiB"})
+			Reason: "the box image's " + ImageMCPPath + " is larger than 64 KiB"}), image
 	}
 	invalid := Drop{Kind: "mcp", Name: "image", Reason: "the box image's " + ImageMCPPath + " is not valid JSON"}
 	var top any
 	if json.Unmarshal(f.MCP, &top) != nil {
-		return user, append(drops, invalid)
+		return user, append(drops, invalid), image
 	}
 	doc, ok := top.(map[string]any)
 	if !ok {
-		return user, append(drops, invalid)
+		return user, append(drops, invalid), image
 	}
 	var servers map[string]any
 	switch v := doc["mcpServers"].(type) {
@@ -193,7 +195,7 @@ func mergeImageMCP(user map[string]any, drops []Drop, f ImageFacts) (map[string]
 		servers = v
 	default:
 		// The same shape error fails the whole user file in filterMCP.
-		return user, append(drops, invalid)
+		return user, append(drops, invalid), image
 	}
 
 	names := make([]string, 0, len(servers))
@@ -224,9 +226,10 @@ func mergeImageMCP(user map[string]any, drops []Drop, f ImageFacts) (map[string]
 		}
 		drops = kept
 		out[n] = srv
+		image[n] = srv
 		if replaced {
 			drops = append(drops, Drop{Kind: "mcp", Name: n, Reason: "replaced by the image's " + n})
 		}
 	}
-	return out, drops
+	return out, drops, image
 }

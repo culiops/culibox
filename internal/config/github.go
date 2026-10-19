@@ -16,11 +16,52 @@ import (
 	"github.com/culiops/agent-box/internal/hostmatch"
 )
 
-// KeyRef says where a secret's bytes live. N1 knows only "file": an absolute
-// path on the host that the broker reads. The bytes never enter a box.
+// KeyRef says where a secret's bytes live: a file on the host or an
+// environment variable of the daemon. The bytes are resolved at use and never
+// enter a box as a reference. N4 adds "store".
 type KeyRef struct {
-	Type string `json:"type"` // "file" only in N1
-	Path string `json:"path,omitempty"`
+	Type string `json:"type"`           // "file" | "env"
+	Path string `json:"path,omitempty"` // file: absolute path
+	Var  string `json:"var,omitempty"`  // env: variable name
+}
+
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidEnvName reports whether s is a legal environment variable name.
+func ValidEnvName(s string) bool { return envNameRe.MatchString(s) }
+
+// Validate checks the reference's shape; it never reads the value.
+func (r KeyRef) Validate() error {
+	switch r.Type {
+	case "file":
+		if r.Var != "" {
+			return errors.New(`a "file" reference must not set var`)
+		}
+		if !filepath.IsAbs(r.Path) {
+			return fmt.Errorf("path %q must be an absolute path", r.Path)
+		}
+	case "env":
+		if r.Path != "" {
+			return errors.New(`an "env" reference must not set path`)
+		}
+		if !ValidEnvName(r.Var) {
+			return fmt.Errorf("env var %q is not a valid variable name", r.Var)
+		}
+		if strings.HasPrefix(r.Var, "AB_") {
+			return fmt.Errorf("env var %q is reserved: the AB_ prefix holds agent-box's own settings", r.Var)
+		}
+	default:
+		return fmt.Errorf("unsupported reference type %q (want \"file\" or \"env\")", r.Type)
+	}
+	return nil
+}
+
+// String names the reference for messages. It is never a value.
+func (r KeyRef) String() string {
+	if r.Type == "env" {
+		return "env " + r.Var
+	}
+	return r.Type + " " + r.Path
 }
 
 // GitHubApp is a named GitHub App connection, declared once in config.json
@@ -32,11 +73,14 @@ type GitHubApp struct {
 }
 
 // GitHubOwner scopes a binding to named repositories under one account or
-// organisation, minted through one App.
+// organisation. Exactly one of App (a minted installation token) and Token (a
+// static_tokens entry holding a personal access token) says where the
+// credential comes from.
 type GitHubOwner struct {
 	Owner string   `json:"owner"`
 	App   string   `json:"app"`
 	Repos []string `json:"repos"`
+	Token string   `json:"token,omitempty"`
 }
 
 // GitHubBinding gives a boxed profile read-only GitHub access through the
@@ -114,8 +158,11 @@ func (b GitHubBinding) Validate() error {
 		} else {
 			seen[k] = true
 		}
-		if strings.TrimSpace(o.App) == "" {
-			return fmt.Errorf("github.owners[%d].app must name a github_apps entry", i)
+		if hasApp, hasTok := strings.TrimSpace(o.App) != "", o.Token != ""; hasApp == hasTok {
+			return fmt.Errorf("github.owners[%d]: set exactly one of app or token", i)
+		}
+		if o.Token != "" && !tokenNameRe.MatchString(o.Token) {
+			return fmt.Errorf("github.owners[%d].token %q is not an entry name", i, o.Token)
 		}
 		if len(o.Repos) == 0 {
 			return fmt.Errorf("github.owners[%d].repos needs at least one repository", i)
@@ -224,12 +271,15 @@ func ValidateGitHubApps(apps []GitHubApp) error {
 }
 
 // CheckGitHubApps refuses a binding whose owners name an App the instance does
-// not define.
+// not define. An owner that names a token entry has no App to check.
 func CheckGitHubApps(a AgentConfig, apps []GitHubApp) error {
 	if a.GitHub == nil {
 		return nil
 	}
 	for i, o := range a.GitHub.Owners {
+		if o.App == "" && o.Token != "" {
+			continue
+		}
 		if !slices.ContainsFunc(apps, func(x GitHubApp) bool { return x.Name == o.App }) {
 			return fmt.Errorf("github.owners[%d].app %q is not defined in github_apps", i, o.App)
 		}
@@ -254,23 +304,33 @@ func validateGitHub(a AgentConfig) error {
 type Bindings struct {
 	AWS    *AWSBinding
 	GitHub *GitHubBinding
+	Tokens []StaticToken // clones of the entries named in a profile's tokens
+	PATs   []StaticToken // clones of the entries GitHub owners name in token (deduped)
 }
 
-// Any reports whether the session has at least one binding.
-func (b Bindings) Any() bool { return b.AWS != nil || b.GitHub != nil }
+// Any reports whether the session has at least one binding. PATs do not count
+// on their own: a PAT owner is part of the GitHub binding.
+func (b Bindings) Any() bool { return b.AWS != nil || b.GitHub != nil || len(b.Tokens) > 0 }
 
 // Hash identifies the whole scope. With no GitHub binding it is exactly the AWS
 // binding's hash, so a session that existed before GitHub bindings keeps its box
-// key and binding directory. With neither binding it is "".
+// key and binding directory. With neither binding it is "". Token entries are
+// folded in only when there are some, so a session that binds none keeps the
+// hash it had before they existed.
 func (b Bindings) Hash() string {
 	aws := ""
 	if b.AWS != nil {
 		aws = b.AWS.Hash()
 	}
-	if b.GitHub == nil {
-		return aws
+	base := aws
+	if b.GitHub != nil {
+		sum := sha256.Sum256([]byte(aws + "\x00" + b.GitHub.Hash()))
+		base = hex.EncodeToString(sum[:6])
 	}
-	sum := sha256.Sum256([]byte(aws + "\x00" + b.GitHub.Hash()))
+	if len(b.Tokens)+len(b.PATs) == 0 {
+		return base
+	}
+	sum := sha256.Sum256([]byte(base + "\x00tokens\x00" + TokensHash(b.Tokens, b.PATs)))
 	return hex.EncodeToString(sum[:6])
 }
 

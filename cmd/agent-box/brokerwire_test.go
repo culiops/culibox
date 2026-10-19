@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -66,7 +67,7 @@ func TestStartBrokerServesAuditsAndStops(t *testing.T) {
 				return session.Info{}, false
 			}
 			return session.Info{ID: id, AWS: &session.AWSInfo{Label: "x"}}, true
-		}, nil)
+		}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,13 +130,13 @@ func TestStartBrokerReusesItsSecretAcrossRestarts(t *testing.T) {
 	dataDir := shortRoot(t)
 	get := func(string) (*session.Session, bool) { return nil, false }
 	info := func(string) (session.Info, bool) { return session.Info{}, false }
-	a, err := startBroker(dataDir, dataDir, "linux", 0, get, info, nil)
+	a, err := startBroker(dataDir, dataDir, "linux", 0, get, info, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tokA := a.Hooks.Token("claude-3", wireNonce)
 	a.Stop(context.Background())
-	b, err := startBroker(dataDir, dataDir, "linux", 0, get, info, nil)
+	b, err := startBroker(dataDir, dataDir, "linux", 0, get, info, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestStartBrokerRefusesAShortSecret(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := startBroker(dataDir, dataDir, "linux", 0,
-		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 	if err == nil || errors.Is(err, errBrokerListen) || !strings.Contains(err.Error(), "broker secret") {
 		t.Fatalf("err = %v, want a fatal broker secret error", err)
 	}
@@ -166,7 +167,7 @@ func TestStartBrokerListenFailureIsNotFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := startBroker(dataDir, dataDir, "linux", 0,
-		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+		func(string) (*session.Session, bool) { return nil, false }, func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 	if !errors.Is(err, errBrokerListen) {
 		t.Fatalf("err = %v, want errBrokerListen", err)
 	}
@@ -185,7 +186,7 @@ func TestBrokerLookupCarriesExclusive(t *testing.T) {
 	defer func() { lookAWS = lookAWSBefore }()
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +220,7 @@ func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
 	defer func() { lookAWS = lookAWSBefore }()
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +285,7 @@ func TestStopClosesTheSignInRunnerBeforeTheAuditStore(t *testing.T) {
 	sessions := map[string]*session.Session{"aws-1": boundSess("aws-1")}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +338,7 @@ func TestStartBrokerClosesWindowsLeftOpenByTheLastRun(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		svc, err := startBroker(dataDir, dataDir, "linux", 0,
 			func(string) (*session.Session, bool) { return nil, false },
-			func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+			func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -383,7 +384,7 @@ func TestStartBrokerWiresGitHub(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dataDir := shortRoot(t)
-			svc, err := startBroker(dataDir, dataDir, "linux", 0, get, info, tc.apps)
+			svc, err := startBroker(dataDir, dataDir, "linux", 0, get, info, tc.apps, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -397,5 +398,104 @@ func TestStartBrokerWiresGitHub(t *testing.T) {
 				t.Fatalf("body %q lacks %q", body, tc.body)
 			}
 		})
+	}
+}
+
+func postStaticToken(t *testing.T, sock, token, name string) (int, string) {
+	t.Helper()
+	c := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}, Timeout: 10 * time.Second}
+	req, _ := http.NewRequest(http.MethodPost, "http://broker/v1/static/token", strings.NewReader(`{"name":"`+name+`"}`))
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func tokenEntry(name, path string) config.StaticToken {
+	return config.StaticToken{Name: name, Value: config.KeyRef{Type: "file", Path: path}, Env: []string{"X_TOKEN"},
+		Egress: []config.TokenEgress{{Host: "x.example.com"}}}
+}
+
+// A session carries the entries it was spawned with. One that static_tokens no
+// longer defines is dropped from the broker's view of the session (the broker
+// answers denied_scope), while a still-defined one is served.
+func TestBrokerLookupDropsUndefinedEntries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix socket transport")
+	}
+	dataDir := shortRoot(t)
+	valFile := filepath.Join(t.TempDir(), "kept")
+	if err := os.WriteFile(valFile, []byte("tok-SECRET-1234\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	kept, old := tokenEntry("kept", valFile), tokenEntry("old", valFile)
+	sessions := map[string]*session.Session{
+		"tok-1": {ID: "tok-1", Agent: "claude", Runtime: config.RuntimeBox, BrokerNonce: wireNonce, Tokens: []config.StaticToken{kept, old}},
+	}
+	svc, err := startBroker(dataDir, dataDir, "linux", 0,
+		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, []config.StaticToken{kept})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	sock := filepath.Join(dataDir, "broker", "sock", "broker.sock")
+	tok := svc.Hooks.Token("tok-1", wireNonce)
+
+	if code, body := postStaticToken(t, sock, tok, "kept"); code != http.StatusOK || !strings.Contains(body, "tok-SECRET-1234") {
+		t.Fatalf("defined entry: status %d body %q", code, body)
+	}
+	code, body := postStaticToken(t, sock, tok, "old")
+	if code != http.StatusForbidden || !strings.Contains(body, "no token entry named") {
+		t.Fatalf("deleted entry: status %d body %q, want 403 denied_scope", code, body)
+	}
+	if strings.Contains(body, "tok-SECRET-1234") {
+		t.Fatalf("a value leaked into a refusal: %q", body)
+	}
+}
+
+func TestDefinedTokensFiltersTokensAndPATs(t *testing.T) {
+	keep := definedTokens([]config.StaticToken{{Name: "a"}, {Name: "c"}})
+	in := []config.StaticToken{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	got := keep(in)
+	if len(got) != 2 || got[0].Name != "a" || got[1].Name != "c" {
+		t.Fatalf("got %+v", got)
+	}
+	if keep(nil) != nil || definedTokens(nil)(in) != nil {
+		t.Fatal("nothing to keep must be nil, so a session without tokens keeps its exact view")
+	}
+}
+
+func TestTokenVarsListsEnvReferences(t *testing.T) {
+	entries := []config.StaticToken{
+		{Name: "a", Value: config.KeyRef{Type: "env", Var: "A_TOKEN"}},
+		{Name: "b", Value: config.KeyRef{Type: "file", Path: "/x/b"}},
+		{Name: "c", Value: config.KeyRef{Type: "env", Var: "C_TOKEN"}},
+	}
+	if got := strings.Join(tokenVars(entries), ","); got != "A_TOKEN,C_TOKEN" {
+		t.Fatalf("tokenVars = %q", got)
+	}
+	if tokenVars(nil) != nil {
+		t.Fatal("no entries, no vars")
+	}
+}
+
+func TestEntryMCPCommandsAddsTheLauncher(t *testing.T) {
+	entries := []config.StaticToken{
+		{Name: "a"},
+		{Name: "b", MCP: &config.TokenMCP{Server: "grafana", Command: "mcp-grafana"}},
+		{Name: "c", MCP: &config.TokenMCP{Server: "sentry", Command: "mcp-server-sentry"}},
+	}
+	if got := strings.Join(entryMCPCommands(entries), ","); got != "agentbox-env,mcp-grafana,mcp-server-sentry" {
+		t.Fatalf("entryMCPCommands = %q", got)
+	}
+	if entryMCPCommands(entries[:1]) != nil || entryMCPCommands(nil) != nil {
+		t.Fatal("no entry server, nothing extra to probe")
 	}
 }

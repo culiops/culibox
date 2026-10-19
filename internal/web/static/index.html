@@ -316,6 +316,14 @@
           <p class="warnbox tiny" id="pf-gh-perm-err" role="alert" hidden></p>
           <p class="tiny" id="pf-gh-help">Agents get 1-hour read-only tokens for these repos. The agent can read the token while it runs.</p>
         </div>
+        <div id="pf-st-block">
+          <span class="flab">Tokens</span>
+          <p class="tiny mut" id="pf-st-hint" hidden>Tokens need runtime: box. The host tier cannot contain credentials.</p>
+          <p class="tiny mut" id="pf-st-none" hidden>No token entry is defined. Add one under static_tokens in config.json, then restart agent-box.</p>
+          <div id="pf-st-list"></div>
+          <p class="warnbox tiny" id="pf-st-warn">The agent can read this token. It is long-lived and is not revoked when the session ends.</p>
+          <p class="warnbox tiny" id="pf-st-err" role="alert" hidden></p>
+        </div>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
           <label class="pf-check"><input type="checkbox" id="pf-replyable"> Allow replies by default</label>

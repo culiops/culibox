@@ -80,7 +80,7 @@ func TestBrokerStopRevokesAll(t *testing.T) {
 	}
 	svc, err := startBroker(dataDir, dataDir, "linux", 0,
 		func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok },
-		func(string) (session.Info, bool) { return session.Info{}, false }, nil)
+		func(string) (session.Info, bool) { return session.Info{}, false }, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,15 +2,18 @@ package egress
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
 
@@ -559,5 +563,35 @@ func TestServiceBindsTokensToTheirBoxThroughDocker(t *testing.T) {
 	f.mu.Unlock()
 	if inspects != 1 {
 		t.Fatalf("container inspects = %d, want 1", inspects)
+	}
+}
+
+func TestServiceWarnsOnCIDROverlap(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	f, lr := newFakeDocker(), &listenRec{}
+	// The fake network is 172.21.0.0/16: the first cidr contains it, the second is elsewhere.
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen,
+		StaticTokens: []config.StaticToken{
+			{Name: "corp", Egress: []config.TokenEgress{
+				{Host: "wide.corp.example", Private: true, CIDR: "172.16.0.0/12"},
+				{Host: "narrow.corp.example", Private: true, CIDR: "10.20.0.0/16"},
+				{Host: "public.example.com"},
+			}}}})
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Ready(context.Background()); err != nil { // idempotent: no second warning
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "overlaps the box subnet") || !strings.Contains(out, `"corp"`) || !strings.Contains(out, "172.16.0.0/12") || !strings.Contains(out, "172.21.0.0/16") {
+		t.Fatalf("log = %q", out)
+	}
+	if strings.Contains(out, "10.20.0.0/16") || strings.Count(out, "overlaps the box subnet") != 1 {
+		t.Fatalf("log = %q", out)
 	}
 }

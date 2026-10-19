@@ -301,6 +301,49 @@ type fakeBundles struct {
 	flags    []string
 	drops    []bundle.Drop
 	err      error // returned, with no mounts or flags, when set
+
+	// SessionMCP: what it was asked, and what it answers (a zero smcp answers a
+	// plain document whose drops are the ones it was given).
+	smcpCalls       int
+	smcpIncludeUser bool
+	smcpDrops       []bundle.Drop
+	smcpEntries     []bundle.EntryServer
+	smcp            bundle.SessionMCP
+	smcpErr         error
+	mountKeys       []string // SessionMCPMount calls: the binding key
+	writeKeys       []string // WriteSessionMCP calls: "<binding key>/<key>"
+	writeDocs       []string
+	writeErr        error
+}
+
+func (f *fakeBundles) SessionMCPMount(bindingKey string) (box.Mount, error) {
+	f.mountKeys = append(f.mountKeys, bindingKey)
+	return box.Mount{Host: "/b/session-mcp/" + bindingKey, Box: bundle.BoxSessionMCPDir}, nil
+}
+
+func (f *fakeBundles) WriteSessionMCP(bindingKey, key string, doc []byte) (string, error) {
+	if f.writeErr != nil {
+		return "", f.writeErr
+	}
+	f.writeKeys = append(f.writeKeys, bindingKey+"/"+key)
+	f.writeDocs = append(f.writeDocs, string(doc))
+	return bundle.BoxSessionMCPDir + "/mcp-" + key + ".json", nil
+}
+
+func (f *fakeBundles) SessionMCP(includeUser bool, drops []bundle.Drop, entries []bundle.EntryServer) (bundle.SessionMCP, error) {
+	f.smcpCalls++
+	f.smcpIncludeUser, f.smcpDrops, f.smcpEntries = includeUser, drops, entries
+	if f.smcpErr != nil {
+		return bundle.SessionMCP{}, f.smcpErr
+	}
+	if f.smcp.Key != "" {
+		return f.smcp, nil
+	}
+	key := "deadbeef-i"
+	if includeUser {
+		key = "deadbeef-u"
+	}
+	return bundle.SessionMCP{Doc: []byte(`{"mcpServers":{}}`), Key: key, Drops: drops}, nil
 }
 
 func (f *fakeBundles) For(bin string) (bundle.Grant, error) {
