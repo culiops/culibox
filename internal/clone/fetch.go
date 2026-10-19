@@ -271,15 +271,25 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	}
 
 	// 4. A fresh 0600 temp file the host chose; removed on every path out.
-	if err := os.MkdirAll(r.TempDir, 0o700); err != nil {
+	tempDir, err := filepath.Abs(r.TempDir) // git runs with -C <of>: a relative path would mean another place
+	if err != nil {
 		return res, fmt.Errorf("clone fetch: %w", err)
 	}
-	f, err := os.CreateTemp(r.TempDir, "bundle-*")
+	if err := os.MkdirAll(tempDir, 0o700); err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	f, err := os.CreateTemp(tempDir, "bundle-*")
 	if err != nil {
 		return res, fmt.Errorf("clone fetch: %w", err)
 	}
 	tmp := f.Name()
-	defer func() { f.Close(); os.Remove(tmp) }()
+	packOut := tmp + ".pack"
+	defer func() {
+		f.Close()
+		for _, p := range []string{tmp, packOut, tmp + ".idx", tmp + ".rev"} {
+			os.Remove(p)
+		}
+	}()
 
 	// 5. The bundle, made in the container. Success is the exit status alone:
 	// an empty range exits 128 but has already written a header to stdout.
@@ -310,8 +320,9 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	// 6b. git does not fsck the objects of a bundle fetch (measured, git 2.43:
 	// fetch.fsckObjects/transfer.fsckObjects pass a commit with no author
 	// email), so the pack goes through index-pack --strict first. A failure
-	// leaves no ref; index-pack drops the pack it refused.
-	if err := strictIndexPack(ctx, g, c.Of, tmp); err != nil {
+	// leaves no ref, and the check's pack is written beside the bundle in
+	// TempDir (never into clone_of), removed with it.
+	if err := strictIndexPack(ctx, g, c.Of, tmp, packOut); err != nil {
 		if ctx.Err() != nil {
 			return res, fmt.Errorf("clone fetch: %w", ctx.Err())
 		}
@@ -410,10 +421,12 @@ const (
 
 // packOffset returns where the pack starts in a bundle file: after the header's
 // terminating blank line. It accepts the "# v2 git bundle" and "# v3 git
-// bundle" signatures (v3 may carry "@object-format=..." capability lines) and
-// refuses anything else, including a filtered (partial) v3 bundle.
+// bundle" signatures and refuses anything else. EVERY header line is checked,
+// because git accepts "@" capability lines anywhere in a v3 header: in a v3
+// header an "@" line must be @object-format=sha1|sha256 (so a @filter, which
+// makes a partial bundle, is refused wherever it sits), and a v2 header has none.
 func packOffset(f *os.File) (int64, error) {
-	br := bufio.NewReaderSize(f, 4096)
+	br := bufio.NewReaderSize(f, maxBundleHeaderLine)
 	var off int64
 	readLine := func() (string, error) {
 		line, err := br.ReadSlice('\n')
@@ -433,22 +446,11 @@ func packOffset(f *os.File) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	var v3 bool
 	switch sig {
 	case "# v2 git bundle":
 	case "# v3 git bundle":
-		for {
-			peek, perr := br.Peek(1)
-			if perr != nil || peek[0] != '@' {
-				break
-			}
-			line, err := readLine()
-			if err != nil {
-				return 0, err
-			}
-			if !strings.HasPrefix(line, "@object-format=") {
-				return 0, fmt.Errorf("bundle capability %q is not supported", sanitize(line))
-			}
-		}
+		v3 = true
 	default:
 		return 0, fmt.Errorf("not a git bundle (signature %q)", sanitize(sig))
 	}
@@ -460,13 +462,19 @@ func packOffset(f *os.File) (int64, error) {
 		if line == "" {
 			return off, nil
 		}
+		if line[0] == '@' && !(v3 && (line == "@object-format=sha1" || line == "@object-format=sha256")) {
+			return 0, fmt.Errorf("bundle capability %q is not supported", sanitize(line))
+		}
 	}
 }
 
 // strictIndexPack feeds the pack inside the bundle file to `git index-pack
-// --strict --fix-thin --stdin` in of, which fscks every object (missingEmail,
-// badTree, a .gitmodules trick...) and completes a thin pack from of's objects.
-func strictIndexPack(ctx context.Context, g Git, of, bundle string) error {
+// --strict --fix-thin --stdin <packOut>` in of, which fscks every object
+// (missingEmail, badTree, a .gitmodules trick...) and completes a thin pack from
+// of's objects. packOut (and its .idx/.rev) is outside of: without a path
+// index-pack writes into of's objects/pack, and a refused pack would stay there
+// as tmp_pack_*. The caller removes packOut's files.
+func strictIndexPack(ctx context.Context, g Git, of, bundle, packOut string) error {
 	sg, ok := g.(StdinGit)
 	if !ok {
 		return errors.New("this git runner cannot take stdin")
@@ -483,6 +491,6 @@ func strictIndexPack(ctx context.Context, g Git, of, bundle string) error {
 	if _, err := f.Seek(off, io.SeekStart); err != nil {
 		return err
 	}
-	_, err = sg.RunStdin(ctx, of, CleanEnv(), f, "index-pack", "--strict", "--fix-thin", "--stdin")
+	_, err = sg.RunStdin(ctx, of, CleanEnv(), f, "index-pack", "--strict", "--fix-thin", "--stdin", packOut)
 	return err
 }

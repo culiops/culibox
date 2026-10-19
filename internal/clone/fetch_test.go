@@ -396,10 +396,11 @@ func gitIn(t *testing.T, dir, stdin string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// git does not fsck the objects of a bundle fetch (measured on git 2.43), so a
-// commit whose author has no email must be stopped by the index-pack step.
-func TestFetchRefusesObjectsThatFailStrictChecks(t *testing.T) {
-	x := newFetchFx(t)
+// breakTip replaces the clone's feat tip with a commit whose author has no
+// email: an object `index-pack --strict` refuses (fsck missingEmail) but a
+// plain bundle fetch accepts.
+func breakTip(t *testing.T, x *fetchFx) {
+	t.Helper()
 	dir := x.req.Clone.Dir
 	tree := gitIn(t, dir, "", "rev-parse", "HEAD^{tree}")
 	parent := gitIn(t, dir, "", "rev-parse", "HEAD")
@@ -411,6 +412,13 @@ func TestFetchRefusesObjectsThatFailStrictChecks(t *testing.T) {
 	if out, err := chk.CombinedOutput(); err == nil || !strings.Contains(string(out), "missingEmail") {
 		t.Fatalf("the fixture commit is not the broken object this test needs: %v: %s", err, out)
 	}
+}
+
+// git does not fsck the objects of a bundle fetch (measured on git 2.43), so a
+// commit whose author has no email must be stopped by the index-pack step.
+func TestFetchRefusesObjectsThatFailStrictChecks(t *testing.T) {
+	x := newFetchFx(t)
+	breakTip(t, x)
 	_, err := x.fetch()
 	if err == nil || !strings.Contains(err.Error(), "strict checks") {
 		t.Fatalf("err = %v, want a strict-check refusal", err)
@@ -419,6 +427,62 @@ func TestFetchRefusesObjectsThatFailStrictChecks(t *testing.T) {
 		t.Error("box/feat exists after a refused fetch")
 	}
 	x.tempEmpty()
+}
+
+// packFiles lists clone_of's objects/pack.
+func packFiles(t *testing.T, of string) []string {
+	t.Helper()
+	ents, err := os.ReadDir(filepath.Join(of, ".git", "objects", "pack"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, e := range ents {
+		out = append(out, e.Name())
+	}
+	return out
+}
+
+// The strict check must not leave its pack in clone_of: a refused bundle would
+// otherwise stay there as tmp_pack_* (box-chosen bytes, up to the size cap), and
+// an accepted one as a full pack the real fetch then duplicates.
+func TestFetchLeavesNothingInOfsPackDir(t *testing.T) {
+	// A refused bundle changes nothing in of's pack dir. An accepted one adds
+	// exactly the one pack the real fetch keeps (git keeps a bundle fetch's pack),
+	// not a second one from the check.
+	countPacks := func(names []string) (n int) {
+		for _, f := range names {
+			if strings.HasSuffix(f, ".pack") {
+				n++
+			}
+		}
+		return
+	}
+	for _, refused := range []bool{true, false} {
+		x := newFetchFx(t)
+		if refused {
+			breakTip(t, x)
+		}
+		before := packFiles(t, x.of)
+		_, err := x.fetch()
+		if refused != (err != nil) {
+			t.Fatalf("refused=%v err=%v", refused, err)
+		}
+		after := packFiles(t, x.of)
+		for _, n := range after {
+			if strings.HasPrefix(n, "tmp_pack_") {
+				t.Errorf("refused=%v: %s left in clone_of", refused, n)
+			}
+		}
+		want := 0
+		if !refused {
+			want = 1
+		}
+		if got := countPacks(after) - countPacks(before); got != want {
+			t.Errorf("refused=%v: %d new pack(s) in clone_of, want %d: %v -> %v", refused, got, want, before, after)
+		}
+		x.tempEmpty()
+	}
 }
 
 func TestPackOffset(t *testing.T) {
@@ -441,6 +505,13 @@ func TestPackOffset(t *testing.T) {
 		{"v2", "# v2 git bundle\n-" + sha + " c\n" + sha + " refs/heads/x\n\nPACK", int64(len("# v2 git bundle\n-" + sha + " c\n" + sha + " refs/heads/x\n\n")), ""},
 		{"v2 empty header", "# v2 git bundle\n\nPACK", int64(len("# v2 git bundle\n\n")), ""},
 		{"v3", "# v3 git bundle\n@object-format=sha1\n" + sha + " refs/heads/x\n\nPACK", int64(len("# v3 git bundle\n@object-format=sha1\n" + sha + " refs/heads/x\n\n")), ""},
+		{"v3 sha256", "# v3 git bundle\n@object-format=sha256\n\nPACK", int64(len("# v3 git bundle\n@object-format=sha256\n\n")), ""},
+		{"v3 filter after ref", "# v3 git bundle\n@object-format=sha1\n-" + sha + " c\n" + sha + " refs/heads/x\n@filter=blob:none\n\nPACK", 0, "not supported"},
+		{"v3 filter after prerequisite", "# v3 git bundle\n-" + sha + " c\n@filter=blob:none\n" + sha + " refs/heads/x\n\nPACK", 0, "not supported"},
+		{"v3 unknown capability", "# v3 git bundle\n" + sha + " refs/heads/x\n@whatever=1\n\nPACK", 0, "not supported"},
+		{"v3 object-format other", "# v3 git bundle\n@object-format=md5\n\nPACK", 0, "not supported"},
+		{"v2 with capability", "# v2 git bundle\n@object-format=sha1\n\nPACK", 0, "not supported"},
+		{"long prerequisite subject", "# v2 git bundle\n-" + sha + " " + strings.Repeat("s", 5<<10) + "\n" + sha + " refs/heads/x\n\nPACK", int64(len("# v2 git bundle\n-" + sha + " " + strings.Repeat("s", 5<<10) + "\n" + sha + " refs/heads/x\n\n")), ""},
 		{"v3 filter", "# v3 git bundle\n@filter=blob:none\n\nPACK", 0, "not supported"},
 		{"v1", "# v1 git bundle\n\nPACK", 0, "not a git bundle"},
 		{"garbage", "PACK\x00\x00", 0, "bundle"},
