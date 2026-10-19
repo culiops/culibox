@@ -301,3 +301,39 @@ func TestParseGitHubRepo(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyRefValidate(t *testing.T) {
+	bad := []KeyRef{
+		{Type: "store"},
+		{Type: ""},
+		{Type: "file", Path: "relative"},
+		{Type: "file", Path: ""},
+		{Type: "file", Path: "/a", Var: "X"},
+		{Type: "env", Var: "1BAD"},
+		{Type: "env", Var: ""},
+		{Type: "env", Var: "AB_X"},
+		{Type: "env", Var: "X", Path: "/a"},
+	}
+	for _, r := range bad {
+		if err := r.Validate(); err == nil {
+			t.Errorf("%+v: want error", r)
+		}
+	}
+	if err := (KeyRef{Type: "store"}).Validate(); err == nil || err.Error() != `unsupported reference type "store" (want "file" or "env")` {
+		t.Errorf("store message: %v", err)
+	}
+	for _, r := range []KeyRef{{Type: "file", Path: "/a/b"}, {Type: "env", Var: "MY_TOKEN"}} {
+		if err := r.Validate(); err != nil {
+			t.Errorf("%+v: %v", r, err)
+		}
+	}
+	if s := (KeyRef{Type: "file", Path: "/a/b"}).String(); s != "file /a/b" {
+		t.Errorf("String = %q", s)
+	}
+	if s := (KeyRef{Type: "env", Var: "MY_TOKEN"}).String(); s != "env MY_TOKEN" {
+		t.Errorf("String = %q", s)
+	}
+	if !ValidEnvName("A_b1") || ValidEnvName("1A") || ValidEnvName("") || ValidEnvName("A-B") {
+		t.Error("ValidEnvName")
+	}
+}

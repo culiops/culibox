@@ -16,11 +16,52 @@ import (
 	"github.com/culiops/agent-box/internal/hostmatch"
 )
 
-// KeyRef says where a secret's bytes live. N1 knows only "file": an absolute
-// path on the host that the broker reads. The bytes never enter a box.
+// KeyRef says where a secret's bytes live: a file on the host or an
+// environment variable of the daemon. The bytes are resolved at use and never
+// enter a box as a reference. N4 adds "store".
 type KeyRef struct {
-	Type string `json:"type"` // "file" only in N1
-	Path string `json:"path,omitempty"`
+	Type string `json:"type"`           // "file" | "env"
+	Path string `json:"path,omitempty"` // file: absolute path
+	Var  string `json:"var,omitempty"`  // env: variable name
+}
+
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidEnvName reports whether s is a legal environment variable name.
+func ValidEnvName(s string) bool { return envNameRe.MatchString(s) }
+
+// Validate checks the reference's shape; it never reads the value.
+func (r KeyRef) Validate() error {
+	switch r.Type {
+	case "file":
+		if r.Var != "" {
+			return errors.New(`a "file" reference must not set var`)
+		}
+		if !filepath.IsAbs(r.Path) {
+			return fmt.Errorf("path %q must be an absolute path", r.Path)
+		}
+	case "env":
+		if r.Path != "" {
+			return errors.New(`an "env" reference must not set path`)
+		}
+		if !ValidEnvName(r.Var) {
+			return fmt.Errorf("env var %q is not a valid variable name", r.Var)
+		}
+		if strings.HasPrefix(r.Var, "AB_") {
+			return fmt.Errorf("env var %q is reserved: the AB_ prefix holds agent-box's own settings", r.Var)
+		}
+	default:
+		return fmt.Errorf("unsupported reference type %q (want \"file\" or \"env\")", r.Type)
+	}
+	return nil
+}
+
+// String names the reference for messages. It is never a value.
+func (r KeyRef) String() string {
+	if r.Type == "env" {
+		return "env " + r.Var
+	}
+	return r.Type + " " + r.Path
 }
 
 // GitHubApp is a named GitHub App connection, declared once in config.json
