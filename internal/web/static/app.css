@@ -1467,11 +1467,17 @@
     @media (hover: none) {
       .cell-bar .tab:not(.act) { background: var(--surface-2); }
     }
-    /* A tab that carries an AWS chip shrinks its session name (ellipsis) before the
-       chip, so "AWS \u00d7N" or a prod label is never pushed under the pane's
-       controls. Scoped to tabs with a chip: plain tabs keep scrolling. */
-    .cell-bar .tab:has(.bdg.aws) { min-width: 0; }
-    .cell-bar .tab:has(.bdg.aws) .tab-label { min-width: 4ch; flex: 0 1 auto; }
+    /* A tab whose chip is the named-connections one (.bdg.aws.conns) has a longer
+       chip than a plain tab, so in a narrow pane its session name is capped short
+       (ellipsis) and 1-2 such tabs still fit beside the pane's sticky controls.
+       Tabs are NOT made shrinkable: they keep their content width, so they never
+       overlap, and past what fits the strip scrolls exactly as it always has. Only
+       connection chips are matched; plain and legacy single-binding tabs are
+       untouched. */
+    .cell-bar { container-type: inline-size; }
+    @container (max-width: 560px) {
+      .cell-bar .tab:has(.bdg.aws.conns) .tab-label { max-width: 7ch; }
+    }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     /* Per-window context readout on the tab: muted, tabular so digits don't jitter. */
