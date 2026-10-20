@@ -350,7 +350,7 @@ function renderSteerFacts(s) {
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
-    meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
+    meta.rows.map((r) => r.k + "=" + r.v + (r.title ? "@" + r.title : "")).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
     (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null), JSON.stringify(s.github || null),
     JSON.stringify(s.aws_connections || null)].join("|");
   if (key === steerFactsKey) return;
@@ -381,7 +381,7 @@ function renderSteerFacts(s) {
     if (meta.tier.title) b.title = meta.tier.title;
     hrow.appendChild(b);
   }
-  head.replaceChildren(hrow, ...meta.rows.map((r) => (r.kind ? connRowEl(s, r) : kvRow(r.k, r.v, r.wrap, r.chip))));
+  head.replaceChildren(hrow, ...meta.rows.map((r) => (r.kind ? connRowEl(s, r) : kvRow(r.k, r.v, r.wrap, r.chip, r.title))));
 
   // 2 — how full the window is. Drawn only when there is a number to draw.
   ctx.replaceChildren(railTitle("Context window"));
@@ -427,7 +427,8 @@ function hasConns(s) {
 const awsConnExpanded = new Set();
 
 // connRowEl: one row of awsConnRailRows. A block is three lines under one
-// frame (name and chips; the muted identity; the counters or last error); the
+// frame (name and chips; the muted identity; the base role's measured write
+// access; the counters or last error); the
 // collapse toggle is a plain button. Every string is server- or operator-
 // supplied (a name, a label, a role, an error), so all of it goes in through
 // textContent. The chips are the rail's own .bdg ones: no new colours.
@@ -459,18 +460,19 @@ function connRowEl(s, r) {
     l1.appendChild(chip);
   }
   box.appendChild(l1);
-  const lines = [[r.detail, ""], [r.stat, r.err ? " err" : ""]];
-  for (const [text, extra] of lines) {
+  const lines = [[r.detail, "", ""], [r.base, r.baseWarn ? " warn" : "", r.baseTitle], [r.stat, r.err ? " err" : "", ""]];
+  for (const [text, extra, title] of lines) {
     if (!text) continue;
     const p = document.createElement("p");
     p.className = "tiny mut connln" + extra;
     p.textContent = text;
+    if (title) p.title = title;
     box.appendChild(p);
   }
   return box;
 }
 
-function kvRow(k, v, wrap, chip) {
+function kvRow(k, v, wrap, chip, title) {
   const row = document.createElement("div");
   row.className = wrap ? "kv wrap" : "kv";
   const a = document.createElement("span");
@@ -480,7 +482,7 @@ function kvRow(k, v, wrap, chip) {
   // text — it keeps its own colour and is never clipped.
   b.className = chip || "v";
   b.textContent = v;
-  b.title = v;
+  b.title = title || v;
   row.append(a, b);
   return row;
 }

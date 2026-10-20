@@ -145,8 +145,9 @@ function awsBadgeEl(s) {
   if (!ab) return null;
   const b = document.createElement("span");
   // write is a separate axis from prod: an open write window is amber, and a
-  // production binding that is writing is red with the amber ring.
-  b.className = "bdg aws" + (ab.prod ? " prod" : "") + (ab.write ? " write" : "") + (hasConns(s) ? " conns" : "");
+  // production binding that is writing is red with the amber ring. rolew (dashed
+  // amber) is the base role being able to write with no window open.
+  b.className = "bdg aws" + (ab.prod ? " prod" : "") + (ab.write ? " write" : "") + (ab.roleWrite ? " rolew" : "") + (hasConns(s) ? " conns" : "");
   b.title = ab.title;
   const parts = badgeParts(ab);
   const lab = document.createElement("span");
@@ -159,6 +160,11 @@ function awsBadgeEl(s) {
     const w = document.createElement("span");
     w.className = "awsw";
     w.textContent = " · write";
+    b.appendChild(w);
+  } else if (parts.roleWrite) {
+    const w = document.createElement("span");
+    w.className = "awsw";
+    w.textContent = ROLE_WRITE_SUFFIX;
     b.appendChild(w);
   }
   return b;
