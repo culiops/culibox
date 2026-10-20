@@ -55,6 +55,10 @@ type StaticToken struct {
 	Label       string            `json:"label,omitempty"`
 	Prod        bool              `json:"prod,omitempty"`
 	Description string            `json:"description,omitempty"`
+	// Template is the catalog id the entry was created from. Presentation only,
+	// like Provider: it lets the edit form reopen with the right fields, and it
+	// is not part of DefHash because it changes nothing a box sees.
+	Template string `json:"template,omitempty"`
 }
 
 const (
@@ -448,6 +452,7 @@ func EntryMCPArgs(e StaticToken, bound map[string]bool) ([]string, error) {
 func (e StaticToken) DefHash() string {
 	c := e.Clone()
 	c.Value = KeyRef{}
+	c.Template = ""
 	j, _ := json.Marshal(c)
 	sum := sha256.Sum256(j)
 	return hex.EncodeToString(sum[:6])

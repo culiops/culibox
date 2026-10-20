@@ -300,6 +300,20 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
+// CheckPasswordEnvClash refuses a token whose value is read from the env var
+// that holds the login password: the password must never double as a token.
+func CheckPasswordEnvClash(passwordEnv string, tokens []StaticToken) error {
+	if passwordEnv == "" {
+		return nil
+	}
+	for _, e := range tokens {
+		if e.Value.Type == "env" && e.Value.Var == passwordEnv {
+			return fmt.Errorf("static_tokens[%q].value: env var %q is password_env, the login password, and cannot be a token", e.Name, passwordEnv)
+		}
+	}
+	return nil
+}
+
 // Validate enforces the security and completeness invariants.
 func (c Config) Validate() error {
 	if len(c.Agents) == 0 {
@@ -337,12 +351,8 @@ func (c Config) Validate() error {
 	if err := ValidateAWSConnections(c.AWSConnections); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	if c.PasswordEnv != "" {
-		for _, e := range c.StaticTokens {
-			if e.Value.Type == "env" && e.Value.Var == c.PasswordEnv {
-				return fmt.Errorf("config: static_tokens[%q].value: env var %q is password_env, the login password, and cannot be a token", e.Name, c.PasswordEnv)
-			}
-		}
+	if err := CheckPasswordEnvClash(c.PasswordEnv, c.StaticTokens); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {

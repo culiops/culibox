@@ -56,10 +56,16 @@ func main() {
 	home, homeErr := serveHome(os.UserHomeDir)
 	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
 	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	// Merge the web-defined credentials before anything validates or reads cfg.
+	// Needs a usable home (the data dir hangs off it) and a config that loaded.
+	var cred credState
+	if homeErr == nil && cfgErr == nil {
+		cfg, cred = mergeCredentials(cfg, home)
+	}
 	if args.Cmd == "doctor" {
 		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
 		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit()}))
+			Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}))
 	}
 	if homeErr != nil {
 		log.Fatalf("home: %v", homeErr)
@@ -86,6 +92,7 @@ func main() {
 		os.Exit(runClone(args, cfg, home, cfgFiles, os.Stdout))
 	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
+	log.Print(cred.summary())
 	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if err != nil {
 		log.Fatalf("config: %v", err)
