@@ -311,12 +311,12 @@ A profile binds at most 16 entries, with no duplicates, and each must be defined
 **How the agent uses it**
 
 ```sh
-agentbox-env grafana-prod -- curl -H "Authorization: Bearer $GRAFANA_SERVICE_ACCOUNT_TOKEN" ...
+agentbox-env grafana-prod -- sh -c 'curl -H "Authorization: Bearer $GRAFANA_SERVICE_ACCOUNT_TOKEN" ...'
 agentbox-env NAME [NAME...] -- CMD [ARGS...]   # run CMD with those tokens in its environment only
 agentbox-env --list                            # what is bound; never a value
 ```
 
-`agentbox-env` asks the broker for each named token, then runs `CMD` (no shell) with the token and the entry's `config_env` in that one process's environment. Nothing is fetched until it runs; if any fetch fails, or two named entries would set the same variable, nothing runs. `--list` reads `/opt/agentbox/tokens.json`, which holds names, labels, hosts and `config_env` but no token.
+`agentbox-env` asks the broker for each named token, then runs `CMD` (no shell, so a `$VAR` you type is expanded by your own shell before the token exists; wrap such a command in `sh -c '...'`) with the token and the entry's `config_env` in that one process's environment. Nothing is fetched until it runs; if any fetch fails, or two named entries would set the same variable, nothing runs. `--list` reads `/opt/agentbox/tokens.json`, which holds names, labels, hosts and `config_env` but no token.
 
 One box can hold several environments of the same service. Give each its own entry, with distinct `mcp.server` names, and bind both:
 
