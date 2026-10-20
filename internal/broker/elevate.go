@@ -54,6 +54,7 @@ type elevation struct {
 	until, grantedAt time.Time
 	lastExp          time.Time // latest Expiration of an elevated credential handed out
 	reason           string
+	conn             string // the AWS connection the window is for; "" = the legacy binding
 	gen              uint64 // bumped on every grant/extend; a stale timer or mint compares it
 	pending          bool   // granted but its approval row is not written yet: grants nothing, reported as no window
 	timer            stopper

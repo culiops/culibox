@@ -74,7 +74,7 @@ func TestHooksAWSState(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.mu.Lock()
-	b.ssoNeed["aws-1"] = "example-sso"
+	b.ssoNeed[connKey{"aws-1", ""}] = "example-sso"
 	b.mu.Unlock()
 	until, sso := h.AWSState("aws-1")
 	if !until.Equal(v.Until) || !until.Equal(now.Add(30*time.Minute)) || sso != "example-sso" {

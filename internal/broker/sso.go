@@ -2,6 +2,7 @@ package broker
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -45,10 +46,25 @@ func (b *Broker) SourceKeyOf(profile string) string {
 
 // SSOExpired is the sourceKey session sid is waiting on a human to sign in to,
 // or "" when its last mint did not fail on an expired SSO login.
+// For a session with connections it is the legacy key if any, else the first by
+// connection name.
 func (b *Broker) SSOExpired(sid string) string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.ssoNeed[sid]
+	if k, ok := b.ssoNeed[connKey{sid, ""}]; ok {
+		return k
+	}
+	var conns []string
+	for k := range b.ssoNeed {
+		if k.sid == sid {
+			conns = append(conns, k.conn)
+		}
+	}
+	if len(conns) == 0 {
+		return ""
+	}
+	slices.Sort(conns)
+	return b.ssoNeed[connKey{sid, conns[0]}]
 }
 
 // SSOLoginDone records the outcome of a sign-in that sid's card started for the
@@ -71,9 +87,9 @@ func (b *Broker) SSOLoginDone(key, sid string, ok bool, detail string) {
 // clearSSOLocked forgets an expiry for key and every session waiting on it.
 func (b *Broker) clearSSOLocked(key string) {
 	delete(b.ssoBad, key)
-	for sid, k := range b.ssoNeed {
+	for ck, k := range b.ssoNeed {
 		if k == key {
-			delete(b.ssoNeed, sid)
+			delete(b.ssoNeed, ck)
 		}
 	}
 }
