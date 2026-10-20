@@ -1193,7 +1193,7 @@ func (m *Manager) baseProbed(id, key string, r awsprobe.Result) {
 			log.Printf("session %s: aws base-role re-probe: rewriting aws.json: %v", id, err)
 		}
 	}
-	log.Printf("session %s: aws base-role re-probe %s → %s", id, key, r.Normalize().State)
+	log.Printf("session %s: aws base-role re-probe %q → %s", id, key, r.Normalize().State)
 }
 
 // SetEgress installs the egress-proxy hooks. Call once at boot, with SetBroker.

@@ -198,7 +198,8 @@ func validateBindings(bs config.Bindings) error {
 	return nil
 }
 
-// WriteAWSListing rewrites aws.json in an existing binding dir, with new
+// WriteAWSListing rewrites aws.json (and the box's agentbox-env.js, which may
+// predate the probe) in an existing binding dir, with new
 // base-role probe results (a re-probe that landed after the spawn). It is a no-op
 // when the bindings have no named connections (the legacy binding has no
 // aws.json). It never creates the dir: a missing one, or one that is not a plain
@@ -219,8 +220,15 @@ func WriteAWSListing(stateRoot string, bs config.Bindings, base map[string]awspr
 	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
 		return fmt.Errorf("broker: %s is not a plain directory", rel)
 	}
-	if err := replaceFile(root, rel, AWSListFile, AWSListing(bs.AWSConns, base)); err != nil {
-		return fmt.Errorf("broker: writing %s: %w", AWSListFile, err)
+	// The env script goes too: a box spawned before the base-role probe has an
+	// old one, and the re-probe would otherwise leave its --list output stale.
+	for _, f := range []struct {
+		name string
+		data []byte
+	}{{"agentbox-env.js", envScript}, {AWSListFile, AWSListing(bs.AWSConns, base)}} {
+		if err := replaceFile(root, rel, f.name, f.data); err != nil {
+			return fmt.Errorf("broker: writing %s: %w", f.name, err)
+		}
 	}
 	return nil
 }

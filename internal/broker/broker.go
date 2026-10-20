@@ -479,7 +479,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 // discarded rather than handed out ("" = keep it). The hard bound (spec §5.2):
 // a write credential never outlives the window it was minted under, and is
 // never handed out for a window that changed while STS was being called.
-// Either way it is discarded, not cached, and the box gets read-only instead.
+// Either way it is discarded, not cached, and the box gets the base role instead.
 func (b *Broker) discardReasonLocked(sid string, p mintPlan, c Creds, now time.Time) string {
 	if !p.elevated {
 		return ""
@@ -487,11 +487,11 @@ func (b *Broker) discardReasonLocked(sid string, p mintPlan, c Creds, now time.T
 	e := b.elev[sid]
 	switch {
 	case !c.Expiration.After(now): // an absent or past Expiration proves nothing about the bound
-		return "elevated credential has no usable expiration; minted read-only instead"
+		return "elevated credential has no usable expiration; minted from the base role instead"
 	case c.Expiration.After(p.until):
-		return "elevated credential would outlive the window; minted read-only instead"
+		return "elevated credential would outlive the window; minted from the base role instead"
 	case e == nil || e.gen != p.gen:
-		return "the elevation changed during the mint; minted read-only instead"
+		return "the elevation changed during the mint; minted from the base role instead"
 	}
 	return ""
 }

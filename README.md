@@ -432,7 +432,7 @@ Read-only comes from the role, not from agent-box: point each connection's `role
 
 "No broad writes found" is not proof of read-only. A write grant scoped to one resource or behind a condition is not detected, and permission boundaries and SCPs count only as far as IAM simulation evaluates them.
 
-The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a role change. An unverified result is checked again after the next successful credential mint for that connection, for example after an SSO sign-in. The exceptions are `role cannot simulate itself` and `assume-role denied`: a sign-in cannot fix those, so the check stops. Fix the role, then respawn. A custom role needs `iam:SimulatePrincipalPolicy` on itself (`ReadOnlyAccess` includes it). The check only warns. It never refuses a spawn.
+The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a role change. An unverified result is checked again after the next successful base (non-elevated) credential mint for that connection, for example after an SSO sign-in. The exceptions are `role cannot simulate itself` and `assume-role denied`: a sign-in cannot fix those, so the check stops. Fix the role, then respawn. A custom role needs `iam:SimulatePrincipalPolicy` on itself (`ReadOnlyAccess` includes it). The check only warns. It never refuses a spawn.
 
 **Limits and operations**
 

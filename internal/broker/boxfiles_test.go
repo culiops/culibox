@@ -908,6 +908,31 @@ func TestWriteAWSListingRewrites(t *testing.T) {
 	}
 }
 
+// A box spawned before the probe shipped has an old agentbox-env.js; a re-probe
+// must bring it up to date so `--list` shows the base-role state.
+func TestWriteAWSListingRefreshesStaleEnvScript(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{AWSConns: twoConns()}
+	dir, err := EnsureBindingDirWith(root, bs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := filepath.Join(dir, "agentbox-env.js")
+	if err := os.WriteFile(js, []byte("// stale pre-probe script\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAWSListing(root, bs, baseResults()); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(js)
+	if err != nil || !bytes.Equal(b, envScript) {
+		t.Fatalf("agentbox-env.js not refreshed (err %v, %d bytes)", err, len(b))
+	}
+	if fi, err := os.Stat(js); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode: %v %v", fi, err)
+	}
+}
+
 func TestWriteAWSListingRefusesSymlinkedDir(t *testing.T) {
 	root := t.TempDir()
 	bs := config.Bindings{AWSConns: twoConns()}
