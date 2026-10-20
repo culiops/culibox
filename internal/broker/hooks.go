@@ -24,14 +24,22 @@ func (h Hooks) NewNonce() string { return NewNonce() }
 func (h Hooks) Token(id, nonce string) string { return h.B.Token(id, nonce) }
 
 // BoxFor writes the binding's per-binding files and returns the mounts and env
-// a bound box needs. It never modifies the endpoint's own mount slice.
-func (h Hooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
-	dir, err := EnsureBindingDir(h.StateRoot, bs)
+// a bound box needs. base is the spawn's base-role probe results (nil without
+// AWS), which aws.json carries per connection. It never modifies the
+// endpoint's own mount slice.
+func (h Hooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Result) ([]box.Mount, []string, error) {
+	dir, err := EnsureBindingDirWith(h.StateRoot, bs, base)
 	if err != nil {
 		return nil, nil, err
 	}
 	mounts := append([]box.Mount{{Host: dir, Box: BoxDir}}, h.EP.Mounts...)
 	return mounts, BoxEnv(bs, h.EP.BoxURL), nil
+}
+
+// WriteAWSListing rewrites aws.json in the binding's existing dir with new
+// base-role probe results; a no-op without named connections.
+func (h Hooks) WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error {
+	return WriteAWSListing(h.StateRoot, bs, base)
 }
 
 // WriteSessionMCP writes a session's MCP config file into its binding dir and

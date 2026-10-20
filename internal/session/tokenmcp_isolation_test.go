@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/bundle"
@@ -23,16 +24,23 @@ type realFilesHooks struct {
 	root string
 }
 
-func (h realFilesHooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
-	_, env, err := h.fakeBrokerHooks.BoxFor(bs)
+func (h realFilesHooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Result) ([]box.Mount, []string, error) {
+	_, env, err := h.fakeBrokerHooks.BoxFor(bs, base)
 	if err != nil {
 		return nil, nil, err
 	}
-	dir, err := broker.EnsureBindingDir(h.root, bs)
+	dir, err := broker.EnsureBindingDirWith(h.root, bs, base)
 	if err != nil {
 		return nil, nil, err
 	}
 	return []box.Mount{{Host: dir, Box: broker.BoxDir}}, env, nil
+}
+
+func (h realFilesHooks) WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error {
+	if err := h.fakeBrokerHooks.WriteAWSListing(bs, base); err != nil {
+		return err
+	}
+	return broker.WriteAWSListing(h.root, bs, base)
 }
 
 func (h realFilesHooks) WriteSessionMCP(bs config.Bindings, key string, doc []byte) (string, error) {

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/creack/pty"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
@@ -271,7 +273,22 @@ type BrokerHooks interface {
 	// BoxFor prepares the binding's host files and returns the read-only
 	// mounts and the env (NAME=value) that point a box's AWS and GitHub tooling at the
 	// broker. The values reach the box by name only (box.Wrap's `-e NAME`).
-	BoxFor(bs config.Bindings) (mounts []box.Mount, env []string, err error)
+	// base is the spawn's base-role probe results (nil without AWS), which the
+	// box's aws.json carries per connection.
+	BoxFor(bs config.Bindings, base map[string]awsprobe.Result) (mounts []box.Mount, env []string, err error)
+	// ProbeBase checks, at spawn, whether each bound AWS base role can write.
+	// The map is keyed "" for the legacy binding, else by connection name, and
+	// never nil. A warning, never a gate: any failure is an unverified result.
+	ProbeBase(sessionID, agent string, bs config.Bindings) map[string]awsprobe.Result
+	// WatchBase asks for a re-probe of the session's keys whose result is not
+	// definite, after their next successful base mint. Every watched session
+	// must eventually be Forget-ed.
+	WatchBase(sessionID string, keys []string)
+	// SetBaseNotify installs the sink a re-probe result is delivered to.
+	SetBaseNotify(f func(sessionID, key string, r awsprobe.Result))
+	// WriteAWSListing rewrites the binding dir's aws.json with new base-role
+	// results; a no-op without named connections.
+	WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error
 	// CheckGitHub reports whether every App a GitHub binding names is usable
 	// (configured, key loads; no network call). Doctor-style: never key bytes.
 	CheckGitHub(g config.GitHubBinding) error
@@ -342,6 +359,8 @@ type AWSInfo struct {
 	// SSOExpired is the sign-in key the session waits on a human to renew;
 	// absent with none. Filled by List only.
 	SSOExpired string `json:"sso_expired,omitempty"`
+	// Fields is the base role's write probe (base_access and friends).
+	awsprobe.Fields
 }
 
 // AWSConnInfo is the wire view of one of a session's named AWS connections:
@@ -362,6 +381,8 @@ type AWSConnInfo struct {
 	// state); absent otherwise.
 	ElevatedUntil *time.Time `json:"elevated_until,omitempty"`
 	SSOExpired    string     `json:"sso_expired,omitempty"`
+	// Fields is the base role's write probe (base_access and friends).
+	awsprobe.Fields
 }
 
 // GitHubInfo is the wire view of a session's GitHub binding: which owners and
@@ -548,6 +569,16 @@ type Session struct {
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
+
+	// base is the base-role probe result per AWS binding key ("" = the legacy
+	// binding, else the connection name). Guarded by mu, unlike the binding
+	// fields: a re-probe changes it. nil for a record from before the probe,
+	// which reads as "not checked".
+	base map[string]awsprobe.Result
+	// persistMu serializes a re-probe's snapshot of base with its writes to
+	// the sidecar and aws.json, so two re-probes landing together never
+	// persist an older snapshot last. Outermost: taken with no other lock held.
+	persistMu sync.Mutex
 
 	// Replyable is guarded by s.mu: unlike Runtime it changes during the
 	// session's life, from the peek panel's toggle.
@@ -930,11 +961,12 @@ func (s *Session) Info() Info {
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
-			Elevate: elevateInfo(s.AWS.Elevate)}
+			Elevate: elevateInfo(s.AWS.Elevate), Fields: awsprobe.Lookup(s.base, "").Fields()}
 	}
 	for _, c := range s.AWSConns {
 		in.AWSConnections = append(in.AWSConnections, AWSConnInfo{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
-			RoleARN: c.RoleARN, Region: c.Region, Prod: c.Prod, WriteCapable: c.Elevate != nil, Elevate: elevateInfo(c.Elevate)})
+			RoleARN: c.RoleARN, Region: c.Region, Prod: c.Prod, WriteCapable: c.Elevate != nil, Elevate: elevateInfo(c.Elevate),
+			Fields: awsprobe.Lookup(s.base, c.Name).Fields()})
 	}
 	slices.SortFunc(in.AWSConnections, func(a, b AWSConnInfo) int { return strings.Compare(a.Name, b.Name) })
 	if g := s.GitHub; g != nil {
@@ -953,6 +985,30 @@ func (s *Session) Info() Info {
 		in.Tokens = append(in.Tokens, ti)
 	}
 	return in
+}
+
+// BaseAccess is a copy of the session's base-role probe results.
+func (s *Session) BaseAccess() map[string]awsprobe.Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return maps.Clone(s.base)
+}
+
+// awsKeys are the session's base-role probe keys: "" for the legacy binding,
+// else the connection names; none without AWS. Immutable fields, no lock.
+func (s *Session) awsKeys() []string {
+	return awsKeysOf(s.Bindings())
+}
+
+func awsKeysOf(bs config.Bindings) []string {
+	if bs.AWS != nil {
+		return []string{""}
+	}
+	keys := make([]string, 0, len(bs.AWSConns))
+	for _, c := range bs.AWSConns {
+		keys = append(keys, c.Name)
+	}
+	return keys
 }
 
 // Bindings is the set of credential bindings the session was spawned with.
@@ -1094,11 +1150,50 @@ func (m *Manager) SetBundles(b Bundles) {
 	m.mu.Unlock()
 }
 
-// SetBroker installs the credential-broker hooks. Call once at boot.
+// SetBroker installs the credential-broker hooks and registers the re-probe
+// sink with them. Call once at boot, before Reconcile.
 func (m *Manager) SetBroker(h BrokerHooks) {
 	m.mu.Lock()
 	m.broker = h
 	m.mu.Unlock()
+	if h != nil {
+		h.SetBaseNotify(m.baseProbed) // outside m.mu: the broker takes its own lock
+	}
+}
+
+// baseProbed is the broker's re-probe sink: a watched base role was probed
+// again after a successful mint. It updates the session, its sidecar entry and,
+// for a session with named connections, the binding dir's aws.json (the legacy
+// binding has none). The broker calls it with its lock released, possibly
+// concurrently for two keys of one session, and possibly racing the session's
+// removal: an unknown id or key is ignored.
+func (m *Manager) baseProbed(id, key string, r awsprobe.Result) {
+	m.mu.Lock()
+	s := m.sessions[id]
+	sc := m.sidecar
+	brk := m.broker
+	m.mu.Unlock()
+	if s == nil || !slices.Contains(s.awsKeys(), key) {
+		return
+	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	s.mu.Lock()
+	if s.base == nil { // a record from before the probe: the very sessions that are watched
+		s.base = map[string]awsprobe.Result{}
+	}
+	s.base[key] = r
+	snap := maps.Clone(s.base)
+	s.mu.Unlock()
+	if sc != nil {
+		sc.setBaseAccess(id, snap)
+	}
+	if brk != nil && len(s.AWSConns) > 0 {
+		if err := brk.WriteAWSListing(s.Bindings(), snap); err != nil {
+			log.Printf("session %s: aws base-role re-probe: rewriting aws.json: %v", id, err)
+		}
+	}
+	log.Printf("session %s: aws base-role re-probe %s → %s", id, key, r.Normalize().State)
 }
 
 // SetEgress installs the egress-proxy hooks. Call once at boot, with SetBroker.
@@ -1446,6 +1541,19 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	id := m.nextIDLocked(spec.Agent)
 	m.mu.Unlock()
 
+	// baseAccess is the base-role probe's results (AWS-bound sessions only). A key
+	// it leaves unverified is watched before the box starts, so the watch is in
+	// place for the box's first mint; a spawn that fails after that must drop
+	// the watch, or the broker would keep it for an id that never ran.
+	var baseAccess map[string]awsprobe.Result
+	watched := false
+	started := false
+	defer func() {
+		if watched && !started {
+			brk.Forget(id)
+		}
+	}()
+
 	// Containment is applied here, between the launcher and the process start,
 	// so abduco persistence and the whole session lifecycle stay untouched.
 	var boxName string
@@ -1465,8 +1573,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 				}
 			}
+			if bs.AWS != nil || len(bs.AWSConns) > 0 {
+				// Warn, never block: the probe has no error, only results.
+				baseAccess = brk.ProbeBase(id, spec.Agent, bs)
+				if keys := awsprobe.NeedsRecheck(baseAccess, awsKeysOf(bs)); len(keys) > 0 {
+					brk.WatchBase(id, keys)
+					watched = true
+				}
+			}
 			var err error
-			bm, benv, err = brk.BoxFor(bs)
+			bm, benv, err = brk.BoxFor(bs, baseAccess)
 			if err != nil {
 				return nil, fmt.Errorf("spawn %s: preparing %s access: %w", spec.Agent, bindingNames(bs), err)
 			}
@@ -1570,6 +1686,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.releaseBoxNamed(boxName) // never leak a box for a session that failed to start
 		return nil, err
 	}
+	started = true // from here the session is published; its removal forgets it
 
 	// Replies start at the profile default (or this spawn's override) and stay
 	// a claude-only feature whatever the profile says — SetReplyable's seam.
@@ -1626,6 +1743,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
 	sess.Exclusive = exclusive
+	sess.base = maps.Clone(baseAccess) // its own: a re-probe writes into it
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	sess.replyable = replyable
@@ -1638,7 +1756,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive,
+			BaseAccess: maps.Clone(baseAccess)})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -2308,6 +2427,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.Exclusive = md.Exclusive
+	// nil for a record from before the probe: every key reads "not checked"
+	// and is watched below, never a clean result.
+	sess.base = maps.Clone(md.BaseAccess)
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart. With the kill-switch off the persisted value
@@ -2324,7 +2446,15 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	m.sessions[id] = sess
+	brk := m.broker
 	m.mu.Unlock()
+	// Not re-probed now (a restart must not mint for every session): an
+	// unverified or unchecked key waits for the session's next base mint.
+	if brk != nil {
+		if keys := awsprobe.NeedsRecheck(md.BaseAccess, sess.awsKeys()); len(keys) > 0 {
+			brk.WatchBase(id, keys)
+		}
+	}
 	// The box was already adopted by Reconcile, before this attach was even
 	// tried — see adoptSurvivingBoxes.
 	sess.ForceRedraw()
