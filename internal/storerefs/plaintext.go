@@ -18,8 +18,10 @@ type StoreIDs interface {
 
 // PlaintextCopies returns, sorted, the secret names that a store secret_source
 // serves (an agent's secrets entry or an account's token_secret whose value is
-// in the store) and that are also set non-empty in the daemon's own
-// environment: a copy the store's encryption does not protect. Names only.
+// in the store) and that are also set non-empty in the environment lookupEnv
+// reads: a copy the store's encryption does not protect. Names only. The
+// daemon passes os.LookupEnv once at start, so it reports its own environment
+// as of then; doctor passes the environment it runs in, which can differ.
 func PlaintextCopies(cfg config.Config, accts []account.Account, st StoreIDs, lookupEnv func(string) (string, bool)) []string {
 	if !HasSource(cfg) {
 		return nil
