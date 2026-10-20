@@ -585,6 +585,15 @@ func (c Config) ResolvedDataDir(home string) string {
 	return filepath.Join(home, ".local", "share", "agent-box")
 }
 
+// ResolvedProfilesPath is profiles_path, else profiles.json in the data dir.
+// serve and doctor both locate the profile store with it.
+func (c Config) ResolvedProfilesPath(dataDir string) string {
+	if c.ProfilesPath != "" {
+		return c.ProfilesPath
+	}
+	return filepath.Join(dataDir, "profiles.json")
+}
+
 // UploadLimit is the per-file upload cap, defaulting to 64 MiB. A zero or
 // negative value means "unset", never "unlimited" — the upload path must never
 // run uncapped, so there is deliberately no way to express that in config.

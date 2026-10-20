@@ -427,3 +427,12 @@ func TestValidateIgnoresAgentBoxImage(t *testing.T) {
 		t.Fatalf("legacy agent box.image must not fail Validate, got %v", err)
 	}
 }
+
+func TestResolvedProfilesPath(t *testing.T) {
+	if got := (Config{}).ResolvedProfilesPath("/srv/ab"); got != "/srv/ab/profiles.json" {
+		t.Errorf("default: got %q", got)
+	}
+	if got := (Config{ProfilesPath: "/x/p.json"}).ResolvedProfilesPath("/srv/ab"); got != "/x/p.json" {
+		t.Errorf("explicit: got %q", got)
+	}
+}

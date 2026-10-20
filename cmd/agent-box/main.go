@@ -114,10 +114,7 @@ func tokenVars(entries []config.StaticToken) []string {
 
 // profilesPathFor is profiles_path, else profiles.json in the data dir.
 func profilesPathFor(cfg config.Config, dataDir string) string {
-	if cfg.ProfilesPath != "" {
-		return cfg.ProfilesPath
-	}
-	return filepath.Join(dataDir, "profiles.json")
+	return cfg.ResolvedProfilesPath(dataDir)
 }
 
 // protectedDirs is every host directory a boxed workspace must not overlap,
