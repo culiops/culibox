@@ -86,20 +86,20 @@ func ParseProfiles(r io.Reader) ([]Profile, error) {
 		order  []*rawProfile
 		byName = map[string]*rawProfile{}
 		cur    *rawProfile // nil outside a profile section
+		// haveKey / lastEmpty: the last key of this section and whether its value was empty.
+		haveKey, lastEmpty bool
 	)
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), 1<<20)
 	for sc.Scan() {
 		raw := strings.TrimRight(sc.Text(), "\r")
-		if raw != strings.TrimLeft(raw, " \t") {
-			continue // indented: a sub-block entry (s3 = ... / max_concurrent_requests = 5)
-		}
+		indented := raw != strings.TrimLeft(raw, " \t")
 		line := strings.TrimSpace(raw)
 		if line == "" || line[0] == '#' || line[0] == ';' {
 			continue
 		}
-		if line[0] == '[' {
-			cur = nil
+		if !indented && line[0] == '[' {
+			cur, haveKey = nil, false
 			end := strings.IndexByte(line, ']')
 			if end < 0 {
 				continue
@@ -120,13 +120,21 @@ func ParseProfiles(r io.Reader) ([]Profile, error) {
 		if cur == nil {
 			continue
 		}
+		// The SDK reads an indented "k = v" as a sub-property only while the
+		// previous key's value is empty ("s3 =" then its settings). Otherwise it
+		// promotes the line to an ordinary key of the profile, so we do too.
+		if indented && haveKey && lastEmpty {
+			continue
+		}
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
 		k = strings.ToLower(strings.TrimSpace(k))
+		v = cleanValue(v)
+		haveKey, lastEmpty = true, v == ""
 		if wantKeys[k] {
-			cur.kv[k] = cleanValue(v)
+			cur.kv[k] = v
 		}
 	}
 	if err := sc.Err(); err != nil {

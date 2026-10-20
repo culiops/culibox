@@ -144,3 +144,31 @@ func writeFile(t *testing.T, path, s string) {
 		t.Fatal(err)
 	}
 }
+
+// The SDK treats an indented "k = v" as a sub-property only after an empty-valued
+// key; otherwise it is an ordinary property of the profile.
+func TestParseIndentedTopLevelProperties(t *testing.T) {
+	got := parse(t, "[profile x]\n    sso_account_id = 111111111111\n    sso_role_name = ReadOnly\n"+
+		"[profile y]\nrole_arn = arn:aws:iam::1:role/x\n\tsource_profile = x\n\tmfa_serial = arn:aws:iam::1:mfa/me\n")
+	if len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	if x := got[0]; x.Kind != "sso" || x.SSOAccountID != "111111111111" || x.SSORoleName != "ReadOnly" || !x.Selectable {
+		t.Fatalf("indented sso keys lost: %+v", x)
+	}
+	if y := got[1]; y.Kind != "assume-role" || y.SourceProfile != "x" || y.Selectable || y.Note != "needs an MFA code; not supported" {
+		t.Fatalf("indented source_profile / mfa_serial lost: %+v", y)
+	}
+}
+
+func TestParseSubBlockStaysSkippedAndEndsAtNextKey(t *testing.T) {
+	// the indented entries after "s3 =" belong to s3, even when named like real keys
+	got := parse(t, "[profile a]\ns3 =\n  region = ignored\n  mfa_serial = ignored\nregion = eu-west-1\n  sso_role_name = R\n")
+	if len(got) != 1 || got[0].Region != "eu-west-1" || !got[0].Selectable {
+		t.Fatalf("sub-block entries leaked: %+v", got)
+	}
+	// ...but after a non-empty key an indented line is a normal key again
+	if got[0].Kind != "other" || got[0].SSORoleName != "" {
+		t.Fatalf("got %+v", got[0])
+	}
+}
