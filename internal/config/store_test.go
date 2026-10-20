@@ -100,3 +100,20 @@ func TestStoreOmittedFromJSONWhenZero(t *testing.T) {
 		t.Fatalf("parse: %v %v", err, c.Store)
 	}
 }
+
+func TestSecretSourceStore(t *testing.T) {
+	base := func(ss ...SecretSource) Config {
+		return Config{BindAddr: "127.0.0.1:8080", SecretSources: ss,
+			Agents: []AgentConfig{{Name: "a", Bin: "claude"}}}
+	}
+	if err := base(SecretSource{Type: "store"}, SecretSource{Type: "env"}).Validate(); err != nil {
+		t.Fatalf("store source: %v", err)
+	}
+	if err := base(SecretSource{Type: "store", Path: "/x"}).Validate(); err == nil {
+		t.Error("store with a path must be refused")
+	}
+	err := base(SecretSource{Type: "store"}, SecretSource{Type: "store"}).Validate()
+	if err == nil || err.Error() != "config: at most one store secret_source" {
+		t.Errorf("two stores: %v", err)
+	}
+}

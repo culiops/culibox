@@ -32,6 +32,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
@@ -1570,6 +1571,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			if bs.GitHub != nil {
 				// Doctor-style and secret-free, so its message can be shown as is.
 				if err := brk.CheckGitHub(*bs.GitHub); err != nil {
+					if errors.Is(err, credref.ErrLocked) {
+						// A key in the locked store: say so (423), not a containment failure.
+						return nil, fmt.Errorf("%w (GitHub App key, profile %q)", launcher.ErrStoreLocked, spec.Agent)
+					}
 					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 				}
 			}

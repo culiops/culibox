@@ -1136,3 +1136,27 @@ func TestSpawnOmitsOptionsDroppedWhenNothingDropped(t *testing.T) {
 		}
 	}
 }
+
+// A locked store refuses the spawn with 423 and a stable code the UI can act
+// on. The body carries only the fixed text: the wrapped secret name goes to the
+// server log, never the response.
+func TestSpawnErrStoreLocked(t *testing.T) {
+	wrapped := fmt.Errorf("%w (DB_PASSWORD)", launcher.ErrStoreLocked)
+	a := &API{Sessions: &mockSvc{spawnErr: wrapped}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w"}`))
+	if rec.Code != http.StatusLocked {
+		t.Fatalf("code %d want 423", rec.Code)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body %s: %v", rec.Body, err)
+	}
+	want := map[string]string{"error": launcher.ErrStoreLocked.Error(), "code": "store_locked"}
+	if len(got) != 2 || got["error"] != want["error"] || got["code"] != want["code"] {
+		t.Fatalf("body = %v, want %v", got, want)
+	}
+	if strings.Contains(rec.Body.String(), "DB_PASSWORD") {
+		t.Fatal("the secret name leaked into the response")
+	}
+}

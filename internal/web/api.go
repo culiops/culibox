@@ -86,6 +86,11 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
+// writeErrCode is writeErr plus a stable machine-readable code the UI can act on.
+func writeErrCode(w http.ResponseWriter, status int, msg, code string) {
+	writeJSON(w, status, map[string]string{"error": msg, "code": code})
+}
+
 // sha256HexRe is the only ask_sha256 shape /answer accepts (what the web
 // client's sha256Hex produces).
 var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -101,6 +106,9 @@ var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func writeSpawnErr(w http.ResponseWriter, agent string, err error) {
 	log.Printf("spawn agent=%q: %v", agent, err)
 	switch {
+	case errors.Is(err, launcher.ErrStoreLocked):
+		// The fixed text only: the wrapped error names the secret, which stays in the log above.
+		writeErrCode(w, http.StatusLocked, launcher.ErrStoreLocked.Error(), "store_locked")
 	case errors.Is(err, box.ErrUnboxableWorkspace), errors.Is(err, box.ErrBoxUnavailable), errors.Is(err, box.ErrWorkspaceHeld),
 		errors.Is(err, box.ErrBoxOwned),
 		errors.Is(err, launcher.ErrBadPrompt),

@@ -41,8 +41,8 @@ type BoxConfig struct {
 
 // SecretSource is one place secrets are resolved from, tried in order.
 type SecretSource struct {
-	Type string `json:"type"`           // "env" | "file"
-	Path string `json:"path,omitempty"` // for type "file"
+	Type string `json:"type"`           // "env" | "file" | "store"
+	Path string `json:"path,omitempty"` // for type "file"; "store" reads the encrypted store and takes none
 }
 
 // Option types.
@@ -435,9 +435,17 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	stores := 0
 	for _, s := range c.SecretSources {
 		switch s.Type {
 		case "env":
+		case "store":
+			if s.Path != "" {
+				return errors.New("config: store secret_source takes no path")
+			}
+			if stores++; stores > 1 {
+				return errors.New("config: at most one store secret_source")
+			}
 		case "file":
 			if s.Path == "" {
 				return errors.New("config: file secret_source requires a path")
