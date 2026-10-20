@@ -650,15 +650,31 @@ func (l *AgentLauncher) mergeOptions(cfg config.AgentConfig, spec SpawnSpec) map
 	return merged
 }
 
-// acceptOverride is the one rule for a per-spawn option override: the profile
+// Reasons an override is dropped. The rejected value is never part of a
+// reason: it is caller input and may be junk.
+const (
+	dropNotExposed   = "this profile does not expose this option"
+	dropInvalidValue = "invalid value for this option"
+)
+
+// checkOverride is the one rule for a per-spawn option override: the profile
 // exposes the key, and the value is valid for its type. An untrusted enum
-// value never reaches the command.
-func (l *AgentLauncher) acceptOverride(cfg config.AgentConfig, k string, v any) bool {
-	if _, ok := cfg.Options[k]; !ok {
-		return false
+// value never reaches the command. reason is "" when ok.
+func (l *AgentLauncher) checkOverride(cfg config.AgentConfig, k string, v any) (ok bool, reason string) {
+	if _, exposed := cfg.Options[k]; !exposed {
+		return false, dropNotExposed
 	}
-	def, ok := l.optionDefs[k]
-	return ok && validOptionValue(def, v)
+	def, known := l.optionDefs[k]
+	if !known || !validOptionValue(def, v) {
+		return false, dropInvalidValue
+	}
+	return true, ""
+}
+
+// acceptOverride reports whether checkOverride keeps the override.
+func (l *AgentLauncher) acceptOverride(cfg config.AgentConfig, k string, v any) bool {
+	ok, _ := l.checkOverride(cfg, k, v)
+	return ok
 }
 
 // AcceptedOptions returns the overrides Build would apply for spec — what a
@@ -678,6 +694,51 @@ func (l *AgentLauncher) AcceptedOptions(spec SpawnSpec) map[string]any {
 		}
 	}
 	return out
+}
+
+// OptionDrop is one per-spawn override the profile refused: the key the caller
+// sent and why. It never carries the value.
+type OptionDrop struct {
+	Key    string `json:"key"`
+	Reason string `json:"reason"`
+}
+
+// Caps on what DroppedOptions reports: keys are caller input.
+const (
+	maxDroppedOptions  = 16
+	maxDroppedKeyBytes = 64
+)
+
+// DroppedOptions returns the overrides in spec that Build would ignore (the
+// complement of AcceptedOptions up to the cap), sorted by key, capped at maxDroppedOptions
+// entries with each key cut to maxDroppedKeyBytes. nil when all are accepted
+// and for an unknown agent (the spawn fails elsewhere).
+func (l *AgentLauncher) DroppedOptions(spec SpawnSpec) []OptionDrop {
+	cfg, ok := l.agent(spec.Agent)
+	if !ok {
+		return nil
+	}
+	var out []OptionDrop
+	for _, k := range sortedKeys(spec.Options) {
+		if ok, reason := l.checkOverride(cfg, k, spec.Options[k]); !ok {
+			out = append(out, OptionDrop{Key: truncateBytes(k, maxDroppedKeyBytes), Reason: reason})
+		}
+	}
+	if len(out) > maxDroppedOptions {
+		out = out[:maxDroppedOptions]
+	}
+	return out
+}
+
+// truncateBytes cuts s to at most n bytes without splitting a UTF-8 rune.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // ReplyableFor is the reply opt-in a new session starts with: the per-spawn
