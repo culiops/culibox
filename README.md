@@ -420,7 +420,9 @@ provider "aws" {
 - Granting a different connection while a window is open is refused: drop the first one.
 - After you drop a window, the write credentials already issued stay valid until they expire (15 minutes at most). A *different* connection can be granted only after that; the refusal names the time. Granting the same connection again is allowed at once.
 - A session that binds any write-capable connection is exclusive: it gets its own box, even if you never grant a window.
-- A connection other than the elevated one stays read-only while a window is open.
+- A connection other than the elevated one stays on its own `role_arn` while a window is open, so it is read-only only if that role is.
+
+Read-only comes from the role, not from agent-box: point each connection's `role_arn` at a read-only role and put write access only in `elevate.role_arn`. The session policy agent-box adds narrows data reads; it does not remove writes, so a connection whose `role_arn` can write can write at any time, and the UI still calls it read-only.
 
 **Limits and operations**
 
