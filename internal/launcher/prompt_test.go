@@ -2,9 +2,12 @@ package launcher
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -246,5 +249,95 @@ func TestAcceptedOptionsKeepsOnlyWhatBuildWouldApply(t *testing.T) {
 	}
 	if got := l.AcceptedOptions(SpawnSpec{Agent: "c", Options: map[string]any{"effort": "$(evil)"}}); len(got) != 0 {
 		t.Fatalf("an invalid value was accepted: %v", got)
+	}
+}
+
+func dropTestLauncher() *AgentLauncher {
+	defs := []config.OptionDef{
+		{Key: "effort", Type: "enum", Choices: []string{"high", "low"}, Flag: "--effort"},
+		{Key: "skip", Type: "bool", Flag: "--dangerously-skip-permissions"},
+		{Key: "model", Type: "enum", Choices: []string{"opus", "sonnet"}, Flag: "--model"},
+	}
+	return New([]config.AgentConfig{
+		{Name: "c", Bin: "claude", Options: map[string]any{"effort": "high", "skip": false}},
+		{Name: "bare", Bin: "claude"},
+	}, fakeResolver{}, defs)
+}
+
+func TestDroppedOptionsUnexposedKey(t *testing.T) {
+	l := dropTestLauncher()
+	got := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"model": "sonnet"}})
+	want := []OptionDrop{{Key: "model", Reason: "this profile does not expose this option"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("DroppedOptions = %v, want %v", got, want)
+	}
+}
+
+func TestDroppedOptionsInvalidEnumValue(t *testing.T) {
+	l := dropTestLauncher()
+	got := l.DroppedOptions(SpawnSpec{Agent: "c", Options: map[string]any{"effort": "$(evil)"}})
+	want := []OptionDrop{{Key: "effort", Reason: "invalid value for this option"}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("DroppedOptions = %v, want %v", got, want)
+	}
+	for _, d := range got {
+		if strings.Contains(d.Reason, "evil") || strings.Contains(d.Key, "evil") {
+			t.Fatalf("the rejected value was echoed: %v", d)
+		}
+	}
+	// A wrong type for a bool is invalid too.
+	got = l.DroppedOptions(SpawnSpec{Agent: "c", Options: map[string]any{"skip": "yes"}})
+	if len(got) != 1 || got[0].Reason != "invalid value for this option" {
+		t.Fatalf("bool given a string: %v", got)
+	}
+}
+
+func TestDroppedOptionsMixOfAcceptedAndDropped(t *testing.T) {
+	l := dropTestLauncher()
+	got := l.DroppedOptions(SpawnSpec{Agent: "c", Options: map[string]any{
+		"effort": "low", "skip": true, "model": "sonnet", "bogus": 1,
+	}})
+	want := []OptionDrop{
+		{Key: "bogus", Reason: "this profile does not expose this option"},
+		{Key: "model", Reason: "this profile does not expose this option"},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("DroppedOptions = %v, want %v", got, want)
+	}
+}
+
+func TestDroppedOptionsNilWhenAllAccepted(t *testing.T) {
+	l := dropTestLauncher()
+	if got := l.DroppedOptions(SpawnSpec{Agent: "c", Options: map[string]any{"effort": "low", "skip": true}}); got != nil {
+		t.Fatalf("DroppedOptions = %v, want nil", got)
+	}
+	if got := l.DroppedOptions(SpawnSpec{Agent: "c"}); got != nil {
+		t.Fatalf("no overrides: %v, want nil", got)
+	}
+	if got := l.DroppedOptions(SpawnSpec{Agent: "nope", Options: map[string]any{"model": "sonnet"}}); got != nil {
+		t.Fatalf("unknown agent: %v, want nil", got)
+	}
+}
+
+func TestDroppedOptionsSortedAndCapped(t *testing.T) {
+	l := dropTestLauncher()
+	opts := map[string]any{}
+	for i := 0; i < 40; i++ {
+		opts[fmt.Sprintf("k%02d", i)] = true
+	}
+	opts["z"+strings.Repeat("x", 200)] = true
+	got := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: opts})
+	if len(got) != maxDroppedOptions {
+		t.Fatalf("len = %d, want cap %d", len(got), maxDroppedOptions)
+	}
+	if !sort.SliceIsSorted(got, func(i, j int) bool { return got[i].Key < got[j].Key }) {
+		t.Fatalf("not sorted by key: %v", got)
+	}
+	if got[0].Key != "k00" {
+		t.Fatalf("first = %q, want k00", got[0].Key)
+	}
+	long := l.DroppedOptions(SpawnSpec{Agent: "bare", Options: map[string]any{"z" + strings.Repeat("x", 200): true}})
+	if len(long) != 1 || len(long[0].Key) != maxDroppedKeyBytes {
+		t.Fatalf("long key not truncated to %d bytes: %v", maxDroppedKeyBytes, long)
 	}
 }

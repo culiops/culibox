@@ -524,6 +524,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		rateLimitsFile = filepath.Join(home, ".claude", "abtop-rate-limits.json")
 	}
 	api := &web.API{Sessions: web.ManagerService{M: mgr}, DefaultCwd: defaultCwd,
+		OptionsDropped: lnch.DroppedOptions,
 		ProfileCwd: func(name string) string {
 			p, ok := pm.Get(name)
 			if !ok {

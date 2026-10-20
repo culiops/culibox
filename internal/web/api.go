@@ -42,7 +42,10 @@ type API struct {
 	// ProfileCwd returns the named profile's default_cwd ("" = none); a spawn
 	// that omits cwd uses it before DefaultCwd. nil = no profile defaults.
 	ProfileCwd func(agent string) string
-	AWS        AWSStatusService // nil = the credential broker is not running; /aws is a 404
+	// OptionsDropped reports the spawn option overrides the profile refused,
+	// for the 201 body only (never persisted). nil = nothing is reported.
+	OptionsDropped func(launcher.SpawnSpec) []launcher.OptionDrop
+	AWS            AWSStatusService // nil = the credential broker is not running; /aws is a 404
 	// Elevation serves the write-window and AWS sign-in endpoints; nil = the
 	// credential broker is not running, and they are 404.
 	Elevation ElevationService
@@ -155,15 +158,25 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		// The generic message hides most refusals; a refusal that is actionable
 		// and names only what the caller just supplied (an unboxable workspace,
 		// a rejected first message) is shown instead — see writeSpawnErr.
-		info, err := a.Sessions.Spawn(launcher.SpawnSpec{
+		spec := launcher.SpawnSpec{
 			Agent: req.Agent, Name: req.Name, Cwd: cwd, Options: req.Options, Runtime: req.Runtime,
 			Prompt: req.Prompt, Replyable: req.Replyable, Account: req.Account, Login: req.Login,
-		})
+		}
+		info, err := a.Sessions.Spawn(spec)
 		if err != nil {
 			writeSpawnErr(w, req.Agent, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, info)
+		// A rejected override must not look accepted: say which were dropped.
+		// Response only; session.Info and the sidecar do not carry it.
+		resp := struct {
+			session.Info
+			OptionsDropped []launcher.OptionDrop `json:"options_dropped,omitempty"`
+		}{Info: info}
+		if a.OptionsDropped != nil {
+			resp.OptionsDropped = a.OptionsDropped(spec)
+		}
+		writeJSON(w, http.StatusCreated, resp)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

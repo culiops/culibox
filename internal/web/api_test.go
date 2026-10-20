@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1063,6 +1064,75 @@ func TestRepliesDisabledEndpoints403(t *testing.T) {
 		(&API{Sessions: c.svc}).handleSession(rec, c.req)
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("%s: code %d want 403, body %s", c.name, rec.Code, rec.Body)
+		}
+	}
+}
+
+// A spawn override the profile dropped is reported in the 201 body only: the
+// session itself, its sidecar and the list never carry it.
+func TestSpawnReportsDroppedOptions(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "claude-1", Agent: "claude", Cwd: "/w"}}
+	var seen launcher.SpawnSpec
+	a := &API{Sessions: svc, OptionsDropped: func(s launcher.SpawnSpec) []launcher.OptionDrop {
+		seen = s
+		return []launcher.OptionDrop{{Key: "model", Reason: "this profile does not expose this option"}}
+	}}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w","options":{"model":"claude-sonnet-5"}}`))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("code %d body %s", rec.Code, rec.Body)
+	}
+	if seen.Agent != "claude" || seen.Options["model"] != "claude-sonnet-5" {
+		t.Fatalf("the hook saw %+v", seen)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	// Every field Info already marshals is still there.
+	var want map[string]any
+	b, _ := json.Marshal(svc.spawnInfo)
+	_ = json.Unmarshal(b, &want)
+	for k, v := range want {
+		if !reflect.DeepEqual(got[k], v) {
+			t.Errorf("field %q = %v, want %v", k, got[k], v)
+		}
+	}
+	drops, ok := got["options_dropped"].([]any)
+	if !ok || len(drops) != 1 {
+		t.Fatalf("options_dropped = %v", got["options_dropped"])
+	}
+	d := drops[0].(map[string]any)
+	if d["key"] != "model" || d["reason"] != "this profile does not expose this option" {
+		t.Fatalf("drop = %v", d)
+	}
+	if strings.Contains(rec.Body.String(), "claude-sonnet-5") {
+		t.Fatalf("the rejected value was echoed: %s", rec.Body)
+	}
+}
+
+func TestSpawnOmitsOptionsDroppedWhenNothingDropped(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "claude-1"}}
+	for name, hook := range map[string]func(launcher.SpawnSpec) []launcher.OptionDrop{
+		"nil hook":   nil,
+		"no drops":   func(launcher.SpawnSpec) []launcher.OptionDrop { return nil },
+		"empty list": func(launcher.SpawnSpec) []launcher.OptionDrop { return []launcher.OptionDrop{} },
+	} {
+		a := &API{Sessions: svc, OptionsDropped: hook}
+		rec := httptest.NewRecorder()
+		a.handleSessions(rec, postReq("/api/sessions", `{"agent":"claude","cwd":"/w","options":{"effort":"low"}}`))
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s: code %d", name, rec.Code)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if _, has := got["options_dropped"]; has {
+			t.Fatalf("%s: options_dropped present: %s", name, rec.Body)
+		}
+		if got["id"] != "claude-1" {
+			t.Fatalf("%s: id = %v", name, got["id"])
 		}
 	}
 }
