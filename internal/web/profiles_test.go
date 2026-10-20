@@ -530,3 +530,30 @@ func TestProfileSaveChecksTokens(t *testing.T) {
 		t.Fatal("SetStaticTokens must clone")
 	}
 }
+
+func TestProfileSaveChecksAWSConnections(t *testing.T) {
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	body := `{"name":"p","bin":"claude","runtime":"box","aws_connections":["acme-prod-read"]}`
+
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "acme-prod-read") {
+		t.Fatalf("an undefined connection must be a 400 naming it, got %d %s", rec.Code, rec.Body)
+	}
+
+	conns := []config.AWSConnection{{Name: "acme-prod-read", AWSBinding: config.AWSBinding{
+		SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/r", Region: "us-east-1"}}}
+	pm.SetAWSConnections(conns)
+	rec = httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body)))
+	if rec.Code != 201 {
+		t.Fatalf("a defined connection should save, got %d %s", rec.Code, rec.Body)
+	}
+
+	// the manager keeps its own copy
+	conns[0].Region = "changed"
+	if pm.awsConns[0].Region != "us-east-1" {
+		t.Fatal("SetAWSConnections must clone")
+	}
+}

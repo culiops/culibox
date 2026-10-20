@@ -92,6 +92,22 @@ type ProfileManager struct {
 	// wired at boot, so a profile cannot be saved naming an entry that does
 	// not exist. nil = none defined.
 	tokens []config.StaticToken
+	// awsConns are the instance's aws_connections (config.AWSConnections),
+	// wired at boot, so a profile cannot be saved naming a connection that does
+	// not exist. nil = none defined.
+	awsConns []config.AWSConnection
+}
+
+// SetAWSConnections installs the instance's named AWS connections, which Save
+// checks a profile's aws_connections against. Call at boot.
+func (m *ProfileManager) SetAWSConnections(list []config.AWSConnection) {
+	cp := make([]config.AWSConnection, len(list))
+	for i, c := range list {
+		cp[i] = c.Clone()
+	}
+	m.mu.Lock()
+	m.awsConns = cp
+	m.mu.Unlock()
 }
 
 // SetStaticTokens installs the instance's static token entries, which Save
@@ -364,6 +380,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := config.CheckTokens(p, m.tokens, m.optDefs); err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	if err := config.CheckAWSConnections(p, m.awsConns); err != nil {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := m.checkAccount(p); err != nil {

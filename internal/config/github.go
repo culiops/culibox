@@ -302,19 +302,26 @@ func validateGitHub(a AgentConfig) error {
 
 // Bindings is the set of credential bindings a session carries.
 type Bindings struct {
-	AWS    *AWSBinding
-	GitHub *GitHubBinding
-	Tokens []StaticToken // clones of the entries named in a profile's tokens
-	PATs   []StaticToken // clones of the entries GitHub owners name in token (deduped)
+	AWS *AWSBinding
+	// AWSConns are clones of the host aws_connections a profile names, sorted by
+	// name. Exclusive with AWS: a session binds one or the other.
+	AWSConns []AWSConnection
+	GitHub   *GitHubBinding
+	Tokens   []StaticToken // clones of the entries named in a profile's tokens
+	PATs     []StaticToken // clones of the entries GitHub owners name in token (deduped)
 }
 
 // Any reports whether the session has at least one binding. PATs do not count
 // on their own: a PAT owner is part of the GitHub binding.
-func (b Bindings) Any() bool { return b.AWS != nil || b.GitHub != nil || len(b.Tokens) > 0 }
+func (b Bindings) Any() bool {
+	return b.AWS != nil || len(b.AWSConns) > 0 || b.GitHub != nil || len(b.Tokens) > 0
+}
 
 // Hash identifies the whole scope. With no GitHub binding it is exactly the AWS
 // binding's hash, so a session that existed before GitHub bindings keeps its box
-// key and binding directory. With neither binding it is "". Token entries are
+// key and binding directory. With neither binding it is "". Named AWS
+// connections fold in after the GitHub binding, only when there are some.
+// Token entries are
 // folded in only when there are some, so a session that binds none keeps the
 // hash it had before they existed.
 func (b Bindings) Hash() string {
@@ -325,6 +332,10 @@ func (b Bindings) Hash() string {
 	base := aws
 	if b.GitHub != nil {
 		sum := sha256.Sum256([]byte(aws + "\x00" + b.GitHub.Hash()))
+		base = hex.EncodeToString(sum[:6])
+	}
+	if len(b.AWSConns) > 0 {
+		sum := sha256.Sum256([]byte(base + "\x00awsconns\x00" + AWSConnsHash(b.AWSConns)))
 		base = hex.EncodeToString(sum[:6])
 	}
 	if len(b.Tokens)+len(b.PATs) == 0 {
