@@ -33,6 +33,9 @@ var pathEscapes = map[string]int{
 	// bundle_source, the default ~/.claude source, and refusing a source whose
 	// symlinks resolve to the whole home.
 	"internal/bundle/bundle.go os.UserHomeDir": 3,
+	// Lists the profiles of the host's ~/.aws/config for the credentials screen (a read of
+	// the user's own AWS config, never a write; AWS_CONFIG_FILE wins when set).
+	"internal/awshost/profiles.go os.UserHomeDir": 1,
 	// A spawned agent with no HOME gets the user's: the agent's env, not our storage.
 	"internal/launcher/launcher.go os.UserHomeDir": 1,
 	// Refuses the home dir as a boxed profile's default_cwd (UnboxableDefaultCwd).

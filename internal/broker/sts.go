@@ -3,7 +3,6 @@ package broker
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"time"
 
@@ -12,6 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials/ssocreds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
+
+	"github.com/culiops/agent-box/internal/awshost"
 )
 
 const mintTimeout = 20 * time.Second
@@ -26,7 +27,7 @@ type STSMinter struct{}
 func (STSMinter) Mint(ctx context.Context, in MintInput) (Creds, error) {
 	ctx, cancel := context.WithTimeout(ctx, mintTimeout)
 	defer cancel()
-	opts := append(sharedFileOpts(), awsconfig.WithSharedConfigProfile(in.SourceProfile), awsconfig.WithRegion(in.Region))
+	opts := append(awshost.LoadOpts(), awsconfig.WithSharedConfigProfile(in.SourceProfile), awsconfig.WithRegion(in.Region))
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return Creds{}, withCode(classify(err), "ConfigError")
@@ -43,41 +44,12 @@ func (STSMinter) Mint(ctx context.Context, in MintInput) (Creds, error) {
 		SessionToken: aws.ToString(c.SessionToken), Expiration: aws.ToTime(c.Expiration)}, nil
 }
 
-// sharedFiles is where the SDK reads the shared config and credentials files
-// from when AWS_CONFIG_FILE / AWS_SHARED_CREDENTIALS_FILE are set; nil means the
-// SDK's home-directory default. Mint and SourceKey both resolve their files
-// through it, so they can never disagree about which profile they mean.
-// (LoadSharedConfigProfile, unlike LoadDefaultConfig, ignores those variables
-// unless the paths are passed explicitly.)
-func sharedFiles() (cfgs, creds []string) {
-	if v := os.Getenv("AWS_CONFIG_FILE"); v != "" {
-		cfgs = []string{v}
-	}
-	if v := os.Getenv("AWS_SHARED_CREDENTIALS_FILE"); v != "" {
-		creds = []string{v}
-	}
-	return cfgs, creds
-}
-
-// sharedFileOpts are the LoadDefaultConfig options that pin sharedFiles.
-func sharedFileOpts() []func(*awsconfig.LoadOptions) error {
-	cfgs, creds := sharedFiles()
-	var opts []func(*awsconfig.LoadOptions) error
-	if cfgs != nil {
-		opts = append(opts, awsconfig.WithSharedConfigFiles(cfgs))
-	}
-	if creds != nil {
-		opts = append(opts, awsconfig.WithSharedCredentialsFiles(creds))
-	}
-	return opts
-}
-
 // SourceKey names the SSO session a source profile signs in with: profiles on
 // one sso_session expire together and one sign-in fixes them all. A legacy
 // profile (no sso_session) keys on its own name; so does an unreadable one, but
 // that comes back with the read error so the caller does not cache it.
 func (STSMinter) SourceKey(ctx context.Context, profile string) (string, error) {
-	cfgs, creds := sharedFiles()
+	cfgs, creds := awshost.SharedFiles()
 	sc, err := awsconfig.LoadSharedConfigProfile(ctx, profile, func(o *awsconfig.LoadSharedConfigOptions) {
 		o.ConfigFiles, o.CredentialsFiles = cfgs, creds
 	})

@@ -143,20 +143,6 @@ func TestSTSMinterSourceKeyReadsTheSSOSession(t *testing.T) {
 	}
 }
 
-func TestSharedFilesFollowTheEnvironmentLikeMint(t *testing.T) {
-	t.Setenv("AWS_CONFIG_FILE", "/tmp/x/config")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/tmp/x/creds")
-	cfgs, creds := sharedFiles()
-	if len(cfgs) != 1 || cfgs[0] != "/tmp/x/config" || len(creds) != 1 || creds[0] != "/tmp/x/creds" {
-		t.Fatalf("cfgs=%v creds=%v", cfgs, creds)
-	}
-	t.Setenv("AWS_CONFIG_FILE", "")
-	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
-	if cfgs, creds := sharedFiles(); cfgs != nil || creds != nil {
-		t.Fatalf("unset env must defer to the SDK defaults, got %v %v", cfgs, creds)
-	}
-}
-
 // A SourceKey read that failed is not cached: the profile name serves that call
 // only, and the next call reads again and keeps the real key.
 func TestSourceKeyOfDoesNotCacheAFailedRead(t *testing.T) {
