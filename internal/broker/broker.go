@@ -145,6 +145,11 @@ type Broker struct {
 	ssoBad  map[string]time.Time // sourceKey -> when a mint last failed on it
 	ssoNeed map[connKey]string   // session + connection -> the sourceKey that mint failed on
 
+	// storeLocked holds the sessions whose last read of the encrypted store was
+	// refused as locked; guarded by mu. Cleared by the next read that succeeds
+	// and by Forget.
+	storeLocked map[string]struct{}
+
 	// GitHub tokens (github.go); gh is set before the broker serves, the maps are guarded by mu.
 	gh       GitHubMinter
 	ghCache  map[ghKey]ghCached
@@ -198,7 +203,8 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		connStats: map[connKey]*Stats{},
 		denied:    map[deniedKey]*deniedState{},
 		elev:      map[string]*elevation{}, dropped: map[string]droppedWin{}, refused: map[refusedKey]time.Time{},
-		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
+		storeLocked: map[string]struct{}{},
+		srcKeys:     map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
 		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{},
@@ -254,6 +260,7 @@ func (b *Broker) Forget(sessionID string) {
 			delete(b.ssoNeed, k)
 		}
 	}
+	delete(b.storeLocked, sessionID)
 	for k := range b.baseWatch {
 		if k.sid == sessionID {
 			delete(b.baseWatch, k)
@@ -695,6 +702,37 @@ func (b *Broker) recordDenied(r Row) {
 	for _, row := range out {
 		b.record(row)
 	}
+}
+
+// storeLockedMsg is the one message a locked store produces, for the box and
+// for the audit row: it names no id and no path.
+const storeLockedMsg = "agent-box store is locked — ask the operator to unlock it"
+
+// StoreLockedFor reports whether session sid's last read of the encrypted store
+// was refused because it is locked. The next read that succeeds clears it.
+func (b *Broker) StoreLockedFor(sid string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.storeLocked[sid]
+	return ok
+}
+
+// storeWasLocked marks sid, unless the session has ended: Forget must be the
+// last word, or a refusal landing after it would leave an entry nothing clears.
+func (b *Broker) storeWasLocked(sid string) {
+	sv, found := b.lookup(sid) // before b.mu, as everywhere else
+	if !found || !sv.Live {
+		return
+	}
+	b.mu.Lock()
+	b.storeLocked[sid] = struct{}{}
+	b.mu.Unlock()
+}
+
+func (b *Broker) storeUnlocked(sid string) {
+	b.mu.Lock()
+	delete(b.storeLocked, sid)
+	b.mu.Unlock()
 }
 
 func suppressedNote(reason string, n int) string {

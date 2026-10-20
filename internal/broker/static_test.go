@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 )
 
 const staticSecret = "tok-SECRET-1234"
@@ -286,3 +288,63 @@ func TestStaticValueNeverLogged(t *testing.T) {
 		}
 	}
 }
+
+const wantStoreLockedMsg = "agent-box store is locked — ask the operator to unlock it"
+
+// A locked store is a fixed message to the box and a store_locked row, with the
+// reference's own error text kept out of both. The flag is per session and the
+// next successful fetch clears it.
+func TestStaticLockedStore(t *testing.T) {
+	b, fr, rec, _ := staticSetup(t, map[string]SessionView{"claude-3": staticSession(grafanaEntry()), "other": staticSession(grafanaEntry())})
+	fr.err = fmt.Errorf("store value grafana-prod: %w", credref.ErrLocked)
+	w := staticCall(b, tokA("claude-3"), grafanaBody)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), wantStoreLockedMsg) || strings.Contains(w.Body.String(), "grafana-prod") {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreLocked || rec.rows[0].Error != wantStoreLockedMsg ||
+		rec.rows[0].Provider != ProviderStatic || rec.rows[0].Subject != "grafana-prod" {
+		t.Fatalf("rows: %+v", rec.rows)
+	}
+	if !b.StoreLockedFor("claude-3") || b.StoreLockedFor("other") {
+		t.Fatalf("flag: claude-3=%v other=%v", b.StoreLockedFor("claude-3"), b.StoreLockedFor("other"))
+	}
+	fr.err = nil
+	if w := staticCall(b, tokA("claude-3"), grafanaBody); w.Code != 200 {
+		t.Fatalf("after unlock: %d %s", w.Code, w.Body)
+	}
+	if b.StoreLockedFor("claude-3") {
+		t.Fatal("a successful fetch must clear the flag")
+	}
+}
+
+// The flag is dropped with the session's state (no unbounded growth).
+func TestStoreLockedFlagForgotten(t *testing.T) {
+	b, fr, _, _ := staticSetup(t, map[string]SessionView{"claude-3": staticSession(grafanaEntry())})
+	fr.err = credref.ErrLocked
+	staticCall(b, tokA("claude-3"), grafanaBody)
+	if !b.StoreLockedFor("claude-3") {
+		t.Fatal("flag not set")
+	}
+	b.Forget("claude-3")
+	if b.StoreLockedFor("claude-3") || len(b.storeLocked) != 0 {
+		t.Fatalf("flag survived Forget: %v", b.storeLocked)
+	}
+}
+
+// A refusal that lands after the session is gone must not leave a flag behind.
+func TestStoreLockedFlagNotSetForGoneSession(t *testing.T) {
+	sessions := map[string]SessionView{"claude-3": staticSession(grafanaEntry())}
+	b, _, _, _ := staticSetup(t, sessions)
+	b.SetResolver(resolverFunc(func(config.KeyRef) ([]byte, error) {
+		delete(sessions, "claude-3") // the session ends while the store is being read
+		return nil, credref.ErrLocked
+	}))
+	staticCall(b, tokA("claude-3"), grafanaBody)
+	if len(b.storeLocked) != 0 {
+		t.Fatalf("flag for a gone session: %v", b.storeLocked)
+	}
+}
+
+type resolverFunc func(config.KeyRef) ([]byte, error)
+
+func (f resolverFunc) Resolve(r config.KeyRef) ([]byte, error) { return f(r) }

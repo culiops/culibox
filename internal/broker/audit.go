@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/culiops/agent-box/internal/secretstore"
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite"
 )
 
@@ -38,6 +39,9 @@ const (
 	// reference could not be read.
 	OutcomeFetched    Outcome = "fetched"
 	OutcomeUnresolved Outcome = "unresolved"
+
+	// The encrypted store is locked: a token or key read from it was refused.
+	OutcomeStoreLocked Outcome = "store_locked"
 )
 
 // Credential providers, as stored in Row.Provider.
@@ -135,6 +139,13 @@ CREATE TABLE IF NOT EXISTS approval_audit (
   error TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_approval_session ON approval_audit(session_id, ts);
+CREATE TABLE IF NOT EXISTS store_audit (
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT ''
+);
 `
 
 // Audit is the SQLite-backed credential audit log (<data_dir>/audit.db).
@@ -235,6 +246,19 @@ func (a *Audit) RecordApproval(r ApprovalRow) error {
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, string(r.Action), until, r.Minutes,
 		sanitizeN(r.Reason, maxReasonBytes), r.Cred, sanitize(r.Error), r.Entry)
+	return err
+}
+
+// maxStoreDetail bounds a store event's detail (an id or a TTL) in bytes.
+const maxStoreDetail = 200
+
+// RecordStore appends one encrypted-store event (set, delete, unlock, lock).
+// It satisfies secretstore.Recorder; the error is returned so the store can
+// fail closed when the event could not be recorded. An Event carries an id or a
+// TTL, never a value; the fields are still one line and bounded.
+func (a *Audit) RecordStore(e secretstore.Event) error {
+	_, err := a.db.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?,?,?,?)`,
+		time.Now().Unix(), sanitize(e.Action), sanitize(e.Actor), sanitizeN(e.Detail, maxStoreDetail))
 	return err
 }
 
