@@ -38,6 +38,10 @@ type brokerService struct {
 	Stop   func(context.Context)
 }
 
+// probeStopWait bounds how long Stop waits for base-role re-probes in flight:
+// just over one probe's own timeout.
+const probeStopWait = 6 * time.Second
+
 // lookAWS finds the aws CLI once at boot; a variable so tests can point it at a
 // fake.
 var lookAWS = func() (string, error) { return exec.LookPath("aws") }
@@ -157,6 +161,9 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next
 			}
+			// A base-role re-probe started by a mint writes its audit row; let
+			// the ones in flight finish (each within its own 5s timeout) first.
+			brk.StopProbes(probeStopWait)
 			_ = audit.Close()
 		},
 	}, nil

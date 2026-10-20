@@ -62,6 +62,13 @@ func (h Hooks) ProbeBase(id, agent string, bs config.Bindings) map[string]awspro
 	return h.B.ProbeBase(id, agent, bs)
 }
 
+// WatchBase re-probes the session's unverified base roles (keys as in
+// ProbeBase) after their next successful base mint.
+func (h Hooks) WatchBase(id string, keys []string) { h.B.WatchBase(id, keys) }
+
+// SetBaseNotify installs the sink for re-probe results; call it once at boot.
+func (h Hooks) SetBaseNotify(f func(id, key string, r awsprobe.Result)) { h.B.SetBaseNotify(f) }
+
 // AWSState is what a session list shows of the broker's per-session state: the
 // end of the live write window (zero when none), the connection it is for (""
 // for the legacy binding or none) and the sign-in key awaiting a human (""

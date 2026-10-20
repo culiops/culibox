@@ -511,3 +511,451 @@ func TestProbeBaseLeavesMintStateAlone(t *testing.T) {
 			len(b.cache), len(b.mintTimes), len(b.ssoBad), len(b.ssoNeed), len(b.stats), len(b.connStats))
 	}
 }
+
+// --- recover-on-mint (WatchBase / SetBaseNotify) ---
+
+type notified struct {
+	sid, key string
+	r        awsprobe.Result
+}
+
+// notifyRec records SetBaseNotify deliveries; goroutine-safe.
+type notifyRec struct {
+	mu  sync.Mutex
+	got []notified
+}
+
+func (n *notifyRec) f(sid, key string, r awsprobe.Result) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.got = append(n.got, notified{sid, key, r})
+}
+
+func (n *notifyRec) list() []notified {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.got)
+}
+
+// reprobeSetup is a broker with a simulator and a notify recorder. The probe
+// timeout is long so a blocked fake simulator is only ever ended by the test.
+func reprobeSetup(t *testing.T, sessions map[string]SessionView, sim *fakeSim) (*Broker, *fakeMinter, *time.Time, *notifyRec) {
+	t.Helper()
+	b, fm, _, now := setup(t, sessions)
+	b.SetSimulator(sim)
+	nr := &notifyRec{}
+	b.SetBaseNotify(nr.f)
+	b.probeTimeout = time.Minute
+	return b, fm, now, nr
+}
+
+func allowsPut(string) map[string]string { return map[string]string{"s3:PutObject": "allowed"} }
+
+func watched(b *Broker, sid, key string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.baseWatch[connKey{sid, key}]
+	return ok
+}
+
+func TestReprobeAfterBaseMint(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut}
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	b.WatchBase("s-1", []string{""})
+	if w := call(b, tokA("s-1")); w.Code != 200 {
+		t.Fatalf("status %d: %s", w.Code, w.Body)
+	}
+	b.probeWG.Wait()
+	got := nr.list()
+	if len(got) != 1 || got[0].sid != "s-1" || got[0].key != "" || got[0].r.State != awsprobe.Writes ||
+		!slices.Equal(got[0].r.Actions, []string{"s3:PutObject"}) {
+		t.Fatalf("notified %+v", got)
+	}
+	if fs.callCount() != 1 || watched(b, "s-1", "") {
+		t.Fatalf("sims=%d watched=%v", fs.callCount(), watched(b, "s-1", ""))
+	}
+	// Past the refresh margin the next request really mints; the watch ended,
+	// so it starts no re-probe (a cached probe result would still notify).
+	*now = now.Add(credTTL - refreshMargin + time.Minute)
+	if w := call(b, tokA("s-1")); w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	b.probeWG.Wait()
+	if fm.callCount() != 3 { // credential, probe, credential
+		t.Fatalf("mints = %d; the second request must really mint", fm.callCount())
+	}
+	if len(nr.list()) != 1 || fs.callCount() != 1 {
+		t.Fatalf("re-probed after the watch ended: notified %d, sims %d", len(nr.list()), fs.callCount())
+	}
+}
+
+// simulate_denied cannot be fixed by a sign-in: the watch ends with it.
+func TestReprobeSimulateDeniedEndsWatch(t *testing.T) {
+	fs := &fakeSim{err: &smithy.GenericAPIError{Code: "AccessDenied", Message: "no"}}
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if got := nr.list(); len(got) != 1 || got[0].r.State != awsprobe.Unverified || got[0].r.Reason != awsprobe.ReasonSimulateDenied {
+		t.Fatalf("notified %+v", got)
+	}
+	*now = now.Add(credTTL)
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if fm.callCount() != 3 || fs.callCount() != 1 || len(nr.list()) != 1 || watched(b, "s-1", "") {
+		t.Fatalf("mints=%d sims=%d notified=%d watched=%v", fm.callCount(), fs.callCount(), len(nr.list()), watched(b, "s-1", ""))
+	}
+}
+
+// A timeout may clear up: the watch stays and the next real mint re-probes.
+func TestReprobeTimeoutKeepsWatching(t *testing.T) {
+	fs := &fakeSim{release: make(chan struct{})} // never released: every probe times out
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	b.probeTimeout = time.Millisecond
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if got := nr.list(); len(got) != 1 || got[0].r.Reason != awsprobe.ReasonTimeout {
+		t.Fatalf("notified %+v", got)
+	}
+	if !watched(b, "s-1", "") {
+		t.Fatal("a timeout ended the watch")
+	}
+	*now = now.Add(credTTL)
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if fm.callCount() != 4 || fs.callCount() != 2 || len(nr.list()) != 2 {
+		t.Fatalf("mints=%d sims=%d notified=%d", fm.callCount(), fs.callCount(), len(nr.list()))
+	}
+}
+
+func TestReprobeEndsWatchOnlyWhenNoSignInCanFixIt(t *testing.T) {
+	for _, tc := range []struct {
+		r    awsprobe.Result
+		ends bool
+	}{
+		{awsprobe.Result{State: awsprobe.Writes}, true},
+		{awsprobe.Result{State: awsprobe.NoneFound}, true},
+		{awsprobe.Fail(awsprobe.ReasonSimulateDenied, time.Time{}), true},
+		{awsprobe.Fail(awsprobe.ReasonAssumeDenied, time.Time{}), true},
+		{awsprobe.Fail(awsprobe.ReasonSSOExpired, time.Time{}), false},
+		{awsprobe.Fail(awsprobe.ReasonTimeout, time.Time{}), false},
+		{awsprobe.Fail(awsprobe.ReasonError, time.Time{}), false},
+		{awsprobe.NotChecked(), false},
+		{awsprobe.Disabled(), false},
+	} {
+		if got := endsWatch(tc.r); got != tc.ends {
+			t.Errorf("endsWatch(%+v) = %v, want %v", tc.r, got, tc.ends)
+		}
+	}
+}
+
+func TestReprobeNotOnCacheHitOrElevatedMint(t *testing.T) {
+	// A cache hit starts no re-probe.
+	fs := &fakeSim{dec: allowsPut}
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	call(b, tokA("s-1")) // not watched yet
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if fm.callCount() != 1 || fs.callCount() != 0 || len(nr.list()) != 0 {
+		t.Fatalf("cache hit: mints=%d sims=%d notified=%d", fm.callCount(), fs.callCount(), len(nr.list()))
+	}
+	*now = now.Add(credTTL) // the watch is live: a real mint re-probes
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if fs.callCount() != 1 || len(nr.list()) != 1 {
+		t.Fatalf("real mint: sims=%d notified=%d", fs.callCount(), len(nr.list()))
+	}
+
+	// An elevated mint of the watched connection starts none; a base mint after the drop does.
+	fs2 := &fakeSim{dec: allowsPut}
+	b2, fm2, _, nr2 := reprobeSetup(t, map[string]SessionView{"c-1": liveConns()}, fs2)
+	withTimers(b2)
+	if _, err := b2.Elevate("c-1", connReq("a", 30)); err != nil {
+		t.Fatal(err)
+	}
+	b2.WatchBase("c-1", []string{"a"})
+	if w := callBody(b2, tokA("c-1"), `{"name":"a"}`); w.Code != 200 {
+		t.Fatalf("elevated: %d %s", w.Code, w.Body)
+	}
+	b2.probeWG.Wait()
+	if fm2.callCount() != 1 || fm2.calls[0].RoleARN != connWriteA || fs2.callCount() != 0 || len(nr2.list()) != 0 {
+		t.Fatalf("elevated mint: mints=%d sims=%d notified=%d", fm2.callCount(), fs2.callCount(), len(nr2.list()))
+	}
+	if _, ok := b2.Drop("c-1", CredCookie); !ok {
+		t.Fatal("no window to drop")
+	}
+	if w := callBody(b2, tokA("c-1"), `{"name":"a"}`); w.Code != 200 {
+		t.Fatalf("after drop: %d %s", w.Code, w.Body)
+	}
+	b2.probeWG.Wait()
+	if fs2.callCount() != 1 || len(nr2.list()) != 1 || nr2.list()[0].key != "a" {
+		t.Fatalf("base mint after drop: sims=%d notified=%+v", fs2.callCount(), nr2.list())
+	}
+	if fs2.callsCopy()[0].Role != connRoleA {
+		t.Fatalf("probed %s, want the base role", fs2.callsCopy()[0].Role)
+	}
+}
+
+func TestReprobeOnlyWatchedKey(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut}
+	b, _, _, nr := reprobeSetup(t, map[string]SessionView{"c-1": liveConns()}, fs)
+	b.WatchBase("c-1", []string{"a"})
+	callBody(b, tokA("c-1"), `{"name":"b"}`)
+	b.probeWG.Wait()
+	if fs.callCount() != 0 || len(nr.list()) != 0 {
+		t.Fatalf("mint on b: sims=%d notified=%d", fs.callCount(), len(nr.list()))
+	}
+	callBody(b, tokA("c-1"), `{"name":"a"}`)
+	b.probeWG.Wait()
+	if fs.callCount() != 1 || len(nr.list()) != 1 || nr.list()[0].key != "a" {
+		t.Fatalf("mint on a: sims=%d notified=%+v", fs.callCount(), nr.list())
+	}
+}
+
+// mintConcurrently sends n credential requests at once and waits for every reply.
+func mintConcurrently(t *testing.T, b *Broker, tok, body string, n int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = callBody(b, tok, body).Code
+		}()
+	}
+	wg.Wait()
+	for i, c := range codes {
+		if c != 200 {
+			t.Fatalf("request %d: status %d", i, c)
+		}
+	}
+}
+
+func TestReprobeAtMostOneInFlight(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut, release: make(chan struct{})}
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a credential cache hit
+	b.WatchBase("s-1", []string{""})
+	mintConcurrently(t, b, tokA("s-1"), "", 2)
+	close(fs.release) // only after both replies: the re-probe is in flight the whole time
+	b.probeWG.Wait()
+	if fs.callCount() != 1 || len(nr.list()) != 1 {
+		t.Fatalf("sims=%d notified=%d", fs.callCount(), len(nr.list()))
+	}
+	if fm.callCount() != 3 { // two credentials, one probe
+		t.Fatalf("mints = %d", fm.callCount())
+	}
+}
+
+func TestReprobeAfterForgetDoesNotNotify(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut, release: make(chan struct{})}
+	b, _, _, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.Forget("s-1")
+	close(fs.release)
+	b.probeWG.Wait()
+	if len(nr.list()) != 0 {
+		t.Fatalf("notified a forgotten session: %+v", nr.list())
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.baseWatch) != 0 || len(b.reprobing) != 0 {
+		t.Fatalf("state left: watch=%v reprobing=%v", b.baseWatch, b.reprobing)
+	}
+}
+
+func TestReprobeIdReusedDoesNotNotify(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut, release: make(chan struct{})}
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a credential cache hit
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.Forget("s-1")
+	b.WatchBase("s-1", []string{""}) // a new spawn under the same id
+	close(fs.release)
+	b.probeWG.Wait()
+	if len(nr.list()) != 0 {
+		t.Fatalf("the old spawn's re-probe notified: %+v", nr.list())
+	}
+	if !watched(b, "s-1", "") {
+		t.Fatal("the old re-probe ended the new spawn's watch")
+	}
+
+	// The new spawn re-probes on its own; two concurrent mints give one
+	// simulation. Past the probe cache TTL, so the re-probe really simulates.
+	*now = now.Add(probeCacheTTL + time.Minute)
+	fs.mu.Lock()
+	fs.release = make(chan struct{})
+	fs.mu.Unlock()
+	mintConcurrently(t, b, tokA("s-1"), "", 2)
+	fs.mu.Lock()
+	close(fs.release)
+	fs.mu.Unlock()
+	b.probeWG.Wait()
+	if fs.callCount() != 2 || len(nr.list()) != 1 || nr.list()[0].r.State != awsprobe.Writes {
+		t.Fatalf("sims=%d notified=%+v", fs.callCount(), nr.list())
+	}
+}
+
+// An old re-probe finishing after the id was reused while the new spawn's
+// re-probe is in flight must not clear the new spawn's in-flight mark.
+func TestReprobeOldFinishKeepsNewInFlightMark(t *testing.T) {
+	b, _, _, _ := reprobeSetup(t, map[string]SessionView{"s-1": live()}, &fakeSim{})
+	b.mu.Lock()
+	ck := connKey{"s-1", ""}
+	b.baseWatch[ck], b.reprobing[ck] = 7, 7
+	b.mu.Unlock()
+	b.finishReprobe(ck, 3, awsprobe.Result{State: awsprobe.Writes})
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.reprobing[ck] != 7 || b.baseWatch[ck] != 7 {
+		t.Fatalf("watch=%v reprobing=%v", b.baseWatch, b.reprobing)
+	}
+}
+
+func TestWatchBaseNoopWithoutSimulator(t *testing.T) {
+	b, fm, _, _ := setup(t, map[string]SessionView{"s-1": live()})
+	nr := &notifyRec{}
+	b.SetBaseNotify(nr.f)
+	b.WatchBase("s-1", []string{""})
+	if w := call(b, tokA("s-1")); w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	b.probeWG.Wait()
+	if fm.callCount() != 1 || len(nr.list()) != 0 || watched(b, "s-1", "") {
+		t.Fatalf("mints=%d notified=%d", fm.callCount(), len(nr.list()))
+	}
+}
+
+func TestReprobeNeverDelaysTheMint(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut, release: make(chan struct{})}
+	b, _, _, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	b.WatchBase("s-1", []string{""})
+	done := make(chan int)
+	go func() { done <- call(b, tokA("s-1")).Code }()
+	select {
+	case code := <-done: // the sim is still blocked: the reply did not wait for it
+		if code != 200 {
+			t.Fatalf("status %d", code)
+		}
+	case <-time.After(10 * time.Second): // a failure bound only
+		close(fs.release)
+		t.Fatal("the credential reply waited for the re-probe")
+	}
+	if len(nr.list()) != 0 {
+		t.Fatal("notified before the simulation was released")
+	}
+	close(fs.release)
+	b.probeWG.Wait()
+	if len(nr.list()) != 1 {
+		t.Fatalf("notified %d", len(nr.list()))
+	}
+}
+
+// A result reached before SetBaseNotify has no one to tell: the watch stays,
+// so the next real mint retries.
+func TestReprobeBeforeNotifyKeepsWatch(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut}
+	b, _, _, now := setup(t, map[string]SessionView{"s-1": live()})
+	b.SetSimulator(fs)
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if !watched(b, "s-1", "") {
+		t.Fatal("a result with no notify sink ended the watch")
+	}
+	nr := &notifyRec{}
+	b.SetBaseNotify(nr.f)
+	*now = now.Add(credTTL)
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if len(nr.list()) != 1 || watched(b, "s-1", "") {
+		t.Fatalf("notified %+v", nr.list())
+	}
+}
+
+func TestStopProbesRefusesNewReprobesAndWaits(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut, release: make(chan struct{})}
+	b, fm, now, nr := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a credential cache hit
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1")) // a re-probe is now in flight
+	stopped := make(chan struct{})
+	go func() { b.StopProbes(time.Minute); close(stopped) }()
+	// StopProbes sets closing before it waits; once it is set no re-probe starts.
+	deadline := time.Now().Add(10 * time.Second) // a failure bound only
+	for {
+		b.mu.Lock()
+		c := b.probeClosing
+		b.mu.Unlock()
+		if c {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(fs.release)
+			t.Fatal("StopProbes never set closing")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("StopProbes returned while a re-probe was in flight")
+	default:
+	}
+	close(fs.release)
+	<-stopped
+	if len(nr.list()) != 1 {
+		t.Fatalf("notified %d", len(nr.list()))
+	}
+	b.mu.Lock()
+	b.baseWatch[connKey{"s-1", ""}] = 99 // watched again
+	b.mu.Unlock()
+	call(b, tokA("s-1"))
+	b.probeWG.Wait()
+	if fs.callCount() != 1 {
+		t.Fatalf("a re-probe started after StopProbes: sims=%d", fs.callCount())
+	}
+}
+
+func TestStopProbesWaitIsBounded(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut, release: make(chan struct{})}
+	b, _, _, _ := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1"))
+	b.StopProbes(time.Millisecond) // returns although the re-probe is blocked
+	close(fs.release)
+	b.probeWG.Wait()
+}
+
+func TestProbeCacheDoesNotAliasActions(t *testing.T) {
+	fs := &fakeSim{dec: allowsPut}
+	b, _, _, _ := probeSetup(t, fs)
+	bs := config.Bindings{AWS: binding()}
+	first := b.ProbeBase("s-1", "claude", bs)[""]
+	first.Actions[0] = "mutated" // the fresh result must not be the cached slice
+	second := b.ProbeBase("s-2", "claude", bs)[""]
+	if !slices.Equal(second.Actions, []string{"s3:PutObject"}) {
+		t.Fatalf("cache aliased the fresh result: %v", second.Actions)
+	}
+	second.Actions[0] = "mutated" // nor the hit
+	if third := b.ProbeBase("s-3", "claude", bs)[""]; !slices.Equal(third.Actions, []string{"s3:PutObject"}) {
+		t.Fatalf("cache aliased a hit: %v", third.Actions)
+	}
+	if fs.callCount() != 1 {
+		t.Fatalf("sims = %d", fs.callCount())
+	}
+}
+
+func TestProbeBaseKeysDoNotShareActions(t *testing.T) {
+	b, _, _, _ := probeSetup(t, &fakeSim{dec: allowsPut})
+	got := b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{
+		connOf("a", "p", roleA, "r"), connOf("b", "p", roleA, "r")}})
+	got["a"].Actions[0] = "mutated"
+	if !slices.Equal(got["b"].Actions, []string{"s3:PutObject"}) {
+		t.Fatalf("keys share a backing array: %v", got["b"].Actions)
+	}
+}

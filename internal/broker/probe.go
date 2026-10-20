@@ -130,7 +130,7 @@ func (b *Broker) ProbeBase(sid, agent string, bs config.Bindings) map[string]aws
 			res := b.probeOne(sid, agent, keys[0], targets[keys[0]])
 			mu.Lock()
 			for _, k := range keys {
-				out[k] = res
+				out[k] = cloneResult(res) // each key its own Actions
 			}
 			mu.Unlock()
 		}()
@@ -142,15 +142,21 @@ func (b *Broker) ProbeBase(sid, agent string, bs config.Bindings) map[string]aws
 // probeOne probes one (source profile, role) pair: a fresh definite result from
 // the cache, else a mint and simulation under its own probeTimeout. entry is
 // the binding key the audit row names. Safe to call concurrently.
+//
+// It takes b.mu itself and may block for probeTimeout: never call it with b.mu
+// held, and never on a request's reply path (the mint path runs it in its own
+// goroutine, see reprobe). The returned Actions are the caller's own: cached
+// results are cloned on the way in and out, so no two callers share a slice.
 func (b *Broker) probeOne(sid, agent, entry string, t ProbeTarget) awsprobe.Result {
 	pk := probeKey{t.SourceProfile, t.RoleARN}
 	now := b.now()
 	b.mu.Lock()
 	if c, ok := b.probeCache[pk]; ok {
 		if now.Sub(c.at) < probeCacheTTL {
+			res := cloneResult(c.res)
 			b.mu.Unlock()
-			logProbe(t.RoleARN, c.res, true)
-			return c.res
+			logProbe(t.RoleARN, res, true)
+			return res
 		}
 		delete(b.probeCache, pk)
 	}
@@ -169,11 +175,17 @@ func (b *Broker) probeOne(sid, agent, entry string, t ProbeTarget) awsprobe.Resu
 				delete(b.probeCache, k)
 			}
 		}
-		b.probeCache[pk] = probeCached{res: res, at: at}
+		b.probeCache[pk] = probeCached{res: cloneResult(res), at: at}
 		b.mu.Unlock()
 	}
 	logProbe(t.RoleARN, res, false)
 	return res
+}
+
+// cloneResult is r with its own Actions slice.
+func cloneResult(r awsprobe.Result) awsprobe.Result {
+	r.Actions = slices.Clone(r.Actions)
+	return r
 }
 
 func logProbe(role string, r awsprobe.Result, cached bool) {
@@ -227,4 +239,113 @@ func probeErrText(err error) string {
 		return s
 	}
 	return "MintFailed"
+}
+
+// WatchBase registers the session's keys ("" for the legacy binding, else a
+// connection name) whose base-role result is not definite: the next successful
+// non-elevated mint of each re-probes it in the background. Each key gets a new
+// watch generation, so a re-probe started for an earlier spawn under the same
+// id never reports to this one. A no-op without a simulator. The session layer
+// calls it before the box process starts.
+func (b *Broker) WatchBase(sid string, keys []string) {
+	if b.sim == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, k := range keys {
+		b.watchGen++
+		b.baseWatch[connKey{sid, k}] = b.watchGen
+	}
+}
+
+// SetBaseNotify installs the sink for re-probe results. Call it once at boot;
+// it may be after the broker started serving. A result reached before it is
+// set is not delivered and leaves the watch in place, so the next real mint
+// retries.
+func (b *Broker) SetBaseNotify(f func(sid, key string, r awsprobe.Result)) {
+	b.mu.Lock()
+	b.onBase = f
+	b.mu.Unlock()
+}
+
+// StopProbes stops starting re-probes and waits, at most d, for the ones in
+// flight to finish (each is bounded by probeTimeout), so their audit rows are
+// written before the audit store closes. For daemon shutdown.
+//
+// Ordering (as revokeAsync): probeWG.Add runs under b.mu and only while
+// probeClosing is false, and probeClosing is set under b.mu before the Wait,
+// so every Add happens-before the Wait begins.
+func (b *Broker) StopProbes(d time.Duration) {
+	b.mu.Lock()
+	b.probeClosing = true
+	b.mu.Unlock()
+	idle := make(chan struct{})
+	go func() { b.probeWG.Wait(); close(idle) }() // ends when the re-probes do
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-idle:
+	case <-t.C:
+	}
+}
+
+// startReprobeLocked decides, under b.mu and in the critical section that
+// caches a fresh credential for ck, whether that mint starts a re-probe: only
+// a non-elevated mint of a watched key with none in flight, while the broker is
+// not closing. On true the caller must run reprobe with gen, outside b.mu and
+// after the reply is written.
+func (b *Broker) startReprobeLocked(ck connKey, elevated bool) (gen uint64, ok bool) {
+	if elevated || b.sim == nil || b.probeClosing {
+		return 0, false
+	}
+	gen, watched := b.baseWatch[ck]
+	if !watched {
+		return 0, false
+	}
+	if _, busy := b.reprobing[ck]; busy {
+		return 0, false
+	}
+	b.reprobing[ck] = gen
+	b.probeWG.Add(1)
+	return gen, true
+}
+
+// reprobe probes ck's base role once more and reports the result. It runs in
+// its own goroutine (probeOne may block for probeTimeout).
+func (b *Broker) reprobe(ck connKey, agent string, t ProbeTarget, gen uint64) {
+	defer b.probeWG.Done()
+	b.finishReprobe(ck, gen, b.probeOne(ck.sid, agent, ck.conn, t))
+}
+
+// finishReprobe clears ck's in-flight mark if it is still this re-probe's, and
+// delivers res only if the watch is still the generation the re-probe ran for:
+// a Forget, or a new spawn under the same id, since it started means nobody
+// is waiting for it. A result that endsWatch ends the watch; any other keeps
+// it, so the next real mint retries. The notify runs outside b.mu.
+//
+// A Forget that lands between the generation check and the notify is not
+// seen: the session layer must ignore a result for a session it no longer has.
+func (b *Broker) finishReprobe(ck connKey, gen uint64, res awsprobe.Result) {
+	b.mu.Lock()
+	if g, ok := b.reprobing[ck]; ok && g == gen {
+		delete(b.reprobing, ck)
+	}
+	notify := b.onBase
+	if g, ok := b.baseWatch[ck]; !ok || g != gen || notify == nil {
+		b.mu.Unlock()
+		return
+	}
+	if endsWatch(res) {
+		delete(b.baseWatch, ck)
+	}
+	b.mu.Unlock()
+	notify(ck.sid, ck.conn, res)
+}
+
+// endsWatch reports whether a re-probe result ends the watch: a definite
+// result, or a failure a sign-in cannot fix (the role cannot be assumed, or
+// cannot simulate itself). SSO expiry, timeouts and other errors keep it.
+func endsWatch(r awsprobe.Result) bool {
+	return r.Definite() || r.Reason == awsprobe.ReasonSimulateDenied || r.Reason == awsprobe.ReasonAssumeDenied
 }

@@ -110,3 +110,19 @@ func TestHooksBoxForGitHub(t *testing.T) {
 		t.Fatalf("env %q", env)
 	}
 }
+
+func TestHooksWatchBaseAndNotify(t *testing.T) {
+	b, _, _, _ := setup(t, map[string]SessionView{"s-1": live()})
+	b.SetSimulator(&fakeSim{dec: allowsPut})
+	h := Hooks{B: b}
+	nr := &notifyRec{}
+	h.SetBaseNotify(nr.f)
+	h.WatchBase("s-1", []string{""})
+	if w := call(b, tokA("s-1")); w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	b.probeWG.Wait()
+	if got := nr.list(); len(got) != 1 || got[0].sid != "s-1" || got[0].key != "" {
+		t.Fatalf("notified %+v", got)
+	}
+}

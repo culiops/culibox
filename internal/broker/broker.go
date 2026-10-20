@@ -161,6 +161,15 @@ type Broker struct {
 	sim          awsprobe.Simulator
 	probeTimeout time.Duration // per probe; New sets 5s, tests shrink it
 	probeCache   map[probeKey]probeCached
+
+	// Recover-on-mint (probe.go): a successful base mint of a watched key
+	// re-probes its base role. All guarded by mu except probeWG.
+	baseWatch    map[connKey]uint64 // watched (unverified) key -> its watch generation
+	watchGen     uint64             // the last generation handed out; never 0 once used
+	reprobing    map[connKey]uint64 // key -> the watch generation its in-flight re-probe runs for
+	onBase       func(sid, key string, r awsprobe.Result)
+	probeClosing bool           // StopProbes ran: no re-probe starts
+	probeWG      sync.WaitGroup // every re-probe goroutine; StopProbes and tests Wait on it
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -193,6 +202,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
 		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{},
+		baseWatch: map[connKey]uint64{}, reprobing: map[connKey]uint64{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b
@@ -242,6 +252,16 @@ func (b *Broker) Forget(sessionID string) {
 	for k := range b.ssoNeed {
 		if k.sid == sessionID {
 			delete(b.ssoNeed, k)
+		}
+	}
+	for k := range b.baseWatch {
+		if k.sid == sessionID {
+			delete(b.baseWatch, k)
+		}
+	}
+	for k := range b.reprobing { // an in-flight re-probe finds its generation gone and reports nothing
+		if k.sid == sessionID {
+			delete(b.reprobing, k)
 		}
 	}
 	for k := range b.mintTimes {
@@ -443,8 +463,12 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			st.Mints++
 			st.LastMint, st.LastError = now, ""
 		})
+		gen, reprobe := b.startReprobeLocked(ck, p.elevated)
 		b.mu.Unlock()
 		writeCreds(w, c)
+		if reprobe { // after the reply: a re-probe never delays the credential
+			go b.reprobe(ck, sv.Agent, TargetOf(bnd), gen)
+		}
 		return
 	}
 	// Unreachable: attempt 1 is read-only and always returns. Fail closed if that changes.
