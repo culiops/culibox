@@ -192,12 +192,13 @@ func decodeCredJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 // credAudit appends one AWS-setup row. A row that cannot be written stops the
 // call it describes.
 func (s *Server) credAudit(w http.ResponseWriter, action, detail string) bool {
-	if s.CredAudit == nil {
-		return true
+	var err error = errors.New("no audit recorder is wired")
+	if s.CredAudit != nil {
+		err = s.CredAudit.RecordCred(broker.CredEvent{Action: action, Kind: credfile.KindAWS, Actor: storeActor, Detail: detail})
 	}
-	if err := s.CredAudit.RecordCred(broker.CredEvent{Action: action, Kind: credfile.KindAWS, Actor: storeActor, Detail: detail}); err != nil {
+	if err != nil {
 		log.Printf("credentials: audit %s: %v", action, err)
-		writeErr(w, http.StatusInternalServerError, "could not record the audit row; nothing was done")
+		writeErr(w, http.StatusInternalServerError, ErrCredPersist.Error())
 		return false
 	}
 	return true
@@ -209,10 +210,15 @@ func (s *Server) credLimited(w http.ResponseWriter) bool {
 	if ok {
 		return false
 	}
-	secs := int((wait + time.Second - 1) / time.Second)
+	writeRateLimited(w, wait)
+	return true
+}
+
+// writeRateLimited answers 429 with Retry-After rounded up to whole seconds.
+func writeRateLimited(w http.ResponseWriter, wait time.Duration) {
+	secs := max(int((wait+time.Second-1)/time.Second), 1)
 	w.Header().Set("Retry-After", strconv.Itoa(secs))
 	writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("too many AWS calls: try again in %d seconds", secs))
-	return true
 }
 
 func writeNoBroker(w http.ResponseWriter) {
@@ -329,6 +335,11 @@ func (s *Server) credAWSCheck(w http.ResponseWriter, r *http.Request, _ string) 
 		return
 	}
 	if s.credLimited(w) {
+		return
+	}
+	// The signer is about to be used: that row is written first, and without it
+	// the call does not happen. The state row follows.
+	if !s.credAudit(w, broker.CredChecked, req.RoleARN+" started") {
 		return
 	}
 	res := s.CredAWS.Check(r.Context(), broker.ProbeTarget{SourceProfile: req.SourceProfile, Region: req.Region, RoleARN: req.RoleARN}).Normalize()
@@ -470,7 +481,10 @@ func (s *Server) credAWSEntry(w http.ResponseWriter, r *http.Request, name strin
 func writeCredErr(w http.ResponseWriter, err error) {
 	var inUse ErrCredInUse
 	var ack ErrNeedsAck
+	var limited ErrCheckLimited
 	switch {
+	case errors.As(err, &limited):
+		writeRateLimited(w, limited.Wait)
 	case errors.As(err, &ack):
 		writeJSON(w, http.StatusConflict, map[string]any{"error": ack.Error(), "code": "needs_ack", "verdict": verdictOf(ack.Result)})
 	case errors.Is(err, ErrNoBroker):

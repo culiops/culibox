@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/awsprobe"
@@ -56,6 +57,17 @@ var (
 // ErrCredPersist marks a failure to record the audit row or write the file: its
 // text can name a path, so a route shows a fixed sentence and logs the rest.
 var ErrCredPersist = errors.New("could not record or save the change")
+
+// ErrCheckLimited refuses an AWS save whose server-side base-role check would
+// exceed the daemon-wide budget for such checks. Wait is until the window ends.
+type ErrCheckLimited struct{ Wait time.Duration }
+
+func (e ErrCheckLimited) Error() string { return "too many base-role checks: try again shortly" }
+
+// saveCheckMax is how many base-role checks the create/replace path may run
+// per minute, daemon-wide (the routes that check on request have their own,
+// smaller budget).
+const saveCheckMax = 60
 
 // ErrCredInUse refuses a delete (or a value overwrite) while other definitions
 // still use the entry or value. By names them, sorted.
@@ -108,6 +120,8 @@ type CredentialManager struct {
 	// verdicts is the last base-role check per (source_profile, role_arn). In
 	// memory only: after a restart every connection is "not checked".
 	verdicts map[string]awsprobe.Result
+	// checkLimit charges the base-role checks a save runs itself.
+	checkLimit callLimiter
 }
 
 // NewCredentialManager wires the manager. base must be the config as read from
@@ -119,7 +133,8 @@ type CredentialManager struct {
 func NewCredentialManager(base config.Config, web credfile.File, dataDir string, pm *ProfileManager, vals CredValues,
 	rec CredRecorder, chk BaseRoleChecker, apply func(config.Config), accounts func() []account.Account) *CredentialManager {
 	c := &CredentialManager{base: base, file: web, dataDir: dataDir, pm: pm, vals: vals, rec: rec, chk: chk,
-		apply: apply, accounts: accounts, verdicts: map[string]awsprobe.Result{}}
+		apply: apply, accounts: accounts, verdicts: map[string]awsprobe.Result{},
+		checkLimit: callLimiter{max: saveCheckMax, window: time.Minute}}
 	c.merged, c.src, _ = credfile.Merge(base, web)
 	return c
 }
@@ -557,6 +572,15 @@ func (c *CredentialManager) prepAWS(conn config.AWSConnection, create bool) (nee
 func (c *CredentialManager) checkRole(ctx context.Context, conn config.AWSConnection, locked bool) (awsprobe.Result, error) {
 	if c.chk == nil {
 		return awsprobe.Result{}, ErrNoBroker
+	}
+	if wait, ok := c.checkLimit.allow(); !ok {
+		return awsprobe.Result{}, ErrCheckLimited{Wait: wait}
+	}
+	// The row that says the signer is about to be used comes first: a call that
+	// cannot be audited does not happen.
+	if err := c.rec.RecordCred(broker.CredEvent{Action: broker.CredChecked, Kind: credfile.KindAWS, Name: conn.Name,
+		Actor: storeActor, Detail: conn.RoleARN + " started"}); err != nil {
+		return awsprobe.Result{}, fmt.Errorf("%w: audit: %w", ErrCredPersist, err)
 	}
 	res := c.chk.Check(ctx, broker.TargetOf(conn.AWSBinding)).Normalize()
 	if !locked {

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ type fakeAWSSvc struct {
 	ssoStatus map[string]ssologin.State
 	calls     []string
 	targets   []broker.ProbeTarget
+	onCheck   func()
 }
 
 func (f *fakeAWSSvc) note(s string) {
@@ -47,7 +50,11 @@ func (f *fakeAWSSvc) Check(_ context.Context, t broker.ProbeTarget) awsprobe.Res
 	f.note("check")
 	f.mu.Lock()
 	f.targets = append(f.targets, t)
+	hook := f.onCheck
 	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return f.check
 }
 
@@ -80,6 +87,8 @@ type awsRoutes struct {
 
 func newAWSRoutes(t *testing.T) *awsRoutes {
 	t.Helper()
+	// GET host-profiles must never read the real ~/.aws/config in a test.
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "no-such-config"))
 	fx := newCredFixture(t, config.Config{}, nil)
 	svc := &fakeAWSSvc{check: awsprobe.Result{State: awsprobe.NoneFound}}
 	fx.cm.chk = svc
@@ -292,19 +301,56 @@ func TestCheckBadInputs(t *testing.T) {
 func TestCheckAudited(t *testing.T) {
 	a := newAWSRoutes(t)
 	a.svc.check = awsprobe.Result{State: awsprobe.Writes, Actions: []string{"s3:PutObject"}}
+	// The row that says the signer is about to be used exists before it is used.
+	var before []broker.CredEvent
+	a.svc.onCheck = func() { before = slices.Clone(a.fx.rec.events) }
 	a.call("POST", pathAWS+"/check", checkBody)
-	if len(a.fx.rec.events) != 1 {
+	if len(before) != 1 || before[0].Action != broker.CredChecked || !strings.HasSuffix(before[0].Detail, " started") {
+		t.Fatalf("no audit row before the AWS call: %+v", before)
+	}
+	if len(a.fx.rec.events) != 2 {
 		t.Fatalf("%+v", a.fx.rec.events)
 	}
-	e := a.fx.rec.events[0]
+	e := a.fx.rec.events[1]
 	if e.Action != broker.CredChecked || e.Kind != "aws" || !strings.Contains(e.Detail, "arn:aws:iam::123456789012:role/R") || !strings.Contains(e.Detail, "writes") {
 		t.Fatalf("%+v", e)
 	}
-	// A check whose audit row cannot be written is not reported.
+}
+
+// A check that cannot be audited is not made: the host signer is not used.
+func TestCheckRefusedWhenAuditFails(t *testing.T) {
+	a := newAWSRoutes(t)
 	a.fx.rec.err = errors.New("disk full")
 	code, body, _ := a.call("POST", pathAWS+"/check", checkBody)
-	if code != 500 || body["verdict"] != nil {
-		t.Fatalf("%d %v", code, body)
+	if code != 500 || body["verdict"] != nil || a.svc.n() != 0 {
+		t.Fatalf("%d %v calls=%v", code, body, a.svc.calls)
+	}
+	// Same for the other two calls that use the signer.
+	if code, _, _ := a.call("POST", pathAWS+"/roles", `{"source_profile":"p"}`); code != 500 {
+		t.Fatalf("roles: %d", code)
+	}
+	if code, _, _ := a.call("POST", pathAWS+"/sso-login", `{"source_profile":"p"}`); code != 500 {
+		t.Fatalf("sso-login: %d", code)
+	}
+	if a.svc.n() != 0 {
+		t.Fatalf("the signer was used unaudited: %v", a.svc.calls)
+	}
+}
+
+// No audit recorder wired fails closed, not open.
+func TestNoAuditRecorderFailsClosed(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.srv.CredAudit = nil
+	for _, rt := range []struct{ path, body string }{
+		{"/roles", `{"source_profile":"p"}`}, {"/check", checkBody}, {"/sso-login", `{"source_profile":"p"}`},
+	} {
+		code, body, _ := a.call("POST", pathAWS+rt.path, rt.body)
+		if code != 500 || body["error"] != ErrCredPersist.Error() {
+			t.Errorf("%s: %d %v", rt.path, code, body)
+		}
+	}
+	if a.svc.n() != 0 {
+		t.Fatalf("the signer was used unaudited: %v", a.svc.calls)
 	}
 }
 
@@ -503,12 +549,12 @@ func TestSSOLoginUnavailable(t *testing.T) {
 }
 
 func TestHostProfilesRoute(t *testing.T) {
+	a := newAWSRoutes(t) // first: it points AWS_CONFIG_FILE at nothing, this test then overrides it
 	cfg := t.TempDir() + "/config"
 	if err := os.WriteFile(cfg, []byte("[profile dev]\nsso_account_id = 123456789012\nsso_role_name = Dev\nregion = us-east-1\naws_secret_access_key = SHOULDNEVERAPPEAR\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AWS_CONFIG_FILE", cfg)
-	a := newAWSRoutes(t)
 	w := do(a.srv.handleCredAWS, storeReq("GET", pathAWS+"/host-profiles", "", "", credCookie))
 	if w.Code != 200 || strings.Contains(w.Body.String(), "SHOULDNEVERAPPEAR") {
 		t.Fatalf("%d %s", w.Code, w.Body)
@@ -593,5 +639,70 @@ func TestCredAWSThroughHandler(t *testing.T) {
 	}
 	if code := get(s, "", cookie); code != 200 {
 		t.Fatalf("cookie: %d", code)
+	}
+}
+
+func saveBody(name, desc string) string {
+	return fmt.Sprintf(`{"connection":{"name":%q,"description":%q,"source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1"}}`, name, desc)
+}
+
+// The create/replace path charges only the saves that run a check, to its own
+// budget of 60 a minute; the 10/min bucket of roles, check and sso-login is
+// separate and unchanged.
+func TestAWSSaveCheckBudget(t *testing.T) {
+	a := newAWSRoutes(t)
+	now := time.Unix(1_800_000_000, 0)
+	a.fx.cm.checkLimit.now = func() time.Time { return now }
+	for i := 0; i < 60; i++ {
+		if code, body, _ := a.call("POST", pathAWS, saveBody(fmt.Sprintf("c%d", i), "")); code != 201 {
+			t.Fatalf("create %d: %d %v", i, code, body)
+		}
+	}
+	if a.svc.n() != 60 {
+		t.Fatalf("checks %d", a.svc.n())
+	}
+	code, _, h := a.call("POST", pathAWS, saveBody("c60", ""))
+	if code != 429 || h.Get("Retry-After") == "" {
+		t.Fatalf("61st check-triggering create: %d %v", code, h)
+	}
+	if a.svc.n() != 60 || len(a.fx.file(t).AWSConnections) != 60 {
+		t.Fatalf("the refused save reached AWS or the file: checks=%d", a.svc.n())
+	}
+	// Saves that run no check are not charged, nor refused.
+	if code, _, _ := a.call("PUT", pathAWS+"/c0", saveBody("c0", "new label")); code != 200 {
+		t.Fatalf("label-only edit: %d", code)
+	}
+	if code, _, _ := a.call("DELETE", pathAWS+"/c1", ""); code != 204 {
+		t.Fatalf("delete: %d", code)
+	}
+	if a.svc.n() != 60 {
+		t.Fatal("an edit that changes nothing the check measures ran a check")
+	}
+	// The other bucket is untouched by all of this.
+	if code, _, _ := a.call("POST", pathAWS+"/check", checkBody); code != 200 {
+		t.Fatalf("check bucket: %d", code)
+	}
+	// A new window opens the budget again.
+	now = now.Add(time.Minute)
+	if code, _, _ := a.call("POST", pathAWS, saveBody("c60", "")); code != 201 {
+		t.Fatalf("next window: %d", code)
+	}
+}
+
+// An un-acknowledged save against a writes role runs a check each time, so it
+// is charged too.
+func TestAWSUnackedLoopIsLimited(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.check = awsprobe.Result{State: awsprobe.Writes, Actions: []string{"s3:PutObject"}}
+	for i := 0; i < 60; i++ {
+		if code, _, _ := a.call("POST", pathAWS, saveBody("w", "")); code != 409 {
+			t.Fatalf("call %d: %d", i+1, code)
+		}
+	}
+	if code, _, _ := a.call("POST", pathAWS, saveBody("w", "")); code != 429 {
+		t.Fatalf("61st: %d", code)
+	}
+	if a.svc.n() != 60 {
+		t.Fatalf("checks %d", a.svc.n())
 	}
 }

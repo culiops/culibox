@@ -811,3 +811,20 @@ func TestEditCannotBreakOverriddenSeed(t *testing.T) {
 		t.Fatalf("boot validation: %v", err)
 	}
 }
+
+// A save whose check cannot be audited does not use the signer.
+func TestPutAWSCheckNeedsAuditRowFirst(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	f.rec.err = errors.New("disk full")
+	_, err := f.cm.PutAWS(context.Background(), awsConn("c", "p", arnRead), true, false)
+	if !errors.Is(err, ErrCredPersist) || f.chk.n() != 0 {
+		t.Fatalf("err=%v checks=%d", err, f.chk.n())
+	}
+	f.rec.err = nil
+	if _, err := f.cm.PutAWS(context.Background(), awsConn("c", "p", arnRead), true, false); err != nil {
+		t.Fatal(err)
+	}
+	if a := f.rec.actions(); len(a) < 3 || a[0] != broker.CredChecked || f.rec.events[0].Detail != arnRead+" started" {
+		t.Fatalf("audit %+v", f.rec.events)
+	}
+}
