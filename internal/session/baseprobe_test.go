@@ -2,12 +2,13 @@ package session
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,13 @@ func (f *fakeBrokerHooks) watchedKeys(id string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.watched[id])
+}
+
+// probeState is what the fake recorded of the probe and BoxFor, read under its lock.
+func (f *fakeBrokerHooks) probeState() (calls []probeCall, lastBase map[string]awsprobe.Result, boxFor int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.probeCalls), maps.Clone(f.lastBase), f.boxForCalls
 }
 
 func (f *fakeBrokerHooks) listingCalls() []listingCall {
@@ -89,12 +97,12 @@ func TestSpawnProbesBeforeBoxFor(t *testing.T) {
 	boxes.order = hooks.order
 	s := spawnT(t, m, "conn")
 
-	if len(hooks.probeCalls) != 1 || hooks.probeCalls[0].id != s.ID || hooks.probeCalls[0].agent != "conn" ||
-		hooks.probeCalls[0].bs.Hash() != s.Bindings().Hash() {
-		t.Fatalf("probe calls %+v", hooks.probeCalls)
+	calls, lastBase, _ := hooks.probeState()
+	if len(calls) != 1 || calls[0].id != s.ID || calls[0].agent != "conn" || calls[0].bs.Hash() != s.Bindings().Hash() {
+		t.Fatalf("probe calls %+v", calls)
 	}
-	if !reflect.DeepEqual(hooks.lastBase, hooks.base) {
-		t.Fatalf("BoxFor got base %+v, want %+v", hooks.lastBase, hooks.base)
+	if !reflect.DeepEqual(lastBase, hooks.base) {
+		t.Fatalf("BoxFor got base %+v, want %+v", lastBase, hooks.base)
 	}
 	if got := hooks.order.got(); !reflect.DeepEqual(got, []string{"prepare", "probe", "boxfor", "wrap"}) {
 		t.Fatalf("call order %q", got)
@@ -119,8 +127,8 @@ func TestSpawnLegacyProbe(t *testing.T) {
 	if got, want := s.Info().AWS.Fields, writesResult().Fields(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Info.AWS fields %+v, want %+v", got, want)
 	}
-	if !reflect.DeepEqual(hooks.lastBase, hooks.base) {
-		t.Fatalf("BoxFor got base %+v", hooks.lastBase)
+	if _, lastBase, _ := hooks.probeState(); !reflect.DeepEqual(lastBase, hooks.base) {
+		t.Fatalf("BoxFor got base %+v", lastBase)
 	}
 }
 
@@ -169,8 +177,8 @@ func TestSpawnFailureAfterWatchForgets(t *testing.T) {
 func TestSpawnWithoutAWSDoesNotProbe(t *testing.T) {
 	m, _, hooks, _ := ghManager(t, config.RuntimeBox)
 	s := spawnT(t, m, "gh")
-	if len(hooks.probeCalls) != 0 || hooks.lastBase != nil || hooks.boxForCalls != 1 {
-		t.Fatalf("probe calls %d, BoxFor base %+v, BoxFor calls %d", len(hooks.probeCalls), hooks.lastBase, hooks.boxForCalls)
+	if calls, lastBase, boxFor := hooks.probeState(); len(calls) != 0 || lastBase != nil || boxFor != 1 {
+		t.Fatalf("probe calls %d, BoxFor base %+v, BoxFor calls %d", len(calls), lastBase, boxFor)
 	}
 	if k := hooks.watchedKeys(s.ID); len(k) != 0 {
 		t.Fatalf("watched %q", k)
@@ -256,6 +264,45 @@ func TestOldSidecarWithoutBaseAccessIsNotChecked(t *testing.T) {
 	}
 	if got := sidecarEntry(t, path, "oldsess1").BaseAccess; !reflect.DeepEqual(got, map[string]awsprobe.Result{"": writesResult()}) {
 		t.Fatalf("sidecar base_access %+v", got)
+	}
+}
+
+// Review focus 1: a corrupt record (an unknown state string) restores as "not
+// checked", never as a clean result, and is watched.
+func TestSidecarUnknownBaseStateIsNotChecked(t *testing.T) {
+	rec := `{"agent":"aws","created":"2026-10-01T00:00:00Z","runtime":"box","box":"ab-box-test","replyable":false,` +
+		`"aws":{"source_profile":"sandbox-admin","role_arn":"arn:aws:iam::226198813800:role/agentbox-agent","region":"ap-southeast-1","s3_read":["culishop-tfstate"],"label":"sandbox"},` +
+		`"aws_nonce":"` + fakeNonce + `","egress_nonce":"` + fakeNonce + `","base_access":{"":{"state":"clean"}}}`
+	var md sessionMeta
+	if err := json.Unmarshal([]byte(rec), &md); err != nil {
+		t.Fatal(err)
+	}
+	if md.BaseAccess[""].State != "clean" {
+		t.Fatalf("record decoded base_access %+v", md.BaseAccess)
+	}
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	sc, err := openSidecar(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.put("oddsess1", md)
+	fb := newFakeBackend()
+	fb.seedLive("oddsess1")
+	hooks := &fakeBrokerHooks{}
+	m, _ := managerWith(t, legacyLauncher(), path, fb, hooks)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m.Get("oddsess1")
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m.Kill(r.ID) })
+	if in := r.Info().AWS; in.BaseAccess != "unverified" || in.BaseAccessReason != "not_checked" {
+		t.Fatalf("an unknown state reads %+v", in.Fields)
+	}
+	if k := hooks.watchedKeys("oddsess1"); !reflect.DeepEqual(k, []string{""}) {
+		t.Fatalf("watched %q, want [\"\"]", k)
 	}
 }
 
@@ -351,51 +398,85 @@ func TestInfoJSONHasBaseAccess(t *testing.T) {
 	}
 }
 
+// gatedFilesHooks is realFilesHooks whose first WriteAWSListing signals entered
+// and blocks until release is closed; later calls pass straight through (an
+// atomic flag, not a sync.Once: Once would hold them until the first returns).
+type gatedFilesHooks struct {
+	realFilesHooks
+	taken   *atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (h gatedFilesHooks) WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error {
+	if h.taken.CompareAndSwap(false, true) {
+		close(h.entered)
+		<-h.release
+	}
+	return h.realFilesHooks.WriteAWSListing(bs, base)
+}
+
 // Two re-probes of one session landing together each persist the merged map,
-// never an older snapshot over a newer one: both keys end up in the sidecar
-// and in aws.json, every round.
+// never an older snapshot over a newer one. Deterministic: re-probe A is held
+// inside its aws.json write (its snapshot taken) while re-probe B runs; without
+// the per-session persist lock B finishes first and A's older snapshot lands
+// last.
 func TestConcurrentReprobesPersistBothKeys(t *testing.T) {
 	stateRoot := t.TempDir()
 	path := filepath.Join(t.TempDir(), "sessions.json")
 	fake := &fakeBrokerHooks{}
-	m, _ := managerWith(t, connLauncherFor(connA(), connB()), path, newFakeBackend(), realFilesHooks{fakeBrokerHooks: fake, root: stateRoot})
+	h := gatedFilesHooks{realFilesHooks: realFilesHooks{fakeBrokerHooks: fake, root: stateRoot},
+		taken: &atomic.Bool{}, entered: make(chan struct{}), release: make(chan struct{})}
+	m, _ := managerWith(t, connLauncherFor(connA(), connB()), path, newFakeBackend(), h)
 	s := spawnT(t, m, "conn")
 	notify := fake.notifyFn()
 	listPath := filepath.Join(stateRoot, "broker", "binding-"+s.Bindings().Hash(), broker.AWSListFile)
+	atA, atB := probeAt.Add(time.Minute), probeAt.Add(2*time.Minute)
 
-	for i := range 40 {
-		at := probeAt.Add(time.Duration(i+1) * time.Minute)
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			notify(s.ID, "sbx-a", awsprobe.Result{State: awsprobe.NoneFound, CheckedAt: at})
-		}()
-		go func() {
-			defer wg.Done()
-			notify(s.ID, "sbx-b", awsprobe.Result{State: awsprobe.Writes, Actions: []string{"s3:PutObject"}, CheckedAt: at})
-		}()
-		wg.Wait()
+	doneA, doneB := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(doneA)
+		notify(s.ID, "sbx-a", awsprobe.Result{State: awsprobe.NoneFound, CheckedAt: atA})
+	}()
+	select {
+	case <-h.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("re-probe A never reached WriteAWSListing")
+	}
+	go func() {
+		defer close(doneB)
+		notify(s.ID, "sbx-b", awsprobe.Result{State: awsprobe.Writes, Actions: []string{"s3:PutObject"}, CheckedAt: atB})
+	}()
+	select { // with the lock B waits for A; without it B runs to completion
+	case <-doneB:
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(h.release)
+	<-doneA
+	<-doneB
 
-		md := sidecarEntry(t, path, s.ID)
-		if !md.BaseAccess["sbx-a"].CheckedAt.Equal(at) || !md.BaseAccess["sbx-b"].CheckedAt.Equal(at) {
-			t.Fatalf("round %d: sidecar kept an older snapshot: %+v", i, md.BaseAccess)
+	md := sidecarEntry(t, path, s.ID)
+	if !md.BaseAccess["sbx-a"].CheckedAt.Equal(atA) || !md.BaseAccess["sbx-b"].CheckedAt.Equal(atB) {
+		t.Fatalf("sidecar kept an older snapshot: %+v", md.BaseAccess)
+	}
+	raw, err := os.ReadFile(listPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		Name string `json:"name"`
+		awsprobe.Fields
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]time.Time{"sbx-a": atA, "sbx-b": atB}
+	for _, r := range rows {
+		if r.BaseCheckedAt == nil || !r.BaseCheckedAt.Equal(want[r.Name]) {
+			t.Fatalf("aws.json kept an older snapshot: %s", raw)
 		}
-		raw, err := os.ReadFile(listPath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var rows []struct {
-			Name string `json:"name"`
-			awsprobe.Fields
-		}
-		if err := json.Unmarshal(raw, &rows); err != nil {
-			t.Fatal(err)
-		}
-		for _, r := range rows {
-			if r.BaseCheckedAt == nil || !r.BaseCheckedAt.Equal(at) {
-				t.Fatalf("round %d: aws.json kept an older snapshot: %s", i, raw)
-			}
-		}
+	}
+	if len(rows) != 2 {
+		t.Fatalf("aws.json rows: %s", raw)
 	}
 }
