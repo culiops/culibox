@@ -710,7 +710,7 @@ const (
 )
 
 // DroppedOptions returns the overrides in spec that Build would ignore (the
-// complement of AcceptedOptions), sorted by key, capped at maxDroppedOptions
+// complement of AcceptedOptions up to the cap), sorted by key, capped at maxDroppedOptions
 // entries with each key cut to maxDroppedKeyBytes. nil when all are accepted
 // and for an unknown agent (the spawn fails elsewhere).
 func (l *AgentLauncher) DroppedOptions(spec SpawnSpec) []OptionDrop {
