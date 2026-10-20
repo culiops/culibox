@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/ghapp"
 )
 
@@ -857,5 +858,45 @@ func TestForgetDoesNotRevokePAT(t *testing.T) {
 	b.revokeWG.Wait()
 	if got := fg.revokedList(); len(got) != 0 {
 		t.Fatalf("a PAT is never revoked: %v", got)
+	}
+}
+
+func TestGitHubPATLockedStore(t *testing.T) {
+	b, fr, _, rec, _ := patSetup(t, map[string]SessionView{"s": patLive()})
+	fr.err = fmt.Errorf("store value acme-pat: %w", credref.ErrLocked)
+	w := ghCall(b, tokA("s"), patBody)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), wantStoreLockedMsg) || strings.Contains(w.Body.String(), "acme-pat") {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreLocked || rec.rows[0].Error != wantStoreLockedMsg ||
+		rec.rows[0].Subject != "acme" || rec.rows[0].Entry != "gh-pat-acme" {
+		t.Fatalf("rows %+v", rec.rows)
+	}
+	if !b.StoreLockedFor("s") {
+		t.Fatal("flag not set")
+	}
+	fr.err = nil
+	if w := ghCall(b, tokA("s"), patBody); w.Code != 200 || b.StoreLockedFor("s") {
+		t.Fatalf("after unlock: %d flag %v", w.Code, b.StoreLockedFor("s"))
+	}
+}
+
+func TestGitHubAppMintLockedStore(t *testing.T) {
+	b, fg, rec, _ := ghSetup(t, map[string]SessionView{"claude-3": ghLive()})
+	fg.err = fmt.Errorf("github app key: %w", credref.ErrLocked)
+	w := ghCall(b, tokA("claude-3"), ghBody)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), wantStoreLockedMsg) || strings.Contains(w.Body.String(), "github app key") {
+		t.Fatalf("status %d body %s", w.Code, w.Body)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeStoreLocked || rec.rows[0].Error != wantStoreLockedMsg ||
+		rec.rows[0].Provider != ProviderGitHub || rec.rows[0].Subject != "culiops" {
+		t.Fatalf("rows %+v", rec.rows)
+	}
+	if !b.StoreLockedFor("claude-3") {
+		t.Fatal("flag not set")
+	}
+	fg.err = nil
+	if w := ghCall(b, tokA("claude-3"), ghBody); w.Code != 200 || b.StoreLockedFor("claude-3") {
+		t.Fatalf("after unlock: %d flag %v", w.Code, b.StoreLockedFor("claude-3"))
 	}
 }

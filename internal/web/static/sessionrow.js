@@ -33,7 +33,7 @@ function rowClasses(s, ctx) {
   const out = ["srow"];
   if (c.killing) { out.push("killing"); return out; }
   if (s && c.selectedId && s.id === c.selectedId) out.push("sel");
-  if (s && (s.activity === "waiting" || s.need === "sso")) out.push("needs");
+  if (s && (s.activity === "waiting" || s.need === "sso" || s.need === "store_locked")) out.push("needs");
   return out;
 }
 

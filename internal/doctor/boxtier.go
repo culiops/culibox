@@ -12,7 +12,8 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/agent-box/internal/secretchain"
 )
 
 // ClaudeBoxToken checks that every boxed claude agent in config.json names a
@@ -20,34 +21,49 @@ import (
 // login in the Keychain, which a box cannot read, and agent-box deliberately
 // does not copy it: the box gets a token made for it. Values are never printed.
 // Only config.json agents are checked; UI-created profiles are not visible here.
-func ClaudeBoxToken(c config.Config) Result {
+//
+// st is the encrypted store when a secret source names it (see StoreFor); nil
+// otherwise. A locked store counts as "does not resolve", never a pass.
+func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	const check = "boxed claude token"
-	res, rerr := secrets.New(c.SecretSources)
+	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
+	var locked []string // agents whose credential failed only because the store is locked
 	boxed := 0
 	for _, a := range c.Agents {
 		if filepath.Base(a.Bin) != "claude" || c.RuntimeFor(a) != config.RuntimeBox {
 			continue
 		}
 		boxed++
-		found := false
+		found, isLocked := false, false
 		for _, name := range a.Secrets {
 			if name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "ANTHROPIC_API_KEY" {
 				continue
 			}
 			if rerr == nil {
-				if _, ok, err := res.Resolve(name); err == nil && ok {
+				_, ok, err := res.Resolve(name)
+				switch {
+				case err == nil && ok:
 					found = true
+				case errors.Is(err, credref.ErrLocked):
+					isLocked = true
 				}
 			}
 		}
-		if !found {
+		switch {
+		case found:
+		case isLocked:
+			locked = append(locked, a.Name)
+		default:
 			missing = append(missing, a.Name)
 		}
 	}
 	switch {
 	case boxed == 0:
 		return Result{Pass, check, "no boxed claude agent in config.json"}
+	case len(locked) > 0:
+		return Result{Warn, check, "agent(s) " + strings.Join(locked, ", ") +
+			`: the Claude token is in the store, which is locked — unlock it ("agent-box store unlock")`}
 	case len(missing) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(missing, ", ") +
 			" have no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret that resolves; a boxed claude will ask to /login. " +

@@ -94,6 +94,10 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	value, err := b.resolve.Resolve(entry.Value)
+	if errors.Is(err, credref.ErrLocked) {
+		b.storeLockedReply(w, base, sid)
+		return
+	}
 	if err != nil {
 		msg := sanitize(err.Error()) // names the reference, never the value
 		row := base
@@ -103,6 +107,7 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	b.storeUnlocked(sid)
 	// The fetched row is written before the value leaves (fail closed): a value
 	// with no audit row is never handed out.
 	row := base
@@ -113,6 +118,17 @@ func (b *Broker) serveStaticToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeStaticToken(w, string(value), entry)
+}
+
+// storeLockedReply refuses a read of a locked store: a store_locked row, the
+// session flagged, and the fixed message to the box. The reference's own error
+// text is not used: it names the store id.
+func (b *Broker) storeLockedReply(w http.ResponseWriter, base Row, sid string) {
+	row := base
+	row.Outcome, row.Error = OutcomeStoreLocked, storeLockedMsg
+	b.recordDenied(row)
+	b.storeWasLocked(sid)
+	replyErr(w, http.StatusServiceUnavailable, storeLockedMsg)
 }
 
 func writeStaticToken(w http.ResponseWriter, value string, e config.StaticToken) {

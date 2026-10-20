@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
@@ -31,9 +33,11 @@ import (
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/secretchain"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/agent-box/internal/storerefs"
 	"github.com/culiops/agent-box/internal/terminal"
 	"github.com/culiops/agent-box/internal/web"
 )
@@ -70,6 +74,9 @@ func main() {
 	}
 	if args.Cmd == "box" {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
+	}
+	if args.Cmd == "store" {
+		os.Exit(runStore(args, cfg, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout))
 	}
 	if args.Cmd == "clone" {
 		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
@@ -216,7 +223,16 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		log.Printf("WARNING: the login password (env %s) is shorter than 12 characters", cfg.PasswordEnv)
 	}
 
-	resolver, err := secrets.New(cfg.SecretSources)
+	// ONE store for the daemon: the secret_sources chain, the broker's value
+	// references and the GitHub App minter all read through it. The data dir
+	// exists (the lock created it); the keeper hashes its real path.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		log.Fatalf("data dir: %v", err)
+	}
+	storeAudit := &lazyAudit{path: filepath.Join(dataDir, "audit.db")}
+	defer storeAudit.Close()
+	vstore := secretstore.Open(dataDir, newKeeper(dataDir), storeAudit)
+	resolver, err := secretchain.New(cfg.SecretSources, vstore)
 	if err != nil {
 		log.Fatalf("secrets: %v", err)
 	}
@@ -254,6 +270,14 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 	defer accts.Close()
 	lnch.SetAccounts(accts)
+	var acctList []account.Account
+	for _, r := range accts.List() {
+		if !r.IsDefault {
+			acctList = append(acctList, r.Account)
+		}
+	}
+	ptCopies := storerefs.PlaintextCopies(cfg, acctList, vstore, os.LookupEnv)
+	logPlaintextCopies(ptCopies)
 
 	// Default working dir: config value if set, else $HOME.
 	defaultCwd := cfg.DefaultCwd
@@ -353,6 +377,28 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		}
 	}
 
+	// Seccomp gate (N4 spec 7.9). On Linux a box shares the daemon's kernel user
+	// keyring, where the unlocked store key lives; Docker's default seccomp
+	// profile blocks the keyctl calls that would read it. Measured once here
+	// at start for the log; the gate re-probes on every boxed spawn once a store
+	// exists, and reads the store's state each time, so `store init` while
+	// running takes effect. macOS boxes run in a VM with the key in the host Keychain.
+	if layer != nil && layer.vm == nil && runtime.GOOS == "linux" {
+		cli := layer.cli
+		probe := func() (bool, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return cli.SeccompActive(ctx)
+		}
+		// Start-up line only: the gate probes docker itself on every gated spawn.
+		if on, err := probe(); err != nil {
+			log.Printf("seccomp: could not read docker's security options (%v); boxed spawns are refused while a store exists, until it can be read", err)
+		} else if !on {
+			log.Printf("seccomp: Docker's default profile is off; boxed spawns are refused while a store exists")
+		}
+		lnch.SetBoxGate(launcher.SeccompGate(probe, func() bool { return vstore.Status().Initialized }))
+	}
+
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
 	// bundleSrc stays empty with the bundle off or no layer; clone mode reads it
 	// below as the memory root.
@@ -401,8 +447,8 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	// runs only in a box. Before Reconcile so reattached sessions find the hooks.
 	var brokerSvc *brokerService
 	if layer != nil {
-		svc, err := startBroker(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
-			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens)
+		svc, err := startBrokerWithStore(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
+			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens, vstore)
 		switch {
 		case errors.Is(err, errBrokerListen):
 			log.Printf("%v (profiles with an AWS binding will refuse to spawn)", err)
@@ -573,7 +619,16 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 		Accounts: accts,
 		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
+
+		// vstore is never nil (the daemon always opens one), so no typed-nil
+		// interface can reach the web layer.
+		Store:                vstore,
+		StoreAudit:           storeAudit,
+		StoreInUse:           storerefs.InUse(cfg),
+		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
+		StorePlaintextCopies: ptCopies,
 	}
+	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)
 
 	// Analytics: durable token/prompt rollups mined from the Claude Code

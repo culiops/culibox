@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/launcher"
 )
 
@@ -176,6 +178,28 @@ func TestSpawnGitHubCheckFails(t *testing.T) {
 	}
 	if eg.spawnCalls() != 0 || boxes.wraps != 0 || len(m.List()) != 0 {
 		t.Fatalf("failed check left state: egress=%d wraps=%d sessions=%d", eg.spawnCalls(), boxes.wraps, len(m.List()))
+	}
+}
+
+// A GitHub App key that lives in the locked store refuses the spawn as
+// ErrStoreLocked (so the API answers 423 store_locked), not as a generic
+// box-unavailable refusal.
+func TestSpawnGitHubCheckLockedStore(t *testing.T) {
+	m, _, hooks, eg := ghManager(t, config.RuntimeBox)
+	hooks.checkErr = fmt.Errorf("GitHub App %q: %w", "main", credref.ErrLocked)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "gh", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("spawn survived a locked store")
+	}
+	if !errors.Is(err, launcher.ErrStoreLocked) {
+		t.Fatalf("err = %v, want ErrStoreLocked", err)
+	}
+	if errors.Is(err, box.ErrBoxUnavailable) {
+		t.Fatalf("a locked store is not a containment failure: %v", err)
+	}
+	if eg.spawnCalls() != 0 || len(m.List()) != 0 {
+		t.Fatalf("locked refusal left state: egress=%d sessions=%d", eg.spawnCalls(), len(m.List()))
 	}
 }
 

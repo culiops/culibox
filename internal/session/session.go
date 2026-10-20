@@ -32,6 +32,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/sesstoken"
 )
@@ -314,6 +315,9 @@ type BrokerHooks interface {
 	// AWSConnState maps each named connection waiting on a human sign-in to
 	// its sign-in key. Read-only; it takes only the broker's lock.
 	AWSConnState(sessionID string) map[string]string
+	// StoreLockedFor reports whether the session's last read of the encrypted
+	// store was refused because it is locked. Read-only; broker lock only.
+	StoreLockedFor(sessionID string) bool
 	// WriteSessionMCP writes the session's own MCP config (the entry servers a
 	// token binding adds) into the binding dir and returns its path inside the
 	// box. key names the file; the document carries no secret.
@@ -1106,12 +1110,15 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
-	egress    EgressHooks // nil = egress control not running; bound profiles are refused
-	egressAll bool        // every boxed spawn needs egress (Linux); see SetEgressAll
-	clone     CloneHooks  // nil = clone mode unavailable; clone profiles are refused
-	home      string      // daemon user's home; where a host session's ~/.claude lives
-	stateDir  string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
-	repliesOn bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
+	// storeLocked reports whether the encrypted store is locked right now.
+	// Nil = no store: no session ever needs it unlocked.
+	storeLocked func() bool
+	egress      EgressHooks // nil = egress control not running; bound profiles are refused
+	egressAll   bool        // every boxed spawn needs egress (Linux); see SetEgressAll
+	clone       CloneHooks  // nil = clone mode unavailable; clone profiles are refused
+	home        string      // daemon user's home; where a host session's ~/.claude lives
+	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	repliesOn   bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -1159,6 +1166,15 @@ func (m *Manager) SetBroker(h BrokerHooks) {
 	if h != nil {
 		h.SetBaseNotify(m.baseProbed) // outside m.mu: the broker takes its own lock
 	}
+}
+
+// SetStoreLocked installs the store's current-state probe. A listed session the
+// broker saw refused for a locked store needs the operator only while this still
+// says locked. Call once at boot.
+func (m *Manager) SetStoreLocked(f func() bool) {
+	m.mu.Lock()
+	m.storeLocked = f
+	m.mu.Unlock()
 }
 
 // baseProbed is the broker's re-probe sink: a watched base role was probed
@@ -1570,6 +1586,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			if bs.GitHub != nil {
 				// Doctor-style and secret-free, so its message can be shown as is.
 				if err := brk.CheckGitHub(*bs.GitHub); err != nil {
+					if errors.Is(err, credref.ErrLocked) {
+						// A key in the locked store: say so (423), not a containment failure.
+						return nil, fmt.Errorf("%w (GitHub App key, profile %q)", launcher.ErrStoreLocked, spec.Agent)
+					}
 					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 				}
 			}
@@ -2069,6 +2089,11 @@ func (m *Manager) List() []Info {
 		defer m.mu.Unlock()
 		return m.broker
 	}()
+	storeLocked := func() func() bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.storeLocked
+	}()
 	// The critical section is a closure so the unlock is a defer again: it used
 	// to be an explicit Unlock (so PeekFor, which takes the same non-reentrant
 	// mutex, could run after it), which meant a panic inside s.Info() would
@@ -2093,6 +2118,7 @@ func (m *Manager) List() []Info {
 	// Summaries and needs are filled AFTER m.mu is released. PeekFor takes the
 	// same non-reentrant mutex, so filling them inside the loop above deadlocks
 	// the daemon on the first poll.
+	var storeIsLocked *bool
 	for i := range out {
 		p, ok, blocked := m.peekAndBlocked(out[i].ID)
 		if ok {
@@ -2110,8 +2136,30 @@ func (m *Manager) List() []Info {
 			}
 			applyAWSState(&out[i], st)
 		}
+		// Read the store only for a session the broker actually refused, and
+		// at most once per list.
+		if brk != nil && storeLocked != nil && !out[i].Exited && out[i].Need != "ask" && brk.StoreLockedFor(out[i].ID) {
+			if storeIsLocked == nil {
+				v := storeLocked()
+				storeIsLocked = &v
+			}
+			if *storeIsLocked {
+				applyStoreNeed(&out[i])
+			}
+		}
 	}
 	return out
+}
+
+// applyStoreNeed marks a session that waits on the operator to unlock the
+// encrypted store. Lower than "sso" and never over "ask", whose card has a
+// prompt to answer. Activity is left alone: the row keeps saying what the agent
+// is doing. An exited session needs nothing.
+func applyStoreNeed(in *Info) {
+	if in.Exited || in.Need == "ask" || in.Need == "sso" {
+		return
+	}
+	in.Need = "store_locked"
 }
 
 // awsState is the broker's state for one listed session (BrokerHooks.AWSState

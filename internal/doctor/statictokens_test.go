@@ -8,6 +8,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 func TestDoctorStaticTokens(t *testing.T) {
@@ -102,5 +103,17 @@ func TestDoctor_ListsStaticTokens(t *testing.T) {
 	out, _ := run(in)
 	if !strings.Contains(out, "token t1") || !strings.Contains(out, "NO_SUCH_VAR_FOR_DOCTOR is not set in this shell") {
 		t.Errorf("doctor output lacks the token line:\n%s", out)
+	}
+}
+
+// A store-backed token while the store is locked is the same WARN the store
+// row gives (spec 7.8), never a FAIL: a reboot must not turn doctor red.
+func TestDoctorStaticTokenStoreLockedWarns(t *testing.T) {
+	c := config.Config{StaticTokens: []config.StaticToken{
+		{Name: "graf", Value: config.KeyRef{Type: "store", ID: "graf"}, Egress: []config.TokenEgress{{Host: "api.example.com"}}},
+	}}
+	got := checkStaticTokens(c, defaultResolver(stubStore{err: secretstore.ErrLocked}))
+	if len(got) != 1 || got[0].Status != Warn || !strings.Contains(got[0].Detail, "store locked") {
+		t.Fatalf("locked store token: %s", dump(got))
 	}
 }

@@ -317,3 +317,26 @@ test("the SSO card text names the expired sources of a connections session", () 
   assert.strictEqual(cardContent({ need: "sso", activity: "working", aws: { sso_expired: "example-sso" } }).text,
     "AWS sign-in expired (example-sso). This session's AWS calls fail until you sign in.");
 });
+
+test("store_locked needs you, even while the agent is working", () => {
+  assert.strictEqual(needsYou({ activity: "working", need: "store_locked" }), true);
+  assert.strictEqual(needsYou({ activity: "working" }), false);
+});
+
+test("store_locked card: the Store locked title and an unlock marker, no reply path", () => {
+  const c = cardContent({ activity: "working", need: "store_locked", claude: true, replyable: true });
+  assert.strictEqual(c.title, "Store locked");
+  assert.strictEqual(c.unlock, true);
+  assert.strictEqual(c.ask, false);
+  assert.strictEqual(c.reply, false);
+  assert.strictEqual(c.enableReplies, false);
+  assert.match(c.text, /unlock/i);
+});
+
+test("sso outranks store_locked for which card shows; label and tab dot name the store", () => {
+  assert.strictEqual(cardContent({ activity: "working", need: "sso" }).sso, true);
+  assert.strictEqual(needLabel({ activity: "working", need: "store_locked" }), "store locked");
+  assert.strictEqual(tabNeedWhy({ activity: "working", need: "store_locked" }), "store");
+  assert.strictEqual(tabNeedWhy({ activity: "waiting", need: "store_locked" }), "");
+  assert.strictEqual(sessionDot({ activity: "working", need: "store_locked" }).title, "Store locked");
+});

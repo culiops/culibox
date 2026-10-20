@@ -1,0 +1,93 @@
+// Package storerefs finds which configuration entries point at the encrypted
+// store. It lives outside secretstore because config already imports
+// secretstore.
+package storerefs
+
+import (
+	"sort"
+
+	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/secretstore"
+)
+
+// HasSource reports whether secret_sources names the store.
+func HasSource(cfg config.Config) bool {
+	for _, s := range cfg.SecretSources {
+		if s.Type == "store" {
+			return true
+		}
+	}
+	return false
+}
+
+// InUse reports whether anything in cfg reads from the store: a store-backed
+// GitHub App key or static token, or a store secret_source.
+func InUse(cfg config.Config) bool {
+	if HasSource(cfg) {
+		return true
+	}
+	for _, a := range cfg.GitHubApps {
+		if a.PrivateKey.Type == "store" {
+			return true
+		}
+	}
+	for _, t := range cfg.StaticTokens {
+		if t.Value.Type == "store" {
+			return true
+		}
+	}
+	return false
+}
+
+// Refs maps a store id to the entries that reference it, each sorted:
+// "github_apps/<name>", "static_tokens/<name>", "agents/<agent>.secrets",
+// "accounts/<account>.token_secret". Secret NAMES (agent secrets and account
+// token_secret) count as store ids only when a store secret_source exists,
+// because only then does a name resolve to the value with that id. Names that
+// are not valid store ids are skipped. Values are never read.
+func Refs(cfg config.Config, accts []account.Account) map[string][]string {
+	out := map[string][]string{}
+	add := func(id, ref string) { out[id] = append(out[id], ref) }
+	for _, a := range cfg.GitHubApps {
+		if a.PrivateKey.Type == "store" {
+			add(a.PrivateKey.ID, "github_apps/"+a.Name)
+		}
+	}
+	for _, t := range cfg.StaticTokens {
+		if t.Value.Type == "store" {
+			add(t.Value.ID, "static_tokens/"+t.Name)
+		}
+	}
+	for id, refs := range SecretNameRefs(cfg, accts) {
+		out[id] = append(out[id], refs...)
+	}
+	for id := range out {
+		sort.Strings(out[id])
+	}
+	return out
+}
+
+// SecretNameRefs maps each secret name that a store secret_source could serve
+// (an agent's secrets entry, an account's token_secret) to the entries that
+// declare it. Empty when no store source exists. Names that are not valid
+// store ids are skipped.
+func SecretNameRefs(cfg config.Config, accts []account.Account) map[string][]string {
+	out := map[string][]string{}
+	if !HasSource(cfg) {
+		return out
+	}
+	for _, a := range cfg.Agents {
+		for _, s := range a.Secrets {
+			if secretstore.ValidID(s) {
+				out[s] = append(out[s], "agents/"+a.Name+".secrets")
+			}
+		}
+	}
+	for _, a := range accts {
+		if a.TokenSecret != "" && secretstore.ValidID(a.TokenSecret) {
+			out[a.TokenSecret] = append(out[a.TokenSecret], "accounts/"+a.Name+".token_secret")
+		}
+	}
+	return out
+}

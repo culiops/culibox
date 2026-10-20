@@ -154,7 +154,7 @@ func TestValidateGitHubApps(t *testing.T) {
 	}{
 		{"duplicate name", []GitHubApp{ok, ok}, "duplicate"},
 		{"relative path", mut(func(a *GitHubApp) { a.PrivateKey.Path = "app.pem" }), "absolute"},
-		{"store type", mut(func(a *GitHubApp) { a.PrivateKey = KeyRef{Type: "store"} }), "private_key.type"},
+		{"env type", mut(func(a *GitHubApp) { a.PrivateKey = KeyRef{Type: "env", Var: "X"} }), "private_key.type"},
 		{"empty client_id", mut(func(a *GitHubApp) { a.ClientID = "" }), "client_id"},
 		{"bad client_id", mut(func(a *GitHubApp) { a.ClientID = "a b" }), "client_id"},
 		{"bad name", mut(func(a *GitHubApp) { a.Name = "a b" }), "name"},
@@ -305,6 +305,7 @@ func TestParseGitHubRepo(t *testing.T) {
 func TestKeyRefValidate(t *testing.T) {
 	bad := []KeyRef{
 		{Type: "store"},
+		{Type: "store", ID: "x", Path: "/a"},
 		{Type: ""},
 		{Type: "file", Path: "relative"},
 		{Type: "file", Path: ""},
@@ -319,8 +320,8 @@ func TestKeyRefValidate(t *testing.T) {
 			t.Errorf("%+v: want error", r)
 		}
 	}
-	if err := (KeyRef{Type: "store"}).Validate(); err == nil || err.Error() != `unsupported reference type "store" (want "file" or "env")` {
-		t.Errorf("store message: %v", err)
+	if err := (KeyRef{Type: "x"}).Validate(); err == nil || err.Error() != `unsupported reference type "x" (want "file", "env" or "store")` {
+		t.Errorf("unknown type message: %v", err)
 	}
 	for _, r := range []KeyRef{{Type: "file", Path: "/a/b"}, {Type: "env", Var: "MY_TOKEN"}} {
 		if err := r.Validate(); err != nil {

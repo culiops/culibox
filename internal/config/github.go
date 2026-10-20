@@ -14,15 +14,18 @@ import (
 	"strings"
 
 	"github.com/culiops/agent-box/internal/hostmatch"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // KeyRef says where a secret's bytes live: a file on the host or an
 // environment variable of the daemon. The bytes are resolved at use and never
-// enter a box as a reference. N4 adds "store".
+// enter a box as a reference. "store" names a value in the agent-box encrypted
+// store by id.
 type KeyRef struct {
-	Type string `json:"type"`           // "file" | "env"
+	Type string `json:"type"`           // "file" | "env" | "store"
 	Path string `json:"path,omitempty"` // file: absolute path
 	Var  string `json:"var,omitempty"`  // env: variable name
+	ID   string `json:"id,omitempty"`   // store: value id
 }
 
 var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -37,6 +40,9 @@ func (r KeyRef) Validate() error {
 		if r.Var != "" {
 			return errors.New(`a "file" reference must not set var`)
 		}
+		if r.ID != "" {
+			return errors.New(`a "file" reference must not set id`)
+		}
 		if !filepath.IsAbs(r.Path) {
 			return fmt.Errorf("path %q must be an absolute path", r.Path)
 		}
@@ -44,22 +50,35 @@ func (r KeyRef) Validate() error {
 		if r.Path != "" {
 			return errors.New(`an "env" reference must not set path`)
 		}
+		if r.ID != "" {
+			return errors.New(`an "env" reference must not set id`)
+		}
 		if !ValidEnvName(r.Var) {
 			return fmt.Errorf("env var %q is not a valid variable name", r.Var)
 		}
 		if strings.HasPrefix(r.Var, "AB_") {
 			return fmt.Errorf("env var %q is reserved: the AB_ prefix holds agent-box's own settings", r.Var)
 		}
+	case "store":
+		if r.Path != "" || r.Var != "" {
+			return errors.New(`a "store" reference must not set path or var`)
+		}
+		if !secretstore.ValidID(r.ID) {
+			return fmt.Errorf("store id %q must be letters, digits, _ and - (starting with a letter or digit, at most 64)", r.ID)
+		}
 	default:
-		return fmt.Errorf("unsupported reference type %q (want \"file\" or \"env\")", r.Type)
+		return fmt.Errorf("unsupported reference type %q (want \"file\", \"env\" or \"store\")", r.Type)
 	}
 	return nil
 }
 
 // String names the reference for messages. It is never a value.
 func (r KeyRef) String() string {
-	if r.Type == "env" {
+	switch r.Type {
+	case "env":
 		return "env " + r.Var
+	case "store":
+		return "store " + r.ID
 	}
 	return r.Type + " " + r.Path
 }
@@ -246,7 +265,8 @@ func (b GitHubBinding) Clone() *GitHubBinding {
 }
 
 // ValidateGitHubApps checks the instance's github_apps list: unique names, a
-// usable client id and a private key that is an absolute file path.
+// usable client id and a private key that is an absolute file path or a store
+// value.
 func ValidateGitHubApps(apps []GitHubApp) error {
 	seen := map[string]bool{}
 	for i, a := range apps {
@@ -260,11 +280,20 @@ func ValidateGitHubApps(apps []GitHubApp) error {
 		if !githubClientIDRe.MatchString(a.ClientID) {
 			return fmt.Errorf("github_apps[%d].client_id %q must be the App's client id (letters, digits, . _ -)", i, a.ClientID)
 		}
-		if a.PrivateKey.Type != "file" {
-			return fmt.Errorf("github_apps[%d].private_key.type %q is not supported (want \"file\")", i, a.PrivateKey.Type)
-		}
-		if !filepath.IsAbs(a.PrivateKey.Path) {
-			return fmt.Errorf("github_apps[%d].private_key.path %q must be an absolute path", i, a.PrivateKey.Path)
+		switch a.PrivateKey.Type {
+		case "file":
+			if !filepath.IsAbs(a.PrivateKey.Path) {
+				return fmt.Errorf("github_apps[%d].private_key.path %q must be an absolute path", i, a.PrivateKey.Path)
+			}
+			if a.PrivateKey.Var != "" || a.PrivateKey.ID != "" {
+				return fmt.Errorf("github_apps[%d].private_key: a \"file\" reference sets only path", i)
+			}
+		case "store":
+			if err := a.PrivateKey.Validate(); err != nil {
+				return fmt.Errorf("github_apps[%d].private_key: %w", i, err)
+			}
+		default:
+			return fmt.Errorf("github_apps[%d].private_key.type %q is not supported (want \"file\" or \"store\")", i, a.PrivateKey.Type)
 		}
 	}
 	return nil

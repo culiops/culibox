@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // m3aSchema is the audit schema as M3a/M3c shipped it (before the elevated
@@ -697,5 +699,86 @@ func TestEndOpenWindowsCarriesTheEntry(t *testing.T) {
 	rows, err := a.ApprovalsForSession("aws-1", 10)
 	if err != nil || len(rows) != 2 || rows[0].Action != ActionEnded || rows[0].Entry != "sbx-a" {
 		t.Fatalf("rows: %+v %v", rows, err)
+	}
+}
+
+func TestRecordStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	a, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	var _ secretstore.Recorder = a
+	long := strings.Repeat("d", 500)
+	if err := a.RecordStore(secretstore.Event{Action: "set", Actor: "operator", Detail: "grafana-prod"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RecordStore(secretstore.Event{Action: "unlock", Detail: "line one\nline two " + long}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.db.Query(`SELECT ts, action, actor, detail FROM store_audit ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type got struct {
+		ts            int64
+		action, actor string
+		detail        string
+	}
+	var all []got
+	for rows.Next() {
+		var g got
+		if err := rows.Scan(&g.ts, &g.action, &g.actor, &g.detail); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, g)
+	}
+	if len(all) != 2 || all[0].action != "set" || all[0].actor != "operator" || all[0].detail != "grafana-prod" || all[0].ts == 0 {
+		t.Fatalf("rows: %+v", all)
+	}
+	if all[1].actor != "" || strings.Contains(all[1].detail, "\n") || len(all[1].detail) > maxStoreDetail+len("…") ||
+		!strings.HasPrefix(all[1].detail, "line one line two ddd") || !strings.HasSuffix(all[1].detail, "…") {
+		t.Fatalf("detail not bounded to one line: %q (%d)", all[1].detail, len(all[1].detail))
+	}
+}
+
+// An audit.db written before the store existed gets the table on open, and its
+// old rows stay.
+func TestOpenAddsStoreAuditToAnOldStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(m3aSchema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO credential_audit (ts, session_id, outcome) VALUES (1, 'old-1', 'minted')`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+	for i := 0; i < 2; i++ {
+		a, err := OpenAudit(path)
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		if err := a.RecordStore(secretstore.Event{Action: "lock"}); err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		a.Close()
+	}
+	a, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	var n int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM store_audit`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("store_audit rows %d %v", n, err)
+	}
+	if rows, err := a.ForSession("old-1", 10); err != nil || len(rows) != 1 {
+		t.Fatalf("old row: %+v %v", rows, err)
 	}
 }

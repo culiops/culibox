@@ -184,7 +184,7 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 	default:
 		fmt.Fprintln(w, "PASS docker context: yours is untouched")
 	}
-	r := doctor.ClaudeBoxToken(cfg)
+	r := doctor.ClaudeBoxToken(cfg, doctor.StoreFor(cfg, l.dataDir))
 	fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, r.Detail)
 	return 0
 }

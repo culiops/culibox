@@ -89,6 +89,9 @@ func (h Hooks) AWSState(id string) (until time.Time, conn string, ssoExpired str
 	return until, conn, h.B.SSOExpired(id)
 }
 
+// StoreLockedFor reports whether the session's last store read was refused as locked.
+func (h Hooks) StoreLockedFor(id string) bool { return h.B.StoreLockedFor(id) }
+
 // AWSConnState maps each named connection of the session waiting on a human
 // sign-in to its sourceKey; connections that can mint are not in it.
 func (h Hooks) AWSConnState(id string) map[string]string { return h.B.SSOExpiredConns(id) }

@@ -23,6 +23,10 @@ func checkStaticTokens(c config.Config, r credref.Resolver) []Result {
 			out = append(out, Result{Pass, check, e.Value.String() + " resolves"})
 		case errors.Is(err, credref.ErrEnvNotSet):
 			out = append(out, Result{Warn, check, e.Value.Var + " is not set in this shell; the daemon reads its own environment"})
+		case errors.Is(err, credref.ErrLocked):
+			// The same state the store row already WARNs about; a locked store
+			// after every reboot must not turn doctor red.
+			out = append(out, Result{Warn, check, "store locked"})
 		default:
 			out = append(out, Result{Fail, check, err.Error()})
 		}

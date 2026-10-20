@@ -41,8 +41,8 @@ type BoxConfig struct {
 
 // SecretSource is one place secrets are resolved from, tried in order.
 type SecretSource struct {
-	Type string `json:"type"`           // "env" | "file"
-	Path string `json:"path,omitempty"` // for type "file"
+	Type string `json:"type"`           // "env" | "file" | "store"
+	Path string `json:"path,omitempty"` // for type "file"; "store" reads the encrypted store and takes none
 }
 
 // Option types.
@@ -193,6 +193,7 @@ type Config struct {
 	EgressPort        int    `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
 
 	Analytics AnalyticsConfig `json:"analytics,omitempty"`
+	Store     StoreConfig     `json:"store,omitzero"` // the encrypted value store (see store.go)
 }
 
 // AnalyticsConfig configures the token/prompt analytics store + ingester. The
@@ -324,6 +325,9 @@ func (c Config) Validate() error {
 	if c.EgressPortOrDefault() == c.BrokerPortOrDefault() {
 		return fmt.Errorf("config: egress_port %d must differ from broker_port", c.EgressPortOrDefault())
 	}
+	if err := validStore(c.Store); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	if err := ValidateGitHubApps(c.GitHubApps); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
@@ -431,9 +435,17 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	stores := 0
 	for _, s := range c.SecretSources {
 		switch s.Type {
 		case "env":
+		case "store":
+			if s.Path != "" {
+				return errors.New("config: store secret_source takes no path")
+			}
+			if stores++; stores > 1 {
+				return errors.New("config: at most one store secret_source")
+			}
 		case "file":
 			if s.Path == "" {
 				return errors.New("config: file secret_source requires a path")

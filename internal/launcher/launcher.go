@@ -19,8 +19,9 @@ import (
 	"unicode/utf8"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/credref"
 )
 
 // SpawnSpec is the request to launch an agent.
@@ -142,7 +143,7 @@ var cleanBaseVars = []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG"}
 type AgentLauncher struct {
 	mu         sync.RWMutex
 	agents     map[string]config.AgentConfig
-	secrets    secrets.Resolver
+	secrets    SecretResolver
 	shell      string
 	optionDefs map[string]config.OptionDef
 	// defaultRuntime is the instance-level tier for agents that name none. It
@@ -158,6 +159,14 @@ type AgentLauncher struct {
 	tokens []config.StaticToken
 	// awsConns are the instance's named AWS connections, read once at boot.
 	awsConns []config.AWSConnection
+	// boxGate, when set, can refuse a boxed spawn (nil = never).
+	boxGate func() error
+}
+
+// SecretResolver resolves a declared secret name to its value. secrets.New's
+// result and secretchain.Chain both satisfy it.
+type SecretResolver interface {
+	Resolve(name string) (string, bool, error)
 }
 
 // AccountResolver is the launcher's view of the account store.
@@ -180,7 +189,21 @@ var (
 	// ErrAccountConflict wraps every refusal to mix an account with a profile
 	// that would carry another login's credentials. Safe to show the caller.
 	ErrAccountConflict = errors.New("account conflict")
+	// ErrStoreLocked refuses a spawn whose secrets or GitHub App key live in
+	// the locked encrypted store. The text is fixed and secret-free so it can
+	// be shown to the caller; the secret name is appended only to wrapped
+	// errors, which go to the server log, never the response.
+	ErrStoreLocked = errors.New(`store is locked — unlock it in the UI or with "agent-box store unlock"`)
 )
+
+// storeLocked returns the ErrStoreLocked (naming the secret, for the log) to
+// use when a resolve error means "the store is locked", else nil.
+func storeLocked(name string, err error) error {
+	if errors.Is(err, credref.ErrLocked) {
+		return fmt.Errorf("%w (%s)", ErrStoreLocked, name)
+	}
+	return nil
+}
 
 // SetAccounts installs the account resolver. Call at boot.
 func (l *AgentLauncher) SetAccounts(r AccountResolver) {
@@ -308,7 +331,7 @@ func (l *AgentLauncher) agent(name string) (config.AgentConfig, bool) {
 }
 
 // New indexes agents + option definitions and resolves a usable login shell.
-func New(agents []config.AgentConfig, resolver secrets.Resolver, optionDefs []config.OptionDef) *AgentLauncher {
+func New(agents []config.AgentConfig, resolver SecretResolver, optionDefs []config.OptionDef) *AgentLauncher {
 	m := make(map[string]config.AgentConfig, len(agents))
 	for _, a := range agents {
 		m[a.Name] = a
@@ -401,6 +424,39 @@ func (l *AgentLauncher) SetStaticTokens(entries []config.StaticToken) {
 	l.mu.Lock()
 	l.tokens = cp
 	l.mu.Unlock()
+}
+
+// SetBoxGate installs a check that runs for every boxed spawn, before anything
+// is resolved; a non-nil error refuses the spawn. Host-tier spawns never call
+// it. Call once at boot. nil removes the gate.
+func (l *AgentLauncher) SetBoxGate(gate func() error) {
+	l.mu.Lock()
+	l.boxGate = gate
+	l.mu.Unlock()
+}
+
+// SeccompGate refuses boxed spawns while Docker's seccomp is off and an
+// encrypted store exists. storeExists is read on every call, so `store init`
+// while the daemon runs takes effect, and probe is not called at all while
+// there is no store. With a store, probe runs on EVERY gated spawn and nothing
+// is cached: docker's security options can change under a running daemon, and
+// an error (we cannot tell) is refused too, so a failure clears itself on the
+// next spawn.
+func SeccompGate(probe func() (bool, error), storeExists func() bool) func() error {
+	return func() error {
+		if !storeExists() {
+			return nil
+		}
+		on, err := probe()
+		if err != nil {
+			log.Printf("seccomp: could not read docker's security options (%v); boxed spawn refused", err)
+			return box.ErrSeccompOff
+		}
+		if !on {
+			return box.ErrSeccompOff
+		}
+		return nil
+	}
 }
 
 // SetAWSConnections installs the instance's aws_connections (deep-copied).
@@ -568,6 +624,17 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	boxed := spec.Runtime == config.RuntimeBox ||
 		(spec.Runtime == "" && l.tierOf(cfg) == config.RuntimeBox)
 
+	if boxed {
+		l.mu.RLock()
+		gate := l.boxGate
+		l.mu.RUnlock()
+		if gate != nil {
+			if err := gate(); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+
 	acct, err := l.AccountFor(spec)
 	if err != nil {
 		return nil, nil, err
@@ -624,6 +691,9 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 		}
 		v, ok, err := l.secrets.Resolve(name)
 		if err != nil {
+			if locked := storeLocked(name, err); locked != nil {
+				return nil, nil, locked
+			}
 			return nil, nil, fmt.Errorf("launcher: resolving secret %q for agent %q: %w", name, cfg.Name, err)
 		}
 		if !ok {
@@ -638,6 +708,9 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 		if acct.TokenSecret != "" {
 			v, ok, err := l.secrets.Resolve(acct.TokenSecret)
 			if err != nil {
+				if locked := storeLocked(acct.TokenSecret, err); locked != nil {
+					return nil, nil, locked
+				}
 				return nil, nil, fmt.Errorf("launcher: account %q: resolving token secret %s: %w", acct.Name, acct.TokenSecret, err)
 			}
 			if !ok {

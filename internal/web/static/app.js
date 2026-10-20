@@ -5,8 +5,14 @@ async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) {
     let msg = res.statusText;
-    try { msg = (await res.json()).error || msg; } catch (_) {}
-    throw new Error(msg);
+    let code = "";
+    try { const b = await res.json(); msg = b.error || msg; code = b.code || ""; } catch (_) {}
+    const err = new Error(msg);
+    // The status and machine code ride along so a caller can act on a specific
+    // refusal (a locked store, 423) instead of parsing prose.
+    err.status = res.status;
+    err.code = code;
+    throw err;
   }
   return res.status === 204 ? null : res.json();
 }
@@ -1082,7 +1088,11 @@ async function restartSession(s) {
   if (!res.ok) {
     let msg = "";
     try { msg = ((await res.json()) || {}).error || ""; } catch (_) {}
-    showToast(res.status === 400 && msg ? "Restart failed: " + msg : actionFailText("restart", res.status), { error: true });
+    // 423 = the store is locked: its message names the way out, and the banner
+    // (refreshStore) is where the passphrase goes.
+    const named = (res.status === 400 || res.status === 423) && msg;
+    showToast(named ? "Restart failed: " + msg : actionFailText("restart", res.status), { error: true });
+    if (res.status === 423) refreshStore();
     await refreshSessions();
     return;
   }
@@ -1586,6 +1596,8 @@ function renderNeedsBody(s) {
   const c = cardContent(s);
   // An expired AWS sign-in outranks turn/ask for which card shows.
   if (c.sso) return renderSSOBody(s, { mobile: false });
+  // A locked store: the card is the unlock form (store.js).
+  if (c.unlock) return renderStoreBody(s, { mobile: false });
   const body = document.createElement("div");
   body.className = "nbody";
   // The text block doubles as the expand/collapse control — the sidebar's old
@@ -1745,7 +1757,7 @@ function renderNeedsCard(s) {
   // call Task 4's sheet header already made for the identical reason.
   const wt = document.createElement("span");
   wt.className = "wt";
-  wt.textContent = s.need === "sso" ? needLabel(s) : "waiting";
+  wt.textContent = s.need === "sso" || s.need === "store_locked" ? needLabel(s) : "waiting";
   hdr.appendChild(wt);
   li.appendChild(hdr);
 
@@ -1771,6 +1783,22 @@ function renderNeedsCard(s) {
     sterm.onclick = () => openTerminal(s.id, s.name);
     swide.appendChild(sterm);
     li.appendChild(swide);
+    return li;
+  }
+
+  // A locked store: the unlock form, then Open terminal. No reply row: nothing
+  // is being asked, and the fix is the passphrase.
+  if (cardContent(s).unlock) {
+    li.appendChild(renderStoreBody(s, { mobile: true }));
+    const uwide = document.createElement("div");
+    uwide.className = "wide";
+    const uterm = document.createElement("button");
+    uterm.type = "button";
+    uterm.className = "btn";
+    uterm.textContent = "Open terminal";
+    uterm.onclick = () => openTerminal(s.id, s.name);
+    uwide.appendChild(uterm);
+    li.appendChild(uwide);
     return li;
   }
 
@@ -2337,7 +2365,9 @@ async function refreshSessions() {
   // click on it is still safe, because sendAnswer hashes the STALE ask_full it
   // has on hand and the server's own hash/memo gate (ask_sha256 mismatch ->
   // 409) refuses it rather than answering the wrong prompt.
-  const holdList = () => editing || replyFocused;
+  // A focused store passphrase field holds the rebuild too (store.js): a poll
+  // must not tear down the form mid-keystroke.
+  const holdList = () => editing || replyFocused || storeUnlockFocused();
   let sessions;
   try { sessions = await api("/api/sessions"); }
   catch (e) {
@@ -3722,6 +3752,7 @@ async function spawnSession(req, opts) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
   });
+  if (opts.onCreated) opts.onCreated(s);
   try {
     localStorage.setItem(LAST_SPAWN_KEY, JSON.stringify({
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
@@ -3937,6 +3968,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   }
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
+  hideSpawnUnlock();
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
@@ -3955,8 +3987,56 @@ function initSpawnControl() {
   });
 }
 
+// spawnBusy: a spawn POST is in flight. The dialog now stays open until the
+// server answers (a refused spawn must be able to show its unlock form in
+// place), so a second submit would start a second session.
+let spawnBusy = false;
+
+// hideSpawnUnlock clears the inline unlock block. Called on every dialog open
+// and on Retry, so a stale "store unlocked" never outlives its dialog.
+function hideSpawnUnlock() {
+  const box = $("spawn-unlock");
+  if (!box) return;
+  box.hidden = true;
+  box.replaceChildren();
+}
+
+// showSpawnUnlock: a spawn was refused with 423 store_locked. The dialog stays
+// open with the unlock form inline; after a 204 it offers Retry, which submits
+// the same form again.
+function showSpawnUnlock(message) {
+  const box = $("spawn-unlock");
+  if (!box) return;
+  const txt = document.createElement("div");
+  txt.className = "storetxt";
+  txt.textContent = message;
+  const slot = document.createElement("div");
+  slot.className = "storeslot";
+  renderUnlockForm(slot, () => {
+    const done = document.createElement("div");
+    done.className = "storeretry";
+    const note = document.createElement("span");
+    note.textContent = "Store unlocked.";
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "btn pri";
+    retry.textContent = "Retry";
+    retry.onclick = () => { hideSpawnUnlock(); $("spawn").requestSubmit(); };
+    done.append(note, retry);
+    slot.replaceChildren(done);
+    retry.focus();
+  });
+  box.replaceChildren(txt, slot);
+  box.hidden = false;
+  refreshStore(); // the banner behind the dialog shows the same lock
+}
+
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
+  if (spawnBusy) return;
+  spawnBusy = true;
+  const goBtn = $("spawn").querySelector('button[type="submit"]');
+  if (goBtn) goBtn.disabled = true;
   const req = spawnPayload({
     agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
     runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
@@ -3964,16 +4044,28 @@ $("spawn").addEventListener("submit", async (ev) => {
     account: $("spawn-account-row").hidden ? "" : $("spawn-account").value,
   });
   const draft = $("spawn-prompt").value;
-  // Close first: a fixed-position toast renders *beneath* a modal dialog's
-  // backdrop, so an Undo offered while the dialog is still up is unreachable.
-  closeDialog("spawn-modal");
-  $("sess-name").value = "";
-  $("spawn-prompt").value = "";
+  // The dialog closes the moment the session exists, before the toast: a
+  // fixed-position toast renders *beneath* a modal dialog's backdrop, so an Undo
+  // offered while the dialog is still up is unreachable.
+  const closeSpawn = () => {
+    closeDialog("spawn-modal");
+    $("sess-name").value = "";
+    $("spawn-prompt").value = "";
+  };
+  hideSpawnUnlock();
   try {
-    await spawnSession(req);
+    await spawnSession(req, { onCreated: closeSpawn });
   } catch (e) {
-    spawnPromptDraft = draft; // reopening New session restores it
-    showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
+    if (spawnRefusedLocked(e.status, e.code)) {
+      showSpawnUnlock(e.message); // dialog and form values stay as they were
+    } else {
+      closeSpawn();
+      spawnPromptDraft = draft; // reopening New session restores it
+      showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
+    }
+  } finally {
+    spawnBusy = false;
+    if (goBtn) goBtn.disabled = false;
   }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
@@ -4502,6 +4594,7 @@ async function spawnShellIn(cell) {
     openTerminal(s.id, s.name);
   } catch (e) {
     showToast("Shell failed: " + e.message, { error: true });
+    if (spawnRefusedLocked(e.status, e.code)) refreshStore();
   } finally {
     shellSpawning.delete(cell);
   }
@@ -4700,6 +4793,7 @@ initMobileShell();
 fontPrefs.applyCssVars();
 initSettings();
 initNotifyToggle();
+initStore();
 setInterval(refreshSessions, 3000);
 // U8: crossing the mobile breakpoint (rotate, resize, devtools) changes which
 // panes/screens are even in the DOM — mobileshell's own screen classes react
@@ -4731,6 +4825,9 @@ setInterval(async () => {
     lastRateLimits = (m && m.rate_limits) || null;
     renderRateLimits(lastRateLimits);
   } catch (_) {}
+  // The store's lock state moves on the same slow cadence (TTL expiry, a lock
+  // or unlock from the CLI), so it rides this tick rather than a timer of its own.
+  refreshStore();
 }, 30000);
 
 // Ctrl+Shift+` → new shell in the focused window. Capture phase + stopPropagation

@@ -13,10 +13,23 @@ import (
 	"syscall"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
-// MaxValueBytes bounds a referenced value read from a file.
-const MaxValueBytes = 64 << 10
+// MaxValueBytes bounds a referenced value: one limit for files and the store.
+const MaxValueBytes = secretstore.MaxValueBytes
+
+// ErrLocked is what a store reference resolves to while the store is locked.
+var ErrLocked = secretstore.ErrLocked
+
+// StoreGetter is the part of the encrypted store a reference needs. Get returns
+// the value's raw bytes.
+type StoreGetter interface {
+	Get(id string) ([]byte, error)
+}
+
+// ErrStoreNotConfigured is returned for a store reference when no store was given.
+var ErrStoreNotConfigured = errors.New("store references need the agent-box store (not configured)")
 
 // ErrEnvNotSet is what Resolve wraps when an env reference names a variable
 // that is unset or empty. Callers that only report on a reference (doctor) can
@@ -36,9 +49,11 @@ type Resolver interface {
 	Resolve(ref config.KeyRef) ([]byte, error)
 }
 
-// Default resolves file and env references. A nil LookupEnv means os.LookupEnv.
+// Default resolves file, env and store references. A nil LookupEnv means
+// os.LookupEnv; a nil Store refuses store references.
 type Default struct {
 	LookupEnv func(string) (string, bool)
+	Store     StoreGetter
 }
 
 // Resolve validates ref, reads it fresh, and returns the trimmed value.
@@ -64,12 +79,35 @@ func (d Default) Resolve(ref config.KeyRef) ([]byte, error) {
 			return nil, envNotSetError{ref.Var}
 		}
 		raw = []byte(v)
+	case "store":
+		b, err := GetStore(d.Store, ref.ID)
+		if err != nil {
+			return nil, err
+		}
+		raw = b
 	}
 	out, err := Value(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", ref, err)
 	}
 	return out, nil
+}
+
+// GetStore reads a store value's raw bytes. Errors keep the store's sentinels
+// (errors.Is ErrLocked / secretstore.ErrNoSuchValue) and name the id, never the
+// bytes. A nil store is ErrStoreNotConfigured.
+func GetStore(s StoreGetter, id string) ([]byte, error) {
+	if s == nil {
+		return nil, ErrStoreNotConfigured
+	}
+	b, err := s.Get(id)
+	if err != nil {
+		if errors.Is(err, ErrLocked) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("store %s: %w", id, err)
+	}
+	return b, nil
 }
 
 // Value trims one trailing "\n" or "\r\n", then refuses an empty value or one

@@ -1,12 +1,14 @@
 package credref
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 const fakeSecret = "tok-SECRET-1234"
@@ -111,7 +113,7 @@ func TestDefaultResolveEnv(t *testing.T) {
 		t.Fatal("AB_PASS must be refused")
 	}
 	if _, err = d.Resolve(config.KeyRef{Type: "store"}); err == nil {
-		t.Fatal("store must be refused")
+		t.Fatal("store ref without an id must be refused")
 	}
 }
 
@@ -152,5 +154,48 @@ func TestResolveFilePicksUpRotation(t *testing.T) {
 	got, err = d.Resolve(ref)
 	if err != nil || string(got) != "v2" {
 		t.Fatalf("v2: %q, %v", got, err)
+	}
+}
+
+type fakeStore struct {
+	val   []byte
+	err   error
+	calls int
+}
+
+func (f *fakeStore) Get(id string) ([]byte, error) { f.calls++; return f.val, f.err }
+
+func TestResolveStore(t *testing.T) {
+	ref := config.KeyRef{Type: "store", ID: "tok"}
+	fs := &fakeStore{val: []byte("tok\n")}
+	got, err := Default{Store: fs}.Resolve(ref)
+	if err != nil || string(got) != "tok" {
+		t.Fatalf("Resolve = %q, %v", got, err)
+	}
+
+	fs = &fakeStore{err: ErrLocked}
+	if _, err = (Default{Store: fs}).Resolve(ref); !errors.Is(err, ErrLocked) {
+		t.Fatalf("locked: %v", err)
+	}
+	fs = &fakeStore{err: secretstore.ErrNoSuchValue}
+	if _, err = (Default{Store: fs}).Resolve(ref); !errors.Is(err, secretstore.ErrNoSuchValue) || !strings.Contains(err.Error(), "tok") {
+		t.Fatalf("missing: %v", err)
+	}
+
+	_, err = Default{}.Resolve(ref)
+	if err == nil || err.Error() != "store references need the agent-box store (not configured)" {
+		t.Fatalf("nil store: %v", err)
+	}
+
+	// A stored value goes through the same Value filter as file/env.
+	fs = &fakeStore{val: []byte("a\nb")}
+	if _, err = (Default{Store: fs}).Resolve(ref); err == nil {
+		t.Fatal("control byte must be refused")
+	}
+}
+
+func TestMaxValueBytesShared(t *testing.T) {
+	if MaxValueBytes != secretstore.MaxValueBytes {
+		t.Fatalf("credref %d != secretstore %d", MaxValueBytes, secretstore.MaxValueBytes)
 	}
 }
