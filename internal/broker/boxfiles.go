@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -99,46 +100,18 @@ func StripGitHubEnv() []string {
 // All writes go through os.Root, so a symlink planted at any level is refused
 // rather than followed (repo rule: host writes go through os.Root).
 func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
-	if !bs.Any() {
-		return "", errors.New("broker: no binding to prepare")
-	}
-	if bs.AWS != nil {
-		if err := bs.AWS.Validate(); err != nil {
-			return "", fmt.Errorf("broker: %w", err)
-		}
-	}
-	if bs.GitHub != nil {
-		if err := bs.GitHub.Validate(); err != nil {
-			return "", fmt.Errorf("broker: %w", err)
-		}
-	}
-	for _, t := range bs.Tokens {
-		if err := t.Validate(); err != nil {
-			return "", fmt.Errorf("broker: %w", err)
-		}
-	}
-	// Connection names and regions are formatted into an INI file: re-check
-	// each one here, as for the inline binding (a hand-edited config.json is not
-	// re-validated at load).
-	for i, c := range bs.AWSConns {
-		if err := c.Validate(); err != nil {
-			return "", fmt.Errorf("broker: aws_connections[%d]: %w", i, err)
-		}
-	}
-	root, err := os.OpenRoot(stateRoot)
+	return EnsureBindingDirWith(stateRoot, bs, nil)
+}
+
+// EnsureBindingDirWith is EnsureBindingDir with the spawn's base-role probe
+// results, keyed by binding key (the connection name), which aws.json carries
+// per connection. A connection missing from base reads as "not checked".
+func EnsureBindingDirWith(stateRoot string, bs config.Bindings, base map[string]awsprobe.Result) (string, error) {
+	root, rel, err := openBindingDir(stateRoot, bs)
 	if err != nil {
-		return "", fmt.Errorf("broker: opening state root: %w", err)
+		return "", err
 	}
 	defer root.Close()
-	rel := filepath.Join("broker", "binding-"+bs.Hash())
-	for _, d := range []string{"broker", rel} {
-		if err := root.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			return "", fmt.Errorf("broker: %w", err)
-		}
-	}
-	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
-		return "", fmt.Errorf("broker: %s is not a plain directory", rel)
-	}
 	type file struct {
 		name string
 		data []byte
@@ -149,7 +122,7 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 		files = append(files, file{"aws-config", []byte(cfg)})
 	}
 	if len(bs.AWSConns) > 0 {
-		files = append(files, file{"aws-config", AWSConfigFor(bs.AWSConns)}, file{AWSListFile, AWSListing(bs.AWSConns)})
+		files = append(files, file{"aws-config", AWSConfigFor(bs.AWSConns)}, file{AWSListFile, AWSListing(bs.AWSConns, base)})
 	}
 	if bs.GitHub != nil {
 		files = append(files, file{"agentbox-gh.js", ghScript})
@@ -168,6 +141,88 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 		}
 	}
 	return filepath.Join(stateRoot, rel), nil
+}
+
+// openBindingDir validates the bindings, then opens the state root and makes
+// sure <stateRoot>/broker/binding-<hash> exists as a plain directory. It writes
+// no file into it. The caller closes the returned root.
+func openBindingDir(stateRoot string, bs config.Bindings) (*os.Root, string, error) {
+	if err := validateBindings(bs); err != nil {
+		return nil, "", err
+	}
+	root, err := os.OpenRoot(stateRoot)
+	if err != nil {
+		return nil, "", fmt.Errorf("broker: opening state root: %w", err)
+	}
+	rel := filepath.Join("broker", "binding-"+bs.Hash())
+	for _, d := range []string{"broker", rel} {
+		if err := root.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			root.Close()
+			return nil, "", fmt.Errorf("broker: %w", err)
+		}
+	}
+	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
+		root.Close()
+		return nil, "", fmt.Errorf("broker: %s is not a plain directory", rel)
+	}
+	return root, rel, nil
+}
+
+func validateBindings(bs config.Bindings) error {
+	if !bs.Any() {
+		return errors.New("broker: no binding to prepare")
+	}
+	if bs.AWS != nil {
+		if err := bs.AWS.Validate(); err != nil {
+			return fmt.Errorf("broker: %w", err)
+		}
+	}
+	if bs.GitHub != nil {
+		if err := bs.GitHub.Validate(); err != nil {
+			return fmt.Errorf("broker: %w", err)
+		}
+	}
+	for _, t := range bs.Tokens {
+		if err := t.Validate(); err != nil {
+			return fmt.Errorf("broker: %w", err)
+		}
+	}
+	// Connection names and regions are formatted into an INI file: re-check
+	// each one here, as for the inline binding (a hand-edited config.json is not
+	// re-validated at load).
+	for i, c := range bs.AWSConns {
+		if err := c.Validate(); err != nil {
+			return fmt.Errorf("broker: aws_connections[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// WriteAWSListing rewrites aws.json in an existing binding dir, with new
+// base-role probe results (a re-probe that landed after the spawn). It is a no-op
+// when the bindings have no named connections (the legacy binding has no
+// aws.json). It never creates the dir: a missing one, or one that is not a plain
+// directory, is an error. The write goes through os.Root and replaceFile.
+func WriteAWSListing(stateRoot string, bs config.Bindings, base map[string]awsprobe.Result) error {
+	if len(bs.AWSConns) == 0 {
+		return nil
+	}
+	if err := validateBindings(bs); err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(stateRoot)
+	if err != nil {
+		return fmt.Errorf("broker: opening state root: %w", err)
+	}
+	defer root.Close()
+	rel := filepath.Join("broker", "binding-"+bs.Hash())
+	if fi, err := root.Lstat(rel); err != nil || !fi.IsDir() {
+		return fmt.Errorf("broker: %s is not a plain directory", rel)
+	}
+	if err := replaceFile(root, rel, AWSListFile, AWSListing(bs.AWSConns, base)); err != nil {
+		return fmt.Errorf("broker: writing %s: %w", AWSListFile, err)
+	}
+	return nil
 }
 
 // AWSConfigFor is the aws-config of a session with named connections: a
@@ -197,17 +252,21 @@ type awsListEntry struct {
 	Region       string `json:"region"`
 	WriteCapable bool   `json:"write_capable"`
 	Description  string `json:"description,omitempty"`
+	awsprobe.Fields
 }
 
 // AWSListing is the JSON the box shows for the AWS section of `agentbox-env
-// --list`, one row per connection sorted by name.
-func AWSListing(conns []config.AWSConnection) []byte {
+// --list`, one row per connection sorted by name. base holds the base-role probe
+// results keyed by connection name; a connection missing from it is "not checked",
+// never read-only.
+func AWSListing(conns []config.AWSConnection, base map[string]awsprobe.Result) []byte {
 	sorted := slices.Clone(conns)
 	slices.SortFunc(sorted, func(a, b config.AWSConnection) int { return strings.Compare(a.Name, b.Name) })
 	out := make([]awsListEntry, len(sorted))
 	for i, c := range sorted {
 		out[i] = awsListEntry{Name: c.Name, Label: c.Label, Prod: c.Prod, AccountID: awsscope.AccountOf(c.RoleARN),
-			RoleARN: c.RoleARN, Region: c.Region, WriteCapable: c.Elevate != nil, Description: c.Description}
+			RoleARN: c.RoleARN, Region: c.Region, WriteCapable: c.Elevate != nil, Description: c.Description,
+			Fields: awsprobe.Lookup(base, c.Name).Fields()}
 	}
 	b, err := json.Marshal(out)
 	if err != nil { // plain strings and bools: cannot happen
@@ -279,19 +338,13 @@ func WriteSessionMCP(stateRoot string, bs config.Bindings, key string, doc []byt
 	if !sessionKeyRe.MatchString(key) {
 		return "", fmt.Errorf("broker: bad session key %q", key)
 	}
-	dir, err := EnsureBindingDir(stateRoot, bs)
+	// Only the directory is ensured: the binding's files (aws.json among them,
+	// which may hold a later re-probe result) were written by the spawn.
+	root, rel, err := openBindingDir(stateRoot, bs)
 	if err != nil {
 		return "", err
 	}
-	root, err := os.OpenRoot(stateRoot)
-	if err != nil {
-		return "", fmt.Errorf("broker: opening state root: %w", err)
-	}
 	defer root.Close()
-	rel, err := filepath.Rel(stateRoot, dir)
-	if err != nil {
-		return "", fmt.Errorf("broker: %w", err)
-	}
 	name := "mcp-" + key + ".json"
 	if err := replaceFile(root, rel, name, doc); err != nil {
 		return "", fmt.Errorf("broker: writing %s: %w", name, err)

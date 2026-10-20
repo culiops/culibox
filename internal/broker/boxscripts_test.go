@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -805,7 +806,10 @@ func awsListDir(t *testing.T, withTokens bool) string {
 	if withTokens {
 		bs.Tokens = listingTokens()
 	}
-	dir, err := EnsureBindingDir(t.TempDir(), bs)
+	dir, err := EnsureBindingDirWith(t.TempDir(), bs, map[string]awsprobe.Result{
+		"acme-prod-read": {State: awsprobe.Writes, Actions: []string{"s3:PutObject", "iam:CreateUser"}},
+		"acme-stg-read":  {State: awsprobe.NoneFound},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -821,13 +825,15 @@ func TestEnvListAWSSection(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 	want := "AWS connections\n" +
-		"acme-prod-read [Acme prod] [prod] [write-capable]\n" +
+		"acme-prod-read [Acme prod] [prod] [write-capable] [role can write]\n" +
 		"  account 111111111111 · role agent-read · region eu-west-1\n" +
+		"  base role allows: s3:PutObject, iam:CreateUser\n" +
 		"  Prod, read only\n" +
 		"  use: aws --profile acme-prod-read …   terraform: provider \"aws\" { profile = \"acme-prod-read\" }\n" +
 		"\n" +
 		"acme-stg-read\n" +
 		"  account 222222222222 · role agent-read · region eu-west-1\n" +
+		"  base role: no broad writes found (scoped grants not detected)\n" +
 		"  use: aws --profile acme-stg-read …   terraform: provider \"aws\" { profile = \"acme-stg-read\" }\n" +
 		"\n"
 	if !strings.HasPrefix(out, want) {
@@ -878,5 +884,62 @@ func TestEnvListNoTokensLineOnlyWhenNothing(t *testing.T) {
 		"AGENTBOX_ENV_LIST_FILE="+empty, "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile))
 	if code != 0 || strings.Contains(out, "no tokens") {
 		t.Fatalf("empty tokens: code=%d out=%q", code, out)
+	}
+}
+
+// listAWSRows runs `agentbox-env --list` over a hand-written aws.json.
+func listAWSRows(t *testing.T, rows string) string {
+	t.Helper()
+	dir := awsListDir(t, false)
+	aws := filepath.Join(t.TempDir(), "aws.json")
+	if err := os.WriteFile(aws, []byte(rows), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, stderr, code := runNode(t, "", "", []string{filepath.Join(dir, "agentbox-env.js"), "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+filepath.Join(dir, "none.json"), "AGENTBOX_ENV_AWS_FILE="+aws)
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	return out
+}
+
+func TestEnvListUnverifiedReasons(t *testing.T) {
+	for reason, text := range map[string]string{
+		"sso_expired": "SSO expired", "assume_denied": "assume-role denied", "simulate_denied": "role cannot simulate itself",
+		"timeout": "timed out", "error": "check failed", "not_checked": "not checked", "probe_disabled": "probe disabled",
+		"bogus": "check failed", "__proto__": "check failed", "toString": "check failed",
+	} {
+		row := `[{"name":"a","account_id":"1","role_arn":"arn:aws:iam::1:role/r","region":"x","base_access":"unverified","base_access_reason":"` + reason + `"}]`
+		out := listAWSRows(t, row)
+		if !strings.Contains(out, "a [base role: unverified]\n") || !strings.Contains(out, "\n  base role: unverified ("+text+")\n") {
+			t.Errorf("%s:\n%s", reason, out)
+		}
+		if strings.Contains(out, "read-only") {
+			t.Errorf("%s: output claims read-only:\n%s", reason, out)
+		}
+	}
+}
+
+// An old box's aws.json has no base_* keys; a corrupt one has an unknown state.
+// Neither may read as a clean result.
+func TestEnvListMissingBaseFieldsIsUnverified(t *testing.T) {
+	for name, extra := range map[string]string{
+		"missing": ``, "unknown state": `,"base_access":"none-found","base_access_reason":"timeout"`,
+		"empty state": `,"base_access":""`, "non-string": `,"base_access":7`,
+	} {
+		out := listAWSRows(t, `[{"name":"a","account_id":"1","role_arn":"arn:aws:iam::1:role/r","region":"x"`+extra+`}]`)
+		if !strings.Contains(out, "a [base role: unverified]\n") || !strings.Contains(out, "\n  base role: unverified (not checked)\n") {
+			t.Errorf("%s:\n%s", name, out)
+		}
+		if strings.Contains(out, "no broad writes") || strings.Contains(out, "read-only") {
+			t.Errorf("%s: clean claim:\n%s", name, out)
+		}
+	}
+}
+
+func TestEnvListWritesWithoutActions(t *testing.T) {
+	out := listAWSRows(t, `[{"name":"a","account_id":"1","role_arn":"arn:aws:iam::1:role/r","region":"x","base_access":"writes"}]`)
+	if !strings.Contains(out, "a [role can write]\n") || !strings.Contains(out, "\n  base role allows writes\n") {
+		t.Fatalf("%s", out)
 	}
 }

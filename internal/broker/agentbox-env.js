@@ -136,14 +136,47 @@ function readList(file, what) {
   } catch (e) { return fail('cannot read the ' + what + ' (' + e.message + ')'); }
 }
 
+// BASE_REASON mirrors awsprobe.ReasonText; anything else reads "check failed".
+const BASE_REASON = {
+  sso_expired: 'SSO expired',
+  assume_denied: 'assume-role denied',
+  simulate_denied: 'role cannot simulate itself',
+  timeout: 'timed out',
+  error: 'check failed',
+  not_checked: 'not checked',
+  probe_disabled: 'probe disabled',
+};
+
+function baseReasonText(r) {
+  return Object.prototype.hasOwnProperty.call(BASE_REASON, r) ? BASE_REASON[r] : 'check failed';
+}
+
+// baseState reads a row's base-role fields. A missing or unknown state (an old
+// box, a hand-edited file) is unverified, never "no writes".
+function baseState(c) {
+  if (c.base_access === 'writes' || c.base_access === 'none_found') return c.base_access;
+  return 'unverified';
+}
+
 function awsSection(conns) {
   const blocks = conns.map((c) => {
     const head = [c.name];
     if (c.label) head.push('[' + c.label + ']');
     if (c.prod) head.push('[prod]');
     if (c.write_capable) head.push('[write-capable]');
+    const state = baseState(c);
+    if (state === 'writes') head.push('[role can write]');
+    else if (state === 'unverified') head.push('[base role: unverified]');
     const role = String(c.role_arn || '').split('/').pop();
     const lines = [head.join(' '), '  account ' + c.account_id + ' · role ' + role + ' · region ' + c.region];
+    if (state === 'writes') {
+      const acts = Array.isArray(c.base_write_actions) ? c.base_write_actions.filter((a) => typeof a === 'string') : [];
+      lines.push(acts.length ? '  base role allows: ' + acts.join(', ') : '  base role allows writes');
+    } else if (state === 'none_found') {
+      lines.push('  base role: no broad writes found (scoped grants not detected)');
+    } else {
+      lines.push('  base role: unverified (' + baseReasonText(c.base_access === 'unverified' ? (c.base_access_reason || 'not_checked') : 'not_checked') + ')');
+    }
     if (c.description) lines.push('  ' + c.description);
     lines.push('  use: aws --profile ' + c.name + ' …   terraform: provider "aws" { profile = "' + c.name + '" }');
     return lines.join('\n');

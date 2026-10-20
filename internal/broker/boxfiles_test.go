@@ -13,7 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -571,7 +573,7 @@ func TestWriteSessionMCP(t *testing.T) {
 	if b, _ := os.ReadFile(p); string(b) != `{"mcpServers":{}}` {
 		t.Fatalf("content %q", b)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(p), "agentbox-env.js")); err != nil {
+	if fi, err := os.Stat(filepath.Dir(p)); err != nil || !fi.IsDir() {
 		t.Fatalf("binding dir was not ensured: %v", err)
 	}
 	if _, err := WriteSessionMCP(root, bs, "sess-1", []byte(`{"v":2}`)); err != nil { // replaces
@@ -798,7 +800,7 @@ func TestEnsureBindingDirConnsWritesEnvScript(t *testing.T) {
 		t.Fatalf("aws-config %q", cfg)
 	}
 	list, _ := os.ReadFile(filepath.Join(dir, AWSListFile))
-	if !bytes.Equal(list, AWSListing(bs.AWSConns)) {
+	if !bytes.Equal(list, AWSListing(bs.AWSConns, nil)) {
 		t.Fatalf("aws.json %q", list)
 	}
 	// With tokens as well, tokens.json joins them.
@@ -831,7 +833,7 @@ func TestEnsureBindingDirConnsRevalidates(t *testing.T) {
 }
 
 func TestAWSListingNoSourceProfile(t *testing.T) {
-	b := AWSListing(twoConns())
+	b := AWSListing(twoConns(), nil)
 	if strings.Contains(string(b), "source_profile") || strings.Contains(string(b), "sso-acme") {
 		t.Fatalf("listing leaks the source profile: %s", b)
 	}
@@ -855,5 +857,121 @@ func TestAWSListingNoSourceProfile(t *testing.T) {
 		if strings.Contains(string(b), k) {
 			t.Errorf("listing carries %s", k)
 		}
+	}
+}
+
+func baseResults() map[string]awsprobe.Result {
+	at := time.Date(2026, 10, 20, 9, 30, 0, 0, time.UTC)
+	return map[string]awsprobe.Result{
+		"acme-prod-read": {State: awsprobe.Writes, Actions: []string{"s3:PutObject"}, CheckedAt: at},
+	}
+}
+
+func TestAWSListingBaseFields(t *testing.T) {
+	var rows []map[string]any
+	if err := json.Unmarshal(AWSListing(twoConns(), baseResults()), &rows); err != nil {
+		t.Fatal(err)
+	}
+	acts, _ := rows[0]["base_write_actions"].([]any)
+	if rows[0]["base_access"] != "writes" || len(acts) != 1 || acts[0] != "s3:PutObject" ||
+		rows[0]["base_checked_at"] != "2026-10-20T09:30:00Z" {
+		t.Fatalf("row 0 = %v", rows[0])
+	}
+	if rows[1]["base_access"] != "unverified" || rows[1]["base_access_reason"] != "not_checked" {
+		t.Fatalf("row 1 = %v", rows[1])
+	}
+	if _, ok := rows[1]["base_write_actions"]; ok {
+		t.Fatalf("row 1 has actions: %v", rows[1])
+	}
+}
+
+func TestWriteAWSListingRewrites(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{AWSConns: twoConns()}
+	dir, err := EnsureBindingDirWith(root, bs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, AWSListFile)
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), `"base_access":"unverified"`) {
+		t.Fatalf("initial aws.json: %s", b)
+	}
+	if err := WriteAWSListing(root, bs, baseResults()); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if !bytes.Equal(b, AWSListing(bs.AWSConns, baseResults())) || !strings.Contains(string(b), `"base_access":"writes"`) {
+		t.Fatalf("aws.json not rewritten: %s", b)
+	}
+	if fi, err := os.Stat(p); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode: %v %v", fi, err)
+	}
+}
+
+func TestWriteAWSListingRefusesSymlinkedDir(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{AWSConns: twoConns()}
+	dir, err := EnsureBindingDirWith(root, bs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAWSListing(root, bs, baseResults()); err == nil {
+		t.Fatal("wrote through a symlinked binding dir")
+	}
+	if ents, _ := os.ReadDir(outside); len(ents) != 0 {
+		t.Fatalf("wrote into the symlink target: %v", ents)
+	}
+}
+
+func TestWriteAWSListingMissingDirIsAnError(t *testing.T) {
+	root := t.TempDir()
+	if err := WriteAWSListing(root, config.Bindings{AWSConns: twoConns()}, baseResults()); err == nil {
+		t.Fatal("created or accepted a missing binding dir")
+	}
+	if _, err := os.Stat(filepath.Join(root, "broker")); err == nil {
+		t.Fatal("created the binding dir")
+	}
+}
+
+func TestWriteAWSListingNoConnsNoop(t *testing.T) {
+	root := t.TempDir()
+	bs := awsOnly(*binding())
+	dir, err := EnsureBindingDir(root, bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAWSListing(root, bs, baseResults()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, AWSListFile)); err == nil {
+		t.Fatal("wrote aws.json for a legacy-only binding")
+	}
+}
+
+// A re-probe result in aws.json must survive a later MCP write on the same dir.
+func TestWriteSessionMCPKeepsAWSListing(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{AWSConns: twoConns(), Tokens: tokenEntries()}
+	dir, err := EnsureBindingDirWith(root, bs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteAWSListing(root, bs, baseResults()); err != nil {
+		t.Fatal(err)
+	}
+	want, _ := os.ReadFile(filepath.Join(dir, AWSListFile))
+	if _, err := WriteSessionMCP(root, bs, "sess-1", []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, AWSListFile))
+	if !bytes.Equal(got, want) || !strings.Contains(string(got), `"base_access":"writes"`) {
+		t.Fatalf("WriteSessionMCP rewrote aws.json:\n%s\nwant\n%s", got, want)
 	}
 }
