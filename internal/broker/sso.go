@@ -67,10 +67,26 @@ func (b *Broker) SSOExpired(sid string) string {
 	return b.ssoNeed[connKey{sid, conns[0]}]
 }
 
+// SSOExpiredConns maps each of session sid's named connections whose last
+// mint failed on an expired SSO login to the sourceKey it waits on. The legacy
+// binding (conn "") is not in it: SSOExpired reports that one.
+func (b *Broker) SSOExpiredConns(sid string) map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]string{}
+	for k, key := range b.ssoNeed {
+		if k.sid == sid && k.conn != "" {
+			out[k.conn] = key
+		}
+	}
+	return out
+}
+
 // SSOLoginDone records the outcome of a sign-in that sid's card started for the
-// sourceKey. A completed one clears the flag for every session on that key; a
-// failed one clears nothing. Both are audited.
-func (b *Broker) SSOLoginDone(key, sid string, ok bool, detail string) {
+// sourceKey, for connection conn ("" = the legacy binding). A completed one
+// clears the flag for every session on that key; a failed one clears nothing.
+// Both are audited.
+func (b *Broker) SSOLoginDone(key, sid, conn string, ok bool, detail string) {
 	row := ApprovalRow{Time: b.now(), SessionID: sid, Action: ActionSSOLoginFailed, Error: sanitize(detail)}
 	if ok {
 		row.Action = ActionSSOLoginOK
@@ -79,7 +95,7 @@ func (b *Broker) SSOLoginDone(key, sid string, ok bool, detail string) {
 		b.mu.Unlock()
 	}
 	if sv, found := b.lookup(sid); found {
-		identify(&row, sv)
+		identify(&row, sv, conn)
 	}
 	b.recordApproval(row)
 }

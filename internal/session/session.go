@@ -290,9 +290,13 @@ type BrokerHooks interface {
 	// is idempotent. Called when the agent exits, not when it merely detaches.
 	RevokeGitHub(sessionID string)
 	// AWSState is the broker-held state a session list shows: when the
-	// session's write window ends (zero = none) and the sign-in a human must
-	// renew on the host ("" = none). Read-only; it takes only the broker's lock.
-	AWSState(sessionID string) (elevatedUntil time.Time, ssoExpired string)
+	// session's write window ends (zero = none), the connection it is for (""
+	// = the legacy binding), and the sign-in a human must renew on the host
+	// ("" = none). Read-only; it takes only the broker's lock.
+	AWSState(sessionID string) (elevatedUntil time.Time, conn string, ssoExpired string)
+	// AWSConnState maps each named connection waiting on a human sign-in to
+	// its sign-in key. Read-only; it takes only the broker's lock.
+	AWSConnState(sessionID string) map[string]string
 	// WriteSessionMCP writes the session's own MCP config (the entry servers a
 	// token binding adds) into the binding dir and returns its path inside the
 	// box. key names the file; the document carries no secret.
@@ -372,6 +376,14 @@ type ElevateInfo struct {
 	RoleARN    string `json:"role_arn"`
 	MaxMinutes int    `json:"max_minutes"`
 	AllowIAM   bool   `json:"allow_iam"`
+}
+
+// elevateInfo is the wire view of an elevate block; nil for none.
+func elevateInfo(e *config.AWSElevate) *ElevateInfo {
+	if e == nil {
+		return nil
+	}
+	return &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
 }
 
 // Bundles supplies the pinned agent-config bundle for a boxed session. Nil means
@@ -917,18 +929,12 @@ func (s *Session) Info() Info {
 	}
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	if s.AWS != nil {
-		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod}
-		if e := s.AWS.Elevate; e != nil {
-			in.AWS.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
-		}
+		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
+			Elevate: elevateInfo(s.AWS.Elevate)}
 	}
 	for _, c := range s.AWSConns {
-		ci := AWSConnInfo{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN), RoleARN: c.RoleARN, Region: c.Region,
-			Prod: c.Prod, WriteCapable: c.Elevate != nil}
-		if e := c.Elevate; e != nil {
-			ci.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
-		}
-		in.AWSConnections = append(in.AWSConnections, ci)
+		in.AWSConnections = append(in.AWSConnections, AWSConnInfo{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
+			RoleARN: c.RoleARN, Region: c.Region, Prod: c.Prod, WriteCapable: c.Elevate != nil, Elevate: elevateInfo(c.Elevate)})
 	}
 	slices.SortFunc(in.AWSConnections, func(a, b AWSConnInfo) int { return strings.Compare(a.Name, b.Name) })
 	if g := s.GitHub; g != nil {
@@ -1977,12 +1983,24 @@ func (m *Manager) List() []Info {
 		if out[i].Need == "ask" && out[i].Replyable && blocked && ok {
 			out[i].AskFull = p.AskFull
 		}
-		if out[i].AWS != nil && brk != nil {
-			until, sso := brk.AWSState(out[i].ID)
-			applyAWSState(&out[i], until, sso)
+		if brk != nil && (out[i].AWS != nil || len(out[i].AWSConnections) > 0) {
+			st := awsState{}
+			st.until, st.conn, st.sso = brk.AWSState(out[i].ID)
+			if len(out[i].AWSConnections) > 0 {
+				st.conns = brk.AWSConnState(out[i].ID)
+			}
+			applyAWSState(&out[i], st)
 		}
 	}
 	return out
+}
+
+// awsState is the broker's state for one listed session (BrokerHooks.AWSState
+// and, for a session with connections, AWSConnState).
+type awsState struct {
+	until     time.Time         // end of the live write window; zero = none
+	conn, sso string            // the window's connection ("" = legacy); the sign-in key awaited
+	conns     map[string]string // named connection -> the sign-in key it awaits
 }
 
 // applyAWSState folds the broker's state into a listed bound session. A
@@ -1990,16 +2008,33 @@ func (m *Manager) List() []Info {
 // whose card has a prompt to answer — for any bound session, claude or not.
 // Activity is left alone: the row keeps saying what the agent is doing. An
 // exited session shows no write window: nothing can mint with it any more.
-func applyAWSState(in *Info, until time.Time, sso string) {
-	if in.AWS == nil {
+// A session with connections shows the window on the connection it is for
+// and each expired sign-in on its own connection.
+func applyAWSState(in *Info, st awsState) {
+	window := !st.until.IsZero() && !in.Exited
+	needSSO := false
+	switch {
+	case in.AWS != nil:
+		if window {
+			u := st.until
+			in.AWS.ElevatedUntil = &u
+		}
+		in.AWS.SSOExpired = st.sso
+		needSSO = st.sso != ""
+	case len(in.AWSConnections) > 0:
+		for i := range in.AWSConnections {
+			c := &in.AWSConnections[i]
+			if window && c.Name == st.conn {
+				u := st.until
+				c.ElevatedUntil = &u
+			}
+			c.SSOExpired = st.conns[c.Name]
+			needSSO = needSSO || c.SSOExpired != ""
+		}
+	default:
 		return
 	}
-	if !until.IsZero() && !in.Exited {
-		u := until
-		in.AWS.ElevatedUntil = &u
-	}
-	in.AWS.SSOExpired = sso
-	if sso != "" && in.Need != "ask" {
+	if needSSO && in.Need != "ask" {
 		in.Need = "sso"
 	}
 }

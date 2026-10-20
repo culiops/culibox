@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/culiops/agent-box/internal/awsscope"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 // The credential kind recorded on an approval row. Only these labels are ever
@@ -30,10 +31,11 @@ var ErrElevateRefused = errors.New("elevation refused")
 
 // ElevateRequest is a human's request for a write window. Cred is the kind of
 // credential the request arrived with; only a signed-in browser (CredCookie)
-// may grant.
+// may grant. Name is the AWS connection the window is for: required for a
+// session bound by connections, empty for the legacy binding.
 type ElevateRequest struct {
-	Minutes                    int
-	Reason, ConfirmLabel, Cred string
+	Minutes                          int
+	Name, Reason, ConfirmLabel, Cred string
 }
 
 // ElevationView is the timer-free, exported state of a session's write window.
@@ -43,6 +45,16 @@ type ElevationView struct {
 	GrantedAt time.Time `json:"granted_at,omitzero"`
 	Reason    string    `json:"reason,omitempty"`
 	LastValid time.Time `json:"last_valid,omitzero"`
+	// Name is the AWS connection the window (or, after a drop, the write
+	// credentials still valid) is for; empty for the legacy binding.
+	Name string `json:"name,omitempty"`
+}
+
+// droppedWin is what a drop leaves behind: the connection whose write
+// credentials were already issued, and the latest Expiration among them.
+type droppedWin struct {
+	conn      string
+	lastValid time.Time
 }
 
 // stopper is the part of *time.Timer the overlay uses; tests inject fakes.
@@ -79,16 +91,80 @@ func credLabel(c string) string {
 
 // identify fills a row's profile, role and account from the session: the
 // elevate role when the binding has one, since that is what a grant is about.
-func identify(row *ApprovalRow, sv SessionView) {
+// conn "" is the legacy binding; a named connection the session has also sets
+// the row's Entry, and one it lacks leaves the row with the profile alone.
+func identify(row *ApprovalRow, sv SessionView, conn string) {
 	row.Profile = sv.Agent
-	if sv.AWS == nil {
+	bnd := sv.AWS
+	if conn != "" {
+		c, ok := config.AWSConnByName(sv.AWSConns, conn)
+		if !ok {
+			return
+		}
+		bnd, row.Entry = &c.AWSBinding, c.Name
+	}
+	if bnd == nil {
 		return
 	}
-	row.RoleARN = sv.AWS.RoleARN
-	if sv.AWS.Elevate != nil {
-		row.RoleARN = sv.AWS.Elevate.RoleARN
+	row.RoleARN = bnd.RoleARN
+	if bnd.Elevate != nil {
+		row.RoleARN = bnd.Elevate.RoleARN
 	}
 	row.AccountID = awsscope.AccountOf(row.RoleARN)
+}
+
+// elevBinding resolves the binding a grant is for (spec §7.5). The legacy
+// binding takes no name; a session bound by connections must name one of its
+// own. entry is what a refused row records for the name: the name when it is
+// well formed, invalidEntry when it is not, "" when none was given.
+func elevBinding(sv SessionView, name string) (bnd *config.AWSBinding, entry, why string) {
+	switch {
+	case len(sv.AWSConns) > 0 && name == "":
+		return nil, "", "name the connection to elevate"
+	case len(sv.AWSConns) > 0:
+		if !config.ValidTokenName(name) {
+			return nil, invalidEntry, "that is not a valid connection name"
+		}
+		c, ok := config.AWSConnByName(sv.AWSConns, name)
+		if !ok {
+			return nil, name, fmt.Sprintf("this session has no AWS connection named %q", name)
+		}
+		return &c.AWSBinding, name, ""
+	case sv.AWS == nil:
+		return nil, "", "this session has no AWS binding in a box"
+	case name != "":
+		entry = name
+		if !config.ValidTokenName(name) {
+			entry = invalidEntry
+		}
+		return nil, entry, "this session has no named AWS connections; grant without a name"
+	}
+	return sv.AWS, "", ""
+}
+
+// grantConflictLocked is why a grant for conn cannot be made now on top of the
+// binding's own rules: the session has one write window at a time, so another
+// connection's live window, or the write credentials it issued before a drop
+// that are still valid, block it. "" = no conflict. Caller holds b.mu.
+func (b *Broker) grantConflictLocked(sid, conn string, now time.Time) string {
+	if e := b.elev[sid]; e != nil && e.conn != conn {
+		return fmt.Sprintf("drop %s first", e.conn)
+	}
+	if d, ok := b.dropped[sid]; ok && d.conn != conn && d.lastValid.After(now) {
+		return fmt.Sprintf("%s's write credentials stay valid until %s — %s can be granted then",
+			d.conn, d.lastValid.Local().Format("15:04"), conn)
+	}
+	return ""
+}
+
+// GrantConflict is why a grant for connection conn of session sid would be
+// refused right now because of another connection's window or leftover write
+// credentials ("" = none). The grant panel shows it before a human tries.
+func (b *Broker) GrantConflict(sid, conn string) string {
+	now := b.now()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.grantConflictLocked(sid, conn, now)
 }
 
 func validReason(s string) bool {
@@ -113,7 +189,7 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 	sv, found := b.lookup(sid)
 	row := ApprovalRow{Time: now, SessionID: sid, Minutes: req.Minutes, Reason: req.Reason, Cred: credLabel(req.Cred)}
 	if found {
-		identify(&row, sv)
+		identify(&row, sv, "")
 	}
 	refuse := func(msg string) (ElevationView, error) {
 		b.recordRefusal(row, msg)
@@ -126,22 +202,41 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 		return refuse("granting write access needs a signed-in browser session")
 	case !found || !sv.Live:
 		return refuse("this session is not running")
-	case !sv.Boxed || sv.AWS == nil:
+	case !sv.Boxed:
 		return refuse("this session has no AWS binding in a box")
-	case sv.AWS.Elevate == nil:
+	}
+	bnd, entry, why := elevBinding(sv, req.Name)
+	if why != "" {
+		row.Entry = entry
+		return refuse(why)
+	}
+	conn := req.Name // "" for the legacy binding
+	if conn != "" {
+		identify(&row, sv, conn)
+	}
+	switch {
+	case bnd.Elevate == nil && conn != "":
+		return refuse(fmt.Sprintf("connection %s did not allow elevation when the session started; add elevate to it in aws_connections and start a new session", conn))
+	case bnd.Elevate == nil:
 		return refuse("this session's profile did not allow elevation when it started; add elevate to the profile and start a new session")
 	case !sv.Exclusive:
 		return refuse("this session's box is shared; restart it to get its own box")
 	}
-	maxMin := sv.AWS.Elevate.Max()
+	maxMin := bnd.Elevate.Max()
 	if (req.Minutes != 30 && req.Minutes != 60) || req.Minutes > maxMin {
 		return refuse(fmt.Sprintf("the window must be 30 or 60 minutes, at most %d", maxMin))
 	}
 	if !validReason(req.Reason) {
 		return refuse("the reason must be one line of at most 200 characters")
 	}
-	if sv.AWS.Prod && req.ConfirmLabel != sv.AWS.Label {
+	if bnd.Prod && req.ConfirmLabel != bnd.Label {
 		return refuse("type the binding label to grant write access on a production account")
+	}
+	b.mu.Lock() // checked again below, under the lock that grants; this spares the claim check
+	conflict := b.grantConflictLocked(sid, conn, now)
+	b.mu.Unlock()
+	if conflict != "" {
+		return refuse(conflict)
 	}
 	if b.claimCheck != nil { // outside mu: it may take other locks
 		if err := b.claimCheck(sid); err != nil {
@@ -157,6 +252,10 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 	action := ActionGranted
 
 	b.mu.Lock()
+	if conflict := b.grantConflictLocked(sid, conn, now); conflict != "" {
+		b.mu.Unlock()
+		return refuse(conflict)
+	}
 	old := b.elev[sid]
 	if old != nil && old.pending {
 		b.mu.Unlock()
@@ -169,10 +268,18 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 		// and unchanged, until its own row is written.
 		b.gen++
 		gen = b.gen
-		e := &elevation{until: until, grantedAt: now, reason: row.Reason, row: row, gen: gen, pending: true}
+		e := &elevation{until: until, grantedAt: now, reason: row.Reason, conn: conn, row: row, gen: gen, pending: true}
 		e.timer = b.after(until.Sub(now), func() { b.expire(sid, gen) })
 		b.elev[sid] = e
-		delete(b.dropped, sid)
+		// A drop's leftover is cleared only when it is this connection's (its
+		// time moves onto the new window, so a later drop still reports it) or
+		// has passed: another connection's live leftover refused the grant above.
+		if d, ok := b.dropped[sid]; ok && (d.conn == conn || !d.lastValid.After(now)) {
+			if d.conn == conn && d.lastValid.After(now) {
+				e.lastExp = d.lastValid
+			}
+			delete(b.dropped, sid)
+		}
 	} else {
 		action, gen = ActionExtended, old.gen
 	}
@@ -203,7 +310,7 @@ func (b *Broker) Elevate(sid string, req ElevateRequest) (ElevationView, error) 
 	cur.timer.Stop() // the extend takes effect now: new until, new gen, new timer
 	b.gen++
 	ng := b.gen
-	ne := &elevation{until: until, grantedAt: cur.grantedAt, lastExp: cur.lastExp, reason: row.Reason, row: row, gen: ng}
+	ne := &elevation{until: until, grantedAt: cur.grantedAt, lastExp: cur.lastExp, reason: row.Reason, conn: cur.conn, row: row, gen: ng}
 	ne.timer = b.after(until.Sub(b.now()), func() { b.expire(sid, ng) }) // the write took time: measure what is left now
 	b.elev[sid] = ne
 	return viewOf(ne), nil
@@ -226,7 +333,7 @@ func (b *Broker) elevatedLocked(sid string, now time.Time) (*elevation, bool) {
 func normalizeReason(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 func viewOf(e *elevation) ElevationView {
-	return ElevationView{Active: true, Until: e.until, GrantedAt: e.grantedAt, Reason: e.reason}
+	return ElevationView{Active: true, Until: e.until, GrantedAt: e.grantedAt, Reason: e.reason, Name: e.conn}
 }
 
 // endLocked removes a session's overlay (caller holds b.mu), stops its timer and
@@ -235,7 +342,7 @@ func (b *Broker) endLocked(sid string, e *elevation, now time.Time) {
 	e.timer.Stop()
 	delete(b.elev, sid)
 	if e.lastExp.After(now) {
-		b.dropped[sid] = e.lastExp
+		b.dropped[sid] = droppedWin{conn: e.conn, lastValid: e.lastExp}
 	}
 }
 
@@ -275,10 +382,10 @@ func (b *Broker) Drop(sid, cred string) (ElevationView, bool) {
 		return ElevationView{}, false
 	}
 	b.endLocked(sid, e, now)
-	view := ElevationView{LastValid: b.dropped[sid]}
+	view := ElevationView{LastValid: b.dropped[sid].lastValid, Name: e.conn}
 	b.mu.Unlock()
 	row := e.row
-	row.Time, row.Action, row.Until, row.Cred, row.Reason = now, ActionDropped, e.until, credLabel(cred), e.reason
+	row.Time, row.Action, row.Until, row.Cred, row.Reason, row.Entry = now, ActionDropped, e.until, credLabel(cred), e.reason, e.conn
 	b.recordApproval(row)
 	return view, true
 }
@@ -297,9 +404,9 @@ func (b *Broker) Elevation(sid string) (ElevationView, bool) {
 		}
 		return viewOf(e), true
 	}
-	if lv, ok := b.dropped[sid]; ok {
-		if lv.After(now) {
-			return ElevationView{LastValid: lv}, true
+	if d, ok := b.dropped[sid]; ok {
+		if d.lastValid.After(now) {
+			return ElevationView{LastValid: d.lastValid, Name: d.conn}, true
 		}
 		delete(b.dropped, sid)
 	}
@@ -316,7 +423,7 @@ func (b *Broker) RefuseElevation(sid, cred, reason string) {
 		return
 	}
 	row := ApprovalRow{Time: b.now(), SessionID: sid, Cred: credLabel(cred)}
-	identify(&row, sv)
+	identify(&row, sv, "")
 	b.recordRefusal(row, reason)
 }
 

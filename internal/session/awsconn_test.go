@@ -312,3 +312,30 @@ func TestInfoWithoutAWSConnectionsHasNoKey(t *testing.T) {
 		t.Fatalf("Info grew an aws_connections key: %s", b)
 	}
 }
+
+// List folds the broker's per-connection state into each connection: the
+// window on the connection it is for, an expired sign-in on its own connection.
+func TestListCarriesPerConnectionBrokerState(t *testing.T) {
+	m, _, hooks := connManager(t, connLauncherFor(connA(), connB()))
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "conn", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	until := time.Unix(1_800_003_600, 0)
+	hooks.setConnState(s.ID, awsState{until: until, conn: "sbx-a", sso: "corp-sso", conns: map[string]string{"sbx-b": "corp-sso"}})
+	var got Info
+	for _, i := range m.List() {
+		if i.ID == s.ID {
+			got = i
+		}
+	}
+	if len(got.AWSConnections) != 2 || got.Need != "sso" {
+		t.Fatalf("List: %+v", got)
+	}
+	a, b := got.AWSConnections[0], got.AWSConnections[1]
+	if a.Name != "sbx-a" || a.ElevatedUntil == nil || !a.ElevatedUntil.Equal(until) || a.SSOExpired != "" ||
+		b.ElevatedUntil != nil || b.SSOExpired != "corp-sso" {
+		t.Fatalf("connections %+v / %+v", a, b)
+	}
+}

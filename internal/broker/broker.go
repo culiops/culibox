@@ -131,7 +131,7 @@ type Broker struct {
 	// Elevation overlay (elevate.go); all guarded by mu except after/claimCheck/appr,
 	// which are set before the broker serves.
 	elev       map[string]*elevation
-	dropped    map[string]time.Time // sid -> latest Expiration still valid after a drop
+	dropped    map[string]droppedWin // sid -> the connection and latest Expiration still valid after a drop
 	gen        uint64
 	refused    map[refusedKey]time.Time
 	lastRefuse time.Time
@@ -176,7 +176,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		cache: map[connKey]cached{}, mintTimes: map[bucketKey][]time.Time{}, stats: map[string]*Stats{},
 		connStats: map[connKey]*Stats{},
 		denied:    map[deniedKey]*deniedState{},
-		elev:      map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
+		elev:      map[string]*elevation{}, dropped: map[string]droppedWin{}, refused: map[refusedKey]time.Time{},
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,

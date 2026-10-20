@@ -59,10 +59,8 @@ func (e elevationService) isExited(s *session.Session) bool {
 }
 
 // boundOrExited is bound without the liveness test: a boxed session with an AWS
-// binding that may already have exited but is still listed. A session bound by
-// aws_connections counts; its elevation and sign-in are wired per connection
-// later, and until then the paths below that need the inline binding answer
-// "unknown" for it rather than dereference a binding it does not have.
+// binding (inline or named connections) that may already have exited but is
+// still listed.
 func (e elevationService) boundOrExited(id string) (*session.Session, bool) {
 	s, ok := e.get(id)
 	if !ok || s == nil || (s.AWS == nil && len(s.AWSConns) == 0) || s.Runtime != config.RuntimeBox {
@@ -71,11 +69,13 @@ func (e elevationService) boundOrExited(id string) (*session.Session, bool) {
 	return s, true
 }
 
-func (e elevationService) Grant(id string, minutes int, reason, label, cred string) (broker.ElevationView, error) {
+// Grant asks the broker for a write window. The broker resolves req.Name
+// against the session's own connections and applies every refusal.
+func (e elevationService) Grant(id string, req broker.ElevateRequest) (broker.ElevationView, error) {
 	if _, ok := e.bound(id); !ok {
 		return broker.ElevationView{}, web.ErrElevationUnknown
 	}
-	return e.brk.Elevate(id, broker.ElevateRequest{Minutes: minutes, Reason: reason, ConfirmLabel: label, Cred: cred})
+	return e.brk.Elevate(id, req)
 }
 
 // Drop ends the window. Dropping when none is active is still a success: the
@@ -94,15 +94,20 @@ func (e elevationService) Refused(id, cred, reason string) {
 }
 
 // SSOLogin starts (or joins) the sign-in for the session's recorded source
-// profile. The profile comes from the binding, never from the request. Any
-// failure, or no aws CLI on this host, is an SSOLoginError carrying the command
-// the human can run instead.
-func (e elevationService) SSOLogin(id string) (ssologin.State, error) {
+// profile: the inline binding's (name ""), or that of the connection name
+// names. The profile comes from the session, never from the request; a name
+// the session does not have, or a missing one where it has connections, is
+// web.ErrConnectionName. Any other failure, or no aws CLI on this host, is an
+// SSOLoginError carrying the command the human can run instead.
+func (e elevationService) SSOLogin(id, name string) (ssologin.State, error) {
 	s, ok := e.bound(id)
-	if !ok || s.AWS == nil {
+	if !ok {
 		return ssologin.State{}, web.ErrElevationUnknown
 	}
-	p := s.AWS.SourceProfile
+	p, ok := recordedProfile(s, name)
+	if !ok {
+		return ssologin.State{}, web.ErrConnectionName
+	}
 	command := hostLoginCommand(p)
 	if command == "" { // a restored binding is not re-validated at load: do it here
 		return ssologin.State{}, &web.SSOLoginError{Err: errors.New("the session's source profile name is not valid")}
@@ -111,11 +116,29 @@ func (e elevationService) SSOLogin(id string) (ssologin.State, error) {
 		return ssologin.State{}, &web.SSOLoginError{Command: command, Err: errors.New("the aws CLI is not on the daemon's PATH")}
 	}
 	key := e.brk.SourceKeyOf(p)
-	st, err := e.runner.Start(key, p, func(ok bool, detail string) { e.brk.SSOLoginDone(key, id, ok, detail) })
+	st, err := e.runner.Start(key, p, func(ok bool, detail string) { e.brk.SSOLoginDone(key, id, name, ok, detail) })
 	if err != nil {
 		return ssologin.State{}, &web.SSOLoginError{Command: command, Err: err}
 	}
 	return st, nil
+}
+
+// recordedProfile is the source profile recorded for name on session s: the
+// inline binding's for "", a named connection's otherwise. ok is false when
+// the name does not fit the session (a name on the legacy binding, none or an
+// unbound one where it has connections).
+func recordedProfile(s *session.Session, name string) (string, bool) {
+	if len(s.AWSConns) > 0 {
+		if name == "" {
+			return "", false
+		}
+		c, ok := config.AWSConnByName(s.AWSConns, name)
+		return c.SourceProfile, ok
+	}
+	if s.AWS == nil || name != "" {
+		return "", false
+	}
+	return s.AWS.SourceProfile, true
 }
 
 // hostLoginCommand is the command a human can run on the host to sign in
@@ -158,11 +181,15 @@ func (e elevationService) blockerFor(s *session.Session) (string, error) {
 
 // ssoStatus is the sso object of GET .../aws: whether the session waits on a
 // sign-in, the host command, and the flow in progress. ok is false when there
-// is nothing to say.
+// is nothing to say. A session with connections gets one Sources entry per
+// sign-in source that is expired or has a flow.
 func (e elevationService) ssoStatus(id string) (web.SSOStatus, bool) {
 	s, ok := e.bound(id)
-	if !ok || s.AWS == nil {
+	if !ok {
 		return web.SSOStatus{}, false
+	}
+	if len(s.AWSConns) > 0 {
+		return e.connSSOStatus(id, s.AWSConns)
 	}
 	p := s.AWS.SourceProfile
 	key := e.brk.SSOExpired(id)
@@ -184,17 +211,75 @@ func (e elevationService) ssoStatus(id string) (web.SSOStatus, bool) {
 	return out, true
 }
 
+// connSSOStatus groups a session's connections (sorted by name) by sign-in
+// source. A connection whose mint failed is keyed on the source it failed on;
+// the others on their profile's current source. The command names the first
+// connection's recorded profile in each group.
+func (e elevationService) connSSOStatus(id string, conns []config.AWSConnection) (web.SSOStatus, bool) {
+	expired := e.brk.SSOExpiredConns(id)
+	var out web.SSOStatus
+	at := map[string]int{} // source -> its index in out.Sources
+	for _, c := range conns {
+		key, isExpired := expired[c.Name]
+		if !isExpired {
+			key = e.brk.SourceKeyOf(c.SourceProfile)
+		}
+		i, seen := at[key]
+		if !seen {
+			i = len(out.Sources)
+			at[key] = i
+			out.Sources = append(out.Sources, web.SSOSource{Source: key, Command: hostLoginCommand(c.SourceProfile)})
+		}
+		src := &out.Sources[i]
+		src.Names = append(src.Names, c.Name)
+		src.Expired = src.Expired || isExpired
+	}
+	kept := out.Sources[:0]
+	for _, src := range out.Sources {
+		if e.runner != nil && src.Command != "" { // a valid recorded profile, so a flow may exist
+			if st, found := e.runner.Status(src.Source); found {
+				src.Login = &st
+			}
+		}
+		if src.Expired || src.Login != nil {
+			kept = append(kept, src)
+		}
+	}
+	if len(kept) == 0 {
+		return web.SSOStatus{}, false
+	}
+	out.Sources = kept
+	out.Source = kept[0].Source
+	for _, src := range kept {
+		out.Expired = out.Expired || src.Expired
+	}
+	return out, true
+}
+
 // grantContext fills the grant panel: the live host-tier sessions (which are
 // not contained and can reach the same credentials the box cannot) and why a
-// grant would be refused right now.
+// grant would be refused right now. For a session with connections it also
+// says, per write-capable connection, what another connection's window or
+// leftover write credentials block.
 func (e elevationService) grantContext(id string) web.GrantContext {
 	gc := web.GrantContext{HostSessions: []web.HostSession{}}
 	s, ok := e.bound(id)
-	if !ok || s.AWS == nil || s.AWS.Elevate == nil {
+	if !ok || !elevatable(s) {
 		// Nothing can be granted here (exited, unbound, not elevatable), so
 		// there is no panel to fill: skip the box listing that would otherwise
 		// run on every poll of GET .../aws.
 		return gc
+	}
+	for _, c := range s.AWSConns {
+		if c.Elevate == nil {
+			continue
+		}
+		if msg := e.brk.GrantConflict(id, c.Name); msg != "" {
+			if gc.ConnBlocked == nil {
+				gc.ConnBlocked = map[string]string{}
+			}
+			gc.ConnBlocked[c.Name] = msg
+		}
 	}
 	if e.list != nil {
 		for _, in := range e.list() {
@@ -211,4 +296,18 @@ func (e elevationService) grantContext(id string) web.GrantContext {
 	}
 	gc.Blocked = msg
 	return gc
+}
+
+// elevatable: the session's inline binding, or at least one of its
+// connections, names an elevate role.
+func elevatable(s *session.Session) bool {
+	if s.AWS != nil {
+		return s.AWS.Elevate != nil
+	}
+	for _, c := range s.AWSConns {
+		if c.Elevate != nil {
+			return true
+		}
+	}
+	return false
 }

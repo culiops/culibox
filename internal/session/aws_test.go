@@ -65,32 +65,38 @@ type fakeBrokerHooks struct {
 	mcpDocs     []string
 	mcpErr      error
 	next        int
-	state       map[string]struct {
-		until time.Time
-		sso   string
-	}
+	state       map[string]awsState
 }
 
 func (f *fakeBrokerHooks) setState(id string, until time.Time, sso string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.state == nil {
-		f.state = map[string]struct {
-			until time.Time
-			sso   string
-		}{}
+		f.state = map[string]awsState{}
 	}
-	f.state[id] = struct {
-		until time.Time
-		sso   string
-	}{until, sso}
+	f.state[id] = awsState{until: until, sso: sso}
 }
 
-func (f *fakeBrokerHooks) AWSState(id string) (time.Time, string) {
+func (f *fakeBrokerHooks) setConnState(id string, st awsState) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.state == nil {
+		f.state = map[string]awsState{}
+	}
+	f.state[id] = st
+}
+
+func (f *fakeBrokerHooks) AWSState(id string) (time.Time, string, string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st := f.state[id]
-	return st.until, st.sso
+	return st.until, st.conn, st.sso
+}
+
+func (f *fakeBrokerHooks) AWSConnState(id string) map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.state[id].conns
 }
 
 func (f *fakeBrokerHooks) NewNonce() string {
@@ -1060,7 +1066,7 @@ func TestApplyAWSState(t *testing.T) {
 	}
 	for _, c := range cases {
 		in := Info{Activity: "working", Need: c.need, AWS: &AWSInfo{Label: "sandbox"}}
-		applyAWSState(&in, c.until, c.sso)
+		applyAWSState(&in, awsState{until: c.until, sso: c.sso})
 		if in.Need != c.wantNeed || in.Activity != "working" || in.AWS.SSOExpired != c.sso {
 			t.Errorf("%s: need=%q activity=%q sso=%q", c.name, in.Need, in.Activity, in.AWS.SSOExpired)
 		}
@@ -1069,14 +1075,34 @@ func TestApplyAWSState(t *testing.T) {
 		}
 	}
 	gone := Info{Exited: true, AWS: &AWSInfo{Label: "sandbox"}}
-	applyAWSState(&gone, until, "")
+	applyAWSState(&gone, awsState{until: until})
 	if gone.AWS.ElevatedUntil != nil {
 		t.Fatalf("an exited session must not show a write window: %v", gone.AWS.ElevatedUntil)
 	}
 	plain := Info{Need: "turn"}
-	applyAWSState(&plain, until, "example-sso") // no binding: nothing to apply
+	applyAWSState(&plain, awsState{until: until, sso: "example-sso"}) // no binding: nothing to apply
 	if plain.Need != "turn" || plain.AWS != nil {
 		t.Fatalf("an unbound session is untouched: %+v", plain)
+	}
+}
+
+// A connection session: the window shows on its connection only, and each
+// connection carries its own expired sign-in.
+func TestApplyAWSStatePerConnection(t *testing.T) {
+	until := time.Unix(1_800_003_600, 0)
+	in := Info{Need: "turn", AWSConnections: []AWSConnInfo{{Name: "a"}, {Name: "b"}, {Name: "c"}}}
+	applyAWSState(&in, awsState{until: until, conn: "b", sso: "sso-a", conns: map[string]string{"a": "sso-a"}})
+	a, b, c := in.AWSConnections[0], in.AWSConnections[1], in.AWSConnections[2]
+	if a.ElevatedUntil != nil || b.ElevatedUntil == nil || !b.ElevatedUntil.Equal(until) || c.ElevatedUntil != nil {
+		t.Fatalf("elevated_until: a=%v b=%v c=%v", a.ElevatedUntil, b.ElevatedUntil, c.ElevatedUntil)
+	}
+	if a.SSOExpired != "sso-a" || b.SSOExpired != "" || c.SSOExpired != "" || in.Need != "sso" || in.AWS != nil {
+		t.Fatalf("sso: %+v need %q", in.AWSConnections, in.Need)
+	}
+	quiet := Info{Need: "turn", Exited: true, AWSConnections: []AWSConnInfo{{Name: "a"}}}
+	applyAWSState(&quiet, awsState{until: until, conn: "a"})
+	if quiet.AWSConnections[0].ElevatedUntil != nil || quiet.Need != "turn" {
+		t.Fatalf("an exited session shows no window and a quiet one keeps its need: %+v", quiet)
 	}
 }
 

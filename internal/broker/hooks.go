@@ -57,11 +57,16 @@ func (h Hooks) Forget(id string) { h.B.Forget(id) }
 func (h Hooks) RevokeGitHub(id string) { h.B.RevokeGitHub(id) }
 
 // AWSState is what a session list shows of the broker's per-session state: the
-// end of the live write window (zero when none) and the sign-in key awaiting a
-// human ("" when none).
-func (h Hooks) AWSState(id string) (until time.Time, ssoExpired string) {
+// end of the live write window (zero when none), the connection it is for (""
+// for the legacy binding or none) and the sign-in key awaiting a human (""
+// when none; for a session with connections, the first by name).
+func (h Hooks) AWSState(id string) (until time.Time, conn string, ssoExpired string) {
 	if v, ok := h.B.Elevation(id); ok && v.Active {
-		until = v.Until
+		until, conn = v.Until, v.Name
 	}
-	return until, h.B.SSOExpired(id)
+	return until, conn, h.B.SSOExpired(id)
 }
+
+// AWSConnState maps each named connection of the session waiting on a human
+// sign-in to its sourceKey; connections that can mint are not in it.
+func (h Hooks) AWSConnState(id string) map[string]string { return h.B.SSOExpiredConns(id) }
