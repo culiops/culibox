@@ -14,6 +14,9 @@ function elevRoleName(arn) {
 function elevHHMM(iso) {
   return typeof hhmm === "function" ? hhmm(iso) : require("./sessionrow.js").hhmm(iso);
 }
+function elevLiveWindow(conns, st, nowMs) {
+  return typeof liveWindowConn === "function" ? liveWindowConn(conns, st, nowMs) : require("./sessionrow.js").liveWindowConn(conns, st, nowMs);
+}
 function elevSSOText(s) {
   return typeof ssoExpiredText === "function" ? ssoExpiredText(s) : require("./attention.js").ssoExpiredText(s);
 }
@@ -37,16 +40,19 @@ function elevSSOText(s) {
 // A legacy binding returns exactly the first list, so its panel is unchanged.
 function grantPanel(aws, st, conns, pick, nowMs = Date.now()) {
   if (Array.isArray(conns) && conns.length) return connGrantPanel(conns, st, pick, nowMs);
-  const e = aws && aws.elevate;
-  if (!e) return null;
+  if (!aws || !aws.elevate) return null;
+  return grantFields(aws.elevate, aws.prod, aws.label, st);
+}
+
+// grantFields: the panel fields common to both shapes, from one elevate block.
+function grantFields(e, prod, label, st) {
   const max = Number(e.max_minutes) || 60;
-  const windows = ELEV_WINDOWS.filter((w) => w <= max);
   const se = (st && st.elevate) || {};
   return {
     role: elevRoleName(e.role_arn),
-    windows: windows,
-    needLabel: !!aws.prod,
-    label: aws.label || "",
+    windows: ELEV_WINDOWS.filter((w) => w <= max),
+    needLabel: !!prod,
+    label: label || "",
     hostSessions: Array.isArray(se.host_sessions) ? se.host_sessions : [],
     blocked: se.blocked || "",
     allowIAM: !!e.allow_iam,
@@ -57,34 +63,30 @@ function connGrantPanel(conns, st, pick, nowMs) {
   const writable = conns.filter((c) => c && c.write_capable && c.elevate);
   if (!writable.length) return null;
   const se = (st && st.elevate) || {};
-  // Which connection holds the window: the status knows first-hand; the list
-  // entry covers the moment before the status has loaded.
-  let elevatedConn = "";
-  if (st && st.elevation && st.elevation.active && st.elevation.name) elevatedConn = st.elevation.name;
-  else if (!st || !st.elevation) {
-    const live = conns.find((c) => c && c.elevated_until && Date.parse(c.elevated_until) > nowMs);
-    if (live) elevatedConn = live.name;
-  }
+  const elevatedConn = (elevLiveWindow(conns, st, nowMs) || {}).name || "";
   let sel = writable.find((c) => c.name === pick);
   if (!sel) sel = writable.find((c) => c.name === elevatedConn) || writable[0];
-  const max = Number(sel.elevate.max_minutes) || 60;
   let blockedText = "";
   if (elevatedConn && elevatedConn !== sel.name) blockedText = "Drop " + elevatedConn + " first";
-  else if (se.conn_blocked && typeof se.conn_blocked[sel.name] === "string") blockedText = se.conn_blocked[sel.name];
-  return {
-    role: elevRoleName(sel.elevate.role_arn),
-    windows: ELEV_WINDOWS.filter((w) => w <= max),
-    needLabel: !!sel.prod,
-    label: sel.label || "",
-    hostSessions: Array.isArray(se.host_sessions) ? se.host_sessions : [],
-    blocked: se.blocked || "",
-    allowIAM: !!sel.elevate.allow_iam,
+  else if (!elevatedConn && typeof (se.conn_blocked || {})[sel.name] === "string" && leftoverLive(st, sel.name, nowMs)) {
+    blockedText = se.conn_blocked[sel.name];
+  }
+  return Object.assign(grantFields(sel.elevate, sel.prod, sel.label, st), {
     conns: writable.map((c) => ({ name: c.name, label: c.label || "", prod: !!c.prod, role: elevRoleName(c.elevate.role_arn) })),
     selector: writable.length > 1,
     selected: sel.name,
     elevatedConn: elevatedConn,
     blockedText: blockedText,
-  };
+  });
+}
+
+// leftoverLive: write credentials issued before a drop, for a connection other
+// than `name`, are still valid. The server's conn_blocked sentence is as old as
+// the cached status and has no clock of its own, so it is kept only while the
+// status's last_valid is in the future.
+function leftoverLive(st, name, nowMs) {
+  const e = st && st.elevation;
+  return !!e && e.active === false && !!e.name && e.name !== name && Date.parse(e.last_valid) > nowMs;
 }
 
 // grantBody: the POST body of an elevate request. A reason is sent only when
@@ -126,28 +128,36 @@ function trustedSSOURL(uri) {
   return SSO_REGION_RE.test(u.hostname) || SSO_PORTAL_RE.test(u.hostname);
 }
 
-// ssoCard: the model of the "AWS sign-in expired" needs-you card. The link is
-// rendered only when the server vouched for it (uri_trusted) AND this page's
-// own check agrees. `reply` keeps the session's reply box (spec 8.2): the SSO
-// card outranks "your turn" for which card shows, not for what you can do.
 // ssoLoginOf: the sign-in flow to show. The legacy status carries one at the top
-// level; a session with connections carries one per source, and one card shows
-// one flow at a time, so a waiting one wins, then any.
-function ssoLoginOf(sso) {
+// level. A session with connections carries one per source; with `name` (the
+// connection the Sign in button targets) only that connection's source counts,
+// so a flow of another source is never shown against it. Without a name, a
+// waiting flow wins, then any.
+function ssoLoginOf(sso, name) {
   if (!sso) return null;
   if (sso.login) return sso.login;
   const srcs = Array.isArray(sso.sources) ? sso.sources : [];
+  if (name) {
+    const src = srcs.find((x) => x && Array.isArray(x.names) && x.names.includes(name));
+    return (src && src.login) || null;
+  }
   const waiting = srcs.find((x) => x && x.login && x.login.state === "waiting");
   const any = waiting || srcs.find((x) => x && x.login);
   return any ? any.login : null;
 }
 
 // ssoCommandOf: the host command to offer. The top-level one for the legacy
-// binding; for connections, that of the first source still expired.
-function ssoCommandOf(sso) {
+// binding. For connections, that of the source the target connection `name`
+// signs in through (the one the Sign in button will start), else the first
+// source still expired.
+function ssoCommandOf(sso, name) {
   if (!sso) return "";
   if (sso.command) return sso.command;
   const srcs = Array.isArray(sso.sources) ? sso.sources : [];
+  if (name) {
+    const src = srcs.find((x) => x && Array.isArray(x.names) && x.names.includes(name));
+    if (src) return src.command || "";
+  }
   const x = srcs.find((y) => y && y.expired && y.command);
   return x ? x.command : "";
 }
@@ -163,9 +173,14 @@ function ssoSignInName(s) {
   return bad.length ? bad[0] : names[0];
 }
 
+// ssoCard: the model of the "AWS sign-in expired" needs-you card. The link is
+// rendered only when the server vouched for it (uri_trusted) AND this page's
+// own check agrees. `reply` keeps the session's reply box (spec 8.2): the SSO
+// card outranks "your turn" for which card shows, not for what you can do.
 function ssoCard(s, st) {
   const sso = (st && st.sso) || {};
-  const l = ssoLoginOf(sso);
+  const target = ssoSignInName(s);
+  const l = ssoLoginOf(sso, target);
   let login = null;
   if (l) {
     const uri = typeof l.uri === "string" ? l.uri : "";
@@ -174,7 +189,7 @@ function ssoCard(s, st) {
   }
   return {
     text: elevSSOText(s),
-    command: ssoCommandOf(sso),
+    command: ssoCommandOf(sso, target),
     login: login,
     reply: !!(s && s.replyable),
   };

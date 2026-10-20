@@ -174,3 +174,48 @@ test("ssoCard (connections): the command comes from the expired source; the text
   const m2 = ssoCard(s, { sso: { command: "aws sso login --profile corp", login: null } });
   assert.strictEqual(m2.command, "aws sso login --profile corp");
 });
+
+// --- #155 fix round 1 --------------------------------------------------------
+test("grantPanel (connections): a lapsed window in a cached status blocks nothing", () => {
+  const conns = [wc("a"), wc("b")];
+  const stale = { elevation: { active: true, until: iso(-1), name: "a" }, elevate: { host_sessions: [], conn_blocked: { b: "drop a first" } } };
+  const p = grantPanel(null, stale, conns, "b", NOW);
+  assert.strictEqual(p.elevatedConn, "", "the clock, not the cached flag, decides");
+  assert.strictEqual(p.blockedText, "", "the server's 'drop a first' is as old as the status");
+  // a window still running in the same status does block
+  const live = { elevation: { active: true, until: iso(5), name: "a" }, elevate: { host_sessions: [] } };
+  assert.strictEqual(grantPanel(null, live, conns, "b", NOW).blockedText, "Drop a first");
+  // the fresh list entry wins over a status that has not seen the grant yet
+  const none = { elevation: { active: false }, elevate: { host_sessions: [] } };
+  assert.strictEqual(grantPanel(null, none, [wc("a", { elevated_until: iso(20) }), wc("b")], "b", NOW).blockedText, "Drop a first");
+});
+
+test("grantPanel (connections): the leftover sentence goes once its time has passed", () => {
+  const msg = "a's write credentials stay valid until 14:32 \u2014 b can be granted then";
+  const mk = (lastValid) => ({ elevation: { active: false, name: "a", last_valid: lastValid }, elevate: { host_sessions: [], conn_blocked: { b: msg } } });
+  assert.strictEqual(grantPanel(null, mk(iso(10)), [wc("a"), wc("b")], "b", NOW).blockedText, msg);
+  assert.strictEqual(grantPanel(null, mk(iso(-1)), [wc("a"), wc("b")], "b", NOW).blockedText, "");
+  assert.strictEqual(grantPanel(null, mk(""), [wc("a"), wc("b")], "b", NOW).blockedText, "");
+  // the dropped connection itself may be granted again at once
+  assert.strictEqual(grantPanel(null, { ...mk(iso(10)), elevate: { host_sessions: [], conn_blocked: { b: msg } } }, [wc("a"), wc("b")], "a", NOW).blockedText, "");
+});
+
+test("ssoCard targets ONE source: the one the Sign in button will sign in", () => {
+  // a signs in through dev, b through corp; both are expired. The button names a.
+  const s = { aws_connections: [wc("b", { sso_expired: "corp" }), wc("a", { sso_expired: "dev" })] };
+  const sso = { sources: [
+    { source: "corp", names: ["b"], expired: true, command: "aws sso login --profile corp", login: { state: "waiting", code: "CORP-1" } },
+    { source: "dev", names: ["a"], expired: true, command: "aws sso login --profile dev" },
+  ] };
+  assert.strictEqual(ssoSignInName(s), "a");
+  assert.strictEqual(ssoCommandOf(sso, "a"), "aws sso login --profile dev");
+  assert.strictEqual(ssoLoginOf(sso, "a"), null, "corp's flow is not a's");
+  const m = ssoCard(s, { sso });
+  assert.strictEqual(m.command, "aws sso login --profile dev");
+  assert.strictEqual(m.login, null);
+  // dev's own flow is shown
+  const sso2 = { sources: [sso.sources[0], { ...sso.sources[1], login: { state: "waiting", code: "DEV-9" } }] };
+  assert.strictEqual(ssoCard(s, { sso: sso2 }).login.code, "DEV-9");
+  // legacy top-level fields are unchanged
+  assert.strictEqual(ssoCommandOf({ command: "top", sources: sso.sources }, "a"), "top");
+});

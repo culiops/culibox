@@ -1849,9 +1849,14 @@ const ssoStarting = new Set();     // ids whose sign-in POST is in flight
 const SSO_POLL_MS = 3000;
 
 function ssoPath(id, tail) { return "/api/sessions/" + encodeURIComponent(id) + "/aws" + (tail || ""); }
+// ssoTarget: the connection the Sign in button will name for session id, so the
+// command, the flow and the POST all talk about the same source ("" legacy).
+function ssoTarget(id) {
+  return ssoSignInName(lastSessions.find((x) => x.id === id));
+}
 function ssoCommand(id) {
   const st = ssoStatus.get(id);
-  return ssoCommandOf(st && st.sso);
+  return ssoCommandOf(st && st.sso, ssoTarget(id));
 }
 
 // ssoLocalSig: what the SSO card reads beyond the session record, for rowSig, so
@@ -1868,7 +1873,7 @@ const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to r
 // ssoAdopt: take a GET .../aws body: cache it and follow the flow it carries.
 function ssoAdopt(id, body) {
   ssoStatus.set(id, body || {});
-  const login = ssoLoginOf(body && body.sso);
+  const login = ssoLoginOf(body && body.sso, ssoTarget(id));
   const cur = ssoFlows.get(id);
   if (login) {
     ssoFlows.set(id, login);
@@ -1927,7 +1932,7 @@ async function ssoPollTick(id, last) {
   ssoPolling.delete(id);
   if (status === 404 || status === 410) { stopSSOPoll(id); return; }
   if (!body) return;
-  const login = ssoLoginOf(body.sso);
+  const login = ssoLoginOf(body.sso, ssoTarget(id));
   const state = login ? login.state : "";
   if (last) {
     if (state === "ok") showToast(SSO_DONE_TOAST);

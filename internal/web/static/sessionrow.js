@@ -291,6 +291,38 @@ function awsRailRows(s, st, nowMs = Date.now()) {
   return rows;
 }
 
+// liveWindowConn: which connection holds the session's one write window, as
+// {name, until}, or null. The list entry (fresh each poll) is asked first; the
+// cached /aws status is the fallback for the moment between a grant and the next
+// poll, and counts only while its own `until` is in the future: the status is
+// refetched on focus and after a grant or drop, not as time passes, so its
+// `active` flag alone goes stale when a window lapses.
+function liveWindowConn(conns, st, nowMs) {
+  const cs = Array.isArray(conns) ? conns : [];
+  const c = cs.find((x) => isElevated(x, nowMs));
+  if (c) return { name: c.name, until: c.elevated_until };
+  const e = st && st.elevation;
+  if (e && e.active && e.name && Date.parse(e.until) > nowMs) return { name: e.name, until: e.until };
+  return null;
+}
+
+// connWindowLine: the Write access section's line for the connection that has a
+// window, or whose issued write credentials outlive a drop: {name, text}, null
+// with neither. The text is the legacy scopeRow's, not a copy of it, so the
+// countdown, the "new credentials read-only" warning under NEW_CRED_MIN and the
+// after-drop "issued write creds valid until" cannot drift from the single-
+// binding rail. The status's elevation view is for one connection (its name);
+// it is only offered to scopeRow for that one.
+function connWindowLine(conns, st, nowMs) {
+  const w = liveWindowConn(conns, st, nowMs);
+  if (w) return { name: w.name, text: scopeRow({ elevated_until: w.until }, null, nowMs).v };
+  const e = st && st.elevation;
+  if (e && e.active === false && e.name && e.last_valid && Date.parse(e.last_valid) > nowMs) {
+    return { name: e.name, text: scopeRow({}, { elevation: e }, nowMs).v };
+  }
+  return null;
+}
+
 // CONN_COLLAPSE: how many connection blocks the rail draws before it offers
 // "Show all N".
 const CONN_COLLAPSE = 6;
@@ -379,6 +411,6 @@ function readAWSFields(get) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, readAWSFields,
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine, readAWSFields,
     hhmm, minutesLeft, isElevated, elevActions };
 }

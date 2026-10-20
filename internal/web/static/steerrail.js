@@ -759,10 +759,11 @@ function elevModel(s, st, now) {
     if (!gp) return null;
     const a = s.aws_connections.find((c) => c.name === gp.selected);
     const other = gp.elevatedConn && gp.elevatedConn !== gp.selected;
-    return { gp, a, conns: true, acts: other ? { elevate: true, extend: false, drop: true } : elevActions(a, now) };
+    return { gp, a, conns: true, line: connWindowLine(s.aws_connections, st, now),
+      acts: other ? { elevate: true, extend: false, drop: true } : elevActions(a, now) };
   }
   const gp = s.aws ? grantPanel(s.aws, st) : null;
-  return gp ? { gp, a: s.aws, conns: false, acts: elevActions(s.aws, now) } : null;
+  return gp ? { gp, a: s.aws, conns: false, line: null, acts: elevActions(s.aws, now) } : null;
 }
 
 function renderElevSection(s) {
@@ -782,13 +783,16 @@ function renderElevSection(s) {
     (st && st.elevation && st.elevation.last_valid) || "", gp.blocked,
     gp.hostSessions.length, gp.hostSessions.map((h) => h && h.name).join(","),
     open, elevBusy === s.id, elevErr.id === s.id ? elevErr.text : "",
-    m.conns ? [gp.selected, gp.elevatedConn, gp.blockedText, gp.conns.map((c) => c.name).join(",")].join("~") : ""].join("|");
+    // The window line carries a minute countdown; the section is rebuilt when it
+    // changes, but never under an open panel (that holds typed text).
+    m.conns ? [gp.selected, gp.elevatedConn, gp.blockedText, gp.conns.map((c) => c.name).join(","),
+      open || !m.line ? "" : m.line.name + ":" + m.line.text].join("~") : ""].join("|");
   if (key === elevKey) return;
   elevKey = key;
   el.hidden = false;
   el.replaceChildren(railTitle("Write access"),
     ...(m.conns ? [connPicker(s, gp)] : []),
-    open ? buildElevPanel(s, gp, !acts.elevate) : buildElevButtons(s, gp, acts));
+    open ? buildElevPanel(s, gp, !acts.elevate) : buildElevButtons(s, gp, acts, m.line));
 }
 
 // connPicker: which connection Write access is about. Two or more write-capable
@@ -844,7 +848,7 @@ function elevButton(text, cls, onclick, disabled) {
   return b;
 }
 
-function buildElevButtons(s, gp, acts) {
+function buildElevButtons(s, gp, acts, line) {
   const wrap = document.createElement("div");
   const busy = elevBusy === s.id;
   const row = document.createElement("div");
@@ -856,11 +860,12 @@ function buildElevButtons(s, gp, acts) {
   if (acts.extend) row.appendChild(elevButton("Extend", "btn", () => openElevPanel(s.id), busy));
   if (acts.drop) row.appendChild(elevButton("Drop", "btn", () => dropElevation(s), busy));
   wrap.appendChild(row);
-  if (gp.elevatedConn) {
-    const until = elevWindowUntil(s, gp.elevatedConn);
+  // The connection with a window (countdown, new-credentials warning) or with
+  // write credentials still valid after a drop: the legacy scope row's own text.
+  if (line) {
     const p = document.createElement("p");
     p.className = "tiny mut";
-    p.textContent = gp.elevatedConn + " \u00b7 write" + (until ? " until " + until : "");
+    p.textContent = line.name + " \u00b7 " + line.text;
     wrap.appendChild(p);
   }
   if (acts.elevate) {
@@ -870,13 +875,6 @@ function buildElevButtons(s, gp, acts) {
     wrap.appendChild(p);
   }
   return wrap;
-}
-
-// elevWindowUntil: the clock face the named connection's window ends, from the
-// list entry (fresh each poll); "" when it has none.
-function elevWindowUntil(s, name) {
-  const c = (s.aws_connections || []).find((x) => x.name === name);
-  return c && c.elevated_until ? hhmm(c.elevated_until) : "";
 }
 
 function openElevPanel(id) {

@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions, awsConnRailRows, awsBadgeParts } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -430,6 +430,32 @@ test("awsSig covers connections: moves on a grant, a drop and prod, not on unren
   assert.strictEqual(awsSig({ aws_connections: [conn("a", { elevated_until: iso(-1) }), conn("b")] }, NOW), s0);
   assert.notStrictEqual(awsSig({ aws_connections: [conn("a", { prod: true }), conn("b")] }, NOW), s0);
   assert.strictEqual(awsSig({ aws_connections: [conn("a", { region: "eu-west-1" }), conn("b")] }, NOW), s0);
+});
+
+// --- #155 fix round 1: a connection's window counts down like the legacy scope row ---
+test("connWindowLine: the open window reads as the legacy scope row does", () => {
+  const conns = [conn("a", { elevated_until: iso(17) }), conn("b")];
+  const w = connWindowLine(conns, null, NOW);
+  assert.strictEqual(w.name, "a");
+  assert.match(w.text, /^write \u00b7 until \d\d:\d\d \(17 min\)$/);
+  assert.match(connWindowLine([conn("a", { elevated_until: iso(12) })], null, NOW).text, /\(12 min\) \u00b7 new credentials read-only$/);
+  assert.doesNotMatch(connWindowLine([conn("a", { elevated_until: iso(16) })], null, NOW).text, /new credentials/);
+  assert.strictEqual(connWindowLine([conn("a", { elevated_until: iso(-1) }), conn("b")], null, NOW), null, "a lapsed window says nothing");
+  assert.strictEqual(connWindowLine([conn("a")], null, NOW), null);
+});
+
+test("connWindowLine: a status-only window, and the issued credentials after a drop", () => {
+  const conns = [conn("a"), conn("b")];
+  const live = connWindowLine(conns, { elevation: { active: true, name: "b", until: iso(30) } }, NOW);
+  assert.strictEqual(live.name, "b");
+  assert.match(live.text, /^write \u00b7 until \d\d:\d\d \(30 min\)$/);
+  assert.strictEqual(connWindowLine(conns, { elevation: { active: true, name: "b", until: iso(-2) } }, NOW), null);
+  const left = connWindowLine(conns, { elevation: { active: false, name: "a", last_valid: iso(9) } }, NOW);
+  assert.strictEqual(left.name, "a");
+  assert.match(left.text, /^read-only \u00b7 issued write creds valid until \d\d:\d\d$/);
+  assert.strictEqual(connWindowLine(conns, { elevation: { active: false, name: "a", last_valid: iso(-1) } }, NOW), null);
+  assert.deepStrictEqual(liveWindowConn(conns, { elevation: { active: true, name: "b", until: iso(30) } }, NOW), { name: "b", until: iso(30) });
+  assert.strictEqual(liveWindowConn(conns, null, NOW), null);
 });
 
 // Kill-switch: the reply menu items close unless globalThis.repliesEnabled is the boolean true.
