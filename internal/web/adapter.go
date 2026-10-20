@@ -75,6 +75,9 @@ const staticRecentRows = 5
 type AWSStatusAdapter struct {
 	Get   func(id string) (session.Info, bool)
 	Stats func(id string) (broker.Stats, bool)
+	// ConnStats is the per-connection counters of a session with named AWS
+	// connections, by connection name; nil = every connection reads as zeros.
+	ConnStats func(id string) map[string]broker.Stats
 	// Recent is the session's rows of every provider but static tokens, so a
 	// chatty token cannot crowd the AWS and GitHub history out of the reply.
 	Recent func(id string, limit int) ([]broker.Row, error)
@@ -100,13 +103,15 @@ type AWSStatusAdapter struct {
 // the sign-in code and URL are left out.
 func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) { return a.AWSStatusFor(id, false) }
 
-// AWSStatusFor is ok only for a known session that has an AWS, a GitHub or a
-// token binding (the credential broker's audit rows and counters serve them). The
+// AWSStatusFor is ok only for a known session that has an AWS (inline or named
+// connections), a GitHub or a token binding (the credential broker's audit rows
+// and counters serve them). The
 // device sign-in code and URL are in the reply only when cookie is true: they
 // are shown to the browser session that asked for the flow, not to a token.
 func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	info, ok := a.Get(id)
-	if !ok || (info.AWS == nil && info.GitHub == nil && len(info.Tokens) == 0) {
+	hasConns := len(info.AWSConnections) > 0
+	if !ok || (info.AWS == nil && !hasConns && info.GitHub == nil && len(info.Tokens) == 0) {
 		return nil, false
 	}
 	stats, _ := a.Stats(id)
@@ -122,6 +127,18 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	out := map[string]any{"stats": stats, "recent": rows}
 	if info.AWS != nil {
 		out["label"], out["account_id"], out["role_arn"], out["prod"] = info.AWS.Label, info.AWS.AccountID, info.AWS.RoleARN, info.AWS.Prod
+	}
+	if hasConns {
+		// Sorted by name already; never a source profile (AWSConnInfo has none).
+		var cs map[string]broker.Stats
+		if a.ConnStats != nil {
+			cs = a.ConnStats(id)
+		}
+		conns := make([]connStatus, 0, len(info.AWSConnections))
+		for _, c := range info.AWSConnections {
+			conns = append(conns, connStatus{AWSConnInfo: c, Stats: cs[c.Name]})
+		}
+		out["connections"] = conns
 	}
 	if len(info.Tokens) > 0 {
 		out["tokens"] = info.Tokens
@@ -147,8 +164,7 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		es, _ := a.Egress(id)
 		out["egress"] = map[string]any{"mode": info.Egress, "allowed": es.Allowed, "denied": es.Denied}
 	}
-	if info.AWS != nil && info.AWS.Elevate != nil {
-		e := info.AWS.Elevate
+	if (info.AWS != nil && info.AWS.Elevate != nil) || connsCanElevate(info.AWSConnections) {
 		gc := GrantContext{}
 		if a.Grant != nil {
 			gc = a.Grant(id)
@@ -156,21 +172,24 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		if gc.HostSessions == nil {
 			gc.HostSessions = []HostSession{} // [] on the wire, never null
 		}
-		el := map[string]any{
-			"role_arn": e.RoleARN, "max_minutes": e.MaxMinutes, "allow_iam": e.AllowIAM,
-			"host_sessions": gc.HostSessions,
+		el := map[string]any{"host_sessions": gc.HostSessions}
+		if e := elevateOf(info); e != nil {
+			el["role_arn"], el["max_minutes"], el["allow_iam"] = e.RoleARN, e.MaxMinutes, e.AllowIAM
 		}
 		if gc.Blocked != "" {
 			el["blocked"] = gc.Blocked
 		}
+		if len(gc.ConnBlocked) > 0 {
+			el["conn_blocked"] = gc.ConnBlocked
+		}
 		out["elevate"] = el
 	}
-	if a.Elevation != nil && info.AWS != nil {
+	if a.Elevation != nil && (info.AWS != nil || hasConns) {
 		if v, ok := a.Elevation(id); ok {
 			out["elevation"] = v
 		}
 	}
-	if a.SSO != nil && info.AWS != nil {
+	if a.SSO != nil && (info.AWS != nil || hasConns) {
 		if s, ok := a.SSO(id); ok {
 			if s.Login != nil && !cookie {
 				l := *s.Login
@@ -181,6 +200,32 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		}
 	}
 	return out, true
+}
+
+// connStatus is one entry of "connections": the session's view of the
+// connection plus the broker's counters for it.
+type connStatus struct {
+	session.AWSConnInfo
+	Stats broker.Stats `json:"stats"`
+}
+
+// connsCanElevate: at least one connection names an elevate role.
+func connsCanElevate(cs []session.AWSConnInfo) bool {
+	for _, c := range cs {
+		if c.Elevate != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// elevateOf is the inline binding's elevate block, nil for a session with
+// connections (each carries its own under connections[].elevate).
+func elevateOf(info session.Info) *session.ElevateInfo {
+	if info.AWS != nil {
+		return info.AWS.Elevate
+	}
+	return nil
 }
 
 // EgressStatusAdapter serves the egress line for a boxed session, bound to AWS

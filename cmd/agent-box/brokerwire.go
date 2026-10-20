@@ -134,7 +134,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 	}
 	return &brokerService{
 		Hooks: broker.Hooks{B: brk, StateRoot: stateRoot, EP: ep},
-		Status: web.AWSStatusAdapter{Get: info, Stats: brk.Stats,
+		Status: web.AWSStatusAdapter{Get: info, Stats: brk.Stats, ConnStats: brk.ConnStats,
 			Recent: func(id string, n int) ([]broker.Row, error) {
 				return audit.ForSessionExcept(id, broker.ProviderStatic, n)
 			},
