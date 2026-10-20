@@ -717,3 +717,68 @@ func TestVerdictMapBounded(t *testing.T) {
 		t.Fatalf("latest lost: %+v", v)
 	}
 }
+
+// A credential edit must not break a profile that binds the entry: what
+// Config.Validate refuses at boot is refused at save (spec §7, Review Focus 5).
+func TestEditCannotBreakBoundProfile(t *testing.T) {
+	p1 := config.AgentConfig{Name: "p1", Bin: "claude", Runtime: config.RuntimeBox, Tokens: []string{"a"}, Secrets: []string{"OTHER"}}
+	base := config.Config{Agents: []config.AgentConfig{p1}, BindAddr: "127.0.0.1:8899"}
+	f := newCredFixture(t, base, base.Agents)
+	if err := f.cm.PutTokens([]config.StaticToken{tok("a", "A_TOKEN")}, map[string][]byte{"a": []byte("v")}, true); err != nil {
+		t.Fatal(err)
+	}
+	before, applies := f.fileBytes(t), f.applyCount()
+
+	noEgress := tok("a", "A_TOKEN")
+	noEgress.Value = config.KeyRef{Type: "store", ID: "a"}
+	noEgress.Egress = nil
+	collide := tok("a", "OTHER")
+	collide.Value = config.KeyRef{Type: "store", ID: "a"}
+	for name, e := range map[string]config.StaticToken{"egress removed": noEgress, "env collides with secrets": collide} {
+		err := f.cm.PutTokens([]config.StaticToken{e}, nil, false)
+		if err == nil || !strings.Contains(err.Error(), `"p1"`) {
+			t.Fatalf("%s: got %v", name, err)
+		}
+		if f.fileBytes(t) != before || f.applyCount() != applies {
+			t.Fatalf("%s: written anyway", name)
+		}
+	}
+
+	ok := tok("a", "A_TOKEN")
+	ok.Value = config.KeyRef{Type: "store", ID: "a"}
+	ok.Label = "Renamed"
+	if err := f.cm.PutTokens([]config.StaticToken{ok}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	merged, _, errs := credfile.Merge(base, f.file(t))
+	if len(errs) != 0 {
+		t.Fatalf("merge errs: %v", errs)
+	}
+	if err := merged.Validate(); err != nil {
+		t.Fatalf("boot validation after an accepted save: %v", err)
+	}
+}
+
+// A runtime profile is protected the same way.
+func TestEditCannotBreakRuntimeProfile(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	if _, err := f.cm.PutAWS(context.Background(), awsConn("c", "p", arnRead), true, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pm.Save(config.AgentConfig{Name: "rt", Bin: "claude", Runtime: config.RuntimeBox, AWSConnections: []string{"c"},
+		Tokens: []string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.cm.PutTokens([]config.StaticToken{tok("t", "T_TOKEN")}, map[string][]byte{"t": []byte("v")}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.pm.Save(config.AgentConfig{Name: "rt2", Bin: "claude", Runtime: config.RuntimeBox, Tokens: []string{"t"},
+		Env: map[string]string{"X": "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	e := tok("t", "X")
+	e.Value = config.KeyRef{Type: "store", ID: "t"}
+	if err := f.cm.PutTokens([]config.StaticToken{e}, nil, false); err == nil || !strings.Contains(err.Error(), `"rt2"`) {
+		t.Fatalf("got %v", err)
+	}
+}

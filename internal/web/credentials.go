@@ -257,7 +257,38 @@ func (c *CredentialManager) checkLocked(cand credfile.File, want, gone []string)
 	if err := credfile.ValidateMerged(merged); err != nil {
 		return config.Config{}, nil, err
 	}
+	if err := c.checkProfilesLocked(merged); err != nil {
+		return config.Config{}, nil, err
+	}
 	return merged, src, nil
+}
+
+// checkProfilesLocked runs, for every profile (seed and runtime), the same
+// per-profile credential check Config.Validate runs at boot
+// (config.CheckCredentialRefs) against the candidate merged config. A save may
+// not break a profile: a seed it broke would stop the next boot, a runtime one
+// would stop spawning. A profile that already fails today (a save that raced a
+// delete) does not block unrelated saves; only a newly broken one refuses.
+// Caller holds c.mu.
+func (c *CredentialManager) checkProfilesLocked(merged config.Config) error {
+	if c.pm == nil {
+		return nil
+	}
+	optDefs := map[string]config.OptionDef{}
+	for _, o := range c.base.Options {
+		optDefs[o.Key] = o
+	}
+	var broken []string
+	for _, p := range c.pm.All() {
+		if err := config.CheckCredentialRefs(p, merged, optDefs); err != nil &&
+			config.CheckCredentialRefs(p, c.merged, optDefs) == nil {
+			broken = append(broken, fmt.Sprintf("profile %q: %v", p.Name, err))
+		}
+	}
+	if len(broken) > 0 {
+		return fmt.Errorf("this change would break %s", strings.Join(broken, "; "))
+	}
+	return nil
 }
 
 // persistLocked records the audit rows, saves the file and applies the merged

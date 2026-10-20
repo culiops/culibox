@@ -379,13 +379,7 @@ func (c Config) Validate() error {
 		if err := validateAWSConnBinding(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
-		if err := CheckAWSConnections(a, c.AWSConnections); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
-		}
 		if err := validateGitHub(a); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
-		}
-		if err := CheckGitHubApps(a, c.GitHubApps); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if err := validateClone(a); err != nil {
@@ -418,7 +412,7 @@ func (c Config) Validate() error {
 		if err := validateTokens(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
-		if err := CheckTokens(a, c.StaticTokens, optDefs); err != nil {
+		if err := CheckCredentialRefs(a, c, optDefs); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		for k, v := range a.Options {
@@ -473,6 +467,21 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: abduco_socket_dir %q must be an absolute path", c.AbducoSocketDir)
 	}
 	return c.checkBind()
+}
+
+// CheckCredentialRefs is the per-profile check against the instance's
+// credential lists: every aws_connections, github App and token name the
+// profile binds is defined, and the bound tokens do not collide with the
+// profile's env, secrets or option envs. Validate runs it at boot; the web
+// credentials screen runs it on every save, so the two cannot drift.
+func CheckCredentialRefs(a AgentConfig, c Config, optDefs map[string]OptionDef) error {
+	if err := CheckAWSConnections(a, c.AWSConnections); err != nil {
+		return err
+	}
+	if err := CheckGitHubApps(a, c.GitHubApps); err != nil {
+		return err
+	}
+	return CheckTokens(a, c.StaticTokens, optDefs)
 }
 
 // ValidateProfile validates a single profile (used for runtime-stored profiles)
