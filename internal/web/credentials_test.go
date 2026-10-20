@@ -782,3 +782,32 @@ func TestEditCannotBreakRuntimeProfile(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// Boot validates the config.json seed even when a runtime profile of the same
+// name overrides it, so a save is checked against the seed too.
+func TestEditCannotBreakOverriddenSeed(t *testing.T) {
+	p1 := config.AgentConfig{Name: "p1", Bin: "claude", Runtime: config.RuntimeBox, Tokens: []string{"a"}, Secrets: []string{"OTHER"}}
+	base := config.Config{Agents: []config.AgentConfig{p1}, BindAddr: "127.0.0.1:8899"}
+	f := newCredFixture(t, base, base.Agents)
+	if err := f.cm.PutTokens([]config.StaticToken{tok("a", "A_TOKEN")}, map[string][]byte{"a": []byte("v")}, true); err != nil {
+		t.Fatal(err)
+	}
+	// The UI edit of the seed stores an override that drops the bindings.
+	if err := f.pm.Save(config.AgentConfig{Name: "p1", Bin: "claude", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatal(err)
+	}
+	before, applies := f.fileBytes(t), f.applyCount()
+	e := tok("a", "OTHER")
+	e.Value = config.KeyRef{Type: "store", ID: "a"}
+	err := f.cm.PutTokens([]config.StaticToken{e}, nil, false)
+	if err == nil || strings.Count(err.Error(), `"p1"`) != 1 {
+		t.Fatalf("got %v", err)
+	}
+	if f.fileBytes(t) != before || f.applyCount() != applies {
+		t.Fatal("written anyway")
+	}
+	merged, _, _ := credfile.Merge(base, f.file(t))
+	if err := merged.Validate(); err != nil {
+		t.Fatalf("boot validation: %v", err)
+	}
+}

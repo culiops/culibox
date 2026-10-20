@@ -263,7 +263,8 @@ func (c *CredentialManager) checkLocked(cand credfile.File, want, gone []string)
 	return merged, src, nil
 }
 
-// checkProfilesLocked runs, for every profile (seed and runtime), the same
+// checkProfilesLocked runs, for every profile (seed and runtime, and each
+// config.json seed even where a runtime profile overrides it), the same
 // per-profile credential check Config.Validate runs at boot
 // (config.CheckCredentialRefs) against the candidate merged config. A save may
 // not break a profile: a seed it broke would stop the next boot, a runtime one
@@ -271,17 +272,26 @@ func (c *CredentialManager) checkLocked(cand credfile.File, want, gone []string)
 // delete) does not block unrelated saves; only a newly broken one refuses.
 // Caller holds c.mu.
 func (c *CredentialManager) checkProfilesLocked(merged config.Config) error {
-	if c.pm == nil {
-		return nil
-	}
 	optDefs := map[string]config.OptionDef{}
 	for _, o := range c.base.Options {
 		optDefs[o.Key] = o
 	}
+	// The effective profiles, then the config.json seeds: boot validates a
+	// seed even when a runtime profile of the same name overrides it. A name
+	// is reported once.
 	var broken []string
-	for _, p := range c.pm.All() {
+	seen := map[string]bool{}
+	var profiles []config.AgentConfig
+	if c.pm != nil {
+		profiles = c.pm.All()
+	}
+	for _, p := range append(profiles, c.base.Agents...) {
+		if seen[p.Name] {
+			continue
+		}
 		if err := config.CheckCredentialRefs(p, merged, optDefs); err != nil &&
 			config.CheckCredentialRefs(p, c.merged, optDefs) == nil {
+			seen[p.Name] = true
 			broken = append(broken, fmt.Sprintf("profile %q: %v", p.Name, err))
 		}
 	}
