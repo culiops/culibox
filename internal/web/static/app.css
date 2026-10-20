@@ -207,6 +207,7 @@
     .connblk .connnm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .connblk .connln { margin: 2px 0 0; overflow-wrap: anywhere; }
     .connblk .connln.err { color: var(--danger); }
+    .connblk .connln.warn { color: var(--warn); }
     .connmore { margin: 6px 0 0; }
     /* Write access: the connection picker sits above the buttons with the rail's
        usual control gap, and never widens the rail. Two names share the width as
@@ -534,13 +535,18 @@
     .bdg.aws .awsw { flex: none; white-space: pre; }
     .bdg.aws.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
     .bdg.aws.write { color: var(--warn); border-color: var(--warn); }
+    /* The base role can write (measured), no window open: amber but DASHED, so it
+       cannot be read as the solid open-window chip. An open window wins. */
+    .bdg.aws.rolew { color: var(--warn); border-color: var(--warn); border-style: dashed; }
+    .bdg.aws.prod.rolew { color: var(--danger); border-color: var(--danger); border-style: dashed; }
+    .bdg.aws.prod.rolew .awsw { color: var(--warn); font-weight: 700; }
     /* Production while writing: red label, amber word, a filled amber-tinted chip
        and a 2px ring, so it cannot be read as a plain prod or a plain write chip. */
     .bdg.aws.prod.write { color: var(--danger); border-color: var(--danger); background: var(--warn-bg);
                           box-shadow: 0 0 0 2px var(--warn); }
     .bdg.aws.prod.write .awsw { color: var(--warn-fg); font-weight: 700; }
     /* The rail's scope chip carries a sentence (until HH:MM (N min) · new credentials
-       read-only), so inside a .kv row it takes the row's width and wraps. */
+       from the base role), so inside a .kv row it takes the row's width and wraps. */
     .kv .bdg.aws { display: block; flex: 0 1 auto; max-width: none; white-space: normal; overflow: visible;
                    text-overflow: clip; text-align: right; overflow-wrap: anywhere; line-height: 1.5; }
     #sessions .ren-input { flex: 1; min-width: 0; background: var(--bg); color: var(--fg); border: 1px solid var(--accent); padding: 3px 6px; font-family: var(--font-family); font-size: 12.5px; }

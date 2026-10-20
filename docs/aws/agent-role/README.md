@@ -10,6 +10,9 @@ for 15 minutes at a time, and hands the credentials to the box through `credenti
   (S3 objects outside the binding's `s3_read` allowlist, Secrets Manager values, SSM
   parameters, DynamoDB items, KMS decrypt outside S3). Effective permissions are the
   intersection of the two.
+  agent-box simulates the role's own policy at spawn to check whether it can write, so a
+  custom permissions policy must allow `iam:SimulatePrincipalPolicy` on the role itself
+  (`ReadOnlyAccess` already does).
 - **Trust:** only the account's IAM Identity Center (SSO) roles of the permission sets you
   name in `sso_permission_sets`, and only with a `SourceIdentity` matching `agentbox-*`.
   agent-box sets `SourceIdentity = RoleSessionName = agentbox-<session id>`, so CloudTrail

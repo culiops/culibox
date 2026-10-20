@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -200,7 +200,7 @@ test("awsBadge: label, account fallback, prod flag", () => {
   assert.strictEqual(awsBadge({}), null);
   assert.strictEqual(awsBadge(null), null);
   assert.deepStrictEqual(awsBadge({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }),
-    { text: "sandbox", prod: false, write: false, title: "AWS 123456789012 · agentbox-agent · read-only" });
+    { text: "sandbox", prod: false, write: false, roleWrite: false, title: "AWS 123456789012 · agentbox-agent · base role unverified (not checked)" });
   assert.strictEqual(awsBadge({ aws: { label: "", account_id: "123456789012", role_arn: ARN, prod: true } }).text, "aws:123456789012");
   assert.strictEqual(awsBadge({ aws: { label: "prd", account_id: "1", role_arn: "x", prod: true } }).prod, true);
 });
@@ -210,7 +210,7 @@ test("awsRailRows: short rows that wrap, and a production chip that is its own r
   assert.deepStrictEqual(awsRailRows({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }, null, NOW), [
     { k: "aws", v: "sandbox · 123456789012", wrap: true },
     { k: "role", v: "agentbox-agent", wrap: true },
-    { k: "scope", v: "read-only" },
+    { k: "scope", v: "unverified (not checked)", wrap: true, title: "the base role's write access could not be checked" },
   ]);
   // no label: the account alone, not "aws · 1234"
   assert.strictEqual(awsRailRows({ aws: { label: "", account_id: "123456789012", role_arn: ARN } })[0].v, "123456789012");
@@ -250,7 +250,7 @@ test("readAWSFields: no egress hosts saves none, so the binding hash (and the bo
 
 test("awsBadge: write state, and prod keeps its red with the write outline", () => {
   assert.deepStrictEqual(awsBadge({ aws: { label: "sandbox", account_id: "123456789012", role_arn: ARN, prod: false } }, NOW),
-    { text: "sandbox", prod: false, write: false, title: "AWS 123456789012 · agentbox-agent · read-only" });
+    { text: "sandbox", prod: false, write: false, roleWrite: false, title: "AWS 123456789012 · agentbox-agent · base role unverified (not checked)" });
   const w = awsBadge({ aws: { ...ELEV, elevated_until: iso(17) } }, NOW);
   assert.strictEqual(w.write, true);
   assert.strictEqual(w.text, "sandbox · write");
@@ -263,15 +263,15 @@ test("awsBadge: write state, and prod keeps its red with the write outline", () 
 
 test("awsRailRows: scope row by state", () => {
   const scope = (aws, st) => awsRailRows({ aws }, st, NOW).find((r) => r.k === "scope");
-  assert.deepStrictEqual(scope(ELEV, null), { k: "scope", v: "read-only" });
+  assert.deepStrictEqual(scope(ELEV, null), { k: "scope", v: "unverified (not checked)", wrap: true, title: "the base role's write access could not be checked" });
   const el = scope({ ...ELEV, elevated_until: iso(17) }, null);
   assert.match(el.v, /^write · until \d\d:\d\d \(17 min\)$/);
   assert.strictEqual(el.chip, "bdg aws write");
-  assert.match(scope({ ...ELEV, elevated_until: iso(12) }, null).v, /\(12 min\) · new credentials read-only$/);
+  assert.match(scope({ ...ELEV, elevated_until: iso(12) }, null).v, /\(12 min\) · new credentials from the base role$/);
   assert.doesNotMatch(scope({ ...ELEV, elevated_until: iso(16) }, null).v, /new credentials/); // 16 min still mints
-  assert.match(scope({ ...ELEV, elevated_until: iso(15) }, null).v, /new credentials read-only$/);
-  assert.match(scope(ELEV, { elevation: { active: false, last_valid: iso(9) } }).v, /^read-only · issued write creds valid until \d\d:\d\d$/);
-  assert.deepStrictEqual(scope(ELEV, { elevation: { active: false, last_valid: iso(-1) } }), { k: "scope", v: "read-only" });
+  assert.match(scope({ ...ELEV, elevated_until: iso(15) }, null).v, /new credentials from the base role$/);
+  assert.match(scope(ELEV, { elevation: { active: false, last_valid: iso(9) } }).v, /^unverified \(not checked\) · issued write creds valid until \d\d:\d\d$/);
+  assert.deepStrictEqual(scope(ELEV, { elevation: { active: false, last_valid: iso(-1) } }), { k: "scope", v: "unverified (not checked)", wrap: true, title: "the base role's write access could not be checked" });
   const role = awsRailRows({ aws: { ...ELEV, elevated_until: iso(17) } }, null, NOW).find((r) => r.k === "role");
   assert.strictEqual(role.v, "agentbox-agent-write"); // while elevated, the rail names the role in use
   assert.strictEqual(awsRailRows({ aws: ELEV }, null, NOW).find((r) => r.k === "role").v, "agentbox-agent");
@@ -303,11 +303,11 @@ test("rowClasses: an SSO need is a needs-you row", () => {
 
 test("badgeParts splits the write state from the label so only the label can be cut", () => {
   assert.strictEqual(badgeParts(null), null);
-  assert.deepStrictEqual(badgeParts(awsBadge({ aws: { ...ELEV, elevated_until: iso(17) } }, NOW)), { label: "sandbox", write: true });
-  assert.deepStrictEqual(badgeParts(awsBadge({ aws: { ...ELEV, label: "sandbox-prod", prod: true, elevated_until: iso(17) } }, NOW)), { label: "sandbox-prod", write: true });
-  assert.deepStrictEqual(badgeParts(awsBadge({ aws: ELEV }, NOW)), { label: "sandbox", write: false });
+  assert.deepStrictEqual(badgeParts(awsBadge({ aws: { ...ELEV, elevated_until: iso(17) } }, NOW)), { label: "sandbox", write: true, roleWrite: false });
+  assert.deepStrictEqual(badgeParts(awsBadge({ aws: { ...ELEV, label: "sandbox-prod", prod: true, elevated_until: iso(17) } }, NOW)), { label: "sandbox-prod", write: true, roleWrite: false });
+  assert.deepStrictEqual(badgeParts(awsBadge({ aws: ELEV }, NOW)), { label: "sandbox", write: false, roleWrite: false });
   // A label that itself ends in " · write" is not a write state when the window is closed.
-  assert.deepStrictEqual(badgeParts({ text: "x · write", write: false }), { label: "x · write", write: false });
+  assert.deepStrictEqual(badgeParts({ text: "x · write", write: false }), { label: "x · write", write: false, roleWrite: false });
 });
 
 test("awsSig moves on grant, drop and lapse, and on nothing else", () => {
@@ -416,7 +416,7 @@ test("awsBadge reads the connections too, in the shape the chip renderer already
   const ab = awsBadge({ aws_connections: [conn("a"), conn("b", { elevated_until: iso(17) })] }, NOW);
   assert.strictEqual(ab.text, "AWS \u00d72 \u00b7 write");
   assert.strictEqual(ab.write, true);
-  assert.deepStrictEqual(badgeParts(ab), { label: "AWS \u00d72", write: true });
+  assert.deepStrictEqual(badgeParts(ab), { label: "AWS \u00d72", write: true, roleWrite: false });
   assert.strictEqual(awsBadge({ aws_connections: [conn("a", { label: "Sandbox" })] }, NOW).text, "Sandbox");
   // the legacy binding still wins nothing: a session never carries both
   assert.strictEqual(awsBadge({ aws: ELEV }, NOW).text, "sandbox");
@@ -438,7 +438,7 @@ test("connWindowLine: the open window reads as the legacy scope row does", () =>
   const w = connWindowLine(conns, null, NOW);
   assert.strictEqual(w.name, "a");
   assert.match(w.text, /^write \u00b7 until \d\d:\d\d \(17 min\)$/);
-  assert.match(connWindowLine([conn("a", { elevated_until: iso(12) })], null, NOW).text, /\(12 min\) \u00b7 new credentials read-only$/);
+  assert.match(connWindowLine([conn("a", { elevated_until: iso(12) })], null, NOW).text, /\(12 min\) \u00b7 new credentials from the base role$/);
   assert.doesNotMatch(connWindowLine([conn("a", { elevated_until: iso(16) })], null, NOW).text, /new credentials/);
   assert.strictEqual(connWindowLine([conn("a", { elevated_until: iso(-1) }), conn("b")], null, NOW), null, "a lapsed window says nothing");
   assert.strictEqual(connWindowLine([conn("a")], null, NOW), null);
@@ -452,7 +452,7 @@ test("connWindowLine: a status-only window, and the issued credentials after a d
   assert.strictEqual(connWindowLine(conns, { elevation: { active: true, name: "b", until: iso(-2) } }, NOW), null);
   const left = connWindowLine(conns, { elevation: { active: false, name: "a", last_valid: iso(9) } }, NOW);
   assert.strictEqual(left.name, "a");
-  assert.match(left.text, /^read-only \u00b7 issued write creds valid until \d\d:\d\d$/);
+  assert.match(left.text, /^unverified \(not checked\) \u00b7 issued write creds valid until \d\d:\d\d$/);
   assert.strictEqual(connWindowLine(conns, { elevation: { active: false, name: "a", last_valid: iso(-1) } }, NOW), null);
   assert.deepStrictEqual(liveWindowConn(conns, { elevation: { active: true, name: "b", until: iso(30) } }, NOW), { name: "b", until: iso(30) });
   assert.strictEqual(liveWindowConn(conns, null, NOW), null);
@@ -475,3 +475,150 @@ for (const off of [undefined, "true"]) {
     }
   });
 }
+
+// --- base-role write probe: the UI shows the measured base-role access ---
+const CHK = "2027-01-15T09:30:00Z";
+const hm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
+const WRITES = { base_access: "writes", base_write_actions: ["s3:PutObject", "iam:CreateUser"], base_checked_at: CHK };
+const NONE = { base_access: "none_found", base_checked_at: CHK };
+const UNV = (r) => ({ base_access: "unverified", base_access_reason: r });
+
+test("baseScope: three states and fallbacks", () => {
+  assert.deepStrictEqual(baseScope(WRITES), { state: "writes", text: "role can write: s3:PutObject, iam:CreateUser",
+    title: "checked " + hm(CHK) + " \u00b7 IAM policy simulation" });
+  assert.deepStrictEqual(baseScope(NONE), { state: "none_found", text: "no broad writes found",
+    title: "checked " + hm(CHK) + " \u00b7 scoped write grants are not detected" });
+  const u = baseScope(UNV("sso_expired"));
+  assert.deepStrictEqual([u.state, u.text, u.title], ["unverified", "unverified (SSO expired)", "the base role's write access could not be checked"]);
+  assert.strictEqual(baseScope({}).text, "unverified (not checked)");
+  assert.strictEqual(baseScope({}).state, "unverified");
+  assert.strictEqual(baseScope(undefined).text, "unverified (not checked)");
+  assert.strictEqual(baseScope(UNV("bogus")).text, "unverified (check failed)");
+  assert.strictEqual(baseScope({ base_access: "bogus", base_access_reason: "timeout" }).text, "unverified (not checked)", "an unknown state is never none_found");
+  assert.strictEqual(baseScope({ base_access: "writes" }).text, "role can write");
+  assert.strictEqual(baseScope({ base_access: "writes" }).title, "IAM policy simulation", "no check time: no 'checked' prefix");
+  assert.strictEqual(baseScope({ base_access: "none_found" }).title, "scoped write grants are not detected");
+  assert.strictEqual(baseScope({ base_access: "writes", base_write_actions: [] }).text, "role can write");
+  assert.strictEqual(baseReasonText("timeout"), "timed out");
+  assert.strictEqual(baseReasonText("toString"), "check failed");
+  assert.strictEqual(Object.keys(BASE_REASON).length, 7);
+  assert.strictEqual(ROLE_WRITE_SUFFIX, " \u00b7 can write");
+});
+
+test("scopeRow: base states", () => {
+  const scope = (aws, st) => awsRailRows({ aws: { ...ELEV, ...aws } }, st, NOW).find((r) => r.k === "scope");
+  assert.deepStrictEqual(scope({ ...WRITES, base_write_actions: ["s3:PutObject"] }, null),
+    { k: "scope", v: "role can write: s3:PutObject", chip: "bdg aws rolew", wrap: true, title: "checked " + hm(CHK) + " \u00b7 IAM policy simulation" });
+  assert.deepStrictEqual(scope(NONE, null),
+    { k: "scope", v: "no broad writes found", title: "checked " + hm(CHK) + " \u00b7 scoped write grants are not detected" });
+  assert.deepStrictEqual(scope(UNV("timeout"), null),
+    { k: "scope", v: "unverified (timed out)", wrap: true, title: "the base role's write access could not be checked" });
+});
+
+test("scopeRow: elevated copy wins, whatever the base state", () => {
+  const scope = (aws, st) => awsRailRows({ aws: { ...ELEV, ...aws } }, st, NOW).find((r) => r.k === "scope");
+  for (const b of [WRITES, NONE, UNV("timeout"), {}]) {
+    assert.match(scope({ ...b, elevated_until: iso(17) }, null).v, /^write \u00b7 until \d\d:\d\d \(17 min\)$/);
+    const low = scope({ ...b, elevated_until: iso(12) }, null);
+    assert.match(low.v, /^write \u00b7 until /);
+    assert.match(low.v, /\u00b7 new credentials from the base role$/);
+    assert.strictEqual(low.chip, "bdg aws write");
+  }
+  const after = scope(NONE, { elevation: { active: false, last_valid: iso(9) } });
+  assert.match(after.v, /^no broad writes found \u00b7 issued write creds valid until \d\d:\d\d$/);
+  assert.strictEqual(scope(WRITES, { elevation: { active: false, last_valid: iso(9) } }).v.startsWith("role can write: s3:PutObject, iam:CreateUser \u00b7 issued write creds"), true);
+});
+
+test("awsBadge: base role can write", () => {
+  const w = awsBadge({ aws: { ...ELEV, ...WRITES, base_write_actions: ["s3:PutObject"] } }, NOW);
+  assert.strictEqual(w.text, "sandbox \u00b7 can write");
+  assert.strictEqual(w.roleWrite, true);
+  assert.strictEqual(w.write, false);
+  assert.match(w.title, / \u00b7 role can write: s3:PutObject$/);
+  const open = awsBadge({ aws: { ...ELEV, ...WRITES, elevated_until: iso(17) } }, NOW);
+  assert.strictEqual(open.write, true);
+  assert.strictEqual(open.roleWrite, false);
+  assert.match(open.text, / \u00b7 write$/);
+  assert.match(awsBadge({ aws: { ...ELEV, ...NONE } }, NOW).title, / \u00b7 no broad writes found \(scoped write grants are not detected\)$/);
+  assert.match(awsBadge({ aws: { ...ELEV, ...UNV("sso_expired") } }, NOW).title, / \u00b7 base role unverified \(SSO expired\)$/);
+  assert.strictEqual(awsBadge({ aws: { ...ELEV, ...NONE } }, NOW).roleWrite, false);
+});
+
+test("awsBadgeParts: one and many connections", () => {
+  const one = awsBadgeParts({ aws_connections: [conn("a", WRITES)] }, NOW);
+  assert.strictEqual(one.roleWrite, true);
+  assert.match(one.title, / \u00b7 role can write: s3:PutObject, iam:CreateUser$/);
+  assert.strictEqual(awsBadgeParts({ aws_connections: [conn("a", NONE)] }, NOW).roleWrite, false);
+  const many = awsBadgeParts({ aws_connections: [conn("a", WRITES), conn("c", UNV("timeout")), conn("b", NONE)] }, NOW);
+  assert.strictEqual(many.roleWrite, true);
+  assert.ok(many.title.includes(" \u00b7 role can write on a"), many.title);
+  assert.ok(many.title.includes(" \u00b7 unverified on c"), many.title);
+  assert.ok(!many.title.includes("on b"), many.title);
+  const live = awsBadgeParts({ aws_connections: [conn("a", { ...WRITES, elevated_until: iso(17) }), conn("b", WRITES)] }, NOW);
+  assert.strictEqual(live.roleWrite, false, "an open window wins");
+  assert.strictEqual(live.write, true);
+  assert.strictEqual(awsBadgeParts({ aws_connections: [conn("a", { ...WRITES, elevated_until: iso(17) })] }, NOW).roleWrite, false);
+});
+
+test("badgeParts: role-write suffix never ellipsizes", () => {
+  const ab = awsBadge({ aws: { ...ELEV, ...WRITES } }, NOW);
+  assert.deepStrictEqual(badgeParts(ab), { label: "sandbox", write: false, roleWrite: true });
+  const many = awsBadge({ aws_connections: [conn("a", WRITES), conn("b")] }, NOW);
+  assert.deepStrictEqual(badgeParts(many), { label: "AWS \u00d72", write: false, roleWrite: true });
+});
+
+test("awsConnRailRows: base line", () => {
+  const rows = (c, st) => awsConnRailRows({ aws_connections: [c] }, st || null, NOW, false)[0];
+  const w = rows(conn("a", { ...WRITES, base_write_actions: ["s3:PutObject"] }));
+  assert.strictEqual(w.base, "role can write: s3:PutObject");
+  assert.strictEqual(w.baseWarn, true);
+  assert.ok(w.v.includes(w.base));
+  const n = rows(conn("a", NONE));
+  assert.strictEqual(n.baseWarn, false);
+  assert.strictEqual(n.baseTitle, "checked " + hm(CHK) + " \u00b7 scoped write grants are not detected");
+  assert.strictEqual(n.base, "no broad writes found");
+  const u = rows(conn("a", UNV("assume_denied")));
+  assert.deepStrictEqual([u.base, u.baseWarn], ["unverified (assume-role denied)", false]);
+  const live = rows(conn("a", { ...WRITES, elevated_until: iso(17) }));
+  assert.strictEqual(live.base, "");
+  assert.strictEqual(live.baseWarn, false);
+  assert.notStrictEqual(w.v, n.v, "the repaint key moves with the base state");
+});
+
+test("connWindowLine after a drop uses the connection's base", () => {
+  const conns = [conn("a", NONE), conn("b", WRITES)];
+  const st = { elevation: { active: false, name: "a", last_valid: iso(9) } };
+  assert.match(connWindowLine(conns, st, NOW).text, /^no broad writes found \u00b7 issued write creds valid until \d\d:\d\d$/);
+  const stb = { elevation: { active: false, name: "b", last_valid: iso(9) } };
+  assert.match(connWindowLine(conns, stb, NOW).text, /^role can write: s3:PutObject, iam:CreateUser \u00b7 issued write creds/);
+});
+
+test("awsSig moves with the base-role result", () => {
+  for (const mk of [(o) => ({ aws: { ...ELEV, ...o } }), (o) => ({ aws_connections: [conn("a", o)] })]) {
+    const none = awsSig(mk(NONE), NOW);
+    const wr = awsSig(mk(WRITES), NOW);
+    const r1 = awsSig(mk(UNV("timeout")), NOW);
+    const r2 = awsSig(mk(UNV("sso_expired")), NOW);
+    assert.strictEqual(new Set([none, wr, r1, r2]).size, 4);
+    assert.notStrictEqual(awsSig(mk({ ...WRITES, base_write_actions: ["s3:PutObject"] }), NOW), wr, "the actions move it");
+    assert.strictEqual(awsSig(mk({ ...NONE, base_checked_at: "2027-01-15T10:00:00Z" }), NOW), none, "a re-check with the same result does not rebuild the tab");
+  }
+});
+
+test("no unqualified read-only", () => {
+  const states = [WRITES, NONE, UNV("timeout"), UNV("bogus"), {}];
+  const texts = [];
+  for (const b of states) {
+    for (const extra of [{}, { elevated_until: iso(17) }, { elevated_until: iso(12) }]) {
+      const s = { aws: { ...ELEV, ...b, ...extra } };
+      texts.push(awsBadge(s, NOW).title);
+      for (const r of awsRailRows(s, null, NOW)) texts.push(String(r.v), String(r.title || ""));
+      texts.push(awsRailRows(s, { elevation: { active: false, last_valid: iso(9) } }, NOW).map((r) => r.v).join(" "));
+      const cs = { aws_connections: [conn("a", { ...b, ...extra }), conn("b", b)] };
+      texts.push(awsBadge(cs, NOW).title);
+      for (const r of awsConnRailRows(cs, null, NOW, false)) texts.push(r.v, r.base || "", r.baseTitle || "");
+      texts.push(connWindowLine(cs.aws_connections, { elevation: { active: false, name: "b", last_valid: iso(9) } }, NOW).text);
+    }
+  }
+  for (const t of texts) assert.doesNotMatch(t, /read-only/i, t);
+});

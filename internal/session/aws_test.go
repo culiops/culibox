@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
@@ -66,6 +68,85 @@ type fakeBrokerHooks struct {
 	mcpErr      error
 	next        int
 	state       map[string]awsState
+
+	// Base-role probe: base answers ProbeBase per key (a key it lacks is
+	// Disabled, the broker's no-simulator answer); the rest records calls.
+	base       map[string]awsprobe.Result
+	probeCalls []probeCall
+	lastBase   map[string]awsprobe.Result // what BoxFor was last given
+	watched    map[string][]string        // WatchBase: session id -> keys
+	notify     func(sessionID, key string, r awsprobe.Result)
+	listings   []listingCall // WriteAWSListing calls
+	listErr    error
+	order      *callLog // optional: shared with fakeBoxes to pin call order
+}
+
+type probeCall struct {
+	id, agent string
+	bs        config.Bindings
+}
+
+type listingCall struct {
+	bs   config.Bindings
+	base map[string]awsprobe.Result
+}
+
+// probeKeys are a binding set's probe keys: "" for the legacy binding, else
+// the connection names.
+func probeKeys(bs config.Bindings) []string {
+	if bs.AWS != nil {
+		return []string{""}
+	}
+	var keys []string
+	for _, c := range bs.AWSConns {
+		keys = append(keys, c.Name)
+	}
+	return keys
+}
+
+func (f *fakeBrokerHooks) ProbeBase(id, agent string, bs config.Bindings) map[string]awsprobe.Result {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.probeCalls = append(f.probeCalls, probeCall{id: id, agent: agent, bs: bs})
+	f.order.add("probe")
+	out := map[string]awsprobe.Result{}
+	for _, k := range probeKeys(bs) {
+		if r, ok := f.base[k]; ok {
+			out[k] = r
+		} else {
+			out[k] = awsprobe.Disabled()
+		}
+	}
+	return out
+}
+
+func (f *fakeBrokerHooks) WatchBase(id string, keys []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.watched == nil {
+		f.watched = map[string][]string{}
+	}
+	f.watched[id] = append(f.watched[id], keys...)
+	f.order.add("watch")
+}
+
+func (f *fakeBrokerHooks) SetBaseNotify(fn func(sessionID, key string, r awsprobe.Result)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notify = fn
+}
+
+func (f *fakeBrokerHooks) WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listings = append(f.listings, listingCall{bs: bs, base: maps.Clone(base)})
+	return f.listErr
+}
+
+func (f *fakeBrokerHooks) notifyFn() func(sessionID, key string, r awsprobe.Result) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.notify
 }
 
 func (f *fakeBrokerHooks) setState(id string, until time.Time, sso string) {
@@ -117,11 +198,13 @@ func (f *fakeBrokerHooks) Token(id, nonce string) string {
 	return "tok-" + id + "." + nonce
 }
 
-func (f *fakeBrokerHooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
+func (f *fakeBrokerHooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Result) ([]box.Mount, []string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boxForCalls++
 	f.lastBS = bs
+	f.lastBase = base
+	f.order.add("boxfor")
 	env := []string{"AGENTBOX_BROKER=unix:///opt/agentbox-sock/broker.sock"}
 	if bs.AWS != nil {
 		env = append([]string{"AWS_PROFILE=agentbox"}, env...)
@@ -318,7 +401,7 @@ func TestBoundSpawnGetsBrokerEnvMountsTokenAndItsOwnBox(t *testing.T) {
 		t.Fatalf("session AWS=%+v nonce=%q", s.AWS, s.BrokerNonce)
 	}
 	info := s.Info()
-	want := &AWSInfo{Label: "sandbox", AccountID: "226198813800", RoleARN: testBinding().RoleARN, Prod: false}
+	want := &AWSInfo{Label: "sandbox", AccountID: "226198813800", RoleARN: testBinding().RoleARN, Prod: false, Fields: awsprobe.Disabled().Fields()}
 	if !reflect.DeepEqual(info.AWS, want) {
 		t.Fatalf("Info.AWS = %+v, want %+v", info.AWS, want)
 	}

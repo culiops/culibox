@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/ghapp"
@@ -36,6 +37,10 @@ type brokerService struct {
 	SSO    *ssologin.Runner     // the in-UI AWS sign-in; nil when the aws CLI is not on the daemon's PATH
 	Stop   func(context.Context)
 }
+
+// probeStopWait bounds how long Stop waits for base-role re-probes in flight:
+// just over one probe's own timeout.
+const probeStopWait = 6 * time.Second
 
 // lookAWS finds the aws CLI once at boot; a variable so tests can point it at a
 // fake.
@@ -107,6 +112,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 		}
 		return brokerSessionView(s, defined), true
 	}, broker.STSMinter{}, audit)
+	brk.SetSimulator(awsprobe.IAMSimulator{})
 	// github_apps is read once, at daemon start: a change needs a restart. With
 	// none configured the route keeps answering 503.
 	if len(apps) > 0 {
@@ -155,6 +161,9 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 			if err := srv.Shutdown(ctx); err != nil {
 				_ = srv.Close() // a mint outlived the grace period; the audit store closes next
 			}
+			// A base-role re-probe started by a mint writes its audit row; let
+			// the ones in flight finish (each within its own 5s timeout) first.
+			brk.StopProbes(probeStopWait)
 			_ = audit.Close()
 		},
 	}, nil

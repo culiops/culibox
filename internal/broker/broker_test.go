@@ -52,6 +52,9 @@ func (f *fakeMinter) Mint(_ context.Context, in MintInput) (Creds, error) {
 func (f *fakeMinter) expOf(i int) time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.exps[i] }
 func (f *fakeMinter) calls0Exp() time.Time  { return f.expOf(0) }
 
+// callCount is the number of Mint calls so far, safe while mints run.
+func (f *fakeMinter) callCount() int { f.mu.Lock(); defer f.mu.Unlock(); return len(f.calls) }
+
 type memRec struct {
 	mu      sync.Mutex
 	rows    []Row

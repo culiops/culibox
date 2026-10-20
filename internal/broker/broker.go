@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
@@ -154,6 +155,21 @@ type Broker struct {
 	ghTokenTimeout  time.Duration  // cap on one GitHub Revoke call; New sets 2s, tests shrink it
 	revokeWG        sync.WaitGroup // every revoke goroutine; RevokeAllGitHub and tests Wait on it
 	closing         bool           // RevokeAllGitHub ran: /v1/github/token mints nothing more
+
+	// Base-role write probe (probe.go). sim is set before the broker serves
+	// (SetSimulator); probeCache is guarded by mu.
+	sim          awsprobe.Simulator
+	probeTimeout time.Duration // per probe; New sets 5s, tests shrink it
+	probeCache   map[probeKey]probeCached
+
+	// Recover-on-mint (probe.go): a successful base mint of a watched key
+	// re-probes its base role. All guarded by mu except probeWG.
+	baseWatch    map[connKey]uint64 // watched (unverified) key -> its watch generation
+	watchGen     uint64             // the last generation handed out; never 0 once used
+	reprobing    map[connKey]uint64 // key -> the watch generation its in-flight re-probe runs for
+	onBase       func(sid, key string, r awsprobe.Result)
+	probeClosing bool           // StopProbes ran: no re-probe starts
+	probeWG      sync.WaitGroup // every re-probe goroutine; StopProbes and tests Wait on it
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -185,6 +201,8 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
+		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{},
+		baseWatch: map[connKey]uint64{}, reprobing: map[connKey]uint64{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b
@@ -234,6 +252,16 @@ func (b *Broker) Forget(sessionID string) {
 	for k := range b.ssoNeed {
 		if k.sid == sessionID {
 			delete(b.ssoNeed, k)
+		}
+	}
+	for k := range b.baseWatch {
+		if k.sid == sessionID {
+			delete(b.baseWatch, k)
+		}
+	}
+	for k := range b.reprobing { // an in-flight re-probe finds its generation gone and reports nothing
+		if k.sid == sessionID {
+			delete(b.reprobing, k)
 		}
 	}
 	for k := range b.mintTimes {
@@ -435,8 +463,12 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 			st.Mints++
 			st.LastMint, st.LastError = now, ""
 		})
+		gen, reprobe := b.startReprobeLocked(ck, p.elevated)
 		b.mu.Unlock()
 		writeCreds(w, c)
+		if reprobe { // after the reply: a re-probe never delays the credential
+			go b.reprobe(ck, sv.Agent, TargetOf(bnd), gen)
+		}
 		return
 	}
 	// Unreachable: attempt 1 is read-only and always returns. Fail closed if that changes.
@@ -447,7 +479,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 // discarded rather than handed out ("" = keep it). The hard bound (spec §5.2):
 // a write credential never outlives the window it was minted under, and is
 // never handed out for a window that changed while STS was being called.
-// Either way it is discarded, not cached, and the box gets read-only instead.
+// Either way it is discarded, not cached, and the box gets the base role instead.
 func (b *Broker) discardReasonLocked(sid string, p mintPlan, c Creds, now time.Time) string {
 	if !p.elevated {
 		return ""
@@ -455,11 +487,11 @@ func (b *Broker) discardReasonLocked(sid string, p mintPlan, c Creds, now time.T
 	e := b.elev[sid]
 	switch {
 	case !c.Expiration.After(now): // an absent or past Expiration proves nothing about the bound
-		return "elevated credential has no usable expiration; minted read-only instead"
+		return "elevated credential has no usable expiration; minted from the base role instead"
 	case c.Expiration.After(p.until):
-		return "elevated credential would outlive the window; minted read-only instead"
+		return "elevated credential would outlive the window; minted from the base role instead"
 	case e == nil || e.gen != p.gen:
-		return "the elevation changed during the mint; minted read-only instead"
+		return "the elevation changed during the mint; minted from the base role instead"
 	}
 	return ""
 }

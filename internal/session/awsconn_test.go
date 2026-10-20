@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -274,8 +275,10 @@ func TestInfoAWSConnections(t *testing.T) {
 	in := s.Info()
 	want := []AWSConnInfo{
 		{Name: "sbx-a", Label: "Sandbox A", AccountID: "226198813800", RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent", Region: "ap-southeast-1",
-			WriteCapable: true, Elevate: &ElevateInfo{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write", MaxMinutes: 60}},
-		{Name: "sbx-b", Label: "Sandbox B", AccountID: "111122223333", RoleARN: "arn:aws:iam::111122223333:role/b", Region: "us-east-1", Prod: true},
+			WriteCapable: true, Elevate: &ElevateInfo{RoleARN: "arn:aws:iam::226198813800:role/agentbox-agent-write", MaxMinutes: 60},
+			Fields: awsprobe.Disabled().Fields()},
+		{Name: "sbx-b", Label: "Sandbox B", AccountID: "111122223333", RoleARN: "arn:aws:iam::111122223333:role/b", Region: "us-east-1", Prod: true,
+			Fields: awsprobe.Disabled().Fields()},
 	}
 	if !reflect.DeepEqual(in.AWSConnections, want) {
 		t.Fatalf("Info.AWSConnections = %+v\nwant %+v", in.AWSConnections, want)

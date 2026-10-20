@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -23,14 +24,22 @@ func (h Hooks) NewNonce() string { return NewNonce() }
 func (h Hooks) Token(id, nonce string) string { return h.B.Token(id, nonce) }
 
 // BoxFor writes the binding's per-binding files and returns the mounts and env
-// a bound box needs. It never modifies the endpoint's own mount slice.
-func (h Hooks) BoxFor(bs config.Bindings) ([]box.Mount, []string, error) {
-	dir, err := EnsureBindingDir(h.StateRoot, bs)
+// a bound box needs. base is the spawn's base-role probe results (nil without
+// AWS), which aws.json carries per connection. It never modifies the
+// endpoint's own mount slice.
+func (h Hooks) BoxFor(bs config.Bindings, base map[string]awsprobe.Result) ([]box.Mount, []string, error) {
+	dir, err := EnsureBindingDirWith(h.StateRoot, bs, base)
 	if err != nil {
 		return nil, nil, err
 	}
 	mounts := append([]box.Mount{{Host: dir, Box: BoxDir}}, h.EP.Mounts...)
 	return mounts, BoxEnv(bs, h.EP.BoxURL), nil
+}
+
+// WriteAWSListing rewrites aws.json in the binding's existing dir with new
+// base-role probe results; a no-op without named connections.
+func (h Hooks) WriteAWSListing(bs config.Bindings, base map[string]awsprobe.Result) error {
+	return WriteAWSListing(h.StateRoot, bs, base)
 }
 
 // WriteSessionMCP writes a session's MCP config file into its binding dir and
@@ -55,6 +64,19 @@ func (h Hooks) Forget(id string) { h.B.Forget(id) }
 
 // RevokeGitHub revokes the session's GitHub tokens at GitHub, in the background.
 func (h Hooks) RevokeGitHub(id string) { h.B.RevokeGitHub(id) }
+
+// ProbeBase checks, at spawn, whether each bound AWS base role can write.
+func (h Hooks) ProbeBase(id, agent string, bs config.Bindings) map[string]awsprobe.Result {
+	return h.B.ProbeBase(id, agent, bs)
+}
+
+// WatchBase re-probes the session's unverified base roles (keys as in
+// ProbeBase) after their next successful base mint.
+func (h Hooks) WatchBase(id string, keys []string) { h.B.WatchBase(id, keys) }
+
+// SetBaseNotify installs the sink for re-probe results; call it once at boot
+// (may be after serving).
+func (h Hooks) SetBaseNotify(f func(id, key string, r awsprobe.Result)) { h.B.SetBaseNotify(f) }
 
 // AWSState is what a session list shows of the broker's per-session state: the
 // end of the live write window (zero when none), the connection it is for (""

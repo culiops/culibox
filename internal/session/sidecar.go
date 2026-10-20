@@ -3,11 +3,13 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -85,6 +87,10 @@ type sessionMeta struct {
 	// Exclusive: the session's box is its own (an elevate binding). Records
 	// written before M3b have no key and read as false.
 	Exclusive bool `json:"exclusive,omitempty"`
+	// BaseAccess is the base-role probe result per AWS binding key ("" = the
+	// legacy binding, else the connection name), updated by a re-probe.
+	// Records from before the probe lack it: every key reads "not checked".
+	BaseAccess map[string]awsprobe.Result `json:"base_access,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries
@@ -189,6 +195,21 @@ func (sc *sidecar) setClaudeSessionID(id, sid string) {
 		return
 	}
 	md.ClaudeSessionID = sid
+	sc.m[id] = md
+	_ = sc.flushLocked()
+}
+
+// setBaseAccess records the session's base-role results after a re-probe.
+// No-op if the id is absent, so a concurrent retention-prune can never be
+// resurrected.
+func (sc *sidecar) setBaseAccess(id string, base map[string]awsprobe.Result) {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	md, ok := sc.m[id]
+	if !ok {
+		return
+	}
+	md.BaseAccess = maps.Clone(base)
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }

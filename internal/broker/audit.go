@@ -21,6 +21,11 @@ const (
 	OutcomeSTSError      Outcome = "sts_error"
 	OutcomeRateLimited   Outcome = "rate_limited"
 
+	// Base-role write probe: a mint made only to simulate the role's own write
+	// access. The credential never leaves the host.
+	OutcomeProbeMinted Outcome = "probe_minted"
+	OutcomeProbeFailed Outcome = "probe_failed"
+
 	// GitHub-provider outcomes.
 	OutcomeDeniedScope  Outcome = "denied_scope"
 	OutcomeNotInstalled Outcome = "not_installed"

@@ -1,10 +1,14 @@
 package broker
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/sesstoken"
@@ -18,7 +22,7 @@ func testHooks(t *testing.T) Hooks {
 
 func TestHooksBoxFor(t *testing.T) {
 	h := testHooks(t)
-	mounts, env, err := h.BoxFor(awsOnly(*binding()))
+	mounts, env, err := h.BoxFor(awsOnly(*binding()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +42,7 @@ func TestHooksBoxForRefusesAnInvalidBinding(t *testing.T) {
 	h := testHooks(t)
 	b := *binding()
 	b.Region = "x\n[evil]"
-	if _, _, err := h.BoxFor(awsOnly(b)); err == nil {
+	if _, _, err := h.BoxFor(awsOnly(b), nil); err == nil {
 		t.Fatal("an invalid binding was prepared")
 	}
 }
@@ -99,7 +103,7 @@ func TestHooksAWSState(t *testing.T) {
 
 func TestHooksBoxForGitHub(t *testing.T) {
 	h := testHooks(t)
-	mounts, env, err := h.BoxFor(config.Bindings{GitHub: ghTwoOwners()})
+	mounts, env, err := h.BoxFor(config.Bindings{GitHub: ghTwoOwners()}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,4 +113,75 @@ func TestHooksBoxForGitHub(t *testing.T) {
 	if !slices.Contains(env, "GIT_TERMINAL_PROMPT=0") || !slices.Contains(env, "AGENTBOX_GH_OWNERS=culiops,CuliOps2") {
 		t.Fatalf("env %q", env)
 	}
+}
+
+func TestHooksWatchBaseAndNotify(t *testing.T) {
+	b, _, _, _ := setup(t, map[string]SessionView{"s-1": live()})
+	b.SetSimulator(&fakeSim{dec: allowsPut})
+	h := Hooks{B: b}
+	nr := &notifyRec{}
+	h.SetBaseNotify(nr.f)
+	h.WatchBase("s-1", []string{""})
+	if w := call(b, tokA("s-1")); w.Code != 200 {
+		t.Fatalf("status %d", w.Code)
+	}
+	b.probeWG.Wait()
+	if got := nr.list(); len(got) != 1 || got[0].sid != "s-1" || got[0].key != "" {
+		t.Fatalf("notified %+v", got)
+	}
+}
+
+// BoxFor hands the spawn's probe results to the binding dir: aws.json carries
+// them per connection.
+func TestHooksBoxForWritesBaseIntoAWSListing(t *testing.T) {
+	h := testHooks(t)
+	cs := twoConns()
+	base := map[string]awsprobe.Result{"acme-prod-read": {State: awsprobe.Writes, Actions: []string{"s3:PutObject"}}}
+	mounts, _, err := h.BoxFor(config.Bindings{AWSConns: cs}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readAWSRows(t, filepath.Join(mounts[0].Host, AWSListFile))
+	if rows["acme-prod-read"].BaseAccess != "writes" || rows["acme-stg-read"].BaseAccess != "unverified" ||
+		rows["acme-stg-read"].BaseAccessReason != "not_checked" {
+		t.Fatalf("aws.json rows %+v", rows)
+	}
+}
+
+// WriteAWSListing rewrites aws.json in the dir BoxFor made, with new results.
+func TestHooksWriteAWSListing(t *testing.T) {
+	h := testHooks(t)
+	bs := config.Bindings{AWSConns: twoConns()}
+	mounts, _, err := h.BoxFor(bs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := map[string]awsprobe.Result{"acme-stg-read": {State: awsprobe.NoneFound}}
+	if err := h.WriteAWSListing(bs, base); err != nil {
+		t.Fatal(err)
+	}
+	rows := readAWSRows(t, filepath.Join(mounts[0].Host, AWSListFile))
+	if rows["acme-stg-read"].BaseAccess != "none_found" || rows["acme-prod-read"].BaseAccess != "unverified" {
+		t.Fatalf("aws.json rows %+v", rows)
+	}
+}
+
+func readAWSRows(t *testing.T, path string) map[string]awsprobe.Fields {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		Name string `json:"name"`
+		awsprobe.Fields
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatalf("aws.json %s: %v", raw, err)
+	}
+	out := map[string]awsprobe.Fields{}
+	for _, r := range rows {
+		out[r.Name] = r.Fields
+	}
+	return out
 }

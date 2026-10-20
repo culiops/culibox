@@ -174,12 +174,80 @@ const NEW_CRED_MIN = 16;
 // EXTEND_UNDER: Extend is offered when fewer than this many minutes are left.
 const EXTEND_UNDER = 20;
 
+// BASE_REASON mirrors awsprobe.ReasonText (and the table in the box's
+// agentbox-env.js; a Go test keeps the three equal). Any other value reads
+// "check failed": a reason is only ever one of these seven short words.
+const BASE_REASON = {
+  sso_expired: "SSO expired",
+  assume_denied: "assume-role denied",
+  simulate_denied: "role cannot simulate itself",
+  timeout: "timed out",
+  error: "check failed",
+  not_checked: "not checked",
+  probe_disabled: "probe disabled",
+};
+
+function baseReasonText(r) {
+  return Object.prototype.hasOwnProperty.call(BASE_REASON, r) ? BASE_REASON[r] : "check failed";
+}
+
+// baseState: the base role's measured write access of a binding, from the wire
+// fields base_access / base_write_actions / base_access_reason. A missing or
+// unknown state (an older daemon, a sidecar from before the probe) is
+// unverified, never "no writes".
+function baseState(a) {
+  const x = a || {};
+  if (x.base_access === "writes" || x.base_access === "none_found") return x.base_access;
+  return "unverified";
+}
+
+function baseActions(a) {
+  return a && Array.isArray(a.base_write_actions) ? a.base_write_actions.filter((x) => typeof x === "string") : [];
+}
+
+// baseUnverifiedReason: why the state is unverified. Only an unverified record
+// has a reason; anything else (missing, unknown state) was never checked.
+function baseUnverifiedReason(a) {
+  return a && a.base_access === "unverified" && a.base_access_reason ? a.base_access_reason : "not_checked";
+}
+
+// baseScope: what the base role can do, as {state, text, title}. A clean result
+// is "no broad writes found", never a claim of read-only: the probe lists a
+// short fixed set of broad write actions and does not see scoped grants.
+function baseScope(a) {
+  const state = baseState(a);
+  const at = hhmm(a && a.base_checked_at);
+  const checked = at ? "checked " + at + " \u00b7 " : "";
+  if (state === "writes") {
+    const acts = baseActions(a);
+    return { state, text: acts.length ? "role can write: " + acts.join(", ") : "role can write",
+      title: checked + "IAM policy simulation" };
+  }
+  if (state === "none_found") {
+    return { state, text: "no broad writes found", title: checked + "scoped write grants are not detected" };
+  }
+  return { state, text: "unverified (" + baseReasonText(baseUnverifiedReason(a)) + ")",
+    title: "the base role's write access could not be checked" };
+}
+
+// baseChipTail: the end of the chip's title for a binding with no open window.
+function baseChipTail(a) {
+  const b = baseScope(a);
+  if (b.state === "writes") return b.text;
+  if (b.state === "none_found") return b.text + " (scoped write grants are not detected)";
+  return "base role unverified (" + baseReasonText(baseUnverifiedReason(a)) + ")";
+}
+
+// ROLE_WRITE_SUFFIX is what awsBadge appends while the base role can write and
+// no window is open (dashed amber; the solid " \u00b7 write" is an open window).
+const ROLE_WRITE_SUFFIX = " \u00b7 can write";
+
 // awsBadge: the short chip. Red (prod) is the operator's own flag on the
 // binding, not something inferred from the account. `write` is a separate axis
 // (amber outline), so a prod binding that is writing is both.
 function awsBadge(s, nowMs = Date.now()) {
   const p = awsBadgeParts(s, nowMs);
-  if (p) return { text: p.label + (p.write ? WRITE_SUFFIX : ""), prod: p.prod, write: p.write, title: p.title };
+  if (p) return { text: p.label + (p.write ? WRITE_SUFFIX : p.roleWrite ? ROLE_WRITE_SUFFIX : ""), prod: p.prod, write: p.write, roleWrite: p.roleWrite, title: p.title };
   const a = s && s.aws;
   if (!a) return null;
   const base = a.label || ("aws:" + a.account_id);
@@ -188,14 +256,17 @@ function awsBadge(s, nowMs = Date.now()) {
       text: base + " · write",
       prod: !!a.prod,
       write: true,
+      roleWrite: false,
       title: "AWS " + a.account_id + " · " + roleName(a.elevate && a.elevate.role_arn) + " · write until " + hhmm(a.elevated_until),
     };
   }
+  const roleWrite = baseState(a) === "writes";
   return {
-    text: base,
+    text: base + (roleWrite ? ROLE_WRITE_SUFFIX : ""),
     prod: !!a.prod,
     write: false,
-    title: "AWS " + a.account_id + " · " + roleName(a.role_arn) + " · read-only",
+    roleWrite,
+    title: "AWS " + a.account_id + " · " + roleName(a.role_arn) + " · " + baseChipTail(a),
   };
 }
 
@@ -209,35 +280,52 @@ function connList(s) {
 // any. One connection reads as its own label (its name when unlabelled); two or
 // more as "AWS ×N", the names in the title. Red when ANY bound connection is
 // production, amber when any has a window open: the chip is the one place a
-// reader sees either without opening the rail.
+// reader sees either without opening the rail. Dashed amber (roleWrite) when no
+// window is open and a base role can write; an open window wins that chip.
 function awsBadgeParts(s, nowMs = Date.now()) {
   const cs = connList(s);
   if (!cs.length) return null;
   const prod = cs.some((c) => c.prod);
   const live = cs.filter((c) => isElevated(c, nowMs));
   const write = live.length > 0;
+  const idle = cs.filter((c) => !isElevated(c, nowMs));
+  const roleWrite = !write && idle.some((c) => baseState(c) === "writes");
   if (cs.length === 1) {
     const c = cs[0];
     const base = "AWS " + c.account_id + " \u00b7 " + roleName(write && c.elevate ? c.elevate.role_arn : c.role_arn);
-    return { label: c.label || c.name, prod, write,
-      title: base + (write ? " \u00b7 write until " + hhmm(c.elevated_until) : " \u00b7 read-only") };
+    return { label: c.label || c.name, prod, write, roleWrite,
+      title: base + (write ? " \u00b7 write until " + hhmm(c.elevated_until) : " \u00b7 " + baseChipTail(c)) };
   }
-  return { label: "AWS \u00d7" + cs.length, prod, write,
+  const names = (state) => idle.filter((c) => baseState(c) === state).map((c) => c.name).join(", ");
+  const canWrite = names("writes");
+  const unverified = names("unverified");
+  return { label: "AWS \u00d7" + cs.length, prod, write, roleWrite,
     title: "AWS connections: " + cs.map((c) => c.name).join(", ") +
-      live.map((c) => " \u00b7 write on " + c.name + " until " + hhmm(c.elevated_until)).join("") };
+      live.map((c) => " \u00b7 write on " + c.name + " until " + hhmm(c.elevated_until)).join("") +
+      (canWrite ? " \u00b7 role can write on " + canWrite : "") +
+      (unverified ? " \u00b7 unverified on " + unverified : "") };
 }
 
 // WRITE_SUFFIX is what awsBadge appends while a window is open.
 const WRITE_SUFFIX = " · write";
 
-// badgeParts: the badge text as {label, write}, so the renderer can let the
-// label ellipsize while the word "write" never does (it is the one part of the
-// chip that must always be readable).
+// badgeParts: the badge text as {label, write, roleWrite}, so the renderer can
+// let the label ellipsize while the suffix (" \u00b7 write" or " \u00b7 can write") never
+// does (it is the one part of the chip that must always be readable).
 function badgeParts(ab) {
   if (!ab) return null;
   const text = String(ab.text || "");
-  if (ab.write && text.endsWith(WRITE_SUFFIX)) return { label: text.slice(0, -WRITE_SUFFIX.length), write: true };
-  return { label: text, write: false };
+  if (ab.write && text.endsWith(WRITE_SUFFIX)) return { label: text.slice(0, -WRITE_SUFFIX.length), write: true, roleWrite: false };
+  if (ab.roleWrite && text.endsWith(ROLE_WRITE_SUFFIX)) return { label: text.slice(0, -ROLE_WRITE_SUFFIX.length), write: false, roleWrite: true };
+  return { label: text, write: false, roleWrite: false };
+}
+
+// baseSig: the part of the chip's signature that the base-role result decides.
+// The state, the actions and the reason move it; the check time does not, so a
+// re-check that finds the same thing does not rebuild every tab.
+function baseSig(a) {
+  const st = baseState(a);
+  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : ""].join("/");
 }
 
 // awsSig: everything the AWS chip draws, as one string. A terminal tab keeps its
@@ -246,35 +334,42 @@ function badgeParts(ab) {
 function awsSig(s, nowMs = Date.now()) {
   const cs = connList(s);
   if (cs.length) {
-    return cs.map((c) => [c.name, c.label || "", c.account_id || "", !!c.prod, isElevated(c, nowMs) ? c.elevated_until : ""].join("|")).join(";");
+    return cs.map((c) => [c.name, c.label || "", c.account_id || "", !!c.prod, isElevated(c, nowMs) ? c.elevated_until : "", baseSig(c)].join("|")).join(";");
   }
   const a = s && s.aws;
   if (!a) return "";
-  return [a.label || "", a.account_id || "", !!a.prod, isElevated(a, nowMs) ? a.elevated_until : ""].join("|");
+  return [a.label || "", a.account_id || "", !!a.prod, isElevated(a, nowMs) ? a.elevated_until : "", baseSig(a)].join("|");
 }
 
 // scopeRow: the scope row of the steer rail. Under a live window it reads the
 // clock and minutes left (the elevation view only carries last_valid after a
 // drop, so an active window is described from the list entry's elevated_until).
 // After a drop, credentials already issued may outlive the grant: say until when.
+// With no window the row is the base role's measured access (baseScope), and a
+// base role that can write is drawn as the dashed amber chip.
 function scopeRow(a, st, nowMs) {
   if (isElevated(a, nowMs)) {
     const m = minutesLeft(a.elevated_until, nowMs);
     let v = "write · until " + hhmm(a.elevated_until) + " (" + m + " min)";
-    if (m < NEW_CRED_MIN) v += " · new credentials read-only";
+    if (m < NEW_CRED_MIN) v += " · new credentials from the base role";
     return { k: "scope", v: v, chip: "bdg aws write", wrap: true };
   }
+  const b = baseScope(a);
+  const row = { k: "scope", v: b.text, title: b.title };
+  if (b.state === "writes") { row.chip = "bdg aws rolew"; row.wrap = true; }
+  if (b.state === "unverified") row.wrap = true;
   const e = st && st.elevation;
   if (e && e.active === false && e.last_valid && Date.parse(e.last_valid) > nowMs) {
-    return { k: "scope", v: "read-only · issued write creds valid until " + hhmm(e.last_valid), wrap: true };
+    row.v = b.text + " · issued write creds valid until " + hhmm(e.last_valid);
+    row.wrap = true;
   }
-  return { k: "scope", v: "read-only" };
+  return row;
 }
 
 // awsRailRows: the steer rail's view of the binding, as short rows rather than
 // one long line: the rail's value cell is ~260px, and a single
-// "label · account · role · read-only" string was ellipsized so that the end of
-// it (read-only, production) was exactly what the reader could not see. The
+// "label · account · role · scope" string was ellipsized so that the end of
+// it (the scope, production) was exactly what the reader could not see. The
 // identifiers wrap; the scope is its own row; production is a row of its own
 // drawn as the red chip, so no label length can push it out of view. While
 // elevated, the role row names the write role in use.
@@ -309,7 +404,7 @@ function liveWindowConn(conns, st, nowMs) {
 // connWindowLine: the Write access section's line for the connection that has a
 // window, or whose issued write credentials outlive a drop: {name, text}, null
 // with neither. The text is the legacy scopeRow's, not a copy of it, so the
-// countdown, the "new credentials read-only" warning under NEW_CRED_MIN and the
+// countdown, the "new credentials from the base role" note under NEW_CRED_MIN and the
 // after-drop "issued write creds valid until" cannot drift from the single-
 // binding rail. The status's elevation view is for one connection (its name);
 // it is only offered to scopeRow for that one.
@@ -318,7 +413,8 @@ function connWindowLine(conns, st, nowMs) {
   if (w) return { name: w.name, text: scopeRow({ elevated_until: w.until }, null, nowMs).v };
   const e = st && st.elevation;
   if (e && e.active === false && e.name && e.last_valid && Date.parse(e.last_valid) > nowMs) {
-    return { name: e.name, text: scopeRow({}, { elevation: e }, nowMs).v };
+    const named = (Array.isArray(conns) ? conns : []).find((x) => x.name === e.name);
+    return { name: e.name, text: scopeRow(named || {}, { elevation: e }, nowMs).v };
   }
   return null;
 }
@@ -346,7 +442,8 @@ function connStatLine(stats, nowMs) {
 // first, then by name. Each block is
 //   line 1  name + chips [prod] [write until HH:MM] [SSO expired]
 //   line 2  label · account · role-name · region   (muted; the write role while elevated)
-//   line 3  N mints · last mint HH:MM, or the last error
+//   line 3  the base role's measured write access (none while a window is open)
+//   line 4  N mints · last mint HH:MM, or the last error
 // Past CONN_COLLAPSE blocks and not `expanded`, the first six and a "more" row
 // whose n is the TOTAL ("Show all N"); expanded, every block and a "less" row.
 // `k`/`v` make every row comparable for the rail's repaint key: v carries all
@@ -363,8 +460,13 @@ function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false) {
     if (c.sso_expired) chips.push({ text: "SSO expired", chip: "bdg dgr" });
     const detail = [c.label, c.account_id, roleName(live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" \u00b7 ");
     const { stat, err } = connStatLine((byName.get(c.name) || {}).stats, nowMs);
-    return { kind: "conn", k: "aws", name: c.name, chips, detail, stat, err,
-      v: [c.name, chips.map((x) => x.text).join(","), detail, stat].join("\u241f") };
+    // While a window is open the base role is not what the session holds.
+    const b = live ? null : baseScope(c);
+    const base = b ? b.text : "";
+    const baseTitle = b ? b.title : "";
+    const baseWarn = !!b && b.state === "writes";
+    return { kind: "conn", k: "aws", name: c.name, chips, detail, base, baseWarn, baseTitle, stat, err,
+      v: [c.name, chips.map((x) => x.text).join(","), detail, base, baseTitle, stat].join("\u241f") };
   });
   if (blocks.length <= CONN_COLLAPSE) return blocks;
   if (expanded) return blocks.concat([{ kind: "less", k: "aws", v: "less" }]);
@@ -402,8 +504,8 @@ function readAWSFields(get) {
   // Only when there are hosts: an empty list must not reach the server, so a
   // binding without extra hosts keeps its pre-egress hash (and its box name).
   if (egress.length) out.egress_allow = egress;
-  // The write role is optional: without one the binding is read-only and the
-  // block is absent. A blank or non-numeric max falls back to the 60 min default.
+  // The write role is optional: without one the binding has no write window to
+  // open and the block is absent. A blank or non-numeric max falls back to the 60 min default.
   const elevRole = String(get("pf-aws-elev-role") || "").trim();
   if (elevRole) {
     out.elevate = { role_arn: elevRole, max_minutes: Number(get("pf-aws-elev-max")) || 60 };
@@ -413,6 +515,6 @@ function readAWSFields(get) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine, readAWSFields,
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine, readAWSFields,
     hhmm, minutesLeft, isElevated, elevActions };
 }
