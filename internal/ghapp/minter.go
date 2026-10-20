@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 )
 
 // MintInput names what a token should cover. Repos are bare repository names
@@ -35,6 +36,8 @@ type Minter struct {
 	client Client
 	now    func() time.Time
 
+	store credref.StoreGetter // backs private_key refs of type "store"; may be nil
+
 	mu    sync.Mutex
 	keys  map[string]*rsa.PrivateKey
 	insts map[installKey]int64
@@ -54,13 +57,36 @@ func NewMinter(apps []config.GitHubApp, c Client) *Minter {
 	return m
 }
 
-// key returns the cached key for app, loading it on first use.
+// SetStore gives the minter the encrypted store that "store" key references
+// read from. Call it before the first mint.
+func (m *Minter) SetStore(s credref.StoreGetter) {
+	m.mu.Lock()
+	m.store = s
+	m.mu.Unlock()
+}
+
+// key returns the key for app. A file-backed key is loaded once and cached; a
+// store-backed key is read on every call and never cached, so a lock or an
+// unlock expiry takes effect on the next mint.
 func (m *Minter) key(app string) (config.GitHubApp, *rsa.PrivateKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a, ok := m.apps[app]
 	if !ok {
 		return a, nil, fmt.Errorf("unknown GitHub App %q", app)
+	}
+	if a.PrivateKey.Type == "store" {
+		raw, err := credref.GetStore(m.store, a.PrivateKey.ID)
+		if err != nil {
+			return a, nil, fmt.Errorf("GitHub App %q: %w", app, err)
+		}
+		// The PEM has newlines: raw bytes go straight to the parser, never
+		// through credref.Value.
+		k, err := parseKey(a.PrivateKey.String(), raw)
+		if err != nil {
+			return a, nil, fmt.Errorf("GitHub App %q: %w", app, err)
+		}
+		return a, k, nil
 	}
 	if k, ok := m.keys[app]; ok {
 		return a, k, nil

@@ -193,6 +193,7 @@ type Config struct {
 	EgressPort        int    `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
 
 	Analytics AnalyticsConfig `json:"analytics,omitempty"`
+	Store     StoreConfig     `json:"store,omitzero"` // the encrypted value store (see store.go)
 }
 
 // AnalyticsConfig configures the token/prompt analytics store + ingester. The
@@ -323,6 +324,9 @@ func (c Config) Validate() error {
 	}
 	if c.EgressPortOrDefault() == c.BrokerPortOrDefault() {
 		return fmt.Errorf("config: egress_port %d must differ from broker_port", c.EgressPortOrDefault())
+	}
+	if err := validStore(c.Store); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	if err := ValidateGitHubApps(c.GitHubApps); err != nil {
 		return fmt.Errorf("config: %w", err)

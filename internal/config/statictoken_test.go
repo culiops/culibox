@@ -144,6 +144,7 @@ func TestStaticTokenValidate(t *testing.T) {
 		{"33-char label", func(e *StaticToken) { e.Label = strings.Repeat("a", 33) }, ".label"},
 		{"201-char description", func(e *StaticToken) { e.Description = strings.Repeat("a", 201) }, ".description"},
 		{"bad value ref", func(e *StaticToken) { e.Value = KeyRef{Type: "store", Path: "x"} }, ".value"},
+		{"store value ref without id", func(e *StaticToken) { e.Value = KeyRef{Type: "store"} }, ".value"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
