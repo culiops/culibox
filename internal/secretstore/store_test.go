@@ -6,9 +6,12 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"filippo.io/age"
 )
 
 const goodPass = "correct horse battery"
@@ -447,11 +450,104 @@ func TestDefaultWorkFactor(t *testing.T) {
 	old := scryptWorkFactor
 	scryptWorkFactor = 0
 	defer func() { scryptWorkFactor = old }()
-	s, _, _, _ := newStore(t, true)
+	s, _, _, dir := newStore(t, true)
 	if err := s.Init([]byte(goodPass), "cli"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Unlock([]byte(goodPass), time.Hour, "cli"); err != nil {
 		t.Fatal(err)
+	}
+	if got := scryptLogN(t, filepath.Join(dir, "store", "identity.age")); got < 18 {
+		t.Fatalf("scrypt logN %d, want >= 18 (age default)", got)
+	}
+}
+
+// scryptLogN reads the work factor from the scrypt stanza of an age file:
+// "-> scrypt <salt> <logN>".
+func scryptLogN(t *testing.T, path string) int {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(line); len(f) == 4 && f[0] == "->" && f[1] == "scrypt" {
+			n, err := strconv.Atoi(f[3])
+			if err != nil {
+				t.Fatalf("bad logN %q", f[3])
+			}
+			return n
+		}
+		if strings.HasPrefix(line, "---") {
+			break
+		}
+	}
+	t.Fatal("no scrypt stanza in identity.age")
+	return 0
+}
+
+func TestReinitDoesNotInheritUnlock(t *testing.T) {
+	s, k, _, dir := initLinux(t)
+	if err := s.Unlock([]byte(goodPass), time.Hour, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, "store")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Init([]byte(goodPass), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Status().Locked {
+		t.Fatal("re-init inherited the previous unlocked identity")
+	}
+	if _, _, err := k.Load(); !errors.Is(err, ErrLocked) {
+		t.Fatalf("keeper still holds an identity: %v", err)
+	}
+}
+
+func TestKeeperIdentityMismatchIsLocked(t *testing.T) {
+	s, k, _, _ := initLinux(t)
+	if err := s.Set("a", []byte("v"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Save(other.String(), time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Get("a"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("get with a foreign identity: %v", err)
+	}
+	if !s.Status().Locked {
+		t.Fatal("status unlocked with a foreign identity")
+	}
+}
+
+func TestUnlockMismatchedPair(t *testing.T) {
+	s, k, rec, dir := initLinux(t)
+	// A second store with the same passphrase: its identity.age decrypts fine
+	// but belongs to a different recipient.
+	s2, _, _, dir2 := initLinux(t)
+	_ = s2
+	b, err := os.ReadFile(filepath.Join(dir2, "store", "identity.age"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "store", "identity.age"), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Unlock([]byte(goodPass), time.Hour, "cli"); err == nil {
+		t.Fatal("unlock accepted an identity that does not match the recipient")
+	}
+	if _, _, err := k.Load(); !errors.Is(err, ErrLocked) {
+		t.Fatalf("something was saved: %v", err)
+	}
+	if rec.has("unlocked") {
+		t.Fatal("unlocked event recorded")
+	}
+	if err := s.Passwd([]byte(goodPass), []byte("another good phrase"), "cli"); err == nil {
+		t.Fatal("passwd accepted a mismatched pair")
 	}
 }

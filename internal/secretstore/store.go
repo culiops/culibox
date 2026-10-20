@@ -154,6 +154,10 @@ func (s *Store) Init(passphrase []byte, actor string) error {
 		}
 		return fail(err)
 	}
+	if needsPass {
+		// A previous store's unlocked identity must not carry over to this one.
+		_ = s.k.Clear()
+	}
 	return nil
 }
 
@@ -165,7 +169,7 @@ func (s *Store) Status() Status {
 		return st
 	}
 	st.Initialized = true
-	if _, exp, err := s.k.Load(); err != nil {
+	if _, exp, err := s.keeperIdentity(); err != nil {
 		st.Locked = true
 	} else {
 		st.ExpiresAt = exp
@@ -306,13 +310,9 @@ func (s *Store) Get(id string) ([]byte, error) {
 		}
 		return nil, err
 	}
-	ident, _, err := s.k.Load()
+	x, _, err := s.keeperIdentityFor(root)
 	if err != nil {
 		return nil, err
-	}
-	x, err := age.ParseX25519Identity(strings.TrimSpace(ident))
-	if err != nil {
-		return nil, errors.New("master key is malformed")
 	}
 	r, err := age.Decrypt(bytes.NewReader(ct), x)
 	if err != nil {
@@ -398,7 +398,8 @@ func (s *Store) openIdentity(passphrase []byte) (string, error) {
 		return "", err
 	}
 	defer root.Close()
-	if _, err := readRecipient(root); err != nil {
+	rcpt, err := readRecipient(root)
+	if err != nil {
 		return "", err
 	}
 	ct, err := readSafe(root, identityFn, maxSmallFile)
@@ -424,7 +425,47 @@ func (s *Store) openIdentity(passphrase []byte) (string, error) {
 	if err != nil {
 		return "", errors.New("identity file is unreadable")
 	}
-	return strings.TrimSpace(string(b)), nil
+	ident := strings.TrimSpace(string(b))
+	x, err := age.ParseX25519Identity(ident)
+	if err != nil {
+		return "", errors.New("identity file is unreadable")
+	}
+	if x.Recipient().String() != rcpt.String() {
+		return "", errors.New("identity.age does not match the store recipient")
+	}
+	return ident, nil
+}
+
+// keeperIdentity returns the keeper's identity when it belongs to this store.
+func (s *Store) keeperIdentity() (*age.X25519Identity, time.Time, error) {
+	root, err := s.openRoot(false)
+	if err != nil {
+		return nil, time.Time{}, ErrLocked
+	}
+	defer root.Close()
+	return s.keeperIdentityFor(root)
+}
+
+// keeperIdentityFor loads the identity from the keeper and checks it against
+// the recipient file. An identity that is not this store's (a stale entry from
+// an earlier store in the same data dir) counts as locked.
+func (s *Store) keeperIdentityFor(root *os.Root) (*age.X25519Identity, time.Time, error) {
+	ident, exp, err := s.k.Load()
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	x, err := age.ParseX25519Identity(strings.TrimSpace(ident))
+	if err != nil {
+		return nil, time.Time{}, errors.New("master key is malformed")
+	}
+	rcpt, err := readRecipient(root)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	if x.Recipient().String() != rcpt.String() {
+		return nil, time.Time{}, ErrLocked
+	}
+	return x, exp, nil
 }
 
 func checkNewPassphrase(p []byte) error {
@@ -491,7 +532,7 @@ func (s *Store) openRoot(create bool) (*os.Root, error) {
 	return root, nil
 }
 
-func readRecipient(root *os.Root) (age.Recipient, error) {
+func readRecipient(root *os.Root) (*age.X25519Recipient, error) {
 	b, err := readSafe(root, recipientFn, maxSmallFile)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
