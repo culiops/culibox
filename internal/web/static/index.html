@@ -267,9 +267,18 @@
               OS user and can read the default account's files. Use box containment to keep accounts apart.</div>
           </div>
         </div>
+        <div id="pf-awsc-block">
+          <span class="flab">AWS connections (boxed only)</span>
+          <p class="tiny mut" id="pf-awsc-hint" hidden>AWS connections need runtime: box. The host tier cannot contain credentials.</p>
+          <p class="tiny mut" id="pf-awsc-note" hidden></p>
+          <p class="tiny mut" id="pf-awsc-none" hidden>No AWS connection is defined. Add one under aws_connections in config.json, then restart agent-box.</p>
+          <div id="pf-awsc-list"></div>
+          <p class="warnbox tiny" id="pf-awsc-err" role="alert" hidden></p>
+        </div>
         <div id="pf-aws-block">
           <span class="flab">AWS (boxed only)</span>
           <p class="tiny mut" id="pf-aws-hint" hidden>AWS needs runtime: box. The host tier cannot contain credentials.</p>
+          <p class="tiny mut" id="pf-aws-note" hidden></p>
           <div class="frow">
             <div class="fcol"><label class="flab" for="pf-aws-profile">Source profile</label>
               <input id="pf-aws-profile" class="fld" type="text" placeholder="sandbox-admin" autocomplete="off" spellcheck="false"></div>

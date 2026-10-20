@@ -150,6 +150,12 @@ func (s *Server) Handler() http.Handler {
 		if s.Profiles != nil {
 			meta["static_tokens"] = s.Profiles.StaticTokenMeta()
 		}
+		// The aws_connections the profile editor's picker offers (names and
+		// shape, never a source profile or a role); [] when none are defined.
+		meta["aws_connections"] = []AWSConnectionMeta{}
+		if s.Profiles != nil {
+			meta["aws_connections"] = s.Profiles.AWSConnectionMetaList()
+		}
 		// Per-account 5h/weekly usage, read fresh (tiny files). Omitted when no
 		// account has data so the client shows nothing rather than an empty widget.
 		if m := s.rateLimitsByAccount(); len(m) > 0 {

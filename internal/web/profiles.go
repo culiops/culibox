@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -187,6 +188,32 @@ func (m *ProfileManager) StaticTokenMeta() []TokenMeta {
 			tm.MCPServer = e.MCP.Server
 		}
 		out = append(out, tm)
+	}
+	return out
+}
+
+// AWSConnectionMeta is what the profile editor may know of an aws_connections
+// entry: its name, how it is shown, the account and region it reaches and
+// whether it can be widened to write. Never the source profile or a role ARN.
+type AWSConnectionMeta struct {
+	Name         string `json:"name"`
+	Label        string `json:"label"`
+	AccountID    string `json:"account_id"`
+	Region       string `json:"region"`
+	Description  string `json:"description"`
+	Prod         bool   `json:"prod"`
+	WriteCapable bool   `json:"write_capable"`
+}
+
+// AWSConnectionMetaList lists the instance's aws_connections for the profile
+// editor's picker, in config order. Never nil, so it encodes as [].
+func (m *ProfileManager) AWSConnectionMetaList() []AWSConnectionMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]AWSConnectionMeta, 0, len(m.awsConns))
+	for _, c := range m.awsConns {
+		out = append(out, AWSConnectionMeta{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
+			Region: c.Region, Description: c.Description, Prod: c.Prod, WriteCapable: c.Elevate != nil})
 	}
 	return out
 }

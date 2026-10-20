@@ -1131,6 +1131,9 @@
     .pf-check { display: flex; align-items: center; gap: 8px; }
     /* The AWS block is greyed with the rest of the editor's .off controls when
        the host tier (or a lock) closes it; the hint says why. */
+    #pf-awsc-block { margin-top: 14px; }
+    #pf-awsc-block > .flab { display: block; margin-bottom: 6px; }
+    #pf-awsc-hint, #pf-awsc-note, #pf-awsc-none, #pf-aws-note { margin: 0 0 8px; }
     #pf-aws-block { margin-top: 14px; }
     #pf-aws-block > .flab { display: block; margin-bottom: 6px; }
     #pf-aws-hint { margin: 0 0 8px; }
@@ -2071,7 +2074,7 @@
       .pf-gh-owner .fcol.rm .btn { min-height: var(--tap); width: var(--tap); padding: 0; }
       #pf-gh-perms .pf-check { min-height: var(--tap); }
       .pf-st-entry { min-height: var(--tap); }
-      #pf-st-list input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
+      #pf-awsc-list input[type="checkbox"], #pf-st-list input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       #pf-gh-perms input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       /* The containment segments and the token row's own buttons are controls
          this slice added too; nothing else sizes them for a finger. A profile
