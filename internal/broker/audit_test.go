@@ -2,11 +2,13 @@ package broker
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -176,9 +178,9 @@ func TestRecordApprovalReturnsTheWriteError(t *testing.T) {
 }
 
 // Prove: an approval row holds identifiers and the human's reason, never a
-// credential, token or nonce. Pinned on the type, so a new field is a decision.
+// credential, token or nonce (Entry is a connection name). Pinned on the type, so a new field is a decision.
 func TestApprovalRowCarriesNoSecrets(t *testing.T) {
-	want := []string{"Time", "SessionID", "Profile", "AccountID", "RoleARN", "Action", "Until", "Minutes", "Reason", "Cred", "Error"}
+	want := []string{"Time", "SessionID", "Profile", "AccountID", "RoleARN", "Action", "Until", "Minutes", "Reason", "Cred", "Error", "Entry"}
 	ty := reflect.TypeOf(ApprovalRow{})
 	var got []string
 	for i := 0; i < ty.NumField(); i++ {
@@ -584,5 +586,116 @@ func TestForSessionProviderAndExcept(t *testing.T) {
 func TestAuditStaticOutcomeValues(t *testing.T) {
 	if OutcomeFetched != "fetched" || OutcomeUnresolved != "unresolved" || ProviderStatic != "static" {
 		t.Fatalf("%q %q %q", OutcomeFetched, OutcomeUnresolved, ProviderStatic)
+	}
+}
+
+// approvalSchemaBeforeEntry is approval_audit exactly as HEAD (before the entry
+// column) created it, so the migration test describes a real old store.
+const approvalSchemaBeforeEntry = `
+CREATE TABLE IF NOT EXISTS approval_audit (
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  session_id TEXT NOT NULL,
+  profile TEXT NOT NULL DEFAULT '',
+  account_id TEXT NOT NULL DEFAULT '',
+  role_arn TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL,
+  until INTEGER NOT NULL DEFAULT 0,
+  minutes INTEGER NOT NULL DEFAULT 0,
+  reason TEXT NOT NULL DEFAULT '',
+  cred TEXT NOT NULL DEFAULT '',
+  error TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_approval_session ON approval_audit(session_id, ts);
+`
+
+func TestApprovalAuditEntryColumnMigrates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		approvalSchemaBeforeEntry,
+		`INSERT INTO approval_audit (ts, session_id, action, minutes, reason, cred) VALUES (1, 'pre-entry', 'granted', 30, 'old grant', 'cookie')`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.Close()
+	var a *Audit
+	for i := 0; i < 2; i++ { // the second open proves the migration is idempotent
+		if a != nil {
+			a.Close()
+		}
+		if a, err = OpenAudit(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer a.Close()
+	var n int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('approval_audit') WHERE name = 'entry'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("entry column: n=%d err=%v", n, err)
+	}
+	rows, err := a.ApprovalsForSession("pre-entry", 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	if rows[0].Entry != "" || rows[0].Action != ActionGranted || rows[0].Minutes != 30 || rows[0].Reason != "old grant" {
+		t.Fatalf("old row: %+v", rows[0])
+	}
+}
+
+func TestApprovalRowEntryRoundTrip(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	base := ApprovalRow{Time: time.Unix(1_800_000_000, 0), SessionID: "aws-1", Action: ActionGranted, Minutes: 15, Cred: "cookie"}
+	named := base
+	named.Entry = "sbx-a"
+	if err := a.RecordApproval(named); err != nil {
+		t.Fatal(err)
+	}
+	legacy := base
+	legacy.Time = legacy.Time.Add(time.Minute)
+	if err := a.RecordApproval(legacy); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.ApprovalsForSession("aws-1", 10) // newest first
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows: %+v %v", rows, err)
+	}
+	if rows[0].Entry != "" || rows[1].Entry != "sbx-a" {
+		t.Fatalf("entries: %q %q", rows[0].Entry, rows[1].Entry)
+	}
+	// Legacy payloads are unchanged: an empty entry is omitted from JSON.
+	if b, _ := json.Marshal(legacy); strings.Contains(string(b), `"entry"`) {
+		t.Fatalf("empty entry leaked into JSON: %s", b)
+	}
+	if b, _ := json.Marshal(named); !strings.Contains(string(b), `"entry":"sbx-a"`) {
+		t.Fatalf("entry missing from JSON: %s", b)
+	}
+}
+
+// A window closed after a restart keeps naming the connection it was granted on.
+func TestEndOpenWindowsCarriesTheEntry(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	now := time.Unix(1_800_000_000, 0)
+	if err := a.RecordApproval(ApprovalRow{Time: now, SessionID: "aws-1", Action: ActionGranted, Until: now.Add(time.Hour), Entry: "sbx-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := a.EndOpenWindows(now.Add(time.Minute)); err != nil || n != 1 {
+		t.Fatalf("EndOpenWindows: %d %v", n, err)
+	}
+	rows, err := a.ApprovalsForSession("aws-1", 10)
+	if err != nil || len(rows) != 2 || rows[0].Action != ActionEnded || rows[0].Entry != "sbx-a" {
+		t.Fatalf("rows: %+v %v", rows, err)
 	}
 }
