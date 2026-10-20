@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
@@ -154,6 +155,12 @@ type Broker struct {
 	ghTokenTimeout  time.Duration  // cap on one GitHub Revoke call; New sets 2s, tests shrink it
 	revokeWG        sync.WaitGroup // every revoke goroutine; RevokeAllGitHub and tests Wait on it
 	closing         bool           // RevokeAllGitHub ran: /v1/github/token mints nothing more
+
+	// Base-role write probe (probe.go). sim is set before the broker serves
+	// (SetSimulator); probeCache is guarded by mu.
+	sim          awsprobe.Simulator
+	probeTimeout time.Duration // per probe; New sets 5s, tests shrink it
+	probeCache   map[probeKey]probeCached
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
@@ -185,6 +192,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
+		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
 	return b

@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -270,5 +271,243 @@ func TestFakeSimErrForIsPerRole(t *testing.T) {
 	}
 	if fs.callCount() != 2 || len(fs.callsCopy()) != 2 || fs.maxConcurrent() != 1 {
 		t.Fatalf("calls=%d max=%d", fs.callCount(), fs.maxConcurrent())
+	}
+}
+
+// --- ProbeBase ---
+
+const (
+	roleA = "arn:aws:iam::111111111111:role/a"
+	roleB = "arn:aws:iam::222222222222:role/b"
+	roleC = "arn:aws:iam::333333333333:role/c"
+)
+
+func connOf(name, src, role, region string, s3 ...string) config.AWSConnection {
+	return config.AWSConnection{Name: name, AWSBinding: config.AWSBinding{SourceProfile: src, RoleARN: role, Region: region, S3Read: s3}}
+}
+
+func probeSetup(t *testing.T, sim *fakeSim) (*Broker, *fakeMinter, *memRec, *time.Time) {
+	t.Helper()
+	b, fm, rec, now := setup(t, nil)
+	if sim != nil {
+		b.SetSimulator(sim)
+	}
+	return b, fm, rec, now
+}
+
+func TestProbeBaseDisabledWithoutSimulator(t *testing.T) {
+	b, fm, rec, _ := probeSetup(t, nil)
+	got := b.ProbeBase("s-1", "claude", config.Bindings{AWS: binding()})
+	if len(got) != 1 || !reflect.DeepEqual(got[""], awsprobe.Disabled()) {
+		t.Fatalf("got %+v", got)
+	}
+	if len(fm.calls) != 0 || len(rec.rows) != 0 {
+		t.Fatalf("mints=%d rows=%d", len(fm.calls), len(rec.rows))
+	}
+	conns := b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{connOf("a", "p", roleA, "r")}})
+	if len(conns) != 1 || conns["a"].Reason != awsprobe.ReasonProbeDisabled {
+		t.Fatalf("conns = %+v", conns)
+	}
+}
+
+func TestProbeBaseNoAWSNoProbe(t *testing.T) {
+	b, fm, rec, _ := probeSetup(t, &fakeSim{})
+	got := b.ProbeBase("s-1", "claude", config.Bindings{GitHub: &config.GitHubBinding{}})
+	if got == nil || len(got) != 0 {
+		t.Fatalf("got %#v", got)
+	}
+	if len(fm.calls) != 0 || len(rec.rows) != 0 {
+		t.Fatalf("mints=%d rows=%d", len(fm.calls), len(rec.rows))
+	}
+}
+
+func TestProbeBaseConnections(t *testing.T) {
+	fs := &fakeSim{dec: func(role string) map[string]string {
+		if role == roleB {
+			return map[string]string{"s3:PutObject": "allowed"}
+		}
+		return nil
+	}}
+	b, fm, _, now := probeSetup(t, fs)
+	got := b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{
+		connOf("a", "pa", roleA, "r1"), connOf("b", "pb", roleB, "r1")}})
+	if got["a"].State != awsprobe.NoneFound || got["b"].State != awsprobe.Writes ||
+		!slices.Equal(got["b"].Actions, []string{"s3:PutObject"}) || len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+	if !got["a"].CheckedAt.Equal(*now) {
+		t.Fatalf("CheckedAt = %v", got["a"].CheckedAt)
+	}
+	if len(fm.calls) != 2 || fs.callCount() != 2 {
+		t.Fatalf("mints=%d sims=%d", len(fm.calls), fs.callCount())
+	}
+	for _, c := range fm.calls {
+		if c.SessionName != awsscope.SessionName("s-1") {
+			t.Fatalf("session name %q", c.SessionName)
+		}
+	}
+}
+
+func TestProbeBaseDedupesSamePair(t *testing.T) {
+	fs := &fakeSim{dec: func(string) map[string]string { return map[string]string{"s3:PutObject": "allowed"} }}
+	b, fm, rec, _ := probeSetup(t, fs)
+	got := b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{
+		connOf("b", "p", roleA, "eu-west-1", "bucket/x/"), connOf("a", "p", roleA, "ap-southeast-1")}})
+	if len(fm.calls) != 1 || fs.callCount() != 1 {
+		t.Fatalf("mints=%d sims=%d", len(fm.calls), fs.callCount())
+	}
+	if len(got) != 2 || !reflect.DeepEqual(got["a"], got["b"]) || got["a"].State != awsprobe.Writes {
+		t.Fatalf("got %+v", got)
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Entry != "a" {
+		t.Fatalf("rows = %+v", rec.rows)
+	}
+}
+
+func TestProbeBaseParallel(t *testing.T) {
+	fs := &fakeSim{release: make(chan struct{})}
+	b, _, _, _ := probeSetup(t, fs)
+	done := make(chan map[string]awsprobe.Result)
+	go func() {
+		done <- b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{
+			connOf("a", "p", roleA, "r"), connOf("b", "p", roleB, "r"), connOf("c", "p", roleC, "r")}})
+	}()
+	// All three simulations must be in flight together before any is released.
+	deadline := time.Now().Add(5 * time.Second)
+	for fs.maxConcurrent() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("maxConcurrent = %d, want 3", fs.maxConcurrent())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(fs.release)
+	if got := <-done; len(got) != 3 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestProbeBaseTimeoutIsUnverified(t *testing.T) {
+	fs := &fakeSim{release: make(chan struct{})} // never released
+	b, _, rec, _ := probeSetup(t, fs)
+	b.probeTimeout = 30 * time.Millisecond
+	start := time.Now()
+	got := b.ProbeBase("s-1", "claude", config.Bindings{AWS: binding()})
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("took %v", time.Since(start))
+	}
+	if got[""].State != awsprobe.Unverified || got[""].Reason != awsprobe.ReasonTimeout {
+		t.Fatalf("got %+v", got)
+	}
+	if len(b.probeCache) != 0 {
+		t.Fatal("unverified result was cached")
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeProbeMinted {
+		t.Fatalf("mint succeeded, so one probe_minted row: %+v", rec.rows)
+	}
+}
+
+func TestProbeBaseCache(t *testing.T) {
+	fs := &fakeSim{dec: func(string) map[string]string { return map[string]string{"s3:PutObject": "allowed"} }}
+	b, fm, rec, now := probeSetup(t, fs)
+	bs := config.Bindings{AWS: binding()}
+	first := b.ProbeBase("s-1", "claude", bs)
+	*now = now.Add(59 * time.Minute)
+	second := b.ProbeBase("s-2", "claude", bs)
+	if len(fm.calls) != 1 || fs.callCount() != 1 || len(rec.rows) != 1 {
+		t.Fatalf("mints=%d sims=%d rows=%d", len(fm.calls), fs.callCount(), len(rec.rows))
+	}
+	if !second[""].CheckedAt.Equal(first[""].CheckedAt) || second[""].State != awsprobe.Writes {
+		t.Fatalf("first=%+v second=%+v", first, second)
+	}
+	*now = now.Add(2 * time.Minute) // 61 minutes after the first probe
+	third := b.ProbeBase("s-3", "claude", bs)
+	if len(fm.calls) != 2 || !third[""].CheckedAt.Equal(*now) {
+		t.Fatalf("mints=%d third=%+v", len(fm.calls), third)
+	}
+
+	// An unverified result is never cached.
+	fs2 := &fakeSim{err: errors.New("boom")}
+	b2, fm2, _, _ := probeSetup(t, fs2)
+	for i := 0; i < 2; i++ {
+		if r := b2.ProbeBase("s-1", "claude", bs); r[""].State != awsprobe.Unverified {
+			t.Fatalf("r = %+v", r)
+		}
+	}
+	if len(fm2.calls) != 2 || len(b2.probeCache) != 0 {
+		t.Fatalf("mints=%d cache=%d", len(fm2.calls), len(b2.probeCache))
+	}
+}
+
+func TestProbeBaseAuditRows(t *testing.T) {
+	fs := &fakeSim{}
+	b, fm, rec, now := probeSetup(t, fs)
+	b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{
+		connOf("z", "p", roleA, "r"), connOf("m", "p", roleA, "r")}})
+	if len(rec.rows) != 1 {
+		t.Fatalf("rows = %+v", rec.rows)
+	}
+	r := rec.rows[0]
+	if r.Outcome != OutcomeProbeMinted || r.SessionID != "s-1" || r.Profile != "claude" || r.RoleARN != roleA ||
+		r.AccountID != "111111111111" || r.SourceIdentity != awsscope.SessionName("s-1") || r.Entry != "m" ||
+		!r.Expires.Equal(now.Add(credTTL)) || r.Elevated || r.Error != "" || !r.Time.Equal(*now) {
+		t.Fatalf("row = %+v", r)
+	}
+
+	// A cache hit records nothing.
+	b.ProbeBase("s-2", "claude", config.Bindings{AWSConns: []config.AWSConnection{connOf("m", "p", roleA, "r")}})
+	if len(rec.rows) != 1 {
+		t.Fatalf("cache hit wrote a row: %+v", rec.rows)
+	}
+
+	// A mint failure records probe_failed with a sanitized error.
+	fm.err = &MintError{Code: "AccessDenied", Detail: "not authorized\n  to assume " + roleB}
+	res := b.ProbeBase("s-3", "claude", config.Bindings{AWSConns: []config.AWSConnection{connOf("q", "p", roleB, "r")}})
+	if res["q"].Reason != awsprobe.ReasonAssumeDenied {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(rec.rows) != 2 {
+		t.Fatalf("rows = %+v", rec.rows)
+	}
+	f := rec.rows[1]
+	if f.Outcome != OutcomeProbeFailed || f.Error == "" || strings.ContainsAny(f.Error, "\n\t") || f.Entry != "q" ||
+		!f.Expires.IsZero() || f.SourceIdentity != awsscope.SessionName("s-3") {
+		t.Fatalf("failed row = %+v", f)
+	}
+
+	// A failing Recorder does not change the result.
+	fm.mu.Lock()
+	fm.err = nil
+	fm.mu.Unlock()
+	rec.mu.Lock()
+	rec.recErr = errors.New("disk full")
+	rec.mu.Unlock()
+	got := b.ProbeBase("s-4", "claude", config.Bindings{AWSConns: []config.AWSConnection{connOf("n", "p", roleC, "r")}})
+	if got["n"].State != awsprobe.NoneFound {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestProbeBaseLeavesMintStateAlone(t *testing.T) {
+	fs := &fakeSim{}
+	b, fm, _, _ := probeSetup(t, fs)
+	fm.err = &MintError{Code: "SSOExpired", Detail: "x", cause: ErrSSOExpired}
+	res := b.ProbeBase("s-1", "claude", config.Bindings{AWS: binding()})
+	if res[""].Reason != awsprobe.ReasonSSOExpired {
+		t.Fatalf("res = %+v", res)
+	}
+	fm.err = nil
+	b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{connOf("a", "p", roleA, "r")}})
+	if b.SSOExpired("s-1") != "" {
+		t.Fatalf("SSOExpired = %q", b.SSOExpired("s-1"))
+	}
+	if _, ok := b.Stats("s-1"); ok {
+		t.Fatal("probe created Stats")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.cache) != 0 || len(b.mintTimes) != 0 || len(b.ssoBad) != 0 || len(b.ssoNeed) != 0 ||
+		len(b.stats) != 0 || len(b.connStats) != 0 {
+		t.Fatalf("mint state touched: cache=%d times=%d ssoBad=%d ssoNeed=%d stats=%d conn=%d",
+			len(b.cache), len(b.mintTimes), len(b.ssoBad), len(b.ssoNeed), len(b.stats), len(b.connStats))
 	}
 }

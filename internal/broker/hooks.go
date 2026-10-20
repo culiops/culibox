@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -55,6 +56,11 @@ func (h Hooks) Forget(id string) { h.B.Forget(id) }
 
 // RevokeGitHub revokes the session's GitHub tokens at GitHub, in the background.
 func (h Hooks) RevokeGitHub(id string) { h.B.RevokeGitHub(id) }
+
+// ProbeBase checks, at spawn, whether each bound AWS base role can write.
+func (h Hooks) ProbeBase(id, agent string, bs config.Bindings) map[string]awsprobe.Result {
+	return h.B.ProbeBase(id, agent, bs)
+}
 
 // AWSState is what a session list shows of the broker's per-session state: the
 // end of the live write window (zero when none), the connection it is for (""

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/ghapp"
@@ -107,6 +108,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 		}
 		return brokerSessionView(s, defined), true
 	}, broker.STSMinter{}, audit)
+	brk.SetSimulator(awsprobe.IAMSimulator{})
 	// github_apps is read once, at daemon start: a change needs a restart. With
 	// none configured the route keeps answering 503.
 	if len(apps) > 0 {
