@@ -42,7 +42,8 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 - **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`. A profile can instead bind several named AWS connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)).
 - **GitHub access.** A boxed profile can carry a `github` binding. The broker mints one-hour, read-only GitHub App installation tokens scoped to the repos you list; `git` and `gh` in the box use them, and the box never holds a personal access token (see [GitHub access for agents](#github-access-for-agents)).
 - **Attribution and audit.** Credentials are minted with `SourceIdentity` and role session name `agentbox-<session id>`, so CloudTrail records the agent session rather than you. The broker also writes every mint, refusal and failure to a local SQLite audit log, with no credential values in it.
-- **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment or a file, injected only into the agent that declares them, and never logged.
+- **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment, a file or the encrypted store, injected only into the agent that declares them, and never logged.
+- **Encrypted value store.** A small encrypted store in the data root holds tokens, a GitHub App key or the Claude token as ciphertext, so a disk snapshot or backup yields nothing usable (see [Store](#store)).
 - **`agent-box doctor`.** Checks the machine and prints PASS, WARN or FAIL lines. It is read-only and prints no secrets, so the output is safe to paste into an issue.
 
 ## Requirements
@@ -134,7 +135,8 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
 | `data_dir` | the data root | Where state lives. |
 | `abduco_bin` | `abduco` | Path to abduco. |
-| `secret_sources` | none | List of `{"type": "env"}` or `{"type": "file", "path": ...}`. |
+| `secret_sources` | none | List of `{"type": "env"}`, `{"type": "file", "path": ...}` or `{"type": "store"}` (at most one). Tried in order, first hit wins. |
+| `store.unlock_ttl` | `168h` | How long an unlocked [store](#store) stays unlocked (Linux). A Go duration, 1h to 720h. |
 | `max_upload_bytes` | 64 MiB | Per uploaded file. Zero or negative means the default, never unlimited. |
 | `max_archive_bytes`, `max_archive_files` | 512 MiB, 20000 | Caps on folder downloads. |
 | `analytics.enabled` | `true` | Token and cost analytics. |
@@ -441,6 +443,47 @@ The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a r
 - `agent-box doctor` prints one `aws-connection <name>` line per connection: whether the `source_profile` exists in the host's AWS config (a missing one fails), whether its SSO login is valid or expired (checked once per SSO session, so connections sharing a login cost one check), and whether the connection can be elevated. It reads the shell's own AWS config, not the daemon's environment. A second line, `aws-connection <name> base role`, runs the base-role check above; inline `aws` bindings (from `config.json` and the profile store) get `aws-binding <profile>`. A base role that can write, or one that could not be checked, is a WARN; none found is a PASS. The check is never a FAIL.
 - **Rolling back to an older binary (operator step).** An older agent-box ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with the inline `aws` binding are unaffected.
 
+## Store
+
+agent-box can hold secret values itself: tokens, a GitHub App private key, the Claude OAuth token. Anywhere config takes a value reference (`file` or `env`) it can also say `{"type": "store", "id": "<id>"}`, and `secret_sources` accepts `{"type": "store"}`. On disk there is only ciphertext (age), so the store directory is safe to back up.
+
+**What it protects against, and what it does not**
+
+- **It protects against a disk snapshot or backup** taken by your hosting provider or a backup job: the values in the store are unreadable without the passphrase (Linux) or the login Keychain item (macOS).
+- **It does not hide values from agents.** While the store is unlocked, any process running as your user, a host-tier agent included, can read the master key and so every value. Boxed agents cannot. A value still reaches the box the way it always did (env for a declared secret, `agentbox-env` for a static token, the git helper for GitHub).
+- **It only protects what you move into it.** A value that is also in an env file, a shell profile or your home directory is still readable from a snapshot. The same goes for everything else on the machine that agent-box does not own, such as SSH keys and cloud-CLI caches.
+- It is not a vault product: one machine, one user, no sync.
+
+**Commands.** The CLI honours `-config` like the rest of agent-box, writes the files directly and does not need the daemon running.
+
+| Command | What it does |
+|---|---|
+| `agent-box store init` | Create the store. Linux asks for a passphrase twice (at least 12 characters) and leaves the store unlocked. macOS keeps the master key in the login Keychain. |
+| `agent-box store status` | Initialized or not, locked or unlocked, time left, number of values. |
+| `agent-box store unlock` | Linux: ask for the passphrase and unlock for `store.unlock_ttl`. |
+| `agent-box store lock` | Linux: lock now. |
+| `agent-box store passwd` | Linux: change the passphrase. Values are not re-encrypted. |
+| `agent-box store set <id>` | Read a value from stdin and store it. The value is never an argument. On a terminal it is read without echo; when piped, all of stdin is read and one trailing newline is trimmed. Works while locked. |
+| `agent-box store rm <id>` | Delete a value. |
+| `agent-box store list` | Ids, last-updated time and what refers to each id. There is no `get`, and values are never printed. |
+
+An id is 1 to 64 characters of letters, digits, `_` and `-`, starting with a letter or digit, and a value is at most 64 KiB.
+
+**Unlock and TTL.** On Linux the master key sits in the kernel user keyring, not in the daemon, so unlocking survives a daemon restart. It does not survive a reboot. Unlock with `agent-box store unlock`, or from the web UI: a banner appears when the store is locked and Settings has a Lock button. Web unlock needs the browser session (an API bearer token cannot unlock) and failed attempts are rate limited. The key expires after `store.unlock_ttl` (default 7 days, a new unlock resets it, reads do not extend it); a lock or an expiry takes effect on the next value lookup. If you reach agent-box through a tunnel or proxy that terminates TLS, the passphrase is visible to that proxy in transit when you type it into the web UI. `agent-box store unlock` on the machine does not have that exposure. A forgotten passphrase cannot be recovered: remove `<data root>/store` and set the values again.
+
+**After a reboot the store is locked.** Anything that needs a store value is then refused until someone unlocks: a spawn fails with `store is locked`, and a running boxed session's next token fetch gets a 503. If the Claude token is in the store, that means every Claude session. A host-tier agent hits this too.
+
+**Moving the Claude token into the store.** Out of the box the token comes from the daemon's environment.
+
+1. `printenv CLAUDE_CODE_OAUTH_TOKEN | agent-box store set CLAUDE_CODE_OAUTH_TOKEN`
+2. Add `{"type": "store"}` to `secret_sources` **before** the `env` source, and restart agent-box.
+3. Delete the value from every env file and shell profile that still holds it (the file your service manager loads as `EnvironmentFile=`, your dev and prod copies, your login shell's profile).
+4. Run `agent-box doctor`. It warns when a name resolves from the store and is also still in the daemon's environment.
+
+The protection exists only once every plaintext copy is gone.
+
+**Docker's seccomp profile must stay on.** The box barrier for the master key is Docker's default seccomp profile, which refuses the `keyctl` calls a box would need to read it. At each boxed spawn agent-box checks that seccomp is active, and when it is not (and a store exists) it refuses the spawn, and `agent-box doctor` fails. A box that was already running when you ran `agent-box store init` is not re-checked: a container keeps the seccomp profile it was created with, so a box created while seccomp was off can read the keyring once the store is unlocked. If your host runs Docker with seccomp off, stop those boxes before `store init`.
+
 ## Security model
 
 agent-box starts shells and agents on your machine, so authentication is never optional.
@@ -451,6 +494,7 @@ agent-box starts shells and agents on your machine, so authentication is never o
 - **Network exposure.** The default bind is loopback. Binding all interfaces is refused unless `allow_public` is set. Requests whose `Host` header is not in the allowlist are refused (DNS-rebinding defence), and state-changing requests are checked for same-origin.
 - **Containment.** The boxed tier described above. Roughly, containment comes from what is absent inside the box. The hardening flags are the smaller part. A box cannot reach services on the host's loopback; on macOS agent-box checks this on every new box and refuses the box if the check fails.
 - **Cloud access.** The broker mints credentials only for live boxed sessions, with a per-spawn token, rate limits, and a 15-minute lifetime. The role is capped by `ReadOnlyAccess`, and a generated session policy denies reading S3 objects (outside an allowlist you set per binding), Secrets Manager values, SSM parameters, DynamoDB items and KMS decrypt. Trust is limited to the SSO permission sets you name and requires a `SourceIdentity` of `agentbox-*`. Create the role with [docs/aws/agent-role](docs/aws/agent-role/README.md). The inline `aws` binding gets the same base-role write check as named connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)).
+- **Store.** Values held in the [store](#store) are encrypted against disk snapshots and backups. While it is unlocked, host-tier agents can read them; boxed agents cannot.
 - **Static tokens.** A bound token is fetched per command through the broker, is audited, and reaches only the hosts its entry names. The agent can still read it, and it is long-lived and not revoked when the session ends. See [Static tokens for agents](#static-tokens-for-agents).
 
 **Never bind agent-box to a public interface without a front door.** A reachable agent-box is a remote shell. If you need access from elsewhere, keep the bind on loopback or a private network and put an authenticating proxy or tunnel in front (add its hostname to `allowed_hosts`). Do not rely on the login page alone on the open internet, and use a long password.
