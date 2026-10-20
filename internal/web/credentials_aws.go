@@ -22,6 +22,7 @@ import (
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/ssologin"
 )
 
@@ -57,6 +58,12 @@ const (
 	credAWSPrefix = "/api/credentials/aws"
 	// credBodyMax caps a definition body (no AWS request carries a value).
 	credBodyMax = 64 << 10
+	// credValueBodyMax caps a request that carries secret values. Datadog sends
+	// two (64 KiB each, so 128 KiB of text plus JSON framing); a value full of
+	// characters JSON must escape (a quote or newline costs 2 bytes, a control
+	// character 6) can push a near-limit value past it, and then the request is
+	// refused as too large.
+	credValueBodyMax = 160 << 10
 )
 
 // credProfileRe is the source_profile shape every AWS call accepts, checked
@@ -170,7 +177,15 @@ func credGate(w http.ResponseWriter, r *http.Request, strict bool) bool {
 // decodeCredJSON reads a request body into dst: at most credBodyMax bytes, no
 // unknown field, nothing after the value. No error text echoes the body.
 func decodeCredJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, credBodyMax))
+	return decodeCredJSONMax(w, r, dst, credBodyMax)
+}
+
+// decodeCredJSONMax is decodeCredJSON with its own cap: credValueBodyMax for a
+// request that carries a secret value. The buffer the body was read into is
+// zeroed before it returns.
+func decodeCredJSONMax(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	defer zero(raw)
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
@@ -180,13 +195,20 @@ func decodeCredJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 		}
 		return false
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil || dec.Decode(&json.RawMessage{}) != io.EOF {
+	if !decodeBytesStrict(raw, dst) {
 		writeErr(w, http.StatusBadRequest, "invalid request")
 		return false
 	}
 	return true
+}
+
+// decodeBytesStrict decodes raw into dst: no unknown field, nothing after the
+// value. It reports only whether that worked; the decoder's error text can
+// quote the input, so it is dropped.
+func decodeBytesStrict(raw []byte, dst any) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst) == nil && dec.Decode(&json.RawMessage{}) == io.EOF
 }
 
 // credAudit appends one AWS-setup row. A row that cannot be written stops the
@@ -483,6 +505,14 @@ func writeCredErr(w http.ResponseWriter, err error) {
 	var ack ErrNeedsAck
 	var limited ErrCheckLimited
 	switch {
+	case errors.Is(err, secretstore.ErrTooLarge):
+		writeErrCode(w, http.StatusRequestEntityTooLarge, "the value is larger than 64 KiB", "too_large")
+	case errors.Is(err, secretstore.ErrNoSuchValue):
+		writeErrCode(w, http.StatusNotFound, "no such value in the store", "not_found")
+	case errors.Is(err, secretstore.ErrNotInitialized):
+		writeErrCode(w, http.StatusConflict, "the encrypted store is not created yet", "store_missing")
+	case errors.Is(err, secretstore.ErrBadID):
+		writeErr(w, http.StatusBadRequest, secretstore.ErrBadID.Error())
 	case errors.As(err, &limited):
 		writeRateLimited(w, limited.Wait)
 	case errors.As(err, &ack):

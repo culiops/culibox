@@ -20,6 +20,7 @@ type StoreService interface {
 	Status() secretstore.Status
 	Unlock(pass []byte, ttl time.Duration, actor string) error
 	Lock(actor string) error
+	Init(pass []byte, actor string) error
 }
 
 const (

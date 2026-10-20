@@ -82,6 +82,10 @@ type Server struct {
 	StoreUnlockTTL       time.Duration
 	StorePlaintextCopies []string
 	storeLimit           unlockLimiter
+	// SeccompProbe reports whether Docker's default seccomp profile is on, the
+	// same probe the launcher's SeccompGate uses. nil = the host has no docker
+	// gate (macOS, or no containment), so store init is not held back.
+	SeccompProbe func() (bool, error)
 
 	// Creds owns the web-defined credentials; nil → the /api/credentials
 	// routes are not registered. CredAWS is the host's AWS signer behind the
@@ -158,10 +162,17 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/store", s.handleStore)
 		protected.HandleFunc("/api/store/unlock", s.handleStoreUnlock)
 		protected.HandleFunc("/api/store/lock", s.handleStoreLock)
+		protected.HandleFunc("/api/store/init", s.handleStoreInit)
 	}
 	if s.Creds != nil {
 		protected.HandleFunc("/api/credentials/aws", s.handleCredAWS)
 		protected.HandleFunc("/api/credentials/aws/", s.handleCredAWS)
+		protected.HandleFunc("/api/credentials/templates", s.handleCredTemplates)
+		protected.HandleFunc("/api/credentials/tokens", s.handleCredTokens)
+		protected.HandleFunc("/api/credentials/tokens/", s.handleCredTokens)
+		protected.HandleFunc("/api/credentials/github-apps", s.handleCredGitHubApps)
+		protected.HandleFunc("/api/credentials/github-apps/", s.handleCredGitHubApps)
+		protected.HandleFunc("/api/store/values/", s.handleStoreValue)
 	}
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/tokens", s.handleTokens)

@@ -24,6 +24,20 @@ type fakeSecretStore struct {
 	attempts  int
 	locks     []string
 	unlockErr error
+	initErr   error
+	inits     []string // passphrase/actor per Init call
+	unlockTTL []time.Duration
+}
+
+func (f *fakeSecretStore) Init(pass []byte, actor string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.inits = append(f.inits, string(pass)+"/"+actor)
+	if f.initErr != nil {
+		return f.initErr
+	}
+	f.st.Initialized, f.st.Locked = true, f.st.PassphraseMode
+	return nil
 }
 
 func (f *fakeSecretStore) Status() secretstore.Status {
@@ -43,6 +57,7 @@ func (f *fakeSecretStore) Unlock(pass []byte, ttl time.Duration, actor string) e
 		return secretstore.ErrBadPassphrase
 	}
 	f.st.Locked = false
+	f.unlockTTL = append(f.unlockTTL, ttl)
 	f.unlocks = append(f.unlocks, actor+"/"+ttl.String())
 	return nil
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
+	"github.com/culiops/agent-box/internal/credtemplates"
 	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/storerefs"
 )
@@ -82,10 +82,6 @@ type ErrNeedsAck struct{ Result awsprobe.Result }
 func (e ErrNeedsAck) Error() string {
 	return "the base role can write to this AWS account; acknowledge to save"
 }
-
-// tokenTemplateRe bounds StaticToken.Template on a web entry: empty, or a
-// short catalog-id-shaped string.
-var tokenTemplateRe = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
 
 // kindLabel names a credfile kind in messages.
 var kindLabel = map[string]string{
@@ -384,7 +380,7 @@ func (c *CredentialManager) setAndPersistLocked(values map[string][]byte, owner 
 	if len(values) > 0 {
 		ents, err := c.vals.List()
 		if err != nil {
-			return fmt.Errorf("store: %w", err) // cannot tell new ids from old ones: set nothing
+			return storeErr("store", err) // cannot tell new ids from old ones: set nothing
 		}
 		for _, e := range ents {
 			pre[e.ID] = true
@@ -399,7 +395,7 @@ func (c *CredentialManager) setAndPersistLocked(values map[string][]byte, owner 
 	for _, id := range slices.Sorted(maps.Keys(values)) {
 		if err := c.vals.Set(id, values[id], storeActor); err != nil {
 			rollback()
-			return fmt.Errorf("store value %q: %w", id, err)
+			return storeErr(fmt.Sprintf("store value %q", id), err)
 		}
 		if !pre[id] {
 			created = append(created, id)
@@ -433,16 +429,47 @@ func webTokenRules(e config.StaticToken) error {
 	if e.MCP != nil {
 		return fmt.Errorf("token %q: %w", e.Name, ErrMCPOnWeb)
 	}
-	if e.Template != "" && !tokenTemplateRe.MatchString(e.Template) {
-		return fmt.Errorf("token %q: template must be lowercase letters, digits and - (at most 32)", e.Name)
+	if e.Template != "" && !credtemplates.Known(e.Template) {
+		return fmt.Errorf("token %q: %q is not a template in the catalog", e.Name, e.Template)
 	}
 	return nil
+}
+
+// errTemplateLocked refuses a change to a template-created token other than its
+// label, description, prod flag and value: the provider fields (env, config_env,
+// egress, provider, template) are what the catalog set, and the form cannot
+// show a hand-edited mix of them.
+func errTemplateLocked(name, template string) error {
+	return fmt.Errorf("token %q was created from the %s template: only its label, description, prod flag and value can change; delete it and create it again to change anything else", name, template)
+}
+
+// sameProviderFields reports whether a and b agree on everything a template
+// sets. nil and empty lists are the same.
+func sameProviderFields(a, b config.StaticToken) bool {
+	return a.Template == b.Template && a.Provider == b.Provider &&
+		slices.Equal(a.Env, b.Env) && maps.Equal(a.ConfigEnv, b.ConfigEnv) &&
+		slices.Equal(a.Egress, b.Egress) && a.MCP == nil && b.MCP == nil
+}
+
+// storeErr passes on the store errors a route can explain (and that never name
+// a path) and hides the rest behind ErrCredPersist, whose text a route does not
+// show.
+func storeErr(what string, err error) error {
+	switch {
+	case errors.Is(err, secretstore.ErrTooLarge), errors.Is(err, secretstore.ErrBadID),
+		errors.Is(err, secretstore.ErrNotInitialized), errors.Is(err, secretstore.ErrNoSuchValue):
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrCredPersist, what, err)
 }
 
 // PutTokens creates (create) or replaces several static token entries at once,
 // all or nothing (a template such as Datadog defines two). values maps an entry
 // NAME to its new value; that entry's reference becomes {store, id} with id =
-// its existing store id, else its name. The caller owns and zeroes values.
+// the store id the entry already reads (a replace), else the id the request
+// names, else its name. A replace that names no Value keeps the current
+// reference, and a template-created token may only change label, description,
+// prod and value. The caller owns and zeroes values.
 func (c *CredentialManager) PutTokens(entries []config.StaticToken, values map[string][]byte, create bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -467,12 +494,27 @@ func (c *CredentialManager) PutTokens(entries []config.StaticToken, values map[s
 		if err := c.presence(credfile.KindToken, e.Name, create); err != nil {
 			return err
 		}
+		var old *config.StaticToken
+		if j := c.fileIndex(credfile.KindToken, e.Name); j >= 0 {
+			old = &c.file.StaticTokens[j]
+			if old.Template != e.Template || (old.Template != "" && !sameProviderFields(*old, e)) {
+				return errTemplateLocked(e.Name, old.Template)
+			}
+			if e.Value == (config.KeyRef{}) {
+				e.Value = old.Value // an edit that names no value keeps the reference
+			}
+		}
 		if v, ok := values[e.Name]; ok {
 			if len(v) == 0 {
 				return fmt.Errorf("token %q: the value is empty", e.Name)
 			}
+			// A replace keeps the id the entry already reads, so a new value never
+			// moves to id = name and never orphans a custom id.
 			id := e.Name
-			if e.Value.Type == "store" && e.Value.ID != "" {
+			switch {
+			case old != nil && old.Value.Type == "store" && old.Value.ID != "":
+				id = old.Value.ID
+			case e.Value.Type == "store" && e.Value.ID != "":
 				id = e.Value.ID
 			}
 			if !secretstore.ValidID(id) {
@@ -708,7 +750,10 @@ func (c *CredentialManager) SetValue(id string, v []byte) error {
 	if len(v) == 0 {
 		return errors.New("the value is empty")
 	}
-	return c.vals.Set(id, v, storeActor)
+	if err := c.vals.Set(id, v, storeActor); err != nil {
+		return storeErr(fmt.Sprintf("store value %q", id), err)
+	}
+	return nil
 }
 
 // RemoveValue deletes a store value, refused with ErrCredInUse while any
@@ -719,5 +764,8 @@ func (c *CredentialManager) RemoveValue(id string) error {
 	if refs := c.storeRefsLocked()[id]; len(refs) > 0 {
 		return fmt.Errorf("store value %q: %w", id, ErrCredInUse{By: refs})
 	}
-	return c.vals.Remove(id, storeActor)
+	if err := c.vals.Remove(id, storeActor); err != nil {
+		return storeErr(fmt.Sprintf("store value %q", id), err)
+	}
+	return nil
 }

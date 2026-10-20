@@ -34,6 +34,15 @@ func (f *fakeVals) Set(id string, v []byte, actor string) error {
 	if f.setErr != nil {
 		return f.setErr
 	}
+	// The real store's refusals, so a route test sees what production would.
+	switch {
+	case !secretstore.ValidID(id):
+		return secretstore.ErrBadID
+	case len(v) > secretstore.MaxValueBytes:
+		return secretstore.ErrTooLarge
+	case len(v) == 0:
+		return errors.New("value is empty")
+	}
 	f.m[id] = slices.Clone(v)
 	return nil
 }

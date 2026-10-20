@@ -398,6 +398,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgF
 	// at start for the log; the gate re-probes on every boxed spawn once a store
 	// exists, and reads the store's state each time, so `store init` while
 	// running takes effect. macOS boxes run in a VM with the key in the host Keychain.
+	var seccompProbe func() (bool, error) // also gates store init from the web
 	if layer != nil && layer.vm == nil && runtime.GOOS == "linux" {
 		cli := layer.cli
 		probe := func() (bool, error) {
@@ -412,6 +413,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgF
 			log.Printf("seccomp: Docker's default profile is off; boxed spawns are refused while a store exists")
 		}
 		lnch.SetBoxGate(launcher.SeccompGate(probe, func() bool { return vstore.Status().Initialized }))
+		seccompProbe = probe
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
@@ -647,6 +649,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgF
 		StoreInUse:           live.InUse,
 		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
 		StorePlaintextCopies: ptCopies,
+		SeccompProbe:         seccompProbe,
 
 		Creds:     creds,
 		CredAWS:   credAWS,
