@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/store"
 )
@@ -380,6 +381,49 @@ func (m *ProfileManager) Get(name string) (config.AgentConfig, bool) {
 		}
 	}
 	return config.AgentConfig{}, false
+}
+
+// All is the merged profile set: config seeds and runtime profiles, a runtime
+// profile overriding a same-named seed.
+func (m *ProfileManager) All() []config.AgentConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.merged()
+}
+
+// RefsTo returns, sorted, the names of the profiles (seed or runtime) that bind
+// the credential entry kind/name. Kinds are the credfile ones: an AWS
+// connection by aws_connections; a GitHub App by a github owner's app; a static
+// token by tokens or a github owner's token (a PAT).
+func (m *ProfileManager) RefsTo(kind, name string) []string {
+	var out []string
+	for _, p := range m.All() {
+		if profileBinds(p, kind, name) {
+			out = append(out, p.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func profileBinds(p config.AgentConfig, kind, name string) bool {
+	switch kind {
+	case credfile.KindAWS:
+		return slices.Contains(p.AWSConnections, name)
+	case credfile.KindToken:
+		if slices.Contains(p.Tokens, name) {
+			return true
+		}
+	}
+	if p.GitHub == nil {
+		return false
+	}
+	for _, o := range p.GitHub.Owners {
+		if (kind == credfile.KindGitHubApp && o.App == name) || (kind == credfile.KindToken && o.Token == name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Save validates and persists a runtime profile, then refreshes the launcher.
