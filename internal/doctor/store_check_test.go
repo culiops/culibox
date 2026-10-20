@@ -2,6 +2,8 @@ package doctor
 
 import (
 	"errors"
+	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +162,10 @@ func TestCheckStoreSeccompOffFailsOnLinuxOnly(t *testing.T) {
 	}
 	if got := checkStore(storeConfig(), st, nil, noEnv, "darwin", seccomp(false, nil)); find(got, Fail, "seccomp") {
 		t.Fatalf("darwin boxes run in a VM:\n%s", dump(got))
+	}
+	// No docker binary: nothing to gate, nothing to say.
+	if got := checkStore(storeConfig(), st, nil, noEnv, "linux", seccomp(false, fmt.Errorf("lookup: %w", exec.ErrNotFound))); find(got, Warn, "seccomp") || find(got, Fail, "seccomp") {
+		t.Fatalf("docker missing must be silent:\n%s", dump(got))
 	}
 	// Docker unreachable: unknown is not a failure doctor can name, but is not silent either.
 	if got := checkStore(storeConfig(), st, nil, noEnv, "linux", seccomp(false, errors.New("no docker"))); !find(got, Warn, "seccomp") {

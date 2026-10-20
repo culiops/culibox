@@ -436,11 +436,23 @@ func (l *AgentLauncher) SetBoxGate(gate func() error) {
 }
 
 // SeccompGate refuses boxed spawns while Docker's seccomp is off and an
-// encrypted store exists. seccompActive is measured once at start; storeExists
-// is read on every call, so `store init` while the daemon runs takes effect.
-func SeccompGate(seccompActive bool, storeExists func() bool) func() error {
+// encrypted store exists. storeExists is read on every call, so `store init`
+// while the daemon runs takes effect, and probe is not called at all while
+// there is no store. With a store, probe runs on EVERY gated spawn and nothing
+// is cached: docker's security options can change under a running daemon, and
+// an error (we cannot tell) is refused too, so a failure clears itself on the
+// next spawn.
+func SeccompGate(probe func() (bool, error), storeExists func() bool) func() error {
 	return func() error {
-		if !seccompActive && storeExists() {
+		if !storeExists() {
+			return nil
+		}
+		on, err := probe()
+		if err != nil {
+			log.Printf("seccomp: could not read docker's security options (%v); boxed spawn refused", err)
+			return box.ErrSeccompOff
+		}
+		if !on {
 			return box.ErrSeccompOff
 		}
 		return nil

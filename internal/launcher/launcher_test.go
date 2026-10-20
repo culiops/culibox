@@ -500,7 +500,7 @@ func TestBoxGateRefusesBoxedSpawnOnly(t *testing.T) {
 	l := boxedLauncher(t, []config.AgentConfig{
 		{Name: "claude", Bin: "claude"}, {Name: "bash", Bin: "bash"},
 	})
-	l.SetBoxGate(SeccompGate(false, func() bool { return initialized }))
+	l.SetBoxGate(SeccompGate(constProbe(false), func() bool { return initialized }))
 
 	_, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
 	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), want) {
@@ -524,9 +524,57 @@ func TestBoxGateOpenWithSeccompOnOrNoGate(t *testing.T) {
 	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err != nil {
 		t.Fatalf("nil gate: %v", err)
 	}
-	l.SetBoxGate(SeccompGate(true, func() bool { return true }))
+	l.SetBoxGate(SeccompGate(constProbe(true), func() bool { return true }))
 	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err != nil {
 		t.Fatalf("seccomp on: %v", err)
 	}
 	l.SetBoxGate(nil)
+}
+
+func constProbe(on bool) func() (bool, error) { return func() (bool, error) { return on, nil } }
+
+func TestSeccompGateProbesEveryGatedCallAndNeverCaches(t *testing.T) {
+	calls := 0
+	results := []struct {
+		on  bool
+		err error
+	}{{false, nil}, {false, errors.New("docker hung")}, {true, nil}, {false, nil}}
+	g := SeccompGate(func() (bool, error) {
+		r := results[calls]
+		calls++
+		return r.on, r.err
+	}, func() bool { return true })
+	want := []bool{true, true, false, true} // refused?
+	for i, refuse := range want {
+		err := g()
+		if refuse && !errors.Is(err, box.ErrSeccompOff) {
+			t.Fatalf("call %d: want refusal, got %v", i, err)
+		}
+		if !refuse && err != nil {
+			t.Fatalf("call %d: want allowed, got %v", i, err)
+		}
+		if calls != i+1 {
+			t.Fatalf("call %d: probe must run exactly once per gated call, ran %d total", i, calls)
+		}
+	}
+}
+
+func TestBuildProbesOncePerBoxedSpawnAndNeverForHost(t *testing.T) {
+	calls := 0
+	l := boxedLauncher(t, []config.AgentConfig{{Name: "claude", Bin: "claude"}, {Name: "bash", Bin: "bash"}})
+	l.SetBoxGate(SeccompGate(func() (bool, error) { calls++; return true, nil }, func() bool { return true }))
+	if _, _, err := l.Build(SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost}); err != nil || calls != 0 {
+		t.Fatalf("host tier: err=%v probes=%d", err, calls)
+	}
+	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err != nil || calls != 1 {
+		t.Fatalf("boxed: err=%v probes=%d, want 1", err, calls)
+	}
+}
+
+func TestSeccompGateDoesNotProbeWithoutAStore(t *testing.T) {
+	calls := 0
+	g := SeccompGate(func() (bool, error) { calls++; return false, nil }, func() bool { return false })
+	if err := g(); err != nil || calls != 0 {
+		t.Fatalf("no store: err=%v probes=%d", err, calls)
+	}
 }

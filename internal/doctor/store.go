@@ -2,7 +2,9 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -108,6 +110,9 @@ func checkStore(c config.Config, st *secretstore.Store, accts []account.Account,
 	}
 	if goos == "linux" && seccomp != nil {
 		switch on, err := seccomp(); {
+		case errors.Is(err, exec.ErrNotFound):
+			// No docker CLI: no boxes either, so there is nothing to gate (the
+			// boxed tier row already reports the missing docker).
 		case err != nil:
 			out = append(out, Result{Warn, ck, "could not tell whether Docker seccomp is on (" + err.Error() + ")"})
 		case !on:

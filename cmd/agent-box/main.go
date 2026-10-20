@@ -380,18 +380,23 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	// Seccomp gate (N4 spec 7.9). On Linux a box shares the daemon's kernel user
 	// keyring, where the unlocked store key lives; Docker's default seccomp
 	// profile blocks the keyctl calls that would read it. Measured once here
-	// (docker's setting does not change under a running daemon); the closure
-	// reads the store's state on each spawn, so `store init` while running
-	// takes effect. macOS boxes run in a VM with the key in the host Keychain.
+	// at start for the log; the gate re-probes on every boxed spawn once a store
+	// exists, and reads the store's state each time, so `store init` while
+	// running takes effect. macOS boxes run in a VM with the key in the host Keychain.
 	if layer != nil && layer.vm == nil && runtime.GOOS == "linux" {
-		on, err := layer.cli.SeccompActive(context.Background())
-		if err != nil {
-			// Unknown is treated as off: refuse rather than assume protection.
-			log.Printf("seccomp: could not read docker's security options (%v); boxed spawns are refused while a store exists", err)
+		cli := layer.cli
+		probe := func() (bool, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			return cli.SeccompActive(ctx)
+		}
+		// Start-up line only: the gate probes docker itself on every gated spawn.
+		if on, err := probe(); err != nil {
+			log.Printf("seccomp: could not read docker's security options (%v); boxed spawns are refused while a store exists, until it can be read", err)
 		} else if !on {
 			log.Printf("seccomp: Docker's default profile is off; boxed spawns are refused while a store exists")
 		}
-		lnch.SetBoxGate(launcher.SeccompGate(err == nil && on, func() bool { return vstore.Status().Initialized }))
+		lnch.SetBoxGate(launcher.SeccompGate(probe, func() bool { return vstore.Status().Initialized }))
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
