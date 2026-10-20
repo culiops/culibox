@@ -73,6 +73,19 @@ const ghTokenTimeout = 2 * time.Second
 // down is revoked instead of listed.
 type ghFlight struct{ dead bool }
 
+// ghConfigured reports whether /v1/github/token can mint: a minter is
+// installed and, if it can say so, has an App defined. Revoking needs only the
+// installed minter (the token is its own credential), so it checks b.gh alone.
+func (b *Broker) ghConfigured() bool {
+	if b.gh == nil {
+		return false
+	}
+	if c, ok := b.gh.(interface{ Configured() bool }); ok {
+		return c.Configured()
+	}
+	return true
+}
+
 // SetGitHub installs the minter behind /v1/github/token. Call it before the
 // broker serves; until then the route answers 503.
 func (b *Broker) SetGitHub(m GitHubMinter) { b.gh = m }
@@ -86,7 +99,7 @@ func (b *Broker) CheckGitHub(g config.GitHubBinding) error {
 		if o.Token != "" {
 			continue
 		}
-		if b.gh == nil {
+		if !b.ghConfigured() {
 			return errors.New("GitHub is not configured")
 		}
 		if seen[o.App] {
@@ -325,7 +338,7 @@ func (b *Broker) serveGitHubToken(w http.ResponseWriter, r *http.Request) {
 		b.serveGitHubPAT(w, base, sv, entry, sid, now, deny)
 		return
 	}
-	if b.gh == nil {
+	if !b.ghConfigured() {
 		replyErr(w, http.StatusServiceUnavailable, "GitHub is not configured on this agent-box host")
 		return
 	}

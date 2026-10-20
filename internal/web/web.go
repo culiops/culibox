@@ -74,10 +74,11 @@ type Server struct {
 	// StoreAudit receives unlock_rate_limited (best effort); the store records
 	// its own unlocks and locks.
 	StoreAudit secretstore.Recorder
-	// StoreInUse: a configured reference reads the store. StoreUnlockTTL is how
+	// StoreInUse: whether a configured reference reads the store, asked per
+	// request (a credential save can change it); nil = false. StoreUnlockTTL is how
 	// long a web unlock lasts. StorePlaintextCopies are secret NAMES (never
 	// values) that are in the store and also set in the daemon's environment.
-	StoreInUse           bool
+	StoreInUse           func() bool
 	StoreUnlockTTL       time.Duration
 	StorePlaintextCopies []string
 	storeLimit           unlockLimiter

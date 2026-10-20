@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -174,5 +175,43 @@ func TestMinterStoreKeyBadPEMNamesNoBytes(t *testing.T) {
 func TestLoadKeyStillFileOnly(t *testing.T) {
 	if _, err := LoadKey(config.KeyRef{Type: "store", ID: "x"}); err == nil {
 		t.Fatal("LoadKey must refuse store refs")
+	}
+}
+
+func TestSetAppsLive(t *testing.T) {
+	dir := t.TempDir()
+	p := writeKey(t, dir, "k.pem", 0o600, false, genKey(t))
+	m := NewMinter(nil, Client{})
+	if m.Configured() {
+		t.Fatal("no App defined: not configured")
+	}
+	if err := m.Check("x"); err == nil {
+		t.Fatal("Check(x) must fail before the App exists")
+	}
+	m.SetApps([]config.GitHubApp{{Name: "x", ClientID: "Iv1.x", PrivateKey: config.KeyRef{Type: "file", Path: p}}})
+	if err := m.Check("x"); err != nil {
+		t.Fatalf("after SetApps the App must pass Check: %v", err)
+	}
+	if !m.Configured() {
+		t.Fatal("an App is defined: configured")
+	}
+	m.SetApps(nil)
+	if err := m.Check("x"); err == nil {
+		t.Fatal("a removed App must be unknown again")
+	}
+}
+
+// A key cached for an App must not outlive a redefinition of that App.
+func TestSetAppsDropsCachedKeyOfChangedApp(t *testing.T) {
+	dir := t.TempDir()
+	p1 := writeKey(t, dir, "k1.pem", 0o600, false, genKey(t))
+	p2 := filepath.Join(dir, "missing.pem")
+	m := NewMinter([]config.GitHubApp{{Name: "x", ClientID: "Iv1.x", PrivateKey: config.KeyRef{Type: "file", Path: p1}}}, Client{})
+	if err := m.Check("x"); err != nil {
+		t.Fatal(err)
+	}
+	m.SetApps([]config.GitHubApp{{Name: "x", ClientID: "Iv1.x", PrivateKey: config.KeyRef{Type: "file", Path: p2}}})
+	if err := m.Check("x"); err == nil {
+		t.Fatal("the old cached key was served for the redefined App")
 	}
 }

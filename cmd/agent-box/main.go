@@ -259,14 +259,17 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 	lnch := launcher.New(agents, resolver, cfg.Options)
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
-	// A token entry's env-typed value variable lives in the daemon's env for the
-	// broker to read: like the password, it must never reach a session through
-	// an inherited base.
-	lnch.SetDaemonSecretEnv(append([]string{cfg.PasswordEnv}, tokenVars(cfg.StaticTokens)...)...)
-	lnch.SetStaticTokens(cfg.StaticTokens)
-	lnch.SetAWSConnections(cfg.AWSConnections)
+	// Every holder of the credential lists (launcher, profiles, broker filter,
+	// GitHub minter, the daemon-env scrub list, store-in-use) is fed through one
+	// Apply, here for the launcher alone and again once the rest exist. A web
+	// credential save calls the same Apply. The launcher's part is first, before
+	// anything can spawn: a token entry's env-typed value variable lives in the
+	// daemon's env for the broker to read, and like the password it must never
+	// reach a session through an inherited base.
+	live := &credLive{lnch: lnch, passwordEnv: cfg.PasswordEnv}
+	live.Apply(cfg)
 	if n := len(cfg.StaticTokens); n > 0 {
-		log.Printf("static_tokens: %d entries (read at start; a change needs a restart)", n)
+		log.Printf("static_tokens: %d entries", n)
 	}
 
 	// Agent accounts: accounts.json lives inside the data dir (the store writes it
@@ -463,6 +466,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			log.Fatalf("%v", err)
 		default:
 			brokerSvc = svc
+			live.tokens, live.gh = svc.Tokens, svc.GitHub
 			mgr.SetBroker(svc.Hooks)
 			log.Printf("credential broker listening on %s", svc.Hooks.EP.BoxURL)
 		}
@@ -562,9 +566,9 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
-	pm.SetGitHubApps(cfg.GitHubApps)
-	pm.SetStaticTokens(cfg.StaticTokens)
-	pm.SetAWSConnections(cfg.AWSConnections)
+	// The profile manager, the broker's token set and the minter exist now.
+	live.pm = pm
+	live.Apply(cfg)
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
@@ -631,7 +635,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		// interface can reach the web layer.
 		Store:                vstore,
 		StoreAudit:           storeAudit,
-		StoreInUse:           storerefs.InUse(cfg),
+		StoreInUse:           live.InUse,
 		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
 		StorePlaintextCopies: ptCopies,
 	}

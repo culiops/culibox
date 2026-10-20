@@ -68,7 +68,7 @@ func storeSrv() (*Server, *fakeSecretStore, *fakeSecretAudit) {
 		pass: "correct horse battery",
 	}
 	au := &fakeSecretAudit{}
-	return &Server{Store: fs, StoreAudit: au, StoreInUse: true, StoreUnlockTTL: 48 * time.Hour,
+	return &Server{Store: fs, StoreAudit: au, StoreInUse: func() bool { return true }, StoreUnlockTTL: 48 * time.Hour,
 		StorePlaintextCopies: []string{"CLAUDE_TOKEN"}}, fs, au
 }
 

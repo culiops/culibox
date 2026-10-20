@@ -100,7 +100,7 @@ type ProfileManager struct {
 }
 
 // SetAWSConnections installs the instance's named AWS connections, which Save
-// checks a profile's aws_connections against. Call at boot.
+// checks a profile's aws_connections against. Safe to call again on a credential save.
 func (m *ProfileManager) SetAWSConnections(list []config.AWSConnection) {
 	cp := make([]config.AWSConnection, len(list))
 	for i, c := range list {
@@ -112,7 +112,7 @@ func (m *ProfileManager) SetAWSConnections(list []config.AWSConnection) {
 }
 
 // SetStaticTokens installs the instance's static token entries, which Save
-// checks a profile's tokens and GitHub PAT owners against. Call at boot.
+// checks a profile's tokens and GitHub PAT owners against. Safe to call again on a credential save.
 func (m *ProfileManager) SetStaticTokens(entries []config.StaticToken) {
 	cp := make([]config.StaticToken, len(entries))
 	for i, e := range entries {
@@ -124,7 +124,7 @@ func (m *ProfileManager) SetStaticTokens(entries []config.StaticToken) {
 }
 
 // SetGitHubApps installs the instance's GitHub App connections, which Save
-// checks a profile's github binding against. Call at boot.
+// checks a profile's github binding against. Safe to call again on a credential save.
 func (m *ProfileManager) SetGitHubApps(apps []config.GitHubApp) {
 	m.mu.Lock()
 	m.ghApps = slices.Clone(apps)
