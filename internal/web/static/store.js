@@ -70,7 +70,7 @@ function storeUnlockOutcome(status, text, retryAfter) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
+  module.exports = { renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
 }
 
 // --- DOM wiring (browser only) -------------------------------------------------
@@ -78,12 +78,29 @@ if (typeof module !== "undefined" && module.exports) {
 // The last GET /api/store, or null when there is no store (404) or it has not
 // answered yet. Everything below paints from this.
 let storeState = null;
-// True while an unlock field has focus. refreshSessions holds its list rebuild
-// while this is set (like a focused reply box), so a poll cannot tear down a
-// card mid-keystroke.
-let storeFieldFocus = false;
+// Unlock requests in flight. refreshSessions holds its list rebuild while any is
+// pending: clicking Unlock moves focus off the field, and a poll that rebuilt
+// the row mid-request would write the outcome into a detached node.
+let storeInflight = 0;
+// The last failed unlock's line and when it happened, so a form rebuilt right
+// after the failure (a card row the poll replaced) shows it again.
+let storeLastMsg = "";
+let storeLastMsgAt = 0;
+const STORE_MSG_TTL_MS = 15000;
 
-function storeUnlockFocused() { return storeFieldFocus; }
+// storeRecentMsg: the remembered failure line while it is fresh, "" after.
+function storeRecentMsg(msg, at, nowMs) {
+  return msg && nowMs - at >= 0 && nowMs - at < STORE_MSG_TTL_MS ? msg : "";
+}
+
+// storeUnlockFocused: whether refreshSessions must hold its list rebuild. Read
+// from the DOM, not from focus/blur events: removing a focused element fires no
+// blur in every browser, which would leave a flag stuck on and the list frozen.
+function storeUnlockFocused() {
+  if (storeInflight > 0) return true;
+  const a = typeof document !== "undefined" ? document.activeElement : null;
+  return !!(a && a.isConnected && a.classList && a.classList.contains("storepass"));
+}
 
 function storeEl(tag, cls, text) {
   const e = document.createElement(tag);
@@ -92,13 +109,17 @@ function storeEl(tag, cls, text) {
   return e;
 }
 
-// renderUnlockForm fills `container` with the one unlock form: a password field
+// renderUnlockForm fills `container` with the one unlock UI: a password field
 // and an Unlock button, stacked on a narrow screen. onDone() runs after a 204.
-// The banner, the needs-you card and the spawn dialog all call this.
+// The banner, the needs-you card, the spawn dialog and Settings all call this.
+//
+// Deliberately NOT a <form>: the spawn dialog's slot sits inside <form id=spawn>,
+// and a nested form's submit bubbles to the spawn handler (starting a spawn and
+// detaching this UI), while Enter in a bare input would submit the outer form.
+// So: a div, a type=button button, and Enter handled on keydown with the event
+// stopped.
 function renderUnlockForm(container, onDone) {
-  const form = storeEl("form", "storeform");
-  form.setAttribute("autocomplete", "off");
-  form.noValidate = true;
+  const form = storeEl("div", "storeform");
   const field = storeEl("input", "fld storepass");
   field.type = "password";
   field.name = "agent-box-store-passphrase";
@@ -108,24 +129,24 @@ function renderUnlockForm(container, onDone) {
   field.spellcheck = false;
   field.placeholder = "Store passphrase";
   field.setAttribute("aria-label", "Store passphrase");
-  field.addEventListener("focus", () => { storeFieldFocus = true; });
-  field.addEventListener("blur", () => { storeFieldFocus = false; });
   const btn = storeEl("button", "btn pri", "Unlock");
-  btn.type = "submit";
+  btn.type = "button";
   const err = storeEl("div", "dlg-err storeerr");
   err.setAttribute("role", "alert");
+  err.textContent = storeRecentMsg(storeLastMsg, storeLastMsgAt, Date.now());
   form.append(field, btn, err);
 
   let busy = false;
-  form.addEventListener("submit", async (ev) => {
-    ev.preventDefault();
+  const submit = async () => {
     if (busy) return;
     const passphrase = field.value;
     field.value = ""; // cleared on every submit, success or not
     if (!passphrase) { err.textContent = "Type the store passphrase."; return; }
     busy = true;
+    storeInflight++;
     btn.disabled = true;
     err.textContent = "";
+    storeLastMsg = "";
     let out;
     try {
       const res = await fetch("/api/store/unlock", {
@@ -145,11 +166,16 @@ function renderUnlockForm(container, onDone) {
     busy = false;
     btn.disabled = false;
     if (out.ok) {
+      field.blur(); // the form is about to be replaced; drop focus explicitly
+      storeInflight--;
       await refreshStore();
       if (typeof refreshSessions === "function") refreshSessions();
       if (onDone) onDone();
       return;
     }
+    storeInflight--;
+    storeLastMsg = out.msg;
+    storeLastMsgAt = Date.now();
     err.textContent = out.msg;
     if (out.signedOut) {
       const re = storeEl("button", "btn", "Reload");
@@ -159,6 +185,13 @@ function renderUnlockForm(container, onDone) {
       err.appendChild(re);
     }
     field.focus();
+  };
+  btn.addEventListener("click", (ev) => { ev.stopPropagation(); submit(); });
+  field.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter" || ev.isComposing) return;
+    ev.preventDefault();  // no implicit submit of an enclosing form
+    ev.stopPropagation(); // and no dialog/palette shortcut sees it
+    submit();
   });
   container.replaceChildren(form);
   return form;

@@ -4035,6 +4035,8 @@ $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (spawnBusy) return;
   spawnBusy = true;
+  const goBtn = $("spawn").querySelector('button[type="submit"]');
+  if (goBtn) goBtn.disabled = true;
   const req = spawnPayload({
     agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
     runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
@@ -4063,6 +4065,7 @@ $("spawn").addEventListener("submit", async (ev) => {
     }
   } finally {
     spawnBusy = false;
+    if (goBtn) goBtn.disabled = false;
   }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
