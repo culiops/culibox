@@ -98,3 +98,19 @@ func TestGitHubResultsHost(t *testing.T) {
 		}
 	}
 }
+
+// Named AWS connections add their egress_allow hosts, and a set with none adds
+// nothing, so a legacy session's allowlist is unchanged.
+func TestEffectiveIncludesAWSConnectionHosts(t *testing.T) {
+	conns := []config.AWSConnection{
+		{Name: "a", AWSBinding: config.AWSBinding{EgressAllow: []string{"a.example.com"}}},
+		{Name: "b"},
+	}
+	got := Effective(config.Bindings{AWSConns: conns})
+	if want := append(DefaultAllow(), "a.example.com"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Effective = %v, want %v", got, want)
+	}
+	if got := Effective(config.Bindings{AWSConns: []config.AWSConnection{{Name: "b"}}}); !reflect.DeepEqual(got, DefaultAllow()) {
+		t.Fatalf("a connection without egress_allow widened the list: %v", got)
+	}
+}

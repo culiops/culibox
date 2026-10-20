@@ -40,7 +40,10 @@ type SessionView struct {
 	// refused without it.
 	Exclusive bool
 	AWS       *config.AWSBinding
-	GitHub    *config.GitHubBinding
+	// AWSConns are the named AWS connections the session may mint by name
+	// (clones, sorted by name); exclusive with AWS.
+	AWSConns []config.AWSConnection
+	GitHub   *config.GitHubBinding
 	// Tokens are the static-token entries the session may fetch by name; PATs
 	// are the entries its GitHub owners use as a personal access token.
 	Tokens []config.StaticToken

@@ -65,7 +65,7 @@ func GitHubResultsHost(host string) bool {
 }
 
 // Effective is the allowlist for a session with bindings bs: DefaultAllow, plus
-// AWS.EgressAllow, plus (for GitHub) GitHubAllow and GitHub.EgressAllow, plus
+// AWS.EgressAllow (and each named AWS connection's), plus (for GitHub) GitHubAllow and GitHub.EgressAllow, plus
 // every host of every bound token entry (Tokens, then PATs), as a fresh slice
 // that aliases none of them. Nothing bound adds nothing, so AWS-only and
 // unbound sessions get exactly what they always did. Entry hosts are exact
@@ -74,6 +74,9 @@ func Effective(bs config.Bindings) []string {
 	out := DefaultAllow()
 	if bs.AWS != nil {
 		out = append(out, bs.AWS.EgressAllow...)
+	}
+	for _, c := range bs.AWSConns {
+		out = append(out, c.EgressAllow...)
 	}
 	if bs.GitHub != nil {
 		out = append(out, GitHubAllow()...)

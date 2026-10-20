@@ -41,7 +41,8 @@ type elevationService struct {
 var _ web.ElevationService = elevationService{}
 
 // bound is the session with that id when it is a live boxed session with an
-// AWS binding: the only kind elevation and the sign-in card apply to.
+// AWS binding (inline or named connections): the only kind elevation and the
+// sign-in card apply to.
 func (e elevationService) bound(id string) (*session.Session, bool) {
 	s, ok := e.boundOrExited(id)
 	if !ok || e.isExited(s) {
@@ -58,10 +59,13 @@ func (e elevationService) isExited(s *session.Session) bool {
 }
 
 // boundOrExited is bound without the liveness test: a boxed session with an AWS
-// binding that may already have exited but is still listed.
+// binding that may already have exited but is still listed. A session bound by
+// aws_connections counts; its elevation and sign-in are wired per connection
+// later, and until then the paths below that need the inline binding answer
+// "unknown" for it rather than dereference a binding it does not have.
 func (e elevationService) boundOrExited(id string) (*session.Session, bool) {
 	s, ok := e.get(id)
-	if !ok || s == nil || s.AWS == nil || s.Runtime != config.RuntimeBox {
+	if !ok || s == nil || (s.AWS == nil && len(s.AWSConns) == 0) || s.Runtime != config.RuntimeBox {
 		return nil, false
 	}
 	return s, true
@@ -95,7 +99,7 @@ func (e elevationService) Refused(id, cred, reason string) {
 // the human can run instead.
 func (e elevationService) SSOLogin(id string) (ssologin.State, error) {
 	s, ok := e.bound(id)
-	if !ok {
+	if !ok || s.AWS == nil {
 		return ssologin.State{}, web.ErrElevationUnknown
 	}
 	p := s.AWS.SourceProfile
@@ -157,7 +161,7 @@ func (e elevationService) blockerFor(s *session.Session) (string, error) {
 // is nothing to say.
 func (e elevationService) ssoStatus(id string) (web.SSOStatus, bool) {
 	s, ok := e.bound(id)
-	if !ok {
+	if !ok || s.AWS == nil {
 		return web.SSOStatus{}, false
 	}
 	p := s.AWS.SourceProfile
@@ -186,7 +190,7 @@ func (e elevationService) ssoStatus(id string) (web.SSOStatus, bool) {
 func (e elevationService) grantContext(id string) web.GrantContext {
 	gc := web.GrantContext{HostSessions: []web.HostSession{}}
 	s, ok := e.bound(id)
-	if !ok || s.AWS.Elevate == nil {
+	if !ok || s.AWS == nil || s.AWS.Elevate == nil {
 		// Nothing can be granted here (exited, unbound, not elevatable), so
 		// there is no panel to fill: skip the box listing that would otherwise
 		// run on every poll of GET .../aws.

@@ -186,6 +186,14 @@ type AWSResolver interface {
 	AWSFor(agent string) *config.AWSBinding
 }
 
+// AWSConnResolver is implemented by launchers that know a profile's named AWS
+// connections: deep copies sorted by name. An error is a refusal (a name the
+// instance does not define, or a profile-binding rule that no longer holds).
+// Optional, like AWSResolver.
+type AWSConnResolver interface {
+	AWSConnectionsFor(agent string) ([]config.AWSConnection, error)
+}
+
 // GitHubResolver is implemented by launchers that know a profile's GitHub
 // binding. Optional, like AWSResolver.
 type GitHubResolver interface {
@@ -332,6 +340,26 @@ type AWSInfo struct {
 	SSOExpired string `json:"sso_expired,omitempty"`
 }
 
+// AWSConnInfo is the wire view of one of a session's named AWS connections:
+// what it can reach, never how it authenticates (no source profile, no
+// nonce, no token).
+type AWSConnInfo struct {
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	AccountID string `json:"account_id"`
+	RoleARN   string `json:"role_arn"`
+	Region    string `json:"region"`
+	Prod      bool   `json:"prod"`
+	// WriteCapable: the connection names an elevate role, so a human may widen
+	// it to write.
+	WriteCapable bool         `json:"write_capable"`
+	Elevate      *ElevateInfo `json:"elevate,omitempty"`
+	// ElevatedUntil and SSOExpired are filled by List only (the broker owns the
+	// state); absent otherwise.
+	ElevatedUntil *time.Time `json:"elevated_until,omitempty"`
+	SSOExpired    string     `json:"sso_expired,omitempty"`
+}
+
 // GitHubInfo is the wire view of a session's GitHub binding: which owners and
 // how many repositories it can reach, never an App, a token or a nonce.
 type GitHubInfo struct {
@@ -440,6 +468,10 @@ type Info struct {
 	// AWS is the binding the session was spawned with; nil (absent) for an
 	// unbound session, so its wire shape is unchanged.
 	AWS *AWSInfo `json:"aws,omitempty"`
+	// AWSConnections are the named AWS connections the session was spawned
+	// with, sorted by name; absent without any, so a legacy or unbound
+	// session's wire shape is unchanged.
+	AWSConnections []AWSConnInfo `json:"aws_connections,omitempty"`
 	// GitHub is the GitHub binding the session was spawned with; nil (absent)
 	// without one, so an AWS-only or unbound session's wire shape is unchanged.
 	GitHub *GitHubInfo `json:"github,omitempty"`
@@ -476,6 +508,11 @@ type Session struct {
 	// AWS is the binding the session was spawned with; immutable, read without
 	// the lock. A later profile edit never changes a running session's scope.
 	AWS *config.AWSBinding
+	// AWSConns are the named AWS connections the session was spawned with
+	// (deep copies, sorted by name); exclusive with AWS. Immutable and read
+	// without the lock, like AWS: a later edit or removal in aws_connections
+	// never changes a running session's scope.
+	AWSConns []config.AWSConnection
 	// GitHub is the GitHub binding the session was spawned with; immutable,
 	// read without the lock, like AWS.
 	GitHub *config.GitHubBinding
@@ -885,6 +922,15 @@ func (s *Session) Info() Info {
 			in.AWS.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
 		}
 	}
+	for _, c := range s.AWSConns {
+		ci := AWSConnInfo{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN), RoleARN: c.RoleARN, Region: c.Region,
+			Prod: c.Prod, WriteCapable: c.Elevate != nil}
+		if e := c.Elevate; e != nil {
+			ci.Elevate = &ElevateInfo{RoleARN: e.RoleARN, MaxMinutes: e.Max(), AllowIAM: e.AllowIAM}
+		}
+		in.AWSConnections = append(in.AWSConnections, ci)
+	}
+	slices.SortFunc(in.AWSConnections, func(a, b AWSConnInfo) int { return strings.Compare(a.Name, b.Name) })
 	if g := s.GitHub; g != nil {
 		gi := &GitHubInfo{Owners: make([]string, len(g.Owners))}
 		for i, o := range g.Owners {
@@ -906,7 +952,7 @@ func (s *Session) Info() Info {
 // Bindings is the set of credential bindings the session was spawned with.
 // Immutable, so it needs no lock.
 func (s *Session) Bindings() config.Bindings {
-	return config.Bindings{AWS: s.AWS, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs}
+	return config.Bindings{AWS: s.AWS, AWSConns: s.AWSConns, GitHub: s.GitHub, Tokens: s.Tokens, PATs: s.PATs}
 }
 
 // claudeSID returns the last validated Claude conversation id ("" if none).
@@ -1204,6 +1250,15 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if r, ok := m.launcher.(GitHubResolver); ok {
 		ghBinding = r.GitHubFor(spec.Agent)
 	}
+	var awsConns []config.AWSConnection
+	if r, ok := m.launcher.(AWSConnResolver); ok {
+		var err error
+		awsConns, err = r.AWSConnectionsFor(spec.Agent)
+		if err != nil {
+			// ErrBoxUnavailable so the UI shows which profile and why.
+			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
+		}
+	}
 	var tokens, pats []config.StaticToken
 	if r, ok := m.launcher.(TokenResolver); ok {
 		var err error
@@ -1213,7 +1268,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, fmt.Errorf("%w: %w", box.ErrBoxUnavailable, err)
 		}
 	}
-	bs := config.Bindings{AWS: binding, GitHub: ghBinding, Tokens: tokens, PATs: pats}
+	bs := config.Bindings{AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats}
 	m.mu.Lock()
 	brk := m.broker
 	eg := m.egress
@@ -1462,8 +1517,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			}
 			mounts = append(slices.Clip(mounts), bm...) // never write into the bundle provider's array
 			key.Binding = bs.Hash()
-			if binding != nil && binding.Elevate != nil {
-				// An elevatable binding gets a box of its own (M3b §7.1):
+			if (binding != nil && binding.Elevate != nil) || slices.ContainsFunc(awsConns, func(c config.AWSConnection) bool { return c.Elevate != nil }) {
+				// An elevatable binding (or any elevatable connection) gets a box of its own (M3b §7.1):
 				// processes in a shared box can read each other's broker token
 				// from /proc, and an elevated token must not be readable by
 				// another session.
@@ -1558,6 +1613,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.Account = acctName
 	sess.ConfigDir = cfgDir
 	sess.AWS = binding
+	sess.AWSConns = awsConns
 	sess.GitHub = ghBinding
 	sess.Tokens, sess.PATs = tokens, pats
 	sess.BrokerNonce = nonce
@@ -1576,7 +1632,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -1660,7 +1716,7 @@ func hasTokenMCP(ts []config.StaticToken) bool {
 // bindingKinds lists the kinds of binding present, in a fixed order.
 func bindingKinds(bs config.Bindings) []string {
 	var k []string
-	if bs.AWS != nil {
+	if bs.AWS != nil || len(bs.AWSConns) > 0 {
 		k = append(k, "AWS")
 	}
 	if bs.GitHub != nil {
@@ -2206,6 +2262,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.Account = md.Account
 	sess.ConfigDir = md.ConfigDir
 	sess.AWS = md.AWS
+	sess.AWSConns = md.AWSConns
 	sess.GitHub = md.GitHub
 	sess.Tokens, sess.PATs = md.Tokens, md.PATs
 	sess.BrokerNonce = md.BrokerNonce

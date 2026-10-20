@@ -62,6 +62,15 @@ func definedTokens(entries []config.StaticToken) func([]config.StaticToken) []co
 	}
 }
 
+// brokerSessionView is what the broker may know of a session. A session
+// carries the AWS connections it was spawned with (a copy that outlives their
+// removal from aws_connections), so unlike token entries they are passed through
+// without filtering.
+func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []config.StaticToken) broker.SessionView {
+	return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
+		Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}
+}
+
 // startBroker brings the credential broker up: the persisted HMAC secret, the
 // audit store, the listener and the HTTP server. dataDir holds broker.secret and
 // audit.db; stateRoot (symlink-resolved on darwin) holds the socket and the
@@ -96,8 +105,7 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 		if !ok {
 			return broker.SessionView{}, false
 		}
-		return broker.SessionView{Agent: s.Agent, Nonce: s.BrokerNonce, Boxed: s.Runtime == config.RuntimeBox, GitHub: s.GitHub,
-			Live: !s.Exited(), AWS: s.AWS, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}, true
+		return brokerSessionView(s, defined), true
 	}, broker.STSMinter{}, audit)
 	// github_apps is read once, at daemon start: a change needs a restart. With
 	// none configured the route keeps answering 503.

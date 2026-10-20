@@ -272,3 +272,28 @@ func TestGrantContextSkipsTheBoxListingWhereNothingCanBeGranted(t *testing.T) {
 		t.Fatalf("a live elevatable session must be checked once, got %d", calls)
 	}
 }
+
+// A session bound by named connections counts as bound, but its elevation and
+// sign-in are not wired yet: the inline-binding paths answer "unknown" for it
+// rather than dereference a binding it does not have.
+func TestConnectionBoundSessionIsBoundButNotYetElevatable(t *testing.T) {
+	c := boundSess("c-1")
+	c.AWSConns = []config.AWSConnection{{Name: "sbx-a", AWSBinding: *c.AWS}}
+	c.AWS = nil
+	e := elevationService{brk: testBroker(t), get: func(id string) (*session.Session, bool) { return c, true }}
+	if _, ok := e.bound("c-1"); !ok {
+		t.Fatal("a connection-bound live boxed session must count as bound")
+	}
+	if _, err := e.SSOLogin("c-1"); !errors.Is(err, web.ErrElevationUnknown) {
+		t.Errorf("SSOLogin: %v", err)
+	}
+	if _, ok := e.ssoStatus("c-1"); ok {
+		t.Error("ssoStatus answered from an inline binding the session lacks")
+	}
+	if gc := e.grantContext("c-1"); len(gc.HostSessions) != 0 {
+		t.Errorf("grantContext = %+v", gc)
+	}
+	if _, err := e.Drop("c-1", broker.CredCookie); err != nil {
+		t.Errorf("Drop: %v", err)
+	}
+}

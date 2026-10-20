@@ -156,6 +156,8 @@ type AgentLauncher struct {
 	daemonSecretEnv map[string]bool
 	// tokens are the instance's static-token entries, read once at boot.
 	tokens []config.StaticToken
+	// awsConns are the instance's named AWS connections, read once at boot.
+	awsConns []config.AWSConnection
 }
 
 // AccountResolver is the launcher's view of the account store.
@@ -399,6 +401,47 @@ func (l *AgentLauncher) SetStaticTokens(entries []config.StaticToken) {
 	l.mu.Lock()
 	l.tokens = cp
 	l.mu.Unlock()
+}
+
+// SetAWSConnections installs the instance's aws_connections (deep-copied).
+// Call once at boot: a change to aws_connections needs a restart.
+func (l *AgentLauncher) SetAWSConnections(list []config.AWSConnection) {
+	cp := make([]config.AWSConnection, len(list))
+	for i, c := range list {
+		cp[i] = c.Clone()
+	}
+	l.mu.Lock()
+	l.awsConns = cp
+	l.mu.Unlock()
+}
+
+// AWSConnectionsFor returns deep copies of the connections a profile binds,
+// sorted by name so Bindings.Hash does not depend on the order the profile
+// lists them. It is nil for a profile with none (or an unknown profile). The
+// profile-binding rule is re-checked here (spawn is the second of its two
+// checkpoints), and a name no connection defines is an error, never a partial
+// binding: the spawn is refused rather than run with less than the profile asks.
+func (l *AgentLauncher) AWSConnectionsFor(agent string) ([]config.AWSConnection, error) {
+	cfg, ok := l.agent(agent)
+	if !ok || len(cfg.AWSConnections) == 0 {
+		return nil, nil
+	}
+	if err := config.ValidateAWSConnBinding(cfg); err != nil {
+		return nil, err
+	}
+	l.mu.RLock()
+	list := l.awsConns
+	l.mu.RUnlock()
+	out := make([]config.AWSConnection, 0, len(cfg.AWSConnections))
+	for _, n := range cfg.AWSConnections {
+		c, ok := config.AWSConnByName(list, n)
+		if !ok {
+			return nil, fmt.Errorf("profile %q names AWS connection %q, which is not defined in aws_connections", agent, n)
+		}
+		out = append(out, c)
+	}
+	slices.SortFunc(out, func(a, b config.AWSConnection) int { return strings.Compare(a.Name, b.Name) })
+	return out, nil
 }
 
 // TokensFor returns deep copies of the entries a profile binds: tokens (its

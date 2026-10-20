@@ -499,3 +499,17 @@ func TestEntryMCPCommandsAddsTheLauncher(t *testing.T) {
 		t.Fatal("no entry server, nothing extra to probe")
 	}
 }
+
+// A connection-bound session reaches the broker with its connections (the
+// clone it was spawned with, even if aws_connections no longer defines them)
+// and no inline binding.
+func TestBrokerSessionViewCarriesAWSConns(t *testing.T) {
+	s := boundSess("aws-1")
+	s.AWS = nil
+	s.AWSConns = []config.AWSConnection{{Name: "sbx-a", AWSBinding: *wireBinding()}}
+	s.BrokerNonce = wireNonce
+	v := brokerSessionView(s, definedTokens(nil))
+	if v.AWS != nil || len(v.AWSConns) != 1 || v.AWSConns[0].Name != "sbx-a" || !v.Boxed || v.Nonce != wireNonce {
+		t.Fatalf("view = %+v", v)
+	}
+}
