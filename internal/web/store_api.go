@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -56,10 +58,15 @@ func (l *unlockLimiter) prune(now time.Time) {
 	l.failures = kept
 }
 
-// limited reports whether another attempt is refused. Caller holds mu.
-func (l *unlockLimiter) limited() bool {
-	l.prune(l.clock())
-	return len(l.failures) >= unlockMaxFailures
+// wait is how long until another attempt is allowed: zero when not limited,
+// else until the oldest failure leaves the window. Caller holds mu.
+func (l *unlockLimiter) wait() time.Duration {
+	now := l.clock()
+	l.prune(now)
+	if len(l.failures) < unlockMaxFailures {
+		return 0
+	}
+	return l.failures[0].Add(unlockWindow).Sub(now)
 }
 
 func (l *unlockLimiter) fail() { l.failures = append(l.failures, l.clock()) }
@@ -164,12 +171,18 @@ func (s *Server) handleStoreUnlock(w http.ResponseWriter, r *http.Request) {
 
 	s.storeLimit.mu.Lock()
 	defer s.storeLimit.mu.Unlock()
-	if s.storeLimit.limited() {
+	if wait := s.storeLimit.wait(); wait > 0 {
 		if s.StoreAudit != nil {
 			_ = s.StoreAudit.RecordStore(secretstore.Event{Action: "unlock_rate_limited", Actor: storeActor})
 		}
-		w.Header().Set("Retry-After", "900")
-		writeErr(w, http.StatusTooManyRequests, "too many wrong passphrases — try again in 15 minutes")
+		secs := int((wait + time.Second - 1) / time.Second) // round up
+		mins := (secs + 59) / 60
+		unit := "minutes"
+		if mins == 1 {
+			unit = "minute"
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("too many wrong passphrases — try again in %d %s", mins, unit))
 		return
 	}
 	switch err := s.Store.Unlock(req.Passphrase, s.StoreUnlockTTL, storeActor); {

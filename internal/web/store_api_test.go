@@ -224,10 +224,24 @@ func TestUnlockRateLimit(t *testing.T) {
 	if w.Code != 429 {
 		t.Fatalf("6th attempt (right passphrase): %d %s", w.Code, w.Body)
 	}
+	if ra := w.Header().Get("Retry-After"); ra != "900" || !strings.Contains(w.Body.String(), "15 minutes") {
+		t.Fatalf("fresh window: Retry-After %q body %s", ra, w.Body)
+	}
+	now = now.Add(10*time.Minute + 30*time.Second) // 4m30s left of the window
+	w = do(srv.handleStoreUnlock, storeReq("POST", "/api/store/unlock", right, same, credCookie))
+	if ra := w.Header().Get("Retry-After"); w.Code != 429 || ra != "270" || !strings.Contains(w.Body.String(), "5 minutes") {
+		t.Fatalf("part-way: %d Retry-After %q body %s", w.Code, ra, w.Body)
+	}
+	now = now.Add(4*time.Minute + 29*time.Second + 500*time.Millisecond) // half a second left
+	w = do(srv.handleStoreUnlock, storeReq("POST", "/api/store/unlock", right, same, credCookie))
+	if ra := w.Header().Get("Retry-After"); w.Code != 429 || ra != "1" || !strings.Contains(w.Body.String(), "1 minute\"") {
+		t.Fatalf("nearly out: %d Retry-After %q body %s", w.Code, ra, w.Body)
+	}
+	now = time.Unix(1_800_000_000, 0)
 	if fs.attempts != before || len(fs.unlocks) != 0 {
 		t.Fatalf("a limited attempt must not reach the store")
 	}
-	if len(au.events) != 1 || au.events[0].Action != "unlock_rate_limited" || au.events[0].Actor != "web" ||
+	if len(au.events) != 3 || au.events[0].Action != "unlock_rate_limited" || au.events[0].Actor != "web" ||
 		strings.Contains(au.events[0].Detail, "correct") {
 		t.Fatalf("audit %+v", au.events)
 	}
@@ -273,7 +287,23 @@ func TestUnlockNeverLogged(t *testing.T) {
 		w := do(srv.handleStoreUnlock, storeReq("POST", "/api/store/unlock", `{"passphrase":"`+p+`"}`, same, credCookie))
 		out.WriteString(w.Body.String())
 	}
-	// And through the full handler chain's mux, if the routes are registered.
+	// And through the full handler chain: valid cookie + same Origin.
+	rs, _ := routedServer(t)
+	rs.Store, rs.StoreUnlockTTL = &fakeSecretStore{st: secretstore.Status{Initialized: true, Locked: true}, pass: rightPass}, time.Hour
+	iw := httptest.NewRecorder()
+	rs.Session.Issue(iw, false)
+	for i, p := range []string{wrongPass, rightPass} {
+		r := httptest.NewRequest("POST", "/api/store/unlock", strings.NewReader(`{"passphrase":"`+p+`"}`))
+		r.Host = "example.com"
+		r.Header.Set("Origin", "http://example.com")
+		r.AddCookie(iw.Result().Cookies()[0])
+		w := httptest.NewRecorder()
+		rs.Handler().ServeHTTP(w, r)
+		if want := []int{401, 204}[i]; w.Code != want {
+			t.Fatalf("through Handler, attempt %d: %d %s, want %d", i, w.Code, w.Body, want)
+		}
+		out.WriteString(w.Body.String())
+	}
 	if strings.Contains(buf.String(), wrongPass) || strings.Contains(buf.String(), rightPass) ||
 		strings.Contains(out.String(), wrongPass) || strings.Contains(out.String(), rightPass) {
 		t.Fatalf("a passphrase leaked.\nlog: %q\nresponses: %q", buf.String(), out.String())
@@ -309,23 +339,22 @@ func TestStoreLock(t *testing.T) {
 }
 
 func TestStoreRoutesOnlyWithAStore(t *testing.T) {
-	srv, _, _ := storeSrv()
-	srv.AllowedHosts = []string{host}
-	// Registered: an unauthenticated API call is refused by the guard (401),
-	// not routed to the static file server's 404.
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest("GET", "/api/store", nil)
-	r.Host = host
-	srv.Handler().ServeHTTP(w, r)
-	if w.Code == 404 {
-		t.Fatalf("with a store the route must exist: %d", w.Code)
+	get := func(s *Server, tok string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "/api/store", nil)
+		r.Host = "example.com"
+		r.Header.Set("Authorization", "Bearer "+tok)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w
 	}
-	none := &Server{AllowedHosts: []string{host}}
-	w = httptest.NewRecorder()
-	r = httptest.NewRequest("GET", "/api/store", nil)
-	r.Host = host
-	none.Handler().ServeHTTP(w, r)
-	if w.Code == 200 {
-		t.Fatalf("without a store: %d", w.Code)
+	with, tok := routedServer(t)
+	with.Store = &fakeSecretStore{st: secretstore.Status{Initialized: true, Locked: true, Platform: "linux"}}
+	w := get(with, tok)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"initialized":true`) {
+		t.Fatalf("with a store: %d %s", w.Code, w.Body)
+	}
+	without, tok := routedServer(t)
+	if w := get(without, tok); w.Code != 404 {
+		t.Fatalf("without a store the route must not exist (SPA fallback 404): %d %s", w.Code, w.Body)
 	}
 }
