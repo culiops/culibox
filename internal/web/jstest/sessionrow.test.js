@@ -478,7 +478,6 @@ for (const off of [undefined, "true"]) {
 
 // --- base-role write probe: the UI shows the measured base-role access ---
 const CHK = "2027-01-15T09:30:00Z";
-const HM = /\d\d:\d\d/;
 const hm = (iso) => { const d = new Date(iso); return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); };
 const WRITES = { base_access: "writes", base_write_actions: ["s3:PutObject", "iam:CreateUser"], base_checked_at: CHK };
 const NONE = { base_access: "none_found", base_checked_at: CHK };
@@ -497,6 +496,8 @@ test("baseScope: three states and fallbacks", () => {
   assert.strictEqual(baseScope(UNV("bogus")).text, "unverified (check failed)");
   assert.strictEqual(baseScope({ base_access: "bogus", base_access_reason: "timeout" }).text, "unverified (not checked)", "an unknown state is never none_found");
   assert.strictEqual(baseScope({ base_access: "writes" }).text, "role can write");
+  assert.strictEqual(baseScope({ base_access: "writes" }).title, "IAM policy simulation", "no check time: no 'checked' prefix");
+  assert.strictEqual(baseScope({ base_access: "none_found" }).title, "scoped write grants are not detected");
   assert.strictEqual(baseScope({ base_access: "writes", base_write_actions: [] }).text, "role can write");
   assert.strictEqual(baseReasonText("timeout"), "timed out");
   assert.strictEqual(baseReasonText("toString"), "check failed");

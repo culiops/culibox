@@ -891,7 +891,7 @@ function buildElevButtons(s, gp, acts, line) {
   if (acts.elevate) {
     const p = document.createElement("p");
     p.className = "tiny mut";
-    p.textContent = gp.blockedText || ("Read-only now. Elevate gives this session " + gp.role + " for a limited time.");
+    p.textContent = gp.blockedText || ("Elevate gives this session " + gp.role + " for a limited time.");
     wrap.appendChild(p);
   }
   return wrap;
