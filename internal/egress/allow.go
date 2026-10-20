@@ -2,6 +2,7 @@ package egress
 
 import (
 	"regexp"
+	"slices"
 
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -65,18 +66,25 @@ func GitHubResultsHost(host string) bool {
 }
 
 // Effective is the allowlist for a session with bindings bs: DefaultAllow, plus
-// AWS.EgressAllow (and each named AWS connection's), plus (for GitHub) GitHubAllow and GitHub.EgressAllow, plus
-// every host of every bound token entry (Tokens, then PATs), as a fresh slice
-// that aliases none of them. Nothing bound adds nothing, so AWS-only and
-// unbound sessions get exactly what they always did. Entry hosts are exact
-// names, so they never widen into a wildcard.
+// AWS.EgressAllow, plus the egress_allow of each named AWS connection (the
+// union, first-seen order, each host once), plus (for GitHub) GitHubAllow and
+// GitHub.EgressAllow, plus every host of every bound token entry (Tokens, then
+// PATs), as a fresh slice that aliases none of them. Nothing bound adds
+// nothing, so AWS-only and unbound sessions get exactly what they always did.
+// Entry hosts are exact names, so they never widen into a wildcard.
 func Effective(bs config.Bindings) []string {
 	out := DefaultAllow()
 	if bs.AWS != nil {
 		out = append(out, bs.AWS.EgressAllow...)
 	}
+	// Connections are deduped against everything already listed and against
+	// each other. The legacy inline list above is left exactly as it was.
 	for _, c := range bs.AWSConns {
-		out = append(out, c.EgressAllow...)
+		for _, h := range c.EgressAllow {
+			if !slices.Contains(out, h) {
+				out = append(out, h)
+			}
+		}
 	}
 	if bs.GitHub != nil {
 		out = append(out, GitHubAllow()...)

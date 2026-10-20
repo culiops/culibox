@@ -114,3 +114,36 @@ func TestEffectiveIncludesAWSConnectionHosts(t *testing.T) {
 		t.Fatalf("a connection without egress_allow widened the list: %v", got)
 	}
 }
+
+// Two connections with different egress_allow give both hosts, once each, in
+// first-seen order: a host already in the defaults, or listed by both
+// connections, is not repeated.
+func TestEffectiveUnionAWSConns(t *testing.T) {
+	conns := []config.AWSConnection{
+		{Name: "a", AWSBinding: config.AWSBinding{EgressAllow: []string{"a.example.com", "shared.example.com", "github.com"}}},
+		{Name: "b", AWSBinding: config.AWSBinding{EgressAllow: []string{"shared.example.com", "b.example.com", "b.example.com"}}},
+	}
+	got := Effective(config.Bindings{AWSConns: conns})
+	want := append(DefaultAllow(), "a.example.com", "shared.example.com", "b.example.com")
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Effective = %v, want %v", got, want)
+	}
+	// Nothing the result holds aliases a connection's slice.
+	got[len(got)-1] = "mutated"
+	if conns[1].EgressAllow[1] != "b.example.com" {
+		t.Fatal("the result aliases a connection's egress_allow")
+	}
+}
+
+// A session with no connections gets exactly the legacy list: the union logic
+// must not dedupe or reorder the legacy inline-binding hosts.
+func TestEffectiveLegacyUnchanged(t *testing.T) {
+	legacy := &config.AWSBinding{EgressAllow: []string{"github.com", "x.example.com", "x.example.com"}}
+	want := append(DefaultAllow(), "github.com", "x.example.com", "x.example.com")
+	if got := Effective(config.Bindings{AWS: legacy}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Effective(legacy) = %v, want %v", got, want)
+	}
+	if got := Effective(config.Bindings{AWSConns: []config.AWSConnection{}}); !reflect.DeepEqual(got, DefaultAllow()) {
+		t.Fatalf("empty connections changed the list: %v", got)
+	}
+}
