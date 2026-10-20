@@ -85,10 +85,15 @@ func TestApplyRedrivesDaemonSecretEnv(t *testing.T) {
 	if _, leaked := m["AB_TEST_PW"]; leaked || m["AC_KEEP"] != "kept" {
 		t.Fatalf("password env must stay stripped and ordinary vars kept: %v", m)
 	}
-	// Deleting the entry stops scrubbing a variable that is no longer a secret.
+	// The scrub list never shrinks: the variable is still in the daemon's env
+	// after its definition is gone, so it must stay stripped.
 	c.Apply(config.Config{})
-	if build()["FOO_TOKEN"] != "hunter2" {
-		t.Fatal("scrub list must follow the current definitions")
+	if _, leaked := build()["FOO_TOKEN"]; leaked {
+		t.Fatal("FOO_TOKEN reached a session after its definition disappeared from the merged config")
+	}
+	c.Apply(config.Config{StaticTokens: []config.StaticToken{tok("other")}})
+	if _, leaked := build()["FOO_TOKEN"]; leaked {
+		t.Fatal("a later Apply shrank the scrub list")
 	}
 	if _, leaked := build()["AB_TEST_PW"]; leaked {
 		t.Fatal("password env must stay stripped after every Apply")
