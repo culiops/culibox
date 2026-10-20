@@ -260,9 +260,10 @@ func (b *Broker) WatchBase(sid string, keys []string) {
 }
 
 // SetBaseNotify installs the sink for re-probe results. Call it once at boot;
-// it may be after the broker started serving. A result reached before it is
-// set is not delivered and leaves the watch in place, so the next real mint
-// retries.
+// it may be after the broker started serving. It must not block for long: the
+// key it reports on starts no new re-probe until it returns. A result reached
+// before it is set is not delivered and leaves the watch in place, so the next
+// real mint retries.
 func (b *Broker) SetBaseNotify(f func(sid, key string, r awsprobe.Result)) {
 	b.mu.Lock()
 	b.onBase = f
@@ -318,29 +319,36 @@ func (b *Broker) reprobe(ck connKey, agent string, t ProbeTarget, gen uint64) {
 	b.finishReprobe(ck, gen, b.probeOne(ck.sid, agent, ck.conn, t))
 }
 
-// finishReprobe clears ck's in-flight mark if it is still this re-probe's, and
-// delivers res only if the watch is still the generation the re-probe ran for:
-// a Forget, or a new spawn under the same id, since it started means nobody
-// is waiting for it. A result that endsWatch ends the watch; any other keeps
-// it, so the next real mint retries. The notify runs outside b.mu.
+// finishReprobe delivers res only if the watch is still the generation the
+// re-probe ran for (a Forget, or a new spawn under the same id, since it
+// started means nobody is waiting for it), a sink is installed and the broker
+// is not closing (the session layer may be tearing down). A result that
+// endsWatch ends the watch; any other keeps it, so the next real mint retries.
+// The notify runs outside b.mu.
+//
+// The in-flight mark is cleared only after the delivery, and only if it is
+// still this re-probe's: until then no other re-probe of ck starts, so a stale
+// result can never be delivered after a newer one.
 //
 // A Forget that lands between the generation check and the notify is not
 // seen: the session layer must ignore a result for a session it no longer has.
 func (b *Broker) finishReprobe(ck connKey, gen uint64, res awsprobe.Result) {
 	b.mu.Lock()
-	if g, ok := b.reprobing[ck]; ok && g == gen {
-		delete(b.reprobing, ck)
-	}
 	notify := b.onBase
-	if g, ok := b.baseWatch[ck]; !ok || g != gen || notify == nil {
-		b.mu.Unlock()
-		return
-	}
-	if endsWatch(res) {
+	g, ok := b.baseWatch[ck]
+	deliver := ok && g == gen && notify != nil && !b.probeClosing
+	if deliver && endsWatch(res) {
 		delete(b.baseWatch, ck)
 	}
 	b.mu.Unlock()
-	notify(ck.sid, ck.conn, res)
+	if deliver {
+		notify(ck.sid, ck.conn, res)
+	}
+	b.mu.Lock()
+	if g, ok := b.reprobing[ck]; ok && g == gen {
+		delete(b.reprobing, ck)
+	}
+	b.mu.Unlock()
 }
 
 // endsWatch reports whether a re-probe result ends the watch: a definite

@@ -908,8 +908,8 @@ func TestStopProbesRefusesNewReprobesAndWaits(t *testing.T) {
 	}
 	close(fs.release)
 	<-stopped
-	if len(nr.list()) != 1 {
-		t.Fatalf("notified %d", len(nr.list()))
+	if len(nr.list()) != 0 { // closing: the session layer may be tearing down
+		t.Fatalf("notified after StopProbes: %+v", nr.list())
 	}
 	b.mu.Lock()
 	b.baseWatch[connKey{"s-1", ""}] = 99 // watched again
@@ -926,9 +926,59 @@ func TestStopProbesWaitIsBounded(t *testing.T) {
 	b, _, _, _ := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
 	b.WatchBase("s-1", []string{""})
 	call(b, tokA("s-1"))
-	b.StopProbes(time.Millisecond) // returns although the re-probe is blocked
+	stopped := make(chan struct{})
+	go func() { b.StopProbes(time.Millisecond); close(stopped) }() // returns although the re-probe is blocked
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second): // a failure bound only
+		close(fs.release)
+		t.Fatal("StopProbes waited past its bound")
+	}
 	close(fs.release)
 	b.probeWG.Wait()
+}
+
+// A re-probe keeps its in-flight mark until its result is delivered: while a
+// kept-watch result (here "error") is being delivered, a new mint starts no
+// second re-probe, so a newer result can never be overtaken by a stale one.
+func TestReprobeMarkHeldUntilDelivered(t *testing.T) {
+	fs := &fakeSim{err: errors.New("boom")} // unverified (error): the watch stays
+	b, fm, now, _ := reprobeSetup(t, map[string]SessionView{"s-1": live()}, fs)
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a credential cache hit
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var got []awsprobe.Result
+	b.SetBaseNotify(func(_, _ string, r awsprobe.Result) {
+		mu.Lock()
+		got = append(got, r)
+		first := len(got) == 1
+		mu.Unlock()
+		if first {
+			close(entered)
+			<-unblock
+		}
+	})
+	b.WatchBase("s-1", []string{""})
+	call(b, tokA("s-1")) // re-probe A
+	select {
+	case <-entered:
+	case <-time.After(10 * time.Second): // a failure bound only
+		t.Fatal("re-probe A never delivered")
+	}
+	call(b, tokA("s-1")) // A's delivery is pending: must not start B
+	if fs.callCount() != 1 {
+		close(unblock)
+		t.Fatalf("a second re-probe started while A was delivering: sims=%d", fs.callCount())
+	}
+	close(unblock)
+	b.probeWG.Wait()
+	call(b, tokA("s-1")) // A is done: the mark is gone, B starts
+	b.probeWG.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if fs.callCount() != 2 || len(got) != 2 {
+		t.Fatalf("sims=%d notified=%d", fs.callCount(), len(got))
+	}
 }
 
 func TestProbeCacheDoesNotAliasActions(t *testing.T) {

@@ -66,7 +66,8 @@ func (h Hooks) ProbeBase(id, agent string, bs config.Bindings) map[string]awspro
 // ProbeBase) after their next successful base mint.
 func (h Hooks) WatchBase(id string, keys []string) { h.B.WatchBase(id, keys) }
 
-// SetBaseNotify installs the sink for re-probe results; call it once at boot.
+// SetBaseNotify installs the sink for re-probe results; call it once at boot
+// (may be after serving).
 func (h Hooks) SetBaseNotify(f func(id, key string, r awsprobe.Result)) { h.B.SetBaseNotify(f) }
 
 // AWSState is what a session list shows of the broker's per-session state: the
