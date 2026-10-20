@@ -27,6 +27,11 @@ type File struct {
 	AWSConnections []config.AWSConnection `json:"aws_connections,omitempty"`
 	GitHubApps     []config.GitHubApp     `json:"github_apps,omitempty"`
 	StaticTokens   []config.StaticToken   `json:"static_tokens,omitempty"`
+
+	// Undecodable are entries Load could not decode (e.g. an unknown field).
+	// Merge reports them. They are not written back: the next Save drops them,
+	// after they have been shown as invalid in doctor and the screen.
+	Undecodable []EntryError `json:"-"`
 }
 
 // Entry kinds, as used in Sources keys and EntryError.Kind.
@@ -51,19 +56,64 @@ type EntryError struct{ Kind, Name, Err string }
 // Path is where the file lives.
 func Path(dataDir string) string { return filepath.Join(dataDir, "credentials.json") }
 
-// parse decodes strictly: an unknown field is a typo in a security-relevant
-// definition (egress, env), and silently ignoring it would widen or narrow
-// what an entry does.
-func parse(b []byte) (File, error) {
-	var f File
+// rawFile is File with each entry undecoded, so one bad entry cannot take the
+// others down with it.
+type rawFile struct {
+	AWSConnections []json.RawMessage `json:"aws_connections"`
+	GitHubApps     []json.RawMessage `json:"github_apps"`
+	StaticTokens   []json.RawMessage `json:"static_tokens"`
+}
+
+// decodeStrict is json decoding that refuses unknown fields and trailing data.
+func decodeStrict(b []byte, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&f); err != nil {
-		return File{}, err
+	if err := dec.Decode(v); err != nil {
+		return err
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return File{}, errors.New("unexpected data after the JSON object")
+		return errors.New("unexpected data after the JSON value")
 	}
+	return nil
+}
+
+// decodeEntries decodes each entry strictly. An unknown field is a typo (or a
+// newer version's field) in a security-relevant definition (egress, env), and
+// silently ignoring it would widen or narrow what the entry does, so that entry
+// is reported and left out; the others are kept.
+func decodeEntries[T any](kind string, raws []json.RawMessage, bad *[]EntryError) []T {
+	var out []T
+	for i, r := range raws {
+		var e T
+		err := decodeStrict(r, &e)
+		if err == nil {
+			out = append(out, e)
+			continue
+		}
+		var n struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(r, &n) // best effort: only to label the error
+		if n.Name == "" {
+			n.Name = fmt.Sprintf("#%d", i)
+		}
+		*bad = append(*bad, EntryError{kind, n.Name, err.Error()})
+	}
+	return out
+}
+
+// parse is file-level strict (not JSON, an unknown top-level key, a wrong
+// top-level type, trailing data: the whole file is bad) and entry-level
+// tolerant (see decodeEntries).
+func parse(b []byte) (File, error) {
+	var r rawFile
+	if err := decodeStrict(b, &r); err != nil {
+		return File{}, err
+	}
+	var f File
+	f.AWSConnections = decodeEntries[config.AWSConnection](KindAWS, r.AWSConnections, &f.Undecodable)
+	f.GitHubApps = decodeEntries[config.GitHubApp](KindGitHubApp, r.GitHubApps, &f.Undecodable)
+	f.StaticTokens = decodeEntries[config.StaticToken](KindToken, r.StaticTokens, &f.Undecodable)
 	return f, nil
 }
 
@@ -205,6 +255,7 @@ func mergeKind[T any](kind string, seeds, web []T, nameOf func(T) string, check 
 func Merge(cfg config.Config, f File) (merged config.Config, src Sources, errs []EntryError) {
 	merged = cfg
 	src = Sources{}
+	errs = slices.Clone(f.Undecodable)
 	for _, c := range cfg.AWSConnections {
 		src[KindAWS+"/"+c.Name] = SourceConfig
 	}

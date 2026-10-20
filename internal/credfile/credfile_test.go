@@ -44,7 +44,7 @@ func TestLoadMissingIsEmpty(t *testing.T) {
 }
 
 func TestLoadBadJSON(t *testing.T) {
-	for _, body := range []string{"{", "", `{"static_tokens":[]} trailing`, `{"typo_field":1}`} {
+	for _, body := range []string{"{", "", `{"static_tokens":[]} trailing`, `{"typo_field":1}`, `{"static_tokens":{}}`} {
 		dir := t.TempDir()
 		if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -231,5 +231,38 @@ func TestTemplateFieldNotInDefHash(t *testing.T) {
 	}
 	if got := b.Clone().Template; got != "sentry" {
 		t.Errorf("Clone dropped Template: %q", got)
+	}
+}
+
+func TestLoadUnknownEntryFieldKeepsOtherEntries(t *testing.T) {
+	dir := t.TempDir()
+	body := `{"static_tokens":[
+	  {"name":"typo","value":{"type":"store","id":"typo"},"env":["A_TOKEN"],"egres":[{"host":"api.example.com"}]},
+	  {"name":"good","value":{"type":"store","id":"good"},"env":["B_TOKEN"],"egress":[{"host":"api.example.com"}]}]}`
+	if err := os.WriteFile(Path(dir), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, bad, err := Load(dir)
+	if bad || err != nil {
+		t.Fatalf("Load = bad %v err %v, want the file to stay usable", bad, err)
+	}
+	m, src, errs := Merge(config.Config{}, f)
+	if got := strings.Join(tokenNames(m.StaticTokens), ","); got != "good" || src["token/good"] != "web" {
+		t.Errorf("merged = %s %v, want only good", got, src)
+	}
+	if len(errs) != 1 || errs[0].Kind != "token" || errs[0].Name != "typo" || !strings.Contains(errs[0].Err, "egres") {
+		t.Errorf("errs = %+v, want one error naming typo and the unknown field", errs)
+	}
+	// The undecodable entry is reported until the next Save, which drops it
+	// without renaming the file (it is not bad) and keeps the good one.
+	if err := Save(dir, f); err != nil {
+		t.Fatal(err)
+	}
+	if bads, _ := filepath.Glob(Path(dir) + ".bad-*"); len(bads) != 0 {
+		t.Errorf("file renamed aside: %v", bads)
+	}
+	after, _, _ := Load(dir)
+	if len(after.StaticTokens) != 1 || len(after.Undecodable) != 0 {
+		t.Errorf("after save = %+v", after)
 	}
 }
