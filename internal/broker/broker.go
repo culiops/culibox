@@ -157,10 +157,15 @@ type Broker struct {
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
-// "" for denied_token (whose claimed id is never trusted).
+// "" for denied_token (whose claimed id is never trusted). conn is set only for
+// a rate-limited row of a bound connection (at most maxBoundAWSConnections per
+// session), so each connection's row keeps its own entry; refusals of unbound
+// names are never keyed by name, or a client cycling made-up names would flood
+// the audit log.
 type deniedKey struct {
 	outcome Outcome
 	sid     string
+	conn    string
 }
 
 // deniedState is the last row written for a key and how many were dropped since.
@@ -617,14 +622,17 @@ func (b *Broker) allowNamedLocked(sid string, k bucket, name string, now time.Ti
 	return true
 }
 
-// recordDenied writes at most one row per (outcome, session) per second, so a
+// recordDenied writes at most one row per (outcome, session[, connection]) per second, so a
 // looping or hostile client cannot grow the audit store without bound, and a
 // probe of one session cannot mask another's row. Dropped requests are counted
 // and the count rides on the next row for that key ("+N similar refusals
 // suppressed"). A key that goes quiet with a pending count is flushed as a
 // summary row the next time the (at most once-a-second) prune runs.
 func (b *Broker) recordDenied(r Row) {
-	key := deniedKey{r.Outcome, r.SessionID}
+	key := deniedKey{outcome: r.Outcome, sid: r.SessionID}
+	if r.Outcome == OutcomeRateLimited {
+		key.conn = r.Entry // always a bound connection name, or "" for the legacy binding
+	}
 	var out []Row
 	b.mu.Lock()
 	if b.now().Sub(b.lastPrune) >= deniedWindow {

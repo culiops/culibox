@@ -24,7 +24,7 @@ type AWSConnection struct {
 const maxBoundAWSConnections = 16
 
 // awsConnReserved are names a connection may not take: "default" is the
-// legacy inline binding's profile and "agentbox" the box's own.
+// in-box guidance profile and "agentbox" the legacy in-box profile name.
 var awsConnReserved = []string{"default", "agentbox"}
 
 // Validate checks the name, the description and every AWSBinding rule. The

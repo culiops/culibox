@@ -952,3 +952,62 @@ func TestForgetClearsConnState(t *testing.T) {
 		t.Fatal("ConnStats after Forget")
 	}
 }
+
+// Two connections that both hit their own rate limit inside one throttle window
+// each get their own row: a row must say which connection it was for.
+func TestRateLimitedRowsKeepTheirOwnConnection(t *testing.T) {
+	b, fm, rec, now := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a cache hit
+	for _, name := range []string{"a", "b"} {
+		for i := 0; i < mintsPerMinute; i++ {
+			if w := callBody(b, tokA("claude-3"), `{"name":"`+name+`"}`); w.Code != 200 {
+				t.Fatalf("%s mint %d: %d", name, i, w.Code)
+			}
+		}
+	}
+	for _, name := range []string{"a", "b", "a", "b"} {
+		if w := callBody(b, tokA("claude-3"), `{"name":"`+name+`"}`); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s over the limit: %d", name, w.Code)
+		}
+	}
+	var entries []string
+	for _, r := range rec.rows {
+		if r.Outcome == OutcomeRateLimited {
+			entries = append(entries, r.Entry)
+		}
+	}
+	if len(entries) != 2 || entries[0] != "a" || entries[1] != "b" {
+		t.Fatalf("rate-limited rows name %v, want [a b]", entries)
+	}
+	*now = now.Add(time.Second)
+	callBody(b, tokA("claude-3"), `{"name":"a"}`)
+	callBody(b, tokA("claude-3"), `{"name":"b"}`)
+	noted := map[string]int{} // each suppressed count rides on its own connection's row
+	for _, r := range rec.rows[2:] {
+		if strings.Contains(r.Error, "+1 similar refusals suppressed") {
+			noted[r.Entry]++
+		}
+	}
+	if noted["a"] != 1 || noted["b"] != 1 {
+		t.Fatalf("suppressed notes by entry %v, rows %+v", noted, rec.rows)
+	}
+}
+
+// Refusals of names that are not bound are not keyed by name: an agent cycling
+// made-up names must not be able to flood the audit log.
+func TestUnboundNameRefusalsStillCollapse(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	for _, name := range []string{"x1", "x2", "x3", "x4"} {
+		if w := callBody(b, tokA("claude-3"), `{"name":"`+name+`"}`); w.Code != http.StatusForbidden {
+			t.Fatalf("%s: %d", name, w.Code)
+		}
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeDeniedScope {
+		t.Fatalf("burst rows: %+v", rec.rows)
+	}
+	*now = now.Add(time.Second)
+	callBody(b, tokA("claude-3"), `{"name":"x5"}`)
+	if len(rec.rows) != 2 || !strings.Contains(rec.rows[1].Error, "+3 similar refusals suppressed") {
+		t.Fatalf("rows after the window: %+v", rec.rows)
+	}
+}
