@@ -163,7 +163,7 @@ func Checks(in Input) []Result {
 	out = append(out, checkAgents(c)...)
 	vst := StoreFor(c, dataDir)
 	out = append(out, checkStaticTokens(c, defaultResolver(vst))...)
-	if ost := openStore(c, dataDir); ost != nil {
+	if ost := openStoreForCheck(c, dataDir); ost != nil {
 		out = append(out, checkStore(c, ost, storerefs.ReadAccounts(dataDir), os.LookupEnv, runtime.GOOS, dockerSeccomp(c))...)
 	}
 	var stored []config.AgentConfig

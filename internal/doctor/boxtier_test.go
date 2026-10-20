@@ -163,8 +163,9 @@ func TestClaudeBoxTokenStoreSource(t *testing.T) {
 	if r := ClaudeBoxToken(c, ok); r.Status != Pass || strings.Contains(r.Detail, "sk-store") {
 		t.Fatalf("store holds the token: %+v", r)
 	}
-	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}); r.Status != Warn {
-		t.Fatalf("a locked store does not resolve: %+v", r)
+	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}); r.Status != Warn ||
+		!strings.Contains(r.Detail, "is in the store, which is locked") || strings.Contains(r.Detail, "/login") {
+		t.Fatalf("a locked store does not resolve and must say so: %+v", r)
 	}
 	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
 		t.Fatalf("a store source with no store: %+v", r)

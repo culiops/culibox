@@ -260,11 +260,13 @@ func readValue(r io.Reader, tty bool) ([]byte, error) {
 			val = line
 		}
 	} else {
-		b, err := io.ReadAll(io.LimitReader(r, secretstore.MaxValueBytes+2))
+		// One byte more than "max, \r, \n" so anything past a single trimmed
+		// newline shows up as over the limit instead of being cut off.
+		b, err := io.ReadAll(io.LimitReader(r, secretstore.MaxValueBytes+3))
 		if err != nil {
 			return nil, errors.New("could not read the value")
 		}
-		val = bytes.TrimSuffix(bytes.TrimSuffix(b, []byte("\n")), []byte("\r"))
+		val = trimNewline(b)
 	}
 	if len(val) > secretstore.MaxValueBytes {
 		return nil, secretstore.ErrTooLarge
@@ -282,7 +284,17 @@ func readLine(br *bufio.Reader) ([]byte, error) {
 	if err != nil && (!errors.Is(err, io.EOF) || len(line) == 0) {
 		return nil, errors.New("no input")
 	}
-	return bytes.TrimSuffix(bytes.TrimSuffix(line, []byte("\n")), []byte("\r")), nil
+	return trimNewline(line), nil
+}
+
+// trimNewline removes exactly one trailing "\n" or "\r\n". A "\r" with no "\n"
+// after it is data and stays.
+func trimNewline(b []byte) []byte {
+	if !bytes.HasSuffix(b, []byte("\n")) {
+		return b
+	}
+	b = b[:len(b)-1]
+	return bytes.TrimSuffix(b, []byte("\r"))
 }
 
 // prompter reads passphrases: on a tty with no echo (twice for a new one),

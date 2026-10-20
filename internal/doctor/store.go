@@ -38,6 +38,20 @@ func openStore(c config.Config, dataDir string) *secretstore.Store {
 	return secretstore.Open(dataDir, secretstore.NewKeeper(dataDir), nil)
 }
 
+// openStoreForCheck is openStore, but also opens an initialized store the
+// config does not reference yet: the daemon's seccomp gate fires on an
+// initialized store, so doctor must look at it too. nil when there is no store.
+func openStoreForCheck(c config.Config, dataDir string) *secretstore.Store {
+	if st := openStore(c, dataDir); st != nil {
+		return st
+	}
+	st := secretstore.Open(dataDir, secretstore.NewKeeper(dataDir), nil)
+	if st.Status().Initialized {
+		return st
+	}
+	return nil
+}
+
 // defaultResolver resolves file, env and store references, the way the daemon
 // does. A nil store refuses store references.
 func defaultResolver(st credref.StoreGetter) credref.Default {
@@ -49,7 +63,7 @@ func defaultResolver(st credref.StoreGetter) credref.Default {
 }
 
 // checkStore reports the encrypted store's state. It returns nothing when
-// nothing in the config uses the store. Never prints a value: ids, reference
+// nothing uses the store and none is initialized. Never prints a value: ids, reference
 // names and secret NAMES only.
 //
 // A missing value FAILs for a direct reference (a GitHub App key or a static
@@ -57,14 +71,20 @@ func defaultResolver(st credref.StoreGetter) credref.Default {
 // from the store is not reported: a later secret_source (env, file) may serve
 // it, and a name that resolves nowhere is the spawn's concern, not the store's.
 // seccomp is only consulted on linux (macOS boxes run in a VM) and only once a
-// store exists; nil skips it.
+// store is in use or initialized; nil skips it.
 func checkStore(c config.Config, st *secretstore.Store, accts []account.Account,
 	lookupEnv func(string) (string, bool), goos string, seccomp func() (bool, error)) []Result {
-	if !storerefs.InUse(c) {
-		return nil
-	}
 	const ck = "store"
+	inUse := storerefs.InUse(c)
 	s := st.Status()
+	if !inUse {
+		// Nothing references the store, so it has nothing to report beyond the
+		// daemon's seccomp gate, which fires as soon as a store is initialized.
+		if !s.Initialized {
+			return nil
+		}
+		return seccompResults(ck, goos, seccomp)
+	}
 	if !s.Initialized {
 		return []Result{{Fail, ck, `store not initialized: the configuration reads it (run "agent-box store init")`}}
 	}
@@ -108,18 +128,25 @@ func checkStore(c config.Config, st *secretstore.Store, accts []account.Account,
 	for _, name := range storerefs.PlaintextCopies(c, accts, st, lookupEnv) {
 		out = append(out, Result{Warn, ck, "plaintext copy of " + name + " is still in this environment"})
 	}
-	if goos == "linux" && seccomp != nil {
-		switch on, err := seccomp(); {
-		case errors.Is(err, exec.ErrNotFound):
-			// No docker CLI: no boxes either, so there is nothing to gate (the
-			// boxed tier row already reports the missing docker).
-		case err != nil:
-			out = append(out, Result{Warn, ck, "could not tell whether Docker seccomp is on (" + err.Error() + ")"})
-		case !on:
-			out = append(out, Result{Fail, ck, box.SeccompOffText})
-		}
+	return append(out, seccompResults(ck, goos, seccomp)...)
+}
+
+// seccompResults is the Docker seccomp check the daemon gate enforces once a
+// store is initialized. Linux only (macOS boxes run in a VM); nil skips it.
+func seccompResults(ck, goos string, seccomp func() (bool, error)) []Result {
+	if goos != "linux" || seccomp == nil {
+		return nil
 	}
-	return out
+	switch on, err := seccomp(); {
+	case errors.Is(err, exec.ErrNotFound):
+		// No docker CLI: no boxes either, so there is nothing to gate (the
+		// boxed tier row already reports the missing docker).
+	case err != nil:
+		return []Result{{Warn, ck, "could not tell whether Docker seccomp is on (" + err.Error() + ")"}}
+	case !on:
+		return []Result{{Fail, ck, box.SeccompOffText}}
+	}
+	return nil
 }
 
 // dockerSeccomp asks the local docker daemon whether its default seccomp

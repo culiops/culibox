@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -73,6 +74,8 @@ func TestReadValueStdin(t *testing.T) {
 		{"-----BEGIN-----\nAAA\n-----END-----\n", "-----BEGIN-----\nAAA\n-----END-----", false},
 		{"one line\nsecond\n", "one line", true}, // a tty gives one line
 		{"one line\r\n", "one line", true},
+		{"tok\r", "tok\r", false}, // a lone trailing CR is data, not a newline
+		{"a\r\n\r\n", "a\r\n", false},
 	}
 	for _, c := range cases {
 		got, err := readValue(strings.NewReader(c.in), c.tty)
@@ -87,6 +90,19 @@ func TestReadValueStdin(t *testing.T) {
 	}
 	if _, err := readValue(strings.NewReader(strings.Repeat("a", secretstore.MaxValueBytes+1)), false); err == nil {
 		t.Error("readValue accepted a value over the size limit")
+	}
+	// Exactly the limit, then one trimmed newline, is fine; more data after it
+	// is over the limit and must be refused, not truncated.
+	max := strings.Repeat("a", secretstore.MaxValueBytes)
+	for _, in := range []string{max, max + "\n", max + "\r\n"} {
+		if got, err := readValue(strings.NewReader(in), false); err != nil || len(got) != secretstore.MaxValueBytes {
+			t.Errorf("readValue(max%q) = %d bytes, %v; want accepted", in[len(max):], len(got), err)
+		}
+	}
+	for _, tail := range []string{"\r\nmore", "\nmore", "x", "\n\n"} {
+		if _, err := readValue(strings.NewReader(max+tail), false); !errors.Is(err, secretstore.ErrTooLarge) {
+			t.Errorf("readValue(max+%q) err = %v, want ErrTooLarge", tail, err)
+		}
 	}
 }
 

@@ -28,30 +28,42 @@ func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	const check = "boxed claude token"
 	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
+	var locked []string // agents whose credential failed only because the store is locked
 	boxed := 0
 	for _, a := range c.Agents {
 		if filepath.Base(a.Bin) != "claude" || c.RuntimeFor(a) != config.RuntimeBox {
 			continue
 		}
 		boxed++
-		found := false
+		found, isLocked := false, false
 		for _, name := range a.Secrets {
 			if name != "CLAUDE_CODE_OAUTH_TOKEN" && name != "ANTHROPIC_API_KEY" {
 				continue
 			}
 			if rerr == nil {
-				if _, ok, err := res.Resolve(name); err == nil && ok {
+				_, ok, err := res.Resolve(name)
+				switch {
+				case err == nil && ok:
 					found = true
+				case errors.Is(err, credref.ErrLocked):
+					isLocked = true
 				}
 			}
 		}
-		if !found {
+		switch {
+		case found:
+		case isLocked:
+			locked = append(locked, a.Name)
+		default:
 			missing = append(missing, a.Name)
 		}
 	}
 	switch {
 	case boxed == 0:
 		return Result{Pass, check, "no boxed claude agent in config.json"}
+	case len(locked) > 0:
+		return Result{Warn, check, "agent(s) " + strings.Join(locked, ", ") +
+			`: the Claude token is in the store, which is locked — unlock it ("agent-box store unlock")`}
 	case len(missing) > 0:
 		return Result{Warn, check, "agent(s) " + strings.Join(missing, ", ") +
 			" have no CLAUDE_CODE_OAUTH_TOKEN/ANTHROPIC_API_KEY secret that resolves; a boxed claude will ask to /login. " +

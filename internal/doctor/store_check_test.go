@@ -180,3 +180,16 @@ func TestCheckStoreSeccompNotCheckedWithoutInitializedStore(t *testing.T) {
 		t.Fatalf("no store yet, no gate:\n%s", dump(got))
 	}
 }
+
+// The daemon gate fires once the store is initialized, whether or not a config
+// reference names it yet.
+func TestCheckStoreInitializedNotReferencedChecksSeccomp(t *testing.T) {
+	st, _ := storeFixture(t, true)
+	got := checkStore(config.Config{}, st, nil, noEnv, "linux", seccomp(false, nil))
+	if !find(got, Fail, box.SeccompOffText) {
+		t.Fatalf("initialized + unreferenced + seccomp off:\n%s", dump(got))
+	}
+	if got := checkStore(config.Config{}, st, nil, noEnv, "linux", seccomp(true, nil)); len(got) != 0 {
+		t.Fatalf("seccomp on, nothing else to say:\n%s", dump(got))
+	}
+}
