@@ -95,9 +95,12 @@ type AgentConfig struct {
 	Account    string            `json:"account,omitempty"`     // agent account; "" = default (~/.claude)
 	AWS        *AWSBinding       `json:"aws,omitempty"`         // credential-broker AWS access; boxed profiles only
 	GitHub     *GitHubBinding    `json:"github,omitempty"`      // credential-broker GitHub access (read-only installation tokens); boxed profiles only
-	Tokens     []string          `json:"tokens,omitempty"`      // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
-	CloneOf    string            `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
-	CloneShare []string          `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
+	// AWSConnections names host aws_connections entries this profile's boxes may
+	// mint credentials for (several at once); exclusive with the inline AWS binding.
+	AWSConnections []string `json:"aws_connections,omitempty"`
+	Tokens         []string `json:"tokens,omitempty"`      // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
+	CloneOf        string   `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
+	CloneShare     []string `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours
@@ -154,20 +157,21 @@ type Config struct {
 	// its bind address (and the loopback aliases of a loopback bind) — e.g. the
 	// public hostname of a reverse proxy or tunnel. Exact host[:port]; no
 	// wildcards. Everything else is refused: that is the DNS-rebinding defence.
-	AllowedHosts    []string       `json:"allowed_hosts,omitempty"`
-	ProfilesPath    string         `json:"profiles_path,omitempty"`    // store for runtime profiles
-	DataDir         string         `json:"data_dir,omitempty"`         // default: the data root (see Root)
-	RateLimitsFile  string         `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
-	AbducoBin       string         `json:"abduco_bin,omitempty"`       // default "abduco" on PATH
-	AbducoSocketDir string         `json:"abduco_socket_dir,omitempty"`
-	MaxUploadBytes  int64          `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB
-	MaxArchiveBytes int64          `json:"max_archive_bytes,omitempty"` // per directory download; 0 → 512 MiB
-	MaxArchiveFiles int            `json:"max_archive_files,omitempty"` // per directory download; 0 → 20000
-	SecretSources   []SecretSource `json:"secret_sources,omitempty"`
-	Options         []OptionDef    `json:"options,omitempty"`
-	Agents          []AgentConfig  `json:"agents"`
-	GitHubApps      []GitHubApp    `json:"github_apps,omitempty"`   // GitHub App connections that profile github bindings name
-	StaticTokens    []StaticToken  `json:"static_tokens,omitempty"` // long-lived token entries that profile tokens name; read at daemon start
+	AllowedHosts    []string        `json:"allowed_hosts,omitempty"`
+	ProfilesPath    string          `json:"profiles_path,omitempty"`    // store for runtime profiles
+	DataDir         string          `json:"data_dir,omitempty"`         // default: the data root (see Root)
+	RateLimitsFile  string          `json:"rate_limits_file,omitempty"` // account 5h/weekly source; default ~/.claude/abtop-rate-limits.json
+	AbducoBin       string          `json:"abduco_bin,omitempty"`       // default "abduco" on PATH
+	AbducoSocketDir string          `json:"abduco_socket_dir,omitempty"`
+	MaxUploadBytes  int64           `json:"max_upload_bytes,omitempty"`  // per uploaded file; 0 → 64 MiB
+	MaxArchiveBytes int64           `json:"max_archive_bytes,omitempty"` // per directory download; 0 → 512 MiB
+	MaxArchiveFiles int             `json:"max_archive_files,omitempty"` // per directory download; 0 → 20000
+	SecretSources   []SecretSource  `json:"secret_sources,omitempty"`
+	Options         []OptionDef     `json:"options,omitempty"`
+	Agents          []AgentConfig   `json:"agents"`
+	GitHubApps      []GitHubApp     `json:"github_apps,omitempty"`     // GitHub App connections that profile github bindings name
+	StaticTokens    []StaticToken   `json:"static_tokens,omitempty"`   // long-lived token entries that profile tokens name; read at daemon start
+	AWSConnections  []AWSConnection `json:"aws_connections,omitempty"` // named AWS connections that profile aws_connections name; read at daemon start
 
 	// DefaultRuntime is the tier for any agent that does not name one. It exists
 	// because the quick-shell profile is GENERATED, not configured, so no
@@ -326,6 +330,9 @@ func (c Config) Validate() error {
 	if err := ValidateStaticTokens(c.StaticTokens); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
+	if err := ValidateAWSConnections(c.AWSConnections); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	if c.PasswordEnv != "" {
 		for _, e := range c.StaticTokens {
 			if e.Value.Type == "env" && e.Value.Var == c.PasswordEnv {
@@ -353,6 +360,12 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: agent %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 		}
 		if err := validateAWS(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		if err := validateAWSConnBinding(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		if err := CheckAWSConnections(a, c.AWSConnections); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if err := validateGitHub(a); err != nil {
@@ -460,6 +473,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q has invalid runtime %q (want box|host)", a.Name, a.Runtime)
 	}
 	if err := validateAWS(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateAWSConnBinding(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateGitHub(a); err != nil {

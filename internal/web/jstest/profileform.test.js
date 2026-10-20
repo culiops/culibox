@@ -159,3 +159,56 @@ test("stTokensToSend: sorted, no repeats, undefined when none is ticked", () => 
   assert.strictEqual(stTokensToSend([]), undefined);
   assert.strictEqual(stTokensToSend(undefined), undefined);
 });
+
+// #155: the AWS connections picker's pure rules.
+const { awscPickerRows, awscExclusiveState, awscToSend } = require("../static/profileform.js");
+
+test("awscPickerRows: prod first, then by name; the account and chips come through", () => {
+  const meta = [
+    { name: "sbx-b", label: "Sandbox B", account_id: "222222222222", prod: false, write_capable: false },
+    { name: "prd-z", label: "Prod Z", account_id: "999999999999", prod: true, write_capable: true },
+    { name: "sbx-a", account_id: "111111111111", prod: false, write_capable: true },
+    { name: "prd-a", prod: true },
+  ];
+  const got = awscPickerRows(meta, []);
+  assert.deepStrictEqual(got.map((r) => r.name), ["prd-a", "prd-z", "sbx-a", "sbx-b"]);
+  assert.deepStrictEqual(got[1], { name: "prd-z", label: "Prod Z", prod: true, write: true, account: "999999999999", missing: false });
+  assert.deepStrictEqual(got[0], { name: "prd-a", label: "", prod: true, write: false, account: "", missing: false });
+  assert.deepStrictEqual(awscPickerRows([], []), []);
+  assert.deepStrictEqual(awscPickerRows(undefined, undefined), []);
+});
+
+test("awscPickerRows: a ticked name that config no longer defines is missing, and sorts last", () => {
+  const meta = [{ name: "sbx-a", prod: false }, { name: "prd-a", prod: true }];
+  const got = awscPickerRows(meta, ["zzz-gone", "sbx-a", "aaa-gone"]);
+  assert.deepStrictEqual(got.map((r) => [r.name, r.missing]), [["prd-a", false], ["sbx-a", false], ["aaa-gone", true], ["zzz-gone", true]]);
+  assert.deepStrictEqual(got[2], { name: "aaa-gone", label: "", prod: false, write: false, account: "", missing: true });
+});
+
+test("awscExclusiveState: connections ticked turn the inline binding off", () => {
+  assert.deepStrictEqual(awscExclusiveState(2, ""),
+    { pickerDisabled: false, inlineDisabled: true, note: "Using AWS connections — the inline binding is off" });
+  assert.deepStrictEqual(awscExclusiveState(1, "arn:aws:iam::1:role/x").inlineDisabled, true);
+});
+
+test("awscExclusiveState: a filled inline role turns the picker off", () => {
+  assert.deepStrictEqual(awscExclusiveState(0, " arn:aws:iam::123456789012:role/x "),
+    { pickerDisabled: true, inlineDisabled: false, note: "Clear the inline binding to use connections" });
+});
+
+test("awscExclusiveState: neither used leaves both open and says nothing", () => {
+  assert.deepStrictEqual(awscExclusiveState(0, ""), { pickerDisabled: false, inlineDisabled: false, note: "" });
+  assert.deepStrictEqual(awscExclusiveState(0, "   "), { pickerDisabled: false, inlineDisabled: false, note: "" });
+  assert.deepStrictEqual(awscExclusiveState(undefined, undefined), { pickerDisabled: false, inlineDisabled: false, note: "" });
+});
+
+test("awscToSend: sorted, no repeats, undefined when none is ticked (the key is left out)", () => {
+  assert.deepStrictEqual(awscToSend(["b", "a", "b"]), ["a", "b"]);
+  assert.strictEqual(awscToSend([]), undefined);
+  assert.strictEqual(awscToSend(undefined), undefined);
+  // the form's property assignment follows this: nothing ticked leaves the profile JSON with no key at all
+  const p = { name: "x" };
+  const names = awscToSend([]);
+  if (names) p.aws_connections = names;
+  assert.strictEqual(JSON.stringify(p), '{"name":"x"}');
+});

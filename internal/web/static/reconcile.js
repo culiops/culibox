@@ -99,6 +99,8 @@ function rowSig(s, local) {
     // The AWS chip (label, prod, the amber write state) and the SSO card's text
     // read the binding; elevated_until appears and goes with a grant and a drop.
     l.sso || "", v.aws ? JSON.stringify(v.aws) : "",
+    // Named connections: the chip (count, prod, write) and the SSO text read them.
+    JSON.stringify(v.aws_connections),
   ]);
 }
 

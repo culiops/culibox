@@ -91,6 +91,9 @@ type ApprovalRow struct {
 	Until                                  time.Time
 	Minutes                                int
 	Reason, Cred, Error                    string
+	// Entry names the AWS connection a grant was for; empty for a session with
+	// the inline binding, and for every row written before connections existed.
+	Entry string `json:"entry,omitempty"`
 }
 
 // ApprovalRecorder is what the elevation code writes approvals through. The
@@ -161,6 +164,10 @@ func OpenAudit(path string) (*Audit, error) {
 			return nil, fmt.Errorf("audit migrate: %w", err)
 		}
 	}
+	if err := addColumnIfMissing(db, "approval_audit", "entry", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("audit migrate: %w", err)
+	}
 	// SQLite creates the file 0644; it records who was granted write access and
 	// why, so only the owner may read it. The -wal/-shm siblings exist while the
 	// store is open and are tightened the same way.
@@ -219,11 +226,38 @@ func (a *Audit) RecordApproval(r ApprovalRow) error {
 		until = r.Until.Unix()
 	}
 	_, err := a.db.Exec(`INSERT INTO approval_audit
-		(ts, session_id, profile, account_id, role_arn, action, until, minutes, reason, cred, error)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		(ts, session_id, profile, account_id, role_arn, action, until, minutes, reason, cred, error, entry)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, string(r.Action), until, r.Minutes,
-		sanitizeN(r.Reason, maxReasonBytes), r.Cred, sanitize(r.Error))
+		sanitizeN(r.Reason, maxReasonBytes), r.Cred, sanitize(r.Error), r.Entry)
 	return err
+}
+
+// ApprovalsForSession returns up to limit approval rows for a session, newest
+// first.
+func (a *Audit) ApprovalsForSession(sessionID string, limit int) ([]ApprovalRow, error) {
+	rows, err := a.db.Query(`SELECT ts, session_id, profile, account_id, role_arn, action, until, minutes, reason, cred, error, entry
+		FROM approval_audit WHERE session_id = ? ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ApprovalRow
+	for rows.Next() {
+		var r ApprovalRow
+		var ts, until int64
+		var action string
+		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &action, &until, &r.Minutes,
+			&r.Reason, &r.Cred, &r.Error, &r.Entry); err != nil {
+			return nil, err
+		}
+		r.Time, r.Action = time.Unix(ts, 0), Action(action)
+		if until != 0 {
+			r.Until = time.Unix(until, 0)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // windowActionsSQL lists the rows that decide whether a write window is in
@@ -247,7 +281,7 @@ const windowActionsSQL = `('granted','extended','dropped','expired','ended')`
 // logged and skipped (the gap is retried at the next start); the first error is
 // returned for the caller to log. It returns the number of rows written.
 func (a *Audit) EndOpenWindows(now time.Time) (int, error) {
-	rows, err := a.db.Query(`SELECT session_id, profile, account_id, role_arn, until, reason
+	rows, err := a.db.Query(`SELECT session_id, profile, account_id, role_arn, until, reason, entry
 		FROM approval_audit a
 		WHERE action IN ('granted','extended')
 		  AND id = (SELECT id FROM approval_audit
@@ -260,7 +294,7 @@ func (a *Audit) EndOpenWindows(now time.Time) (int, error) {
 	for rows.Next() {
 		var r ApprovalRow
 		var until int64
-		if err := rows.Scan(&r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &until, &r.Reason); err != nil {
+		if err := rows.Scan(&r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &until, &r.Reason, &r.Entry); err != nil {
 			rows.Close()
 			return 0, err
 		}

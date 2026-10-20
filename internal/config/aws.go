@@ -104,9 +104,10 @@ func (b AWSBinding) Validate() error {
 	return nil
 }
 
-// Hash is 12 hex characters over the whole binding; the S3 and egress
-// allowlists are compared as sets, so their order does not matter.
-func (b AWSBinding) Hash() string {
+// normalized is the binding in the form Hash and AWSConnection.DefHash digest:
+// the S3 and egress allowlists are compared as sets, [] and nil marshal alike,
+// and an elevate window of 0 is the same as 60.
+func (b AWSBinding) normalized() AWSBinding {
 	c := b
 	c.S3Read = slices.Clone(b.S3Read)
 	slices.Sort(c.S3Read)
@@ -120,7 +121,13 @@ func (b AWSBinding) Hash() string {
 		e.MaxMinutes = e.Max() // 0 and 60 are the same window, so the same box key
 		c.Elevate = &e
 	}
-	j, _ := json.Marshal(c)
+	return c
+}
+
+// Hash is 12 hex characters over the whole binding; the S3 and egress
+// allowlists are compared as sets, so their order does not matter.
+func (b AWSBinding) Hash() string {
+	j, _ := json.Marshal(b.normalized())
 	sum := sha256.Sum256(j)
 	return hex.EncodeToString(sum[:6])
 }

@@ -8,7 +8,15 @@
 // AWS sign-in counts even while the agent is still running: its AWS calls fail
 // until someone signs in, and nothing about the agent's activity says so.
 function needsYou(s) {
-  return !!s && (s.activity === "waiting" || s.need === "sso");
+  return !!s && (s.activity === "waiting" || s.need === "sso" || connSSOSources(s).length > 0);
+}
+
+// connSSOSources: the distinct sign-in sources a session with named AWS
+// connections waits on (sorted), [] for any other session. The list entry
+// carries sso_expired per connection; any one of them wants the operator.
+function connSSOSources(s) {
+  const cs = s && Array.isArray(s.aws_connections) ? s.aws_connections : [];
+  return [...new Set(cs.map((c) => c && c.sso_expired).filter(Boolean))].sort();
 }
 
 // tabNeedWhy: why a session's tab reads "waiting" when the agent itself is not
@@ -16,7 +24,7 @@ function needsYou(s) {
 // "" otherwise. The tab's dot and tooltip use it so a working agent is not
 // described as waiting for input (the activity itself is never rewritten).
 function tabNeedWhy(s) {
-  return s && s.need === "sso" && s.activity !== "waiting" ? "sso" : "";
+  return s && (s.need === "sso" || connSSOSources(s).length > 0) && s.activity !== "waiting" ? "sso" : "";
 }
 
 // sessionDot: the activity dot (class + title) for a session on every surface
@@ -32,7 +40,7 @@ function sessionDot(s) {
 // ssoExpiredText: the SSO card's sentence, shared by cardContent and the card
 // model in elevation.js so the two cannot drift.
 function ssoExpiredText(s) {
-  const src = s && s.aws && s.aws.sso_expired;
+  const src = (s && s.aws && s.aws.sso_expired) || connSSOSources(s).join(", ");
   return "AWS sign-in expired" + (src ? " (" + src + ")" : "") + ". This session's AWS calls fail until you sign in.";
 }
 
@@ -291,7 +299,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+  module.exports = { needsYou, connSSOSources, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }

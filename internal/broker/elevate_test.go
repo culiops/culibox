@@ -858,3 +858,235 @@ func TestRefuseElevationIgnoresUnknownSessions(t *testing.T) {
 		t.Fatalf("a known id writes one row: %+v", rec.appr)
 	}
 }
+
+const connWriteB = "arn:aws:iam::222222222222:role/agentbox-b-write"
+
+// elevConns is a session with two write-capable connections: a (sandbox) and
+// b (production, its own label).
+func elevConns() SessionView {
+	sv := liveConns()
+	sv.AWSConns[0].Label = "sandbox-a"
+	sv.AWSConns[1].Label, sv.AWSConns[1].Prod = "company-prod", true
+	sv.AWSConns[1].Elevate = &config.AWSElevate{RoleARN: connWriteB}
+	return sv
+}
+
+func connReq(name string, min int) ElevateRequest {
+	return ElevateRequest{Minutes: min, Name: name, Cred: CredCookie}
+}
+
+func lastAppr(rec *memRec) ApprovalRow {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return rec.appr[len(rec.appr)-1]
+}
+
+func TestElevateConnRequiresName(t *testing.T) {
+	noElev := liveConns() // b has no elevate role
+	b, _, rec, now := setup(t, map[string]SessionView{"c-1": elevConns(), "c-2": noElev, "aws-1": liveElev()})
+	withTimers(b)
+	cases := []struct {
+		name, sid string
+		req       ElevateRequest
+		want      string
+		entry     string
+	}{
+		{"no name", "c-1", connReq("", 30), "name the connection to elevate", ""},
+		{"unbound name", "c-1", connReq("zzz", 30), "no AWS connection named \"zzz\"", "zzz"},
+		{"invalid name", "c-1", connReq("Bad Name!", 30), "not a valid connection name", invalidEntry},
+		{"no elevate on b", "c-2", connReq("b", 30), "did not allow elevation", "b"},
+		{"legacy with a name", "aws-1", connReq("a", 30), "no named AWS connections", "a"},
+	}
+	for _, c := range cases {
+		*now = now.Add(2 * time.Second) // step past the refusal throttle
+		_, err := b.Elevate(c.sid, c.req)
+		if !errors.Is(err, ErrElevateRefused) || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if strings.Contains(err.Error(), "Bad Name") {
+			t.Errorf("%s: a malformed name is echoed: %v", c.name, err)
+		}
+		if _, on := b.Elevation(c.sid); on {
+			t.Errorf("%s: a window was set", c.name)
+		}
+		if got := lastAppr(rec); got.Action != ActionRefused || got.Entry != c.entry {
+			t.Errorf("%s: refused row %+v", c.name, got)
+		}
+	}
+	*now = now.Add(2 * time.Second)
+	v, err := b.Elevate("c-1", connReq("a", 30))
+	if err != nil || !v.Active || v.Name != "a" {
+		t.Fatalf("naming a write-capable connection grants: %+v %v", v, err)
+	}
+	if got := lastAppr(rec); got.Action != ActionGranted || got.Entry != "a" || got.RoleARN != connWriteA || got.AccountID != "111111111111" {
+		t.Fatalf("grant row %+v", got)
+	}
+}
+
+func TestElevateConnProdLabelIsPerConn(t *testing.T) {
+	sv := elevConns()
+	sv.AWSConns[0].Elevate.MaxMinutes = 30
+	b, _, rec, now := setup(t, map[string]SessionView{"c-1": sv})
+	withTimers(b)
+	refused := func(what string, req ElevateRequest, want string) {
+		t.Helper()
+		*now = now.Add(2 * time.Second)
+		if _, err := b.Elevate("c-1", req); !errors.Is(err, ErrElevateRefused) || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: %v", what, err)
+		}
+		if got := lastAppr(rec); got.Action != ActionRefused || got.Entry != req.Name {
+			t.Fatalf("%s: row %+v", what, got)
+		}
+	}
+	refused("prod b without a label", connReq("b", 30), "type the binding label")
+	other := connReq("b", 30)
+	other.ConfirmLabel = "sandbox-a" // a's label does not open b
+	refused("prod b with a's label", other, "type the binding label")
+	refused("a over its own max", connReq("a", 60), "at most 30")
+	ok := connReq("b", 60) // b's max is the default, not a's 30
+	ok.ConfirmLabel = "company-prod"
+	*now = now.Add(2 * time.Second)
+	if v, err := b.Elevate("c-1", ok); err != nil || v.Name != "b" {
+		t.Fatalf("b's own label grants: %+v %v", v, err)
+	}
+	if got := lastAppr(rec); got.RoleARN != connWriteB || got.AccountID != "222222222222" || got.Entry != "b" {
+		t.Fatalf("grant row %+v", got)
+	}
+}
+
+func TestElevateOtherConnWhileLiveRefused(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"c-1": elevConns()})
+	withTimers(b)
+	if _, err := b.Elevate("c-1", connReq("a", 30)); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(time.Minute)
+	req := connReq("b", 30)
+	req.ConfirmLabel = "company-prod"
+	_, err := b.Elevate("c-1", req)
+	if !errors.Is(err, ErrElevateRefused) || !strings.Contains(err.Error(), "drop a first") {
+		t.Fatalf("got %v", err)
+	}
+	if got := lastAppr(rec); got.Action != ActionRefused || got.Entry != "b" {
+		t.Fatalf("row %+v", got)
+	}
+	if v, on := b.Elevation("c-1"); !on || v.Name != "a" {
+		t.Fatalf("a's window must stand: %+v", v)
+	}
+}
+
+func TestElevateSameConnExtends(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"c-1": elevConns()})
+	withTimers(b)
+	first, err := b.Elevate("c-1", connReq("a", 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(10 * time.Minute)
+	v, err := b.Elevate("c-1", connReq("a", 60))
+	if err != nil || v.Name != "a" || !v.Until.Equal(now.Add(time.Hour)) || !v.GrantedAt.Equal(first.GrantedAt) {
+		t.Fatalf("extend %+v %v", v, err)
+	}
+	if got := lastAppr(rec); got.Action != ActionExtended || got.Entry != "a" {
+		t.Fatalf("row %+v", got)
+	}
+}
+
+// Review Focus 2: after A is dropped, its write credentials stay valid until
+// their LastValid; B is refused until then, A may be granted again at once, and
+// dropping A again must not lose the time A's old credentials still run.
+func TestGrantOtherConnBlockedByLeftover(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"c-1": elevConns()})
+	withTimers(b)
+	t0 := *now
+	reqB := connReq("b", 30)
+	reqB.ConfirmLabel = "company-prod"
+	if _, err := b.Elevate("c-1", connReq("a", 30)); err != nil {
+		t.Fatal(err)
+	}
+	lv := t0.Add(12 * time.Minute)
+	b.mu.Lock()
+	b.noteElevatedExp("c-1", lv)
+	b.mu.Unlock()
+	if v, ok := b.Drop("c-1", CredCookie); !ok || !v.LastValid.Equal(lv) || v.Name != "a" {
+		t.Fatalf("drop %+v %v", v, ok)
+	}
+	if got := lastAppr(rec); got.Action != ActionDropped || got.Entry != "a" {
+		t.Fatalf("drop row %+v", got)
+	}
+
+	*now = t0.Add(time.Minute)
+	want := "a's write credentials stay valid until " + lv.Local().Format("15:04") + " — b can be granted then"
+	_, err := b.Elevate("c-1", reqB)
+	if !errors.Is(err, ErrElevateRefused) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("B within A's leftover: %v (want %q)", err, want)
+	}
+	if got := lastAppr(rec); got.Action != ActionRefused || got.Entry != "b" {
+		t.Fatalf("refused row %+v", got)
+	}
+	if v, _ := b.Elevation("c-1"); !v.LastValid.Equal(lv) || v.Name != "a" {
+		t.Fatalf("a refused grant erased A's leftover: %+v", v)
+	}
+
+	if v, err := b.Elevate("c-1", connReq("a", 30)); err != nil || v.Name != "a" {
+		t.Fatalf("re-granting A is allowed at once: %+v %v", v, err)
+	}
+	*now = t0.Add(2 * time.Minute)
+	if v, ok := b.Drop("c-1", CredCookie); !ok || !v.LastValid.Equal(lv) {
+		t.Fatalf("the second drop lost A's earlier leftover: %+v", v)
+	}
+	*now = t0.Add(3 * time.Minute)
+	if _, err := b.Elevate("c-1", reqB); !errors.Is(err, ErrElevateRefused) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("B after A's second drop, before LastValid: %v", err)
+	}
+
+	*now = t0.Add(13 * time.Minute)
+	if v, err := b.Elevate("c-1", reqB); err != nil || v.Name != "b" {
+		t.Fatalf("B once A's leftover passed: %+v %v", v, err)
+	}
+}
+
+// A drop carries no name: it ends the session's one window, whatever
+// connection it is for, and lowering power never fails over a name.
+func TestDropIgnoresName(t *testing.T) {
+	b, _, rec, _ := setup(t, map[string]SessionView{"c-1": elevConns()})
+	ts := withTimers(b)
+	if _, err := b.Elevate("c-1", connReq("a", 30)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := b.Drop("c-1", CredBearer); !ok || !(*ts)[0].stopped {
+		t.Fatal("drop of a connection's window")
+	}
+	if got := lastAppr(rec); got.Action != ActionDropped || got.Entry != "a" || got.Cred != CredBearer {
+		t.Fatalf("drop row %+v", got)
+	}
+}
+
+func TestApprovalRowsCarryEntry(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"c-1": elevConns(), "aws-1": liveElev()})
+	ts := withTimers(b)
+	b.Elevate("c-1", connReq("a", 30))
+	*now = now.Add(time.Minute)
+	b.Elevate("c-1", connReq("a", 60))
+	b.Drop("c-1", CredCookie)
+	b.Elevate("c-1", connReq("a", 30))
+	*now = now.Add(30 * time.Minute)
+	(*ts)[len(*ts)-1].f()
+	var got []string
+	for _, r := range rec.appr {
+		got = append(got, string(r.Action)+"/"+r.Entry)
+	}
+	want := "granted/a extended/a dropped/a granted/a expired/a"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("rows %v, want %s", got, want)
+	}
+	n := len(rec.appr)
+	b.Elevate("aws-1", cookie(30)) // legacy rows carry no entry
+	b.Drop("aws-1", CredCookie)
+	for _, r := range rec.appr[n:] {
+		if r.Entry != "" {
+			t.Fatalf("legacy row with an entry: %+v", r)
+		}
+	}
+}

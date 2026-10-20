@@ -210,9 +210,9 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		a.handleSSOLogin(w, r, sid)
 		return
 	}
-	// GET /api/sessions/{id}/aws — the session's AWS and/or GitHub binding, broker
-	// counters and recent audit rows. 204 when the session is unknown or has no
-	// binding of either kind; 404
+	// GET /api/sessions/{id}/aws — the session's AWS (inline or named
+	// connections), GitHub and/or token binding, broker counters and recent
+	// audit rows. 204 when the session is unknown or has no binding; 404
 	// when the broker is not running.
 	if strings.HasSuffix(id, "/aws") {
 		if a.AWS == nil {

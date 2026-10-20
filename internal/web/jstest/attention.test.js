@@ -296,3 +296,24 @@ for (const off of [undefined, "true"]) {
     }
   });
 }
+
+// --- #155 named AWS connections ---------------------------------------------
+test("an expired sign-in on any connection needs you, whatever the agent is doing", () => {
+  const ok = { name: "a", sso_expired: "" };
+  const bad = { name: "b", sso_expired: "corp" };
+  assert.ok(needsYou({ activity: "working", aws_connections: [ok, bad] }));
+  assert.ok(!needsYou({ activity: "working", aws_connections: [ok] }));
+  assert.ok(!needsYou({ activity: "working", aws_connections: [] }));
+  assert.strictEqual(tabNeedWhy({ activity: "working", aws_connections: [ok, bad] }), "sso");
+  assert.strictEqual(tabNeedWhy({ activity: "waiting", aws_connections: [ok, bad] }), "");
+  assert.strictEqual(tabNeedWhy({ activity: "working", aws_connections: [ok] }), "");
+});
+
+test("the SSO card text names the expired sources of a connections session", () => {
+  const s = { need: "sso", activity: "working", aws_connections: [{ name: "b", sso_expired: "corp" }, { name: "a", sso_expired: "corp" }, { name: "c", sso_expired: "dev" }, { name: "d" }] };
+  assert.strictEqual(cardContent(s).text, "AWS sign-in expired (corp, dev). This session's AWS calls fail until you sign in.");
+  assert.strictEqual(cardContent({ need: "sso", activity: "working", aws_connections: [{ name: "a", sso_expired: "corp" }] }).sso, true);
+  // the legacy sentence is unchanged
+  assert.strictEqual(cardContent({ need: "sso", activity: "working", aws: { sso_expired: "example-sso" } }).text,
+    "AWS sign-in expired (example-sso). This session's AWS calls fail until you sign in.");
+});

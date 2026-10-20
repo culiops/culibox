@@ -39,7 +39,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 
 ### Cloud access, audit and secrets
 
-- **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`.
+- **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`. A profile can instead bind several named AWS connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)).
 - **GitHub access.** A boxed profile can carry a `github` binding. The broker mints one-hour, read-only GitHub App installation tokens scoped to the repos you list; `git` and `gh` in the box use them, and the box never holds a personal access token (see [GitHub access for agents](#github-access-for-agents)).
 - **Attribution and audit.** Credentials are minted with `SourceIdentity` and role session name `agentbox-<session id>`, so CloudTrail records the agent session rather than you. The broker also writes every mint, refusal and failure to a local SQLite audit log, with no credential values in it.
 - **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment or a file, injected only into the agent that declares them, and never logged.
@@ -142,11 +142,12 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
 | `static_tokens` | none | Long-lived token entries (a Grafana, Sentry or Atlassian token, a GitHub personal access token) that a boxed profile can pick by name. See [Static tokens for agents](#static-tokens-for-agents). Read at daemon start only: a change needs a restart. |
+| `aws_connections` | none | Named AWS connections (source profile, role, region, optional write role) that a boxed profile can pick by name, so one session reaches several accounts. See [Several AWS accounts in one session](#several-aws-accounts-in-one-session). Read at daemon start only: a change needs a restart. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
 `box_pids_limit`, `box_tmp_size` and `box_memory` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
-Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `default_cwd`, `account`, `aws`, `github` (see [GitHub access for agents](#github-access-for-agents)), `tokens` (see [Static tokens for agents](#static-tokens-for-agents)), `clone_of` and `clone_share` (see [Clone mode](#clone-mode)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles. A profile only honours per-spawn overrides for options it lists; `POST /api/sessions` reports any it ignored in an `options_dropped` list of `{key, reason}` in the 201 body. Images are instance-wide: set `box_image`. A profile carrying `box.image` is refused on save and ignored, with a log line, when loaded from an older store or config.
+Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `default_cwd`, `account`, `aws`, `aws_connections` (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)), `github` (see [GitHub access for agents](#github-access-for-agents)), `tokens` (see [Static tokens for agents](#static-tokens-for-agents)), `clone_of` and `clone_share` (see [Clone mode](#clone-mode)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles. A profile only honours per-spawn overrides for options it lists; `POST /api/sessions` reports any it ignored in an `options_dropped` list of `{key, reason}` in the 201 body. Images are instance-wide: set `box_image`. A profile carrying `box.image` is refused on save and ignored, with a log line, when loaded from an older store or config.
 
 ## Clone mode
 
@@ -362,6 +363,71 @@ The two share a variable name, which is fine: the agent picks one per command (`
 - A session may fetch at most 60 tokens a minute; more are refused with a rate-limit error.
 - `agent-box doctor` prints a line per entry: whether its reference resolves (a file problem fails; an `env` variable unset in doctor's own shell is a warning, because the daemon reads its own environment) and a warning for a wide private `cidr`.
 - The box image must ship `agentbox-env` and the MCP server binaries your entries use (Grafana, Sentry, Atlassian): use an image built from this release and set `box_image` to it.
+
+## Several AWS accounts in one session
+
+A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Linux only, like the other credential bindings: a bound spawn is refused on macOS and on the host tier.
+
+**1. Define the connections.** Declare them next to `static_tokens` and restart agent-box:
+
+```json
+"aws_connections": [
+  { "name": "staging-read", "label": "Staging", "description": "Staging account, read-only",
+    "source_profile": "acme-sso", "region": "eu-west-1",
+    "role_arn": "arn:aws:iam::111111111111:role/agentbox-agent" },
+  { "name": "prod-read", "label": "PROD", "prod": true, "description": "Production account; writes need a granted window",
+    "source_profile": "acme-sso", "region": "eu-west-1",
+    "role_arn": "arn:aws:iam::222222222222:role/agentbox-agent",
+    "elevate": { "role_arn": "arn:aws:iam::222222222222:role/agentbox-agent-write", "max_minutes": 30 } }
+]
+```
+
+Each entry takes the fields of the inline `aws` binding (see [docs/aws/agent-role](docs/aws/agent-role/README.md) for the roles) plus:
+
+| Field | Rules |
+|---|---|
+| `name` | Required, unique. `^[a-z0-9][a-z0-9-]{0,62}$`. `default` and `agentbox` are reserved. Profiles refer to the connection by it, and it is the AWS profile name inside the box. |
+| `description` | Optional, at most 200 characters, one line. Shown in the UI and in `agentbox-env --list`. |
+| `region` | Required for every connection. |
+
+**2. Pick them in a profile.** Set `"runtime": "box"` explicitly, then tick the connections in the profile form, or write the names in `config.json`:
+
+```json
+{ "name": "claude-aws", "bin": "claude", "runtime": "box", "aws_connections": ["staging-read", "prod-read"] }
+```
+
+A profile binds at most 16 connections, with no duplicates, and each must be defined. A profile uses either the inline `aws` binding or `aws_connections`, never both; saving or spawning one that sets both, or that names an undefined connection, is refused.
+
+**How the agent uses it.** Each connection is an AWS profile of the same name inside the box:
+
+```sh
+aws s3 ls --profile staging-read
+agentbox-env --list              # connections: name, label, prod, account, role, region, write-capable, description
+aws configure list-profiles      # also lists them
+```
+
+```hcl
+provider "aws" {
+  profile = "staging-read"       # Terraform picks up the profile's region
+}
+```
+
+- **No default with two or more connections.** A bare `aws` command fails with `agentbox: several AWS connections are bound — pick one with --profile <name> or AWS_PROFILE; run agentbox-env --list` (the AWS CLI adds its own error text in front). Terraform without a `profile` shows only a generic "No valid credential sources found"; run `agentbox-env --list` to see the names. With exactly one connection bound, `AWS_PROFILE` is set to it, so nothing changes for the agent.
+- **Region.** `AWS_REGION` and `AWS_DEFAULT_REGION` are set only when every bound connection shares one region, because they would override each profile's own region. When regions differ they are left unset and each profile supplies its own. Some scripts read only `AWS_REGION`; pass `--region` (or set it for that one command) there.
+
+**Write access.** A connection with `elevate` can be widened to its write role for a fixed window, as with the inline binding, but only **one connection per session at a time**:
+
+- Granting a different connection while a window is open is refused: drop the first one.
+- After you drop a window, the write credentials already issued stay valid until they expire (15 minutes at most). A *different* connection can be granted only after that; the refusal names the time. Granting the same connection again is allowed at once.
+- A session that binds any write-capable connection is exclusive: it gets its own box, even if you never grant a window.
+- A connection other than the elevated one stays read-only while a window is open.
+
+**Limits and operations**
+
+- `aws_connections` is read at daemon start only: edit `config.json` and restart agent-box. A running session keeps the definition it was spawned with until you kill it, including a connection you have since removed from `config.json`; saving or spawning a profile that names a removed connection is refused.
+- Each connection signs in through its own `source_profile`. If connections use different SSO sessions and one expires, only that connection's credential requests fail, and the UI shows which source to sign in to.
+- `agent-box doctor` prints one `aws-connection <name>` line per connection: whether the `source_profile` exists in the host's AWS config (a missing one fails), whether its SSO login is valid or expired (checked once per SSO session, so connections sharing a login cost one check), and whether the connection can be elevated. It reads the shell's own AWS config, not the daemon's environment.
+- **Rolling back to an older binary (operator step).** An older agent-box ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with the inline `aws` binding are unaffected.
 
 ## Security model
 

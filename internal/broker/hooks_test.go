@@ -63,26 +63,37 @@ func TestHooksTokenNonceStripForget(t *testing.T) {
 }
 
 func TestHooksAWSState(t *testing.T) {
-	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev()})
+	b, _, _, now := setup(t, map[string]SessionView{"aws-1": liveElev(), "c-1": elevConns()})
 	withTimers(b)
 	h := Hooks{B: b}
-	if until, sso := h.AWSState("aws-1"); !until.IsZero() || sso != "" {
-		t.Fatalf("a quiet session reports %v %q", until, sso)
+	if until, conn, sso := h.AWSState("aws-1"); !until.IsZero() || conn != "" || sso != "" {
+		t.Fatalf("a quiet session reports %v %q %q", until, conn, sso)
 	}
 	v, err := b.Elevate("aws-1", cookie(30))
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.mu.Lock()
-	b.ssoNeed["aws-1"] = "example-sso"
+	b.ssoNeed[connKey{"aws-1", ""}] = "example-sso"
 	b.mu.Unlock()
-	until, sso := h.AWSState("aws-1")
-	if !until.Equal(v.Until) || !until.Equal(now.Add(30*time.Minute)) || sso != "example-sso" {
-		t.Fatalf("AWSState = %v %q", until, sso)
+	until, conn, sso := h.AWSState("aws-1")
+	if !until.Equal(v.Until) || !until.Equal(now.Add(30*time.Minute)) || conn != "" || sso != "example-sso" {
+		t.Fatalf("AWSState = %v %q %q", until, conn, sso)
+	}
+	if cs := h.AWSConnState("aws-1"); len(cs) != 0 {
+		t.Fatalf("a legacy session has no connection state: %v", cs)
 	}
 	h.Forget("aws-1")
-	if until, sso := h.AWSState("aws-1"); !until.IsZero() || sso != "" {
+	if until, _, sso := h.AWSState("aws-1"); !until.IsZero() || sso != "" {
 		t.Fatalf("Forget left %v %q", until, sso)
+	}
+	// A connection's window names its connection.
+	cv, err := b.Elevate("c-1", connReq("a", 30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if until, conn, _ := h.AWSState("c-1"); !until.Equal(cv.Until) || conn != "a" {
+		t.Fatalf("connection AWSState = %v %q", until, conn)
 	}
 }
 

@@ -21,8 +21,9 @@ const os = require('os');
 
 const ep = process.env.AGENTBOX_BROKER || '';
 const tok = process.env.AGENTBOX_BROKER_TOKEN || '';
-// Test-only overrides: the listing path, and the fetch timeout (default 10 s).
+// Test-only overrides: the listing paths, and the fetch timeout (default 10 s).
 const listFile = process.env.AGENTBOX_ENV_LIST_FILE || '/opt/agentbox/tokens.json';
+const awsFile = process.env.AGENTBOX_ENV_AWS_FILE || '/opt/agentbox/aws.json';
 // The override can only shorten the default: a non-finite or junk value is ignored,
 // a huge one is capped (Node turns an overflowing delay into a 1 ms timer).
 const timeoutOverride = Number(process.env.AGENTBOX_ENV_TIMEOUT_MS);
@@ -120,14 +121,38 @@ function run(cmd, args, env) {
   });
 }
 
-function list() {
-  let entries;
+// readList reads one JSON listing. A missing file is null (the caller decides if
+// that is an error); anything else that is not a list exits with `what`.
+function readList(file, what) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
+    if (e.code === 'ENOENT') return null;
+    return fail('cannot read the ' + what + ' (' + e.message + ')');
+  }
   try {
-    entries = JSON.parse(fs.readFileSync(listFile, 'utf8'));
-    if (!Array.isArray(entries)) throw new Error('not a list');
-  } catch (e) { return fail('cannot read the token list (' + e.message + ')'); }
-  if (entries.length === 0) return process.stdout.write('no tokens are bound to this session\n');
-  const blocks = entries.map((e) => {
+    const v = JSON.parse(text);
+    if (!Array.isArray(v)) throw new Error('not a list');
+    return v;
+  } catch (e) { return fail('cannot read the ' + what + ' (' + e.message + ')'); }
+}
+
+function awsSection(conns) {
+  const blocks = conns.map((c) => {
+    const head = [c.name];
+    if (c.label) head.push('[' + c.label + ']');
+    if (c.prod) head.push('[prod]');
+    if (c.write_capable) head.push('[write-capable]');
+    const role = String(c.role_arn || '').split('/').pop();
+    const lines = [head.join(' '), '  account ' + c.account_id + ' · role ' + role + ' · region ' + c.region];
+    if (c.description) lines.push('  ' + c.description);
+    lines.push('  use: aws --profile ' + c.name + ' …   terraform: provider "aws" { profile = "' + c.name + '" }');
+    return lines.join('\n');
+  });
+  return 'AWS connections\n' + blocks.join('\n\n');
+}
+
+function tokenSection(entries) {
+  return entries.map((e) => {
     const head = [e.name];
     if (e.label) head.push('[' + e.label + ']');
     if (e.prod) head.push('[prod]');
@@ -141,8 +166,23 @@ function list() {
     if (hosts.length) lines.push('  hosts: ' + hosts.join(', '));
     if (e.mcp_server) lines.push('  mcp: ' + e.mcp_server);
     return lines.join('\n');
-  });
-  process.stdout.write(blocks.join('\n\n') + '\n');
+  }).join('\n\n');
+}
+
+// list prints the AWS connections (when aws.json exists), then the tokens. A box
+// with connections and no tokens has no tokens.json, which is not an error.
+function list() {
+  const conns = readList(awsFile, 'AWS connection list');
+  let entries = readList(listFile, 'token list');
+  if (entries === null) {
+    if (conns === null) return fail('cannot read the token list (ENOENT: no such file or directory, open ' + JSON.stringify(listFile) + ')');
+    entries = [];
+  }
+  const sections = [];
+  if (conns && conns.length) sections.push(awsSection(conns));
+  if (entries.length) sections.push(tokenSection(entries));
+  if (sections.length === 0) return process.stdout.write('no tokens are bound to this session\n');
+  process.stdout.write(sections.join('\n\n') + '\n');
 }
 
 function main() {

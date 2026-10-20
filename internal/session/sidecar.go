@@ -64,6 +64,11 @@ type sessionMeta struct {
 	// bindings existed must still restore.
 	AWS    *config.AWSBinding    `json:"aws,omitempty"`
 	GitHub *config.GitHubBinding `json:"github,omitempty"`
+	// AWSConns are the named AWS connections the session was spawned with, as
+	// the launcher cloned them (sorted by name; the sidecar keeps them, not the
+	// host config, so a removed connection keeps working for a running session).
+	// Records from before aws_connections existed lack the key and read as none.
+	AWSConns []config.AWSConnection `json:"aws_connections,omitempty"`
 	// Tokens and PATs are the static-token entries the session was spawned
 	// with, as the launcher cloned them (the value reference, never the value).
 	// Records from before N3 lack both and read as none.

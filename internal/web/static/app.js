@@ -1849,9 +1849,14 @@ const ssoStarting = new Set();     // ids whose sign-in POST is in flight
 const SSO_POLL_MS = 3000;
 
 function ssoPath(id, tail) { return "/api/sessions/" + encodeURIComponent(id) + "/aws" + (tail || ""); }
+// ssoTarget: the connection the Sign in button will name for session id, so the
+// command, the flow and the POST all talk about the same source ("" legacy).
+function ssoTarget(id) {
+  return ssoSignInName(lastSessions.find((x) => x.id === id));
+}
 function ssoCommand(id) {
   const st = ssoStatus.get(id);
-  return (st && st.sso && st.sso.command) || "";
+  return ssoCommandOf(st && st.sso, ssoTarget(id));
 }
 
 // ssoLocalSig: what the SSO card reads beyond the session record, for rowSig, so
@@ -1868,7 +1873,7 @@ const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to r
 // ssoAdopt: take a GET .../aws body: cache it and follow the flow it carries.
 function ssoAdopt(id, body) {
   ssoStatus.set(id, body || {});
-  const login = body && body.sso && body.sso.login;
+  const login = ssoLoginOf(body && body.sso, ssoTarget(id));
   const cur = ssoFlows.get(id);
   if (login) {
     ssoFlows.set(id, login);
@@ -1927,7 +1932,7 @@ async function ssoPollTick(id, last) {
   ssoPolling.delete(id);
   if (status === 404 || status === 410) { stopSSOPoll(id); return; }
   if (!body) return;
-  const login = body.sso && body.sso.login;
+  const login = ssoLoginOf(body.sso, ssoTarget(id));
   const state = login ? login.state : "";
   if (last) {
     if (state === "ok") showToast(SSO_DONE_TOAST);
@@ -1971,7 +1976,12 @@ async function ssoSignIn(s) {
   let status = 0;
   let body = null;
   try {
-    const res = await fetch(ssoPath(id, "/sso-login"), { method: "POST" });
+    // A session with named connections says which one to sign in (the server
+    // resolves its recorded source profile); the legacy request has no body.
+    const name = ssoSignInName(s);
+    const res = await fetch(ssoPath(id, "/sso-login"), name
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name }) }
+      : { method: "POST" });
     status = res.status;
     try { body = await res.json(); } catch (_) { body = null; }
   } catch (_) { status = 0; }
@@ -2791,6 +2801,9 @@ let ghApps = [];
 // stEntries: the instance's static_tokens as /api/meta describes them (names,
 // env names, hosts; never a value or where it is read from). Loaded at boot.
 let stEntries = [];
+// awscEntries: the instance's aws_connections as /api/meta describes them (name,
+// label, account, region, whether it can write; never the source profile).
+let awscEntries = [];
 // The stored binding as loaded: the editor has no field for its extra egress
 // hosts, so they are carried unchanged on save (see ghBindingFromForm).
 let pfLoadedGh = null;
@@ -2957,6 +2970,55 @@ function readStTicked() {
   return [...$("pf-st-list").querySelectorAll("input[data-token]")].filter((cb) => cb.checked).map((cb) => cb.dataset.token);
 }
 
+// --- the AWS connections block of the profile editor (#155) ---------------
+// renderAwscPicker draws one checkbox per connection, plus one for each ticked
+// name the instance no longer defines (shown as "(not defined)"), so a save
+// never drops a stored name silently: the server refuses it by name instead.
+function renderAwscPicker(ticked) {
+  const host = $("pf-awsc-list");
+  host.replaceChildren();
+  const rows = awscPickerRows(awscEntries, ticked);
+  for (const r of rows) {
+    const lab = document.createElement("label");
+    lab.className = "pf-check pf-st-entry";
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.dataset.awsc = r.name; cb.checked = (ticked || []).includes(r.name);
+    cb.addEventListener("change", () => { $("pf-awsc-err").hidden = true; syncEditorActions(); });
+    const text = document.createElement("span");
+    text.className = "pf-st-text";
+    const nm = document.createElement("span");
+    nm.textContent = r.missing ? r.name + " (not defined)" : r.label ? r.label + " · " + r.name : r.name;
+    text.append(nm);
+    if (r.prod) {
+      const chip = document.createElement("span");
+      chip.className = "bdg aws prod";
+      chip.textContent = "production";
+      text.append(" ", chip);
+    }
+    if (r.write) {
+      const chip = document.createElement("span");
+      chip.className = "bdg aws write";
+      chip.textContent = "write";
+      text.append(" ", chip);
+    }
+    const entry = awscEntries.find((e) => e.name === r.name);
+    for (const line of r.missing ? [] : [entry && entry.description, r.account && "account " + r.account + (entry && entry.region ? " · " + entry.region : "")]) {
+      if (!line) continue;
+      const d = document.createElement("span");
+      d.className = "tiny mut pf-st-line";
+      d.textContent = line;
+      text.append(d);
+    }
+    lab.append(cb, text);
+    host.append(lab);
+  }
+  $("pf-awsc-none").hidden = rows.length > 0;
+}
+function readAwscTicked() {
+  return [...$("pf-awsc-list").querySelectorAll("input[data-awsc]")].filter((cb) => cb.checked).map((cb) => cb.dataset.awsc);
+}
+$("pf-aws-role").addEventListener("input", () => syncEditorActions());
+
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
 // rowsToConfig turns them back into the two fields the server stores.
@@ -3005,6 +3067,8 @@ function fillForm(p) {
   renderGhPerms(ghPermsChecked(gh));
   renderStPicker(Array.isArray(p.tokens) ? p.tokens : []);
   $("pf-st-err").hidden = true;
+  renderAwscPicker(Array.isArray(p.aws_connections) ? p.aws_connections : []);
+  $("pf-awsc-err").hidden = true;
   syncPfReplyable();
   syncEditorActions();
 }
@@ -3045,6 +3109,30 @@ function syncEditorActions() {
     f.disabled = aws.disabled;
   }
   $("pf-aws-hint").hidden = !aws.hint;
+  // A profile binds AWS inline or by named connections, never both: ticking a
+  // connection closes the inline block, and a filled inline role closes the
+  // picker (awscExclusiveState). The picker also closes on the lock and the host
+  // tier, like the Tokens block.
+  const excl = awscExclusiveState(readAwscTicked().length, $("pf-aws-role").value);
+  if (excl.inlineDisabled) {
+    for (const f of $("pf-aws-block").querySelectorAll(".fld, input[type=checkbox]")) {
+      f.classList.add("off");
+      f.disabled = true;
+    }
+  }
+  $("pf-aws-note").textContent = excl.inlineDisabled ? excl.note : "";
+  $("pf-aws-note").hidden = !excl.inlineDisabled || aws.disabled;
+  for (const f of $("pf-awsc-block").querySelectorAll(".fld, input[type=checkbox]")) {
+    f.classList.toggle("off", aws.disabled || excl.pickerDisabled);
+    f.disabled = aws.disabled || excl.pickerDisabled;
+  }
+  // The whole row, label text included, not only its checkbox.
+  for (const row of $("pf-awsc-list").querySelectorAll(".pf-st-entry")) {
+    row.classList.toggle("off", aws.disabled || excl.pickerDisabled);
+  }
+  $("pf-awsc-hint").hidden = !aws.hint;
+  $("pf-awsc-note").textContent = excl.pickerDisabled ? excl.note : "";
+  $("pf-awsc-note").hidden = !excl.pickerDisabled || aws.disabled;
   // The GH block closes on exactly the same terms (lock, host tier).
   for (const f of $("pf-gh-block").querySelectorAll(".fld, .btn, input[type=checkbox]")) {
     f.classList.toggle("off", aws.disabled);
@@ -3076,6 +3164,9 @@ function readForm() {
   if (gh) p.github = gh;
   const tokens = stTokensToSend(readStTicked());
   if (tokens) p.tokens = tokens;
+  // Only when a connection is ticked: no key keeps a legacy profile's JSON as it was.
+  const conns = awscToSend(readAwscTicked());
+  if (conns) p.aws_connections = conns;
   // The tier is always sent as shown (see runtimeToSend): a blank would let the
   // instance default decide, and on a host-default instance that turns a profile
   // the editor lit as "box" into a host one. The server's own message answers an
@@ -3127,6 +3218,7 @@ async function saveProfile() {
   const editing = profiles.some((x) => x.name === p.name && x.editable);
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
   $("pf-st-err").hidden = true;
+  $("pf-awsc-err").hidden = true;
   try {
     await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) {
@@ -3135,6 +3227,12 @@ async function saveProfile() {
     if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
       $("pf-st-err").textContent = String(e.message);
       $("pf-st-err").hidden = false;
+    }
+    // Likewise a refusal that names aws_connections (an undefined name, too
+    // many, or both bindings at once) shows on the connections block.
+    if (/aws_connections/.test(e.message)) {
+      $("pf-awsc-err").textContent = String(e.message);
+      $("pf-awsc-err").hidden = false;
     }
     return;
   }
@@ -4574,6 +4672,8 @@ initMobileShell();
     ghApps = meta && Array.isArray(meta.github_apps) ? meta.github_apps : [];
     stEntries = meta && Array.isArray(meta.static_tokens) ? meta.static_tokens : [];
     renderStPicker(readStTicked()); // the Tokens picker, now that the entries are known
+    awscEntries = meta && Array.isArray(meta.aws_connections) ? meta.aws_connections : [];
+    renderAwscPicker(readAwscTicked()); // the connections picker, likewise
     renderGhOwners(readGhRows()); // the App and token pickers, now that the names are known
     syncEditorActions();
     const anBtn = $("analytics-open");

@@ -244,6 +244,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	// an inherited base.
 	lnch.SetDaemonSecretEnv(append([]string{cfg.PasswordEnv}, tokenVars(cfg.StaticTokens)...)...)
 	lnch.SetStaticTokens(cfg.StaticTokens)
+	lnch.SetAWSConnections(cfg.AWSConnections)
 	if n := len(cfg.StaticTokens); n > 0 {
 		log.Printf("static_tokens: %d entries (read at start; a change needs a restart)", n)
 	}
@@ -513,6 +514,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	pm.SetGitHubApps(cfg.GitHubApps)
 	pm.SetStaticTokens(cfg.StaticTokens)
+	pm.SetAWSConnections(cfg.AWSConnections)
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works

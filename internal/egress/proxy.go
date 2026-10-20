@@ -53,6 +53,7 @@ type SessionView struct {
 	Box         string
 	Boxed, Live bool
 	AWS         *config.AWSBinding
+	AWSConns    []config.AWSConnection
 	GitHub      *config.GitHubBinding
 	Tokens      []config.StaticToken
 	PATs        []config.StaticToken
@@ -650,7 +651,7 @@ func (p *Proxy) authenticate(h http.Header) (principal, authVerdict) {
 		return bad, authBad
 	}
 	pr := principal{sid: sid, box: v.Box, key: sid, epoch: epoch}
-	bs := config.Bindings{AWS: v.AWS, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs}
+	bs := config.Bindings{AWS: v.AWS, AWSConns: v.AWSConns, GitHub: v.GitHub, Tokens: v.Tokens, PATs: v.PATs}
 	if !bs.Any() {
 		pr.open = true
 	} else {

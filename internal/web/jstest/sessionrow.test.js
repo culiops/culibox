@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -319,6 +319,143 @@ test("awsSig moves on grant, drop and lapse, and on nothing else", () => {
   assert.strictEqual(awsSig({ aws: { ...ELEV, elevated_until: iso(-1) } }, NOW), s0, "a lapsed window reads as dropped");
   assert.notStrictEqual(awsSig({ aws: { ...ELEV, prod: true } }, NOW), s0);
   assert.strictEqual(awsSig({ aws: { ...ELEV, role_arn: "other" } }, NOW), s0, "fields the chip does not draw");
+});
+
+// --- #155 named AWS connections ---------------------------------------------
+const CARN = (n) => "arn:aws:iam::226198813800:role/agentbox-" + n;
+const conn = (name, over) => Object.assign({ name: name, label: name.toUpperCase(), account_id: "226198813800", role_arn: CARN(name),
+  region: "ap-southeast-1", prod: false, write_capable: false }, over);
+
+test("awsConnRailRows: prod first, then by name; three lines per block", () => {
+  assert.deepStrictEqual(awsConnRailRows({}, null, NOW, false), []);
+  assert.deepStrictEqual(awsConnRailRows({ aws_connections: [] }, null, NOW, false), []);
+  const s = { aws_connections: [conn("sbx-b"), conn("zz-prod", { prod: true }), conn("sbx-a")] };
+  const rows = awsConnRailRows(s, null, NOW, false);
+  assert.deepStrictEqual(rows.map((r) => r.name), ["zz-prod", "sbx-a", "sbx-b"]);
+  assert.ok(rows.every((r) => r.kind === "conn"));
+  assert.strictEqual(rows[1].detail, "SBX-A · 226198813800 · agentbox-sbx-a · ap-southeast-1");
+  assert.deepStrictEqual(rows[0].chips, [{ text: "prod", chip: "bdg aws prod" }]);
+  assert.deepStrictEqual(rows[1].chips, []);
+  assert.strictEqual(rows[1].stat, "", "no counters loaded yet: no third line, not a made-up zero");
+});
+
+test("awsConnRailRows: write and SSO chips, and the write role while elevated", () => {
+  const w = conn("sbx-a", { write_capable: true, elevated_until: iso(17), sso_expired: "corp",
+    elevate: { role_arn: CARN("sbx-a-write"), max_minutes: 60 } });
+  const r = awsConnRailRows({ aws_connections: [w] }, null, NOW, false)[0];
+  assert.strictEqual(r.chips.length, 2);
+  assert.match(r.chips[0].text, /^write until \d\d:\d\d$/);
+  assert.strictEqual(r.chips[0].chip, "bdg aws write");
+  assert.deepStrictEqual(r.chips[1], { text: "SSO expired", chip: "bdg dgr" });
+  assert.match(r.detail, /agentbox-sbx-a-write/);
+  // a lapsed window is not write
+  const lapsed = awsConnRailRows({ aws_connections: [{ ...w, elevated_until: iso(-1), sso_expired: undefined }] }, null, NOW, false)[0];
+  assert.deepStrictEqual(lapsed.chips, []);
+  assert.match(lapsed.detail, /agentbox-sbx-a · /);
+});
+
+test("awsConnRailRows: line 3 is the counters, or the last error verbatim", () => {
+  const s = { aws_connections: [conn("sbx-a"), conn("sbx-b")] };
+  const st = { connections: [
+    { name: "sbx-a", stats: { mints: 3, cache_hits: 1, last_mint: iso(-5) } },
+    { name: "sbx-b", stats: { mints: 0, last_mint: "0001-01-01T00:00:00Z", last_error: "sso session expired — run aws sso login" } },
+  ] };
+  const [a, b] = awsConnRailRows(s, st, NOW, false);
+  assert.match(a.stat, /^3 mints · last mint \d\d:\d\d · 5m ago$/, "the legacy row's clock-and-age text");
+  assert.strictEqual(a.err, false);
+  assert.strictEqual(b.stat, "sso session expired — run aws sso login");
+  assert.strictEqual(b.err, true);
+  const one = awsConnRailRows({ aws_connections: [conn("x")] }, { connections: [{ name: "x", stats: { mints: 1, last_mint: "0001-01-01T00:00:00Z" } }] }, NOW, false)[0];
+  assert.strictEqual(one.stat, "1 mint · last mint never");
+});
+
+test("awsConnRailRows: six fit; seven collapse to six plus a show-all row; expanded shows all", () => {
+  const mk = (n) => ({ aws_connections: Array.from({ length: n }, (_, i) => conn("c" + String(i).padStart(2, "0"))) });
+  assert.strictEqual(awsConnRailRows(mk(6), null, NOW, false).length, 6);
+  assert.ok(awsConnRailRows(mk(6), null, NOW, false).every((r) => r.kind === "conn"));
+  const seven = awsConnRailRows(mk(7), null, NOW, false);
+  assert.strictEqual(seven.length, 7);
+  assert.deepStrictEqual(seven.slice(0, 6).map((r) => r.name), ["c00", "c01", "c02", "c03", "c04", "c05"]);
+  assert.strictEqual(seven[6].kind, "more");
+  assert.strictEqual(seven[6].n, 7, "show all N: N is the total");
+  const open = awsConnRailRows(mk(7), null, NOW, true);
+  assert.strictEqual(open.filter((r) => r.kind === "conn").length, 7);
+  assert.strictEqual(open[open.length - 1].kind, "less");
+});
+
+test("awsConnRailRows rows carry a signature that moves with what they draw", () => {
+  const s = { aws_connections: [conn("sbx-a", { write_capable: true })] };
+  const v0 = awsConnRailRows(s, null, NOW, false)[0].v;
+  const v1 = awsConnRailRows({ aws_connections: [{ ...s.aws_connections[0], elevated_until: iso(17) }] }, null, NOW, false)[0].v;
+  assert.notStrictEqual(v0, v1);
+  assert.strictEqual(awsConnRailRows(s, null, NOW, false)[0].k, "aws");
+});
+
+test("awsBadgeParts: one connection shows its label, several show AWS xN", () => {
+  assert.strictEqual(awsBadgeParts({}, NOW), null);
+  assert.strictEqual(awsBadgeParts({ aws_connections: [] }, NOW), null);
+  const one = awsBadgeParts({ aws_connections: [conn("sbx-a", { label: "Sandbox" })] }, NOW);
+  assert.strictEqual(one.label, "Sandbox");
+  assert.deepStrictEqual([one.prod, one.write], [false, false]);
+  assert.strictEqual(awsBadgeParts({ aws_connections: [conn("sbx-a", { label: "" })] }, NOW).label, "sbx-a", "no label: the name");
+  const two = awsBadgeParts({ aws_connections: [conn("a"), conn("b")] }, NOW);
+  assert.strictEqual(two.label, "AWS \u00d72");
+  assert.match(two.title, /a, b/);
+});
+
+test("awsBadgeParts: red if any is prod, amber if any window is open", () => {
+  const p = awsBadgeParts({ aws_connections: [conn("a"), conn("b", { prod: true })] }, NOW);
+  assert.strictEqual(p.prod, true);
+  const w = awsBadgeParts({ aws_connections: [conn("a", { elevated_until: iso(17) }), conn("b")] }, NOW);
+  assert.strictEqual(w.write, true);
+  assert.match(w.title, /write on a until \d\d:\d\d/);
+  assert.strictEqual(awsBadgeParts({ aws_connections: [conn("a", { elevated_until: iso(-1) }), conn("b")] }, NOW).write, false);
+});
+
+test("awsBadge reads the connections too, in the shape the chip renderer already takes", () => {
+  const ab = awsBadge({ aws_connections: [conn("a"), conn("b", { elevated_until: iso(17) })] }, NOW);
+  assert.strictEqual(ab.text, "AWS \u00d72 \u00b7 write");
+  assert.strictEqual(ab.write, true);
+  assert.deepStrictEqual(badgeParts(ab), { label: "AWS \u00d72", write: true });
+  assert.strictEqual(awsBadge({ aws_connections: [conn("a", { label: "Sandbox" })] }, NOW).text, "Sandbox");
+  // the legacy binding still wins nothing: a session never carries both
+  assert.strictEqual(awsBadge({ aws: ELEV }, NOW).text, "sandbox");
+});
+
+test("awsSig covers connections: moves on a grant, a drop and prod, not on unrendered fields", () => {
+  const base = { aws_connections: [conn("a"), conn("b")] };
+  const s0 = awsSig(base, NOW);
+  assert.notStrictEqual(s0, "");
+  assert.notStrictEqual(awsSig({ aws_connections: [conn("a", { elevated_until: iso(17) }), conn("b")] }, NOW), s0);
+  assert.strictEqual(awsSig({ aws_connections: [conn("a", { elevated_until: iso(-1) }), conn("b")] }, NOW), s0);
+  assert.notStrictEqual(awsSig({ aws_connections: [conn("a", { prod: true }), conn("b")] }, NOW), s0);
+  assert.strictEqual(awsSig({ aws_connections: [conn("a", { region: "eu-west-1" }), conn("b")] }, NOW), s0);
+});
+
+// --- #155 fix round 1: a connection's window counts down like the legacy scope row ---
+test("connWindowLine: the open window reads as the legacy scope row does", () => {
+  const conns = [conn("a", { elevated_until: iso(17) }), conn("b")];
+  const w = connWindowLine(conns, null, NOW);
+  assert.strictEqual(w.name, "a");
+  assert.match(w.text, /^write \u00b7 until \d\d:\d\d \(17 min\)$/);
+  assert.match(connWindowLine([conn("a", { elevated_until: iso(12) })], null, NOW).text, /\(12 min\) \u00b7 new credentials read-only$/);
+  assert.doesNotMatch(connWindowLine([conn("a", { elevated_until: iso(16) })], null, NOW).text, /new credentials/);
+  assert.strictEqual(connWindowLine([conn("a", { elevated_until: iso(-1) }), conn("b")], null, NOW), null, "a lapsed window says nothing");
+  assert.strictEqual(connWindowLine([conn("a")], null, NOW), null);
+});
+
+test("connWindowLine: a status-only window, and the issued credentials after a drop", () => {
+  const conns = [conn("a"), conn("b")];
+  const live = connWindowLine(conns, { elevation: { active: true, name: "b", until: iso(30) } }, NOW);
+  assert.strictEqual(live.name, "b");
+  assert.match(live.text, /^write \u00b7 until \d\d:\d\d \(30 min\)$/);
+  assert.strictEqual(connWindowLine(conns, { elevation: { active: true, name: "b", until: iso(-2) } }, NOW), null);
+  const left = connWindowLine(conns, { elevation: { active: false, name: "a", last_valid: iso(9) } }, NOW);
+  assert.strictEqual(left.name, "a");
+  assert.match(left.text, /^read-only \u00b7 issued write creds valid until \d\d:\d\d$/);
+  assert.strictEqual(connWindowLine(conns, { elevation: { active: false, name: "a", last_valid: iso(-1) } }, NOW), null);
+  assert.deepStrictEqual(liveWindowConn(conns, { elevation: { active: true, name: "b", until: iso(30) } }, NOW), { name: "b", until: iso(30) });
+  assert.strictEqual(liveWindowConn(conns, null, NOW), null);
 });
 
 // Kill-switch: the reply menu items close unless globalThis.repliesEnabled is the boolean true.

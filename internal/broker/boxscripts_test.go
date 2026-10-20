@@ -688,3 +688,195 @@ func TestAgentboxEnvNoBrokerEnv(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 }
+
+// --- #155 task 7: AWS connections in the in-box scripts ---
+
+// fakeCredBroker answers /v1/credentials and records each raw body.
+type fakeCredBroker struct {
+	mu     sync.Mutex
+	bodies []string
+	ctypes []string
+	sock   string
+}
+
+func newFakeCredBroker(t *testing.T) *fakeCredBroker {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not installed")
+	}
+	dir, err := os.MkdirTemp("", "abx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	f := &fakeCredBroker{sock: filepath.Join(dir, "b.sock")}
+	l, err := net.Listen("unix", f.sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/credentials", func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.bodies = append(f.bodies, string(raw))
+		f.ctypes = append(f.ctypes, r.Header.Get("Content-Type"))
+		f.mu.Unlock()
+		_, _ = w.Write([]byte(`{"Version":1,"AccessKeyId":"AKIA","SecretAccessKey":"s","SessionToken":"t"}`))
+	})
+	srv := &http.Server{Handler: mux}
+	go srv.Serve(l)
+	t.Cleanup(func() { srv.Shutdown(context.Background()) })
+	return f
+}
+
+func (f *fakeCredBroker) env() []string {
+	return []string{"AGENTBOX_BROKER=unix://" + f.sock, "AGENTBOX_BROKER_TOKEN=sess-tok"}
+}
+
+func (f *fakeCredBroker) seen() ([]string, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.bodies...), append([]string(nil), f.ctypes...)
+}
+
+func TestCredAwsNoNameGuidance(t *testing.T) {
+	f := newFakeCredBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	out, stderr, code := runNode(t, "", "", []string{js, "aws"}, f.env()...)
+	want := "agentbox: several AWS connections are bound — pick one with --profile <name> or AWS_PROFILE; run agentbox-env --list\n"
+	if code != 1 || stderr != want || out != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	if b, _ := f.seen(); len(b) != 0 {
+		t.Fatalf("guidance made %d broker calls", len(b))
+	}
+	// Even with no broker env at all, the guidance is the answer (no network, no token needed).
+	_, stderr, code = runNode(t, "", "", []string{js, "aws"})
+	if code != 1 || stderr != want {
+		t.Fatalf("no env: code=%d stderr=%q", code, stderr)
+	}
+}
+
+func TestCredAwsNameBody(t *testing.T) {
+	f := newFakeCredBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	out, stderr, code := runNode(t, "", "", []string{js, "aws", "a"}, f.env()...)
+	if code != 0 || stderr != "" || !strings.Contains(out, "AKIA") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	b, ct := f.seen()
+	if len(b) != 1 || b[0] != `{"name":"a"}` || ct[0] != "application/json" {
+		t.Fatalf("bodies=%q ctypes=%q", b, ct)
+	}
+}
+
+func TestCredLegacyNoArgsEmptyBody(t *testing.T) {
+	f := newFakeCredBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	out, stderr, code := runNode(t, "", "", []string{js}, f.env()...)
+	if code != 0 || stderr != "" || !strings.Contains(out, "AKIA") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+	b, ct := f.seen()
+	if len(b) != 1 || b[0] != "" || ct[0] != "" {
+		t.Fatalf("legacy request changed: bodies=%q ctypes=%q", b, ct)
+	}
+}
+
+func TestCredAwsBadNameLocal(t *testing.T) {
+	f := newFakeCredBroker(t)
+	js := filepath.Join(ghScriptDir(t), "agentbox-cred.js")
+	for _, n := range []string{"A", "-a", "a b", "a/b", strings.Repeat("a", 64), `a"}`} {
+		_, stderr, code := runNode(t, "", "", []string{js, "aws", n}, f.env()...)
+		if code != 1 || !strings.HasPrefix(stderr, "agentbox: ") {
+			t.Errorf("%q: code=%d stderr=%q", n, code, stderr)
+		}
+	}
+	if b, _ := f.seen(); len(b) != 0 {
+		t.Fatalf("bad names reached the broker: %q", b)
+	}
+}
+
+// awsListDir binds two connections and a token entry; the env script and both
+// listings are in the returned dir.
+func awsListDir(t *testing.T, withTokens bool) string {
+	t.Helper()
+	bs := config.Bindings{AWSConns: twoConns()}
+	if withTokens {
+		bs.Tokens = listingTokens()
+	}
+	dir, err := EnsureBindingDir(t.TempDir(), bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestEnvListAWSSection(t *testing.T) {
+	dir := awsListDir(t, true)
+	js := filepath.Join(dir, "agentbox-env.js")
+	out, stderr, code := runNode(t, "", "", []string{js, "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+filepath.Join(dir, TokensFile), "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile))
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	want := "AWS connections\n" +
+		"acme-prod-read [Acme prod] [prod] [write-capable]\n" +
+		"  account 111111111111 · role agent-read · region eu-west-1\n" +
+		"  Prod, read only\n" +
+		"  use: aws --profile acme-prod-read …   terraform: provider \"aws\" { profile = \"acme-prod-read\" }\n" +
+		"\n" +
+		"acme-stg-read\n" +
+		"  account 222222222222 · role agent-read · region eu-west-1\n" +
+		"  use: aws --profile acme-stg-read …   terraform: provider \"aws\" { profile = \"acme-stg-read\" }\n" +
+		"\n"
+	if !strings.HasPrefix(out, want) {
+		t.Fatalf("listing:\n%s\nwant prefix:\n%s", out, want)
+	}
+	rest := out[len(want):]
+	if !strings.HasPrefix(rest, "grafana-cloud") || !strings.Contains(rest, "atlassian") {
+		t.Fatalf("token section missing after the AWS one:\n%s", rest)
+	}
+	for _, bad := range []string{"sso-acme", "source_profile", "agent-write"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("listing shows %q", bad)
+		}
+	}
+}
+
+func TestEnvListAWSOnly(t *testing.T) {
+	dir := awsListDir(t, false)
+	js := filepath.Join(dir, "agentbox-env.js")
+	out, stderr, code := runNode(t, "", "", []string{js, "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+filepath.Join(dir, TokensFile), "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile))
+	if code != 0 || stderr != "" || !strings.HasPrefix(out, "AWS connections\n") || strings.Contains(out, "no tokens") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, out, stderr)
+	}
+}
+
+func TestEnvListNoTokensLineOnlyWhenNothing(t *testing.T) {
+	js := filepath.Join(envScriptDir(t), "agentbox-env.js")
+	empty := filepath.Join(t.TempDir(), "tokens.json")
+	if err := os.WriteFile(empty, []byte("[]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	none := filepath.Join(t.TempDir(), "none.json")
+	// Nothing bound at all: the line is printed.
+	out, _, code := runNode(t, "", "", []string{js, "--list"}, "AGENTBOX_ENV_LIST_FILE="+empty, "AGENTBOX_ENV_AWS_FILE="+none)
+	if code != 0 || out != "no tokens are bound to this session\n" {
+		t.Fatalf("nothing bound: code=%d out=%q", code, out)
+	}
+	// Connections but no tokens (no tokens.json at all, as EnsureBindingDir writes it): no such line, no error.
+	dir := awsListDir(t, false)
+	out, stderr, code := runNode(t, "", "", []string{filepath.Join(dir, "agentbox-env.js"), "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+none, "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile))
+	if code != 0 || stderr != "" || strings.Contains(out, "no tokens") || !strings.Contains(out, "acme-stg-read") {
+		t.Fatalf("aws only: code=%d out=%q stderr=%q", code, out, stderr)
+	}
+	// Connections and an empty token list: still no line.
+	out, _, code = runNode(t, "", "", []string{filepath.Join(dir, "agentbox-env.js"), "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+empty, "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile))
+	if code != 0 || strings.Contains(out, "no tokens") {
+		t.Fatalf("empty tokens: code=%d out=%q", code, out)
+	}
+}

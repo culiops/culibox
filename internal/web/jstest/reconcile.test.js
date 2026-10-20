@@ -158,3 +158,11 @@ test("rowSig moves with the AWS binding and with the SSO card's local state", ()
   assert.notStrictEqual(rowSig(elevated, local), s0, "a grant repaints the write badge");
   assert.notStrictEqual(rowSig(base, { sso: "waiting~ABCD-EFGH" }), s0, "a sign-in flow moving on repaints the card");
 });
+
+test("rowSig moves with the AWS connections (badge, SSO flag, write window)", () => {
+  const base = { id: "a", name: "n", activity: "working", aws_connections: [{ name: "a", label: "A", account_id: "1", prod: false }] };
+  const s0 = rowSig(base, {});
+  assert.notStrictEqual(rowSig(Object.assign({}, base, { aws_connections: [{ ...base.aws_connections[0], elevated_until: "2026-10-17T10:00:00Z" }] }), {}), s0);
+  assert.notStrictEqual(rowSig(Object.assign({}, base, { aws_connections: [{ ...base.aws_connections[0], sso_expired: "corp" }] }), {}), s0);
+  assert.notStrictEqual(rowSig(Object.assign({}, base, { aws_connections: [] }), {}), s0);
+});

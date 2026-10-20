@@ -206,6 +206,48 @@ function stTokensToSend(checked) {
   return names.length ? names : undefined;
 }
 
+// The AWS connections block (#155). meta is /api/meta's aws_connections (names,
+// account and shape only; the source profile and the roles never reach the
+// browser).
+
+// awscPickerRows: one row per defined connection, production first and then by
+// name, followed by one `missing` row for each ticked name the instance no
+// longer defines (so a save never drops a stored name silently; the server
+// refuses it by name instead).
+function awscPickerRows(meta, ticked) {
+  const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  const defined = (meta || []).map((e) => ({
+    name: e.name, label: e.label || "", prod: !!e.prod, write: !!e.write_capable, account: e.account_id || "", missing: false,
+  })).sort((a, b) => (a.prod === b.prod ? byName(a, b) : a.prod ? -1 : 1));
+  const have = new Set(defined.map((r) => r.name));
+  const gone = [...new Set((ticked || []).filter((n) => !have.has(n)))].sort().map((name) => (
+    { name, label: "", prod: false, write: false, account: "", missing: true }));
+  return defined.concat(gone);
+}
+
+// awscExclusiveState: a profile binds AWS inline or by connections, never both.
+// Ticked connections close the inline block; a filled inline role closes the
+// picker; the note names whichever one is closed. If both are somehow set (a
+// stored profile the server would refuse), the connections win the display and
+// the picker stays open, so unticking is the way out.
+function awscExclusiveState(tickedCount, inlineRole) {
+  if ((tickedCount || 0) > 0) {
+    return { pickerDisabled: false, inlineDisabled: true, note: "Using AWS connections — the inline binding is off" };
+  }
+  if (String(inlineRole || "").trim()) {
+    return { pickerDisabled: true, inlineDisabled: false, note: "Clear the inline binding to use connections" };
+  }
+  return { pickerDisabled: false, inlineDisabled: false, note: "" };
+}
+
+// awscToSend: the ticked connection names as the profile's aws_connections
+// field, sorted and without repeats, or undefined when none is ticked (the key
+// is then left out, so a legacy profile's JSON is unchanged).
+function awscToSend(checked) {
+  const names = [...new Set((checked || []).map((n) => String(n)).filter(Boolean))].sort();
+  return names.length ? names : undefined;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError };
+  module.exports = { awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError };
 }

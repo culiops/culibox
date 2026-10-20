@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -92,6 +93,22 @@ type ProfileManager struct {
 	// wired at boot, so a profile cannot be saved naming an entry that does
 	// not exist. nil = none defined.
 	tokens []config.StaticToken
+	// awsConns are the instance's aws_connections (config.AWSConnections),
+	// wired at boot, so a profile cannot be saved naming a connection that does
+	// not exist. nil = none defined.
+	awsConns []config.AWSConnection
+}
+
+// SetAWSConnections installs the instance's named AWS connections, which Save
+// checks a profile's aws_connections against. Call at boot.
+func (m *ProfileManager) SetAWSConnections(list []config.AWSConnection) {
+	cp := make([]config.AWSConnection, len(list))
+	for i, c := range list {
+		cp[i] = c.Clone()
+	}
+	m.mu.Lock()
+	m.awsConns = cp
+	m.mu.Unlock()
 }
 
 // SetStaticTokens installs the instance's static token entries, which Save
@@ -171,6 +188,32 @@ func (m *ProfileManager) StaticTokenMeta() []TokenMeta {
 			tm.MCPServer = e.MCP.Server
 		}
 		out = append(out, tm)
+	}
+	return out
+}
+
+// AWSConnectionMeta is what the profile editor may know of an aws_connections
+// entry: its name, how it is shown, the account and region it reaches and
+// whether it can be widened to write. Never the source profile or a role ARN.
+type AWSConnectionMeta struct {
+	Name         string `json:"name"`
+	Label        string `json:"label"`
+	AccountID    string `json:"account_id"`
+	Region       string `json:"region"`
+	Description  string `json:"description"`
+	Prod         bool   `json:"prod"`
+	WriteCapable bool   `json:"write_capable"`
+}
+
+// AWSConnectionMetaList lists the instance's aws_connections for the profile
+// editor's picker, in config order. Never nil, so it encodes as [].
+func (m *ProfileManager) AWSConnectionMetaList() []AWSConnectionMeta {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]AWSConnectionMeta, 0, len(m.awsConns))
+	for _, c := range m.awsConns {
+		out = append(out, AWSConnectionMeta{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
+			Region: c.Region, Description: c.Description, Prod: c.Prod, WriteCapable: c.Elevate != nil})
 	}
 	return out
 }
@@ -364,6 +407,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := config.CheckTokens(p, m.tokens, m.optDefs); err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	if err := config.CheckAWSConnections(p, m.awsConns); err != nil {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	if err := m.checkAccount(p); err != nil {

@@ -148,3 +148,11 @@ test("ghRailRows: only github rows, in the order given, capped at five", () => {
   assert.deepStrictEqual(ghRailRows(null), []);
   assert.deepStrictEqual(ghRailRows({}), []);
 });
+
+test("ghRowText: PAT <entry> only for a github row; an aws row names its connection plainly", () => {
+  assert.match(ghRowText({ provider: "github", subject: "acme", repos: 1, outcome: "minted", entry: "ci", expires: "0001-01-01T00:00:00Z" }), / · PAT ci/);
+  const aws = ghRowText({ provider: "aws", subject: "acme", repos: 1, outcome: "minted", entry: "sbx-a", expires: "0001-01-01T00:00:00Z" });
+  assert.match(aws, / · sbx-a/);
+  assert.doesNotMatch(aws, /PAT/);
+  assert.doesNotMatch(ghRowText({ provider: "aws", outcome: "minted", entry: "sbx-a" }), /PAT/);
+});

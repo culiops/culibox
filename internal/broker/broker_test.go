@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -680,5 +681,333 @@ func TestBrokerSocketHasNoElevationRoute(t *testing.T) {
 				t.Errorf("%s %s: %d, want 404", m, p, w.Code)
 			}
 		}
+	}
+}
+
+// --- #155: per-connection credentials ---------------------------------------
+
+const (
+	connRoleA  = "arn:aws:iam::111111111111:role/agentbox-a"
+	connWriteA = "arn:aws:iam::111111111111:role/agentbox-a-write"
+	connRoleB  = "arn:aws:iam::222222222222:role/agentbox-b"
+)
+
+func connA() config.AWSConnection {
+	return config.AWSConnection{Name: "a", AWSBinding: config.AWSBinding{SourceProfile: "prof-a", RoleARN: connRoleA,
+		Region: "ap-southeast-1", S3Read: []string{"bucket-a"}, Elevate: &config.AWSElevate{RoleARN: connWriteA}}}
+}
+
+func connB() config.AWSConnection {
+	return config.AWSConnection{Name: "b", AWSBinding: config.AWSBinding{SourceProfile: "prof-b", RoleARN: connRoleB,
+		Region: "us-east-1", S3Read: []string{"bucket-b"}}}
+}
+
+func liveConns() SessionView {
+	return SessionView{Agent: "c", Nonce: nonceA, Boxed: true, Live: true, Exclusive: true,
+		AWSConns: []config.AWSConnection{connA(), connB()}}
+}
+
+func callBody(b *Broker, tok, body string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/v1/credentials", strings.NewReader(body))
+	if tok != "" {
+		r.Header.Set("Authorization", "Bearer "+tok)
+	}
+	w := httptest.NewRecorder()
+	b.Handler().ServeHTTP(w, r)
+	return w
+}
+
+func TestCredentialsLegacyEmptyBodyUnchanged(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": live()})
+	for _, body := range []string{"", "  \n"} {
+		if w := callBody(b, tokA("claude-3"), body); w.Code != 200 {
+			t.Fatalf("body %q: status %d: %s", body, w.Code, w.Body)
+		}
+	}
+	if len(fm.calls) != 1 { // the second was a cache hit under the legacy key
+		t.Fatalf("minted %d times", len(fm.calls))
+	}
+	// The legacy key, bucket and scope are what they were before connections.
+	c, ok := b.cache[connKey{"claude-3", ""}]
+	if !ok || len(b.cache) != 1 || c.scopeKey != binding().Hash() {
+		t.Fatalf("cache %+v", b.cache)
+	}
+	if got := len(b.mintTimes[bucketKey{"claude-3", bucketMint, ""}]); got != 1 || len(b.mintTimes) != 1 {
+		t.Fatalf("buckets %+v", b.mintTimes)
+	}
+	if rec.rows[0].ScopeHash != binding().Hash() || rec.rows[0].Entry != "" {
+		t.Fatalf("audit %+v", rec.rows[0])
+	}
+	if cs := b.ConnStats("claude-3"); len(cs) != 0 {
+		t.Fatalf("legacy mint filled connStats: %+v", cs)
+	}
+}
+
+func TestCredentialsConnByName(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	for _, n := range []string{"a", "b"} {
+		if w := callBody(b, tokA("claude-3"), `{"name":"`+n+`"}`); w.Code != 200 {
+			t.Fatalf("%s: status %d: %s", n, w.Code, w.Body)
+		}
+	}
+	if len(fm.calls) != 2 {
+		t.Fatalf("calls %d", len(fm.calls))
+	}
+	for i, c := range []config.AWSConnection{connA(), connB()} {
+		in := fm.calls[i]
+		pol, _ := awsscope.SessionPolicy("aws", c.S3Read)
+		if in.RoleARN != c.RoleARN || in.Region != c.Region || in.SourceProfile != c.SourceProfile ||
+			in.SessionName != "agentbox-claude-3" || in.Policy != pol || in.Duration != credTTL {
+			t.Fatalf("%s mint input: %+v", c.Name, in)
+		}
+		row := rec.rows[i]
+		if row.Entry != c.Name || row.Outcome != OutcomeMinted || row.RoleARN != c.RoleARN ||
+			row.AccountID != awsscope.AccountOf(c.RoleARN) || row.SourceIdentity != "agentbox-claude-3" ||
+			row.ScopeHash != c.DefHash() || row.Elevated {
+			t.Fatalf("%s audit: %+v", c.Name, row)
+		}
+	}
+	st, _ := b.Stats("claude-3")
+	cs := b.ConnStats("claude-3")
+	if st.Mints != 2 || cs["a"].Mints != 1 || cs["b"].Mints != 1 || len(cs) != 2 {
+		t.Fatalf("stats %+v conn %+v", st, cs)
+	}
+	cs["a"] = Stats{Mints: 99} // a copy: writing it changes nothing in the broker
+	if b.ConnStats("claude-3")["a"].Mints != 1 {
+		t.Fatal("ConnStats returned the live map")
+	}
+}
+
+func TestCredentialsConnEmptyBodyRefused(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	w := callBody(b, tokA("claude-3"), "")
+	if w.Code != 403 || !strings.Contains(w.Body.String(), "agentbox-env --list") || len(fm.calls) != 0 {
+		t.Fatalf("status %d body %s calls %d", w.Code, w.Body, len(fm.calls))
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeDeniedScope {
+		t.Fatalf("audit %+v", rec.rows)
+	}
+}
+
+func TestCredentialsConnUnboundName(t *testing.T) {
+	b, fm, rec, now := setup(t, map[string]SessionView{"claude-3": liveConns(), "old-1": live()})
+	w := callBody(b, tokA("claude-3"), `{"name":"zz"}`)
+	if w.Code != 403 || len(fm.calls) != 0 {
+		t.Fatalf("status %d calls %d", w.Code, len(fm.calls))
+	}
+	if r := rec.rows[len(rec.rows)-1]; r.Outcome != OutcomeDeniedScope || r.Entry != "zz" || r.SessionID != "claude-3" {
+		t.Fatalf("audit %+v", r)
+	}
+	*now = now.Add(2 * time.Second) // past the denied-row throttle window
+	w = callBody(b, tokA("claude-3"), `{"name":"../x"}`)
+	if w.Code != 403 || len(fm.calls) != 0 {
+		t.Fatalf("status %d calls %d", w.Code, len(fm.calls))
+	}
+	r := rec.rows[len(rec.rows)-1]
+	if r.Outcome != OutcomeDeniedScope || r.Entry != "(invalid)" {
+		t.Fatalf("audit %+v", r)
+	}
+	if j, _ := json.Marshal(r); strings.Contains(string(j), "../x") {
+		t.Fatalf("raw name stored: %s", j)
+	}
+	// A legacy session has no connections: any name is unbound.
+	*now = now.Add(2 * time.Second)
+	w = callBody(b, tokA("old-1"), `{"name":"a"}`)
+	if w.Code != 403 || len(fm.calls) != 0 || rec.rows[len(rec.rows)-1].Outcome != OutcomeDeniedScope {
+		t.Fatalf("legacy session with a name: status %d calls %d", w.Code, len(fm.calls))
+	}
+}
+
+func TestCredentialsUnknownFieldRefused(t *testing.T) {
+	b, fm, _, _ := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	for _, body := range []string{`{"name":"a","role_arn":"arn:aws:iam::1:role/x"}`, `{"name":`, `{"name":"a"} {"name":"b"}`, `[]`} {
+		if w := callBody(b, tokA("claude-3"), body); w.Code != 400 || len(fm.calls) != 0 {
+			t.Fatalf("%s: status %d calls %d", body, w.Code, len(fm.calls))
+		}
+	}
+	big := `{"name":"a","x":"` + strings.Repeat("y", maxStaticBody) + `"}`
+	if w := callBody(b, tokA("claude-3"), big); w.Code != http.StatusRequestEntityTooLarge || len(fm.calls) != 0 {
+		t.Fatalf("oversized: status %d calls %d", w.Code, len(fm.calls))
+	}
+}
+
+func TestConnCacheIsolated(t *testing.T) {
+	b, fm, _, _ := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	for _, n := range []string{"a", "b", "a", "b"} {
+		if w := callBody(b, tokA("claude-3"), `{"name":"`+n+`"}`); w.Code != 200 {
+			t.Fatalf("%s: %d", n, w.Code)
+		}
+	}
+	if len(fm.calls) != 2 {
+		t.Fatalf("minted %d times; want 2 (a, b; the repeats are cache hits)", len(fm.calls))
+	}
+	st, _ := b.Stats("claude-3")
+	if st.CacheHits != 2 || b.ConnStats("claude-3")["a"].CacheHits != 1 {
+		t.Fatalf("stats %+v %+v", st, b.ConnStats("claude-3"))
+	}
+}
+
+// Review Focus 1: an elevated entry in one connection's cache is never served
+// to the other, and the other mints with its own role and read-only policy.
+func TestConnCacheIsolatedUnderElevation(t *testing.T) {
+	sv := liveConns()
+	// b may be elevated too (it has a write role): the window is a's, so b must
+	// still mint read-only. Without that, only b's missing role would save it.
+	sv.AWSConns[1].Elevate = &config.AWSElevate{RoleARN: "arn:aws:iam::222222222222:role/agentbox-b-write"}
+	b, fm, rec, now := setup(t, map[string]SessionView{"claude-3": sv})
+	b.elev["claude-3"] = &elevation{until: now.Add(time.Hour), grantedAt: *now, gen: 1, conn: "a", timer: &fakeTimer{}}
+	if w := callBody(b, tokA("claude-3"), `{"name":"a"}`); w.Code != 200 {
+		t.Fatalf("a: %d %s", w.Code, w.Body)
+	}
+	if w := callBody(b, tokA("claude-3"), `{"name":"b"}`); w.Code != 200 {
+		t.Fatalf("b: %d %s", w.Code, w.Body)
+	}
+	if len(fm.calls) != 2 {
+		t.Fatalf("calls %d", len(fm.calls))
+	}
+	ca, cb := connA(), connB()
+	elevPol, _ := awsscope.ElevatedPolicy("aws", ca.S3Read, false)
+	readPol, _ := awsscope.SessionPolicy("aws", cb.S3Read)
+	if fm.calls[0].RoleARN != connWriteA || fm.calls[0].Policy != elevPol || fm.calls[0].SourceProfile != "prof-a" {
+		t.Fatalf("a minted %+v", fm.calls[0])
+	}
+	if fm.calls[1].RoleARN != connRoleB || fm.calls[1].Policy != readPol || fm.calls[1].Region != "us-east-1" {
+		t.Fatalf("b minted %+v", fm.calls[1])
+	}
+	if !rec.rows[0].Elevated || rec.rows[1].Elevated {
+		t.Fatalf("elevated flags: %+v", rec.rows)
+	}
+	// Both are now cached under their own keys; repeats mint nothing.
+	callBody(b, tokA("claude-3"), `{"name":"b"}`)
+	callBody(b, tokA("claude-3"), `{"name":"a"}`)
+	if len(fm.calls) != 2 {
+		t.Fatalf("repeat minted: %d calls", len(fm.calls))
+	}
+	if ka, kb := b.cache[connKey{"claude-3", "a"}], b.cache[connKey{"claude-3", "b"}]; ka.scopeKey == kb.scopeKey ||
+		!strings.Contains(ka.scopeKey, "/e") || strings.Contains(kb.scopeKey, "/e") {
+		t.Fatalf("scope keys a=%q b=%q", ka.scopeKey, kb.scopeKey)
+	}
+}
+
+func TestConnRateBucketPerName(t *testing.T) {
+	b, fm, rec, now := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a cache hit
+	for i := 0; i < mintsPerMinute; i++ {
+		if w := callBody(b, tokA("claude-3"), `{"name":"a"}`); w.Code != 200 {
+			t.Fatalf("mint %d: %d", i, w.Code)
+		}
+	}
+	if w := callBody(b, tokA("claude-3"), `{"name":"a"}`); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("11th a: %d", w.Code)
+	}
+	if r := rec.rows[len(rec.rows)-1]; r.Outcome != OutcomeRateLimited || r.Entry != "a" {
+		t.Fatalf("audit %+v", r)
+	}
+	if w := callBody(b, tokA("claude-3"), `{"name":"b"}`); w.Code != 200 {
+		t.Fatalf("b after a is limited: %d", w.Code)
+	}
+	if len(b.mintTimes[bucketKey{"claude-3", bucketAWSConn, "a"}]) != mintsPerMinute || len(b.mintTimes[bucketKey{"claude-3", bucketMint, ""}]) != 0 {
+		t.Fatalf("buckets %+v", b.mintTimes)
+	}
+}
+
+func TestConnMintFailureIsAttributed(t *testing.T) {
+	b, fm, rec, _ := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	fm.err = fmt.Errorf("%w: token expired", ErrSSOExpired)
+	if w := callBody(b, tokA("claude-3"), `{"name":"b"}`); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d", w.Code)
+	}
+	if r := rec.rows[0]; r.Outcome != OutcomeSSOExpired || r.Entry != "b" {
+		t.Fatalf("audit %+v", r)
+	}
+	if _, ok := b.ssoNeed[connKey{"claude-3", "b"}]; !ok || len(b.ssoNeed) != 1 {
+		t.Fatalf("ssoNeed %+v", b.ssoNeed)
+	}
+	if b.ConnStats("claude-3")["b"].LastError == "" || b.ConnStats("claude-3")["a"].LastError != "" {
+		t.Fatalf("conn stats %+v", b.ConnStats("claude-3"))
+	}
+}
+
+func TestForgetClearsConnState(t *testing.T) {
+	b, fm, _, now := setup(t, map[string]SessionView{"claude-3": liveConns(), "other-1": liveConns()})
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Hour) }
+	for _, sid := range []string{"claude-3", "other-1"} {
+		for _, n := range []string{"a", "b"} {
+			callBody(b, tokA(sid), `{"name":"`+n+`"}`)
+		}
+	}
+	b.mu.Lock()
+	b.ssoNeed[connKey{"claude-3", "a"}] = "k"
+	b.mu.Unlock()
+	b.Forget("claude-3")
+	if len(b.cache) != 2 || len(b.connStats) != 2 || len(b.mintTimes) != 2 || len(b.ssoNeed) != 0 {
+		t.Fatalf("after Forget: cache %d connStats %d mintTimes %d ssoNeed %d", len(b.cache), len(b.connStats), len(b.mintTimes), len(b.ssoNeed))
+	}
+	for k := range b.cache {
+		if k.sid == "claude-3" {
+			t.Fatalf("cache kept %+v", k)
+		}
+	}
+	if len(b.ConnStats("claude-3")) != 0 || len(b.ConnStats("other-1")) != 2 {
+		t.Fatal("ConnStats after Forget")
+	}
+}
+
+// Two connections that both hit their own rate limit inside one throttle window
+// each get their own row: a row must say which connection it was for.
+func TestRateLimitedRowsKeepTheirOwnConnection(t *testing.T) {
+	b, fm, rec, now := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	fm.exp = func(MintInput) time.Time { return now.Add(time.Minute) } // never a cache hit
+	for _, name := range []string{"a", "b"} {
+		for i := 0; i < mintsPerMinute; i++ {
+			if w := callBody(b, tokA("claude-3"), `{"name":"`+name+`"}`); w.Code != 200 {
+				t.Fatalf("%s mint %d: %d", name, i, w.Code)
+			}
+		}
+	}
+	for _, name := range []string{"a", "b", "a", "b"} {
+		if w := callBody(b, tokA("claude-3"), `{"name":"`+name+`"}`); w.Code != http.StatusTooManyRequests {
+			t.Fatalf("%s over the limit: %d", name, w.Code)
+		}
+	}
+	var entries []string
+	for _, r := range rec.rows {
+		if r.Outcome == OutcomeRateLimited {
+			entries = append(entries, r.Entry)
+		}
+	}
+	if len(entries) != 2 || entries[0] != "a" || entries[1] != "b" {
+		t.Fatalf("rate-limited rows name %v, want [a b]", entries)
+	}
+	*now = now.Add(time.Second)
+	callBody(b, tokA("claude-3"), `{"name":"a"}`)
+	callBody(b, tokA("claude-3"), `{"name":"b"}`)
+	noted := map[string]int{} // each suppressed count rides on its own connection's row
+	for _, r := range rec.rows[2:] {
+		if strings.Contains(r.Error, "+1 similar refusals suppressed") {
+			noted[r.Entry]++
+		}
+	}
+	if noted["a"] != 1 || noted["b"] != 1 {
+		t.Fatalf("suppressed notes by entry %v, rows %+v", noted, rec.rows)
+	}
+}
+
+// Refusals of names that are not bound are not keyed by name: an agent cycling
+// made-up names must not be able to flood the audit log.
+func TestUnboundNameRefusalsStillCollapse(t *testing.T) {
+	b, _, rec, now := setup(t, map[string]SessionView{"claude-3": liveConns()})
+	for _, name := range []string{"x1", "x2", "x3", "x4"} {
+		if w := callBody(b, tokA("claude-3"), `{"name":"`+name+`"}`); w.Code != http.StatusForbidden {
+			t.Fatalf("%s: %d", name, w.Code)
+		}
+	}
+	if len(rec.rows) != 1 || rec.rows[0].Outcome != OutcomeDeniedScope {
+		t.Fatalf("burst rows: %+v", rec.rows)
+	}
+	*now = now.Add(time.Second)
+	callBody(b, tokA("claude-3"), `{"name":"x5"}`)
+	if len(rec.rows) != 2 || !strings.Contains(rec.rows[1].Error, "+3 similar refusals suppressed") {
+		t.Fatalf("rows after the window: %+v", rec.rows)
 	}
 }

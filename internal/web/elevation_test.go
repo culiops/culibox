@@ -19,11 +19,17 @@ import (
 type fakeElev struct {
 	grants, drops, refused []string
 	sso                    int
+	ssoNames               []string
 	grantErr, ssoErr       error
 }
 
-func (f *fakeElev) Grant(id string, minutes int, reason, label, cred string) (broker.ElevationView, error) {
-	f.grants = append(f.grants, fmt.Sprintf("%s/%d/%s/%s/%s", id, minutes, reason, label, cred))
+// Grant records id/minutes/reason/label/cred, plus /name when one was sent.
+func (f *fakeElev) Grant(id string, req broker.ElevateRequest) (broker.ElevationView, error) {
+	g := fmt.Sprintf("%s/%d/%s/%s/%s", id, req.Minutes, req.Reason, req.ConfirmLabel, req.Cred)
+	if req.Name != "" {
+		g += "/" + req.Name
+	}
+	f.grants = append(f.grants, g)
 	if f.grantErr != nil {
 		return broker.ElevationView{}, f.grantErr
 	}
@@ -37,8 +43,9 @@ func (f *fakeElev) Drop(id, cred string) (broker.ElevationView, error) {
 
 func (f *fakeElev) Refused(id, cred, reason string) { f.refused = append(f.refused, id+"/"+cred) }
 
-func (f *fakeElev) SSOLogin(id string) (ssologin.State, error) {
+func (f *fakeElev) SSOLogin(id, name string) (ssologin.State, error) {
 	f.sso++
+	f.ssoNames = append(f.ssoNames, name)
 	if f.ssoErr != nil {
 		return ssologin.State{}, f.ssoErr
 	}
@@ -48,7 +55,11 @@ func (f *fakeElev) SSOLogin(id string) (ssologin.State, error) {
 const host = "100.76.118.121:8913"
 
 func elevReq(method, path, origin, fetchSite string, kind credKind) *http.Request {
-	r := httptest.NewRequest(method, path, strings.NewReader(`{"minutes":60,"reason":"apply"}`))
+	body := "" // sso-login: the legacy client sends no body
+	if strings.HasSuffix(path, elevateSuffix) {
+		body = `{"minutes":60,"reason":"apply"}`
+	}
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	r.Host = host
 	if origin != "" {
 		r.Header.Set("Origin", origin)
@@ -246,35 +257,106 @@ func TestSSOLoginSuccessBody(t *testing.T) {
 }
 
 // The sign-in profile comes from the session's recorded binding, inside the
-// service: the handler hands it the session id and nothing from the request.
+// service: the handler hands it the session id and at most a connection name,
+// nothing else from the request. A body naming anything else is refused.
 func TestSSOLoginProfileComesFromTheSession(t *testing.T) {
-	var gotID string
-	calls := 0
-	svc := ssoSpy{f: &fakeElev{}, on: func(id string) { gotID = id; calls++ }}
-	r := elevReq("POST", "/api/sessions/aws-1/aws/sso-login?profile=evil&source_profile=evil", "http://"+host, "", credCookie)
-	r.Body = io.NopCloser(strings.NewReader(`{"profile":"evil","source_profile":"evil","command":"rm -rf /"}`))
-	r.Header.Set("X-Profile", "evil")
-	w := httptest.NewRecorder()
-	(&API{Sessions: &mockSvc{}, Elevation: svc}).handleSession(w, r)
-	if w.Code != 200 || calls != 1 || gotID != "aws-1" {
-		t.Fatalf("%d calls %d id %q", w.Code, calls, gotID)
+	type got struct{ id, name string }
+	var calls []got
+	svc := ssoSpy{f: &fakeElev{}, on: func(id, name string) { calls = append(calls, got{id, name}) }}
+	send := func(body string) *httptest.ResponseRecorder {
+		r := elevReq("POST", "/api/sessions/aws-1/aws/sso-login?profile=evil&source_profile=evil", "http://"+host, "", credCookie)
+		r.Body = io.NopCloser(strings.NewReader(body))
+		r.Header.Set("X-Profile", "evil")
+		w := httptest.NewRecorder()
+		(&API{Sessions: &mockSvc{}, Elevation: svc}).handleSession(w, r)
+		return w
 	}
-	if strings.Contains(w.Body.String(), "evil") {
-		t.Errorf("request text echoed: %s", w.Body)
+	for _, body := range []string{`{"profile":"evil","source_profile":"evil","command":"rm -rf /"}`,
+		`{"name":"a","source_profile":"evil"}`, `{"name":"a"}{"name":"b"}`, `{"name":1}`, "{"} {
+		if w := send(body); w.Code != 400 || len(calls) != 0 || strings.Contains(w.Body.String(), "evil") {
+			t.Fatalf("body %s: %d calls %v %s", body, w.Code, calls, w.Body)
+		}
+	}
+	for _, c := range []struct{ body, name string }{{"", ""}, {" \n", ""}, {`{"name":"a"}`, "a"}, {`{}`, ""}} {
+		calls = nil
+		w := send(c.body)
+		if w.Code != 200 || len(calls) != 1 || calls[0] != (got{"aws-1", c.name}) {
+			t.Fatalf("body %q: %d calls %v", c.body, w.Code, calls)
+		}
+		if strings.Contains(w.Body.String(), "evil") {
+			t.Errorf("request text echoed: %s", w.Body)
+		}
+	}
+}
+
+// An unbound or missing connection name is the caller's mistake: 400.
+func TestSSOLoginUnboundNameIs400(t *testing.T) {
+	f := &fakeElev{ssoErr: fmt.Errorf("%w: no such connection", ErrConnectionName)}
+	r := elevReq("POST", "/api/sessions/aws-1/aws/sso-login", "http://"+host, "", credCookie)
+	r.Body = io.NopCloser(strings.NewReader(`{"name":"zzz"}`))
+	w := httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(w, r)
+	if w.Code != 400 || f.ssoNames[0] != "zzz" {
+		t.Fatalf("%d %s %v", w.Code, w.Body, f.ssoNames)
+	}
+}
+
+func TestHandleElevateNamePassedThrough(t *testing.T) {
+	f := &fakeElev{}
+	r := elevReq("POST", "/api/sessions/aws-1/aws/elevate", "http://"+host, "", credCookie)
+	r.Body = io.NopCloser(strings.NewReader(`{"minutes":30,"reason":"r","confirm_label":"L","name":"sbx-a"}`))
+	(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(httptest.NewRecorder(), r)
+	if len(f.grants) != 1 || f.grants[0] != "aws-1/30/r/L/cookie/sbx-a" {
+		t.Fatalf("grants %v", f.grants)
+	}
+	f = &fakeElev{}
+	r = elevReq("POST", "/api/sessions/aws-1/aws/elevate", "http://"+host, "", credCookie)
+	r.Body = io.NopCloser(strings.NewReader(`{"minutes":30,"name":"sbx-a","source_profile":"evil"}`))
+	w := httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(w, r)
+	if w.Code != 400 || len(f.grants) != 0 {
+		t.Fatalf("unknown field: %d %v", w.Code, f.grants)
+	}
+}
+
+// A legacy grant body (no name) reaches the service exactly as before.
+func TestLegacyElevateBodyUnchanged(t *testing.T) {
+	f := &fakeElev{}
+	r := elevReq("POST", "/api/sessions/aws-1/aws/elevate", "http://"+host, "", credCookie)
+	r.Body = io.NopCloser(strings.NewReader(`{"minutes":60,"reason":"apply vpc","confirm_label":"sandbox"}`))
+	w := httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(w, r)
+	if w.Code != 200 || len(f.grants) != 1 || f.grants[0] != "aws-1/60/apply vpc/sandbox/cookie" {
+		t.Fatalf("%d grants %v", w.Code, f.grants)
+	}
+}
+
+// DELETE never takes or checks a name: a body is ignored and the window drops.
+func TestDropIgnoresName(t *testing.T) {
+	f := &fakeElev{}
+	r := elevReq("DELETE", "/api/sessions/aws-1/aws/elevate", "", "", credCookie)
+	r.Body = io.NopCloser(strings.NewReader(`{"name":"zzz","extra":true}`))
+	w := httptest.NewRecorder()
+	(&API{Sessions: &mockSvc{}, Elevation: f}).handleSession(w, r)
+	if w.Code != 200 || len(f.drops) != 1 || f.drops[0] != "aws-1/cookie" {
+		t.Fatalf("%d drops %v", w.Code, f.drops)
 	}
 }
 
 type ssoSpy struct {
 	f  *fakeElev
-	on func(id string)
+	on func(id, name string)
 }
 
-func (s ssoSpy) Grant(id string, m int, r, l, c string) (broker.ElevationView, error) {
-	return s.f.Grant(id, m, r, l, c)
+func (s ssoSpy) Grant(id string, req broker.ElevateRequest) (broker.ElevationView, error) {
+	return s.f.Grant(id, req)
 }
 func (s ssoSpy) Drop(id, c string) (broker.ElevationView, error) { return s.f.Drop(id, c) }
 func (s ssoSpy) Refused(id, c, r string)                         { s.f.Refused(id, c, r) }
-func (s ssoSpy) SSOLogin(id string) (ssologin.State, error)      { s.on(id); return s.f.SSOLogin(id) }
+func (s ssoSpy) SSOLogin(id, name string) (ssologin.State, error) {
+	s.on(id, name)
+	return s.f.SSOLogin(id, name)
+}
 
 func TestElevationRoutesAre404WithoutTheBroker(t *testing.T) {
 	for _, p := range []string{"elevate", "sso-login"} {

@@ -389,3 +389,48 @@ func TestFaviconsAreServed(t *testing.T) {
 		}
 	}
 }
+
+// The profile editor's AWS connections picker is fed by /api/meta. It may know
+// a connection's name, label, account, region and whether it can write; never
+// the source profile (an SSO profile name is the host's own).
+func TestMetaListsAWSConnectionsWithoutSourceProfile(t *testing.T) {
+	pm := NewProfileManager([]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}}, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.SetAWSConnections([]config.AWSConnection{
+		{Name: "sbx-a", Description: "sandbox a", AWSBinding: config.AWSBinding{
+			SourceProfile: "corp-sso-secret", RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent", Region: "ap-southeast-1", Label: "Sandbox A",
+			Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent-write"}}},
+		{Name: "prd-b", AWSBinding: config.AWSBinding{
+			SourceProfile: "other-sso-secret", RoleARN: "arn:aws:iam::210987654321:role/agentbox-agent", Region: "us-east-1", Prod: true}},
+	})
+	got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, Profiles: pm})
+	list, _ := got["aws_connections"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("aws_connections = %v, want 2 entries", got["aws_connections"])
+	}
+	a, _ := list[0].(map[string]any)
+	if a["name"] != "sbx-a" || a["label"] != "Sandbox A" || a["account_id"] != "123456789012" || a["region"] != "ap-southeast-1" ||
+		a["description"] != "sandbox a" || a["write_capable"] != true || a["prod"] != false {
+		t.Fatalf("first entry = %v", a)
+	}
+	b, _ := list[1].(map[string]any)
+	if b["name"] != "prd-b" || b["account_id"] != "210987654321" || b["prod"] != true || b["write_capable"] != false {
+		t.Fatalf("second entry = %v", b)
+	}
+	for _, e := range []map[string]any{a, b} {
+		if _, ok := e["source_profile"]; ok {
+			t.Errorf("entry %v carries source_profile", e)
+		}
+	}
+	raw, _ := json.Marshal(got)
+	for _, banned := range []string{"source_profile", "corp-sso-secret", "other-sso-secret", "role_arn", "agentbox-agent", "elevate"} {
+		if strings.Contains(string(raw), banned) {
+			t.Errorf("the bootstrap payload carries %q: %s", banned, raw)
+		}
+	}
+
+	// none defined: [] on the wire, never null
+	got = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, Profiles: NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})})
+	if l, ok := got["aws_connections"].([]any); !ok || len(l) != 0 {
+		t.Fatalf("aws_connections with none defined = %v, want []", got["aws_connections"])
+	}
+}

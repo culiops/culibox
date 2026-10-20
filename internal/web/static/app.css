@@ -199,6 +199,22 @@
        command to run) wraps instead of clipping. */
     .kv .bdg { align-self: center; }
     .kv.wrap .v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
+    /* One block per named AWS connection (steer rail): name and chips, then the
+       muted identity line, then the counters or the last error. Existing tokens
+       only; the chips are the rail's own .bdg ones. */
+    .connblk { padding: 6px 0; border-top: 1px solid var(--border); }
+    .connblk .connl1 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+    .connblk .connnm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .connblk .connln { margin: 2px 0 0; overflow-wrap: anywhere; }
+    .connblk .connln.err { color: var(--danger); }
+    .connmore { margin: 6px 0 0; }
+    /* Write access: the connection picker sits above the buttons with the rail's
+       usual control gap, and never widens the rail. Two names share the width as
+       a segmented control; three or more are a select. */
+    #steer-elev > .fcol { margin-bottom: 8px; }
+    #steer-elev .connseg { display: flex; max-width: 100%; }
+    #steer-elev .connseg button { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #steer-elev .connsel { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
     /* Write elevation (steer rail, desktop only): the Elevate/Extend/Drop buttons
        and the inline grant panel. #steer-elev is a .rsec; hidden when the binding
        has no write role. */
@@ -1131,6 +1147,9 @@
     .pf-check { display: flex; align-items: center; gap: 8px; }
     /* The AWS block is greyed with the rest of the editor's .off controls when
        the host tier (or a lock) closes it; the hint says why. */
+    #pf-awsc-block { margin-top: 14px; }
+    #pf-awsc-block > .flab { display: block; margin-bottom: 6px; }
+    #pf-awsc-hint, #pf-awsc-note, #pf-awsc-none, #pf-aws-note { margin: 0 0 8px; }
     #pf-aws-block { margin-top: 14px; }
     #pf-aws-block > .flab { display: block; margin-bottom: 6px; }
     #pf-aws-hint { margin: 0 0 8px; }
@@ -1158,6 +1177,8 @@
     #pf-st-hint, #pf-st-none { margin: 0 0 8px; }
     .pf-st-group { display: block; margin: 8px 0 2px; }
     .pf-st-entry { align-items: flex-start; margin-bottom: 6px; }
+    /* A closed AWS picker row dims whole (the Tokens picker dims only its box). */
+    #pf-awsc-list .pf-st-entry.off { opacity: .42; cursor: not-allowed; }
     .pf-st-entry input[type="checkbox"] { margin-top: 3px; flex: none; }
     .pf-st-text { min-width: 0; overflow-wrap: anywhere; }
     .pf-st-line { display: block; }
@@ -1445,6 +1466,17 @@
        it as a control. Same fill as the pointer hover state, not a new colour. */
     @media (hover: none) {
       .cell-bar .tab:not(.act) { background: var(--surface-2); }
+    }
+    /* A tab whose chip is the named-connections one (.bdg.aws.conns) has a longer
+       chip than a plain tab, so in a narrow pane its session name is capped short
+       (ellipsis) and 1-2 such tabs still fit beside the pane's sticky controls.
+       Tabs are NOT made shrinkable: they keep their content width, so they never
+       overlap, and past what fits the strip scrolls exactly as it always has. Only
+       connection chips are matched; plain and legacy single-binding tabs are
+       untouched. */
+    .cell-bar { container-type: inline-size; }
+    @container (max-width: 560px) {
+      .cell-bar .tab:has(.bdg.aws.conns) .tab-label { max-width: 7ch; }
     }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
@@ -2071,7 +2103,7 @@
       .pf-gh-owner .fcol.rm .btn { min-height: var(--tap); width: var(--tap); padding: 0; }
       #pf-gh-perms .pf-check { min-height: var(--tap); }
       .pf-st-entry { min-height: var(--tap); }
-      #pf-st-list input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
+      #pf-awsc-list input[type="checkbox"], #pf-st-list input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       #pf-gh-perms input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; }
       /* The containment segments and the token row's own buttons are controls
          this slice added too; nothing else sizes them for a finger. A profile

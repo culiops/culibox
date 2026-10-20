@@ -104,6 +104,8 @@ func TestEgressLookup(t *testing.T) {
 		"claude-3": {ID: "claude-3", Box: "agent-box-x", Runtime: config.RuntimeBox, AWS: wireBinding(), BrokerNonce: "broker-only", EgressNonce: egressNonce},
 		"claude-4": {ID: "claude-4", Runtime: config.RuntimeHost, AWS: wireBinding(), EgressNonce: egressNonce},
 		"claude-5": {ID: "claude-5", Box: "agent-box-y", Runtime: config.RuntimeBox, EgressNonce: egressNonce},
+		"claude-7": {ID: "claude-7", Box: "agent-box-w", Runtime: config.RuntimeBox, EgressNonce: egressNonce,
+			AWSConns: []config.AWSConnection{{Name: "sbx-a", AWSBinding: *wireBinding()}}},
 		"claude-6": {ID: "claude-6", Box: "agent-box-z", Runtime: config.RuntimeBox, EgressNonce: egressNonce,
 			Tokens: []config.StaticToken{{Name: "sentry"}}, PATs: []config.StaticToken{{Name: "gh-pat-acme"}}},
 	}
@@ -123,6 +125,11 @@ func TestEgressLookup(t *testing.T) {
 	// The spawn-time token entries reach the proxy, which binds on them.
 	if v, ok := look("claude-6"); !ok || len(v.Tokens) != 1 || v.Tokens[0].Name != "sentry" || len(v.PATs) != 1 || v.PATs[0].Name != "gh-pat-acme" {
 		t.Errorf("token session: %+v %v", v, ok)
+	}
+	// Named AWS connections reach the proxy too: without them a connection-bound
+	// session would read as unbound and get open egress.
+	if v, ok := look("claude-7"); !ok || v.AWS != nil || len(v.AWSConns) != 1 || v.AWSConns[0].Name != "sbx-a" {
+		t.Errorf("connection session: %+v %v", v, ok)
 	}
 	// Left the registry: unknown, so the proxy refuses it (no stale admit).
 	delete(sessions, "claude-3")

@@ -1,11 +1,13 @@
 package broker
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -40,7 +42,10 @@ type SessionView struct {
 	// refused without it.
 	Exclusive bool
 	AWS       *config.AWSBinding
-	GitHub    *config.GitHubBinding
+	// AWSConns are the named AWS connections the session may mint by name
+	// (clones, sorted by name); exclusive with AWS.
+	AWSConns []config.AWSConnection
+	GitHub   *config.GitHubBinding
 	// Tokens are the static-token entries the session may fetch by name; PATs
 	// are the entries its GitHub owners use as a personal access token.
 	Tokens []config.StaticToken
@@ -100,6 +105,11 @@ type cached struct {
 	scopeKey string // the binding hash, plus the window end for an elevated credential
 }
 
+// connKey scopes per-session AWS state to one connection. conn "" is the
+// legacy single binding, so a session without connections keeps exactly one
+// key per session.
+type connKey struct{ sid, conn string }
+
 type Broker struct {
 	secret []byte
 	lookup Lookup
@@ -111,16 +121,17 @@ type Broker struct {
 	resolve credref.Resolver
 
 	mu        sync.Mutex
-	cache     map[string]cached
+	cache     map[connKey]cached
 	mintTimes map[bucketKey][]time.Time
-	stats     map[string]*Stats
+	stats     map[string]*Stats  // per session: the aggregate over every connection
+	connStats map[connKey]*Stats // per named connection, parallel to stats; never holds conn ""
 	denied    map[deniedKey]*deniedState
 	lastPrune time.Time
 
 	// Elevation overlay (elevate.go); all guarded by mu except after/claimCheck/appr,
 	// which are set before the broker serves.
 	elev       map[string]*elevation
-	dropped    map[string]time.Time // sid -> latest Expiration still valid after a drop
+	dropped    map[string]droppedWin // sid -> the connection and latest Expiration still valid after a drop
 	gen        uint64
 	refused    map[refusedKey]time.Time
 	lastRefuse time.Time
@@ -131,7 +142,7 @@ type Broker struct {
 	// SSO expiry (sso.go); guarded by mu.
 	srcKeys map[string]string    // source profile -> its sourceKey, read once
 	ssoBad  map[string]time.Time // sourceKey -> when a mint last failed on it
-	ssoNeed map[string]string    // session id -> the sourceKey that session's mint failed on
+	ssoNeed map[connKey]string   // session + connection -> the sourceKey that mint failed on
 
 	// GitHub tokens (github.go); gh is set before the broker serves, the maps are guarded by mu.
 	gh       GitHubMinter
@@ -146,10 +157,15 @@ type Broker struct {
 }
 
 // deniedKey scopes the audit throttle: sid is the MAC-verified session id, or
-// "" for denied_token (whose claimed id is never trusted).
+// "" for denied_token (whose claimed id is never trusted). conn is set only for
+// a rate-limited row of a bound connection (at most maxBoundAWSConnections per
+// session), so each connection's row keeps its own entry; refusals of unbound
+// names are never keyed by name, or a client cycling made-up names would flood
+// the audit log.
 type deniedKey struct {
 	outcome Outcome
 	sid     string
+	conn    string
 }
 
 // deniedState is the last row written for a key and how many were dropped since.
@@ -162,10 +178,11 @@ const deniedWindow = time.Second
 
 func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 	b := &Broker{secret: secret, lookup: lookup, minter: m, rec: rec, now: time.Now, resolve: credref.Default{},
-		cache: map[string]cached{}, mintTimes: map[bucketKey][]time.Time{}, stats: map[string]*Stats{},
-		denied: map[deniedKey]*deniedState{},
-		elev:   map[string]*elevation{}, dropped: map[string]time.Time{}, refused: map[refusedKey]time.Time{},
-		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[string]string{},
+		cache: map[connKey]cached{}, mintTimes: map[bucketKey][]time.Time{}, stats: map[string]*Stats{},
+		connStats: map[connKey]*Stats{},
+		denied:    map[deniedKey]*deniedState{},
+		elev:      map[string]*elevation{}, dropped: map[string]droppedWin{}, refused: map[refusedKey]time.Time{},
+		srcKeys: map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
@@ -186,20 +203,50 @@ func (b *Broker) Stats(sessionID string) (Stats, bool) {
 	return *s, true
 }
 
+// ConnStats is a copy of the per-connection stats of a session, by connection
+// name. A session without connections has none.
+func (b *Broker) ConnStats(sessionID string) map[string]Stats {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := map[string]Stats{}
+	for k, s := range b.connStats {
+		if k.sid == sessionID {
+			out[k.conn] = *s
+		}
+	}
+	return out
+}
+
 // Forget drops everything held for a session. The session layer calls it when a
 // session is removed, so per-session state does not outlive the session.
 func (b *Broker) Forget(sessionID string) {
 	b.mu.Lock()
-	delete(b.cache, sessionID)
-	delete(b.mintTimes, bucketKey{sessionID, bucketMint})
-	delete(b.mintTimes, bucketKey{sessionID, bucketStatic})
+	for k := range b.cache {
+		if k.sid == sessionID {
+			delete(b.cache, k)
+		}
+	}
+	for k := range b.connStats {
+		if k.sid == sessionID {
+			delete(b.connStats, k)
+		}
+	}
+	for k := range b.ssoNeed {
+		if k.sid == sessionID {
+			delete(b.ssoNeed, k)
+		}
+	}
+	for k := range b.mintTimes {
+		if k.sid == sessionID { // every bucket of the session, named or not
+			delete(b.mintTimes, k)
+		}
+	}
 	delete(b.stats, sessionID)
 	if e := b.elev[sessionID]; e != nil {
 		e.timer.Stop()
 		delete(b.elev, sessionID)
 	}
 	delete(b.dropped, sessionID)
-	delete(b.ssoNeed, sessionID)
 	toks := b.forgetGitHubLocked(sessionID)
 	delete(b.refused, refusedKey{sessionID, CredCookie})
 	delete(b.refused, refusedKey{sessionID, CredBearer})
@@ -241,24 +288,55 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		replyErr(w, http.StatusForbidden, "this session is not a live boxed session with an AWS binding") // same text for every reason: no oracle to the box
 		return
 	}
-	bnd := *sv.AWS // a shallow copy: bnd.Elevate is shared with the session, read it only
+	name, ok := readConnName(w, r)
+	if !ok {
+		return
+	}
+	// conn "" is the legacy single binding: its cache key, rate bucket, scope
+	// hash and audit rows are exactly what they were before connections.
+	var conn, scope string
+	var bnd config.AWSBinding // a shallow copy: bnd.Elevate is shared with the session, read it only
+	if len(sv.AWSConns) > 0 {
+		c, boxMsg, entry, why := resolveConn(sv.AWSConns, name)
+		if why != "" {
+			row := Row{Time: now, SessionID: sid, Profile: sv.Agent, Outcome: OutcomeDeniedScope, Error: why,
+				Entry: entry, ScopeHash: config.AWSConnsHash(sv.AWSConns)}
+			b.recordDenied(row)
+			replyErr(w, http.StatusForbidden, boxMsg)
+			return
+		}
+		conn, bnd, scope = c.Name, c.AWSBinding, c.DefHash() // not c.Hash(): that ignores name and description
+	} else {
+		if name != "" { // a legacy binding has no names: any name is unbound
+			entry := name
+			if !config.ValidTokenName(name) {
+				entry = invalidEntry
+			}
+			b.recordDenied(Row{Time: now, SessionID: sid, Profile: sv.Agent, Outcome: OutcomeDeniedScope,
+				Error: "connection not bound", Entry: entry, ScopeHash: sv.AWS.Hash()})
+			replyErr(w, http.StatusForbidden, noConnReply(name))
+			return
+		}
+		bnd = *sv.AWS
+		scope = bnd.Hash()
+	}
+	ck := connKey{sid, conn}
 	base := Row{Time: now, SessionID: sid, Profile: sv.Agent, AccountID: awsscope.AccountOf(bnd.RoleARN),
-		RoleARN: bnd.RoleARN, SourceIdentity: awsscope.SessionName(sid), ScopeHash: bnd.Hash()}
+		RoleARN: bnd.RoleARN, SourceIdentity: awsscope.SessionName(sid), ScopeHash: scope, Entry: conn}
 
 	// Attempt 0 mints what the window allows. Attempt 1 exists only to fall back to
 	// read-only after an elevated credential was discarded below; it never loops.
 	for attempt := 0; attempt < 2; attempt++ {
 		b.mu.Lock()
-		p := b.planLocked(sid, bnd, now, attempt > 0)
-		st := b.statsLocked(sid)
-		if c, ok := b.cache[sid]; ok && c.nonce == nonce && c.scopeKey == p.key &&
+		p := b.planLocked(sid, conn, bnd, scope, now, attempt > 0)
+		if c, ok := b.cache[ck]; ok && c.nonce == nonce && c.scopeKey == p.key &&
 			c.creds.Expiration.Sub(now) > refreshMargin {
-			st.CacheHits++
+			b.eachStatsLocked(ck, func(st *Stats) { st.CacheHits++ })
 			b.mu.Unlock()
 			writeCreds(w, c.creds)
 			return
 		}
-		if attempt == 0 && !b.allowLocked(sid, bucketMint, now) { // the fallback mint is not a second request
+		if attempt == 0 && !b.allowMintLocked(ck, now) { // the fallback mint is not a second request
 			b.mu.Unlock()
 			row := base
 			row.Outcome = OutcomeRateLimited
@@ -287,7 +365,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ErrSSOExpired) {
 			key := b.SourceKeyOf(bnd.SourceProfile)
 			b.mu.Lock()
-			b.ssoBad[key], b.ssoNeed[sid] = now, key
+			b.ssoBad[key], b.ssoNeed[ck] = now, key
 			b.mu.Unlock()
 			boxMsg := fmt.Sprintf(
 				`SSO session for profile %q expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile %s" on the host).`,
@@ -333,7 +411,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		if err := b.rec.Record(row); err != nil {
 			log.Printf("broker: audit write failed (%v); credential for %s withheld", err, sid) // the row holds identifiers only
 			b.mu.Lock()
-			b.statsLocked(sid).LastError = "the credential could not be audited, so it was not issued"
+			b.eachStatsLocked(ck, func(st *Stats) { st.LastError = "the credential could not be audited, so it was not issued" })
 			b.mu.Unlock()
 			replyErr(w, http.StatusServiceUnavailable, "agent-box could not audit this credential, so it was not issued; retry shortly")
 			return
@@ -352,10 +430,11 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		if p.elevated {
 			b.noteElevatedExp(sid, c.Expiration) // same critical section as the check: a drop now sees it
 		}
-		b.cache[sid] = cached{creds: c, nonce: nonce, scopeKey: p.key}
-		st = b.statsLocked(sid)
-		st.Mints++
-		st.LastMint, st.LastError = now, ""
+		b.cache[ck] = cached{creds: c, nonce: nonce, scopeKey: p.key}
+		b.eachStatsLocked(ck, func(st *Stats) {
+			st.Mints++
+			st.LastMint, st.LastError = now, ""
+		})
 		b.mu.Unlock()
 		writeCreds(w, c)
 		return
@@ -386,8 +465,9 @@ func (b *Broker) discardReasonLocked(sid string, p mintPlan, c Creds, now time.T
 }
 
 // mintPlan is what one mint attempt will ask STS for. key is the cache key: the
-// binding hash, plus the window end for an elevated credential so a grant,
-// extend or drop never reuses a credential minted under another window.
+// scope key (the binding hash, or a connection's DefHash), plus the window end
+// for an elevated credential so a grant, extend or drop never reuses a
+// credential minted under another window.
 type mintPlan struct {
 	elevated  bool
 	until     time.Time
@@ -398,12 +478,16 @@ type mintPlan struct {
 // planLocked decides, under b.mu, whether a mint is elevated (spec §5.2): only
 // while elevatedLocked says a window is in force with enough time left, and only
 // if the binding still has an elevate role. forceRead is the read-only fallback.
-func (b *Broker) planLocked(sid string, bnd config.AWSBinding, now time.Time, forceRead bool) mintPlan {
-	p := mintPlan{key: bnd.Hash(), role: bnd.RoleARN}
+// The window belongs to one connection (elevation.conn): any other connection
+// of the session plans read-only with its own role and policy, so an elevated
+// credential is never minted for, or served to, a connection the human did not
+// grant.
+func (b *Broker) planLocked(sid, conn string, bnd config.AWSBinding, key string, now time.Time, forceRead bool) mintPlan {
+	p := mintPlan{key: key, role: bnd.RoleARN}
 	if forceRead || bnd.Elevate == nil {
 		return p
 	}
-	if e, ok := b.elevatedLocked(sid, now); ok {
+	if e, ok := b.elevatedLocked(sid, now); ok && e.conn == conn {
 		p.elevated, p.until, p.gen = true, e.until, e.gen
 		// gen too: Drop leaves the cache alone, so a later window ending in the
 		// same second must not hit the dropped window's credential.
@@ -421,7 +505,7 @@ func (b *Broker) fail(w http.ResponseWriter, row Row, o Outcome, status int, msg
 // host-side detail) for the audit row and Stats.LastError.
 func (b *Broker) failSplit(w http.ResponseWriter, row Row, o Outcome, status int, boxMsg, hostMsg string) {
 	b.mu.Lock()
-	b.statsLocked(row.SessionID).LastError = hostMsg
+	b.eachStatsLocked(connKey{row.SessionID, row.Entry}, func(st *Stats) { st.LastError = hostMsg }) // Entry is the connection ("" = legacy)
 	b.mu.Unlock()
 	row.Outcome, row.Error = o, hostMsg
 	b.record(row)
@@ -461,6 +545,21 @@ func stsHint(code string) string {
 	return "see the agent-box audit log on the host for details"
 }
 
+// eachStatsLocked applies f to the session's aggregate stats and, for a named
+// connection, to that connection's stats as well.
+func (b *Broker) eachStatsLocked(ck connKey, f func(*Stats)) {
+	f(b.statsLocked(ck.sid))
+	if ck.conn == "" {
+		return
+	}
+	s, ok := b.connStats[ck]
+	if !ok {
+		s = &Stats{}
+		b.connStats[ck] = s
+	}
+	f(s)
+}
+
 func (b *Broker) statsLocked(sid string) *Stats {
 	s, ok := b.stats[sid]
 	if !ok {
@@ -478,19 +577,37 @@ type bucket int
 const (
 	bucketMint bucket = iota
 	bucketStatic
+	// bucketAWSConn counts the mints of one named AWS connection (the key's
+	// name); a connection's burst never starves another's. Legacy mints stay in
+	// bucketMint, shared with GitHub App tokens.
+	bucketAWSConn
 )
 
 type bucketKey struct {
 	sid  string
 	kind bucket
+	name string // the connection, for bucketAWSConn only
+}
+
+// allowMintLocked takes one slot of the bucket an AWS mint counts in: the
+// connection's own, or the shared mint bucket for the legacy binding.
+func (b *Broker) allowMintLocked(ck connKey, now time.Time) bool {
+	if ck.conn == "" {
+		return b.allowLocked(ck.sid, bucketMint, now)
+	}
+	return b.allowNamedLocked(ck.sid, bucketAWSConn, ck.conn, now)
 }
 
 func (b *Broker) allowLocked(sid string, k bucket, now time.Time) bool {
+	return b.allowNamedLocked(sid, k, "", now)
+}
+
+func (b *Broker) allowNamedLocked(sid string, k bucket, name string, now time.Time) bool {
 	limit := mintsPerMinute
 	if k == bucketStatic {
 		limit = staticFetchesPerMinute
 	}
-	key := bucketKey{sid, k}
+	key := bucketKey{sid, k, name}
 	kept := b.mintTimes[key][:0]
 	for _, t := range b.mintTimes[key] {
 		if now.Sub(t) < time.Minute {
@@ -505,14 +622,17 @@ func (b *Broker) allowLocked(sid string, k bucket, now time.Time) bool {
 	return true
 }
 
-// recordDenied writes at most one row per (outcome, session) per second, so a
+// recordDenied writes at most one row per (outcome, session[, connection]) per second, so a
 // looping or hostile client cannot grow the audit store without bound, and a
 // probe of one session cannot mask another's row. Dropped requests are counted
 // and the count rides on the next row for that key ("+N similar refusals
 // suppressed"). A key that goes quiet with a pending count is flushed as a
 // summary row the next time the (at most once-a-second) prune runs.
 func (b *Broker) recordDenied(r Row) {
-	key := deniedKey{r.Outcome, r.SessionID}
+	key := deniedKey{outcome: r.Outcome, sid: r.SessionID}
+	if r.Outcome == OutcomeRateLimited {
+		key.conn = r.Entry // always a bound connection name, or "" for the legacy binding
+	}
 	var out []Row
 	b.mu.Lock()
 	if b.now().Sub(b.lastPrune) >= deniedWindow {
@@ -563,7 +683,7 @@ func refusalReason(sv SessionView, found bool, nonce string, k bindingKind) stri
 		return "not live"
 	case !sv.Boxed:
 		return "not boxed"
-	case k == kindAWS && sv.AWS == nil, k == kindGitHub && sv.GitHub == nil:
+	case k == kindAWS && sv.AWS == nil && len(sv.AWSConns) == 0, k == kindGitHub && sv.GitHub == nil:
 		return "no binding"
 	case k == kindStatic && len(sv.Tokens) == 0:
 		return "no binding"
@@ -604,4 +724,65 @@ func replyErr(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// invalidEntry is what an audit row records for a connection name that fails
+// the name rule: never the raw input.
+const invalidEntry = "(invalid)"
+
+type awsCredRequest struct {
+	Name string `json:"name"`
+}
+
+// readConnName reads the optional request body: empty means the legacy binding
+// (name ""), otherwise exactly {"name":"..."}, at most maxStaticBody bytes. On
+// a bad body it has already replied and ok is false.
+func readConnName(w http.ResponseWriter, r *http.Request) (name string, ok bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStaticBody))
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			replyErr(w, http.StatusRequestEntityTooLarge, "request too large")
+		} else {
+			replyErr(w, http.StatusBadRequest, `expected {"name":"..."}`)
+		}
+		return "", false
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return "", true
+	}
+	var req awsCredRequest
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&req) != nil || dec.Decode(&struct{}{}) != io.EOF { // one object, nothing after it
+		replyErr(w, http.StatusBadRequest, `expected {"name":"..."}`)
+		return "", false
+	}
+	return req.Name, true
+}
+
+// resolveConn picks the named connection of a session that has some. why is ""
+// on success; otherwise it is the audit reason, entry the audit entry (the name,
+// or (invalid)), and boxMsg what the box is told.
+func resolveConn(conns []config.AWSConnection, name string) (c config.AWSConnection, boxMsg, entry, why string) {
+	switch {
+	case name == "":
+		return c, "name a connection: run agentbox-env --list", "", "connection name required"
+	case !config.ValidTokenName(name):
+		return c, noConnReply(name), invalidEntry, "malformed connection name"
+	}
+	c, ok := config.AWSConnByName(conns, name)
+	if !ok {
+		return c, noConnReply(name), name, "connection not bound"
+	}
+	return c, "", name, ""
+}
+
+// noConnReply is the box's answer for a name the session cannot use. A
+// malformed name is not echoed.
+func noConnReply(name string) string {
+	if !config.ValidTokenName(name) {
+		return "that is not a valid connection name: run agentbox-env --list"
+	}
+	return fmt.Sprintf("this session has no AWS connection named %q: run agentbox-env --list", name)
 }

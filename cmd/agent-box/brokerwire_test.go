@@ -236,24 +236,24 @@ func TestGrantMapsReasonLabelAndCredIntoTheBrokerRequest(t *testing.T) {
 			t.Errorf("%s: %v (want a refusal containing %q)", what, err, want)
 		}
 	}
-	_, err = e.Grant("aws-1", 30, strings.Repeat("r", 201), "x", broker.CredCookie)
+	_, err = e.Grant("aws-1", broker.ElevateRequest{Minutes: 30, Reason: strings.Repeat("r", 201), ConfirmLabel: "x", Cred: broker.CredCookie})
 	refused("201-char reason", "one line", err)
-	_, err = e.Grant("aws-1", 30, "apply", "wrong", broker.CredCookie)
+	_, err = e.Grant("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "apply", ConfirmLabel: "wrong", Cred: broker.CredCookie})
 	refused("wrong label", "type the binding label", err)
-	_, err = e.Grant("aws-1", 30, "apply", "apply", broker.CredCookie) // label and reason transposed would pass this
+	_, err = e.Grant("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "apply", ConfirmLabel: "apply", Cred: broker.CredCookie}) // label and reason transposed would pass this
 	refused("label equal to the reason", "type the binding label", err)
-	_, err = e.Grant("aws-1", 30, "apply", "x", broker.CredBearer)
+	_, err = e.Grant("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "apply", ConfirmLabel: "x", Cred: broker.CredBearer})
 	refused("bearer credential", "signed-in browser", err)
 
 	blockMsg = "another box (instance PROD) uses /w/proj"
-	_, err = e.Grant("aws-1", 30, "apply", "x", broker.CredCookie)
+	_, err = e.Grant("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "apply", ConfirmLabel: "x", Cred: broker.CredCookie})
 	refused("claim check", blockMsg, err)
 	if strings.Contains(err.Error(), "could not check") {
 		t.Errorf("the claim-check message was replaced: %v", err)
 	}
 
 	blockMsg = ""
-	v, err := e.Grant("aws-1", 30, "apply vpc", "x", broker.CredCookie)
+	v, err := e.Grant("aws-1", broker.ElevateRequest{Minutes: 30, Reason: "apply vpc", ConfirmLabel: "x", Cred: broker.CredCookie})
 	if err != nil || !v.Active || v.Reason != "apply vpc" {
 		t.Fatalf("a correct grant: %+v, %v", v, err)
 	}
@@ -300,7 +300,7 @@ func TestStopClosesTheSignInRunnerBeforeTheAuditStore(t *testing.T) {
 	}
 	brk := svc.Hooks.B
 	es := elevationService{brk: brk, runner: svc.SSO, get: func(id string) (*session.Session, bool) { s, ok := sessions[id]; return s, ok }}
-	st, err := es.SSOLogin("aws-1")
+	st, err := es.SSOLogin("aws-1", "")
 	if err != nil || st.Code != "ABCD-EFGH" {
 		t.Fatalf("start: %+v %v", st, err)
 	}
@@ -497,5 +497,19 @@ func TestEntryMCPCommandsAddsTheLauncher(t *testing.T) {
 	}
 	if entryMCPCommands(entries[:1]) != nil || entryMCPCommands(nil) != nil {
 		t.Fatal("no entry server, nothing extra to probe")
+	}
+}
+
+// A connection-bound session reaches the broker with its connections (the
+// clone it was spawned with, even if aws_connections no longer defines them)
+// and no inline binding.
+func TestBrokerSessionViewCarriesAWSConns(t *testing.T) {
+	s := boundSess("aws-1")
+	s.AWS = nil
+	s.AWSConns = []config.AWSConnection{{Name: "sbx-a", AWSBinding: *wireBinding()}}
+	s.BrokerNonce = wireNonce
+	v := brokerSessionView(s, definedTokens(nil))
+	if v.AWS != nil || len(v.AWSConns) != 1 || v.AWSConns[0].Name != "sbx-a" || !v.Boxed || v.Nonce != wireNonce {
+		t.Fatalf("view = %+v", v)
 	}
 }
