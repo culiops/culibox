@@ -30,7 +30,6 @@ import (
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/procinfo"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
@@ -161,7 +160,8 @@ func Checks(in Input) []Result {
 	sh, src := config.DetectShellSource()
 	out = append(out, Result{Pass, "shell", fmt.Sprintf("%s (from %s)", sh, src)})
 	out = append(out, checkAgents(c)...)
-	out = append(out, checkStaticTokens(c, credref.Default{})...)
+	vst := StoreFor(c, dataDir)
+	out = append(out, checkStaticTokens(c, defaultResolver(vst))...)
 	var stored []config.AgentConfig
 	st, storeErr := store.Open(c.ResolvedProfilesPath(dataDir))
 	if storeErr == nil {
@@ -169,7 +169,7 @@ func Checks(in Input) []Result {
 	}
 	out = append(out, checkAWSConns(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
 		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}))...)
-	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c))...)
+	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c, vst))...)
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out
 }

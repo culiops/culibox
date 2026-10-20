@@ -12,7 +12,8 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/config"
-	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/credref"
+	"github.com/culiops/agent-box/internal/secretchain"
 )
 
 // ClaudeBoxToken checks that every boxed claude agent in config.json names a
@@ -20,9 +21,12 @@ import (
 // login in the Keychain, which a box cannot read, and agent-box deliberately
 // does not copy it: the box gets a token made for it. Values are never printed.
 // Only config.json agents are checked; UI-created profiles are not visible here.
-func ClaudeBoxToken(c config.Config) Result {
+//
+// st is the encrypted store when a secret source names it (see StoreFor); nil
+// otherwise. A locked store counts as "does not resolve", never a pass.
+func ClaudeBoxToken(c config.Config, st credref.StoreGetter) Result {
 	const check = "boxed claude token"
-	res, rerr := secrets.New(c.SecretSources)
+	res, rerr := secretchain.New(c.SecretSources, st)
 	var missing []string
 	boxed := 0
 	for _, a := range c.Agents {

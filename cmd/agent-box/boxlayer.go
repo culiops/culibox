@@ -52,6 +52,7 @@ type boxLayer struct {
 	img        boximage.Docker
 	image      string // the fallback box image (box_image)
 	goos       string // runtime.GOOS as the layer was built; linux fences and guards every box
+	dataDir    string // the absolute data dir, for the store doctor and box setup read
 	stateRoot  string // where box homes and the bundle live; resolved on darwin
 }
 
@@ -66,7 +67,7 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 	if err != nil {
 		return nil, err
 	}
-	l := &boxLayer{goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir}
+	l := &boxLayer{goos: goos, dockerBin: bin, image: cfg.BoxImageOrDefault(), stateRoot: dataDir, dataDir: dataDir}
 	if goos == "darwin" {
 		colima, err := boxvm.LookColima(cfg.ColimaBin)
 		if err != nil {

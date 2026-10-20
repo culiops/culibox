@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -22,14 +23,17 @@ const usage = `usage:
   agent-box box status                                 list boxes (macOS: and the box VM)
   agent-box box stop [-force]                          macOS: stop the box VM
   agent-box clone fetch [-config <path>] [-base <branch>] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>
+  agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
+  agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
 
 Everything agent-box writes, its config.json included, lives in one data root:
 $AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "box" | "clone"
-	Sub        string // box: "setup" | "stop" | "status"; clone: "fetch"
+	Cmd        string // "serve" | "doctor" | "box" | "clone" | "store"
+	Sub        string // box: "setup" | "stop" | "status"; clone: "fetch"; store: "init" | "status" | ... | "list"
+	ID         string // store set|rm: the value id
 	ConfigPath string
 	ConfigSet  bool   // -config given explicitly
 	Rebuild    bool   // box setup
@@ -39,6 +43,12 @@ type cliArgs struct {
 	Branch     string // clone fetch: the branch in the clone to bring home
 	Base       string // clone fetch: the branch in clone_of the range starts after (default main)
 }
+
+// storeSubs are the `agent-box store` subcommands. There is no get: a value
+// never comes back out through the CLI.
+var storeSubs = []string{"init", "status", "unlock", "lock", "passwd", "set", "rm", "list"}
+
+const storeNeedsSub = "store needs a subcommand: init, status, unlock, lock, passwd, set, rm or list"
 
 // parseArgs reads argv without the program name. No subcommand means serve, so
 // the existing `agent-box -config x.json` invocations (air, the PROD unit) are
@@ -67,6 +77,14 @@ func parseArgs(argv []string) (cliArgs, error) {
 		if sub != "fetch" {
 			return cliArgs{}, fmt.Errorf("unknown clone subcommand %q", sub)
 		}
+	case "store":
+		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
+			return cliArgs{}, errors.New(storeNeedsSub)
+		}
+		sub, argv = argv[0], argv[1:]
+		if !slices.Contains(storeSubs, sub) {
+			return cliArgs{}, fmt.Errorf("unknown store subcommand %q", sub)
+		}
 	default:
 		return cliArgs{}, fmt.Errorf("unknown command %q", cmd)
 	}
@@ -80,8 +98,14 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}
-	var profile, branch string
-	if cmd == "clone" {
+	var profile, branch, id string
+	if cmd == "store" && (sub == "set" || sub == "rm") {
+		// Flags come before the id, as with clone.
+		if fs.NArg() != 1 {
+			return cliArgs{}, fmt.Errorf("store %s needs exactly one <id> after its flags", sub)
+		}
+		id = fs.Arg(0)
+	} else if cmd == "clone" {
 		// Flags come before the two positionals; the flag package stops at the
 		// first positional, so a late flag lands here as a third argument.
 		if fs.NArg() != 2 {
@@ -115,7 +139,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
 		Rebuild: *rebuild, Recreate: *recreate, Force: *force,
-		Profile: profile, Branch: branch, Base: *base}, nil
+		Profile: profile, Branch: branch, Base: *base, ID: id}, nil
 }
 
 // shutdownSignals end the daemon through DetachAll. SIGHUP is the one a laptop

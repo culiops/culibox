@@ -11,6 +11,7 @@ import (
 	boximage "github.com/culiops/agent-box/docker/agent-box"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 func ok() boxFacts {
@@ -116,22 +117,57 @@ func TestBoxTierLinux(t *testing.T) {
 func TestClaudeBoxToken(t *testing.T) {
 	boxedClaude := config.AgentConfig{Name: "claude", Bin: "claude"}
 	c := config.Config{Agents: []config.AgentConfig{boxedClaude}}
-	if r := ClaudeBoxToken(c); r.Status != Warn || !strings.Contains(r.Detail, "claude setup-token") {
+	if r := ClaudeBoxToken(c, nil); r.Status != Warn || !strings.Contains(r.Detail, "claude setup-token") {
 		t.Fatalf("no secret configured: %+v", r)
 	}
 	boxedClaude.Secrets = []string{"CLAUDE_CODE_OAUTH_TOKEN"}
 	c = config.Config{Agents: []config.AgentConfig{boxedClaude}, SecretSources: []config.SecretSource{{Type: "env"}}}
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-test-not-real")
-	if r := ClaudeBoxToken(c); r.Status != Pass || strings.Contains(r.Detail, "sk-test") {
+	if r := ClaudeBoxToken(c, nil); r.Status != Pass || strings.Contains(r.Detail, "sk-test") {
 		t.Fatalf("configured token must pass and never print: %+v", r)
 	}
 	os.Unsetenv("CLAUDE_CODE_OAUTH_TOKEN") // t.Setenv above restores it
-	if r := ClaudeBoxToken(c); r.Status != Warn {
+	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
 		t.Fatalf("a secret that does not resolve is not a credential: %+v", r)
 	}
 	host := config.AgentConfig{Name: "claude", Bin: "claude", Runtime: config.RuntimeHost}
-	if r := ClaudeBoxToken(config.Config{Agents: []config.AgentConfig{host}}); r.Status != Pass {
+	if r := ClaudeBoxToken(config.Config{Agents: []config.AgentConfig{host}}, nil); r.Status != Pass {
 		t.Fatalf("no boxed claude agent: nothing to check: %+v", r)
+	}
+}
+
+type stubStore struct {
+	vals map[string]string
+	err  error
+}
+
+func (s stubStore) Get(id string) ([]byte, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	v, ok := s.vals[id]
+	if !ok {
+		return nil, secretstore.ErrNoSuchValue
+	}
+	return []byte(v), nil
+}
+
+// A store secret_source must not make doctor fail to start (secrets.New refuses
+// the type): with the store it resolves, locked it is a WARN, and with none it
+// is a WARN, never a panic.
+func TestClaudeBoxTokenStoreSource(t *testing.T) {
+	boxed := config.AgentConfig{Name: "claude", Bin: "claude", Secrets: []string{"CLAUDE_CODE_OAUTH_TOKEN"}}
+	c := config.Config{Agents: []config.AgentConfig{boxed}, SecretSources: []config.SecretSource{{Type: "store"}, {Type: "env"}}}
+	os.Unsetenv("CLAUDE_CODE_OAUTH_TOKEN")
+	ok := stubStore{vals: map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "sk-store-not-real"}}
+	if r := ClaudeBoxToken(c, ok); r.Status != Pass || strings.Contains(r.Detail, "sk-store") {
+		t.Fatalf("store holds the token: %+v", r)
+	}
+	if r := ClaudeBoxToken(c, stubStore{err: secretstore.ErrLocked}); r.Status != Warn {
+		t.Fatalf("a locked store does not resolve: %+v", r)
+	}
+	if r := ClaudeBoxToken(c, nil); r.Status != Warn {
+		t.Fatalf("a store source with no store: %+v", r)
 	}
 }
 

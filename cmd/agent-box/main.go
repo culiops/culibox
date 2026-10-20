@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
@@ -31,7 +33,8 @@ import (
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
-	"github.com/culiops/agent-box/internal/secrets"
+	"github.com/culiops/agent-box/internal/secretchain"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
 	"github.com/culiops/agent-box/internal/terminal"
@@ -70,6 +73,9 @@ func main() {
 	}
 	if args.Cmd == "box" {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
+	}
+	if args.Cmd == "store" {
+		os.Exit(runStore(args, cfg, home, os.Stdin, term.IsTerminal(int(os.Stdin.Fd())), os.Stdout))
 	}
 	if args.Cmd == "clone" {
 		cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
@@ -216,7 +222,16 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		log.Printf("WARNING: the login password (env %s) is shorter than 12 characters", cfg.PasswordEnv)
 	}
 
-	resolver, err := secrets.New(cfg.SecretSources)
+	// ONE store for the daemon: the secret_sources chain, the broker's value
+	// references and the GitHub App minter all read through it. The data dir
+	// exists (the lock created it); the keeper hashes its real path.
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		log.Fatalf("data dir: %v", err)
+	}
+	storeAudit := &lazyAudit{path: filepath.Join(dataDir, "audit.db")}
+	defer storeAudit.Close()
+	vstore := secretstore.Open(dataDir, newKeeper(dataDir), storeAudit)
+	resolver, err := secretchain.New(cfg.SecretSources, vstore)
 	if err != nil {
 		log.Fatalf("secrets: %v", err)
 	}
@@ -254,6 +269,13 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 	defer accts.Close()
 	lnch.SetAccounts(accts)
+	var acctList []account.Account
+	for _, r := range accts.List() {
+		if !r.IsDefault {
+			acctList = append(acctList, r.Account)
+		}
+	}
+	logPlaintextCopies(plaintextCopies(cfg, acctList, vstore, os.LookupEnv))
 
 	// Default working dir: config value if set, else $HOME.
 	defaultCwd := cfg.DefaultCwd
@@ -401,8 +423,8 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	// runs only in a box. Before Reconcile so reattached sessions find the hooks.
 	var brokerSvc *brokerService
 	if layer != nil {
-		svc, err := startBroker(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
-			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens)
+		svc, err := startBrokerWithStore(dataDir, layer.stateRoot, runtime.GOOS, cfg.BrokerPortOrDefault(),
+			mgr.Get, web.ManagerService{M: mgr}.Get, cfg.GitHubApps, cfg.StaticTokens, vstore)
 		switch {
 		case errors.Is(err, errBrokerListen):
 			log.Printf("%v (profiles with an AWS binding will refuse to spawn)", err)

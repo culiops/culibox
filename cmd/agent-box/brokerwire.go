@@ -15,7 +15,9 @@ import (
 	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/ghapp"
+	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/ssologin"
 	"github.com/culiops/agent-box/internal/web"
@@ -84,6 +86,15 @@ func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []
 // failure to listen wraps errBrokerListen.
 func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
 	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken) (*brokerService, error) {
+	return startBrokerWithStore(dataDir, stateRoot, goos, port, get, info, apps, entries, nil)
+}
+
+// startBrokerWithStore is startBroker with the daemon's encrypted store, which
+// serves `store` value references for static tokens and GitHub App keys. A nil
+// vstore leaves the references refusing, exactly as without a store.
+func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id string) (*session.Session, bool),
+	info func(id string) (session.Info, bool), apps []config.GitHubApp, entries []config.StaticToken,
+	vstore *secretstore.Store) (*brokerService, error) {
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "broker.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("broker secret: %w", err)
@@ -116,7 +127,16 @@ func startBroker(dataDir, stateRoot, goos string, port int, get func(id string) 
 	// github_apps is read once, at daemon start: a change needs a restart. With
 	// none configured the route keeps answering 503.
 	if len(apps) > 0 {
-		brk.SetGitHub(ghapp.NewMinter(apps, ghapp.Client{}))
+		minter := ghapp.NewMinter(apps, ghapp.Client{})
+		// A nil *Store must not become a non-nil interface: a store reference
+		// then reports "not configured" instead of panicking.
+		if vstore != nil {
+			minter.SetStore(vstore)
+		}
+		brk.SetGitHub(minter)
+	}
+	if vstore != nil {
+		brk.SetResolver(credref.Default{Store: vstore})
 	}
 
 	ep, err := broker.Listen(goos, stateRoot, port)
