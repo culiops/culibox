@@ -6,14 +6,30 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const testIdentity = "AGE-SECRET-KEY-TEST"
 
+// requireKeyctl skips the test where the kernel keyring is blocked (seccomp
+// profiles answer EPERM, kernels without keyrings ENOSYS).
+func requireKeyctl(t *testing.T) {
+	t.Helper()
+	if _, err := unix.KeyctlGetKeyringID(unix.KEY_SPEC_USER_KEYRING, false); err != nil {
+		if errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENOSYS) {
+			t.Skipf("keyctl is blocked here: %v", err)
+		}
+		t.Fatalf("keyctl probe: %v", err)
+	}
+}
+
 func newTestKeeper(t *testing.T) Keeper {
 	t.Helper()
+	requireKeyctl(t)
 	k := NewKeeper(t.TempDir())
 	t.Cleanup(func() { _ = k.Clear() })
 	return k
@@ -76,6 +92,7 @@ func TestKeyringSurvivesProcess(t *testing.T) {
 		}
 		return
 	}
+	requireKeyctl(t)
 	dir := t.TempDir()
 	k := NewKeeper(dir)
 	t.Cleanup(func() { _ = k.Clear() })
@@ -107,5 +124,40 @@ func TestKeyringRejectsBadTTL(t *testing.T) {
 	k := newTestKeeper(t)
 	if err := k.Save(testIdentity, 0); err == nil {
 		t.Fatal("ttl 0 accepted")
+	}
+}
+
+func TestKeyringPermissions(t *testing.T) {
+	k := newTestKeeper(t)
+	if err := k.Save(testIdentity, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	id, err := unix.KeyctlSearch(unix.KEY_SPEC_USER_KEYRING, "user", k.(*keyringKeeper).desc, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "type;uid;gid;perm;description"
+	desc, err := unix.KeyctlString(unix.KEYCTL_DESCRIBE, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := strings.SplitN(desc, ";", 5)
+	if len(f) != 5 || f[3] != "3f0b0000" {
+		t.Fatalf("describe %q: want perm 3f0b0000 (possessor all, user view|read|search)", desc)
+	}
+	// A re-save keeps the mask.
+	if err := k.Save(testIdentity, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKeyErrMapping(t *testing.T) {
+	if err := keyErr(unix.EACCES, "read"); err == nil || errors.Is(err, ErrLocked) || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("EACCES: %v", err)
+	}
+	for _, e := range []error{unix.ENOKEY, unix.EKEYEXPIRED, unix.EKEYREVOKED} {
+		if err := keyErr(e, "read"); !errors.Is(err, ErrLocked) {
+			t.Fatalf("%v: %v", e, err)
+		}
 	}
 }

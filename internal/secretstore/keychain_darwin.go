@@ -13,6 +13,8 @@ import (
 
 const (
 	keychainService = "agent-box-store"
+	// Absolute, so a PATH entry cannot stand in for it.
+	securityBin = "/usr/bin/security"
 	// security(1) exits 44 when the item is not found.
 	keychainNotFound = 44
 )
@@ -32,9 +34,14 @@ func (k *keychainKeeper) Save(identity string, _ time.Duration) error {
 	if !keychainSafe(identity) {
 		return errors.New("master key has unexpected characters")
 	}
-	cmd := exec.Command("security", "-i")
+	cmd := exec.Command(securityBin, "-i")
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("add-generic-password -U -s %s -a %s -w %s\n", keychainService, k.account, identity))
-	if err := cmd.Run(); err != nil {
+	runErr := cmd.Run()
+	// The Keychain item is the only copy of the master identity, and a locked
+	// login keychain or an unanswered ACL prompt can fail without a useful exit
+	// status. Read it back before Init writes a recipient nothing can decrypt.
+	got, _, loadErr := k.Load()
+	if runErr != nil || loadErr != nil || got != identity {
 		return errors.New("keychain write failed")
 	}
 	return nil
@@ -42,7 +49,7 @@ func (k *keychainKeeper) Save(identity string, _ time.Duration) error {
 
 func (k *keychainKeeper) Load() (string, time.Time, error) {
 	var out bytes.Buffer
-	cmd := exec.Command("security", "find-generic-password", "-s", keychainService, "-a", k.account, "-w")
+	cmd := exec.Command(securityBin, "find-generic-password", "-s", keychainService, "-a", k.account, "-w")
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError

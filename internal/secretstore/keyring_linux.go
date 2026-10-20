@@ -12,6 +12,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// keyPerm is the permission mask set on the key: possessor all, owning uid
+// view|read|search (linux/keyctl.h KEY_POS_ALL, KEY_USR_VIEW, KEY_USR_READ,
+// KEY_USR_SEARCH).
+const keyPerm uint32 = 0x3f000000 | 0x00010000 | 0x00020000 | 0x00080000
+
 // keyringKeeper keeps the unlocked identity in the kernel user keyring (@u),
 // as a "user" key with a kernel-enforced timeout. It survives the daemon
 // process and dies with the uid's keyring or the TTL.
@@ -33,6 +38,13 @@ func (k *keyringKeeper) Save(identity string, ttl time.Duration) error {
 	id, err := unix.AddKey("user", k.desc, payload, unix.KEY_SPEC_USER_KEYRING)
 	if err != nil {
 		return fmt.Errorf("kernel keyring add: %w", err)
+	}
+	// Possessor keeps everything; the owning uid gets view, read and search so
+	// a process whose session keyring does not link @u can still read it. Any
+	// process of this uid can read the key either way (the stated threat model).
+	if err := unix.KeyctlSetperm(id, keyPerm); err != nil {
+		_, _ = unix.KeyctlInt(unix.KEYCTL_UNLINK, id, unix.KEY_SPEC_USER_KEYRING, 0, 0)
+		return fmt.Errorf("kernel keyring set permissions: %w", err)
 	}
 	secs := int((ttl + time.Second - 1) / time.Second)
 	if _, err := unix.KeyctlInt(unix.KEYCTL_SET_TIMEOUT, id, secs, 0, 0); err != nil {
@@ -98,6 +110,9 @@ func gone(err error) bool {
 func keyErr(err error, op string) error {
 	if gone(err) {
 		return ErrLocked
+	}
+	if errors.Is(err, unix.EACCES) {
+		return fmt.Errorf("kernel keyring %s: permission denied (the unlock key is not readable by this process)", op)
 	}
 	return fmt.Errorf("kernel keyring %s: %w", op, err)
 }
