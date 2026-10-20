@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credref"
 )
@@ -158,6 +159,8 @@ type AgentLauncher struct {
 	tokens []config.StaticToken
 	// awsConns are the instance's named AWS connections, read once at boot.
 	awsConns []config.AWSConnection
+	// boxGate, when set, can refuse a boxed spawn (nil = never).
+	boxGate func() error
 }
 
 // SecretResolver resolves a declared secret name to its value. secrets.New's
@@ -423,6 +426,27 @@ func (l *AgentLauncher) SetStaticTokens(entries []config.StaticToken) {
 	l.mu.Unlock()
 }
 
+// SetBoxGate installs a check that runs for every boxed spawn, before anything
+// is resolved; a non-nil error refuses the spawn. Host-tier spawns never call
+// it. Call once at boot. nil removes the gate.
+func (l *AgentLauncher) SetBoxGate(gate func() error) {
+	l.mu.Lock()
+	l.boxGate = gate
+	l.mu.Unlock()
+}
+
+// SeccompGate refuses boxed spawns while Docker's seccomp is off and an
+// encrypted store exists. seccompActive is measured once at start; storeExists
+// is read on every call, so `store init` while the daemon runs takes effect.
+func SeccompGate(seccompActive bool, storeExists func() bool) func() error {
+	return func() error {
+		if !seccompActive && storeExists() {
+			return box.ErrSeccompOff
+		}
+		return nil
+	}
+}
+
 // SetAWSConnections installs the instance's aws_connections (deep-copied).
 // Call once at boot: a change to aws_connections needs a restart.
 func (l *AgentLauncher) SetAWSConnections(list []config.AWSConnection) {
@@ -587,6 +611,17 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 
 	boxed := spec.Runtime == config.RuntimeBox ||
 		(spec.Runtime == "" && l.tierOf(cfg) == config.RuntimeBox)
+
+	if boxed {
+		l.mu.RLock()
+		gate := l.boxGate
+		l.mu.RUnlock()
+		if gate != nil {
+			if err := gate(); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 
 	acct, err := l.AccountFor(spec)
 	if err != nil {

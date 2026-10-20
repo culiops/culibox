@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/storerefs"
@@ -128,7 +126,7 @@ func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinT
 			return fail("%s", storeErrText(err))
 		}
 		fmt.Fprintf(out, "removed %s\n", a.ID)
-		if refs := storerefs.Refs(cfg, readAccounts(dataDir))[a.ID]; len(refs) > 0 {
+		if refs := storerefs.Refs(cfg, storerefs.ReadAccounts(dataDir))[a.ID]; len(refs) > 0 {
 			fmt.Fprintf(out, "note: still referenced by %s\n", strings.Join(refs, ", "))
 		}
 		return 0
@@ -138,7 +136,7 @@ func runStore(a cliArgs, cfg config.Config, home string, stdin io.Reader, stdinT
 		if err != nil {
 			return fail("%s", storeErrText(err))
 		}
-		refs := storerefs.Refs(cfg, readAccounts(dataDir))
+		refs := storerefs.Refs(cfg, storerefs.ReadAccounts(dataDir))
 		stored := map[string]bool{}
 		for _, e := range ents {
 			stored[e.ID] = true
@@ -239,21 +237,6 @@ func storeErrText(err error) string {
 		return "wrong passphrase"
 	}
 	return err.Error()
-}
-
-// readAccounts reads accounts.json from the data dir without opening the
-// account store (which would re-provision every account). A missing or
-// unreadable file means no accounts: list only uses it to show references.
-func readAccounts(dataDir string) []account.Account {
-	b, err := os.ReadFile(filepath.Join(dataDir, "accounts.json"))
-	if err != nil {
-		return nil
-	}
-	var list []account.Account
-	if json.Unmarshal(b, &list) != nil {
-		return nil
-	}
-	return list
 }
 
 // readValue reads one value. On a terminal it reads one line with no echo.

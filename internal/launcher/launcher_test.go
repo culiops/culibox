@@ -1,11 +1,13 @@
 package launcher
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -488,4 +490,43 @@ func TestRequestedRuntime(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- seccomp gate ----------------------------------------------------------
+
+func TestBoxGateRefusesBoxedSpawnOnly(t *testing.T) {
+	const want = "Docker seccomp is off: a box could read the unlocked store key. Enable the default seccomp profile."
+	initialized := true
+	l := boxedLauncher(t, []config.AgentConfig{
+		{Name: "claude", Bin: "claude"}, {Name: "bash", Bin: "bash"},
+	})
+	l.SetBoxGate(SeccompGate(false, func() bool { return initialized }))
+
+	_, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox})
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("boxed Build with seccomp off and a store: %v, want ErrBoxUnavailable containing %q", err, want)
+	}
+	if _, _, err := l.Build(SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost}); err != nil {
+		t.Fatalf("host-tier Build must not be gated: %v", err)
+	}
+	initialized = false
+	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatalf("no store: no refusal, got %v", err)
+	}
+	initialized = true // `store init` while the daemon runs takes effect at once
+	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err == nil {
+		t.Fatal("a store created after start must close the gate")
+	}
+}
+
+func TestBoxGateOpenWithSeccompOnOrNoGate(t *testing.T) {
+	l := boxedLauncher(t, []config.AgentConfig{{Name: "claude", Bin: "claude"}})
+	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatalf("nil gate: %v", err)
+	}
+	l.SetBoxGate(SeccompGate(true, func() bool { return true }))
+	if _, _, err := l.Build(SpawnSpec{Agent: "claude", Runtime: config.RuntimeBox}); err != nil {
+		t.Fatalf("seccomp on: %v", err)
+	}
+	l.SetBoxGate(nil)
 }

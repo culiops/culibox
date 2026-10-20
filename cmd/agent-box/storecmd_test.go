@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/agent-box/internal/storerefs"
 )
 
 func TestParseStore(t *testing.T) {
@@ -297,20 +298,20 @@ func TestPlaintextCopies(t *testing.T) {
 	env := map[string]string{"CLAUDE_CODE_OAUTH_TOKEN": "plain", "UNUSED": "plain", "WORK_TOKEN": ""}
 	look := func(n string) (string, bool) { v, ok := env[n]; return v, ok }
 
-	got := plaintextCopies(r.cfg, accts, st, look)
+	got := storerefs.PlaintextCopies(r.cfg, accts, st, look)
 	if len(got) != 1 || got[0] != "CLAUDE_CODE_OAUTH_TOKEN" {
 		t.Fatalf("plaintextCopies = %v, want only CLAUDE_CODE_OAUTH_TOKEN (UNUSED is no declared secret, WORK_TOKEN is empty in env)", got)
 	}
 	cfg := r.cfg
 	cfg.SecretSources = []config.SecretSource{{Type: "env"}}
-	if got := plaintextCopies(cfg, accts, st, look); got != nil {
-		t.Fatalf("plaintextCopies without a store source = %v", got)
+	if got := storerefs.PlaintextCopies(cfg, accts, st, look); got != nil {
+		t.Fatalf("PlaintextCopies without a store source = %v", got)
 	}
 	// Names only: no value in what the log would print.
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	defer log.SetOutput(os.Stderr)
-	logPlaintextCopies(plaintextCopies(r.cfg, accts, st, look))
+	logPlaintextCopies(storerefs.PlaintextCopies(r.cfg, accts, st, look))
 	if !strings.Contains(buf.String(), "store: plaintext copy of CLAUDE_CODE_OAUTH_TOKEN is still in the daemon environment") ||
 		strings.Contains(buf.String(), "plain\n") {
 		t.Fatalf("log = %q", buf.String())

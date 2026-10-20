@@ -33,6 +33,7 @@ import (
 	"github.com/culiops/agent-box/internal/procinfo"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/agent-box/internal/storerefs"
 )
 
 const (
@@ -162,6 +163,9 @@ func Checks(in Input) []Result {
 	out = append(out, checkAgents(c)...)
 	vst := StoreFor(c, dataDir)
 	out = append(out, checkStaticTokens(c, defaultResolver(vst))...)
+	if ost := openStore(c, dataDir); ost != nil {
+		out = append(out, checkStore(c, ost, storerefs.ReadAccounts(dataDir), os.LookupEnv, runtime.GOOS, dockerSeccomp(c))...)
+	}
 	var stored []config.AgentConfig
 	st, storeErr := store.Open(c.ResolvedProfilesPath(dataDir))
 	if storeErr == nil {

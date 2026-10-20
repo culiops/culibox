@@ -102,6 +102,15 @@ var ErrUnboxableWorkspace = errors.New("workspace cannot be contained")
 // must never contain env values or secrets.
 var ErrBoxUnavailable = errors.New("containment unavailable")
 
+// SeccompOffText is the refusal (and doctor FAIL) when Docker's seccomp is off
+// while an encrypted store exists: without it a box could call keyctl and read
+// the unlocked store key from the user keyring.
+const SeccompOffText = "Docker seccomp is off: a box could read the unlocked store key. Enable the default seccomp profile."
+
+// ErrSeccompOff is that refusal as an ErrBoxUnavailable, so the web layer
+// shows its text (a fixed sentence, no values).
+var ErrSeccompOff = fmt.Errorf("%w: %s", ErrBoxUnavailable, SeccompOffText)
+
 // ErrBoxOwned marks a host-tier spawn refused because its directory is a clone
 // that a box owns: the box can rewrite anything in it, so the host must not run
 // an agent (or git, or a build) there. Its message names the path the user

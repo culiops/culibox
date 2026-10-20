@@ -204,3 +204,27 @@ func TestInspectMountsReadsStateAndBindsFromOneCall(t *testing.T) {
 		}
 	}
 }
+
+func TestSeccompActive(t *testing.T) {
+	cases := []struct {
+		name, out string
+		code      int
+		want      bool
+		wantErr   bool
+	}{
+		{"builtin", `["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"]`, 0, true, false},
+		{"unconfined", `["name=seccomp,profile=unconfined"]`, 0, false, false},
+		{"empty", `[]`, 0, false, false},
+		{"null", `null`, 0, false, false},
+		{"custom profile", `["name=seccomp,profile=/etc/x.json"]`, 0, true, false},
+		{"docker fails", ``, 1, false, true},
+		{"not json", `oops`, 0, false, true},
+	}
+	for _, c := range cases {
+		bin, _ := fakeDocker(t, map[string]string{"info": c.out}, map[string]int{"info": c.code})
+		got, err := CLIClient{Bin: bin}.SeccompActive(context.Background())
+		if got != c.want || (err != nil) != c.wantErr {
+			t.Errorf("%s: got (%v, %v), want (%v, err=%v)", c.name, got, err, c.want, c.wantErr)
+		}
+	}
+}

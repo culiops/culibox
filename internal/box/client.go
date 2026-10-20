@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -222,4 +223,31 @@ func (c CLIClient) HasRuntime(ctx context.Context, name string) bool {
 		return false
 	}
 	return strings.Contains(out, `"`+name+`"`)
+}
+
+// SeccompActive reports whether the docker daemon applies a seccomp profile to
+// containers by default: "name=seccomp" is listed in SecurityOptions without
+// "profile=unconfined". Read-only. An error means docker could not say.
+func (c CLIClient) SeccompActive(ctx context.Context) (bool, error) {
+	out, err := c.run(ctx, "info", "--format", "{{json .SecurityOptions}}")
+	if err != nil {
+		return false, err
+	}
+	var opts []string
+	if err := json.Unmarshal([]byte(out), &opts); err != nil {
+		return false, fmt.Errorf("docker info: unreadable SecurityOptions: %w", err)
+	}
+	for _, o := range opts {
+		fields := strings.Split(o, ",")
+		if fields[0] != "name=seccomp" {
+			continue
+		}
+		for _, f := range fields[1:] {
+			if f == "profile=unconfined" {
+				return false, nil
+			}
+		}
+		return true, nil
+	}
+	return false, nil
 }
