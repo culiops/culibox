@@ -1851,7 +1851,7 @@ const SSO_POLL_MS = 3000;
 function ssoPath(id, tail) { return "/api/sessions/" + encodeURIComponent(id) + "/aws" + (tail || ""); }
 function ssoCommand(id) {
   const st = ssoStatus.get(id);
-  return (st && st.sso && st.sso.command) || "";
+  return ssoCommandOf(st && st.sso);
 }
 
 // ssoLocalSig: what the SSO card reads beyond the session record, for rowSig, so
@@ -1868,7 +1868,7 @@ const SSO_DONE_TOAST = "Signed in. The agent's next AWS call works. Tell it to r
 // ssoAdopt: take a GET .../aws body: cache it and follow the flow it carries.
 function ssoAdopt(id, body) {
   ssoStatus.set(id, body || {});
-  const login = body && body.sso && body.sso.login;
+  const login = ssoLoginOf(body && body.sso);
   const cur = ssoFlows.get(id);
   if (login) {
     ssoFlows.set(id, login);
@@ -1927,7 +1927,7 @@ async function ssoPollTick(id, last) {
   ssoPolling.delete(id);
   if (status === 404 || status === 410) { stopSSOPoll(id); return; }
   if (!body) return;
-  const login = body.sso && body.sso.login;
+  const login = ssoLoginOf(body.sso);
   const state = login ? login.state : "";
   if (last) {
     if (state === "ok") showToast(SSO_DONE_TOAST);
@@ -1971,7 +1971,12 @@ async function ssoSignIn(s) {
   let status = 0;
   let body = null;
   try {
-    const res = await fetch(ssoPath(id, "/sso-login"), { method: "POST" });
+    // A session with named connections says which one to sign in (the server
+    // resolves its recorded source profile); the legacy request has no body.
+    const name = ssoSignInName(s);
+    const res = await fetch(ssoPath(id, "/sso-login"), name
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name }) }
+      : { method: "POST" });
     status = res.status;
     try { body = await res.json(); } catch (_) { body = null; }
   } catch (_) { status = 0; }

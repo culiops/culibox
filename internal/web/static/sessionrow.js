@@ -178,6 +178,8 @@ const EXTEND_UNDER = 20;
 // binding, not something inferred from the account. `write` is a separate axis
 // (amber outline), so a prod binding that is writing is both.
 function awsBadge(s, nowMs = Date.now()) {
+  const p = awsBadgeParts(s, nowMs);
+  if (p) return { text: p.label + (p.write ? WRITE_SUFFIX : ""), prod: p.prod, write: p.write, title: p.title };
   const a = s && s.aws;
   if (!a) return null;
   const base = a.label || ("aws:" + a.account_id);
@@ -197,6 +199,34 @@ function awsBadge(s, nowMs = Date.now()) {
   };
 }
 
+// connList: the session's named AWS connections ([] for a legacy or unbound
+// session, which carry s.aws or nothing).
+function connList(s) {
+  return s && Array.isArray(s.aws_connections) ? s.aws_connections : [];
+}
+
+// awsBadgeParts: the chip of a session with named connections, null without
+// any. One connection reads as its own label (its name when unlabelled); two or
+// more as "AWS ×N", the names in the title. Red when ANY bound connection is
+// production, amber when any has a window open: the chip is the one place a
+// reader sees either without opening the rail.
+function awsBadgeParts(s, nowMs = Date.now()) {
+  const cs = connList(s);
+  if (!cs.length) return null;
+  const prod = cs.some((c) => c.prod);
+  const live = cs.filter((c) => isElevated(c, nowMs));
+  const write = live.length > 0;
+  if (cs.length === 1) {
+    const c = cs[0];
+    const base = "AWS " + c.account_id + " \u00b7 " + roleName(write && c.elevate ? c.elevate.role_arn : c.role_arn);
+    return { label: c.label || c.name, prod, write,
+      title: base + (write ? " \u00b7 write until " + hhmm(c.elevated_until) : " \u00b7 read-only") };
+  }
+  return { label: "AWS \u00d7" + cs.length, prod, write,
+    title: "AWS connections: " + cs.map((c) => c.name).join(", ") +
+      live.map((c) => " \u00b7 write on " + c.name + " until " + hhmm(c.elevated_until)).join("") };
+}
+
 // WRITE_SUFFIX is what awsBadge appends while a window is open.
 const WRITE_SUFFIX = " · write";
 
@@ -214,6 +244,10 @@ function badgeParts(ab) {
 // strip until something tells it to rebuild; this is what tells it when a grant,
 // a drop or a lapsed window changed the chip.
 function awsSig(s, nowMs = Date.now()) {
+  const cs = connList(s);
+  if (cs.length) {
+    return cs.map((c) => [c.name, c.label || "", c.account_id || "", !!c.prod, isElevated(c, nowMs) ? c.elevated_until : ""].join("|")).join(";");
+  }
   const a = s && s.aws;
   if (!a) return "";
   return [a.label || "", a.account_id || "", !!a.prod, isElevated(a, nowMs) ? a.elevated_until : ""].join("|");
@@ -255,6 +289,52 @@ function awsRailRows(s, st, nowMs = Date.now()) {
   ];
   if (a.prod) rows.push({ k: "prod", v: "production", chip: "bdg aws prod" });
   return rows;
+}
+
+// CONN_COLLAPSE: how many connection blocks the rail draws before it offers
+// "Show all N".
+const CONN_COLLAPSE = 6;
+
+// connStatLine: line 3 of a connection block, from the broker's counters for it
+// (GET .../aws connections[].stats). The last error wins and is shown whole: it
+// carries the actionable sign-in hint. "" until the counters are loaded, so a
+// block never claims "0 mints" it was not told.
+function connStatLine(stats) {
+  if (!stats) return { stat: "", err: false };
+  if (stats.last_error) return { stat: String(stats.last_error), err: true };
+  const n = Number(stats.mints) || 0;
+  const t = Date.parse(stats.last_mint);
+  const last = Number.isFinite(t) && t > Date.UTC(2000, 0, 1) ? hhmm(stats.last_mint) : "never";
+  return { stat: n + (n === 1 ? " mint" : " mints") + " \u00b7 last mint " + last, err: false };
+}
+
+// awsConnRailRows: the steer rail's blocks, one per named connection: prod
+// first, then by name. Each block is
+//   line 1  name + chips [prod] [write until HH:MM] [SSO expired]
+//   line 2  label · account · role-name · region   (muted; the write role while elevated)
+//   line 3  N mints · last mint HH:MM, or the last error
+// Past CONN_COLLAPSE blocks and not `expanded`, the first six and a "more" row
+// whose n is the TOTAL ("Show all N"); expanded, every block and a "less" row.
+// `k`/`v` make every row comparable for the rail's repaint key: v carries all
+// that the block draws. Elevation and the SSO flag come from the list entry
+// (fresh each poll); only the counters come from the /aws status `st`.
+function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false) {
+  const cs = connList(s).slice().sort((a, b) => (b.prod ? 1 : 0) - (a.prod ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const byName = new Map((st && Array.isArray(st.connections) ? st.connections : []).map((c) => [c.name, c]));
+  const blocks = cs.map((c) => {
+    const live = isElevated(c, nowMs);
+    const chips = [];
+    if (c.prod) chips.push({ text: "prod", chip: "bdg aws prod" });
+    if (live) chips.push({ text: "write until " + hhmm(c.elevated_until), chip: "bdg aws write" });
+    if (c.sso_expired) chips.push({ text: "SSO expired", chip: "bdg dgr" });
+    const detail = [c.label, c.account_id, roleName(live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" \u00b7 ");
+    const { stat, err } = connStatLine((byName.get(c.name) || {}).stats);
+    return { kind: "conn", k: "aws", name: c.name, chips, detail, stat, err,
+      v: [c.name, chips.map((x) => x.text).join(","), detail, stat].join("\u241f") };
+  });
+  if (blocks.length <= CONN_COLLAPSE) return blocks;
+  if (expanded) return blocks.concat([{ kind: "less", k: "aws", v: "less" }]);
+  return blocks.slice(0, CONN_COLLAPSE).concat([{ kind: "more", k: "aws", n: blocks.length, v: "more " + blocks.length }]);
 }
 
 // elevActions: which of Elevate / Extend / Drop the rail offers. Elevate needs
@@ -299,6 +379,6 @@ function readAWSFields(get) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, readAWSFields,
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, readAWSFields,
     hhmm, minutesLeft, isElevated, elevActions };
 }

@@ -258,7 +258,7 @@ function renderSteerRail() {
     return;
   }
   // 1 and 2 — who this is, and how full its window is.
-  if (s.aws || s.github || (s.tokens && s.tokens.length)) loadAwsRailStats(s.id);
+  if (s.aws || hasConns(s) || s.github || (s.tokens && s.tokens.length)) loadAwsRailStats(s.id);
   else if (s.egress) loadEgressRailStats(s.id);
   renderSteerFacts(s);
   // A half-open grant panel belongs to one session; focusing another drops it.
@@ -338,8 +338,10 @@ function renderSteerFacts(s) {
   // log), so a GH-only box takes its GitHub rows and egress line from the same
   // cache; the AWS rows and counters are the AWS binding's own.
   const brokerSt = awsRailCache.get(s.id);
-  const egressRows = s.aws || s.github || (s.tokens && s.tokens.length)
-    ? [...awsRailRows(s, brokerSt, Date.now()), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []), ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt)]
+  const egressRows = s.aws || hasConns(s) || s.github || (s.tokens && s.tokens.length)
+    ? [...awsRailRows(s, brokerSt, Date.now()), ...(s.aws ? awsStatsRows(brokerSt, Date.now()) : []),
+      ...awsConnRailRows(s, brokerSt, Date.now(), awsConnExpanded.has(s.id)),
+      ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt)]
     : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
   // The bundle's drops ride after the egress row, and on a boxed session with
   // no egress row at all; railMeta skips null rows.
@@ -349,7 +351,8 @@ function renderSteerFacts(s) {
   const key = [s.id, meta.name, meta.activity,
     meta.tier ? meta.tier.label + ":" + meta.tier.cls + ":" + meta.tier.title : "",
     meta.rows.map((r) => r.k + "=" + r.v).join(","), f.pct, f.used, f.max, s.claude ? 1 : 0,
-    (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null), JSON.stringify(s.github || null)].join("|");
+    (s.aws && s.aws.elevated_until) || "", JSON.stringify(s.aws || null), JSON.stringify(s.github || null),
+    JSON.stringify(s.aws_connections || null)].join("|");
   if (key === steerFactsKey) return;
   steerFactsKey = key;
 
@@ -378,7 +381,7 @@ function renderSteerFacts(s) {
     if (meta.tier.title) b.title = meta.tier.title;
     hrow.appendChild(b);
   }
-  head.replaceChildren(hrow, ...meta.rows.map((r) => kvRow(r.k, r.v, r.wrap, r.chip)));
+  head.replaceChildren(hrow, ...meta.rows.map((r) => (r.kind ? connRowEl(s, r) : kvRow(r.k, r.v, r.wrap, r.chip))));
 
   // 2 — how full the window is. Drawn only when there is a number to draw.
   ctx.replaceChildren(railTitle("Context window"));
@@ -413,6 +416,58 @@ function railTitle(text) {
   span.textContent = text;
   t.appendChild(span);
   return t;
+}
+
+function hasConns(s) {
+  return !!s && Array.isArray(s.aws_connections) && s.aws_connections.length > 0;
+}
+
+// Sessions whose connection list is shown in full instead of collapsed to six.
+// Per session id, so opening one session's list never opens another's.
+const awsConnExpanded = new Set();
+
+// connRowEl: one row of awsConnRailRows. A block is three lines under one
+// frame (name and chips; the muted identity; the counters or last error); the
+// collapse toggle is a plain button. Every string is server- or operator-
+// supplied (a name, a label, a role, an error), so all of it goes in through
+// textContent. The chips are the rail's own .bdg ones: no new colours.
+function connRowEl(s, r) {
+  if (r.kind === "more" || r.kind === "less") {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "btn connmore";
+    b.textContent = r.kind === "more" ? "Show all " + r.n : "Show fewer";
+    b.onclick = () => {
+      if (r.kind === "more") awsConnExpanded.add(s.id); else awsConnExpanded.delete(s.id);
+      renderSteerFacts(s);
+    };
+    return b;
+  }
+  const box = document.createElement("div");
+  box.className = "connblk";
+  const l1 = document.createElement("div");
+  l1.className = "connl1";
+  const nm = document.createElement("span");
+  nm.className = "connnm";
+  nm.textContent = r.name;
+  nm.title = r.name;
+  l1.appendChild(nm);
+  for (const c of r.chips) {
+    const chip = document.createElement("span");
+    chip.className = c.chip;
+    chip.textContent = c.text;
+    l1.appendChild(chip);
+  }
+  box.appendChild(l1);
+  const lines = [[r.detail, ""], [r.stat, r.err ? " err" : ""]];
+  for (const [text, extra] of lines) {
+    if (!text) continue;
+    const p = document.createElement("p");
+    p.className = "tiny mut connln" + extra;
+    p.textContent = text;
+    box.appendChild(p);
+  }
+  return box;
 }
 
 function kvRow(k, v, wrap, chip) {
@@ -671,6 +726,9 @@ let elevPanelFor = null;
 let elevBusy = null;                      // id with a grant/drop request in flight
 let elevErr = { id: "", text: "" };       // the panel's inline error line
 let elevDraft = { id: "", minutes: 0, reason: "", label: "" };
+// The AWS connection picked in Write access, per session. Only meaningful for a
+// session with named connections; grantPanel falls back to a valid one.
+let elevSel = { id: "", name: "" };
 
 function resetElevSection() {
   elevKey = "";
@@ -678,6 +736,7 @@ function resetElevSection() {
   elevBusy = null;
   elevErr = { id: "", text: "" };
   elevDraft = { id: "", minutes: 0, reason: "", label: "" };
+  elevSel = { id: "", name: "" };
   const el = document.getElementById("steer-elev");
   if (el) { el.replaceChildren(); el.hidden = true; }
 }
@@ -689,28 +748,89 @@ function elevRepaint(id) {
   if (cur && cur.id === id) renderElevSection(cur);
 }
 
+// elevModel: the Write access section's inputs for session s, or null when
+// there is nothing to elevate. `a` is the object elevActions reads: the inline
+// binding, or the SELECTED connection. A window held by ANOTHER connection
+// leaves Elevate offered but disabled (grantPanel's blockedText says why) and
+// Drop live, since a drop names no connection.
+function elevModel(s, st, now) {
+  if (hasConns(s)) {
+    const gp = grantPanel(null, st, s.aws_connections, elevSel.id === s.id ? elevSel.name : "", now);
+    if (!gp) return null;
+    const a = s.aws_connections.find((c) => c.name === gp.selected);
+    const other = gp.elevatedConn && gp.elevatedConn !== gp.selected;
+    return { gp, a, conns: true, acts: other ? { elevate: true, extend: false, drop: true } : elevActions(a, now) };
+  }
+  const gp = s.aws ? grantPanel(s.aws, st) : null;
+  return gp ? { gp, a: s.aws, conns: false, acts: elevActions(s.aws, now) } : null;
+}
+
 function renderElevSection(s) {
   const el = document.getElementById("steer-elev");
   if (!el) return;
   const st = awsRailCache.get(s.id) || null;
-  const gp = s.aws ? grantPanel(s.aws, st) : null;
-  if (!gp) {
+  const now = Date.now();
+  const m = elevModel(s, st, now);
+  if (!m) {
     // No write role on the binding (or no binding at all): no section.
     if (elevKey || !el.hidden) resetElevSection();
     return;
   }
-  const now = Date.now();
-  const acts = elevActions(s.aws, now);
-  const open = elevPanelFor === s.id && (acts.elevate || acts.extend);
-  const key = [s.id, s.aws.elevated_until || "", acts.extend, acts.elevate,
+  const { gp, a, acts } = m;
+  const open = elevPanelFor === s.id && (acts.elevate || acts.extend) && !(m.conns && gp.elevatedConn && gp.elevatedConn !== gp.selected);
+  const key = [s.id, a.elevated_until || "", acts.extend, acts.elevate,
     (st && st.elevation && st.elevation.last_valid) || "", gp.blocked,
     gp.hostSessions.length, gp.hostSessions.map((h) => h && h.name).join(","),
-    open, elevBusy === s.id, elevErr.id === s.id ? elevErr.text : ""].join("|");
+    open, elevBusy === s.id, elevErr.id === s.id ? elevErr.text : "",
+    m.conns ? [gp.selected, gp.elevatedConn, gp.blockedText, gp.conns.map((c) => c.name).join(",")].join("~") : ""].join("|");
   if (key === elevKey) return;
   elevKey = key;
   el.hidden = false;
   el.replaceChildren(railTitle("Write access"),
+    ...(m.conns ? [connPicker(s, gp)] : []),
     open ? buildElevPanel(s, gp, !acts.elevate) : buildElevButtons(s, gp, acts));
+}
+
+// connPicker: which connection Write access is about. Two or more write-capable
+// connections get a segmented control; exactly one is shown as its name.
+function connPicker(s, gp) {
+  const wrap = document.createElement("div");
+  wrap.className = "fcol";
+  const lab = document.createElement("span");
+  lab.className = "flab";
+  lab.textContent = "Connection";
+  wrap.appendChild(lab);
+  if (!gp.selector) {
+    const p = document.createElement("p");
+    p.className = "tiny";
+    p.textContent = gp.selected;
+    wrap.appendChild(p);
+    return wrap;
+  }
+  const seg = document.createElement("div");
+  seg.className = "seg";
+  seg.setAttribute("role", "group");
+  seg.setAttribute("aria-label", "Connection");
+  for (const c of gp.conns) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = c.name;
+    b.title = c.label || c.name;
+    const on = c.name === gp.selected;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.onclick = () => {
+      if (on) return;
+      // A prod label typed for one connection is not the next one's.
+      elevSel = { id: s.id, name: c.name };
+      elevErr = { id: "", text: "" };
+      if (elevDraft.id === s.id) elevDraft.label = "";
+      elevRepaint(s.id);
+    };
+    seg.appendChild(b);
+  }
+  wrap.appendChild(seg);
+  return wrap;
 }
 
 function elevButton(text, cls, onclick, disabled) {
@@ -729,17 +849,34 @@ function buildElevButtons(s, gp, acts) {
   const busy = elevBusy === s.id;
   const row = document.createElement("div");
   row.className = "elevbtns";
-  if (acts.elevate) row.appendChild(elevButton("Elevate", "btn", () => openElevPanel(s.id), busy));
+  // A refusal known in advance (another connection holds the window, or its
+  // issued write credentials are still valid) closes the button; its text is
+  // the server's own sentence, or "Drop <name> first".
+  if (acts.elevate) row.appendChild(elevButton("Elevate", "btn", () => openElevPanel(s.id), busy || !!gp.blockedText));
   if (acts.extend) row.appendChild(elevButton("Extend", "btn", () => openElevPanel(s.id), busy));
   if (acts.drop) row.appendChild(elevButton("Drop", "btn", () => dropElevation(s), busy));
   wrap.appendChild(row);
+  if (gp.elevatedConn) {
+    const until = elevWindowUntil(s, gp.elevatedConn);
+    const p = document.createElement("p");
+    p.className = "tiny mut";
+    p.textContent = gp.elevatedConn + " \u00b7 write" + (until ? " until " + until : "");
+    wrap.appendChild(p);
+  }
   if (acts.elevate) {
     const p = document.createElement("p");
     p.className = "tiny mut";
-    p.textContent = "Read-only now. Elevate gives this session " + gp.role + " for a limited time.";
+    p.textContent = gp.blockedText || ("Read-only now. Elevate gives this session " + gp.role + " for a limited time.");
     wrap.appendChild(p);
   }
   return wrap;
+}
+
+// elevWindowUntil: the clock face the named connection's window ends, from the
+// list entry (fresh each poll); "" when it has none.
+function elevWindowUntil(s, name) {
+  const c = (s.aws_connections || []).find((x) => x.name === name);
+  return c && c.elevated_until ? hhmm(c.elevated_until) : "";
 }
 
 function openElevPanel(id) {
@@ -767,7 +904,7 @@ function buildElevPanel(s, gp, extend) {
   const box = document.createElement("div");
   box.className = "elevpanel";
   box.setAttribute("role", "group");
-  const title = extend ? "Extend write access" : "Grant write access";
+  const title = (extend ? "Extend write access" : "Grant write access") + (hasConns(s) ? " \u00b7 " + gp.selected : "");
   box.setAttribute("aria-label", title);
 
   const ttl = document.createElement("p");
@@ -826,7 +963,7 @@ function buildElevPanel(s, gp, extend) {
     const llab = document.createElement("label");
     llab.className = "flab";
     llab.htmlFor = "elev-label";
-    llab.textContent = 'Type "' + gp.label + '" to confirm';
+    llab.textContent = 'Type "' + gp.label + '" to confirm' + (hasConns(s) ? " (" + gp.selected + ")" : "");
     typed = document.createElement("input");
     typed.id = "elev-label";
     typed.className = "fld";
@@ -859,10 +996,13 @@ function buildElevPanel(s, gp, extend) {
   role.textContent = "Role: " + gp.role;
   box.appendChild(role);
 
-  if (gp.blocked) {
+  // blocked: the host-level refusal; blockedText: another connection's window
+  // or leftover credentials. Both are the server's sentences, shown whole.
+  for (const why of [gp.blocked, gp.blockedText]) {
+    if (!why) continue;
     const warn = document.createElement("div");
     warn.className = "warnbox";
-    warn.textContent = gp.blocked;
+    warn.textContent = why;
     box.appendChild(warn);
   }
 
@@ -888,7 +1028,7 @@ function buildElevPanel(s, gp, extend) {
       b.classList.toggle("on", w === minutes);
       b.setAttribute("aria-pressed", w === minutes ? "true" : "false");
     }
-    const ok = !gp.blocked && elevBusy !== s.id && (!gp.needLabel || (typed && typed.value === gp.label));
+    const ok = !gp.blocked && !gp.blockedText && elevBusy !== s.id && (!gp.needLabel || (typed && typed.value === gp.label));
     grant.disabled = !ok;
     grant.classList.toggle("off", !ok);
   }
@@ -910,7 +1050,7 @@ async function submitElevGrant(s, gp) {
     const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(grantBody(elevDraft.minutes, elevDraft.reason, elevDraft.label, gp.needLabel)),
+      body: JSON.stringify(grantBody(elevDraft.minutes, elevDraft.reason, elevDraft.label, gp.needLabel, hasConns(s) ? gp.selected : "")),
     });
     status = res.status;
     try { body = await res.json(); } catch (_) { body = null; }
@@ -994,7 +1134,8 @@ function ghRowText(row) {
   if (r.outcome === "revoked") return parts.concat("revoked").join(" · ");
   const n = Number(r.repos) || 0;
   parts.push(n + (n === 1 ? " repo" : " repos"), String(r.outcome || "").replace(/_/g, " "));
-  if (r.entry) parts.push("PAT " + String(r.entry));
+  // Only a GitHub row's entry is a PAT; an AWS row's entry is the connection name.
+  if (r.entry) parts.push((r.provider === "github" ? "PAT " : "") + String(r.entry));
   if (r.outcome === "minted") {
     const t = Date.parse(r.expires);
     if (Number.isFinite(t) && t > Date.UTC(2000, 0, 1)) {

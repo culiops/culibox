@@ -199,6 +199,15 @@
        command to run) wraps instead of clipping. */
     .kv .bdg { align-self: center; }
     .kv.wrap .v { white-space: normal; overflow-wrap: anywhere; text-align: right; }
+    /* One block per named AWS connection (steer rail): name and chips, then the
+       muted identity line, then the counters or the last error. Existing tokens
+       only; the chips are the rail's own .bdg ones. */
+    .connblk { padding: 6px 0; border-top: 1px solid var(--border); }
+    .connblk .connl1 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+    .connblk .connnm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .connblk .connln { margin: 2px 0 0; overflow-wrap: anywhere; }
+    .connblk .connln.err { color: var(--danger); }
+    .connmore { margin: 6px 0 0; }
     /* Write elevation (steer rail, desktop only): the Elevate/Extend/Drop buttons
        and the inline grant panel. #steer-elev is a .rsec; hidden when the binding
        has no write role. */
