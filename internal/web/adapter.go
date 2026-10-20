@@ -2,11 +2,13 @@ package web
 
 import (
 	"log"
+	"slices"
 
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/ssologin"
 )
 
 // ManagerService adapts *session.Manager to the Info-based SessionService the
@@ -111,6 +113,7 @@ func (a AWSStatusAdapter) AWSStatus(id string) (any, bool) { return a.AWSStatusF
 func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	info, ok := a.Get(id)
 	hasConns := len(info.AWSConnections) > 0
+	var conns []connStatus // the entries of out["connections"]; overlaid below
 	if !ok || (info.AWS == nil && !hasConns && info.GitHub == nil && len(info.Tokens) == 0) {
 		return nil, false
 	}
@@ -134,7 +137,7 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 		if a.ConnStats != nil {
 			cs = a.ConnStats(id)
 		}
-		conns := make([]connStatus, 0, len(info.AWSConnections))
+		conns = make([]connStatus, 0, len(info.AWSConnections))
 		for _, c := range info.AWSConnections {
 			conns = append(conns, connStatus{AWSConnInfo: c, Stats: cs[c.Name]})
 		}
@@ -187,19 +190,60 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 	if a.Elevation != nil && (info.AWS != nil || hasConns) {
 		if v, ok := a.Elevation(id); ok {
 			out["elevation"] = v
+			// The status reads the session without the list's AWS state, so the
+			// window is overlaid here: on the connection it is for, while active.
+			if v.Active && !v.Until.IsZero() && !info.Exited {
+				for i := range conns {
+					if conns[i].Name == v.Name {
+						u := v.Until
+						conns[i].ElevatedUntil = &u
+					}
+				}
+			}
 		}
 	}
 	if a.SSO != nil && (info.AWS != nil || hasConns) {
 		if s, ok := a.SSO(id); ok {
-			if s.Login != nil && !cookie {
-				l := *s.Login
-				l.URI, l.Code, l.URITrusted = "", "", false
-				s.Login = &l
+			if !cookie {
+				// Copies throughout: the callback's state is not ours to change.
+				if s.Login != nil {
+					s.Login = redactedLogin(s.Login)
+				}
+				if len(s.Sources) > 0 {
+					srcs := make([]SSOSource, len(s.Sources))
+					copy(srcs, s.Sources)
+					for i := range srcs {
+						if srcs[i].Login != nil {
+							srcs[i].Login = redactedLogin(srcs[i].Login)
+						}
+					}
+					s.Sources = srcs
+				}
+			}
+			// A connection that signs in through an expired source is flagged with
+			// that source's key, as the session list does.
+			for _, src := range s.Sources {
+				if !src.Expired {
+					continue
+				}
+				for i := range conns {
+					if slices.Contains(src.Names, conns[i].Name) {
+						conns[i].SSOExpired = src.Source
+					}
+				}
 			}
 			out["sso"] = s
 		}
 	}
 	return out, true
+}
+
+// redactedLogin is a copy of l without the device code and URL, which only the
+// browser session that asked for the flow may see.
+func redactedLogin(l *ssologin.State) *ssologin.State {
+	c := *l
+	c.URI, c.Code, c.URITrusted = "", "", false
+	return &c
 }
 
 // connStatus is one entry of "connections": the session's view of the

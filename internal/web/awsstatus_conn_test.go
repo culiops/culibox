@@ -10,6 +10,7 @@ import (
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/ssologin"
 )
 
 // statusKeys marshals a status reply and returns its object keys, sorted, at
@@ -221,5 +222,91 @@ func TestAWSStatusConnOnlySessionNot204(t *testing.T) {
 	}
 	if _, ok := ad.AWSStatus("claude-6"); ok {
 		t.Fatal("an unbound session got a status")
+	}
+}
+
+// A token caller never sees a device code or URL, at the top level or under
+// any per-source login; a browser session still does. The state the SSO
+// callback returned is not changed in place.
+func TestAWSStatusRedactsPerSourceSSOForTokens(t *testing.T) {
+	login := &ssologin.State{State: "pending", URI: "https://device.example/x", URITrusted: true, Code: "ABCD-EFGH"}
+	srcLogin := &ssologin.State{State: "pending", URI: "https://device.example/y", URITrusted: true, Code: "WXYZ-1234"}
+	given := SSOStatus{Expired: true, Source: "k", Login: login, Sources: []SSOSource{
+		{Source: "k", Names: []string{"sbx-b"}, Expired: true, Login: srcLogin},
+		{Source: "j", Names: []string{"sbx-a"}},
+	}}
+	ad := connAdapter(connSessionInfo())
+	ad.SSO = func(string) (SSOStatus, bool) { return given, true }
+
+	st, _ := ad.AWSStatusFor("claude-5", false)
+	raw, _ := json.Marshal(st)
+	for _, secret := range []string{"ABCD-EFGH", "WXYZ-1234", "device.example"} {
+		if strings.Contains(string(raw), secret) {
+			t.Fatalf("a token caller can read %q: %s", secret, raw)
+		}
+	}
+	var wire struct {
+		SSO struct {
+			Sources []struct {
+				Login *ssologin.State `json:"login"`
+			} `json:"sources"`
+		} `json:"sso"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil || wire.SSO.Sources[0].Login == nil || wire.SSO.Sources[0].Login.State != "pending" {
+		t.Fatalf("redaction dropped the flow state: %v %s", err, raw)
+	}
+	if login.Code != "ABCD-EFGH" || srcLogin.Code != "WXYZ-1234" || given.Sources[0].Login != srcLogin ||
+		srcLogin.URI == "" || login.URI == "" {
+		t.Fatal("the callback's SSO state was mutated in place")
+	}
+
+	st, _ = ad.AWSStatusFor("claude-5", true)
+	raw, _ = json.Marshal(st)
+	for _, secret := range []string{"ABCD-EFGH", "WXYZ-1234"} {
+		if !strings.Contains(string(raw), secret) {
+			t.Fatalf("a browser session lost %q: %s", secret, raw)
+		}
+	}
+}
+
+// The status overlays the write window and the SSO state on the right
+// connection only, and the top-level elevate of a connections session carries
+// no inline-binding fields.
+func TestAWSStatusConnectionElevationAndSSOState(t *testing.T) {
+	st, ok := connAdapter(connSessionInfo()).AWSStatus("claude-5")
+	if !ok {
+		t.Fatal("no status")
+	}
+	raw, _ := json.Marshal(st)
+	var wire struct {
+		Connections []struct {
+			Name          string     `json:"name"`
+			ElevatedUntil *time.Time `json:"elevated_until"`
+			SSOExpired    string     `json:"sso_expired"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	a, b := wire.Connections[0], wire.Connections[1]
+	if a.Name != "sbx-a" || a.ElevatedUntil == nil || !a.ElevatedUntil.Equal(time.Unix(1700000900, 0)) || a.SSOExpired != "" {
+		t.Fatalf("sbx-a %+v", a)
+	}
+	if b.Name != "sbx-b" || b.ElevatedUntil != nil || b.SSOExpired != "k" {
+		t.Fatalf("sbx-b %+v", b)
+	}
+	if got := statusKeys(t, st, "elevate")["elevate"]; !equalStrings(got, []string{"conn_blocked", "host_sessions"}) {
+		t.Fatalf("connections session elevate keys %v", got)
+	}
+
+	// An inactive view, or one for a session that has exited, marks nothing.
+	ad := connAdapter(connSessionInfo())
+	ad.Elevation = func(string) (broker.ElevationView, bool) {
+		return broker.ElevationView{Active: false, LastValid: time.Unix(1700000900, 0), Name: "sbx-a"}, true
+	}
+	st, _ = ad.AWSStatus("claude-5")
+	raw, _ = json.Marshal(st)
+	if strings.Contains(string(raw), "elevated_until") {
+		t.Fatalf("an inactive window marked a connection: %s", raw)
 	}
 }
