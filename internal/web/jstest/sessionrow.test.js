@@ -361,7 +361,7 @@ test("awsConnRailRows: line 3 is the counters, or the last error verbatim", () =
     { name: "sbx-b", stats: { mints: 0, last_mint: "0001-01-01T00:00:00Z", last_error: "sso session expired — run aws sso login" } },
   ] };
   const [a, b] = awsConnRailRows(s, st, NOW, false);
-  assert.match(a.stat, /^3 mints · last mint \d\d:\d\d$/);
+  assert.match(a.stat, /^3 mints · last mint \d\d:\d\d · 5m ago$/, "the legacy row's clock-and-age text");
   assert.strictEqual(a.err, false);
   assert.strictEqual(b.stat, "sso session expired — run aws sso login");
   assert.strictEqual(b.err, true);

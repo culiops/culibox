@@ -331,12 +331,14 @@ const CONN_COLLAPSE = 6;
 // (GET .../aws connections[].stats). The last error wins and is shown whole: it
 // carries the actionable sign-in hint. "" until the counters are loaded, so a
 // block never claims "0 mints" it was not told.
-function connStatLine(stats) {
+function connStatLine(stats, nowMs) {
   if (!stats) return { stat: "", err: false };
   if (stats.last_error) return { stat: String(stats.last_error), err: true };
   const n = Number(stats.mints) || 0;
   const t = Date.parse(stats.last_mint);
-  const last = Number.isFinite(t) && t > Date.UTC(2000, 0, 1) ? hhmm(stats.last_mint) : "never";
+  // The legacy AWS row's own helper (clock and age, "05:20 \u00b7 3m ago"), so the two read alike.
+  const started = typeof startedText === "function" ? startedText : require("./steerrail.js").startedText;
+  const last = Number.isFinite(t) && t > Date.UTC(2000, 0, 1) ? started(stats.last_mint, nowMs) : "never";
   return { stat: n + (n === 1 ? " mint" : " mints") + " \u00b7 last mint " + last, err: false };
 }
 
@@ -360,7 +362,7 @@ function awsConnRailRows(s, st, nowMs = Date.now(), expanded = false) {
     if (live) chips.push({ text: "write until " + hhmm(c.elevated_until), chip: "bdg aws write" });
     if (c.sso_expired) chips.push({ text: "SSO expired", chip: "bdg dgr" });
     const detail = [c.label, c.account_id, roleName(live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" \u00b7 ");
-    const { stat, err } = connStatLine((byName.get(c.name) || {}).stats);
+    const { stat, err } = connStatLine((byName.get(c.name) || {}).stats, nowMs);
     return { kind: "conn", k: "aws", name: c.name, chips, detail, stat, err,
       v: [c.name, chips.map((x) => x.text).join(","), detail, stat].join("\u241f") };
   });

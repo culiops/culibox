@@ -3126,6 +3126,10 @@ function syncEditorActions() {
     f.classList.toggle("off", aws.disabled || excl.pickerDisabled);
     f.disabled = aws.disabled || excl.pickerDisabled;
   }
+  // The whole row, label text included, not only its checkbox.
+  for (const row of $("pf-awsc-list").querySelectorAll(".pf-st-entry")) {
+    row.classList.toggle("off", aws.disabled || excl.pickerDisabled);
+  }
   $("pf-awsc-hint").hidden = !aws.hint;
   $("pf-awsc-note").textContent = excl.pickerDisabled ? excl.note : "";
   $("pf-awsc-note").hidden = !excl.pickerDisabled || aws.disabled;

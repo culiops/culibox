@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { grantPanel, grantBody, grantErrorText, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName } = require("../static/elevation.js");
+const { connPickerKind, grantPanel, grantBody, grantErrorText, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName } = require("../static/elevation.js");
 
 const WRITE = "arn:aws:iam::226198813800:role/agentbox-agent-write";
 const aws = { label: "sandbox", account_id: "226198813800", prod: false, elevate: { role_arn: WRITE, max_minutes: 60, allow_iam: false } };
@@ -218,4 +218,17 @@ test("ssoCard targets ONE source: the one the Sign in button will sign in", () =
   assert.strictEqual(ssoCard(s, { sso: sso2 }).login.code, "DEV-9");
   // legacy top-level fields are unchanged
   assert.strictEqual(ssoCommandOf({ command: "top", sources: sso.sources }, "a"), "top");
+});
+
+// --- #155 visual fix round ---------------------------------------------------
+test("connPickerKind: text for one, segmented for two, a select from three", () => {
+  assert.deepStrictEqual([1, 2, 3, 4, 9].map(connPickerKind), ["text", "seg", "select", "select", "select"]);
+  const st = { elevate: { host_sessions: [] } };
+  const kind = (n) => grantPanel(null, st, Array.from({ length: n }, (_, i) => wc("c" + i)), "", NOW).picker;
+  assert.strictEqual(kind(1), "text");
+  assert.strictEqual(kind(2), "seg");
+  assert.strictEqual(kind(3), "select");
+  assert.strictEqual(kind(4), "select");
+  // read-only connections do not count toward the switch
+  assert.strictEqual(grantPanel(null, st, [wc("a"), wc("b"), wc("c", { write_capable: false, elevate: undefined })], "", NOW).picker, "seg");
 });

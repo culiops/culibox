@@ -208,6 +208,13 @@
     .connblk .connln { margin: 2px 0 0; overflow-wrap: anywhere; }
     .connblk .connln.err { color: var(--danger); }
     .connmore { margin: 6px 0 0; }
+    /* Write access: the connection picker sits above the buttons with the rail's
+       usual control gap, and never widens the rail. Two names share the width as
+       a segmented control; three or more are a select. */
+    #steer-elev > .fcol { margin-bottom: 8px; }
+    #steer-elev .connseg { display: flex; max-width: 100%; }
+    #steer-elev .connseg button { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #steer-elev .connsel { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
     /* Write elevation (steer rail, desktop only): the Elevate/Extend/Drop buttons
        and the inline grant panel. #steer-elev is a .rsec; hidden when the binding
        has no write role. */
@@ -1170,6 +1177,8 @@
     #pf-st-hint, #pf-st-none { margin: 0 0 8px; }
     .pf-st-group { display: block; margin: 8px 0 2px; }
     .pf-st-entry { align-items: flex-start; margin-bottom: 6px; }
+    /* A closed AWS picker row dims whole (the Tokens picker dims only its box). */
+    #pf-awsc-list .pf-st-entry.off { opacity: .42; cursor: not-allowed; }
     .pf-st-entry input[type="checkbox"] { margin-top: 3px; flex: none; }
     .pf-st-text { min-width: 0; overflow-wrap: anywhere; }
     .pf-st-line { display: block; }
@@ -1458,6 +1467,11 @@
     @media (hover: none) {
       .cell-bar .tab:not(.act) { background: var(--surface-2); }
     }
+    /* A tab that carries an AWS chip shrinks its session name (ellipsis) before the
+       chip, so "AWS \u00d7N" or a prod label is never pushed under the pane's
+       controls. Scoped to tabs with a chip: plain tabs keep scrolling. */
+    .cell-bar .tab:has(.bdg.aws) { min-width: 0; }
+    .cell-bar .tab:has(.bdg.aws) .tab-label { min-width: 4ch; flex: 0 1 auto; }
     .cell-bar .tab-label { font-family: ui-monospace, Menlo, monospace; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
     .cell-bar .tab-st { font-size: 10px; color: var(--muted); }
     /* Per-window context readout on the tab: muted, tabular so digits don't jitter. */

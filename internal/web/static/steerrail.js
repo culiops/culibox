@@ -804,15 +804,40 @@ function connPicker(s, gp) {
   lab.className = "flab";
   lab.textContent = "Connection";
   wrap.appendChild(lab);
-  if (!gp.selector) {
+  if (gp.picker === "text") {
     const p = document.createElement("p");
     p.className = "tiny";
     p.textContent = gp.selected;
     wrap.appendChild(p);
     return wrap;
   }
+  const pick = (name) => {
+    if (name === gp.selected) return;
+    // A prod label typed for one connection is not the next one's.
+    elevSel = { id: s.id, name: name };
+    elevErr = { id: "", text: "" };
+    if (elevDraft.id === s.id) elevDraft.label = "";
+    elevRepaint(s.id);
+  };
+  if (gp.picker === "select") {
+    // Three or more would not fit the rail as buttons: a select never widens it.
+    const sel = document.createElement("select");
+    sel.className = "fld connsel";
+    sel.setAttribute("aria-label", "Connection");
+    for (const c of gp.conns) {
+      const o = document.createElement("option");
+      o.value = c.name;
+      o.textContent = c.name;
+      o.title = c.label || c.name;
+      o.selected = c.name === gp.selected;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => pick(sel.value);
+    wrap.appendChild(sel);
+    return wrap;
+  }
   const seg = document.createElement("div");
-  seg.className = "seg";
+  seg.className = "seg connseg";
   seg.setAttribute("role", "group");
   seg.setAttribute("aria-label", "Connection");
   for (const c of gp.conns) {
@@ -823,14 +848,7 @@ function connPicker(s, gp) {
     const on = c.name === gp.selected;
     b.classList.toggle("on", on);
     b.setAttribute("aria-pressed", on ? "true" : "false");
-    b.onclick = () => {
-      if (on) return;
-      // A prod label typed for one connection is not the next one's.
-      elevSel = { id: s.id, name: c.name };
-      elevErr = { id: "", text: "" };
-      if (elevDraft.id === s.id) elevDraft.label = "";
-      elevRepaint(s.id);
-    };
+    b.onclick = () => pick(c.name);
     seg.appendChild(b);
   }
   wrap.appendChild(seg);

@@ -59,6 +59,13 @@ function grantFields(e, prod, label, st) {
   };
 }
 
+// connPickerKind: how Write access offers the connections. One is shown as its
+// name; two fit side by side as a segmented control; three or more would not fit
+// the rail (a long name widens it), so they are a select.
+function connPickerKind(n) {
+  return n > 2 ? "select" : n === 2 ? "seg" : "text";
+}
+
 function connGrantPanel(conns, st, pick, nowMs) {
   const writable = conns.filter((c) => c && c.write_capable && c.elevate);
   if (!writable.length) return null;
@@ -74,6 +81,7 @@ function connGrantPanel(conns, st, pick, nowMs) {
   return Object.assign(grantFields(sel.elevate, sel.prod, sel.label, st), {
     conns: writable.map((c) => ({ name: c.name, label: c.label || "", prod: !!c.prod, role: elevRoleName(c.elevate.role_arn) })),
     selector: writable.length > 1,
+    picker: connPickerKind(writable.length),
     selected: sel.name,
     elevatedConn: elevatedConn,
     blockedText: blockedText,
@@ -204,5 +212,5 @@ function dropToast(view) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { grantPanel, grantBody, grantErrorText, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName };
+  module.exports = { connPickerKind, grantPanel, grantBody, grantErrorText, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName };
 }
