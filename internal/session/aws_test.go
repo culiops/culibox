@@ -68,6 +68,7 @@ type fakeBrokerHooks struct {
 	mcpErr      error
 	next        int
 	state       map[string]awsState
+	storeLocked map[string]bool // StoreLockedFor's answer per session
 
 	// Base-role probe: base answers ProbeBase per key (a key it lacks is
 	// Disabled, the broker's no-simulator answer); the rest records calls.
@@ -172,6 +173,21 @@ func (f *fakeBrokerHooks) AWSState(id string) (time.Time, string, string) {
 	defer f.mu.Unlock()
 	st := f.state[id]
 	return st.until, st.conn, st.sso
+}
+
+func (f *fakeBrokerHooks) StoreLockedFor(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.storeLocked[id]
+}
+
+func (f *fakeBrokerHooks) setStoreLocked(id string, v bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.storeLocked == nil {
+		f.storeLocked = map[string]bool{}
+	}
+	f.storeLocked[id] = v
 }
 
 func (f *fakeBrokerHooks) AWSConnState(id string) map[string]string {

@@ -37,6 +37,7 @@ import (
 	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
+	"github.com/culiops/agent-box/internal/storerefs"
 	"github.com/culiops/agent-box/internal/terminal"
 	"github.com/culiops/agent-box/internal/web"
 )
@@ -275,7 +276,8 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			acctList = append(acctList, r.Account)
 		}
 	}
-	logPlaintextCopies(plaintextCopies(cfg, acctList, vstore, os.LookupEnv))
+	ptCopies := plaintextCopies(cfg, acctList, vstore, os.LookupEnv)
+	logPlaintextCopies(ptCopies)
 
 	// Default working dir: config value if set, else $HOME.
 	defaultCwd := cfg.DefaultCwd
@@ -595,7 +597,16 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 		Accounts: accts,
 		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
+
+		// vstore is never nil (the daemon always opens one), so no typed-nil
+		// interface can reach the web layer.
+		Store:                vstore,
+		StoreAudit:           storeAudit,
+		StoreInUse:           storerefs.InUse(cfg),
+		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
+		StorePlaintextCopies: ptCopies,
 	}
+	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)
 
 	// Analytics: durable token/prompt rollups mined from the Claude Code

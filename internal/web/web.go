@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 //go:embed static
@@ -65,6 +67,20 @@ type Server struct {
 	// SecretOK reports whether a secret NAME resolves (never its value); it only
 	// feeds an account's login_state.
 	SecretOK func(name string) bool
+
+	// Store is the encrypted store behind /api/store. Nil → the routes are not
+	// registered. Never a typed nil: the daemon leaves it unset without a store.
+	Store StoreService
+	// StoreAudit receives unlock_rate_limited (best effort); the store records
+	// its own unlocks and locks.
+	StoreAudit secretstore.Recorder
+	// StoreInUse: a configured reference reads the store. StoreUnlockTTL is how
+	// long a web unlock lasts. StorePlaintextCopies are secret NAMES (never
+	// values) that are in the store and also set in the daemon's environment.
+	StoreInUse           bool
+	StoreUnlockTTL       time.Duration
+	StorePlaintextCopies []string
+	storeLimit           unlockLimiter
 
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
@@ -125,6 +141,11 @@ func (s *Server) Handler() http.Handler {
 	if s.Accounts != nil {
 		protected.HandleFunc("/api/accounts", s.handleAccounts)
 		protected.HandleFunc("/api/accounts/", s.handleAccount)
+	}
+	if s.Store != nil {
+		protected.HandleFunc("/api/store", s.handleStore)
+		protected.HandleFunc("/api/store/unlock", s.handleStoreUnlock)
+		protected.HandleFunc("/api/store/lock", s.handleStoreLock)
 	}
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/tokens", s.handleTokens)
