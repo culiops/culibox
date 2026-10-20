@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -35,6 +36,11 @@ var envScript []byte
 // TokensFile is the non-secret listing of a binding's tokens, in the binding
 // dir (so /opt/agentbox/tokens.json in the box); `agentbox-env --list` reads it.
 const TokensFile = "tokens.json"
+
+// AWSListFile is the non-secret listing of a session's AWS connections, in the
+// binding dir (so /opt/agentbox/aws.json in the box); `agentbox-env --list`
+// reads it.
+const AWSListFile = "aws.json"
 
 // GHConfigDir is gh's config dir in a bound box: a path that dies with the box,
 // so nothing gh writes there (hosts.yml, caches) outlives the session.
@@ -83,7 +89,8 @@ func StripGitHubEnv() []string {
 }
 
 // EnsureBindingDir writes <stateRoot>/broker/binding-<hash>/: aws-config when
-// there is an AWS binding, agentbox-cred.js always, agentbox-gh.js when there is
+// there is an AWS binding (or named AWS connections, which also get aws.json and
+// agentbox-env.js), agentbox-cred.js always, agentbox-gh.js when there is
 // a GitHub binding, agentbox-env.js and tokens.json when there are static tokens
 // (PAT entries go through the gh/git helpers and do not count). The bindings
 // and each token entry are validated first (a hand-edited profiles.json
@@ -110,6 +117,14 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 			return "", fmt.Errorf("broker: %w", err)
 		}
 	}
+	// Connection names and regions are formatted into an INI file: re-check
+	// each one here, as for the inline binding (a hand-edited config.json is not
+	// re-validated at load).
+	for i, c := range bs.AWSConns {
+		if err := c.Validate(); err != nil {
+			return "", fmt.Errorf("broker: aws_connections[%d]: %w", i, err)
+		}
+	}
 	root, err := os.OpenRoot(stateRoot)
 	if err != nil {
 		return "", fmt.Errorf("broker: opening state root: %w", err)
@@ -133,11 +148,19 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 		cfg := fmt.Sprintf("[profile agentbox]\ncredential_process = node %s/agentbox-cred.js\nregion = %s\n", BoxDir, bs.AWS.Region)
 		files = append(files, file{"aws-config", []byte(cfg)})
 	}
+	if len(bs.AWSConns) > 0 {
+		files = append(files, file{"aws-config", AWSConfigFor(bs.AWSConns)}, file{AWSListFile, AWSListing(bs.AWSConns)})
+	}
 	if bs.GitHub != nil {
 		files = append(files, file{"agentbox-gh.js", ghScript})
 	}
+	// The image's agentbox-env shim requires the script, so connections get it
+	// too (for --list); tokens.json only exists with tokens.
+	if len(bs.Tokens) > 0 || len(bs.AWSConns) > 0 {
+		files = append(files, file{"agentbox-env.js", envScript})
+	}
 	if len(bs.Tokens) > 0 {
-		files = append(files, file{"agentbox-env.js", envScript}, file{TokensFile, TokensListing(bs.Tokens)})
+		files = append(files, file{TokensFile, TokensListing(bs.Tokens)})
 	}
 	for _, f := range files {
 		if err := replaceFile(root, rel, f.name, f.data); err != nil {
@@ -145,6 +168,52 @@ func EnsureBindingDir(stateRoot string, bs config.Bindings) (string, error) {
 		}
 	}
 	return filepath.Join(stateRoot, rel), nil
+}
+
+// AWSConfigFor is the aws-config of a session with named connections: a
+// [default] profile that only prints guidance (no silent default), then one
+// profile per connection, sorted by name, each asking the broker for that
+// connection. Names and regions are validated by the caller (EnsureBindingDir).
+func AWSConfigFor(conns []config.AWSConnection) []byte {
+	sorted := slices.Clone(conns)
+	slices.SortFunc(sorted, func(a, b config.AWSConnection) int { return strings.Compare(a.Name, b.Name) })
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[default]\ncredential_process = node %s/agentbox-cred.js aws\n", BoxDir)
+	for _, c := range sorted {
+		fmt.Fprintf(&sb, "\n[profile %s]\ncredential_process = node %s/agentbox-cred.js aws %s\nregion = %s\n", c.Name, BoxDir, c.Name, c.Region)
+	}
+	return []byte(sb.String())
+}
+
+// awsListEntry is one row of aws.json: what `agentbox-env --list` shows and
+// nothing more. There is deliberately no field for the source profile, the
+// elevate role, s3_read or egress.
+type awsListEntry struct {
+	Name         string `json:"name"`
+	Label        string `json:"label,omitempty"`
+	Prod         bool   `json:"prod"`
+	AccountID    string `json:"account_id"`
+	RoleARN      string `json:"role_arn"`
+	Region       string `json:"region"`
+	WriteCapable bool   `json:"write_capable"`
+	Description  string `json:"description,omitempty"`
+}
+
+// AWSListing is the JSON the box shows for the AWS section of `agentbox-env
+// --list`, one row per connection sorted by name.
+func AWSListing(conns []config.AWSConnection) []byte {
+	sorted := slices.Clone(conns)
+	slices.SortFunc(sorted, func(a, b config.AWSConnection) int { return strings.Compare(a.Name, b.Name) })
+	out := make([]awsListEntry, len(sorted))
+	for i, c := range sorted {
+		out[i] = awsListEntry{Name: c.Name, Label: c.Label, Prod: c.Prod, AccountID: awsscope.AccountOf(c.RoleARN),
+			RoleARN: c.RoleARN, Region: c.Region, WriteCapable: c.Elevate != nil, Description: c.Description}
+	}
+	b, err := json.Marshal(out)
+	if err != nil { // plain strings and bools: cannot happen
+		return []byte("[]\n")
+	}
+	return append(b, '\n')
 }
 
 // tokenListEntry is one row of tokens.json: everything `agentbox-env --list`
@@ -267,8 +336,20 @@ func BoxEnv(bs config.Bindings, boxURL string) []string {
 			"AWS_REGION="+bs.AWS.Region,
 			"AWS_DEFAULT_REGION="+bs.AWS.Region)
 	}
+	if len(bs.AWSConns) > 0 {
+		// A profile selector only when there is nothing to choose; a region only
+		// when every connection shares it (an AWS_REGION would override each
+		// profile's own region). Otherwise the SDK takes both from the profile.
+		env = append(env, "AWS_CONFIG_FILE="+BoxDir+"/aws-config")
+		if len(bs.AWSConns) == 1 {
+			env = append(env, "AWS_PROFILE="+bs.AWSConns[0].Name)
+		}
+		if r := config.AWSConnectionsRegion(bs.AWSConns); r != "" {
+			env = append(env, "AWS_REGION="+r, "AWS_DEFAULT_REGION="+r)
+		}
+	}
 	env = append(env, "AGENTBOX_BROKER="+boxURL)
-	if bs.AWS != nil {
+	if bs.AWS != nil || len(bs.AWSConns) > 0 {
 		env = append(env, "TF_CLI_ARGS_plan=-lock=false") // plan never takes the state lock: M3a is strictly read-only
 	}
 	if bs.GitHub != nil {

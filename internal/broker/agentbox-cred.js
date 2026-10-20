@@ -3,6 +3,9 @@
 // on the host for short-lived credentials. Never prints the session token.
 //
 //   agentbox-cred.js              AWS credential_process: prints the credential JSON.
+//   agentbox-cred.js aws <name>   the same, for one named AWS connection.
+//   agentbox-cred.js aws          a session with several connections has no default:
+//                                 prints guidance and exits 1 (no broker call).
 //   agentbox-cred.js github-git   git credential helper (`get` only): prints a GitHub
 //                                 installation token for the repo git is asking about.
 'use strict';
@@ -53,13 +56,19 @@ function brokerMessage(body, status) {
   return msg || 'broker returned HTTP ' + status;
 }
 
-function awsCredentialProcess() {
+const CONN_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+const NO_DEFAULT_GUIDANCE = 'several AWS connections are bound — pick one with --profile <name> or AWS_PROFILE; run agentbox-env --list';
+
+// awsCredentialProcess serves credential_process. With no connection it sends
+// today's request (no body); with one it names the connection in a JSON body.
+function awsCredentialProcess(conn) {
   function fail(msg) {
     process.stderr.write('agentbox: ' + msg + '\n');
     process.exit(1);
   }
+  if (conn !== undefined && !CONN_NAME_RE.test(conn)) fail('bad AWS connection name ' + JSON.stringify(conn));
   if (!ep || !tok) fail('not an agent-box AWS session (AGENTBOX_BROKER / AGENTBOX_BROKER_TOKEN unset)');
-  request('/v1/credentials', undefined, 10000, (err, status, body) => {
+  request('/v1/credentials', conn === undefined ? undefined : { name: conn }, 10000, (err, status, body) => {
     if (err) fail(err.message);
     if (status === 200) { process.stdout.write(body); return; }
     fail(brokerMessage(body, status));
@@ -108,4 +117,12 @@ function githubGit(op) {
 }
 
 if (process.argv[2] === 'github-git') githubGit(process.argv[3]);
-else awsCredentialProcess();
+else if (process.argv[2] === 'aws') {
+  if (process.argv[3] === undefined) {
+    // The [default] profile of a session with several connections: nothing to
+    // mint, so no broker call (and no token needed to be told what to do).
+    process.stderr.write('agentbox: ' + NO_DEFAULT_GUIDANCE + '\n');
+    process.exit(1);
+  }
+  awsCredentialProcess(process.argv[3]);
+} else awsCredentialProcess();

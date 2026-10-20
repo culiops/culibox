@@ -657,3 +657,203 @@ func TestImageShimPathIsTheMountedScript(t *testing.T) {
 		t.Errorf("the script the box mounts as agentbox-env.js is not in this package: %v", err)
 	}
 }
+
+// --- #155 task 7: several named AWS connections ---
+
+func twoConns() []config.AWSConnection {
+	return []config.AWSConnection{
+		{Name: "acme-prod-read", Description: "Prod, read only", AWSBinding: config.AWSBinding{SourceProfile: "sso-acme",
+			RoleARN: "arn:aws:iam::111111111111:role/agent-read", Region: "eu-west-1", Label: "Acme prod", Prod: true,
+			Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::111111111111:role/agent-write"}}},
+		{Name: "acme-stg-read", AWSBinding: config.AWSBinding{SourceProfile: "sso-acme",
+			RoleARN: "arn:aws:iam::222222222222:role/agent-read", Region: "eu-west-1"}},
+	}
+}
+
+func TestAWSConfigForGolden(t *testing.T) {
+	want := "[default]\ncredential_process = node /opt/agentbox/agentbox-cred.js aws\n\n" +
+		"[profile acme-prod-read]\ncredential_process = node /opt/agentbox/agentbox-cred.js aws acme-prod-read\nregion = eu-west-1\n\n" +
+		"[profile acme-stg-read]\ncredential_process = node /opt/agentbox/agentbox-cred.js aws acme-stg-read\nregion = eu-west-1\n"
+	cs := twoConns()
+	if got := string(AWSConfigFor(cs)); got != want {
+		t.Fatalf("aws-config:\n%q\nwant\n%q", got, want)
+	}
+	// Order of the input does not matter: profiles come out sorted by name.
+	cs[0], cs[1] = cs[1], cs[0]
+	if got := string(AWSConfigFor(cs)); got != want {
+		t.Fatalf("unsorted input changed the output:\n%q", got)
+	}
+}
+
+func envHas(env []string, key string) (string, bool) {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func TestBoxEnvConnsOne(t *testing.T) {
+	env := BoxEnv(config.Bindings{AWSConns: twoConns()[:1]}, "unix:///x")
+	for k, want := range map[string]string{"AWS_CONFIG_FILE": "/opt/agentbox/aws-config", "AWS_PROFILE": "acme-prod-read",
+		"AWS_REGION": "eu-west-1", "AWS_DEFAULT_REGION": "eu-west-1", "TF_CLI_ARGS_plan": "-lock=false", "AGENTBOX_BROKER": "unix:///x"} {
+		if v, ok := envHas(env, k); !ok || v != want {
+			t.Errorf("%s = %q (set %v), want %q", k, v, ok, want)
+		}
+	}
+}
+
+func TestBoxEnvConnsMixedRegions(t *testing.T) {
+	cs := twoConns()
+	cs[1].Region = "us-east-1"
+	env := BoxEnv(config.Bindings{AWSConns: cs}, "unix:///x")
+	for _, k := range []string{"AWS_PROFILE", "AWS_REGION", "AWS_DEFAULT_REGION"} {
+		if v, ok := envHas(env, k); ok {
+			t.Errorf("%s=%q must not be set", k, v)
+		}
+	}
+	if v, ok := envHas(env, "AWS_CONFIG_FILE"); !ok || v != "/opt/agentbox/aws-config" {
+		t.Errorf("AWS_CONFIG_FILE = %q", v)
+	}
+}
+
+func TestBoxEnvConnsSameRegion(t *testing.T) {
+	env := BoxEnv(config.Bindings{AWSConns: twoConns()}, "unix:///x")
+	if v, ok := envHas(env, "AWS_REGION"); !ok || v != "eu-west-1" {
+		t.Errorf("AWS_REGION = %q", v)
+	}
+	if v, ok := envHas(env, "AWS_DEFAULT_REGION"); !ok || v != "eu-west-1" {
+		t.Errorf("AWS_DEFAULT_REGION = %q", v)
+	}
+	if v, ok := envHas(env, "AWS_PROFILE"); ok {
+		t.Errorf("AWS_PROFILE=%q must not be set with two connections", v)
+	}
+	for _, kv := range env { // nothing AWS_ beyond the three, and nothing from StripEnv's static routes
+		k, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(k, "AWS_") && !slices.Contains([]string{"AWS_CONFIG_FILE", "AWS_REGION", "AWS_DEFAULT_REGION"}, k) {
+			t.Errorf("unexpected %s", kv)
+		}
+	}
+}
+
+// The inline-binding box files and env are pinned to literals captured from
+// the code before connections existed (HEAD 25d6cf9).
+func TestLegacyBindingDirUnchanged(t *testing.T) {
+	dir, err := EnsureBindingDir(t.TempDir(), awsOnly(*binding()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := os.ReadFile(filepath.Join(dir, "aws-config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "[profile agentbox]\ncredential_process = node /opt/agentbox/agentbox-cred.js\nregion = ap-southeast-1\n"; string(cfg) != want {
+		t.Fatalf("aws-config = %q", cfg)
+	}
+	var files []string
+	for n := range fileModes(t, dir) {
+		files = append(files, n)
+	}
+	slices.Sort(files)
+	if !slices.Equal(files, []string{"agentbox-cred.js", "aws-config"}) {
+		t.Fatalf("files = %v", files)
+	}
+	want := []string{"AWS_CONFIG_FILE=/opt/agentbox/aws-config", "AWS_PROFILE=agentbox", "AWS_REGION=ap-southeast-1",
+		"AWS_DEFAULT_REGION=ap-southeast-1", "AGENTBOX_BROKER=unix:///x", "TF_CLI_ARGS_plan=-lock=false"}
+	if got := BoxEnv(awsOnly(*binding()), "unix:///x"); !slices.Equal(got, want) {
+		t.Fatalf("BoxEnv = %q", got)
+	}
+	wantGH := append(slices.Clone(want), "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=credential.https://github.com.helper",
+		"GIT_CONFIG_VALUE_0=!node /opt/agentbox/agentbox-cred.js github-git", "GIT_CONFIG_KEY_1=credential.https://github.com.useHttpPath",
+		"GIT_CONFIG_VALUE_1=true", "GIT_TERMINAL_PROMPT=0", "GH_CONFIG_DIR=/tmp/agentbox-gh", "GH_PROMPT_DISABLED=1",
+		"AGENTBOX_GH_OWNERS=culiops,CuliOps2")
+	if got := BoxEnv(config.Bindings{AWS: binding(), GitHub: ghTwoOwners()}, "unix:///x"); !slices.Equal(got, wantGH) {
+		t.Fatalf("BoxEnv with GitHub = %q", got)
+	}
+}
+
+func TestEnsureBindingDirConnsWritesEnvScript(t *testing.T) {
+	root := t.TempDir()
+	bs := config.Bindings{AWSConns: twoConns()}
+	dir, err := EnsureBindingDir(root, bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != filepath.Join(root, "broker", "binding-"+bs.Hash()) {
+		t.Fatalf("dir %s", dir)
+	}
+	modes := fileModes(t, dir)
+	var got []string
+	for n := range modes {
+		got = append(got, n)
+	}
+	slices.Sort(got)
+	want := []string{"agentbox-cred.js", "agentbox-env.js", "aws-config", "aws.json"}
+	if !slices.Equal(got, want) { // tokens.json only with tokens
+		t.Fatalf("files %v, want %v", got, want)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(dir, "aws-config"))
+	if !bytes.Equal(cfg, AWSConfigFor(bs.AWSConns)) {
+		t.Fatalf("aws-config %q", cfg)
+	}
+	list, _ := os.ReadFile(filepath.Join(dir, AWSListFile))
+	if !bytes.Equal(list, AWSListing(bs.AWSConns)) {
+		t.Fatalf("aws.json %q", list)
+	}
+	// With tokens as well, tokens.json joins them.
+	bs.Tokens = tokenEntries()
+	dir2, err := EnsureBindingDir(root, bs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := fileModes(t, dir2)[TokensFile]; !ok {
+		t.Fatal("tokens.json missing next to connections")
+	}
+}
+
+func TestEnsureBindingDirConnsRevalidates(t *testing.T) {
+	root := t.TempDir()
+	for name, mut := range map[string]func(*config.AWSConnection){
+		"region injection": func(c *config.AWSConnection) { c.Region = "eu-west-1\n[profile evil]" },
+		"name injection":   func(c *config.AWSConnection) { c.Name = "a\n[profile evil]" },
+		"reserved name":    func(c *config.AWSConnection) { c.Name = "default" },
+	} {
+		cs := twoConns()
+		mut(&cs[0])
+		if _, err := EnsureBindingDir(root, config.Bindings{AWSConns: cs}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, "broker")); err == nil {
+		t.Fatal("created files for an invalid connection")
+	}
+}
+
+func TestAWSListingNoSourceProfile(t *testing.T) {
+	b := AWSListing(twoConns())
+	if strings.Contains(string(b), "source_profile") || strings.Contains(string(b), "sso-acme") {
+		t.Fatalf("listing leaks the source profile: %s", b)
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(b, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0]["name"] != "acme-prod-read" || rows[0]["account_id"] != "111111111111" ||
+		rows[0]["role_arn"] != "arn:aws:iam::111111111111:role/agent-read" || rows[0]["region"] != "eu-west-1" ||
+		rows[0]["prod"] != true || rows[0]["write_capable"] != true || rows[0]["label"] != "Acme prod" ||
+		rows[0]["description"] != "Prod, read only" {
+		t.Fatalf("row 0 = %v", rows[0])
+	}
+	if rows[1]["write_capable"] != false || rows[1]["prod"] != false {
+		t.Fatalf("row 1 = %v", rows[1])
+	}
+	if _, ok := rows[1]["label"]; ok {
+		t.Fatalf("empty label should be omitted: %v", rows[1])
+	}
+	for _, k := range []string{"s3_read", "egress_allow", "elevate"} {
+		if strings.Contains(string(b), k) {
+			t.Errorf("listing carries %s", k)
+		}
+	}
+}
