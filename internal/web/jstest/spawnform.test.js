@@ -106,3 +106,11 @@ for (const off of [undefined, "true"]) {
     }
   });
 }
+
+test("spawnRefusedLocked: only a 423 carrying the store_locked code", () => {
+  const { spawnRefusedLocked } = require("../static/spawnform.js");
+  assert.strictEqual(spawnRefusedLocked(423, "store_locked"), true);
+  assert.strictEqual(spawnRefusedLocked(423, ""), false);
+  assert.strictEqual(spawnRefusedLocked(400, "store_locked"), false);
+  assert.strictEqual(spawnRefusedLocked(undefined, undefined), false);
+});

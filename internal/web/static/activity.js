@@ -6,9 +6,10 @@
 //
 // why is the optional reason a session reads "waiting" without the agent
 // waiting for input (tabNeedWhy in attention.js): "sso" labels the dot "AWS
-// sign-in needed" so a working agent is not described as waiting for input.
+// sign-in needed" ("store": "Store locked") so a working agent is not described as waiting for input.
 function activityClass(activity, why) {
   if (activity === "waiting" && why === "sso") return { cls: "dot waiting", title: "AWS sign-in needed" };
+  if (activity === "waiting" && why === "store") return { cls: "dot waiting", title: "Store locked" };
   switch (activity) {
     case "working":  return { cls: "dot working",  title: "working" };
     case "waiting":  return { cls: "dot waiting",  title: "waiting for input" };

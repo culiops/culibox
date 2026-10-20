@@ -250,6 +250,45 @@
     /* Stacked, full width: a phone has no room for two buttons in a row. */
     .ssocard.mssocard .nacts { display: flex; flex-direction: column; gap: 7px; margin-top: 9px; }
     .ssocard.mssocard .btn { min-height: var(--tap); width: 100%; box-sizing: border-box; }
+    /* --- encrypted store (store.js) ------------------------------------------
+       The global "Store locked" banner, the needs-you card body and the spawn
+       dialog's inline form all share .storeform: a password field and an Unlock
+       button in one row, stacked below 700px. min-width:0 on the field is what
+       lets the row shrink instead of overflowing a 390px screen. */
+    #store-banner {
+      flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+      padding: 8px 14px; border-bottom: 1px solid var(--warn);
+      background: var(--warn-bg); color: var(--warn-fg); font-size: 12.5px;
+    }
+    #store-banner[hidden] { display: none; }
+    .storebanner-msg { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; }
+    .storeslot { min-width: 0; flex: 0 1 auto; }
+    .storeform { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+    .storeform .storepass { flex: 1 1 200px; min-width: 0; box-sizing: border-box; }
+    .storeform .storeerr { flex: 1 0 100%; margin-top: 0; overflow-wrap: anywhere; }
+    .storecard .storetitle { font-weight: 700; margin: 0 0 3px; }
+    .storecard .storetxt { margin: 0 0 8px; overflow-wrap: anywhere; }
+    .storecard .storeslot { display: block; }
+    .storecard.mstorecard { margin: 8px 0; }
+    .spawn-unlock { padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); min-width: 0; }
+    .spawn-unlock[hidden] { display: none; }
+    .spawn-unlock .storetxt { margin: 0 0 8px; overflow-wrap: anywhere; }
+    .spawn-unlock .storeretry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .tabs .t[hidden] { display: none; }
+    .storestat { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 4px 0 8px; }
+    .storestat .lbl { width: 152px; flex: none; color: var(--muted); }
+    .storestat .muted { color: var(--muted); }
+    #store-unlock { padding: 4px 0 10px; }
+    #store-unlock[hidden] { display: none; }
+    #store-plaintext { color: var(--warn-fg); overflow-wrap: anywhere; }
+    #store-plaintext[hidden] { display: none; }
+    #store-honest { overflow-wrap: anywhere; }
+    @media (max-width: 700px) {
+      #store-banner { padding: 10px 12px; }
+      .storeform .storepass { flex: 1 0 100%; min-height: var(--tap); }
+      .storeform .btn { flex: 1 0 100%; min-height: var(--tap); }
+      .storestat .lbl { width: auto; flex: 1 0 100%; }
+    }
     .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
     .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }
     .attr { display: flex; align-items: center; gap: 9px; font-size: 12px; padding: 4px 0; }

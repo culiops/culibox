@@ -39,6 +39,7 @@
     <button id="analytics-open" title="Token &amp; prompt analytics" aria-label="Analytics" hidden>▁▃▅</button>
     <button id="settings-open" title="Settings: profiles and font sizes" aria-label="Settings" class="nf"></button>
   </header>
+  <div id="store-banner" role="region" aria-label="Secret store" hidden></div>
   <div id="layout">
     <nav id="rail48" class="rail48" aria-label="Sessions"></nav>
     <aside id="sidebar">
@@ -200,6 +201,7 @@
           <span class="spawn-adv-label">Advanced</span>
           <div id="options"></div>
         </div>
+        <div class="span2 spawn-unlock" id="spawn-unlock" role="region" aria-label="Unlock the secret store" hidden></div>
         <div class="dlg-err span2" id="spawn-err"></div>
         <div class="spawn-actions span2">
           <button type="button" class="btn gh" data-close="spawn-modal">Cancel</button>
@@ -220,6 +222,7 @@
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Access tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
+      <button type="button" class="t" data-tab="store" role="tab" aria-selected="false" aria-controls="store" hidden>Store</button>
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
@@ -417,6 +420,18 @@
       <div class="dlg-err" id="acct-err"></div>
     </div>
 
+    <div class="dbd pad" id="store" role="tabpanel" hidden>
+      <div class="storestat">
+        <span class="lbl">Status</span>
+        <span id="store-status"></span>
+        <span class="muted" id="store-values"></span>
+      </div>
+      <div class="storeslot" id="store-unlock" hidden></div>
+      <div class="hint" id="store-plaintext" hidden></div>
+      <p class="hint" id="store-honest"></p>
+      <div class="dlg-err" id="store-err"></div>
+    </div>
+
     <div class="dft" id="foot-manage">
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
@@ -433,6 +448,11 @@
       <button id="tok-logout" type="button" class="btn dgr">Sign out of this box…</button>
       <span class="grow"></span>
       <button id="tok-new" type="button" class="btn">+ new token</button>
+      <button type="button" class="btn pri" data-close="settings-modal">Done</button>
+    </div>
+    <div class="dft" id="foot-store" hidden>
+      <button id="store-lock" type="button" class="btn" hidden>Lock now</button>
+      <span class="grow"></span>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
     <div class="dft" id="foot-accounts" hidden>
@@ -564,6 +584,7 @@
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
   <script src="/tokens.js"></script>
+  <script src="/store.js"></script>
   <script src="/sessionrow.js"></script>
   <script src="/reconcile.js"></script>
   <script src="/attention.js"></script>

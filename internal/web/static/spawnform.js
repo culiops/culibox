@@ -80,9 +80,16 @@ function isSubmitHotkey(e, mac) {
   return mac ? !!e.metaKey && !e.ctrlKey : !!e.ctrlKey && !e.metaKey;
 }
 
+// spawnRefusedLocked: the server refused a spawn or restart because the secret
+// store is locked (HTTP 423 with code "store_locked"). The dialog answers by
+// showing the unlock form inline, not by closing with a toast.
+function spawnRefusedLocked(status, code) {
+  return status === 423 && code === "store_locked";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
+    spawnRefusedLocked, BYPASS_OPTION_KEY, isClaudeBinName, promptFieldVisible, repliesFieldVisible, bypassWarningShown,
     runtimeSegChoices, spawnPayload, spawnPrefill, isSubmitHotkey,
   };
 }

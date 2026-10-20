@@ -137,6 +137,7 @@ function selectSettingsTab(name) {
   // The Access-tokens tab loads its list lazily whenever it is shown.
   if (name === "tokens" && typeof loadTokens === "function") loadTokens();
   if (name === "accounts" && typeof loadAccounts === "function") loadAccounts();
+  if (name === "store" && typeof refreshStore === "function") refreshStore();
 }
 
 function initDialogs() {

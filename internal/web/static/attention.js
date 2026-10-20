@@ -6,9 +6,11 @@
 
 // needsYou: the one definition of "this session wants the operator". An expired
 // AWS sign-in counts even while the agent is still running: its AWS calls fail
-// until someone signs in, and nothing about the agent's activity says so.
+// until someone signs in, and nothing about the agent's activity says so. A
+// locked secret store is the same: the session's store-backed credentials
+// cannot be fetched until someone unlocks it.
 function needsYou(s) {
-  return !!s && (s.activity === "waiting" || s.need === "sso" || connSSOSources(s).length > 0);
+  return !!s && (s.activity === "waiting" || s.need === "sso" || s.need === "store_locked" || connSSOSources(s).length > 0);
 }
 
 // connSSOSources: the distinct sign-in sources a session with named AWS
@@ -24,7 +26,9 @@ function connSSOSources(s) {
 // "" otherwise. The tab's dot and tooltip use it so a working agent is not
 // described as waiting for input (the activity itself is never rewritten).
 function tabNeedWhy(s) {
-  return s && (s.need === "sso" || connSSOSources(s).length > 0) && s.activity !== "waiting" ? "sso" : "";
+  if (!s || s.activity === "waiting") return "";
+  if (s.need === "sso" || connSSOSources(s).length > 0) return "sso";
+  return s.need === "store_locked" ? "store" : "";
 }
 
 // sessionDot: the activity dot (class + title) for a session on every surface
@@ -44,11 +48,18 @@ function ssoExpiredText(s) {
   return "AWS sign-in expired" + (src ? " (" + src + ")" : "") + ". This session's AWS calls fail until you sign in.";
 }
 
+// storeLockedText: the store card's sentence. Plain: it names the effect, not
+// the mechanism.
+function storeLockedText() {
+  return "This session's credentials from the store can't be fetched until you unlock it.";
+}
+
 // needLabel: the human word for WHY a waiting session needs you. "" when it is
 // not waiting, or waiting without a known need (the caller falls back to the
 // activity's own title).
 function needLabel(s) {
   if (s && s.need === "sso") return "AWS sign-in";
+  if (s && s.need === "store_locked") return "store locked";
   if (!s || s.activity !== "waiting") return "";
   if (s.need === "ask") return "asks";
   if (s.need === "turn") return "your turn";
@@ -80,6 +91,11 @@ function cardContent(s) {
   // the reply box away from a replyable session (spec 8.2).
   if (v.need === "sso") {
     return { text: ssoExpiredText(v), sso: true, ask: false, reply: on && !!v.replyable, enableReplies: false };
+  }
+  // A locked store: the card IS the unlock form (renderStoreBody). No reply path:
+  // the session is not asking anything, and the fix is the passphrase.
+  if (v.need === "store_locked") {
+    return { title: "Store locked", text: storeLockedText(), unlock: true, ask: false, reply: false, enableReplies: false };
   }
   if (v.need === "ask") {
     return { text: v.ask || v.summary || "Waiting on a prompt in the terminal.", ask: true, reply: false, enableReplies: on && !!v.claude && !v.replyable };
@@ -299,7 +315,7 @@ function staleExpanded(s, seenAskFull) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { needsYou, connSSOSources, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
+  module.exports = { needsYou, connSSOSources, storeLockedText, sessionDot, tabNeedWhy, ssoExpiredText, needLabel, cardContent, attentionTitle, faviconHref, needsTransitions,
     notifyAvailability, notifyChecked, notifyWanted, setNotifyWanted, notifyBody, notifyPoll,
     sha256Hex, answerState, answerErrorText, staleExpanded, maskHint };
 }
