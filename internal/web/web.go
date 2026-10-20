@@ -83,6 +83,17 @@ type Server struct {
 	StorePlaintextCopies []string
 	storeLimit           unlockLimiter
 
+	// Creds owns the web-defined credentials; nil → the /api/credentials
+	// routes are not registered. CredAWS is the host's AWS signer behind the
+	// roles, check and sign-in routes: nil when no broker is running (those
+	// routes answer 409 no_broker), and never a typed nil. CredAudit receives
+	// the AWS-setup audit rows. credLimit is the shared budget of the routes
+	// that call AWS.
+	Creds     *CredentialManager
+	CredAWS   AWSCredService
+	CredAudit CredRecorder
+	credLimit callLimiter
+
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
 	Analytics *analytics.Service
@@ -147,6 +158,10 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/store", s.handleStore)
 		protected.HandleFunc("/api/store/unlock", s.handleStoreUnlock)
 		protected.HandleFunc("/api/store/lock", s.handleStoreLock)
+	}
+	if s.Creds != nil {
+		protected.HandleFunc("/api/credentials/aws", s.handleCredAWS)
+		protected.HandleFunc("/api/credentials/aws/", s.handleCredAWS)
 	}
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/tokens", s.handleTokens)

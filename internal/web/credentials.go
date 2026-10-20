@@ -53,6 +53,10 @@ var (
 	ErrMCPOnWeb = errors.New("an mcp server can only be defined in config.json")
 )
 
+// ErrCredPersist marks a failure to record the audit row or write the file: its
+// text can name a path, so a route shows a fixed sentence and logs the rest.
+var ErrCredPersist = errors.New("could not record or save the change")
+
 // ErrCredInUse refuses a delete (or a value overwrite) while other definitions
 // still use the entry or value. By names them, sorted.
 type ErrCredInUse struct{ By []string }
@@ -307,11 +311,11 @@ func (c *CredentialManager) persistLocked(cand credfile.File, merged config.Conf
 	for _, e := range events {
 		e.Actor = storeActor
 		if err := c.rec.RecordCred(e); err != nil {
-			return fmt.Errorf("audit: %w", err)
+			return fmt.Errorf("%w: audit: %w", ErrCredPersist, err)
 		}
 	}
 	if err := credfile.Save(c.dataDir, cand); err != nil {
-		return fmt.Errorf("save credentials: %w", err)
+		return fmt.Errorf("%w: save credentials: %w", ErrCredPersist, err)
 	}
 	c.file, c.merged, c.src = cand, merged, src
 	c.apply(merged)
@@ -568,7 +572,7 @@ func (c *CredentialManager) checkRole(ctx context.Context, conn config.AWSConnec
 	}
 	if err := c.rec.RecordCred(broker.CredEvent{Action: broker.CredChecked, Kind: credfile.KindAWS, Name: conn.Name,
 		Actor: storeActor, Detail: detail}); err != nil {
-		return res, fmt.Errorf("audit: %w", err)
+		return res, fmt.Errorf("%w: audit: %w", ErrCredPersist, err)
 	}
 	return res, nil
 }

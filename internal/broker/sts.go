@@ -97,6 +97,11 @@ func classify(err error) error {
 	return &MintError{Code: code, Detail: err.Error(), cause: err}
 }
 
+// IsSSOExpired reports whether err, from an SDK call made with a host profile,
+// means that profile's SSO login has lapsed or was ended (the same test a mint
+// failure goes through).
+func IsSSOExpired(err error) bool { return errors.Is(classify(err), ErrSSOExpired) }
+
 // withCode replaces a generic code with a more specific one, leaving SSO expiry
 // and real AWS codes alone.
 func withCode(err error, code string) error {

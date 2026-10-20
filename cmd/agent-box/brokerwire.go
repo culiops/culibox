@@ -38,6 +38,10 @@ type brokerService struct {
 	Hooks  broker.Hooks         // installed on the session manager
 	Status web.AWSStatusAdapter // behind GET /api/sessions/{id}/aws; serve adds the egress counters
 	SSO    *ssologin.Runner     // the in-UI AWS sign-in; nil when the aws CLI is not on the daemon's PATH
+	// Minter and Sim are what the broker mints and probes with; the credentials
+	// screen's AWS service reuses them.
+	Minter broker.Minter
+	Sim    awsprobe.Simulator
 	Stop   func(context.Context)
 
 	// Tokens and GitHub are the live holders credLive.Apply keeps current:
@@ -118,6 +122,10 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 	} else if n > 0 {
 		log.Printf("broker: wrote %d terminal audit row(s) for write windows open at the last shutdown", n)
 	}
+	// The same minter and simulator back the credentials screen's base-role
+	// check, so a check is the mint and probe a spawn makes.
+	var stsMinter broker.Minter = broker.STSMinter{}
+	var simulator awsprobe.Simulator = awsprobe.IAMSimulator{}
 	tokens := &tokenSet{}
 	tokens.Set(entries)
 	defined := definedTokens(tokens)
@@ -127,8 +135,8 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			return broker.SessionView{}, false
 		}
 		return brokerSessionView(s, defined), true
-	}, broker.STSMinter{}, audit)
-	brk.SetSimulator(awsprobe.IAMSimulator{})
+	}, stsMinter, audit)
+	brk.SetSimulator(simulator)
 	// The minter always exists, so an App defined from the web after boot works
 	// at once (credLive.Apply -> SetApps); with no App defined every check and
 	// mint fails as an unknown App.
@@ -171,7 +179,7 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			RecentStatic: func(id string, n int) ([]broker.Row, error) {
 				return audit.ForSessionProvider(id, broker.ProviderStatic, n)
 			}},
-		SSO: sso, Tokens: tokens, GitHub: minter,
+		SSO: sso, Tokens: tokens, GitHub: minter, Minter: stsMinter, Sim: simulator,
 		Stop: func(ctx context.Context) {
 			// First: a killed sign-in writes its sso_login_failed row, and the
 			// audit store must still be open for it.

@@ -30,6 +30,7 @@ import (
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -59,6 +60,10 @@ func main() {
 	// Merge the web-defined credentials before anything validates or reads cfg.
 	// Needs a usable home (the data dir hangs off it) and a config that loaded.
 	var cred credState
+	// baseCfg is config.json alone: the credentials screen needs it to tell a
+	// seed from a web entry (the merged cfg would make every entry look like a
+	// seed).
+	baseCfg := cfg
 	if homeErr == nil && cfgErr == nil {
 		cfg, cred = mergeCredentials(cfg, home)
 	}
@@ -97,7 +102,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	serve(cfg, home, cfgFiles)
+	serve(cfg, baseCfg, cred.File, home, cfgFiles)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -192,7 +197,7 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg config.Config, home string, cfgFiles []string) {
+func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgFiles []string) {
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -612,6 +617,10 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		stopEgress = egressSvc.Stop
 		api.Egress = web.EgressStatusAdapter{Get: web.ManagerService{M: mgr}.Get, Stats: egressSvc.Stats}
 	}
+	// The credentials screen. baseCfg is config.json before mergeCredentials.
+	chk, credAWS := awsServiceFor(brokerSvc, storeAudit)
+	creds := web.NewCredentialManager(baseCfg, credFile, dataDir, pm, vstore, storeAudit, chk, live.Apply, web.AccountsOf(accts))
+
 	srv := &web.Server{
 		API:        api,
 		Session:    sess,
@@ -638,6 +647,10 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		StoreInUse:           live.InUse,
 		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
 		StorePlaintextCopies: ptCopies,
+
+		Creds:     creds,
+		CredAWS:   credAWS,
+		CredAudit: storeAudit,
 	}
 	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)

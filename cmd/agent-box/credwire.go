@@ -17,6 +17,9 @@ type credState struct {
 	Bad  bool
 	// LoadErr is the file-level problem when Bad is set.
 	LoadErr error
+	// File is what credfile.Load returned (empty when the file is missing or
+	// unreadable): the credentials screen's manager starts from it.
+	File credfile.File
 }
 
 // Problems is one line per thing wrong with the file, for doctor.
@@ -46,7 +49,7 @@ func mergeCredentials(cfg config.Config, home string) (config.Config, credState)
 	for _, e := range errs {
 		log.Printf("credentials: skipped %s %q: %s", e.Kind, e.Name, e.Err)
 	}
-	return merged, credState{Src: src, Errs: errs, Bad: bad, LoadErr: err}
+	return merged, credState{Src: src, Errs: errs, Bad: bad, LoadErr: err, File: f}
 }
 
 // count is how many merged entries came from the given source.
