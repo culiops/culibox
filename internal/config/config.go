@@ -316,6 +316,50 @@ func CheckPasswordEnvClash(passwordEnv string, tokens []StaticToken) error {
 
 // Validate enforces the security and completeness invariants.
 func (c Config) Validate() error {
+	var none []ToleratedRef
+	return c.validateInto(nil, &none)
+}
+
+// Entry kinds an UndefinedRefError names. They are the same strings the
+// credfile package uses for its entries.
+const (
+	RefAWS       = "aws"
+	RefGitHubApp = "github_app"
+	RefToken     = "token"
+)
+
+// UndefinedRefError is a profile naming a credential entry no list defines. It
+// is a type so a caller can tell that one failure from a genuine config error
+// without matching on the message.
+type UndefinedRefError struct {
+	Kind, Name string
+	msg        string
+}
+
+func (e *UndefinedRefError) Error() string { return e.msg }
+
+func undefinedRef(kind, name, format string, args ...any) error {
+	return &UndefinedRefError{Kind: kind, Name: name, msg: fmt.Sprintf(format, args...)}
+}
+
+// ToleratedRef is an undefined reference ValidateTolerating let through.
+type ToleratedRef struct {
+	Agent string
+	Ref   UndefinedRefError
+}
+
+// ValidateTolerating is Validate, except that a profile naming an entry that no
+// list defines is recorded and let through when tolerate says so. Every other
+// problem still fails. Boot uses it so that a web entry skipped at load (a
+// corrupt credentials.json) cannot keep the daemon from starting; the profile
+// then spawns nothing, because the launcher refuses an undefined name.
+func (c Config) ValidateTolerating(tolerate func(UndefinedRefError) bool) ([]ToleratedRef, error) {
+	var tolerated []ToleratedRef
+	err := c.validateInto(tolerate, &tolerated)
+	return tolerated, err
+}
+
+func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[]ToleratedRef) error {
 	if len(c.Agents) == 0 {
 		return errors.New("config: at least one agent required")
 	}
@@ -413,7 +457,11 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if err := CheckCredentialRefs(a, c, optDefs); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+			var ur *UndefinedRefError
+			if tolerate == nil || !errors.As(err, &ur) || !tolerate(*ur) {
+				return fmt.Errorf("config: agent %q: %w", a.Name, err)
+			}
+			*tolerated = append(*tolerated, ToleratedRef{Agent: a.Name, Ref: *ur})
 		}
 		for k, v := range a.Options {
 			def, ok := optDefs[k]

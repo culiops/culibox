@@ -72,3 +72,39 @@ func (s credState) summary() string {
 	}
 	return line
 }
+
+// validateBoot is Config.Validate for the boot path. A profile that names a web
+// entry which was skipped at load (credentials.json unreadable, or the entry
+// invalid or shadowed) must not stop the daemon: the screen that fixes it would
+// be unreachable. Such a reference is warned about, loudly, and let through; the
+// launcher then refuses to spawn the profile ("not defined"). Every other
+// validation error, including a reference to a name no skipped entry had, stays
+// fatal.
+func (s credState) validateBoot(cfg config.Config) (warnings []string, err error) {
+	tolerated, err := cfg.ValidateTolerating(func(r config.UndefinedRefError) bool {
+		return s.skipped(r.Kind, r.Name)
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range tolerated {
+		warnings = append(warnings, fmt.Sprintf(
+			"credentials: profile %q names %s %q, which was skipped when credentials.json loaded; the profile cannot start until it is fixed on the Credentials screen",
+			t.Agent, t.Ref.Kind, t.Ref.Name))
+	}
+	return warnings, nil
+}
+
+// skipped reports whether a web entry of that kind and name was left out at
+// load. An unreadable file lost every web entry, so any name could be one.
+func (s credState) skipped(kind, name string) bool {
+	if s.Bad {
+		return true
+	}
+	for _, e := range s.Errs {
+		if e.Kind == kind && e.Name == name {
+			return true
+		}
+	}
+	return false
+}

@@ -310,7 +310,7 @@ func CheckGitHubApps(a AgentConfig, apps []GitHubApp) error {
 			continue
 		}
 		if !slices.ContainsFunc(apps, func(x GitHubApp) bool { return x.Name == o.App }) {
-			return fmt.Errorf("github.owners[%d].app %q is not defined in github_apps", i, o.App)
+			return undefinedRef(RefGitHubApp, o.App, "github.owners[%d].app %q is not defined in github_apps", i, o.App)
 		}
 	}
 	return nil

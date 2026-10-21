@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -91,5 +92,94 @@ func TestBootValidatesProfilesReferencingWebEntries(t *testing.T) {
 	merged, _ := mergeCredentials(cfg, t.TempDir())
 	if err := merged.Validate(); err != nil {
 		t.Fatalf("merged Validate = %v", err)
+	}
+}
+
+func bootCfg(dir string) config.Config {
+	cfg := config.Defaults()
+	cfg.DataDir = dir
+	cfg.Agents = []config.AgentConfig{{Name: "p", Bin: "claude", Runtime: config.RuntimeBox, Tokens: []string{"svc"}}}
+	return cfg
+}
+
+// The ref kinds config reports are the kinds credfile files its errors under.
+func TestRefKindsMatchCredfileKinds(t *testing.T) {
+	if config.RefAWS != credfile.KindAWS || config.RefGitHubApp != credfile.KindGitHubApp || config.RefToken != credfile.KindToken {
+		t.Fatal("config.Ref* and credfile.Kind* have drifted")
+	}
+}
+
+// A profile bound to a web entry that was skipped at load does not stop the
+// daemon (spec section 7): it is warned about, and Validate itself still refuses.
+func TestValidateBootToleratesSkippedWebEntry(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	dir := t.TempDir()
+	cfg := bootCfg(dir)
+	// An invalid entry named "svc" is skipped at load.
+	if err := credfile.Save(dir, credfile.File{StaticTokens: []config.StaticToken{{Name: "svc"}}}); err != nil {
+		t.Fatal(err)
+	}
+	merged, st := mergeCredentials(cfg, t.TempDir())
+	if len(st.Errs) != 1 {
+		t.Fatalf("state = %+v", st)
+	}
+	if err := merged.Validate(); err == nil {
+		t.Fatal("plain Validate accepted a profile naming a skipped entry")
+	}
+	warns, err := st.validateBoot(merged)
+	if err != nil {
+		t.Fatalf("validateBoot = %v, want it to continue", err)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], `"p"`) || !strings.Contains(warns[0], `"svc"`) {
+		t.Fatalf("warnings = %q", warns)
+	}
+}
+
+// An unreadable credentials.json lost every web entry: any not-defined ref is
+// tolerated then, nothing else.
+func TestValidateBootToleratesUnreadableFile(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	dir := t.TempDir()
+	if err := os.WriteFile(credfile.Path(dir), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := bootCfg(dir)
+	merged, st := mergeCredentials(cfg, t.TempDir())
+	if !st.Bad {
+		t.Fatalf("state = %+v", st)
+	}
+	if warns, err := st.validateBoot(merged); err != nil || len(warns) != 1 {
+		t.Fatalf("warns %q err %v", warns, err)
+	}
+	merged.DefaultRuntime = "bogus"
+	if _, err := st.validateBoot(merged); err == nil {
+		t.Fatal("a genuine config error was tolerated")
+	}
+}
+
+// A genuine seed error stays fatal: a typo in config.json is not a skipped web
+// entry, and a skipped entry of another name does not excuse it.
+func TestValidateBootStillFailsGenuineErrors(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	dir := t.TempDir()
+	if err := credfile.Save(dir, credfile.File{StaticTokens: []config.StaticToken{{Name: "other"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := bootCfg(dir) // names "svc", which nothing skipped
+	merged, st := mergeCredentials(cfg, t.TempDir())
+	_, err := st.validateBoot(merged)
+	var ur *config.UndefinedRefError
+	if err == nil || !errors.As(err, &ur) || ur.Name != "svc" {
+		t.Fatalf("validateBoot = %v, want the undefined-ref error for svc", err)
+	}
+	// An error that is not a missing reference.
+	cfg2 := bootCfg(dir)
+	cfg2.Agents[0].Runtime = "bogus"
+	merged2, st2 := mergeCredentials(cfg2, t.TempDir())
+	if _, err := st2.validateBoot(merged2); err == nil {
+		t.Fatal("invalid runtime accepted")
 	}
 }

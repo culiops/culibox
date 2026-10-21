@@ -80,8 +80,12 @@ func main() {
 	}
 	// Resolve only loads; the security invariants (bind, allowed_hosts, socket
 	// dir) are enforced here, for every source including built-in defaults.
-	if err := cfg.Validate(); err != nil {
+	warnings, err := cred.validateBoot(cfg)
+	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+	for _, w := range warnings {
+		log.Print("WARNING: " + w)
 	}
 	if args.Cmd == "box" {
 		os.Exit(runBox(args, cfg, home, os.Stdout))

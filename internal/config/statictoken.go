@@ -392,7 +392,7 @@ func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]Option
 	for i, n := range a.Tokens {
 		e, ok := TokenByName(entries, n)
 		if !ok {
-			return fmt.Errorf("tokens[%d] %q is not defined in static_tokens", i, n)
+			return undefinedRef(RefToken, n, "tokens[%d] %q is not defined in static_tokens", i, n)
 		}
 		if len(e.Egress) == 0 {
 			return fmt.Errorf("tokens[%d] %q has no egress hosts; it can only be a GitHub owner's token", i, n)
@@ -405,7 +405,7 @@ func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]Option
 				continue
 			}
 			if _, ok := TokenByName(entries, o.Token); !ok {
-				return fmt.Errorf("github.owners[%d].token %q is not defined in static_tokens", i, o.Token)
+				return undefinedRef(RefToken, o.Token, "github.owners[%d].token %q is not defined in static_tokens", i, o.Token)
 			}
 		}
 	}
