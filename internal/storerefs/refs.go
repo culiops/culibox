@@ -47,6 +47,18 @@ func InUse(cfg config.Config) bool {
 // because only then does a name resolve to the value with that id. Names that
 // are not valid store ids are skipped. Values are never read.
 func Refs(cfg config.Config, accts []account.Account) map[string][]string {
+	return refs(cfg, SecretNameRefs(cfg, accts))
+}
+
+// Claims is Refs with secret names counted whether or not a store source
+// exists: the ids a definition reads now or will read once one is added. An
+// owner check uses it, so a value written today cannot become an account's or
+// agent's value when the founder adds a store source later.
+func Claims(cfg config.Config, accts []account.Account) map[string][]string {
+	return refs(cfg, secretNames(cfg, accts))
+}
+
+func refs(cfg config.Config, names map[string][]string) map[string][]string {
 	out := map[string][]string{}
 	add := func(id, ref string) { out[id] = append(out[id], ref) }
 	for _, a := range cfg.GitHubApps {
@@ -59,8 +71,8 @@ func Refs(cfg config.Config, accts []account.Account) map[string][]string {
 			add(t.Value.ID, "static_tokens/"+t.Name)
 		}
 	}
-	for id, refs := range SecretNameRefs(cfg, accts) {
-		out[id] = append(out[id], refs...)
+	for id, r := range names {
+		out[id] = append(out[id], r...)
 	}
 	for id := range out {
 		sort.Strings(out[id])
@@ -73,10 +85,14 @@ func Refs(cfg config.Config, accts []account.Account) map[string][]string {
 // declare it. Empty when no store source exists. Names that are not valid
 // store ids are skipped.
 func SecretNameRefs(cfg config.Config, accts []account.Account) map[string][]string {
-	out := map[string][]string{}
 	if !HasSource(cfg) {
-		return out
+		return map[string][]string{}
 	}
+	return secretNames(cfg, accts)
+}
+
+func secretNames(cfg config.Config, accts []account.Account) map[string][]string {
+	out := map[string][]string{}
 	for _, a := range cfg.Agents {
 		for _, s := range a.Secrets {
 			if secretstore.ValidID(s) {
