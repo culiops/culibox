@@ -401,8 +401,7 @@ func (c *CredentialManager) setAndPersistLocked(values map[string][]byte, owner 
 	if len(values) > 0 {
 		refs := c.storeClaimsLocked()
 		for _, id := range slices.Sorted(maps.Keys(values)) {
-			others := slices.DeleteFunc(slices.Clone(refs[id]), func(r string) bool { return r == owner[id] })
-			if len(others) > 0 {
+			if others := claimedBy(refs, id, owner[id]); len(others) > 0 {
 				return fmt.Errorf("store value %q: %w", id, ErrCredInUse{By: others})
 			}
 		}
@@ -455,11 +454,26 @@ func (c *CredentialManager) checkStoreRefLocked(what, self string, ref, own conf
 	if ref.Type != "store" || setting || (own.Type == "store" && own.ID == ref.ID) {
 		return nil
 	}
-	by := slices.DeleteFunc(slices.Clone(c.storeClaimsLocked()[ref.ID]), func(r string) bool { return r == self })
-	if len(by) > 0 {
+	if by := claimedBy(c.storeClaimsLocked(), ref.ID, self); len(by) > 0 {
 		return fmt.Errorf("%s: store value %q: %w", what, ref.ID, ErrCredInUse{By: by})
 	}
 	return fmt.Errorf("%s: store value %q: %w", what, ref.ID, ErrForeignStoreRef)
+}
+
+// claimedBy lists, sorted, the refs other than self that claim id or an id
+// equal to it ignoring case: the store keeps one file per id, and on a
+// case-insensitive filesystem (macOS APFS by default) "work_token" and
+// "WORK_TOKEN" are the same file.
+func claimedBy(claims map[string][]string, id, self string) []string {
+	var out []string
+	for k, refs := range claims {
+		if strings.EqualFold(k, id) {
+			out = append(out, refs...)
+		}
+	}
+	out = slices.DeleteFunc(out, func(r string) bool { return r == self })
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // webTokenRules are the rules a web token entry has on top of

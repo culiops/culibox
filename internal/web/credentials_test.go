@@ -459,6 +459,15 @@ func TestValueUnderSecretNameRefusedWithoutStoreSource(t *testing.T) {
 			t.Fatalf("%s no value: %v", id, err)
 		}
 	}
+	// An id equal ignoring case is the same file on macOS: refused too.
+	e := tok("thief", "THIEF")
+	e.Value = config.KeyRef{Type: "store", ID: "work_token"}
+	if err := f.cm.PutTokens([]config.StaticToken{e}, map[string][]byte{"thief": []byte("chosen")}, true); !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{"accounts/work.token_secret"}) {
+		t.Fatalf("case-folded id: %v", err)
+	}
+	if f.vals.has("work_token") {
+		t.Fatal("case-folded value set despite refusal")
+	}
 	if got := f.file(t).StaticTokens; len(got) != 0 {
 		t.Fatalf("file: %+v", got)
 	}
