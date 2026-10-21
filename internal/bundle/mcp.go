@@ -125,6 +125,9 @@ func rejectReason(srv mcpServer, resolves map[string]bool) (string, bool) {
 	if env, ok := srv["env"].(map[string]any); ok && len(env) > 0 {
 		return "declares literal env values; materializing them would write a secret into the bundle", true
 	}
+	if reason, ok := credentialReason(srv); ok {
+		return reason, true
+	}
 	if url, _ := srv["url"].(string); url != "" {
 		return "", false // remote transport works in a box (subject to egress)
 	}
