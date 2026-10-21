@@ -3,11 +3,14 @@ package web
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/store"
 )
 
@@ -39,6 +42,10 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 // handleProfile serves PUT (update) and DELETE on /api/profiles/{name}.
 func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/profiles/")
+	if base, ok := strings.CutSuffix(name, convertAWSSuffix); ok && base != "" {
+		s.handleConvertAWS(w, r, base)
+		return
+	}
 	if name == "" {
 		writeErr(w, http.StatusBadRequest, "name required")
 		return
@@ -103,4 +110,130 @@ func decodeProfile(w http.ResponseWriter, r *http.Request) (config.AgentConfig, 
 		return config.AgentConfig{}, errors.New("invalid profile json")
 	}
 	return p, nil
+}
+
+// convertAWSSuffix is the path word after a profile name that converts its
+// inline AWS binding. A profile name has no "/", so it cannot be mistaken for
+// one.
+const convertAWSSuffix = "/convert-aws"
+
+// connNameMax is the longest AWS connection name.
+const connNameMax = 63
+
+// convertSlug turns a profile name into an AWS connection name: lowercase, any
+// character outside [a-z0-9-] becomes "-", leading non-alphanumerics go, at
+// most 63 characters; "aws" when nothing is left.
+func convertSlug(profile string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(profile) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	out := strings.TrimLeft(b.String(), "-")
+	if len(out) > connNameMax {
+		out = out[:connNameMax]
+	}
+	if out == "" {
+		return "aws"
+	}
+	return out
+}
+
+// convertFallback is "<slug>-aws", the slug cut so the whole stays within 63.
+func convertFallback(slug string) string {
+	const suffix = "-aws"
+	return slug[:min(len(slug), connNameMax-len(suffix))] + suffix
+}
+
+// connNameUnusable are names no connection may take: the config package's
+// reserved names and the path words under /api/credentials/aws. Such a slug is
+// treated like a taken one, so a profile named "default" still converts.
+func connNameUnusable(name string) bool {
+	return slices.Contains([]string{"default", "agentbox"}, name) || slices.Contains(awsRouteWords, name)
+}
+
+// convertTaken reports whether PutAWS refused a create because the name is
+// already an entry, in config.json (ErrCredSeed) or in the web file.
+func convertTaken(err error) bool {
+	return errors.Is(err, ErrCredExists) || errors.Is(err, ErrCredSeed)
+}
+
+// handleConvertAWS is POST /api/profiles/{name}/convert-aws {ack_write?}: it
+// turns the profile's inline AWS binding into a web AWS connection named after
+// the profile (or "<profile>-aws" when that is taken) and points the profile at
+// it. The profile's box key changes with its binding, so its next session gets
+// a new box. Same gate as the credential mutations: it can use the host signer.
+//
+// The two writes are sequential (lock order is CredentialManager, then
+// ProfileManager): the connection first, then the profile; a profile that
+// cannot be saved takes the new connection back out.
+func (s *Server) handleConvertAWS(w http.ResponseWriter, r *http.Request, name string) {
+	if !credGate(w, r, true) {
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.Creds == nil || s.CredAWS == nil {
+		writeNoBroker(w)
+		return
+	}
+	var req struct {
+		AckWrite bool `json:"ack_write"`
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, credBodyMax))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	if len(strings.TrimSpace(string(raw))) > 0 && !decodeBytesStrict(raw, &req) {
+		writeErr(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+	p, ok := s.Profiles.Get(name)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such profile")
+		return
+	}
+	if p.AWS == nil {
+		writeErr(w, http.StatusBadRequest, "this profile has no inline AWS binding to convert")
+		return
+	}
+	slug := convertSlug(name)
+	conn := config.AWSConnection{Description: "converted from profile " + name, AWSBinding: *p.AWS.Clone()}
+	created := ""
+	for _, candidate := range []string{slug, convertFallback(slug)} {
+		if connNameUnusable(candidate) {
+			continue
+		}
+		conn.Name = candidate
+		if _, err := s.Creds.PutAWS(r.Context(), conn, true, req.AckWrite); err != nil {
+			if convertTaken(err) {
+				continue
+			}
+			writeCredErr(w, err)
+			return
+		}
+		created = candidate
+		break
+	}
+	if created == "" {
+		writeErrCode(w, http.StatusConflict, "an AWS connection named "+slug+" or "+convertFallback(slug)+" is already defined", "exists")
+		return
+	}
+	p.AWS = nil
+	p.AWSConnections = []string{created}
+	if err := s.Profiles.Save(p); err != nil {
+		if derr := s.Creds.Delete(credfile.KindAWS, created); derr != nil {
+			log.Printf("convert-aws: profile %q not saved and connection %q could not be removed: %v", name, created, derr)
+		}
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"connection": created})
 }
