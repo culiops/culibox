@@ -201,6 +201,12 @@ type credTokenBody struct {
 	Status      string   `json:"status"`
 	Error       string   `json:"error,omitempty"`
 	UsedBy      []string `json:"used_by"`
+	// Entry is the saved definition of a web-created token, for the Edit form to
+	// send back with only its label, description or prod flag changed (the
+	// server refuses any other change to a template token). It holds references
+	// and non-secret settings only, like the rest of this body. A config.json
+	// seed has none: only the file edits it.
+	Entry *config.StaticToken `json:"entry,omitempty"`
 }
 
 type credValueBody struct {
@@ -364,6 +370,10 @@ func (s *Server) credView() credViewBody {
 		b.Status, b.Error = ids.refStatus(t.Value)
 		if e.err != "" {
 			b.Status, b.Error = credInvalid, e.err
+		}
+		if e.src == credfile.SourceWeb {
+			c := t.Clone()
+			b.Entry = &c
 		}
 		body.Tokens = append(body.Tokens, b)
 	}

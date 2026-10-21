@@ -276,8 +276,185 @@ function awsErrText(e) {
   return e.message || "Something went wrong";
 }
 
+// --- Tokens, GitHub Apps, stored values, store creation: the pure decisions ---
+
+// Keys that carry a secret on its way to the server. They are stripped from
+// anything this module keeps (credKeep): a value lives in the input that holds
+// it until the request is sent, then in neither.
+const CRED_SECRET_KEYS = ["values", "value", "private_key_value", "passphrase"];
+
+// templateForm: what the Add token form asks for, from one catalog template.
+// A select starts on its first option; Sentry's URL shows only when "Self-hosted"
+// is chosen (`when`). `values` are the secrets to paste, in the template's order
+// (Datadog has two). defaultName is "" when the operator has to name it ("other").
+function templateForm(t) {
+  const tpl = t || {};
+  const fields = (tpl.fields || []).map((f) => {
+    const out = { key: f.key, label: f.label, kind: f.kind, options: f.options || [], def: f.kind === "select" && f.options && f.options.length ? f.options[0].value : "" };
+    if (tpl.id === "sentry" && f.key === "url") out.when = { key: "region", value: "self" };
+    return out;
+  });
+  return {
+    id: tpl.id || "", label: tpl.label || "", fields,
+    values: (tpl.values || []).map((label, index) => ({ index, label })),
+    defaultName: tpl.id && tpl.id !== "other" ? tpl.id : "",
+  };
+}
+
+// fromTemplateBody: the POST /api/credentials/tokens/from-template body. `form`
+// is { name, label, prod, fields, values }. The values are sent exactly as typed
+// (not trimmed: a stored value is verbatim) and the caller clears the inputs
+// afterwards; nothing here keeps them.
+function fromTemplateBody(t, form) {
+  const f = templateForm(t);
+  const given = (form && form.fields) || {};
+  const resolved = {};
+  for (const fd of f.fields) {
+    let v = given[fd.key];
+    if (fd.kind === "select") {
+      if (!fd.options.some((o) => o.value === v)) v = fd.def;
+    } else {
+      v = v == null ? "" : String(v).trim();
+    }
+    resolved[fd.key] = v;
+  }
+  const fields = {};
+  for (const fd of f.fields) {
+    if (fd.when && resolved[fd.when.key] !== fd.when.value) continue;
+    fields[fd.key] = resolved[fd.key];
+  }
+  const vals = (form && form.values) || [];
+  return {
+    template: f.id,
+    name: String((form && form.name) || "").trim(),
+    label: String((form && form.label) || "").trim(),
+    prod: !!(form && form.prod),
+    fields,
+    values: f.values.map((v) => (vals[v.index] == null ? "" : String(vals[v.index]))),
+  };
+}
+
+// valueFieldCleared: empty a value input, whatever happened to its request.
+// Returns true once it is empty (so a caller can assert it).
+function valueFieldCleared(el) {
+  if (!el) return true;
+  el.value = "";
+  if (typeof el.removeAttribute === "function") el.removeAttribute("value");
+  return el.value === "";
+}
+
+// credUniqueName: base, else base-2, base-3 ... the first not in `taken`.
+function credUniqueName(base, taken) {
+  if (!base) return "";
+  const used = new Set(taken || []);
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n++) if (!used.has(base + "-" + n)) return base + "-" + n;
+}
+
+// valueIdsText: where the pasted value(s) will be stored (a hint under the field).
+// With an index, the id of that one value (Datadog stores two: <name>-api, <name>-app).
+function valueIdsText(t, name, index) {
+  const n = String(name || "").trim();
+  if (!n) return "the token name";
+  if (!t || t.id !== "datadog") return n;
+  if (index === 0) return n + "-api";
+  if (index === 1) return n + "-app";
+  return n + "-api and " + n + "-app";
+}
+
+function credStripSecrets(x) {
+  if (Array.isArray(x)) return x.map(credStripSecrets);
+  if (x && typeof x === "object") {
+    const out = {};
+    for (const k of Object.keys(x)) if (!CRED_SECRET_KEYS.includes(k)) out[k] = credStripSecrets(x[k]);
+    return out;
+  }
+  return x;
+}
+
+// credKeep: the one way a form's non-secret state is kept in this module. Any
+// secret key is dropped, deeply, so a value cannot ride along by accident.
+function credKeep(form) {
+  credForm = form == null ? null : credStripSecrets(form);
+  return credForm;
+}
+
+// credState: what this module is holding (for tests): the read model and the open form.
+function credState() {
+  return { view: credView, form: credForm };
+}
+
+// tokenEditBody: the PUT body for an edit of label, description and prod. The
+// entry is the read model's own copy of the saved entry, so every provider
+// field goes back exactly as it was; `value` (a replacement) is added only when given.
+function tokenEditBody(entry, form) {
+  const e = JSON.parse(JSON.stringify(entry || {}));
+  const label = String((form && form.label) || "").trim();
+  const desc = String((form && form.description) || "").trim();
+  if (label) e.label = label; else delete e.label;
+  if (desc) e.description = desc; else delete e.description;
+  if (form && form.prod) e.prod = true; else delete e.prod;
+  const body = { entry: e };
+  if (form && form.value) body.value = form.value;
+  return body;
+}
+
+// appBody: the GitHub App save body. A pasted key goes as private_key_value, a
+// file path (absolute, checked by the caller and the server) as a file reference;
+// neither leaves the saved reference alone (an edit that does not touch the key).
+function appBody(form) {
+  const f = form || {};
+  const app = { name: String(f.name || "").trim(), client_id: String(f.client_id || "").trim() };
+  if (f.useFile) {
+    const path = String(f.path || "").trim();
+    if (path) app.private_key = { type: "file", path };
+    return { app };
+  }
+  const body = { app };
+  if (f.key) body.private_key_value = f.key;
+  return body;
+}
+
+// storeCreateCheck: whether the Create the encrypted store form may be sent.
+// passMode (Linux): the passphrase twice, at least 12 characters, counted in
+// characters. Without it (macOS Keychain) there is nothing to check.
+function storeCreateCheck(passMode, a, b) {
+  if (!passMode) return { ok: true, msg: "" };
+  const p = String(a || "");
+  if (!p) return { ok: false, msg: "Type a passphrase." };
+  if ([...p].length < CRED_PASS_MIN) return { ok: false, msg: "The passphrase must be at least " + CRED_PASS_MIN + " characters." };
+  if (p !== String(b || "")) return { ok: false, msg: "The two passphrases do not match." };
+  return { ok: true, msg: "" };
+}
+
+const CRED_PASS_MIN = 12;
+
+// credErrText: a failed request on the token / GitHub App / value / store screens
+// in words. `noun` names what was being saved ("token", "GitHub App", "value").
+// The server's own sentence is used for anything not special-cased; it never
+// carries a secret.
+function credErrText(e, noun) {
+  if (!e) return "Something went wrong";
+  if (e.status === 429) {
+    const n = parseInt(e.retryAfter, 10);
+    return "Too many requests, try again in " + (n > 0 ? n + " s" : "a few seconds");
+  }
+  if (e.code === "exists") return "A " + noun + " with this name already exists.";
+  if (e.code === "seed") return "That name belongs to an entry in config.json.";
+  if (e.code === "store_missing") return "The encrypted store is not created yet. Create it first.";
+  if (e.code === "in_use") {
+    const b = e.body || {};
+    const by = (Array.isArray(b.used_by) ? b.used_by : Array.isArray(b.by) ? b.by : []).filter(Boolean);
+    if (noun === "value") return "Still used by " + valueRefsText(by) + ". Remove those first.";
+    return "Used by profile " + (by.length ? by.join(", ") : "(unknown)") + ". Remove it there first.";
+  }
+  return e.message || "Something went wrong";
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
+    tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS,
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
@@ -290,6 +467,9 @@ if (typeof module !== "undefined" && module.exports) {
 // The last GET /api/credentials, or null before it has answered. Never holds a
 // secret: the read model carries references and states only.
 let credView = null;
+// The Add / Edit token, GitHub App or stored-value view while it is open, else
+// null. Kept only through credKeep, which drops every secret key.
+let credForm = null;
 // True when a repaint was held back because the unlock field had focus; it is
 // done once the field lets go (see credWireHeld).
 let credRepaintHeld = false;
@@ -423,6 +603,26 @@ function credValueRow(v) {
   const refs = credEl("span", "refs" + (v.referenced_by && v.referenced_by.length ? "" : " none"));
   refs.append(credEl("span", "k", "Referenced by"), document.createTextNode(valueRefsText(v.referenced_by)));
   const acts = credEl("span", "acts");
+  const h = credActionHandlers.value || {};
+  if (typeof h.edit === "function") {
+    const b = credEl("button", "btn", "Replace");
+    b.type = "button";
+    b.onclick = () => h.edit(v, loadCredentials, b);
+    acts.appendChild(b);
+  }
+  if (typeof h.delete === "function") {
+    const b = credEl("button", "btn dgr", "Delete");
+    b.type = "button";
+    // A value something still reads cannot be deleted; the row says who reads it.
+    if (v.referenced_by && v.referenced_by.length) {
+      b.disabled = true;
+      b.classList.add("off");
+      b.title = "Still referenced. Remove the references first.";
+    } else {
+      b.onclick = () => h.delete(v, loadCredentials, b);
+    }
+    acts.appendChild(b);
+  }
   row.append(id, upd, refs, acts);
   return row;
 }
@@ -493,6 +693,13 @@ function credStrip(view) {
   if (!st.initialized) {
     strip.appendChild(credEl("span", "st notset", "Not set up"));
     strip.appendChild(credEl("div", "txt", "There is no encrypted store yet. Without one, tokens can only come from the daemon's environment or a file."));
+    const slot = credEl("div", "storeslot");
+    const mk = credEl("button", "btn pri", "Create the encrypted store");
+    mk.type = "button";
+    mk.id = "store-create";
+    mk.onclick = () => { slot.replaceChildren(credStoreCreateNode(() => loadCredentials(), true)); };
+    slot.appendChild(mk);
+    strip.appendChild(slot);
   } else {
     strip.appendChild(credEl("span", "st " + (locked ? "locked" : "ready"), locked ? "Locked" : st.platform === "darwin" ? "Keychain" : "Unlocked"));
     const txt = credEl("div", "txt");
@@ -554,7 +761,7 @@ function renderCredentials(view) {
   if (!host) return;
   credView = view;
   // The Add / Edit view owns the body until it is left; it reads credView when it needs it.
-  if (awsFlow) return;
+  if (awsFlow || credForm) return;
   if (typeof storeUnlockFocused === "function" && storeUnlockFocused()) {
     // Held, not dropped: repaint as soon as the field lets go.
     credRepaintHeld = true;
@@ -563,7 +770,13 @@ function renderCredentials(view) {
   credRepaintHeld = false;
   credWireHeld(host);
   const nodes = [credStrip(view), ...credBanners(view)];
-  for (const g of credGroups(view)) nodes.push(credSection(g));
+  const groups = credGroups(view);
+  const hasTokens = groups.some((g) => g.key.startsWith("token:"));
+  for (const g of groups) {
+    // Token providers only appear once there is a token; the first one needs an Add button of its own.
+    if (g.key === "values" && !hasTokens) nodes.push(credTokensEmpty());
+    nodes.push(credSection(g));
+  }
   host.replaceChildren(...nodes);
 }
 
@@ -585,6 +798,7 @@ async function loadCredentials() {
   setCredErr("");
   // Re-selecting the tab hides the Add / Edit footer; the view is still there.
   if (awsFlow) awsShowFoot(true);
+  if (credForm) credFormFoot(true);
   // The store strip also reads GET /api/store (plaintext copies, value count).
   if (typeof refreshStore === "function") await refreshStore();
   let view;
@@ -1310,4 +1524,631 @@ function awsDelete(entry, reload, btn) {
   on("aws-check-all", () => awsCheckAll());
   on("aws-save", () => awsSaveAll());
   on("aws-cancel", () => awsExit());
+})();
+
+// --- Tokens, GitHub Apps and stored values: add / edit / delete (browser only) ---
+//
+// One form view in place of the list, with its own footer (#foot-creds-form):
+//   token add:   provider tiles -> the template's fields -> name, label, prod -> the value(s)
+//   token edit:  label, description, prod, and a replacement value
+//   GitHub App:  name, client ID, the private key (pasted, or a file path under Advanced)
+//   value:       an id and a value (Set), or the value alone (Replace)
+// A value is typed into a password field, read once when Save is pressed, sent,
+// and the field is emptied whatever the answer was. credForm (see credKeep) never
+// holds one; a value sits in its input and in the one request body, nowhere else.
+
+let credTemplates = null;
+let credFormSubmit = null;
+let credFormBusy = false;
+let credFormErrEl = null;
+
+async function credLoadTemplates() {
+  if (!credTemplates) {
+    const res = await api("/api/credentials/templates");
+    credTemplates = res.templates || [];
+  }
+  return credTemplates;
+}
+
+function credFormFoot(on) {
+  const form = document.getElementById("foot-creds-form");
+  const base = document.getElementById("foot-creds");
+  const add = document.getElementById("foot-creds-add");
+  if (form) form.hidden = !on;
+  if (base) base.hidden = on;
+  if (add) add.hidden = true;
+}
+
+function credFormErr(msg) {
+  if (credFormErrEl) credFormErrEl.textContent = msg || "";
+}
+
+function credLink(text, fn) {
+  const a = credEl("a", "lnk", text);
+  a.tabIndex = 0;
+  a.setAttribute("role", "button");
+  a.onclick = fn;
+  a.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fn(); } };
+  return a;
+}
+
+// credField: a labelled text input (or textarea). Returns the column, the input
+// and the hint paragraph (so a caller can reword it as the name changes).
+function credField(id, label, opts) {
+  const o = opts || {};
+  const col = credEl("div", "fcol" + (o.full ? " full" : ""));
+  const lab = credEl("label", "flab", label);
+  lab.htmlFor = id;
+  const inp = document.createElement(o.area ? "textarea" : "input");
+  inp.id = id;
+  inp.className = "fld";
+  if (!o.area) inp.type = "text";
+  inp.autocomplete = "off";
+  inp.spellcheck = false;
+  inp.setAttribute("autocapitalize", "off");
+  if (o.value) inp.value = o.value;
+  if (o.placeholder) inp.placeholder = o.placeholder;
+  if (o.max) inp.maxLength = o.max;
+  if (o.readonly) { inp.readOnly = true; inp.classList.add("ro"); }
+  col.append(lab, inp);
+  let hint = null;
+  if (o.hint) { hint = credEl("p", "hint", o.hint); col.appendChild(hint); }
+  return { col, inp, hint };
+}
+
+// credSecretField: a value field. A password input, or (for a key that spans
+// lines, which a password input would flatten on paste) a masked textarea.
+function credSecretField(id, label, opts) {
+  const o = opts || {};
+  const f = credField(id, label, { full: true, area: !!o.area, hint: o.hint });
+  const inp = f.inp;
+  if (o.area) { inp.classList.add("secret-area"); inp.rows = 5; } else { inp.type = "password"; }
+  inp.autocomplete = "new-password";
+  inp.setAttribute("autocorrect", "off");
+  inp.name = "agent-box-" + id;
+  return f;
+}
+
+function credCheck(id, text, checked) {
+  const lab = credEl("label", "pf-check");
+  lab.htmlFor = id;
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.id = id;
+  cb.checked = !!checked;
+  lab.append(cb, document.createTextNode(" " + text));
+  const col = credEl("div", "fcol full");
+  col.appendChild(lab);
+  return { col, cb };
+}
+
+function credStoreReady() {
+  return !!(credView && credView.store && credView.store.initialized);
+}
+
+// credRefreshView: re-read the store and the read model without repainting the
+// body (a form is open). Used after the store was created from inside a form.
+async function credRefreshView() {
+  if (typeof refreshStore === "function") await refreshStore();
+  try { credView = await api("/api/credentials"); } catch (_) { /* the form keeps its last view */ }
+}
+
+// credStoreCreateNode: "Create the encrypted store" (D6). Linux: a passphrase twice
+// (at least 12 characters); macOS: one button (the key goes in the Keychain). A
+// seccomp refusal shows the server's own sentence, word for word. The passphrase
+// fields are emptied after every attempt. `hold` marks the fields so a repaint of
+// the tab waits while one is being typed in.
+function credStoreCreateNode(onDone, hold) {
+  const st = (credView && credView.store) || {};
+  const passMode = st.platform !== "darwin";
+  const box = credEl("div", "storecreate");
+  box.appendChild(credEl("p", "hint", passMode
+    ? "Values are stored encrypted. Choose a passphrase of at least 12 characters. You type it to unlock the store, and it cannot be recovered if you lose it."
+    : "Values are stored encrypted, with a key kept in the macOS Keychain. There is no passphrase to type."));
+  const fields = [];
+  if (passMode) {
+    for (const [id, label] of [["store-pass1", "Passphrase"], ["store-pass2", "Repeat the passphrase"]]) {
+      const f = credField(id, label, {});
+      f.inp.type = "password";
+      f.inp.autocomplete = "new-password";
+      f.inp.name = "agent-box-" + id;
+      if (hold) f.inp.classList.add("storepass");
+      box.appendChild(f.col);
+      fields.push(f.inp);
+    }
+  }
+  const err = credEl("div", "ent-err");
+  err.setAttribute("role", "alert");
+  const btn = credEl("button", "btn pri", "Create the encrypted store");
+  btn.type = "button";
+  btn.onclick = async () => {
+    const a = fields[0] ? fields[0].value : "";
+    const b = fields[1] ? fields[1].value : "";
+    const chk = storeCreateCheck(passMode, a, b);
+    if (!chk.ok) { err.textContent = chk.msg; return; }
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+    err.textContent = "";
+    let ok = false;
+    try {
+      await api("/api/store/init", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(passMode ? { passphrase: a } : {}) });
+      ok = true;
+    } catch (e) {
+      if (e.code === "exists") ok = true;
+      else if (e.code === "seccomp_off" || e.code === "seccomp_unknown") err.textContent = e.message;
+      else err.textContent = credErrText(e, "store");
+    } finally {
+      for (const f of fields) valueFieldCleared(f);
+      btn.disabled = false;
+      btn.textContent = "Create the encrypted store";
+    }
+    if (ok) onDone();
+  };
+  box.append(err, btn);
+  return box;
+}
+
+// credOpenForm: show a form view. `meta` is the non-secret state kept (kind and
+// the like); `submit` runs on Save and returns true once the save worked.
+function credOpenForm(meta, crumbText, nodes, submit) {
+  const host = document.getElementById("creds-body");
+  if (!host) return;
+  setCredErr("");
+  credKeep(meta);
+  credFormSubmit = submit;
+  credFormBusy = false;
+  const crumb = credEl("div", "crumb");
+  crumb.append(credLink("Credentials", () => credFormExit()), document.createTextNode(" / "), credEl("b", null, crumbText));
+  const err = credEl("div", "ent-err");
+  err.setAttribute("role", "alert");
+  credFormErrEl = err;
+  host.replaceChildren(crumb, ...nodes, err);
+  const save = document.getElementById("cred-form-save");
+  if (save) { save.textContent = meta.saveLabel || "Save"; save.disabled = false; }
+  credFormFoot(true);
+  if (host.parentElement) host.parentElement.scrollTop = 0;
+}
+
+async function credFormExit() {
+  credKeep(null);
+  credFormSubmit = null;
+  credFormErrEl = null;
+  credFormFoot(false);
+  await loadCredentials();
+}
+
+async function credFormRun() {
+  if (!credFormSubmit || credFormBusy) return;
+  const save = document.getElementById("cred-form-save");
+  credFormBusy = true;
+  if (save) save.disabled = true;
+  credFormErr("");
+  let done = false;
+  try {
+    done = await credFormSubmit();
+  } finally {
+    credFormBusy = false;
+    if (save) save.disabled = false;
+  }
+  if (done) await credFormExit();
+}
+
+async function credSend(method, path, body) {
+  return api(path, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+
+// --- token add / edit ----------------------------------------------------------
+
+function credTokensEmpty() {
+  const sec = credEl("section", "sec");
+  sec.setAttribute("aria-label", "Tokens");
+  const h = credEl("div", "sec-h");
+  h.appendChild(credEl("span", "grow", "Tokens "));
+  h.firstChild.appendChild(credEl("span", "count", "0"));
+  const add = credActionHandlers.token && credActionHandlers.token.add;
+  if (typeof add === "function") {
+    const b = credEl("button", "btn", "Add token");
+    b.type = "button";
+    b.onclick = () => add(null, loadCredentials);
+    h.appendChild(b);
+  }
+  sec.append(h, credEl("p", "hint", "No tokens yet. Add a Sentry, Grafana, Datadog, PagerDuty or GitHub token, or your own, and the box gets it as an environment variable."));
+  return sec;
+}
+
+// credSeg: a radio group of buttons for a select field of up to three options.
+function credSeg(fd, labelId, onChange) {
+  const seg = credEl("div", "seg");
+  seg.setAttribute("role", "radiogroup");
+  seg.setAttribute("aria-labelledby", labelId);
+  let cur = fd.def;
+  const btns = fd.options.map((o) => {
+    const b = credEl("button", "", o.label);
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.onclick = () => { cur = o.value; paint(); onChange(); };
+    seg.appendChild(b);
+    return [o, b];
+  });
+  function paint() {
+    for (const [o, b] of btns) { b.classList.toggle("on", o.value === cur); b.setAttribute("aria-checked", o.value === cur ? "true" : "false"); }
+  }
+  paint();
+  return { node: seg, get: () => cur };
+}
+
+function credTokenDetails(t, taken) {
+  const tf = templateForm(t);
+  const uid = "ct-" + t.id;
+  const sec = credEl("section", "sec");
+  sec.setAttribute("aria-label", t.label + " details");
+  const h = credEl("div", "sec-h");
+  h.appendChild(credEl("span", "grow", t.label + (t.group === "github" ? "" : " token")));
+  const grid = credEl("div", "frow");
+  const getters = {};
+  const whens = [];
+  const refresh = () => { for (const [col, w] of whens) col.hidden = getters[w.key]() !== w.value; };
+  for (const fd of tf.fields) {
+    let col;
+    if (fd.kind === "select") {
+      col = credEl("div", "fcol full");
+      const labId = uid + "-" + fd.key + "-l";
+      const lab = credEl("span", "flab", fd.label);
+      lab.id = labId;
+      col.appendChild(lab);
+      if (fd.options.length <= 3) {
+        const seg = credSeg(fd, labId, refresh);
+        col.appendChild(seg.node);
+        getters[fd.key] = seg.get;
+      } else {
+        const sel = document.createElement("select");
+        sel.className = "fld";
+        sel.setAttribute("aria-labelledby", labId);
+        for (const o of fd.options) { const op = document.createElement("option"); op.value = o.value; op.textContent = o.label; sel.appendChild(op); }
+        sel.value = fd.def;
+        sel.onchange = refresh;
+        col.appendChild(sel);
+        getters[fd.key] = () => sel.value;
+      }
+    } else {
+      const f = credField(uid + "-" + fd.key, fd.label, { full: true, placeholder: fd.kind === "url" ? "https://" : "" });
+      getters[fd.key] = () => f.inp.value;
+      col = f.col;
+    }
+    grid.appendChild(col);
+    if (fd.when) whens.push([col, fd.when]);
+  }
+  refresh();
+
+  const nm = credField(uid + "-name", "Name", { value: credUniqueName(tf.defaultName, taken), max: 63 });
+  const lb = credField(uid + "-label", "Label", { placeholder: t.label, max: 32 });
+  const prod = credCheck(uid + "-prod", "production", false);
+  grid.append(nm.col, lb.col, prod.col);
+
+  const valuesHost = credEl("div", "fcol full");
+  grid.appendChild(valuesHost);
+  let valueEls = [];
+  const hintText = (i) => "Goes into the encrypted store as " + valueIdsText(t, nm.inp.value, i) + " and is never shown again. The field clears after you save. You can add it while the store is locked.";
+  let hints = [];
+  const paintValues = () => {
+    valueEls = [];
+    hints = [];
+    if (!credStoreReady()) {
+      valuesHost.replaceChildren(credStoreCreateNode(async () => { await credRefreshView(); paintValues(); }, false));
+      return;
+    }
+    const nodes = [];
+    for (const v of tf.values) {
+      const f = credSecretField(uid + "-v" + v.index, v.label, { hint: hintText(v.index) });
+      valueEls.push(f.inp);
+      hints.push(f.hint);
+      nodes.push(f.col);
+    }
+    valuesHost.replaceChildren(...nodes);
+  };
+  nm.inp.addEventListener("input", () => { hints.forEach((hn, i) => { hn.textContent = hintText(i); }); });
+  paintValues();
+
+  sec.append(h, grid, credEl("p", "honest", CRED_N3));
+  return {
+    node: sec,
+    ready: () => credStoreReady(),
+    collect: () => ({
+      name: nm.inp.value, label: lb.inp.value, prod: prod.cb.checked,
+      fields: Object.fromEntries(Object.keys(getters).map((k) => [k, getters[k]()])),
+      values: valueEls.map((e) => e.value),
+    }),
+    clearValues: () => { for (const e of valueEls) valueFieldCleared(e); },
+  };
+}
+
+async function credTokenAdd(group) {
+  let tpls;
+  try {
+    tpls = await credLoadTemplates();
+  } catch (e) {
+    setCredErr("Could not load the token providers: " + credErrText(e, "token"));
+    return;
+  }
+  if (!tpls.length) { setCredErr("There are no token providers to choose from."); return; }
+  const want = group && group.key && group.key.startsWith("token:") ? group.key.slice(6) : "";
+  const start = tpls.find((t) => want && t.provider === want && t.id !== "other") || (want ? tpls.find((t) => t.id === "other") : null) || tpls[0];
+  const taken = (credView && credView.tokens ? credView.tokens : []).map((t) => t.name);
+
+  const tilesSec = credEl("section", "sec");
+  tilesSec.setAttribute("aria-label", "Provider");
+  const th = credEl("div", "sec-h");
+  th.appendChild(credEl("span", "grow", "Provider"));
+  const tiles = credEl("div", "tiles");
+  const detHost = credEl("div");
+  const tileBtns = [];
+  let cur = null;
+  let det = null;
+  const select = (t) => {
+    cur = t;
+    for (const [id, b] of tileBtns) { b.classList.toggle("on", id === t.id); b.setAttribute("aria-pressed", id === t.id ? "true" : "false"); }
+    det = credTokenDetails(t, taken);
+    detHost.replaceChildren(det.node);
+    credKeep({ kind: "token-add", template: t.id, saveLabel: "Save" });
+    credFormErr("");
+  };
+  for (const t of tpls) {
+    const b = credEl("button", "tile");
+    b.type = "button";
+    b.append(credEl("span", "n", t.label), credEl("span", "s", (t.values || []).join(" + ")));
+    b.onclick = () => select(t);
+    tileBtns.push([t.id, b]);
+    tiles.appendChild(b);
+  }
+  tilesSec.append(th, tiles);
+
+  credOpenForm({ kind: "token-add", template: start.id, saveLabel: "Save" }, "Add token", [tilesSec, detHost], async () => {
+    const body = fromTemplateBody(cur, det.collect());
+    if (!body.name) { credFormErr("Give the token a name."); return false; }
+    if (!det.ready()) { credFormErr("Create the encrypted store first. The value is stored in it."); return false; }
+    if (body.values.some((v) => v === "")) { credFormErr("Paste the value to store."); return false; }
+    let ok = false;
+    try {
+      await credSend("POST", "/api/credentials/tokens/from-template", body);
+      ok = true;
+    } catch (e) {
+      credFormErr(credErrText(e, "token"));
+    } finally {
+      det.clearValues();
+      body.values.fill("");
+    }
+    return ok;
+  });
+  select(start);
+}
+
+function credTokenEdit(entry) {
+  const saved = entry.entry;
+  if (!saved) { setCredErr("This token cannot be edited here. Reload the page and try again."); return; }
+  const uid = "cte";
+  const sec = credEl("section", "sec");
+  sec.setAttribute("aria-label", "Edit token");
+  const h = credEl("div", "sec-h");
+  h.appendChild(credEl("span", "grow", entry.name));
+  const grid = credEl("div", "frow");
+  const meta = credMeta([["Env", (entry.env || []).join(", ")], ["Agent may reach", (entry.hosts || []).join(", ")], ["Value", credValueRef(entry)]]);
+  const mcol = credEl("div", "fcol full");
+  mcol.appendChild(meta);
+  mcol.appendChild(credEl("p", "hint", "To change the provider settings, delete this token and add it again."));
+  const lb = credField(uid + "-label", "Label", { value: entry.label || "", max: 32 });
+  const ds = credField(uid + "-desc", "Description", { value: entry.description || "", max: 200 });
+  const prod = credCheck(uid + "-prod", "production", entry.prod);
+  const val = credSecretField(uid + "-value", "Replace the value (leave empty to keep it)", {
+    hint: "The new value replaces the stored one under the same id and is never shown again. The field clears after you save.",
+  });
+  grid.append(mcol, lb.col, ds.col, prod.col, val.col);
+  sec.append(h, grid, credEl("p", "honest", CRED_N3));
+  credOpenForm({ kind: "token-edit", name: entry.name, saveLabel: "Save" }, "Edit " + entry.name, [sec], async () => {
+    const body = tokenEditBody(saved, { label: lb.inp.value, description: ds.inp.value, prod: prod.cb.checked, value: val.inp.value });
+    let ok = false;
+    try {
+      await credSend("PUT", "/api/credentials/tokens/" + encodeURIComponent(entry.name), body);
+      ok = true;
+    } catch (e) {
+      credFormErr(credErrText(e, "token"));
+    } finally {
+      valueFieldCleared(val.inp);
+      delete body.value;
+    }
+    return ok;
+  });
+}
+
+// --- GitHub App add / edit -----------------------------------------------------
+
+const CRED_APP_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+function credAppForm(entry) {
+  const edit = !!entry;
+  const uid = "cga";
+  const sec = credEl("section", "sec");
+  sec.setAttribute("aria-label", "GitHub App");
+  const h = credEl("div", "sec-h");
+  h.appendChild(credEl("span", "grow", edit ? entry.name : "GitHub App"));
+  const grid = credEl("div", "frow");
+  const nm = credField(uid + "-name", "App name", { value: edit ? entry.name : "", readonly: edit, max: 64, placeholder: "my-bot" });
+  const cid = credField(uid + "-cid", "Client ID", { value: edit ? entry.client_id || "" : "", placeholder: "Iv1.…", max: 100 });
+  const keyHost = credEl("div", "fcol full");
+  grid.append(nm.col, cid.col, keyHost);
+  sec.append(h, grid);
+
+  let useFile = false;
+  let keyEl = null;
+  let pathEl = null;
+  const paintKey = () => {
+    keyEl = null;
+    pathEl = null;
+    const nodes = [];
+    if (useFile) {
+      const f = credField(uid + "-path", edit ? "Key file (leave empty to keep the current key)" : "Key file", {
+        full: true, placeholder: "/home/you/.config/agent-box/app.pem",
+        hint: "An absolute path on this host. The daemon reads the file when a session needs a token; nothing is copied into the store.",
+      });
+      pathEl = f.inp;
+      nodes.push(f.col, credEl("p", "hint"));
+      nodes[1].appendChild(credLink("Paste the key instead", () => { useFile = false; paintKey(); }));
+    } else if (!credStoreReady()) {
+      nodes.push(credStoreCreateNode(async () => { await credRefreshView(); paintKey(); }, false));
+      const p = credEl("p", "hint");
+      p.appendChild(credLink("Advanced: use a file instead", () => { useFile = true; paintKey(); }));
+      nodes.push(p);
+    } else {
+      const f = credSecretField(uid + "-key", edit ? "Replace the private key (leave empty to keep it)" : "Private key", {
+        area: true,
+        hint: "Paste the whole .pem file, BEGIN and END lines included. It goes into the encrypted store as gh-" + (edit ? entry.name : "<name>") + "-key and is never shown again. The field clears after you save.",
+      });
+      keyEl = f.inp;
+      nodes.push(f.col);
+      const p = credEl("p", "hint");
+      p.appendChild(credLink("Advanced: use a file instead", () => { useFile = true; paintKey(); }));
+      nodes.push(p);
+    }
+    keyHost.replaceChildren(...nodes);
+  };
+  paintKey();
+
+  credOpenForm({ kind: edit ? "app-edit" : "app-add", name: edit ? entry.name : "", saveLabel: "Save" }, edit ? "Edit " + entry.name : "Add GitHub App", [sec], async () => {
+    const form = { name: nm.inp.value, client_id: cid.inp.value, useFile, path: pathEl ? pathEl.value : "", key: keyEl ? keyEl.value : "" };
+    if (!CRED_APP_NAME_RE.test(form.name.trim())) { credFormErr("The name may use letters, digits, . _ and -, up to 64 characters."); return false; }
+    if (!form.client_id.trim()) { credFormErr("Enter the App's client ID."); return false; }
+    if (useFile && form.path.trim() && !form.path.trim().startsWith("/")) { credFormErr("The key file path must be absolute (start with /)."); return false; }
+    if (!edit && !(useFile ? form.path.trim() : form.key)) { credFormErr(useFile ? "Enter the path of the key file." : "Paste the App's private key."); return false; }
+    if (!useFile && form.key && !credStoreReady()) { credFormErr("Create the encrypted store first. The key is stored in it."); return false; }
+    const body = appBody(form);
+    form.key = "";
+    let ok = false;
+    try {
+      if (edit) await credSend("PUT", "/api/credentials/github-apps/" + encodeURIComponent(entry.name), body);
+      else await credSend("POST", "/api/credentials/github-apps", body);
+      ok = true;
+    } catch (e) {
+      credFormErr(credErrText(e, "GitHub App"));
+    } finally {
+      valueFieldCleared(keyEl);
+      delete body.private_key_value;
+    }
+    return ok;
+  });
+}
+
+// --- stored values ---------------------------------------------------------------
+
+const CRED_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+// credValueForm: Set a value (replaceId empty: an id and a value) or Replace one
+// (the id is fixed). Values are write-only: nothing here ever shows one.
+function credValueForm(replaceId) {
+  const replace = !!replaceId;
+  const uid = "csv";
+  const sec = credEl("section", "sec");
+  sec.setAttribute("aria-label", replace ? "Replace a value" : "Set a value");
+  const h = credEl("div", "sec-h");
+  h.appendChild(credEl("span", "grow", replace ? "Replace " + replaceId : "Set a value"));
+  const grid = credEl("div", "frow");
+  const idf = credField(uid + "-id", "Id", {
+    value: replaceId || "", readonly: replace, max: 64, full: true, placeholder: "e.g. claude-account-token",
+    hint: replace ? "" : "Letters, digits, - and _. A token or GitHub App you add on this screen names its own value; this is for values something else reads, such as an agent account's token.",
+  });
+  const valHost = credEl("div", "fcol full");
+  grid.append(idf.col, valHost);
+  sec.append(h, grid);
+  let valEl = null;
+  const paintVal = () => {
+    valEl = null;
+    if (!credStoreReady()) {
+      valHost.replaceChildren(credStoreCreateNode(async () => { await credRefreshView(); paintVal(); }, false));
+      return;
+    }
+    const f = credSecretField(uid + "-value", replace ? "New value" : "Value", {
+      hint: "Write-only: it goes in encrypted and is never shown again. The field clears after you save. You can do this while the store is locked.",
+    });
+    valEl = f.inp;
+    valHost.replaceChildren(f.col);
+  };
+  paintVal();
+  credOpenForm({ kind: replace ? "value-replace" : "value-set", id: replaceId || "", saveLabel: replace ? "Replace" : "Save" }, replace ? "Replace " + replaceId : "Set a value", [sec], async () => {
+    const id = idf.inp.value.trim();
+    if (!CRED_ID_RE.test(id)) { credFormErr("The id may use letters, digits, - and _, starting with a letter or digit, up to 64 characters."); return false; }
+    if (!replace && credView && (credView.values || []).some((v) => v.id === id)) {
+      credFormErr("A value with this id exists. Use Replace on its row.");
+      return false;
+    }
+    if (!valEl) { credFormErr("Create the encrypted store first."); return false; }
+    const value = valEl.value;
+    if (!value) { credFormErr("Paste the value to store."); return false; }
+    let ok = false;
+    try {
+      await credSend("PUT", "/api/store/values/" + encodeURIComponent(id), { value });
+      ok = true;
+    } catch (e) {
+      credFormErr(credErrText(e, "value"));
+    } finally {
+      valueFieldCleared(valEl);
+    }
+    return ok;
+  });
+}
+
+// credConfirmDelete: an inline confirmation in the card or row (no browser
+// dialog), then DELETE `path`. `noun` picks the words for a refusal.
+function credConfirmDelete(host, text, path, noun, reload) {
+  if (!host || host.querySelector(".confirm")) return;
+  const box = credEl("div", "confirm");
+  box.appendChild(credEl("p", null, text));
+  const err = credEl("div", "ent-err");
+  err.setAttribute("role", "alert");
+  const btns = credEl("div", "btns");
+  const del = credEl("button", "btn dgr", "Delete");
+  del.type = "button";
+  del.onclick = async () => {
+    del.disabled = true;
+    err.textContent = "";
+    try {
+      await api(path, { method: "DELETE" });
+    } catch (e) {
+      err.textContent = credErrText(e, noun);
+      del.disabled = false;
+      return;
+    }
+    reload();
+  };
+  const cancel = credEl("button", "btn", "Cancel");
+  cancel.type = "button";
+  cancel.onclick = () => box.remove();
+  btns.append(del, cancel);
+  box.append(err, btns);
+  host.appendChild(box);
+}
+
+(function credFormsWire() {
+  if (typeof document === "undefined") return;
+  credActionHandlers.token = {
+    add: (g) => credTokenAdd(g),
+    edit: (e) => credTokenEdit(e),
+    delete: (e, reload, btn) => credConfirmDelete(btn.closest(".ent"),
+      "Delete the token " + e.name + "? The value " + (e.value_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "is not touched."),
+      "/api/credentials/tokens/" + encodeURIComponent(e.name), "token", reload),
+  };
+  credActionHandlers.github = {
+    add: () => credAppForm(null),
+    edit: (e) => credAppForm(e),
+    delete: (e, reload, btn) => credConfirmDelete(btn.closest(".ent"),
+      "Delete the GitHub App " + e.name + "? The private key " + (e.key_ref_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "file is not touched."),
+      "/api/credentials/github-apps/" + encodeURIComponent(e.name), "GitHub App", reload),
+  };
+  credActionHandlers.value = {
+    add: () => credValueForm(""),
+    edit: (v) => credValueForm(v.id),
+    delete: (v, reload, btn) => credConfirmDelete(btn.closest(".sv"),
+      "Delete the stored value " + v.id + "? It cannot be recovered.",
+      "/api/store/values/" + encodeURIComponent(v.id), "value", reload),
+  };
+  const on = (id, fn) => { const e = document.getElementById(id); if (e) e.onclick = fn; };
+  on("cred-form-save", () => credFormRun());
+  on("cred-form-cancel", () => credFormExit());
 })();

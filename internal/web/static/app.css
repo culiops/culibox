@@ -413,6 +413,22 @@
     #creds .confirm { grid-column: 1 / -1; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; }
     #creds .confirm p { margin: 0; overflow-wrap: anywhere; }
     #creds .confirm .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    /* Add / Edit token, GitHub App and stored value (credentials.js credOpenForm). */
+    #creds .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    #creds .tile { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); text-align: left; cursor: pointer; border-radius: 0; min-width: 0; font: inherit; }
+    #creds .tile .n { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+    #creds .tile .s { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+    #creds .tile.on { border-color: var(--accent); background: var(--sel); }
+    #creds .tile.on .n { color: var(--accent); }
+    #creds .seg { max-width: 100%; }
+    #creds .seg button { min-width: 0; overflow-wrap: anywhere; }
+    #creds select.fld { width: 100%; }
+    #creds .fld.secret-area { -webkit-text-security: disc; text-security: disc; resize: vertical; min-height: 96px; font-family: var(--font-family); }
+    #creds .storecreate { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--warn); background: var(--warn-bg); min-width: 0; }
+    #creds .storecreate .hint { margin: 0; }
+    #creds .storecreate .btn { align-self: flex-start; }
+    #creds .strip .storecreate { flex: 1 1 100%; }
+    #creds .sv .confirm { margin-top: 4px; }
     #foot-creds-add .hint { margin: 0; }
     @media (max-width: 700px) {
       #creds .btn { min-height: var(--tap); }
@@ -434,6 +450,13 @@
       #creds .sv .acts { justify-content: stretch; }
       #creds .sv .acts .btn { flex: 1; }
       #creds .sec-h .btn { flex: 1 0 100%; }
+      #creds .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      /* The option labels are long ("US (us.sentry.io)"): stacked, not squeezed side by side. */
+      #creds .seg { display: flex; flex-direction: column; width: 100%; }
+      #creds .seg button { min-height: var(--tap); padding: 7px 10px; text-align: left; border-right: 0; border-bottom: 1px solid var(--border); }
+      #creds .seg button:last-child { border-bottom: 0; }
+      #creds .storecreate .btn { align-self: stretch; }
+      #creds .tile { min-height: var(--tap); }
     }
     .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
     .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }

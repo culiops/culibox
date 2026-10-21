@@ -71,6 +71,14 @@ type viewBody struct {
 		Status      string   `json:"status"`
 		Error       string   `json:"error"`
 		UsedBy      []string `json:"used_by"`
+		Entry       *struct {
+			Name  string `json:"name"`
+			Value struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			} `json:"value"`
+			Env []string `json:"env"`
+		} `json:"entry"`
 	} `json:"tokens"`
 	Values []struct {
 		ID           string   `json:"id"`
@@ -429,6 +437,13 @@ func TestViewSourceTags(t *testing.T) {
 	}
 	if b.GitHubApps[1].KeyRefKind != "store" || b.Tokens[1].ValueKind != "store" {
 		t.Errorf("ref kinds: %s", raw)
+	}
+	// The Edit form needs the saved definition of a web token; a seed has none.
+	if e := b.Tokens[1].Entry; e == nil || e.Name != "web-tok" || e.Value.Type != "store" || e.Value.ID != "web-tok" || len(e.Env) != 1 {
+		t.Errorf("web token entry: %s", raw)
+	}
+	if b.Tokens[0].Entry != nil {
+		t.Errorf("a config.json token must not carry an entry: %s", raw)
 	}
 }
 
