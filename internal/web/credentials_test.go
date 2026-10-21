@@ -837,3 +837,122 @@ func TestPutAWSCheckNeedsAuditRowFirst(t *testing.T) {
 		t.Fatalf("audit %+v", f.rec.events)
 	}
 }
+
+// A web token without a value may not point at a store id another definition
+// reads (another token, an account's token_secret) or at any id it does not
+// already read; a replace keeping its own id is fine.
+func TestTokenStoreRefMustBeOwn(t *testing.T) {
+	base := config.Config{SecretSources: []config.SecretSource{{Type: "store"}}}
+	f := newCredFixture(t, base, nil, account.Account{Name: "work", Provider: "claude", TokenSecret: "WORK_TOKEN"})
+	f.vals.m["WORK_TOKEN"] = []byte("acct")
+	if err := f.cm.PutTokens([]config.StaticToken{tok("a", "A_TOKEN")}, map[string][]byte{"a": []byte("v")}, true); err != nil {
+		t.Fatal(err)
+	}
+	var inUse ErrCredInUse
+	b := tok("b", "B_TOKEN")
+	b.Value = config.KeyRef{Type: "store", ID: "a"}
+	if err := f.cm.PutTokens([]config.StaticToken{b}, nil, true); !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{"static_tokens/a"}) {
+		t.Fatalf("other token's id: %v", err)
+	}
+	b.Value.ID = "WORK_TOKEN"
+	if err := f.cm.PutTokens([]config.StaticToken{b}, nil, true); !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{"accounts/work.token_secret"}) {
+		t.Fatalf("account token id: %v", err)
+	}
+	f.vals.m["loose"] = []byte("x")
+	for _, id := range []string{"loose", "not-yet"} {
+		b.Value.ID = id
+		if err := f.cm.PutTokens([]config.StaticToken{b}, nil, true); !errors.Is(err, ErrForeignStoreRef) {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+	// Replace keeping its own id, no value: allowed.
+	a := tok("a", "A_TOKEN")
+	a.Label = "renamed"
+	a.Value = config.KeyRef{Type: "store", ID: "a"}
+	if err := f.cm.PutTokens([]config.StaticToken{a}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	// Replace moving to another token's id: refused.
+	if err := f.cm.PutTokens([]config.StaticToken{tok("c", "C_TOKEN")}, map[string][]byte{"c": []byte("w")}, true); err != nil {
+		t.Fatal(err)
+	}
+	a.Value.ID = "c"
+	if err := f.cm.PutTokens([]config.StaticToken{a}, nil, false); !errors.As(err, &inUse) {
+		t.Fatalf("replace onto c: %v", err)
+	}
+	if got := f.file(t).StaticTokens; len(got) != 2 || got[0].Value.ID != "a" {
+		t.Fatalf("file: %+v", got)
+	}
+}
+
+// Within one request, an entry without a value may not read the id another
+// entry of the same request sets.
+func TestTokenStoreRefSameRequest(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	b := tok("b", "B_TOKEN")
+	b.Value = config.KeyRef{Type: "store", ID: "a"}
+	err := f.cm.PutTokens([]config.StaticToken{tok("a", "A_TOKEN"), b}, map[string][]byte{"a": []byte("v")}, true)
+	if !errors.Is(err, ErrForeignStoreRef) {
+		t.Fatalf("got %v", err)
+	}
+	if f.vals.has("a") {
+		t.Fatal("value set despite refusal")
+	}
+}
+
+func TestGitHubAppStoreRefMustBeOwn(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	if err := f.cm.PutTokens([]config.StaticToken{tok("a", "A_TOKEN")}, map[string][]byte{"a": []byte("v")}, true); err != nil {
+		t.Fatal(err)
+	}
+	var inUse ErrCredInUse
+	app := config.GitHubApp{Name: "gh", ClientID: "Iv1", PrivateKey: config.KeyRef{Type: "store", ID: "a"}}
+	if err := f.cm.PutGitHubApp(app, nil, true); !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{"static_tokens/a"}) {
+		t.Fatalf("got %v", err)
+	}
+	app.PrivateKey = config.KeyRef{}
+	if err := f.cm.PutGitHubApp(app, []byte("-----BEGIN"), true); err != nil {
+		t.Fatal(err)
+	}
+	app.PrivateKey = config.KeyRef{Type: "store", ID: "gh-gh-key"}
+	if err := f.cm.PutGitHubApp(app, nil, false); err != nil {
+		t.Fatalf("own id: %v", err)
+	}
+}
+
+// A new key on replace goes to the id the App already reads.
+func TestGitHubAppReplaceKeepsCustomKeyID(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	app := config.GitHubApp{Name: "gh", ClientID: "Iv1", PrivateKey: config.KeyRef{Type: "store", ID: "custom-key"}}
+	if err := f.cm.PutGitHubApp(app, []byte("k1"), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.cm.PutGitHubApp(config.GitHubApp{Name: "gh", ClientID: "Iv1"}, []byte("k2"), false); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.vals.m["custom-key"]) != "k2" || f.vals.has("gh-gh-key") {
+		t.Fatalf("store: %v", f.vals.m)
+	}
+	if got := f.file(t).GitHubApps[0].PrivateKey; got != (config.KeyRef{Type: "store", ID: "custom-key"}) {
+		t.Fatalf("ref: %+v", got)
+	}
+}
+
+// A replace that sends a key and names another store id still writes the key
+// under the App's own id (the token rule): the old id is never orphaned.
+func TestGitHubAppReplaceOwnIDWins(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	if err := f.cm.PutGitHubApp(config.GitHubApp{Name: "gh", ClientID: "Iv1"}, []byte("k1"), true); err != nil {
+		t.Fatal(err)
+	}
+	app := config.GitHubApp{Name: "gh", ClientID: "Iv1", PrivateKey: config.KeyRef{Type: "store", ID: "elsewhere"}}
+	if err := f.cm.PutGitHubApp(app, []byte("k2"), false); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.vals.m["gh-gh-key"]) != "k2" || f.vals.has("elsewhere") {
+		t.Fatalf("store: %v", f.vals.m)
+	}
+	if got := f.file(t).GitHubApps[0].PrivateKey; got != (config.KeyRef{Type: "store", ID: "gh-gh-key"}) {
+		t.Fatalf("ref: %+v", got)
+	}
+}
