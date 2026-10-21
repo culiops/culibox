@@ -89,3 +89,27 @@ context and never edits `~/.ssh/config`.
   deletes and recreates the VM. Like `box stop`, it refuses while any box is
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
+
+### Boxes with AWS access
+
+A profile with an AWS binding or static tokens gets a locked-down network. Its
+box can reach only the credential broker and agent-box's egress proxy on your
+Mac (the proxy listens on `127.0.0.1`, port `egress_port`, default 9072; boxes
+call it `host.lima.internal`), and the proxy lets through only the hosts the
+profile's bindings allow. Everything else is dropped by rules inside the VM:
+direct connections, DNS, and other boxes. Profiles without a binding are
+unchanged and keep normal outbound access.
+
+Egress control for macOS boxes is new and has not yet been verified on a Mac.
+
+- After upgrading, run `agent-box box setup -recreate` once. The rules live in
+  the VM's provisioning, so an existing VM has none until it is recreated;
+  `agent-box doctor` warns "box VM config changed since setup" until you do.
+  Like any recreate, it refuses while a box is running unless you add `-force`.
+- The bound network uses the fixed subnet `172.29.72.0/24` inside the VM.
+- A tool that ignores `HTTPS_PROXY` cannot connect, by design: there is no
+  direct route to fall back on. A connection that fails with a timeout, not a
+  clear error, is usually such a tool.
+- Denials show in the steer rail's egress row for the session ("N denied since
+  start") and, with host and time, in the `egress_audit` table of `audit.db` in
+  the data directory.
