@@ -47,7 +47,11 @@ var (
 	ErrCredSeed     = errors.New("defined in config.json")
 	ErrCredNotFound = errors.New("not defined")
 	ErrNoBroker     = errors.New("AWS connections need the boxed runtime")
-	ErrEnvRefOnWeb  = errors.New(`an "env" reference cannot be set from the web (a new variable only reaches the daemon after a restart); use the store or a file`)
+	ErrEnvRefOnWeb  = errors.New(`an "env" reference cannot be set from the web (a new variable only reaches the daemon after a restart)`)
+	// ErrForeignStoreRef: a web entry may only read a stored value it sets in
+	// the same call or already reads, so a request cannot point a token (whose
+	// value reaches a box) at a value another definition owns or will own.
+	ErrForeignStoreRef = errors.New("a web entry can only reference a stored value it sets in the same request or already references; send the value with it")
 	// ErrFileRefOnWeb: a token's value is delivered into the box, so a file
 	// reference from the web would be a two-field route for any file the
 	// daemon user owns (~/.aws/credentials, ssh keys) to reach an agent.
@@ -431,11 +435,27 @@ func action(create bool) string {
 	return broker.CredUpdated
 }
 
+// checkStoreRefLocked refuses a web entry's store reference to an id the call
+// does not set a value for (setting) and the entry did not already read (own).
+// An id other definitions read is ErrCredInUse with their names; any other id,
+// stored or not yet, is ErrForeignStoreRef: a dangling id would read whatever
+// value lands under it later. self is the entry's ref ("static_tokens/<name>").
+func (c *CredentialManager) checkStoreRefLocked(what, self string, ref, own config.KeyRef, setting bool) error {
+	if ref.Type != "store" || setting || (own.Type == "store" && own.ID == ref.ID) {
+		return nil
+	}
+	by := slices.DeleteFunc(slices.Clone(c.storeRefsLocked()[ref.ID]), func(r string) bool { return r == self })
+	if len(by) > 0 {
+		return fmt.Errorf("%s: store value %q: %w", what, ref.ID, ErrCredInUse{By: by})
+	}
+	return fmt.Errorf("%s: store value %q: %w", what, ref.ID, ErrForeignStoreRef)
+}
+
 // webTokenRules are the rules a web token entry has on top of
 // StaticToken.Validate.
 func webTokenRules(e config.StaticToken) error {
 	if e.Value.Type == "env" {
-		return fmt.Errorf("token %q: %w", e.Name, ErrEnvRefOnWeb)
+		return fmt.Errorf("token %q: %w; use the store", e.Name, ErrEnvRefOnWeb)
 	}
 	if e.Value.Type == "file" {
 		return fmt.Errorf("token %q: %w", e.Name, ErrFileRefOnWeb)
@@ -514,8 +534,10 @@ func (c *CredentialManager) PutTokens(entries []config.StaticToken, values map[s
 			return err
 		}
 		var old *config.StaticToken
+		var own config.KeyRef
 		if j := c.fileIndex(credfile.KindToken, e.Name); j >= 0 {
 			old = &c.file.StaticTokens[j]
+			own = old.Value
 			if old.Template != e.Template || (old.Template != "" && !sameProviderFields(*old, e)) {
 				return errTemplateLocked(e.Name, old.Template)
 			}
@@ -523,7 +545,8 @@ func (c *CredentialManager) PutTokens(entries []config.StaticToken, values map[s
 				e.Value = old.Value // an edit that names no value keeps the reference
 			}
 		}
-		if v, ok := values[e.Name]; ok {
+		v, setting := values[e.Name]
+		if setting {
 			if len(v) == 0 {
 				return fmt.Errorf("token %q: the value is empty", e.Name)
 			}
@@ -547,6 +570,9 @@ func (c *CredentialManager) PutTokens(entries []config.StaticToken, values map[s
 			owner[id] = "static_tokens/" + e.Name
 		}
 		if err := webTokenRules(e); err != nil {
+			return err
+		}
+		if err := c.checkStoreRefLocked(fmt.Sprintf("token %q", e.Name), "static_tokens/"+e.Name, e.Value, own, setting); err != nil {
 			return err
 		}
 		if j := c.fileIndex(credfile.KindToken, e.Name); j >= 0 {
@@ -587,7 +613,8 @@ func defaultAppKeyID(name string) string {
 // PutGitHubApp creates or replaces a GitHub App. A non-empty keyValue is the
 // private key: it goes to the store (id = the App's existing store id, else
 // gh-<name>-key) and the entry references it. A replace that names no key and
-// gives none keeps the current reference. The caller owns and zeroes keyValue.
+// gives none keeps the current reference. Without a key, a store reference must
+// be the one the App already reads. The caller owns and zeroes keyValue.
 func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, create bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -595,15 +622,22 @@ func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, 
 		return err
 	}
 	j := c.fileIndex(credfile.KindGitHubApp, app.Name)
-	if app.PrivateKey == (config.KeyRef{}) && len(keyValue) == 0 && j >= 0 {
-		app.PrivateKey = c.file.GitHubApps[j].PrivateKey
+	var own config.KeyRef
+	if j >= 0 {
+		own = c.file.GitHubApps[j].PrivateKey
+	}
+	if app.PrivateKey == (config.KeyRef{}) && len(keyValue) == 0 {
+		app.PrivateKey = own
 	}
 	toSet := map[string][]byte{}
 	owner := map[string]string{}
 	if len(keyValue) > 0 {
 		id := defaultAppKeyID(app.Name)
-		if app.PrivateKey.Type == "store" && app.PrivateKey.ID != "" {
+		switch {
+		case app.PrivateKey.Type == "store" && app.PrivateKey.ID != "":
 			id = app.PrivateKey.ID
+		case app.PrivateKey == (config.KeyRef{}) && own.Type == "store" && own.ID != "":
+			id = own.ID // a new key replaces the one the App reads, never orphans a custom id
 		}
 		if !secretstore.ValidID(id) {
 			return fmt.Errorf("GitHub App %q: the key's store id %q is not valid; name one with private_key.id", app.Name, id)
@@ -613,7 +647,10 @@ func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, 
 		owner[id] = "github_apps/" + app.Name
 	}
 	if app.PrivateKey.Type == "env" {
-		return fmt.Errorf("GitHub App %q: %w", app.Name, ErrEnvRefOnWeb)
+		return fmt.Errorf("GitHub App %q: %w; use the store or a file", app.Name, ErrEnvRefOnWeb)
+	}
+	if err := c.checkStoreRefLocked(fmt.Sprintf("GitHub App %q", app.Name), "github_apps/"+app.Name, app.PrivateKey, own, len(keyValue) > 0); err != nil {
+		return err
 	}
 	cand := c.cloneFile()
 	if j >= 0 {

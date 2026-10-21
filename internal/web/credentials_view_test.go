@@ -151,9 +151,8 @@ func TestViewNeverContainsValue(t *testing.T) {
 		GitHubApps: []config.GitHubApp{{Name: "seed-app", ClientID: "Iv1.abc", PrivateKey: config.KeyRef{Type: "file", Path: keyFile}}},
 	}
 	v := newViewFix(t, base, []config.AgentConfig{{Name: "p1", Bin: "claude", Secrets: []string{"legacy-one"}}})
-	v.vals.m["web-tok"] = []byte(storeVal)
 	if err := v.cm.PutTokens([]config.StaticToken{{Name: "web-tok", Value: config.KeyRef{Type: "store", ID: "web-tok"},
-		Env: []string{"WEB_TOKEN"}, Egress: []config.TokenEgress{{Host: "api.web.example"}}}}, nil, true); err != nil {
+		Env: []string{"WEB_TOKEN"}, Egress: []config.TokenEgress{{Host: "api.web.example"}}}}, map[string][]byte{"web-tok": []byte(storeVal)}, true); err != nil {
 		t.Fatal(err)
 	}
 	v.srv.SecretCheck = func(string) (secretchain.Presence, error) { return secretchain.Present, nil }

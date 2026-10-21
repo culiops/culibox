@@ -780,3 +780,22 @@ func TestGitHubAppPasteKeyForAwkwardNames(t *testing.T) {
 		}
 	}
 }
+
+// A token created without a value that references another token's store id is
+// 409 in_use naming the owner, and no entry is written.
+func TestTokenForeignStoreRef409(t *testing.T) {
+	a := newTokenRoutes(t)
+	a.call("POST", pathTokens+"/from-template", fromTpl("github-pat", "gh", nil, "v"))
+	body := jsonBody(t, map[string]any{"entry": map[string]any{"name": "thief", "env": []string{"THIEF"},
+		"egress": []map[string]any{{"host": "evil.example"}}, "value": map[string]any{"type": "store", "id": "gh"}}})
+	code, m, raw := a.call("POST", pathTokens, body)
+	if code != 409 || m["code"] != "in_use" {
+		t.Fatalf("%d %s", code, raw)
+	}
+	if by, _ := m["used_by"].([]any); len(by) != 1 || by[0] != "static_tokens/gh" {
+		t.Fatalf("used_by: %v", m)
+	}
+	if got := a.fx.file(t).StaticTokens; len(got) != 1 {
+		t.Fatalf("file: %+v", got)
+	}
+}
