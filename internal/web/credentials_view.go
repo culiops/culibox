@@ -166,10 +166,15 @@ type credAWSBody struct {
 	SourceProfile string           `json:"source_profile"`
 	RoleARN       string           `json:"role_arn"`
 	Elevate       *credElevateBody `json:"elevate"`
-	Status        string           `json:"status"`
-	Error         string           `json:"error,omitempty"`
-	UsedBy        []string         `json:"used_by"`
-	Base          verdictBody      `json:"base"`
+	// EgressAllow and S3Read are what the Edit form must send back unchanged:
+	// a save replaces the whole connection, so a form that did not know them
+	// would silently drop them.
+	EgressAllow []string    `json:"egress_allow,omitempty"`
+	S3Read      []string    `json:"s3_read,omitempty"`
+	Status      string      `json:"status"`
+	Error       string      `json:"error,omitempty"`
+	UsedBy      []string    `json:"used_by"`
+	Base        verdictBody `json:"base"`
 }
 
 type credAppBody struct {
@@ -331,6 +336,7 @@ func (s *Server) credView() credViewBody {
 	for _, e := range sn.aws {
 		b := credAWSBody{Name: e.conn.Name, Label: e.conn.Label, Description: e.conn.Description, AccountID: accountOf(e.conn.RoleARN),
 			Region: e.conn.Region, Prod: e.conn.Prod, Source: e.src, SourceProfile: e.conn.SourceProfile, RoleARN: e.conn.RoleARN,
+			EgressAllow: slices.Clone(e.conn.EgressAllow), S3Read: slices.Clone(e.conn.S3Read),
 			Status: credOK, Error: e.err, UsedBy: orEmpty(e.usedBy), Base: verdictOf(e.base)}
 		if e.err != "" {
 			b.Status = credInvalid

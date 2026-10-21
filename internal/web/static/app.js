@@ -6,8 +6,13 @@ async function api(path, opts) {
   if (!res.ok) {
     let msg = res.statusText;
     let code = "";
-    try { const b = await res.json(); msg = b.error || msg; code = b.code || ""; } catch (_) {}
+    let body = null;
+    try { body = await res.json(); msg = body.error || msg; code = body.code || ""; } catch (_) {}
     const err = new Error(msg);
+    // The parsed body and Retry-After ride along for callers that need more
+    // than the sentence (a 409 that names who uses an entry, a 429's wait).
+    err.body = body;
+    err.retryAfter = res.headers ? res.headers.get("Retry-After") || "" : "";
     // The status and machine code ride along so a caller can act on a specific
     // refusal (a locked store, 423) instead of parsing prose.
     err.status = res.status;

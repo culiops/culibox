@@ -38,6 +38,8 @@ type viewBody struct {
 		SourceProfile string   `json:"source_profile"`
 		RoleARN       string   `json:"role_arn"`
 		Elevate       any      `json:"elevate"`
+		EgressAllow   []string `json:"egress_allow"`
+		S3Read        []string `json:"s3_read"`
 		Status        string   `json:"status"`
 		Error         string   `json:"error"`
 		UsedBy        []string `json:"used_by"`
@@ -434,6 +436,7 @@ func TestViewEntryFields(t *testing.T) {
 	conn := awsConn("prod-ro", "host-a", arnRead)
 	conn.Label, conn.Description, conn.Prod = "Prod read", "the prod account", true
 	conn.Elevate = &config.AWSElevate{RoleARN: arnWrite, MaxMinutes: 30}
+	conn.EgressAllow, conn.S3Read = []string{"api.example.com"}, []string{"my-bucket"}
 	tk := config.StaticToken{Name: "dd", Value: config.KeyRef{Type: "store", ID: "dd"}, Env: []string{"DD_API_KEY", "DD_SITE"},
 		Egress:   []config.TokenEgress{{Host: "api.datadoghq.com"}, {Host: "api.eu.example", Port: 8443}, {Host: "10.0.0.5", Private: true}},
 		Provider: "datadog", Template: "datadog", Label: "Datadog", Description: "d", Prod: true}
@@ -443,6 +446,10 @@ func TestViewEntryFields(t *testing.T) {
 	if a.AccountID != "123456789012" || a.Region != "us-east-1" || a.SourceProfile != "host-a" || a.RoleARN != arnRead ||
 		a.Label != "Prod read" || a.Description != "the prod account" || !a.Prod || a.Elevate == nil || a.Status != "ok" {
 		t.Errorf("aws row: %s", raw)
+	}
+	// The Edit form sends the whole connection back, so it must be told these two.
+	if strings.Join(a.EgressAllow, ",") != "api.example.com" || strings.Join(a.S3Read, ",") != "my-bucket" {
+		t.Errorf("aws egress_allow / s3_read missing from the read model: %s", raw)
 	}
 	tr := b.Tokens[0]
 	if tr.Provider != "datadog" || tr.Template != "datadog" || tr.Label != "Datadog" || !tr.Prod || tr.ValueKind != "store" ||

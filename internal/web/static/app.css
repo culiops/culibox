@@ -363,8 +363,67 @@
       border-bottom: 1px solid var(--border); font-size: 12px; align-items: baseline;
     }
     #creds .leg > * { min-width: 0; overflow-wrap: anywhere; }
+    /* Add / Edit AWS connection (credentials.js awsPaintFlow). */
+    #creds .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; font-size: 12px; color: var(--muted); }
+    #creds .crumb b { color: var(--fg); font-weight: 400; overflow-wrap: anywhere; }
+    #creds a.lnk { color: var(--accent); text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
+    #creds .intro { margin: 0; font-size: 12.5px; line-height: 1.6; }
+    #creds .hp { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
+    #creds .hp .tx { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+    #creds .hp .nm { font-weight: 700; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; overflow-wrap: anywhere; }
+    #creds .hp .d { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+    #creds .hp .dim { opacity: .42; }
+    #creds .hp .stop { font-size: 11.5px; color: var(--warn); }
+    #creds input[type="checkbox"], #creds input[type="radio"] { accent-color: var(--accent); margin: 0; flex: none; width: 15px; height: 15px; }
+    #creds .hp input[type="checkbox"] { margin-top: 3px; }
+    #creds .bdg.kind { color: var(--accent); border-color: var(--accent); }
+    #creds .bdg.warnb { color: var(--warn); border-color: var(--warn); }
+    #creds .arow { border: 1px solid var(--border); background: var(--bg); padding: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    #creds .awsnote { display: none; }
+    #creds .arow.danger { border-color: var(--danger); }
+    #creds .arow-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+    #creds .arow-h .nm { font-weight: 700; overflow-wrap: anywhere; }
+    #creds .arow-h .btn { margin-left: auto; }
+    #creds .frow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 0; }
+    #creds .frow .full { grid-column: 1 / -1; }
+    #creds .fcol { min-width: 0; }
+    #creds .flab { display: block; margin-bottom: 7px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    #creds .fld { box-sizing: border-box; min-width: 0; border-radius: 0; }
+    #creds textarea.fld { resize: vertical; font-family: var(--font-family); }
+    #creds .fld.ro { background: var(--surface-2); color: var(--muted); }
+    #creds .roleline { display: flex; gap: 8px; min-width: 0; }
+    #creds .roleline .fld { flex: 1; }
+    #creds .roles { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; max-height: 220px; overflow-y: auto; }
+    #creds .roles label { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
+    #creds .roles label.on { border-color: var(--accent); background: var(--sel-soft); }
+    #creds .rolesbox .hint { margin-top: 7px; }
+    #creds .pf-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+    #creds .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
+    #creds .res { display: flex; flex-direction: column; gap: 8px; font-size: 12px; min-width: 0; }
+    #creds .res:empty { display: none; }
+    #creds .res .l { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; }
+    #creds .res .l.ok { color: var(--ok); }
+    #creds .res .ent-err { margin: 0; }
+    #creds details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+    #creds details[open] summary { margin-bottom: 10px; }
+    #creds .ssopanel { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); }
+    #creds .ssopanel .hint { margin: 0; }
+    #creds .ssocode { font-size: 18px; letter-spacing: .12em; font-weight: 700; }
+    #creds .cmd { font: inherit; overflow-wrap: anywhere; color: var(--fg); }
+    #creds .confirm { grid-column: 1 / -1; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; }
+    #creds .confirm p { margin: 0; overflow-wrap: anywhere; }
+    #creds .confirm .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    #foot-creds-add .hint { margin: 0; }
     @media (max-width: 700px) {
       #creds .btn { min-height: var(--tap); }
+      #creds .fld { min-height: var(--tap); font-size: 13px; }
+      #creds textarea.fld { min-height: 0; }
+      #creds .awsnote { display: block; }
+      #creds .frow { grid-template-columns: 1fr; }
+      #creds .roleline { flex-direction: column; }
+      #creds .arow-h .btn { margin-left: 0; flex: 1 0 100%; }
+      #creds .pf-check, #creds .roles label { min-height: var(--tap); }
+      #creds .confirm .btns .btn { flex: 1 1 100%; }
       #creds .ent { grid-template-columns: 1fr; padding: 12px; }
       #creds .ent-act { align-self: stretch; }
       #creds .ent-act .btn { flex: 1; }
