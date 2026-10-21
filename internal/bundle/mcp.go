@@ -136,7 +136,9 @@ func rejectReason(srv mcpServer, resolves map[string]bool) (string, bool) {
 		return "has neither a url nor a command", true
 	}
 	if !resolves[cmd] {
-		return "command " + cmd + " does not exist inside the box image", true
+		// Only the first word: the reason lands in the lock file the box mounts,
+		// and the rest of a command string could hold a secret.
+		return "command " + strings.Fields(cmd)[0] + " does not exist inside the box image", true
 	}
 	return "", false
 }

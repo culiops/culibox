@@ -158,8 +158,9 @@ func (s *Store) syncInherit(cr *os.Root, on bool) error {
 		}
 		man.Links = appendUnique(man.Links, n)
 	}
-	// Same shape filter the boxed bundle uses: a server with literal env values
-	// or ${VAR} substitution is dropped rather than copied onto disk.
+	// Same shape filter the boxed bundle uses: a server with literal env values,
+	// ${VAR} substitution, or a credential in its headers/args/url is dropped
+	// rather than copied onto disk.
 	src := bundle.DefaultMCPFile(s.defaultDir)
 	servers, drops := bundle.FilterMCP(src, hostProber{})
 	if mcpSourceUnreadable(src, drops) && man.MCP {
