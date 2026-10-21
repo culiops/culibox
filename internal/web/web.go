@@ -13,6 +13,7 @@ import (
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/secretchain"
 	"github.com/culiops/agent-box/internal/secretstore"
 )
 
@@ -93,10 +94,14 @@ type Server struct {
 	// routes answer 409 no_broker), and never a typed nil. CredAudit receives
 	// the AWS-setup audit rows. credLimit is the shared budget of the routes
 	// that call AWS.
-	Creds     *CredentialManager
-	CredAWS   AWSCredService
-	CredAudit CredRecorder
-	credLimit callLimiter
+	Creds *CredentialManager
+	// SecretCheck says whether a profile's legacy secret NAME resolves, without
+	// handing back the value (secretchain.Chain.Check). nil = every name reads
+	// "missing".
+	SecretCheck func(name string) (secretchain.Presence, error)
+	CredAWS     AWSCredService
+	CredAudit   CredRecorder
+	credLimit   callLimiter
 
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
@@ -165,6 +170,7 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/store/init", s.handleStoreInit)
 	}
 	if s.Creds != nil {
+		protected.HandleFunc("/api/credentials", s.handleCredentials)
 		protected.HandleFunc("/api/credentials/aws", s.handleCredAWS)
 		protected.HandleFunc("/api/credentials/aws/", s.handleCredAWS)
 		protected.HandleFunc("/api/credentials/templates", s.handleCredTemplates)

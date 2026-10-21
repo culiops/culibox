@@ -102,7 +102,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	serve(cfg, baseCfg, cred.File, home, cfgFiles)
+	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -197,7 +197,7 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgFiles []string) {
+func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, home string, cfgFiles []string) {
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -622,6 +622,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgF
 	// The credentials screen. baseCfg is config.json before mergeCredentials.
 	chk, credAWS := awsServiceFor(brokerSvc, storeAudit)
 	creds := web.NewCredentialManager(baseCfg, credFile, dataDir, pm, vstore, storeAudit, chk, live.Apply, web.AccountsOf(accts))
+	creds.SetFileBad(credBad)
 
 	srv := &web.Server{
 		API:        api,
@@ -641,6 +642,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, home string, cfgF
 
 		Accounts: accts,
 		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
+		// The credentials screen's legacy-secret status: presence only, no value.
+		SecretCheck: resolver.Check,
 
 		// vstore is never nil (the daemon always opens one), so no typed-nil
 		// interface can reach the web layer.

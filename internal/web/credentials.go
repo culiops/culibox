@@ -118,6 +118,9 @@ type CredentialManager struct {
 	verdicts map[string]awsprobe.Result
 	// checkLimit charges the base-role checks a save runs itself.
 	checkLimit callLimiter
+	// bad: credentials.json was unreadable at start and has not been replaced by
+	// a save since (the save moves it aside). The screen shows a banner.
+	bad bool
 }
 
 // NewCredentialManager wires the manager. base must be the config as read from
@@ -133,6 +136,14 @@ func NewCredentialManager(base config.Config, web credfile.File, dataDir string,
 		checkLimit: callLimiter{max: saveCheckMax, window: time.Minute}}
 	c.merged, c.src, _ = credfile.Merge(base, web)
 	return c
+}
+
+// SetFileBad records that credentials.json could not be read at start (the
+// daemon came up with no web entries). The next successful save clears it.
+func (c *CredentialManager) SetFileBad(bad bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bad = bad
 }
 
 // AccountsOf lists the non-default agent accounts of s, for NewCredentialManager.
@@ -329,6 +340,7 @@ func (c *CredentialManager) persistLocked(cand credfile.File, merged config.Conf
 		return fmt.Errorf("%w: save credentials: %w", ErrCredPersist, err)
 	}
 	c.file, c.merged, c.src = cand, merged, src
+	c.bad = false // Save moved an unreadable file aside
 	c.apply(merged)
 	return nil
 }
