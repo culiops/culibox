@@ -76,8 +76,10 @@ context and never edits `~/.ssh/config`.
   settings and SSH key). They also must not be or contain the directory of the
   config file agent-box reads, or of `profiles_path` (symlinks are followed to
   their targets); a folder below those is fine.
-- A box cannot reach services listening on your Mac's 127.0.0.1. agent-box
-  checks this on every new box and refuses the box if the check fails.
+- A box cannot reach services listening on your Mac's 127.0.0.1, other than
+  agent-box's own credential broker and, for boxes with a binding, the egress
+  proxy (see below). agent-box checks this on every new box and refuses the box
+  if the check fails.
 - Claude Code keeps its macOS login in the Keychain, which a box cannot read.
   Create a token for boxes with `claude setup-token`, store it as a secret
   source, and add `CLAUDE_CODE_OAUTH_TOKEN` to the agent's `secrets`.
@@ -90,11 +92,11 @@ context and never edits `~/.ssh/config`.
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
 
-### Boxes with AWS access
+### Boxes with credential bindings
 
-A profile with an AWS binding or static tokens gets a locked-down network. Its
-box can reach only the credential broker and agent-box's egress proxy on your
-Mac (the proxy listens on `127.0.0.1`, port `egress_port`, default 9072; boxes
+A profile with any binding (an `aws` binding, named AWS connections, a `github`
+binding or static tokens) gets a locked-down network. Its box can reach only the
+credential broker and agent-box's egress proxy on your Mac (the proxy listens on `127.0.0.1`, port `egress_port`, default 9072; boxes
 call it `host.lima.internal`), and the proxy lets through only the hosts the
 profile's bindings allow. Everything else is dropped by rules inside the VM:
 direct connections, DNS, and other boxes. Profiles without a binding are
