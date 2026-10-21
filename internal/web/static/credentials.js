@@ -281,7 +281,14 @@ function awsErrText(e) {
 // Keys that carry a secret on its way to the server. They are stripped from
 // anything this module keeps (credKeep): a value lives in the input that holds
 // it until the request is sent, then in neither.
-const CRED_SECRET_KEYS = ["values", "value", "private_key_value", "passphrase"];
+const CRED_SECRET_KEYS = ["values", "value", "private_key_value", "passphrase", "key"];
+
+// ghKeyID: the store id a pasted GitHub App key is saved under, as the server
+// derives it (defaultAppKeyID in credentials.go): characters outside
+// [A-Za-z0-9_-] become "-", and the name is cut so the id fits 64 characters.
+function ghKeyID(name) {
+  return "gh-" + String(name || "").replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 57) + "-key";
+}
 
 // templateForm: what the Add token form asks for, from one catalog template.
 // A select starts on its first option; Sentry's URL shows only when "Self-hosted"
@@ -454,7 +461,7 @@ function credErrText(e, noun) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
-    tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS,
+    tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut,
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
@@ -1324,10 +1331,23 @@ function awsRepaintProfileRows(prof) {
   for (const r of awsFlow.rows) if (r.source_profile === prof) awsPaintRes(r);
 }
 
+// awsSSOTimedOut: the panel state once polling gives up. "gone" is the state
+// that shows the Sign in button again.
+function awsSSOTimedOut() {
+  return { state: "gone", msg: "Sign-in timed out. Press Sign in to start another." };
+}
+
 function awsSSOPoll(f, prof) {
   const started = Date.now();
   const timer = setInterval(async () => {
-    if (awsFlow !== f || Date.now() - started > AWS_SSO_POLL_MAX) { clearInterval(timer); f.timers.delete(timer); return; }
+    if (awsFlow !== f) { clearInterval(timer); f.timers.delete(timer); return; }
+    if (Date.now() - started > AWS_SSO_POLL_MAX) {
+      // Back to the "Sign in" state with a note, never stuck on "Waiting…".
+      clearInterval(timer); f.timers.delete(timer);
+      f.sso[prof] = awsSSOTimedOut();
+      awsRepaintProfileRows(prof);
+      return;
+    }
     let st;
     try {
       st = await api("/api/credentials/aws/sso-login?profile=" + encodeURIComponent(prof));
@@ -2021,7 +2041,7 @@ function credAppForm(entry) {
     } else {
       const f = credSecretField(uid + "-key", edit ? "Replace the private key (leave empty to keep it)" : "Private key", {
         area: true,
-        hint: "Paste the whole .pem file, BEGIN and END lines included. It goes into the encrypted store as gh-" + (edit ? entry.name : "<name>") + "-key and is never shown again. The field clears after you save.",
+        hint: "Paste the whole .pem file, BEGIN and END lines included. It goes into the encrypted store as " + (edit ? ghKeyID(entry.name) : "gh-<name>-key") + " and is never shown again. The field clears after you save.",
       });
       keyEl = f.inp;
       nodes.push(f.col);

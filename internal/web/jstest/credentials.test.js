@@ -6,7 +6,7 @@ const {
   providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, CRED_D4, CRED_N3, CRED_FILE_BAD,
   awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsConnFromRow, awsRoleARN, awsCheckView, awsErrText, CRED_D4_REMEDY,
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
-  tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS,
+  tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -352,6 +352,7 @@ test("module state never holds a value: credKeep strips every secret key, deeply
   const kept = credKeep({
     kind: "token-add", name: "sentry", label: "x",
     values: ["n2-dummy-aaa"], value: "n2-dummy-bbb", private_key_value: "n2-dummy-ccc", passphrase: "n2-dummy-ddd",
+    key: "n2-dummy-ggg",
     nested: { value: "n2-dummy-eee", ok: 1 }, list: [{ private_key_value: "n2-dummy-fff", id: 2 }],
   });
   assert.strictEqual(credState().form, kept);
@@ -360,7 +361,7 @@ test("module state never holds a value: credKeep strips every secret key, deeply
   assert.strictEqual(kept.name, "sentry");
   assert.strictEqual(kept.nested.ok, 1);
   assert.strictEqual(kept.list[0].id, 2);
-  for (const k of ["values", "value", "private_key_value", "passphrase"]) assert.ok(CRED_SECRET_KEYS.includes(k));
+  for (const k of ["values", "value", "private_key_value", "passphrase", "key"]) assert.ok(CRED_SECRET_KEYS.includes(k));
   credKeep(null);
   assert.strictEqual(credState().form, null);
 });
@@ -432,4 +433,19 @@ test("no top-level name in credentials.js is also declared by another page scrip
     for (const n of names(fs.readFileSync(path.join(dir, f), "utf8"))) if (mine.has(n)) clashes.push(n + " (" + f + ")");
   }
   assert.deepStrictEqual(clashes, []);
+});
+
+test("ghKeyID mirrors the server: odd characters become -, the id stays within 64", () => {
+  assert.strictEqual(ghKeyID("bot"), "gh-bot-key");
+  assert.strictEqual(ghKeyID("my.app"), "gh-my-app-key");
+  const long = ghKeyID("a".repeat(64));
+  assert.strictEqual(long, "gh-" + "a".repeat(57) + "-key");
+  assert.strictEqual(long.length, 64);
+  assert.ok(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(ghKeyID(".".repeat(64))));
+});
+
+test("a timed-out sign-in goes back to the Sign in state with a note", () => {
+  const s = awsSSOTimedOut();
+  assert.strictEqual(s.state, "gone");
+  assert.ok(/timed out/i.test(s.msg));
 });
