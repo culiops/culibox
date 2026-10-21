@@ -291,7 +291,9 @@ func (l *AgentLauncher) SetDefaultRuntime(rt string) {
 
 // SetDaemonSecretEnv names daemon-only variables (the login password's env var)
 // that must never reach a session through an inherited base. Every AB_* variable
-// is stripped regardless; this adds names that do not carry the prefix.
+// is stripped regardless; this adds names that do not carry the prefix. The
+// list is replaced, not merged, and is re-driven on every credential save: a
+// spawn sees the old list or the new one.
 func (l *AgentLauncher) SetDaemonSecretEnv(names ...string) {
 	m := map[string]bool{}
 	for _, n := range names {
@@ -415,7 +417,8 @@ func (l *AgentLauncher) GitHubFor(agent string) *config.GitHubBinding {
 }
 
 // SetStaticTokens installs the instance's static-token entries (deep-copied).
-// Call once at boot: a change to static_tokens needs a restart.
+// Safe to call again (a credential save pushes the new list); a running
+// session keeps the copy it was spawned with.
 func (l *AgentLauncher) SetStaticTokens(entries []config.StaticToken) {
 	cp := make([]config.StaticToken, len(entries))
 	for i, e := range entries {
@@ -460,7 +463,8 @@ func SeccompGate(probe func() (bool, error), storeExists func() bool) func() err
 }
 
 // SetAWSConnections installs the instance's aws_connections (deep-copied).
-// Call once at boot: a change to aws_connections needs a restart.
+// Safe to call again (a credential save pushes the new list); a running
+// session keeps the copy it was spawned with.
 func (l *AgentLauncher) SetAWSConnections(list []config.AWSConnection) {
 	cp := make([]config.AWSConnection, len(list))
 	for i, c := range list {

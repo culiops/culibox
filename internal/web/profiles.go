@@ -16,6 +16,7 @@ import (
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/store"
 )
@@ -100,7 +101,7 @@ type ProfileManager struct {
 }
 
 // SetAWSConnections installs the instance's named AWS connections, which Save
-// checks a profile's aws_connections against. Call at boot.
+// checks a profile's aws_connections against. Safe to call again on a credential save.
 func (m *ProfileManager) SetAWSConnections(list []config.AWSConnection) {
 	cp := make([]config.AWSConnection, len(list))
 	for i, c := range list {
@@ -112,7 +113,7 @@ func (m *ProfileManager) SetAWSConnections(list []config.AWSConnection) {
 }
 
 // SetStaticTokens installs the instance's static token entries, which Save
-// checks a profile's tokens and GitHub PAT owners against. Call at boot.
+// checks a profile's tokens and GitHub PAT owners against. Safe to call again on a credential save.
 func (m *ProfileManager) SetStaticTokens(entries []config.StaticToken) {
 	cp := make([]config.StaticToken, len(entries))
 	for i, e := range entries {
@@ -124,7 +125,7 @@ func (m *ProfileManager) SetStaticTokens(entries []config.StaticToken) {
 }
 
 // SetGitHubApps installs the instance's GitHub App connections, which Save
-// checks a profile's github binding against. Call at boot.
+// checks a profile's github binding against. Safe to call again on a credential save.
 func (m *ProfileManager) SetGitHubApps(apps []config.GitHubApp) {
 	m.mu.Lock()
 	m.ghApps = slices.Clone(apps)
@@ -380,6 +381,49 @@ func (m *ProfileManager) Get(name string) (config.AgentConfig, bool) {
 		}
 	}
 	return config.AgentConfig{}, false
+}
+
+// All is the merged profile set: config seeds and runtime profiles, a runtime
+// profile overriding a same-named seed.
+func (m *ProfileManager) All() []config.AgentConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.merged()
+}
+
+// RefsTo returns, sorted, the names of the profiles (seed or runtime) that bind
+// the credential entry kind/name. Kinds are the credfile ones: an AWS
+// connection by aws_connections; a GitHub App by a github owner's app; a static
+// token by tokens or a github owner's token (a PAT).
+func (m *ProfileManager) RefsTo(kind, name string) []string {
+	var out []string
+	for _, p := range m.All() {
+		if profileBinds(p, kind, name) {
+			out = append(out, p.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func profileBinds(p config.AgentConfig, kind, name string) bool {
+	switch kind {
+	case credfile.KindAWS:
+		return slices.Contains(p.AWSConnections, name)
+	case credfile.KindToken:
+		if slices.Contains(p.Tokens, name) {
+			return true
+		}
+	}
+	if p.GitHub == nil {
+		return false
+	}
+	for _, o := range p.GitHub.Owners {
+		if (kind == credfile.KindGitHubApp && o.App == name) || (kind == credfile.KindToken && o.Token == name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Save validates and persists a runtime profile, then refreshes the launcher.

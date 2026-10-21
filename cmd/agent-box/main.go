@@ -30,6 +30,7 @@ import (
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
@@ -56,10 +57,20 @@ func main() {
 	home, homeErr := serveHome(os.UserHomeDir)
 	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
 	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	// Merge the web-defined credentials before anything validates or reads cfg.
+	// Needs a usable home (the data dir hangs off it) and a config that loaded.
+	var cred credState
+	// baseCfg is config.json alone: the credentials screen needs it to tell a
+	// seed from a web entry (the merged cfg would make every entry look like a
+	// seed).
+	baseCfg := cfg
+	if homeErr == nil && cfgErr == nil {
+		cfg, cred = mergeCredentials(cfg, home)
+	}
 	if args.Cmd == "doctor" {
 		// home is "" when $HOME is unusable; doctor reports that as a FAIL.
 		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
-			Home: home, Commit: buildCommit()}))
+			Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}))
 	}
 	if homeErr != nil {
 		log.Fatalf("home: %v", homeErr)
@@ -69,8 +80,12 @@ func main() {
 	}
 	// Resolve only loads; the security invariants (bind, allowed_hosts, socket
 	// dir) are enforced here, for every source including built-in defaults.
-	if err := cfg.Validate(); err != nil {
+	warnings, err := cred.validateBoot(cfg)
+	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+	for _, w := range warnings {
+		log.Print("WARNING: " + w)
 	}
 	if args.Cmd == "box" {
 		os.Exit(runBox(args, cfg, home, os.Stdout))
@@ -86,11 +101,12 @@ func main() {
 		os.Exit(runClone(args, cfg, home, cfgFiles, os.Stdout))
 	}
 	log.Printf("config: %s (agent-box %s)", src, buildCommit())
+	log.Print(cred.summary())
 	cfgFiles, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	serve(cfg, home, cfgFiles)
+	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -185,7 +201,7 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg config.Config, home string, cfgFiles []string) {
+func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, home string, cfgFiles []string) {
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -252,14 +268,17 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 	lnch := launcher.New(agents, resolver, cfg.Options)
 	lnch.SetDefaultRuntime(cfg.DefaultRuntime)
-	// A token entry's env-typed value variable lives in the daemon's env for the
-	// broker to read: like the password, it must never reach a session through
-	// an inherited base.
-	lnch.SetDaemonSecretEnv(append([]string{cfg.PasswordEnv}, tokenVars(cfg.StaticTokens)...)...)
-	lnch.SetStaticTokens(cfg.StaticTokens)
-	lnch.SetAWSConnections(cfg.AWSConnections)
+	// Every holder of the credential lists (launcher, profiles, broker filter,
+	// GitHub minter, the daemon-env scrub list, store-in-use) is fed through one
+	// Apply, here for the launcher alone and again once the rest exist. A web
+	// credential save calls the same Apply. The launcher's part is first, before
+	// anything can spawn: a token entry's env-typed value variable lives in the
+	// daemon's env for the broker to read, and like the password it must never
+	// reach a session through an inherited base.
+	live := &credLive{lnch: lnch, passwordEnv: cfg.PasswordEnv}
+	live.Apply(cfg)
 	if n := len(cfg.StaticTokens); n > 0 {
-		log.Printf("static_tokens: %d entries (read at start; a change needs a restart)", n)
+		log.Printf("static_tokens: %d entries", n)
 	}
 
 	// Agent accounts: accounts.json lives inside the data dir (the store writes it
@@ -383,6 +402,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	// at start for the log; the gate re-probes on every boxed spawn once a store
 	// exists, and reads the store's state each time, so `store init` while
 	// running takes effect. macOS boxes run in a VM with the key in the host Keychain.
+	var seccompProbe func() (bool, error) // also gates store init from the web
 	if layer != nil && layer.vm == nil && runtime.GOOS == "linux" {
 		cli := layer.cli
 		probe := func() (bool, error) {
@@ -397,6 +417,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			log.Printf("seccomp: Docker's default profile is off; boxed spawns are refused while a store exists")
 		}
 		lnch.SetBoxGate(launcher.SeccompGate(probe, func() bool { return vstore.Status().Initialized }))
+		seccompProbe = probe
 	}
 
 	// Config bundle: what a boxed agent is allowed to see of the user's config.
@@ -456,6 +477,7 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 			log.Fatalf("%v", err)
 		default:
 			brokerSvc = svc
+			live.tokens, live.gh = svc.Tokens, svc.GitHub
 			mgr.SetBroker(svc.Hooks)
 			log.Printf("credential broker listening on %s", svc.Hooks.EP.BoxURL)
 		}
@@ -555,9 +577,9 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
-	pm.SetGitHubApps(cfg.GitHubApps)
-	pm.SetStaticTokens(cfg.StaticTokens)
-	pm.SetAWSConnections(cfg.AWSConnections)
+	// The profile manager, the broker's token set and the minter exist now.
+	live.pm = pm
+	live.Apply(cfg)
 	pm.SetAccounts(accts) // without it a profile naming an account cannot be saved
 	// Profiles are now registered with the launcher; backfill Bin for sessions
 	// reconciled at startup (before profiles were known) so per-window usage works
@@ -601,6 +623,11 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 		stopEgress = egressSvc.Stop
 		api.Egress = web.EgressStatusAdapter{Get: web.ManagerService{M: mgr}.Get, Stats: egressSvc.Stats}
 	}
+	// The credentials screen. baseCfg is config.json before mergeCredentials.
+	chk, credAWS := awsServiceFor(brokerSvc, storeAudit)
+	creds := web.NewCredentialManager(baseCfg, credFile, dataDir, pm, vstore, storeAudit, chk, live.Apply, web.AccountsOf(accts))
+	creds.SetFileBad(credBad)
+
 	srv := &web.Server{
 		API:        api,
 		Session:    sess,
@@ -619,14 +646,21 @@ func serve(cfg config.Config, home string, cfgFiles []string) {
 
 		Accounts: accts,
 		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
+		// The credentials screen's legacy-secret status: presence only, no value.
+		SecretCheck: resolver.Check,
 
 		// vstore is never nil (the daemon always opens one), so no typed-nil
 		// interface can reach the web layer.
 		Store:                vstore,
 		StoreAudit:           storeAudit,
-		StoreInUse:           storerefs.InUse(cfg),
+		StoreInUse:           live.InUse,
 		StoreUnlockTTL:       cfg.StoreUnlockTTL(),
 		StorePlaintextCopies: ptCopies,
+		SeccompProbe:         seccompProbe,
+
+		Creds:     creds,
+		CredAWS:   credAWS,
+		CredAudit: storeAudit,
 	}
 	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)

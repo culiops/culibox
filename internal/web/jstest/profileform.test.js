@@ -193,7 +193,7 @@ test("awscExclusiveState: connections ticked turn the inline binding off", () =>
 
 test("awscExclusiveState: a filled inline role turns the picker off", () => {
   assert.deepStrictEqual(awscExclusiveState(0, " arn:aws:iam::123456789012:role/x "),
-    { pickerDisabled: true, inlineDisabled: false, note: "Clear the inline binding to use connections" });
+    { pickerDisabled: true, inlineDisabled: false, note: "Convert or remove the inline binding to use connections" });
 });
 
 test("awscExclusiveState: neither used leaves both open and says nothing", () => {
@@ -211,4 +211,89 @@ test("awscToSend: sorted, no repeats, undefined when none is ticked (the key is 
   const names = awscToSend([]);
   if (names) p.aws_connections = names;
   assert.strictEqual(JSON.stringify(p), '{"name":"x"}');
+});
+
+// --- Task 14: the profile form picks credentials only; an inline AWS binding is a summary ---
+const fs = require("node:fs");
+const path = require("node:path");
+const { inlineAWSSummary, awsInlineToSend, convertAWSConfirm, convertConnName, convertAWSErrText } =
+  require("../static/profileform.js");
+
+test("inlineAWSSummary: source profile, role name and region on one line", () => {
+  assert.strictEqual(
+    inlineAWSSummary({ source_profile: "sandbox-admin", role_arn: "arn:aws:iam::226198813800:role/agentbox-agent", region: "ap-southeast-1" }),
+    "sandbox-admin → agentbox-agent (ap-southeast-1)");
+  // a role with a path shows only its name
+  assert.strictEqual(
+    inlineAWSSummary({ source_profile: "p", role_arn: "arn:aws:iam::226198813800:role/team/x", region: "eu-west-1" }),
+    "p → x (eu-west-1)");
+});
+
+test("inlineAWSSummary: a missing part never prints 'undefined' or an empty ()", () => {
+  assert.strictEqual(inlineAWSSummary({ source_profile: "p", role_arn: "arn:aws:iam::1:role/r" }), "p → r");
+  assert.doesNotMatch(inlineAWSSummary({}), /undefined|null|\(\)/);
+  assert.doesNotMatch(inlineAWSSummary(null), /undefined|null|\(\)/);
+});
+
+test("awsInlineToSend: an untouched inline binding round-trips unchanged, copied", () => {
+  const aws = {
+    source_profile: "sandbox-admin", role_arn: "arn:aws:iam::226198813800:role/agentbox-agent", region: "ap-southeast-1",
+    s3_read: ["b/p/"], label: "sandbox", prod: true, egress_allow: ["*.example.com"],
+    elevate: { role_arn: "arn:aws:iam::226198813800:role/agentbox-agent-write", max_minutes: 30, allow_iam: true },
+  };
+  const out = awsInlineToSend(aws, false);
+  assert.deepStrictEqual(out, aws);
+  assert.notStrictEqual(out, aws);
+  assert.notStrictEqual(out.elevate, aws.elevate);
+  // the saved JSON carries it unchanged
+  const p = { name: "x" };
+  if (out) p.aws = out;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(p)).aws, aws);
+});
+
+test("awsInlineToSend: Remove drops it, and a profile with none sends none", () => {
+  const aws = { source_profile: "p", role_arn: "arn:aws:iam::1:role/r" };
+  assert.strictEqual(awsInlineToSend(aws, true), null);
+  assert.strictEqual(awsInlineToSend(null, false), null);
+  assert.strictEqual(awsInlineToSend(undefined, false), null);
+});
+
+test("convertAWSConfirm: the exact sentence, with the connection name twice", () => {
+  assert.strictEqual(convertAWSConfirm("ops-legacy"),
+    "This creates a connection named ops-legacy and points the profile at it. The next session gets a new box, and AWS_PROFILE becomes ops-legacy.");
+});
+
+test("convertConnName mirrors the server's slug: lowercase, [a-z0-9-] only, no leading dash, 63 max, 'aws' if empty", () => {
+  assert.strictEqual(convertConnName("ops-legacy"), "ops-legacy");
+  assert.strictEqual(convertConnName("Ops Legacy_2"), "ops-legacy-2");
+  assert.strictEqual(convertConnName("--x"), "x");
+  assert.strictEqual(convertConnName("___"), "aws");
+  assert.strictEqual(convertConnName("a".repeat(80)).length, 63);
+});
+
+test("convertAWSErrText: the two refusals with their own wording", () => {
+  assert.strictEqual(convertAWSErrText({ status: 409, code: "profile_changed" }),
+    "This profile changed while converting; reload and try again");
+  assert.strictEqual(convertAWSErrText({ status: 409, code: "no_broker" }),
+    "AWS connections need the boxed runtime");
+  assert.strictEqual(convertAWSErrText({ status: 409, code: "exists" }), "");
+  assert.strictEqual(convertAWSErrText(null), "");
+});
+
+test("the 'none defined' hints no longer send the reader to config.json; each is a link to the Credentials tab", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  for (const [id, group] of [["pf-awsc-none", "aws"], ["pf-gh-noapps", "github"], ["pf-st-none", "tokens"]]) {
+    const m = html.match(new RegExp('<p[^>]*id="' + id + '"[^>]*>([\\s\\S]*?)</p>'));
+    assert.ok(m, id + " is in the page");
+    assert.doesNotMatch(m[1], /config\.json|restart|aws_connections|github_apps|static_tokens/, id);
+    assert.match(m[1], new RegExp('<a [^>]*data-creds-group="' + group + '"'), id);
+  }
+});
+
+test("the inline AWS inputs are gone from the profile form", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "static", "index.html"), "utf8");
+  for (const id of ["profile", "region", "role", "s3", "egress", "label", "prod", "elev-role", "elev-max", "elev-iam", "elev-warn", "elev-help"]) {
+    assert.ok(!html.includes('id="pf-aws-' + id + '"'), "pf-aws-" + id);
+  }
+  assert.ok(html.includes('id="pf-aws-convert"') && html.includes('id="pf-aws-remove"'));
 });

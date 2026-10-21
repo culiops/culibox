@@ -461,7 +461,9 @@ func TestBrokerLookupDropsUndefinedEntries(t *testing.T) {
 }
 
 func TestDefinedTokensFiltersTokensAndPATs(t *testing.T) {
-	keep := definedTokens([]config.StaticToken{{Name: "a"}, {Name: "c"}})
+	ts := &tokenSet{}
+	ts.Set([]config.StaticToken{{Name: "a"}, {Name: "c"}})
+	keep := definedTokens(ts)
 	in := []config.StaticToken{{Name: "a"}, {Name: "b"}, {Name: "c"}}
 	got := keep(in)
 	if len(got) != 2 || got[0].Name != "a" || got[1].Name != "c" {

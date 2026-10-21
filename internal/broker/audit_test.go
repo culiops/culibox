@@ -782,3 +782,59 @@ func TestOpenAddsStoreAuditToAnOldStore(t *testing.T) {
 		t.Fatalf("old row: %+v %v", rows, err)
 	}
 }
+
+// A credential-definition event is one row in cred_audit: the action, kind,
+// name and actor, with the detail bounded to one line.
+func TestRecordCredRow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	a, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.RecordCred(CredEvent{Action: "created", Kind: "token", Name: "sentry", Actor: "web", Detail: "template=sentry"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RecordCred(CredEvent{Action: "updated", Kind: "token", Name: "sentry", Actor: "web",
+		Detail: "line one\nline two " + strings.Repeat("d", 300)}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.db.Query(`SELECT ts, action, kind, name, actor, detail FROM cred_audit ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	type got struct {
+		ts                                int64
+		action, kind, name, actor, detail string
+	}
+	var all []got
+	for rows.Next() {
+		var g got
+		if err := rows.Scan(&g.ts, &g.action, &g.kind, &g.name, &g.actor, &g.detail); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, g)
+	}
+	if len(all) != 2 || all[0].action != "created" || all[0].kind != "token" || all[0].name != "sentry" ||
+		all[0].actor != "web" || all[0].detail != "template=sentry" || all[0].ts == 0 {
+		t.Fatalf("rows: %+v", all)
+	}
+	if strings.Contains(all[1].detail, "\n") || len(all[1].detail) > maxCredDetail+len("…") ||
+		!strings.HasPrefix(all[1].detail, "line one line two ddd") || !strings.HasSuffix(all[1].detail, "…") {
+		t.Fatalf("detail not bounded to one line: %q (%d)", all[1].detail, len(all[1].detail))
+	}
+}
+
+// The action constants are the strings the audit log and the UI rely on.
+func TestCredActionValues(t *testing.T) {
+	want := map[string]string{
+		CredCreated: "created", CredUpdated: "updated", CredDeleted: "deleted", CredWriteAck: "write_ack",
+		CredRolesListed: "aws_roles_listed", CredChecked: "aws_checked", CredSSOStarted: "aws_sso_started", CredSSOResult: "aws_sso_result",
+	}
+	for got, w := range want {
+		if got != w {
+			t.Errorf("action constant %q, want %q", got, w)
+		}
+	}
+}

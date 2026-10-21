@@ -53,6 +53,9 @@ type Input struct {
 	ConfigErr error
 	Home      string // "" when $HOME was empty, relative or unreadable
 	Commit    string
+	// CredErrors describes what was wrong with the web-defined credentials file
+	// ("<kind> <name>: <err>" per skipped entry, or the file-level problem).
+	CredErrors []string
 }
 
 type Result struct{ Status, Check, Detail string }
@@ -137,6 +140,7 @@ func Checks(in Input) []Result {
 		return append(out, Result{Fail, "config", in.Source.String() + ": " + err.Error()})
 	}
 	out = append(out, Result{Pass, "config", in.Source.String()})
+	out = append(out, checkCredFile(in))
 	c := in.Config
 	dataDir := c.ResolvedDataDir(in.Home)
 	if abs, err := filepath.Abs(dataDir); err == nil {

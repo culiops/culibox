@@ -20,6 +20,7 @@ type StoreService interface {
 	Status() secretstore.Status
 	Unlock(pass []byte, ttl time.Duration, actor string) error
 	Lock(actor string) error
+	Init(pass []byte, actor string) error
 }
 
 const (
@@ -119,7 +120,7 @@ func (s *Server) handleStore(w http.ResponseWriter, r *http.Request) {
 	}
 	st := s.Store.Status()
 	body := storeStatusBody{Initialized: st.Initialized, Locked: st.Locked, Platform: st.Platform,
-		Values: st.Values, InUse: s.StoreInUse, PlaintextCopies: append([]string{}, s.StorePlaintextCopies...)}
+		Values: st.Values, InUse: s.storeInUse(), PlaintextCopies: append([]string{}, s.StorePlaintextCopies...)}
 	if !st.ExpiresAt.IsZero() {
 		t := st.ExpiresAt
 		body.ExpiresAt = &t
@@ -224,3 +225,7 @@ func (s *Server) handleStoreLock(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not lock the store")
 	}
 }
+
+// storeInUse is whether a configured reference reads the store, asked at
+// request time because a credential save can change it. nil = false.
+func (s *Server) storeInUse() bool { return s.StoreInUse != nil && s.StoreInUse() }

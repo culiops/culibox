@@ -55,6 +55,10 @@ type StaticToken struct {
 	Label       string            `json:"label,omitempty"`
 	Prod        bool              `json:"prod,omitempty"`
 	Description string            `json:"description,omitempty"`
+	// Template is the catalog id the entry was created from. Presentation only,
+	// like Provider: it lets the edit form reopen with the right fields, and it
+	// is not part of DefHash because it changes nothing a box sees.
+	Template string `json:"template,omitempty"`
 }
 
 const (
@@ -388,7 +392,7 @@ func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]Option
 	for i, n := range a.Tokens {
 		e, ok := TokenByName(entries, n)
 		if !ok {
-			return fmt.Errorf("tokens[%d] %q is not defined in static_tokens", i, n)
+			return undefinedRef(RefToken, n, "tokens[%d] %q is not defined in static_tokens", i, n)
 		}
 		if len(e.Egress) == 0 {
 			return fmt.Errorf("tokens[%d] %q has no egress hosts; it can only be a GitHub owner's token", i, n)
@@ -401,7 +405,7 @@ func CheckTokens(a AgentConfig, entries []StaticToken, optDefs map[string]Option
 				continue
 			}
 			if _, ok := TokenByName(entries, o.Token); !ok {
-				return fmt.Errorf("github.owners[%d].token %q is not defined in static_tokens", i, o.Token)
+				return undefinedRef(RefToken, o.Token, "github.owners[%d].token %q is not defined in static_tokens", i, o.Token)
 			}
 		}
 	}
@@ -448,6 +452,7 @@ func EntryMCPArgs(e StaticToken, bound map[string]bool) ([]string, error) {
 func (e StaticToken) DefHash() string {
 	c := e.Clone()
 	c.Value = KeyRef{}
+	c.Template = ""
 	j, _ := json.Marshal(c)
 	sum := sha256.Sum256(j)
 	return hex.EncodeToString(sum[:6])

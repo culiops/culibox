@@ -36,6 +36,8 @@ type Minter struct {
 	client Client
 	now    func() time.Time
 
+	// apps is guarded by mu with keys and insts: SetApps swaps it while mints run.
+
 	store credref.StoreGetter // backs private_key refs of type "store"; may be nil
 
 	mu    sync.Mutex
@@ -55,6 +57,39 @@ func NewMinter(apps []config.GitHubApp, c Client) *Minter {
 		m.apps[a.Name] = a
 	}
 	return m
+}
+
+// SetApps replaces the App definitions, safe to call while mints are in
+// flight (Check and Mint read them under the same lock, so each sees the old
+// or the new set, never a mix). A cached key or installation id of an App that
+// was removed or redefined is dropped, so the next mint loads from the new
+// definition; one still in flight finishes with the copy it already holds.
+func (m *Minter) SetApps(apps []config.GitHubApp) {
+	next := make(map[string]config.GitHubApp, len(apps))
+	for _, a := range apps {
+		next[a.Name] = a
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, old := range m.apps {
+		if cur, ok := next[name]; !ok || cur != old {
+			delete(m.keys, name)
+			for k := range m.insts {
+				if k.app == name {
+					delete(m.insts, k)
+				}
+			}
+		}
+	}
+	m.apps = next
+}
+
+// Configured reports whether any App is defined. The broker answers "GitHub is
+// not configured" while none is, as it did before a minter always existed.
+func (m *Minter) Configured() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.apps) > 0
 }
 
 // SetStore gives the minter the encrypted store that "store" key references

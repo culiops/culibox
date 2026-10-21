@@ -70,7 +70,7 @@ function storeUnlockOutcome(status, text, retryAfter) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
+  module.exports = { lockStore, renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
 }
 
 // --- DOM wiring (browser only) -------------------------------------------------
@@ -234,46 +234,17 @@ function paintStoreBanner() {
   el.hidden = !show;
 }
 
-// --- Settings "Store" tab ----------------------------------------------------------
-
-function paintStoreSettings() {
-  const tab = document.querySelector('#settings-tabs [data-tab="store"]');
-  if (tab) tab.hidden = !storeState;
-  const status = document.getElementById("store-status");
-  if (!status) return;
-  const st = storeState;
-  if (!st) { status.textContent = ""; return; }
-  status.textContent = storeExpiryText(st, Date.now());
-  const n = document.getElementById("store-values");
-  if (n) n.textContent = st.values + (st.values === 1 ? " value" : " values");
-  // A passphrase store can be locked from here; macOS has no passphrase to lock with.
-  const lock = document.getElementById("store-lock");
-  if (lock) lock.hidden = !(st.initialized && !st.locked && st.platform !== "darwin");
-  // A locked passphrase store can be unlocked from here too, so a store no
-  // current config references (no banner) is never a dead end. Built once per
-  // locked spell, like the banner.
-  const un = document.getElementById("store-unlock");
-  if (un) {
-    const want = st.initialized && st.locked && st.platform !== "darwin";
-    if (want && un.hidden) renderUnlockForm(un);
-    else if (!want) un.replaceChildren();
-    un.hidden = !want;
-  }
-  const pt = document.getElementById("store-plaintext");
-  if (pt) {
-    const text = storePlaintextText(st.plaintext_copies);
-    pt.textContent = text;
-    pt.hidden = !text;
-  }
-  const honest = document.getElementById("store-honest");
-  if (honest) honest.textContent = STORE_HONEST_STATEMENT;
-}
+// --- Settings "Credentials" tab ------------------------------------------------
+// The store's status, unlock and lock live at the top of the Credentials tab
+// (credentials.js credStrip); there is no longer a Store tab of its own.
 
 function setStoreErr(msg) {
   const el = document.getElementById("store-err");
   if (el) el.textContent = msg || "";
 }
 
+// lockStore: true when the store is now locked. On failure it returns false and
+// leaves the reason in #store-err, so a caller must not repaint that element away.
 async function lockStore() {
   setStoreErr("");
   try {
@@ -282,14 +253,15 @@ async function lockStore() {
       let t = "";
       try { t = (await res.json()).error || ""; } catch (_) { /* keep generic */ }
       setStoreErr(t || "Could not lock the store (" + res.status + ").");
-      return;
+      return false;
     }
   } catch (_) {
     setStoreErr("Could not lock the store: no connection.");
-    return;
+    return false;
   }
   await refreshStore();
   if (typeof refreshSessions === "function") refreshSessions();
+  return true;
 }
 
 // refreshStore: GET /api/store and repaint every surface. 404 = no store here:
@@ -305,11 +277,8 @@ async function refreshStore() {
     return;
   }
   paintStoreBanner();
-  paintStoreSettings();
 }
 
 function initStore() {
-  const lock = document.getElementById("store-lock");
-  if (lock) lock.onclick = lockStore;
   refreshStore();
 }

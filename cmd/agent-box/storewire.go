@@ -33,6 +33,22 @@ func (l *lazyAudit) RecordStore(e secretstore.Event) error {
 	return l.a.RecordStore(e)
 }
 
+// RecordCred appends one credential-definition event, opening audit.db on the
+// first one the same way RecordStore does. The error is returned so the caller
+// can fail closed.
+func (l *lazyAudit) RecordCred(e broker.CredEvent) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.a == nil {
+		a, err := broker.OpenAudit(l.path)
+		if err != nil {
+			return fmt.Errorf("audit store: %w", err)
+		}
+		l.a = a
+	}
+	return l.a.RecordCred(e)
+}
+
 func (l *lazyAudit) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

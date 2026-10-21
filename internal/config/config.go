@@ -300,8 +300,66 @@ func Load(path string) (Config, error) {
 	return c, nil
 }
 
+// CheckPasswordEnvClash refuses a token whose value is read from the env var
+// that holds the login password: the password must never double as a token.
+func CheckPasswordEnvClash(passwordEnv string, tokens []StaticToken) error {
+	if passwordEnv == "" {
+		return nil
+	}
+	for _, e := range tokens {
+		if e.Value.Type == "env" && e.Value.Var == passwordEnv {
+			return fmt.Errorf("static_tokens[%q].value: env var %q is password_env, the login password, and cannot be a token", e.Name, passwordEnv)
+		}
+	}
+	return nil
+}
+
 // Validate enforces the security and completeness invariants.
 func (c Config) Validate() error {
+	var none []ToleratedRef
+	return c.validateInto(nil, &none)
+}
+
+// Entry kinds an UndefinedRefError names. They are the same strings the
+// credfile package uses for its entries.
+const (
+	RefAWS       = "aws"
+	RefGitHubApp = "github_app"
+	RefToken     = "token"
+)
+
+// UndefinedRefError is a profile naming a credential entry no list defines. It
+// is a type so a caller can tell that one failure from a genuine config error
+// without matching on the message.
+type UndefinedRefError struct {
+	Kind, Name string
+	msg        string
+}
+
+func (e *UndefinedRefError) Error() string { return e.msg }
+
+func undefinedRef(kind, name, format string, args ...any) error {
+	return &UndefinedRefError{Kind: kind, Name: name, msg: fmt.Sprintf(format, args...)}
+}
+
+// ToleratedRef is an undefined reference ValidateTolerating let through.
+type ToleratedRef struct {
+	Agent string
+	Ref   UndefinedRefError
+}
+
+// ValidateTolerating is Validate, except that a profile naming an entry that no
+// list defines is recorded and let through when tolerate says so. Every other
+// problem still fails. Boot uses it so that a web entry skipped at load (a
+// corrupt credentials.json) cannot keep the daemon from starting; the profile
+// then spawns nothing, because the launcher refuses an undefined name.
+func (c Config) ValidateTolerating(tolerate func(UndefinedRefError) bool) ([]ToleratedRef, error) {
+	var tolerated []ToleratedRef
+	err := c.validateInto(tolerate, &tolerated)
+	return tolerated, err
+}
+
+func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[]ToleratedRef) error {
 	if len(c.Agents) == 0 {
 		return errors.New("config: at least one agent required")
 	}
@@ -337,12 +395,8 @@ func (c Config) Validate() error {
 	if err := ValidateAWSConnections(c.AWSConnections); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
-	if c.PasswordEnv != "" {
-		for _, e := range c.StaticTokens {
-			if e.Value.Type == "env" && e.Value.Var == c.PasswordEnv {
-				return fmt.Errorf("config: static_tokens[%q].value: env var %q is password_env, the login password, and cannot be a token", e.Name, c.PasswordEnv)
-			}
-		}
+	if err := CheckPasswordEnvClash(c.PasswordEnv, c.StaticTokens); err != nil {
+		return fmt.Errorf("config: %w", err)
 	}
 	seen := map[string]bool{}
 	for _, a := range c.Agents {
@@ -369,13 +423,7 @@ func (c Config) Validate() error {
 		if err := validateAWSConnBinding(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
-		if err := CheckAWSConnections(a, c.AWSConnections); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
-		}
 		if err := validateGitHub(a); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
-		}
-		if err := CheckGitHubApps(a, c.GitHubApps); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
 		if err := validateClone(a); err != nil {
@@ -408,8 +456,12 @@ func (c Config) Validate() error {
 		if err := validateTokens(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
-		if err := CheckTokens(a, c.StaticTokens, optDefs); err != nil {
-			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		if err := CheckCredentialRefs(a, c, optDefs); err != nil {
+			var ur *UndefinedRefError
+			if tolerate == nil || !errors.As(err, &ur) || !tolerate(*ur) {
+				return fmt.Errorf("config: agent %q: %w", a.Name, err)
+			}
+			*tolerated = append(*tolerated, ToleratedRef{Agent: a.Name, Ref: *ur})
 		}
 		for k, v := range a.Options {
 			def, ok := optDefs[k]
@@ -463,6 +515,21 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: abduco_socket_dir %q must be an absolute path", c.AbducoSocketDir)
 	}
 	return c.checkBind()
+}
+
+// CheckCredentialRefs is the per-profile check against the instance's
+// credential lists: every aws_connections, github App and token name the
+// profile binds is defined, and the bound tokens do not collide with the
+// profile's env, secrets or option envs. Validate runs it at boot; the web
+// credentials screen runs it on every save, so the two cannot drift.
+func CheckCredentialRefs(a AgentConfig, c Config, optDefs map[string]OptionDef) error {
+	if err := CheckAWSConnections(a, c.AWSConnections); err != nil {
+		return err
+	}
+	if err := CheckGitHubApps(a, c.GitHubApps); err != nil {
+		return err
+	}
+	return CheckTokens(a, c.StaticTokens, optDefs)
 }
 
 // ValidateProfile validates a single profile (used for runtime-stored profiles)

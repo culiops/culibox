@@ -13,6 +13,7 @@ import (
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/secretchain"
 	"github.com/culiops/agent-box/internal/secretstore"
 )
 
@@ -74,13 +75,33 @@ type Server struct {
 	// StoreAudit receives unlock_rate_limited (best effort); the store records
 	// its own unlocks and locks.
 	StoreAudit secretstore.Recorder
-	// StoreInUse: a configured reference reads the store. StoreUnlockTTL is how
+	// StoreInUse: whether a configured reference reads the store, asked per
+	// request (a credential save can change it); nil = false. StoreUnlockTTL is how
 	// long a web unlock lasts. StorePlaintextCopies are secret NAMES (never
 	// values) that are in the store and also set in the daemon's environment.
-	StoreInUse           bool
+	StoreInUse           func() bool
 	StoreUnlockTTL       time.Duration
 	StorePlaintextCopies []string
 	storeLimit           unlockLimiter
+	// SeccompProbe reports whether Docker's default seccomp profile is on, the
+	// same probe the launcher's SeccompGate uses. nil = the host has no docker
+	// gate (macOS, or no containment), so store init is not held back.
+	SeccompProbe func() (bool, error)
+
+	// Creds owns the web-defined credentials; nil → the /api/credentials
+	// routes are not registered. CredAWS is the host's AWS signer behind the
+	// roles, check and sign-in routes: nil when no broker is running (those
+	// routes answer 409 no_broker), and never a typed nil. CredAudit receives
+	// the AWS-setup audit rows. credLimit is the shared budget of the routes
+	// that call AWS.
+	Creds *CredentialManager
+	// SecretCheck says whether a profile's legacy secret NAME resolves, without
+	// handing back the value (secretchain.Chain.Check). nil = every name reads
+	// "missing".
+	SecretCheck func(name string) (secretchain.Presence, error)
+	CredAWS     AWSCredService
+	CredAudit   CredRecorder
+	credLimit   callLimiter
 
 	// Analytics serves the token/prompt analytics endpoints and view. Nil → the
 	// feature is disabled: no routes registered, no data shown.
@@ -146,6 +167,18 @@ func (s *Server) Handler() http.Handler {
 		protected.HandleFunc("/api/store", s.handleStore)
 		protected.HandleFunc("/api/store/unlock", s.handleStoreUnlock)
 		protected.HandleFunc("/api/store/lock", s.handleStoreLock)
+		protected.HandleFunc("/api/store/init", s.handleStoreInit)
+	}
+	if s.Creds != nil {
+		protected.HandleFunc("/api/credentials", s.handleCredentials)
+		protected.HandleFunc("/api/credentials/aws", s.handleCredAWS)
+		protected.HandleFunc("/api/credentials/aws/", s.handleCredAWS)
+		protected.HandleFunc("/api/credentials/templates", s.handleCredTemplates)
+		protected.HandleFunc("/api/credentials/tokens", s.handleCredTokens)
+		protected.HandleFunc("/api/credentials/tokens/", s.handleCredTokens)
+		protected.HandleFunc("/api/credentials/github-apps", s.handleCredGitHubApps)
+		protected.HandleFunc("/api/credentials/github-apps/", s.handleCredGitHubApps)
+		protected.HandleFunc("/api/store/values/", s.handleStoreValue)
 	}
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/tokens", s.handleTokens)

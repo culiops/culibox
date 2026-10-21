@@ -151,7 +151,7 @@ func ValidateAWSConnBinding(a AgentConfig) error { return validateAWSConnBinding
 func CheckAWSConnections(a AgentConfig, list []AWSConnection) error {
 	for i, n := range a.AWSConnections {
 		if !slices.ContainsFunc(list, func(c AWSConnection) bool { return c.Name == n }) {
-			return fmt.Errorf("aws_connections[%d] %q is not defined in aws_connections", i, n)
+			return undefinedRef(RefAWS, n, "aws_connections[%d] %q is not defined in aws_connections", i, n)
 		}
 	}
 	return nil

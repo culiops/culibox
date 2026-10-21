@@ -275,19 +275,188 @@
     .spawn-unlock .storetxt { margin: 0 0 8px; overflow-wrap: anywhere; }
     .spawn-unlock .storeretry { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
     .tabs .t[hidden] { display: none; }
-    .storestat { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 4px 0 8px; }
-    .storestat .lbl { width: 152px; flex: none; color: var(--muted); }
-    .storestat .muted { color: var(--muted); }
-    #store-unlock { padding: 4px 0 10px; }
-    #store-unlock[hidden] { display: none; }
-    #store-plaintext { color: var(--warn-fg); overflow-wrap: anywhere; }
-    #store-plaintext[hidden] { display: none; }
-    #store-honest { overflow-wrap: anywhere; }
     @media (max-width: 700px) {
       #store-banner { padding: 10px 12px; }
       .storeform .storepass { flex: 1 0 100%; min-height: var(--tap); }
       .storeform .btn { flex: 1 0 100%; min-height: var(--tap); }
-      .storestat .lbl { width: auto; flex: 1 0 100%; }
+    }
+    /* --- Settings > Credentials (credentials.js) -----------------------------
+       Scoped to #creds so the short generic names (.st, .ent, .sec, .meta) cannot
+       leak into the rest of the page. Square corners and the app's tokens, as
+       the approved mockup. Colour is secondary: every chip and verdict carries
+       its meaning in text as well. */
+    #creds-body { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+    #creds .stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    #creds .sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+    #creds .sec-h {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 6px 9px; min-height: 36px; padding-bottom: 6px;
+      font-size: 10.5px; letter-spacing: .09em; color: var(--muted); text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+    #creds .sec-h .count { letter-spacing: 0; }
+    #creds .sec-h .btn { text-transform: none; letter-spacing: 0; }
+    #creds .strip {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 11px 14px;
+      border: 1px solid var(--warn); background: var(--warn-bg);
+    }
+    #creds .strip .txt { flex: 1 1 260px; min-width: 0; font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+    #creds .strip .txt b { font-weight: 700; color: var(--warn); }
+    #creds .strip .storeslot { flex: 1 1 260px; }
+    #creds .hint { margin-top: 0; overflow-wrap: anywhere; }
+    #creds .hint.warnline { color: var(--warn-fg); }
+    #creds .st {
+      font-size: 10.5px; padding: 1px 7px; border: 1px solid var(--border); line-height: 16px;
+      display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+    }
+    #creds .st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+    #creds .st.ready { color: var(--ok); border-color: var(--ok); }
+    #creds .st.missing, #creds .st.invalid { color: var(--danger); border-color: var(--danger); }
+    #creds .st.locked, #creds .st.notset { color: var(--warn); border-color: var(--warn); }
+    #creds .st.invalid::before, #creds .st.notset::before { border-radius: 0; }
+    #creds .st.locked::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+    #creds .st.notset::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+    #creds .ent {
+      border: 1px solid var(--border); background: var(--bg); padding: 12px 14px;
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 16px; align-items: start;
+    }
+    #creds .ent.danger { border-color: var(--danger); }
+    #creds .ent-top { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+    #creds .ent-top .nm { font-size: 13.5px; font-weight: 700; overflow-wrap: anywhere; }
+    #creds .ent-top .lab { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    #creds .ent-act { display: flex; gap: 6px; align-self: start; }
+    #creds .ent-act:empty { display: none; }
+    #creds .ent-body { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+    #creds .ent-err { margin: 0; color: var(--danger); font-size: 11.5px; overflow-wrap: anywhere; }
+    #creds .ent-desc { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    #creds .meta { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; font-size: 11.5px; }
+    #creds .meta > div { display: flex; gap: 7px; min-width: 0; }
+    #creds .meta dt { color: var(--muted); flex: none; }
+    #creds .meta dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+    #creds .verdict { font-size: 11.5px; display: flex; gap: 8px; align-items: baseline; }
+    #creds .verdict.ok { color: var(--ok); }
+    #creds .verdict.warn { color: var(--warn); }
+    #creds .verdict.bad { color: var(--danger); }
+    #creds .verdict .g { flex: none; }
+    #creds .verdict b { font-weight: 400; }
+    #creds .verdict .when { color: var(--muted); }
+    #creds .honest { margin: 0; font-size: 11.5px; color: var(--muted); line-height: 1.55; border-top: 1px solid var(--border); padding-top: 8px; }
+    #creds .warnbox { margin-top: 0; font-size: 11.5px; overflow-wrap: anywhere; }
+    #creds .warnbox .remedy { margin-top: 6px; color: var(--fg); }
+    #creds .amberbox {
+      border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
+      font-size: 11.5px; padding: 10px 12px; line-height: 1.6; overflow-wrap: anywhere;
+    }
+    #creds .bdg.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
+    #creds .bdg.seed { color: var(--muted); }
+    #creds .sv {
+      display: grid; grid-template-columns: minmax(0, 1.3fr) 110px minmax(0, 1.6fr) auto; gap: 6px 14px;
+      align-items: center; padding: 9px 2px; border-bottom: 1px solid var(--border); font-size: 12px;
+    }
+    #creds .sv.head { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
+    #creds .sv .k { display: none; color: var(--muted); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; }
+    #creds .sv .id { font-weight: 700; overflow-wrap: anywhere; }
+    #creds .sv .refs { min-width: 0; overflow-wrap: anywhere; }
+    #creds .sv .refs.none { color: var(--muted); }
+    #creds .sv .acts { display: flex; gap: 6px; justify-content: flex-end; }
+    #creds .leg {
+      display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; padding: 8px 2px;
+      border-bottom: 1px solid var(--border); font-size: 12px; align-items: baseline;
+    }
+    #creds .leg > * { min-width: 0; overflow-wrap: anywhere; }
+    /* Add / Edit AWS connection (credentials.js awsPaintFlow). */
+    #creds .crumb { display: flex; align-items: center; flex-wrap: wrap; gap: 0 6px; font-size: 12px; color: var(--muted); }
+    #creds .crumb b { color: var(--fg); font-weight: 400; overflow-wrap: anywhere; }
+    #creds a.lnk { color: var(--accent); text-decoration: underline; cursor: pointer; overflow-wrap: anywhere; }
+    #creds .intro { margin: 0; font-size: 12.5px; line-height: 1.6; }
+    #creds .hp { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
+    #creds .hp .tx { min-width: 0; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+    #creds .hp .nm { font-weight: 700; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; overflow-wrap: anywhere; }
+    #creds .hp .d { font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
+    #creds .hp .dim { opacity: .42; }
+    #creds .hp .stop { font-size: 11.5px; color: var(--warn); }
+    #creds input[type="checkbox"], #creds input[type="radio"] { accent-color: var(--accent); margin: 0; flex: none; width: 15px; height: 15px; }
+    #creds .hp input[type="checkbox"] { margin-top: 3px; }
+    #creds .bdg.kind { color: var(--accent); border-color: var(--accent); }
+    #creds .bdg.warnb { color: var(--warn); border-color: var(--warn); }
+    #creds .arow { border: 1px solid var(--border); background: var(--bg); padding: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    #creds .awsnote { display: none; }
+    #creds .arow.danger { border-color: var(--danger); }
+    #creds .arow-h { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+    #creds .arow-h .nm { font-weight: 700; overflow-wrap: anywhere; }
+    #creds .arow-h .btn { margin-left: auto; }
+    #creds .frow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin: 0; }
+    #creds .frow .full { grid-column: 1 / -1; }
+    #creds .fcol { min-width: 0; }
+    #creds .flab { display: block; margin-bottom: 7px; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+    #creds .fld { box-sizing: border-box; min-width: 0; border-radius: 0; }
+    #creds textarea.fld { resize: vertical; font-family: var(--font-family); }
+    #creds .fld.ro { background: var(--surface-2); color: var(--muted); }
+    #creds .roleline { display: flex; gap: 8px; min-width: 0; }
+    #creds .roleline .fld { flex: 1; }
+    #creds .roles { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; max-height: 220px; overflow-y: auto; }
+    #creds .roles label { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
+    #creds .roles label.on { border-color: var(--accent); background: var(--sel-soft); }
+    #creds .rolesbox .hint { margin-top: 7px; }
+    #creds .pf-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+    #creds .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
+    #creds .res { display: flex; flex-direction: column; gap: 8px; font-size: 12px; min-width: 0; }
+    #creds .res:empty { display: none; }
+    #creds .res .l { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; overflow-wrap: anywhere; }
+    #creds .res .l.ok { color: var(--ok); }
+    #creds .res .ent-err { margin: 0; }
+    #creds details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+    #creds details[open] summary { margin-bottom: 10px; }
+    #creds .ssopanel { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); }
+    #creds .ssopanel .hint { margin: 0; }
+    #creds .ssocode { font-size: 18px; letter-spacing: .12em; font-weight: 700; }
+    #creds .cmd { font: inherit; overflow-wrap: anywhere; color: var(--fg); }
+    #creds .confirm { grid-column: 1 / -1; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; }
+    #creds .confirm p { margin: 0; overflow-wrap: anywhere; }
+    #creds .confirm .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    /* Add / Edit token, GitHub App and stored value (credentials.js credOpenForm). */
+    #creds .tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    #creds .tile { display: flex; flex-direction: column; gap: 3px; padding: 11px 12px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); text-align: left; cursor: pointer; border-radius: 0; min-width: 0; font: inherit; }
+    #creds .tile .n { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+    #creds .tile .s { font-size: 11px; color: var(--muted); overflow-wrap: anywhere; }
+    #creds .tile.on { border-color: var(--accent); background: var(--sel); }
+    #creds .tile.on .n { color: var(--accent); }
+    #creds .seg { max-width: 100%; }
+    #creds .seg button { min-width: 0; overflow-wrap: anywhere; }
+    #creds select.fld { width: 100%; }
+    #creds .fld.secret-area { -webkit-text-security: disc; text-security: disc; resize: vertical; min-height: 96px; font-family: var(--font-family); }
+    #creds .storecreate { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--warn); background: var(--warn-bg); min-width: 0; }
+    #creds .storecreate .hint { margin: 0; }
+    #creds .storecreate .btn { align-self: flex-start; }
+    #creds .strip .storecreate { flex: 1 1 100%; }
+    #creds .sv .confirm { margin-top: 4px; }
+    #foot-creds-add .hint { margin: 0; }
+    @media (max-width: 700px) {
+      #creds .btn { min-height: var(--tap); }
+      #creds .fld { min-height: var(--tap); font-size: 13px; }
+      #creds textarea.fld { min-height: 0; }
+      #creds .awsnote { display: block; }
+      #creds .frow { grid-template-columns: 1fr; }
+      #creds .roleline { flex-direction: column; }
+      #creds .arow-h .btn { margin-left: 0; flex: 1 0 100%; }
+      #creds .pf-check, #creds .roles label { min-height: var(--tap); }
+      #creds .confirm .btns .btn { flex: 1 1 100%; }
+      #creds .ent { grid-template-columns: 1fr; padding: 12px; }
+      #creds .ent-act { align-self: stretch; }
+      #creds .ent-act .btn { flex: 1; }
+      #creds .strip .storeslot { flex: 1 0 100%; }
+      #creds .sv { grid-template-columns: 1fr; padding: 12px 2px; }
+      #creds .sv.head { display: none; }
+      #creds .sv .k { display: block; }
+      #creds .sv .acts { justify-content: stretch; }
+      #creds .sv .acts .btn { flex: 1; }
+      #creds .sec-h .btn { flex: 1 0 100%; }
+      #creds .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      /* The option labels are long ("US (us.sentry.io)"): stacked, not squeezed side by side. */
+      #creds .seg { display: flex; flex-direction: column; width: 100%; }
+      #creds .seg button { min-height: var(--tap); padding: 7px 10px; text-align: left; border-right: 0; border-bottom: 1px solid var(--border); }
+      #creds .seg button:last-child { border-bottom: 0; }
+      #creds .storecreate .btn { align-self: stretch; }
+      #creds .tile { min-height: var(--tap); }
     }
     .ctxbar { height: 8px; background: var(--surface-2); position: relative; margin-top: 9px; }
     .ctxbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); display: block; }
@@ -1194,10 +1363,25 @@
        the host tier (or a lock) closes it; the hint says why. */
     #pf-awsc-block { margin-top: 14px; }
     #pf-awsc-block > .flab { display: block; margin-bottom: 6px; }
-    #pf-awsc-hint, #pf-awsc-note, #pf-awsc-none, #pf-aws-note { margin: 0 0 8px; }
+    #pf-awsc-hint, #pf-awsc-note, #pf-awsc-none, #pf-awsc-manage { margin: 0 0 8px; }
     #pf-aws-block { margin-top: 14px; }
     #pf-aws-block > .flab { display: block; margin-bottom: 6px; }
-    #pf-aws-hint { margin: 0 0 8px; }
+    #pf-aws-hint, #pf-aws-removed, #pf-aws-done { margin: 0 0 8px; }
+    /* The legacy inline binding: a read-only summary, then Convert / Remove. The
+       confirm opens under it, in place (no browser dialog). */
+    .pf-sumbox { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
+    .pf-sumbox[hidden] { display: none; }
+    .pf-sumline { font-size: 13px; overflow-wrap: anywhere; }
+    .pf-sumbox p, .pf-confirm p { margin: 0; }
+    .pf-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pf-confirm { margin-top: 10px; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; min-width: 0; overflow-wrap: anywhere; }
+    .pf-confirm[hidden] { display: none; }
+    .pf-confirm .warnbox { margin-top: 0; }
+    .pf-confirm .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
+    #pf-aws-block a.lnk, #pf-awsc-block a.lnk, #pf-gh-block a.lnk, #pf-st-block a.lnk { color: var(--accent); text-decoration: underline; cursor: pointer; }
+    @media (max-width: 700px) {
+      .pf-sumbox .pf-btns .btn, .pf-confirm .pf-btns .btn { flex: 1 1 100%; min-height: var(--tap); }
+    }
     /* The GitHub block sits beside the AWS one and is closed by the same rules
        (lock, host tier). Owner rows reuse .frow/.fcol, so they stack on a phone
        with the rest of the editor. */

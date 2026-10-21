@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS store_audit (
   actor TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS cred_audit (
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT '',
+  name TEXT NOT NULL DEFAULT '',
+  actor TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT ''
+);
 `
 
 // Audit is the SQLite-backed credential audit log (<data_dir>/audit.db).
@@ -259,6 +268,37 @@ const maxStoreDetail = 200
 func (a *Audit) RecordStore(e secretstore.Event) error {
 	_, err := a.db.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?,?,?,?)`,
 		time.Now().Unix(), sanitize(e.Action), sanitize(e.Actor), sanitizeN(e.Detail, maxStoreDetail))
+	return err
+}
+
+// Actions of a CredEvent: a credential definition created, updated or deleted,
+// a write acknowledgement, and the AWS setup calls.
+const (
+	CredCreated     = "created"
+	CredUpdated     = "updated"
+	CredDeleted     = "deleted"
+	CredWriteAck    = "write_ack"
+	CredRolesListed = "aws_roles_listed"
+	CredChecked     = "aws_checked"
+	CredSSOStarted  = "aws_sso_started"
+	CredSSOResult   = "aws_sso_result"
+)
+
+// maxCredDetail bounds a credential event's detail in bytes.
+const maxCredDetail = 200
+
+// CredEvent is one row of the credential-definition audit trail. Detail is a
+// short description (a template name, a setup outcome); the caller must never
+// put a secret value in it. Every field is stored one line and bounded.
+type CredEvent struct {
+	Action, Kind, Name, Actor, Detail string
+}
+
+// RecordCred appends one credential-definition event to cred_audit. The error
+// is returned so a caller can fail closed when the event could not be recorded.
+func (a *Audit) RecordCred(e CredEvent) error {
+	_, err := a.db.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?,?,?,?,?,?)`,
+		time.Now().Unix(), sanitize(e.Action), sanitize(e.Kind), sanitize(e.Name), sanitize(e.Actor), sanitizeN(e.Detail, maxCredDetail))
 	return err
 }
 

@@ -98,3 +98,90 @@ func TestChainStoreSourceNeedsStore(t *testing.T) {
 		t.Fatalf("no store source needs no store: %v", err)
 	}
 }
+
+// probeStore is a store that can also say which ids it holds and whether it is
+// locked, without decrypting anything. Get fails the test: Check must not
+// reach for a value when it can ask by id.
+type probeStore struct {
+	t      *testing.T
+	ids    []string
+	locked bool
+	listEr error
+}
+
+func (p probeStore) Get(string) ([]byte, error) {
+	p.t.Helper()
+	p.t.Fatal("Check decrypted a store value")
+	return nil, nil
+}
+func (p probeStore) List() ([]secretstore.Entry, error) {
+	var out []secretstore.Entry
+	for _, id := range p.ids {
+		out = append(out, secretstore.Entry{ID: id})
+	}
+	return out, p.listEr
+}
+func (p probeStore) Status() secretstore.Status {
+	return secretstore.Status{Initialized: true, Locked: p.locked}
+}
+
+func TestCheckStoreByIDWithoutDecrypting(t *testing.T) {
+	c, err := New([]config.SecretSource{storeSrc}, probeStore{t: t, ids: []string{"A"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Check("A"); err != nil || got != Present {
+		t.Fatalf("A = %v %v, want Present", got, err)
+	}
+	if got, err := c.Check("B"); err != nil || got != Absent {
+		t.Fatalf("B = %v %v, want Absent", got, err)
+	}
+	if got, err := c.Check("bad/name"); err != nil || got != Absent {
+		t.Fatalf("bad/name = %v %v, want Absent", got, err)
+	}
+	locked, _ := New([]config.SecretSource{storeSrc}, probeStore{t: t, ids: []string{"A"}, locked: true})
+	if got, err := locked.Check("A"); err != nil || got != StoredLocked {
+		t.Fatalf("locked A = %v %v, want StoredLocked", got, err)
+	}
+	// Absent from a locked store is still absent, as Resolve would say (not found).
+	if got, err := locked.Check("B"); err != nil || got != Absent {
+		t.Fatalf("locked B = %v %v, want Absent", got, err)
+	}
+	uninit, _ := New([]config.SecretSource{storeSrc}, probeStore{t: t, listEr: secretstore.ErrNotInitialized})
+	if got, err := uninit.Check("A"); err != nil || got != Absent {
+		t.Fatalf("uninitialised = %v %v, want Absent", got, err)
+	}
+}
+
+func TestCheckOrderAndOtherSources(t *testing.T) {
+	t.Setenv("E", "plaintext")
+	c, err := New([]config.SecretSource{envSrc, storeSrc}, probeStore{t: t, locked: true, ids: []string{"S"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := c.Check("E"); got != Present {
+		t.Fatalf("E = %v, want Present", got)
+	}
+	if got, _ := c.Check("S"); got != StoredLocked {
+		t.Fatalf("S = %v, want StoredLocked", got)
+	}
+	if got, _ := c.Check("NOPE"); got != Absent {
+		t.Fatalf("NOPE = %v, want Absent", got)
+	}
+}
+
+func TestCheckFallsBackToGetAndZeroes(t *testing.T) {
+	// A store with no List/Status: Check reads through Get (no other way) and
+	// reports only presence. A locked store is StoredLocked.
+	c, _ := New([]config.SecretSource{storeSrc}, fakeStore{vals: map[string][]byte{"A": []byte("v")}})
+	if got, err := c.Check("A"); err != nil || got != Present {
+		t.Fatalf("A = %v %v", got, err)
+	}
+	if got, _ := c.Check("B"); got != Absent {
+		t.Fatalf("B = %v", got)
+	}
+	l, _ := New([]config.SecretSource{storeSrc}, fakeStore{locked: true})
+	if got, _ := l.Check("A"); got != StoredLocked {
+		t.Fatalf("locked = %v", got)
+	}
+}

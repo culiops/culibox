@@ -6,8 +6,13 @@ async function api(path, opts) {
   if (!res.ok) {
     let msg = res.statusText;
     let code = "";
-    try { const b = await res.json(); msg = b.error || msg; code = b.code || ""; } catch (_) {}
+    let body = null;
+    try { body = await res.json(); msg = body.error || msg; code = body.code || ""; } catch (_) {}
     const err = new Error(msg);
+    // The parsed body and Retry-After ride along for callers that need more
+    // than the sentence (a 409 that names who uses an entry, a 429's wait).
+    err.body = body;
+    err.retryAfter = res.headers ? res.headers.get("Retry-After") || "" : "";
     // The status and machine code ride along so a caller can act on a specific
     // refusal (a locked store, 423) instead of parsing prose.
     err.status = res.status;
@@ -2811,10 +2816,6 @@ function paintPfAccount(value) {
 function syncPfAccountWarn() {
   $("pf-account-warn").hidden = !($("pf-account").value && segValue($("pf-runtime")) === "host");
 }
-// syncPfElevWarn: the IAM-writes warning shows exactly while the box is ticked.
-function syncPfElevWarn() {
-  $("pf-aws-elev-warn").hidden = !$("pf-aws-elev-iam").checked;
-}
 // syncPfReplyable shows "Allow replies by default" only for a claude binary:
 // replies are claude-only on the server, and a default nothing honours is a
 // setting that lies.
@@ -3047,7 +3048,107 @@ function renderAwscPicker(ticked) {
 function readAwscTicked() {
   return [...$("pf-awsc-list").querySelectorAll("input[data-awsc]")].filter((cb) => cb.checked).map((cb) => cb.dataset.awsc);
 }
-$("pf-aws-role").addEventListener("input", () => syncEditorActions());
+
+// --- The inline AWS binding of a legacy profile (N2) -----------------------
+// Not editable: a summary, "Convert to a connection" (POST
+// /api/profiles/{name}/convert-aws) and "Remove". The profile runs unchanged
+// until one of the two is used. Every string below that came from the server
+// goes in through textContent.
+let pfAwsBusy = false;
+// paintPfAws draws the block from pfInlineAws / pfAwsRemoved / pfAwsDone.
+function paintPfAws() {
+  const has = !!pfInlineAws;
+  const removed = has && pfAwsRemoved;
+  $("pf-aws-block").hidden = !has && !pfAwsDone;
+  $("pf-aws-sum").hidden = !has || removed;
+  $("pf-aws-removed").hidden = !removed;
+  $("pf-aws-done").textContent = pfAwsDone;
+  $("pf-aws-done").hidden = !pfAwsDone;
+  $("pf-aws-sum-text").textContent = has ? inlineAWSSummary(pfInlineAws) : "";
+  closePfAwsConfirm();
+}
+function closePfAwsConfirm() {
+  $("pf-aws-confirm").hidden = true;
+  $("pf-aws-ack").hidden = true;
+  $("pf-aws-ack-cb").checked = false;
+  $("pf-aws-convert-err").hidden = true;
+  $("pf-aws-convert-err").textContent = "";
+}
+// syncPfAwsAck: with the write warning showing, Convert waits for "I understand".
+function syncPfAwsAck() {
+  if (!$("pf-aws-ack").hidden && !$("pf-aws-ack-cb").checked) {
+    $("pf-aws-confirm-go").disabled = true;
+    $("pf-aws-confirm-go").classList.add("off");
+  }
+}
+function openPfAwsConfirm() {
+  if (!pfInlineAws || !selectedProfileName()) return;
+  closePfAwsConfirm();
+  $("pf-aws-confirm-text").textContent = convertAWSConfirm(selectedProfileName()) + " Unsaved changes to this profile are discarded.";
+  $("pf-aws-confirm").hidden = false;
+  syncEditorActions();
+  $("pf-aws-confirm-go").focus();
+}
+async function convertPfAws(ackWrite) {
+  const name = selectedProfileName();
+  if (!name || pfAwsBusy) return;
+  const err = $("pf-aws-convert-err");
+  err.hidden = true;
+  pfAwsBusy = true;
+  syncEditorActions();
+  let res = null;
+  try {
+    res = await api("/api/profiles/" + encodeURIComponent(name) + "/convert-aws", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(ackWrite ? { ack_write: true } : {}),
+    });
+  } catch (e) {
+    pfAwsBusy = false;
+    if (e.status === 409 && e.code === "needs_ack") {
+      // The role the profile uses can write to the account: D4 wording, then
+      // "I understand", then the same request again with ack_write.
+      const v = (e.body && e.body.verdict) || {};
+      $("pf-aws-ack-text").textContent = CRED_D4 + " " + CRED_D4_REMEDY;
+      $("pf-aws-ack-actions").textContent = Array.isArray(v.actions) && v.actions.length ? "Allowed here: " + v.actions.join(", ") : "";
+      $("pf-aws-ack-cb").checked = false;
+      $("pf-aws-ack").hidden = false;
+    } else if (e.code === "profile_changed") {
+      // The stored profile moved under the convert: show what it holds now, with
+      // the sentence in the block's status line (the reload clears the error line).
+      await reloadPfAfterConvert(name, convertAWSErrText(e));
+      return;
+    } else {
+      err.textContent = convertAWSErrText(e) || awsErrText(e);
+      err.hidden = false;
+    }
+    syncEditorActions();
+    return;
+  }
+  pfAwsBusy = false;
+  await reloadPfAfterConvert(name, "Converted to the connection " + String(res && res.connection) + ". The profile now uses it; the next session gets a new box.");
+}
+// reloadPfAfterConvert shows what the server now holds (the convert changed the
+// stored profile), then the result line.
+async function reloadPfAfterConvert(name, done) {
+  try {
+    await loadProfiles(false);
+    fillForm(await api("/api/profiles/" + encodeURIComponent(name)));
+    pfAwsDone = done;
+    paintPfAws();
+    renderProfileList();
+  } catch (e) { setDialogError("settings-modal", "Converted, but reloading the profile failed: " + e.message); }
+  syncEditorActions();
+}
+$("pf-aws-convert").addEventListener("click", openPfAwsConfirm);
+$("pf-aws-confirm-cancel").addEventListener("click", () => { closePfAwsConfirm(); syncEditorActions(); $("pf-aws-convert").focus(); });
+$("pf-aws-confirm-go").addEventListener("click", () => convertPfAws(!$("pf-aws-ack").hidden && $("pf-aws-ack-cb").checked));
+$("pf-aws-ack-cb").addEventListener("change", syncEditorActions);
+$("pf-aws-remove").addEventListener("click", () => { pfAwsRemoved = true; paintPfAws(); syncEditorActions(); $("pf-aws-undo").focus(); });
+$("pf-aws-undo").addEventListener("click", () => { pfAwsRemoved = false; paintPfAws(); syncEditorActions(); $("pf-aws-remove").focus(); });
+// The "none defined" hints and the picker's pointer open the Credentials tab on
+// the group they are about.
+for (const a of document.querySelectorAll("#settings-modal a[data-creds-group]")) {
+  a.addEventListener("click", (ev) => { ev.preventDefault(); openSettings("creds", a.dataset.credsGroup); });
+}
 
 // The allowlist's live rows, as the editor sees them: envRows(cfg) turns a
 // saved profile into rows, the table renders and edits them in place, and
@@ -3060,6 +3161,13 @@ let pfStoredRuntime = "";
 // editor has no clone fields, so clone_of/clone_share are carried unchanged; see
 // cloneToSend.
 let pfLoadedClone = null;
+// The stored profile's inline AWS binding exactly as loaded (null when it has
+// none), and whether Remove was pressed since. readForm sends the binding back
+// unchanged unless it was removed (awsInlineToSend).
+let pfInlineAws = null;
+let pfAwsRemoved = false;
+// The line shown after a convert, until the form is next filled.
+let pfAwsDone = "";
 function fillForm(p) {
   $("pf-name").value = p.name || "";
   $("pf-bin").value = p.bin || "";
@@ -3077,20 +3185,12 @@ function fillForm(p) {
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
   $("pf-replyable").checked = !!p.replyable;
-  const aws = p.aws || {};
-  $("pf-aws-profile").value = aws.source_profile || "";
-  $("pf-aws-role").value = aws.role_arn || "";
-  $("pf-aws-region").value = aws.region || "";
-  $("pf-aws-s3").value = (aws.s3_read || []).join("\n");
-  $("pf-aws-egress").value = (aws.egress_allow || []).join("\n");
-  $("pf-aws-label").value = aws.label || "";
-  $("pf-aws-prod").checked = !!aws.prod;
-  const elev = aws.elevate || {};
-  $("pf-aws-elev-role").value = elev.role_arn || "";
-  // max_minutes 0/absent means the default window; the select offers only 30 and 60.
-  $("pf-aws-elev-max").value = String(elev.max_minutes === 30 ? 30 : 60);
-  $("pf-aws-elev-iam").checked = !!elev.allow_iam;
-  syncPfElevWarn();
+  // The inline AWS binding is not editable here: it is carried as loaded and
+  // shown as a summary (paintPfAws) until it is converted or removed.
+  pfInlineAws = p.aws && typeof p.aws === "object" ? p.aws : null;
+  pfAwsRemoved = false;
+  pfAwsDone = "";
+  paintPfAws();
   const gh = p.github || null;
   pfLoadedGh = gh;
   renderGhOwners(((gh && gh.owners) || []).map((o) => ({ owner: o.owner, app: o.app, token: o.token, repos: (o.repos || []).join("\n") })));
@@ -3131,27 +3231,27 @@ function syncEditorActions() {
     f.disabled = st.locked;
   }
   $("pf-save").textContent = saveLabel(segValue($("pf-runtime")));
-  // After the lock loop above, which re-enabled every .fld: the AWS block is
+  // After the lock loop above, which re-enabled every .fld: the AWS blocks are
   // also closed by the host tier, and this is the only pass that knows both.
   const aws = awsFieldsState(st.locked, segValue($("pf-runtime")));
-  for (const f of $("pf-aws-block").querySelectorAll(".fld, input[type=checkbox]")) {
-    f.classList.toggle("off", aws.disabled);
-    f.disabled = aws.disabled;
-  }
   $("pf-aws-hint").hidden = !aws.hint;
-  // A profile binds AWS inline or by named connections, never both: ticking a
-  // connection closes the inline block, and a filled inline role closes the
-  // picker (awscExclusiveState). The picker also closes on the lock and the host
-  // tier, like the Tokens block.
-  const excl = awscExclusiveState(readAwscTicked().length, $("pf-aws-role").value);
-  if (excl.inlineDisabled) {
-    for (const f of $("pf-aws-block").querySelectorAll(".fld, input[type=checkbox]")) {
-      f.classList.add("off");
-      f.disabled = true;
-    }
+  // A profile binds AWS inline or by named connections, never both: an inline
+  // binding closes the picker until it is converted or removed (awscExclusiveState).
+  // The picker also closes on the lock and the host tier, like the Tokens block.
+  const inline = awsInlineToSend(pfInlineAws, pfAwsRemoved);
+  const excl = awscExclusiveState(readAwscTicked().length, inline ? inline.role_arn : "");
+  for (const id of ["pf-aws-convert", "pf-aws-remove", "pf-aws-undo", "pf-aws-confirm-go", "pf-aws-confirm-cancel"]) {
+    const b = $(id);
+    b.classList.toggle("off", aws.disabled || pfAwsBusy);
+    b.disabled = aws.disabled || pfAwsBusy;
   }
-  $("pf-aws-note").textContent = excl.inlineDisabled ? excl.note : "";
-  $("pf-aws-note").hidden = !excl.inlineDisabled || aws.disabled;
+  // Both set (a stored profile the server would refuse): the connections win the
+  // display, so converting is closed and untick/remove is the way out.
+  if (excl.inlineDisabled) {
+    $("pf-aws-convert").classList.add("off");
+    $("pf-aws-convert").disabled = true;
+  }
+  $("pf-aws-sum-note").textContent = excl.inlineDisabled ? excl.note : "Read only. This profile still runs unchanged until you convert it.";
   for (const f of $("pf-awsc-block").querySelectorAll(".fld, input[type=checkbox]")) {
     f.classList.toggle("off", aws.disabled || excl.pickerDisabled);
     f.disabled = aws.disabled || excl.pickerDisabled;
@@ -3163,6 +3263,7 @@ function syncEditorActions() {
   $("pf-awsc-hint").hidden = !aws.hint;
   $("pf-awsc-note").textContent = excl.pickerDisabled ? excl.note : "";
   $("pf-awsc-note").hidden = !excl.pickerDisabled || aws.disabled;
+  syncPfAwsAck();
   // The GH block closes on exactly the same terms (lock, host tier).
   for (const f of $("pf-gh-block").querySelectorAll(".fld, .btn, input[type=checkbox]")) {
     f.classList.toggle("off", aws.disabled);
@@ -3188,7 +3289,8 @@ function newProfile() {
 }
 function readForm() {
   const p = { name: $("pf-name").value.trim(), bin: $("pf-bin").value.trim(), base: $("pf-base").value };
-  const aws = readAWSFields((id) => { const el = $(id); return el.type === "checkbox" ? el.checked : el.value; });
+  // The inline binding is not edited here: it goes back as loaded unless Remove was pressed.
+  const aws = awsInlineToSend(pfInlineAws, pfAwsRemoved);
   if (aws) p.aws = aws;
   const gh = ghBindingFromForm({ owners: readGhRows(), permissions: readGhPerms(), egress_allow: pfLoadedGh && pfLoadedGh.egress_allow });
   if (gh) p.github = gh;
@@ -3383,7 +3485,6 @@ $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
 });
 $("pf-account").addEventListener("change", syncPfAccountWarn);
-$("pf-aws-elev-iam").addEventListener("change", syncPfElevWarn);
 // pf-runtime's own change is handled by renderPfRuntime's buildSeg onChange —
 // a .seg is buttons, not a form control, so it has no native "change" event.
 // workspacesCache backs the tier-aware re-render: switching Runtime must be able

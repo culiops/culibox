@@ -578,3 +578,27 @@ func TestSeccompGateDoesNotProbeWithoutAStore(t *testing.T) {
 		t.Fatalf("no store: err=%v probes=%d", err, calls)
 	}
 }
+
+// SetDaemonSecretEnv replaces the list: it is re-driven on every credential
+// save, so a name dropped from the list must stop being scrubbed.
+func TestSetDaemonSecretEnvReplaces(t *testing.T) {
+	t.Setenv("OLD_TOKEN", "a")
+	t.Setenv("NEW_TOKEN", "b")
+	l := New([]config.AgentConfig{{Name: "sh", Bin: "bash", Base: config.BaseInherit, Runtime: config.RuntimeHost}},
+		fakeResolver{vals: map[string]string{}}, nil)
+	env := func() map[string]string {
+		_, e, err := l.Build(SpawnSpec{Agent: "sh", Runtime: config.RuntimeHost})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return envMap(e)
+	}
+	l.SetDaemonSecretEnv("OLD_TOKEN")
+	if m := env(); m["OLD_TOKEN"] != "" || m["NEW_TOKEN"] != "b" {
+		t.Fatalf("first list: %v", m)
+	}
+	l.SetDaemonSecretEnv("NEW_TOKEN")
+	if m := env(); m["OLD_TOKEN"] != "a" || m["NEW_TOKEN"] != "" {
+		t.Fatalf("second list must replace the first: %v", m)
+	}
+}

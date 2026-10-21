@@ -192,3 +192,29 @@ test("a rebuilt form shows the failure that just happened", async () => {
   const rebuilt = mount(); // the poll replaced the row
   assert.match(rebuilt.err.textContent, /too many wrong passphrases/);
 });
+
+// A failed lock must report false (the Credentials strip reloads only on true,
+// because a repaint would wipe the error lockStore just wrote into #store-err).
+test("lockStore returns false and keeps the reason on failure, true on 204", async () => {
+  const { lockStore } = require("../static/store.js");
+  const err = { textContent: "" };
+  const saved = { document: global.document, fetch: global.fetch };
+  global.document = { getElementById: (id) => (id === "store-err" ? err : null) };
+  try {
+    global.fetch = async () => ({ status: 500, json: async () => ({ error: "boom" }) });
+    assert.strictEqual(await lockStore(), false);
+    assert.strictEqual(err.textContent, "boom");
+    global.fetch = async () => ({ status: 502, json: async () => { throw new Error("not json"); } });
+    assert.strictEqual(await lockStore(), false);
+    assert.strictEqual(err.textContent, "Could not lock the store (502).");
+    global.fetch = async () => { throw new Error("offline"); };
+    assert.strictEqual(await lockStore(), false);
+    assert.strictEqual(err.textContent, "Could not lock the store: no connection.");
+    global.fetch = async (url) => (url === "/api/store/lock" ? { status: 204 } : { status: 404 });
+    assert.strictEqual(await lockStore(), true);
+    assert.strictEqual(err.textContent, "");
+  } finally {
+    global.document = saved.document;
+    global.fetch = saved.fetch;
+  }
+});

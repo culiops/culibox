@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/culiops/agent-box/internal/auth"
@@ -37,7 +38,16 @@ type brokerService struct {
 	Hooks  broker.Hooks         // installed on the session manager
 	Status web.AWSStatusAdapter // behind GET /api/sessions/{id}/aws; serve adds the egress counters
 	SSO    *ssologin.Runner     // the in-UI AWS sign-in; nil when the aws CLI is not on the daemon's PATH
+	// Minter and Sim are what the broker mints and probes with; the credentials
+	// screen's AWS service reuses them.
+	Minter broker.Minter
+	Sim    awsprobe.Simulator
 	Stop   func(context.Context)
+
+	// Tokens and GitHub are the live holders credLive.Apply keeps current:
+	// the defined-entries filter behind the session view, and the App minter.
+	Tokens *tokenSet
+	GitHub *ghapp.Minter
 }
 
 // probeStopWait bounds how long Stop waits for base-role re-probes in flight:
@@ -48,20 +58,17 @@ const probeStopWait = 6 * time.Second
 // fake.
 var lookAWS = func() (string, error) { return exec.LookPath("aws") }
 
-// definedTokens returns a filter that keeps the entries whose name is in
-// entries, the list read at daemon start. A session carries the entries it was
-// spawned with, so an entry deleted from static_tokens since (the daemon was
-// restarted, the session was reattached) is dropped from its view and its
-// fetches are denied_scope; the entries' values are never re-read from here.
-func definedTokens(entries []config.StaticToken) func([]config.StaticToken) []config.StaticToken {
-	known := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		known[e.Name] = true
-	}
+// definedTokens returns a filter that keeps the entries whose name is in ts,
+// read at call time: a credential save swaps the set, so an entry deleted
+// since a session was spawned is dropped from its view and its fetches are
+// denied_scope, and one added since is honoured. A session carries the entries
+// it was spawned with; their values are never re-read from here.
+func definedTokens(ts *tokenSet) func([]config.StaticToken) []config.StaticToken {
 	return func(in []config.StaticToken) []config.StaticToken {
+		entries := ts.Get()
 		var out []config.StaticToken
 		for _, e := range in {
-			if known[e.Name] {
+			if slices.ContainsFunc(entries, func(d config.StaticToken) bool { return d.Name == e.Name }) {
 				out = append(out, e)
 			}
 		}
@@ -115,26 +122,31 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 	} else if n > 0 {
 		log.Printf("broker: wrote %d terminal audit row(s) for write windows open at the last shutdown", n)
 	}
-	defined := definedTokens(entries)
+	// The same minter and simulator back the credentials screen's base-role
+	// check, so a check is the mint and probe a spawn makes.
+	var stsMinter broker.Minter = broker.STSMinter{}
+	var simulator awsprobe.Simulator = awsprobe.IAMSimulator{}
+	tokens := &tokenSet{}
+	tokens.Set(entries)
+	defined := definedTokens(tokens)
 	brk := broker.New(sec.Secret(), func(id string) (broker.SessionView, bool) {
 		s, ok := get(id)
 		if !ok {
 			return broker.SessionView{}, false
 		}
 		return brokerSessionView(s, defined), true
-	}, broker.STSMinter{}, audit)
-	brk.SetSimulator(awsprobe.IAMSimulator{})
-	// github_apps is read once, at daemon start: a change needs a restart. With
-	// none configured the route keeps answering 503.
-	if len(apps) > 0 {
-		minter := ghapp.NewMinter(apps, ghapp.Client{})
-		// A nil *Store must not become a non-nil interface: a store reference
-		// then reports "not configured" instead of panicking.
-		if vstore != nil {
-			minter.SetStore(vstore)
-		}
-		brk.SetGitHub(minter)
+	}, stsMinter, audit)
+	brk.SetSimulator(simulator)
+	// The minter always exists, so an App defined from the web after boot works
+	// at once (credLive.Apply -> SetApps); with no App defined every check and
+	// mint fails as an unknown App.
+	minter := ghapp.NewMinter(apps, ghapp.Client{})
+	// A nil *Store must not become a non-nil interface: a store reference
+	// then reports "not configured" instead of panicking.
+	if vstore != nil {
+		minter.SetStore(vstore)
 	}
+	brk.SetGitHub(minter)
 	if vstore != nil {
 		brk.SetResolver(credref.Default{Store: vstore})
 	}
@@ -167,7 +179,7 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			RecentStatic: func(id string, n int) ([]broker.Row, error) {
 				return audit.ForSessionProvider(id, broker.ProviderStatic, n)
 			}},
-		SSO: sso,
+		SSO: sso, Tokens: tokens, GitHub: minter, Minter: stsMinter, Sim: simulator,
 		Stop: func(ctx context.Context) {
 			// First: a killed sign-in writes its sso_login_failed row, and the
 			// audit store must still be open for it.
