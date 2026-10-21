@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/auth"
+	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/session"
@@ -18,10 +18,11 @@ import (
 // The egress service is the only implementation of session.EgressHooks.
 var _ session.EgressHooks = (*egress.Service)(nil)
 
-// errEgressUnsupported is why startEgress refuses a platform: bound boxes there
-// would have no allowlist in front of them. The caller leaves the hooks unset,
-// so every bound spawn is refused (fail closed) and unbound boxes are untouched.
-var errEgressUnsupported = errors.New("egress control for macOS boxes is not available yet")
+// limaProxyHost is what a darwin box calls the Mac: lima's host.lima.internal,
+// pinned in the box's /etc/hosts by --add-host (box.Egress.AddHosts) to
+// boxvm.LimaHostGateway. The gateway reaches the Mac's 127.0.0.1, where the
+// proxy listens.
+const limaProxyHost = "host.lima.internal"
 
 // bootReadyTimeout bounds bringing the listener up at boot for a network that
 // already exists.
@@ -30,9 +31,10 @@ const bootReadyTimeout = 30 * time.Second
 // egressService is the running egress proxy and what the rest of serve needs
 // from it.
 type egressService struct {
-	Svc   *egress.Service                      // installed on the session manager and the box layer
-	Stats func(id string) (egress.Stats, bool) // behind the egress object of GET /api/sessions/{id}/aws
-	Stop  func(context.Context)
+	Svc      *egress.Service                      // installed on the session manager and the box layer
+	Stats    func(id string) (egress.Stats, bool) // behind the egress object of GET /api/sessions/{id}/aws
+	Stop     func(context.Context)
+	AddHosts []string
 }
 
 // egressLookup is the proxy's view of a session. It reads the registry through
@@ -51,12 +53,21 @@ func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 	}
 }
 
-// egressServiceOptions is the Linux service configuration: an internal-only
-// network on which boxes cannot reach each other, loopback kept off the proxy, and the one env var the measured gate
-// G2 needs for plain Node fetch to honour HTTPS_PROXY. The other measured env
-// (hooks.go measuredEnv) is added by the service itself.
+// egressServiceOptions is the service configuration. Linux: an internal-only
+// network on which boxes cannot reach each other, loopback kept off the proxy,
+// and the one env var the measured gate G2 needs for plain Node fetch to honour
+// HTTPS_PROXY. The other measured env (hooks.go measuredEnv) is added by the
+// service itself.
+//
+// darwin (option (a)): the network cannot be --internal inside the lima VM (the
+// route to the host gateway is the point), so it is an ordinary bridge on the
+// fixed boxvm.EgressSubnet, and the VM's provision rules (boxvm) drop
+// everything from that subnet except the broker and this proxy's port on the
+// gateway. The proxy listens on the Mac's 127.0.0.1 and boxes dial it as
+// host.lima.internal; NO_PROXY keeps that name, and the box's own loopback,
+// direct (the broker is reached on the gateway, not through the proxy).
 func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d egress.Docker) egress.ServiceOptions {
-	return egress.ServiceOptions{
+	o := egress.ServiceOptions{
 		Proxy:    proxy,
 		Docker:   d,
 		GOOS:     goos,
@@ -69,6 +80,12 @@ func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d
 		// spawn-time entries through the lookup.
 		StaticTokens: cfg.StaticTokens,
 	}
+	if goos == "darwin" {
+		o.Want = egress.Want{Internal: false, Subnet: boxvm.EgressSubnet}
+		o.ProxyHost = limaProxyHost
+		o.NoProxy = "localhost,127.0.0.1,::1," + limaProxyHost
+	}
+	return o
 }
 
 // bridgeBoxes picks, from `docker ps --format '{{.Names}}\t{{.Networks}}'`
@@ -112,10 +129,6 @@ func warnBridgeBoxes(ctx context.Context, d egress.Docker, instance, network str
 // control bound profiles refuse to spawn, which is the fail-closed state.
 func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string,
 	get func(id string) (*session.Session, bool)) (*egressService, error) {
-	// TODO(Task 18): darwin option (a) replaces this refusal.
-	if goos == "darwin" {
-		return nil, errEgressUnsupported
-	}
 	sec, err := auth.NewCookieAuth(filepath.Join(dataDir, "egress.secret"))
 	if err != nil {
 		return nil, fmt.Errorf("egress secret: %w", err)
@@ -142,14 +155,21 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	// creates the network.
 	ctx, cancel := context.WithTimeout(context.Background(), bootReadyTimeout)
 	defer cancel()
-	if svc.Exists(ctx) {
+	// darwin: with the VM stopped there is no docker to ask and no bound session
+	// running; the first bound spawn's Ready runs after prepare started the VM.
+	if !layer.vmStopped(ctx) && svc.Exists(ctx) {
 		if _, err := svc.Ready(ctx); err != nil {
 			log.Printf("egress: network %s exists but the proxy could not start (%v); bound sessions are refused until it can", svc.Network(), err)
 		}
 	}
+	var addHosts []string
+	if goos == "darwin" {
+		addHosts = []string{limaProxyHost + ":" + boxvm.LimaHostGateway}
+	}
 	return &egressService{
-		Svc:   svc,
-		Stats: proxy.Stats,
+		AddHosts: addHosts,
+		Svc:      svc,
+		Stats:    proxy.Stats,
 		Stop: func(ctx context.Context) {
 			// Close blocks until every tunnel is audited (or ctx ends); only then
 			// is the audit handle closed, so no tunnel's row is lost to a closed store.

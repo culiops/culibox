@@ -37,26 +37,52 @@ const acceptDrain = 200 * time.Millisecond
 // Without the control, a box with no network at all would "pass" by blocking
 // everything. The port is an integer from our own listener.
 func probeScript(port int) string {
+	return probeHead(port) +
+		`dns.lookup('api.anthropic.com',{family:4},e1=>{console.log(e1?'DNS fail '+e1.code:'DNS ok');` +
+		probeTail + `});`
+}
+
+// probeBoundScript is probeScript for a bound box, whose DNS is closed on
+// purpose: no DNS control (the egress probe's ALLOW 200 is the positive
+// control), and host.lima.internal resolves from the box's own /etc/hosts
+// (--add-host), with the measured gateway address as the by-address attempt.
+func probeBoundScript(port int) string {
+	return probeHead(port) + probeTail
+}
+
+func probeHead(port int) string {
 	return `const net=require('net'),dns=require('dns');const port=` + strconv.Itoa(port) + `;` +
 		`function tryc(h){return new Promise(r=>{const s=net.connect({host:h,port,timeout:2000});` +
 		`s.on('connect',()=>{s.destroy();r('REACHED '+h)});s.on('timeout',()=>{s.destroy();r('BLOCKED '+h+' ETIMEDOUT')});` +
-		`s.on('error',e=>r('BLOCKED '+h+' '+e.code))})}` +
-		`dns.lookup('api.anthropic.com',{family:4},e1=>{console.log(e1?'DNS fail '+e1.code:'DNS ok');` +
-		`dns.lookup('host.lima.internal',{family:4},async(e,a)=>{const t=['host.lima.internal'];` +
-		`t.push(!e&&a?a:'192.168.5.2');(await Promise.all(t.map(tryc))).forEach(l=>console.log(l));})});`
+		`s.on('error',e=>r('BLOCKED '+h+' '+e.code))})}`
 }
+
+const probeTail = `dns.lookup('host.lima.internal',{family:4},async(e,a)=>{const t=['host.lima.internal'];` +
+	`t.push(!e&&a?a:'` + LimaHostGateway + `');(await Promise.all(t.map(tryc))).forEach(l=>console.log(l));})`
 
 // ProbeLoopback proves a box cannot reach a listener on the Mac's 127.0.0.1.
 // It passes only when the box's network is alive (DNS ok), at least one attempt
 // was BLOCKED, none REACHED, and the listener accepted nothing. Anything else,
 // including a probe that could not run, is a failure: the caller refuses the box.
 func ProbeLoopback(ctx context.Context, exec ExecFunc) error {
+	return probeLoopback(ctx, exec, probeScript, true)
+}
+
+// ProbeLoopbackBound is ProbeLoopback for a box on the egress network, whose
+// DNS is closed: no DNS control is required (the egress probe's ALLOW 200 is
+// the positive control and runs first). It still fails on any REACHED, on any
+// accept at the listener, on a probe that could not run, and on no BLOCKED.
+func ProbeLoopbackBound(ctx context.Context, exec ExecFunc) error {
+	return probeLoopback(ctx, exec, probeBoundScript, false)
+}
+
+func probeLoopback(ctx context.Context, exec ExecFunc, script func(port int) string, needDNS bool) error {
 	ln, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		return fmt.Errorf("containment check: opening a loopback listener: %w", err)
 	}
 	defer ln.Close()
-	out, execErr := exec(ctx, probeScript(ln.Addr().(*net.TCPAddr).Port))
+	out, execErr := exec(ctx, script(ln.Addr().(*net.TCPAddr).Port))
 	// Count accepts after exec returns, on this goroutine: no race with the
 	// listener's close, and queued handshakes are still returned by Accept.
 	// Fail closed: without the deadline the drain cannot be trusted to count.
@@ -93,7 +119,7 @@ func ProbeLoopback(ctx context.Context, exec ExecFunc) error {
 	switch {
 	case reached > 0:
 		return errors.New("containment check failed: the box can reach the Mac's loopback services; run `agent-box doctor`")
-	case !dnsOK:
+	case needDNS && !dnsOK:
 		return errors.New("containment check inconclusive: the box has no working DNS, so a blocked loopback proves nothing; run `agent-box doctor`")
 	case blocked == 0:
 		return errors.New("containment check inconclusive: the probe produced no result")

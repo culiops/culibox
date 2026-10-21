@@ -2,6 +2,7 @@ package boxvm
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 
 func testCfg() Config {
 	return Config{Root: "/Users/a/.local/share/agent-box", Home: "/Users/a",
-		ColimaBin: "/opt/homebrew/bin/colima", DockerBin: "/opt/homebrew/bin/docker", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071}
+		ColimaBin: "/opt/homebrew/bin/colima", DockerBin: "/opt/homebrew/bin/docker", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}
 }
 
 func TestPathsLiveUnderTheDataRoot(t *testing.T) {
@@ -190,45 +191,55 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 
 func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
 	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d")
-	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8, BrokerPort: 9071}
+	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8, BrokerPort: 9071, EgressPort: 9072}
 	if got != want {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
-	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 {
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 || d.EgressPort != 9072 {
 		t.Fatalf("defaults: %+v", d)
 	}
 	if c := ConfigFor(config.Config{BrokerPort: 9100}, "/data", "/home/a", "/c", "/d"); c.BrokerPort != 9100 {
 		t.Fatalf("broker_port from config: %+v", c)
 	}
+	if c := ConfigFor(config.Config{EgressPort: 9200}, "/data", "/home/a", "/c", "/d"); c.EgressPort != 9200 {
+		t.Fatalf("egress_port from config: %+v", c)
+	}
 }
 
-// fakeIptables keeps the DOCKER-USER chain in a file, one rule per line, so the
-// provision script runs for real and its rule ORDER can be checked. It knows
-// only what the script uses: -N, -C, -D and -I at position 1, always with -w
-// (wait for the xtables lock docker may hold while it starts).
+// fakeIptables keeps the DOCKER-USER chain in a file ($CHAIN) and the INPUT
+// chain in another ($CHAIN.input), one rule per line, so the provision script
+// runs for real and its rule ORDER can be checked. It knows only what the
+// script uses: -N, -C, -D and -I at position 1, always with -w (wait for the
+// xtables lock docker may hold while it starts). Rules are stored as the text
+// of their arguments, so -s/-d/-p/--dport/-j all travel through.
 const fakeIptables = `#!/bin/sh
 chain="$CHAIN"
 touch "$chain"
 [ "$1" = -w ] || exit 6
 shift
 op=$1; shift
-[ "$1" = DOCKER-USER ] || exit 3
+case "$1" in
+DOCKER-USER) f="$chain" ;;
+INPUT) f="$chain.input" ;;
+*) exit 3 ;;
+esac
 shift
+touch "$f"
 case "$op" in
 -N) exit 0 ;;
--C) grep -qxF -- "$*" "$chain" ;;
--D) grep -qxF -- "$*" "$chain" || exit 1
-	awk -v r="$*" '!d && $0 == r { d = 1; next } { print }' "$chain" > "$chain.t" && mv "$chain.t" "$chain" ;;
+-C) grep -qxF -- "$*" "$f" ;;
+-D) grep -qxF -- "$*" "$f" || exit 1
+	awk -v r="$*" '!d && $0 == r { d = 1; next } { print }' "$f" > "$f.t" && mv "$f.t" "$f" ;;
 -I) [ "$1" = 1 ] || exit 4; shift
-	{ printf '%s\n' "$*"; cat "$chain"; } > "$chain.t" && mv "$chain.t" "$chain" ;;
+	{ printf '%s\n' "$*"; cat "$f"; } > "$f.t" && mv "$f.t" "$f" ;;
 *) exit 5 ;;
 esac
 `
 
-// runProvision runs provisionScript against fakeIptables and a getent that
-// resolves host.lima.internal to gw, starting from the chain in seed, and
-// returns the chain afterwards.
-func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
+// runProvisionBoth runs provisionScript against fakeIptables and a getent that
+// resolves host.lima.internal to gw, starting from the DOCKER-USER chain in
+// seed, and returns the DOCKER-USER and INPUT chains afterwards.
+func runProvisionBoth(t *testing.T, gw string, seed []string, runs int) (dockerUser, input []string) {
 	t.Helper()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -242,7 +253,7 @@ func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 		}
 	}
 	getent := "#!/bin/sh\n[ \"$2\" = host.lima.internal ] && echo '" + gw + "       STREAM host.lima.internal'\n"
-	for name, body := range map[string]string{"iptables": fakeIptables, "getent": getent, "provision.sh": provisionScript(9071)} {
+	for name, body := range map[string]string{"iptables": fakeIptables, "getent": getent, "provision.sh": provisionScript(9071, 9072)} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -254,11 +265,40 @@ func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 			t.Fatalf("provision run %d: %v\n%s", i+1, err, out)
 		}
 	}
-	b, err := os.ReadFile(chain)
-	if err != nil {
-		t.Fatal(err)
+	read := func(p string) []string {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
 	}
-	return strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	return read(chain), read(chain + ".input")
+}
+
+// runProvisionFull is the whole DOCKER-USER chain, the egress subnet's rules
+// included.
+func runProvisionFull(t *testing.T, gw string, seed []string, runs int) []string {
+	t.Helper()
+	c, _ := runProvisionBoth(t, gw, seed, runs)
+	return c
+}
+
+// runProvision is the DOCKER-USER chain as the M2 gateway rules left it: the
+// egress subnet's own rules (-s EgressSubnet, M3c) are left out, so the M2
+// order tests keep describing the gateway/DNS/broker rules and nothing else.
+// TestProvisionEgressOrder covers the subnet's rules.
+func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
+	t.Helper()
+	var out []string
+	for _, r := range runProvisionFull(t, gw, seed, runs) {
+		if !strings.Contains(r, "-s "+EgressSubnet) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // Measured on the founder's Mac (2026-10-16): docker gives boxes the lima
@@ -310,7 +350,7 @@ func TestProvisionLetsTheBrokerPortThroughBeforeTheGatewayDrop(t *testing.T) {
 			t.Errorf("%s:\n got %q\nwant %q", name, got, want)
 		}
 	}
-	if strings.Contains(provisionScript(9071), "tcp --dport 53") {
+	if strings.Contains(provisionScript(9071, 9072), "tcp --dport 53") {
 		t.Fatal("tcp/53 must stay dropped")
 	}
 }
@@ -322,7 +362,7 @@ func TestProvisionUsesTheConfiguredBrokerPort(t *testing.T) {
 		t.Fatalf("default port: %q", got)
 	}
 	y, err := Config{Root: "/Users/a/.local/share/agent-box", Home: "/Users/a", ColimaBin: "/c", DockerBin: "/d",
-		CPUs: 4, MemoryGiB: 4, BrokerPort: 9100}.YAML()
+		CPUs: 4, MemoryGiB: 4, BrokerPort: 9100, EgressPort: 9072}.YAML()
 	if err != nil || !strings.Contains(string(y), "--dport 9100 -j RETURN") || strings.Contains(string(y), "9071") {
 		t.Fatalf("yaml must carry the configured port: %v\n%s", err, y)
 	}
@@ -334,6 +374,194 @@ func TestValidateRefusesABrokerPortOutOfRange(t *testing.T) {
 		c.BrokerPort = p
 		if c.Validate() == nil {
 			t.Errorf("broker port %d accepted", p)
+		}
+	}
+}
+
+// pkt is one packet as the DOCKER-USER chain sees it.
+type pkt struct {
+	src, dst, proto string
+	dport           int
+}
+
+// ruleMatches reports whether one stored rule ("-s a -d b -p tcp --dport 53 -j
+// DROP") matches p. -s/-d take an IP or a CIDR; a field the rule does not name
+// matches anything.
+func ruleMatches(t *testing.T, rule string, p pkt) (matches bool, target string) {
+	t.Helper()
+	f := strings.Fields(rule)
+	in := func(spec, addr string) bool {
+		if strings.Contains(spec, "/") {
+			_, n, err := net.ParseCIDR(spec)
+			if err != nil {
+				t.Fatalf("rule %q: bad cidr %q", rule, spec)
+			}
+			return n.Contains(net.ParseIP(addr))
+		}
+		return net.ParseIP(spec).Equal(net.ParseIP(addr))
+	}
+	matches = true
+	for i := 0; i < len(f); i++ {
+		switch f[i] {
+		case "-s", "-d", "-p", "--dport", "-j":
+			if i+1 >= len(f) {
+				t.Fatalf("rule %q: %s has no value", rule, f[i])
+			}
+		default:
+			t.Fatalf("rule %q: the evaluator does not know %q", rule, f[i])
+		}
+		v := f[i+1]
+		switch f[i] {
+		case "-s":
+			matches = matches && in(v, p.src)
+		case "-d":
+			matches = matches && in(v, p.dst)
+		case "-p":
+			matches = matches && v == p.proto
+		case "--dport":
+			matches = matches && v == fmt.Sprint(p.dport)
+		case "-j":
+			target = v
+		}
+		i++
+	}
+	return matches, target
+}
+
+// verdict evaluates a chain the way netfilter does: the first matching rule
+// decides. No match is ACCEPT here: docker's own rules, which come after
+// DOCKER-USER, then allow the packet.
+func verdict(t *testing.T, chain []string, p pkt) string {
+	t.Helper()
+	for _, r := range chain {
+		if m, target := ruleMatches(t, r, p); m {
+			return target
+		}
+	}
+	return "ACCEPT"
+}
+
+func egressCases(gw string) []struct {
+	p    pkt
+	want string
+} {
+	eg := "172.29.72.5"
+	return []struct {
+		p    pkt
+		want string
+	}{
+		{pkt{eg, gw, "tcp", 9072}, "RETURN"},
+		{pkt{eg, gw, "tcp", 9071}, "RETURN"},
+		{pkt{eg, gw, "udp", 53}, "DROP"},
+		{pkt{eg, gw, "tcp", 53}, "DROP"},
+		{pkt{eg, gw, "tcp", 22}, "DROP"},
+		{pkt{eg, "1.1.1.1", "tcp", 443}, "DROP"},
+		{pkt{eg, "172.29.72.6", "tcp", 8080}, "DROP"}, // another box on the egress network
+		{pkt{"172.17.0.5", gw, "udp", 53}, "RETURN"},  // unbound boxes: unchanged
+		{pkt{"172.17.0.5", gw, "tcp", 9071}, "RETURN"},
+		{pkt{"172.17.0.5", gw, "tcp", 9072}, "DROP"}, // the egress proxy is for the egress network only
+		{pkt{"172.17.0.5", gw, "tcp", 22}, "DROP"},
+		{pkt{"172.17.0.5", "1.1.1.1", "tcp", 443}, "ACCEPT"},
+	}
+}
+
+// The boxes on the egress network reach the broker and the egress proxy on the
+// lima host gateway and nothing else, whatever the chain looked like before.
+func TestProvisionEgressOrder(t *testing.T) {
+	gw := "192.168.5.2"
+	for _, runs := range []int{1, 2} {
+		chain := runProvisionFull(t, gw, nil, runs)
+		for _, c := range egressCases(gw) {
+			if got := verdict(t, chain, c.p); got != c.want {
+				t.Errorf("runs=%d %+v: %s, want %s\nchain:\n%s", runs, c.p, got, c.want, strings.Join(chain, "\n"))
+			}
+		}
+	}
+}
+
+// The evaluator is not a rubber stamp: the same cases FAIL on a chain whose
+// egress DROP sits at the bottom, which is what a boot that only appended
+// would leave.
+func TestProvisionEgressEvaluatorSeesAWrongOrder(t *testing.T) {
+	gw := "192.168.5.2"
+	bad := []string{"-d " + gw + " -p tcp --dport 9071 -j RETURN", "-d " + gw + " -p udp --dport 53 -j RETURN",
+		"-d " + gw + " -j DROP", "-s " + EgressSubnet + " -j DROP"}
+	if got := verdict(t, bad, pkt{"172.29.72.5", gw, "udp", 53}); got != "RETURN" {
+		t.Fatalf("a bottom DROP must let the egress subnet's DNS through (that is the bug): %s", got)
+	}
+}
+
+func TestProvisionEgressRepairsAWrongOrderSeed(t *testing.T) {
+	gw := "192.168.5.2"
+	seed := []string{
+		"-d " + gw + " -p tcp --dport 9071 -j RETURN",
+		"-d " + gw + " -p udp --dport 53 -j RETURN",
+		"-d " + gw + " -j DROP",
+		"-s " + EgressSubnet + " -d " + gw + " -p tcp --dport 9072 -j RETURN",
+		"-s " + EgressSubnet + " -j DROP",
+	}
+	chain := runProvisionFull(t, gw, seed, 1)
+	for _, c := range egressCases(gw) {
+		if got := verdict(t, chain, c.p); got != c.want {
+			t.Errorf("%+v: %s, want %s\nchain:\n%s", c.p, got, c.want, strings.Join(chain, "\n"))
+		}
+	}
+	// Re-inserted, not duplicated.
+	for _, r := range chain {
+		n := 0
+		for _, o := range chain {
+			if o == r {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("rule %q appears %d times:\n%s", r, n, strings.Join(chain, "\n"))
+		}
+	}
+}
+
+func TestProvisionUsesTheConfiguredEgressPort(t *testing.T) {
+	s := provisionScript(9071, 9300)
+	if !strings.Contains(s, "--dport 9300 -j RETURN") || strings.Contains(s, "9072") {
+		t.Fatalf("the egress port must come from the config:\n%s", s)
+	}
+	if !strings.Contains(s, "sub="+EgressSubnet+"\n") {
+		t.Fatal("the subnet is the fixed EgressSubnet")
+	}
+	if strings.Contains(s, "%!") {
+		t.Fatalf("a format verb leaked into the script:\n%s", s)
+	}
+}
+
+// The VM's own INPUT chain: nothing from the egress subnet reaches the VM itself
+// (the bridge gateway, sshd), once, however many times the VM boots.
+func TestProvisionAddsInputDropOnce(t *testing.T) {
+	_, input := runProvisionBoth(t, "192.168.5.2", nil, 2)
+	if len(input) != 1 || input[0] != "-s "+EgressSubnet+" -j DROP" {
+		t.Fatalf("INPUT = %q, want exactly one egress-subnet DROP", input)
+	}
+}
+
+func TestValidateRefusesAnEgressPortOutOfRange(t *testing.T) {
+	for _, p := range []int{0, -1, 65536} {
+		c := testCfg()
+		c.EgressPort = p
+		if c.Validate() == nil {
+			t.Errorf("egress port %d accepted", p)
+		}
+	}
+}
+
+// The egress rules change the provision script, so every VM set up before M3c
+// reads as drifted and doctor sends it to `box setup -recreate`.
+func TestEgressRulesChangeTheYAMLHash(t *testing.T) {
+	y, err := testCfg().YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"-s \"$sub\" -j DROP", EgressSubnet, "--dport 9072 -j RETURN", "iptables -w -I INPUT 1"} {
+		if !strings.Contains(string(y), want) {
+			t.Errorf("yaml missing %q:\n%s", want, y)
 		}
 	}
 }
