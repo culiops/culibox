@@ -219,10 +219,10 @@
     </div>
     <div class="tabs" id="settings-tabs" role="tablist">
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
+      <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Access tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
-      <button type="button" class="t" data-tab="store" role="tab" aria-selected="false" aria-controls="store" hidden>Store</button>
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
@@ -420,16 +420,9 @@
       <div class="dlg-err" id="acct-err"></div>
     </div>
 
-    <div class="dbd pad" id="store" role="tabpanel" hidden>
-      <div class="storestat">
-        <span class="lbl">Status</span>
-        <span id="store-status"></span>
-        <span class="muted" id="store-values"></span>
-      </div>
-      <div class="storeslot" id="store-unlock" hidden></div>
-      <div class="hint" id="store-plaintext" hidden></div>
-      <p class="hint" id="store-honest"></p>
-      <div class="dlg-err" id="store-err"></div>
+    <div class="dbd pad" id="creds" role="tabpanel" hidden>
+      <div id="creds-body"></div>
+      <div class="dlg-err" id="creds-err"></div>
     </div>
 
     <div class="dft" id="foot-manage">
@@ -450,8 +443,7 @@
       <button id="tok-new" type="button" class="btn">+ new token</button>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
-    <div class="dft" id="foot-store" hidden>
-      <button id="store-lock" type="button" class="btn" hidden>Lock now</button>
+    <div class="dft" id="foot-creds" hidden>
       <span class="grow"></span>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
     </div>
@@ -585,6 +577,7 @@
   <script src="/shell.js"></script>
   <script src="/tokens.js"></script>
   <script src="/store.js"></script>
+  <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>
   <script src="/reconcile.js"></script>
   <script src="/attention.js"></script>
