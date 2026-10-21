@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -204,8 +205,11 @@ func (s *Server) handleConvertAWS(w http.ResponseWriter, r *http.Request, name s
 		writeErr(w, http.StatusBadRequest, "this profile has no inline AWS binding to convert")
 		return
 	}
+	// A private copy: the pointer in p may be shared with the stored profile, and
+	// the comparison after the check must see the binding as it was read.
+	orig := p.AWS.Clone()
 	slug := convertSlug(name)
-	conn := config.AWSConnection{Description: "converted from profile " + name, AWSBinding: *p.AWS.Clone()}
+	conn := config.AWSConnection{Description: "converted from profile " + name, AWSBinding: *orig.Clone()}
 	created := ""
 	for _, candidate := range []string{slug, convertFallback(slug)} {
 		if connNameUnusable(candidate) {
@@ -226,14 +230,30 @@ func (s *Server) handleConvertAWS(w http.ResponseWriter, r *http.Request, name s
 		writeErrCode(w, http.StatusConflict, "an AWS connection named "+slug+" or "+convertFallback(slug)+" is already defined", "exists")
 		return
 	}
-	p.AWS = nil
-	p.AWSConnections = []string{created}
-	if err := s.Profiles.Save(p); err != nil {
-		if derr := s.Creds.Delete(credfile.KindAWS, created); derr != nil {
-			log.Printf("convert-aws: profile %q not saved and connection %q could not be removed: %v", name, created, derr)
-		}
+	// The check above can take seconds. Read the profile again and build the
+	// save from that copy: an edit made meanwhile survives, and a profile that
+	// was deleted, converted by another request, or given a different inline
+	// binding is left alone, with the connection just created taken back out.
+	fresh, ok := s.Profiles.Get(name)
+	if !ok || fresh.AWS == nil || !reflect.DeepEqual(fresh.AWS, orig) {
+		s.removeConverted(name, created)
+		writeErrCode(w, http.StatusConflict, "the profile changed while it was being converted: reload and try again", "profile_changed")
+		return
+	}
+	fresh.AWS = nil
+	fresh.AWSConnections = []string{created}
+	if err := s.Profiles.Save(fresh); err != nil {
+		s.removeConverted(name, created)
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"connection": created})
+}
+
+// removeConverted takes back the connection a convert created but could not use.
+// A delete that fails is logged (names only); the caller's answer stands.
+func (s *Server) removeConverted(profile, conn string) {
+	if err := s.Creds.Delete(credfile.KindAWS, conn); err != nil {
+		log.Printf("convert-aws: profile %q not converted and connection %q could not be removed: %v", profile, conn, err)
+	}
 }

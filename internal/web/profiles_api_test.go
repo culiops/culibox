@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/culiops/agent-box/internal/awsprobe"
@@ -443,5 +444,107 @@ func TestConvertWithoutManagerOrBroker(t *testing.T) {
 	c.srv.CredAWS = nil
 	if w := c.convert("dev", "", credCookie, credOrigin); w.Code != 409 || convertBody(t, w)["code"] != "no_broker" {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// onFirstCheck runs f during the first base-role check only, the way a second
+// browser tab acts while a convert waits on AWS.
+func (c *convertRoutes) onFirstCheck(f func()) {
+	var done atomic.Bool // not sync.Once: the hook may start another convert, whose check re-enters it
+	c.svc.onCheck = func() {
+		if done.CompareAndSwap(false, true) {
+			f()
+		}
+	}
+}
+
+func TestConvertKeepsAnEditMadeDuringTheCheck(t *testing.T) {
+	c := newConvertRoutes(t, config.Config{}, nil)
+	if err := c.fx.pm.Save(inlineAWSProfile("dev")); err != nil {
+		t.Fatal(err)
+	}
+	c.onFirstCheck(func() {
+		p, _ := c.fx.pm.Get("dev")
+		p.Env = map[string]string{"EDITED": "yes"}
+		if err := c.fx.pm.Save(p); err != nil {
+			t.Error(err)
+		}
+	})
+	if w := c.convert("dev", "", credCookie, credOrigin); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	p, _ := c.fx.pm.Get("dev")
+	if p.Env["EDITED"] != "yes" || p.AWS != nil || len(p.AWSConnections) != 1 {
+		t.Fatalf("the concurrent edit was lost or the swap missing: %+v", p)
+	}
+}
+
+func TestConvertRefusesWhenTheBindingChangedDuringTheCheck(t *testing.T) {
+	c := newConvertRoutes(t, config.Config{}, nil)
+	if err := c.fx.pm.Save(inlineAWSProfile("dev")); err != nil {
+		t.Fatal(err)
+	}
+	c.onFirstCheck(func() {
+		p, _ := c.fx.pm.Get("dev")
+		p.AWS = p.AWS.Clone()
+		p.AWS.Region = "eu-west-1"
+		if err := c.fx.pm.Save(p); err != nil {
+			t.Error(err)
+		}
+	})
+	w := c.convert("dev", "", credCookie, credOrigin)
+	if w.Code != 409 || convertBody(t, w)["code"] != "profile_changed" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if got := c.fx.file(t).AWSConnections; len(got) != 0 {
+		t.Fatalf("connection left behind: %+v", got)
+	}
+	if p, _ := c.fx.pm.Get("dev"); p.AWS == nil || p.AWS.Region != "eu-west-1" {
+		t.Fatalf("the newer binding was touched: %+v", p)
+	}
+}
+
+func TestConvertDoesNotResurrectAProfileDeletedDuringTheCheck(t *testing.T) {
+	c := newConvertRoutes(t, config.Config{}, nil)
+	if err := c.fx.pm.Save(inlineAWSProfile("dev")); err != nil {
+		t.Fatal(err)
+	}
+	c.onFirstCheck(func() {
+		if err := c.fx.pm.Delete("dev"); err != nil {
+			t.Error(err)
+		}
+	})
+	w := c.convert("dev", "", credCookie, credOrigin)
+	if w.Code != 409 || convertBody(t, w)["code"] != "profile_changed" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if _, ok := c.fx.pm.Get("dev"); ok {
+		t.Fatal("the deleted profile came back")
+	}
+	if got := c.fx.file(t).AWSConnections; len(got) != 0 {
+		t.Fatalf("connection left behind: %+v", got)
+	}
+}
+
+// A second convert that runs to completion while the first waits on AWS (a
+// double click): one connection stays, referenced; the other is taken back out.
+func TestConvertConcurrentSecondConvertLeavesNoOrphan(t *testing.T) {
+	c := newConvertRoutes(t, config.Config{}, nil)
+	if err := c.fx.pm.Save(inlineAWSProfile("dev")); err != nil {
+		t.Fatal(err)
+	}
+	var inner *httptest.ResponseRecorder
+	c.onFirstCheck(func() { inner = c.convert("dev", "", credCookie, credOrigin) })
+	outer := c.convert("dev", "", credCookie, credOrigin)
+	if inner == nil || inner.Code != 200 {
+		t.Fatalf("inner: %v", inner)
+	}
+	if outer.Code != 409 || convertBody(t, outer)["code"] != "profile_changed" {
+		t.Fatalf("outer: %d %s", outer.Code, outer.Body)
+	}
+	p, _ := c.fx.pm.Get("dev")
+	conns := c.fx.file(t).AWSConnections
+	if p.AWS != nil || len(p.AWSConnections) != 1 || len(conns) != 1 || conns[0].Name != p.AWSConnections[0] {
+		t.Fatalf("profile %+v, connections %+v", p, conns)
 	}
 }
