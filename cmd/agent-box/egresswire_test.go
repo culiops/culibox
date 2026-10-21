@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -472,6 +473,59 @@ func TestEgressVerifyDarwinFailsClosed(t *testing.T) {
 		ran := regexp.MustCompile(`(?m)^exec agent-box-x node -e `).Match(log)
 		if ran != tc.wantExec {
 			t.Errorf("%s: loopback check ran = %v, want %v", name, ran, tc.wantExec)
+		}
+	}
+}
+
+// A darwin refusal of a bound box names `box setup -recreate` when the VM's
+// provision config has drifted (a VM provisioned before the egress subnet rules
+// existed), and only then. The refusal itself is the same either way.
+func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
+	const hint = "box setup -recreate"
+	for name, tc := range map[string]struct {
+		drifted bool
+		novm    bool
+		want    bool
+	}{
+		"drifted VM":    {drifted: true, want: true},
+		"up-to-date VM": {drifted: false, want: false},
+		"no VM (linux)": {novm: true, want: false},
+	} {
+		bin, _ := statefulEgressDocker(t)
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		if !tc.novm {
+			dl, _, _ := darwinLayer(t, true)
+			if !tc.drifted {
+				if err := dl.vm.Provision(context.Background(), false, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.MkdirAll(dl.vm.Config().ColimaHome(), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(dl.vm.Config().StampPath(), []byte("old\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if dl.vm.Drifted() != tc.drifted {
+				t.Fatalf("%s: setup Drifted = %v", name, dl.vm.Drifted())
+			}
+			l.vm = dl.vm
+		}
+		svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: freePort(t)}, "darwin", noSessions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.egressProbe = func(context.Context, *egress.Proxy, string, egress.ProbeTarget, egress.ExecInput) error {
+			return errors.New("egress check failed: the box can reach x directly; its network is not the egress network")
+		}
+		err = l.egressVerify(svc.Svc)(context.Background(), "agent-box-x")
+		svc.Stop(context.Background())
+		if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "its network is not the egress network") {
+			t.Fatalf("%s: err = %v, want the original refusal kept", name, err)
+		}
+		if got := strings.Contains(err.Error(), hint); got != tc.want {
+			t.Errorf("%s: hint present = %v, want %v: %v", name, got, tc.want, err)
 		}
 	}
 }

@@ -96,8 +96,9 @@ context and never edits `~/.ssh/config`.
 
 A profile with any binding (an `aws` binding, named AWS connections, a `github`
 binding or static tokens) gets a locked-down network. Its box can reach only the
-credential broker and agent-box's egress proxy on your Mac (the proxy listens on `127.0.0.1`, port `egress_port`, default 9072; boxes
-call it `host.lima.internal`), and the proxy lets through only the hosts the
+credential broker and agent-box's egress proxy on your Mac (the proxy listens
+on `127.0.0.1`, port `egress_port`, default 9072; boxes call it
+`host.lima.internal`), and the proxy lets through only the hosts the
 profile's bindings allow. Everything else is dropped by rules inside the VM:
 direct connections, DNS, and other boxes. Profiles without a binding are
 unchanged and keep normal outbound access.

@@ -226,10 +226,22 @@ func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, n
 			err = boxvm.ProbeLoopbackBound(ctx, l.execNode(name))
 		}
 		if err != nil {
-			return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
+			return fmt.Errorf("%w: %v%s", box.ErrBoxUnavailable, err, l.recreateHint())
 		}
 		return nil
 	}
+}
+
+// recreateHint is appended to a darwin refusal of a bound box when the VM's
+// provision config has drifted: a VM provisioned before the egress subnet rules
+// existed fails the probe with a message that does not say what to do. Only the
+// text changes; the refusal itself is unchanged. Empty off darwin and when the
+// config has not drifted.
+func (l *boxLayer) recreateHint() string {
+	if l.vm == nil || !l.vm.Drifted() {
+		return ""
+	}
+	return " (the box VM's provision config is out of date, so its egress rules may be missing; run `agent-box box setup -recreate`)"
 }
 
 // vmStopped reports a darwin VM that is not running. Background passes check it

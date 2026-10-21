@@ -63,11 +63,12 @@ func egressLookup(get func(id string) (*session.Session, bool)) egress.Lookup {
 // route to the host gateway is the point), so it is an ordinary bridge on the
 // fixed boxvm.EgressSubnet, and the VM's provision rules (boxvm) drop
 // everything from that subnet except the broker and this proxy's port on the
-// gateway. Like Linux, boxes on it must not reach each other: icc=false
+// gateway. As on Linux, boxes on it must not reach each other: icc=false
 // (NoICC) enforces that on the bridge itself, since same-bridge traffic only
-// reaches iptables when br_netfilter is active. The proxy listens on the Mac's 127.0.0.1 and boxes dial it as
-// host.lima.internal; NO_PROXY keeps that name, and the box's own loopback,
-// direct (the broker is reached on the gateway, not through the proxy).
+// reaches iptables when br_netfilter is active. The proxy listens on the Mac's
+// 127.0.0.1 and boxes dial it as host.lima.internal; NO_PROXY keeps that name,
+// and the box's own loopback, direct (the broker is reached on the gateway, not
+// through the proxy).
 func egressServiceOptions(cfg config.Config, goos string, proxy *egress.Proxy, d egress.Docker) egress.ServiceOptions {
 	o := egress.ServiceOptions{
 		Proxy:    proxy,
