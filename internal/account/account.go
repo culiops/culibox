@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -23,16 +24,52 @@ const (
 	MCPFileName = "agentbox-mcp.json"
 )
 
-// AuthEnv lists every variable that carries a provider credential or points at
-// one. A non-default account's session never inherits any of them.
+// AuthEnv lists the variables that carry a provider credential or point at one
+// by exact name. IsAuthEnv adds the provider-routing families by shape. A
+// non-default account's session never inherits any of them.
 var AuthEnv = []string{
 	"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
 	"CLAUDE_CONFIG_DIR", "CODEX_HOME", "OPENAI_API_KEY",
 }
 
+// claudeCredSegments mark a CLAUDE_CODE_* variable as a credential, a pointer
+// to one, or an auth/header override when any "_"-separated part equals one.
+var claudeCredSegments = map[string]bool{
+	"TOKEN": true, "KEY": true, "PASSPHRASE": true, "CERT": true, "SECRET": true,
+	"OAUTH": true, "AUTH": true, "HEADER": true, "HEADERS": true,
+}
+
+// IsAuthEnv reports whether name could hand a session another login: carry a
+// credential, route inference to another provider (Bedrock, Vertex, Foundry and
+// whatever Claude Code adds next) or point it at another endpoint. It fails
+// closed on purpose: Claude Code keeps adding such variables, so the families
+// go by shape, and the cost of a false positive is only that a non-default
+// account does not inherit a setting.
+//   - ANTHROPIC_*: all of it except model selection (*_MODEL).
+//   - AWS_BEARER_TOKEN_*: Bedrock API keys.
+//   - CLAUDE_CODE_USE_*: the provider switches.
+//   - CLAUDE_CODE_*_BASE_URL, and any CLAUDE_CODE_* with a claudeCredSegments part.
 func IsAuthEnv(name string) bool {
 	for _, n := range AuthEnv {
 		if n == name {
+			return true
+		}
+	}
+	if rest, ok := strings.CutPrefix(name, "ANTHROPIC_"); ok {
+		return rest != "" && !strings.HasSuffix(name, "_MODEL")
+	}
+	if rest, ok := strings.CutPrefix(name, "AWS_BEARER_TOKEN_"); ok {
+		return rest != ""
+	}
+	rest, ok := strings.CutPrefix(name, "CLAUDE_CODE_")
+	if !ok || rest == "" {
+		return false
+	}
+	if strings.HasPrefix(rest, "USE_") || strings.HasSuffix(rest, "BASE_URL") {
+		return true
+	}
+	for _, seg := range strings.Split(rest, "_") {
+		if claudeCredSegments[seg] {
 			return true
 		}
 	}

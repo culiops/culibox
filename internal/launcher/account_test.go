@@ -85,6 +85,54 @@ func TestBuild_NonDefaultStripsInheritedAuthAndSetsConfigDir(t *testing.T) {
 	}
 }
 
+func TestBuild_NonDefaultStripsInheritedProviderRouting(t *testing.T) {
+	routes := map[string]string{
+		"AWS_BEARER_TOKEN_BEDROCK": "founder-bedrock-key",
+		"CLAUDE_CODE_USE_BEDROCK":  "1",
+		"CLAUDE_CODE_USE_VERTEX":   "1",
+		"ANTHROPIC_BASE_URL":       "https://founder-proxy.example",
+		"ANTHROPIC_CUSTOM_HEADERS": "X-Founder: yes",
+	}
+	for k, v := range routes {
+		t.Setenv(k, v)
+	}
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "sonnet")
+	agents := []config.AgentConfig{{Name: "c", Bin: "/usr/bin/claude", Base: "inherit"}}
+	l := New(agents, fakeResolver{}, nil)
+	l.SetAccounts(fakeAccounts{"work": workAcct("/data/accounts/work/claude")})
+	_, env, err := l.Build(SpawnSpec{Agent: "c", Account: "work", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := envMap(env)
+	for k := range routes {
+		if _, ok := m[k]; ok {
+			t.Errorf("%s reached a non-default account", k)
+		}
+	}
+	if m["CLAUDE_CODE_SUBAGENT_MODEL"] != "sonnet" {
+		t.Error("non-auth claude settings must still pass through")
+	}
+	// The default account is the founder's own: it keeps today's behaviour.
+	_, env, err = l.Build(SpawnSpec{Agent: "c", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envMap(env)["ANTHROPIC_BASE_URL"] != routes["ANTHROPIC_BASE_URL"] {
+		t.Error("default account lost its inherited provider route")
+	}
+}
+
+func TestBuild_ProfileProviderRouteRefusedUnderAccount(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "c", Bin: "/usr/bin/claude", Env: map[string]string{"ANTHROPIC_BASE_URL": "https://p.example"}},
+	}, fakeResolver{}, nil)
+	l.SetAccounts(fakeAccounts{"work": workAcct("/d")})
+	if _, _, err := l.Build(SpawnSpec{Agent: "c", Account: "work", Runtime: config.RuntimeHost}); !errors.Is(err, ErrAccountConflict) {
+		t.Fatalf("a profile routing to another endpoint spawned under an account (err = %v)", err)
+	}
+}
+
 func TestBuild_NonDefaultBoxedHasNoConfigDirAndNoAuth(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "personal")
 	t.Setenv("CLAUDE_CONFIG_DIR", "/home/u/.claude")

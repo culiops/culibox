@@ -167,6 +167,25 @@ func TestInheritRefusesSecretNamedEnvEntries(t *testing.T) {
 	}
 }
 
+// The values here are not credential-shaped, so only the name rule can stop
+// them: an account must never inherit a route onto the founder's provider.
+func TestInheritRefusesProviderRoutingEnvEntries(t *testing.T) {
+	s, _ := newStore(t)
+	writeDefaultSettings(t, s, `{"env":{
+      "CLAUDE_CODE_SUBAGENT_MODEL":"sonnet",
+      "CLAUDE_CODE_USE_BEDROCK":"1",
+      "ANTHROPIC_BASE_URL":"https://proxy.example",
+      "ANTHROPIC_CUSTOM_HEADERS":"X-Team: founder"}}`)
+	r, err := s.Create(Account{Name: "work", Provider: ProviderClaude, InheritPersonal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := settingsOf(t, r)["env"].(map[string]any)
+	if !reflect.DeepEqual(keysOf(env), []string{"CLAUDE_CODE_SUBAGENT_MODEL"}) {
+		t.Fatalf("env = %v", env)
+	}
+}
+
 func TestInheritEnvWithOnlyRefusedEntriesIsNotCopied(t *testing.T) {
 	s, _ := newStore(t)
 	writeDefaultSettings(t, s, `{"env":{"AB_X":"v"},"model":"opus"}`)
