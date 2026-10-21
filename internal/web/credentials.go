@@ -43,11 +43,15 @@ type BaseRoleChecker interface {
 
 // Errors of the CredentialManager. None of them ever carries a secret value.
 var (
-	ErrCredExists         = errors.New("already defined")
-	ErrCredSeed           = errors.New("defined in config.json")
-	ErrCredNotFound       = errors.New("not defined")
-	ErrNoBroker           = errors.New("AWS connections need the boxed runtime")
-	ErrEnvRefOnWeb        = errors.New(`an "env" reference cannot be set from the web (a new variable only reaches the daemon after a restart); use the store or a file`)
+	ErrCredExists   = errors.New("already defined")
+	ErrCredSeed     = errors.New("defined in config.json")
+	ErrCredNotFound = errors.New("not defined")
+	ErrNoBroker     = errors.New("AWS connections need the boxed runtime")
+	ErrEnvRefOnWeb  = errors.New(`an "env" reference cannot be set from the web (a new variable only reaches the daemon after a restart); use the store or a file`)
+	// ErrFileRefOnWeb: a token's value is delivered into the box, so a file
+	// reference from the web would be a two-field route for any file the
+	// daemon user owns (~/.aws/credentials, ssh keys) to reach an agent.
+	ErrFileRefOnWeb       = errors.New("a token's value must be stored in the encrypted store on the web; file references stay possible in config.json")
 	ErrPrivateEgressOnWeb = errors.New("private egress hosts (private/cidr) can only be defined in config.json")
 	// ErrMCPOnWeb: web tokens carry no mcp server, because the config bundle
 	// that runs MCP commands is built at startup only (see credLive).
@@ -432,6 +436,9 @@ func action(create bool) string {
 func webTokenRules(e config.StaticToken) error {
 	if e.Value.Type == "env" {
 		return fmt.Errorf("token %q: %w", e.Name, ErrEnvRefOnWeb)
+	}
+	if e.Value.Type == "file" {
+		return fmt.Errorf("token %q: %w", e.Name, ErrFileRefOnWeb)
 	}
 	for _, h := range e.Egress {
 		if h.Private || h.CIDR != "" {

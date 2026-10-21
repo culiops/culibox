@@ -706,3 +706,32 @@ func TestTokenRoutesAreRegistered(t *testing.T) {
 		}
 	}
 }
+
+// A token's value reaches the box, so the web must not point one at a host file
+// (~/.aws/credentials, an ssh key, the data dir): only the store, on the web.
+func TestTokenRoutesRefuseFileValueRef(t *testing.T) {
+	a := newTokenRoutes(t)
+	e := tok("f", "F_TOKEN")
+	e.Value = config.KeyRef{Type: "file", Path: "/home/u/.aws/credentials"}
+	code, m, raw := a.call("POST", pathTokens, jsonBody(t, map[string]any{"entry": e}))
+	if code != 400 || !strings.Contains(raw, "encrypted store") || strings.Contains(raw, ".aws") {
+		t.Fatalf("POST: %d %v %s", code, m, raw)
+	}
+	if a.fx.fileBytes(t) != "" {
+		t.Fatalf("an entry was written: %s", a.fx.fileBytes(t))
+	}
+	// PUT over a store-backed entry, switching it to a file reference.
+	if code, _, raw := a.call("POST", pathTokens, jsonBody(t, map[string]any{"entry": tok("g", "G_TOKEN"), "value": "v1"})); code != 201 {
+		t.Fatalf("create: %d %s", code, raw)
+	}
+	before := a.fx.fileBytes(t)
+	e = tok("g", "G_TOKEN")
+	e.Value = config.KeyRef{Type: "file", Path: "/home/u/.ssh/id_ed25519"}
+	code, _, raw = a.call("PUT", pathTokens+"/g", jsonBody(t, map[string]any{"entry": e}))
+	if code != 400 || !strings.Contains(raw, "encrypted store") {
+		t.Fatalf("PUT: %d %s", code, raw)
+	}
+	if a.fx.fileBytes(t) != before {
+		t.Fatalf("a refused PUT changed the file")
+	}
+}
