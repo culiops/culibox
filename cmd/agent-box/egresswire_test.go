@@ -101,9 +101,10 @@ echo "$*" >> "$d/log"
 case "$1 $2" in
 "network ls") [ -f "$d/net" ] && echo agentbox-egress-default ;;
 "network create") shift 2
-	while [ $# -gt 0 ]; do case "$1" in --subnet) echo "$2" > "$d/net"; shift ;; --internal) echo internal >> "$d/flags" ;; esac; shift; done
+	while [ $# -gt 0 ]; do case "$1" in --subnet) echo "$2" > "$d/net"; shift ;; --internal) echo internal >> "$d/flags" ;; -o) echo "$2" >> "$d/opts"; shift ;; esac; shift; done
 	: > "$d/created" ;;
-"network inspect") printf '{"Internal":false,"IPAM":{"Config":[{"Subnet":"%s","Gateway":"172.29.72.1"}]}}' "$(cat "$d/net")" ;;
+"network inspect") icc=true; grep -q 'enable_icc=false' "$d/opts" 2>/dev/null && icc=false
+	printf '{"Internal":false,"Options":{"com.docker.network.bridge.enable_icc":"%s"},"IPAM":{"Config":[{"Subnet":"%s","Gateway":"172.29.72.1"}]}}' "$icc" "$(cat "$d/net")" ;;
 exec*) cat "$d/exec" 2>/dev/null ;;
 esac
 exit 0
@@ -147,6 +148,9 @@ func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
 	log, _ := os.ReadFile(filepath.Join(dir, "log"))
 	if !strings.Contains(string(log), "--subnet "+boxvm.EgressSubnet) {
 		t.Errorf("network create lacks --subnet %s:\n%s", boxvm.EgressSubnet, log)
+	}
+	if o, _ := os.ReadFile(filepath.Join(dir, "opts")); !strings.Contains(string(o), "com.docker.network.bridge.enable_icc=false") {
+		t.Errorf("darwin's network must be created with inter-container traffic off (boxes must not reach each other): opts %q", o)
 	}
 	if f, _ := os.ReadFile(filepath.Join(dir, "flags")); strings.Contains(string(f), "internal") || strings.Contains(string(log), "--internal") {
 		t.Errorf("darwin's network must not be --internal (boxes would lose the route to the gateway):\n%s", log)
@@ -194,8 +198,8 @@ func TestEgressServiceOptionsPerPlatform(t *testing.T) {
 		t.Errorf("linux options changed: %+v", lin)
 	}
 	dar := egressServiceOptions(cfg, "darwin", nil, nil)
-	if dar.Want.Internal || dar.Want.NoICC || dar.Want.Subnet != boxvm.EgressSubnet {
-		t.Errorf("darwin wants a non-internal network on %s: %+v", boxvm.EgressSubnet, dar.Want)
+	if dar.Want.Internal || !dar.Want.NoICC || dar.Want.Subnet != boxvm.EgressSubnet {
+		t.Errorf("darwin wants a non-internal network on %s with inter-container traffic off: %+v", boxvm.EgressSubnet, dar.Want)
 	}
 	if dar.ProxyHost != "host.lima.internal" || !strings.Contains(dar.NoProxy, "host.lima.internal") || dar.GOOS != "darwin" {
 		t.Errorf("darwin proxy host / no_proxy: %+v", dar)

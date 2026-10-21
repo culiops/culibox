@@ -456,8 +456,11 @@ func egressCases(gw string) []struct {
 		{pkt{eg, gw, "tcp", 53}, "DROP"},
 		{pkt{eg, gw, "tcp", 22}, "DROP"},
 		{pkt{eg, "1.1.1.1", "tcp", 443}, "DROP"},
-		{pkt{eg, "172.29.72.6", "tcp", 8080}, "DROP"}, // another box on the egress network
-		{pkt{"172.17.0.5", gw, "udp", 53}, "RETURN"},  // unbound boxes: unchanged
+		// Another box on the egress network. Same-bridge isolation is really enforced
+		// by icc=false (egress.Want.NoICC); this row only models the case where
+		// br_netfilter routes bridged traffic through DOCKER-USER.
+		{pkt{eg, "172.29.72.6", "tcp", 8080}, "DROP"},
+		{pkt{"172.17.0.5", gw, "udp", 53}, "RETURN"}, // unbound boxes: unchanged
 		{pkt{"172.17.0.5", gw, "tcp", 9071}, "RETURN"},
 		{pkt{"172.17.0.5", gw, "tcp", 9072}, "DROP"}, // the egress proxy is for the egress network only
 		{pkt{"172.17.0.5", gw, "tcp", 22}, "DROP"},
