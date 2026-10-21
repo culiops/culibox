@@ -52,14 +52,16 @@ func TestMCPServersCarryingCredentialsAreRefused(t *testing.T) {
       "lead-space":    {"command":"npx","args":["pkg"],"oauth":{"tokenEndpoint":" https://u:zz-literal-35@x.invalid"}},
       "token-key":     {"url":"https://x.invalid/mcp","oauth":{"sk-abcdefghijklmnopqrstuv":""}},
       "hdr-line-key":  {"url":"https://x.invalid/mcp","headers":{"Authorization: Bearer zz-literal-36":"1"}},
-      "q-name-value":  {"url":"https://x.invalid/mcp?token_Zz9literal37aBcDeFgHiJkLm=1"}
+      "q-name-value":  {"url":"https://x.invalid/mcp?token_Zz9literal37aBcDeFgHiJkLm=1"},
+      "top-token-key": {"url":"https://x.invalid/mcp","sk-abcdefghijklmnopqrstuv":"1"},
+      "flag-name-val": {"command":"npx","args":["pkg","--token-Zz9literal38aBcDeFgHiJkLm","x"]}
     }}`)
 	kept, drops := filterMCP(path, fakeProber{"npx": true, "sh": true})
 	if len(kept) != 0 {
 		t.Fatalf("every server carries a credential and must be dropped; kept %v", keys(kept))
 	}
-	if len(drops) != 43 {
-		t.Fatalf("want 43 drops, got %d: %+v", len(drops), drops)
+	if len(drops) != 45 {
+		t.Fatalf("want 45 drops, got %d: %+v", len(drops), drops)
 	}
 	// The reason is shown in the UI and the lock file: it must never echo the
 	// credential it is refusing to copy.
@@ -119,5 +121,16 @@ func TestWhitespaceCommandIsDroppedNotPanicking(t *testing.T) {
 	kept, drops := filterMCP(path, fakeProber{"npx": true})
 	if len(kept) != 0 || len(drops) != 1 {
 		t.Fatalf("kept=%v drops=%+v", kept, drops)
+	}
+}
+
+// The missing-command reason names only a plain base name.
+func TestMissingCommandReasonWithholdsOddNames(t *testing.T) {
+	path := writeMCP(t, `{"mcpServers":{"s":{"command":"/opt/Zz9literal39aBcDeFgHiJkLm/run"},"p":{"command":"/usr/local/bin/thing"}}}`)
+	_, drops := filterMCP(path, DenyAllProber{})
+	for _, d := range drops {
+		if strings.Contains(d.Reason, "Zz9literal") || strings.Contains(d.Reason, "/usr/local") {
+			t.Errorf("reason %q echoes more than a plain base name", d.Reason)
+		}
 	}
 }

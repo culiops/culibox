@@ -65,8 +65,11 @@ func credentialReason(srv mcpServer) (string, bool) {
 		case "url", "command", "args", "env", "headers", "headersHelper":
 			continue
 		}
+		if tokenShaped.MatchString(k) {
+			return "has a key shaped like an API token; materializing it would write a secret into the bundle", true
+		}
 		if what, ok := deepCredential(k, srv[k]); ok {
-			return "key " + k + " carries " + what + "; materializing it would write a secret into the bundle", true
+			return "key " + echoName(k) + " carries " + what + "; materializing it would write a secret into the bundle", true
 		}
 	}
 	return "", false
@@ -97,7 +100,7 @@ func deepCredential(key string, v any) (string, bool) {
 	switch t := v.(type) {
 	case string:
 		if t != "" && secretName(key) {
-			return "a value for " + key, true
+			return "a value for " + echoName(key), true
 		}
 		if tokenShaped.MatchString(t) {
 			return "a value shaped like an API token", true
@@ -255,17 +258,17 @@ func argCredential(arg, next string) (string, bool) {
 			value = next
 		}
 		if value != "" && !pointerValue(value) {
-			return "a value for " + strings.SplitN(arg, "=", 2)[0], true
+			return "a value for --" + echoName(m[1]), true
 		}
 	}
 	if m == nil {
 		if a := assignArg.FindStringSubmatch(arg); a != nil && secretName(a[1]) && !pointerValue(a[2]) {
-			return "an assignment to " + a[1], true
+			return "an assignment to " + echoName(a[1]), true
 		}
 	}
 	if h := headerArg.FindStringSubmatch(arg); h != nil && !strings.Contains(arg, "://") &&
 		(secretName(h[1]) || strings.EqualFold(h[1], "x-key")) {
-		return "the " + h[1] + " header", true
+		return "the " + echoName(h[1]) + " header", true
 	}
 	// Only url-shaped pieces are parsed (a list like a,b of origins is split),
 	// so the parse-failure refusal is not tripped by prose that mentions ://.

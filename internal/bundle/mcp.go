@@ -144,17 +144,11 @@ func rejectReason(srv mcpServer, resolves map[string]bool) (string, bool) {
 	return "", false
 }
 
-// commandName is the first word of a command, withheld unless it is a plain
-// name or path: the reason is written to the lock file the box mounts.
+// commandName is the base name of a command's first word, withheld unless it
+// is a plain name: the reason is written to the lock file the box mounts.
 func commandName(cmd string) string {
-	w := strings.Fields(cmd)[0]
-	if !plainCommand.MatchString(w) || randomSegment(filepath.Base(w)) {
-		return "(name withheld)"
-	}
-	return w
+	return echoName(filepath.Base(strings.Fields(cmd)[0]))
 }
-
-var plainCommand = regexp.MustCompile(`^[A-Za-z0-9_./~+-]{1,128}$`)
 
 func hasUnresolvedVar(v any) bool {
 	switch t := v.(type) {
