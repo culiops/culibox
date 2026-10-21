@@ -937,3 +937,22 @@ func TestGitHubAppReplaceKeepsCustomKeyID(t *testing.T) {
 		t.Fatalf("ref: %+v", got)
 	}
 }
+
+// A replace that sends a key and names another store id still writes the key
+// under the App's own id (the token rule): the old id is never orphaned.
+func TestGitHubAppReplaceOwnIDWins(t *testing.T) {
+	f := newCredFixture(t, config.Config{}, nil)
+	if err := f.cm.PutGitHubApp(config.GitHubApp{Name: "gh", ClientID: "Iv1"}, []byte("k1"), true); err != nil {
+		t.Fatal(err)
+	}
+	app := config.GitHubApp{Name: "gh", ClientID: "Iv1", PrivateKey: config.KeyRef{Type: "store", ID: "elsewhere"}}
+	if err := f.cm.PutGitHubApp(app, []byte("k2"), false); err != nil {
+		t.Fatal(err)
+	}
+	if string(f.vals.m["gh-gh-key"]) != "k2" || f.vals.has("elsewhere") {
+		t.Fatalf("store: %v", f.vals.m)
+	}
+	if got := f.file(t).GitHubApps[0].PrivateKey; got != (config.KeyRef{Type: "store", ID: "gh-gh-key"}) {
+		t.Fatalf("ref: %+v", got)
+	}
+}

@@ -633,11 +633,13 @@ func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, 
 	owner := map[string]string{}
 	if len(keyValue) > 0 {
 		id := defaultAppKeyID(app.Name)
+		// As for tokens: a replace keeps the id the App already reads, so a new
+		// key never moves and never orphans a custom id.
 		switch {
+		case own.Type == "store" && own.ID != "":
+			id = own.ID
 		case app.PrivateKey.Type == "store" && app.PrivateKey.ID != "":
 			id = app.PrivateKey.ID
-		case app.PrivateKey == (config.KeyRef{}) && own.Type == "store" && own.ID != "":
-			id = own.ID // a new key replaces the one the App reads, never orphans a custom id
 		}
 		if !secretstore.ValidID(id) {
 			return fmt.Errorf("GitHub App %q: the key's store id %q is not valid; name one with private_key.id", app.Name, id)
