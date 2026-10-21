@@ -190,7 +190,7 @@ func TestViewStatuses(t *testing.T) {
 	v := newViewFix(t, base, nil)
 	v.vals.m["has"] = []byte("v")
 	want := map[string]string{"store-ok": "ok", "store-miss": "missing", "file-ok": "ok", "file-miss": "missing",
-		"file-dir": "missing", "env-set": "ok", "env-unset": "unset", "env-empty": "unset"}
+		"file-dir": "invalid", "env-set": "ok", "env-unset": "unset", "env-empty": "unset"}
 	check := func(label string, want map[string]string) {
 		t.Helper()
 		b, raw := v.get(t)
@@ -223,6 +223,53 @@ func TestViewStatuses(t *testing.T) {
 type notInitVals struct{ *fakeVals }
 
 func (notInitVals) List() ([]secretstore.Entry, error) { return nil, secretstore.ErrNotInitialized }
+
+// A file reference is "ok" only where spawn would read it: credref.ReadFile
+// refuses a symlink, a file group or others can reach, and a relative path.
+func TestViewFileRefsMatchWhatSpawnReads(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(name string, mode os.FileMode) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("FILE-CONTENT-31337"), mode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil { // umask must not decide the test
+			t.Fatal(err)
+		}
+		return p
+	}
+	good, loose := mk("good.pem", 0o600), mk("loose.pem", 0o644)
+	link := filepath.Join(dir, "link.pem")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	apps := map[string]string{"good": good, "loose": loose, "link": link, "relative": "keys/app.pem",
+		"absent": filepath.Join(dir, "absent.pem"), "dir": dir}
+	var base config.Config
+	for n, p := range apps {
+		base.GitHubApps = append(base.GitHubApps, config.GitHubApp{Name: n, ClientID: "Iv1." + n, PrivateKey: config.KeyRef{Type: "file", Path: p}})
+	}
+	v := newViewFix(t, base, nil)
+	b, raw := v.get(t)
+	want := map[string]string{"good": "ok", "loose": "invalid", "link": "invalid", "relative": "invalid", "absent": "missing", "dir": "invalid"}
+	for _, a := range b.GitHubApps {
+		if a.Status != want[a.Name] {
+			t.Errorf("%s = %q, want %q", a.Name, a.Status, want[a.Name])
+		}
+		if a.Status == "invalid" && !strings.Contains(a.Error, "0600") {
+			t.Errorf("%s: invalid with no reason: %q", a.Name, a.Error)
+		}
+		if a.Status != "invalid" && a.Error != "" {
+			t.Errorf("%s: unexpected error %q", a.Name, a.Error)
+		}
+	}
+	// The reason is a fixed sentence: it does not echo the path or the contents.
+	for _, leak := range []string{dir, "FILE-CONTENT-31337", "keys/app.pem"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("response contains %q: %s", leak, raw)
+		}
+	}
+}
 
 func TestViewStoreListErrorIsNotMissing(t *testing.T) {
 	base := config.Config{StaticTokens: []config.StaticToken{{Name: "t", Value: config.KeyRef{Type: "store", ID: "x"},

@@ -2,6 +2,7 @@ package credref
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,5 +198,51 @@ func TestResolveStore(t *testing.T) {
 func TestMaxValueBytesShared(t *testing.T) {
 	if MaxValueBytes != secretstore.MaxValueBytes {
 		t.Fatalf("credref %d != secretstore %d", MaxValueBytes, secretstore.MaxValueBytes)
+	}
+}
+
+// CheckFile is ReadFile's gate without the read: whatever it passes ReadFile may
+// open, whatever it refuses ReadFile refuses for the same reason.
+func TestCheckFileMatchesReadFileGate(t *testing.T) {
+	dir := t.TempDir()
+	good := writeFile(t, dir, "good", fakeSecret, 0o600)
+	loose := writeFile(t, dir, "loose", fakeSecret, 0o644)
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(good, link); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "sub")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(dir, "missing")
+	cases := []struct {
+		name, path string
+		absent     bool
+		ok         bool
+	}{
+		{"good", good, false, true},
+		{"mode", loose, false, false},
+		{"symlink", link, false, false},
+		{"directory", sub, false, false},
+		{"relative", "relative", false, false},
+		{"missing", missing, true, false},
+		{"missing dir", filepath.Join(dir, "nodir", "f"), true, false},
+	}
+	for _, c := range cases {
+		err := CheckFile(c.path)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: CheckFile = %v, want ok=%v", c.name, err, c.ok)
+		}
+		if errors.Is(err, fs.ErrNotExist) != c.absent {
+			t.Errorf("%s: ErrNotExist = %v, want %v (%v)", c.name, errors.Is(err, fs.ErrNotExist), c.absent, err)
+		}
+		_, rerr := ReadFile(c.path, 1024)
+		if (rerr == nil) != (err == nil) {
+			t.Errorf("%s: ReadFile err=%v but CheckFile err=%v", c.name, rerr, err)
+		}
+		if err != nil && strings.Contains(err.Error(), fakeSecret) {
+			t.Errorf("%s: error leaks the value", c.name)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"errors"
+	"io/fs"
 	"maps"
 	"net/http"
 	"os"
@@ -13,12 +14,13 @@ import (
 	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
+	"github.com/culiops/agent-box/internal/credref"
 	"github.com/culiops/agent-box/internal/secretchain"
 	"github.com/culiops/agent-box/internal/secretstore"
 )
 
 // Entry status on the wire. A reference is only ever looked at, never read: a
-// store id by name, a file by os.Stat, an env var by os.LookupEnv.
+// store id by name, a file by credref.CheckFile, an env var by os.LookupEnv.
 const (
 	credOK           = "ok"
 	credMissing      = "missing"
@@ -26,6 +28,10 @@ const (
 	credInvalid      = "invalid"
 	credUnset        = "unset"
 )
+
+// credFileRefused is why a file reference is invalid: the file is there, but
+// credref.ReadFile would refuse it.
+const credFileRefused = "must be an absolute path to a regular file you own with mode 0600, not a symlink"
 
 // credStoreReadError is shown instead of the text of a failed store listing: it
 // can name a path.
@@ -259,7 +265,7 @@ type storeIDs struct {
 func (s storeIDs) has(id string) bool { _, ok := s.ids[id]; return ok }
 
 // refStatus says whether a reference points at something, without reading it:
-// a store id is looked up by name, a file is os.Stat-ed (never opened), an env
+// a store id is looked up by name, a file goes through credref.CheckFile (never opened), an env
 // var is looked up (its value is dropped unread).
 func (s storeIDs) refStatus(r config.KeyRef) (status, errText string) {
 	switch r.Type {
@@ -274,10 +280,16 @@ func (s storeIDs) refStatus(r config.KeyRef) (status, errText string) {
 		}
 		return credOK, ""
 	case "file":
-		if fi, err := os.Stat(r.Path); err == nil && fi.Mode().IsRegular() {
+		// The gate ReadFile runs before it opens the file, and nothing more: the
+		// file is never opened, so "ok" means a spawn would get past the checks.
+		switch err := credref.CheckFile(r.Path); {
+		case err == nil:
 			return credOK, ""
+		case errors.Is(err, fs.ErrNotExist):
+			return credMissing, ""
 		}
-		return credMissing, ""
+		// The refusal's own text names the path: show a fixed sentence instead.
+		return credInvalid, credFileRefused
 	case "env":
 		// The value is dropped unread; an empty variable is unset, as when resolved.
 		if v, set := os.LookupEnv(r.Var); set && v != "" {

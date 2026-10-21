@@ -130,28 +130,69 @@ func Value(raw []byte) ([]byte, error) {
 	return raw, nil
 }
 
+// missingError is a file that does not exist; it matches fs.ErrNotExist so a
+// caller can tell "absent" from "present but refused".
+type missingError struct{ msg string }
+
+func (e missingError) Error() string        { return e.msg }
+func (e missingError) Is(target error) bool { return target == fs.ErrNotExist }
+
+// openChecked is the gate in front of every host secret file read: an absolute
+// path, a directory that opens, and an Lstat'ed entry that is a regular file
+// (never a symlink) owned by the current user with no group or other bits. It
+// returns the root on the file's directory and the file's name in it. It never
+// opens the file itself.
+func openChecked(path string) (*os.Root, string, error) {
+	if !filepath.IsAbs(path) {
+		return nil, "", fmt.Errorf("%q: path must be absolute", path)
+	}
+	fail := func(err error) (*os.Root, string, error) {
+		e := fmt.Errorf("%q: %s", path, reason(err))
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, "", missingError{e.Error()}
+		}
+		return nil, "", e
+	}
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		return fail(err)
+	}
+	base := filepath.Base(path)
+	fi, err := root.Lstat(base)
+	if err != nil {
+		root.Close()
+		return fail(err)
+	}
+	if err := checkFile(path, fi); err != nil {
+		root.Close()
+		return nil, "", err
+	}
+	return root, base, nil
+}
+
+// CheckFile runs the checks ReadFile runs before it opens a host secret file,
+// and nothing more: it never opens or reads the file. A nil error means a read
+// would get past them. An error that matches fs.ErrNotExist means the file (or
+// its directory) is not there; any other error is a refusal. ReadFile calls the
+// same gate, so the two cannot drift.
+func CheckFile(path string) error {
+	root, _, err := openChecked(path)
+	if err != nil {
+		return err
+	}
+	return root.Close()
+}
+
 // ReadFile reads a host secret file. The file must be a regular file (never a
 // symlink) owned by the current user with no group or other permission bits,
 // and at most max bytes. All access goes through an os.Root on its directory.
 // Errors name the path and the reason, never the bytes.
 func ReadFile(path string, max int64) ([]byte, error) {
-	if !filepath.IsAbs(path) {
-		return nil, fmt.Errorf("%q: path must be absolute", path)
-	}
-	root, err := os.OpenRoot(filepath.Dir(path))
+	root, base, err := openChecked(path)
 	if err != nil {
-		return nil, fmt.Errorf("%q: %s", path, reason(err))
-	}
-	defer root.Close()
-	base := filepath.Base(path)
-
-	fi, err := root.Lstat(base)
-	if err != nil {
-		return nil, fmt.Errorf("%q: %s", path, reason(err))
-	}
-	if err := checkFile(path, fi); err != nil {
 		return nil, err
 	}
+	defer root.Close()
 	f, err := root.Open(base)
 	if err != nil {
 		return nil, fmt.Errorf("%q: %s", path, reason(err))
