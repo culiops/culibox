@@ -50,14 +50,16 @@ func TestMCPServersCarryingCredentialsAreRefused(t *testing.T) {
       "q-escaped-eq":  {"url":"https://x.invalid/mcp?apikey%3Dzz-literal-34=1"},
       "path-b64":      {"url":"https://x.invalid/s/Xk9_aQ2mPz7Lw-4RtY8nB3vC_hJ6dF1sG0eK5uQ/sse"},
       "lead-space":    {"command":"npx","args":["pkg"],"oauth":{"tokenEndpoint":" https://u:zz-literal-35@x.invalid"}},
-      "token-key":     {"url":"https://x.invalid/mcp","oauth":{"sk-abcdefghijklmnopqrstuv":""}}
+      "token-key":     {"url":"https://x.invalid/mcp","oauth":{"sk-abcdefghijklmnopqrstuv":""}},
+      "hdr-line-key":  {"url":"https://x.invalid/mcp","headers":{"Authorization: Bearer zz-literal-36":"1"}},
+      "q-name-value":  {"url":"https://x.invalid/mcp?token_Zz9literal37aBcDeFgHiJkLm=1"}
     }}`)
 	kept, drops := filterMCP(path, fakeProber{"npx": true, "sh": true})
 	if len(kept) != 0 {
 		t.Fatalf("every server carries a credential and must be dropped; kept %v", keys(kept))
 	}
-	if len(drops) != 41 {
-		t.Fatalf("want 41 drops, got %d: %+v", len(drops), drops)
+	if len(drops) != 43 {
+		t.Fatalf("want 43 drops, got %d: %+v", len(drops), drops)
 	}
 	// The reason is shown in the UI and the lock file: it must never echo the
 	// credential it is refusing to copy.
@@ -65,7 +67,7 @@ func TestMCPServersCarryingCredentialsAreRefused(t *testing.T) {
 		if d.Reason == "" {
 			t.Errorf("drop %q has no reason", d.Name)
 		}
-		if strings.Contains(d.Reason, "zz-literal") || strings.Contains(d.Reason, "ghp_") || strings.Contains(d.Reason, "sk-") {
+		if strings.Contains(d.Reason, "zz-literal") || strings.Contains(d.Reason, "ghp_") || strings.Contains(d.Reason, "sk-") || strings.Contains(d.Reason, "Zz9literal") {
 			t.Errorf("drop %q reason leaks the value: %q", d.Name, d.Reason)
 		}
 	}

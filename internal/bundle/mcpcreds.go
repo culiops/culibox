@@ -23,7 +23,7 @@ func credentialReason(srv mcpServer) (string, bool) {
 	if h, ok := srv["headers"].(map[string]any); ok && len(h) > 0 {
 		names := make([]string, 0, len(h))
 		for n := range h {
-			names = append(names, n)
+			names = append(names, echoName(n))
 		}
 		sort.Strings(names)
 		return "declares literal headers (" + strings.Join(names, ", ") + "); materializing them would write a secret into the bundle", true
@@ -377,7 +377,7 @@ func paramCredential(raw string) (string, bool) {
 		}
 		// A pair with no = is all value, and an odd name may hide one
 		// (apikey%3Dsecret): echo only a plain short name.
-		if !named || !plainName.MatchString(name) {
+		if !named || echoName(name) != name {
 			return "a credential-like value", true
 		}
 		return "a credential (" + name + ")", true
@@ -386,6 +386,17 @@ func paramCredential(raw string) (string, bool) {
 }
 
 var plainName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,40}$`)
+
+// echoName is a user-written name as it may appear in a drop reason: only a
+// plain short name that does not itself look like a secret (a whole header
+// line pasted as the key, token_<value>). Reasons land in the lock file the
+// box mounts.
+func echoName(n string) string {
+	if !plainName.MatchString(n) || tokenShaped.MatchString(n) || randomSegment(n) {
+		return "(name withheld)"
+	}
+	return n
+}
 
 func queryNameSecret(name string) bool {
 	l := strings.ToLower(name)
