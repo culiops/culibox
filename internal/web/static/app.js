@@ -3166,6 +3166,9 @@ async function convertPfAws(ackWrite) {
 async function reloadPfAfterConvert(name, done) {
   try {
     await loadProfiles(false);
+    // The convert created a connection: the pickers must list it before fillForm
+    // ticks it, or it shows as "(not defined)" until the next refresh.
+    await refreshCredLists();
     fillForm(await api("/api/profiles/" + encodeURIComponent(name)));
     pfAwsDone = done;
     paintPfAws();
@@ -4890,6 +4893,7 @@ initMobileShell();
 // would otherwise hide the +sh button for the whole page session.
 (async function initEnv(retry = true) {
   try {
+    const seq = ++credListsSeq; // shares the refresh's sequence, so a slower boot answer cannot overwrite a newer one
     const meta = await api("/api/meta");
     // Whether replies are on gates every reply surface; closed until this answers.
     globalThis.repliesEnabled = !!(meta && meta.replies === true);
@@ -4898,7 +4902,7 @@ initMobileShell();
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
-    applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
+    if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     lastRateLimits = (meta && meta.rate_limits) || null;
