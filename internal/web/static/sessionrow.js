@@ -485,36 +485,7 @@ function elevActions(a, nowMs = Date.now()) {
   };
 }
 
-// readAWSFields: the profile editor's AWS block as the object the server
-// stores, or undefined when no role is given (an empty block means "no
-// binding", not an invalid one). get(id) returns an input's value, or its
-// checked state for the checkbox.
-function readAWSFields(get) {
-  const role = String(get("pf-aws-role") || "").trim();
-  if (!role) return undefined;
-  const egress = String(get("pf-aws-egress") || "").split("\n").map((x) => x.trim()).filter(Boolean);
-  const out = {
-    source_profile: String(get("pf-aws-profile") || "").trim(),
-    role_arn: role,
-    region: String(get("pf-aws-region") || "").trim(),
-    s3_read: String(get("pf-aws-s3") || "").split("\n").map((x) => x.trim()).filter(Boolean),
-    label: String(get("pf-aws-label") || "").trim(),
-    prod: !!get("pf-aws-prod"),
-  };
-  // Only when there are hosts: an empty list must not reach the server, so a
-  // binding without extra hosts keeps its pre-egress hash (and its box name).
-  if (egress.length) out.egress_allow = egress;
-  // The write role is optional: without one the binding has no write window to
-  // open and the block is absent. A blank or non-numeric max falls back to the 60 min default.
-  const elevRole = String(get("pf-aws-elev-role") || "").trim();
-  if (elevRole) {
-    out.elevate = { role_arn: elevRole, max_minutes: Number(get("pf-aws-elev-max")) || 60 };
-    if (get("pf-aws-elev-iam")) out.elevate.allow_iam = true;
-  }
-  return out;
-}
-
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine, readAWSFields,
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

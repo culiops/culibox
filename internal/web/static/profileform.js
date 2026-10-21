@@ -235,7 +235,7 @@ function awscExclusiveState(tickedCount, inlineRole) {
     return { pickerDisabled: false, inlineDisabled: true, note: "Using AWS connections — the inline binding is off" };
   }
   if (String(inlineRole || "").trim()) {
-    return { pickerDisabled: true, inlineDisabled: false, note: "Clear the inline binding to use connections" };
+    return { pickerDisabled: true, inlineDisabled: false, note: "Convert or remove the inline binding to use connections" };
   }
   return { pickerDisabled: false, inlineDisabled: false, note: "" };
 }
@@ -248,6 +248,55 @@ function awscToSend(checked) {
   return names.length ? names : undefined;
 }
 
+// --- The inline AWS binding (legacy) -------------------------------------
+// The form no longer edits it: a profile that still carries one shows a summary
+// with "Convert to a connection" and "Remove", and runs unchanged until then.
+
+// inlineAWSSummary: "<source profile> → <role name> (<region>)", for the
+// read-only line. A part the binding lacks is left out rather than printed.
+function inlineAWSSummary(aws) {
+  const a = aws || {};
+  const arn = String(a.role_arn || "");
+  const role = arn.slice(arn.lastIndexOf("/") + 1);
+  const src = String(a.source_profile || "");
+  const region = String(a.region || "");
+  const head = src && role ? src + " → " + role : src || role;
+  return region ? (head ? head + " (" + region + ")" : region) : head;
+}
+
+// awsInlineToSend: what a save sends as the profile's `aws`. The binding as it
+// was loaded (a copy), unchanged; null once Remove was pressed, or when there
+// never was one (the caller then leaves the key out).
+function awsInlineToSend(loaded, removed) {
+  if (removed || !loaded || typeof loaded !== "object") return null;
+  return JSON.parse(JSON.stringify(loaded));
+}
+
+// convertConnName: the name the server will give the new connection, which is
+// the profile's name as a slug (internal/web/profiles_api.go convertSlug). The
+// server falls back to "<slug>-aws" when that is taken; the confirm names the
+// first choice and the result line names the real one.
+function convertConnName(profile) {
+  let out = String(profile || "").toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/^-+/, "");
+  if (out.length > 63) out = out.slice(0, 63);
+  return out || "aws";
+}
+
+// convertAWSConfirm: the sentence the confirm shows before converting.
+function convertAWSConfirm(profile) {
+  const n = convertConnName(profile);
+  return "This creates a connection named " + n + " and points the profile at it. The next session gets a new box, and AWS_PROFILE becomes " + n + ".";
+}
+
+// convertAWSErrText: the wording for the two refusals that are specific to a
+// convert. "" means the generic AWS-screen wording applies (awsErrText).
+function convertAWSErrText(e) {
+  if (!e) return "";
+  if (e.code === "profile_changed") return "This profile changed while converting; reload and try again";
+  if (e.code === "no_broker") return "AWS connections need the boxed runtime";
+  return "";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError };
+  module.exports = { awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
 }

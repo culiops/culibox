@@ -1363,10 +1363,25 @@
        the host tier (or a lock) closes it; the hint says why. */
     #pf-awsc-block { margin-top: 14px; }
     #pf-awsc-block > .flab { display: block; margin-bottom: 6px; }
-    #pf-awsc-hint, #pf-awsc-note, #pf-awsc-none, #pf-aws-note { margin: 0 0 8px; }
+    #pf-awsc-hint, #pf-awsc-note, #pf-awsc-none, #pf-awsc-manage { margin: 0 0 8px; }
     #pf-aws-block { margin-top: 14px; }
     #pf-aws-block > .flab { display: block; margin-bottom: 6px; }
-    #pf-aws-hint { margin: 0 0 8px; }
+    #pf-aws-hint, #pf-aws-removed, #pf-aws-done { margin: 0 0 8px; }
+    /* The legacy inline binding: a read-only summary, then Convert / Remove. The
+       confirm opens under it, in place (no browser dialog). */
+    .pf-sumbox { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); background: var(--bg); min-width: 0; }
+    .pf-sumbox[hidden] { display: none; }
+    .pf-sumline { font-size: 13px; overflow-wrap: anywhere; }
+    .pf-sumbox p, .pf-confirm p { margin: 0; }
+    .pf-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    .pf-confirm { margin-top: 10px; border: 1px solid var(--accent); background: var(--sel-soft); padding: 12px 14px; font-size: 12px; line-height: 1.6; display: flex; flex-direction: column; gap: 10px; min-width: 0; overflow-wrap: anywhere; }
+    .pf-confirm[hidden] { display: none; }
+    .pf-confirm .warnbox { margin-top: 0; }
+    .pf-confirm .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
+    #pf-aws-block a.lnk, #pf-awsc-block a.lnk, #pf-gh-block a.lnk, #pf-st-block a.lnk { color: var(--accent); text-decoration: underline; cursor: pointer; }
+    @media (max-width: 700px) {
+      .pf-sumbox .pf-btns .btn, .pf-confirm .pf-btns .btn { flex: 1 1 100%; min-height: var(--tap); }
+    }
     /* The GitHub block sits beside the AWS one and is closed by the same rules
        (lock, host tier). Owner rows reuse .frow/.fcol, so they stack on a phone
        with the rest of the editor. */

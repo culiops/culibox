@@ -101,7 +101,10 @@ function closeSheet() {
 // openSettings shows the settings dialog with one tab selected ("manage" =
 // profiles, "settings" = font sizes: the ids are the pre-existing panel ids,
 // kept so every handler that already targets them keeps working).
-function openSettings(tab) {
+function openSettings(tab, group) {
+  // "creds" can be opened on one group ("aws", "github", "tokens"): it scrolls
+  // there once the Credentials view has painted (credFocusGroup).
+  if (tab === "creds" && group && typeof credFocusGroup === "function") credFocusGroup(group);
   selectSettingsTab(tab || "manage");
   openDialog("settings-modal");
   // shell.js loads before app.js, so initNotifyToggle may not exist yet on the

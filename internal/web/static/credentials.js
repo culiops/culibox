@@ -655,6 +655,7 @@ const CRED_EMPTY = {
 
 function credSection(g) {
   const sec = credEl("section", "sec");
+  sec.dataset.group = g.key;
   sec.setAttribute("aria-label", g.title);
   const h = credEl("div", "sec-h");
   const title = credEl("span", "grow", g.title + " ");
@@ -778,6 +779,25 @@ function renderCredentials(view) {
     nodes.push(credSection(g));
   }
   host.replaceChildren(...nodes);
+  credScrollPending();
+}
+
+// credFocusGroup: the profile form's "none defined" links ask for the
+// Credentials tab on one group ("aws", "github", "tokens"). The view paints
+// after the tab is selected, so the wish is kept until renderCredentials has
+// drawn, then the group is scrolled into view. "tokens" is the first token
+// provider group, or the empty Tokens section when there is none.
+let credFocusWanted = "";
+function credFocusGroup(group) { credFocusWanted = String(group || ""); }
+function credScrollPending() {
+  const want = credFocusWanted;
+  if (!want) return;
+  credFocusWanted = "";
+  const host = document.getElementById("creds-body");
+  if (!host) return;
+  const sel = want === "tokens" ? '[data-group="tokens"], [data-group^="token:"]' : '[data-group="' + want.replace(/[^a-z0-9:_-]/gi, "") + '"]';
+  const el = host.querySelector(sel);
+  if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "start" });
 }
 
 // credWireHeld: once, repaint a held view when focus leaves the body.
@@ -1741,6 +1761,7 @@ async function credSend(method, path, body) {
 
 function credTokensEmpty() {
   const sec = credEl("section", "sec");
+  sec.dataset.group = "tokens";
   sec.setAttribute("aria-label", "Tokens");
   const h = credEl("div", "sec-h");
   h.appendChild(credEl("span", "grow", "Tokens "));

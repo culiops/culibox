@@ -274,53 +274,42 @@
           <span class="flab">AWS connections (boxed only)</span>
           <p class="tiny mut" id="pf-awsc-hint" hidden>AWS connections need runtime: box. The host tier cannot contain credentials.</p>
           <p class="tiny mut" id="pf-awsc-note" hidden></p>
-          <p class="tiny mut" id="pf-awsc-none" hidden>No AWS connection is defined. Add one under aws_connections in config.json, then restart agent-box.</p>
+          <p class="tiny mut" id="pf-awsc-none" hidden>No AWS connection is defined. <a href="#" class="lnk" data-creds-group="aws">Add one in Credentials › AWS</a>.</p>
           <div id="pf-awsc-list"></div>
           <p class="warnbox tiny" id="pf-awsc-err" role="alert" hidden></p>
+          <p class="tiny mut" id="pf-awsc-manage">Manage connections in <a href="#" class="lnk" data-creds-group="aws">Credentials › AWS</a>.</p>
         </div>
-        <div id="pf-aws-block">
-          <span class="flab">AWS (boxed only)</span>
+        <div id="pf-aws-block" hidden>
+          <span class="flab">AWS (defined on this profile)</span>
           <p class="tiny mut" id="pf-aws-hint" hidden>AWS needs runtime: box. The host tier cannot contain credentials.</p>
-          <p class="tiny mut" id="pf-aws-note" hidden></p>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-profile">Source profile</label>
-              <input id="pf-aws-profile" class="fld" type="text" placeholder="sandbox-admin" autocomplete="off" spellcheck="false"></div>
-            <div class="fcol"><label class="flab" for="pf-aws-region">Region</label>
-              <input id="pf-aws-region" class="fld" type="text" placeholder="ap-southeast-1" autocomplete="off" spellcheck="false"></div>
+          <div class="pf-sumbox" id="pf-aws-sum">
+            <div class="pf-sumline"><span class="mut" id="pf-aws-sum-lab">Defined on this profile:</span> <span id="pf-aws-sum-text"></span></div>
+            <p class="tiny mut" id="pf-aws-sum-note">Read only. This profile still runs unchanged until you convert it.</p>
+            <div class="pf-btns" id="pf-aws-btns">
+              <button type="button" class="btn pri" id="pf-aws-convert">Convert to a connection</button>
+              <button type="button" class="btn dgr" id="pf-aws-remove">Remove</button>
+            </div>
           </div>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-role">Role ARN (empty = no AWS access)</label>
-              <input id="pf-aws-role" class="fld" type="text" placeholder="arn:aws:iam::&lt;account&gt;:role/agentbox-agent" autocomplete="off" spellcheck="false"></div>
+          <div class="pf-confirm" id="pf-aws-confirm" role="alertdialog" aria-label="Confirm convert" hidden>
+            <span id="pf-aws-confirm-text"></span>
+            <div class="warnbox tiny" id="pf-aws-ack" hidden>
+              <span id="pf-aws-ack-text"></span>
+              <div id="pf-aws-ack-actions" class="tiny"></div>
+              <label class="pf-check"><input type="checkbox" id="pf-aws-ack-cb"> I understand</label>
+            </div>
+            <p class="warnbox tiny" id="pf-aws-convert-err" role="alert" hidden></p>
+            <div class="pf-btns">
+              <button type="button" class="btn pri" id="pf-aws-confirm-go">Convert</button>
+              <button type="button" class="btn" id="pf-aws-confirm-cancel">Cancel</button>
+            </div>
           </div>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-s3">S3 read allowlist</label>
-              <textarea id="pf-aws-s3" class="fld" rows="2" spellcheck="false" placeholder="one bucket or bucket/prefix/ per line"></textarea></div>
-          </div>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-egress">Extra egress hosts</label>
-              <textarea id="pf-aws-egress" class="fld" rows="2" spellcheck="false" placeholder="one host or *.domain per line (added to the default allowlist)"></textarea></div>
-          </div>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-label">Label</label>
-              <input id="pf-aws-label" class="fld" type="text" maxlength="40" placeholder="sandbox" autocomplete="off"></div>
-            <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-aws-prod"> production</label></div>
-          </div>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-elev-role">Write role for elevation (empty = no elevation)</label>
-              <input id="pf-aws-elev-role" class="fld" type="text" placeholder="arn:aws:iam::&lt;account&gt;:role/agentbox-agent-write" autocomplete="off" spellcheck="false"></div>
-          </div>
-          <div class="frow">
-            <div class="fcol"><label class="flab" for="pf-aws-elev-max">Longest window</label>
-              <select id="pf-aws-elev-max" class="fld"><option value="60">60 min</option><option value="30">30 min</option></select></div>
-            <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-aws-elev-iam"> allow IAM writes</label></div>
-          </div>
-          <p class="tiny" id="pf-aws-elev-help">The window bounds the agent's credentials, not everything it sets up. Even with IAM writes off, it can create access that outlives the window through resource policies (an S3 bucket policy, a KMS grant, an EC2 key pair, a Lambda function URL).</p>
-          <p class="warnbox tiny" id="pf-aws-elev-warn" hidden>With IAM writes on, an agent that can create a role can make one that trusts an outside account, which outlives the window. The window then bounds these credentials, not what the agent can set up.</p>
+          <p class="tiny mut" id="pf-aws-removed" hidden>The inline AWS binding is removed when you save. <button type="button" class="btn" id="pf-aws-undo">Undo</button></p>
+          <p class="tiny mut" id="pf-aws-done" role="status" hidden></p>
         </div>
         <div id="pf-gh-block">
           <span class="flab">GitHub (boxed only)</span>
           <p class="tiny mut" id="pf-gh-hint" hidden>GitHub needs runtime: box. The host tier cannot contain credentials.</p>
-          <p class="tiny mut" id="pf-gh-noapps" hidden>No GitHub App is defined. Add one under github_apps in config.json.</p>
+          <p class="tiny mut" id="pf-gh-noapps" hidden>No GitHub App is defined. <a href="#" class="lnk" data-creds-group="github">Add one in Credentials › GitHub Apps</a>.</p>
           <div id="pf-gh-owners"></div>
           <button id="pf-gh-add" type="button" class="btn">+ owner</button>
           <span class="flab" id="pf-gh-perms-lab">Read permissions</span>
@@ -331,7 +320,7 @@
         <div id="pf-st-block">
           <span class="flab">Tokens</span>
           <p class="tiny mut" id="pf-st-hint" hidden>Tokens need runtime: box. The host tier cannot contain credentials.</p>
-          <p class="tiny mut" id="pf-st-none" hidden>No token entry is defined. Add one under static_tokens in config.json, then restart agent-box.</p>
+          <p class="tiny mut" id="pf-st-none" hidden>No token is defined. <a href="#" class="lnk" data-creds-group="tokens">Add one in Credentials › Tokens</a>.</p>
           <div id="pf-st-list"></div>
           <p class="warnbox tiny" id="pf-st-warn">The agent can read this token. It is long-lived and is not revoked when the session ends.</p>
           <p class="warnbox tiny" id="pf-st-err" role="alert" hidden></p>
