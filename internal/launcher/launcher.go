@@ -684,8 +684,10 @@ func (l *AgentLauncher) Build(spec SpawnSpec) ([]string, []string, error) {
 	l.applyOptionEnv(opts, env)
 
 	if !acct.IsDefault { // never let the daemon's own login reach another account
-		for _, k := range account.AuthEnv {
-			delete(env, k)
+		for k := range env {
+			if account.IsAuthEnv(k) {
+				delete(env, k)
+			}
 		}
 	}
 
