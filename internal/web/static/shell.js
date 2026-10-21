@@ -143,6 +143,10 @@ function selectSettingsTab(name) {
   if (name === "creds" && typeof loadCredentials === "function") loadCredentials();
   // The profile form's pickers list what Credentials holds now, not what it held at page load.
   if (name === "manage" && typeof refreshCredLists === "function") refreshCredLists();
+  // And the profile list what the server holds now (a profile made through the
+  // API or in another tab). loadProfiles repaints the list, never the editor,
+  // so an open form keeps its unsaved edits.
+  if (name === "manage" && typeof loadProfiles === "function") loadProfiles(false);
 }
 
 function initDialogs() {

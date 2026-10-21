@@ -351,11 +351,21 @@ function valueFieldCleared(el) {
 }
 
 // credUniqueName: base, else base-2, base-3 ... the first not in `taken`.
-function credUniqueName(base, taken) {
+function credUniqueName(base, taken, suffixes) {
   if (!base) return "";
   const used = new Set(taken || []);
-  if (!used.has(base)) return base;
-  for (let n = 2; ; n++) if (!used.has(base + "-" + n)) return base + "-" + n;
+  // A template that defines several entries (Datadog: <name>-api, <name>-app)
+  // needs every name it creates to be free, not the bare one.
+  const sfx = suffixes && suffixes.length ? suffixes : [""];
+  const free = (c) => sfx.every((x) => !used.has(c + x));
+  if (free(base)) return base;
+  for (let n = 2; ; n++) if (free(base + "-" + n)) return base + "-" + n;
+}
+
+// credTemplateSuffixes: the suffixes the server adds to a template token's name
+// (see valueIdsText). Empty for a one-entry template.
+function credTemplateSuffixes(t) {
+  return t && t.id === "datadog" ? ["-api", "-app"] : [];
 }
 
 // valueIdsText: where the pasted value(s) will be stored (a hint under the field).
@@ -461,7 +471,7 @@ function credErrText(e, noun) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
-    tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut,
+    tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
@@ -634,12 +644,15 @@ function credValueRow(v) {
   return row;
 }
 
+const CRED_VALUES_HINT = "Values are write-only: they go in encrypted and are never shown again. A value that something still references cannot be deleted.";
+
 function credValuesBody(entries) {
   const wrap = credEl("div");
   const head = credEl("div", "sv head");
   for (const t of ["Id", "Updated", "Referenced by", ""]) head.appendChild(credEl("span", null, t));
   wrap.appendChild(head);
   for (const v of entries) wrap.appendChild(credValueRow(v));
+  wrap.appendChild(credEl("p", "hint", CRED_VALUES_HINT));
   return wrap;
 }
 
@@ -1223,12 +1236,13 @@ function awsPaintRes(row) {
     if (v.assume === "ok") {
       nodes.push(awsLine("ok", "✓", v.text));
       nodes.push(awsVerdictNode(row, v));
+    } else if (v.signIn) {
+      needSignIn = true; // awsSignInNode carries the badge, beside its Sign in button
     } else {
       const l = awsEl("div", "l");
       l.appendChild(awsEl("span", "bdg " + (v.tone === "bad" ? "prod" : "warnb"), v.badge));
       l.appendChild(awsEl("span", null, v.text));
       nodes.push(l);
-      if (v.signIn) needSignIn = true;
     }
   }
   if (needSignIn) nodes.push(awsSignInNode(row));
@@ -1342,11 +1356,16 @@ function awsSSOTimedOut() {
 
 function awsSSOPoll(f, prof) {
   const started = Date.now();
+  // A poll still in flight when polling stops (time-out, failure, done) must not
+  // repaint "Waiting…" over the final state.
+  let stopped = false;
+  const stop = () => { stopped = true; clearInterval(timer); f.timers.delete(timer); };
   const timer = setInterval(async () => {
-    if (awsFlow !== f) { clearInterval(timer); f.timers.delete(timer); return; }
+    if (stopped) return;
+    if (awsFlow !== f) { stop(); return; }
     if (Date.now() - started > AWS_SSO_POLL_MAX) {
       // Back to the "Sign in" state with a note, never stuck on "Waiting…".
-      clearInterval(timer); f.timers.delete(timer);
+      stop();
       f.sso[prof] = awsSSOTimedOut();
       awsRepaintProfileRows(prof);
       return;
@@ -1355,17 +1374,17 @@ function awsSSOPoll(f, prof) {
     try {
       st = await api("/api/credentials/aws/sso-login?profile=" + encodeURIComponent(prof));
     } catch (e) {
-      if (awsFlow !== f) return;
-      clearInterval(timer); f.timers.delete(timer);
+      if (awsFlow !== f || stopped) return;
+      stop();
       f.sso[prof] = { state: "gone", msg: e.status === 404 ? "No sign-in is in progress any more. Press Sign in to start another." : awsErrText(e) };
       awsRepaintProfileRows(prof);
       return;
     }
-    if (awsFlow !== f) return;
+    if (awsFlow !== f || stopped) return;
     f.sso[prof] = { st };
     awsRepaintProfileRows(prof);
     if (st.state === "ok" || st.state === "failed") {
-      clearInterval(timer); f.timers.delete(timer);
+      stop();
       if (st.state === "ok") awsAfterSignIn(f, prof);
     }
   }, AWS_SSO_POLL_MS);
@@ -1646,7 +1665,9 @@ function credSecretField(id, label, opts) {
   const f = credField(id, label, { full: true, area: !!o.area, hint: o.hint });
   const inp = f.inp;
   if (o.area) { inp.classList.add("secret-area"); inp.rows = 5; } else { inp.type = "password"; }
-  inp.autocomplete = "new-password";
+  // A textarea is no password field: "new-password" there can invite a manager to
+  // offer (and save) a generated password into the key.
+  inp.autocomplete = o.area ? "off" : "new-password";
   inp.setAttribute("autocorrect", "off");
   inp.name = "agent-box-" + id;
   return f;
@@ -1683,7 +1704,8 @@ async function credRefreshView() {
 // the tab waits while one is being typed in.
 function credStoreCreateNode(onDone, hold) {
   const st = (credView && credView.store) || {};
-  const passMode = st.platform !== "darwin";
+  // The server's own answer (the keyring in use), which is what store init checks.
+  const passMode = !!st.passphrase_mode;
   const box = credEl("div", "storecreate");
   box.appendChild(credEl("p", "hint", passMode
     ? "Values are stored encrypted. Choose a passphrase of at least 12 characters. You type it to unlock the store, and it cannot be recovered if you lose it."
@@ -1864,7 +1886,7 @@ function credTokenDetails(t, taken) {
   }
   refresh();
 
-  const nm = credField(uid + "-name", "Name", { value: credUniqueName(tf.defaultName, taken), max: 63 });
+  const nm = credField(uid + "-name", "Name", { value: credUniqueName(tf.defaultName, taken, credTemplateSuffixes(t)), max: 63 });
   const lb = credField(uid + "-label", "Label", { placeholder: t.label, max: 32 });
   const prod = credCheck(uid + "-prod", "production", false);
   grid.append(nm.col, lb.col, prod.col);

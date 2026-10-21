@@ -6,7 +6,7 @@ const {
   providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, CRED_D4, CRED_N3, CRED_FILE_BAD,
   awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsConnFromRow, awsRoleARN, awsCheckView, awsErrText, CRED_D4_REMEDY,
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
-  tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut,
+  tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -337,6 +337,18 @@ test("credUniqueName: base when free, then base-2, base-3", () => {
   assert.strictEqual(credUniqueName("sentry", ["sentry"]), "sentry-2");
   assert.strictEqual(credUniqueName("sentry", ["sentry", "sentry-2"]), "sentry-3");
   assert.strictEqual(credUniqueName("", ["x"]), "");
+});
+
+test("credUniqueName with suffixes: every created name must be free (Datadog <name>-api/-app)", () => {
+  const sfx = credTemplateSuffixes({ id: "datadog" });
+  assert.deepStrictEqual(sfx, ["-api", "-app"]);
+  assert.strictEqual(credUniqueName("datadog", [], sfx), "datadog");
+  assert.strictEqual(credUniqueName("datadog", ["datadog-api", "datadog-app"], sfx), "datadog-2");
+  assert.strictEqual(credUniqueName("datadog", ["datadog-app"], sfx), "datadog-2");
+  // The bare name is not what the server creates, so it being taken does not matter.
+  assert.strictEqual(credUniqueName("datadog", ["datadog"], sfx), "datadog");
+  assert.deepStrictEqual(credTemplateSuffixes({ id: "sentry" }), []);
+  assert.strictEqual(credUniqueName("sentry", ["sentry"], credTemplateSuffixes({ id: "sentry" })), "sentry-2");
 });
 
 test("valueIdsText: the store ids a template's values will be stored under", () => {

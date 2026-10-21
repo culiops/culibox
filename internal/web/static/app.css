@@ -348,8 +348,10 @@
     }
     #creds .bdg.prod { color: var(--danger); border-color: var(--danger); font-weight: 700; }
     #creds .bdg.seed { color: var(--muted); }
+    /* Header and rows are separate grids: every column is explicit so they line up
+       (an auto last column sizes to the buttons in a row, to nothing in the header). */
     #creds .sv {
-      display: grid; grid-template-columns: minmax(0, 1.3fr) 110px minmax(0, 1.6fr) auto; gap: 6px 14px;
+      display: grid; grid-template-columns: minmax(0, 1.3fr) 110px minmax(0, 1.6fr) 150px; gap: 6px 14px;
       align-items: center; padding: 9px 2px; border-bottom: 1px solid var(--border); font-size: 12px;
     }
     #creds .sv.head { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: 2px; }
