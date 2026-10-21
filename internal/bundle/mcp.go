@@ -3,6 +3,7 @@ package bundle
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -138,10 +139,22 @@ func rejectReason(srv mcpServer, resolves map[string]bool) (string, bool) {
 	if !resolves[cmd] {
 		// Only the first word: the reason lands in the lock file the box mounts,
 		// and the rest of a command string could hold a secret.
-		return "command " + strings.Fields(cmd)[0] + " does not exist inside the box image", true
+		return "command " + commandName(cmd) + " does not exist inside the box image", true
 	}
 	return "", false
 }
+
+// commandName is the first word of a command, withheld unless it is a plain
+// name or path: the reason is written to the lock file the box mounts.
+func commandName(cmd string) string {
+	w := strings.Fields(cmd)[0]
+	if !plainCommand.MatchString(w) || randomSegment(filepath.Base(w)) {
+		return "(name withheld)"
+	}
+	return w
+}
+
+var plainCommand = regexp.MustCompile(`^[A-Za-z0-9_./~+-]{1,128}$`)
 
 func hasUnresolvedVar(v any) bool {
 	switch t := v.(type) {

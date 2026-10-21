@@ -102,7 +102,7 @@ func deepCredential(key string, v any) (string, bool) {
 		if tokenShaped.MatchString(t) {
 			return "a value shaped like an API token", true
 		}
-		if urlArg.MatchString(t) {
+		if t := strings.TrimSpace(t); urlArg.MatchString(t) {
 			if what, ok := urlCredential(t); ok {
 				return "a url with " + what, true
 			}
@@ -118,6 +118,9 @@ func deepCredential(key string, v any) (string, bool) {
 			return "literal headers", true
 		}
 		for _, k := range sortedKeys(t) {
+			if tokenShaped.MatchString(k) {
+				return "a key shaped like an API token", true
+			}
 			if what, ok := deepCredential(k, t[k]); ok {
 				return what, true
 			}
@@ -215,7 +218,7 @@ func pointerValue(v string) bool {
 		return false
 	}
 	for _, seg := range segs {
-		if randomRun(seg) {
+		if randomSegment(seg) {
 			return false
 		}
 	}
@@ -296,14 +299,18 @@ func wordsCredential(s string) (string, bool) {
 }
 
 var (
-	alnumRun = regexp.MustCompile(`[A-Za-z0-9]{20,}`)
-	gitSHA   = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	alnumRun   = regexp.MustCompile(`[A-Za-z0-9]{20,}`)
+	base64Like = regexp.MustCompile(`^[A-Za-z0-9_-]{24,}$`)
+	gitSHA     = regexp.MustCompile(`^[0-9a-f]{40}$`)
 )
 
-// randomRun reports an unbroken run of 20+ letters and digits mixing both: the
-// shape of a secret embedded in a path (mcp.zapier.com/api/mcp/s/<secret>/).
-// Hyphenated slugs and UUIDs break into short runs; a git SHA is exempt.
-func randomRun(s string) bool {
+// randomSegment reports the shape of a secret embedded in a path segment
+// (mcp.zapier.com/api/mcp/s/<secret>/): an unbroken run of 20+ letters and
+// digits mixing both (a lowercase git SHA is exempt), or a 24+ char base64url
+// segment mixing upper, lower and digits, which catches a token whose - and _
+// split it into short runs. Hyphenated slugs are lowercase and break into short
+// runs, so they pass.
+func randomSegment(s string) bool {
 	for _, r := range alnumRun.FindAllString(s, -1) {
 		if gitSHA.MatchString(r) {
 			continue
@@ -312,7 +319,8 @@ func randomRun(s string) bool {
 			return true
 		}
 	}
-	return false
+	return base64Like.MatchString(s) && strings.ContainsAny(s, "0123456789") &&
+		strings.IndexFunc(s, unicode.IsUpper) >= 0 && strings.IndexFunc(s, unicode.IsLower) >= 0
 }
 
 // urlCredential reports a url that carries a credential: userinfo of any kind
@@ -338,7 +346,7 @@ func urlCredential(raw string) (string, bool) {
 		return what + " in its fragment", true
 	}
 	for _, seg := range strings.Split(u.EscapedPath(), "/") {
-		if randomRun(seg) {
+		if randomSegment(seg) {
 			return "a random-looking path segment", true
 		}
 	}
@@ -346,11 +354,14 @@ func urlCredential(raw string) (string, bool) {
 }
 
 // queryWords are matched as substrings of a query parameter name (tavilyApiKey,
-// access_token); querySegments only as whole name segments, so author, keyword
-// and design are not mistaken for auth, key and sig.
+// access_token, sessionkey); a name ending in "key" counts too (accesskey,
+// appkey). querySegments match only as whole name segments, so author and
+// design are not mistaken for auth and sig. A query value is never checked for
+// randomness, so the name rules lean wide.
 var (
-	queryWords    = []string{"token", "secret", "passw", "apikey", "cred"}
+	queryWords    = []string{"token", "secret", "passw", "apikey", "cred", "session"}
 	querySegments = map[string]bool{"key": true, "auth": true, "sig": true, "signature": true}
+	keyNotSecret  = map[string]bool{"monkey": true, "hotkey": true, "turkey": true, "whiskey": true, "jockey": true}
 )
 
 // paramCredential splits a raw query (or fragment) itself, on & and ;, so a pair
@@ -364,17 +375,23 @@ func paramCredential(raw string) (string, bool) {
 		if !queryNameSecret(name) {
 			continue
 		}
-		// A pair with no = is all value: never echo it.
-		if !named {
-			return "a bare credential-like value", true
+		// A pair with no = is all value, and an odd name may hide one
+		// (apikey%3Dsecret): echo only a plain short name.
+		if !named || !plainName.MatchString(name) {
+			return "a credential-like value", true
 		}
 		return "a credential (" + name + ")", true
 	}
 	return "", false
 }
 
+var plainName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,40}$`)
+
 func queryNameSecret(name string) bool {
 	l := strings.ToLower(name)
+	if strings.HasSuffix(l, "key") && !keyNotSecret[l] {
+		return true
+	}
 	for _, w := range queryWords {
 		if strings.Contains(l, w) {
 			return true
