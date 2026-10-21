@@ -70,7 +70,7 @@ function storeUnlockOutcome(status, text, retryAfter) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
+  module.exports = { lockStore, renderUnlockForm, storeUnlockFocused, storeRecentMsg, STORE_HONEST_STATEMENT, storeBannerVisible, storeExpiryText, storePlaintextText, storeUnlockOutcome };
 }
 
 // --- DOM wiring (browser only) -------------------------------------------------
@@ -243,6 +243,8 @@ function setStoreErr(msg) {
   if (el) el.textContent = msg || "";
 }
 
+// lockStore: true when the store is now locked. On failure it returns false and
+// leaves the reason in #store-err, so a caller must not repaint that element away.
 async function lockStore() {
   setStoreErr("");
   try {
@@ -251,14 +253,15 @@ async function lockStore() {
       let t = "";
       try { t = (await res.json()).error || ""; } catch (_) { /* keep generic */ }
       setStoreErr(t || "Could not lock the store (" + res.status + ").");
-      return;
+      return false;
     }
   } catch (_) {
     setStoreErr("Could not lock the store: no connection.");
-    return;
+    return false;
   }
   await refreshStore();
   if (typeof refreshSessions === "function") refreshSessions();
+  return true;
 }
 
 // refreshStore: GET /api/store and repaint every surface. 404 = no store here:

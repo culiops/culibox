@@ -377,7 +377,9 @@ function credStrip(view) {
     const b = credEl("button", "btn", "Lock now");
     b.type = "button";
     b.id = "store-lock";
-    b.onclick = async () => { await lockStore(); loadCredentials(); };
+    // Reload only after a lock that worked: a repaint rebuilds #store-err
+    // empty, which would hide why the store is still unlocked.
+    b.onclick = async () => { if (await lockStore()) loadCredentials(); };
     strip.appendChild(b);
   }
   const wrap = credEl("div", "stack");
