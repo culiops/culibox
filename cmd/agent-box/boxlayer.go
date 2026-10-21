@@ -54,6 +54,8 @@ type boxLayer struct {
 	goos       string // runtime.GOOS as the layer was built; linux fences and guards every box
 	dataDir    string // the absolute data dir, for the store doctor and box setup read
 	stateRoot  string // where box homes and the bundle live; resolved on darwin
+	// egressProbe is egress.Probe; a test replaces it.
+	egressProbe func(ctx context.Context, p *egress.Proxy, box string, t egress.ProbeTarget, exec egress.ExecInput) error
 }
 
 // newBoxLayer builds the containment layer, or reports why it is unavailable.
@@ -174,13 +176,18 @@ func (l *boxLayer) prepare(ctx context.Context) error {
 func (l *boxLayer) verify(ctx context.Context, name string) error {
 	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	err := boxvm.ProbeLoopback(ctx, func(ctx context.Context, script string) (string, error) {
-		return l.cli.Run(ctx, []string{"exec", name, "node", "-e", script})
-	})
+	err := boxvm.ProbeLoopback(ctx, l.execNode(name))
 	if err != nil {
 		return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 	}
 	return nil
+}
+
+// execNode runs `node -e <script>` in the named box and returns its stdout.
+func (l *boxLayer) execNode(name string) boxvm.ExecFunc {
+	return func(ctx context.Context, script string) (string, error) {
+		return l.cli.Run(ctx, []string{"exec", name, "node", "-e", script})
+	}
 }
 
 // egressExec runs the egress probe's script in the named box. The credential
@@ -195,6 +202,13 @@ func (l *boxLayer) egressExec(name string) egress.ExecInput {
 // egress network and allowlist, by running the probe inside the real container
 // against the live proxy. It runs instead of verify for bound boxes. Fail
 // closed: a proxy that cannot start or a probe that cannot run is a refusal.
+//
+// darwin adds the loopback check after the egress probe. The egress network is
+// not --internal there, so the probe's DIRECT/DNS legs prove the VM rules only
+// for the paths they try; the loopback check proves the Mac's loopback services
+// stay unreachable through the gateway. It runs second because the probe's
+// ALLOW 200 is its positive control (a bound box's DNS is closed, so the plain
+// check's DNS control cannot be used); a probe that fails never reaches it.
 func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, name string) error {
 	return func(ctx context.Context, name string) error {
 		ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
@@ -203,12 +217,31 @@ func (l *boxLayer) egressVerify(svc *egress.Service) func(ctx context.Context, n
 		if err != nil {
 			return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
 		}
-		err = egress.Probe(ctx, svc.Proxy(), name, egress.ProbeTarget{ProxyHost: ep.ProxyHost, Port: ep.Port}, l.egressExec(name))
+		probe := l.egressProbe
+		if probe == nil {
+			probe = egress.Probe
+		}
+		err = probe(ctx, svc.Proxy(), name, egress.ProbeTarget{ProxyHost: ep.ProxyHost, Port: ep.Port}, l.egressExec(name))
+		if err == nil && l.goos == "darwin" {
+			err = boxvm.ProbeLoopbackBound(ctx, l.execNode(name))
+		}
 		if err != nil {
-			return fmt.Errorf("%w: %v", box.ErrBoxUnavailable, err)
+			return fmt.Errorf("%w: %v%s", box.ErrBoxUnavailable, err, l.recreateHint())
 		}
 		return nil
 	}
+}
+
+// recreateHint is appended to a darwin refusal of a bound box when the VM's
+// provision config has drifted: a VM provisioned before the egress subnet rules
+// existed fails the probe with a message that does not say what to do. Only the
+// text changes; the refusal itself is unchanged. Empty off darwin and when the
+// config has not drifted.
+func (l *boxLayer) recreateHint() string {
+	if l.vm == nil || !l.vm.Drifted() {
+		return ""
+	}
+	return " (the box VM's provision config is out of date, so its egress rules may be missing; run `agent-box box setup -recreate`)"
 }
 
 // vmStopped reports a darwin VM that is not running. Background passes check it

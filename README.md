@@ -216,7 +216,7 @@ Commit subjects are printed with control characters replaced, because a box wrot
 
 ## GitHub access for agents
 
-A boxed profile can carry a `github` binding. The credential broker then mints short-lived, read-only GitHub App installation tokens for the repositories you list, so the agent can `git clone`, `git fetch` and use `gh` without a personal access token in the box. Linux only for now: a bound profile is refused on macOS and on the host tier.
+A boxed profile can carry a `github` binding. The credential broker then mints short-lived, read-only GitHub App installation tokens for the repositories you list, so the agent can `git clone`, `git fetch` and use `gh` without a personal access token in the box. A bound profile is refused on the host tier. On macOS its box goes through the same egress allowlist as on Linux; that is new and not yet verified on a Mac, and an existing VM needs `agent-box box setup -recreate` once (see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
 
 **1. Create the GitHub App.** Give it read permissions only (agent-box never asks for write). Make it public ("Any account") if you will install it on more than its owner account; otherwise create it under the org that owns the repos. Install it on each owner you want to reach and select the repositories. Generate a private key and note the App's client id.
 
@@ -270,7 +270,7 @@ The box image must include `gh`: use an image built from this version (tag `2026
 
 ## Static tokens for agents
 
-Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once in `config.json`. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. Linux only for now: a bound spawn is refused on macOS until agent-box's egress control lands there, and on the host tier.
+Some services have no short-lived credential to mint: Grafana service-account tokens, Sentry auth tokens, Atlassian API tokens, a GitHub personal access token. A boxed profile can bind **static token entries** that you define once in `config.json`. The agent gets a token only for one command at a time, through a small in-box wrapper, and the box's egress is opened to exactly the hosts the entry names. A bound spawn is refused on the host tier. On macOS it goes through the egress allowlist like on Linux (new, not yet verified on a Mac; see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
 
 **What this does and does not protect against**
 
@@ -368,7 +368,7 @@ The two share a variable name, which is fine: the agent picks one per command (`
 
 ## Several AWS accounts in one session
 
-A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Linux only, like the other credential bindings: a bound spawn is refused on macOS and on the host tier.
+A boxed profile with the inline `aws` binding reaches one AWS account. To give one session several (a staging account and a production account, say), define **named AWS connections** once in `config.json` and let profiles pick them by name. Each connection is a full binding of its own: its own source profile, role, region, session policy, egress hosts and optional write role. Like the other credential bindings, a bound spawn is refused on the host tier, and on macOS it goes through the egress allowlist (new, not yet verified on a Mac; see [docs/MACOS.md](docs/MACOS.md#boxes-with-credential-bindings)).
 
 **1. Define the connections.** Declare them next to `static_tokens` and restart agent-box:
 
@@ -494,7 +494,7 @@ agent-box starts shells and agents on your machine, so authentication is never o
 
 - **Login.** Either a generated token (printed once in a URL, kept at `0600` in the data root) or a password from the env var named by `password_env`. Failed logins are throttled. Browsers get a signed 30-day cookie; delete `cookie.secret` to log everyone out. Named, revocable bearer tokens exist for programmatic clients and are stored as hashes.
 - **Network exposure.** The default bind is loopback. Binding all interfaces is refused unless `allow_public` is set. Requests whose `Host` header is not in the allowlist are refused (DNS-rebinding defence), and state-changing requests are checked for same-origin.
-- **Containment.** The boxed tier described above. Roughly, containment comes from what is absent inside the box. The hardening flags are the smaller part. A box cannot reach services on the host's loopback; on macOS agent-box checks this on every new box and refuses the box if the check fails.
+- **Containment.** The boxed tier described above. Roughly, containment comes from what is absent inside the box. The hardening flags are the smaller part. A box cannot reach services on the host's loopback, other than agent-box's own credential broker and, for boxes with a credential binding, the egress proxy; on macOS agent-box checks this on every new box and refuses the box if the check fails.
 - **Cloud access.** The broker mints credentials only for live boxed sessions, with a per-spawn token, rate limits, and a 15-minute lifetime. The role is capped by `ReadOnlyAccess`, and a generated session policy denies reading S3 objects (outside an allowlist you set per binding), Secrets Manager values, SSM parameters, DynamoDB items and KMS decrypt. Trust is limited to the SSO permission sets you name and requires a `SourceIdentity` of `agentbox-*`. Create the role with [docs/aws/agent-role](docs/aws/agent-role/README.md). The inline `aws` binding gets the same base-role write check as named connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)).
 - **Store.** Values held in the [store](#store) are encrypted against disk snapshots and backups. While it is unlocked, host-tier agents can read them; boxed agents cannot.
 - **Static tokens.** A bound token is fetched per command through the broker, is audited, and reaches only the hosts its entry names. The agent can still read it, and it is long-lived and not revoked when the session ends. See [Static tokens for agents](#static-tokens-for-agents).
@@ -505,7 +505,7 @@ agent-box starts shells and agents on your machine, so authentication is never o
 
 - The `host` tier is not contained. A host session is you, with an agent.
 - The adversary in scope is an agent running arbitrary userspace commands in a box. A kernel-level escape is out of scope.
-- On Linux, boxes reach the network only through agent-box's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. A public IP that is NAT'd to the host but not on one of its interfaces is not known to agent-box. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. macOS boxes still have normal outbound access.
+- On Linux, boxes reach the network only through agent-box's CONNECT proxy: port 443, hostnames only, never private addresses or addresses on the host's own interfaces. A public IP that is NAT'd to the host but not on one of its interfaces is not known to agent-box. AWS-bound boxes are limited to an allowlist. Boxes on the egress network cannot reach each other. On macOS only boxes with a binding (an `aws` binding, named AWS connections, a `github` binding or static tokens) get this treatment, and it is new and not yet verified on a Mac; macOS boxes without a binding keep normal outbound access.
 - A box started in place sees the workspace root's `.git`, `.claude/` and any top-level `CLAUDE.md`, `CLAUDE.local.md`, `AGENTS.md` or `.mcp.json` read-only, so it cannot commit there or edit them. Repos with submodules, or whose git config sets `core.worktree` or `core.bare` to anything but false, are refused. When `core.hooksPath` is nested (for example `.husky/_`), the whole top-level directory that holds it (`.husky/`) is read-only in the box.
 - Those guards cover top-level names only, and block direct writes to them only. They do not make a workspace safe to hand back to the host:
   - The same names in subdirectories are writable: a box can edit an existing `sub/CLAUDE.md`, `sub/.mcp.json` or `sub/.claude/settings.json` (hooks), and a host session started in `sub/` loads them.
@@ -529,7 +529,7 @@ Only one agent-box can serve a data root at a time.
 
 ## Roadmap
 
-- Egress allowlist for macOS boxes (Linux boxes have it).
+- Verify the egress allowlist for macOS boxes on a Mac (built, not yet run there).
 
 ## Development
 

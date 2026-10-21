@@ -21,6 +21,16 @@ import (
 // <COLIMA_HOME>/_lima/colima-<profile>/, and macOS caps a socket path at 103 bytes.
 const Profile = "agent-box"
 
+// EgressSubnet is the egress network's subnet for bound boxes (M3c). It is
+// fixed, not chosen by docker: the provision script runs before the network
+// exists and must name it.
+const EgressSubnet = "172.29.72.0/24"
+
+// LimaHostGateway is lima's host gateway (host.lima.internal), measured in the
+// M2 spike. Bound boxes get it as `--add-host host.lima.internal:<it>` and the
+// loopback check dials it; the check fails closed if the address is wrong.
+const LimaHostGateway = "192.168.5.2"
+
 // sunPathMax is macOS sockaddr_un.sun_path, NUL included.
 const sunPathMax = 104
 
@@ -35,6 +45,10 @@ type Config struct {
 	// BrokerPort is the Mac-loopback TCP port of the credential broker; the
 	// provision script lets boxes through the gateway DROP on exactly this port.
 	BrokerPort int
+	// EgressPort is the Mac-loopback TCP port of the egress proxy; boxes on the
+	// egress network are let through the gateway DROP on exactly this port and
+	// the broker's.
+	EgressPort int
 }
 
 // ConfigFor is the VM config for an instance: paths from the data root and
@@ -42,7 +56,7 @@ type Config struct {
 // a Config, so doctor and box setup cannot disagree about the VM they mean.
 func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string) Config {
 	cpus, mem := cfg.BoxVMSize()
-	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem, BrokerPort: cfg.BrokerPortOrDefault()}
+	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem, BrokerPort: cfg.BrokerPortOrDefault(), EgressPort: cfg.EgressPortOrDefault()}
 }
 
 func (c Config) ColimaHome() string      { return filepath.Join(c.Root, "vm") }
@@ -77,8 +91,10 @@ func (c Config) Mounts() []string {
 // whole broke DNS in every box and in the image build), so udp/53 passes.
 // DOCKER-USER is the chain docker evaluates first and never rewrites; creating
 // it here is harmless if docker has not started yet (docker keeps it).
-func provisionScript(brokerPort int) string {
-	return provisionBase + fmt.Sprintf(provisionBroker, brokerPort, brokerPort)
+// provisionEgress comes last so the egress subnet's rules end up on top.
+func provisionScript(brokerPort, egressPort int) string {
+	return provisionBase + fmt.Sprintf(provisionBroker, brokerPort, brokerPort) +
+		fmt.Sprintf(provisionEgress, egressPort, egressPort, brokerPort, brokerPort)
 }
 
 const provisionBase = `#!/bin/sh
@@ -107,6 +123,26 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
 const provisionBroker = `# credential broker (loopback on the Mac): one TCP port through the gateway DROP.
 while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
 iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport %d -j RETURN
+`
+
+// provisionEgress is formatted with only the two ports (the subnet is a literal
+// from EgressSubnet, so no % can come from it). Boxes bound to cloud credentials
+// sit on the egress network and may reach the Mac only through the gateway's
+// broker and egress-proxy ports; everything else from the subnet is dropped,
+// DNS included, and so is any packet to the VM itself. Each rule is removed and
+// re-inserted at position 1 on every boot, the DROP first, so the order holds
+// whatever the chain looked like before.
+const provisionEgress = `# egress (M3c): boxes on the egress network reach only the broker and the
+# egress proxy on the Mac. No udp/53 for this subnet: their DNS is closed.
+sub=` + EgressSubnet + `
+while iptables -w -D DOCKER-USER -s "$sub" -j DROP 2>/dev/null; do :; done
+iptables -w -I DOCKER-USER 1 -s "$sub" -j DROP
+while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
+iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN
+while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
+iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN
+# The VM itself (its bridge gateway, sshd): nothing from this subnet.
+iptables -w -C INPUT -s "$sub" -j DROP 2>/dev/null || iptables -w -I INPUT 1 -s "$sub" -j DROP
 `
 
 // yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
@@ -160,6 +196,9 @@ func (c Config) Validate() error {
 	if c.BrokerPort <= 0 || c.BrokerPort > 65535 {
 		return fmt.Errorf("the box VM needs a broker port between 1 and 65535, got %d", c.BrokerPort)
 	}
+	if c.EgressPort <= 0 || c.EgressPort > 65535 {
+		return fmt.Errorf("the box VM needs an egress port between 1 and 65535, got %d", c.EgressPort)
+	}
 	if c.CPUs <= 0 || c.MemoryGiB <= 0 {
 		return fmt.Errorf("the box VM needs positive cpus and memory, got %d and %d GiB", c.CPUs, c.MemoryGiB)
 	}
@@ -186,7 +225,7 @@ func (c Config) YAML() ([]byte, error) {
 		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: true\n", m)
 	}
 	b.WriteString("provision:\n  - mode: system\n    script: |\n")
-	for _, line := range strings.Split(strings.TrimRight(provisionScript(c.BrokerPort), "\n"), "\n") {
+	for _, line := range strings.Split(strings.TrimRight(provisionScript(c.BrokerPort, c.EgressPort), "\n"), "\n") {
 		b.WriteString("      " + line + "\n")
 	}
 	return []byte(b.String()), nil

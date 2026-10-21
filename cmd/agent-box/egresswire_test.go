@@ -4,15 +4,22 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/session"
 )
 
@@ -81,21 +88,156 @@ func TestStartEgressRefusesABadSecret(t *testing.T) {
 	}
 }
 
-// darwin placeholder until Task 18: every bound spawn is refused (main leaves
-// the hooks unset), and nothing is opened.
-func TestStartEgressDarwinUnsupported(t *testing.T) {
-	dir := t.TempDir()
-	_, err := startEgress(dir, absentLayer(), config.Config{}, "darwin", noSessions)
-	if !errors.Is(err, errEgressUnsupported) {
-		t.Fatalf("err = %v, want errEgressUnsupported", err)
+// statefulEgressDocker is a docker whose `network create` makes the network
+// exist (as docker would: non-internal here, on the subnet it was given), so a
+// first Ready can create it and a later one find it. `exec` prints the file
+// "exec" in its directory.
+func statefulEgressDocker(t *testing.T) (bin, dir string) {
+	t.Helper()
+	dir = t.TempDir()
+	bin = filepath.Join(dir, "docker")
+	script := `#!/bin/sh
+d=` + dir + `
+echo "$*" >> "$d/log"
+case "$1 $2" in
+"network ls") [ -f "$d/net" ] && echo agentbox-egress-default ;;
+"network create") shift 2
+	while [ $# -gt 0 ]; do case "$1" in --subnet) echo "$2" > "$d/net"; shift ;; --internal) echo internal >> "$d/flags" ;; -o) echo "$2" >> "$d/opts"; shift ;; esac; shift; done
+	: > "$d/created" ;;
+"network inspect") icc=true; grep -q 'enable_icc=false' "$d/opts" 2>/dev/null && icc=false
+	printf '{"Internal":false,"Options":{"com.docker.network.bridge.enable_icc":"%s"},"IPAM":{"Config":[{"Subnet":"%s","Gateway":"172.29.72.1"}]}}' "$icc" "$(cat "$d/net")" ;;
+exec*) cat "$d/exec" 2>/dev/null ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "egress control for macOS boxes is not available yet") {
-		t.Errorf("message %q must say plainly that macOS is not supported yet", err)
+	return bin, dir
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, f := range []string{"egress.secret", "audit.db"} {
-		if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
-			t.Errorf("%s created for an unsupported platform", f)
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// darwin option (a): a non-internal network on the fixed subnet, the proxy on
+// the Mac's 127.0.0.1, and boxes finding it as host.lima.internal.
+func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
+	bin, dir := statefulEgressDocker(t)
+	port := freePort(t)
+	svc, err := startEgress(t.TempDir(), &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}, config.Config{EgressPort: port}, "darwin", noSessions)
+	if err != nil {
+		t.Fatalf("darwin must start egress now: %v", err)
+	}
+	defer svc.Stop(context.Background())
+	if want := []string{"host.lima.internal:" + boxvm.LimaHostGateway}; !reflect.DeepEqual(svc.AddHosts, want) {
+		t.Errorf("AddHosts = %q, want %q", svc.AddHosts, want)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "created")); b != nil {
+		t.Error("boot created the network (the first bound spawn does)")
+	}
+	env, err := svc.Svc.SpawnEnv(context.Background(), "claude-3", egressNonce)
+	if err != nil {
+		t.Fatalf("first bound spawn: %v", err)
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, "log"))
+	if !strings.Contains(string(log), "--subnet "+boxvm.EgressSubnet) {
+		t.Errorf("network create lacks --subnet %s:\n%s", boxvm.EgressSubnet, log)
+	}
+	if o, _ := os.ReadFile(filepath.Join(dir, "opts")); !strings.Contains(string(o), "com.docker.network.bridge.enable_icc=false") {
+		t.Errorf("darwin's network must be created with inter-container traffic off (boxes must not reach each other): opts %q", o)
+	}
+	if f, _ := os.ReadFile(filepath.Join(dir, "flags")); strings.Contains(string(f), "internal") || strings.Contains(string(log), "--internal") {
+		t.Errorf("darwin's network must not be --internal (boxes would lose the route to the gateway):\n%s", log)
+	}
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "@host.lima.internal:"+strconv.Itoa(port)) {
+		t.Errorf("HTTPS_PROXY must name host.lima.internal:%d:\n%s", port, redactTokens(joined))
+	}
+	if !strings.Contains(joined, "NO_PROXY=") || !strings.Contains(joined, "host.lima.internal") {
+		t.Errorf("NO_PROXY must keep host.lima.internal (the broker) direct:\n%s", redactTokens(joined))
+	}
+	// The listener is on the Mac's loopback and nowhere wider.
+	ep, err := svc.Svc.Ready(context.Background())
+	if err != nil || ep.Port != port || ep.ProxyHost != "host.lima.internal" || ep.Net.Subnet.String() != boxvm.EgressSubnet {
+		t.Fatalf("endpoint = %+v, %v", ep, err)
+	}
+	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("proxy not listening on 127.0.0.1:%d: %v", port, err)
+	}
+	c.Close()
+	if ips, _ := net.InterfaceAddrs(); len(ips) > 0 {
+		for _, a := range ips {
+			ip, _, _ := net.ParseCIDR(a.String())
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+			if c, err := net.DialTimeout("tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)), time.Second); err == nil {
+				c.Close()
+				t.Errorf("proxy also answers on %s: it must bind 127.0.0.1 only", ip)
+			}
 		}
+	}
+}
+
+// redactTokens keeps a failing assertion from printing the proxy credential.
+func redactTokens(s string) string {
+	return regexp.MustCompile(`://[^@\s]*@`).ReplaceAllString(s, "://[redacted]@")
+}
+
+func TestEgressServiceOptionsPerPlatform(t *testing.T) {
+	cfg := config.Config{}
+	lin := egressServiceOptions(cfg, "linux", nil, nil)
+	if !lin.Want.Internal || !lin.Want.NoICC || lin.Want.Subnet != "" || lin.ProxyHost != "" {
+		t.Errorf("linux options changed: %+v", lin)
+	}
+	dar := egressServiceOptions(cfg, "darwin", nil, nil)
+	if dar.Want.Internal || !dar.Want.NoICC || dar.Want.Subnet != boxvm.EgressSubnet {
+		t.Errorf("darwin wants a non-internal network on %s with inter-container traffic off: %+v", boxvm.EgressSubnet, dar.Want)
+	}
+	if dar.ProxyHost != "host.lima.internal" || !strings.Contains(dar.NoProxy, "host.lima.internal") || dar.GOOS != "darwin" {
+		t.Errorf("darwin proxy host / no_proxy: %+v", dar)
+	}
+	if dar.Port != cfg.EgressPortOrDefault() {
+		t.Errorf("darwin port = %d", dar.Port)
+	}
+}
+
+// The darwin boot asks docker about the network only while the VM runs: a
+// stopped VM has no docker to ask, and the first bound spawn (after prepare
+// has started the VM) brings the listener up.
+func TestStartEgressDarwinBootLeavesAStoppedVMAlone(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	svc, err := startEgress(t.TempDir(), l, config.Config{}, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	if fc.called("start") {
+		t.Fatal("egress boot started the VM")
+	}
+	if strings.Contains(d.log(), "network") {
+		t.Fatalf("egress boot reached docker with the VM stopped:\n%s", d.log())
+	}
+}
+
+func TestStartEgressDarwinBootChecksTheNetworkWhenTheVMRuns(t *testing.T) {
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	svc, err := startEgress(t.TempDir(), l, config.Config{}, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	if !strings.Contains(d.log(), "network ls") {
+		t.Fatalf("a running VM's egress network must be looked up at boot:\n%s", d.log())
 	}
 }
 
@@ -264,5 +406,126 @@ func TestEgressVerifyFailsClosedWhenTheProxyCannotStart(t *testing.T) {
 	err = l.egressVerify(svc.Svc)(context.Background(), "agent-box-x")
 	if !errors.Is(err, box.ErrBoxUnavailable) {
 		t.Fatalf("err = %v, want it to wrap box.ErrBoxUnavailable", err)
+	}
+}
+
+// darwin: the egress probe (its ALLOW 200 is the positive control) runs first,
+// then the loopback check without a DNS control. Both must pass.
+func TestEgressVerifyDarwinRunsTheProbeThenTheLoopbackCheck(t *testing.T) {
+	bin, dir := statefulEgressDocker(t)
+	port := freePort(t)
+	l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: port}, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	var order []string
+	var target egress.ProbeTarget
+	l.egressProbe = func(_ context.Context, _ *egress.Proxy, name string, tg egress.ProbeTarget, _ egress.ExecInput) error {
+		order = append(order, "probe")
+		target = tg
+		return nil
+	}
+	// DNS is closed in a bound box: "DNS fail" is the expected answer.
+	if err := os.WriteFile(filepath.Join(dir, "exec"), []byte("DNS fail EAI_AGAIN\nBLOCKED a ETIMEDOUT\nBLOCKED b ETIMEDOUT\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.egressVerify(svc.Svc)(context.Background(), "agent-box-x"); err != nil {
+		t.Fatalf("verify: %v", err)
+	}
+	if !reflect.DeepEqual(order, []string{"probe"}) || target.ProxyHost != "host.lima.internal" || target.Port != port {
+		t.Fatalf("probe order %v target %+v", order, target)
+	}
+	log, _ := os.ReadFile(filepath.Join(dir, "log"))
+	if !regexp.MustCompile(`(?m)^exec agent-box-x node -e `).Match(log) {
+		t.Fatalf("the loopback check never ran in the box:\n%s", log)
+	}
+}
+
+func TestEgressVerifyDarwinFailsClosed(t *testing.T) {
+	for name, tc := range map[string]struct {
+		probeErr error
+		execOut  string
+		wantExec bool
+	}{
+		"probe fails: the loopback check does not run": {errors.New("egress check failed: x"), "BLOCKED a\n", false},
+		"loopback reached":      {nil, "REACHED host.lima.internal\nBLOCKED b\n", true},
+		"loopback inconclusive": {nil, "", true},
+	} {
+		bin, dir := statefulEgressDocker(t)
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: freePort(t)}, "darwin", noSessions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		probeErr := tc.probeErr
+		l.egressProbe = func(context.Context, *egress.Proxy, string, egress.ProbeTarget, egress.ExecInput) error {
+			return probeErr
+		}
+		_ = os.WriteFile(filepath.Join(dir, "exec"), []byte(tc.execOut), 0o600)
+		err = l.egressVerify(svc.Svc)(context.Background(), "agent-box-x")
+		svc.Stop(context.Background())
+		if !errors.Is(err, box.ErrBoxUnavailable) {
+			t.Errorf("%s: err = %v, want it to wrap box.ErrBoxUnavailable", name, err)
+		}
+		log, _ := os.ReadFile(filepath.Join(dir, "log"))
+		ran := regexp.MustCompile(`(?m)^exec agent-box-x node -e `).Match(log)
+		if ran != tc.wantExec {
+			t.Errorf("%s: loopback check ran = %v, want %v", name, ran, tc.wantExec)
+		}
+	}
+}
+
+// A darwin refusal of a bound box names `box setup -recreate` when the VM's
+// provision config has drifted (a VM provisioned before the egress subnet rules
+// existed), and only then. The refusal itself is the same either way.
+func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
+	const hint = "box setup -recreate"
+	for name, tc := range map[string]struct {
+		drifted bool
+		novm    bool
+		want    bool
+	}{
+		"drifted VM":    {drifted: true, want: true},
+		"up-to-date VM": {drifted: false, want: false},
+		"no VM (linux)": {novm: true, want: false},
+	} {
+		bin, _ := statefulEgressDocker(t)
+		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		if !tc.novm {
+			dl, _, _ := darwinLayer(t, true)
+			if !tc.drifted {
+				if err := dl.vm.Provision(context.Background(), false, io.Discard); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.MkdirAll(dl.vm.Config().ColimaHome(), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(dl.vm.Config().StampPath(), []byte("old\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if dl.vm.Drifted() != tc.drifted {
+				t.Fatalf("%s: setup Drifted = %v", name, dl.vm.Drifted())
+			}
+			l.vm = dl.vm
+		}
+		svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: freePort(t)}, "darwin", noSessions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.egressProbe = func(context.Context, *egress.Proxy, string, egress.ProbeTarget, egress.ExecInput) error {
+			return errors.New("egress check failed: the box can reach x directly; its network is not the egress network")
+		}
+		err = l.egressVerify(svc.Svc)(context.Background(), "agent-box-x")
+		svc.Stop(context.Background())
+		if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "its network is not the egress network") {
+			t.Fatalf("%s: err = %v, want the original refusal kept", name, err)
+		}
+		if got := strings.Contains(err.Error(), hint); got != tc.want {
+			t.Errorf("%s: hint present = %v, want %v: %v", name, got, tc.want, err)
+		}
 	}
 }

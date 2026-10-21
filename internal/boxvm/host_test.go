@@ -53,7 +53,7 @@ func TestColimaVersionRunsWithThePinnedEnv(t *testing.T) {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Root: "/data/ab", Home: "/home/a", ColimaBin: bin, DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071}
+	cfg := Config{Root: "/data/ab", Home: "/home/a", ColimaBin: bin, DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}
 	if v := ColimaVersion(context.Background(), cfg); v != "0.8.1" {
 		t.Fatalf("version = %q", v)
 	}
