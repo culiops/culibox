@@ -357,6 +357,17 @@ func (c *CredentialManager) persistLocked(cand credfile.File, merged config.Conf
 // merged entries (plus web entries that do not merge today: they still mean
 // to use their value), every profile's secrets, and the accounts.
 func (c *CredentialManager) storeRefsLocked() map[string][]string {
+	return storerefs.Refs(c.refInputsLocked())
+}
+
+// storeClaimsLocked is storeRefsLocked with profile secrets and account
+// token_secrets counted even without a store secret_source (storerefs.Claims):
+// what an owner check guards, since adding a source later makes them read.
+func (c *CredentialManager) storeClaimsLocked() map[string][]string {
+	return storerefs.Claims(c.refInputsLocked())
+}
+
+func (c *CredentialManager) refInputsLocked() (config.Config, []account.Account) {
 	cfg := c.merged
 	cfg.GitHubApps = slices.Clone(cfg.GitHubApps)
 	cfg.StaticTokens = slices.Clone(cfg.StaticTokens)
@@ -377,18 +388,18 @@ func (c *CredentialManager) storeRefsLocked() map[string][]string {
 	if c.accounts != nil {
 		accts = c.accounts()
 	}
-	return storerefs.Refs(cfg, accts)
+	return cfg, accts
 }
 
 // setAndPersistLocked stores the values first, then persists; if anything
 // fails after a Set, it removes the ids this call created (never one that was
 // already in the store). owner maps each id to the ref ("static_tokens/<name>")
 // allowed to share it: a new value may not overwrite a value that any other
-// definition reads.
+// definition reads, or will read once a store secret_source is added.
 func (c *CredentialManager) setAndPersistLocked(values map[string][]byte, owner map[string]string,
 	cand credfile.File, merged config.Config, src credfile.Sources, events []broker.CredEvent) error {
 	if len(values) > 0 {
-		refs := c.storeRefsLocked()
+		refs := c.storeClaimsLocked()
 		for _, id := range slices.Sorted(maps.Keys(values)) {
 			others := slices.DeleteFunc(slices.Clone(refs[id]), func(r string) bool { return r == owner[id] })
 			if len(others) > 0 {
@@ -444,7 +455,7 @@ func (c *CredentialManager) checkStoreRefLocked(what, self string, ref, own conf
 	if ref.Type != "store" || setting || (own.Type == "store" && own.ID == ref.ID) {
 		return nil
 	}
-	by := slices.DeleteFunc(slices.Clone(c.storeRefsLocked()[ref.ID]), func(r string) bool { return r == self })
+	by := slices.DeleteFunc(slices.Clone(c.storeClaimsLocked()[ref.ID]), func(r string) bool { return r == self })
 	if len(by) > 0 {
 		return fmt.Errorf("%s: store value %q: %w", what, ref.ID, ErrCredInUse{By: by})
 	}

@@ -436,6 +436,38 @@ func TestRemoveValueAgentAndAccountRefs(t *testing.T) {
 	}
 }
 
+// Without a store secret_source, a value may still not be written under an id
+// an account's token_secret or an agent's secret names: adding a store source
+// later would hand that definition the web caller's value. Removing a loose
+// value under such a name still works.
+func TestValueUnderSecretNameRefusedWithoutStoreSource(t *testing.T) {
+	profiles := []config.AgentConfig{{Name: "p1", Bin: "claude", Secrets: []string{"GH_TOKEN"}}}
+	f := newCredFixture(t, config.Config{}, profiles, account.Account{Name: "work", Provider: "claude", TokenSecret: "WORK_TOKEN"})
+	var inUse ErrCredInUse
+	for id, by := range map[string]string{"WORK_TOKEN": "accounts/work.token_secret", "GH_TOKEN": "agents/p1.secrets"} {
+		e := tok("thief", "THIEF")
+		e.Value = config.KeyRef{Type: "store", ID: id}
+		err := f.cm.PutTokens([]config.StaticToken{e}, map[string][]byte{"thief": []byte("chosen")}, true)
+		if !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{by}) {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if f.vals.has(id) {
+			t.Fatalf("%s: value set despite refusal", id)
+		}
+		// Without a value it is refused too, naming the reader.
+		if err := f.cm.PutTokens([]config.StaticToken{e}, nil, true); !errors.As(err, &inUse) || !slices.Equal(inUse.By, []string{by}) {
+			t.Fatalf("%s no value: %v", id, err)
+		}
+	}
+	if got := f.file(t).StaticTokens; len(got) != 0 {
+		t.Fatalf("file: %+v", got)
+	}
+	f.vals.m["WORK_TOKEN"] = []byte("loose")
+	if err := f.cm.RemoveValue("WORK_TOKEN"); err != nil || f.vals.has("WORK_TOKEN") {
+		t.Fatalf("remove loose value: %v", err)
+	}
+}
+
 func TestPutAWSNeedsAck(t *testing.T) {
 	f := newCredFixture(t, config.Config{}, nil)
 	f.chk.res = awsprobe.Result{State: awsprobe.Writes, Actions: []string{"s3:PutObject"}}

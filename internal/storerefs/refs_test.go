@@ -89,3 +89,25 @@ func TestInUse(t *testing.T) {
 		t.Fatal("InUse true for the zero config")
 	}
 }
+
+// Claims counts secret names as store ids without a store source too: a value
+// written under one today becomes that definition's value once a source is added.
+func TestClaimsCountNamesWithoutStoreSource(t *testing.T) {
+	cfg := fullConfig()
+	cfg.SecretSources = []config.SecretSource{{Type: "env"}}
+	accts := []account.Account{{Name: "work", Provider: "claude", TokenSecret: "WORK_TOKEN"}}
+	got := Claims(cfg, accts)
+	want := map[string][]string{
+		"gh-ci-key":               {"github_apps/ci"},
+		"grafana-tok":             {"static_tokens/grafana"},
+		"CLAUDE_CODE_OAUTH_TOKEN": {"agents/claude.secrets"},
+		"WORK_TOKEN":              {"accounts/work.token_secret"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Claims = %v, want %v", got, want)
+	}
+	cfg.SecretSources = []config.SecretSource{{Type: "store"}}
+	if s := Claims(cfg, accts); !reflect.DeepEqual(s, Refs(cfg, accts)) {
+		t.Fatalf("with a store source Claims = %v, Refs = %v", s, Refs(cfg, accts))
+	}
+}
