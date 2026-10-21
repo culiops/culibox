@@ -297,3 +297,27 @@ test("the inline AWS inputs are gone from the profile form", () => {
   }
   assert.ok(html.includes('id="pf-aws-convert"') && html.includes('id="pf-aws-remove"'));
 });
+
+// A live refresh of the pickers (the lists changed in Credentials) keeps the
+// ticks the operator made, and drops only those for an entry that WAS defined
+// and no longer is. A tick for a name that was never defined (a stored profile
+// pointing at a removed entry) stays, so its "not defined" row survives.
+const { ticksAfterRefresh } = require("../static/profileform.js");
+
+test("a refresh keeps ticks for entries that still exist", () => {
+  assert.deepStrictEqual(ticksAfterRefresh(["a", "b"], ["a", "b"], ["a", "b", "c"]), ["a", "b"]);
+});
+
+test("a refresh drops a tick whose entry was deleted meanwhile", () => {
+  assert.deepStrictEqual(ticksAfterRefresh(["a", "b"], ["a", "b"], ["a"]), ["a"]);
+});
+
+test("a tick on a name that was never defined stays so the server names it", () => {
+  assert.deepStrictEqual(ticksAfterRefresh(["gone"], ["a"], ["a", "b"]), ["gone"]);
+});
+
+test("a tick on a newly defined entry is kept and nothing is invented", () => {
+  assert.deepStrictEqual(ticksAfterRefresh(["new"], ["a"], ["a", "new"]), ["new"]);
+  assert.deepStrictEqual(ticksAfterRefresh([], ["a"], ["a", "b"]), []);
+  assert.deepStrictEqual(ticksAfterRefresh(null, null, null), []);
+});

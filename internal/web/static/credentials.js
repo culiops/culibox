@@ -836,6 +836,9 @@ async function loadCredentials() {
     return;
   }
   renderCredentials(view);
+  // Every mutation ends in a reload, so this is the one place the profile form's
+  // pickers learn that an entry was added, changed or deleted.
+  if (typeof refreshCredLists === "function") refreshCredLists();
 }
 
 // --- Add / edit AWS connections (browser only) ---------------------------------

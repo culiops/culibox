@@ -297,6 +297,17 @@ function convertAWSErrText(e) {
   return "";
 }
 
+// ticksAfterRefresh: the checkbox ticks that survive a live refresh of a picker
+// (the lists changed in Credentials while the form is open). A tick goes only
+// when its entry WAS defined in oldNames and is not in newNames. A tick on a
+// name that was never defined (a stored profile pointing at a removed entry)
+// stays, so its "(not defined)" row survives and the server names it on save.
+function ticksAfterRefresh(ticked, oldNames, newNames) {
+  const was = new Set(oldNames || []);
+  const now = new Set(newNames || []);
+  return (ticked || []).filter((n) => !(was.has(n) && !now.has(n)));
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
+  module.exports = { ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
 }

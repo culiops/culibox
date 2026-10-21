@@ -2835,6 +2835,41 @@ let stEntries = [];
 // awscEntries: the instance's aws_connections as /api/meta describes them (name,
 // label, account, region, whether it can write; never the source profile).
 let awscEntries = [];
+// applyCredLists takes the credential lists out of a /api/meta answer and repaints
+// the profile form's pickers. The ticks the operator has made in an open form are
+// kept; only a tick on an entry that was defined a moment ago and is gone now is
+// dropped (ticksAfterRefresh). A repaint is skipped when nothing changed, so a
+// refresh never disturbs a form that needs none.
+function applyCredLists(meta) {
+  const apps = meta && Array.isArray(meta.github_apps) ? meta.github_apps : [];
+  const sts = meta && Array.isArray(meta.static_tokens) ? meta.static_tokens : [];
+  const awscs = meta && Array.isArray(meta.aws_connections) ? meta.aws_connections : [];
+  const names = (l) => l.map((e) => (typeof e === "string" ? e : e.name));
+  const oldSt = names(stEntries), oldAwsc = names(awscEntries);
+  const changed = JSON.stringify([ghApps, stEntries, awscEntries]) !== JSON.stringify([apps, sts, awscs]);
+  ghApps = apps;
+  stEntries = sts;
+  awscEntries = awscs;
+  if (!changed && credListsPainted) return;
+  credListsPainted = true;
+  renderStPicker(ticksAfterRefresh(readStTicked(), oldSt, names(sts)));
+  renderAwscPicker(ticksAfterRefresh(readAwscTicked(), oldAwsc, names(awscs)));
+  renderGhOwners(readGhRows()); // a row on a removed App or token keeps it, shown, for the server to name
+  syncEditorActions();
+}
+let credListsPainted = false;
+// refreshCredLists re-reads /api/meta and repaints the pickers: when the
+// Profiles tab is shown and after a Credentials change. Newest answer wins; a
+// failed fetch leaves the lists as they were.
+let credListsSeq = 0;
+async function refreshCredLists() {
+  const seq = ++credListsSeq;
+  let meta;
+  try { meta = await api("/api/meta"); } catch (_) { return; }
+  if (seq !== credListsSeq) return;
+  applyCredLists(meta);
+}
+
 // The stored binding as loaded: the editor has no field for its extra egress
 // hosts, so they are carried unchanged on save (see ghBindingFromForm).
 let pfLoadedGh = null;
@@ -4863,13 +4898,7 @@ initMobileShell();
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
-    ghApps = meta && Array.isArray(meta.github_apps) ? meta.github_apps : [];
-    stEntries = meta && Array.isArray(meta.static_tokens) ? meta.static_tokens : [];
-    renderStPicker(readStTicked()); // the Tokens picker, now that the entries are known
-    awscEntries = meta && Array.isArray(meta.aws_connections) ? meta.aws_connections : [];
-    renderAwscPicker(readAwscTicked()); // the connections picker, likewise
-    renderGhOwners(readGhRows()); // the App and token pickers, now that the names are known
-    syncEditorActions();
+    applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     lastRateLimits = (meta && meta.rate_limits) || null;
