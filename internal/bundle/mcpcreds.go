@@ -102,6 +102,11 @@ func deepCredential(key string, v any) (string, bool) {
 		if tokenShaped.MatchString(t) {
 			return "a value shaped like an API token", true
 		}
+		if urlArg.MatchString(t) {
+			if what, ok := urlCredential(t); ok {
+				return "a url with " + what, true
+			}
+		}
 	case []any:
 		for _, e := range t {
 			if what, ok := deepCredential(key, e); ok {
@@ -138,6 +143,7 @@ var secretWords = map[string]bool{
 var pointerWords = map[string]bool{
 	"limit": true, "limits": true, "type": true, "budget": true, "count": true,
 	"file": true, "path": true, "dir": true, "name": true, "jar": true, "id": true,
+	"url": true, "uri": true, "endpoint": true,
 }
 
 // nameSegments splits on - _ . and camelCase boundaries, lowercased.
@@ -178,11 +184,42 @@ func secretFlag(name string) bool {
 	return secretName(name) || l == "key" || l == "auth"
 }
 
+// modeWords are values that pick an auth mode rather than being a secret:
+// --auth oauth, --token none.
+var modeWords = map[string]bool{
+	"none": true, "oauth": true, "oauth2": true, "bearer": true, "basic": true,
+	"true": true, "false": true,
+}
+
+var pathValue = regexp.MustCompile(`^(~|\.\.?)?/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*/?$`)
+
 // pointerValue is a value that names where a secret lives rather than being
-// one: a path. Pointing a flag at a file is the safe practice. A number is not
-// exempt: --password 123456 is a secret.
+// one: a mode word, or a strictly path-shaped value. Pointing a flag at a file
+// is the safe practice. The shape is strict so a secret can't pass by wearing a
+// slash: an absolute path needs two segments, and no segment may look random.
+// A number is not exempt: --password 123456 is a secret.
 func pointerValue(v string) bool {
-	return strings.HasPrefix(v, "/") || strings.HasPrefix(v, "~") || strings.HasPrefix(v, "./") || strings.HasPrefix(v, "../")
+	if modeWords[strings.ToLower(v)] {
+		return true
+	}
+	if !pathValue.MatchString(v) || tokenShaped.MatchString(v) {
+		return false
+	}
+	var segs []string
+	for _, seg := range strings.Split(v, "/") {
+		if seg != "" && seg != "~" && seg != "." && seg != ".." {
+			segs = append(segs, seg)
+		}
+	}
+	if strings.HasPrefix(v, "/") && len(segs) < 2 {
+		return false
+	}
+	for _, seg := range segs {
+		if randomRun(seg) {
+			return false
+		}
+	}
+	return true
 }
 
 var (
@@ -258,10 +295,25 @@ func wordsCredential(s string) (string, bool) {
 	return "", false
 }
 
-// randomSegment matches a long url path segment mixing letters and digits: the
-// shape of a secret embedded in the path (mcp.zapier.com/api/mcp/s/<secret>/).
-var randomSegment = regexp.MustCompile(`^[A-Za-z0-9_-]{24,}$`)
-var uuidSegment = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var (
+	alnumRun = regexp.MustCompile(`[A-Za-z0-9]{20,}`)
+	gitSHA   = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
+
+// randomRun reports an unbroken run of 20+ letters and digits mixing both: the
+// shape of a secret embedded in a path (mcp.zapier.com/api/mcp/s/<secret>/).
+// Hyphenated slugs and UUIDs break into short runs; a git SHA is exempt.
+func randomRun(s string) bool {
+	for _, r := range alnumRun.FindAllString(s, -1) {
+		if gitSHA.MatchString(r) {
+			continue
+		}
+		if strings.ContainsAny(r, "0123456789") && strings.IndexFunc(r, unicode.IsLetter) >= 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // urlCredential reports a url that carries a credential: userinfo of any kind
 // (a token is often the bare username), a credential-named query or fragment
@@ -279,38 +331,59 @@ func urlCredential(raw string) (string, bool) {
 	if u.User != nil {
 		return "userinfo (user:password@)", true
 	}
-	for _, part := range []string{u.RawQuery, u.Fragment} {
-		if n, ok := paramCredential(part); ok {
-			return "a credential in its query (" + n + ")", true
-		}
+	if what, ok := paramCredential(u.RawQuery); ok {
+		return what + " in its query", true
+	}
+	if what, ok := paramCredential(u.Fragment); ok {
+		return what + " in its fragment", true
 	}
 	for _, seg := range strings.Split(u.EscapedPath(), "/") {
-		if randomSegment.MatchString(seg) && !uuidSegment.MatchString(seg) &&
-			strings.ContainsAny(seg, "0123456789") && strings.IndexFunc(seg, unicode.IsLetter) >= 0 {
+		if randomRun(seg) {
 			return "a random-looking path segment", true
 		}
 	}
 	return "", false
 }
 
-// queryWords are matched as substrings of a query parameter name: a query name
-// has no other context, so tavilyApiKey or access_token both count.
-var queryWords = []string{"token", "secret", "key", "passw", "auth", "cred", "sig", "session"}
+// queryWords are matched as substrings of a query parameter name (tavilyApiKey,
+// access_token); querySegments only as whole name segments, so author, keyword
+// and design are not mistaken for auth, key and sig.
+var (
+	queryWords    = []string{"token", "secret", "passw", "apikey", "cred"}
+	querySegments = map[string]bool{"key": true, "auth": true, "sig": true, "signature": true}
+)
 
 // paramCredential splits a raw query (or fragment) itself, on & and ;, so a pair
 // url.Query would silently skip (bad escape, ; separator) is still seen.
 func paramCredential(raw string) (string, bool) {
 	for _, pair := range strings.FieldsFunc(raw, func(r rune) bool { return r == '&' || r == ';' }) {
-		name := strings.SplitN(pair, "=", 2)[0]
+		name, _, named := strings.Cut(pair, "=")
 		if un, err := url.QueryUnescape(name); err == nil {
 			name = un
 		}
-		l := strings.ToLower(name)
-		for _, w := range queryWords {
-			if strings.Contains(l, w) {
-				return name, true
-			}
+		if !queryNameSecret(name) {
+			continue
 		}
+		// A pair with no = is all value: never echo it.
+		if !named {
+			return "a bare credential-like value", true
+		}
+		return "a credential (" + name + ")", true
 	}
 	return "", false
+}
+
+func queryNameSecret(name string) bool {
+	l := strings.ToLower(name)
+	for _, w := range queryWords {
+		if strings.Contains(l, w) {
+			return true
+		}
+	}
+	for _, seg := range nameSegments(name) {
+		if querySegments[seg] {
+			return true
+		}
+	}
+	return secretName(name)
 }

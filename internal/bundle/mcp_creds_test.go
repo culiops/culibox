@@ -40,14 +40,18 @@ func TestMCPServersCarryingCredentialsAreRefused(t *testing.T) {
       "arg-number":    {"command":"npx","args":["pkg","--password",123456]},
       "oauth-secret":  {"url":"https://x.invalid/mcp","oauth":{"clientId":"abc","clientSecret":"zz-literal-25"}},
       "cap-headers":   {"url":"https://x.invalid/mcp","Headers":{"X-Thing":"zz-literal-26"}},
-      "cmd-secret":    {"command":"/opt/bin/run --token zz-literal-27"}
+      "cmd-secret":    {"command":"/opt/bin/run --token zz-literal-27"},
+      "path-disguise": {"command":"npx","args":["pkg","--password","/zz-literal-28"]},
+      "path-random":   {"command":"npx","args":["pkg","--token","~/Zz9literal29aBcDeFgHiJkLm"]},
+      "bare-query":    {"url":"https://x.invalid/mcp?zz-literal-30-auth"},
+      "server-url":    {"command":"npx","args":["pkg"],"serverUrl":"https://x.invalid/mcp?apiKey=zz-literal-31"}
     }}`)
 	kept, drops := filterMCP(path, fakeProber{"npx": true, "sh": true})
 	if len(kept) != 0 {
 		t.Fatalf("every server carries a credential and must be dropped; kept %v", keys(kept))
 	}
-	if len(drops) != 31 {
-		t.Fatalf("want 31 drops, got %d: %+v", len(drops), drops)
+	if len(drops) != 35 {
+		t.Fatalf("want 35 drops, got %d: %+v", len(drops), drops)
 	}
 	// The reason is shown in the UI and the lock file: it must never echo the
 	// credential it is refusing to copy.
@@ -76,11 +80,16 @@ func TestMCPServersWithoutCredentialsAreKept(t *testing.T) {
       "pw-file":     {"command":"npx","args":["pkg","--password-file","/run/secrets/db","--credentials","~/adc.json"]},
       "cookie-jar":  {"command":"npx","args":["pkg","--cookie-jar","/tmp/c"]},
       "uuid-path":   {"url":"https://x.invalid/mcp/123e4567-e89b-12d3-a456-426614174000/sse"},
-      "oauth-plain": {"url":"https://x.invalid/mcp","oauth":{"clientId":"abc","callbackPort":8080}}
+      "oauth-plain": {"url":"https://x.invalid/mcp","oauth":{"clientId":"abc","callbackPort":8080,"tokenEndpoint":"https://x.invalid/t"}},
+      "author-q":    {"url":"https://x.invalid/mcp?author=me&keyword=x&design=y"},
+      "slug-path":   {"url":"https://gitmcp.io/culiops/agent-box-v2-2026-release/projects/acme-production-cluster-01"},
+      "sha-arg":     {"command":"npx","args":["pkg","https://raw.githubusercontent.com/o/r/0123456789abcdef0123456789abcdef01234567/x.json"]},
+      "auth-mode":   {"command":"npx","args":["pkg","--auth","oauth"]}
     }}`)
 	kept, drops := filterMCP(path, fakeProber{"npx": true})
 	for _, want := range []string{"playwright", "fs", "remote", "empty-hdrs", "token-limit", "bool-flag",
-		"origins", "tok-limit", "pw-file", "cookie-jar", "uuid-path", "oauth-plain"} {
+		"origins", "tok-limit", "pw-file", "cookie-jar", "uuid-path", "oauth-plain",
+		"author-q", "slug-path", "sha-arg", "auth-mode"} {
 		if _, ok := kept[want]; !ok {
 			t.Errorf("%s should have been kept; drops=%+v", want, drops)
 		}
@@ -93,4 +102,14 @@ func keys(m map[string]any) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// A whitespace-only command is "no command", not a crash: one stray value in
+// the user's config must not panic every bundle build.
+func TestWhitespaceCommandIsDroppedNotPanicking(t *testing.T) {
+	path := writeMCP(t, `{"mcpServers":{"blank":{"command":"   "}}}`)
+	kept, drops := filterMCP(path, fakeProber{"npx": true})
+	if len(kept) != 0 || len(drops) != 1 {
+		t.Fatalf("kept=%v drops=%+v", kept, drops)
+	}
 }

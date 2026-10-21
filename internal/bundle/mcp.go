@@ -132,7 +132,7 @@ func rejectReason(srv mcpServer, resolves map[string]bool) (string, bool) {
 		return "", false // remote transport works in a box (subject to egress)
 	}
 	cmd, _ := srv["command"].(string)
-	if cmd == "" {
+	if strings.TrimSpace(cmd) == "" {
 		return "has neither a url nor a command", true
 	}
 	if !resolves[cmd] {
