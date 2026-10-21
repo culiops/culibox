@@ -3,6 +3,7 @@ package bundle
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -125,17 +126,28 @@ func rejectReason(srv mcpServer, resolves map[string]bool) (string, bool) {
 	if env, ok := srv["env"].(map[string]any); ok && len(env) > 0 {
 		return "declares literal env values; materializing them would write a secret into the bundle", true
 	}
+	if reason, ok := credentialReason(srv); ok {
+		return reason, true
+	}
 	if url, _ := srv["url"].(string); url != "" {
 		return "", false // remote transport works in a box (subject to egress)
 	}
 	cmd, _ := srv["command"].(string)
-	if cmd == "" {
+	if strings.TrimSpace(cmd) == "" {
 		return "has neither a url nor a command", true
 	}
 	if !resolves[cmd] {
-		return "command " + cmd + " does not exist inside the box image", true
+		// Only the first word: the reason lands in the lock file the box mounts,
+		// and the rest of a command string could hold a secret.
+		return "command " + commandName(cmd) + " does not exist inside the box image", true
 	}
 	return "", false
+}
+
+// commandName is the base name of a command's first word, withheld unless it
+// is a plain name: the reason is written to the lock file the box mounts.
+func commandName(cmd string) string {
+	return echoName(filepath.Base(strings.Fields(cmd)[0]))
 }
 
 func hasUnresolvedVar(v any) bool {
