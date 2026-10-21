@@ -735,3 +735,48 @@ func TestTokenRoutesRefuseFileValueRef(t *testing.T) {
 		t.Fatalf("a refused PUT changed the file")
 	}
 }
+
+func TestDefaultAppKeyID(t *testing.T) {
+	long := strings.Repeat("a", 64)
+	for name, want := range map[string]string{
+		"bot":    "gh-bot-key",
+		"my.app": "gh-my-app-key",
+		"a_b-c":  "gh-a_b-c-key",
+		long:     "gh-" + strings.Repeat("a", 57) + "-key",
+	} {
+		got := defaultAppKeyID(name)
+		if got != want || !secretstore.ValidID(got) {
+			t.Errorf("%q -> %q, want %q (valid=%v)", name, got, want, secretstore.ValidID(got))
+		}
+	}
+	if got := defaultAppKeyID(strings.Repeat(".", 64)); !secretstore.ValidID(got) || len(got) != 64 {
+		t.Errorf("dots -> %q", got)
+	}
+}
+
+// An App whose name has a "." or is long can still take a pasted key; a second
+// name that maps to the same id is refused rather than overwriting the first.
+func TestGitHubAppPasteKeyForAwkwardNames(t *testing.T) {
+	a := newTokenRoutes(t)
+	const pem = "-----BEGIN PRIVATE KEY-----\nK\n-----END PRIVATE KEY-----\n"
+	long := strings.Repeat("a", 60)
+	for _, n := range []string{"my.app", long} {
+		app := config.GitHubApp{Name: n, ClientID: "Iv1.abc"}
+		if code, _, raw := a.call("POST", pathApps, jsonBody(t, map[string]any{"app": app, "private_key_value": pem})); code != 201 {
+			t.Fatalf("%s: %d %s", n, code, raw)
+		}
+	}
+	if !a.fx.vals.has("gh-my-app-key") || !a.fx.vals.has(defaultAppKeyID(long)) {
+		t.Fatalf("store: %v", a.fx.vals.m)
+	}
+	clash := config.GitHubApp{Name: "my-app", ClientID: "Iv1.abc"}
+	code, m, raw := a.call("POST", pathApps, jsonBody(t, map[string]any{"app": clash, "private_key_value": pem}))
+	if code != 409 || m["code"] != "in_use" {
+		t.Fatalf("clash: %d %s", code, raw)
+	}
+	for _, e := range a.fx.file(t).GitHubApps {
+		if e.Name == "my-app" {
+			t.Fatal("the refused App was written")
+		}
+	}
+}

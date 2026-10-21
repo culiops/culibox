@@ -564,6 +564,26 @@ func (c *CredentialManager) PutTokens(entries []config.StaticToken, values map[s
 	return c.setAndPersistLocked(toSet, owner, cand, merged, src, events)
 }
 
+// defaultAppKeyID is the store id a pasted GitHub App key gets: gh-<name>-key,
+// with every character outside [A-Za-z0-9_-] written as "-" and the name cut so
+// the whole id fits secretstore's 64 characters. An App name may hold a "." or
+// be longer than that allows, and the form has no field to name another id. Two
+// names can map to one id; the value-owner check then refuses the second.
+// Mirrored by ghKeyID in static/credentials.js.
+func defaultAppKeyID(name string) string {
+	const prefix, suffix = "gh-", "-key"
+	b := []byte(name)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			b[i] = '-'
+		}
+	}
+	if max := 64 - len(prefix) - len(suffix); len(b) > max {
+		b = b[:max]
+	}
+	return prefix + string(b) + suffix
+}
+
 // PutGitHubApp creates or replaces a GitHub App. A non-empty keyValue is the
 // private key: it goes to the store (id = the App's existing store id, else
 // gh-<name>-key) and the entry references it. A replace that names no key and
@@ -581,7 +601,7 @@ func (c *CredentialManager) PutGitHubApp(app config.GitHubApp, keyValue []byte, 
 	toSet := map[string][]byte{}
 	owner := map[string]string{}
 	if len(keyValue) > 0 {
-		id := "gh-" + app.Name + "-key"
+		id := defaultAppKeyID(app.Name)
 		if app.PrivateKey.Type == "store" && app.PrivateKey.ID != "" {
 			id = app.PrivateKey.ID
 		}
