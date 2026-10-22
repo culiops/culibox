@@ -86,6 +86,9 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 	l.img = boximage.Docker{Bin: bin, Args: l.dockerArgs}
 	o := l.options(cfg)
 	o.Protected = protected
+	// The image build trusts the same CAs as the boxes; with a load error it
+	// gets none, and the manager refuses every boxed spawn (ExtraCAErr).
+	l.img.ExtraCA = o.ExtraCA.PEM()
 	m, err := box.New(o)
 	if err != nil {
 		return nil, err
@@ -97,6 +100,10 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 // options is what the box manager is built with. Off darwin there are no hooks:
 // Linux behaves exactly as before the VM existed.
 func (l *boxLayer) options(cfg config.Config) box.Options {
+	// Loaded once. The daemon refuses to boot on a bad extra_ca_certs, but a
+	// layer built any other way must still fail closed: ExtraCAErr refuses
+	// every boxed spawn.
+	extra, extraErr := cfg.ExtraCA()
 	o := box.Options{
 		DockerBin:  l.dockerBin,
 		DockerArgs: l.dockerArgs,
@@ -108,6 +115,8 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		PidsLimit:  cfg.BoxPidsLimit,
 		TmpSize:    cfg.BoxTmpSize,
 		Memory:     cfg.BoxMemory,
+		ExtraCA:    extra,
+		ExtraCAErr: extraErr,
 		// Linux: every box sits on the egress network and has its guard files
 		// read-only in place. darwin keeps its default network and Verify.
 		EgressAll:    l.goos == "linux",

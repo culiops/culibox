@@ -27,7 +27,13 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	ctx := context.Background()
 	switch a.Sub {
 	case "setup":
-		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), w)
+		set, err := cfg.ExtraCA()
+		if err != nil {
+			fmt.Fprintf(w, "FAIL extra-ca: %v\n", err)
+			return 1
+		}
+		printExtraCA(w, set, time.Now())
+		return boxSetupImage(ctx, boximage.Docker{Bin: bin, ExtraCA: set.PEM()}, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), w)
 	case "status":
 		rc := boxImageStatus(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), w)
 		return max(rc, boxListStatus(ctx, box.CLIClient{Bin: bin}, w))
@@ -87,6 +93,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 	fmt.Fprintf(w, "building %s for linux/%s ...\n", strings.Join(tags, ", "), arch)
 	if err := d.Build(ctx, tags, w); err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		hintBuildFailure(ctx, w, d, err)
 		return 1
 	}
 	fmt.Fprintf(w, "PASS image: built %s (linux/%s, dockerfile %s)\n", dated, arch, boximage.Hash())
@@ -129,6 +136,7 @@ func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, 
 	fmt.Fprintf(w, "pulling %s for linux/%s ...\n", image, arch)
 	if err := d.Pull(ctx, image, arch, w); err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		hintPullFailure(ctx, w, d, err)
 		return 1
 	}
 	st, err := d.Inspect(ctx, image)

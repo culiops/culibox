@@ -129,6 +129,12 @@ func boxStopVM(ctx context.Context, force bool, l *boxLayer, w io.Writer) int {
 // The colima flags it starts with (boxvm.Config.StartArgs) keep the user's
 // docker context and ~/.ssh/config untouched; the context check confirms it.
 func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, w io.Writer) int {
+	set, err := cfg.ExtraCA()
+	if err != nil {
+		fmt.Fprintf(w, "FAIL extra-ca: %v\n", err)
+		return 1
+	}
+	printExtraCA(w, set, time.Now())
 	if major := boxvm.MacOSMajor(ctx); major != 0 && major < 13 {
 		fmt.Fprintf(w, "FAIL macOS %d: the box VM needs macOS 13+ (vz + virtiofs)\n", major)
 		return 1

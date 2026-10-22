@@ -57,6 +57,7 @@ func TestBoxTierRows(t *testing.T) {
 		{"stopped", func(f *boxFacts) { f.Status.Running = false; f.ProbeRan = false }, Pass, "first boxed spawn"},
 		{"status failed", func(f *boxFacts) { f.StatusErr = errors.New("colima status: boom") }, Fail, "boom"},
 		{"drift", func(f *boxFacts) { f.Drifted = true }, Warn, "-recreate"},
+		{"drift names the CA setting", func(f *boxFacts) { f.Drifted = true }, Warn, "extra_ca_certs"},
 		{"sshfs", func(f *boxFacts) { f.Status.MountType = "sshfs" }, Warn, "virtiofs"},
 		{"no image", func(f *boxFacts) { f.Image = boximage.ImageState{} }, Fail, "box setup"},
 		{"image inspect failed", func(f *boxFacts) { f.ImageErr = errors.New("docker image inspect: boom") }, Fail, "boom"},

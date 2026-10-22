@@ -140,6 +140,7 @@ func Checks(in Input) []Result {
 		return append(out, Result{Fail, "config", in.Source.String() + ": " + err.Error()})
 	}
 	out = append(out, Result{Pass, "config", in.Source.String()})
+	out = append(out, checkExtraCA(in.Config, time.Now())...)
 	out = append(out, checkCredFile(in))
 	c := in.Config
 	dataDir := c.ResolvedDataDir(in.Home)
@@ -475,4 +476,24 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// checkExtraCA is one row per CA in extra_ca_certs, and none when it is unset.
+// An expired or not-yet-valid CA warns. A file that no longer loads fails: the
+// boxes refuse to start without it.
+func checkExtraCA(c config.Config, now time.Time) []Result {
+	set, err := c.ExtraCA()
+	if err != nil {
+		return []Result{{Fail, "extra-ca", err.Error()}}
+	}
+	var out []Result
+	for _, ca := range set.CAs {
+		valid, line := ca.Describe(now)
+		if valid {
+			out = append(out, Result{Pass, "extra-ca", line})
+		} else {
+			out = append(out, Result{Warn, "extra-ca", line + " (expired or not yet valid)"})
+		}
+	}
+	return out
 }
