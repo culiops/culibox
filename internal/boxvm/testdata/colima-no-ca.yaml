@@ -1,0 +1,49 @@
+# Written by `agent-box box setup`. Edits are overwritten: set box_vm_cpus /
+# box_vm_memory_gib in agent-box's config.json instead.
+cpu: 4
+memory: 4
+runtime: docker
+vmType: vz
+rosetta: false
+mountType: virtiofs
+mountInotify: true
+autoActivate: false
+sshConfig: false
+forwardAgent: false
+mounts:
+  - location: "/Users/a"
+    writable: true
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      # agent-box: boxes must not reach the Mac's loopback through the host gateway.
+      set -eu
+      # IPv6: the default docker bridge has no IPv6, so the IPv4 host-gateway DROP is the whole rule.
+      gw=$(getent ahostsv4 host.lima.internal | awk 'NR==1 {print $1}')
+      [ -n "$gw" ] || gw=192.168.5.2
+      iptables -w -N DOCKER-USER 2>/dev/null || true
+      iptables -w -C DOCKER-USER -d "$gw" -j DROP 2>/dev/null || iptables -w -I DOCKER-USER 1 -d "$gw" -j DROP
+      # DNS over UDP is the one exception: docker hands boxes the gateway as their
+      # nameserver (the VM's systemd-resolved uplink). udp/53 there is expected to be
+      # lima's own resolver, which takes the packet before the NAT to the Mac; check
+      # with a decoy on the Mac's 127.0.0.1:53 after a lima upgrade.
+      # TCP stays dropped: an older resolver without a TCP listener would let tcp/53
+      # fall through to the Mac's 127.0.0.1:53. Removed and re-inserted above the
+      # DROP on every run, so the order always holds.
+      while iptables -w -D DOCKER-USER -d "$gw" -p udp --dport 53 -j RETURN 2>/dev/null; do :; done
+      iptables -w -I DOCKER-USER 1 -d "$gw" -p udp --dport 53 -j RETURN
+      # credential broker (loopback on the Mac): one TCP port through the gateway DROP.
+      while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport 9071 -j RETURN 2>/dev/null; do :; done
+      iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport 9071 -j RETURN
+      # egress (M3c): boxes on the egress network reach only the broker and the
+      # egress proxy on the Mac. No udp/53 for this subnet: their DNS is closed.
+      sub=172.29.72.0/24
+      while iptables -w -D DOCKER-USER -s "$sub" -j DROP 2>/dev/null; do :; done
+      iptables -w -I DOCKER-USER 1 -s "$sub" -j DROP
+      while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport 9072 -j RETURN 2>/dev/null; do :; done
+      iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport 9072 -j RETURN
+      while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport 9071 -j RETURN 2>/dev/null; do :; done
+      iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport 9071 -j RETURN
+      # The VM itself (its bridge gateway, sshd): nothing from this subnet.
+      iptables -w -C INPUT -s "$sub" -j DROP 2>/dev/null || iptables -w -I INPUT 1 -s "$sub" -j DROP

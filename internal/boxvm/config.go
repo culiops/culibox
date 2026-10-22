@@ -49,6 +49,9 @@ type Config struct {
 	// egress network are let through the gateway DROP on exactly this port and
 	// the broker's.
 	EgressPort int
+	// ExtraCAPEM is the canonical PEM of extra_ca_certs; empty means none, and
+	// then the YAML is byte-identical to what it was before the feature.
+	ExtraCAPEM []byte
 }
 
 // ConfigFor is the VM config for an instance: paths from the data root and
@@ -56,7 +59,11 @@ type Config struct {
 // a Config, so doctor and box setup cannot disagree about the VM they mean.
 func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string) Config {
 	cpus, mem := cfg.BoxVMSize()
-	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem, BrokerPort: cfg.BrokerPortOrDefault(), EgressPort: cfg.EgressPortOrDefault()}
+	// Every caller (the daemon's box layer, doctor) runs after config validation,
+	// which already refused an unreadable extra_ca_certs. On an error here
+	// ExtraCAPEM stays nil: no CA block, never a half-built one.
+	ca, _ := cfg.ExtraCA()
+	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem, BrokerPort: cfg.BrokerPortOrDefault(), EgressPort: cfg.EgressPortOrDefault(), ExtraCAPEM: ca.PEM()}
 }
 
 func (c Config) ColimaHome() string      { return filepath.Join(c.Root, "vm") }
@@ -145,6 +152,39 @@ iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN
 iptables -w -C INPUT -s "$sub" -j DROP 2>/dev/null || iptables -w -I INPUT 1 -s "$sub" -j DROP
 `
 
+// caTerminator ends caBlock's heredoc. A PEM never contains it (base64 and
+// BEGIN/END lines only), but the text lands in a root shell script, so Validate
+// refuses a PEM that does.
+const caTerminator = "AGENT_BOX_CA"
+
+// caBlock is appended to provisionScript's output by plain concatenation,
+// never formatted: a % in it would otherwise be read as a verb. The heredoc is
+// quoted, so the shell expands nothing in the PEM. The file is replaced, and
+// dockerd restarted, only when its content changed; the restart is best-effort
+// because the script runs under set -eu on every VM start and a failed restart
+// must not fail it. The script ends in `true` because `a && b` as its last
+// command would otherwise leave the script's exit status at is-active's 3 when
+// docker is not running yet (the usual first start). A failed
+// update-ca-certificates removes the file again so the next start retries
+// instead of seeing an unchanged file and skipping the update.
+func caBlock(pem []byte) string {
+	return `# extra_ca_certs: dockerd (image pulls, registry logins) trusts the roots the boxes trust.
+ca=/usr/local/share/ca-certificates/agent-box-extra.crt
+mkdir -p /usr/local/share/ca-certificates
+cat > "$ca.new" <<'` + caTerminator + `'
+` + strings.TrimRight(string(pem), "\n") + `
+` + caTerminator + `
+if cmp -s "$ca.new" "$ca"; then
+  rm -f "$ca.new"
+else
+  mv "$ca.new" "$ca"
+  update-ca-certificates || { rm -f "$ca"; exit 1; }
+  systemctl is-active --quiet docker && { systemctl restart docker || echo "agent-box: docker restart failed" >&2; }
+fi
+true
+`
+}
+
 // yamlSafe refuses what a double-quoted YAML scalar would need escaping for or
 // could be read differently: a double quote, a backslash, invalid UTF-8, any
 // control character (C0, DEL, C1 including U+0085 NEL) and U+2028/U+2029, which
@@ -199,6 +239,11 @@ func (c Config) Validate() error {
 	if c.EgressPort <= 0 || c.EgressPort > 65535 {
 		return fmt.Errorf("the box VM needs an egress port between 1 and 65535, got %d", c.EgressPort)
 	}
+	for _, l := range strings.Split(string(c.ExtraCAPEM), "\n") {
+		if strings.TrimSpace(l) == caTerminator {
+			return errors.New("the extra CA bundle contains the provision script's heredoc terminator")
+		}
+	}
 	if c.CPUs <= 0 || c.MemoryGiB <= 0 {
 		return fmt.Errorf("the box VM needs positive cpus and memory, got %d and %d GiB", c.CPUs, c.MemoryGiB)
 	}
@@ -225,7 +270,11 @@ func (c Config) YAML() ([]byte, error) {
 		fmt.Fprintf(&b, "  - location: \"%s\"\n    writable: true\n", m)
 	}
 	b.WriteString("provision:\n  - mode: system\n    script: |\n")
-	for _, line := range strings.Split(strings.TrimRight(provisionScript(c.BrokerPort, c.EgressPort), "\n"), "\n") {
+	script := provisionScript(c.BrokerPort, c.EgressPort)
+	if len(c.ExtraCAPEM) > 0 {
+		script += caBlock(c.ExtraCAPEM)
+	}
+	for _, line := range strings.Split(strings.TrimRight(script, "\n"), "\n") {
 		b.WriteString("      " + line + "\n")
 	}
 	return []byte(b.String()), nil

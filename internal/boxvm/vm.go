@@ -154,7 +154,7 @@ func yamlHash(y []byte) string {
 }
 
 // Drifted reports whether the config agent-box would write now differs from
-// the one the VM was provisioned with (cpus, memory, mounts, provision script).
+// the one the VM was provisioned with (cpus, memory, mounts, extra_ca_certs, provision script).
 func (v *VM) Drifted() bool {
 	y, err := v.cfg.YAML()
 	if err != nil {
@@ -279,7 +279,7 @@ func (v *VM) Provision(ctx context.Context, recreate bool, w io.Writer) error {
 		return err
 	}
 	if _, statErr := os.Stat(v.cfg.StampPath()); statErr == nil && v.Drifted() && !recreate {
-		return errors.New("the box VM was set up with a different configuration; run `agent-box box setup -recreate` (deletes the VM's images and cache, not box homes)")
+		return errors.New("the box VM was set up with a different configuration (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate` (deletes the VM's images and cache, not box homes)")
 	}
 	if recreate {
 		fmt.Fprintln(w, "deleting the box VM …")

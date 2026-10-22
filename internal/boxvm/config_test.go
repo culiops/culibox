@@ -1,13 +1,22 @@
 package boxvm
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -192,7 +201,7 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
 	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d")
 	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8, BrokerPort: 9071, EgressPort: 9072}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
 	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 || d.EgressPort != 9072 {
@@ -566,5 +575,218 @@ func TestEgressRulesChangeTheYAMLHash(t *testing.T) {
 		if !strings.Contains(string(y), want) {
 			t.Errorf("yaml missing %q:\n%s", want, y)
 		}
+	}
+}
+
+// scriptFromYAML is the provision script as lima runs it: the YAML block scalar
+// with its six-space indent stripped.
+func scriptFromYAML(t *testing.T, y []byte) string {
+	t.Helper()
+	const head = "    script: |\n"
+	i := strings.Index(string(y), head)
+	if i < 0 {
+		t.Fatalf("no provision script in the yaml:\n%s", y)
+	}
+	var out []string
+	for _, l := range strings.Split(strings.TrimRight(string(y)[i+len(head):], "\n"), "\n") {
+		if !strings.HasPrefix(l, "      ") {
+			t.Fatalf("script line %q is not indented under the block scalar", l)
+		}
+		out = append(out, strings.TrimPrefix(l, "      "))
+	}
+	return strings.Join(out, "\n") + "\n"
+}
+
+const testCAPEM = "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0FfVEVTVF9ST09UAAAAAAAAAAAwCgYIKoZIzj0EAwIw\nEjEQMA4GA1UEAwwHdGVzdC1jYTAeFw0yNjEwMjIwMDAwMDBaFw0zNjEwMjIwMDAw\n-----END CERTIFICATE-----\n"
+
+// Off means off: with no CA the YAML bytes, and so the drift stamp, are exactly
+// what they were before extra_ca_certs existed. testdata/colima-no-ca.yaml was
+// captured from the code at 41f3081, before any change.
+func TestYAMLWithoutCAUnchanged(t *testing.T) {
+	want, err := os.ReadFile("testdata/colima-no-ca.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := testCfg().YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("YAML with no CA changed:\n%s\nwant\n%s", got, want)
+	}
+	if h := yamlHash(got); h != "483c85c2ce56512ce8bf5c9c77a612754a88589d26e37b5acb8dc7108e1c28ba" {
+		t.Fatalf("hash %s is not the pre-feature hash", h)
+	}
+	c := testCfg()
+	c.ExtraCAPEM = []byte{}
+	if g, _ := c.YAML(); string(g) != string(want) {
+		t.Fatal("an empty, non-nil ExtraCAPEM must read as no CA")
+	}
+}
+
+func TestYAMLWithCAInstallsIt(t *testing.T) {
+	plain, _ := testCfg().YAML()
+	c := testCfg()
+	c.ExtraCAPEM = []byte(testCAPEM)
+	y, err := c.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := scriptFromYAML(t, y)
+	for _, want := range []string{
+		testCAPEM, "<<'AGENT_BOX_CA'\n", "\nAGENT_BOX_CA\n", "update-ca-certificates",
+		"/usr/local/share/ca-certificates/agent-box-extra.crt", "cmp -s",
+		"systemctl is-active --quiet docker && {", "systemctl restart docker || echo \"agent-box: docker restart failed\" >&2",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script missing %q:\n%s", want, s)
+		}
+	}
+	if yamlHash(y) == yamlHash(plain) {
+		t.Error("adding a CA must change the YAML hash (drift)")
+	}
+	if !strings.HasPrefix(string(y), string(plain[:strings.Index(string(plain), "provision:")])) {
+		t.Error("only the provision script may differ")
+	}
+}
+
+// The block is appended after the sprintf-formatted script, never formatted.
+func TestCABlockNotSprintfFormatted(t *testing.T) {
+	const pemWithVerbs = "-----BEGIN CERTIFICATE-----\n%d %s %!x(MISSING)\n-----END CERTIFICATE-----\n"
+	if got := provisionScript(1, 2) + caBlock([]byte(pemWithVerbs)); !strings.Contains(got, pemWithVerbs) {
+		t.Fatalf("PEM changed by formatting:\n%s", got)
+	}
+	c := testCfg()
+	c.ExtraCAPEM = []byte(pemWithVerbs)
+	y, err := c.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := scriptFromYAML(t, y); !strings.Contains(s, pemWithVerbs) {
+		t.Fatalf("PEM changed on the way into the yaml:\n%s", s)
+	}
+}
+
+func TestValidateRefusesAPEMThatCouldEndTheHeredoc(t *testing.T) {
+	c := testCfg()
+	c.ExtraCAPEM = []byte("-----BEGIN CERTIFICATE-----\nAAAA\nAGENT_BOX_CA\ntouch /pwned\n-----END CERTIFICATE-----\n")
+	if _, err := c.YAML(); err == nil {
+		t.Fatal("a PEM carrying the heredoc terminator must be refused")
+	}
+}
+
+// Runs the rendered script for real, with the CA directory redirected into a
+// scratch dir and fake iptables/getent/update-ca-certificates/systemctl.
+func TestCABlockRuns(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	c := testCfg()
+	c.ExtraCAPEM = []byte(testCAPEM)
+	y, err := c.YAML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := scriptFromYAML(t, y)
+	type env struct{ dir, ca string }
+	setup := func(t *testing.T, active, restartFails bool) env {
+		dir := t.TempDir()
+		caDir := filepath.Join(dir, "certs")
+		sc := strings.ReplaceAll(script, "/usr/local/share/ca-certificates", caDir)
+		systemctl := "#!/bin/sh\necho \"systemctl $*\" >> \"$LOG\"\ncase \"$1\" in\nis-active) " + map[bool]string{true: "exit 0", false: "exit 3"}[active] + " ;;\nrestart) " + map[bool]string{true: "exit 1", false: "exit 0"}[restartFails] + " ;;\nesac\n"
+		for name, body := range map[string]string{
+			"iptables":               fakeIptables,
+			"getent":                 "#!/bin/sh\necho '192.168.5.2 STREAM host.lima.internal'\n",
+			"update-ca-certificates": "#!/bin/sh\necho update-ca-certificates >> \"$LOG\"\n",
+			"systemctl":              systemctl,
+			"provision.sh":           sc,
+		} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command(sh, "-n", filepath.Join(dir, "provision.sh")).CombinedOutput(); err != nil {
+			t.Fatalf("sh -n: %v\n%s", err, out)
+		}
+		return env{dir, filepath.Join(caDir, "agent-box-extra.crt")}
+	}
+	run := func(t *testing.T, e env) (log, stderr string, err error) {
+		cmd := exec.Command(sh, filepath.Join(e.dir, "provision.sh"))
+		cmd.Env = []string{"PATH=" + e.dir + ":/usr/bin:/bin", "CHAIN=" + filepath.Join(e.dir, "chain"), "LOG=" + filepath.Join(e.dir, "log")}
+		var eb strings.Builder
+		cmd.Stderr = &eb
+		err = cmd.Run()
+		b, _ := os.ReadFile(filepath.Join(e.dir, "log"))
+		os.Remove(filepath.Join(e.dir, "log"))
+		return string(b), eb.String(), err
+	}
+
+	t.Run("first start installs, updates, restarts a running docker", func(t *testing.T) {
+		e := setup(t, true, false)
+		log, _, err := run(t, e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(e.ca); string(b) != testCAPEM {
+			t.Fatalf("installed file = %q", b)
+		}
+		if log != "update-ca-certificates\nsystemctl is-active --quiet docker\nsystemctl restart docker\n" {
+			t.Fatalf("log:\n%s", log)
+		}
+		if _, err := os.Stat(e.ca + ".new"); err == nil {
+			t.Fatal(".new left behind")
+		}
+		// Second start: nothing changed, nothing runs.
+		log, _, err = run(t, e)
+		if err != nil || log != "" {
+			t.Fatalf("unchanged start: err=%v log=%q", err, log)
+		}
+		if _, err := os.Stat(e.ca + ".new"); err == nil {
+			t.Fatal(".new left behind on an unchanged start")
+		}
+	})
+	t.Run("docker not running: no restart, script still succeeds", func(t *testing.T) {
+		e := setup(t, false, false)
+		log, _, err := run(t, e)
+		if err != nil {
+			t.Fatalf("script failed: %v", err)
+		}
+		if strings.Contains(log, "restart") || !strings.Contains(log, "update-ca-certificates") {
+			t.Fatalf("log:\n%s", log)
+		}
+	})
+	t.Run("restart failing never fails the script", func(t *testing.T) {
+		e := setup(t, true, true)
+		_, stderr, err := run(t, e)
+		if err != nil {
+			t.Fatalf("script failed: %v", err)
+		}
+		if !strings.Contains(stderr, "agent-box: docker restart failed") {
+			t.Fatalf("stderr = %q", stderr)
+		}
+	})
+}
+
+func TestConfigForFillsTheCAFromExtraCACerts(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "t"}, NotBefore: time.Now().Add(-time.Hour),
+		NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true, IsCA: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(f, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := ConfigFor(config.Config{ExtraCACerts: []string{f}}, "/data", "/home/a", "/c", "/d"); !strings.HasPrefix(string(got.ExtraCAPEM), "-----BEGIN CERTIFICATE-----\n") {
+		t.Fatalf("ExtraCAPEM = %q", got.ExtraCAPEM)
+	}
+	if got := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); got.ExtraCAPEM != nil {
+		t.Fatalf("no extra_ca_certs must leave ExtraCAPEM nil, got %q", got.ExtraCAPEM)
 	}
 }
