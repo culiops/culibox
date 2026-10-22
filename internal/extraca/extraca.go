@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -48,18 +49,40 @@ type Set struct {
 
 // Load reads every path and returns the combined Set. Expiry is not an error
 // (see Describe). Errors name the offending path and never echo file bytes.
+//
+// It works in two phases so the size limit is judged on what the operator
+// pointed at, not on what happens to parse: a whole system bundle (which can
+// hold an unparseable or v1 root) must get the "export only" refusal, not a
+// parse error about one of its certificates.
 func Load(paths []string) (Set, error) {
-	seen := map[string]CA{}
+	type fileBlocks struct {
+		path   string
+		blocks []*pem.Block
+	}
+	var files []fileBlocks
+	distinct := map[[sha256.Size]byte]struct{}{}
 	for _, p := range paths {
-		cas, err := loadFile(p)
+		blocks, err := readBlocks(p)
 		if err != nil {
 			return Set{}, err
 		}
-		for _, ca := range cas {
-			seen[ca.SHA256] = ca
+		for _, b := range blocks {
+			distinct[sha256.Sum256(b.Bytes)] = struct{}{}
 		}
-		if len(seen) > maxCAs {
+		if len(distinct) > maxCAs {
 			return Set{}, fmt.Errorf("%s: the configured files hold more than %d certificates; export only the TLS-inspection root CA, not a whole system bundle", p, maxCAs)
+		}
+		files = append(files, fileBlocks{p, blocks})
+	}
+
+	seen := map[string]CA{}
+	for _, f := range files {
+		for _, b := range f.blocks {
+			ca, err := parseCA(f.path, b)
+			if err != nil {
+				return Set{}, err
+			}
+			seen[ca.SHA256] = ca
 		}
 	}
 	var s Set
@@ -70,7 +93,11 @@ func Load(paths []string) (Set, error) {
 	return s, nil
 }
 
-func loadFile(path string) ([]CA, error) {
+// pemLabel matches a plausible PEM type label; anything else is not echoed.
+var pemLabel = regexp.MustCompile(`^[A-Z ]{1,40}$`)
+
+// readBlocks reads one file and returns its PEM blocks, all of type CERTIFICATE.
+func readBlocks(path string) ([]*pem.Block, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%s: must be an absolute path", path)
 	}
@@ -97,7 +124,7 @@ func loadFile(path string) ([]CA, error) {
 		return nil, fmt.Errorf("%s: larger than 1 MiB; export only the TLS-inspection root CA", path)
 	}
 
-	var cas []CA
+	var blocks []*pem.Block
 	for {
 		var b *pem.Block
 		b, data = pem.Decode(data)
@@ -105,32 +132,40 @@ func loadFile(path string) ([]CA, error) {
 			break
 		}
 		if b.Type != "CERTIFICATE" {
-			return nil, fmt.Errorf("%s: contains a %q block; only CERTIFICATE blocks are allowed (is this a key file?)", path, b.Type)
+			// The label comes from the file; echo it only when it looks like one.
+			if pemLabel.MatchString(b.Type) {
+				return nil, fmt.Errorf("%s: contains a %q block; only CERTIFICATE blocks are allowed (is this a key file?)", path, b.Type)
+			}
+			return nil, fmt.Errorf("%s: contains an unrecognized PEM block; only CERTIFICATE blocks are allowed (is this a key file?)", path)
 		}
-		cert, err := x509.ParseCertificate(b.Bytes)
-		if err != nil {
-			return nil, fmt.Errorf("%s: a CERTIFICATE block does not parse as an X.509 certificate", path)
-		}
-		subject := cert.Subject.CommonName
-		if subject == "" {
-			subject = cert.Subject.String()
-		}
-		if !cert.BasicConstraintsValid || !cert.IsCA {
-			return nil, fmt.Errorf("%s: certificate %q is not a CA (no CA basic constraint); export the root CA, not a server certificate", path, subject)
-		}
-		sum := sha256.Sum256(cert.Raw)
-		cas = append(cas, CA{
-			Subject:   subject,
-			SHA256:    hex.EncodeToString(sum[:]),
-			NotBefore: cert.NotBefore,
-			NotAfter:  cert.NotAfter,
-			DER:       cert.Raw,
-		})
+		blocks = append(blocks, b)
 	}
-	if len(cas) == 0 {
+	if len(blocks) == 0 {
 		return nil, fmt.Errorf("%s: contains no CERTIFICATE block", path)
 	}
-	return cas, nil
+	return blocks, nil
+}
+
+func parseCA(path string, b *pem.Block) (CA, error) {
+	cert, err := x509.ParseCertificate(b.Bytes)
+	if err != nil {
+		return CA{}, fmt.Errorf("%s: a CERTIFICATE block does not parse as an X.509 certificate", path)
+	}
+	subject := cert.Subject.CommonName
+	if subject == "" {
+		subject = cert.Subject.String()
+	}
+	if !cert.BasicConstraintsValid || !cert.IsCA {
+		return CA{}, fmt.Errorf("%s: certificate %q is not a CA (no CA basic constraint); export the root CA, not a server certificate", path, subject)
+	}
+	sum := sha256.Sum256(cert.Raw)
+	return CA{
+		Subject:   subject,
+		SHA256:    hex.EncodeToString(sum[:]),
+		NotBefore: cert.NotBefore,
+		NotAfter:  cert.NotAfter,
+		DER:       cert.Raw,
+	}, nil
 }
 
 // unwrapPathErr drops the *PathError wrapper so the path is not named twice.

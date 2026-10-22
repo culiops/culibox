@@ -2,11 +2,18 @@ package extraca
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestIntercepted(t *testing.T) {
@@ -60,19 +67,66 @@ func TestFailingHost(t *testing.T) {
 }
 
 func TestRootSubject(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	defer srv.Close()
-	leaf := srv.Certificate()
-	pool := x509.NewCertPool()
-	pool.AddCert(leaf)
+	// A real two-element chain: the server presents only the leaf, the client
+	// trusts only the root, so VerifiedChains[0] is [leaf, root]. A
+	// leaf-returning implementation must fail this test.
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test Root CA", Organization: []string{"Root Org"}},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "leaf.test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, root, &leafKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}}}
+	srv.StartTLS()
+	defer srv.Close()
 	hostport := srv.Listener.Addr().String()
+
+	pool := x509.NewCertPool()
+	pool.AddCert(root)
 	subject, cn, err := rootSubjectWith(context.Background(), hostport, &tls.Config{RootCAs: pool})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if subject != leaf.Subject.String() || cn != leaf.Subject.CommonName {
-		t.Errorf("got %q / %q, want %q / %q", subject, cn, leaf.Subject.String(), leaf.Subject.CommonName)
+	if subject != root.Subject.String() || cn != "Test Root CA" {
+		t.Errorf("got %q / %q, want the ROOT %q / %q", subject, cn, root.Subject.String(), "Test Root CA")
+	}
+	if cn == "leaf.test" || subject == leafTmpl.Subject.String() {
+		t.Error("returned the leaf, not the root")
 	}
 
 	// An untrusted chain is an error, not a guess.

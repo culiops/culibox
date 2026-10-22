@@ -163,6 +163,20 @@ func TestLoadRefuses(t *testing.T) {
 		many.WriteString(block(newCA(t, fmt.Sprintf("many-%d", i))))
 	}
 
+	// A system bundle with a non-CA cert / unparseable cert among 33 distinct
+	// blocks must still get the size refusal, not a parse error about one cert.
+	var bundleNonCA, bundleGarbage strings.Builder
+	for i := 0; i < 32; i++ {
+		ca := block(newCA(t, fmt.Sprintf("bundle-%d", i)))
+		bundleNonCA.WriteString(ca)
+		bundleGarbage.WriteString(ca)
+	}
+	bundleNonCA.WriteString(block(newCert(t, certOpts{cn: "leaf"})))
+	bundleGarbage.WriteString(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("garbage, not DER")})))
+
+	oddLabel := "SECRET-LABEL-" + strings.Repeat("x", 60)
+	oddFile := writeFile(t, dir, "odd.pem", "-----BEGIN "+oddLabel+"-----\nAAAA\n-----END "+oddLabel+"-----\n")
+
 	subdir := filepath.Join(dir, "adir")
 	if err := os.Mkdir(subdir, 0o755); err != nil {
 		t.Fatal(err)
@@ -181,6 +195,9 @@ func TestLoadRefuses(t *testing.T) {
 		{name: "no blocks", path: writeFile(t, dir, "empty.pem", "just some words\n")},
 		{name: "non-CA cert", path: writeFile(t, dir, "leaf.pem", block(newCert(t, certOpts{cn: "leaf"})))},
 		{name: "private key", path: keyFile, contains: []string{"PRIVATE KEY"}, omits: []string{keyB64, "-----BEGIN PRIVATE"}},
+		{name: "33 blocks with a non-CA", path: writeFile(t, dir, "b1.pem", bundleNonCA.String()), contains: []string{"32", "export only"}},
+		{name: "33 blocks with garbage DER", path: writeFile(t, dir, "b2.pem", bundleGarbage.String()), contains: []string{"32", "export only"}},
+		{name: "long odd label is not echoed", path: oddFile, contains: []string{"unrecognized PEM block"}, omits: []string{"SECRET-LABEL", "xxxx"}},
 		{name: "33 CAs", path: writeFile(t, dir, "many.pem", many.String()), contains: []string{"32", "export only"}},
 	}
 	for _, tc := range cases {
@@ -204,6 +221,25 @@ func TestLoadRefuses(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLoadAcceptsMoreThan32BlocksThatDedupeTo32(t *testing.T) {
+	dir := t.TempDir()
+	var sb strings.Builder
+	var first string
+	for i := 0; i < 32; i++ {
+		b := block(newCA(t, fmt.Sprintf("d-%d", i)))
+		if i == 0 {
+			first = b
+		}
+		sb.WriteString(b)
+	}
+	sb.WriteString(first) // 33 blocks, 32 distinct
+	p := writeFile(t, dir, "dup.pem", sb.String())
+	s, err := Load([]string{p})
+	if err != nil || len(s.CAs) != 32 {
+		t.Fatalf("Load = %d CAs, %v", len(s.CAs), err)
 	}
 }
 
