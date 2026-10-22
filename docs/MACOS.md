@@ -123,8 +123,9 @@ Some company networks (for example Zscaler or Netskope) decrypt HTTPS and
 re-sign it with their own root CA. Your Mac trusts that root, but the box VM
 and the boxes do not, so `box setup` fails with errors such as `curl: (60)`,
 `SSL certificate problem` or `x509: certificate signed by unknown authority`.
-When it sees one, `box setup` prints a `HINT:` that names the root CA your Mac
-sees for the failing host and the export command below with the name filled in.
+When it sees one, `box setup` prints a `HINT:` that usually names the root CA your Mac
+sees for the failing host and the export command below with the name filled in
+(it leaves those lines out when it cannot reach the failing host itself).
 
 1. Export the root CA to a PEM file. `<Root CN>` is the name in the hint, or
    the root certificate's name in Keychain Access (usually under the System
@@ -142,6 +143,10 @@ sees for the failing host and the export command below with the name filled in.
        agent-box box setup -recreate
 
    It refuses while a box is running; add `-force` to end those sessions.
+
+4. Restart agent-box. `extra_ca_certs` is read at daemon start only, so a running
+   `agent-box serve` keeps the old list until you restart it (your sessions
+   survive the restart and reattach).
 
 `box setup` and `agent-box doctor` then print one line per CA:
 
@@ -170,8 +175,8 @@ mounted over `/etc/ssl/certs/ca-certificates.crt`, and the usual variables
 the list while a box with live sessions is running, new sessions in that box
 are refused until the old ones end (on macOS, `agent-box box stop` ends them).
 
-On Linux there is no VM. Boxes pick up a changed list when they next start, and
-the image build needs `agent-box box setup -rebuild`. A registry pull (a
+On Linux there is no VM. After a change, restart agent-box; a box created after
+that uses the new list, and the image build needs `agent-box box setup -rebuild`. A registry pull (a
 `box_image` that is a `ghcr.io` digest) goes through the host's Docker daemon,
 which uses the host's own trust store. agent-box does not manage that: install
 the proxy's root there (on Debian or Ubuntu, copy it into
