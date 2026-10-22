@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/extraca"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/store"
 )
@@ -76,7 +77,8 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 	for _, o := range cfg.Options {
 		defs[o.Key] = o
 	}
-	p.Box = config.BoxConfig{} // retired per-profile box.image: ignored on load, as in the daemon
+	p.Box = config.BoxConfig{}  // retired per-profile box.image: ignored on load, as in the daemon
+	p.Env = withoutCAEnv(p.Env) // a stored CA env name is dropped at spawn; only a save refuses it
 	if err := config.ValidateProfile(p, defs); err != nil {
 		return fail("%v", err)
 	}
@@ -154,4 +156,26 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// withoutCAEnv is env minus the CA variable names agent-box owns. It returns a
+// copy when it drops anything, so a map shared with the store is never mutated.
+func withoutCAEnv(env map[string]string) map[string]string {
+	var out map[string]string
+	for _, n := range extraca.EnvNames {
+		if _, ok := env[n]; !ok {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(env))
+			for k, v := range env {
+				out[k] = v
+			}
+		}
+		delete(out, n)
+	}
+	if out == nil {
+		return env
+	}
+	return out
 }

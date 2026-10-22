@@ -301,3 +301,18 @@ func TestRunCloneIgnoresLegacyBoxImage(t *testing.T) {
 		t.Fatalf("rc=%d out=%q, want a legacy box.image ignored", rc, out)
 	}
 }
+
+// A profile stored before the CA env refusal existed still clones: the save
+// path refuses, the stored one keeps working (its value is dropped at spawn).
+func TestRunCloneIgnoresStoredCAEnv(t *testing.T) {
+	p := cloneProfile("old", "/src/r", "/clones/r")
+	p.Env = map[string]string{"NODE_EXTRA_CA_CERTS": "/x", "KEEP": "1"}
+	e := newCloneEnv(t, []config.AgentConfig{p}, nil)
+	rc, out := runCloneArgs(e, "old", "b", "main")
+	if rc != 0 {
+		t.Fatalf("rc=%d out=%q, want a stored CA env name ignored", rc, out)
+	}
+	if p.Env["NODE_EXTRA_CA_CERTS"] != "/x" {
+		t.Fatal("the shared env map was mutated")
+	}
+}
