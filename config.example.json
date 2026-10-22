@@ -24,6 +24,8 @@
   "comment_containment": "Sessions run contained ('box' tier) by default: a per-project Docker container with only that project directory mounted (no home, no ~/.ssh, no docker socket). 'host' is the uncontained tier, for work that genuinely needs the machine. default_runtime sets the tier for every agent that does not name its own, INCLUDING the auto-detected shell profile, which no per-agent setting can reach. Omitting it means box.",
   "default_runtime": "box",
   "box_image": "culiops/agent-box:base",
+  "comment_extra_ca": "PEM files of extra CA certificates (e.g. a corporate TLS-inspection root) that every box trusts on top of the image's own. Export only the root you need, not a whole system bundle. Empty = none. Read at daemon start.",
+  "extra_ca_certs": [],
   "box_idle_ttl_seconds": 900,
   "docker_bin": "docker",
 

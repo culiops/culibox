@@ -1,12 +1,22 @@
 package config
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 func writeTemp(t *testing.T, content string) string {
@@ -434,5 +444,99 @@ func TestResolvedProfilesPath(t *testing.T) {
 	}
 	if got := (Config{ProfilesPath: "/x/p.json"}).ResolvedProfilesPath("/srv/ab"); got != "/x/p.json" {
 		t.Errorf("explicit: got %q", got)
+	}
+}
+
+// writeCert writes a self-signed certificate (a CA when isCA) as a PEM file.
+func writeCert(t *testing.T, isCA bool) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  isCA,
+	}
+	if isCA {
+		tmpl.KeyUsage = x509.KeyUsageCertSign
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestValidate_ExtraCACerts(t *testing.T) {
+	base := func() Config {
+		return Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "c", Bin: "claude"}}}
+	}
+	c := base()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("absent extra_ca_certs must stay valid, got %v", err)
+	}
+	c.ExtraCACerts = []string{writeCert(t, true)}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a valid CA refused: %v", err)
+	}
+	set, err := c.ExtraCA()
+	if err != nil || len(set.CAs) != 1 {
+		t.Fatalf("ExtraCA() = %d CAs, %v; want 1, nil", len(set.CAs), err)
+	}
+	c.ExtraCACerts = []string{writeCert(t, false)}
+	if err := c.Validate(); err == nil || !strings.HasPrefix(err.Error(), "config: extra_ca_certs:") {
+		t.Fatalf("a non-CA cert must fail with the config: extra_ca_certs: prefix, got %v", err)
+	}
+}
+
+func TestExtraCACertsParses(t *testing.T) {
+	var c Config
+	if err := json.Unmarshal([]byte(`{"extra_ca_certs":["/a.pem","/b.pem"]}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.ExtraCACerts) != 2 || c.ExtraCACerts[0] != "/a.pem" {
+		t.Fatalf("extra_ca_certs not parsed: %v", c.ExtraCACerts)
+	}
+}
+
+func TestTokenEnvDeniedCoversCAEnv(t *testing.T) {
+	for _, n := range extraca.DeniedEnvNames {
+		if !TokenEnvDenied(n) {
+			t.Errorf("TokenEnvDenied(%q) = false; a static token must not set a CA env var", n)
+		}
+	}
+}
+
+func TestValidateProfileRefusesCAEnv(t *testing.T) {
+	if !slices.Contains(extraca.DeniedEnvNames, "SSL_CERT_DIR") || !slices.Contains(extraca.DeniedEnvNames, "GIT_SSL_CAPATH") {
+		t.Fatalf("DeniedEnvNames must add the directory-based trust paths: %v", extraca.DeniedEnvNames)
+	}
+	for _, n := range extraca.DeniedEnvNames {
+		err := ValidateProfile(AgentConfig{Name: "p", Bin: "bash", Env: map[string]string{n: "/x"}}, nil)
+		if err == nil || !strings.Contains(err.Error(), n) || !strings.Contains(err.Error(), "extra_ca_certs") {
+			t.Errorf("env %s: got %v, want a refusal naming the variable and extra_ca_certs", n, err)
+		}
+	}
+	if err := ValidateProfile(AgentConfig{Name: "p", Bin: "bash", Env: map[string]string{"FOO": "1"}}, nil); err != nil {
+		t.Fatalf("an unrelated env var must stay valid, got %v", err)
+	}
+}
+
+// A stored profile that already carries a CA env name must still boot: only
+// ValidateProfile (on save) refuses it, Config.Validate does not look at
+// stored profiles, and the value is dropped at spawn.
+func TestValidateKeepsConfigAgentWithCAEnvBootable(t *testing.T) {
+	c := Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "a", Bin: "a", Env: map[string]string{"NODE_EXTRA_CA_CERTS": "/x"}}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("an existing agent with a CA env name must still validate at boot, got %v", err)
 	}
 }

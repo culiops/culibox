@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // Base env policies for a spawned agent.
@@ -192,6 +193,11 @@ type Config struct {
 	BrokerPort        int    `json:"broker_port,omitempty"`          // macOS: credential broker TCP port on 127.0.0.1; 0 → 9071
 	EgressPort        int    `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
 
+	// ExtraCACerts are PEM files of CA certificates every box trusts on top of
+	// the image's own (a corporate TLS-inspection root). Operator-only: there is
+	// no per-profile equivalent. Read at daemon start.
+	ExtraCACerts []string `json:"extra_ca_certs,omitempty"`
+
 	Analytics AnalyticsConfig `json:"analytics,omitempty"`
 	Store     StoreConfig     `json:"store,omitzero"` // the encrypted value store (see store.go)
 }
@@ -359,6 +365,11 @@ func (c Config) ValidateTolerating(tolerate func(UndefinedRefError) bool) ([]Tol
 	return tolerated, err
 }
 
+// ExtraCA loads and validates the CA files named by extra_ca_certs.
+func (c Config) ExtraCA() (extraca.Set, error) {
+	return extraca.Load(c.ExtraCACerts)
+}
+
 func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[]ToleratedRef) error {
 	if len(c.Agents) == 0 {
 		return errors.New("config: at least one agent required")
@@ -370,6 +381,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 	}
 	if err := validImageRef(c.BoxImage); err != nil {
 		return fmt.Errorf("config: box_image: %w", err)
+	}
+	if _, err := c.ExtraCA(); err != nil {
+		return fmt.Errorf("config: extra_ca_certs: %w", err)
 	}
 	if err := box.ValidateLimits(c.BoxPidsLimit, c.BoxTmpSize, c.BoxMemory); err != nil {
 		return fmt.Errorf("config: %w", err)
@@ -540,6 +554,11 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	}
 	if strings.TrimSpace(a.Box.Image) != "" {
 		return fmt.Errorf("profile %q: box.image is not per-profile; every box runs the instance-wide box_image (set it in the config)", a.Name)
+	}
+	for _, n := range extraca.DeniedEnvNames {
+		if _, set := a.Env[n]; set {
+			return fmt.Errorf("profile %q: env %s is set by agent-box (extra_ca_certs in the config), not per profile", a.Name, n)
+		}
 	}
 	switch a.BasePolicy() {
 	case BaseClean, BaseLogin, BaseInherit:

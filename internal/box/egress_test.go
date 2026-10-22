@@ -19,7 +19,7 @@ func okVerify(context.Context, string) error { return nil }
 func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify, AddHosts: []string{"host.lima.internal:192.168.5.2"}})
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false)
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false, "")
 	if slices.Contains(got, "--network") || slices.Contains(got, "--add-host") {
 		t.Fatalf("unbound box got egress flags: %q", got)
 	}
@@ -48,7 +48,7 @@ func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 func TestBoundRunArgsJoinEgressNetwork(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify, AddHosts: []string{"host.lima.internal:192.168.5.2"}})
-	got := m.runArgs("ab-box-abc", "/w", nil, true, false)
+	got := m.runArgs("ab-box-abc", "/w", nil, true, false, "")
 	if !containsPair(got, "--network", "agentbox-egress-TEST") || !containsPair(got, "--add-host", "host.lima.internal:192.168.5.2") {
 		t.Fatalf("runArgs = %q", got)
 	}

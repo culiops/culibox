@@ -12,7 +12,7 @@ func TestBoxArgvNeverDisablesSeccompOrPrivileges(t *testing.T) {
 	var all [][]string
 	for _, fenced := range []bool{false, true} {
 		for _, excl := range []bool{false, true} {
-			all = append(all, m.runArgs("ab-box-x", "/w", []Mount{{Host: "/h", Box: "/b"}}, fenced, excl))
+			all = append(all, m.runArgs("ab-box-x", "/w", []Mount{{Host: "/h", Box: "/b"}}, fenced, excl, ""))
 		}
 	}
 	all = append(all, m.execArgv("ab-box-x", "/w", "sid", []string{"claude"}, []string{"A=1"}))

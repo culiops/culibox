@@ -190,6 +190,26 @@ func TestPUTProfileWithBoxImageIs400(t *testing.T) {
 	}
 }
 
+func TestPOSTProfileWithCAEnvIs400(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(`{"name":"p","bin":"bash","env":{"NODE_EXTRA_CA_CERTS":"/x"}}`)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "NODE_EXTRA_CA_CERTS") {
+		t.Fatalf("POST with a CA env var: code %d body %s, want 400 naming it", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(`{"name":"p","bin":"bash"}`)))
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/p", strings.NewReader(`{"name":"p","bin":"bash","env":{"SSL_CERT_FILE":"/x"}}`)))
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), "SSL_CERT_FILE") {
+		t.Fatalf("PUT with a CA env var: code %d body %s, want 400 naming it", rec.Code, rec.Body)
+	}
+}
+
 // convertRoutes is a Server with the credential manager wired to a profile
 // manager that holds the given seed profiles.
 type convertRoutes struct {

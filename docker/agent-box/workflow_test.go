@@ -127,3 +127,31 @@ func jobBlock(t *testing.T, wf, name string) string {
 	}
 	return block
 }
+
+// The Dockerfile COPYs extra-ca.pem, which agent-box's own build puts in its
+// stdin context. The published image builds from the directory instead, so CI
+// creates the file, empty: the image on ghcr never trusts an extra CA. The file
+// is untracked (and gitignored), so the step must come before the build.
+func TestWorkflowCreatesEmptyExtraCABeforeBuild(t *testing.T) {
+	b, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := jobBlock(t, string(b), "build")
+	mk := strings.Index(build, ": > docker/agent-box/extra-ca.pem\n")
+	bp := strings.Index(build, "docker/build-push-action@")
+	if mk < 0 {
+		t.Fatal("the build job lacks a step that writes an EMPTY docker/agent-box/extra-ca.pem (`: > docker/agent-box/extra-ca.pem`)")
+	}
+	if bp < 0 || mk > bp {
+		t.Error("the extra-ca.pem step must precede the build-push step")
+	}
+	// The file is generated, never tracked.
+	gi, err := os.ReadFile("../../.gitignore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`(?m)^docker/agent-box/extra-ca\.pem$`).Match(gi) {
+		t.Error(".gitignore must list docker/agent-box/extra-ca.pem")
+	}
+}

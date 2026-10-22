@@ -27,7 +27,13 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 	ctx := context.Background()
 	switch a.Sub {
 	case "setup":
-		return boxSetupImage(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), w)
+		set, err := cfg.ExtraCA()
+		if err != nil {
+			fmt.Fprintf(w, "FAIL extra-ca: %v\n", err)
+			return 1
+		}
+		printExtraCA(w, set, time.Now())
+		return boxSetupImage(ctx, boximage.Docker{Bin: bin, ExtraCA: set.PEM()}, cfg.BoxImageOrDefault(), a.Rebuild, time.Now(), runtime.GOOS, w)
 	case "status":
 		rc := boxImageStatus(ctx, boximage.Docker{Bin: bin}, cfg.BoxImageOrDefault(), w)
 		return max(rc, boxListStatus(ctx, box.CLIClient{Bin: bin}, w))
@@ -40,7 +46,7 @@ func runBox(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 // boxSetupImage builds the image unless a current, native one is present. Every
 // build also gets a dated tag. A dated box_image is pinned: it is never built,
 // rebuilt or moved, and -rebuild on it builds a new dated tag instead.
-func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, w io.Writer) int {
+func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild bool, now time.Time, goos string, w io.Writer) int {
 	arch, err := d.ServerArch(ctx)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
@@ -52,7 +58,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 		return 1
 	}
 	if boximage.IsRemote(image) {
-		return boxSetupRemote(ctx, d, image, arch, st, rebuild, w)
+		return boxSetupRemote(ctx, d, image, arch, st, rebuild, goos, w)
 	}
 	pinned := boximage.IsDated(image)
 	fatal, msg := st.CheckFor(image, arch)
@@ -87,6 +93,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 	fmt.Fprintf(w, "building %s for linux/%s ...\n", strings.Join(tags, ", "), arch)
 	if err := d.Build(ctx, tags, w); err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		hintBuildFailure(ctx, w, d, goos, err)
 		return 1
 	}
 	fmt.Fprintf(w, "PASS image: built %s (linux/%s, dockerfile %s)\n", dated, arch, boximage.Hash())
@@ -102,7 +109,7 @@ func boxSetupImage(ctx context.Context, d boximage.Docker, image string, rebuild
 // boxSetupRemote makes a digest or registry box_image present: it pulls a
 // missing one for the daemon's architecture and never builds it. An image that
 // is already there is only checked, never re-pulled.
-func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, st boximage.ImageState, rebuild bool, w io.Writer) int {
+func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, st boximage.ImageState, rebuild bool, goos string, w io.Writer) int {
 	if !strings.Contains(image, "@sha256:") {
 		// A registry tag can be moved by whoever pushes it; only a digest pins.
 		fmt.Fprintf(w, "WARN image: %s is a mutable tag; pin box_image by digest (ghcr.io/culiops/agent-box@sha256:…)\n", image)
@@ -129,6 +136,7 @@ func boxSetupRemote(ctx context.Context, d boximage.Docker, image, arch string, 
 	fmt.Fprintf(w, "pulling %s for linux/%s ...\n", image, arch)
 	if err := d.Pull(ctx, image, arch, w); err != nil {
 		fmt.Fprintf(w, "FAIL image: %v\n", err)
+		hintPullFailure(ctx, w, d, goos, err)
 		return 1
 	}
 	st, err := d.Inspect(ctx, image)

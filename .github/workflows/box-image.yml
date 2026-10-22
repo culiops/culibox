@@ -92,6 +92,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The Dockerfile COPYs extra-ca.pem. The published image never trusts an
+      # extra CA, so the file is empty (it is untracked and gitignored).
+      - name: Create the empty extra-ca.pem build input
+        run: |
+          : > docker/agent-box/extra-ca.pem
+
       # The image is about 4 GB uncompressed. mode=max for two arches can pass
       # GitHub's 10 GB per-repo cache, which then evicts the oldest entries:
       # accepted, a cold build is only slower (about 10 minutes).

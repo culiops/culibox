@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // CLIClient drives the real docker CLI. It is deliberately thin: every decision
@@ -75,21 +77,22 @@ func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 // failure (an unreachable daemon, a stopped VM) is, because guessing "missing"
 // would send the caller into a docker run that cannot work either.
 func (c CLIClient) Inspect(ctx context.Context, name string) (State, error) {
-	st, _, err := c.inspect(ctx, name, false)
+	st, _, _, err := c.inspect(ctx, name, false)
 	return st, err
 }
 
 // InspectMounts is Inspect plus the box's bind destinations, from the same
 // docker call, so ensure pays one round trip under opMu, not two.
-func (c CLIClient) InspectMounts(ctx context.Context, name string) (State, []string, error) {
+func (c CLIClient) InspectMounts(ctx context.Context, name string) (State, []string, string, error) {
 	return c.inspect(ctx, name, true)
 }
 
-// inspectMountsFormat prints the running flag on the first line and one
-// "type|destination" line per mount after it.
-const inspectMountsFormat = `{{.State.Running}}{{range .Mounts}}{{"\n"}}{{.Type}}|{{.Destination}}{{end}}`
+// inspectMountsFormat prints the CA label on the first line (blank when the box
+// has none), the running flag on the second and one "type|destination" line per
+// mount after it.
+const inspectMountsFormat = `{{index .Config.Labels "` + extraca.Label + `"}}{{"\n"}}{{.State.Running}}{{range .Mounts}}{{"\n"}}{{.Type}}|{{.Destination}}{{end}}`
 
-func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (State, []string, error) {
+func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (State, []string, string, error) {
 	format := "{{.State.Running}}"
 	if withMounts {
 		format = inspectMountsFormat
@@ -105,21 +108,29 @@ func (c CLIClient) inspect(ctx context.Context, name string, withMounts bool) (S
 			// The wording's case differs between docker versions ("Error: No such
 			// object" vs "error: no such object"), so compare case-insensitively.
 			if l := strings.ToLower(stderr); strings.Contains(l, "no such object") || strings.Contains(l, "no such container") {
-				return StateMissing, nil, nil
+				return StateMissing, nil, "", nil
 			}
 		}
-		return StateMissing, nil, fmt.Errorf("docker inspect: %w: %s", err, stderr)
+		return StateMissing, nil, "", fmt.Errorf("docker inspect: %w: %s", err, stderr)
 	}
-	first, rest, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	// Only the end is trimmed: with the label line first, a box without a label
+	// starts with a blank line that is part of the answer.
+	text := strings.TrimRight(string(out), " \t\r\n")
+	var label string
+	if withMounts {
+		l, rest, _ := strings.Cut(text, "\n")
+		label, text = strings.TrimSpace(l), rest
+	}
+	first, rest, _ := strings.Cut(text, "\n")
 	switch s := strings.TrimSpace(first); s {
 	case "true":
-		return StateRunning, parseMounts(rest), nil
+		return StateRunning, parseMounts(rest), label, nil
 	case "false":
-		return StateStopped, nil, nil
+		return StateStopped, nil, label, nil
 	default:
 		// Fail closed: the caller force-removes a Stopped box, so an answer we
 		// cannot read must never be taken for one.
-		return StateMissing, nil, fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
+		return StateMissing, nil, "", fmt.Errorf("docker inspect %s: unexpected output %q", name, s)
 	}
 }
 

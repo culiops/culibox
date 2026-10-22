@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // fakeDocker writes a shell script standing in for docker: it logs its argv and
@@ -101,7 +103,7 @@ func TestEveryClientCallCarriesTheGlobalArgs(t *testing.T) {
 	ctx := context.Background()
 	_, _ = c.Run(ctx, []string{"run", "-d", "x"})
 	_, _ = c.Inspect(ctx, "x")
-	_, _, _ = c.InspectMounts(ctx, "x")
+	_, _, _, _ = c.InspectMounts(ctx, "x")
 	_, _ = c.ListByLabel(ctx, "l")
 	_, _ = c.ListBoxes(ctx, "l")
 	_ = c.Stop(ctx, "x")
@@ -172,35 +174,40 @@ func TestParseBoxListFlagsRowsItCannotSplit(t *testing.T) {
 	}
 }
 
-// One docker call answers both questions ensure asks of a box. The running flag
-// is the first line; only bind mounts count; a stopped or missing box reports
-// no mounts, and the stderr rules of Inspect hold unchanged.
-func TestInspectMountsReadsStateAndBindsFromOneCall(t *testing.T) {
+// One docker call answers all three questions ensure asks of a box. The CA
+// label is the first line (empty when the box has none, so the line may be
+// blank), the running flag the second; only bind mounts count; a stopped or
+// missing box reports no mounts, and the stderr rules of Inspect hold unchanged.
+func TestInspectMountsReadsStateLabelAndBindsFromOneCall(t *testing.T) {
 	cases := []struct {
 		name, stdout, errs string
 		code               int
 		want               State
 		mounts             []string
+		label              string
 		err                bool
 	}{
-		{"running", "true\nbind|/w\ntmpfs|/tmp\nbind|/home/agent\nvolume|/v\nbind|/opt/agent-bundle", "", 0,
-			StateRunning, []string{"/w", "/home/agent", "/opt/agent-bundle"}, false},
-		{"running no mounts", "true", "", 0, StateRunning, nil, false},
-		{"stopped", "false\nbind|/w", "", 0, StateStopped, nil, false},
-		{"missing", "", "Error: No such object: ab-box-x", 1, StateMissing, nil, false},
-		{"daemon down", "", "Cannot connect to the Docker daemon", 1, StateMissing, nil, true},
-		{"warning on stderr", "true\nbind|/w", "WARNING: a deprecated thing", 0, StateRunning, []string{"/w"}, false},
-		{"unexpected first line", "bind|/w\ntrue", "", 0, StateMissing, nil, true},
+		{"running", "\ntrue\nbind|/w\ntmpfs|/tmp\nbind|/home/agent\nvolume|/v\nbind|/opt/agent-bundle", "", 0,
+			StateRunning, []string{"/w", "/home/agent", "/opt/agent-bundle"}, "", false},
+		{"running with CA label", "0123456789ab\ntrue\nbind|/w\nbind|/etc/ssl/certs/ca-certificates.crt", "", 0,
+			StateRunning, []string{"/w", "/etc/ssl/certs/ca-certificates.crt"}, "0123456789ab", false},
+		{"running no mounts", "\ntrue", "", 0, StateRunning, nil, "", false},
+		{"stopped", "\nfalse\nbind|/w", "", 0, StateStopped, nil, "", false},
+		{"missing", "", "Error: No such object: ab-box-x", 1, StateMissing, nil, "", false},
+		{"daemon down", "", "Cannot connect to the Docker daemon", 1, StateMissing, nil, "", true},
+		{"warning on stderr", "\ntrue\nbind|/w", "WARNING: a deprecated thing", 0, StateRunning, []string{"/w"}, "", false},
+		{"unexpected running line", "\nbind|/w\ntrue", "", 0, StateMissing, nil, "", true},
+		{"label line missing", "true\nbind|/w", "", 0, StateMissing, nil, "", true},
 	}
 	for _, c := range cases {
 		bin, log := fakeDockerStderr(t, map[string]string{"inspect": c.stdout}, map[string]string{"inspect": c.errs}, map[string]int{"inspect": c.code})
-		st, mounts, err := CLIClient{Bin: bin}.InspectMounts(context.Background(), "ab-box-x")
-		if st != c.want || (err != nil) != c.err || strings.Join(mounts, ",") != strings.Join(c.mounts, ",") {
-			t.Fatalf("%s: got (%v, %v, %v), want (%v, %v, err=%v)", c.name, st, mounts, err, c.want, c.mounts, c.err)
+		st, mounts, label, err := CLIClient{Bin: bin}.InspectMounts(context.Background(), "ab-box-x")
+		if st != c.want || (err != nil) != c.err || strings.Join(mounts, ",") != strings.Join(c.mounts, ",") || label != c.label {
+			t.Fatalf("%s: got (%v, %v, %q, %v), want (%v, %v, %q, err=%v)", c.name, st, mounts, label, err, c.want, c.mounts, c.label, c.err)
 		}
 		b, _ := os.ReadFile(log)
-		if !strings.Contains(string(b), "{{.State.Running}}{{range .Mounts}}") {
-			t.Fatalf("%s: one inspect must ask for state and mounts together: %s", c.name, b)
+		if !strings.Contains(string(b), `{{index .Config.Labels "`+extraca.Label+`"}}`) || !strings.Contains(string(b), "{{.State.Running}}{{range .Mounts}}") {
+			t.Fatalf("%s: one inspect must ask for label, state and mounts together: %s", c.name, b)
 		}
 	}
 }

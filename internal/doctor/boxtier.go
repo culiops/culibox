@@ -144,7 +144,7 @@ func boxTierResults(goos string, f boxFacts, token Result) []Result {
 		out = append(out, Result{Warn, "colima", "version " + f.ColimaVer + " is older than the tested 0.8; `brew upgrade colima`"})
 	}
 	if f.Drifted {
-		out = append(out, Result{Warn, "box VM config", "changed since setup; run `agent-box box setup -recreate`"})
+		out = append(out, Result{Warn, "box VM config", "changed since setup (VM size, mounts, extra_ca_certs or the provision script); run `agent-box box setup -recreate`"})
 	}
 	out = append(out, userCtx)
 	if !f.Status.Running {

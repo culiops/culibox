@@ -142,6 +142,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `analytics.enabled` | `true` | Token and cost analytics. |
 | `box_vm_cpus`, `box_vm_memory_gib` | 4, 4 | macOS box VM size. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
+| `extra_ca_certs` | none | Absolute paths to CA certificate PEM files that boxes should trust, for a TLS-inspecting proxy. See [Behind a TLS-inspecting proxy](docs/MACOS.md#behind-a-tls-inspecting-proxy). Read at daemon start only: a change needs a restart. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
 | `static_tokens` | none | Long-lived token entries (a Grafana, Sentry or Atlassian token, a GitHub personal access token) that a boxed profile can pick by name. See [Static tokens for agents](#static-tokens-for-agents). Read at daemon start only: a change needs a restart. |
 | `aws_connections` | none | Named AWS connections (source profile, role, region, optional write role) that a boxed profile can pick by name, so one session reaches several accounts. See [Several AWS accounts in one session](#several-aws-accounts-in-one-session). Read at daemon start only: a change needs a restart. |

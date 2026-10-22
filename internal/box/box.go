@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // Container labels. Instance keeps the DEV and PROD daemons from adopting or
@@ -37,6 +39,11 @@ const (
 	// workspaces, so older boxes (without it) are known not to honour claims.
 	LabelExclusive = "io.culiops.agent-box.exclusive"
 	LabelClaims    = "io.culiops.agent-box.claims"
+	// LabelCAScratch marks the never-started container caBundle creates to read
+	// the image's trust bundle. It is deliberately not LabelInstance: claimCheck
+	// and Sweep select boxes by that key and a leftover would read as a box with
+	// no workspace, blocking every spawn. Reconcile and Sweep reap it by this one.
+	LabelCAScratch = "io.culiops.agent-box.ca-scratch"
 	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
@@ -172,7 +179,8 @@ type Client interface {
 	// InspectMounts is Inspect plus the in-box destinations of the box's bind
 	// mounts, as docker reports them: the truth for every box, adopted ones and
 	// ones created by an older build included. Mounts are nil unless running.
-	InspectMounts(ctx context.Context, name string) (State, []string, error)
+	// The third value is the box's extraca.Label value, "" when it has none.
+	InspectMounts(ctx context.Context, name string) (State, []string, string, error)
 }
 
 // Options configures a Manager.
@@ -229,6 +237,17 @@ type Options struct {
 	PidsLimit int
 	TmpSize   string
 	Memory    string
+
+	// ExtraCA is the operator's extra trust set (config extra_ca_certs). Empty =
+	// off: no label, no mount, no docker call, runArgs unchanged. When set, every
+	// new box mounts a bundle (the image's own roots plus these) read-only over
+	// extraca.ContainerBundle and carries extraca.Label, and every session gets
+	// the extraca.EnvNames pointing at it.
+	ExtraCA extraca.Set
+	// ExtraCAErr is why the configured CAs could not be loaded. Non-nil refuses
+	// every boxed spawn: starting without the trust the operator asked for would
+	// fail on the very proxy they configured it for, or worse, look configured.
+	ExtraCAErr error
 }
 
 // Egress fences boxes that carry an AWS binding (BoxKey.Binding != ""), and
@@ -593,7 +612,8 @@ func (m *Manager) Prepare(ctx context.Context) error {
 }
 
 // Wrap ensures the workspace's box is running and returns the argv/env to
-// execute. The returned env is the caller's env unchanged: it stays on the
+// execute. The returned env is the caller's env minus the extra-CA variables,
+// plus those variables when CAs are configured: it stays on the
 // docker CLIENT process so `-e NAME` can forward values without ever putting
 // them in argv, which is world-readable through `ps` on the host.
 // It also returns the box name. That name is the box's identity from here on:
@@ -602,6 +622,9 @@ func (m *Manager) Prepare(ctx context.Context) error {
 // still running, and a name that cannot be recomputed is a box that leaks or,
 // worse, gets reaped out from under a live session.
 func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, argv, env []string, extraRO []Mount) ([]string, []string, string, error) {
+	if m.opts.ExtraCAErr != nil {
+		return nil, nil, "", fmt.Errorf("%w: extra_ca_certs: %v", ErrBoxUnavailable, m.opts.ExtraCAErr)
+	}
 	if reason, bad := unboxableWorkspace(cwd, m.protected(), m.opts.Shared); bad {
 		return nil, nil, "", fmt.Errorf("%w: %s (%s). Pick a project directory, "+
 			"or choose \"Run on trusted host\" to run it uncontained on purpose",
@@ -640,7 +663,30 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != ""); err != nil {
 		return nil, nil, "", err
 	}
+	// The CA variables are fixed container paths set here and nowhere else: any
+	// incoming value (a profile's, the host's) is dropped first, so nothing can
+	// point a tool at a different bundle. SSL_CERT_DIR and GIT_SSL_CAPATH are
+	// dropped too and never set. Off, they are simply dropped.
+	env = withoutNames(env, extraca.DeniedEnvNames)
+	if !m.opts.ExtraCA.Empty() {
+		for _, n := range extraca.EnvNames {
+			env = append(env, n+"="+extraca.ContainerBundle)
+		}
+	}
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
+}
+
+// withoutNames returns env without the named variables, as a new slice: the
+// caller's backing array is never written to.
+func withoutNames(env, names []string) []string {
+	out := make([]string, 0, len(env)+len(names))
+	for _, kv := range env {
+		n, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(names, n) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // ensure starts the box if it is not already running, and registers the caller
@@ -688,7 +734,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 	}
 
 	// One docker call answers both whether the box runs and what it mounts.
-	st, have, err := m.opts.Client.InspectMounts(ctx, name)
+	st, have, caLabel, err := m.opts.Client.InspectMounts(ctx, name)
 	if err != nil {
 		m.rearmIfIdle(name)
 		return fmt.Errorf("box: inspecting %s: %w", name, err)
@@ -710,6 +756,14 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		if st, err = m.reuseMounts(ctx, name, cwd, have, extraRO, partial); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		// The bundle mounts at one fixed destination, so reuseMounts cannot see a
+		// stale CA set; the label can (also for a box from before extra CAs).
+		if st == StateRunning {
+			if st, err = m.reuseCA(ctx, name, caLabel); err != nil {
+				m.rearmIfIdle(name)
+				return err
+			}
 		}
 		// Removing the box took a docker call, and DEV and PROD share the
 		// daemon: another instance may have claimed the folder meanwhile. Check
@@ -753,7 +807,21 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		}
 	}
 	if st == StateMissing {
-		for _, p := range append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...) {
+		var bundle string
+		if !m.opts.ExtraCA.Empty() {
+			// Before the mount-source check below, which then covers the bundle
+			// path too. A box that cannot get its bundle does not start: it would
+			// run without the trust the operator configured.
+			if bundle, err = m.caBundle(ctx); err != nil {
+				m.rearmIfIdle(name)
+				return fmt.Errorf("%w: extra_ca_certs: building the trust bundle: %v", ErrBoxUnavailable, err)
+			}
+		}
+		srcs := append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...)
+		if bundle != "" {
+			srcs = append(srcs, bundle)
+		}
+		for _, p := range srcs {
 			if reason := MountUnsafe(p); reason != "" {
 				m.rearmIfIdle(name)
 				return fmt.Errorf("box: mount source %q: %s", p, reason)
@@ -763,7 +831,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive)); err != nil {
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive, bundle)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)
@@ -813,7 +881,9 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []string, extraRO []Mount, partial bool) (State, error) {
 	got := map[string]bool{}
 	for _, d := range have {
-		if d = filepath.Clean(d); d != cwd && d != boxHome { // the two every box has
+		// The two every box has, and the CA bundle: its presence is judged by
+		// the label (reuseCA), never as an extra mount.
+		if d = filepath.Clean(d); d != cwd && d != boxHome && d != extraca.ContainerBundle {
 			got[d] = true
 		}
 	}
@@ -855,6 +925,29 @@ func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []stri
 	}
 	if err := m.removeIdle(ctx, name); err != nil {
 		return StateRunning, fmt.Errorf("box: removing idle %s to recreate it with this session's mounts: %w", name, err)
+	}
+	return StateMissing, nil
+}
+
+// reuseCA decides whether a running box carries the CA set this manager is
+// configured with, the way reuseMounts does for mounts: the same label (or none
+// on both sides, including a box from before extra CAs) reuses it; a mismatch
+// removes an idle box and refuses with the remedy while sessions are live in it.
+// Either direction counts, turning CAs off included: the old bundle is still
+// mounted in the box. Caller holds opMu.
+func (m *Manager) reuseCA(ctx context.Context, name, label string) (State, error) {
+	if label == m.opts.ExtraCA.Hash() {
+		return StateRunning, nil
+	}
+	m.mu.Lock()
+	live := m.active[name]
+	m.mu.Unlock()
+	if live > 0 {
+		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them, then spawn again (macOS: or run `agent-box box stop`)",
+			ErrBoxUnavailable, name, live)
+	}
+	if err := m.removeIdle(ctx, name); err != nil {
+		return StateRunning, fmt.Errorf("box: removing idle %s to recreate it with the current CA set: %w", name, err)
 	}
 	return StateMissing, nil
 }
@@ -1147,7 +1240,26 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
 		}
 	}
-	return errors.Join(errs...)
+	_, scratchErrs := m.reapCAScratch(ctx)
+	return errors.Join(append(errs, scratchErrs...)...)
+}
+
+// reapCAScratch removes the CA-extraction containers a crash left behind (see
+// LabelCAScratch). Caller holds opMu, which caBundle also holds, so one being
+// used right now is never seen here.
+func (m *Manager) reapCAScratch(ctx context.Context) (removed []string, errs []error) {
+	names, err := m.opts.Client.ListByLabel(ctx, LabelCAScratch+"="+m.opts.Instance)
+	if err != nil {
+		return nil, []error{fmt.Errorf("box: listing CA scratch containers: %w", err)}
+	}
+	for _, name := range names {
+		if err := m.opts.Client.Stop(ctx, name); err != nil {
+			errs = append(errs, fmt.Errorf("box: reaping CA scratch container %s: %w", name, err))
+			continue
+		}
+		removed = append(removed, name)
+	}
+	return removed, errs
 }
 
 // SweepAction is one thing the sweep did, with the reason it logs.
@@ -1219,7 +1331,11 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 	m.mu.Lock()
 	m.drift = nextDrift
 	m.mu.Unlock()
-	return rep, errors.Join(errs...)
+	removed, scratchErrs := m.reapCAScratch(ctx)
+	for _, name := range removed {
+		rep.Removed = append(rep.Removed, SweepAction{name, "CA extraction container left by a crash"})
+	}
+	return rep, errors.Join(append(errs, scratchErrs...)...)
 }
 
 // remove deletes a box's container. It leaves the session counter alone, like

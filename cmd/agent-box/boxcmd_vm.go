@@ -129,6 +129,12 @@ func boxStopVM(ctx context.Context, force bool, l *boxLayer, w io.Writer) int {
 // The colima flags it starts with (boxvm.Config.StartArgs) keep the user's
 // docker context and ~/.ssh/config untouched; the context check confirms it.
 func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, w io.Writer) int {
+	set, err := cfg.ExtraCA()
+	if err != nil {
+		fmt.Fprintf(w, "FAIL extra-ca: %v\n", err)
+		return 1
+	}
+	printExtraCA(w, set, time.Now())
 	if major := boxvm.MacOSMajor(ctx); major != 0 && major < 13 {
 		fmt.Fprintf(w, "FAIL macOS %d: the box VM needs macOS 13+ (vz + virtiofs)\n", major)
 		return 1
@@ -165,7 +171,7 @@ func boxSetupVM(ctx context.Context, a cliArgs, cfg config.Config, l *boxLayer, 
 		fmt.Fprintf(w, "WARN box VM: mount type %s (virtiofs is about 3.5x faster); run `agent-box box setup -recreate`\n", st.MountType)
 	}
 	fmt.Fprintf(w, "PASS box VM: running (%s, %s)\n", st.Driver, st.MountType)
-	if rc := boxSetupImage(ctx, l.img, l.image, a.Rebuild, time.Now(), w); rc != 0 {
+	if rc := boxSetupImage(ctx, l.img, l.image, a.Rebuild, time.Now(), l.goos, w); rc != 0 {
 		return rc
 	}
 	pctx, cancel := context.WithTimeout(ctx, setupProbeTimeout)
