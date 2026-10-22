@@ -555,7 +555,7 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 	if strings.TrimSpace(a.Box.Image) != "" {
 		return fmt.Errorf("profile %q: box.image is not per-profile; every box runs the instance-wide box_image (set it in the config)", a.Name)
 	}
-	for _, n := range extraca.EnvNames {
+	for _, n := range extraca.DeniedEnvNames {
 		if _, set := a.Env[n]; set {
 			return fmt.Errorf("profile %q: env %s is set by agent-box (extra_ca_certs in the config), not per profile", a.Name, n)
 		}

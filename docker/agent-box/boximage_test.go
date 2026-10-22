@@ -1523,7 +1523,7 @@ func TestDockerfileRemovesExtraCABeforeUserAgent(t *testing.T) {
 			last = in
 		}
 	}
-	want := "RUN rm -f /usr/local/share/ca-certificates/agent-box-extra.crt && update-ca-certificates"
+	want := "RUN rm -f /usr/local/share/ca-certificates/agent-box-extra.crt && update-ca-certificates --fresh"
 	if last != want {
 		t.Errorf("last RUN before USER agent = %q, want %q", last, want)
 	}

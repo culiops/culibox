@@ -91,7 +91,13 @@ type caDocker struct {
 	base    []byte
 	calls   [][]string
 	failCp  bool
+	// warn is printed before the answer of `image inspect` and `create`, as
+	// docker does when it has a warning for stderr (CombinedOutput merges it).
+	warn string
 }
+
+// testCID is the container id the fake daemon hands out: 64 lowercase hex.
+var testCID = strings.Repeat("f", 64)
 
 func (d *caDocker) serve(f *fakeClient) {
 	f.runHook = func(args []string) (string, bool, error) {
@@ -105,9 +111,9 @@ func (d *caDocker) serve(f *fakeClient) {
 		d.calls = append(d.calls, slices.Clone(args))
 		switch args[0] {
 		case "image":
-			return d.imageID, true, nil
+			return d.warn + d.imageID, true, nil
 		case "create":
-			return "cid-123", true, nil
+			return d.warn + testCID, true, nil
 		case "cp":
 			if d.failCp {
 				return "", true, errors.New("docker cp: no such file")
@@ -274,7 +280,7 @@ func TestCABundleExtractsOncePerImage(t *testing.T) {
 	if fi, err := os.Stat(p1); err != nil || fi.Mode().Perm() != 0o644 {
 		t.Fatalf("bundle mode = %v (%v), want 0644", fi.Mode().Perm(), err)
 	}
-	if want := []string{"image inspect", "create --pull=never", "cp cid-123:" + extraca.ContainerBundle, "rm -f"}; !reflect.DeepEqual(d.verbs(), want) {
+	if want := []string{"image inspect", "create --pull=never", "cp " + testCID + ":" + extraca.ContainerBundle, "rm -f"}; !reflect.DeepEqual(d.verbs(), want) {
 		t.Fatalf("docker calls = %q, want %q", d.verbs(), want)
 	}
 	if es, _ := os.ReadDir(filepath.Dir(p1)); len(es) != 1 {
@@ -416,7 +422,7 @@ func TestEnsureRefusesLiveBoxWithOtherCALabel(t *testing.T) {
 			if !errors.Is(err, ErrBoxUnavailable) || !strings.Contains(err.Error(), "different CA set") {
 				t.Fatalf("want ErrBoxUnavailable naming the different CA set, got %v", err)
 			}
-			if !strings.Contains(err.Error(), "agent-box box stop") || !strings.Contains(err.Error(), name) {
+			if !strings.Contains(err.Error(), "end them, then spawn again (macOS: or run `agent-box box stop`)") || !strings.Contains(err.Error(), name) {
 				t.Fatalf("the refusal must give the remedy and the box: %v", err)
 			}
 			if f.stops() != 0 || f.runs() != 1 {
@@ -519,5 +525,140 @@ func TestCABundleRefusesABaseWithoutCertificates(t *testing.T) {
 	}
 	if es, _ := os.ReadDir(filepath.Join(m.opts.StateRoot, "ca")); len(es) != 0 {
 		t.Fatalf("nothing may be written: %v", es)
+	}
+}
+
+// Docker warnings share the stream with the answer (CombinedOutput). The image
+// ID and the container id are the last line, and the scratch container is
+// created from the inspected ID, so the bundle's name and its content come from
+// the same image.
+func TestCABundleIgnoresDockerWarnings(t *testing.T) {
+	set := testCASet(t, "Corp Inspection Root")
+	m, f := newCAManager(t, set, nil)
+	d := &caDocker{imageID: "sha256:" + strings.Repeat("a", 64), base: []byte(fakeBase),
+		warn: "WARNING: IPv4 forwarding is disabled. Networking will not work.\n\n"}
+	d.serve(f)
+	if _, err := m.caBundle(context.Background()); err != nil {
+		t.Fatalf("a warning line before the answer must not fail the build: %v", err)
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var create, cp, rm []string
+	for _, c := range d.calls {
+		switch c[0] {
+		case "create":
+			create = c
+		case "cp":
+			cp = c
+		case "rm":
+			rm = c
+		}
+	}
+	if cp[1] != testCID+":"+extraca.ContainerBundle {
+		t.Fatalf("cp used %q, want the clean container id", cp[1])
+	}
+	if !slices.Equal(rm, []string{"rm", "-f", testCID}) {
+		t.Fatalf("rm = %q, want the clean container id", rm)
+	}
+	n := len(create)
+	if create[n-2] != "sha256:"+strings.Repeat("a", 64) || create[n-1] != "true" {
+		t.Fatalf("create must name the inspected image ID and an explicit harmless command: %q", create)
+	}
+	if !slices.Contains(create, "--label") || !slices.Contains(create, LabelCAScratch+"=TEST") {
+		t.Fatalf("the scratch container carries the scratch label (not the box labels): %q", create)
+	}
+	for _, c := range create {
+		if strings.HasPrefix(c, LabelInstance) || strings.HasPrefix(c, LabelWorkspace) {
+			t.Fatalf("the scratch container must not look like a box: %q", create)
+		}
+	}
+}
+
+func TestCABundleRefusesAnOddContainerID(t *testing.T) {
+	for name, cid := range map[string]string{"short": "cid-123", "upper": strings.Repeat("F", 64), "trailing warning": testCID + "\nWARNING: x"} {
+		t.Run(name, func(t *testing.T) {
+			set := testCASet(t, "Corp Inspection Root")
+			m, f := newCAManager(t, set, nil)
+			d := &caDocker{imageID: "sha256:" + strings.Repeat("a", 64), base: []byte(fakeBase)}
+			d.serve(f)
+			hook := f.runHook
+			f.runHook = func(args []string) (string, bool, error) {
+				if args[0] == "create" {
+					return cid, true, nil
+				}
+				return hook(args)
+			}
+			if _, err := m.caBundle(context.Background()); err == nil {
+				t.Fatal("a container id that is not 64 lowercase hex must be refused")
+			}
+			for _, v := range d.verbs() {
+				if strings.HasPrefix(v, "cp") {
+					t.Fatalf("nothing may be copied from a made-up id: %q", d.verbs())
+				}
+			}
+		})
+	}
+}
+
+func TestCABundleRejectsAShortImageID(t *testing.T) {
+	m, f := newCAManager(t, testCASet(t, "Corp Inspection Root"), nil)
+	(&caDocker{imageID: "sha256:abcdef012345", base: []byte(fakeBase)}).serve(f)
+	if _, err := m.caBundle(context.Background()); err == nil {
+		t.Fatal("an image ID is sha256: and 64 hex; a prefix must be refused")
+	}
+}
+
+// A crash between create and rm leaves the scratch container behind. Reconcile
+// and Sweep reap it by its own label; it carries no box label, so claimCheck
+// never mistakes it for a box.
+func TestReconcileAndSweepReapCAScratchContainers(t *testing.T) {
+	m, f := newCAManager(t, extraca.Set{}, nil)
+	f.scratch = []string{"ab-ca-orphan"}
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !f.wasStopped("ab-ca-orphan") {
+		t.Fatalf("Reconcile must reap the scratch container: %v", f.stopped)
+	}
+	f.stopped = nil
+	rep, err := m.Sweep(context.Background(), map[string]int{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.wasStopped("ab-ca-orphan") || len(rep.Removed) != 1 {
+		t.Fatalf("Sweep must reap the scratch container: stopped=%v report=%+v", f.stopped, rep)
+	}
+}
+
+// SSL_CERT_DIR and GIT_SSL_CAPATH are directory-based trust paths: Wrap drops an
+// incoming value whether CAs are on or off, and agent-box never sets them.
+func TestWrapDropsTrustDirEnvOnAndOff(t *testing.T) {
+	dirs := []string{"SSL_CERT_DIR", "GIT_SSL_CAPATH"}
+	for _, on := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cas_on=%v", on), func(t *testing.T) {
+			m, f := newTestManagerWithFake(t)
+			if on {
+				m, f = newCAManager(t, testCASet(t, "Corp Inspection Root"), nil)
+				(&caDocker{imageID: "sha256:" + strings.Repeat("d", 64), base: []byte(fakeBase)}).serve(f)
+			}
+			in := []string{"SSL_CERT_DIR=/evil", "GIT_SSL_CAPATH=/evil", "TERM=xterm"}
+			argv, env, _, err := m.Wrap(context.Background(), t.TempDir(), "s1", BoxKey{}, []string{"bash"}, in, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range dirs {
+				for _, e := range env {
+					if strings.HasPrefix(e, name+"=") {
+						t.Fatalf("%s must be dropped and never set: %v", name, env)
+					}
+				}
+				if containsPair(argv, "-e", name) {
+					t.Fatalf("%s must not be forwarded: %v", name, argv)
+				}
+			}
+			if !slices.Contains(env, "TERM=xterm") {
+				t.Fatalf("other env must pass through: %v", env)
+			}
+		})
 	}
 }

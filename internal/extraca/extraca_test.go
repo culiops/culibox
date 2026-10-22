@@ -367,6 +367,9 @@ func TestConstants(t *testing.T) {
 		t.Error("constants changed")
 	}
 	want := []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS"}
+	if !reflect.DeepEqual(DeniedEnvNames, append(append([]string(nil), want...), "SSL_CERT_DIR", "GIT_SSL_CAPATH")) {
+		t.Errorf("DeniedEnvNames = %v", DeniedEnvNames)
+	}
 	if !reflect.DeepEqual(EnvNames, want) {
 		t.Errorf("EnvNames = %v", EnvNames)
 	}

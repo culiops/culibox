@@ -33,6 +33,11 @@ const (
 // EnvNames are the variables a box sets to point common tools at ContainerBundle.
 var EnvNames = []string{"SSL_CERT_FILE", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "AWS_CA_BUNDLE", "GIT_SSL_CAINFO", "NODE_EXTRA_CA_CERTS"}
 
+// DeniedEnvNames are the variables agent-box refuses in a profile and drops at
+// spawn: EnvNames plus the two directory-based trust paths (OpenSSL's and git's)
+// an agent could write a CA into.
+var DeniedEnvNames = append(append([]string(nil), EnvNames...), "SSL_CERT_DIR", "GIT_SSL_CAPATH")
+
 // CA is one parsed certificate authority.
 type CA struct {
 	Subject   string // CommonName, or the full subject when the CN is empty

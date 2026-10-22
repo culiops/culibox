@@ -39,6 +39,11 @@ const (
 	// workspaces, so older boxes (without it) are known not to honour claims.
 	LabelExclusive = "io.culiops.agent-box.exclusive"
 	LabelClaims    = "io.culiops.agent-box.claims"
+	// LabelCAScratch marks the never-started container caBundle creates to read
+	// the image's trust bundle. It is deliberately not LabelInstance: claimCheck
+	// and Sweep select boxes by that key and a leftover would read as a box with
+	// no workspace, blocking every spawn. Reconcile and Sweep reap it by this one.
+	LabelCAScratch = "io.culiops.agent-box.ca-scratch"
 	namePrefix     = "ab-box-"
 	stateDirName   = "boxstate"
 	// lastUsedDirName holds one empty file per box whose mtime is the last-use
@@ -660,8 +665,9 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
 	// incoming value (a profile's, the host's) is dropped first, so nothing can
-	// point a tool at a different bundle. Off, they are simply dropped.
-	env = withoutNames(env, extraca.EnvNames)
+	// point a tool at a different bundle. SSL_CERT_DIR and GIT_SSL_CAPATH are
+	// dropped too and never set. Off, they are simply dropped.
+	env = withoutNames(env, extraca.DeniedEnvNames)
 	if !m.opts.ExtraCA.Empty() {
 		for _, n := range extraca.EnvNames {
 			env = append(env, n+"="+extraca.ContainerBundle)
@@ -937,7 +943,7 @@ func (m *Manager) reuseCA(ctx context.Context, name, label string) (State, error
 	live := m.active[name]
 	m.mu.Unlock()
 	if live > 0 {
-		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them or run `agent-box box stop`, then spawn again",
+		return StateRunning, fmt.Errorf("%w: box %s started with a different CA set (extra_ca_certs changed) and still runs %d session(s); end them, then spawn again (macOS: or run `agent-box box stop`)",
 			ErrBoxUnavailable, name, live)
 	}
 	if err := m.removeIdle(ctx, name); err != nil {
@@ -1234,7 +1240,26 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("box: reaping orphan %s: %w", name, err))
 		}
 	}
-	return errors.Join(errs...)
+	_, scratchErrs := m.reapCAScratch(ctx)
+	return errors.Join(append(errs, scratchErrs...)...)
+}
+
+// reapCAScratch removes the CA-extraction containers a crash left behind (see
+// LabelCAScratch). Caller holds opMu, which caBundle also holds, so one being
+// used right now is never seen here.
+func (m *Manager) reapCAScratch(ctx context.Context) (removed []string, errs []error) {
+	names, err := m.opts.Client.ListByLabel(ctx, LabelCAScratch+"="+m.opts.Instance)
+	if err != nil {
+		return nil, []error{fmt.Errorf("box: listing CA scratch containers: %w", err)}
+	}
+	for _, name := range names {
+		if err := m.opts.Client.Stop(ctx, name); err != nil {
+			errs = append(errs, fmt.Errorf("box: reaping CA scratch container %s: %w", name, err))
+			continue
+		}
+		removed = append(removed, name)
+	}
+	return removed, errs
 }
 
 // SweepAction is one thing the sweep did, with the reason it logs.
@@ -1306,7 +1331,11 @@ func (m *Manager) Sweep(ctx context.Context, live map[string]int) (SweepReport, 
 	m.mu.Lock()
 	m.drift = nextDrift
 	m.mu.Unlock()
-	return rep, errors.Join(errs...)
+	removed, scratchErrs := m.reapCAScratch(ctx)
+	for _, name := range removed {
+		rep.Removed = append(rep.Removed, SweepAction{name, "CA extraction container left by a crash"})
+	}
+	return rep, errors.Join(append(errs, scratchErrs...)...)
 }
 
 // remove deletes a box's container. It leaves the session counter alone, like

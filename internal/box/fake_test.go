@@ -19,6 +19,7 @@ type fakeClient struct {
 	stopCount  int
 	stopped    []string
 	existing   []string // names ListByLabel reports
+	scratch    []string // names ListByLabel reports for the CA-scratch label
 	running    map[string]bool
 	exited     map[string]bool // present but not running
 	inspectErr error
@@ -174,9 +175,12 @@ func contains(xs []string, s string) bool {
 	return false
 }
 
-func (f *fakeClient) ListByLabel(_ context.Context, _ string) ([]string, error) {
+func (f *fakeClient) ListByLabel(_ context.Context, label string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if strings.HasPrefix(label, LabelCAScratch) {
+		return append([]string(nil), f.scratch...), nil
+	}
 	return append([]string(nil), f.existing...), nil
 }
 

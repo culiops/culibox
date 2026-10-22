@@ -168,12 +168,14 @@ TLS traffic inside the boxes.** Only whoever owns `config.json` can set it, and
 `doctor` and `box setup` always list it, so it is never silent.
 
 The CA is added to the image only while it builds and is removed before the
-image is finished, so an image you build or publish never contains it. At run
+image is finished, so the image never trusts it: its effective trust store is
+the stock one. (A locally built image still carries the public CA certificate in
+an intermediate layer.) At run
 time each box gets a read-only trust bundle (the image's own roots plus yours)
 mounted over `/etc/ssl/certs/ca-certificates.crt`, and the usual variables
 (`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and the like) point at it. If you change
 the list while a box with live sessions is running, new sessions in that box
-are refused until the old ones end (on macOS, `agent-box box stop` ends them).
+are refused until the old ones end (on macOS, `agent-box box stop` also ends them).
 
 On Linux there is no VM. After a change, restart agent-box; a box created after
 that uses the new list, and the image build needs `agent-box box setup -rebuild`. A registry pull (a

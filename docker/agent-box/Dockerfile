@@ -942,7 +942,7 @@ RUN set -eu; \
 
 # The build-time CAs end here: the stock trust store is what ships. Never ENV
 # a CA variable above; the console sets them on the box at run time.
-RUN rm -f /usr/local/share/ca-certificates/agent-box-extra.crt && update-ca-certificates
+RUN rm -f /usr/local/share/ca-certificates/agent-box-extra.crt && update-ca-certificates --fresh
 
 USER agent
 ENV HOME=/home/agent

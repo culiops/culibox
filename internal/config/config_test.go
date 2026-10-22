@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -508,7 +509,7 @@ func TestExtraCACertsParses(t *testing.T) {
 }
 
 func TestTokenEnvDeniedCoversCAEnv(t *testing.T) {
-	for _, n := range extraca.EnvNames {
+	for _, n := range extraca.DeniedEnvNames {
 		if !TokenEnvDenied(n) {
 			t.Errorf("TokenEnvDenied(%q) = false; a static token must not set a CA env var", n)
 		}
@@ -516,7 +517,10 @@ func TestTokenEnvDeniedCoversCAEnv(t *testing.T) {
 }
 
 func TestValidateProfileRefusesCAEnv(t *testing.T) {
-	for _, n := range extraca.EnvNames {
+	if !slices.Contains(extraca.DeniedEnvNames, "SSL_CERT_DIR") || !slices.Contains(extraca.DeniedEnvNames, "GIT_SSL_CAPATH") {
+		t.Fatalf("DeniedEnvNames must add the directory-based trust paths: %v", extraca.DeniedEnvNames)
+	}
+	for _, n := range extraca.DeniedEnvNames {
 		err := ValidateProfile(AgentConfig{Name: "p", Bin: "bash", Env: map[string]string{n: "/x"}}, nil)
 		if err == nil || !strings.Contains(err.Error(), n) || !strings.Contains(err.Error(), "extra_ca_certs") {
 			t.Errorf("env %s: got %v, want a refusal naming the variable and extra_ca_certs", n, err)

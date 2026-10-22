@@ -316,3 +316,14 @@ func TestRunCloneIgnoresStoredCAEnv(t *testing.T) {
 		t.Fatal("the shared env map was mutated")
 	}
 }
+
+func TestWithoutCAEnvDropsTrustDirNamesToo(t *testing.T) {
+	in := map[string]string{"SSL_CERT_DIR": "/x", "GIT_SSL_CAPATH": "/x", "SSL_CERT_FILE": "/x", "FOO": "1"}
+	got := withoutCAEnv(in)
+	if len(got) != 1 || got["FOO"] != "1" {
+		t.Fatalf("withoutCAEnv = %v, want only FOO", got)
+	}
+	if len(in) != 4 {
+		t.Fatal("the caller's map must not be mutated")
+	}
+}

@@ -44,11 +44,11 @@ func (m *Manager) caBundle(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("inspecting image %s: %w", m.opts.Image, err)
 	}
-	id, err := imageID12(out)
+	imageID, err := parseImageID(out)
 	if err != nil {
 		return "", err
 	}
-	rel := path.Join(caDirName, "bundle-"+id+"-"+m.opts.ExtraCA.Hash()+".pem")
+	rel := path.Join(caDirName, "bundle-"+strings.TrimPrefix(imageID, "sha256:")[:12]+"-"+m.opts.ExtraCA.Hash()+".pem")
 	host := filepath.Join(m.opts.StateRoot, filepath.FromSlash(rel))
 	extra := m.opts.ExtraCA.PEM()
 
@@ -64,7 +64,7 @@ func (m *Manager) caBundle(ctx context.Context) (string, error) {
 	if err := root.MkdirAll(caDirName, 0o755); err != nil {
 		return "", fmt.Errorf("creating %s: %w", filepath.Join(m.opts.StateRoot, caDirName), err)
 	}
-	base, err := m.extractBaseBundle(ctx, root)
+	base, err := m.extractBaseBundle(ctx, root, imageID)
 	if err != nil {
 		return "", err
 	}
@@ -97,20 +97,44 @@ func writeAll(f *os.File, b []byte) error {
 	return err
 }
 
-// imageID12 turns `docker image inspect -f {{.Id}}` output into the 12 hex
-// characters that name the bundle file. The ID becomes part of a path, so
-// anything but hex is refused.
-func imageID12(out string) (string, error) {
-	id := strings.TrimPrefix(strings.TrimSpace(out), "sha256:")
-	if len(id) < 12 {
-		return "", fmt.Errorf("unexpected image id %q", out)
+// lastLine is the last non-empty line of docker output. Client.Run returns
+// stdout and stderr together, and a warning (IPv4 forwarding disabled, a
+// platform mismatch) comes before the answer.
+func lastLine(out string) string {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+func isLowerHex64(s string) bool {
+	if len(s) != 64 {
+		return false
 	}
-	for _, c := range id {
+	for _, c := range s {
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return "", fmt.Errorf("unexpected image id %q", out)
+			return false
 		}
 	}
-	return id[:12], nil
+	return true
+}
+
+// parseImageID reads `docker image inspect -f {{.Id}}` output: "sha256:" and 64
+// lowercase hex, which is returned whole. The ID becomes part of a path and of
+// an argument, so anything else is refused.
+func parseImageID(out string) (string, error) {
+	id := lastLine(out)
+	if hexPart, ok := strings.CutPrefix(id, "sha256:"); !ok || !isLowerHex64(hexPart) {
+		return "", fmt.Errorf("unexpected image id %q", out)
+	}
+	return id, nil
+}
+
+// parseContainerID reads `docker create` output: 64 lowercase hex.
+func parseContainerID(out string) (string, error) {
+	cid := lastLine(out)
+	if !isLowerHex64(cid) {
+		return "", fmt.Errorf("unexpected container id %q from docker create", out)
+	}
+	return cid, nil
 }
 
 // tempName is a fresh, unguessable name inside ca/ (root-relative).
@@ -125,14 +149,21 @@ func tempName(prefix string) (string, error) {
 // extractBaseBundle copies the image's trust bundle out of a container that is
 // created and removed but never started. docker cp writes to a fresh name inside
 // ca/ (never outside the data root), which is read back through root and removed.
-func (m *Manager) extractBaseBundle(ctx context.Context, root *os.Root) ([]byte, error) {
-	cid, err := m.opts.Client.Run(ctx, []string{"create", "--pull=never", m.opts.Image})
+//
+// The container is made from imageID, the ID caBundle just inspected, not from
+// the tag, so the bundle's name and its content always come from the same image.
+// It carries LabelCAScratch (so a crash leaves something Reconcile and Sweep can
+// reap) and an explicit `true` command; it is never started.
+func (m *Manager) extractBaseBundle(ctx context.Context, root *os.Root, imageID string) ([]byte, error) {
+	out, err := m.opts.Client.Run(ctx, []string{"create", "--pull=never",
+		"--label", LabelCAScratch + "=" + m.opts.Instance, imageID, "true"})
 	if err != nil {
 		return nil, fmt.Errorf("creating a container to read the image's CA bundle: %w", err)
 	}
-	cid = strings.TrimSpace(cid)
-	if cid == "" {
-		return nil, errors.New("docker create returned no container id")
+	cid, err := parseContainerID(out)
+	if err != nil {
+		// Not removed: nothing here is an id docker could have handed out.
+		return nil, err
 	}
 	defer func() {
 		// Not on the caller's ctx: a cancelled spawn must still clean up.

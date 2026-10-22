@@ -162,7 +162,7 @@ func shellQuote(s string) string {
 // copy when it drops anything, so a map shared with the store is never mutated.
 func withoutCAEnv(env map[string]string) map[string]string {
 	var out map[string]string
-	for _, n := range extraca.EnvNames {
+	for _, n := range extraca.DeniedEnvNames {
 		if _, ok := env[n]; !ok {
 			continue
 		}
