@@ -13,7 +13,6 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +89,7 @@ func TestHintSilentOnOtherErrors(t *testing.T) {
 	var w bytes.Buffer
 	called := false
 	root := func(context.Context, string) (string, string, error) { called = true; return "", "", nil }
-	printInterceptionHint(context.Background(), &w, "docker build: exit status 1\nE: Unable to locate package foo", false, root)
+	printInterceptionHint(context.Background(), &w, "docker build: exit status 1\nE: Unable to locate package foo", false, "linux", false, root)
 	if w.Len() != 0 || called {
 		t.Fatalf("hint on an unrelated error: %q (root called: %v)", w.String(), called)
 	}
@@ -98,7 +97,7 @@ func TestHintSilentOnOtherErrors(t *testing.T) {
 
 func TestHintWithRootNamesExportCommand(t *testing.T) {
 	var w bytes.Buffer
-	printInterceptionHint(context.Background(), &w, curl60Host, false,
+	printInterceptionHint(context.Background(), &w, curl60Host, false, "darwin", false,
 		fakeRoot("CN=Corp Root,O=Corp", "Corp Root", nil))
 	out := w.String()
 	for _, want := range []string{
@@ -112,21 +111,29 @@ func TestHintWithRootNamesExportCommand(t *testing.T) {
 			t.Errorf("missing %q:\n%s", want, out)
 		}
 	}
-	rerun := "-rebuild"
-	if runtime.GOOS == "darwin" {
-		rerun = "-recreate"
-	}
-	if !strings.Contains(out, "`agent-box box setup "+rerun+"`") {
-		t.Errorf("want the %s command for %s:\n%s", rerun, runtime.GOOS, out)
+	if !strings.Contains(out, "`agent-box box setup -recreate`") {
+		t.Errorf("darwin wants -recreate:\n%s", out)
 	}
 	if strings.Contains(out, "did not cover") {
 		t.Errorf("no CA is configured, so nothing can be 'not covered':\n%s", out)
 	}
 }
 
+func TestHintLinuxBuildNamesRebuildAndNoMacExport(t *testing.T) {
+	var w bytes.Buffer
+	printInterceptionHint(context.Background(), &w, curl60Host, false, "linux", false, fakeRoot("CN=R", "R", nil))
+	out := w.String()
+	if !strings.Contains(out, "`agent-box box setup -rebuild`") || strings.Contains(out, "-recreate") {
+		t.Errorf("linux build wants -rebuild only:\n%s", out)
+	}
+	if !strings.Contains(out, "CN=R") || strings.Contains(out, "security find-certificate") {
+		t.Errorf("linux keeps the chain line but not the macOS export line:\n%s", out)
+	}
+}
+
 func TestHintWithRootButNoCNOmitsExportLine(t *testing.T) {
 	var w bytes.Buffer
-	printInterceptionHint(context.Background(), &w, curl60Host, false, fakeRoot("O=Corp", "", nil))
+	printInterceptionHint(context.Background(), &w, curl60Host, false, "darwin", false, fakeRoot("O=Corp", "", nil))
 	out := w.String()
 	if !strings.Contains(out, "O=Corp") || strings.Contains(out, "macOS export") {
 		t.Fatalf("chain line without export line expected:\n%s", out)
@@ -142,7 +149,7 @@ func TestHintWithoutHostOmitsChainLines(t *testing.T) {
 		"dial fails":        {curl60Host, fakeRoot("", "", errors.New("dial tcp: i/o timeout"))},
 	} {
 		var w bytes.Buffer
-		printInterceptionHint(context.Background(), &w, tc.out, false, tc.root)
+		printInterceptionHint(context.Background(), &w, tc.out, false, "linux", false, tc.root)
 		out := w.String()
 		if !strings.Contains(out, "HINT:") || !strings.Contains(out, "extra_ca_certs") {
 			t.Errorf("%s: the hint itself must still print:\n%s", name, out)
@@ -155,7 +162,7 @@ func TestHintWithoutHostOmitsChainLines(t *testing.T) {
 
 func TestHintWhenConfiguredSaysNotCovered(t *testing.T) {
 	var w bytes.Buffer
-	printInterceptionHint(context.Background(), &w, curl60Host, true, fakeRoot("CN=Other Root", "Other Root", nil))
+	printInterceptionHint(context.Background(), &w, curl60Host, true, "darwin", false, fakeRoot("CN=Other Root", "Other Root", nil))
 	out := w.String()
 	for _, want := range []string{"configured CAs did not cover this chain", "CN=Other Root", `-c "Other Root"`} {
 		if !strings.Contains(out, want) {
@@ -177,7 +184,7 @@ func TestBuildFailureHintUsesTail(t *testing.T) {
 	defer func() { hintRoot = old }()
 	var w bytes.Buffer
 	d := boximage.Docker{Bin: bin, ExtraCA: []byte("pem")}
-	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, &w); rc != 1 {
+	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, "linux", &w); rc != 1 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if asked != "example.test:443" {
@@ -188,22 +195,78 @@ func TestBuildFailureHintUsesTail(t *testing.T) {
 	}
 }
 
-func TestPullFailureHint(t *testing.T) {
-	dir := t.TempDir()
-	bin := filepath.Join(dir, "docker")
+func TestHintDarwinWordingNamesRecreate(t *testing.T) {
+	for _, pull := range []bool{false, true} {
+		var w bytes.Buffer
+		printInterceptionHint(context.Background(), &w, curl60Host, false, "darwin", pull, fakeRoot("CN=R", "R", nil))
+		out := w.String()
+		if !strings.Contains(out, "`agent-box box setup -recreate`") || strings.Contains(out, "-rebuild") {
+			t.Errorf("darwin (pull=%v) wants -recreate only:\n%s", pull, out)
+		}
+		if !strings.Contains(out, `"extra_ca_certs"`) || !strings.Contains(out, "security find-certificate") {
+			t.Errorf("darwin (pull=%v) keeps the extra_ca_certs hint:\n%s", pull, out)
+		}
+	}
+}
+
+func TestHintLinuxPullPointsAtHostTrust(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		var w bytes.Buffer
+		printInterceptionHint(context.Background(), &w, curl60Host, configured, "linux", true, fakeRoot("CN=Corp Root,O=Corp", "Corp Root", nil))
+		out := w.String()
+		for _, want := range []string{"host's docker daemon", "/usr/local/share/ca-certificates", "update-ca-certificates",
+			"restart docker", "releases.hashicorp.com:443", "CN=Corp Root,O=Corp"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("configured=%v: missing %q:\n%s", configured, want, out)
+			}
+		}
+		for _, bad := range []string{"extra_ca_certs", "-rebuild", "-recreate", "security find-certificate", "did not cover"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("configured=%v: linux pull hint must not mention %q:\n%s", configured, bad, out)
+			}
+		}
+	}
+}
+
+func pullFailDocker(t *testing.T) boximage.Docker {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "docker")
 	script := "#!/bin/sh\ncase \"$*\" in\n*version*) echo arm64; exit 0;;\npull*) echo 'Get \"https://ghcr.io/v2/\": tls: failed to verify certificate: x509: certificate signed by unknown authority' >&2; exit 1;;\n*) echo 'Error: No such image' >&2; exit 1;;\nesac\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return boximage.Docker{Bin: bin, ExtraCA: []byte("pem")}
+}
+
+func TestPullFailureHintPerPlatform(t *testing.T) {
 	old := hintRoot
 	hintRoot = fakeRoot("CN=R", "R", nil)
 	defer func() { hintRoot = old }()
-	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), boximage.Docker{Bin: bin}, remoteRef, false, setupNow, &w); rc != 1 {
-		t.Fatalf("rc %d: %s", rc, w.String())
-	}
-	if !strings.Contains(w.String(), "HINT:") || !strings.Contains(w.String(), "ghcr.io:443") {
-		t.Errorf("output:\n%s", w.String())
+	for _, tc := range []struct {
+		goos      string
+		want, not []string
+	}{
+		{"linux", []string{"HINT:", "ghcr.io:443", "host's docker daemon", "update-ca-certificates"},
+			[]string{"extra_ca_certs", "-rebuild", "-recreate", "did not cover"}},
+		{"darwin", []string{"HINT:", "ghcr.io:443", `"extra_ca_certs"`, "`agent-box box setup -recreate`", "configured CAs did not cover this chain"},
+			[]string{"-rebuild", "update-ca-certificates"}},
+	} {
+		var w bytes.Buffer
+		if rc := boxSetupImage(context.Background(), pullFailDocker(t), remoteRef, false, setupNow, tc.goos, &w); rc != 1 {
+			t.Fatalf("%s: rc %d: %s", tc.goos, rc, w.String())
+		}
+		for _, s := range tc.want {
+			if !strings.Contains(w.String(), s) {
+				t.Errorf("%s: missing %q:\n%s", tc.goos, s, w.String())
+			}
+		}
+		// The FAIL line carries docker's own output; look only at the hint.
+		hint := w.String()[strings.Index(w.String(), "HINT:"):]
+		for _, s := range tc.not {
+			if strings.Contains(hint, s) {
+				t.Errorf("%s: hint must not contain %q:\n%s", tc.goos, s, hint)
+			}
+		}
 	}
 }
 

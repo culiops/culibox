@@ -107,7 +107,7 @@ func current() string { return "arm64|" + boximage.Hash() }
 func TestBoxSetupUnpinnedBuildsBaseAndDated(t *testing.T) {
 	d, log := setupDocker(t, nil)
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	b := buildLines(argvLog(t, log))
@@ -125,7 +125,7 @@ func TestBoxSetupUnpinnedBuildsBaseAndDated(t *testing.T) {
 func TestBoxSetupUnpinnedCurrentDoesNotBuild(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{baseRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 0 || !strings.Contains(w.String(), "PASS image: "+baseRef+" is current") {
@@ -136,7 +136,7 @@ func TestBoxSetupUnpinnedCurrentDoesNotBuild(t *testing.T) {
 func TestBoxSetupUnpinnedRebuildBuildsBaseAndDated(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{baseRef: current(), datedRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, baseRef, true, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, baseRef, true, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	b := buildLines(argvLog(t, log))
@@ -148,7 +148,7 @@ func TestBoxSetupUnpinnedRebuildBuildsBaseAndDated(t *testing.T) {
 func TestBoxSetupPinnedRebuildNeverMovesPinOrBase(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{datedRef: current(), baseRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, datedRef, true, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, datedRef, true, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	b := buildLines(argvLog(t, log))
@@ -166,7 +166,7 @@ func TestBoxSetupPinnedRebuildNeverMovesPinOrBase(t *testing.T) {
 func TestBoxSetupMissingPinNeverBuilds(t *testing.T) {
 	d, log := setupDocker(t, nil)
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, &w); rc != 1 {
+	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, "linux", &w); rc != 1 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 0 {
@@ -180,7 +180,7 @@ func TestBoxSetupMissingPinNeverBuilds(t *testing.T) {
 func TestBoxSetupWrongArchPinNeverBuilds(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{datedRef: "amd64|" + boximage.Hash()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, &w); rc != 1 {
+	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, "linux", &w); rc != 1 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 0 {
@@ -191,7 +191,7 @@ func TestBoxSetupWrongArchPinNeverBuilds(t *testing.T) {
 func TestBoxSetupPinnedCurrentIsPass(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{datedRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 0 || !strings.Contains(w.String(), "PASS image: "+datedRef+" is current") {
@@ -202,7 +202,7 @@ func TestBoxSetupPinnedCurrentIsPass(t *testing.T) {
 func TestBoxSetupPinnedStaleWarnsAndDoesNotBuild(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{datedRef: "arm64|old"})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, datedRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 0 || !strings.Contains(w.String(), "WARN image:") || !strings.Contains(w.String(), "pinned to "+datedRef) {
@@ -215,7 +215,7 @@ var remoteRef = "ghcr.io/culiops/agent-box@sha256:" + strings.Repeat("a", 64)
 func TestBoxSetupRemoteMissingPulls(t *testing.T) {
 	d, log := setupDocker(t, nil, map[string]string{remoteRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if p := pullLines(argvLog(t, log)); len(p) != 1 || p[0] != "pull --platform linux/arm64 "+remoteRef {
@@ -233,7 +233,7 @@ func TestBoxSetupRemoteTagWarnsMutable(t *testing.T) {
 	tagRef := "ghcr.io/culiops/agent-box:base"
 	d, _ := setupDocker(t, nil, map[string]string{tagRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, tagRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, tagRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if want := "WARN image: " + tagRef + " is a mutable tag; pin box_image by digest (ghcr.io/culiops/agent-box@sha256:…)"; !strings.Contains(w.String(), want) {
@@ -244,7 +244,7 @@ func TestBoxSetupRemoteTagWarnsMutable(t *testing.T) {
 func TestBoxSetupRemoteDigestDoesNotWarnMutable(t *testing.T) {
 	d, _ := setupDocker(t, nil, map[string]string{remoteRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if strings.Contains(w.String(), "mutable tag") {
@@ -255,7 +255,7 @@ func TestBoxSetupRemoteDigestDoesNotWarnMutable(t *testing.T) {
 func TestBoxSetupRemotePullFailureNeverBuilds(t *testing.T) {
 	d, log := setupDocker(t, nil)
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 1 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, "linux", &w); rc != 1 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 0 {
@@ -269,7 +269,7 @@ func TestBoxSetupRemotePullFailureNeverBuilds(t *testing.T) {
 func TestBoxSetupRemotePulledWrongArchFails(t *testing.T) {
 	d, _ := setupDocker(t, nil, map[string]string{remoteRef: "amd64|" + boximage.Hash()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 1 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, "linux", &w); rc != 1 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if !strings.Contains(w.String(), "FAIL image:") || !strings.Contains(w.String(), "pin the multi-arch index digest") {
@@ -280,7 +280,7 @@ func TestBoxSetupRemotePulledWrongArchFails(t *testing.T) {
 func TestBoxSetupRemoteCurrentDoesNotPull(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{remoteRef: current()}, map[string]string{remoteRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(pullLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 0 {
@@ -294,7 +294,7 @@ func TestBoxSetupRemoteCurrentDoesNotPull(t *testing.T) {
 func TestBoxSetupRemoteStaleWarnsAndDoesNotPull(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{remoteRef: "arm64|old"}, map[string]string{remoteRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(pullLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 0 {
@@ -308,7 +308,7 @@ func TestBoxSetupRemoteStaleWarnsAndDoesNotPull(t *testing.T) {
 func TestBoxSetupRemoteRebuildRefused(t *testing.T) {
 	d, log := setupDocker(t, map[string]string{remoteRef: current()}, map[string]string{remoteRef: current()})
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, remoteRef, true, setupNow, &w); rc != 1 {
+	if rc := boxSetupImage(context.Background(), d, remoteRef, true, setupNow, "linux", &w); rc != 1 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(pullLines(argvLog(t, log))) != 0 || len(buildLines(argvLog(t, log))) != 0 {
@@ -322,7 +322,7 @@ func TestBoxSetupRemoteRebuildRefused(t *testing.T) {
 func TestBoxSetupLocalNameNeverPulls(t *testing.T) {
 	d, log := setupDocker(t, nil)
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, baseRef, false, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	if len(buildLines(argvLog(t, log))) != 1 || len(pullLines(argvLog(t, log))) != 0 {
@@ -335,7 +335,7 @@ func TestBoxSetupLocalNameNeverPulls(t *testing.T) {
 func TestBoxSetupMissingPinRebuildNeverBuildsThePin(t *testing.T) {
 	d, log := setupDocker(t, nil)
 	var w bytes.Buffer
-	if rc := boxSetupImage(context.Background(), d, datedRef, true, setupNow, &w); rc != 0 {
+	if rc := boxSetupImage(context.Background(), d, datedRef, true, setupNow, "linux", &w); rc != 0 {
 		t.Fatalf("rc %d: %s", rc, w.String())
 	}
 	b := buildLines(argvLog(t, log))
