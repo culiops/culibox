@@ -37,6 +37,10 @@ func Hash() string {
 type Docker struct {
 	Bin  string
 	Args []string
+	// ExtraCA is the canonical PEM of the operator's extra CA certificates
+	// (nil when off). Build puts it in the context for the build steps to
+	// trust; it never reaches the shipped image.
+	ExtraCA []byte
 }
 
 func (d Docker) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -52,21 +56,64 @@ func (d Docker) ServerArch(ctx context.Context) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// contextTar is the build context: the Dockerfile alone, streamed on stdin, so
-// nothing is written to disk.
-func contextTar() ([]byte, error) {
+// extraCAName is the context file the Dockerfile COPYs. It is always present,
+// empty when no CA is configured, so a COPY never fails and the argv is the
+// same with CAs on or off.
+const extraCAName = "extra-ca.pem"
+
+// contextTar is the build context: the Dockerfile and extra-ca.pem, streamed
+// on stdin, so nothing is written to disk.
+func contextTar(extraCA []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(dockerfile))}); err != nil {
-		return nil, err
-	}
-	if _, err := tw.Write(dockerfile); err != nil {
-		return nil, err
+	for _, f := range []struct {
+		name string
+		body []byte
+	}{{"Dockerfile", dockerfile}, {extraCAName, extraCA}} {
+		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.body))}); err != nil {
+			return nil, err
+		}
+		if _, err := tw.Write(f.body); err != nil {
+			return nil, err
+		}
 	}
 	if err := tw.Close(); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// tailLen is how much of a failed build's output OutputError keeps.
+const tailLen = 64 << 10
+
+// OutputError is a failed docker command with the end of its output, where the
+// cause is. Callers match it with errors.As to look for a known cause.
+type OutputError struct {
+	Err  error
+	Tail string
+}
+
+func (e *OutputError) Error() string { return e.Err.Error() }
+func (e *OutputError) Unwrap() error { return e.Err }
+
+// tailWriter keeps the last tailLen bytes written to it. It compacts at twice
+// that, so memory is bounded and the copying is amortized.
+type tailWriter struct{ buf []byte }
+
+func (t *tailWriter) Write(p []byte) (int, error) {
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > 2*tailLen {
+		t.buf = append(t.buf[:0], t.buf[len(t.buf)-tailLen:]...)
+	}
+	return len(p), nil
+}
+
+func (t *tailWriter) String() string {
+	b := t.buf
+	if len(b) > tailLen {
+		b = b[len(b)-tailLen:]
+	}
+	return string(b)
 }
 
 // Build builds the image for the daemon's own architecture and gives it every
@@ -81,7 +128,7 @@ func (d Docker) Build(ctx context.Context, tags []string, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	tarball, err := contextTar()
+	tarball, err := contextTar(d.ExtraCA)
 	if err != nil {
 		return err
 	}
@@ -91,9 +138,12 @@ func (d Docker) Build(ctx context.Context, tags []string, w io.Writer) error {
 	}
 	cmd := d.command(ctx, append(args, "-")...)
 	cmd.Stdin = bytes.NewReader(tarball)
-	cmd.Stdout, cmd.Stderr = w, w
+	// One writer for both streams (see Pull): output still streams to w.
+	var tail tailWriter
+	cmd.Stdout = io.MultiWriter(w, &tail)
+	cmd.Stderr = cmd.Stdout
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker build %s: %w", strings.Join(tags, ", "), err)
+		return &OutputError{Err: fmt.Errorf("docker build %s: %w", strings.Join(tags, ", "), err), Tail: tail.String()}
 	}
 	return nil
 }

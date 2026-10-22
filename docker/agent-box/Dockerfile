@@ -25,6 +25,12 @@ ARG ABDUCO_SHA256=c90909e13fa95770b5afc3b59f311b3d3d2fdfae23f9569fa4f96a3e192a35
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc make libc6-dev curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+# extra_ca_certs, for the build only: the context always carries extra-ca.pem
+# (empty when none is configured). It joins this stage's trust store before the
+# first https fetch and is removed again before USER agent, so the shipped image
+# holds the stock store. Plain COPY/RUN: the legacy builder must work too.
+COPY extra-ca.pem /usr/local/share/ca-certificates/agent-box-extra.crt
+RUN f=/usr/local/share/ca-certificates/agent-box-extra.crt; if [ -s "$f" ]; then update-ca-certificates; else rm -f "$f"; fi
 RUN set -eu; \
     curl -fsSL "https://github.com/martanne/abduco/releases/download/v${ABDUCO_VERSION}/abduco-${ABDUCO_VERSION}.tar.gz" -o /tmp/abduco.tar.gz; \
     echo "${ABDUCO_SHA256}  /tmp/abduco.tar.gz" | sha256sum -c -; \
@@ -51,6 +57,8 @@ ARG HASHICORP_PGP_FPR=C874011F0AB405110D02105534365D9472D7468F
 ARG HASHICORP_PGP_SHA256=c2f5bc1163bd8d15a711616b587bcede212d045a5b8b52df01c74095897cd065
 RUN apt-get update && apt-get install -y --no-install-recommends gnupg curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+COPY extra-ca.pem /usr/local/share/ca-certificates/agent-box-extra.crt
+RUN f=/usr/local/share/ca-certificates/agent-box-extra.crt; if [ -s "$f" ]; then update-ca-certificates; else rm -f "$f"; fi
 RUN set -eu; \
     curl -fsSL "https://www.hashicorp.com/.well-known/pgp-key.txt" -o /tmp/hashicorp-key.txt; \
     echo "${HASHICORP_PGP_SHA256}  /tmp/hashicorp-key.txt" | sha256sum -c -; \
@@ -69,6 +77,8 @@ LABEL org.opencontainers.image.source="https://github.com/culiops/agent-box"
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git ca-certificates ripgrep jq less procps curl unzip \
     && rm -rf /var/lib/apt/lists/*
+COPY extra-ca.pem /usr/local/share/ca-certificates/agent-box-extra.crt
+RUN f=/usr/local/share/ca-certificates/agent-box-extra.crt; if [ -s "$f" ]; then update-ca-certificates; else rm -f "$f"; fi
 
 # --- update checks and telemetry: off, before any tool below runs ---
 # The box has no use for self-update (the image is the pin) or for phoning home,
@@ -221,7 +231,7 @@ RUN set -eu; \
 ARG PLAYWRIGHT_MCP_VERSION=0.0.83
 RUN apt-get update && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
+    && NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION} \
     && npm cache clean --force && rm -rf /root/.npm \
     && chromium --version \
     && playwright-mcp --version | grep -q "${PLAYWRIGHT_MCP_VERSION}"
@@ -277,7 +287,7 @@ RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bi
 # To bump: re-read `npm view @anthropic-ai/claude-code dist-tags`, change
 # CLAUDE_CODE_VERSION to `stable`, rebuild.
 ARG CLAUDE_CODE_VERSION=2.1.292
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
+RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} && npm cache clean --force && rm -rf /root/.npm && claude --version | grep -q "${CLAUDE_CODE_VERSION}"
 
 # --- apt extras ---
 # make, dnsutils (dig) and netcat-openbsd (nc) are absent from the slim base;
@@ -633,7 +643,7 @@ RUN set -eu; \
 # the new dist.integrity with the tarball's sha512, and re-check that
 # `sentry-mcp --version` still resolves.
 ARG SENTRY_MCP_VERSION=0.42.0
-RUN npm install -g @sentry/mcp-server@${SENTRY_MCP_VERSION} \
+RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @sentry/mcp-server@${SENTRY_MCP_VERSION} \
     && npm cache clean --force && rm -rf /root/.npm \
     && command -v sentry-mcp \
     && sentry-mcp --version | grep -q "${SENTRY_MCP_VERSION}"
@@ -913,7 +923,7 @@ RUN set -eu; \
       '    --hash=sha256:e85a9db9e5a5ccc326edb19e35a5106ba16e451d570a2ec8ea9deb1ea52a3c42' \
       'zipp==4.1.1 \' \
       '    --hash=sha256:8979f52d874162f485ff2981e3891f3a3317b7a3dd43ff1e1775b9304f307a9c' > /tmp/req.txt; \
-    python3 -m venv /opt/mcp-atlassian && /opt/mcp-atlassian/bin/pip install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r /tmp/req.txt; \
+    python3 -m venv /opt/mcp-atlassian && PIP_CERT=/etc/ssl/certs/ca-certificates.crt /opt/mcp-atlassian/bin/pip install --no-cache-dir --require-hashes --only-binary :all: --no-deps -r /tmp/req.txt; \
     rm -f /tmp/req.txt; rm -rf /root/.cache/pip; \
     ln -s /opt/mcp-atlassian/bin/mcp-atlassian /usr/local/bin/mcp-atlassian; \
     mcp-atlassian --version | grep -q "${MCP_ATLASSIAN_VERSION}"
@@ -929,6 +939,10 @@ RUN set -eu; \
     printf '%s\n' /root/.bashrc /root/.profile | sort > /tmp/rootok; \
     diff /tmp/rootok /tmp/rootls; \
     rm /tmp/rootls /tmp/rootok
+
+# The build-time CAs end here: the stock trust store is what ships. Never ENV
+# a CA variable above; the console sets them on the box at run time.
+RUN rm -f /usr/local/share/ca-certificates/agent-box-extra.crt && update-ca-certificates
 
 USER agent
 ENV HOME=/home/agent

@@ -7,14 +7,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 func TestHashIsStableAndShort(t *testing.T) {
@@ -39,22 +43,36 @@ func TestHashMatchesShellPipeline(t *testing.T) {
 	}
 }
 
-func TestContextTarHoldsOnlyTheDockerfile(t *testing.T) {
-	b, err := contextTar()
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr := tar.NewReader(bytes.NewReader(b))
-	h, err := tr.Next()
-	if err != nil || h.Name != "Dockerfile" {
-		t.Fatalf("first entry: %v %v", h, err)
-	}
-	body, _ := io.ReadAll(tr)
-	if !bytes.Equal(body, dockerfile) {
-		t.Fatal("tar body differs from the embedded Dockerfile")
-	}
-	if _, err := tr.Next(); err != io.EOF {
-		t.Fatal("context must contain only the Dockerfile")
+func TestContextTarHoldsDockerfileAndExtraCA(t *testing.T) {
+	for _, extra := range [][]byte{nil, []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")} {
+		b, err := contextTar(extra)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr := tar.NewReader(bytes.NewReader(b))
+		got := map[string][]byte{}
+		var order []string
+		for {
+			h, err := tr.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(tr)
+			got[h.Name] = body
+			order = append(order, h.Name)
+		}
+		if !slices.Equal(order, []string{"Dockerfile", "extra-ca.pem"}) {
+			t.Fatalf("context entries = %v, want exactly Dockerfile and extra-ca.pem", order)
+		}
+		if !bytes.Equal(got["Dockerfile"], dockerfile) {
+			t.Fatal("tar body differs from the embedded Dockerfile")
+		}
+		if !bytes.Equal(got["extra-ca.pem"], extra) {
+			t.Fatalf("extra-ca.pem = %q, want %q (empty when off)", got["extra-ca.pem"], extra)
+		}
 	}
 }
 
@@ -73,18 +91,63 @@ func fakeDocker(t *testing.T, script string) (string, string) {
 // A user's local node:* tag can be any arch (spike run 2): a plain build
 // silently produced an emulated box. --pull and --platform are mandatory.
 func TestBuildPinsPlatformPullsAndLabels(t *testing.T) {
-	bin, log := fakeDocker(t, `case "$*" in *"version"*) echo arm64;; *) cat >/dev/null;; esac`+"\n")
-	err := Docker{Bin: bin, Args: []string{"--host", "unix:///s"}}.Build(context.Background(), []string{"culiops/agent-box:base"}, io.Discard)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, _ := os.ReadFile(log)
-	got := string(b)
-	for _, want := range []string{"--host unix:///s build", "--pull", "--platform linux/arm64",
-		"--label " + LabelHash + "=" + Hash(), "-t culiops/agent-box:base -"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("build argv missing %q: %s", want, got)
+	var argvs []string
+	for _, extra := range [][]byte{nil, []byte("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")} {
+		bin, log := fakeDocker(t, `case "$*" in *"version"*) echo arm64;; *) cat >/dev/null;; esac`+"\n")
+		err := Docker{Bin: bin, Args: []string{"--host", "unix:///s"}, ExtraCA: extra}.Build(context.Background(), []string{"culiops/agent-box:base"}, io.Discard)
+		if err != nil {
+			t.Fatal(err)
 		}
+		b, _ := os.ReadFile(log)
+		got := string(b)
+		for _, want := range []string{"--host unix:///s build", "--pull", "--platform linux/arm64",
+			"--label " + LabelHash + "=" + Hash(), "-t culiops/agent-box:base -"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("build argv missing %q: %s", want, got)
+			}
+		}
+		argvs = append(argvs, got)
+	}
+	// Off means off: the CAs travel in the context tar, never in the argv.
+	if argvs[0] != argvs[1] {
+		t.Fatalf("build argv differs with ExtraCA:\noff: %s\non:  %s", argvs[0], argvs[1])
+	}
+}
+
+// A failed build carries the end of docker's output, where the cause is; the
+// full output still streams to w. Memory stays bounded: only the last 64 KiB is kept.
+func TestBuildFailureCarriesOutputTail(t *testing.T) {
+	bin, _ := fakeDocker(t, `case "$*" in *"version"*) echo arm64;; *)
+cat >/dev/null
+echo 'first line, long gone'
+i=0; while [ $i -lt 3000 ]; do echo 'padding padding padding padding padding padding'; i=$((i+1)); done
+echo 'curl: (60) SSL certificate problem: self-signed certificate in certificate chain' >&2
+exit 3;; esac
+`)
+	var w bytes.Buffer
+	err := Docker{Bin: bin}.Build(context.Background(), []string{"r:base"}, &w)
+	var oe *OutputError
+	if !errors.As(err, &oe) {
+		t.Fatalf("want an *OutputError, got %T: %v", err, err)
+	}
+	if !strings.Contains(oe.Tail, "(60) SSL certificate problem") {
+		t.Errorf("tail lacks the last line: %.200q", oe.Tail)
+	}
+	if strings.Contains(oe.Tail, "first line, long gone") {
+		t.Error("tail kept output older than its 64 KiB window")
+	}
+	if len(oe.Tail) > 64<<10 {
+		t.Errorf("tail is %d bytes, want at most 64 KiB", len(oe.Tail))
+	}
+	if !strings.Contains(w.String(), "first line, long gone") || !strings.Contains(w.String(), "(60) SSL") {
+		t.Error("the full output must still stream to w")
+	}
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 3 {
+		t.Errorf("OutputError must unwrap to the exit error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "docker build r:base") {
+		t.Errorf("error wording lost its prefix: %v", err)
 	}
 }
 
@@ -1342,7 +1405,8 @@ func TestDockerfileTelemetryEnvFirst(t *testing.T) {
 }
 
 // The root-stage build leaves only the base image's two dotfiles in /root; the
-// last RUN before USER agent fails the build on anything else.
+// RUN before the extra-CA removal (which writes nothing to /root) fails the
+// build on anything else.
 func TestDockerfileRootAllowlistCheck(t *testing.T) {
 	ins := dockerfileInstructions()
 	at := -1
@@ -1351,12 +1415,15 @@ func TestDockerfileRootAllowlistCheck(t *testing.T) {
 			at = i
 		}
 	}
-	if at < 1 {
+	if at < 2 {
 		t.Fatal("no USER agent")
 	}
-	prev := ins[at-1]
+	if !strings.Contains(ins[at-1], "agent-box-extra.crt") {
+		t.Fatalf("the instruction before USER agent is not the extra-CA removal: %.80s", ins[at-1])
+	}
+	prev := ins[at-2]
 	if !strings.HasPrefix(prev, "RUN ") {
-		t.Fatalf("the instruction before USER agent is not a RUN: %.80s", prev)
+		t.Fatalf("the allowlist check is not a RUN: %.80s", prev)
 	}
 	for _, w := range []string{"find /root -mindepth 1", "diff ", "/root/.bashrc", "/root/.profile"} {
 		if !strings.Contains(prev, w) {
@@ -1389,5 +1456,126 @@ func TestDockerfileRootAllowlistCheck(t *testing.T) {
 				t.Errorf("the RUN with %q does not %q in the same layer", marker, clean)
 			}
 		}
+	}
+}
+
+// dockerfileStages splits the Dockerfile's instructions at each FROM. Comments and blank
+// lines are gone, so a URL in a comment or a LABEL is not mistaken for a fetch.
+func dockerfileStages() [][]string {
+	var stages [][]string
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "FROM ") {
+			stages = append(stages, nil)
+		}
+		if len(stages) > 0 {
+			stages[len(stages)-1] = append(stages[len(stages)-1], in)
+		}
+	}
+	return stages
+}
+
+const extraCACopy = "COPY extra-ca.pem /usr/local/share/ca-certificates/agent-box-extra.crt"
+
+func TestDockerfileInstallsExtraCAPerStage(t *testing.T) {
+	stages := dockerfileStages()
+	if len(stages) != 3 {
+		t.Fatalf("found %d stages, want 3", len(stages))
+	}
+	for i, st := range stages {
+		aptCA, copyAt, installAt, firstFetch := -1, -1, -1, -1
+		for j, in := range st {
+			switch {
+			case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "apt-get install") && strings.Contains(in, "ca-certificates") && aptCA < 0:
+				aptCA = j
+			case in == extraCACopy:
+				copyAt = j
+			case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "update-ca-certificates") && installAt < 0:
+				installAt = j
+			case strings.HasPrefix(in, "RUN ") && strings.Contains(in, "https://") && firstFetch < 0:
+				firstFetch = j
+			}
+		}
+		if aptCA < 0 || copyAt < 0 || installAt < 0 || firstFetch < 0 {
+			t.Errorf("stage %d: apt ca-certificates=%d COPY=%d install RUN=%d first https fetch=%d, all must exist", i, aptCA, copyAt, installAt, firstFetch)
+			continue
+		}
+		if !(aptCA < copyAt && copyAt < installAt && installAt < firstFetch) {
+			t.Errorf("stage %d: order apt=%d COPY=%d install=%d fetch=%d, want apt < COPY < install < fetch", i, aptCA, copyAt, installAt, firstFetch)
+		}
+		want := `RUN f=/usr/local/share/ca-certificates/agent-box-extra.crt; if [ -s "$f" ]; then update-ca-certificates; else rm -f "$f"; fi`
+		if st[installAt] != want {
+			t.Errorf("stage %d install RUN = %q, want %q", i, st[installAt], want)
+		}
+	}
+}
+
+// The shipped image holds the stock trust store only: the build-time CAs are
+// removed in the last root RUN, so no layer past it (and no runtime) sees them.
+func TestDockerfileRemovesExtraCABeforeUserAgent(t *testing.T) {
+	ins := dockerfileInstructions()
+	user := slices.Index(ins, "USER agent")
+	if user < 0 {
+		t.Fatal("no USER agent instruction")
+	}
+	last := ""
+	for _, in := range ins[:user] {
+		if strings.HasPrefix(in, "RUN ") {
+			last = in
+		}
+	}
+	want := "RUN rm -f /usr/local/share/ca-certificates/agent-box-extra.crt && update-ca-certificates"
+	if last != want {
+		t.Errorf("last RUN before USER agent = %q, want %q", last, want)
+	}
+	if ins[user-1] != want {
+		t.Errorf("the removal must sit right before USER agent, found %q", ins[user-1])
+	}
+}
+
+// The CA variables are runtime concerns the console sets on the box; baking one
+// into the image would outlive the CAs. BuildKit-only syntax would break the
+// legacy builder that macOS setups still use.
+func TestDockerfileNoBuildKitOnlySyntax(t *testing.T) {
+	if regexp.MustCompile(`(?m)^#\s*syntax\s*=`).MatchString(string(dockerfile)) {
+		t.Error("Dockerfile has a # syntax= directive")
+	}
+	for _, in := range dockerfileInstructions() {
+		if strings.HasPrefix(in, "RUN ") && strings.Contains(in, "--mount") {
+			t.Errorf("RUN --mount is BuildKit-only: %.120s", in)
+		}
+		if !strings.HasPrefix(in, "ENV ") {
+			continue
+		}
+		// ENV KEY=val KEY2=val2 or ENV KEY val.
+		for _, f := range strings.Fields(strings.TrimPrefix(in, "ENV ")) {
+			key, _, _ := strings.Cut(f, "=")
+			if slices.Contains(extraca.EnvNames, key) || key == "PIP_CERT" {
+				t.Errorf("ENV sets %s: CA variables go on a RUN command line only: %s", key, in)
+			}
+		}
+	}
+}
+
+func TestDockerfileNpmPipUseSystemStore(t *testing.T) {
+	npm, pip := 0, 0
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") {
+			continue
+		}
+		if strings.Contains(in, "npm install -g") {
+			npm++
+			if !strings.Contains(in, "NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g") {
+				t.Errorf("npm install without NODE_EXTRA_CA_CERTS on its command: %.160s", in)
+			}
+		}
+		if strings.Contains(in, "pip install") {
+			pip++
+			if !strings.Contains(in, "PIP_CERT=/etc/ssl/certs/ca-certificates.crt /opt/mcp-atlassian/bin/pip install") {
+				t.Errorf("pip install without PIP_CERT on its command: %.160s", in)
+			}
+		}
+	}
+	if npm != 3 || pip != 1 {
+		t.Errorf("found %d npm installs and %d pip installs, want 3 and 1", npm, pip)
 	}
 }
