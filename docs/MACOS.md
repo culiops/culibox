@@ -116,3 +116,64 @@ Egress control for macOS boxes is new and has not yet been verified on a Mac.
 - Denials show in the steer rail's egress row for the session ("N denied since
   start") and, with host and time, in the `egress_audit` table of `audit.db` in
   the data directory.
+
+## Behind a TLS-inspecting proxy
+
+Some company networks (for example Zscaler or Netskope) decrypt HTTPS and
+re-sign it with their own root CA. Your Mac trusts that root, but the box VM
+and the boxes do not, so `box setup` fails with errors such as `curl: (60)`,
+`SSL certificate problem` or `x509: certificate signed by unknown authority`.
+When it sees one, `box setup` prints a `HINT:` that names the root CA your Mac
+sees for the failing host and the export command below with the name filled in.
+
+1. Export the root CA to a PEM file. `<Root CN>` is the name in the hint, or
+   the root certificate's name in Keychain Access (usually under the System
+   keychain, Certificates):
+
+       security find-certificate -c "<Root CN>" -p > ~/agent-box-ca.pem
+
+2. Add it to `config.json`, with an absolute path:
+
+       "extra_ca_certs": ["/Users/me/agent-box-ca.pem"]
+
+3. Apply it. The VM's provisioning changes, so the VM must be recreated.
+   `-recreate` drops the VM's images, so the image is rebuilt (or pulled again):
+
+       agent-box box setup -recreate
+
+   It refuses while a box is running; add `-force` to end those sessions.
+
+`box setup` and `agent-box doctor` then print one line per CA:
+
+    PASS extra-ca: <subject> sha256:<fingerprint> expires <YYYY-MM-DD>
+
+An expired CA (or one not yet valid) shows as `WARN extra-ca:` with the same
+detail. It does not stop agent-box, but trust through it will fail.
+
+What the file may hold:
+
+- Absolute paths to **certificate** PEM files only. A file with a private key
+  in it is refused, so export the certificate, never the key.
+- Each certificate must be a CA. A server certificate is refused.
+- At most 32 certificates in total, and at most 1 MiB per file. Export the one
+  root your proxy signs with, not your whole system trust store.
+
+Trust a CA only if you trust its owner: **a trusted CA can read and modify all
+TLS traffic inside the boxes.** Only whoever owns `config.json` can set it, and
+`doctor` and `box setup` always list it, so it is never silent.
+
+The CA is added to the image only while it builds and is removed before the
+image is finished, so an image you build or publish never contains it. At run
+time each box gets a read-only trust bundle (the image's own roots plus yours)
+mounted over `/etc/ssl/certs/ca-certificates.crt`, and the usual variables
+(`SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS` and the like) point at it. If you change
+the list while a box with live sessions is running, new sessions in that box
+are refused until the old ones end (on macOS, `agent-box box stop` ends them).
+
+On Linux there is no VM. Boxes pick up a changed list when they next start, and
+the image build needs `agent-box box setup -rebuild`. A registry pull (a
+`box_image` that is a `ghcr.io` digest) goes through the host's Docker daemon,
+which uses the host's own trust store. agent-box does not manage that: install
+the proxy's root there (on Debian or Ubuntu, copy it into
+`/usr/local/share/ca-certificates/` as a `.crt`, run `update-ca-certificates`
+and restart docker). `box setup` prints this as a hint when a pull fails.
