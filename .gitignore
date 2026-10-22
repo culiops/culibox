@@ -33,6 +33,10 @@ config.json
 config.prod.json
 .prod.env
 
+# Build input CI creates empty for the published image; a local one may hold
+# real CAs and must never be committed
+docker/agent-box/extra-ca.pem
+
 # Visual brainstorm companion (local only)
 .superpowers/
 

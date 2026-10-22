@@ -1427,16 +1427,16 @@ func TestDockerfileRootAllowlistCheck(t *testing.T) {
 	}
 	for _, w := range []string{"find /root -mindepth 1", "diff ", "/root/.bashrc", "/root/.profile"} {
 		if !strings.Contains(prev, w) {
-			t.Errorf("the final root RUN does not contain %q", w)
+			t.Errorf("the allowlist RUN does not contain %q", w)
 		}
 	}
 	// diff exits non-zero on a mismatch; only set -eu turns that into a failed build.
 	if !strings.HasPrefix(prev, "RUN set -eu;") {
-		t.Errorf("the final root RUN must start with set -eu so a diff mismatch fails the build: %.60s", prev)
+		t.Errorf("the allowlist RUN must start with set -eu so a diff mismatch fails the build: %.60s", prev)
 	}
 	rm, find := strings.Index(prev, "rmdir /root/.ssh"), strings.Index(prev, "find /root -mindepth 1")
 	if rm < 0 {
-		t.Error("the final root RUN does not rmdir /root/.ssh")
+		t.Error("the allowlist RUN does not rmdir /root/.ssh")
 	} else if rm > find {
 		t.Error("/root/.ssh must be removed before the allowlist check")
 	}
