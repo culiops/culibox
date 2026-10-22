@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // hostOnlyEnv names that must never cross into a box. PATH/HOME/SHELL would
@@ -38,8 +40,9 @@ var hostOnlyEnv = map[string]bool{
 // label every box carries.
 // claims=1 tells other agent-box instances on this docker daemon that this build
 // enforces exclusive workspaces; exclusive=1 marks a box another spawn must not
-// share a folder with.
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool) []string {
+// share a folder with. caBundle != "" adds the extra-CA label and bundle mount;
+// "" leaves the output exactly as it was before extra CAs existed.
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle string) []string {
 	pids, tmpSize, memory := m.opts.PidsLimit, m.opts.TmpSize, m.opts.Memory
 	if pids == 0 {
 		pids = DefaultPidsLimit
@@ -81,6 +84,13 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 	// That includes a clone-mode box's mounts (BoxKey.Clone): none is writable.
 	for _, mt := range extraRO {
 		args = append(args, "--mount", bindMount(mt.Host, mt.Box, true))
+	}
+	// The trust bundle (host path from caBundle, "" = CAs off) replaces the
+	// image's own, read-only like every extra bind. The label is how ensure
+	// tells a box started with another CA set from this one.
+	if caBundle != "" {
+		args = append(args, "--label", extraca.Label+"="+m.opts.ExtraCA.Hash(),
+			"--mount", bindMount(caBundle, extraca.ContainerBundle, true))
 	}
 	// A fenced box joins the egress network instead of the default bridge. Both
 	// values come from constants and validated config, never from a session, and

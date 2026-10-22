@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // fakeClient records docker calls so every unit test runs without a daemon.
@@ -44,6 +46,11 @@ type fakeClient struct {
 	// for a running box.
 	mounts    map[string][]string
 	mountsErr error
+
+	// runHook answers a Run before it is recorded or counted (handled=true),
+	// so a test can serve the image/create/cp/rm calls of caBundle without
+	// disturbing the run counters.
+	runHook func(args []string) (out string, handled bool, err error)
 }
 
 func newFake() *fakeClient {
@@ -52,6 +59,14 @@ func newFake() *fakeClient {
 }
 
 func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {
+	f.mu.Lock()
+	hook := f.runHook
+	f.mu.Unlock()
+	if hook != nil {
+		if out, handled, err := hook(args); handled {
+			return out, err
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.runCount++
@@ -184,17 +199,17 @@ func (f *fakeClient) Stop(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []string, error) {
+func (f *fakeClient) InspectMounts(ctx context.Context, name string) (State, []string, string, error) {
 	st, err := f.Inspect(ctx, name)
 	if err != nil || st != StateRunning {
-		return st, nil, err
+		return st, nil, "", err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.mountsErr != nil {
-		return StateMissing, nil, f.mountsErr
+		return StateMissing, nil, "", f.mountsErr
 	}
-	return st, append([]string(nil), f.mounts[name]...), nil
+	return st, append([]string(nil), f.mounts[name]...), f.labels[name][extraca.Label], nil
 }
 
 func (f *fakeClient) HasRuntime(_ context.Context, name string) bool {
