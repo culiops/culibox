@@ -1597,6 +1597,9 @@ func TestDockerfilePinsZshrc(t *testing.T) {
 	if !strings.Contains(string(dockerfile), `sha256sum -c`) {
 		t.Error("the copied zshrc is not checked against the pin")
 	}
+	if !strings.Contains(string(dockerfile), `'skip_global_compinit=1' >> /etc/zsh/zshenv`) {
+		t.Error("Debian's global compinit must be skipped: the zshrc runs its own, with -i and a cache path")
+	}
 	if _, err := exec.LookPath("zsh"); err == nil {
 		if b, err := exec.Command("zsh", "-n", "zshrc").CombinedOutput(); err != nil {
 			t.Fatalf("zsh -n zshrc: %v: %s", err, b)

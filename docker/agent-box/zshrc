@@ -107,7 +107,11 @@ _ab_precmd() {
 	unset _ab_started
 	local mark='>'
 	[[ ${LC_ALL:-${LC_CTYPE:-$LANG}} == *[Uu][Tt][Ff]-#8* ]] && mark='❯'
-	PROMPT="$_ab_line"$'\n'"%(?..%F{red}[$rc]%f )%F{%(?.green.red)}$mark%f "
+	if (( rc )); then
+		PROMPT="$_ab_line"$'\n'"%F{red}[$rc] $mark%f "
+	else
+		PROMPT="$_ab_line"$'\n'"%F{green}$mark%f "
+	fi
 }
 add-zsh-hook preexec _ab_preexec
 add-zsh-hook precmd _ab_precmd

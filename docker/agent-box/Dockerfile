@@ -948,12 +948,13 @@ RUN set -eu; \
 # so an edit to it changes this Dockerfile, and with it the image label that
 # tells doctor to rebuild. Completions for the tools above are generated here
 # (HOME pointed away so nothing lands in /root).
-ARG AGENT_BOX_ZSHRC_SHA256=e63ba9168fdec68b0a6e696336f31f561e47e2e8379f0850b00841766ef81955
+ARG AGENT_BOX_ZSHRC_SHA256=501ad915935a8c08f47f5e8f11bda8efed14415907e9bc37d9e44976773931a2
 COPY zshrc /etc/agent-box/zshrc
 RUN set -eu; \
     echo "${AGENT_BOX_ZSHRC_SHA256}  /etc/agent-box/zshrc" | sha256sum -c -; \
     chmod 0644 /etc/agent-box/zshrc; \
     printf '\n%s\n' '# agent-box defaults; ~/.zshrc loads after this and wins.' '[[ -r /etc/agent-box/zshrc ]] && source /etc/agent-box/zshrc' >> /etc/zsh/zshrc; \
+    printf '\n%s\n' '# agent-box runs compinit itself (/etc/agent-box/zshrc, cache in ~/.cache/zsh); skip Debian'"'"'s second one.' 'skip_global_compinit=1' >> /etc/zsh/zshenv; \
     d=/usr/local/share/zsh/site-functions; mkdir -p "$d"; \
     export HOME=/tmp/zsh-compgen; mkdir -p "$HOME"; \
     kubectl completion zsh > "$d/_kubectl"; \
