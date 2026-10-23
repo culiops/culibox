@@ -99,9 +99,10 @@ type AgentConfig struct {
 	// AWSConnections names host aws_connections entries this profile's boxes may
 	// mint credentials for (several at once); exclusive with the inline AWS binding.
 	AWSConnections []string `json:"aws_connections,omitempty"`
-	Tokens         []string `json:"tokens,omitempty"`      // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
-	CloneOf        string   `json:"clone_of,omitempty"`    // host repo this boxed profile clones into default_cwd (clone mode)
-	CloneShare     []string `json:"clone_share,omitempty"` // read-only host paths (relative to clone_of) shared into the clone
+	Tokens         []string `json:"tokens,omitempty"`        // static_tokens entries (by name) this profile's boxes may fetch; boxed profiles only
+	CloneOf        string   `json:"clone_of,omitempty"`      // host repo this boxed profile clones into default_cwd (clone mode)
+	CloneShare     []string `json:"clone_share,omitempty"`   // read-only host paths (relative to clone_of) shared into the clone
+	ContextPaths   []string `json:"context_paths,omitempty"` // absolute host paths a boxed agent can read, mounted read-only at the same path
 
 	// Replyable is the profile's default for a spawned session's reply opt-in
 	// (the sidebar/card may type into it). Only a claude session ever honours
@@ -443,6 +444,14 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		if err := validateClone(a); err != nil {
 			return fmt.Errorf("config: agent %q: %w", a.Name, err)
 		}
+		if err := validateContextPaths(a); err != nil {
+			return fmt.Errorf("config: agent %q: %w", a.Name, err)
+		}
+		// An agent with no runtime of its own inherits the instance default,
+		// which validateContextPaths cannot see.
+		if len(a.ContextPaths) > 0 && c.RuntimeFor(a) == RuntimeHost {
+			return fmt.Errorf("config: agent %q: %w", a.Name, errContextNeedsBox)
+		}
 	}
 	optDefs := map[string]OptionDef{}
 	for _, o := range c.Options {
@@ -583,6 +592,9 @@ func ValidateProfile(a AgentConfig, optDefs map[string]OptionDef) error {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	if err := validateClone(a); err != nil {
+		return fmt.Errorf("profile %q: %w", a.Name, err)
+	}
+	if err := validateContextPaths(a); err != nil {
 		return fmt.Errorf("profile %q: %w", a.Name, err)
 	}
 	for k, v := range a.Options {
