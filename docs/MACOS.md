@@ -104,6 +104,10 @@ context and never edits `~/.ssh/config`.
   deletes and recreates the VM. Like `box stop`, it refuses while any box is
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
+- Restart `agent-box serve` after any `box setup -recreate`. A running
+  agent-box keeps the VM settings it read when it started, so until the
+  restart it sizes new boxes from the old VM, and a failed boxed spawn can
+  still tell you to recreate. `agent-box doctor` reads the VM fresh each run.
 
 ### Boxes with credential bindings
 
@@ -121,7 +125,8 @@ Egress control for macOS boxes is new and has not yet been verified on a Mac.
 - After upgrading, run `agent-box box setup -recreate` once. The rules live in
   the VM's provisioning, so an existing VM has none until it is recreated;
   `agent-box doctor` warns "box VM config changed since setup" until you do.
-  Like any recreate, it refuses while a box is running unless you add `-force`.
+  Like any recreate, it refuses while a box is running unless you add `-force`,
+  and agent-box must be restarted afterwards.
 - The bound network uses the fixed subnet `172.29.72.0/24` inside the VM.
 - A tool that ignores `HTTPS_PROXY` cannot connect, by design: there is no
   direct route to fall back on. A connection that fails with a timeout, not a
