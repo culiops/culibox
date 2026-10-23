@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -483,7 +484,9 @@ func (m *Manager) touchMarker(boxName string) {
 // It also seeds first-run state. A box home is empty, so an interactive agent
 // otherwise meets an onboarding wizard rather than a prompt — the credential is
 // forwarded and valid, but the agent never gets far enough to use it. These
-// markers are configuration, not credentials.
+// markers are configuration, not credentials. It also pre-accepts Claude Code's
+// trust dialog for workspace (see trustWorkspace), which is safe here because
+// ensure calls this only while the box's container is absent.
 //
 // Everything BELOW the home is created through an os.Root anchored at it, never
 // through plain path joins. The box writes in this directory as the daemon user,
@@ -492,7 +495,7 @@ func (m *Manager) touchMarker(boxName string) {
 // its choosing. os.Root resolves each component with openat/O_NOFOLLOW
 // semantics, so a symlink out of the home fails instead of being followed —
 // the same boundary internal/web puts around $HOME for uploads and file ops.
-func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error) {
+func (m *Manager) ensureStateDir(boxName, workspace string, extraRO []Mount) (string, error) {
 	dir := m.stateDir(boxName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("box: creating state dir %q: %w", dir, err)
@@ -511,15 +514,25 @@ func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error
 	// no way for an existing name to redirect the write.
 	body := []byte("{\n  \"hasCompletedOnboarding\": true,\n  \"theme\": \"dark\"\n}\n")
 	f, err := root.OpenFile(".claude.json", os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return dir, nil // state a running agent has already written
+	switch {
+	case err == nil:
+		_, err = f.Write(body)
+		if cerr := f.Close(); err == nil {
+			err = cerr
 		}
+		if err != nil {
+			return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
+		}
+	case os.IsExist(err):
+		// state a running agent has already written: merged below, never replaced
+	default:
 		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
 	}
-	defer f.Close()
-	if _, err := f.Write(body); err != nil {
-		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
+	// Every new and existing home, because trust is keyed per workspace path and
+	// homes from before this existed lack it. Best effort: without it the agent
+	// just asks, as it always did.
+	if err := trustWorkspace(root, workspace); err != nil {
+		log.Printf("box: %s: workspace trust not pre-accepted: %v", boxName, err)
 	}
 	return dir, nil
 }
@@ -865,7 +878,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 				return fmt.Errorf("box: mount source %q: %s", p, reason)
 			}
 		}
-		if _, err := m.ensureStateDir(name, extraRO); err != nil {
+		if _, err := m.ensureStateDir(name, cwd, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
