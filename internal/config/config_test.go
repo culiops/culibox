@@ -358,11 +358,57 @@ func TestExampleConfigLoadsAndShowsAllowedHosts(t *testing.T) {
 }
 
 func TestBoxVMSizeDefaults(t *testing.T) {
-	if c, m := (Config{}).BoxVMSize(); c != 4 || m != 4 {
-		t.Fatalf("defaults = %d/%d", c, m)
+	const gib = 1 << 30
+	for _, c := range []struct {
+		name     string
+		cfg      Config
+		hostCPUs int
+		hostMem  uint64
+		cpus, gb int
+	}{
+		{"all cores, half the RAM", Config{}, 10, 32 * gib, 10, 16},
+		{"half rounds down to whole GiB", Config{}, 8, 23 * gib, 8, 11},
+		{"small mac keeps the old 4 GiB floor", Config{}, 4, 8 * gib, 4, 4},
+		{"tiny mac still gets the floor", Config{}, 2, 4 * gib, 2, 4},
+		{"host facts unknown: old 4/4", Config{}, 0, 0, 4, 4},
+		{"explicit values win", Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 6}, 10, 32 * gib, 2, 6},
+		{"explicit cpus, default memory", Config{BoxVMCPUs: 2}, 10, 32 * gib, 2, 16},
+		{"explicit memory, default cpus", Config{BoxVMMemoryGiB: 6}, 10, 32 * gib, 10, 6},
+		{"explicit may undercut the floor", Config{BoxVMMemoryGiB: 2}, 10, 32 * gib, 10, 2},
+	} {
+		if cpus, gb := c.cfg.BoxVMSize(c.hostCPUs, c.hostMem); cpus != c.cpus || gb != c.gb {
+			t.Errorf("%s: got %d/%d, want %d/%d", c.name, cpus, gb, c.cpus, c.gb)
+		}
 	}
-	if c, m := (Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 6}).BoxVMSize(); c != 2 || m != 6 {
-		t.Fatalf("overrides = %d/%d", c, m)
+}
+
+func TestValidateBoxCPUs(t *testing.T) {
+	agents := `"agents":[{"name":"a","bin":"b"}]`
+	c, err := Load(writeTemp(t, `{"bind_addr":"127.0.0.1:1","box_cpus":1.5,`+agents+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BoxCPUs != 1.5 {
+		t.Fatalf("box_cpus not parsed: %v", c.BoxCPUs)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid box_cpus rejected: %v", err)
+	}
+	for _, bad := range []string{"-1", "0.001", "1.234", "2000"} {
+		c, err := Load(writeTemp(t, `{"bind_addr":"127.0.0.1:1","box_cpus":`+bad+`,`+agents+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "box_cpus") {
+			t.Errorf("box_cpus %s: want an error naming box_cpus, got %v", bad, err)
+		}
+	}
+	c, err = Load(writeTemp(t, `{"bind_addr":"127.0.0.1:1","box_memory":"max",`+agents+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf(`box_memory "max" rejected: %v`, err)
 	}
 }
 

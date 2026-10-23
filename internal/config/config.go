@@ -179,20 +179,21 @@ type Config struct {
 	// because the quick-shell profile is GENERATED, not configured, so no
 	// per-agent setting can reach it — without this, an instance whose every
 	// configured agent is host still had a boxed shell profile.
-	DefaultRuntime    string `json:"default_runtime,omitempty"`      // box(default)|host
-	RepliesEnabled    bool   `json:"replies_enabled,omitempty"`      // kill-switch for reply + remote Yes/No; absent = off
-	BundleSource      string `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
-	BoxImage          string `json:"box_image,omitempty"`            // the image every box runs; DefaultBoxImage when unset
-	BoxIdleTTLSeconds int    `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
-	BoxPidsLimit      int    `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
-	BoxTmpSize        string `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
-	BoxMemory         string `json:"box_memory,omitempty"`           // box RAM cap (swap capped equal), number + k/m/g, min 1g; "" → 4g
-	DockerBin         string `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
-	ColimaBin         string `json:"colima_bin,omitempty"`           // macOS: default "colima"
-	BoxVMCPUs         int    `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → 4
-	BoxVMMemoryGiB    int    `json:"box_vm_memory_gib,omitempty"`    // macOS box VM; 0 → 4
-	BrokerPort        int    `json:"broker_port,omitempty"`          // macOS: credential broker TCP port on 127.0.0.1; 0 → 9071
-	EgressPort        int    `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
+	DefaultRuntime    string  `json:"default_runtime,omitempty"`      // box(default)|host
+	RepliesEnabled    bool    `json:"replies_enabled,omitempty"`      // kill-switch for reply + remote Yes/No; absent = off
+	BundleSource      string  `json:"bundle_source,omitempty"`        // "" → auto-detect; "off" → no bundle
+	BoxImage          string  `json:"box_image,omitempty"`            // the image every box runs; DefaultBoxImage when unset
+	BoxIdleTTLSeconds int     `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
+	BoxPidsLimit      int     `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
+	BoxTmpSize        string  `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
+	BoxMemory         string  `json:"box_memory,omitempty"`           // box RAM cap (swap capped equal), number + k/m/g, min 1g, or "max"; "" → half of docker's memory, at least min(4g, all of it) (4g if unreadable)
+	BoxCPUs           float64 `json:"box_cpus,omitempty"`             // box CPU cap (--cpus), 0.01-1024, 2 decimals; 0 → no cap
+	DockerBin         string  `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
+	ColimaBin         string  `json:"colima_bin,omitempty"`           // macOS: default "colima"
+	BoxVMCPUs         int     `json:"box_vm_cpus,omitempty"`          // macOS box VM; 0 → all host cores
+	BoxVMMemoryGiB    int     `json:"box_vm_memory_gib,omitempty"`    // macOS box VM; 0 → half the host RAM in whole GiB, at least 4
+	BrokerPort        int     `json:"broker_port,omitempty"`          // macOS: credential broker TCP port on 127.0.0.1; 0 → 9071
+	EgressPort        int     `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
 
 	// ExtraCACerts are PEM files of CA certificates every box trusts on top of
 	// the image's own (a corporate TLS-inspection root). Operator-only: there is
@@ -250,14 +251,20 @@ func (c Config) BoxImageOrDefault() string {
 	return DefaultBoxImage
 }
 
-// BoxVMSize is the macOS box VM's CPUs and memory in GiB, defaulting to 4 and 4.
-func (c Config) BoxVMSize() (cpus, memGiB int) {
+// BoxVMSize is the macOS box VM's CPUs and memory in GiB. Unset means all the
+// host's cores and half its RAM in whole GiB, but never less than 4 GiB, so a
+// small Mac gets what it always did. The host facts are passed in to keep this
+// pure; 0 means unknown and falls back to the old 4 CPUs / 4 GiB.
+func (c Config) BoxVMSize(hostCPUs int, hostMemBytes uint64) (cpus, memGiB int) {
 	cpus, memGiB = c.BoxVMCPUs, c.BoxVMMemoryGiB
 	if cpus <= 0 {
 		cpus = 4
+		if hostCPUs > 0 {
+			cpus = hostCPUs
+		}
 	}
 	if memGiB <= 0 {
-		memGiB = 4
+		memGiB = max(4, int(hostMemBytes>>30)/2)
 	}
 	return cpus, memGiB
 }
@@ -387,6 +394,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		return fmt.Errorf("config: extra_ca_certs: %w", err)
 	}
 	if err := box.ValidateLimits(c.BoxPidsLimit, c.BoxTmpSize, c.BoxMemory); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if err := box.ValidateCPUs(c.BoxCPUs); err != nil {
 		return fmt.Errorf("config: %w", err)
 	}
 	if c.BrokerPort < 0 || c.BrokerPort > 65535 {

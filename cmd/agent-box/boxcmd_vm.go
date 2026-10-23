@@ -28,7 +28,7 @@ func runBoxDarwin(a cliArgs, cfg config.Config, home string, w io.Writer) int {
 		fmt.Fprintf(w, "FAIL data dir: %v\n", err)
 		return 1
 	}
-	l, err := newBoxLayer(cfg, dataDir, home, "darwin", boxvm.ExecRunner{}, nil)
+	l, err := newBoxLayerFor(cfg, dataDir, home, "darwin", boxvm.ExecRunner{}, nil, a.Sub == "setup" && a.Recreate)
 	if err != nil {
 		fmt.Fprintf(w, "FAIL box VM: %v\n", err)
 		return 1

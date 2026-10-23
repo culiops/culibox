@@ -1,6 +1,7 @@
 package boxvm
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -8,12 +9,14 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -199,18 +202,22 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 }
 
 func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
-	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d")
+	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d", 10, 32<<30)
 	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8, BrokerPort: 9071, EgressPort: 9072}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
-	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 || d.EgressPort != 9072 {
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d", 0, 0); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 || d.EgressPort != 9072 {
 		t.Fatalf("defaults: %+v", d)
 	}
-	if c := ConfigFor(config.Config{BrokerPort: 9100}, "/data", "/home/a", "/c", "/d"); c.BrokerPort != 9100 {
+	// Unset size follows the host facts it is given: all cores, half the RAM.
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d", 10, 32<<30); d.CPUs != 10 || d.MemoryGiB != 16 {
+		t.Fatalf("host-derived defaults: %+v", d)
+	}
+	if c := ConfigFor(config.Config{BrokerPort: 9100}, "/data", "/home/a", "/c", "/d", 0, 0); c.BrokerPort != 9100 {
 		t.Fatalf("broker_port from config: %+v", c)
 	}
-	if c := ConfigFor(config.Config{EgressPort: 9200}, "/data", "/home/a", "/c", "/d"); c.EgressPort != 9200 {
+	if c := ConfigFor(config.Config{EgressPort: 9200}, "/data", "/home/a", "/c", "/d", 0, 0); c.EgressPort != 9200 {
 		t.Fatalf("egress_port from config: %+v", c)
 	}
 }
@@ -783,10 +790,110 @@ func TestConfigForFillsTheCAFromExtraCACerts(t *testing.T) {
 	if err := os.WriteFile(f, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := ConfigFor(config.Config{ExtraCACerts: []string{f}}, "/data", "/home/a", "/c", "/d"); !strings.HasPrefix(string(got.ExtraCAPEM), "-----BEGIN CERTIFICATE-----\n") {
+	if got := ConfigFor(config.Config{ExtraCACerts: []string{f}}, "/data", "/home/a", "/c", "/d", 0, 0); !strings.HasPrefix(string(got.ExtraCAPEM), "-----BEGIN CERTIFICATE-----\n") {
 		t.Fatalf("ExtraCAPEM = %q", got.ExtraCAPEM)
 	}
-	if got := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); got.ExtraCAPEM != nil {
+	if got := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d", 0, 0); got.ExtraCAPEM != nil {
 		t.Fatalf("no extra_ca_certs must leave ExtraCAPEM nil, got %q", got.ExtraCAPEM)
+	}
+}
+
+func TestHostSizeReadsTheMachine(t *testing.T) {
+	cpus, mem := HostSize()
+	if cpus < 1 {
+		t.Errorf("HostSize cpus = %d", cpus)
+	}
+	if runtime.GOOS == "darwin" && mem == 0 {
+		t.Error("darwin must read hw.memsize")
+	}
+}
+
+// provisioned makes a VM set up at 4 CPUs / 4 GiB under a fresh root, as an
+// older agent-box would have left it, and returns the root.
+func provisioned(t *testing.T) string {
+	t.Helper()
+	root := shortRoot(t)
+	v := NewVM(Config{Root: root, Home: root, ColimaBin: "/c", DockerBin: "/d", CPUs: 4, MemoryGiB: 4, BrokerPort: 9071, EgressPort: 9072}, &fakeRunner{})
+	if err := v.Provision(context.Background(), false, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// An existing VM keeps the size it was created with: host-derived defaults
+// apply at first setup or after -recreate, never to a VM that exists.
+func TestConfigForKeepsAnExistingVMsSize(t *testing.T) {
+	root := provisioned(t)
+	got := ConfigFor(config.Config{}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 4 || got.MemoryGiB != 4 {
+		t.Fatalf("an existing 4/4 VM with the size unset must stay 4/4, got %d/%d", got.CPUs, got.MemoryGiB)
+	}
+	if v := NewVM(got, &fakeRunner{}); v.Drifted() {
+		t.Fatal("an upgraded 4/4 VM with the size unset must not read as drifted")
+	}
+	// each unset field is kept on its own; an explicit one wins
+	got = ConfigFor(config.Config{BoxVMCPUs: 6}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 6 || got.MemoryGiB != 4 {
+		t.Fatalf("explicit cpus + unset memory: got %d/%d, want 6/4", got.CPUs, got.MemoryGiB)
+	}
+	got = ConfigFor(config.Config{BoxVMMemoryGiB: 8}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 4 || got.MemoryGiB != 8 {
+		t.Fatalf("unset cpus + explicit memory: got %d/%d, want 4/8", got.CPUs, got.MemoryGiB)
+	}
+}
+
+func TestConfigForExplicitNewSizeDriftsAnExistingVM(t *testing.T) {
+	root := provisioned(t)
+	got := ConfigFor(config.Config{BoxVMCPUs: 8, BoxVMMemoryGiB: 16}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 8 || got.MemoryGiB != 16 {
+		t.Fatalf("explicit values must win: %d/%d", got.CPUs, got.MemoryGiB)
+	}
+	if v := NewVM(got, &fakeRunner{}); !v.Drifted() {
+		t.Fatal("an explicit new size on an existing VM must read as drift")
+	}
+}
+
+func TestConfigForFirstSetupUsesHostSize(t *testing.T) {
+	root := shortRoot(t) // no stamp: never provisioned
+	got := ConfigFor(config.Config{}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 10 || got.MemoryGiB != 16 {
+		t.Fatalf("first setup must use the host-derived size, got %d/%d", got.CPUs, got.MemoryGiB)
+	}
+	// a stale colima.yaml without a stamp (an interrupted first setup, or after
+	// -recreate removed the stamp) is not a VM that was set up: host size again
+	if err := os.MkdirAll(filepath.Join(root, "vm", Profile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vm", Profile, "colima.yaml"), []byte("cpu: 4\nmemory: 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = ConfigFor(config.Config{}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 10 || got.MemoryGiB != 16 {
+		t.Fatalf("a yaml with no stamp must not pin the size, got %d/%d", got.CPUs, got.MemoryGiB)
+	}
+}
+
+func TestConfigForIgnoresAnUnreadableExistingYAML(t *testing.T) {
+	root := provisioned(t)
+	if err := os.WriteFile(filepath.Join(root, "vm", Profile, "colima.yaml"), []byte("garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := ConfigFor(config.Config{}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 10 || got.MemoryGiB != 16 {
+		t.Fatalf("an unparseable yaml falls back to the host-derived size, got %d/%d", got.CPUs, got.MemoryGiB)
+	}
+}
+
+// -recreate deletes the VM, so it is the moment host-derived sizing applies
+// again: ConfigForFresh ignores the VM that is about to be replaced.
+func TestConfigForFreshIgnoresAnExistingVM(t *testing.T) {
+	root := provisioned(t)
+	got := ConfigForFresh(config.Config{}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 10 || got.MemoryGiB != 16 {
+		t.Fatalf("recreate must size from the host, got %d/%d", got.CPUs, got.MemoryGiB)
+	}
+	got = ConfigForFresh(config.Config{BoxVMCPUs: 3}, root, root, "/c", "/d", 10, 32<<30)
+	if got.CPUs != 3 || got.MemoryGiB != 16 {
+		t.Fatalf("explicit values still win on recreate, got %d/%d", got.CPUs, got.MemoryGiB)
 	}
 }

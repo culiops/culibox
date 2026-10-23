@@ -71,6 +71,11 @@ func (f *fakeClient) Stdout(_ context.Context, args []string) (string, error) {
 			return out, err
 		}
 	}
+	// docker info: a host with 8 GiB, so spawning tests take the normal path and
+	// do not log the unreadable-MemTotal fallback. A test overrides it via stdoutHook.
+	if strings.Join(args, " ") == "info --format {{.MemTotal}}" {
+		return "8589934592", nil
+	}
 	return "", errors.New("fake: unexpected Stdout " + strings.Join(args, " "))
 }
 

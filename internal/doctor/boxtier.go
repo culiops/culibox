@@ -199,7 +199,8 @@ func gatherBoxFacts(c config.Config, dataDir, home, goos string) boxFacts {
 		f.ColimaErr = err
 		return f
 	}
-	vm := boxvm.NewVM(boxvm.ConfigFor(c, dataDir, home, colima, bin), boxvm.ExecRunner{})
+	hostCPUs, hostMem := boxvm.HostSize()
+	vm := boxvm.NewVM(boxvm.ConfigFor(c, dataDir, home, colima, bin, hostCPUs, hostMem), boxvm.ExecRunner{})
 	vc := vm.Config() // symlink-resolved: the paths the VM really uses
 	f.MacOSMajor = boxvm.MacOSMajor(ctx)
 	f.ColimaVer = boxvm.ColimaVersion(ctx, vc)

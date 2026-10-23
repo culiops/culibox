@@ -198,10 +198,10 @@ func TestBoxLayerOptionsFenceLinuxOnly(t *testing.T) {
 }
 
 func TestBoxLayerOptionsCarryLimits(t *testing.T) {
-	cfg := config.Config{DockerBin: "/bin/sh", BoxPidsLimit: 2048, BoxTmpSize: "2g", BoxMemory: "3g"}
+	cfg := config.Config{DockerBin: "/bin/sh", BoxPidsLimit: 2048, BoxTmpSize: "2g", BoxMemory: "3g", BoxCPUs: 1.5}
 	for _, goos := range []string{"linux", "darwin"} {
 		o := (&boxLayer{goos: goos}).options(cfg)
-		if o.PidsLimit != 2048 || o.TmpSize != "2g" || o.Memory != "3g" {
+		if o.PidsLimit != 2048 || o.TmpSize != "2g" || o.Memory != "3g" || o.CPUs != 1.5 {
 			t.Errorf("%s: limits not carried: pids=%d tmp=%q mem=%q", goos, o.PidsLimit, o.TmpSize, o.Memory)
 		}
 	}
@@ -217,6 +217,50 @@ func TestDarwinLayerPinsTheVM(t *testing.T) {
 	root = resolved(t, root) // macOS: /var/folders → /private/var/folders
 	if l.vm == nil || !strings.Contains(strings.Join(l.dockerArgs, " "), "--host unix://"+root+"/vm/agent-box/docker.sock") {
 		t.Fatalf("darwin layer must pin the VM socket: %+v", l)
+	}
+}
+
+// An existing VM keeps its size, so an upgrade never reads as drift; `box setup
+// -recreate` is when the host-derived size applies.
+func TestDarwinLayerVMSizeKeepsExistingUntilRecreate(t *testing.T) {
+	old := hostSize
+	hostSize = func() (int, uint64) { return 10, 32 << 30 }
+	t.Cleanup(func() { hostSize = old })
+	cfg := config.Config{DockerBin: "/bin/sh", ColimaBin: "/bin/sh"}
+	root := t.TempDir()
+
+	l, err := newBoxLayer(cfg, root, root, "darwin", &fakeColima{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := l.vm.Config(); c.CPUs != 10 || c.MemoryGiB != 16 {
+		t.Fatalf("first setup sizes from the host: %d/%d", c.CPUs, c.MemoryGiB)
+	}
+
+	// as an older agent-box left it: 4/4, stamped
+	vmDir := filepath.Join(root, "vm")
+	if err := os.MkdirAll(filepath.Join(vmDir, boxvm.Profile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vmDir, boxvm.Profile, "colima.yaml"), []byte("cpu: 4\nmemory: 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vmDir, boxvm.Profile+".stamp"), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l, err = newBoxLayer(cfg, root, root, "darwin", &fakeColima{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := l.vm.Config(); c.CPUs != 4 || c.MemoryGiB != 4 {
+		t.Fatalf("an existing VM keeps its size: %d/%d", c.CPUs, c.MemoryGiB)
+	}
+	l, err = newBoxLayerFor(cfg, root, root, "darwin", &fakeColima{}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := l.vm.Config(); c.CPUs != 10 || c.MemoryGiB != 16 {
+		t.Fatalf("recreate sizes from the host again: %d/%d", c.CPUs, c.MemoryGiB)
 	}
 }
 

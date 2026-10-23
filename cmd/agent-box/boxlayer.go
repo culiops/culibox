@@ -65,6 +65,17 @@ type boxLayer struct {
 // starts the VM (D3). protected are the directories besides the state root a
 // workspace must not overlap (config, profiles); nil off the serve path.
 func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Runner, protected []box.ProtectedDir) (*boxLayer, error) {
+	return newBoxLayerFor(cfg, dataDir, home, goos, runner, protected, false)
+}
+
+// hostSize reads the machine's CPUs and RAM for sizing the box VM; a test replaces it.
+var hostSize = boxvm.HostSize
+
+// newBoxLayerFor is newBoxLayer with fresh: true for `box setup -recreate`, which
+// sizes the new VM from the host instead of keeping the one it is deleting. Every
+// other caller (serve, doctor, status, stop, plain setup) keeps an existing VM's
+// size, so they all agree with what is on disk.
+func newBoxLayerFor(cfg config.Config, dataDir, home, goos string, runner boxvm.Runner, protected []box.ProtectedDir, fresh bool) (*boxLayer, error) {
 	bin, err := box.LookDocker(cfg.DockerBin)
 	if err != nil {
 		return nil, err
@@ -75,7 +86,12 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 		if err != nil {
 			return nil, err
 		}
-		l.vm = boxvm.NewVM(boxvm.ConfigFor(cfg, dataDir, home, colima, bin), runner)
+		hostCPUs, hostMem := hostSize()
+		configFor := boxvm.ConfigFor
+		if fresh {
+			configFor = boxvm.ConfigForFresh
+		}
+		l.vm = boxvm.NewVM(configFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem), runner)
 		// Symlink-resolved: the VM mounts these paths, so every path a box
 		// mounts or a workspace is checked against must be spelled the same way.
 		vc := l.vm.Config()
@@ -115,6 +131,7 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		PidsLimit:  cfg.BoxPidsLimit,
 		TmpSize:    cfg.BoxTmpSize,
 		Memory:     cfg.BoxMemory,
+		CPUs:       cfg.BoxCPUs,
 		ExtraCA:    extra,
 		ExtraCAErr: extraErr,
 		// Linux: every box sits on the egress network and has its guard files
