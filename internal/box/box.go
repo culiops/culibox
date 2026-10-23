@@ -365,6 +365,11 @@ type BoxKey struct {
 	Account, Binding, Session string
 	PartialMounts             bool
 	Clone                     *CloneMounts
+	// Context is config.ContextHash of the profile's context_paths ("" = none).
+	// It is part of the identity for the same reason Clone's hash is: reuseMounts
+	// compares in-box destinations only, so a changed list must not land in a box
+	// that still mounts the old one.
+	Context string
 }
 
 // CloneMounts is the clone-mode part of a BoxKey. Hash identifies the clone spec
@@ -386,7 +391,8 @@ type CloneMounts struct {
 // An AWS binding hash is mixed in last, so a session without a binding never
 // shares a box with one that has a binding, sessions with the same binding
 // share, and an unbound session's name is unchanged from before bindings.
-// A clone-mode spec hash goes after those, so a non-clone name is unchanged too.
+// A clone-mode spec hash goes after those, so a non-clone name is unchanged too,
+// and a context_paths hash goes last for the same reason.
 func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -408,6 +414,9 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	}
 	if k.Clone != nil {
 		key += "\x00clone:" + k.Clone.Hash
+	}
+	if k.Context != "" {
+		key += "\x00ctx:" + k.Context
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil

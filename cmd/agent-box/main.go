@@ -583,6 +583,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	contextCheck := contextSaveCheck(h, home, protected, vmShared)
 	pm.SetContextCheck(contextCheck)
+	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked
 	// The profile manager, the broker's token set and the minter exist now.
 	live.pm = pm
 	live.Apply(cfg)

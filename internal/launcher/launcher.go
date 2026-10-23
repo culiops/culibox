@@ -562,6 +562,18 @@ func (l *AgentLauncher) CloneFor(agent string) (*config.Clone, error) {
 	return cfg.Clone()
 }
 
+// ContextPathsFor returns a copy of the profile's context_paths, or nil, nil
+// for a profile without any (or an unknown one). A stored list that no longer
+// validates is an error: the spawn is refused rather than mount a list that
+// agent-box would not have accepted on save.
+func (l *AgentLauncher) ContextPathsFor(agent string) ([]string, error) {
+	cfg, ok := l.agent(agent)
+	if !ok {
+		return nil, nil
+	}
+	return cfg.ContextPathList()
+}
+
 // Clones returns the clone spec of every profile with clone_of set and an
 // absolute, clean default_cwd, ordered by directory. It feeds the host-tier
 // box-owned-directory check, which must cover a directory a box may have

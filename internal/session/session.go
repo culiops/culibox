@@ -218,6 +218,13 @@ type CloneResolver interface {
 	CloneFor(agent string) (*config.Clone, error)
 }
 
+// ContextResolver is implemented by launchers that know a profile's
+// context_paths. Optional, like CloneResolver: without it no session mounts
+// context. A nil, nil answer means the profile has none.
+type ContextResolver interface {
+	ContextPathsFor(agent string) ([]string, error)
+}
+
 // CloneHooks is what spawning a clone-mode session needs from the clone layer,
 // kept as an interface so this package does not import it. A nil CloneHooks
 // means clone mode is unavailable (Linux only), and clone profiles are refused.
@@ -1120,6 +1127,11 @@ type Manager struct {
 	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
 	repliesOn   bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
+	// contextCheck is the on-disk check of one context path (existence,
+	// symlinks, sockets, protected dirs). Nil = it cannot run, so a profile
+	// with context_paths is refused rather than mounted unchecked.
+	contextCheck func(path string) error
+
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
 	// that ordering fragile.
@@ -1233,6 +1245,15 @@ func (m *Manager) SetEgressAll(all bool) {
 func (m *Manager) SetClone(h CloneHooks) {
 	m.mu.Lock()
 	m.clone = h
+	m.mu.Unlock()
+}
+
+// SetContextCheck installs the per-path check a spawn runs on every
+// context_paths entry, the same one a profile save runs. Call once at boot.
+// Nil means context_paths cannot be checked and such profiles are refused.
+func (m *Manager) SetContextCheck(f func(path string) error) {
+	m.mu.Lock()
+	m.contextCheck = f
 	m.mu.Unlock()
 }
 
@@ -1429,6 +1450,21 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		cl = c
 	}
+	// context_paths are read-only mounts of host paths, which only a box has:
+	// a host session reads any path already. The paths are re-validated purely
+	// on every spawn (a hand-edited profiles.json), the disk check runs below.
+	var ctxPaths []string
+	if r, ok := m.launcher.(ContextResolver); ok {
+		p, err := r.ContextPathsFor(spec.Agent)
+		if err != nil {
+			return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+		}
+		ctxPaths = p
+	}
+	if len(ctxPaths) > 0 && runtime != config.RuntimeBox {
+		// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
+		return nil, fmt.Errorf("%w: profile %q: %w", box.ErrUnboxableWorkspace, spec.Agent, config.ErrContextNeedsBox)
+	}
 	// Both checks compare an absolute path: a relative cwd never compares as
 	// under an absolute clone dir, yet the process resolves it against the
 	// daemon's own cwd. Fail closed when it cannot be made absolute.
@@ -1452,6 +1488,23 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		if reason, owned := ch.BoxOwned(absCwd); owned {
 			return nil, fmt.Errorf("%w: %s", box.ErrBoxOwned, reason)
+		}
+	}
+
+	if len(ctxPaths) > 0 {
+		// A path deleted, swapped for a symlink or made unsafe since the profile
+		// was saved is refused here, naming the path, rather than surfacing as a
+		// docker bind error. Before Prepare, which may start the box VM.
+		m.mu.Lock()
+		check := m.contextCheck
+		m.mu.Unlock()
+		if check == nil {
+			return nil, fmt.Errorf("%w: profile %q has context_paths but they cannot be checked on this host", box.ErrBoxUnavailable, spec.Agent)
+		}
+		for _, p := range ctxPaths {
+			if err := check(p); err != nil {
+				return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+			}
 		}
 	}
 
@@ -1677,6 +1730,20 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			}
 			env = withoutEnv(env, strip)
 			env = append(env, penv...)
+		}
+		// The variable is agent-box's alone: whatever the profile or daemon env
+		// says is dropped, so it is set exactly once and only for a context
+		// profile. The mounts are read-only extras like the bundle's; the key's
+		// hash gives a changed list a box of its own (reuseMounts compares
+		// destinations only).
+		env = withoutEnv(env, []string{config.ContextPathsEnv})
+		if len(ctxPaths) > 0 {
+			for _, p := range ctxPaths {
+				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p})
+			}
+			key.Context = config.ContextHash(ctxPaths)
+			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))
+			log.Printf("session %s: context paths %v", id, ctxPaths)
 		}
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {

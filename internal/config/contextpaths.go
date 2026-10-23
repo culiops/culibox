@@ -113,6 +113,22 @@ func validateContextPaths(a AgentConfig) error {
 	return nil
 }
 
+// ContextPathList returns a copy of the profile's context_paths after the pure
+// validation, or nil, nil when it has none. The profile's own runtime is not
+// judged here: a spawn may override it with "box", and the spawn refuses the
+// host tier itself (ErrContextNeedsBox). A stored list that no longer validates
+// is an error, never a partial list.
+func (a AgentConfig) ContextPathList() ([]string, error) {
+	if len(a.ContextPaths) == 0 {
+		return nil, nil
+	}
+	a.Runtime = ""
+	if err := validateContextPaths(a); err != nil {
+		return nil, err
+	}
+	return slices.Clone(a.ContextPaths), nil
+}
+
 // ErrContextNeedsBox is the refusal of context_paths on a host-tier profile.
 var ErrContextNeedsBox = errors.New(`context_paths needs runtime "box"; host sessions can already read any path`)
 

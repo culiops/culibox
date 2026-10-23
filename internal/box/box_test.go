@@ -1115,3 +1115,48 @@ func TestExclusiveRunArgsCarryTheLabels(t *testing.T) {
 		t.Fatalf("a shared bound box: claims yes, exclusive no: %q", plain)
 	}
 }
+
+// A key without Context must name the box exactly as before context_paths:
+// the golden name is computed here with the old formula, so a change to the
+// order or the separator of an earlier part shows up.
+func TestBoxNameUnchangedWithoutContext(t *testing.T) {
+	m := newTestManager(t)
+	dir := t.TempDir()
+	real, _ := filepath.EvalSymlinks(dir)
+	abs, _ := filepath.Abs(real)
+	for _, k := range []BoxKey{{}, {Account: "work"}, {Binding: "abc123abc123"}, {Session: "s1"}, {Clone: &CloneMounts{Hash: "h"}}} {
+		key := "TEST\x00" + abs
+		if k.Account != "" {
+			key += "\x00" + k.Account
+		}
+		if k.Binding != "" {
+			key += "\x00aws:" + k.Binding
+		}
+		if k.Session != "" {
+			key += "\x00session:" + k.Session
+		}
+		if k.Clone != nil {
+			key += "\x00clone:" + k.Clone.Hash
+		}
+		sum := sha256.Sum256([]byte(key))
+		want := "ab-box-" + hex.EncodeToString(sum[:6])
+		if got, _ := m.boxName(dir, k); got != want {
+			t.Errorf("%+v: %s, want %s", k, got, want)
+		}
+	}
+}
+
+func TestBoxNameDiffersByContext(t *testing.T) {
+	m := newTestManager(t)
+	dir := t.TempDir()
+	none, _ := m.boxName(dir, BoxKey{})
+	a, _ := m.boxName(dir, BoxKey{Context: "aaaa"})
+	a2, _ := m.boxName(dir, BoxKey{Context: "aaaa"})
+	b, _ := m.boxName(dir, BoxKey{Context: "bbbb"})
+	if a != a2 {
+		t.Fatalf("the same context hash named two boxes: %s vs %s", a, a2)
+	}
+	if a == b || a == none || b == none {
+		t.Fatalf("context hashes must name distinct boxes: none=%s a=%s b=%s", none, a, b)
+	}
+}
