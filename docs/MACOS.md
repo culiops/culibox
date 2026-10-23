@@ -137,6 +137,19 @@ sees for the failing host and the export command below with the name filled in
 
        "extra_ca_certs": ["/Users/me/agent-box-ca.pem"]
 
+   A config file replaces the built-in defaults. If you have none yet, create
+   `~/.local/share/agent-box/config.json` (or `$AGENT_BOX_HOME/config.json`) with
+   the defaults as well, or agent-box refuses it for having no agents:
+
+       {
+         "bind_addr": "127.0.0.1:8899",
+         "default_runtime": "host",
+         "agents": [{"name": "claude", "bin": "claude"}],
+         "extra_ca_certs": ["/Users/me/agent-box-ca.pem"]
+       }
+
+   The `HINT:` prints this file, and its path, when no config exists.
+
 3. Apply it. The VM's provisioning changes, so the VM must be recreated.
    `-recreate` drops the VM's images, so the image is rebuilt (or pulled again):
 

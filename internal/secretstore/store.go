@@ -189,7 +189,8 @@ func isValueFile(name string) bool {
 }
 
 // Set encrypts value to the store's public recipient and writes it atomically.
-// It works while the store is locked.
+// It works while the store is locked. An id that differs from an existing one
+// only in case is refused (CaseCollisionError); the exact id updates in place.
 func (s *Store) Set(id string, value []byte, actor string) error {
 	if !ValidID(id) {
 		return ErrBadID
@@ -210,6 +211,26 @@ func (s *Store) Set(id string, value []byte, actor string) error {
 	rcpt, err := readRecipient(root)
 	if err != nil {
 		return err
+	}
+	// Before anything is encrypted or audited: a refused set writes nothing.
+	existing, err := listValues(root)
+	if err != nil {
+		return err
+	}
+	// An exact match is an update, even next to a case twin stored before this
+	// check existed (Linux allowed GH and gh side by side).
+	var twin string
+	for _, e := range existing {
+		if e.ID == id {
+			twin = ""
+			break
+		}
+		if strings.EqualFold(e.ID, id) {
+			twin = e.ID
+		}
+	}
+	if twin != "" {
+		return &CaseCollisionError{ID: id, Existing: twin}
 	}
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, rcpt)
@@ -262,6 +283,12 @@ func (s *Store) List() ([]Entry, error) {
 		return nil, err
 	}
 	defer root.Close()
+	return listValues(root)
+}
+
+// listValues is List over an already open root, so Set can check the ids that
+// exist under the lock it already holds.
+func listValues(root *os.Root) ([]Entry, error) {
 	d, err := root.Open(valuesDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

@@ -513,6 +513,8 @@ func writeCredErr(w http.ResponseWriter, err error) {
 		writeErrCode(w, http.StatusConflict, "the encrypted store is not created yet", "store_missing")
 	case errors.Is(err, secretstore.ErrBadID):
 		writeErr(w, http.StatusBadRequest, secretstore.ErrBadID.Error())
+	case errors.Is(err, secretstore.ErrCaseCollision):
+		writeErrCode(w, http.StatusConflict, err.Error(), "id_collision")
 	case errors.As(err, &limited):
 		writeRateLimited(w, limited.Wait)
 	case errors.As(err, &ack):

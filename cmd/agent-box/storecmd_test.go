@@ -289,6 +289,36 @@ func TestRunStoreDarwinFake(t *testing.T) {
 	}
 }
 
+// The macOS report: `store set CaseTest` then `store set casetest` wrote the same
+// CaseTest.age and replaced the first value without a word. The CLI now says so
+// and exits non-zero, on every platform; the exact id still updates.
+func TestRunStoreSetRefusesCaseVariantOfExistingId(t *testing.T) {
+	r := newStoreRun(t, false)
+	if code, out := r.run("init", "", ""); code != 0 {
+		t.Fatalf("init = %d %q", code, out)
+	}
+	if code, out := r.run("set", "CaseTest", testVal); code != 0 {
+		t.Fatalf("set = %d %q", code, out)
+	}
+	code, out := r.run("set", "casetest", "other\n")
+	want := `agent-box store: "casetest" collides with existing "CaseTest" (ids are case-insensitive on macOS); use the exact id`
+	if code != 1 || !strings.Contains(out, want) {
+		t.Fatalf("case variant = %d %q, want exit 1 with %q", code, out, want)
+	}
+	if strings.Contains(out, "stored casetest") {
+		t.Errorf("a refused set must not report success: %q", out)
+	}
+	if code, out := r.run("set", "CaseTest", "again\n"); code != 0 || !strings.Contains(out, "stored CaseTest") {
+		t.Fatalf("exact id must still update: %d %q", code, out)
+	}
+	if code, out := r.run("set", "case-test", testVal); code != 0 {
+		t.Fatalf("a distinct id must still be accepted: %d %q", code, out)
+	}
+	if _, out := r.run("list", "", ""); strings.Contains(out, "casetest") || !strings.Contains(out, "CaseTest") || !strings.Contains(out, "case-test") {
+		t.Errorf("list = %q", out)
+	}
+}
+
 func TestRunStoreUninitialized(t *testing.T) {
 	r := newStoreRun(t, true)
 	for _, sub := range []string{"set", "rm", "list", "unlock"} {

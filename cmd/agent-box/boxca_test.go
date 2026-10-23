@@ -8,11 +8,13 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -298,5 +300,101 @@ func TestOptionsExtraCALoadErrorFailsClosed(t *testing.T) {
 	}
 	if l.img.ExtraCA != nil {
 		t.Errorf("image builder must not get a bundle")
+	}
+}
+
+// sampleConfigFile pulls the JSON object out of the hint output: the lines that
+// follow "config.json:" up to the closing brace, indentation stripped.
+func sampleConfigFile(t *testing.T, out string) []byte {
+	t.Helper()
+	_, rest, ok := strings.Cut(out, "\n      {\n")
+	if !ok {
+		t.Fatalf("no JSON sample in:\n%s", out)
+	}
+	body, _, ok := strings.Cut(rest, "\n      }\n")
+	if !ok {
+		t.Fatalf("unterminated JSON sample in:\n%s", out)
+	}
+	var b strings.Builder
+	b.WriteString("{\n")
+	for _, l := range strings.Split(body, "\n") {
+		b.WriteString(strings.TrimPrefix(l, "      "))
+		b.WriteString("\n")
+	}
+	b.WriteString("}")
+	return []byte(b.String())
+}
+
+// With no config file, the hint names the file to create and shows a minimal
+// valid one: a config file replaces the built-in defaults, so extra_ca_certs
+// alone is rejected (no agents, no bind_addr). The sample comes from
+// config.Defaults(), so the test checks it validates rather than its text.
+func TestHintWithoutConfigFileShowsPathAndValidSample(t *testing.T) {
+	old := hintConfigPath
+	hintConfigPath = "/home/u/.local/share/agent-box/config.json"
+	defer func() { hintConfigPath = old }()
+	var w bytes.Buffer
+	printInterceptionHint(context.Background(), &w, curl60Host, false, "darwin", false, fakeRoot("CN=R", "R", nil))
+	out := w.String()
+	for _, want := range []string{"No config file exists", hintConfigPath, "replaces the built-in defaults"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+	raw := sampleConfigFile(t, out)
+	// Key order is part of the contract: what to change comes last.
+	last := -1
+	for _, k := range []string{`"bind_addr"`, `"default_runtime"`, `"agents"`, `"extra_ca_certs"`} {
+		i := bytes.Index(raw, []byte(k))
+		if i < 0 || i < last {
+			t.Fatalf("key %s missing or out of order in:\n%s", k, raw)
+		}
+		last = i
+	}
+	// The sample's CA path is a placeholder; point it at a real CA, as the user
+	// does, and the whole file must load and validate.
+	ca := writeTestCA(t, "Corp Root", setupNow.Add(-time.Hour), setupNow.Add(24*time.Hour))
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("sample is not JSON: %v\n%s", err, raw)
+	}
+	m["extra_ca_certs"] = []string{ca}
+	fixed, _ := json.Marshal(m)
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(p, fixed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("sample does not validate: %v\n%s", err, raw)
+	}
+	d := config.Defaults()
+	if cfg.BindAddr != d.BindAddr || !reflect.DeepEqual(cfg.Agents, d.Agents) {
+		t.Errorf("sample drifted from Defaults(): %+v vs %+v", cfg, d)
+	}
+}
+
+// A config file exists: the hint must not tell the user to create one, and the
+// host-trust (Linux pull) hint never mentions extra_ca_certs at all.
+func TestHintWithConfigFileOrHostTrustOmitsSample(t *testing.T) {
+	old := hintConfigPath
+	hintConfigPath = "/x/config.json"
+	defer func() { hintConfigPath = old }()
+	for name, tc := range map[string]struct {
+		configured bool
+		goos       string
+		pull       bool
+	}{
+		"configured":      {true, "darwin", false},
+		"linux host pull": {false, "linux", true},
+	} {
+		var w bytes.Buffer
+		printInterceptionHint(context.Background(), &w, curl60Host, tc.configured, tc.goos, tc.pull, fakeRoot("CN=R", "R", nil))
+		if strings.Contains(w.String(), "bind_addr") || strings.Contains(w.String(), "No config file exists") {
+			t.Errorf("%s: no sample expected:\n%s", name, w.String())
+		}
 	}
 }

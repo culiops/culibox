@@ -551,3 +551,89 @@ func TestUnlockMismatchedPair(t *testing.T) {
 		t.Fatal("passwd accepted a mismatched pair")
 	}
 }
+
+// On a case-insensitive filesystem (macOS APFS by default) "CaseTest" and
+// "casetest" are the same file, so a second set would silently replace the first
+// value. The store refuses it on every platform so behaviour does not differ:
+// the check reads the ids that exist, not the filesystem's opinion of them.
+func TestSetRefusesAnIdThatDiffersOnlyInCase(t *testing.T) {
+	s, _, rec, _ := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("CaseTest", []byte("first"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Set("casetest", []byte("second"), "cli")
+	if !errors.Is(err, ErrCaseCollision) {
+		t.Fatalf("case variant: %v", err)
+	}
+	want := `"casetest" collides with existing "CaseTest" (ids are case-insensitive on macOS); use the exact id`
+	if err.Error() != want {
+		t.Errorf("message %q, want %q", err, want)
+	}
+	if got, err := s.Get("CaseTest"); err != nil || string(got) != "first" {
+		t.Fatalf("the existing value must be untouched: %q %v", got, err)
+	}
+	if l, _ := s.List(); len(l) != 1 || l[0].ID != "CaseTest" {
+		t.Fatalf("no second value may be written: %v", l)
+	}
+	for _, e := range rec.events {
+		if e.Action == "value_set" && e.Detail == "casetest" {
+			t.Errorf("a refused set must not be audited as a write: %+v", e)
+		}
+	}
+}
+
+// Case twins stored before the check existed (Linux allowed GH and gh) stay
+// updatable by their exact ids; only a new case variant is refused.
+func TestSetUpdatesALegacyCaseTwinByItsExactId(t *testing.T) {
+	s, _, _, dir := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("GH", []byte("upper"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, storeDirName, valuePath("GH")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, storeDirName, valuePath("gh")), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := s.List(); len(ids) != 2 {
+		t.Skipf("this filesystem folds case, so twins cannot exist: %v", ids)
+	}
+	for _, id := range []string{"gh", "GH"} {
+		if err := s.Set(id, []byte("rotated-"+id), "cli"); err != nil {
+			t.Fatalf("set %s next to its twin: %v", id, err)
+		}
+		if got, err := s.Get(id); err != nil || string(got) != "rotated-"+id {
+			t.Fatalf("get %s: %q %v", id, got, err)
+		}
+	}
+	if err := s.Set("Gh", []byte("x"), "cli"); !errors.Is(err, ErrCaseCollision) {
+		t.Fatalf("a new case variant must still be refused: %v", err)
+	}
+}
+
+func TestSetSameIdUpdatesAndDistinctIdsCoexist(t *testing.T) {
+	s, _, _, _ := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ id, val string }{
+		{"CaseTest", "one"}, {"CaseTest", "two"}, {"case-test", "x"}, {"other", "y"},
+	} {
+		if err := s.Set(c.id, []byte(c.val), "cli"); err != nil {
+			t.Fatalf("set %s: %v", c.id, err)
+		}
+	}
+	if got, err := s.Get("CaseTest"); err != nil || string(got) != "two" {
+		t.Fatalf("exact id must update: %q %v", got, err)
+	}
+	if l, _ := s.List(); len(l) != 3 {
+		t.Fatalf("distinct ids coexist: %v", l)
+	}
+}

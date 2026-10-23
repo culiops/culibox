@@ -521,7 +521,8 @@ func sameProviderFields(a, b config.StaticToken) bool {
 func storeErr(what string, err error) error {
 	switch {
 	case errors.Is(err, secretstore.ErrTooLarge), errors.Is(err, secretstore.ErrBadID),
-		errors.Is(err, secretstore.ErrNotInitialized), errors.Is(err, secretstore.ErrNoSuchValue):
+		errors.Is(err, secretstore.ErrNotInitialized), errors.Is(err, secretstore.ErrNoSuchValue),
+		errors.Is(err, secretstore.ErrCaseCollision):
 		return fmt.Errorf("%s: %w", what, err)
 	}
 	return fmt.Errorf("%w: %s: %w", ErrCredPersist, what, err)
