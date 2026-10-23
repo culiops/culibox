@@ -22,6 +22,10 @@ const (
 	DefaultMemory = "4g"
 	// MemoryMax is the box_memory value that means all of docker's memory.
 	MemoryMax = "max"
+	// defaultMemoryFloorMiB is the least the unset default gives a box, unless
+	// docker has less than that in total: the old fixed default, so a small host
+	// (a 4 GiB Mac VM) never gets boxes under the measured scripts/test.sh peak.
+	defaultMemoryFloorMiB = 4096
 	// minMemoryBytes is the smallest box_memory accepted (1g).
 	minMemoryBytes = 1 << 30
 	// CPU bounds for box_cpus; 0 means no cap.
@@ -80,9 +84,10 @@ func ValidateCPUs(cpus float64) error {
 }
 
 // memoryCap is the --memory value for a new box. An explicit size is used as
-// is. Unset is half of docker's MemTotal (on macOS that is the VM), at least
-// 1g, so one runaway box cannot take the host's other services down with it;
-// "max" is all of it. Either way --memory-swap equals --memory, so a box never
+// is. Unset is half of docker's MemTotal (on macOS that is the VM), but at
+// least min(4g, MemTotal): a small host never drops below the old 4g default
+// unless it has less than that in total, and a big one keeps a runaway box from
+// taking the host's other services down with it. "max" is all of MemTotal. Either way --memory-swap equals --memory, so a box never
 // swaps the host.
 //
 // Unset falls back to DefaultMemory, logged once, when MemTotal cannot be read.
@@ -109,7 +114,7 @@ func (m *Manager) memoryCap(ctx context.Context) (string, error) {
 	}
 	mib := total >> 20
 	if m.opts.Memory != MemoryMax {
-		mib = max(mib/2, minMemoryBytes>>20)
+		mib = max(mib/2, min(defaultMemoryFloorMiB, mib))
 	}
 	return strconv.FormatInt(mib, 10) + "m", nil
 }

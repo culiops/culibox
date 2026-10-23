@@ -136,9 +136,11 @@ func TestMemoryCapDefaultIsHalfOfDocker(t *testing.T) {
 		want  string
 	}{
 		{strconv.Itoa(8 * gib), "4096m"},
-		{"11800000001", "5626m"}, // 11800000001/2 = 5900000000 B = 5626.7 MiB, rounded down
-		{strconv.Itoa(2 * gib), "1024m"},
-		{strconv.Itoa(gib + gib/2), "1024m"}, // half is 768 MiB: floor of 1g
+		{"11800000001", "5626m"},         // 11800000001/2 = 5900000000 B = 5626.7 MiB, rounded down
+		{strconv.Itoa(6 * gib), "4096m"}, // half is 3g: the floor is min(4g, MemTotal) = 4g
+		{strconv.Itoa(4 * gib), "4096m"}, // a 4 GiB Mac VM: boxes keep the old 4g, never half of it
+		{strconv.Itoa(2 * gib), "2048m"}, // below 4g in total: all of it, not 1g
+		{strconv.Itoa(gib + gib/2), "1536m"},
 	} {
 		m, f := newTestManagerWithFake(t)
 		var calls int

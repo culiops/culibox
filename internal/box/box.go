@@ -239,8 +239,8 @@ type Options struct {
 	// PidsLimit caps processes and threads per box; 0 = DefaultPidsLimit.
 	// TmpSize is the size of the box's /tmp tmpfs ("512m", number + k/m/g);
 	// "" = DefaultTmpSize. Memory is the box's RAM cap ("4g", number + k/m/g,
-	// at least 1g); swap is capped to the same value. "" = half of docker's
-	// memory (DefaultMemory if that cannot be read), "max" = all of it (see
+	// at least 1g, or "max"); swap is capped to the same value. "" = half of docker's
+	// memory, at least min(4g, all of it) (DefaultMemory if that cannot be read), "max" = all of it (see
 	// memoryCap). CPUs caps a box's CPU time (--cpus); 0 = no cap.
 	// New validates all four (see ValidateLimits, ValidateCPUs).
 	PidsLimit int

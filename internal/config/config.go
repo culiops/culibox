@@ -186,7 +186,7 @@ type Config struct {
 	BoxIdleTTLSeconds int     `json:"box_idle_ttl_seconds,omitempty"` // 0 → 15m
 	BoxPidsLimit      int     `json:"box_pids_limit,omitempty"`       // processes+threads per box; 0 → 512
 	BoxTmpSize        string  `json:"box_tmp_size,omitempty"`         // box /tmp tmpfs size, number + k/m/g; "" → 512m
-	BoxMemory         string  `json:"box_memory,omitempty"`           // box RAM cap (swap capped equal), number + k/m/g, min 1g, or "max"; "" → half of docker's memory (4g if unreadable)
+	BoxMemory         string  `json:"box_memory,omitempty"`           // box RAM cap (swap capped equal), number + k/m/g, min 1g, or "max"; "" → half of docker's memory, at least min(4g, all of it) (4g if unreadable)
 	BoxCPUs           float64 `json:"box_cpus,omitempty"`             // box CPU cap (--cpus), 0.01-1024, 2 decimals; 0 → no cap
 	DockerBin         string  `json:"docker_bin,omitempty"`           // default "docker", resolved absolute at startup
 	ColimaBin         string  `json:"colima_bin,omitempty"`           // macOS: default "colima"
