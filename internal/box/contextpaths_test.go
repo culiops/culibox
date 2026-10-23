@@ -234,7 +234,23 @@ func TestCheckContextPathRefusesUnixSocket(t *testing.T) {
 	sock := filepath.Join(deep, "s.sock")
 	listenUnix(t, sock)
 	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
-		"contains a unix socket ("+sock+")", "a read-only mount does not stop the box from connecting to it")
+		"contains a unix socket or named pipe ("+sock+")", "a read-only mount does not stop the box from connecting to it or writing into it")
+}
+
+// A read-only mount does not stop a write into a named pipe either: the box
+// would feed whatever host process reads it.
+func TestCheckContextPathRefusesNamedPipe(t *testing.T) {
+	d := shortTmp(t)
+	sub := filepath.Join(d, "a")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(sub, "p.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
+		"contains a unix socket or named pipe ("+fifo+")", "a read-only mount does not stop the box from connecting to it or writing into it")
 }
 
 func TestCheckContextPathSocketBehindSymlinkNotFollowed(t *testing.T) {
@@ -312,7 +328,7 @@ func TestCheckContextPathRefusesTreeOverScanCap(t *testing.T) {
 		}
 	}
 	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
-		"too large to scan for unix sockets (over 5 entries); list narrower subdirectories")
+		"too large to scan for unix sockets and named pipes (over 5 entries); list narrower subdirectories")
 }
 
 func TestCheckContextPathRefusesUnreadableSubdir(t *testing.T) {
@@ -329,5 +345,5 @@ func TestCheckContextPathRefusesUnreadableSubdir(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
 	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
-		"cannot read locked to scan for unix sockets")
+		"cannot read locked to scan for unix sockets and named pipes")
 }

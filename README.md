@@ -235,7 +235,7 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 - A path that does not exist, has a symlink in any component, or is not a directory or regular file.
 - A path equal to or inside `~/.colima`, `~/.lima`, `~/.docker` or `~/.ssh`, and agent-box's own data root, config and profile directories.
 - A path inside a box-owned directory: a clone directory or one recorded in `<data dir>/clone-dirs` (see [Clone mode](#clone-mode)).
-- A directory that contains a unix socket at any depth. A read-only mount does not stop the box from connecting to a socket, and a Docker socket is root on the host. The scan also refuses a directory with over 20000 entries or a subdirectory it cannot read, because either could hide a socket: list narrower subdirectories.
+- A directory that contains a unix socket or a named pipe (FIFO) at any depth. A read-only mount does not stop the box from connecting to a socket or writing into a pipe: a Docker socket is root on the host, and a pipe feeds whatever host process reads it. The scan also refuses a directory with over 20000 entries or a subdirectory it cannot read, because either could hide one: list narrower subdirectories.
 - A path that overlaps the profile's workspace (`default_cwd` or the clone directory) or `clone_of`, in either direction. Use `clone_share` to share part of a cloned repo.
 - On macOS, a path outside the box VM's shared directories. Share its parent and run `agent-box box setup -recreate`.
 

@@ -90,12 +90,13 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 			"share its parent and run `agent-box box setup -recreate`", strings.Join(shared, ", "))
 	}
 	if info.IsDir() {
-		sock, err := findSocket(p)
+		ipc, err := findSocketOrPipe(p)
 		if err != nil {
 			return err
 		}
-		if sock != "" {
-			return ctxPathRefuse(p, "contains a unix socket (%s); a read-only mount does not stop the box from connecting to it", sock)
+		if ipc != "" {
+			return ctxPathRefuse(p, "contains a unix socket or named pipe (%s); a read-only mount does not stop the box "+
+				"from connecting to it or writing into it", ipc)
 		}
 	}
 	return nil
@@ -105,18 +106,20 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 // host services (the docker, colima and lima daemons, ssh keys and agent).
 var hostSocketDirs = []string{".colima", ".lima", ".docker", ".ssh"}
 
-// socketScanMaxEntries bounds findSocket's walk. A tree bigger than this is
-// refused, not allowed unscanned: a socket anywhere in it would go unseen. A
+// socketScanMaxEntries bounds findSocketOrPipe's walk. A tree bigger than this
+// is refused, not allowed unscanned: a socket anywhere in it would go unseen. A
 // var so a test can lower it.
 var socketScanMaxEntries = 20000
 
-// findSocket returns the first unix socket under dir (any depth, symlinks not
-// followed), or "". A read-only bind mount does not stop connect() on a socket,
-// so a socket in a context path lets the box drive the host service behind it
-// (a docker socket is root on the host). It fails closed: a tree over the entry
-// cap or a directory it cannot read is an error, because either could hide a
-// socket. err is a ready context_paths refusal for p.
-func findSocket(p string) (found string, err error) {
+// findSocketOrPipe returns the first unix socket or named pipe under dir (any
+// depth, symlinks not followed), or "". The kernel's read-only check covers
+// regular files, directories and symlinks only: a read-only bind mount stops
+// neither connect() on a socket nor a write into a FIFO. A socket in a context
+// path lets the box drive the host service behind it (a docker socket is root
+// on the host), a FIFO lets it feed whatever host process reads it. It fails
+// closed: a tree over the entry cap or a directory it cannot read is an error,
+// because either could hide one. err is a ready context_paths refusal for p.
+func findSocketOrPipe(p string) (found string, err error) {
 	visited := 0
 	_ = filepath.WalkDir(p, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
@@ -124,15 +127,15 @@ func findSocket(p string) (found string, err error) {
 			if rel, rerr := filepath.Rel(p, path); rerr == nil && rel != "." {
 				sub = rel
 			}
-			err = ctxPathRefuse(p, "cannot read %s to scan for unix sockets", sub)
+			err = ctxPathRefuse(p, "cannot read %s to scan for unix sockets and named pipes", sub)
 			return fs.SkipAll
 		}
 		if visited >= socketScanMaxEntries {
-			err = ctxPathRefuse(p, "too large to scan for unix sockets (over %d entries); list narrower subdirectories", socketScanMaxEntries)
+			err = ctxPathRefuse(p, "too large to scan for unix sockets and named pipes (over %d entries); list narrower subdirectories", socketScanMaxEntries)
 			return fs.SkipAll
 		}
 		visited++
-		if d.Type()&fs.ModeSocket != 0 {
+		if d.Type()&(fs.ModeSocket|fs.ModeNamedPipe) != 0 {
 			found = path
 			return fs.SkipAll
 		}
