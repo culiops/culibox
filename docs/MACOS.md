@@ -73,15 +73,17 @@ context and never edits `~/.ssh/config`.
   an idle one; `agent-box box stop -force` stops the VM anyway and ends those
   sessions. `agent-box box status` shows the VM, the image and the boxes.
 - **Upgrading with the size unset.** A VM created by an older agent-box has 4
-  CPUs / 4 GiB, while the new default is bigger on most Macs. agent-box does
-  not resize or delete an existing VM on its own: it keeps running at the size
-  it was created with, and `agent-box doctor` reports "box VM config changed
-  since setup". To pick up the new size, run `agent-box box setup -recreate`,
-  which deletes the VM, so its images and cache go too (box homes live on the
-  host and stay); the next setup rebuilds the image. To keep the old size and
-  silence the warning, set `box_vm_cpus: 4` and `box_vm_memory_gib: 4`.
-  Boxes size their memory from the VM (by default half of it), so the VM size
-  is what bounds every box on a Mac.
+  CPUs / 4 GiB, and an existing VM keeps the size it was created with: while
+  `box_vm_cpus` and `box_vm_memory_gib` are unset, agent-box reads them back
+  from the VM and nothing reads as changed. The host-derived default (every
+  core, half the RAM) applies only when the VM is first set up, or after
+  `agent-box box setup -recreate`, which deletes the VM, so its images and
+  cache go too (box homes live on the host and stay) and the next setup
+  rebuilds the image. Setting either key explicitly to a different size also
+  changes the VM, and `agent-box doctor` then reports the change until you run
+  `box setup -recreate`. Boxes size their memory from the VM (by default half
+  of it, but at least `4g` or all of the VM if it has less), so the VM size is
+  what bounds every box on a Mac.
 - Workspaces must be under your home directory (the VM shares only that), and
   must not be, contain or sit inside the data root (it holds the VM's own
   settings and SSH key). They also must not be or contain the directory of the

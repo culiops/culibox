@@ -7,8 +7,10 @@ package boxvm
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -58,14 +60,59 @@ type Config struct {
 // home, size from the instance config. The one place that maps config.json onto
 // a Config, so doctor and box setup cannot disagree about the VM they mean.
 // hostCPUs and hostMemBytes (see HostSize) size the VM when the config leaves it
-// unset; 0 means unknown.
+// unset; 0 means unknown. A VM that was already set up keeps the size it has for
+// every field the config leaves unset (see provisionedSize): host-derived sizing
+// applies to the first setup and to one after -recreate, so upgrading never
+// makes an existing VM read as drifted.
 func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string, hostCPUs int, hostMemBytes uint64) Config {
+	return configFor(cfg, dataDir, home, colimaBin, dockerBin, hostCPUs, hostMemBytes, true)
+}
+
+// ConfigForFresh is ConfigFor for a VM about to be recreated: the VM on disk is
+// ignored, so an unset size comes from the host again.
+func ConfigForFresh(cfg config.Config, dataDir, home, colimaBin, dockerBin string, hostCPUs int, hostMemBytes uint64) Config {
+	return configFor(cfg, dataDir, home, colimaBin, dockerBin, hostCPUs, hostMemBytes, false)
+}
+
+func configFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string, hostCPUs int, hostMemBytes uint64, keepExisting bool) Config {
 	cpus, mem := cfg.BoxVMSize(hostCPUs, hostMemBytes)
+	if oldCPUs, oldMem, ok := provisionedSize(dataDir); ok && keepExisting {
+		if cfg.BoxVMCPUs <= 0 {
+			cpus = oldCPUs
+		}
+		if cfg.BoxVMMemoryGiB <= 0 {
+			mem = oldMem
+		}
+	}
 	// Every caller (the daemon's box layer, doctor) runs after config validation,
 	// which already refused an unreadable extra_ca_certs. On an error here
 	// ExtraCAPEM stays nil: no CA block, never a half-built one.
 	ca, _ := cfg.ExtraCA()
 	return Config{Root: dataDir, Home: home, ColimaBin: colimaBin, DockerBin: dockerBin, CPUs: cpus, MemoryGiB: mem, BrokerPort: cfg.BrokerPortOrDefault(), EgressPort: cfg.EgressPortOrDefault(), ExtraCAPEM: ca.PEM()}
+}
+
+// provisionedSize is the cpu and memory (GiB) of a VM that has been set up
+// under dataDir: read from its colima.yaml, but only when the stamp exists, so a
+// yaml left by an interrupted first setup, or by nothing at all, never pins a
+// size. ok is false when there is no such VM or its yaml has no readable size.
+func provisionedSize(dataDir string) (cpus, memGiB int, ok bool) {
+	c := Config{Root: dataDir}
+	if _, err := os.Stat(c.StampPath()); err != nil {
+		return 0, 0, false
+	}
+	b, err := os.ReadFile(c.YAMLPath())
+	if err != nil {
+		return 0, 0, false
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		// Top-level keys only: the provision script and mounts are indented.
+		if v, found := strings.CutPrefix(l, "cpu: "); found {
+			cpus, _ = strconv.Atoi(strings.TrimSpace(v))
+		} else if v, found := strings.CutPrefix(l, "memory: "); found {
+			memGiB, _ = strconv.Atoi(strings.TrimSpace(v))
+		}
+	}
+	return cpus, memGiB, cpus > 0 && memGiB > 0
 }
 
 func (c Config) ColimaHome() string      { return filepath.Join(c.Root, "vm") }

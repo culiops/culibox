@@ -131,7 +131,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
 | `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |
-| `box_memory` | half of docker's memory | RAM cap per box; number + k/m/g, at least `1g`, or `max` for all of docker's memory (on macOS, the VM's). Unset is half of what `docker info` reports (at least `1g`), or `4g` if docker cannot be asked. `max` refuses to start a box rather than run uncapped when it cannot be read. Swap is capped to the same value, so a box over its cap is killed rather than swapping the host. |
+| `box_memory` | half of docker's memory | RAM cap per box; number + k/m/g, at least `1g`, or `max` for all of docker's memory (on macOS, the VM's). Unset is half of what `docker info` reports, but at least `4g` (or all of it, if docker has less than 4g), so a small host never gets less than the old default; it is `4g` if docker cannot be asked. `max` refuses to start a box rather than run uncapped when it cannot be read. Swap is capped to the same value, so a box over its cap is killed rather than swapping the host. |
 | `box_cpus` | unset (no cap) | CPU cap per box, passed as `--cpus`: `0.01` to `1024`, at most 2 decimals. Unset lets a box use every core docker has. A value above docker's core count is refused by docker when the box starts. |
 | `docker_bin` | `docker` | Docker CLI to use. |
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
@@ -142,7 +142,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `max_upload_bytes` | 64 MiB | Per uploaded file. Zero or negative means the default, never unlimited. |
 | `max_archive_bytes`, `max_archive_files` | 512 MiB, 20000 | Caps on folder downloads. |
 | `analytics.enabled` | `true` | Token and cost analytics. |
-| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4. See [macOS](docs/MACOS.md) for what a changed size does to an existing VM. |
+| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4, chosen when the VM is first set up; an existing VM keeps its size until `box setup -recreate` (see [macOS](docs/MACOS.md)). |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `extra_ca_certs` | none | Absolute paths to CA certificate PEM files that boxes should trust, for a TLS-inspecting proxy. See [Behind a TLS-inspecting proxy](docs/MACOS.md#behind-a-tls-inspecting-proxy). Read at daemon start only: a change needs a restart. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
