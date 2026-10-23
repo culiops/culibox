@@ -571,13 +571,8 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 		if real, err := filepath.EvalSymlinks(home); err == nil {
 			home = real
 		}
-		if abs == filepath.Clean(home) {
-			return "it is your home directory, so the box would mount everything in it", true
-		}
-		// An ancestor of home is worse still.
-		if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
-			return "it contains your home directory", true
+		if reason := homeReason(abs, home); reason != "" {
+			return reason, true
 		}
 	}
 	if reason := ProtectedOverlap(abs, protected); reason != "" {
@@ -588,6 +583,21 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 			"), so docker cannot see it", true
 	}
 	return "", false
+}
+
+// homeReason reports why abs (absolute, symlinks resolved) cannot be mounted
+// because it is, or is an ancestor of, home (also resolved), or "" when it is
+// neither.
+func homeReason(abs, home string) string {
+	if abs == filepath.Clean(home) {
+		return "it is your home directory, so the box would mount everything in it"
+	}
+	// An ancestor of home is worse still.
+	if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+		return "it contains your home directory"
+	}
+	return ""
 }
 
 // protected is every directory a workspace must not overlap: the state root
