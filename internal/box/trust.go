@@ -90,22 +90,32 @@ func trustWorkspace(root *os.Root, workspace string) error {
 	}
 
 	entry["hasTrustDialogAccepted"] = json.RawMessage("true")
-	if projects[workspace], err = json.Marshal(entry); err != nil {
+	if projects[workspace], err = encodeJSON(entry, ""); err != nil {
 		return err
 	}
-	if top["projects"], err = json.Marshal(projects); err != nil {
+	if top["projects"], err = encodeJSON(projects, ""); err != nil {
 		return err
 	}
-	// An Encoder, not MarshalIndent: it can leave <, > and & as they are rather
-	// than rewriting them as \u003c and friends in the agent's values.
-	var out bytes.Buffer
-	enc := json.NewEncoder(&out)
+	out, err := encodeJSON(top, "  ")
+	if err != nil {
+		return err
+	}
+	return replaceFile(root, name, append(out, '\n'))
+}
+
+// encodeJSON is json.Marshal (indented when indent != "") that leaves <, > and &
+// as they are rather than rewriting them as \u003c and friends in the agent's
+// values. Every level goes through it: an escape made at an inner level would
+// survive the outer one.
+func encodeJSON(v any, indent string) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
 	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(top); err != nil { // Encode ends with a newline
-		return err
+	enc.SetIndent("", indent)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
 	}
-	return replaceFile(root, name, out.Bytes())
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // readRegular reads f, which must be a regular file of at most

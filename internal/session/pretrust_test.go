@@ -10,10 +10,11 @@ import (
 	"github.com/culiops/agent-box/internal/launcher"
 )
 
-// Claude Code's trust dialog is pre-accepted only for boxes whose sessions run
-// with the config bundle (--setting-sources user, which keeps a repo's own
-// settings and hooks from loading). Without the bundle the dialog is the only
-// gate before a repo hook can read the agent's credentials, so it stays.
+// Claude Code's trust dialog is pre-accepted only when the spawn creating the
+// box runs with the bundle's --setting-sources user, which keeps a repo's own
+// settings and hooks from loading. Without it the dialog is the only gate
+// before a repo hook can read the agent's credentials, so it stays: that
+// includes a bundle without the flag (a shell, codex or wrapper-bin spawn).
 func TestBoxedSpawnPreTrustsOnlyWithTheBundle(t *testing.T) {
 	for _, c := range []struct {
 		name    string
@@ -21,11 +22,14 @@ func TestBoxedSpawnPreTrustsOnlyWithTheBundle(t *testing.T) {
 		bundles *fakeBundles      // nil = bundle layer disabled
 		want    bool
 	}{
-		{"default account, bundle ok", nil, &fakeBundles{}, true},
+		{"default account, bundle ok", nil, &fakeBundles{flags: userOnly}, true},
+		{"bundle ok, flag as one arg", nil, &fakeBundles{flags: []string{"--setting-sources=user"}}, true},
+		{"bundle ok but no flag (shell, codex, wrapper bin)", nil, &fakeBundles{flags: []string{"--strict-mcp-config"}}, false},
+		{"bundle ok, other setting sources", nil, &fakeBundles{flags: []string{"--setting-sources", "user,project"}}, false},
 		{"default account, bundle failed", nil, &fakeBundles{err: errors.New("probe failed")}, false},
 		{"bundle layer disabled", nil, nil, false},
-		{"account without personal config", ptr(workAccount(false)), &fakeBundles{}, false},
-		{"account inheriting personal config", ptr(workAccount(true)), &fakeBundles{}, true},
+		{"account without personal config", ptr(workAccount(false)), &fakeBundles{flags: userOnly}, false},
+		{"account inheriting personal config", ptr(workAccount(true)), &fakeBundles{flags: userOnly}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tl := tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: config.RuntimeBox}
@@ -53,5 +57,7 @@ func TestBoxedSpawnPreTrustsOnlyWithTheBundle(t *testing.T) {
 		})
 	}
 }
+
+var userOnly = []string{"--mcp-config", "/b/mcp.json", "--setting-sources", "user", "--strict-mcp-config"}
 
 func ptr[T any](v T) *T { return &v }

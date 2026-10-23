@@ -392,9 +392,9 @@ type BoxKey struct {
 	// PreTrust asks for Claude Code's workspace trust dialog to be pre-accepted
 	// in the box home (see trustWorkspace). Not identity, like PartialMounts: it
 	// is applied when the box is created. The session layer sets it only when the
-	// box's sessions run with the config bundle, whose --setting-sources user keeps
-	// a repo's own settings and hooks from loading; without it the dialog is the
-	// only gate before those run, so it stays.
+	// spawn creating it runs claude with the config bundle's --setting-sources
+	// user, which keeps a repo's own settings and hooks from loading; without it
+	// the dialog is the only gate before those run, so it stays.
 	PreTrust bool
 }
 

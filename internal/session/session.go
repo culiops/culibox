@@ -1570,7 +1570,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var mounts []box.Mount
 	var bundleHash string
 	var bundleFailed bool // mounts unknown, not empty: see box.BoxKey.PartialMounts
-	var preTrust bool     // the bundle applies: see box.BoxKey.PreTrust
+	var preTrust bool     // the agent gets --setting-sources user: see box.BoxKey.PreTrust
 	var bundleDrops []bundle.Drop
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
@@ -1592,8 +1592,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			mounts, bundleHash = g.Mounts, g.Hash
 			if err == nil {
 				bundleDrops = g.Drops
-				preTrust = true
 			}
+			// The flag itself, not "the bundle applied": only the claude layout
+			// carries it, so a shell, codex or wrapper-bin spawn that creates the
+			// box leaves the dialog in place for any claude run there later.
+			preTrust = settingsLimitedToUser(g.Flags)
 			spec.ExtraArgs = append(spec.ExtraArgs, g.Flags...)
 		}
 		// A token entry's MCP server lives in a config of this session's own,
@@ -2731,4 +2734,17 @@ func parseID(id string) (agent string, n int, ok bool) {
 		return "", 0, false
 	}
 	return id[:i], n, true
+}
+
+// settingsLimitedToUser reports whether args make Claude Code load user settings
+// only (--setting-sources user), so a workspace's own .claude/settings.json, its
+// hooks included, never loads. That is what makes pre-accepting the workspace
+// trust dialog safe (box.BoxKey.PreTrust).
+func settingsLimitedToUser(args []string) bool {
+	for i, a := range args {
+		if a == "--setting-sources=user" || (a == "--setting-sources" && i+1 < len(args) && args[i+1] == "user") {
+			return true
+		}
+	}
+	return false
 }

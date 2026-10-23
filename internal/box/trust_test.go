@@ -361,14 +361,15 @@ func TestTrustLeavesFIFOAlone(t *testing.T) {
 func TestTrustMergeDoesNotEscapeHTML(t *testing.T) {
 	root, dir := trustRoot(t)
 	p := filepath.Join(dir, ".claude.json")
-	if err := os.WriteFile(p, []byte(`{"note":"a<b>&c"}`), 0o600); err != nil {
+	in := `{"note":"a<b>&c","projects":{"/ws/repo":{"allowedTools":["Bash(a && b > c)"]}}}`
+	if err := os.WriteFile(p, []byte(in), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := trustWorkspace(root, trustWS); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(p)
-	if !strings.Contains(string(raw), `"a<b>&c"`) {
+	if !strings.Contains(string(raw), `"a<b>&c"`) || !strings.Contains(string(raw), `"Bash(a && b > c)"`) {
 		t.Fatalf("value re-escaped: %s", raw)
 	}
 }
