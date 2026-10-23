@@ -337,17 +337,23 @@ func TestBoxShellFallbackScript(t *testing.T) {
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"stub zsh $*\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run := func(path string, args ...string) (string, string) {
+	start := func(path string, args ...string) (string, string, error) {
 		t.Helper()
 		var out, errb strings.Builder
 		c := exec.Command(dash, append([]string{"-c", boxShellFallback}, args...)...)
 		c.Env = []string{"PATH=" + path}
 		c.Stdin = strings.NewReader("echo bash-ran\n")
 		c.Stdout, c.Stderr = &out, &errb
-		if err := c.Run(); err != nil {
-			t.Fatalf("%v: %v (stderr %q)", args, err, errb.String())
+		err := c.Run()
+		return out.String(), errb.String(), err
+	}
+	run := func(path string, args ...string) (string, string) {
+		t.Helper()
+		out, errOut, err := start(path, args...)
+		if err != nil {
+			t.Fatalf("%v: %v (stderr %q)", args, err, errOut)
 		}
-		return out.String(), errb.String()
+		return out, errOut
 	}
 	if out, _ := run("/usr/bin:/bin", stub, "-l"); out != "stub zsh -l\n" {
 		t.Errorf("an existing path: got %q", out)
@@ -362,6 +368,18 @@ func TestBoxShellFallbackScript(t *testing.T) {
 	out, errOut := run("/usr/bin:/bin", notExec, "--weird-fish-flag")
 	if out != "bash-ran\n" || !strings.Contains(errOut, notExec+" is not in the box image") {
 		t.Errorf("no such shell: stdout %q stderr %q, want bash (without the fish args) and a notice", out, errOut)
+	}
+	// A command run through the missing shell fails; bash must not swallow it.
+	out, errOut, err = start("/usr/bin:/bin", notExec, "-c", "claude --resume x")
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 127 || out != "" || !strings.Contains(errOut, "-c command cannot run") {
+		t.Errorf("missing shell with -c: err %v stdout %q stderr %q, want exit 127 and no bash", err, out, errOut)
+	}
+	// Hostile argument text stays data: nothing in it is run.
+	marker := filepath.Join(dir, "PWNED")
+	run(dir+":/usr/bin:/bin", "/no/zsh", "$(touch "+marker+")", "`touch "+marker+"`", "; touch "+marker)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("an argument was executed by the fallback script")
 	}
 }
 

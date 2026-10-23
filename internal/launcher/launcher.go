@@ -1051,13 +1051,21 @@ var boxShells = map[string]bool{
 
 // boxShellFallback runs inside the box (by dash, as `sh -c script shell args...`):
 // the shell's path, else its basename on the box PATH, else /bin/bash with a
-// notice and without the args, which were meant for the other shell. `command
-// -v` is not enough for a path (dash reports any existing file), hence -f -x.
+// notice and without the args, which were meant for the other shell. A -c
+// among them means the profile runs a command through that shell, which an
+// interactive bash would silently skip, so that fails instead. `command -v` is
+// not enough for a path (dash reports any existing file), hence -f -x.
 const boxShellFallback = `for b in "$0" "${0##*/}"; do
 	case $b in
 	*/*) [ -f "$b" ] && [ -x "$b" ] && exec "$b" "$@" ;;
 	*) command -v "$b" >/dev/null 2>&1 && exec "$b" "$@" ;;
 	esac
+done
+for a in "$@"; do
+	if [ "$a" = -c ]; then
+		echo "agent-box: $0 is not in the box image, so its -c command cannot run" >&2
+		exit 127
+	fi
 done
 echo "agent-box: $0 is not in the box image; starting /bin/bash instead" >&2
 exec /bin/bash`

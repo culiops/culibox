@@ -1698,3 +1698,76 @@ func TestDockerfileNetworkToolsAreStandIns(t *testing.T) {
 		t.Error("the stand-in is not linked as ping, mtr, traceroute, tracepath and httping")
 	}
 }
+
+// Prompt values come from a repo (branch name, .terraform/environment): with
+// PROMPT_SUBST on (a user's ~/.zshrc may set it) a raw value would run code.
+func TestZshrcPromptRunsNothingFromTheRepo(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	rc, err := filepath.Abs("zshrc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostile := "x$(touch${IFS}PWNED)`touch${IFS}PWNED2`%F{red}"
+	if err := os.WriteFile(filepath.Join(repo, ".terraform", "environment"), []byte(hostile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, opt := range []string{"NO_PROMPT_SUBST", "PROMPT_SUBST"} {
+		c := exec.Command(zsh, "-f", "-c", `setopt `+opt+`; source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
+		c.Dir = repo
+		c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "AWS_PROFILE=a$(touch${IFS}PWNED3)"}
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", opt, err, out)
+		}
+		if !strings.Contains(string(out), "tf:x??touch??IFS?PWNED?") {
+			t.Errorf("%s: the workspace segment was not sanitized: %q", opt, out)
+		}
+		if strings.Contains(string(out), "no such file") {
+			t.Errorf("%s: prompt printed an error: %q", opt, out)
+		}
+	}
+	for _, f := range []string{"PWNED", "PWNED2", "PWNED3"} {
+		if _, err := os.Stat(filepath.Join(repo, f)); err == nil {
+			t.Errorf("the prompt ran a command from a repo or env value (%s exists)", f)
+		}
+	}
+}
+
+// vcs_info's git calls ignore a planted core.fsmonitor in the repo's .git/config.
+func TestZshrcPromptIgnoresRepoFsmonitor(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	rc, _ := filepath.Abs("zshrc")
+	repo := t.TempDir()
+	marker := filepath.Join(repo, "FSMPWNED")
+	for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", "touch " + marker + "; false"}} {
+		if b, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, b)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command(zsh, "-f", "-c", `source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
+	c.Dir = repo
+	c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if !strings.Contains(string(out), "git:") {
+		t.Fatalf("no git segment, so the check proves nothing: %q", out)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the prompt ran the repo's core.fsmonitor")
+	}
+}
