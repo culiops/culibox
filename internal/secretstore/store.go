@@ -217,10 +217,20 @@ func (s *Store) Set(id string, value []byte, actor string) error {
 	if err != nil {
 		return err
 	}
+	// An exact match is an update, even next to a case twin stored before this
+	// check existed (Linux allowed GH and gh side by side).
+	var twin string
 	for _, e := range existing {
-		if e.ID != id && strings.EqualFold(e.ID, id) {
-			return &CaseCollisionError{ID: id, Existing: e.ID}
+		if e.ID == id {
+			twin = ""
+			break
 		}
+		if strings.EqualFold(e.ID, id) {
+			twin = e.ID
+		}
+	}
+	if twin != "" {
+		return &CaseCollisionError{ID: id, Existing: twin}
 	}
 	var buf bytes.Buffer
 	w, err := age.Encrypt(&buf, rcpt)

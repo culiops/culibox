@@ -585,6 +585,39 @@ func TestSetRefusesAnIdThatDiffersOnlyInCase(t *testing.T) {
 	}
 }
 
+// Case twins stored before the check existed (Linux allowed GH and gh) stay
+// updatable by their exact ids; only a new case variant is refused.
+func TestSetUpdatesALegacyCaseTwinByItsExactId(t *testing.T) {
+	s, _, _, dir := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("GH", []byte("upper"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, storeDirName, valuePath("GH")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, storeDirName, valuePath("gh")), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ids, _ := s.List(); len(ids) != 2 {
+		t.Skipf("this filesystem folds case, so twins cannot exist: %v", ids)
+	}
+	for _, id := range []string{"gh", "GH"} {
+		if err := s.Set(id, []byte("rotated-"+id), "cli"); err != nil {
+			t.Fatalf("set %s next to its twin: %v", id, err)
+		}
+		if got, err := s.Get(id); err != nil || string(got) != "rotated-"+id {
+			t.Fatalf("get %s: %q %v", id, got, err)
+		}
+	}
+	if err := s.Set("Gh", []byte("x"), "cli"); !errors.Is(err, ErrCaseCollision) {
+		t.Fatalf("a new case variant must still be refused: %v", err)
+	}
+}
+
 func TestSetSameIdUpdatesAndDistinctIdsCoexist(t *testing.T) {
 	s, _, _, _ := newStore(t, false)
 	if err := s.Init(nil, "cli"); err != nil {

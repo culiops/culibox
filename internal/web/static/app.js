@@ -3432,11 +3432,13 @@ async function saveProfile() {
   // Show what the server now holds, not what was typed: the editor and the
   // stored profile can only disagree on screen if this step is skipped. The
   // write succeeded, so a failure here must not say "Save failed".
+  // The profile now exists, so the editor is no longer a draft even if the
+  // reload below fails (a second Save must PUT, not POST again).
+  selectedProfile = p.name;
   try {
     // No background retry: one that succeeds later would leave the "Saved, but
     // reloading it failed" line on screen next to a good list.
     if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
-    selectedProfile = p.name;
     fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
   } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
   renderProfileList();
