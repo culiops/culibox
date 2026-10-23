@@ -2,6 +2,7 @@ package secretstore
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -16,6 +17,8 @@ var (
 	ErrUnsupported    = errors.New("the encrypted store is not supported on this platform")
 	ErrBadID          = errors.New("invalid store id: use letters, digits, _ and -, starting with a letter or digit, at most 64 characters")
 	ErrTooLarge       = errors.New("value is too large")
+	// ErrCaseCollision matches a CaseCollisionError under errors.Is.
+	ErrCaseCollision = errors.New("id differs only in case from an existing value")
 )
 
 // Keeper holds the unlocked master identity outside the process: the kernel
@@ -44,3 +47,16 @@ type Event struct{ Action, Actor, Detail string }
 // Recorder persists an Event. Store writes and unlocks are fail-closed: when
 // RecordStore errors the action is not taken.
 type Recorder interface{ RecordStore(Event) error }
+
+// CaseCollisionError is Set refusing an id that case-folds onto a different
+// existing one. The store keeps one file per id, so on a case-insensitive
+// filesystem (macOS APFS by default) the two would be the same file and the
+// set would silently replace the other value. It is refused everywhere, so
+// behaviour does not depend on the platform.
+type CaseCollisionError struct{ ID, Existing string }
+
+func (e *CaseCollisionError) Error() string {
+	return fmt.Sprintf("%q collides with existing %q (ids are case-insensitive on macOS); use the exact id", e.ID, e.Existing)
+}
+
+func (e *CaseCollisionError) Is(target error) bool { return target == ErrCaseCollision }

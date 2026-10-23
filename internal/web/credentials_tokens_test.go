@@ -222,6 +222,21 @@ func TestValueOver64KiB413NoOrphan(t *testing.T) {
 	}
 }
 
+// The store refusing an id that differs only in case from a stored one (the
+// macOS APFS overwrite) is a conflict the caller can fix, not a server fault,
+// and leaves no entry behind.
+func TestStoreCaseCollisionIsAConflict(t *testing.T) {
+	a := newTokenRoutes(t)
+	a.fx.vals.setErr = &secretstore.CaseCollisionError{ID: "gh", Existing: "GH"}
+	code, _, raw := a.call("POST", pathTokens+"/from-template", fromTpl("github-pat", "gh", nil, "ok"))
+	if code != 409 || !strings.Contains(raw, `\"gh\" collides with existing \"GH\"`) || !strings.Contains(raw, "id_collision") {
+		t.Fatalf("collision: %d %s", code, raw)
+	}
+	if a.fx.fileBytes(t) != "" {
+		t.Fatal("an entry was written")
+	}
+}
+
 func TestTrailingNewlineVerbatim(t *testing.T) {
 	a := newTokenRoutes(t)
 	// The JSON escape forces the slow decode path; a literal raw newline cannot

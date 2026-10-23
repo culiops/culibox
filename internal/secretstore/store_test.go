@@ -551,3 +551,56 @@ func TestUnlockMismatchedPair(t *testing.T) {
 		t.Fatal("passwd accepted a mismatched pair")
 	}
 }
+
+// On a case-insensitive filesystem (macOS APFS by default) "CaseTest" and
+// "casetest" are the same file, so a second set would silently replace the first
+// value. The store refuses it on every platform so behaviour does not differ:
+// the check reads the ids that exist, not the filesystem's opinion of them.
+func TestSetRefusesAnIdThatDiffersOnlyInCase(t *testing.T) {
+	s, _, rec, _ := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Set("CaseTest", []byte("first"), "cli"); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Set("casetest", []byte("second"), "cli")
+	if !errors.Is(err, ErrCaseCollision) {
+		t.Fatalf("case variant: %v", err)
+	}
+	want := `"casetest" collides with existing "CaseTest" (ids are case-insensitive on macOS); use the exact id`
+	if err.Error() != want {
+		t.Errorf("message %q, want %q", err, want)
+	}
+	if got, err := s.Get("CaseTest"); err != nil || string(got) != "first" {
+		t.Fatalf("the existing value must be untouched: %q %v", got, err)
+	}
+	if l, _ := s.List(); len(l) != 1 || l[0].ID != "CaseTest" {
+		t.Fatalf("no second value may be written: %v", l)
+	}
+	for _, e := range rec.events {
+		if e.Action == "value_set" && e.Detail == "casetest" {
+			t.Errorf("a refused set must not be audited as a write: %+v", e)
+		}
+	}
+}
+
+func TestSetSameIdUpdatesAndDistinctIdsCoexist(t *testing.T) {
+	s, _, _, _ := newStore(t, false)
+	if err := s.Init(nil, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ id, val string }{
+		{"CaseTest", "one"}, {"CaseTest", "two"}, {"case-test", "x"}, {"other", "y"},
+	} {
+		if err := s.Set(c.id, []byte(c.val), "cli"); err != nil {
+			t.Fatalf("set %s: %v", c.id, err)
+		}
+	}
+	if got, err := s.Get("CaseTest"); err != nil || string(got) != "two" {
+		t.Fatalf("exact id must update: %q %v", got, err)
+	}
+	if l, _ := s.List(); len(l) != 3 {
+		t.Fatalf("distinct ids coexist: %v", l)
+	}
+}
