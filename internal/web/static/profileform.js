@@ -9,10 +9,29 @@
 // seed and has never been written to the runtime store. Duplicate is what makes
 // a read-only profile useful — a copy you own, seeded with what it does.
 
+// nameLocked: a saved profile's name is fixed, because the API has no rename and
+// Save on a changed name would create a second profile. Only a draft (New or
+// Duplicate) names itself; to change a saved name, Duplicate it and delete the old.
 function editorState(view) {
-  if (!view) return { locked: false, save: "on", delete: "off", duplicate: "off" };
-  if (view.editable) return { locked: false, save: "on", delete: "on", duplicate: "on" };
-  return { locked: true, save: "off", delete: "off", duplicate: "on" };
+  if (!view) return { locked: false, nameLocked: false, save: "on", delete: "off", duplicate: "off" };
+  if (view.editable) return { locked: false, nameLocked: true, save: "on", delete: "on", duplicate: "on" };
+  return { locked: true, nameLocked: true, save: "off", delete: "off", duplicate: "on" };
+}
+
+// What Save does with the form. selected is the saved profile the editor is on,
+// "" for a draft. A saved profile is always updated under its own name; a draft
+// is always created, and refused when a stored profile already has its name
+// (the server's Save is an upsert, so a POST would silently overwrite it).
+function saveTarget(selected, formName, existing) {
+  if (selected) return { method: "PUT", name: selected };
+  if ((existing || []).includes(formName)) return { error: 'A profile named "' + formName + '" already exists. Pick another name.' };
+  return { method: "POST" };
+}
+
+// The draft Duplicate opens: the editor's form (read as Save would, so unsaved
+// edits come along) under a free "<source> copy" name. Nothing is written until Save.
+function duplicateDraft(form, sourceName, existing) {
+  return Object.assign({}, form, { name: duplicateName(sourceName, existing) });
 }
 
 // A trigger that is going to ask a question says so with a trailing ellipsis;
@@ -339,5 +358,5 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
+  module.exports = { saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
 }

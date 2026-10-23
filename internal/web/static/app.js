@@ -3270,6 +3270,11 @@ function syncEditorActions() {
     f.classList.toggle("off", st.locked);
     f.disabled = st.locked;
   }
+  // After the loop above, which re-enables every unlocked field.
+  const nm = $("pf-name");
+  nm.classList.toggle("off", st.nameLocked);
+  nm.disabled = st.nameLocked;
+  nm.title = st.nameLocked ? "A saved profile's name is fixed. Duplicate it to use another name." : "";
   $("pf-save").textContent = saveLabel(segValue($("pf-runtime")));
   // Readable host paths only mean something inside a box, so the host tier hides
   // an empty row. A filled one stays visible with its "needs runtime: box" hint:
@@ -3392,12 +3397,17 @@ async function saveProfile() {
   $("pf-gh-perm-err").textContent = ghErr;
   $("pf-gh-perm-err").hidden = !ghErr;
   if (ghErr) { setDialogError("settings-modal", ghErr); return; }
+  // From the editor's state, not the typed name: a saved profile's name is
+  // read-only, and a draft (New, Duplicate) always creates, so Save cannot
+  // leave a copy behind.
+  const target = saveTarget(selectedProfile, p.name, profiles.map((x) => x.name));
+  if (target.error) { setDialogError("settings-modal", target.error); return; }
   // Containment is the one field whose consequence is worth naming before it is
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
   if (ask && !(await askConfirm(ask))) return;
-  const editing = profiles.some((x) => x.name === p.name && x.editable);
-  const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
+  const editing = target.method === "PUT";
+  const path = editing ? "/api/profiles/" + encodeURIComponent(target.name) : "/api/profiles";
   $("pf-st-err").hidden = true;
   $("pf-awsc-err").hidden = true;
   $("pf-context-warn").hidden = true;
@@ -3438,19 +3448,21 @@ async function saveProfile() {
   $("pf-context-warn").hidden = !warn;
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
-// with what it does. It reads the editor exactly as Save would, only the name
-// changes and the destination is always a new profile (POST, never PUT).
-async function duplicateProfile() {
+// with what it does. It opens an UNSAVED draft, as New profile does, so Save
+// creates exactly one profile under whatever name is typed. Writing the copy up
+// front left it behind when the user renamed it and saved.
+function duplicateProfile() {
   const name = selectedProfileName();
   if (!name) return;
+  const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
+  selectedProfile = "";
+  fillForm(draft);
   setDialogError("settings-modal", "");
-  const p = readForm();
-  p.name = duplicateName(name, profiles.map((x) => x.name));
-  try {
-    await api("/api/profiles", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-  } catch (e) { setDialogError("settings-modal", "Duplicate failed: " + e.message); return; }
-  await loadProfiles();
-  await editProfile(p.name);
+  $("settings-modal").classList.add("editing");
+  renderProfileList();
+  syncEditorActions();
+  $("pf-name").focus();
+  $("pf-name").select();
 }
 async function editProfile(name) {
   setDialogError("settings-modal", "");

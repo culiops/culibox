@@ -41,3 +41,20 @@ test("saveProfile re-fills the editor from the server after the write", () => {
   assert.ok(refill > write, "saveProfile must fillForm( after the PUT/POST");
   assert.match(b, /Saved, but reloading it failed/);
 });
+
+// Duplicate must open an unsaved draft, as New does: a POST of "<name> copy" up
+// front is what left a stray copy behind once the user renamed it and saved.
+test("duplicateProfile opens a draft and writes nothing", () => {
+  const b = body("duplicateProfile");
+  assert.doesNotMatch(b, /api\(/);
+  assert.doesNotMatch(b, /POST|PUT/);
+  assert.match(b, /selectedProfile\s*=\s*""/);
+  assert.match(b, /duplicateDraft\(/);
+  assert.match(b, /fillForm\(/);
+});
+
+test("saveProfile picks create vs update from the draft state, not the typed name", () => {
+  const b = body("saveProfile");
+  assert.match(b, /saveTarget\(/);
+  assert.doesNotMatch(b, /profiles\.some\(/);
+});

@@ -5,22 +5,51 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
   assert.deepStrictEqual(editorState(null),
-    { locked: false, save: "on", delete: "off", duplicate: "off" });
+    { locked: false, nameLocked: false, save: "on", delete: "off", duplicate: "off" });
 });
 
 test("a stored profile can do everything", () => {
   assert.deepStrictEqual(editorState({ name: "a", editable: true }),
-    { locked: false, save: "on", delete: "on", duplicate: "on" });
+    { locked: false, nameLocked: true, save: "on", delete: "on", duplicate: "on" });
 });
 
 test("a built-in is read-only, and duplicate is the way out", () => {
   assert.deepStrictEqual(editorState({ name: "claude", editable: false }),
-    { locked: true, save: "off", delete: "off", duplicate: "on" });
+    { locked: true, nameLocked: true, save: "off", delete: "off", duplicate: "on" });
+});
+
+// The Duplicate-then-rename bug: Save picked PUT or POST by whether the typed
+// name existed, so renaming a saved profile created a second one and left the
+// original behind. A saved profile's name is now fixed, and only a draft (New
+// or Duplicate) can choose one.
+test("a saved profile keeps its name; only a draft can choose one", () => {
+  assert.strictEqual(editorState(null).nameLocked, false);
+  assert.strictEqual(editorState({ name: "a", editable: true }).nameLocked, true);
+  assert.strictEqual(editorState({ name: "claude", editable: false }).nameLocked, true);
+});
+
+test("Save on a saved profile updates it; on a draft it creates exactly one", () => {
+  assert.deepStrictEqual(saveTarget("bash", "bash", ["bash"]), { method: "PUT", name: "bash" });
+  assert.deepStrictEqual(saveTarget("", "bash copy", ["bash"]), { method: "POST" });
+  assert.deepStrictEqual(saveTarget("", "renamed", ["bash", "bash copy"]), { method: "POST" });
+});
+
+test("a draft never overwrites a stored profile that has its name", () => {
+  const t = saveTarget("", "bash", ["claude", "bash"]);
+  assert.strictEqual(t.method, undefined);
+  assert.match(t.error, /"bash" already exists/);
+});
+
+test("a duplicate draft is the form with a free name, and leaves the form alone", () => {
+  const form = { name: "bash", bin: "/bin/bash", args: ["-l"] };
+  const d = duplicateDraft(form, "bash", ["bash", "bash copy"]);
+  assert.deepStrictEqual(d, { name: "bash copy 2", bin: "/bin/bash", args: ["-l"] });
+  assert.strictEqual(form.name, "bash");
 });
 
 test("saving into host promises the question", () => {
