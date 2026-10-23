@@ -373,7 +373,7 @@ func (c Config) ExtraCA() (extraca.Set, error) {
 
 func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[]ToleratedRef) error {
 	if len(c.Agents) == 0 {
-		return errors.New("config: at least one agent required")
+		return errors.New("config: at least one agent required (a config file replaces the built-in defaults, so it must list every agent, bind_addr included)")
 	}
 	switch c.DefaultRuntime {
 	case "", RuntimeBox, RuntimeHost:

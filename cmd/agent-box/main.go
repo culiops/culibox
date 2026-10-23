@@ -57,6 +57,12 @@ func main() {
 	home, homeErr := serveHome(os.UserHomeDir)
 	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
 	cfg, src, cfgErr := config.Resolve(args.ConfigPath, args.ConfigSet, home, xdg, abHome)
+	if src.Default && cfgErr == nil {
+		// No file yet: let the TLS-interception hint say where to create one.
+		if files, err := config.ConfigFiles(args.ConfigPath, args.ConfigSet, home, xdg, abHome); err == nil && len(files) > 0 {
+			hintConfigPath = files[0]
+		}
+	}
 	// Merge the web-defined credentials before anything validates or reads cfg.
 	// Needs a usable home (the data dir hangs off it) and a config that loaded.
 	var cred credState

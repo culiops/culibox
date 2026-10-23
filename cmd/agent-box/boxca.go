@@ -2,18 +2,25 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	boximage "github.com/culiops/agent-box/docker/agent-box"
+	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/extraca"
 )
 
 // hintRoot dials the failing host for the interception hint. A var so the
 // tests do not touch the network.
 var hintRoot = extraca.RootSubject
+
+// hintConfigPath is the config.json a first-time user must create, set at boot
+// only when no config file was found; "" otherwise. A var, like hintRoot, so
+// the many setup paths that reach the hint need no extra parameter.
+var hintConfigPath string
 
 // printExtraCA prints one line per configured CA, and nothing when none are.
 // An expired or not-yet-valid CA is a WARN: it still loads, and trust fails
@@ -64,6 +71,10 @@ func printInterceptionHint(ctx context.Context, w io.Writer, output string, conf
 		fmt.Fprintln(w, `      Export its root CA and add it to "extra_ca_certs" in config.json, then run`)
 		fmt.Fprintf(w, "      %s.\n", rerun)
 	}
+	if !hostTrust && !configured && hintConfigPath != "" {
+		// Last, after the chain and export lines: that is the order the user acts in.
+		defer printNoConfigSample(w, hintConfigPath)
+	}
 	host := extraca.FailingHost(output)
 	if host == "" {
 		return
@@ -77,6 +88,46 @@ func printInterceptionHint(ctx context.Context, w io.Writer, output string, conf
 	if cn != "" && goos == "darwin" {
 		fmt.Fprintf(w, "      macOS export: security find-certificate -c %q -p > ~/agent-box-ca.pem\n", cn)
 	}
+}
+
+// minimalConfig is the smallest config.json that behaves like the built-in
+// defaults plus a CA. Its fields mirror Config's tags, in the order a user
+// reads them: what to change (extra_ca_certs) comes last.
+type minimalConfig struct {
+	BindAddr       string         `json:"bind_addr"`
+	DefaultRuntime string         `json:"default_runtime"`
+	Agents         []minimalAgent `json:"agents"`
+	ExtraCACerts   []string       `json:"extra_ca_certs"`
+}
+
+// minimalAgent is the two fields an agent needs; AgentConfig would also print
+// the legacy "box": {} that omitempty cannot drop from a struct.
+type minimalAgent struct {
+	Name string `json:"name"`
+	Bin  string `json:"bin"`
+}
+
+// printNoConfigSample is the first-run half of the interception hint: with no
+// config file, "add it to extra_ca_certs in config.json" leads straight into a
+// file that is rejected for having no agents and no bind_addr, because a config
+// file REPLACES the built-in defaults. So it names the file to create and shows
+// one that is valid once the CA path is real, taken from config.Defaults() so it
+// cannot drift from them.
+func printNoConfigSample(w io.Writer, path string) {
+	d := config.Defaults()
+	m := minimalConfig{BindAddr: d.BindAddr, DefaultRuntime: d.DefaultRuntime,
+		ExtraCACerts: []string{"/absolute/path/to/agent-box-ca.pem"}}
+	for _, a := range d.Agents {
+		m.Agents = append(m.Agents, minimalAgent{a.Name, a.Bin})
+	}
+	b, err := json.MarshalIndent(m, "      ", "  ")
+	if err != nil {
+		return // a fixed struct cannot fail to marshal; the hint above still stands
+	}
+	fmt.Fprintf(w, "      No config file exists yet: create %s.\n", path)
+	fmt.Fprintln(w, "      A config file replaces the built-in defaults, so it must carry them too (the values")
+	fmt.Fprintln(w, "      below are the defaults). The CA path must be absolute; ~ is not expanded:")
+	fmt.Fprintf(w, "      %s\n", b)
 }
 
 // hintBuildFailure is the hint for a failed Build: the kept tail of its output.

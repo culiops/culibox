@@ -540,3 +540,17 @@ func TestValidateKeepsConfigAgentWithCAEnvBootable(t *testing.T) {
 		t.Fatalf("an existing agent with a CA env name must still validate at boot, got %v", err)
 	}
 }
+
+// A config file replaces the built-in defaults, so a file that only sets
+// extra_ca_certs has no agents. The error says why, not just what.
+func TestValidate_NoAgentsExplainsFileReplacesDefaults(t *testing.T) {
+	err := Config{BindAddr: "127.0.0.1:8899"}.Validate()
+	if err == nil {
+		t.Fatal("no agents must be refused")
+	}
+	for _, want := range []string{"config: at least one agent required", "a config file replaces the built-in defaults"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+}
