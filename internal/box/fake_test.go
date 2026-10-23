@@ -52,11 +52,26 @@ type fakeClient struct {
 	// so a test can serve the image/create/cp/rm calls of caBundle without
 	// disturbing the run counters.
 	runHook func(args []string) (out string, handled bool, err error)
+	// stdoutHook answers a Stdout; an unhandled Stdout fails the test's
+	// expectations loudly (empty output, error) rather than reaching Run.
+	stdoutHook func(args []string) (out string, handled bool, err error)
 }
 
 func newFake() *fakeClient {
 	return &fakeClient{running: map[string]bool{}, exited: map[string]bool{}, labels: map[string]map[string]string{},
 		mounts: map[string][]string{}}
+}
+
+func (f *fakeClient) Stdout(_ context.Context, args []string) (string, error) {
+	f.mu.Lock()
+	hook := f.stdoutHook
+	f.mu.Unlock()
+	if hook != nil {
+		if out, handled, err := hook(args); handled {
+			return out, err
+		}
+	}
+	return "", errors.New("fake: unexpected Stdout " + strings.Join(args, " "))
 }
 
 func (f *fakeClient) Run(_ context.Context, args []string) (string, error) {

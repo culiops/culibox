@@ -175,6 +175,9 @@ func UnderMount(path string, mounts []string) bool {
 // every unit test, so none of them requires a running daemon.
 type Client interface {
 	Run(ctx context.Context, args []string) (string, error)
+	// Stdout is Run reading stdout only, for an answer that is compared line by
+	// line and must not be shifted by a CLI warning on stderr.
+	Stdout(ctx context.Context, args []string) (string, error)
 	Inspect(ctx context.Context, name string) (State, error)
 	ListBoxes(ctx context.Context, label string) ([]BoxInfo, error)
 	ListByLabel(ctx context.Context, label string) ([]string, error)

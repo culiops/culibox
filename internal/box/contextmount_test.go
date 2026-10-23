@@ -12,7 +12,8 @@ import (
 )
 
 // statFake answers the in-box `stat` exec of the context-mount check with out
-// (or err) and records each call; every other Run goes on to the fake.
+// (or err) and records each call. The check reads stdout only, so it answers
+// Stdout; the exec must be /usr/bin/stat, never a bare stat from the box PATH.
 type statFake struct {
 	mu    sync.Mutex
 	calls [][]string
@@ -21,8 +22,8 @@ type statFake struct {
 }
 
 func (s *statFake) install(f *fakeClient) {
-	f.runHook = func(args []string) (string, bool, error) {
-		if len(args) < 3 || args[0] != "exec" || args[2] != "stat" {
+	f.stdoutHook = func(args []string) (string, bool, error) {
+		if len(args) < 3 || args[0] != "exec" || args[2] != "/usr/bin/stat" {
 			return "", false, nil
 		}
 		s.mu.Lock()
@@ -64,7 +65,7 @@ func TestContextMountMatchStartsTheBox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"exec", name, "stat", "-c", "%d:%i", "--", "/srv/ctx0", "/srv/ctx1"}
+	want := []string{"exec", name, "/usr/bin/stat", "-c", "%d:%i", "--", "/srv/ctx0", "/srv/ctx1"}
 	if sf.n() != 1 || !slices.Equal(sf.calls[0], want) {
 		t.Fatalf("in-box stat calls = %v, want one: %v", sf.calls, want)
 	}
@@ -137,6 +138,9 @@ func TestContextMountMismatchKeepsALiveBox(t *testing.T) {
 	if err == nil || !errors.Is(err, ErrContextMountChanged) {
 		t.Fatalf("err = %v, want the mount refusal", err)
 	}
+	if strings.Contains(err.Error(), "the box was removed") {
+		t.Fatalf("err = %v, a kept box must not claim it was removed", err)
+	}
 	if !strings.Contains(err.Error(), "still runs 1 session(s)") || !strings.Contains(err.Error(), "end them so the box is recreated") {
 		t.Fatalf("err = %v, want the remedy for a live box", err)
 	}
@@ -162,8 +166,12 @@ func TestContextMountMismatchRemovesAnIdleReusedBox(t *testing.T) {
 	}
 	m.ReleaseBox(name)
 	sf.set("10:77", nil)
-	if _, _, _, err := m.Wrap(context.Background(), dir, "s2", BoxKey{Context: "c"}, []string{"claude"}, nil, ms); err == nil || !errors.Is(err, ErrContextMountChanged) {
+	_, _, _, err = m.Wrap(context.Background(), dir, "s2", BoxKey{Context: "c"}, []string{"claude"}, nil, ms)
+	if err == nil || !errors.Is(err, ErrContextMountChanged) {
 		t.Fatalf("err = %v, want the mount refusal", err)
+	}
+	if !strings.HasSuffix(err.Error(), "; the box was removed, spawn again") {
+		t.Fatalf("err = %v, want it to say the idle box was removed", err)
 	}
 	if f.runs() != 1 || f.stops() != 1 {
 		t.Fatalf("runs=%d stops=%d, want the idle box removed, not recreated", f.runs(), f.stops())

@@ -235,3 +235,29 @@ func TestSeccompActive(t *testing.T) {
 		}
 	}
 }
+
+// The in-box identity check compares stdout line by line: a docker CLI warning
+// on stderr beside a successful exec must not shift or pollute those lines.
+func TestStdoutIgnoresStderrOnSuccess(t *testing.T) {
+	bin, _ := fakeDockerStderr(t, map[string]string{"exec": "10:20\n11:21"},
+		map[string]string{"exec": "WARNING: the docker CLI is noisy"}, nil)
+	c := CLIClient{Bin: bin}
+	args := []string{"exec", "ab-box-x", "/usr/bin/stat", "-c", "%d:%i", "--", "/a", "/b"}
+	out, err := c.Stdout(context.Background(), args)
+	if err != nil || out != "10:20\n11:21" {
+		t.Fatalf("Stdout = %q, %v; want the stdout alone", out, err)
+	}
+	// Run (CombinedOutput) is unchanged for its other callers: it sees both.
+	if out, _ := c.Run(context.Background(), args); !strings.Contains(out, "WARNING") {
+		t.Fatalf("Run = %q, want it to keep returning combined output", out)
+	}
+}
+
+func TestStdoutErrorCarriesStderr(t *testing.T) {
+	bin, _ := fakeDockerStderr(t, map[string]string{"exec": ""},
+		map[string]string{"exec": "stat: cannot statx"}, map[string]int{"exec": 1})
+	_, err := CLIClient{Bin: bin}.Stdout(context.Background(), []string{"exec", "ab-box-x", "/usr/bin/stat"})
+	if err == nil || !strings.Contains(err.Error(), "cannot statx") {
+		t.Fatalf("err = %v, want the stderr text in the error", err)
+	}
+}

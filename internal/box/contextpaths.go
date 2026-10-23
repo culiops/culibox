@@ -62,11 +62,15 @@ func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Moun
 	if len(ms) == 0 {
 		return nil
 	}
-	args := []string{"exec", name, "stat", "-c", "%d:%i", "--"}
+	// /usr/bin/stat by absolute path: a bare "stat" resolves through the box PATH,
+	// which has the agent-writable ~/go/bin ahead of /usr/bin, so the agent could
+	// plant a stat that prints whatever identity the check expects.
+	args := []string{"exec", name, "/usr/bin/stat", "-c", "%d:%i", "--"}
 	for _, mt := range ms {
 		args = append(args, mt.Box)
 	}
-	out, err := m.opts.Client.Run(ctx, args)
+	// Stdout only: stderr noise on a successful exec would shift the lines below.
+	out, err := m.opts.Client.Stdout(ctx, args)
 	extra := ""
 	if err != nil {
 		extra = fmt.Sprintf(" (in-box check failed: %v)", err)
@@ -97,6 +101,9 @@ func (m *Manager) refuseMountChanged(ctx context.Context, name string, created b
 	m.unverify(name)
 	if err := m.opts.Client.Stop(ctx, name); err != nil {
 		cerr = fmt.Errorf("%w (box %s could not be removed: %v; every spawn into it is checked again)", cerr, name, err)
+	} else if !created {
+		// A reused idle box: the user did not just create it, so say it is gone.
+		cerr = fmt.Errorf("%w; the box was removed, spawn again", cerr)
 	}
 	m.rearmIfIdle(name)
 	return cerr
