@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 )
 
 // A context path is a host directory or file a boxed agent can read, mounted
@@ -46,26 +45,6 @@ func ctxMountChanged(p, extra string) error {
 // source's, so the identity of a mount's destination inside the box says
 // whether docker mounted the path that was checked.
 type FileID struct{ Dev, Ino uint64 }
-
-// ContextMountID is p's identity for Mount.ID, read with Lstat: a symlink is
-// its own file, so a path swapped for a link after the check never matches the
-// link's target that docker would mount. Nil off Linux, where the in-box check
-// is not made: inode numbers seen through the box VM's file share do not match
-// the host's.
-func ContextMountID(p string) (*FileID, error) {
-	if runtime.GOOS != "linux" {
-		return nil, nil
-	}
-	info, err := os.Lstat(p)
-	if err != nil {
-		return nil, ctxPathRefuse(p, "cannot be read (%v)", err)
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, ctxPathRefuse(p, "its file identity cannot be read")
-	}
-	return &FileID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}, nil
-}
 
 // checkMountIDs compares, inside the running box name, the identity of every
 // extra mount that carries an ID with the one recorded on the host. Docker
@@ -123,19 +102,29 @@ func (m *Manager) refuseMountChanged(ctx context.Context, name string, created b
 	return cerr
 }
 
-// CheckContextPath refuses a context path the box could not mount safely or at
-// all. p is absolute and clean (config validation has seen it). No component of
+// CheckContextPath is CheckContextPathID without the identity, for the callers
+// that only need the verdict.
+func CheckContextPath(p, home string, protected []ProtectedDir, shared []string) error {
+	_, err := CheckContextPathID(p, home, protected, shared)
+	return err
+}
+
+// CheckContextPathID refuses a context path the box could not mount safely or at
+// all, and returns the identity of the leaf it checked, for Mount.ID (nil off
+// Linux, where no in-box comparison is made). The identity comes from a walk
+// that follows no symlink in any component (leafID), so a component swapped
+// after the check makes docker mount something with another identity. p is absolute and clean (config validation has seen it). No component of
 // p may be a symlink: the mount follows links on the host, so a link swapped
 // after this check would expose a different path than the one the user chose.
 // The leaf must exist and be a directory or a regular file. home is the user's
 // home directory, protected the directories a box must not touch, and shared
 // the box VM's shared directories (nil when there is no VM).
-func CheckContextPath(p, home string, protected []ProtectedDir, shared []string) error {
+func CheckContextPathID(p, home string, protected []ProtectedDir, shared []string) (*FileID, error) {
 	if !filepath.IsAbs(p) {
-		return ctxPathRefuse(p, "must be an absolute path")
+		return nil, ctxPathRefuse(p, "must be an absolute path")
 	}
 	if filepath.Clean(p) != p {
-		return ctxPathRefuse(p, "must be a clean path (no . or .. components, no repeated or trailing slash)")
+		return nil, ctxPathRefuse(p, "must be a clean path (no . or .. components, no repeated or trailing slash)")
 	}
 	cur := string(filepath.Separator)
 	var info fs.FileInfo
@@ -147,58 +136,65 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 		var err error
 		if info, err = os.Lstat(cur); err != nil {
 			if os.IsNotExist(err) {
-				return ctxPathRefuse(p, "does not exist")
+				return nil, ctxPathRefuse(p, "does not exist")
 			}
-			return ctxPathRefuse(p, "cannot be read (%v)", err)
+			return nil, ctxPathRefuse(p, "cannot be read (%v)", err)
 		}
 		if info.Mode()&fs.ModeSymlink != 0 {
-			return ctxPathRefuse(p, "%s is a symlink; list the real path", cur)
+			return nil, ctxPathRefuse(p, "%s is a symlink; list the real path", cur)
 		}
 	}
 	if info == nil { // p is the filesystem root
 		var err error
 		if info, err = os.Lstat(p); err != nil {
-			return ctxPathRefuse(p, "cannot be read (%v)", err)
+			return nil, ctxPathRefuse(p, "cannot be read (%v)", err)
 		}
 	}
 	if !info.IsDir() && !info.Mode().IsRegular() {
-		return ctxPathRefuse(p, "must be a directory or a regular file")
+		return nil, ctxPathRefuse(p, "must be a directory or a regular file")
+	}
+	// The identity, straight after the walk above and before the slower checks
+	// below: a second, fd-based walk, because the Lstat walk is a series of
+	// separate lookups a parent swap can slip between.
+	id, err := leafID(p)
+	if err != nil {
+		return nil, err
 	}
 	if reason := MountUnsafe(p); reason != "" {
-		return ctxPathRefuse(p, "%s", reason)
+		return nil, ctxPathRefuse(p, "%s", reason)
 	}
 	if home != "" {
 		if real, err := filepath.EvalSymlinks(home); err == nil {
 			home = real
 		}
 		if reason := homeReason(p, home); reason != "" {
-			return ctxPathRefuse(p, "%s", reason)
+			return nil, ctxPathRefuse(p, "%s", reason)
 		}
 		for _, name := range hostSocketDirs {
 			d := filepath.Join(home, name)
 			if pathWithin(p, d, runtime.GOOS == "darwin") {
-				return ctxPathRefuse(p, "inside %s, which holds host sockets or credentials", d)
+				return nil, ctxPathRefuse(p, "inside %s, which holds host sockets or credentials", d)
 			}
 		}
 	}
 	if reason := ProtectedOverlap(p, protected); reason != "" {
-		return ctxPathRefuse(p, "%s", reason)
+		return nil, ctxPathRefuse(p, "%s", reason)
 	}
 	if len(shared) > 0 && !UnderMount(p, shared) {
-		return ctxPathRefuse(p, "it is not under the box VM's shared directories (%s), so docker cannot see it; "+
+		return nil, ctxPathRefuse(p, "it is not under the box VM's shared directories (%s), so docker cannot see it; "+
 			"share its parent and run `agent-box box setup -recreate`", strings.Join(shared, ", "))
 	}
 	if info.IsDir() {
 		ipc, err := findSocketOrPipe(p)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if ipc != "" {
-			return ctxPathRefuse(p, "contains a unix socket or named pipe (%s); a read-only mount does not stop the box "+
+			return nil, ctxPathRefuse(p, "contains a unix socket or named pipe (%s); a read-only mount does not stop the box "+
 				"from connecting to it or writing into it", ipc)
 		}
 	}
-	return nil
+	return id, nil
 }
 
 // hostSocketDirs are directories under home that hold the sockets or keys of

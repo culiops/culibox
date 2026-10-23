@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 )
 
@@ -188,42 +185,14 @@ func TestContextMountNoIDNoExec(t *testing.T) {
 	}
 }
 
-func TestContextMountID(t *testing.T) {
+// Off Linux no identity is recorded, so no in-box comparison is made.
+func TestCheckContextPathIDOffLinux(t *testing.T) {
+	if runtime.GOOS == "linux" {
+		t.Skip("Linux records the identity (contextid_linux_test.go)")
+	}
 	d := ctxTmp(t)
-	dir := filepath.Join(d, "docs")
-	if err := os.Mkdir(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(d, "link")
-	if err := os.Symlink(dir, link); err != nil {
-		t.Fatal(err)
-	}
-	id, err := ContextMountID(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "linux" {
-		if id != nil {
-			t.Fatalf("ContextMountID = %+v off Linux, want nil (no in-box check)", id)
-		}
-		return
-	}
-	var st syscall.Stat_t
-	if err := syscall.Lstat(dir, &st); err != nil {
-		t.Fatal(err)
-	}
-	if id == nil || id.Dev != uint64(st.Dev) || id.Ino != st.Ino {
-		t.Fatalf("ContextMountID = %+v, want %d:%d", id, st.Dev, st.Ino)
-	}
-	lid, err := ContextMountID(link)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if lid == nil || *lid == *id {
-		t.Fatalf("a symlink must report its own identity, not its target's: %+v vs %+v", lid, id)
-	}
-	if _, err := ContextMountID(filepath.Join(d, "missing")); err == nil || !errors.Is(err, ErrUnboxableWorkspace) ||
-		!strings.Contains(err.Error(), "context_paths "+filepath.Join(d, "missing")+": ") {
-		t.Fatalf("missing path: err = %v, want a context_paths refusal", err)
+	id, err := CheckContextPathID(d, "/h", nil, nil)
+	if err != nil || id != nil {
+		t.Fatalf("CheckContextPathID = %+v, %v; want nil, nil", id, err)
 	}
 }

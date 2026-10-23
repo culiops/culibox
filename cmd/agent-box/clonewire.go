@@ -125,18 +125,20 @@ func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) fu
 // A clone is written by its box, so another box's context would be read from
 // files that box controls. h is nil where clone mode does not exist (not
 // Linux), which leaves only CheckContextPath. shared is the box VM's shared
-// directories, nil when there is no VM.
-func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared []string) func(string) error {
-	return func(p string) error {
-		if err := box.CheckContextPath(p, home, protected, shared); err != nil {
-			return err
+// directories, nil when there is no VM. It returns the identity
+// box.CheckContextPathID recorded, which the spawn hands to the box layer.
+func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared []string) func(string) (*box.FileID, error) {
+	return func(p string) (*box.FileID, error) {
+		id, err := box.CheckContextPathID(p, home, protected, shared)
+		if err != nil {
+			return nil, err
 		}
 		if h != nil {
 			if why, owned := h.BoxOwned(p); owned {
-				return fmt.Errorf("context_paths %s is inside a box-owned directory (%s); another box writes there", p, why)
+				return nil, fmt.Errorf("context_paths %s is inside a box-owned directory (%s); another box writes there", p, why)
 			}
 		}
-		return nil
+		return id, nil
 	}
 }
 

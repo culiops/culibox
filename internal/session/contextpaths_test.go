@@ -50,11 +50,8 @@ func contextManager(t *testing.T, l contextLauncher, check func(string) error) (
 	boxes := &fakeBoxes{}
 	m.SetBoxes(boxes)
 	if check != nil {
-		m.SetContextCheck(check)
+		m.SetContextCheck(func(p string) (*box.FileID, error) { return nil, check(p) })
 	}
-	// The paths these tests list do not exist; the identity seam has its own
-	// tests below.
-	m.contextID = func(string) (*box.FileID, error) { return nil, nil }
 	return m, boxes
 }
 
@@ -305,55 +302,32 @@ func TestSpawnContextMountsDoNotWriteIntoBundleArray(t *testing.T) {
 	}
 }
 
-// Right before Wrap each context mount carries its host identity, read after
-// the last check, so the box layer can compare it inside the running box.
-func TestSpawnContextMountsCarryHostIdentity(t *testing.T) {
-	dir := t.TempDir()
-	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, dir), func(string) error { return nil })
-	m.contextID = box.ContextMountID // the real seam
+// Each context mount carries the identity the last check returned (its own
+// no-symlink walk), so the box layer can compare it inside the running box.
+func TestSpawnContextMountsCarryCheckedIdentity(t *testing.T) {
+	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs", "/srv/b/notes"), nil)
+	calls := 0
+	m.SetContextCheck(func(p string) (*box.FileID, error) {
+		calls++
+		// A different identity per call: the mount must carry the LAST one.
+		return &box.FileID{Dev: uint64(len(p)), Ino: uint64(calls)}, nil
+	})
 	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s.ID) })
-	want, err := box.ContextMountID(dir)
-	if err != nil {
-		t.Fatal(err)
+	want := []box.Mount{
+		{Host: "/srv/b/docs", Box: "/srv/b/docs", ID: &box.FileID{Dev: 11, Ino: 3}},
+		{Host: "/srv/b/notes", Box: "/srv/b/notes", ID: &box.FileID{Dev: 12, Ino: 4}},
 	}
-	var got *box.Mount
-	for i := range boxes.lastRO {
-		if boxes.lastRO[i].Host == dir {
-			got = &boxes.lastRO[i]
+	if len(boxes.lastRO) != len(want) {
+		t.Fatalf("Wrap extraRO = %+v, want %+v", boxes.lastRO, want)
+	}
+	for i, mt := range boxes.lastRO {
+		if mt.Host != want[i].Host || mt.Box != want[i].Box || mt.ID == nil || *mt.ID != *want[i].ID {
+			t.Fatalf("mount %d = %+v (ID %+v), want %+v (ID %+v)", i, mt, mt.ID, want[i], want[i].ID)
 		}
-	}
-	if got == nil {
-		t.Fatalf("Wrap extraRO = %+v, want a mount of %s", boxes.lastRO, dir)
-	}
-	switch {
-	case want == nil && got.ID != nil:
-		t.Fatalf("mount ID = %+v where the in-box check is not made", got.ID)
-	case want != nil && (got.ID == nil || *got.ID != *want):
-		t.Fatalf("mount ID = %+v, want %+v", got.ID, want)
-	}
-}
-
-// The identity is read after the check: a path gone in between is refused like
-// any other context refusal, and no box starts.
-func TestSpawnContextIdentityErrorRefused(t *testing.T) {
-	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs"), func(string) error { return nil })
-	m.contextID = func(p string) (*box.FileID, error) {
-		return nil, errors.New("context_paths " + p + ": cannot be read (gone)")
-	}
-	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
-	if err == nil {
-		_ = m.Kill(s.ID)
-		t.Fatal("a path whose identity could not be read spawned")
-	}
-	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), `profile "ctx": context_paths /srv/b/docs: cannot be read`) {
-		t.Fatalf("err = %v", err)
-	}
-	if w, _, _ := boxes.counts(); w != 0 {
-		t.Fatalf("Wrap ran %d times", w)
 	}
 }
 

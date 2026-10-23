@@ -1130,10 +1130,9 @@ type Manager struct {
 	// contextCheck is the on-disk check of one context path (existence,
 	// symlinks, sockets, protected dirs). Nil = it cannot run, so a profile
 	// with context_paths is refused rather than mounted unchecked.
-	contextCheck func(path string) error
-	// contextID reads a context path's host identity right before Wrap, for
-	// the box layer's in-box comparison (box.ContextMountID; a seam for tests).
-	contextID func(path string) (*box.FileID, error)
+	// It returns the path's host identity (box.CheckContextPathID; nil where
+	// no in-box comparison is made), read by the same walk that refused symlinks.
+	contextCheck func(path string) (*box.FileID, error)
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -1254,7 +1253,7 @@ func (m *Manager) SetClone(h CloneHooks) {
 // SetContextCheck installs the per-path check a spawn runs on every
 // context_paths entry, the same one a profile save runs. Call once at boot.
 // Nil means context_paths cannot be checked and such profiles are refused.
-func (m *Manager) SetContextCheck(f func(path string) error) {
+func (m *Manager) SetContextCheck(f func(path string) (*box.FileID, error)) {
 	m.mu.Lock()
 	m.contextCheck = f
 	m.mu.Unlock()
@@ -1332,7 +1331,6 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		ringCap:   ringCap,
 		retention: retention,
 		procStart: procStartOf,
-		contextID: box.ContextMountID,
 	}
 }
 
@@ -1502,7 +1500,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// surfaces as a docker bind error. It runs before Prepare (cheap refusal,
 	// before the box VM starts) and again right before Wrap, to narrow the window
 	// between the check and the mount.
-	checkContext := func() error { return nil }
+	checkContext := func() ([]*box.FileID, error) { return nil, nil }
 	if len(ctxPaths) > 0 {
 		m.mu.Lock()
 		check := m.contextCheck
@@ -1517,19 +1515,22 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		if real, err := filepath.EvalSymlinks(ws); err == nil {
 			ws = real
 		}
-		checkContext = func() error {
+		checkContext = func() ([]*box.FileID, error) {
+			ids := make([]*box.FileID, 0, len(ctxPaths))
 			for _, p := range ctxPaths {
-				if err := check(p); err != nil {
-					return fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+				id, err := check(p)
+				if err != nil {
+					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
 				}
 				if box.Overlaps(p, ws) {
-					return fmt.Errorf("%w: profile %q: context_paths %s overlaps the session workspace %s; the workspace is already mounted",
+					return nil, fmt.Errorf("%w: profile %q: context_paths %s overlaps the session workspace %s; the workspace is already mounted",
 						box.ErrBoxUnavailable, spec.Agent, p, spec.Cwd)
 				}
+				ids = append(ids, id)
 			}
-			return nil
+			return ids, nil
 		}
-		if err := checkContext(); err != nil {
+		if _, err := checkContext(); err != nil {
 			return nil, err
 		}
 	}
@@ -1766,19 +1767,16 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		if len(ctxPaths) > 0 {
 			// Last look before the mount: the bundle, broker and egress work above
 			// can take a while.
-			if err := checkContext(); err != nil {
+			ids, err := checkContext()
+			if err != nil {
 				return nil, err
 			}
-			for _, p := range ctxPaths {
-				// Recorded after the check: docker follows a symlink in a bind
-				// source, so a path flipped to a link after this point mounts
-				// something else. Wrap compares this identity inside the running
-				// box before the agent starts (nil off Linux: no comparison).
-				fid, err := m.contextID(p)
-				if err != nil {
-					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
-				}
-				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p, ID: fid})
+			for i, p := range ctxPaths {
+				// The identity the check's own no-symlink walk saw. Docker follows
+				// symlinks in a bind source, so a path or parent swapped after the
+				// check mounts something else; Wrap compares the identity inside the
+				// running box before the agent starts (nil off Linux: no comparison).
+				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p, ID: ids[i]})
 			}
 			key.Context = config.ContextHash(ctxPaths)
 			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))

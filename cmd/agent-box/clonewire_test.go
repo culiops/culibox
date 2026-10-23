@@ -299,18 +299,22 @@ func TestContextSaveCheck(t *testing.T) {
 		return []config.Clone{{Of: filepath.Join(home, "repo"), Dir: otherClone}}
 	})
 	check := contextSaveCheck(h, home, nil, nil)
-	if err := check(docs); err != nil {
+	id, err := check(docs)
+	if err != nil {
 		t.Fatalf("a plain host directory must pass: %v", err)
 	}
-	err := check(filepath.Join(otherClone, "sub"))
+	if want, _ := box.CheckContextPathID(docs, home, nil, nil); (id == nil) != (want == nil) || (id != nil && *id != *want) {
+		t.Fatalf("the check returned identity %+v, want CheckContextPathID's %+v", id, want)
+	}
+	_, err = check(filepath.Join(otherClone, "sub"))
 	if err == nil || !strings.Contains(err.Error(), "is inside a box-owned directory") || !strings.Contains(err.Error(), "another box writes there") {
 		t.Fatalf("a path inside another box's clone: want the box-owned refusal, got %v", err)
 	}
-	if err := check(filepath.Join(home, "missing")); err == nil || !strings.Contains(err.Error(), "does not exist") {
+	if _, err := check(filepath.Join(home, "missing")); err == nil || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("a missing path must be refused by CheckContextPath, got %v", err)
 	}
 	// No clone hooks (not Linux): only CheckContextPath.
-	if err := contextSaveCheck(nil, home, nil, nil)(filepath.Join(otherClone, "sub")); err != nil {
+	if _, err := contextSaveCheck(nil, home, nil, nil)(filepath.Join(otherClone, "sub")); err != nil {
 		t.Fatalf("without hooks the box-owned refusal does not apply: %v", err)
 	}
 }
