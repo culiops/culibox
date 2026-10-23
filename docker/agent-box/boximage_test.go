@@ -64,11 +64,14 @@ func TestContextTarHoldsDockerfileAndExtraCA(t *testing.T) {
 			got[h.Name] = body
 			order = append(order, h.Name)
 		}
-		if !slices.Equal(order, []string{"Dockerfile", "extra-ca.pem"}) {
-			t.Fatalf("context entries = %v, want exactly Dockerfile and extra-ca.pem", order)
+		if !slices.Equal(order, []string{"Dockerfile", "extra-ca.pem", "zshrc"}) {
+			t.Fatalf("context entries = %v, want exactly Dockerfile, extra-ca.pem and zshrc", order)
 		}
 		if !bytes.Equal(got["Dockerfile"], dockerfile) {
 			t.Fatal("tar body differs from the embedded Dockerfile")
+		}
+		if !bytes.Equal(got["zshrc"], zshrc) {
+			t.Fatal("tar body differs from the embedded zshrc")
 		}
 		if !bytes.Equal(got["extra-ca.pem"], extra) {
 			t.Fatalf("extra-ca.pem = %q, want %q (empty when off)", got["extra-ca.pem"], extra)
@@ -1577,5 +1580,238 @@ func TestDockerfileNpmPipUseSystemStore(t *testing.T) {
 	}
 	if npm != 3 || pip != 1 {
 		t.Errorf("found %d npm installs and %d pip installs, want 3 and 1", npm, pip)
+	}
+}
+
+// The zshrc is COPY'd from the context; its sha256 is pinned in the Dockerfile,
+// so an edit to it changes the Dockerfile hash (the image label doctor checks).
+func TestDockerfilePinsZshrc(t *testing.T) {
+	sum := sha256.Sum256(zshrc)
+	want := "\nARG AGENT_BOX_ZSHRC_SHA256=" + hex.EncodeToString(sum[:]) + "\n"
+	if !strings.Contains(string(dockerfile), want) {
+		t.Fatalf("Dockerfile must pin the zshrc: want %q (update the ARG after editing zshrc)", strings.TrimSpace(want))
+	}
+	if !strings.Contains(string(dockerfile), "\nCOPY zshrc /etc/agent-box/zshrc\n") {
+		t.Error("no COPY zshrc /etc/agent-box/zshrc")
+	}
+	if !strings.Contains(string(dockerfile), `sha256sum -c`) {
+		t.Error("the copied zshrc is not checked against the pin")
+	}
+	if !strings.Contains(string(dockerfile), `'skip_global_compinit=1' >> /etc/zsh/zshenv`) {
+		t.Error("Debian's global compinit must be skipped: the zshrc runs its own, with -i and a cache path")
+	}
+	if _, err := exec.LookPath("zsh"); err == nil {
+		if b, err := exec.Command("zsh", "-n", "zshrc").CombinedOutput(); err != nil {
+			t.Fatalf("zsh -n zshrc: %v: %s", err, b)
+		}
+	}
+}
+
+func TestDockerfileInstallsZshAndOfflineTools(t *testing.T) {
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN ") || !strings.Contains(in, "apt-get install") || !strings.Contains(in, " zsh ") {
+			continue
+		}
+		for _, pkg := range []string{"zsh-autosuggestions", "zsh-syntax-highlighting", "fzf", "ipcalc", "tree", "file", "bc", "nano"} {
+			if !regexp.MustCompile(`\s` + pkg + `(\s|$)`).MatchString(in) {
+				t.Errorf("zsh block lacks %s", pkg)
+			}
+		}
+		for _, want := range []string{"path-include=/usr/share/doc/fzf/examples/*.zsh", "/etc/dpkg/dpkg.cfg.d/zz-", "rm -rf /var/lib/apt/lists/*", "test -r /usr/share/doc/fzf/examples/key-bindings.zsh"} {
+			if !strings.Contains(in, want) {
+				t.Errorf("zsh block lacks %q", want)
+			}
+		}
+		return
+	}
+	t.Fatal("no RUN apt-get install installs zsh")
+}
+
+// renderRun renders a `RUN printf ... > path` instruction into a temp file.
+func renderRun(t *testing.T, target string) string {
+	t.Helper()
+	for _, in := range dockerfileInstructions() {
+		if !strings.HasPrefix(in, "RUN printf ") || !strings.Contains(in, "> "+target) {
+			continue
+		}
+		out := filepath.Join(t.TempDir(), filepath.Base(target))
+		cmd, _, _ := strings.Cut(strings.TrimPrefix(in, "RUN "), " > "+target)
+		if b, err := exec.Command("sh", "-c", cmd+" > "+out).CombinedOutput(); err != nil {
+			t.Fatalf("rendering %s: %v: %s", target, err, b)
+		}
+		if err := os.Chmod(out, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	t.Fatalf("no RUN printf writes %s", target)
+	return ""
+}
+
+// A fresh box home gets a ~/.zshrc (no zsh new-user wizard); an existing one is
+// never touched.
+func TestDockerfileEntrypointSeedsZshrc(t *testing.T) {
+	entry := renderRun(t, "/usr/local/bin/agent-box-entrypoint")
+	home := t.TempDir()
+	run := func() {
+		t.Helper()
+		c := exec.Command("sh", entry, "true")
+		c.Env = []string{"HOME=" + home, "PATH=/usr/bin:/bin"}
+		if b, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("entrypoint: %v: %s", err, b)
+		}
+	}
+	run()
+	b, err := os.ReadFile(filepath.Join(home, ".zshrc"))
+	if err != nil || !strings.Contains(string(b), "/etc/agent-box/zshrc") {
+		t.Fatalf("~/.zshrc = %q, %v; want the seeded pointer", b, err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".zshrc"), []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	if b, _ := os.ReadFile(filepath.Join(home, ".zshrc")); string(b) != "mine\n" {
+		t.Fatalf("an existing ~/.zshrc was rewritten: %q", b)
+	}
+}
+
+// ping and friends are stand-ins: they say why a box has no direct network and
+// exit 127, never pretend to measure the target.
+func TestDockerfileNetworkToolsAreStandIns(t *testing.T) {
+	script := renderRun(t, "/usr/local/bin/agent-box-no-network")
+	dir := t.TempDir()
+	ping := filepath.Join(dir, "ping")
+	if err := os.Symlink(script, ping); err != nil {
+		t.Fatal(err)
+	}
+	var errb strings.Builder
+	c := exec.Command(ping, "-c", "1", "1.1.1.1")
+	c.Stderr = &errb
+	err := c.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 127 {
+		t.Fatalf("exit = %v, want 127", err)
+	}
+	for _, want := range []string{"agent-box: ping is not in the box image", "agent-box's HTTPS proxy", `curl https://<host>/ -sS -o /dev/null -w '%{http_code} %{time_total}s\n'`} {
+		if !strings.Contains(errb.String(), want) {
+			t.Errorf("message lacks %q:\n%s", want, errb.String())
+		}
+	}
+	if !strings.Contains(string(dockerfile), `for n in ping mtr traceroute tracepath httping; do ln -s agent-box-no-network "/usr/local/bin/$n"; done`) {
+		t.Error("the stand-in is not linked as ping, mtr, traceroute, tracepath and httping")
+	}
+}
+
+// Prompt values come from a repo (branch name, .terraform/environment): with
+// PROMPT_SUBST on (a user's ~/.zshrc may set it) a raw value would run code.
+func TestZshrcPromptRunsNothingFromTheRepo(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	rc, err := filepath.Abs("zshrc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hostile := "x$(touch PWNED)`touch PWNED2`%F{red}"
+	if err := os.WriteFile(filepath.Join(repo, ".terraform", "environment"), []byte(hostile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, opt := range []string{"NO_PROMPT_SUBST", "PROMPT_SUBST"} {
+		c := exec.Command(zsh, "-f", "-c", `setopt `+opt+`; source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
+		c.Dir = repo
+		c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "AWS_PROFILE=a$(touch PWNED3)"}
+		out, err := c.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %v: %s", opt, err, out)
+		}
+		if !strings.Contains(string(out), "tf:x??touch?PWNED??touch?PWNED2??F?red?") {
+			t.Errorf("%s: the workspace segment was not sanitized: %q", opt, out)
+		}
+		if strings.Contains(string(out), "no such file") {
+			t.Errorf("%s: prompt printed an error: %q", opt, out)
+		}
+	}
+	for _, f := range []string{"PWNED", "PWNED2", "PWNED3"} {
+		if _, err := os.Stat(filepath.Join(repo, f)); err == nil {
+			t.Errorf("the prompt ran a command from a repo or env value (%s exists)", f)
+		}
+	}
+}
+
+// The prompt's git calls run nothing a repo's .git/config names: no fsmonitor,
+// no clean filter (both run under `git diff`, which the prompt never calls).
+func TestZshrcPromptRunsNoRepoGitHook(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	rc, _ := filepath.Abs("zshrc")
+	repo := t.TempDir()
+	marker := filepath.Join(repo, "FSMPWNED")
+	for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", "touch " + marker + "; false"}, {"config", "filter.x.clean", "touch " + marker + "; cat"}} {
+		if b, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, b)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("* filter=x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := exec.Command("git", "-C", repo, "-c", "filter.x.clean=cat", "-c", "core.fsmonitor=false", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, b)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command(zsh, "-f", "-c", `source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
+	c.Dir = repo
+	c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if !strings.Contains(string(out), "git:") {
+		t.Fatalf("no git segment, so the check proves nothing: %q", out)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the prompt ran a command from the repo's .git/config")
+	}
+}
+
+// A huge workspace file (a repo can commit one: it compresses to almost
+// nothing) must not stall the prompt, and a long value is cut.
+func TestZshrcPromptStaysFastOnHugeValues(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	rc, _ := filepath.Abs("zshrc")
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".terraform", "environment"), bytes.Repeat([]byte("a"), 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command(zsh, "-f", "-c", `source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
+	c.Dir = repo
+	c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "AWS_PROFILE=" + strings.Repeat("b", 100000)}
+	start := time.Now()
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("one prompt took %v with a 1 MB workspace file and a 100 KB AWS_PROFILE", d)
+	}
+	if strings.Contains(string(out), "tf:") {
+		t.Error("a 1 MB workspace file was rendered")
+	}
+	if strings.Contains(string(out), strings.Repeat("b", 129)) {
+		t.Error("a long value was not cut to 128 characters")
 	}
 }
