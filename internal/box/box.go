@@ -70,6 +70,10 @@ const (
 type Mount struct {
 	Host, Box string
 	Optional  bool
+	// ID, when set, is Host's identity when it was last checked (a context
+	// path on Linux). Once the box runs, ensure refuses it unless Box shows the
+	// same identity inside it (checkMountIDs).
+	ID *FileID
 }
 
 // State is what docker says about a box container. Stopped is not Missing: an
@@ -825,6 +829,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.markVerified(name)
 		}
 	}
+	created := false
 	if st == StateMissing {
 		var bundle string
 		if !m.opts.ExtraCA.Empty() {
@@ -856,12 +861,18 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: starting %s: %w", name, err)
 		}
+		created = true
 		if verify != nil {
 			if err := verify(ctx, name); err != nil {
 				return m.refuseUnverified(ctx, name, err)
 			}
 			m.markVerified(name)
 		}
+	}
+	// The box runs, created or reused; the agent has not started. A mount that
+	// is not the checked path is refused here, before anything runs in it.
+	if err := m.checkMountIDs(ctx, name, extraRO); err != nil {
+		return m.refuseMountChanged(ctx, name, created, err)
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
 	// cannot leak a reference that keeps the box alive forever.

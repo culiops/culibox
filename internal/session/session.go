@@ -1131,6 +1131,9 @@ type Manager struct {
 	// symlinks, sockets, protected dirs). Nil = it cannot run, so a profile
 	// with context_paths is refused rather than mounted unchecked.
 	contextCheck func(path string) error
+	// contextID reads a context path's host identity right before Wrap, for
+	// the box layer's in-box comparison (box.ContextMountID; a seam for tests).
+	contextID func(path string) (*box.FileID, error)
 
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
@@ -1329,6 +1332,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		ringCap:   ringCap,
 		retention: retention,
 		procStart: procStartOf,
+		contextID: box.ContextMountID,
 	}
 }
 
@@ -1766,14 +1770,26 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				return nil, err
 			}
 			for _, p := range ctxPaths {
-				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p})
+				// Recorded after the check: docker follows a symlink in a bind
+				// source, so a path flipped to a link after this point mounts
+				// something else. Wrap compares this identity inside the running
+				// box before the agent starts (nil off Linux: no comparison).
+				fid, err := m.contextID(p)
+				if err != nil {
+					return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+				}
+				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p, ID: fid})
 			}
 			key.Context = config.ContextHash(ctxPaths)
 			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))
-			log.Printf("session %s: context paths %v", id, ctxPaths)
+			log.Printf("session %s (profile %s): context paths %v", id, spec.Agent, ctxPaths)
 		}
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {
+			if errors.Is(err, box.ErrContextMountChanged) {
+				// Shaped like the other context refusals, which name the profile.
+				return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+			}
 			// A refusal already carries its own actionable message; wrapping it
 			// again would print the remedy twice. A containment-check failure
 			// gets no "run on the host" hint either: that is the one thing to

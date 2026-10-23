@@ -1,12 +1,15 @@
 package box
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // A context path is a host directory or file a boxed agent can read, mounted
@@ -22,6 +25,102 @@ func (e *ctxPathError) Unwrap() error { return ErrUnboxableWorkspace }
 
 func ctxPathRefuse(p, format string, a ...any) error {
 	return &ctxPathError{"context_paths " + p + ": " + fmt.Sprintf(format, a...)}
+}
+
+// ErrContextMountChanged marks a box refused because a context mount, seen from
+// inside the box, is not the path that was checked on the host.
+var ErrContextMountChanged = errors.New("context mount is not the checked path")
+
+// ctxMountError is the ErrContextMountChanged refusal: a ctxPathError (so it is
+// ErrUnboxableWorkspace too) that also reports ErrContextMountChanged.
+type ctxMountError struct{ ctxPathError }
+
+func (e *ctxMountError) Is(target error) bool { return target == ErrContextMountChanged }
+
+func ctxMountChanged(p, extra string) error {
+	return &ctxMountError{ctxPathError{"context_paths " + p +
+		": the mounted path is not the checked one (it changed while the box started); refusing" + extra}}
+}
+
+// FileID is a file's identity on its filesystem. A bind mount shares its
+// source's, so the identity of a mount's destination inside the box says
+// whether docker mounted the path that was checked.
+type FileID struct{ Dev, Ino uint64 }
+
+// ContextMountID is p's identity for Mount.ID, read with Lstat: a symlink is
+// its own file, so a path swapped for a link after the check never matches the
+// link's target that docker would mount. Nil off Linux, where the in-box check
+// is not made: inode numbers seen through the box VM's file share do not match
+// the host's.
+func ContextMountID(p string) (*FileID, error) {
+	if runtime.GOOS != "linux" {
+		return nil, nil
+	}
+	info, err := os.Lstat(p)
+	if err != nil {
+		return nil, ctxPathRefuse(p, "cannot be read (%v)", err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, ctxPathRefuse(p, "its file identity cannot be read")
+	}
+	return &FileID{Dev: uint64(st.Dev), Ino: uint64(st.Ino)}, nil
+}
+
+// checkMountIDs compares, inside the running box name, the identity of every
+// extra mount that carries an ID with the one recorded on the host. Docker
+// follows symlinks in a bind source, so a path flipped to a link between the
+// last host check and `docker run` would mount the link's target; this catches
+// it before the agent starts. One `docker exec` for all of them, paths as argv
+// (no shell). Mounts without an ID cost nothing. Caller holds opMu.
+func (m *Manager) checkMountIDs(ctx context.Context, name string, extraRO []Mount) error {
+	var ms []Mount
+	for _, mt := range extraRO {
+		if mt.ID != nil {
+			ms = append(ms, mt)
+		}
+	}
+	if len(ms) == 0 {
+		return nil
+	}
+	args := []string{"exec", name, "stat", "-c", "%d:%i", "--"}
+	for _, mt := range ms {
+		args = append(args, mt.Box)
+	}
+	out, err := m.opts.Client.Run(ctx, args)
+	extra := ""
+	if err != nil {
+		extra = fmt.Sprintf(" (in-box check failed: %v)", err)
+	}
+	lines := strings.Split(out, "\n")
+	for i, mt := range ms {
+		if err != nil || i >= len(lines) || strings.TrimSpace(lines[i]) != fmt.Sprintf("%d:%d", mt.ID.Dev, mt.ID.Ino) {
+			return ctxMountChanged(mt.Host, extra)
+		}
+	}
+	return nil
+}
+
+// refuseMountChanged handles a box that failed checkMountIDs. A box this spawn
+// created, or one no session of this process uses, is removed: nothing runs in
+// it, and it must not be reused with the wrong mount. A box other sessions run
+// in is kept (removing it would kill them) and the refusal says how to get it
+// recreated; every later spawn into it is checked, and refused, again.
+// Caller holds opMu.
+func (m *Manager) refuseMountChanged(ctx context.Context, name string, created bool, cerr error) error {
+	m.mu.Lock()
+	live := m.active[name]
+	m.mu.Unlock()
+	if !created && live > 0 {
+		return fmt.Errorf("%w (box %s still runs %d session(s) and is kept; end them so the box is recreated, then spawn again)",
+			cerr, name, live)
+	}
+	m.unverify(name)
+	if err := m.opts.Client.Stop(ctx, name); err != nil {
+		cerr = fmt.Errorf("%w (box %s could not be removed: %v; every spawn into it is checked again)", cerr, name, err)
+	}
+	m.rearmIfIdle(name)
+	return cerr
 }
 
 // CheckContextPath refuses a context path the box could not mount safely or at

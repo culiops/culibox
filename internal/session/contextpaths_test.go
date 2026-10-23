@@ -1,7 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -49,6 +52,9 @@ func contextManager(t *testing.T, l contextLauncher, check func(string) error) (
 	if check != nil {
 		m.SetContextCheck(check)
 	}
+	// The paths these tests list do not exist; the identity seam has its own
+	// tests below.
+	m.contextID = func(string) (*box.FileID, error) { return nil, nil }
 	return m, boxes
 }
 
@@ -296,5 +302,93 @@ func TestSpawnContextMountsDoNotWriteIntoBundleArray(t *testing.T) {
 	want := []box.Mount{backing[0], {Host: "/srv/b/docs", Box: "/srv/b/docs"}, {Host: "/srv/b/notes", Box: "/srv/b/notes"}}
 	if !slices.Equal(boxes.lastRO, want) {
 		t.Fatalf("Wrap extraRO = %+v, want %+v", boxes.lastRO, want)
+	}
+}
+
+// Right before Wrap each context mount carries its host identity, read after
+// the last check, so the box layer can compare it inside the running box.
+func TestSpawnContextMountsCarryHostIdentity(t *testing.T) {
+	dir := t.TempDir()
+	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, dir), func(string) error { return nil })
+	m.contextID = box.ContextMountID // the real seam
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	want, err := box.ContextMountID(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *box.Mount
+	for i := range boxes.lastRO {
+		if boxes.lastRO[i].Host == dir {
+			got = &boxes.lastRO[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("Wrap extraRO = %+v, want a mount of %s", boxes.lastRO, dir)
+	}
+	switch {
+	case want == nil && got.ID != nil:
+		t.Fatalf("mount ID = %+v where the in-box check is not made", got.ID)
+	case want != nil && (got.ID == nil || *got.ID != *want):
+		t.Fatalf("mount ID = %+v, want %+v", got.ID, want)
+	}
+}
+
+// The identity is read after the check: a path gone in between is refused like
+// any other context refusal, and no box starts.
+func TestSpawnContextIdentityErrorRefused(t *testing.T) {
+	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs"), func(string) error { return nil })
+	m.contextID = func(p string) (*box.FileID, error) {
+		return nil, errors.New("context_paths " + p + ": cannot be read (gone)")
+	}
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a path whose identity could not be read spawned")
+	}
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), `profile "ctx": context_paths /srv/b/docs: cannot be read`) {
+		t.Fatalf("err = %v", err)
+	}
+	if w, _, _ := boxes.counts(); w != 0 {
+		t.Fatalf("Wrap ran %d times", w)
+	}
+}
+
+// The box layer's mount refusal reaches the user like the other context
+// refusals: ErrBoxUnavailable, naming the profile.
+func TestSpawnContextMountChangedRefused(t *testing.T) {
+	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs"), func(string) error { return nil })
+	boxes.wrapErr = fmt.Errorf("context_paths /srv/b/docs: the mounted path is not the checked one: %w", box.ErrContextMountChanged)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("spawned although Wrap refused the mount")
+	}
+	if !errors.Is(err, box.ErrBoxUnavailable) || !errors.Is(err, box.ErrContextMountChanged) ||
+		!strings.Contains(err.Error(), `profile "ctx": context_paths /srv/b/docs: the mounted path is not the checked one`) {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "to run on the host instead") {
+		t.Fatalf("err = %v: a context refusal must not suggest the host tier", err)
+	}
+}
+
+func TestSpawnContextLogNamesProfile(t *testing.T) {
+	var buf bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+	m, _ := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs"), func(string) error { return nil })
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	want := "session " + s.ID + " (profile ctx): context paths [/srv/b/docs]"
+	if !strings.Contains(buf.String(), want) {
+		t.Fatalf("log = %q, want %q", buf.String(), want)
 	}
 }
