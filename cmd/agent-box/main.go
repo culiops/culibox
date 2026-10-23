@@ -577,6 +577,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
+	var vmShared []string // the box VM's shared directories; nil without a VM
+	if layer != nil && layer.vm != nil {
+		vmShared = layer.vm.Config().Mounts()
+	}
+	contextCheck := contextSaveCheck(h, home, protected, vmShared)
+	pm.SetContextCheck(func(p string) error { _, err := contextCheck(p); return err })
+	mgr.SetContextCheck(contextCheck) // the spawn re-checks what the save checked
 	// The profile manager, the broker's token set and the minter exist now.
 	live.pm = pm
 	live.Apply(cfg)

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -566,5 +567,50 @@ func TestConvertConcurrentSecondConvertLeavesNoOrphan(t *testing.T) {
 	conns := c.fx.file(t).AWSConnections
 	if p.AWS != nil || len(p.AWSConnections) != 1 || len(conns) != 1 || conns[0].Name != p.AWSConnections[0] {
 		t.Fatalf("profile %+v, connections %+v", p, conns)
+	}
+}
+
+func TestProfilesAPIContextWarnings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("K=v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clean := t.TempDir()
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+	s := &Server{Profiles: pm}
+	body := func(name, path string) string {
+		return `{"name":"` + name + `","bin":"claude","runtime":"box","context_paths":["` + path + `"]}`
+	}
+	var logs bytes.Buffer
+	log.SetOutput(&logs)
+	defer log.SetOutput(os.Stderr)
+
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles", strings.NewReader(body("c1", dir))))
+	var created struct {
+		Name     string   `json:"name"`
+		Warnings []string `json:"warnings"`
+	}
+	if rec.Code != 201 || json.Unmarshal(rec.Body.Bytes(), &created) != nil || len(created.Warnings) != 1 || !strings.Contains(created.Warnings[0], "look like secrets") {
+		t.Fatalf("POST: code %d body %s, want 201 with a secrets warning", rec.Code, rec.Body)
+	}
+	if !strings.Contains(logs.String(), created.Warnings[0]) {
+		t.Errorf("the warning must also be logged, log = %q", logs.String())
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/c1", strings.NewReader(body("c1", dir))))
+	var updated struct {
+		Warnings []string `json:"warnings"`
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &updated) != nil || len(updated.Warnings) != 1 || !strings.Contains(updated.Warnings[0], "look like secrets") {
+		t.Fatalf("PUT: code %d body %s, want 200 with a secrets warning", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("PUT", "/api/profiles/c1", strings.NewReader(body("c1", clean))))
+	if rec.Code != 204 || rec.Body.Len() != 0 {
+		t.Fatalf("PUT clean: code %d body %q, want 204 and no body", rec.Code, rec.Body)
 	}
 }

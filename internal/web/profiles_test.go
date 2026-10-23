@@ -3,10 +3,12 @@ package web
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -555,5 +557,134 @@ func TestProfileSaveChecksAWSConnections(t *testing.T) {
 	conns[0].Region = "changed"
 	if pm.awsConns[0].Region != "us-east-1" {
 		t.Fatal("SetAWSConnections must clone")
+	}
+}
+
+func contextProfile(runtime string, paths ...string) config.AgentConfig {
+	return config.AgentConfig{Name: "ctx", Bin: "claude", Runtime: runtime, ContextPaths: paths}
+}
+
+func TestSaveRefusesContextPathsOnHost(t *testing.T) {
+	fs := newFakeStore()
+	pm := NewProfileManager(nil, nil, config.RuntimeHost, nil, fs, func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+
+	err := pm.Save(contextProfile("", "/x/ctx"))
+	if err == nil || !strings.Contains(err.Error(), `needs runtime "box"`) {
+		t.Fatalf("a no-runtime profile on a host-default instance must be refused, got %v", err)
+	}
+	if _, ok := fs.Get("ctx"); ok {
+		t.Fatal("a refused profile must not be stored")
+	}
+	if err := pm.Save(contextProfile(config.RuntimeBox, "/x/ctx")); err != nil {
+		t.Fatalf("an explicit box profile must save: %v", err)
+	}
+}
+
+func TestSaveRunsContextCheck(t *testing.T) {
+	fs := newFakeStore()
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, fs, func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+
+	var got []string
+	boom := errors.New("context_paths /x/bad: does not exist")
+	pm.SetContextCheck(func(p string) error {
+		got = append(got, p)
+		if p == "/x/bad" {
+			return boom
+		}
+		return nil
+	})
+	if err := pm.Save(contextProfile("", "/x/good", "/x/bad")); !errors.Is(err, boom) {
+		t.Fatalf("the check's error must be returned, got %v", err)
+	}
+	if !slices.Equal(got, []string{"/x/good", "/x/bad"}) {
+		t.Fatalf("the check must run once per path, in order, got %v", got)
+	}
+	if _, ok := fs.Get("ctx"); ok {
+		t.Fatal("a profile the check refused must not be stored")
+	}
+
+	got = nil
+	if err := pm.Save(contextProfile("", "/x/good", "/x/fine")); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("passing check: want 2 calls, got %v", got)
+	}
+	// A profile without context_paths never calls the check; nil = pure validation only.
+	pm.SetContextCheck(func(string) error { t.Fatal("check called without context_paths"); return nil })
+	if err := pm.Save(config.AgentConfig{Name: "plain", Bin: "bash"}); err != nil {
+		t.Fatal(err)
+	}
+	pm.SetContextCheck(nil)
+	if err := pm.Save(contextProfile("", "/x/good")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContextWarnings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("K=v"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	clean := t.TempDir()
+
+	fs := newFakeStore()
+	pm := NewProfileManager(nil, nil, config.RuntimeBox, nil, fs, func([]config.AgentConfig) {})
+	pm.home = t.TempDir()
+	p := contextProfile("", dir, clean)
+
+	got := pm.ContextWarnings(p)
+	if len(got) != 1 || !strings.Contains(got[0], "look like secrets") || !strings.Contains(got[0], ".env") || !strings.Contains(got[0], dir) {
+		t.Fatalf("want one secrets line naming .env, got %q", got)
+	}
+
+	// An in-place boxed profile working in the dir: that box can write what this one reads.
+	if err := fs.Save(config.AgentConfig{Name: "writer", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: dir}); err != nil {
+		t.Fatal(err)
+	}
+	got = pm.ContextWarnings(p)
+	want := fmt.Sprintf("context_paths %q overlaps the workspace of boxed profile %q; that box can write what this box reads", dir, "writer")
+	if len(got) != 2 || got[1] != want {
+		t.Fatalf("want the overlap line second, got %q", got)
+	}
+
+	// A profile never overlaps itself.
+	p.Name, p.DefaultCwd = "writer", ""
+	if got = pm.ContextWarnings(p); len(got) != 1 {
+		t.Fatalf("a profile must not warn about its own workspace, got %q", got)
+	}
+
+	// Host profiles and clone profiles do not write the dir.
+	fs2 := newFakeStore()
+	pm2 := NewProfileManager(nil, nil, config.RuntimeBox, nil, fs2, func([]config.AgentConfig) {})
+	for _, o := range []config.AgentConfig{
+		{Name: "host", Bin: "claude", Runtime: config.RuntimeHost, DefaultCwd: dir},
+		{Name: "cl", Bin: "claude", Runtime: config.RuntimeBox, CloneOf: "/home/u/repo", DefaultCwd: dir},
+	} {
+		if err := fs2.Save(o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got = pm2.ContextWarnings(contextProfile("", dir)); len(got) != 1 || strings.Contains(got[0], "overlaps") {
+		t.Fatalf("host and clone profiles must not produce an overlap line, got %q", got)
+	}
+
+	// A path whose own name looks like a secret is flagged without touching the disk.
+	if got = pm2.ContextWarnings(contextProfile("", "/x/.env")); len(got) != 1 || !strings.Contains(got[0], "looks like a secret or config file") {
+		t.Fatalf("want the name warning, got %q", got)
+	}
+
+	// The list of names is capped at 5.
+	many := t.TempDir()
+	for _, n := range []string{".env", ".env.a", ".env.b", ".env.c", ".env.d", ".env.e", ".env.f"} {
+		if err := os.WriteFile(filepath.Join(many, n), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got = pm2.ContextWarnings(contextProfile("", many))
+	if len(got) != 1 || !strings.HasSuffix(strings.TrimSuffix(got[0], "; the box will be able to read and send them"), ", …)") {
+		t.Fatalf("more than 5 names must end with an ellipsis, got %q", got)
 	}
 }

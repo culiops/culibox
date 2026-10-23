@@ -602,3 +602,30 @@ func TestSetDaemonSecretEnvReplaces(t *testing.T) {
 		t.Fatalf("second list must replace the first: %v", m)
 	}
 }
+
+func TestContextPathsForCopies(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "ctx", Bin: "claude", ContextPaths: []string{"/srv/b/docs", "/srv/b/notes"}},
+		{Name: "bad", Bin: "claude", ContextPaths: []string{"relative/docs"}},
+		{Name: "plain", Bin: "claude"},
+	}, fakeResolver{}, nil)
+
+	got, err := l.ContextPathsFor("ctx")
+	if err != nil || len(got) != 2 || got[0] != "/srv/b/docs" {
+		t.Fatalf("ContextPathsFor(ctx) = %v, %v", got, err)
+	}
+	if got, err := l.ContextPathsFor("plain"); got != nil || err != nil {
+		t.Fatalf("a profile without context_paths must give nil, nil; got %v, %v", got, err)
+	}
+	if got, err := l.ContextPathsFor("missing"); got != nil || err != nil {
+		t.Fatalf("an unknown profile must give nil, nil; got %v, %v", got, err)
+	}
+	if got, err := l.ContextPathsFor("bad"); got != nil || err == nil {
+		t.Fatalf("an invalid stored list must error, got %v, %v", got, err)
+	}
+	// The copy is the caller's own: mutating it must not reach the profile.
+	got[0] = "/mutated"
+	if again, _ := l.ContextPathsFor("ctx"); again[0] != "/srv/b/docs" {
+		t.Fatal("ContextPathsFor must return a copy")
+	}
+}

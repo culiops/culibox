@@ -67,6 +67,22 @@ func (c CLIClient) RunInput(ctx context.Context, args []string, stdin string) (s
 	return strings.TrimSpace(string(out)), nil
 }
 
+// Stdout is run with stdout alone as the answer. Stderr only enters the error:
+// a docker CLI or context warning beside a successful command must not be read
+// as part of what the command printed.
+func (c CLIClient) Stdout(ctx context.Context, args []string) (string, error) {
+	out, err := c.command(ctx, args...).Output()
+	if err != nil {
+		var stderr string
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			stderr = strings.TrimSpace(string(ee.Stderr))
+		}
+		return "", fmt.Errorf("docker %s: %w: %s", args[0], err, stderr)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // Run starts a detached container and returns its id.
 func (c CLIClient) Run(ctx context.Context, args []string) (string, error) {
 	return c.run(ctx, args...)

@@ -3222,6 +3222,8 @@ function fillForm(p) {
   renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
   renderPfWorkspaceOptions(p.default_cwd || "");
   renderPfOptions(p.options || {});
+  $("pf-context").value = contextPathsToText(p.context_paths);
+  $("pf-context-warn").hidden = true;
   $("pf-replyable").checked = !!p.replyable;
   // The inline AWS binding is not editable here: it is carried as loaded and
   // shown as a summary (paintPfAws) until it is converted or removed.
@@ -3269,6 +3271,13 @@ function syncEditorActions() {
     f.disabled = st.locked;
   }
   $("pf-save").textContent = saveLabel(segValue($("pf-runtime")));
+  // Readable host paths only mean something inside a box, so the host tier hides
+  // an empty row. A filled one stays visible with its "needs runtime: box" hint:
+  // readForm still sends the text and the server refuses it, so the paths must
+  // stay where the user can clear them (contextRowState).
+  const ctxRow = contextRowState(segValue($("pf-runtime")), $("pf-context").value);
+  $("pf-context-row").hidden = ctxRow.hidden;
+  $("pf-context-hint").hidden = !ctxRow.hint;
   // After the lock loop above, which re-enabled every .fld: the AWS blocks are
   // also closed by the host tier, and this is the only pass that knows both.
   const aws = awsFieldsState(st.locked, segValue($("pf-runtime")));
@@ -3364,6 +3373,8 @@ function readForm() {
   if (Object.keys(opts).length) p.options = opts;
   const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
   if (cwd) p.default_cwd = cwd;
+  const ctx = contextPathsFromText($("pf-context").value);
+  if (ctx.length) p.context_paths = ctx;
   if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoadedClone && pfLoadedClone.replyable)) p.replyable = true;
   return p;
 }
@@ -3389,8 +3400,10 @@ async function saveProfile() {
   const path = editing ? "/api/profiles/" + encodeURIComponent(p.name) : "/api/profiles";
   $("pf-st-err").hidden = true;
   $("pf-awsc-err").hidden = true;
+  $("pf-context-warn").hidden = true;
+  let saved = null;
   try {
-    await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+    saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) {
     setDialogError("settings-modal", "Save failed: " + e.message);
     // A refusal that names a token entry is also shown on the Tokens block.
@@ -3417,6 +3430,12 @@ async function saveProfile() {
     fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
   } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
   renderProfileList();
+  // After fillForm, which clears the warning: the save is done, and what the box
+  // may read is the user's call, so the warnings stay on the field (a toast would
+  // paint beneath the modal) for as long as the editor is showing this profile.
+  const warn = contextWarningsText(saved);
+  $("pf-context-warn").textContent = warn;
+  $("pf-context-warn").hidden = !warn;
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It reads the editor exactly as Save would, only the name
@@ -3515,6 +3534,11 @@ function addEnvRow(kind) {
 $("pf-env-add").addEventListener("click", () => addEnvRow("literal"));
 $("pf-secret-add").addEventListener("click", () => addEnvRow("secret"));
 // Re-scope the option list when the agent binary changes.
+// Only the hint follows typing: re-running the row rule here would hide the row
+// under the cursor the moment its last path is deleted on the host tier.
+$("pf-context").addEventListener("input", () => {
+  $("pf-context-hint").hidden = !contextRowState(segValue($("pf-runtime")), $("pf-context").value).hint;
+});
 $("pf-bin").addEventListener("input", () => {
   renderPfOptions(readForm().options);
   syncPfReplyable();

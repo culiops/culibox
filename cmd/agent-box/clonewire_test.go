@@ -284,3 +284,37 @@ func TestCloneHooksHostOriginRefusesBoxOwnedRepo(t *testing.T) {
 		t.Fatal("an unavailable clone layer must not read an origin")
 	}
 }
+
+func TestContextSaveCheck(t *testing.T) {
+	home := t.TempDir()
+	otherClone := filepath.Join(home, "work", "other-clone")
+	if err := os.MkdirAll(filepath.Join(otherClone, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	docs := filepath.Join(home, "docs")
+	if err := os.MkdirAll(docs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h := testHooks(t, func() []config.Clone {
+		return []config.Clone{{Of: filepath.Join(home, "repo"), Dir: otherClone}}
+	})
+	check := contextSaveCheck(h, home, nil, nil)
+	id, err := check(docs)
+	if err != nil {
+		t.Fatalf("a plain host directory must pass: %v", err)
+	}
+	if want, _ := box.CheckContextPathID(docs, home, nil, nil); (id == nil) != (want == nil) || (id != nil && *id != *want) {
+		t.Fatalf("the check returned identity %+v, want CheckContextPathID's %+v", id, want)
+	}
+	_, err = check(filepath.Join(otherClone, "sub"))
+	if err == nil || !strings.Contains(err.Error(), "is inside a box-owned directory") || !strings.Contains(err.Error(), "another box writes there") {
+		t.Fatalf("a path inside another box's clone: want the box-owned refusal, got %v", err)
+	}
+	if _, err := check(filepath.Join(home, "missing")); err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("a missing path must be refused by CheckContextPath, got %v", err)
+	}
+	// No clone hooks (not Linux): only CheckContextPath.
+	if _, err := contextSaveCheck(nil, home, nil, nil)(filepath.Join(otherClone, "sub")); err != nil {
+		t.Fatalf("without hooks the box-owned refusal does not apply: %v", err)
+	}
+}

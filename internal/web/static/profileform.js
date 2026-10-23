@@ -104,6 +104,36 @@ function cloneToSend(loaded) {
   return out;
 }
 
+// The readable-host-paths field (context_paths): one absolute path per line.
+// contextPathsFromText is what readForm sends: trimmed, blanks dropped, order
+// kept. The server does the real validation, so nothing is judged here.
+function contextPathsFromText(text) {
+  return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+// contextPathsToText fills the textarea; a profile with no paths gives "".
+function contextPathsToText(list) {
+  return Array.isArray(list) ? list.join("\n") : "";
+}
+
+// contextRowState: the readable-host-paths row. The paths only mean something
+// in a box. On the host tier an empty row hides; a filled one stays visible with
+// hint = "needs runtime: box", because the server refuses the save and paths
+// hidden behind a tier flip would leave the user with an error and nothing to
+// clear. hidden/hint as for awsFieldsState.
+function contextRowState(runtime, text) {
+  const host = runtime === "host";
+  const filled = contextPathsFromText(text).length > 0;
+  return { hidden: host && !filled, hint: host && filled };
+}
+
+// contextWarningsText: the save response's warnings as the lines shown under the
+// field. A clean PUT is a 204, which api() returns as null, so a missing body or
+// missing list gives "" rather than throwing.
+function contextWarningsText(body) {
+  return body && Array.isArray(body.warnings) ? body.warnings.join("\n") : "";
+}
+
 // replyableToSend: whether a save writes replyable:true. A visible row is the
 // checkbox's word. A hidden row (replies off, or a non-claude bin) has no
 // checkbox to read, so it keeps the stored value: otherwise a save made while
@@ -309,5 +339,5 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
+  module.exports = { ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
 }

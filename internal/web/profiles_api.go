@@ -33,7 +33,7 @@ func (s *Server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		created := struct {
 			Name     string   `json:"name"`
 			Warnings []string `json:"warnings,omitempty"`
-		}{p.Name, shareWarnings(p)}
+		}{p.Name, saveWarnings(s, p)}
 		writeJSON(w, http.StatusCreated, created)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -70,7 +70,7 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if warnings := shareWarnings(p); len(warnings) > 0 {
+		if warnings := saveWarnings(s, p); len(warnings) > 0 {
 			writeJSON(w, http.StatusOK, map[string][]string{"warnings": warnings})
 			return
 		}
@@ -95,10 +95,11 @@ func (s *Server) handleOptions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.Profiles.OptionDefs())
 }
 
-// shareWarnings are the saved profile's secret-looking clone shares. Each is
-// logged as well as returned: the share is the user's call, so the save stands.
-func shareWarnings(p config.AgentConfig) []string {
-	warnings := config.ShareWarnings(p.CloneShare)
+// saveWarnings are the saved profile's secret-looking clone shares plus its
+// context_paths warnings. Each is logged as well as returned: the share is the
+// user's call, so the save stands.
+func saveWarnings(s *Server, p config.AgentConfig) []string {
+	warnings := append(config.ShareWarnings(p.CloneShare), s.Profiles.ContextWarnings(p)...)
 	for _, w := range warnings {
 		log.Printf("profile %q: %s", p.Name, w)
 	}

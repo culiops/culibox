@@ -70,6 +70,10 @@ const (
 type Mount struct {
 	Host, Box string
 	Optional  bool
+	// ID, when set, is Host's identity when it was last checked (a context
+	// path on Linux). Once the box runs, ensure refuses it unless Box shows the
+	// same identity inside it (checkMountIDs).
+	ID *FileID
 }
 
 // State is what docker says about a box container. Stopped is not Missing: an
@@ -171,6 +175,9 @@ func UnderMount(path string, mounts []string) bool {
 // every unit test, so none of them requires a running daemon.
 type Client interface {
 	Run(ctx context.Context, args []string) (string, error)
+	// Stdout is Run reading stdout only, for an answer that is compared line by
+	// line and must not be shifted by a CLI warning on stderr.
+	Stdout(ctx context.Context, args []string) (string, error)
 	Inspect(ctx context.Context, name string) (State, error)
 	ListBoxes(ctx context.Context, label string) ([]BoxInfo, error)
 	ListByLabel(ctx context.Context, label string) ([]string, error)
@@ -365,6 +372,11 @@ type BoxKey struct {
 	Account, Binding, Session string
 	PartialMounts             bool
 	Clone                     *CloneMounts
+	// Context is config.ContextHash of the profile's context_paths ("" = none).
+	// It is part of the identity for the same reason Clone's hash is: reuseMounts
+	// compares in-box destinations only, so a changed list must not land in a box
+	// that still mounts the old one.
+	Context string
 }
 
 // CloneMounts is the clone-mode part of a BoxKey. Hash identifies the clone spec
@@ -386,7 +398,8 @@ type CloneMounts struct {
 // An AWS binding hash is mixed in last, so a session without a binding never
 // shares a box with one that has a binding, sessions with the same binding
 // share, and an unbound session's name is unchanged from before bindings.
-// A clone-mode spec hash goes after those, so a non-clone name is unchanged too.
+// A clone-mode spec hash goes after those, so a non-clone name is unchanged too,
+// and a context_paths hash goes last for the same reason.
 func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	real, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
@@ -408,6 +421,9 @@ func (m *Manager) boxName(cwd string, k BoxKey) (string, error) {
 	}
 	if k.Clone != nil {
 		key += "\x00clone:" + k.Clone.Hash
+	}
+	if k.Context != "" {
+		key += "\x00ctx:" + k.Context
 	}
 	sum := sha256.Sum256([]byte(key))
 	return namePrefix + hex.EncodeToString(sum[:6]), nil
@@ -571,13 +587,8 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 		if real, err := filepath.EvalSymlinks(home); err == nil {
 			home = real
 		}
-		if abs == filepath.Clean(home) {
-			return "it is your home directory, so the box would mount everything in it", true
-		}
-		// An ancestor of home is worse still.
-		if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
-			!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
-			return "it contains your home directory", true
+		if reason := homeReason(abs, home); reason != "" {
+			return reason, true
 		}
 	}
 	if reason := ProtectedOverlap(abs, protected); reason != "" {
@@ -588,6 +599,21 @@ func unboxableWorkspace(cwd string, protected []ProtectedDir, shared []string) (
 			"), so docker cannot see it", true
 	}
 	return "", false
+}
+
+// homeReason reports why abs (absolute, symlinks resolved) cannot be mounted
+// because it is, or is an ancestor of, home (also resolved), or "" when it is
+// neither.
+func homeReason(abs, home string) string {
+	if abs == filepath.Clean(home) {
+		return "it is your home directory, so the box would mount everything in it"
+	}
+	// An ancestor of home is worse still.
+	if rel, err := filepath.Rel(abs, home); err == nil && rel != "." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".." {
+		return "it contains your home directory"
+	}
+	return ""
 }
 
 // protected is every directory a workspace must not overlap: the state root
@@ -806,6 +832,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.markVerified(name)
 		}
 	}
+	created := false
 	if st == StateMissing {
 		var bundle string
 		if !m.opts.ExtraCA.Empty() {
@@ -837,12 +864,18 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return fmt.Errorf("box: starting %s: %w", name, err)
 		}
+		created = true
 		if verify != nil {
 			if err := verify(ctx, name); err != nil {
 				return m.refuseUnverified(ctx, name, err)
 			}
 			m.markVerified(name)
 		}
+	}
+	// The box runs, created or reused; the agent has not started. A mount that
+	// is not the checked path is refused here, before anything runs in it.
+	if err := m.checkMountIDs(ctx, name, extraRO); err != nil {
+		return m.refuseMountChanged(ctx, name, created, err)
 	}
 	// Count the session only once the box is genuinely usable, so a failed spawn
 	// cannot leak a reference that keeps the box alive forever.
