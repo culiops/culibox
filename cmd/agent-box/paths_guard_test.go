@@ -58,8 +58,10 @@ var pathEscapes = map[string]int{
 	"cmd/agent-box/cli.go literal .local":       2, // -config help and the usage text
 	"cmd/agent-box/cli.go literal .config":      1,
 	// context_paths denylist: refuses /tmp itself as a context path (it would
-	// shadow the box's tmpfs); a name compared with, never a location used.
-	"internal/config/contextpaths.go literal /tmp": 1,
+	// shadow the box's tmpfs), and the in-box /tmp/agentbox-gh and
+	// /tmp/ac-session-* (prefix match and its message); names compared with,
+	// never locations used.
+	"internal/config/contextpaths.go literal /tmp": 4,
 	// /tmp INSIDE the box: its tmpfs mount and the pid file kept on it.
 	"internal/box/argv.go literal /tmp": 2,
 	// gh's config dir INSIDE a GitHub-bound box (GHConfigDir): dies with the box.
