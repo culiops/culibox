@@ -270,6 +270,12 @@
               OS user and can read the default account's files. Use box containment to keep accounts apart.</div>
           </div>
         </div>
+        <div class="frow" id="pf-context-row">
+          <div class="fcol"><label class="flab" for="pf-context">Readable host paths</label>
+            <textarea id="pf-context" class="fld" rows="3" spellcheck="false" placeholder="/home/you/other-repo/CLAUDE.md"></textarea>
+            <p class="tiny mut">One absolute path per line. The box can read these, and it has internet access, so never list secrets.</p>
+            <p class="warnbox tiny" id="pf-context-warn" role="status" hidden></p></div>
+        </div>
         <div id="pf-awsc-block">
           <span class="flab">AWS connections (boxed only)</span>
           <p class="tiny mut" id="pf-awsc-hint" hidden>AWS connections need runtime: box. The host tier cannot contain credentials.</p>
