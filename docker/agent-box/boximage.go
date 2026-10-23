@@ -23,6 +23,12 @@ import (
 //go:embed Dockerfile
 var dockerfile []byte
 
+// zshrc is the box's zsh defaults, COPY'd by the Dockerfile, which pins its
+// sha256: editing it changes the Dockerfile, and so Hash().
+//
+//go:embed zshrc
+var zshrc []byte
+
 // LabelHash records which Dockerfile built an image, so doctor can tell an
 // image older than this binary.
 const LabelHash = "io.culiops.agent-box.dockerfile"
@@ -61,7 +67,7 @@ func (d Docker) ServerArch(ctx context.Context) (string, error) {
 // same with CAs on or off.
 const extraCAName = "extra-ca.pem"
 
-// contextTar is the build context: the Dockerfile and extra-ca.pem, streamed
+// contextTar is the build context: the Dockerfile, extra-ca.pem and zshrc, streamed
 // on stdin, so nothing is written to disk.
 func contextTar(extraCA []byte) ([]byte, error) {
 	var buf bytes.Buffer
@@ -69,7 +75,7 @@ func contextTar(extraCA []byte) ([]byte, error) {
 	for _, f := range []struct {
 		name string
 		body []byte
-	}{{"Dockerfile", dockerfile}, {extraCAName, extraCA}} {
+	}{{"Dockerfile", dockerfile}, {extraCAName, extraCA}, {"zshrc", zshrc}} {
 		if err := tw.WriteHeader(&tar.Header{Name: f.name, Mode: 0o644, Size: int64(len(f.body))}); err != nil {
 			return nil, err
 		}

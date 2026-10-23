@@ -1022,6 +1022,9 @@ func (l *AgentLauncher) argv(cfg config.AgentConfig, cmd []string, pathv string,
 	if boxed {
 		// Resolution belongs to the CONTAINER's PATH. The host may not have this
 		// binary at all, and a host absolute path is meaningless inside the image.
+		if boxShells[filepath.Base(cmd[0])] {
+			return append([]string{"sh", "-c", boxShellFallback}, cmd...), nil
+		}
 		return cmd, nil
 	}
 	if cfg.BasePolicy() == config.BaseLogin {
@@ -1037,6 +1040,27 @@ func (l *AgentLauncher) argv(cfg config.AgentConfig, cmd []string, pathv string,
 	}
 	return append([]string{bin}, cmd[1:]...), nil
 }
+
+// boxShells are the interactive shells a boxed profile may name by a host path
+// the image lacks: the quick shell is the host's $SHELL, /opt/homebrew/bin/zsh
+// on a Mac. An agent binary is never in this set: a missing agent must fail.
+var boxShells = map[string]bool{
+	"bash": true, "zsh": true, "fish": true, "sh": true, "dash": true,
+	"ksh": true, "mksh": true, "tcsh": true, "csh": true,
+}
+
+// boxShellFallback runs inside the box (by dash, as `sh -c script shell args...`):
+// the shell's path, else its basename on the box PATH, else /bin/bash with a
+// notice and without the args, which were meant for the other shell. `command
+// -v` is not enough for a path (dash reports any existing file), hence -f -x.
+const boxShellFallback = `for b in "$0" "${0##*/}"; do
+	case $b in
+	*/*) [ -f "$b" ] && [ -x "$b" ] && exec "$b" "$@" ;;
+	*) command -v "$b" >/dev/null 2>&1 && exec "$b" "$@" ;;
+	esac
+done
+echo "agent-box: $0 is not in the box image; starting /bin/bash instead" >&2
+exec /bin/bash`
 
 // lookPathIn resolves bin against the given PATH string (not the daemon's env).
 // A bin containing a slash is used verbatim.

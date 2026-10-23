@@ -3,7 +3,9 @@ package launcher
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -282,6 +284,84 @@ func TestBoxedArgvIsNotResolvedAgainstTheHostPath(t *testing.T) {
 	}
 	if argv[0] != "some-agent-not-on-this-host" {
 		t.Fatalf("argv[0] = %q, want the bare command for in-container resolution", argv[0])
+	}
+}
+
+// A boxed interactive shell runs through the in-box fallback: the host's
+// $SHELL path (/opt/homebrew/bin/zsh on a Mac) need not exist in the image.
+func TestBoxedShellRunsThroughTheInBoxFallback(t *testing.T) {
+	l := boxedLauncher(t, []config.AgentConfig{{Name: "zsh", Bin: "/opt/homebrew/bin/zsh", Args: []string{"-l"}}})
+	argv, _, err := l.Build(SpawnSpec{Agent: "zsh", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sh", "-c", boxShellFallback, "/opt/homebrew/bin/zsh", "-l"}
+	if !slices.Equal(argv, want) {
+		t.Fatalf("argv = %q, want %q", argv, want)
+	}
+}
+
+// Only shells fall back: a missing agent must fail, never quietly become bash.
+func TestBoxedAgentIsNotWrappedInTheShellFallback(t *testing.T) {
+	l := boxedLauncher(t, []config.AgentConfig{{Name: "codex", Bin: "/usr/local/bin/codex"}})
+	argv, _, err := l.Build(SpawnSpec{Agent: "codex", Runtime: config.RuntimeBox})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != "/usr/local/bin/codex" {
+		t.Fatalf("argv = %q, want the agent binary first", argv)
+	}
+}
+
+// The host tier runs the host's own shell; no fallback there.
+func TestHostShellIsNotWrappedInTheShellFallback(t *testing.T) {
+	l := New([]config.AgentConfig{{Name: "sh", Bin: "/bin/sh"}}, fakeResolver{}, nil)
+	argv, _, err := l.Build(SpawnSpec{Agent: "sh", Runtime: config.RuntimeHost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if argv[0] != "/bin/sh" {
+		t.Fatalf("argv = %q, want /bin/sh first", argv)
+	}
+}
+
+// The fallback script itself, run by dash (the box's /bin/sh): the path, else
+// the basename on PATH, else /bin/bash with a notice.
+func TestBoxShellFallbackScript(t *testing.T) {
+	dash, err := exec.LookPath("dash")
+	if err != nil {
+		t.Skip("dash not installed")
+	}
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "zsh")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"stub zsh $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(path string, args ...string) (string, string) {
+		t.Helper()
+		var out, errb strings.Builder
+		c := exec.Command(dash, append([]string{"-c", boxShellFallback}, args...)...)
+		c.Env = []string{"PATH=" + path}
+		c.Stdin = strings.NewReader("echo bash-ran\n")
+		c.Stdout, c.Stderr = &out, &errb
+		if err := c.Run(); err != nil {
+			t.Fatalf("%v: %v (stderr %q)", args, err, errb.String())
+		}
+		return out.String(), errb.String()
+	}
+	if out, _ := run("/usr/bin:/bin", stub, "-l"); out != "stub zsh -l\n" {
+		t.Errorf("an existing path: got %q", out)
+	}
+	if out, _ := run(dir+":/usr/bin:/bin", "/opt/homebrew/bin/zsh", "-l"); out != "stub zsh -l\n" {
+		t.Errorf("a missing path whose basename is on PATH: got %q", out)
+	}
+	notExec := filepath.Join(dir, "fish")
+	if err := os.WriteFile(notExec, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut := run("/usr/bin:/bin", notExec, "--weird-fish-flag")
+	if out != "bash-ran\n" || !strings.Contains(errOut, notExec+" is not in the box image") {
+		t.Errorf("no such shell: stdout %q stderr %q, want bash (without the fish args) and a notice", out, errOut)
 	}
 }
 

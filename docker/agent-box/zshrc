@@ -1,0 +1,112 @@
+# agent-box: the box's zsh defaults, sourced from /etc/zsh/zshrc by every
+# interactive zsh in the box, BEFORE ~/.zshrc, so your own ~/.zshrc wins.
+# Only what Debian packages and the image already ship: no plugin manager,
+# nothing fetched at start.
+
+zmodload zsh/datetime zsh/stat 2>/dev/null
+
+# --- history: in the box home (it lives as long as the box), shared by the
+# box's sessions. A command typed with a leading space is not recorded: use it
+# for anything carrying a secret.
+HISTFILE=${HISTFILE:-$HOME/.zsh_history}
+HISTSIZE=50000
+SAVEHIST=50000
+setopt EXTENDED_HISTORY SHARE_HISTORY HIST_IGNORE_DUPS HIST_IGNORE_SPACE HIST_REDUCE_BLANKS HIST_VERIFY
+setopt INTERACTIVE_COMMENTS AUTO_CD NO_BEEP PROMPT_SUBST
+
+# --- completion. kubectl, helm, stern, yq and gh completions are generated into
+# /usr/local/share/zsh/site-functions at image build; aws and terraform complete
+# through their own binaries.
+autoload -Uz compinit bashcompinit
+() {
+	local cache=${XDG_CACHE_HOME:-$HOME/.cache}/zsh
+	[[ -d $cache ]] || mkdir -p "$cache" 2>/dev/null
+	compinit -i -d "$cache/zcompdump-$ZSH_VERSION"
+}
+bashcompinit
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-z}={A-Za-z}'
+zstyle ':completion:*' list-colors ''
+(( $+commands[aws_completer] )) && complete -C aws_completer aws
+(( $+commands[terraform] )) && complete -o nospace -C terraform terraform
+if (( $+commands[kubectl] )); then
+	alias k=kubectl
+	compdef k=kubectl 2>/dev/null
+fi
+
+alias ls='ls --color=auto' ll='ls -lah --color=auto' grep='grep --color=auto'
+
+# --- fzf: Ctrl-R history, Ctrl-T files, Alt-C cd.
+for f in /usr/share/doc/fzf/examples/key-bindings.zsh /usr/share/doc/fzf/examples/completion.zsh; do
+	[[ -r $f ]] && source "$f"
+done
+unset f
+
+# --- prompt. Line 1: time, box, cwd, then only the context that is set: git
+# branch (* = uncommitted changes), aws profile@region, kube context/namespace,
+# terraform workspace, the last command's duration. Line 2: a failed exit code.
+# A context that looks like production is red.
+autoload -Uz vcs_info add-zsh-hook
+zstyle ':vcs_info:*' enable git
+zstyle ':vcs_info:git:*' check-for-changes true
+zstyle ':vcs_info:git:*' unstagedstr '*'
+zstyle ':vcs_info:git:*' stagedstr '+'
+zstyle ':vcs_info:git:*' formats '%b%u%c'
+zstyle ':vcs_info:git:*' actionformats '%b|%a%u%c'
+
+# _ab_seg COLOR LABEL VALUE: one prompt segment, red when VALUE names production.
+_ab_seg() {
+	local color=$1
+	[[ ${(L)3} =~ '(^|[^a-z])(prod|prd|production|live)([^a-z]|$)' ]] && color=red
+	print -rn -- " %F{$color}$2:${3//\%/%%}%f"
+}
+
+# The kube namespace needs kubectl; cache it on the kubeconfig's mtime, so a
+# prompt normally costs no fork.
+typeset -g _ab_kube_key= _ab_kube_ctx= _ab_kube_ns=
+_ab_kube() {
+	local cfg=${KUBECONFIG%%:*}
+	[[ -n $cfg ]] || cfg=$HOME/.kube/config
+	if [[ ! -r $cfg ]] || (( ! $+commands[kubectl] )); then
+		_ab_kube_ctx= _ab_kube_ns=
+		return
+	fi
+	local key="$cfg:$(zstat +mtime -- "$cfg" 2>/dev/null)"
+	[[ $key == "$_ab_kube_key" ]] && return
+	_ab_kube_key=$key
+	_ab_kube_ctx=$(kubectl config current-context 2>/dev/null)
+	_ab_kube_ns=$(kubectl config view --minify -o 'jsonpath={..namespace}' 2>/dev/null)
+}
+
+_ab_preexec() { _ab_started=$EPOCHSECONDS }
+_ab_precmd() {
+	local rc=$?
+	vcs_info
+	_ab_kube
+	local line="%F{8}%D{%H:%M:%S}%f %F{cyan}box%f %F{blue}%~%f"
+	[[ -n ${vcs_info_msg_0_} ]] && line+=$(_ab_seg magenta git "$vcs_info_msg_0_")
+	local profile=${AWS_PROFILE:-$AWS_DEFAULT_PROFILE} region=${AWS_REGION:-$AWS_DEFAULT_REGION}
+	if [[ -n $profile || -n $region ]]; then
+		line+=$(_ab_seg yellow aws "${profile:-default}${region:+@$region}")
+	fi
+	[[ -n $_ab_kube_ctx ]] && line+=$(_ab_seg blue k8s "$_ab_kube_ctx${_ab_kube_ns:+/$_ab_kube_ns}")
+	local ws=${TF_WORKSPACE:-$(<.terraform/environment 2>/dev/null)}
+	[[ -n $ws && $ws != default ]] && line+=$(_ab_seg green tf "$ws")
+	if [[ -n $_ab_started ]]; then
+		local took=$(( EPOCHSECONDS - _ab_started ))
+		(( took >= 5 )) && line+=" %F{8}took ${took}s%f"
+	fi
+	unset _ab_started
+	local mark='>'
+	[[ ${LC_ALL:-${LC_CTYPE:-$LANG}} == *[Uu][Tt][Ff]-#8* ]] && mark='❯'
+	PROMPT="$line"$'\n'"%(?..%F{red}[$rc]%f )%F{%(?.green.red)}$mark%f "
+}
+add-zsh-hook preexec _ab_preexec
+add-zsh-hook precmd _ab_precmd
+
+# --- plugins, last: syntax highlighting must load after every widget it wraps.
+[[ -r /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh ]] &&
+	source /usr/share/zsh-autosuggestions/zsh-autosuggestions.zsh
+ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+[[ -r /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]] &&
+	source /usr/share/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh

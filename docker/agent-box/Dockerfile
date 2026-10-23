@@ -263,7 +263,7 @@ RUN mkdir -p /etc/agent-box && printf '%s\n' '{"mcpServers":{"codebase-memory":{
 # build time, and every step must also repair what an EARLIER image left behind.
 # Go refuses a missing GOTMPDIR, hence its mkdir.
 # agent-box always passes `sleep infinity`; the probes override --entrypoint.
-RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' '# tflint AWS ruleset: link the default config unless the home holds a REGULAR file (the user-owned one; a repo .tflint.hcl still wins). A symlink, dangling or not, is ours from an earlier start: re-point it, so a ruleset bump is picked up.' 'if [ ! -e "$HOME/.tflint.hcl" ] || [ -L "$HOME/.tflint.hcl" ]; then rm -f "$HOME/.tflint.hcl"; ln -s /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"; fi 2>/dev/null' '# Prune plugin links a ruleset bump left dangling, then link each baked plugin version at the path tflint looks for (see the tflint block below).' 'find "$HOME/.tflint.d/plugins" -xtype l -delete 2>/dev/null' 'for p in /opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/*/tflint-ruleset-aws; do [ -e "$p" ] || continue; d="$HOME/.tflint.d/plugins/${p#/opt/tflint/plugins/}"; [ -e "$d" ] || { mkdir -p "${d%/*}" && ln -s "$p" "$d"; } 2>/dev/null; done' '# tfenv: state lives in the box home (the image is read-only); code, keyring and defaults are root-owned under /opt/tfenv. Every start re-arms signature checks and seeds the default version.' 'if [ -n "${TFENV_CONFIG_DIR:-}" ]; then' '  mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null' '  rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null || echo "agent-box: tfenv signature checks NOT armed (cannot write \$TFENV_CONFIG_DIR/use-gpgv)" >&2' '  v=$(cat /opt/tfenv/default-version 2>/dev/null)' '  # Drop the default versions an EARLIER image linked in (versions/X/terraform -> /usr/local/bin/terraform, an unversioned path that now holds a newer binary). tfenv reinstalls such a version, signature-checked, when it is asked for.' '  for d in "$TFENV_CONFIG_DIR"/versions/*; do [ -n "$v" ] && [ "${d##*/}" != "$v" ] && [ "$(readlink "$d/terraform" 2>/dev/null)" = /usr/local/bin/terraform ] && rm -rf "$d" 2>/dev/null; done' '  [ -z "$v" ] || [ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] || { mkdir -p "$TFENV_CONFIG_DIR/versions/$v" && ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"; } 2>/dev/null' '  # Default version rule: .agent-box-default holds the default this script last wrote. If `version` is absent, or byte-equal to that marker (never changed by the user), it follows the image: write the new default into both. Otherwise the user chose a version (tfenv use): leave `version` alone, and still move the marker to the new default.' '  if [ ! -e "$TFENV_CONFIG_DIR/version" ] || cmp -s "$TFENV_CONFIG_DIR/version" "$TFENV_CONFIG_DIR/.agent-box-default"; then cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null; fi' '  cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/.agent-box-default" 2>/dev/null' 'fi' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
+RUN printf '%s\n' '#!/bin/sh' '# Go refuses a missing GOTMPDIR; the home is a bind mount, so make it here.' '[ -n "${GOTMPDIR:-}" ] && mkdir -p "$GOTMPDIR" 2>/dev/null' '# tflint AWS ruleset: link the default config unless the home holds a REGULAR file (the user-owned one; a repo .tflint.hcl still wins). A symlink, dangling or not, is ours from an earlier start: re-point it, so a ruleset bump is picked up.' 'if [ ! -e "$HOME/.tflint.hcl" ] || [ -L "$HOME/.tflint.hcl" ]; then rm -f "$HOME/.tflint.hcl"; ln -s /etc/agent-box/tflint.hcl "$HOME/.tflint.hcl"; fi 2>/dev/null' '# Prune plugin links a ruleset bump left dangling, then link each baked plugin version at the path tflint looks for (see the tflint block below).' 'find "$HOME/.tflint.d/plugins" -xtype l -delete 2>/dev/null' 'for p in /opt/tflint/plugins/github.com/terraform-linters/tflint-ruleset-aws/*/tflint-ruleset-aws; do [ -e "$p" ] || continue; d="$HOME/.tflint.d/plugins/${p#/opt/tflint/plugins/}"; [ -e "$d" ] || { mkdir -p "${d%/*}" && ln -s "$p" "$d"; } 2>/dev/null; done' '# tfenv: state lives in the box home (the image is read-only); code, keyring and defaults are root-owned under /opt/tfenv. Every start re-arms signature checks and seeds the default version.' 'if [ -n "${TFENV_CONFIG_DIR:-}" ]; then' '  mkdir -p "$TFENV_CONFIG_DIR/versions" 2>/dev/null' '  rm -f "$TFENV_CONFIG_DIR/use-gnupg" "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null; cp /opt/tfenv/use-gpgv "$TFENV_CONFIG_DIR/use-gpgv" 2>/dev/null || echo "agent-box: tfenv signature checks NOT armed (cannot write \$TFENV_CONFIG_DIR/use-gpgv)" >&2' '  v=$(cat /opt/tfenv/default-version 2>/dev/null)' '  # Drop the default versions an EARLIER image linked in (versions/X/terraform -> /usr/local/bin/terraform, an unversioned path that now holds a newer binary). tfenv reinstalls such a version, signature-checked, when it is asked for.' '  for d in "$TFENV_CONFIG_DIR"/versions/*; do [ -n "$v" ] && [ "${d##*/}" != "$v" ] && [ "$(readlink "$d/terraform" 2>/dev/null)" = /usr/local/bin/terraform ] && rm -rf "$d" 2>/dev/null; done' '  [ -z "$v" ] || [ -e "$TFENV_CONFIG_DIR/versions/$v/terraform" ] || { mkdir -p "$TFENV_CONFIG_DIR/versions/$v" && ln -s /usr/local/bin/terraform "$TFENV_CONFIG_DIR/versions/$v/terraform"; } 2>/dev/null' '  # Default version rule: .agent-box-default holds the default this script last wrote. If `version` is absent, or byte-equal to that marker (never changed by the user), it follows the image: write the new default into both. Otherwise the user chose a version (tfenv use): leave `version` alone, and still move the marker to the new default.' '  if [ ! -e "$TFENV_CONFIG_DIR/version" ] || cmp -s "$TFENV_CONFIG_DIR/version" "$TFENV_CONFIG_DIR/.agent-box-default"; then cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/version" 2>/dev/null; fi' '  cp /opt/tfenv/default-version "$TFENV_CONFIG_DIR/.agent-box-default" 2>/dev/null' 'fi' '# zsh: an existing ~/.zshrc keeps zsh'"'"'s new-user wizard away on a fresh box home; the agent-box defaults load first from /etc/agent-box/zshrc.' '[ -e "$HOME/.zshrc" ] || { echo "# Your zsh settings. agent-box defaults (prompt, completion, plugins) load first from /etc/agent-box/zshrc." > "$HOME/.zshrc"; } 2>/dev/null' 'exec "$@"' > /usr/local/bin/agent-box-entrypoint && chmod 0755 /usr/local/bin/agent-box-entrypoint
 
 # === frequently bumped pins (keep last) ===
 # Everything below moves faster than the heavy layers above, so a version bump
@@ -297,6 +297,20 @@ RUN NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt npm install -g @anthr
 RUN apt-get update && apt-get install -y --no-install-recommends \
       make openssl dnsutils netcat-openbsd xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# --- zsh and offline ops tools ---
+# zsh with its two plugins, fzf (Ctrl-R history search), and small tools that work
+# without a network: ipcalc (CIDR and subnet math), tree, file, bc, and nano as the
+# quick-fix editor. All from Debian's signed archive, following the base's apt
+# snapshot. fzf's zsh key bindings live under /usr/share/doc, which the slim base
+# keeps out of every install; the zz- file (read after the base's own, and dpkg
+# applies the last matching rule) lets exactly those files back in.
+RUN printf '%s\n' 'path-include=/usr/share/doc/fzf/examples/*.zsh' > /etc/dpkg/dpkg.cfg.d/zz-agent-box-fzf \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      zsh zsh-autosuggestions zsh-syntax-highlighting fzf ipcalc tree file bc nano \
+    && rm -rf /var/lib/apt/lists/* \
+    && test -r /usr/share/doc/fzf/examples/key-bindings.zsh \
+    && test -r /usr/share/doc/fzf/examples/completion.zsh
 
 # --- kubernetes tools ---
 # kubectl 1.37.1 (released 2026-09-23). Sums from the per-binary .sha256 files:
@@ -927,6 +941,47 @@ RUN set -eu; \
     rm -f /tmp/req.txt; rm -rf /root/.cache/pip; \
     ln -s /opt/mcp-atlassian/bin/mcp-atlassian /usr/local/bin/mcp-atlassian; \
     mcp-atlassian --version | grep -q "${MCP_ATLASSIAN_VERSION}"
+
+# --- zsh defaults ---
+# The box's zshrc (prompt, history, completion, plugins), loaded by every
+# interactive zsh before ~/.zshrc, so the user's own file wins. Pinned by sha256,
+# so an edit to it changes this Dockerfile, and with it the image label that
+# tells doctor to rebuild. Completions for the tools above are generated here
+# (HOME pointed away so nothing lands in /root).
+ARG AGENT_BOX_ZSHRC_SHA256=ab65e2e36638023a4a74907c52a296160c73b7abbf0b0bdfe914ea59104ff896
+COPY zshrc /etc/agent-box/zshrc
+RUN set -eu; \
+    echo "${AGENT_BOX_ZSHRC_SHA256}  /etc/agent-box/zshrc" | sha256sum -c -; \
+    chmod 0644 /etc/agent-box/zshrc; \
+    printf '\n%s\n' '# agent-box defaults; ~/.zshrc loads after this and wins.' '[[ -r /etc/agent-box/zshrc ]] && source /etc/agent-box/zshrc' >> /etc/zsh/zshrc; \
+    d=/usr/local/share/zsh/site-functions; mkdir -p "$d"; \
+    export HOME=/tmp/zsh-compgen; mkdir -p "$HOME"; \
+    kubectl completion zsh > "$d/_kubectl"; \
+    helm completion zsh > "$d/_helm"; \
+    stern --completion zsh > "$d/_stern"; \
+    yq shell-completion zsh > "$d/_yq"; \
+    /opt/gh/bin/gh completion -s zsh > "$d/_gh"; \
+    rm -rf /tmp/zsh-compgen; \
+    zsh -n /etc/agent-box/zshrc
+
+# --- network diagnostics: a stand-in, not the tool ---
+# On Linux a box has no direct network: it reaches the internet only through
+# agent-box's HTTPS proxy, by hostname. A ping or trace from inside would measure
+# that fence, not the target, and an agent would read the loss as an outage. So
+# these tools are not installed; each name says why and what works instead, and
+# exits 127 like a missing command.
+RUN printf '%s\n' '#!/bin/sh' \
+      'cat >&2 <<EOF' \
+      'agent-box: ${0##*/} is not in the box image. On Linux a box reaches the internet only' \
+      'through agent-box'"'"'s HTTPS proxy (port 443, by hostname), so a ping or trace from here' \
+      'would measure that fence, not the target. Diagnose the network where it is: on the' \
+      'target (e.g. aws ssm start-session) or from a host-tier shell profile. To check HTTPS' \
+      'reachability from the box:' \
+      "  curl https://<host>/ -sS -o /dev/null -w '%{http_code} %{time_total}s\\\\n'" \
+      'EOF' \
+      'exit 127' > /usr/local/bin/agent-box-no-network \
+    && chmod 0755 /usr/local/bin/agent-box-no-network \
+    && for n in ping mtr traceroute tracepath httping; do ln -s agent-box-no-network "/usr/local/bin/$n"; done
 
 # Nothing but the base image's two dotfiles may be left in /root: every RUN above
 # cleans after itself in its own layer (a later layer cannot remove an earlier
