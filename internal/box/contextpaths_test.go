@@ -3,6 +3,7 @@ package box
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -196,5 +197,104 @@ func TestSecretFilesStopsAtEntryCap(t *testing.T) {
 	}
 	if out := SecretFiles(d); !slices.Equal(out, []string{"a.pem"}) {
 		t.Fatalf("SecretFiles = %v, want only the entry inside the cap", out)
+	}
+}
+
+// shortTmp is a short-named temp dir: a unix socket path is limited to 107
+// bytes, which t.TempDir (it carries the test name) can overflow.
+func shortTmp(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("", "cp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	d, err = filepath.EvalSymlinks(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func listenUnix(t *testing.T, path string) {
+	t.Helper()
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen %s: %v", path, err)
+	}
+	t.Cleanup(func() { l.Close() })
+}
+
+func TestCheckContextPathRefusesUnixSocket(t *testing.T) {
+	d := shortTmp(t)
+	deep := filepath.Join(d, "a", "b", "c")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(deep, "s.sock")
+	listenUnix(t, sock)
+	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
+		"contains a unix socket ("+sock+")", "a read-only mount does not stop the box from connecting to it")
+}
+
+func TestCheckContextPathSocketBehindSymlinkNotFollowed(t *testing.T) {
+	d := shortTmp(t)
+	other := shortTmp(t)
+	listenUnix(t, filepath.Join(other, "s.sock"))
+	proj := filepath.Join(d, "proj")
+	if err := os.Mkdir(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(proj, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckContextPath(proj, "/h", nil, nil); err != nil {
+		t.Errorf("a socket behind a symlinked subdir must not be followed: %v", err)
+	}
+}
+
+func TestCheckContextPathCleanDirWithFiles(t *testing.T) {
+	d := shortTmp(t)
+	if err := os.MkdirAll(filepath.Join(d, "x", "y"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "x", "y", "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckContextPath(d, "/h", nil, nil); err != nil {
+		t.Errorf("clean dir: %v", err)
+	}
+}
+
+func TestCheckContextPathHostSocketDirs(t *testing.T) {
+	tmp := ctxTmp(t)
+	home := filepath.Join(tmp, "home")
+	for _, name := range []string{".colima", ".lima", ".docker", ".ssh"} {
+		sub := filepath.Join(home, name, "inner")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(home, name)
+		want := "inside " + dir + ", which holds host sockets or credentials"
+		wantCtxErr(t, CheckContextPath(dir, home, nil, nil), dir, want)
+		wantCtxErr(t, CheckContextPath(sub, home, nil, nil), sub, want)
+	}
+	// A look-alike name and an empty home are not caught by this rule.
+	ok := filepath.Join(home, ".sshx")
+	if err := os.Mkdir(ok, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckContextPath(ok, home, nil, nil); err != nil {
+		t.Errorf(".sshx: %v", err)
+	}
+	if err := CheckContextPath(filepath.Join(home, ".ssh"), "", nil, nil); err != nil {
+		t.Errorf("empty home skips the rule: %v", err)
+	}
+}
+
+func TestCheckContextPathNotClean(t *testing.T) {
+	tmp := ctxTmp(t)
+	for _, p := range []string{tmp + "/", tmp + "/.", tmp + "/x/..", tmp + "//y"} {
+		wantCtxErr(t, CheckContextPath(p, "/h", nil, nil), p, "clean")
 	}
 }

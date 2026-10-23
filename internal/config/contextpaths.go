@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/culiops/agent-box/internal/box"
 )
 
 // maxContextPaths bounds context_paths: each entry is one more bind mount and
@@ -34,12 +36,6 @@ var (
 	contextDenyExact = []string{"/home", "/tmp", "/mnt", "/media"}
 )
 
-// contextSecretPatterns are base-name globs that look like a secret or config
-// file; ContextNameWarnings flags them.
-var contextSecretPatterns = []string{
-	".env*", "*.pem", "*.key", "config*.json", "id_*", "*.tfstate", "*.tfstate.*",
-}
-
 // ContextHash identifies the context set for the box name: two profiles with
 // different context paths must never reuse one box. The order is irrelevant.
 // 16 hex chars, or "" for an empty list.
@@ -63,7 +59,7 @@ func ContextNameWarnings(paths []string) []string {
 	var out []string
 	for _, p := range paths {
 		base := filepath.Base(p)
-		for _, pat := range contextSecretPatterns {
+		for _, pat := range box.SecretFilePatterns {
 			if ok, _ := filepath.Match(pat, base); ok {
 				out = append(out, fmt.Sprintf("context_paths %q looks like a secret or config file; the box will be able to read and send it", p))
 				break

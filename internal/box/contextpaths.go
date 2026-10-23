@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -33,6 +34,9 @@ func ctxPathRefuse(p, format string, a ...any) error {
 func CheckContextPath(p, home string, protected []ProtectedDir, shared []string) error {
 	if !filepath.IsAbs(p) {
 		return ctxPathRefuse(p, "must be an absolute path")
+	}
+	if filepath.Clean(p) != p {
+		return ctxPathRefuse(p, "must be a clean path (no . or .. components, no repeated or trailing slash)")
 	}
 	cur := string(filepath.Separator)
 	var info fs.FileInfo
@@ -71,6 +75,12 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 		if reason := homeReason(p, home); reason != "" {
 			return ctxPathRefuse(p, "%s", reason)
 		}
+		for _, name := range hostSocketDirs {
+			d := filepath.Join(home, name)
+			if pathWithin(p, d, runtime.GOOS == "darwin") {
+				return ctxPathRefuse(p, "inside %s, which holds host sockets or credentials", d)
+			}
+		}
 	}
 	if reason := ProtectedOverlap(p, protected); reason != "" {
 		return ctxPathRefuse(p, "%s", reason)
@@ -79,7 +89,47 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 		return ctxPathRefuse(p, "it is not under the box VM's shared directories (%s), so docker cannot see it; "+
 			"share its parent and run `agent-box box setup -recreate`", strings.Join(shared, ", "))
 	}
+	if info.IsDir() {
+		if sock := findSocket(p); sock != "" {
+			return ctxPathRefuse(p, "contains a unix socket (%s); a read-only mount does not stop the box from connecting to it", sock)
+		}
+	}
 	return nil
+}
+
+// hostSocketDirs are directories under home that hold the sockets or keys of
+// host services (the docker, colima and lima daemons, ssh keys and agent).
+var hostSocketDirs = []string{".colima", ".lima", ".docker", ".ssh"}
+
+// socketScanMaxEntries bounds findSocket's walk. A tree bigger than this is
+// allowed unscanned: the scan is best effort.
+const socketScanMaxEntries = 20000
+
+// findSocket returns the first unix socket under dir (any depth, symlinks not
+// followed), or "". A read-only bind mount does not stop connect() on a socket,
+// so a socket in a context path lets the box drive the host service behind it
+// (a docker socket is root on the host). An unreadable directory is skipped.
+func findSocket(dir string) string {
+	var found string
+	visited := 0
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if visited >= socketScanMaxEntries {
+			return fs.SkipAll
+		}
+		visited++
+		if d.Type()&fs.ModeSocket != 0 {
+			found = p
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
 }
 
 const (
@@ -88,10 +138,9 @@ const (
 	secretScanMaxResults = 20
 )
 
-// secretFilePatterns are base-name globs that look like a secret or config
-// file. It mirrors contextSecretPatterns in internal/config (which imports this
-// package, so it cannot be shared): keep the two in step.
-var secretFilePatterns = []string{
+// SecretFilePatterns are base-name globs that look like a secret or config
+// file. internal/config (which imports this package) warns on the same set.
+var SecretFilePatterns = []string{
 	".env*", "*.pem", "*.key", "config*.json", "id_*", "*.tfstate", "*.tfstate.*",
 }
 
@@ -136,7 +185,7 @@ func SecretFiles(dir string) []string {
 }
 
 func looksSecret(name string) bool {
-	for _, pat := range secretFilePatterns {
+	for _, pat := range SecretFilePatterns {
 		if ok, _ := filepath.Match(pat, name); ok {
 			return true
 		}
