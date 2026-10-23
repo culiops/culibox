@@ -43,16 +43,17 @@ done
 unset f
 
 # --- prompt. Line 1: time, box, cwd, then only the context that is set: git
-# branch (* = uncommitted changes), aws profile@region, kube context/namespace,
-# terraform workspace, the last command's duration. Line 2: a failed exit code.
-# A context that looks like production is red.
+# branch, aws profile@region, kube context/namespace, terraform workspace, the
+# last command's duration. Line 2: a failed exit code. A context that looks like
+# production is red.
+# No dirty marker: checking for changes runs `git diff`, which runs whatever
+# fsmonitor, clean filter or diff driver the repo's .git/config names, on every
+# prompt, and scans the whole worktree. The branch alone needs neither.
 autoload -Uz vcs_info add-zsh-hook
 zstyle ':vcs_info:*' enable git
-zstyle ':vcs_info:git:*' check-for-changes true
-zstyle ':vcs_info:git:*' unstagedstr '*'
-zstyle ':vcs_info:git:*' stagedstr '+'
-zstyle ':vcs_info:git:*' formats '%b%u%c'
-zstyle ':vcs_info:git:*' actionformats '%b|%a%u%c'
+zstyle ':vcs_info:git:*' check-for-changes false
+zstyle ':vcs_info:git:*' formats '%b'
+zstyle ':vcs_info:git:*' actionformats '%b|%a'
 
 # _ab_seg COLOR LABEL VALUE: append one segment to _ab_line (no subshell), red
 # when VALUE names production. VALUE comes from places a repo or an agent
@@ -88,8 +89,7 @@ _ab_kube() {
 _ab_preexec() { _ab_started=$EPOCHSECONDS }
 _ab_precmd() {
 	local rc=$?
-	# A repo's .git/config cannot run a command through the prompt's git calls.
-	GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false vcs_info
+	vcs_info
 	_ab_kube
 	typeset -g _ab_line="%F{8}%D{%H:%M:%S}%f %F{cyan}box%f %F{blue}%~%f"
 	[[ -n ${vcs_info_msg_0_} ]] && _ab_seg magenta git "$vcs_info_msg_0_"

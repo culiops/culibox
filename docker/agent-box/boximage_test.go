@@ -1740,8 +1740,9 @@ func TestZshrcPromptRunsNothingFromTheRepo(t *testing.T) {
 	}
 }
 
-// vcs_info's git calls ignore a planted core.fsmonitor in the repo's .git/config.
-func TestZshrcPromptIgnoresRepoFsmonitor(t *testing.T) {
+// The prompt's git calls run nothing a repo's .git/config names: no fsmonitor,
+// no clean filter (both run under `git diff`, which the prompt never calls).
+func TestZshrcPromptRunsNoRepoGitHook(t *testing.T) {
 	zsh, err := exec.LookPath("zsh")
 	if err != nil {
 		t.Skip("zsh not installed")
@@ -1749,10 +1750,16 @@ func TestZshrcPromptIgnoresRepoFsmonitor(t *testing.T) {
 	rc, _ := filepath.Abs("zshrc")
 	repo := t.TempDir()
 	marker := filepath.Join(repo, "FSMPWNED")
-	for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", "touch " + marker + "; false"}} {
+	for _, args := range [][]string{{"init", "-q"}, {"config", "core.fsmonitor", "touch " + marker + "; false"}, {"config", "filter.x.clean", "touch " + marker + "; cat"}} {
 		if b, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, b)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("* filter=x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := exec.Command("git", "-C", repo, "-c", "filter.x.clean=cat", "-c", "core.fsmonitor=false", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, b)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "f"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1768,6 +1775,6 @@ func TestZshrcPromptIgnoresRepoFsmonitor(t *testing.T) {
 		t.Fatalf("no git segment, so the check proves nothing: %q", out)
 	}
 	if _, err := os.Stat(marker); err == nil {
-		t.Error("the prompt ran the repo's core.fsmonitor")
+		t.Error("the prompt ran a command from the repo's .git/config")
 	}
 }
