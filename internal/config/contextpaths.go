@@ -37,7 +37,7 @@ var (
 // contextSecretPatterns are base-name globs that look like a secret or config
 // file; ContextNameWarnings flags them.
 var contextSecretPatterns = []string{
-	".env*", "*.pem", "*.key", "config*.json", "id_rsa*", "id_ed25519*", "*.tfstate", "*.tfstate.*",
+	".env*", "*.pem", "*.key", "config*.json", "id_*", "*.tfstate", "*.tfstate.*",
 }
 
 // ContextHash identifies the context set for the box name: two profiles with
@@ -104,10 +104,13 @@ func validateContextPaths(a AgentConfig) error {
 				return fmt.Errorf("context_paths %q and %q nest; list only the outer path", prev, p)
 			}
 		}
-		if a.DefaultCwd != "" && pathOverlap(p, a.DefaultCwd) {
+		// default_cwd and clone_of are not guaranteed clean here (an in-place
+		// profile's default_cwd is never validated as clean), and pathOverlap
+		// needs clean paths, so clean them or "/b/" would miss "/b/docs".
+		if a.DefaultCwd != "" && pathOverlap(p, filepath.Clean(a.DefaultCwd)) {
 			return fmt.Errorf("context_paths %q overlaps default_cwd %q; the workspace is already mounted", p, a.DefaultCwd)
 		}
-		if a.CloneOf != "" && pathOverlap(p, a.CloneOf) {
+		if a.CloneOf != "" && pathOverlap(p, filepath.Clean(a.CloneOf)) {
 			return fmt.Errorf("context_paths %q overlaps clone_of %q; clone_share is the way to share part of that repo", p, a.CloneOf)
 		}
 	}

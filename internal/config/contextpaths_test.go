@@ -33,6 +33,8 @@ func TestValidateContextPaths(t *testing.T) {
 		{"cwd inside context", AgentConfig{ContextPaths: []string{"/home/u"}, DefaultCwd: "/home/u/a"}, "overlaps default_cwd"},
 		{"context inside cwd", AgentConfig{ContextPaths: []string{"/home/u/a/docs"}, DefaultCwd: "/home/u/a"}, "overlaps default_cwd"},
 		{"cwd equal", AgentConfig{ContextPaths: []string{"/home/u/a"}, DefaultCwd: "/home/u/a"}, "overlaps default_cwd"},
+		{"cwd with trailing slash", AgentConfig{ContextPaths: []string{"/home/u/b/docs"}, DefaultCwd: "/home/u/b/"}, "overlaps default_cwd"},
+		{"cwd with dotdot", AgentConfig{ContextPaths: []string{"/home/u/b/docs"}, DefaultCwd: "/home/u/x/../b"}, "overlaps default_cwd"},
 		{"clone_of overlap", AgentConfig{ContextPaths: []string{"/r/agent-box/docs"}, CloneOf: "/r/agent-box", DefaultCwd: "/c/agent-box"}, "overlaps clone_of"},
 		{"clone_of inside context", AgentConfig{ContextPaths: []string{"/r"}, CloneOf: "/r/agent-box", DefaultCwd: "/c/agent-box"}, "overlaps clone_of"},
 		{"host runtime", AgentConfig{ContextPaths: []string{"/srv/x"}, Runtime: "host"}, `needs runtime "box"`},
@@ -86,7 +88,7 @@ func TestContextHash(t *testing.T) {
 }
 
 func TestContextNameWarnings(t *testing.T) {
-	for _, p := range []string{"/x/.env.prd", "/x/id_rsa", "/x/prod.tfstate"} {
+	for _, p := range []string{"/x/.env.prd", "/x/id_rsa", "/x/id_ecdsa", "/x/id_ed25519_sk", "/x/prod.tfstate", "/x/terraform.tfstate.backup"} {
 		w := ContextNameWarnings([]string{p})
 		if len(w) != 1 || !strings.Contains(w[0], "looks like a secret or config file; the box will be able to read and send it") {
 			t.Errorf("%s: want one warning, got %v", p, w)
