@@ -2,6 +2,8 @@ package session
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -84,8 +86,8 @@ func TestSpawnContextPathsMounts(t *testing.T) {
 	if !slices.Contains(boxes.lastRO, want) {
 		t.Fatalf("Wrap extraRO = %+v, want it to hold %+v", boxes.lastRO, want)
 	}
-	if !slices.Equal(checked, paths) {
-		t.Fatalf("the check ran on %v, want %v", checked, paths)
+	if want := []string{"/srv/b/docs", "/srv/b/docs"}; !slices.Equal(checked, want) { // early and before Wrap
+		t.Fatalf("the check ran on %v, want %v", checked, want)
 	}
 	if boxes.lastKey.Context != config.ContextHash(paths) {
 		t.Fatalf("key.Context = %q, want %q", boxes.lastKey.Context, config.ContextHash(paths))
@@ -204,5 +206,95 @@ func TestSpawnNoContextStripsEnvAndKeepsKey(t *testing.T) {
 	}
 	if len(boxes.lastRO) != 0 {
 		t.Fatalf("extraRO = %+v, want none", boxes.lastRO)
+	}
+}
+
+// The check runs once before Prepare and once right before Wrap. A path that
+// passes the first and fails the second is refused, and no box is started.
+func TestSpawnContextPathsRecheckedBeforeWrap(t *testing.T) {
+	calls := map[string]int{}
+	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs", "/srv/b/notes"), func(p string) error {
+		calls[p]++
+		if calls[p] > 1 {
+			return errors.New("context_paths " + p + ": is a symlink; list the real path")
+		}
+		return nil
+	})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a path that failed the second check spawned")
+	}
+	if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), "context_paths /srv/b/docs: is a symlink") {
+		t.Fatalf("err = %v, want the check's message in the early check's shape", err)
+	}
+	if w, _, _ := boxes.counts(); w != 0 {
+		t.Fatalf("Wrap ran %d times for a refused spawn", w)
+	}
+	if calls["/srv/b/docs"] != 2 {
+		t.Fatalf("the check ran %d times on the first path, want 2 (early and before Wrap)", calls["/srv/b/docs"])
+	}
+}
+
+func TestSpawnContextPathOverlapsWorkspaceRefused(t *testing.T) {
+	ws := t.TempDir()
+	for _, c := range []struct{ name, path string }{
+		{"equal", ws},
+		{"parent", filepath.Dir(ws)},
+		{"child", filepath.Join(ws, "docs")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, c.path), func(string) error { return nil })
+			s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: ws})
+			if err == nil {
+				_ = m.Kill(s.ID)
+				t.Fatal("a context path overlapping the workspace spawned")
+			}
+			want := "context_paths " + c.path + " overlaps the session workspace " + ws + "; the workspace is already mounted"
+			if !errors.Is(err, box.ErrBoxUnavailable) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want it to contain %q", err, want)
+			}
+			if w, _, _ := boxes.counts(); w != 0 {
+				t.Fatalf("Wrap ran %d times", w)
+			}
+		})
+	}
+}
+
+// A sibling that merely shares a name prefix is not an overlap.
+func TestSpawnContextPathSiblingPrefixAllowed(t *testing.T) {
+	base := t.TempDir()
+	ws := filepath.Join(base, "proj")
+	if err := os.Mkdir(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := contextManager(t, testContextLauncher(config.RuntimeBox, ws+"-docs"), func(string) error { return nil })
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = m.Kill(s.ID)
+}
+
+// The bundle hands over a slice with spare capacity; appending the context
+// mounts must copy, never write into its backing array.
+func TestSpawnContextMountsDoNotWriteIntoBundleArray(t *testing.T) {
+	backing := make([]box.Mount, 1, 8)
+	backing[0] = box.Mount{Host: "/b/skills", Box: "/home/agent/.claude/skills"}
+	m, boxes := contextManager(t, testContextLauncher(config.RuntimeBox, "/srv/b/docs", "/srv/b/notes"), func(string) error { return nil })
+	m.SetBundles(&fakeBundles{mounts: backing})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "ctx", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	for i, mt := range backing[:cap(backing)][1:] {
+		if mt != (box.Mount{}) {
+			t.Fatalf("the bundle's backing array was written at %d: %+v", i+1, mt)
+		}
+	}
+	want := []box.Mount{backing[0], {Host: "/srv/b/docs", Box: "/srv/b/docs"}, {Host: "/srv/b/notes", Box: "/srv/b/notes"}}
+	if !slices.Equal(boxes.lastRO, want) {
+		t.Fatalf("Wrap extraRO = %+v, want %+v", boxes.lastRO, want)
 	}
 }

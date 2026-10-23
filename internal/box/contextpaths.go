@@ -90,7 +90,11 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 			"share its parent and run `agent-box box setup -recreate`", strings.Join(shared, ", "))
 	}
 	if info.IsDir() {
-		if sock := findSocket(p); sock != "" {
+		sock, err := findSocket(p)
+		if err != nil {
+			return err
+		}
+		if sock != "" {
 			return ctxPathRefuse(p, "contains a unix socket (%s); a read-only mount does not stop the box from connecting to it", sock)
 		}
 	}
@@ -102,34 +106,39 @@ func CheckContextPath(p, home string, protected []ProtectedDir, shared []string)
 var hostSocketDirs = []string{".colima", ".lima", ".docker", ".ssh"}
 
 // socketScanMaxEntries bounds findSocket's walk. A tree bigger than this is
-// allowed unscanned: the scan is best effort.
-const socketScanMaxEntries = 20000
+// refused, not allowed unscanned: a socket anywhere in it would go unseen. A
+// var so a test can lower it.
+var socketScanMaxEntries = 20000
 
 // findSocket returns the first unix socket under dir (any depth, symlinks not
 // followed), or "". A read-only bind mount does not stop connect() on a socket,
 // so a socket in a context path lets the box drive the host service behind it
-// (a docker socket is root on the host). An unreadable directory is skipped.
-func findSocket(dir string) string {
-	var found string
+// (a docker socket is root on the host). It fails closed: a tree over the entry
+// cap or a directory it cannot read is an error, because either could hide a
+// socket. err is a ready context_paths refusal for p.
+func findSocket(p string) (found string, err error) {
 	visited := 0
-	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if d != nil && d.IsDir() {
-				return fs.SkipDir
+	_ = filepath.WalkDir(p, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			sub := path
+			if rel, rerr := filepath.Rel(p, path); rerr == nil && rel != "." {
+				sub = rel
 			}
-			return nil
+			err = ctxPathRefuse(p, "cannot read %s to scan for unix sockets", sub)
+			return fs.SkipAll
 		}
 		if visited >= socketScanMaxEntries {
+			err = ctxPathRefuse(p, "too large to scan for unix sockets (over %d entries); list narrower subdirectories", socketScanMaxEntries)
 			return fs.SkipAll
 		}
 		visited++
 		if d.Type()&fs.ModeSocket != 0 {
-			found = p
+			found = path
 			return fs.SkipAll
 		}
 		return nil
 	})
-	return found
+	return found, err
 }
 
 const (

@@ -298,3 +298,36 @@ func TestCheckContextPathNotClean(t *testing.T) {
 		wantCtxErr(t, CheckContextPath(p, "/h", nil, nil), p, "clean")
 	}
 }
+
+// The scan is a safety check, so a tree it cannot finish is refused, never
+// allowed unscanned.
+func TestCheckContextPathRefusesTreeOverScanCap(t *testing.T) {
+	old := socketScanMaxEntries
+	socketScanMaxEntries = 5
+	t.Cleanup(func() { socketScanMaxEntries = old })
+	d := shortTmp(t)
+	for i := 0; i < 10; i++ {
+		if err := os.WriteFile(filepath.Join(d, fmt.Sprintf("f%d", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
+		"too large to scan for unix sockets (over 5 entries); list narrower subdirectories")
+}
+
+func TestCheckContextPathRefusesUnreadableSubdir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+	d := shortTmp(t)
+	sub := filepath.Join(d, "locked")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
+		"cannot read locked to scan for unix sockets")
+}

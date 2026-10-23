@@ -1491,20 +1491,42 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 	}
 
+	// checkContext refuses a context path that is unsafe now: deleted, swapped
+	// for a symlink or made unsafe since the profile was saved, or overlapping
+	// the workspace (already mounted, and a read-only mount over part of a
+	// writable one would shadow it). The message names the path, so it never
+	// surfaces as a docker bind error. It runs before Prepare (cheap refusal,
+	// before the box VM starts) and again right before Wrap, to narrow the window
+	// between the check and the mount.
+	checkContext := func() error { return nil }
 	if len(ctxPaths) > 0 {
-		// A path deleted, swapped for a symlink or made unsafe since the profile
-		// was saved is refused here, naming the path, rather than surfacing as a
-		// docker bind error. Before Prepare, which may start the box VM.
 		m.mu.Lock()
 		check := m.contextCheck
 		m.mu.Unlock()
 		if check == nil {
 			return nil, fmt.Errorf("%w: profile %q has context_paths but they cannot be checked on this host", box.ErrBoxUnavailable, spec.Agent)
 		}
-		for _, p := range ctxPaths {
-			if err := check(p); err != nil {
-				return nil, fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+		if absErr != nil {
+			return nil, fmt.Errorf("%w: profile %q: cannot resolve working directory %q: %v", box.ErrBoxUnavailable, spec.Agent, spec.Cwd, absErr)
+		}
+		ws := absCwd // in clone mode this is the clone dir (enforced above)
+		if real, err := filepath.EvalSymlinks(ws); err == nil {
+			ws = real
+		}
+		checkContext = func() error {
+			for _, p := range ctxPaths {
+				if err := check(p); err != nil {
+					return fmt.Errorf("%w: profile %q: %w", box.ErrBoxUnavailable, spec.Agent, err)
+				}
+				if box.Overlaps(p, ws) {
+					return fmt.Errorf("%w: profile %q: context_paths %s overlaps the session workspace %s; the workspace is already mounted",
+						box.ErrBoxUnavailable, spec.Agent, p, spec.Cwd)
+				}
 			}
+			return nil
+		}
+		if err := checkContext(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -1738,6 +1760,11 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// destinations only).
 		env = withoutEnv(env, []string{config.ContextPathsEnv})
 		if len(ctxPaths) > 0 {
+			// Last look before the mount: the bundle, broker and egress work above
+			// can take a while.
+			if err := checkContext(); err != nil {
+				return nil, err
+			}
 			for _, p := range ctxPaths {
 				mounts = append(slices.Clip(mounts), box.Mount{Host: p, Box: p})
 			}
