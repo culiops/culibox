@@ -370,10 +370,12 @@ func TestBoxShellFallbackScript(t *testing.T) {
 		t.Errorf("no such shell: stdout %q stderr %q, want bash (without the fish args) and a notice", out, errOut)
 	}
 	// A command run through the missing shell fails; bash must not swallow it.
-	out, errOut, err = start("/usr/bin:/bin", notExec, "-c", "claude --resume x")
-	var ee *exec.ExitError
-	if !errors.As(err, &ee) || ee.ExitCode() != 127 || out != "" || !strings.Contains(errOut, "-c command cannot run") {
-		t.Errorf("missing shell with -c: err %v stdout %q stderr %q, want exit 127 and no bash", err, out, errOut)
+	for _, flag := range []string{"-c", "-lc", "-ic"} {
+		out, errOut, err = start("/usr/bin:/bin", notExec, flag, "claude --resume x")
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 127 || out != "" || !strings.Contains(errOut, "-c command cannot run") {
+			t.Errorf("missing shell with %s: err %v stdout %q stderr %q, want exit 127 and no bash", flag, err, out, errOut)
+		}
 	}
 	// Hostile argument text stays data: nothing in it is run.
 	marker := filepath.Join(dir, "PWNED")

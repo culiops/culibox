@@ -57,11 +57,12 @@ zstyle ':vcs_info:git:*' actionformats '%b|%a'
 
 # _ab_seg COLOR LABEL VALUE: append one segment to _ab_line (no subshell), red
 # when VALUE names production. VALUE comes from places a repo or an agent
-# controls (a branch name, the workspace file), so it is cut down to a plain
-# charset before it enters PROMPT: no % prompt escapes, and no $ or backtick for
-# a PROMPT_SUBST (set by your own ~/.zshrc, say) to run.
+# controls (a branch name, the workspace file), so it is cut to 128 characters
+# and then to a plain charset before it enters PROMPT: no % prompt escapes, and
+# no $ or backtick for a PROMPT_SUBST (set by your own ~/.zshrc, say) to run.
 _ab_seg() {
-	local color=$1 v=${3//[^A-Za-z0-9._\/@:+=,~*|-]/?}
+	local color=$1 v=${3[1,128]}
+	v=${v//[^A-Za-z0-9._\/@:+=,~*|-]/?}
 	[[ ${(L)v} =~ '(^|[^a-z])(prod|prd|production|live)([^a-z]|$)' ]] && color=red
 	_ab_line+=" %F{$color}$2:$v%f"
 }
@@ -72,9 +73,13 @@ typeset -g _ab_kube_key= _ab_kube_ctx= _ab_kube_ns=
 _ab_kube() {
 	local -a cfgs=(${(s.:.)KUBECONFIG})
 	(( $#cfgs )) || cfgs=($HOME/.kube/config)
-	local f key=
+	local f key= m s
 	for f in $cfgs; do
-		[[ -r $f ]] && key+="$f:$(zstat +mtime -- "$f" 2>/dev/null):$(zstat +size -- "$f" 2>/dev/null);"
+		[[ -r $f ]] || continue
+		m=() s=()
+		zstat -A m +mtime -- "$f" 2>/dev/null
+		zstat -A s +size -- "$f" 2>/dev/null
+		key+="$f:${m[1]}:${s[1]};"
 	done
 	if [[ -z $key ]] || (( ! $+commands[kubectl] )); then
 		_ab_kube_key= _ab_kube_ctx= _ab_kube_ns=
@@ -96,9 +101,13 @@ _ab_precmd() {
 	local profile=${AWS_PROFILE:-$AWS_DEFAULT_PROFILE} region=${AWS_REGION:-$AWS_DEFAULT_REGION}
 	[[ -n $profile || -n $region ]] && _ab_seg yellow aws "${profile:-default}${region:+@$region}"
 	[[ -n $_ab_kube_ctx ]] && _ab_seg blue k8s "$_ab_kube_ctx${_ab_kube_ns:+/$_ab_kube_ns}"
-	local ws=$TF_WORKSPACE
-	# One line, read without a fork (a symlink to a huge file costs nothing).
-	[[ -z $ws && -f .terraform/environment && -r .terraform/environment ]] && read -r ws < .terraform/environment
+	local ws=$TF_WORKSPACE sz=()
+	# A workspace name is short: a bigger file (a repo can commit one) is skipped
+	# before any read, and the read needs no fork.
+	if [[ -z $ws && -f .terraform/environment && -r .terraform/environment ]] &&
+		zstat -A sz +size -- .terraform/environment 2>/dev/null && (( sz[1] <= 256 )); then
+		read -r ws < .terraform/environment
+	fi
 	[[ -n $ws && $ws != default ]] && _ab_seg green tf "$ws"
 	if [[ -n $_ab_started ]]; then
 		local took=$(( EPOCHSECONDS - _ab_started ))

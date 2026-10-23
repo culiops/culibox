@@ -948,7 +948,7 @@ RUN set -eu; \
 # so an edit to it changes this Dockerfile, and with it the image label that
 # tells doctor to rebuild. Completions for the tools above are generated here
 # (HOME pointed away so nothing lands in /root).
-ARG AGENT_BOX_ZSHRC_SHA256=501ad915935a8c08f47f5e8f11bda8efed14415907e9bc37d9e44976773931a2
+ARG AGENT_BOX_ZSHRC_SHA256=a59e93d3f4e2fa674e8428ce88885451edf99383a42a4bcfd18f4d4563b89be2
 COPY zshrc /etc/agent-box/zshrc
 RUN set -eu; \
     echo "${AGENT_BOX_ZSHRC_SHA256}  /etc/agent-box/zshrc" | sha256sum -c -; \

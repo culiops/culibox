@@ -1717,19 +1717,19 @@ func TestZshrcPromptRunsNothingFromTheRepo(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, ".terraform"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	hostile := "x$(touch${IFS}PWNED)`touch${IFS}PWNED2`%F{red}"
+	hostile := "x$(touch PWNED)`touch PWNED2`%F{red}"
 	if err := os.WriteFile(filepath.Join(repo, ".terraform", "environment"), []byte(hostile), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, opt := range []string{"NO_PROMPT_SUBST", "PROMPT_SUBST"} {
 		c := exec.Command(zsh, "-f", "-c", `setopt `+opt+`; source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
 		c.Dir = repo
-		c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "AWS_PROFILE=a$(touch${IFS}PWNED3)"}
+		c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "AWS_PROFILE=a$(touch PWNED3)"}
 		out, err := c.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s: %v: %s", opt, err, out)
 		}
-		if !strings.Contains(string(out), "tf:x??touch??IFS?PWNED?") {
+		if !strings.Contains(string(out), "tf:x??touch?PWNED??touch?PWNED2??F?red?") {
 			t.Errorf("%s: the workspace segment was not sanitized: %q", opt, out)
 		}
 		if strings.Contains(string(out), "no such file") {
@@ -1779,5 +1779,39 @@ func TestZshrcPromptRunsNoRepoGitHook(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("the prompt ran a command from the repo's .git/config")
+	}
+}
+
+// A huge workspace file (a repo can commit one: it compresses to almost
+// nothing) must not stall the prompt, and a long value is cut.
+func TestZshrcPromptStaysFastOnHugeValues(t *testing.T) {
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	rc, _ := filepath.Abs("zshrc")
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".terraform"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".terraform", "environment"), bytes.Repeat([]byte("a"), 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := exec.Command(zsh, "-f", "-c", `source "$1"; _ab_precmd; print -rP -- "$PROMPT"`, "zsh", rc)
+	c.Dir = repo
+	c.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin", "AWS_PROFILE=" + strings.Repeat("b", 100000)}
+	start := time.Now()
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("one prompt took %v with a 1 MB workspace file and a 100 KB AWS_PROFILE", d)
+	}
+	if strings.Contains(string(out), "tf:") {
+		t.Error("a 1 MB workspace file was rendered")
+	}
+	if strings.Contains(string(out), strings.Repeat("b", 129)) {
+		t.Error("a long value was not cut to 128 characters")
 	}
 }
