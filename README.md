@@ -131,7 +131,8 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `box_idle_ttl_seconds` | `900` | How long a box outlives its last session. |
 | `box_pids_limit` | `512` | Max processes and threads per box. |
 | `box_tmp_size` | `512m` | Size of the box's `/tmp` tmpfs; number + k/m/g. |
-| `box_memory` | `4g` | RAM cap per box; number + k/m/g, at least `1g`. Swap is capped to the same value, so a box over its cap is killed rather than swapping the host. |
+| `box_memory` | half of docker's memory | RAM cap per box; number + k/m/g, at least `1g`, or `max` for all of docker's memory (on macOS, the VM's). Unset is half of what `docker info` reports (at least `1g`), or `4g` if docker cannot be asked. `max` refuses to start a box rather than run uncapped when it cannot be read. Swap is capped to the same value, so a box over its cap is killed rather than swapping the host. |
+| `box_cpus` | unset (no cap) | CPU cap per box, passed as `--cpus`: `0.01` to `1024`, at most 2 decimals. Unset lets a box use every core docker has. A value above docker's core count is refused by docker when the box starts. |
 | `docker_bin` | `docker` | Docker CLI to use. |
 | `bundle_source` | auto-detect | Agent config to bundle into boxes; `off` disables it. |
 | `data_dir` | the data root | Where state lives. |
@@ -141,7 +142,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `max_upload_bytes` | 64 MiB | Per uploaded file. Zero or negative means the default, never unlimited. |
 | `max_archive_bytes`, `max_archive_files` | 512 MiB, 20000 | Caps on folder downloads. |
 | `analytics.enabled` | `true` | Token and cost analytics. |
-| `box_vm_cpus`, `box_vm_memory_gib` | 4, 4 | macOS box VM size. |
+| `box_vm_cpus`, `box_vm_memory_gib` | all cores, half the RAM | macOS box VM size. Unset is every core of the Mac and half its RAM in whole GiB, at least 4. See [macOS](docs/MACOS.md) for what a changed size does to an existing VM. |
 | `broker_port` | `9071` | macOS only: credential broker port on `127.0.0.1`. |
 | `extra_ca_certs` | none | Absolute paths to CA certificate PEM files that boxes should trust, for a TLS-inspecting proxy. See [Behind a TLS-inspecting proxy](docs/MACOS.md#behind-a-tls-inspecting-proxy). Read at daemon start only: a change needs a restart. |
 | `github_apps` | none | GitHub App connections the credential broker mints installation tokens with. Read at daemon start only: a change needs a restart. |
@@ -149,7 +150,7 @@ Everything agent-box writes lives in one data root: `$AGENT_BOX_HOME` (an absolu
 | `aws_connections` | none | Named AWS connections (source profile, role, region, optional write role) that a boxed profile can pick by name, so one session reaches several accounts. See [Several AWS accounts in one session](#several-aws-accounts-in-one-session). Read at daemon start only: a change needs a restart. |
 | `env_label`, `env_color` | unset | Badge shown in the UI. |
 
-`box_pids_limit`, `box_tmp_size` and `box_memory` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
+`box_pids_limit`, `box_tmp_size`, `box_memory` and `box_cpus` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
 Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `default_cwd`, `account`, `aws`, `aws_connections` (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)), `github` (see [GitHub access for agents](#github-access-for-agents)), `tokens` (see [Static tokens for agents](#static-tokens-for-agents)), `clone_of` and `clone_share` (see [Clone mode](#clone-mode)), `context_paths` (see [Reading other repos](#reading-other-repos-context_paths)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles. A profile only honours per-spawn overrides for options it lists; `POST /api/sessions` reports any it ignored in an `options_dropped` list of `{key, reason}` in the 201 body. Images are instance-wide: set `box_image`. A profile carrying `box.image` is refused on save and ignored, with a log line, when loaded from an older store or config.
 

@@ -239,11 +239,14 @@ type Options struct {
 	// PidsLimit caps processes and threads per box; 0 = DefaultPidsLimit.
 	// TmpSize is the size of the box's /tmp tmpfs ("512m", number + k/m/g);
 	// "" = DefaultTmpSize. Memory is the box's RAM cap ("4g", number + k/m/g,
-	// at least 1g); swap is capped to the same value. "" = DefaultMemory.
-	// New validates all three (see ValidateLimits).
+	// at least 1g); swap is capped to the same value. "" = half of docker's
+	// memory (DefaultMemory if that cannot be read), "max" = all of it (see
+	// memoryCap). CPUs caps a box's CPU time (--cpus); 0 = no cap.
+	// New validates all four (see ValidateLimits, ValidateCPUs).
 	PidsLimit int
 	TmpSize   string
 	Memory    string
+	CPUs      float64
 
 	// ExtraCA is the operator's extra trust set (config extra_ca_certs). Empty =
 	// off: no label, no mount, no docker call, runArgs unchanged. When set, every
@@ -293,6 +296,11 @@ type Manager struct {
 	// they are removed as soon as their last session is released, with no
 	// idle-TTL reuse. Set by ensure and, after a restart, by MarkExclusive.
 	exclusive map[string]bool
+	// memTotal is docker's MemTotal once read (0 = not yet); memFallbackLogged
+	// stops the unreadable-MemTotal fallback from logging on every spawn. Both
+	// guarded by mu.
+	memTotal          int64
+	memFallbackLogged bool
 }
 
 // New probes for a stronger runtime and returns a ready Manager. Detection is
@@ -307,6 +315,9 @@ func New(opts Options) (*Manager, error) {
 		return nil, fmt.Errorf("box: an image is required")
 	}
 	if err := ValidateLimits(opts.PidsLimit, opts.TmpSize, opts.Memory); err != nil {
+		return nil, fmt.Errorf("box: %w", err)
+	}
+	if err := ValidateCPUs(opts.CPUs); err != nil {
 		return nil, fmt.Errorf("box: %w", err)
 	}
 	if opts.IdleTTL <= 0 {
@@ -858,7 +869,12 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 			m.rearmIfIdle(name)
 			return err
 		}
-		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive, bundle)); err != nil {
+		memory, err := m.memoryCap(ctx)
+		if err != nil {
+			m.rearmIfIdle(name)
+			return fmt.Errorf("%w: %v", ErrBoxUnavailable, err)
+		}
+		if _, err := m.opts.Client.Run(ctx, m.runArgs(name, cwd, extraRO, fenced, exclusive, bundle, memory)); err != nil {
 			// The idle timer was cancelled above. Without re-arming, a box that
 			// survives a failed spawn would never be stopped by anyone.
 			m.rearmIfIdle(name)

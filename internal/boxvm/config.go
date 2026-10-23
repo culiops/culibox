@@ -57,8 +57,10 @@ type Config struct {
 // ConfigFor is the VM config for an instance: paths from the data root and
 // home, size from the instance config. The one place that maps config.json onto
 // a Config, so doctor and box setup cannot disagree about the VM they mean.
-func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string) Config {
-	cpus, mem := cfg.BoxVMSize()
+// hostCPUs and hostMemBytes (see HostSize) size the VM when the config leaves it
+// unset; 0 means unknown.
+func ConfigFor(cfg config.Config, dataDir, home, colimaBin, dockerBin string, hostCPUs int, hostMemBytes uint64) Config {
+	cpus, mem := cfg.BoxVMSize(hostCPUs, hostMemBytes)
 	// Every caller (the daemon's box layer, doctor) runs after config validation,
 	// which already refused an unreadable extra_ca_certs. On an error here
 	// ExtraCAPEM stays nil: no CA block, never a half-built one.

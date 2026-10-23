@@ -198,10 +198,10 @@ func TestBoxLayerOptionsFenceLinuxOnly(t *testing.T) {
 }
 
 func TestBoxLayerOptionsCarryLimits(t *testing.T) {
-	cfg := config.Config{DockerBin: "/bin/sh", BoxPidsLimit: 2048, BoxTmpSize: "2g", BoxMemory: "3g"}
+	cfg := config.Config{DockerBin: "/bin/sh", BoxPidsLimit: 2048, BoxTmpSize: "2g", BoxMemory: "3g", BoxCPUs: 1.5}
 	for _, goos := range []string{"linux", "darwin"} {
 		o := (&boxLayer{goos: goos}).options(cfg)
-		if o.PidsLimit != 2048 || o.TmpSize != "2g" || o.Memory != "3g" {
+		if o.PidsLimit != 2048 || o.TmpSize != "2g" || o.Memory != "3g" || o.CPUs != 1.5 {
 			t.Errorf("%s: limits not carried: pids=%d tmp=%q mem=%q", goos, o.PidsLimit, o.TmpSize, o.Memory)
 		}
 	}

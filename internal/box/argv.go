@@ -42,16 +42,14 @@ var hostOnlyEnv = map[string]bool{
 // enforces exclusive workspaces; exclusive=1 marks a box another spawn must not
 // share a folder with. caBundle != "" adds the extra-CA label and bundle mount;
 // "" leaves the output exactly as it was before extra CAs existed.
-func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle string) []string {
-	pids, tmpSize, memory := m.opts.PidsLimit, m.opts.TmpSize, m.opts.Memory
+// memory is the resolved --memory value (see memoryCap), never "" or "max".
+func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusive bool, caBundle, memory string) []string {
+	pids, tmpSize := m.opts.PidsLimit, m.opts.TmpSize
 	if pids == 0 {
 		pids = DefaultPidsLimit
 	}
 	if tmpSize == "" {
 		tmpSize = DefaultTmpSize
-	}
-	if memory == "" {
-		memory = DefaultMemory
 	}
 	args := []string{
 		// --pull=never: a missing (e.g. deleted pinned) image must fail the spawn,
@@ -76,6 +74,10 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
 		"--mount", bindMount(m.stateDir(boxName), boxHome, false),
+	}
+	// No box_cpus, no flag: the box can use every core docker has.
+	if m.opts.CPUs > 0 {
+		args = append(args, "--cpus", strconv.FormatFloat(m.opts.CPUs, 'f', -1, 64))
 	}
 	if exclusive {
 		args = append(args, "--label", LabelExclusive+"=1")

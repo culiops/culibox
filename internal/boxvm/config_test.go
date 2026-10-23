@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -199,18 +200,22 @@ func TestValidateAcceptsOrdinaryConfigAndRefusesIncomplete(t *testing.T) {
 }
 
 func TestConfigForTakesSizeFromTheInstanceConfig(t *testing.T) {
-	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d")
+	got := ConfigFor(config.Config{BoxVMCPUs: 2, BoxVMMemoryGiB: 8}, "/data", "/home/a", "/c", "/d", 10, 32<<30)
 	want := Config{Root: "/data", Home: "/home/a", ColimaBin: "/c", DockerBin: "/d", CPUs: 2, MemoryGiB: 8, BrokerPort: 9071, EgressPort: 9072}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v want %+v", got, want)
 	}
-	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 || d.EgressPort != 9072 {
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d", 0, 0); d.CPUs != 4 || d.MemoryGiB != 4 || d.BrokerPort != 9071 || d.EgressPort != 9072 {
 		t.Fatalf("defaults: %+v", d)
 	}
-	if c := ConfigFor(config.Config{BrokerPort: 9100}, "/data", "/home/a", "/c", "/d"); c.BrokerPort != 9100 {
+	// Unset size follows the host facts it is given: all cores, half the RAM.
+	if d := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d", 10, 32<<30); d.CPUs != 10 || d.MemoryGiB != 16 {
+		t.Fatalf("host-derived defaults: %+v", d)
+	}
+	if c := ConfigFor(config.Config{BrokerPort: 9100}, "/data", "/home/a", "/c", "/d", 0, 0); c.BrokerPort != 9100 {
 		t.Fatalf("broker_port from config: %+v", c)
 	}
-	if c := ConfigFor(config.Config{EgressPort: 9200}, "/data", "/home/a", "/c", "/d"); c.EgressPort != 9200 {
+	if c := ConfigFor(config.Config{EgressPort: 9200}, "/data", "/home/a", "/c", "/d", 0, 0); c.EgressPort != 9200 {
 		t.Fatalf("egress_port from config: %+v", c)
 	}
 }
@@ -783,10 +788,20 @@ func TestConfigForFillsTheCAFromExtraCACerts(t *testing.T) {
 	if err := os.WriteFile(f, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := ConfigFor(config.Config{ExtraCACerts: []string{f}}, "/data", "/home/a", "/c", "/d"); !strings.HasPrefix(string(got.ExtraCAPEM), "-----BEGIN CERTIFICATE-----\n") {
+	if got := ConfigFor(config.Config{ExtraCACerts: []string{f}}, "/data", "/home/a", "/c", "/d", 0, 0); !strings.HasPrefix(string(got.ExtraCAPEM), "-----BEGIN CERTIFICATE-----\n") {
 		t.Fatalf("ExtraCAPEM = %q", got.ExtraCAPEM)
 	}
-	if got := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d"); got.ExtraCAPEM != nil {
+	if got := ConfigFor(config.Config{}, "/data", "/home/a", "/c", "/d", 0, 0); got.ExtraCAPEM != nil {
 		t.Fatalf("no extra_ca_certs must leave ExtraCAPEM nil, got %q", got.ExtraCAPEM)
+	}
+}
+
+func TestHostSizeReadsTheMachine(t *testing.T) {
+	cpus, mem := HostSize()
+	if cpus < 1 {
+		t.Errorf("HostSize cpus = %d", cpus)
+	}
+	if runtime.GOOS == "darwin" && mem == 0 {
+		t.Error("darwin must read hw.memsize")
 	}
 }

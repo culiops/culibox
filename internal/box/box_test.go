@@ -103,7 +103,7 @@ func TestExecArgvDropsHostSpecificVariables(t *testing.T) {
 
 func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false, "")
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", nil, false, false, "", DefaultMemory)
 	joined := strings.Join(got, " ")
 	for _, forbidden := range []string{"docker.sock", "/home/claude/.ssh", "/home/claude/.claude,"} {
 		if strings.Contains(joined, forbidden) {
@@ -123,7 +123,7 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 
 func TestExtraMountsAreReadOnlyBinds(t *testing.T) {
 	m := newTestManager(t)
-	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false, false, "")
+	got := m.runArgs("ab-box-abc", "/home/claude/proj", []Mount{{Host: "/data/bundle", Box: "/opt/agent-bundle"}}, false, false, "", DefaultMemory)
 	if !containsPair(got, "--mount", "type=bind,src=/data/bundle,dst=/opt/agent-bundle,readonly") {
 		t.Fatalf("extra mounts must be readonly binds: %q", strings.Join(got, " "))
 	}
@@ -182,7 +182,7 @@ func TestMountUnsafeAcceptsOrdinaryPaths(t *testing.T) {
 
 func TestRunArgsAreHardened(t *testing.T) {
 	m := newTestManager(t)
-	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil, false, false, ""), " ")
+	joined := strings.Join(m.runArgs("ab-box-abc", "/tmp/p", nil, false, false, "", DefaultMemory), " ")
 	for _, want := range []string{"--cap-drop=ALL", "no-new-privileges", "--read-only", "--pids-limit", "--init"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing hardening %q in %q", want, joined)
@@ -192,14 +192,14 @@ func TestRunArgsAreHardened(t *testing.T) {
 
 func TestSysboxRuntimeOnlyWhenDetected(t *testing.T) {
 	plain := newTestManager(t)
-	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil, false, false, ""), " "), "sysbox") {
+	if strings.Contains(strings.Join(plain.runArgs("b", "/tmp/p", nil, false, false, "", DefaultMemory), " "), "sysbox") {
 		t.Fatal("must not request sysbox when it is not installed")
 	}
 	if plain.Runtime() != runtimeRunc {
 		t.Fatalf("Runtime() = %q, want %q", plain.Runtime(), runtimeRunc)
 	}
 	withSysbox := newTestManagerWithSysbox(t)
-	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil, false, false, ""), " "), "--runtime="+runtimeSysbox) {
+	if !strings.Contains(strings.Join(withSysbox.runArgs("b", "/tmp/p", nil, false, false, "", DefaultMemory), " "), "--runtime="+runtimeSysbox) {
 		t.Fatal("expected --runtime=sysbox-runc when detected")
 	}
 	if withSysbox.Runtime() != runtimeSysbox {
@@ -329,7 +329,7 @@ func TestStateIsAHostDirectoryNotANamedVolume(t *testing.T) {
 	if _, err := m.ensureStateDir("ab-box-abc", nil); err != nil {
 		t.Fatal(err)
 	}
-	args := m.runArgs("ab-box-abc", "/w", nil, false, false, "")
+	args := m.runArgs("ab-box-abc", "/w", nil, false, false, "", DefaultMemory)
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "ab-state-") {
 		t.Fatalf("state must not be a named volume (image ownership breaks other uids): %q", joined)
@@ -1106,11 +1106,11 @@ func TestSessionKeyGivesEachSessionItsOwnBox(t *testing.T) {
 func TestExclusiveRunArgsCarryTheLabels(t *testing.T) {
 	m := newTestManager(t)
 	m.SetEgress(Egress{Network: "agentbox-egress-TEST", Verify: okVerify})
-	got := m.runArgs("ab-box-x", "/w", nil, true, true, "")
+	got := m.runArgs("ab-box-x", "/w", nil, true, true, "", DefaultMemory)
 	if !containsPair(got, "--label", LabelExclusive+"=1") || !containsPair(got, "--label", LabelClaims+"=1") {
 		t.Fatalf("exclusive box lacks its labels: %q", got)
 	}
-	plain := m.runArgs("ab-box-y", "/w", nil, true, false, "")
+	plain := m.runArgs("ab-box-y", "/w", nil, true, false, "", DefaultMemory)
 	if slices.Contains(plain, LabelExclusive+"=1") || !containsPair(plain, "--label", LabelClaims+"=1") {
 		t.Fatalf("a shared bound box: claims yes, exclusive no: %q", plain)
 	}

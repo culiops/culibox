@@ -75,7 +75,8 @@ func newBoxLayer(cfg config.Config, dataDir, home, goos string, runner boxvm.Run
 		if err != nil {
 			return nil, err
 		}
-		l.vm = boxvm.NewVM(boxvm.ConfigFor(cfg, dataDir, home, colima, bin), runner)
+		hostCPUs, hostMem := boxvm.HostSize()
+		l.vm = boxvm.NewVM(boxvm.ConfigFor(cfg, dataDir, home, colima, bin, hostCPUs, hostMem), runner)
 		// Symlink-resolved: the VM mounts these paths, so every path a box
 		// mounts or a workspace is checked against must be spelled the same way.
 		vc := l.vm.Config()
@@ -115,6 +116,7 @@ func (l *boxLayer) options(cfg config.Config) box.Options {
 		PidsLimit:  cfg.BoxPidsLimit,
 		TmpSize:    cfg.BoxTmpSize,
 		Memory:     cfg.BoxMemory,
+		CPUs:       cfg.BoxCPUs,
 		ExtraCA:    extra,
 		ExtraCAErr: extraErr,
 		// Linux: every box sits on the egress network and has its guard files

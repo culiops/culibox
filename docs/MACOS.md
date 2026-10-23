@@ -67,10 +67,21 @@ context and never edits `~/.ssh/config`.
     agent-box doctor           # the "boxed tier", "box image" and "containment" lines
 
 - The VM starts on the first boxed spawn (expect 20–30 s) and keeps running.
-  `agent-box box stop` frees its memory (default 4 CPU / 4 GiB; `box_vm_cpus`,
-  `box_vm_memory_gib` in config.json). It refuses while any box is running, even
+  `agent-box box stop` frees its memory (default all your Mac's cores and half
+  its RAM in whole GiB, at least 4 GiB; `box_vm_cpus`, `box_vm_memory_gib` in
+  config.json). It refuses while any box is running, even
   an idle one; `agent-box box stop -force` stops the VM anyway and ends those
   sessions. `agent-box box status` shows the VM, the image and the boxes.
+- **Upgrading with the size unset.** A VM created by an older agent-box has 4
+  CPUs / 4 GiB, while the new default is bigger on most Macs. agent-box does
+  not resize or delete an existing VM on its own: it keeps running at the size
+  it was created with, and `agent-box doctor` reports "box VM config changed
+  since setup". To pick up the new size, run `agent-box box setup -recreate`,
+  which deletes the VM, so its images and cache go too (box homes live on the
+  host and stay); the next setup rebuilds the image. To keep the old size and
+  silence the warning, set `box_vm_cpus: 4` and `box_vm_memory_gib: 4`.
+  Boxes size their memory from the VM (by default half of it), so the VM size
+  is what bounds every box on a Mac.
 - Workspaces must be under your home directory (the VM shares only that), and
   must not be, contain or sit inside the data root (it holds the VM's own
   settings and SSH key). They also must not be or contain the directory of the
