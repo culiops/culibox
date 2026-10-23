@@ -1,6 +1,7 @@
 package box
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,12 +9,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"syscall"
 )
 
 // maxClaudeStateSize caps how much of a box home's .claude.json the daemon reads.
-// The agent grows that file (one entry per project, usage counters), so the cap
-// is generous; a file past it is left alone, and the dialog shows as before.
-const maxClaudeStateSize = 32 << 20
+// The agent grows that file (one entry per project, usage counters): measured
+// 2026-10-23 at ~50 KB in box homes and 184 KB for a months-old host one. A file
+// past the cap is left alone, and the dialog shows as before. The merge runs
+// under the box layer's opMu, so the cap also bounds how long a box that pads
+// its own file can hold up other spawns.
+const maxClaudeStateSize = 8 << 20
 
 // trustTempPrefix names the temp file a merge writes before renaming it over
 // .claude.json. A random suffix follows, so a stray one from a crash never
@@ -23,16 +28,18 @@ const trustTempPrefix = ".claude.json.ab-trust-"
 // trustWorkspace marks workspace as trusted in the box home's .claude.json, so
 // Claude Code skips its "Do you trust this folder?" dialog there. That dialog
 // defaults to "No, exit": in the web terminal one stray Enter killed a freshly
-// spawned boxed session. Inside a box the repo's hooks and settings run with the
-// box's own, contained power, so the dialog protects nothing. Host-tier homes
-// never reach this code and keep their dialog.
+// spawned boxed session. It is called only for boxes whose sessions run with the
+// config bundle (BoxKey.PreTrust): its --setting-sources user already keeps the
+// repo's own settings and hooks from loading, so the dialog guards nothing more
+// there. Every other box, and every host-tier home, keeps the dialog.
 //
 // The key is projects[<in-box cwd>].hasTrustDialogAccepted, measured on Claude
 // Code 2.1.292. The workspace is mounted at its own path, so the resolved host
 // path is the in-box one.
 //
-// It merges: every other key stays byte for byte. Anything it does not fully
-// understand (not a regular file, too large, not JSON, a projects value or entry
+// It merges: every other key and value is kept with the same meaning (the file
+// is re-encoded, so key order and whitespace may change). Anything it does not
+// fully understand (not a regular file, too large, not JSON, a projects value or entry
 // that is not an object) is left alone and reported. The caller logs that and
 // spawns anyway. The rename is atomic, so the agent never sees half a file.
 // Callers run it only while the box's container is absent, so no agent can
@@ -46,17 +53,16 @@ func trustWorkspace(root *os.Root, workspace string) error {
 	if !fi.Mode().IsRegular() {
 		return fmt.Errorf("%s is not a regular file (%v)", name, fi.Mode().Type())
 	}
-	f, err := root.Open(name)
+	// O_NONBLOCK, and the type checked again on the open file: a FIFO swapped in
+	// after the Lstat would otherwise block this open, and opMu with it, forever.
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxClaudeStateSize+1))
+	raw, err := readRegular(f)
 	f.Close()
 	if err != nil {
 		return err
-	}
-	if len(raw) > maxClaudeStateSize {
-		return fmt.Errorf("%s is larger than %d bytes", name, maxClaudeStateSize)
 	}
 
 	var top map[string]json.RawMessage
@@ -90,11 +96,36 @@ func trustWorkspace(root *os.Root, workspace string) error {
 	if top["projects"], err = json.Marshal(projects); err != nil {
 		return err
 	}
-	out, err := json.MarshalIndent(top, "", "  ")
-	if err != nil {
+	// An Encoder, not MarshalIndent: it can leave <, > and & as they are rather
+	// than rewriting them as \u003c and friends in the agent's values.
+	var out bytes.Buffer
+	enc := json.NewEncoder(&out)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(top); err != nil { // Encode ends with a newline
 		return err
 	}
-	return replaceFile(root, name, append(out, '\n'))
+	return replaceFile(root, name, out.Bytes())
+}
+
+// readRegular reads f, which must be a regular file of at most
+// maxClaudeStateSize bytes.
+func readRegular(f *os.File) ([]byte, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (%v)", fi.Name(), fi.Mode().Type())
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxClaudeStateSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxClaudeStateSize {
+		return nil, fmt.Errorf("%s is larger than %d bytes", fi.Name(), maxClaudeStateSize)
+	}
+	return raw, nil
 }
 
 // unmarshalObject decodes raw into dst, refusing anything but a JSON object

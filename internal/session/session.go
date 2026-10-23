@@ -1570,6 +1570,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var mounts []box.Mount
 	var bundleHash string
 	var bundleFailed bool // mounts unknown, not empty: see box.BoxKey.PartialMounts
+	var preTrust bool     // the bundle applies: see box.BoxKey.PreTrust
 	var bundleDrops []bundle.Drop
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
@@ -1591,6 +1592,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			mounts, bundleHash = g.Mounts, g.Hash
 			if err == nil {
 				bundleDrops = g.Drops
+				preTrust = true
 			}
 			spec.ExtraArgs = append(spec.ExtraArgs, g.Flags...)
 		}
@@ -1659,7 +1661,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		m.mu.Lock()
 		boxes := m.boxes
 		m.mu.Unlock()
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust}
 		var bm []box.Mount
 		var benv, penv []string
 		if bs.Any() {

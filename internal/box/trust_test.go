@@ -2,10 +2,12 @@ package box
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -238,8 +240,10 @@ func TestTrustSurvivesLeftoverTempFile(t *testing.T) {
 	}
 }
 
-// Host spawns keep the dialog: nothing here may write the host's own state,
-// the default account's or another account's.
+// The box layer writes only under its state root: never the host's own state,
+// the default account's or another account's. That host-tier spawns keep their
+// dialog follows from them never reaching the box layer at all
+// (session.TestSpawnWithHostRuntimeSkipsTheBox).
 func TestEnsureStateDirNeverTouchesHostClaudeState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -287,5 +291,84 @@ func TestAccountBoxHomesEachTrustTheWorkspace(t *testing.T) {
 	}
 	if dirs[0] == dirs[1] {
 		t.Fatal("accounts must not share a box home")
+	}
+}
+
+// Trust is pre-accepted only when the session layer asks (PreTrust): a box whose
+// sessions run without --setting-sources user keeps the dialog, because there it
+// is the only gate before a repo's own settings and hooks run. Normal and clone
+// mode alike, keyed by the resolved workspace path the box mounts at itself.
+func TestWrapPreTrustsOnlyWhenAsked(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	for _, c := range []struct {
+		name string
+		key  BoxKey
+		want bool
+	}{
+		{"not asked", BoxKey{}, false},
+		{"asked", BoxKey{PreTrust: true}, true},
+		{"asked in clone mode", BoxKey{PreTrust: true, Clone: &CloneMounts{Hash: "h"}}, true},
+		{"not asked in clone mode", BoxKey{Clone: &CloneMounts{Hash: "h"}}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ws := realTemp(t)
+			_, _, name, err := m.Wrap(context.Background(), ws, "s1", c.key, []string{"claude"}, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			d := readClaudeState(t, m.stateDir(name))
+			if d["hasCompletedOnboarding"] != true {
+				t.Fatalf("onboarding seed missing: %v", d)
+			}
+			if got := trusted(d, ws); got != c.want {
+				t.Fatalf("trusted = %v, want %v (%v)", got, c.want, d)
+			}
+		})
+	}
+}
+
+// PreTrust is not identity: it must not change the box name.
+func TestPreTrustDoesNotChangeTheBoxName(t *testing.T) {
+	m := newTestManager(t)
+	ws := t.TempDir()
+	a, _ := m.boxName(ws, BoxKey{})
+	b, _ := m.boxName(ws, BoxKey{PreTrust: true})
+	if a != b {
+		t.Fatalf("PreTrust changed the box name: %s vs %s", a, b)
+	}
+}
+
+// A box can swap .claude.json for a FIFO between spawns. Opening one for read
+// blocks until a writer appears, which would hang every spawn behind opMu.
+func TestTrustLeavesFIFOAlone(t *testing.T) {
+	root, dir := trustRoot(t)
+	if err := syscall.Mkfifo(filepath.Join(dir, ".claude.json"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- trustWorkspace(root, trustWS) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("a FIFO must be refused")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("trustWorkspace blocked on a FIFO")
+	}
+}
+
+// Values the agent wrote keep their characters: no < rewriting.
+func TestTrustMergeDoesNotEscapeHTML(t *testing.T) {
+	root, dir := trustRoot(t)
+	p := filepath.Join(dir, ".claude.json")
+	if err := os.WriteFile(p, []byte(`{"note":"a<b>&c"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := trustWorkspace(root, trustWS); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(p)
+	if !strings.Contains(string(raw), `"a<b>&c"`) {
+		t.Fatalf("value re-escaped: %s", raw)
 	}
 }
