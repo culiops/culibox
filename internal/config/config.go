@@ -450,7 +450,7 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 		// An agent with no runtime of its own inherits the instance default,
 		// which validateContextPaths cannot see.
 		if len(a.ContextPaths) > 0 && c.RuntimeFor(a) == RuntimeHost {
-			return fmt.Errorf("config: agent %q: %w", a.Name, errContextNeedsBox)
+			return fmt.Errorf("config: agent %q: %w", a.Name, ErrContextNeedsBox)
 		}
 	}
 	optDefs := map[string]OptionDef{}

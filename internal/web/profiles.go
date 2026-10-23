@@ -86,6 +86,10 @@ type ProfileManager struct {
 	// cloneCheck is the disk-side check of a clone profile's repo (clone.CheckOf,
 	// wired at boot); nil = pure validation only. Spawn re-checks.
 	cloneCheck func(config.Clone) error
+	// contextCheck is the disk-side check of one context_paths entry
+	// (box.CheckContextPath plus the box-owned refusal, wired at boot); nil =
+	// pure validation only. Spawn re-checks.
+	contextCheck func(path string) error
 	// ghApps are the instance's github_apps connections (config.GitHubApps),
 	// wired at boot, so a profile cannot be saved naming an App that does not
 	// exist. nil = none defined.
@@ -231,6 +235,14 @@ func (m *ProfileManager) SetAccounts(r launcher.AccountResolver) {
 func (m *ProfileManager) SetCloneCheck(f func(config.Clone) error) {
 	m.mu.Lock()
 	m.cloneCheck = f
+	m.mu.Unlock()
+}
+
+// SetContextCheck installs the save-time check of one context_paths entry. Call
+// at boot; nil leaves only the pure validation.
+func (m *ProfileManager) SetContextCheck(f func(path string) error) {
+	m.mu.Lock()
+	m.contextCheck = f
 	m.mu.Unlock()
 }
 
@@ -445,6 +457,9 @@ func (m *ProfileManager) Save(p config.AgentConfig) error {
 	if err := m.checkClone(p); err != nil {
 		return err
 	}
+	if err := m.checkContextPaths(p); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := config.CheckGitHubApps(p, m.ghApps); err != nil {
@@ -483,6 +498,74 @@ func (m *ProfileManager) checkClone(p config.AgentConfig) error {
 		return nil
 	}
 	return check(*c)
+}
+
+// checkContextPaths is the save-time form of the context_paths checks: the
+// profile must run boxed (ValidateProfile sees only an explicit runtime, so the
+// instance default is resolved here), and every path must pass the installed
+// disk check. Spawn re-checks.
+func (m *ProfileManager) checkContextPaths(p config.AgentConfig) error {
+	if len(p.ContextPaths) == 0 {
+		return nil
+	}
+	if rt := (config.Config{DefaultRuntime: m.defaultRuntime}).RuntimeFor(p); rt != config.RuntimeBox {
+		return config.ErrContextNeedsBox
+	}
+	m.mu.Lock()
+	check := m.contextCheck
+	m.mu.Unlock()
+	if check == nil {
+		return nil
+	}
+	for _, path := range p.ContextPaths {
+		if err := check(path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// maxSecretNames is how many file names a context warning lists.
+const maxSecretNames = 5
+
+// ContextWarnings are the saved profile's context_paths the user should know
+// about: secret-looking names, secret-looking files inside a directory, and a
+// boxed profile whose workspace a context path overlaps. Warnings, not
+// refusals: what the box may read is the user's call.
+func (m *ProfileManager) ContextWarnings(p config.AgentConfig) []string {
+	if len(p.ContextPaths) == 0 {
+		return nil
+	}
+	out := config.ContextNameWarnings(p.ContextPaths)
+	for _, path := range p.ContextPaths {
+		if fi, err := os.Stat(path); err != nil || !fi.IsDir() {
+			continue
+		}
+		names := box.SecretFiles(path)
+		if len(names) == 0 {
+			continue
+		}
+		list := strings.Join(names[:min(len(names), maxSecretNames)], ", ")
+		if len(names) > maxSecretNames {
+			list += ", …"
+		}
+		out = append(out, fmt.Sprintf("context_paths %q contains files that look like secrets (%s); the box will be able to read and send them", path, list))
+	}
+	rt := config.Config{DefaultRuntime: m.defaultRuntime}
+	for _, o := range m.All() {
+		// An in-place boxed profile writes its default_cwd; a clone profile
+		// writes its clone, not default_cwd's source.
+		if o.Name == p.Name || o.CloneOf != "" || strings.TrimSpace(o.DefaultCwd) == "" || rt.RuntimeFor(o) != config.RuntimeBox {
+			continue
+		}
+		cwd := filepath.Clean(strings.TrimSpace(o.DefaultCwd))
+		for _, path := range p.ContextPaths {
+			if box.Overlaps(path, cwd) {
+				out = append(out, fmt.Sprintf("context_paths %q overlaps the workspace of boxed profile %q; that box can write what this box reads", path, o.Name))
+			}
+		}
+	}
+	return out
 }
 
 // checkAccount is the early, friendly form of launcher.checkAccount: it rejects

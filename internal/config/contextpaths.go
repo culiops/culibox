@@ -87,7 +87,7 @@ func validateContextPaths(a AgentConfig) error {
 		return nil
 	}
 	if a.Runtime == RuntimeHost {
-		return errContextNeedsBox
+		return ErrContextNeedsBox
 	}
 	if len(a.ContextPaths) > maxContextPaths {
 		return fmt.Errorf("context_paths has %d entries; at most %d", len(a.ContextPaths), maxContextPaths)
@@ -117,7 +117,8 @@ func validateContextPaths(a AgentConfig) error {
 	return nil
 }
 
-var errContextNeedsBox = errors.New(`context_paths needs runtime "box"; host sessions can already read any path`)
+// ErrContextNeedsBox is the refusal of context_paths on a host-tier profile.
+var ErrContextNeedsBox = errors.New(`context_paths needs runtime "box"; host sessions can already read any path`)
 
 // checkContextPath validates one entry on its own, before it is compared with
 // the others.

@@ -120,6 +120,26 @@ func cloneSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir) fu
 	}
 }
 
+// contextSaveCheck is the save-time (and spawn-time) check of one context_paths
+// entry: the disk checks of box.CheckContextPath, then the box-owned refusal.
+// A clone is written by its box, so another box's context would be read from
+// files that box controls. h is nil where clone mode does not exist (not
+// Linux), which leaves only CheckContextPath. shared is the box VM's shared
+// directories, nil when there is no VM.
+func contextSaveCheck(h *cloneHooks, home string, protected []box.ProtectedDir, shared []string) func(string) error {
+	return func(p string) error {
+		if err := box.CheckContextPath(p, home, protected, shared); err != nil {
+			return err
+		}
+		if h != nil {
+			if why, owned := h.BoxOwned(p); owned {
+				return fmt.Errorf("context_paths %s is inside a box-owned directory (%s); another box writes there", p, why)
+			}
+		}
+		return nil
+	}
+}
+
 // usableDir reports whether d is an absolute clean path with no control
 // character (a newline would split a record line).
 func usableDir(d string) bool {
