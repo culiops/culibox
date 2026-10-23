@@ -116,6 +116,17 @@ function contextPathsToText(list) {
   return Array.isArray(list) ? list.join("\n") : "";
 }
 
+// contextRowState: the readable-host-paths row. The paths only mean something
+// in a box. On the host tier an empty row hides; a filled one stays visible with
+// hint = "needs runtime: box", because the server refuses the save and paths
+// hidden behind a tier flip would leave the user with an error and nothing to
+// clear. hidden/hint as for awsFieldsState.
+function contextRowState(runtime, text) {
+  const host = runtime === "host";
+  const filled = contextPathsFromText(text).length > 0;
+  return { hidden: host && !filled, hint: host && filled };
+}
+
 // contextWarningsText: the save response's warnings as the lines shown under the
 // field. A clean PUT is a 204, which api() returns as null, so a missing body or
 // missing list gives "" rather than throwing.
@@ -328,5 +339,5 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
+  module.exports = { ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
 }

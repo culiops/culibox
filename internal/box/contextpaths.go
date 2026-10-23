@@ -253,6 +253,8 @@ const (
 // file. internal/config (which imports this package) warns on the same set.
 var SecretFilePatterns = []string{
 	".env*", "*.pem", "*.key", "config*.json", "id_*", "*.tfstate", "*.tfstate.*",
+	"credentials*", "*.tfvars", ".netrc", ".npmrc", ".git-credentials", "auth.json",
+	"*.p12", "*.pfx", "kubeconfig",
 }
 
 // SecretFiles lists, relative to dir, regular files whose names look like a

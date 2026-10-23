@@ -24,17 +24,22 @@ const ContextPathsEnv = "AGENTBOX_CONTEXT_PATHS"
 // A context path is mounted read-only at the same path inside the box, so an
 // entry under one of these would shadow the image, the box home (/home/agent,
 // see boxProjects in internal/clone/share.go) or agent-box's own mounts
-// (/opt/agentbox-*). contextDenyTree refuses the path itself and anything
-// inside it; contextDenyExact refuses only the path itself, because a
-// directory below it (a project under /tmp, /mnt/cold, /home/<user>) is a
-// legitimate context.
+// (/opt/agentbox-*, and under /tmp the gh config dir broker.GHConfigDir and
+// the session pid files of box.pidFile). contextDenyTree refuses the path
+// itself and anything inside it; contextDenyExact refuses only the path itself,
+// because a directory below it (a project under /tmp, /mnt/cold, /home/<user>)
+// is a legitimate context. contextDenyTmpPrefix refuses a path whose first
+// component under /tmp starts with it.
 var (
 	contextDenyTree = []string{
 		"/bin", "/boot", "/dev", "/etc", "/home/agent", "/lib", "/lib32", "/lib64",
 		"/opt", "/proc", "/root", "/run", "/sbin", "/sys", "/usr", "/var",
+		"/tmp/agentbox-gh",
 	}
 	contextDenyExact = []string{"/home", "/tmp", "/mnt", "/media"}
 )
+
+const contextDenyTmpPrefix = "ac-session-"
 
 // ContextHash identifies the context set for the box name: two profiles with
 // different context paths must never reuse one box. The order is irrelevant.
@@ -154,6 +159,9 @@ func checkContextPath(p string) error {
 	}
 	if slices.Contains(contextDenyExact, p) {
 		return fmt.Errorf("context_paths %q: refused: it would shadow %s inside the box", p, p)
+	}
+	if rest, ok := strings.CutPrefix(p, "/tmp/"); ok && strings.HasPrefix(rest, contextDenyTmpPrefix) {
+		return fmt.Errorf("context_paths %q: refused: /tmp/%s* inside the box are agent-box's own files", p, contextDenyTmpPrefix)
 	}
 	return nil
 }

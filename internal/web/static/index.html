@@ -272,8 +272,9 @@
         </div>
         <div class="frow" id="pf-context-row">
           <div class="fcol"><label class="flab" for="pf-context">Readable host paths</label>
-            <textarea id="pf-context" class="fld" rows="3" spellcheck="false" placeholder="/home/you/other-repo/CLAUDE.md"></textarea>
-            <p class="tiny mut">One absolute path per line. The box can read these, and it has internet access, so never list secrets.</p>
+            <p class="tiny mut" id="pf-context-hint" hidden>needs runtime: box — clear these paths or switch to box</p>
+            <textarea id="pf-context" class="fld" rows="3" spellcheck="false" placeholder="/home/you/other-repo/docs"></textarea>
+            <p class="tiny mut">One absolute path per line. List a folder rather than a single file where you can: a file replaced on disk (git checkout, most editors) is not seen by a running box. The box can read these, and it has internet access, so never list secrets.</p>
             <p class="warnbox tiny" id="pf-context-warn" role="status" hidden></p></div>
         </div>
         <div id="pf-awsc-block">

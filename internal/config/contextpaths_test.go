@@ -49,6 +49,12 @@ func TestValidateContextPaths(t *testing.T) {
 		{"mnt", AgentConfig{ContextPaths: []string{"/mnt"}}, "refused: it would shadow"},
 		{"media", AgentConfig{ContextPaths: []string{"/media"}}, "refused: it would shadow"},
 		{"mnt subdir is fine", AgentConfig{ContextPaths: []string{"/mnt/cold/docs"}}, ""},
+		{"gh config dir", AgentConfig{ContextPaths: []string{"/tmp/agentbox-gh"}}, "refused: it would shadow /tmp/agentbox-gh"},
+		{"inside gh config dir", AgentConfig{ContextPaths: []string{"/tmp/agentbox-gh/hosts.yml"}}, "refused: it would shadow /tmp/agentbox-gh"},
+		{"gh look-alike is fine", AgentConfig{ContextPaths: []string{"/tmp/agentbox-ghx"}}, ""},
+		{"session pid file", AgentConfig{ContextPaths: []string{"/tmp/ac-session-abc.pid"}}, "agent-box's own files"},
+		{"under ac-session dir", AgentConfig{ContextPaths: []string{"/tmp/ac-session-x/docs"}}, "agent-box's own files"},
+		{"ac-session deeper is fine", AgentConfig{ContextPaths: []string{"/tmp/proj/ac-session-x"}}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,14 +94,18 @@ func TestContextHash(t *testing.T) {
 }
 
 func TestContextNameWarnings(t *testing.T) {
-	for _, p := range []string{"/x/.env.prd", "/x/id_rsa", "/x/id_ecdsa", "/x/id_ed25519_sk", "/x/prod.tfstate", "/x/terraform.tfstate.backup"} {
+	for _, p := range []string{"/x/.env.prd", "/x/id_rsa", "/x/id_ecdsa", "/x/id_ed25519_sk", "/x/prod.tfstate", "/x/terraform.tfstate.backup",
+		"/x/credentials", "/x/credentials.json", "/x/prod.tfvars", "/x/.netrc", "/x/.npmrc", "/x/.git-credentials",
+		"/x/auth.json", "/x/cert.p12", "/x/cert.pfx", "/x/kubeconfig"} {
 		w := ContextNameWarnings([]string{p})
 		if len(w) != 1 || !strings.Contains(w[0], "looks like a secret or config file; the box will be able to read and send it") {
 			t.Errorf("%s: want one warning, got %v", p, w)
 		}
 	}
-	if w := ContextNameWarnings([]string{"/x/docs"}); len(w) != 0 {
-		t.Errorf("/x/docs: want no warning, got %v", w)
+	for _, p := range []string{"/x/docs", "/x/CLAUDE.md", "/x/main.tf", "/x/variables.tf"} {
+		if w := ContextNameWarnings([]string{p}); len(w) != 0 {
+			t.Errorf("%s: want no warning, got %v", p, w)
+		}
 	}
 }
 

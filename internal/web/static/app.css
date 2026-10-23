@@ -1362,6 +1362,7 @@
     #pf-replyable-row[hidden] { display: none; }
     #pf-context-row[hidden] { display: none; }
     #pf-context-warn { white-space: pre-line; overflow-wrap: anywhere; }
+    #pf-context-hint { margin: 0 0 8px; }
     .pf-check { display: flex; align-items: center; gap: 8px; }
     /* The AWS block is greyed with the rest of the editor's .off controls when
        the host tier (or a lock) closes it; the hint says why. */

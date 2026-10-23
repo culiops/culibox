@@ -155,6 +155,21 @@ func TestSecretFiles(t *testing.T) {
 	}
 }
 
+func TestLooksSecret(t *testing.T) {
+	for _, n := range []string{".env", "k.pem", "k.key", "config.json", "id_rsa", "x.tfstate", "x.tfstate.backup",
+		"credentials", "credentials.csv", "prod.tfvars", ".netrc", ".npmrc", ".git-credentials", "auth.json",
+		"cert.p12", "cert.pfx", "kubeconfig"} {
+		if !looksSecret(n) {
+			t.Errorf("%s: want it to look like a secret", n)
+		}
+	}
+	for _, n := range []string{"README.md", "CLAUDE.md", "main.tf", "package.json", "kubeconfig.md.txt", "netrc"} {
+		if looksSecret(n) {
+			t.Errorf("%s: want it not to look like a secret", n)
+		}
+	}
+}
+
 func TestSecretFilesBounded(t *testing.T) {
 	d := ctxTmp(t)
 	for i := range 6000 {

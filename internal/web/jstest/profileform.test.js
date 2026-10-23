@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText } =
+const { editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -340,4 +340,17 @@ test("context warnings come from the save response body, safely absent", () => {
   assert.strictEqual(contextWarningsText({}), "");
   assert.strictEqual(contextWarningsText(null), "");
   assert.strictEqual(contextWarningsText(undefined), "");
+});
+
+test("readable host paths: hidden on an empty host profile, flagged on a filled one", () => {
+  // A boxed profile always shows the row, with no hint.
+  assert.deepStrictEqual(contextRowState("box", ""), { hidden: false, hint: false });
+  assert.deepStrictEqual(contextRowState("box", "/a"), { hidden: false, hint: false });
+  assert.deepStrictEqual(contextRowState("", "/a"), { hidden: false, hint: false });
+  // Host with nothing listed: nothing to say, the row hides.
+  assert.deepStrictEqual(contextRowState("host", ""), { hidden: true, hint: false });
+  assert.deepStrictEqual(contextRowState("host", "  \n \n"), { hidden: true, hint: false });
+  // Host with paths: the server will refuse the save, so the row stays visible
+  // with the "needs runtime: box" hint instead of hiding the conflict.
+  assert.deepStrictEqual(contextRowState("host", "/a\n"), { hidden: false, hint: true });
 });

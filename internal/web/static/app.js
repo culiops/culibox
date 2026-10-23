@@ -3272,9 +3272,12 @@ function syncEditorActions() {
   }
   $("pf-save").textContent = saveLabel(segValue($("pf-runtime")));
   // Readable host paths only mean something inside a box, so the host tier hides
-  // the row. Its text is kept: readForm still sends it and the server names the
-  // conflict, rather than the paths vanishing silently on a tier flip.
-  $("pf-context-row").hidden = segValue($("pf-runtime")) === "host";
+  // an empty row. A filled one stays visible with its "needs runtime: box" hint:
+  // readForm still sends the text and the server refuses it, so the paths must
+  // stay where the user can clear them (contextRowState).
+  const ctxRow = contextRowState(segValue($("pf-runtime")), $("pf-context").value);
+  $("pf-context-row").hidden = ctxRow.hidden;
+  $("pf-context-hint").hidden = !ctxRow.hint;
   // After the lock loop above, which re-enabled every .fld: the AWS blocks are
   // also closed by the host tier, and this is the only pass that knows both.
   const aws = awsFieldsState(st.locked, segValue($("pf-runtime")));
@@ -3531,6 +3534,11 @@ function addEnvRow(kind) {
 $("pf-env-add").addEventListener("click", () => addEnvRow("literal"));
 $("pf-secret-add").addEventListener("click", () => addEnvRow("secret"));
 // Re-scope the option list when the agent binary changes.
+// Only the hint follows typing: re-running the row rule here would hide the row
+// under the cursor the moment its last path is deleted on the host tier.
+$("pf-context").addEventListener("input", () => {
+  $("pf-context-hint").hidden = !contextRowState(segValue($("pf-runtime")), $("pf-context").value).hint;
+});
 $("pf-bin").addEventListener("input", () => {
   renderPfOptions(readForm().options);
   syncPfReplyable();
