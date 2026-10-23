@@ -936,6 +936,7 @@ func TestProbeCredentialIsOneShotAndScopedToProbeHost(t *testing.T) {
 	if code, _ := h.connect(t, "example.com:443", user, pass); code != 407 {
 		t.Fatalf("second denied use: status %d", code)
 	}
+	waitFor(t, "the probe's allowed count", func() bool { return h.p.probeSeen(user).Allowed == 1 })
 	if res := done(); res != (ProbeResult{Allowed: 1, Denied: 1}) {
 		t.Fatalf("done() = %+v", res)
 	}
@@ -1071,6 +1072,8 @@ func TestStatsAndForget(t *testing.T) {
 	h.connect(t, "example.com:443", "s1", tok)
 	h.connect(t, "private.amazonaws.com:443", "s1", tok)
 	h.connect(t, "api.anthropic.com:443", "s1", "garbage") // bad_auth is not attributed
+	// The allowed count lands just after the 200 is written (see Probe).
+	waitFor(t, "the allowed count", func() bool { st, _ := h.p.Stats("s1"); return st.Allowed == 1 })
 	st, ok := h.p.Stats("s1")
 	if !ok || st != (Stats{Allowed: 1, Denied: 2}) {
 		t.Fatalf("stats = %+v, %v", st, ok)
@@ -1202,6 +1205,8 @@ func TestForgetThenRespawnCountsAgain(t *testing.T) {
 	h.setView("s1", SessionView{Nonce: nonceB, Box: "box-1", Boxed: true, Live: true, AWS: bound()})
 	_, c := h.connect(t, "api.anthropic.com:443", "s1", h.tok("s1", nonceB))
 	c.Close()
+	// The allowed count lands just after the 200 is written (see Probe).
+	waitFor(t, "the respawn's allowed count", func() bool { st, _ := h.p.Stats("s1"); return st.Allowed == 1 })
 	if st, ok := h.p.Stats("s1"); !ok || st != (Stats{Allowed: 1}) {
 		t.Fatalf("stats = %+v, %v", st, ok)
 	}
