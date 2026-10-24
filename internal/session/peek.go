@@ -674,14 +674,36 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 	if !l.claude || l.path == "" {
 		return Peek{}, false, blocked
 	}
-	fi, err := os.Stat(l.path)
-	if err != nil {
-		return Peek{}, false, blocked
+	var f *os.File
+	var fi, tailFi os.FileInfo // fi keys the cache; tailFi sizes the tail read
+	if l.boxDir == "" {
+		// Host tier, unchanged: one stat, and the file is opened only on a miss.
+		var err error
+		if fi, err = os.Stat(l.path); err != nil {
+			return Peek{}, false, blocked
+		}
+		if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
+			return p, true, blocked
+		}
+		var ok bool
+		if f, tailFi, ok = l.openTranscript(); !ok {
+			return Peek{}, false, blocked
+		}
+		defer f.Close()
+	} else {
+		// Boxed: open through boxread first and fstat the fd for the cache key,
+		// so no stat of a box-chosen path ever runs outside the guard.
+		var ok bool
+		if f, fi, ok = l.openTranscript(); !ok {
+			return Peek{}, false, blocked
+		}
+		defer f.Close()
+		if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
+			return p, true, blocked
+		}
+		tailFi = fi
 	}
-	if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
-		return p, true, blocked
-	}
-	b, cut, err := readUsageTail(l.path)
+	b, cut, err := readUsageTail(f, tailFi)
 	if err != nil {
 		return Peek{}, false, blocked
 	}

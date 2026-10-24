@@ -161,6 +161,78 @@ func contextMax(model string) (int, bool) {
 	}
 }
 
+// transcriptPathIn is transcriptPath for a boxed session. It never trusts what
+// is in the box dir, and unlike the host heuristic it never guesses across
+// sessions:
+//   - sid known: only <sid>.jsonl under projects/<slug(c)>/ for each cwd form c.
+//     Not found means no transcript. The registry is skipped for an exited
+//     session, so this is what keeps a fresh or exited session from showing
+//     another session's file from the same box.
+//   - sid unknown: the newest regular *.jsonl whose mtime is not before
+//     created (a file older than the session cannot be its own), and whose stem
+//     is not the conversation id of another session in the same box (exclude):
+//     a busy sibling's transcript is newer than a fresh session's Created. There
+//     is no "newest overall" fallback.
+//
+// cwds are the session's spawn-dir forms (cwdFormsOf): the box runs claude with
+// -w <resolved>, so the slug may be of the symlink-resolved path. One os.Root
+// on boxDir serves the whole call; candidates are ranked with root.Lstat
+// (confined, no final-symlink follow, never blocks, never DirEntry.Info), and
+// only the winner is opened later, through boxread (openTranscript), which
+// re-checks it with fstat. The returned path is absolute under boxDir.
+func transcriptPathIn(boxDir string, cwds []string, sid string, exclude map[string]bool, created time.Time) (string, bool) {
+	if sid != "" && !sessionIDRe.MatchString(sid) {
+		return "", false
+	}
+	root, err := os.OpenRoot(boxDir)
+	if err != nil {
+		return "", false
+	}
+	defer root.Close()
+	var best string
+	var bestT time.Time
+	for _, c := range cwds {
+		relDir := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)))
+		// A slug dir that is itself a symlink (even one staying inside the box)
+		// is refused: Lstat does not follow the final component.
+		if fi, err := root.Lstat(relDir); err != nil || !fi.IsDir() {
+			continue
+		}
+		if sid != "" {
+			rel := filepath.Join(relDir, sid+".jsonl")
+			if fi, err := root.Lstat(rel); err == nil && fi.Mode().IsRegular() {
+				return filepath.Join(boxDir, rel), true
+			}
+			continue
+		}
+		d, err := root.OpenFile(relDir, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			continue
+		}
+		ents, err := d.ReadDir(4096)
+		d.Close()
+		if err != nil && len(ents) == 0 {
+			continue
+		}
+		for _, e := range ents {
+			name := e.Name()
+			stem, isJSONL := strings.CutSuffix(name, ".jsonl")
+			if e.IsDir() || !isJSONL || !sessionIDRe.MatchString(stem) || exclude[stem] {
+				continue
+			}
+			rel := filepath.Join(relDir, name)
+			fi, err := root.Lstat(rel)
+			if err != nil || !fi.Mode().IsRegular() || fi.ModTime().Before(created) {
+				continue
+			}
+			if fi.ModTime().After(bestT) {
+				bestT, best = fi.ModTime(), filepath.Join(boxDir, rel)
+			}
+		}
+	}
+	return best, best != ""
+}
+
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
 // a non-claude session, one whose transcript can't be located/read, or one whose
 // tail carries no usage line. Same locator as PeekFor (registry, then boxstate,
@@ -170,7 +242,12 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !l.claude || l.path == "" {
 		return Usage{}, false
 	}
-	b, _, err := readUsageTail(l.path)
+	f, fi, ok := l.openTranscript()
+	if !ok {
+		return Usage{}, false
+	}
+	defer f.Close()
+	b, _, err := readUsageTail(f, fi)
 	if err != nil {
 		return Usage{}, false
 	}
@@ -178,7 +255,11 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !ok {
 		return Usage{}, false
 	}
-	u.Cwd = liveCwd(u.Cwd, l.cwd, l.boxed)
+	spawn := []string{l.cwd}
+	if l.boxed && len(l.cwds) > 0 {
+		spawn = l.cwds // the raw spawn dir and its resolved form
+	}
+	u.Cwd = liveCwd(u.Cwd, spawn, l.boxed)
 	if max, ok := contextMax(u.Model); ok && u.ContextTokens <= max {
 		u.ContextMax = max
 		pctv := u.ContextTokens * 100 / max
@@ -219,16 +300,8 @@ func (m *Manager) ResolveBins() {
 // fix round 3 (2026-09-29) — parsePeekTailCut uses it to fail AskFull closed
 // when a byte cut, even one that happens to land exactly on a newline (so no
 // line fails to parse), could have hidden context just outside the window.
-func readUsageTail(path string) (data []byte, cut bool, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, false, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, false, err
-	}
+// The caller opens the file (host: os.Open; boxed: boxread.Open) and closes it.
+func readUsageTail(f *os.File, fi os.FileInfo) (data []byte, cut bool, err error) {
 	size := fi.Size()
 	off := int64(0)
 	if size > usageTailBytes {
@@ -250,19 +323,41 @@ func readUsageTail(path string) (data []byte, cut bool, err error) {
 // the spawn cwd is not already inside, and it becomes that worktree's root.
 // Boxed tier: the cwd must also be at or under the spawn cwd, the one mount that
 // names the same files in the container and on the host (box/argv.go: cwd:cwd).
-func liveCwd(raw, spawn string, boxed bool) string {
+// spawn holds every form the spawn dir is known by (the raw dir and, for a
+// symlinked one, its resolved path, which is what the box runs claude in); the
+// host tier passes just the one.
+func liveCwd(raw string, spawn []string, boxed bool) string {
 	if raw == "" || !filepath.IsAbs(raw) {
 		return ""
 	}
-	raw, spawn = filepath.Clean(raw), filepath.Clean(spawn)
-	if boxed && !within(raw, spawn) {
+	raw = filepath.Clean(raw)
+	forms := make([]string, len(spawn))
+	for i, sp := range spawn {
+		forms[i] = filepath.Clean(sp)
+	}
+	if boxed && !withinAny(raw, forms) {
 		return ""
 	}
 	root, ok := worktreeRoot(raw)
-	if !ok || within(spawn, root) {
+	if !ok {
 		return ""
 	}
+	for _, sp := range forms {
+		if within(sp, root) {
+			return ""
+		}
+	}
 	return root
+}
+
+// withinAny reports whether p is at or below any of dirs (all already Clean).
+func withinAny(p string, dirs []string) bool {
+	for _, d := range dirs {
+		if within(p, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // within reports whether p is dir or below it (both already Clean).

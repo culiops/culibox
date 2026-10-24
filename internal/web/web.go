@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/secretchain"
 	"github.com/culiops/agent-box/internal/secretstore"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 //go:embed static
@@ -61,6 +62,11 @@ type Server struct {
 	// RateLimitsFile is the account 5h/weekly usage snapshot (produced by a
 	// statusLine hook); read fresh on every /api/meta. Empty → no limits in the UI.
 	RateLimitsFile string
+
+	// BoxFiles reads a file each boxed session wrote in its box home (the
+	// session manager's BoxFiles). Nil → no box-written data. Its content is
+	// untrusted and is sanitized before it reaches the quota display.
+	BoxFiles func(rel string, max int64) []session.BoxFile
 
 	// Accounts is the agent-account registry behind /api/accounts. Nil → the
 	// feature is off: no routes, and only the default account's quota is shown.

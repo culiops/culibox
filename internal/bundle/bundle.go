@@ -30,6 +30,15 @@ const (
 	// imageMCPName holds the image's own servers on their own, beside the merged
 	// mcp.json: a session's config needs them apart to rank image > entry > host.
 	imageMCPName = "image-mcp.json"
+	// delegateName holds the host's statusLine command for the bundled script to
+	// call (see statusline.go).
+	delegateName = "statusline-delegate"
+	// layoutMarker is folded into the source hash. v2 added image-mcp.json, v3
+	// refuses MCP servers carrying credentials in headers/args/url, v4 ships
+	// agent-box's statusLine script and replaces the host statusLine, so every
+	// bundle built before it rebuilds once. Bundle hashes are not part of the box
+	// key, so no box is recreated by that.
+	layoutMarker = "layout\x00v4\n"
 	// maxLinkDepth bounds symlink following. A cycle must terminate rather than
 	// hang the daemon before a spawn.
 	maxLinkDepth = 8
@@ -183,11 +192,7 @@ func (m *Manager) Ensure() (*Built, error) {
 // It sees a newer plugin snapshot only once it is recreated.
 func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err error) {
 	h := sha256.New()
-	// The layout version: v2 added image-mcp.json, v3 refuses MCP servers carrying
-	// credentials in headers/args/url, so every bundle built before it rebuilds
-	// once. Bundle hashes are not part of the box key, so no box is recreated by
-	// that.
-	fmt.Fprintf(h, "layout\x00v3\n")
+	io.WriteString(h, layoutMarker)
 	for _, c := range m.entryCommands() {
 		fmt.Fprintf(h, "entrycmd\x00%s\n", c)
 	}
@@ -367,6 +372,9 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) 
 		delete(settings, "enabledPlugins")
 	}
 	lock.Dropped = append(lock.Dropped, sdrops...)
+	if err := m.applyStatusLine(tmp, settings, &lock); err != nil {
+		return nil, err
+	}
 	if sum, err := writeJSON(filepath.Join(tmp, "settings.json"), settings); err == nil {
 		lock.Files["settings.json"] = sum
 	}

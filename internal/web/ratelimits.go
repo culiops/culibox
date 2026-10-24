@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"path/filepath"
+	"time"
 
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/session"
@@ -59,16 +60,143 @@ func (s *Server) rateLimitsByAccount() map[string]RateLimits {
 	if rl, ok := readRateLimits(s.RateLimitsFile); ok {
 		out[account.Default] = rl
 	}
-	if s.Accounts == nil {
-		return out
+	if s.Accounts != nil {
+		for _, a := range s.Accounts.List() {
+			if a.IsDefault {
+				continue
+			}
+			if rl, ok := readRateLimits(filepath.Join(a.ConfigDir, account.RateLimitsName)); ok {
+				out[a.Name] = rl
+			}
+		}
 	}
-	for _, a := range s.Accounts.List() {
-		if a.IsDefault {
+	s.mergeBoxRateLimits(out, time.Now())
+	return out
+}
+
+const (
+	// boxRateLimitsRel is where a boxed session's statusLine writes its quota,
+	// relative to the box home. boxRateLimitsMax caps what is read of it.
+	boxRateLimitsRel = ".claude/agent-box-rate-limits.json"
+	boxRateLimitsMax = 4096
+
+	// rateLimitsFutureSlack tolerates VM clock drift: a snapshot stamped further
+	// ahead of now than this is dropped, so a box cannot pin its value forever.
+	rateLimitsFutureSlack = 5 * time.Minute
+	// rateLimitsMaxReset bounds a plausible resets_at.
+	rateLimitsMaxReset = 400 * 24 * time.Hour
+	rateLimitsMinReset = 1e9 // unix seconds
+	// rateLimitsRecent is how fresh a box's default-account snapshot must be to
+	// compete on box name (see mergeBoxRateLimits).
+	rateLimitsRecent = 15 * time.Minute
+)
+
+// mergeBoxRateLimits folds the quota snapshots boxed sessions wrote into out.
+// With no box files out is untouched.
+//
+// The merge differs per account, because of which credential each source uses:
+//   - account.Default: the host default file is written by ANY host claude on the
+//     machine (including the user's own interactive one), while boxes
+//     authenticate with the profile's CLAUDE_CODE_OAUTH_TOKEN, so the two can be
+//     different subscriptions. Freshest-wins would flip the default quota
+//     between identities on every poll. So the host snapshot wins whenever it
+//     is present (the pre-box behaviour); box snapshots fill default only when
+//     there is no host default snapshot at all. Several boxes can then carry
+//     different tokens too (the box key does not include the profile token), so
+//     freshest-wins would flip between them as well: the valid snapshot of the
+//     lexically smallest box name among the snapshots updated within
+//     rateLimitsRecent is used, which does not depend on file order or on which
+//     box wrote last, and an idle or dead box's stale snapshot cannot hold the
+//     slot. If none is that recent, the freshest wins. A tie keeps the first.
+//   - every other account: the per-account host file and the box snapshots all
+//     use that account's own credential, so they share an identity and the
+//     freshest UpdatedAt wins, compared on min(UpdatedAt, now) so a box stamping
+//     inside the future slack cannot always beat a fresh snapshot. A tie keeps
+//     the existing source.
+func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
+	if s.BoxFiles == nil {
+		return
+	}
+	nowUnix := now.Unix()
+	_, hostDefault := out[account.Default]
+	var defCands []session.BoxFile // box files behind defRLs, same index
+	var defRLs []RateLimits        // valid default snapshots
+	for _, f := range s.BoxFiles(boxRateLimitsRel, boxRateLimitsMax) {
+		if f.Account == account.Default && hostDefault {
 			continue
 		}
-		if rl, ok := readRateLimits(filepath.Join(a.ConfigDir, account.RateLimitsName)); ok {
-			out[a.Name] = rl
+		var rl RateLimits
+		if err := json.Unmarshal(f.Data, &rl); err != nil {
+			continue
+		}
+		rl, ok := sanitizeRateLimits(rl, now)
+		if !ok {
+			continue
+		}
+		if f.Account == account.Default { // no host default snapshot here
+			defCands, defRLs = append(defCands, f), append(defRLs, rl)
+			continue
+		}
+		if cur, have := out[f.Account]; !have || min(rl.UpdatedAt, nowUnix) > min(cur.UpdatedAt, nowUnix) {
+			out[f.Account] = rl
 		}
 	}
-	return out
+	if best := pickDefaultBox(defCands, defRLs, now); best >= 0 {
+		out[account.Default] = defRLs[best]
+	}
+}
+
+// pickDefaultBox chooses which box's snapshot fills the default account when
+// the host has none: the smallest box name among the snapshots updated within
+// rateLimitsRecent of now, else the freshest (compared on min(UpdatedAt, now)).
+// The first of equals wins. -1 when there are no candidates.
+func pickDefaultBox(files []session.BoxFile, rls []RateLimits, now time.Time) int {
+	nowUnix := now.Unix()
+	cutoff := now.Add(-rateLimitsRecent).Unix()
+	best, bestRecent := -1, false
+	for i := range files {
+		recent := rls[i].UpdatedAt >= cutoff
+		switch {
+		case best < 0:
+		case recent && !bestRecent:
+		case recent && bestRecent && files[i].Box < files[best].Box:
+		case !recent && !bestRecent && min(rls[i].UpdatedAt, nowUnix) > min(rls[best].UpdatedAt, nowUnix):
+		default:
+			continue
+		}
+		best, bestRecent = i, recent
+	}
+	return best
+}
+
+// sanitizeRateLimits validates a snapshot a boxed session wrote (untrusted).
+// ok=false when updated_at is more than rateLimitsFutureSlack ahead of now, or
+// when no window survives. used_percentage is clamped to [0,100]; a window whose
+// resets_at is not a plausible unix time (>= 1e9 and <= now+400d) is dropped.
+func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
+	if rl.UpdatedAt > now.Add(rateLimitsFutureSlack).Unix() {
+		return RateLimits{}, false
+	}
+	if rl.UpdatedAt < 0 {
+		rl.UpdatedAt = 0
+	}
+	maxReset := now.Add(rateLimitsMaxReset).Unix()
+	clean := func(w *RateLimitWindow) *RateLimitWindow {
+		if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > maxReset {
+			return nil
+		}
+		c := *w
+		// !(x > 0) catches NaN, negatives and -0 (normalized to +0).
+		if !(c.UsedPercentage > 0) {
+			c.UsedPercentage = 0
+		} else if c.UsedPercentage > 100 {
+			c.UsedPercentage = 100
+		}
+		return &c
+	}
+	rl.FiveHour, rl.SevenDay = clean(rl.FiveHour), clean(rl.SevenDay)
+	if rl.FiveHour == nil && rl.SevenDay == nil {
+		return RateLimits{}, false
+	}
+	return rl, true
 }

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/statusline"
 )
 
 const sampleStatusInput = `{"model":{"display_name":"Opus 5.5"},"workspace":{"current_dir":"/work/proj"},"cwd":"/elsewhere","effort":{"level":"high"},"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":1000},"seven_day":{"used_percentage":7,"resets_at":2000}}}`
@@ -20,7 +22,7 @@ func runStatusScript(t *testing.T, cfg, input string) string {
 		}
 	}
 	script := filepath.Join(t.TempDir(), "statusline-ratelimits.sh")
-	if err := os.WriteFile(script, statuslineScript, 0o755); err != nil {
+	if err := os.WriteFile(script, statusline.Script, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", script)
@@ -106,7 +108,7 @@ func TestStatusScriptSelfReferencingDelegateFallsBack(t *testing.T) {
 	cfg := t.TempDir()
 	// Points back at an agent-box statusline script (the name check) ...
 	self := filepath.Join(t.TempDir(), "statusline-ratelimits.sh")
-	if err := os.WriteFile(self, statuslineScript, 0o755); err != nil {
+	if err := os.WriteFile(self, statusline.Script, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(cfg, DelegateFileName), []byte(self), 0o600); err != nil {

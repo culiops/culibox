@@ -732,6 +732,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 			env = append(env, n+"="+extraca.ContainerBundle)
 		}
 	}
+	m.prepareHomePid(name, sessionID)
 	return m.execArgv(name, real, sessionID, argv, env), env, name, nil
 }
 

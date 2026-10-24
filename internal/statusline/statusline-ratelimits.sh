@@ -21,9 +21,10 @@
 #
 # FOOTER: the harvest is a side effect; what this script PRINTS is the footer.
 # agent-box keeps every account's footer identical to the default account's:
-#   1. if $CLAUDE_CONFIG_DIR/.agentbox-statusline-delegate exists (agent-box writes
-#      it for accounts that inherit personal config, holding the default account's
-#      statusLine command), run that command with the same stdin and print its output;
+#   1. if $AGENTBOX_STATUSLINE_DELEGATE_FILE (a box: the host's statusLine command,
+#      shipped in the config bundle) or else $CLAUDE_CONFIG_DIR/.agentbox-statusline-delegate
+#      exists (agent-box writes it for accounts that inherit personal config, holding
+#      the default account's statusLine command), run that command with the same stdin and print its output;
 #   2. otherwise (or if it fails / prints nothing) print the default format itself:
 #        <model> | ~/<cwd basename> | effort <level>
 # Must never error or print a traceback: a broken statusLine blanks the footer.
@@ -76,7 +77,9 @@ print(line)
 ' 2>/dev/null || true)
 
 CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
-DELEGATE="$CFG/.agentbox-statusline-delegate"
+# AGENTBOX_STATUSLINE_DELEGATE_FILE (set by a box's bundled settings, where there
+# is no writable config dir to hold a delegate) wins over the per-account file.
+DELEGATE="${AGENTBOX_STATUSLINE_DELEGATE_FILE:-$CFG/.agentbox-statusline-delegate}"
 # AGENTBOX_STATUSLINE_DELEGATING catches indirect recursion; the name check
 # catches a delegate that points straight back at this script.
 if [ -s "$DELEGATE" ] && [ -z "${AGENTBOX_STATUSLINE_DELEGATING:-}" ]; then
@@ -87,7 +90,15 @@ if [ -s "$DELEGATE" ] && [ -z "${AGENTBOX_STATUSLINE_DELEGATING:-}" ]; then
     *)
       # Keep whatever it printed even on a non-zero exit (the default script's
       # last step can fail after the footer line is already out).
-      OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || true
+      # In a box (AGENTBOX_STATUSLINE_DELEGATE_FILE is set, and only the bundled
+      # command sets it) the host's command may hang on something the box lacks;
+      # bound it so it cannot block the footer or pile up against the pid limit.
+      # Host accounts keep the unbounded call. The harvest above already ran.
+      if [ -n "${AGENTBOX_STATUSLINE_DELEGATE_FILE:-}" ] && command -v timeout >/dev/null 2>&1; then
+        OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 timeout 5 sh -c "$CMD" 2>/dev/null) || true
+      else
+        OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || true
+      fi
       if [ -n "$OUT" ]; then
         printf '%s\n' "$OUT"
         exit 0

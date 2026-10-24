@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -21,6 +22,7 @@ type Service struct {
 	store    *Store
 	roots    []string
 	interval time.Duration
+	boxState string     // <dataDir>/boxstate; roots inside it are walked through os.Root
 	mu       sync.Mutex // held for the duration of one Ingest pass
 }
 
@@ -36,6 +38,21 @@ func New(dbPath string, roots []string, interval time.Duration) (*Service, error
 		interval = 24 * time.Hour
 	}
 	return &Service{store: st, roots: roots, interval: interval}, nil
+}
+
+// SetBoxState names the directory whose subtrees a contained agent writes
+// (<dataDir>/boxstate). Any root that resolves inside it is walked through an
+// os.Root that refuses symlinks (see ingestBoxRoot); all other roots keep the
+// plain walk. Call it before Start.
+func (s *Service) SetBoxState(dir string) { s.boxState = filepath.Clean(dir) }
+
+// inBoxState reports whether root lies strictly inside the box-controlled dir.
+func (s *Service) inBoxState(root string) bool {
+	if s.boxState == "" || s.boxState == "." {
+		return false
+	}
+	rel, err := filepath.Rel(s.boxState, filepath.Clean(root))
+	return err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Ingest runs one full pass over all roots. It is serialized: a call made while
@@ -58,6 +75,10 @@ func (s *Service) Ingest() (IngestStats, error) {
 			matches = []string{pat}
 		}
 		for _, root := range matches {
+			if s.inBoxState(root) {
+				ingestBoxRoot(s.store, s.boxState, root, &st)
+				continue
+			}
 			ingestRoot(s.store, root, &st)
 		}
 	}

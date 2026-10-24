@@ -1,11 +1,16 @@
 package analytics
 
 import (
+	"errors"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+
+	"github.com/culiops/agent-box/internal/boxread"
 )
 
 // IngestStats summarises one ingest pass for logging / the API response.
@@ -43,9 +48,36 @@ func stemSessionID(path string) string {
 //     reverse, so re-reading from 0 would DOUBLE-count. Instead clamp the offset
 //     down to the new size and do not re-add; log it so a real rotation is visible.
 func ingestFile(s *Store, path, project string, st *IngestStats) error {
-	fi, err := os.Stat(path)
+	return ingestOpened(s, path, project, st, 0, func() (*os.File, error) {
+		return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	})
+}
+
+// boxMaxReadPerPass caps the bytes read from one box-written transcript in one
+// pass. A box can `truncate -s 1T`; without a cap a single pass would hold the
+// serialized ingest for minutes. The offset advances by what was consumed, so
+// the following passes continue where this one stopped. A var so a test can
+// lower it.
+var boxMaxReadPerPass int64 = 1 << 30
+
+// ingestOpened is ingestFile with the open supplied by the caller, so a box
+// tree can be opened through an os.Root. path is only the store key and log
+// label; it is never opened here. maxRead > 0 caps the bytes read this pass.
+func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64, open func() (*os.File, error)) error {
+	// Open first, then decide from the fd: roots may include box-written trees,
+	// so a FIFO must not block the open and a symlink must not redirect it.
+	// Size and mtime come from the opened fd, never from a separate path stat.
+	f, err := open()
 	if err != nil {
 		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return errors.New("not a regular file")
 	}
 	size, mtime := fi.Size(), fi.ModTime().Unix()
 
@@ -61,17 +93,19 @@ func ingestFile(s *Store, path, project string, st *IngestStats) error {
 		return s.Apply("", project, path, newParsed(), size, size, mtime)
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
-	parsed, sessionID, consumed, err := ParseTranscript(f)
+	var src io.Reader = f
+	if maxRead > 0 && size-offset > maxRead {
+		src = io.LimitReader(f, maxRead)
+	}
+	parsed, sessionID, consumed, overlongTail, err := parseTranscript(src)
 	if err != nil {
 		return err
+	}
+	if overlongTail {
+		log.Printf("analytics: %s: unterminated line over %d bytes skipped to EOF", path, boxread.MaxLineBytes)
 	}
 	if sessionID == "" {
 		sessionID = stemSessionID(path)
@@ -105,6 +139,82 @@ func ingestRoot(s *Store, root string, st *IngestStats) {
 		}
 		st.Scanned++
 		if err := ingestFile(s, path, project, st); err != nil {
+			st.Errors++
+			log.Printf("analytics: ingest %s: %v", path, err)
+		}
+		return nil
+	})
+}
+
+// ingestBoxRoot is ingestRoot for a root inside a box-controlled tree. root is
+// <boxStateDir>/<box>/<sub...>, where sub is where the box keeps transcripts.
+// Everything below <boxStateDir>/<box> was written by the contained agent, so
+// the box dir is opened as an os.Root and nothing is resolved outside it: the
+// box dir itself, every component of sub, and every directory walked must be a
+// real directory, never a symlink (a symlinked `.claude` or `projects` would
+// make the daemon ingest another box's, or the host's, transcripts under new
+// path keys and double-count them). Each file is opened through the root with
+// O_NOFOLLOW|O_NONBLOCK and then fstat'd, like ingestFile. The store key stays
+// the plain absolute path, so existing offsets remain valid.
+func ingestBoxRoot(s *Store, boxStateDir, root string, st *IngestStats) {
+	rel, err := filepath.Rel(boxStateDir, root)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	boxDir := filepath.Join(boxStateDir, parts[0])
+	sub := "."
+	if len(parts) > 1 {
+		sub = strings.Join(parts[1:], "/")
+	}
+	if fi, err := os.Lstat(boxDir); err != nil || !fi.IsDir() {
+		return // missing, a file, or a symlink to somewhere the box chose
+	}
+	br, err := os.OpenRoot(boxDir)
+	if err != nil {
+		return
+	}
+	defer br.Close()
+	if sub != "." {
+		cur := ""
+		for _, c := range strings.Split(sub, "/") {
+			cur = filepath.Join(cur, c)
+			fi, err := br.Lstat(cur)
+			if err != nil || !fi.IsDir() {
+				return // absent, or a symlink / non-directory component
+			}
+		}
+	}
+	_ = fs.WalkDir(br.FS(), sub, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			st.Errors++
+			return nil
+		}
+		if d.IsDir() {
+			return nil // fs.WalkDir does not descend a symlink: its type is not dir
+		}
+		if !strings.HasSuffix(p, ".jsonl") {
+			return nil
+		}
+		inSub, err := filepath.Rel(sub, p)
+		if err != nil {
+			return nil
+		}
+		project := projectFromRel(inSub)
+		if project == "" {
+			return nil
+		}
+		path := filepath.Join(boxDir, filepath.FromSlash(p))
+		st.Scanned++
+		err = ingestOpened(s, path, project, st, boxMaxReadPerPass, func() (*os.File, error) {
+			// os.Root follows a symlink that stays inside the root even with
+			// O_NOFOLLOW, so the final component is checked explicitly.
+			if fi, lerr := br.Lstat(p); lerr != nil || fi.Mode()&os.ModeSymlink != 0 {
+				return nil, errors.New("symlink or unreadable")
+			}
+			return br.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		})
+		if err != nil {
 			st.Errors++
 			log.Printf("analytics: ingest %s: %v", path, err)
 		}

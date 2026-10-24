@@ -125,13 +125,18 @@ func (m *Manager) execArgv(boxName, cwd, sessionID string, argv, env []string) [
 	for _, name := range forwardableEnvNames(env) {
 		out = append(out, "-e", name)
 	}
-	out = append(out, boxName, "sh", "-c", inContainerWrap, pidFile(sessionID))
+	out = append(out, boxName, "sh", "-c", inContainerWrap, pidFile(sessionID), homePidArg(sessionID))
 	return append(out, argv...)
 }
 
-// inContainerWrap records the shell's pid ($$, preserved across exec) into $0,
-// then becomes the agent. Only shell builtins, so it works in a minimal image.
-const inContainerWrap = `echo $$ > "$0"; exec "$@"`
+// inContainerWrap records the shell's pid ($$, preserved across exec) into two
+// files, then becomes the agent. $0 is the /tmp pidfile KillSession reads from
+// inside the box. $1 is the home pidfile (see HomePidRel), which the host reads
+// to find the agent's live registry file; the box owns it, so the host treats it
+// as untrusted. Its write is best effort and silent: a missing directory, a
+// read-only mount or the /dev/null a refused id gets must not stop the agent.
+// Only shell builtins, so it works in a minimal image.
+const inContainerWrap = `echo $$ > "$0"; { echo $$ > "$1"; } 2>/dev/null; shift; exec "$@"`
 
 // pidFile is where a session's in-container pid lives. /tmp is the box's tmpfs,
 // so it is writable even with a read-only rootfs and vanishes with the box.

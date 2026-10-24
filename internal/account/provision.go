@@ -2,7 +2,6 @@ package account
 
 import (
 	"bytes"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -12,14 +11,12 @@ import (
 	"strings"
 
 	"github.com/culiops/agent-box/internal/bundle"
+	"github.com/culiops/agent-box/internal/statusline"
 )
-
-//go:embed statusline-ratelimits.sh
-var statuslineScript []byte
 
 const (
 	manifestName = ".agentbox-manifest.json"
-	scriptName   = "statusline-ratelimits.sh"
+	scriptName   = statusline.Name
 	// DelegateFileName holds the default account's statusLine command; the
 	// embedded script runs it (after harvesting rate limits) so every account's
 	// footer matches the default's.
@@ -71,11 +68,11 @@ func (s *Store) provision(r Resolved) error {
 // on-disk bytes differ (a running session may be executing it).
 func (s *Store) writeScript() error {
 	rel := filepath.Join(binDir, scriptName)
-	if cur, err := s.root.ReadFile(rel); err != nil || !bytes.Equal(cur, statuslineScript) {
+	if cur, err := s.root.ReadFile(rel); err != nil || !bytes.Equal(cur, statusline.Script) {
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-		if err := writeFileAtomic(s.root, rel, statuslineScript, 0o755); err != nil {
+		if err := writeFileAtomic(s.root, rel, statusline.Script, 0o755); err != nil {
 			return err
 		}
 	}

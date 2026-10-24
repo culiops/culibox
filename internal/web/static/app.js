@@ -1105,6 +1105,8 @@ async function restartSession(s) {
   closeTerminal(s.id);
   await refreshSessions();
   openTerminal(ns.id, ns.name);
+  const note = restartNotice(ns);
+  if (note) showToast(note);
 }
 
 // setRepliesFromMenu flips the reply opt-in from the menu or the palette.

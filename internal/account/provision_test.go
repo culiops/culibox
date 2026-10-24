@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/statusline"
 )
 
 func readJSON(t *testing.T, p string) map[string]any {
@@ -61,7 +63,7 @@ func TestProvisionRewritesScriptOnlyWhenBytesDiffer(t *testing.T) {
 	if _, err := s.Update("work", "", false); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := os.ReadFile(s.ScriptPath()); string(b) != string(statuslineScript) {
+	if b, _ := os.ReadFile(s.ScriptPath()); string(b) != string(statusline.Script) {
 		t.Fatal("stale script not refreshed")
 	}
 }
@@ -378,7 +380,7 @@ func TestOpenReprovisionsExistingAccounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s2.Close()
-	if b, _ := os.ReadFile(s2.ScriptPath()); string(b) != string(statuslineScript) {
+	if b, _ := os.ReadFile(s2.ScriptPath()); string(b) != string(statusline.Script) {
 		t.Fatal("stale script not refreshed on Open")
 	}
 	if b, err := os.ReadFile(filepath.Join(r.ConfigDir, DelegateFileName)); err != nil || string(b) != "/x/sl.sh" {

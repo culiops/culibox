@@ -3,7 +3,9 @@ package analytics
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestProjectFromRel(t *testing.T) {
@@ -130,5 +132,64 @@ func TestIngestSubagentAttributedToParent(t *testing.T) {
 	}
 	if rows[0].SessionID != "PARENT-uuid" || rows[0].Project != "-home-proj" || rows[0].Input != 42 {
 		t.Fatalf("subagent not attributed to parent/project: %+v", rows[0])
+	}
+}
+
+// A FIFO under a root (e.g. planted in boxstate by a contained agent) must be
+// refused without blocking the serialized ingest pass.
+func TestIngestSkipsFIFO(t *testing.T) {
+	root := t.TempDir()
+	fifo := filepath.Join(root, "-home-proj", "x.jsonl")
+	if err := os.MkdirAll(filepath.Dir(fifo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := openTemp(t)
+
+	var st IngestStats
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ingestRoot(s, root, &st)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		// Unblock the wedged goroutine so the temp dir can be cleaned up.
+		if f, err := os.OpenFile(fifo, os.O_RDWR, 0); err == nil {
+			f.Close()
+		}
+		t.Fatal("ingestRoot blocked on a FIFO")
+	}
+	if st.Errors != 1 || st.Files != 0 || st.BytesRead != 0 {
+		t.Fatalf("FIFO not refused: %+v", st)
+	}
+}
+
+// A symlinked transcript must not be followed: its target is outside the root
+// and the box chose it.
+func TestIngestSkipsSymlinkedJSONL(t *testing.T) {
+	root := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.jsonl")
+	writeFile(t, outside, line1+line2)
+	link := filepath.Join(root, "-home-proj", "x.jsonl")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	s := openTemp(t)
+
+	var st IngestStats
+	ingestRoot(s, root, &st)
+	if st.Files != 0 || st.BytesRead != 0 || st.Errors != 1 {
+		t.Fatalf("symlink not refused: %+v", st)
+	}
+	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31")
+	if len(rows) != 0 {
+		t.Fatalf("symlink target was ingested: %+v", rows)
 	}
 }

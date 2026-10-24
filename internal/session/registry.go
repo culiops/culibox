@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/culiops/agent-box/internal/boxread"
 	"github.com/culiops/agent-box/internal/procinfo"
 )
 
@@ -48,6 +49,12 @@ var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
 // procStartFunc returns a pid's start-time token. Injected so tests need no
 // real processes.
 type procStartFunc func(pid int) (string, bool)
+
+// boxHome is a boxed session's home on the host: <stateDir>/boxstate/<box>. The
+// one place this path is built; everything under it is written by the box.
+func boxHome(stateDir, box string) string {
+	return filepath.Join(stateDir, "boxstate", box)
+}
 
 // procStartOf is the pid's start time as procinfo reports it. On Linux this is
 // /proc stat field 22, the same value Claude Code writes as procStart. On darwin
@@ -191,6 +198,14 @@ type located struct {
 	// liveCwd vetting of the transcript's own cwd.
 	cwd   string
 	boxed bool
+	// boxDir is <stateDir>/boxstate/<box> for a boxed session, "" on the host
+	// tier. Everything under it was written by the contained agent, so every
+	// read of a path in it goes through boxread (openTranscript).
+	boxDir string
+	// cwds are the forms of the spawn dir a boxed session is known by (cleaned,
+	// and symlink-resolved when different); nil on the host tier or when the
+	// session has no usable state dir. Host-chosen, never box-supplied.
+	cwds []string
 }
 
 // locate resolves a claude session's transcript, in order:
@@ -222,15 +237,31 @@ func (m *Manager) locate(id string) located {
 	var bin, cwd, box, configDir string
 	var created time.Time
 	var exited bool
+	var sid string
+	var siblingSIDs map[string]bool // conversation ids of the OTHER sessions in this session's box
 	if s != nil {
 		bin, cwd, box, configDir, created = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created
 		s.mu.Lock()
 		exited = s.status == statusExited
 		s.mu.Unlock()
+		if box != "" {
+			siblingSIDs = map[string]bool{}
+			for _, o := range m.sessions {
+				if o == s || o.Box != box {
+					continue
+				}
+				if osid := o.claudeSID(); osid != "" { // o.mu nested under m.mu, as above
+					siblingSIDs[osid] = true
+				}
+			}
+		}
 	}
 	m.mu.Unlock()
 	if s == nil || !isClaudeBin(bin) {
 		return located{}
+	}
+	if box != "" {
+		sid = s.claudeSID() // the conversation id noted earlier, "" if none yet
 	}
 	l := located{claude: true, created: created, cwd: cwd, boxed: box != ""}
 	// The .claude dir this session's registry and transcripts live in: the
@@ -244,8 +275,28 @@ func (m *Manager) locate(id string) located {
 	if configDir != "" {
 		claudeDir = configDir
 	}
-	if box != "" && stateDir != "" {
-		claudeDir = filepath.Join(stateDir, "boxstate", box, ".claude")
+	if box != "" && stateDir == "" {
+		// A boxed session with no state dir has nowhere safe to look: never
+		// fall back to a host .claude (home or account config dir).
+		return l
+	}
+	if box != "" {
+		l.boxDir = boxHome(stateDir, box)
+		l.cwds = s.cwdForms()
+		claudeDir = filepath.Join(l.boxDir, ".claude")
+	}
+	if l.boxDir != "" && !exited {
+		// Boxed tier, live: the box-home pidfile names the in-box pid and its
+		// registry entry names the exact transcript. Every read is guarded
+		// (boxread); any surprise silently falls through to the heuristic.
+		if e, ok := readBoxedRegistry(l.boxDir, id, l.cwds); ok {
+			l.reg = &e
+			m.noteClaudeSessionID(s, id, e.SessionID)
+			// Trusted as is, whether or not the transcript exists: never fall
+			// through to the newest-mtime heuristic and a sibling's file.
+			l.path = boxedTranscriptPath(l.boxDir, e, l.cwds)
+			return l
+		}
 	}
 	if box == "" && claudeDir != "" && !exited {
 		if pr, ok := backend.(PidResolver); ok {
@@ -276,10 +327,43 @@ func (m *Manager) locate(id string) located {
 	if claudeDir == "" {
 		return l
 	}
+	if l.boxDir != "" {
+		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, siblingSIDs, created); ok {
+			l.path = p
+		}
+		return l
+	}
 	if p, ok := transcriptPath(cwd, claudeDir, created); ok {
 		l.path = p
 	}
 	return l
+}
+
+// openTranscript opens the located transcript for reading and returns it with
+// its Fstat info; the caller closes the file. Boxed: through boxread, so a
+// symlink, a FIFO, or a path outside the box dir is "no data". Host: a plain
+// open, exactly as before.
+func (l located) openTranscript() (*os.File, os.FileInfo, bool) {
+	if l.path == "" {
+		return nil, nil, false
+	}
+	if l.boxDir != "" {
+		rel, err := filepath.Rel(l.boxDir, l.path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, nil, false
+		}
+		return boxread.Open(l.boxDir, rel)
+	}
+	f, err := os.Open(l.path)
+	if err != nil {
+		return nil, nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, false
+	}
+	return f, fi, true
 }
 
 // noteClaudeSessionID remembers the conversation a validated registry entry
