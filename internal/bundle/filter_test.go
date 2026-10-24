@@ -148,7 +148,7 @@ func TestBoxedSettingsOutputIsByteIdenticalDespiteInheritableKeys(t *testing.T) 
   "effortLevel": "high",
   "model": "opus",
   "statusLine": {
-    "command": "/home/u/.claude/statusline-command.sh",
+    "command": "AGENTBOX_STATUSLINE_DELEGATE_FILE=/opt/agent-bundle/statusline-delegate /opt/agent-bundle/statusline-ratelimits.sh",
     "type": "command"
   }
 }
