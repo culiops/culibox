@@ -99,23 +99,30 @@ func boxedRecorder(reg *boxedws.Registry) func(cwd string) error {
 }
 
 // seedBoxedRegistry writes the first-boot record. Call it only after sessions
-// were restored into the Manager (Reconcile): the retained boxed sessions are
-// part of the seed. A docker listing failure only drops that source.
-func seedBoxedRegistry(reg *boxedws.Registry, mgr *session.Manager, clones []config.Clone,
-	profileCwds []string, cli *box.CLIClient) {
+// were restored into the Manager (Reconcile) and pass that Manager's list: the
+// retained boxed sessions are part of the seed. listBoxes is the docker
+// listing, nil when there is no containment layer (then there is nothing to
+// list and the seed is complete). The seed is marked complete only when every
+// source was read: a failed docker listing (e.g. the darwin VM is stopped)
+// still records what the other sources gave but leaves the registry unseeded,
+// so the next boot retries instead of losing the docker source for good.
+func seedBoxedRegistry(reg *boxedws.Registry, sessions []session.Info, clones []config.Clone,
+	profileCwds []string, listBoxes func(context.Context) ([]box.BoxInfo, error)) {
 	var boxes []box.BoxInfo
-	if cli != nil {
+	complete := true
+	if listBoxes != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		bs, err := cli.ListBoxes(ctx, box.LabelInstance)
+		bs, err := listBoxes(ctx)
 		if err != nil {
-			log.Printf("boxed workspaces: listing existing boxes failed (%v); seeding without them", err)
+			complete = false
+			log.Printf("boxed workspaces: listing existing boxes failed (%v); seeding without them, will retry next start", err)
 		}
 		boxes = bs
 	}
-	dirs := seedDirs(mgr.List(), clones, profileCwds, boxes)
-	if err := reg.Seed(dirs); err != nil {
+	dirs := seedDirs(sessions, clones, profileCwds, boxes)
+	if err := reg.Seed(dirs, complete); err != nil {
 		log.Fatalf("boxed workspaces: seeding boxed-workspaces.json: %v", err)
 	}
-	log.Printf("boxed workspaces: seeded %d director(ies) on first start", len(reg.List()))
+	log.Printf("boxed workspaces: seeded=%v, %d director(ies) recorded", complete, len(reg.List()))
 }

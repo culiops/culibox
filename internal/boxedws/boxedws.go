@@ -27,7 +27,11 @@ const (
 )
 
 type fileFormat struct {
-	Version    int      `json:"version"`
+	Version int `json:"version"`
+	// Seeded is true once a COMPLETE first-boot seed was written. A file
+	// without it (written by a build that predates the flag) reads as false
+	// and is re-seeded, which is additive and harmless.
+	Seeded     bool     `json:"seeded"`
 	Workspaces []string `json:"workspaces"`
 }
 
@@ -37,15 +41,18 @@ type Registry struct {
 	dataDir   string
 	unboxable func(string) (string, bool)
 	set       map[string]struct{}
+	seeded    bool
 }
 
-// Open loads <dataDir>/boxed-workspaces.json. existed=false when the file is
-// absent (the caller seeds). A present but unreadable or corrupt file, or one
+// Open loads <dataDir>/boxed-workspaces.json. seeded=false when the file is
+// absent or no complete seed was ever written to it (the caller seeds; a file
+// that exists only because a spawn recorded a workspace is not seeded). A
+// present but unreadable or corrupt file, or one
 // with a version this build does not know, is an error: the registry is a
 // security boundary, so an empty fallback would silently un-contain every
 // workspace (fail closed).
 // unboxable is box.Manager.Unboxable (reason, true means refuse the entry).
-func Open(dataDir string, unboxable func(string) (string, bool)) (r *Registry, existed bool, err error) {
+func Open(dataDir string, unboxable func(string) (string, bool)) (r *Registry, seeded bool, err error) {
 	if unboxable == nil {
 		unboxable = func(string) (string, bool) { return "", false }
 	}
@@ -76,7 +83,8 @@ func Open(dataDir string, unboxable func(string) (string, bool)) (r *Registry, e
 	for _, w := range f.Workspaces {
 		r.set[w] = struct{}{}
 	}
-	return r, true, nil
+	r.seeded = f.Seeded
+	return r, f.Seeded, nil
 }
 
 // List returns a sorted copy of the recorded workspaces.
@@ -96,19 +104,22 @@ func (r *Registry) Add(dir string) error {
 	if !r.addLocked(next, dir) {
 		return nil
 	}
-	return r.commitLocked(next)
+	return r.commitLocked(next, r.seeded)
 }
 
-// Seed adds every dir and always writes the file, even if empty, so a later
-// Open reports existed=true and the caller does not seed twice.
-func (r *Registry) Seed(dirs []string) error {
+// Seed adds every dir and always writes the file, even if empty. complete says
+// the caller saw every source (e.g. the docker listing succeeded, or there is
+// nothing to list): only then is the registry marked seeded, so an incomplete
+// seed is retried on the next boot while still recording what it found. The
+// flag never goes from true back to false.
+func (r *Registry) Seed(dirs []string, complete bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := cloneSet(r.set)
 	for _, d := range dirs {
 		r.addLocked(next, d)
 	}
-	return r.commitLocked(next)
+	return r.commitLocked(next, r.seeded || complete)
 }
 
 // addLocked resolves dir and inserts it into set, reporting whether the set
@@ -135,8 +146,8 @@ func (r *Registry) addLocked(set map[string]struct{}, dir string) bool {
 // The write goes through os.Root: the data dir sits next to box-writable
 // directories, and a plain write on a joined path would follow a planted
 // symlink. The temp file is O_EXCL so a pre-planted name is never reused.
-func (r *Registry) commitLocked(next map[string]struct{}) error {
-	b, err := json.Marshal(fileFormat{Version: version, Workspaces: sortedLocked(next)})
+func (r *Registry) commitLocked(next map[string]struct{}, seeded bool) error {
+	b, err := json.Marshal(fileFormat{Version: version, Seeded: seeded, Workspaces: sortedLocked(next)})
 	if err != nil {
 		return err
 	}
@@ -171,6 +182,7 @@ func (r *Registry) commitLocked(next map[string]struct{}) error {
 		return err
 	}
 	r.set = next
+	r.seeded = seeded
 	return nil
 }
 

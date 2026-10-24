@@ -26,12 +26,12 @@ func mkdir(t *testing.T, name string) string {
 }
 
 func TestOpenAbsent(t *testing.T) {
-	r, existed, err := Open(t.TempDir(), none)
+	r, seeded, err := Open(t.TempDir(), none)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if existed {
-		t.Fatal("existed = true for an absent file")
+	if seeded {
+		t.Fatal("seeded = true for an absent file")
 	}
 	if got := r.List(); len(got) != 0 {
 		t.Fatalf("List() = %v, want empty", got)
@@ -48,12 +48,12 @@ func TestAddPersists(t *testing.T) {
 	if err := r.Add(ws); err != nil {
 		t.Fatal(err)
 	}
-	r2, existed, err := Open(data, none)
+	r2, seeded, err := Open(data, none)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !existed {
-		t.Fatal("existed = false after Add")
+	if seeded {
+		t.Fatal("Add alone must not mark the registry seeded")
 	}
 	if got := r2.List(); !reflect.DeepEqual(got, []string{ws}) {
 		t.Fatalf("List() = %v, want [%s]", got, ws)
@@ -143,7 +143,7 @@ func TestOpenUnknownVersionFails(t *testing.T) {
 func TestSeedEmptyWritesFile(t *testing.T) {
 	data := t.TempDir()
 	r, _, _ := Open(data, none)
-	if err := r.Seed(nil); err != nil {
+	if err := r.Seed(nil, true); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(filepath.Join(data, "boxed-workspaces.json"))
@@ -151,11 +151,11 @@ func TestSeedEmptyWritesFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Compact vs indented is not the contract; the content is.
-	if got := string(b); got != "{\"version\":1,\"workspaces\":[]}" && got != "{\"version\":1,\"workspaces\":[]}\n" {
+	if got := string(b); got != "{\"version\":1,\"seeded\":true,\"workspaces\":[]}" && got != "{\"version\":1,\"seeded\":true,\"workspaces\":[]}\n" {
 		t.Fatalf("file = %q", got)
 	}
-	if _, existed, _ := Open(data, none); !existed {
-		t.Fatal("seeded file must count as existing")
+	if _, seeded, _ := Open(data, none); !seeded {
+		t.Fatal("a complete seed must read back as seeded")
 	}
 }
 
@@ -163,7 +163,7 @@ func TestSeedAddsAllSorted(t *testing.T) {
 	data := t.TempDir()
 	a, b := mkdir(t, "a"), mkdir(t, "b")
 	r, _, _ := Open(data, none)
-	if err := r.Seed([]string{b, a, b}); err != nil {
+	if err := r.Seed([]string{b, a, b}, true); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{a, b}
@@ -240,5 +240,65 @@ func TestConcurrentAdd(t *testing.T) {
 	}
 	if got := r2.List(); len(got) != 8 {
 		t.Fatalf("persisted %d entries, want 8", len(got))
+	}
+}
+
+func TestIncompleteSeedStaysUnseeded(t *testing.T) {
+	// The docker listing failed: record what was found, but a later boot must
+	// retry, so the flag is not set and survives re-Open.
+	data := t.TempDir()
+	a := mkdir(t, "a")
+	r, _, _ := Open(data, none)
+	if err := r.Seed([]string{a}, false); err != nil {
+		t.Fatal(err)
+	}
+	r2, seeded, err := Open(data, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seeded {
+		t.Fatal("an incomplete seed must re-Open as unseeded")
+	}
+	if got := r2.List(); !reflect.DeepEqual(got, []string{a}) {
+		t.Fatalf("the partial seed must still be recorded: %v", got)
+	}
+}
+
+func TestAddPreservesSeededFlag(t *testing.T) {
+	data := t.TempDir()
+	r, _, _ := Open(data, none)
+	if err := r.Seed(nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Add(mkdir(t, "ws")); err != nil {
+		t.Fatal(err)
+	}
+	if _, seeded, _ := Open(data, none); !seeded {
+		t.Fatal("Add dropped the seeded flag")
+	}
+}
+
+func TestSeedNeverFlipsTrueToFalse(t *testing.T) {
+	data := t.TempDir()
+	r, _, _ := Open(data, none)
+	if err := r.Seed(nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Seed([]string{mkdir(t, "late")}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, seeded, _ := Open(data, none); !seeded {
+		t.Fatal("an incomplete re-seed must not clear seeded")
+	}
+}
+
+func TestOpenV1WithoutSeededFieldIsUnseeded(t *testing.T) {
+	// Files written before the flag existed: re-seed (additive, harmless).
+	data := t.TempDir()
+	if err := os.WriteFile(filepath.Join(data, "boxed-workspaces.json"), []byte(`{"version":1,"workspaces":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, seeded, err := Open(data, none); err != nil || seeded {
+		t.Fatalf("seeded=%v err=%v, want false/nil", seeded, err)
 	}
 }

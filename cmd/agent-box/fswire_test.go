@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"testing"
 
@@ -88,4 +90,51 @@ func TestBoxedRecorder(t *testing.T) {
 	if got := reg.List(); len(got) != 1 || got[0] != dir {
 		t.Fatalf("relative cwd recorded %v, want [%s]", got, dir)
 	}
+}
+
+// seedCase runs seedBoxedRegistry against a fresh registry and returns what a
+// later boot's Open would see.
+func seedCase(t *testing.T, list func(context.Context) ([]box.BoxInfo, error)) (seeded bool, dirs []string) {
+	t.Helper()
+	data := t.TempDir()
+	none := func(string) (string, bool) { return "", false }
+	reg, _, err := boxedws.Open(data, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := t.TempDir()
+	seedBoxedRegistry(reg, nil, nil, []string{profile}, list)
+	reg2, seeded, err := boxedws.Open(data, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seeded, reg2.List()
+}
+
+func TestSeedBoxedRegistryCompleteness(t *testing.T) {
+	fromDocker := t.TempDir()
+	t.Run("listing ok marks seeded and records docker's workspaces", func(t *testing.T) {
+		seeded, dirs := seedCase(t, func(context.Context) ([]box.BoxInfo, error) {
+			return []box.BoxInfo{{Name: "a", Workspace: fromDocker}}, nil
+		})
+		if !seeded || !slices.Contains(dirs, fromDocker) {
+			t.Fatalf("seeded=%v dirs=%v", seeded, dirs)
+		}
+	})
+	t.Run("listing failure stays unseeded so the next boot retries, but still records the rest", func(t *testing.T) {
+		seeded, dirs := seedCase(t, func(context.Context) ([]box.BoxInfo, error) {
+			return nil, errors.New("docker unreachable")
+		})
+		if seeded {
+			t.Fatal("a failed docker listing must not mark the registry seeded")
+		}
+		if len(dirs) != 1 {
+			t.Fatalf("the profile dir should still be recorded: %v", dirs)
+		}
+	})
+	t.Run("no containment layer: nothing to list, complete", func(t *testing.T) {
+		if seeded, _ := seedCase(t, nil); !seeded {
+			t.Fatal("without a containment layer the seed is complete")
+		}
+	})
 }

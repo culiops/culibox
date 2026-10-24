@@ -413,7 +413,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if layer != nil {
 		unboxable = layer.boxes.Unboxable
 	}
-	boxedReg, boxedExisted, err := boxedws.Open(dataDir, unboxable)
+	boxedReg, boxedSeeded, err := boxedws.Open(dataDir, unboxable)
 	if err != nil {
 		log.Fatalf("boxed workspace record %s: %v", filepath.Join(dataDir, "boxed-workspaces.json"), err)
 	}
@@ -552,14 +552,18 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if err := mgr.Reconcile(); err != nil {
 		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
 	}
-	// First start of a build with the boxed-workspace record: seed it from what
-	// exists now. AFTER Reconcile, so retained boxed sessions are in the Manager.
-	if !boxedExisted {
-		var cli *box.CLIClient
+	// Seed the boxed-workspace record from what exists now, until a seed
+	// completes (a docker listing failure is retried next start). AFTER
+	// Reconcile, so retained boxed sessions are in the Manager.
+	if !boxedSeeded {
+		var listBoxes func(context.Context) ([]box.BoxInfo, error)
 		if layer != nil {
-			cli = &layer.cli
+			cli := layer.cli
+			listBoxes = func(ctx context.Context) ([]box.BoxInfo, error) {
+				return cli.ListBoxes(ctx, box.LabelInstance)
+			}
 		}
-		seedBoxedRegistry(boxedReg, mgr, lnch.Clones(), lnch.BoxedDefaultCwds(), cli)
+		seedBoxedRegistry(boxedReg, mgr.List(), lnch.Clones(), lnch.BoxedDefaultCwds(), listBoxes)
 	}
 	// AFTER session reconcile: that pass adopts every surviving box, so what
 	// remains unclaimed here is genuinely orphaned.
