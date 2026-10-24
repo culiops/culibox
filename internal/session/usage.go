@@ -169,8 +169,10 @@ func contextMax(model string) (int, bool) {
 //     session, so this is what keeps a fresh or exited session from showing
 //     another session's file from the same box.
 //   - sid unknown: the newest regular *.jsonl whose mtime is not before
-//     created (a file older than the session cannot be its own). There is no
-//     "newest overall" fallback.
+//     created (a file older than the session cannot be its own), and whose stem
+//     is not the conversation id of another session in the same box (exclude):
+//     a busy sibling's transcript is newer than a fresh session's Created. There
+//     is no "newest overall" fallback.
 //
 // cwds are the session's spawn-dir forms (cwdFormsOf): the box runs claude with
 // -w <resolved>, so the slug may be of the symlink-resolved path. One os.Root
@@ -178,7 +180,7 @@ func contextMax(model string) (int, bool) {
 // (confined, no final-symlink follow, never blocks, never DirEntry.Info), and
 // only the winner is opened later, through boxread (openTranscript), which
 // re-checks it with fstat. The returned path is absolute under boxDir.
-func transcriptPathIn(boxDir string, cwds []string, sid string, created time.Time) (string, bool) {
+func transcriptPathIn(boxDir string, cwds []string, sid string, exclude map[string]bool, created time.Time) (string, bool) {
 	if sid != "" && !sessionIDRe.MatchString(sid) {
 		return "", false
 	}
@@ -215,7 +217,7 @@ func transcriptPathIn(boxDir string, cwds []string, sid string, created time.Tim
 		for _, e := range ents {
 			name := e.Name()
 			stem, isJSONL := strings.CutSuffix(name, ".jsonl")
-			if e.IsDir() || !isJSONL || !sessionIDRe.MatchString(stem) {
+			if e.IsDir() || !isJSONL || !sessionIDRe.MatchString(stem) || exclude[stem] {
 				continue
 			}
 			rel := filepath.Join(relDir, name)

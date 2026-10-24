@@ -134,8 +134,38 @@ func BenchmarkTranscriptPathIn1000(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, ok := transcriptPathIn(bd, []string{locCwd}, "", now.Add(-time.Hour)); !ok {
+		if _, ok := transcriptPathIn(bd, []string{locCwd}, "", nil, now.Add(-time.Hour)); !ok {
 			b.Fatal("no transcript")
 		}
+	}
+}
+
+// A fresh session still on the trust dialog has no registry and no sid. A busy
+// sibling in the same box has a newer-than-Created transcript; that is the
+// sibling's (its sid is known), so the fresh session must not show it.
+func TestBoxedFreshUnknownSidSkipsSiblingTranscript(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	state := t.TempDir()
+	m.stateDir = state
+	bd := filepath.Join(state, "boxstate", "box-1")
+	now := time.Now()
+	m.sessions["s1"].Box, m.sessions["s2"].Box = "box-1", "box-1"
+	m.sessions["s1"].claudeSessionID = "aaaa-1"
+	m.sessions["s2"].Created = now.Add(-time.Minute)
+	writeTx(t, bd, locCwd, "aaaa-1", "from sibling", now)
+
+	if p, ok := m.PeekFor("s2"); ok {
+		t.Errorf("s2 peek=%q, want a miss: the only candidate is s1's transcript", p.Text)
+	}
+	if u, ok := m.UsageFor("s2"); ok {
+		t.Errorf("s2 usage=%+v, want a miss", u)
+	}
+	if got := peekText(t, m, "s1"); got != "from sibling" {
+		t.Errorf("s1 peek=%q want its own", got)
+	}
+	// A transcript no sibling claims is still found by the heuristic.
+	writeTx(t, bd, locCwd, "cccc-3", "unclaimed", now.Add(-time.Second))
+	if got := peekText(t, m, "s2"); got != "unclaimed" {
+		t.Errorf("s2 peek=%q want the unclaimed file", got)
 	}
 }

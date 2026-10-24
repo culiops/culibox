@@ -238,11 +238,23 @@ func (m *Manager) locate(id string) located {
 	var created time.Time
 	var exited bool
 	var sid string
+	var siblingSIDs map[string]bool // conversation ids of the OTHER sessions in this session's box
 	if s != nil {
 		bin, cwd, box, configDir, created = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created
 		s.mu.Lock()
 		exited = s.status == statusExited
 		s.mu.Unlock()
+		if box != "" {
+			siblingSIDs = map[string]bool{}
+			for _, o := range m.sessions {
+				if o == s || o.Box != box {
+					continue
+				}
+				if osid := o.claudeSID(); osid != "" { // o.mu nested under m.mu, as above
+					siblingSIDs[osid] = true
+				}
+			}
+		}
 	}
 	m.mu.Unlock()
 	if s == nil || !isClaudeBin(bin) {
@@ -316,7 +328,7 @@ func (m *Manager) locate(id string) located {
 		return l
 	}
 	if l.boxDir != "" {
-		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, created); ok {
+		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, siblingSIDs, created); ok {
 			l.path = p
 		}
 		return l
