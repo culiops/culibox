@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -388,6 +389,13 @@ type BoxKey struct {
 	// compares in-box destinations only, so a changed list must not land in a box
 	// that still mounts the old one.
 	Context string
+	// PreTrust asks for Claude Code's workspace trust dialog to be pre-accepted
+	// in the box home (see trustWorkspace). Not identity, like PartialMounts: it
+	// is applied when the box is created. The session layer sets it only when the
+	// spawn creating it runs claude with the config bundle's --setting-sources
+	// user, which keeps a repo's own settings and hooks from loading; without it
+	// the dialog is the only gate before those run, so it stays.
+	PreTrust bool
 }
 
 // CloneMounts is the clone-mode part of a BoxKey. Hash identifies the clone spec
@@ -483,7 +491,10 @@ func (m *Manager) touchMarker(boxName string) {
 // It also seeds first-run state. A box home is empty, so an interactive agent
 // otherwise meets an onboarding wizard rather than a prompt — the credential is
 // forwarded and valid, but the agent never gets far enough to use it. These
-// markers are configuration, not credentials.
+// markers are configuration, not credentials. With trust set (a workspace
+// path, "" for none) it also pre-accepts Claude Code's trust dialog there (see
+// trustWorkspace), which is safe from races because ensure calls this only
+// while the box's container is absent.
 //
 // Everything BELOW the home is created through an os.Root anchored at it, never
 // through plain path joins. The box writes in this directory as the daemon user,
@@ -492,7 +503,7 @@ func (m *Manager) touchMarker(boxName string) {
 // its choosing. os.Root resolves each component with openat/O_NOFOLLOW
 // semantics, so a symlink out of the home fails instead of being followed —
 // the same boundary internal/web puts around $HOME for uploads and file ops.
-func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error) {
+func (m *Manager) ensureStateDir(boxName, trust string, extraRO []Mount) (string, error) {
 	dir := m.stateDir(boxName)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("box: creating state dir %q: %w", dir, err)
@@ -511,15 +522,26 @@ func (m *Manager) ensureStateDir(boxName string, extraRO []Mount) (string, error
 	// no way for an existing name to redirect the write.
 	body := []byte("{\n  \"hasCompletedOnboarding\": true,\n  \"theme\": \"dark\"\n}\n")
 	f, err := root.OpenFile(".claude.json", os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return dir, nil // state a running agent has already written
+	switch {
+	case err == nil:
+		_, err = f.Write(body)
+		if cerr := f.Close(); err == nil {
+			err = cerr
 		}
+		if err != nil {
+			return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
+		}
+	case os.IsExist(err):
+		// state a running agent has already written: merged below, never replaced
+	default:
 		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
 	}
-	defer f.Close()
-	if _, err := f.Write(body); err != nil {
-		return "", fmt.Errorf("box: seeding agent state in %q: %w", dir, err)
+	// New and existing homes alike: homes from before this existed lack the
+	// entry. Best effort: without it the agent just asks, as it always did.
+	if trust != "" {
+		if err := trustWorkspace(root, trust); err != nil {
+			log.Printf("box: %s: workspace trust not pre-accepted: %v", boxName, err)
+		}
 	}
 	return dir, nil
 }
@@ -697,7 +719,7 @@ func (m *Manager) Wrap(ctx context.Context, cwd, sessionID string, key BoxKey, a
 		}
 		extraRO = append(slices.Clip(extraRO), guard...)
 	}
-	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != ""); err != nil {
+	if err := m.ensure(ctx, name, real, extraRO, key.PartialMounts, key.Binding != "", key.Session != "", key.PreTrust); err != nil {
 		return nil, nil, "", err
 	}
 	// The CA variables are fixed container paths set here and nowhere else: any
@@ -734,7 +756,7 @@ func withoutNames(env, names []string) []string {
 // serialization two first spawns race to `docker run` the same --name (docker
 // answers with a Conflict), and a spawn can `docker exec` into a container the
 // idle timer is concurrently removing.
-func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, partial, bound, exclusive bool) error {
+func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount, partial, bound, exclusive, preTrust bool) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 
@@ -866,7 +888,11 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 				return fmt.Errorf("box: mount source %q: %s", p, reason)
 			}
 		}
-		if _, err := m.ensureStateDir(name, extraRO); err != nil {
+		trust := ""
+		if preTrust {
+			trust = cwd
+		}
+		if _, err := m.ensureStateDir(name, trust, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
 		}
