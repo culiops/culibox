@@ -98,7 +98,11 @@ const (
 //     different subscriptions. Freshest-wins would flip the default quota
 //     between identities on every poll. So the host snapshot wins whenever it
 //     is present (the pre-box behaviour); box snapshots fill default only when
-//     there is no host default snapshot at all.
+//     there is no host default snapshot at all. Several boxes can then carry
+//     different tokens too (the box key does not include the profile token), so
+//     freshest-wins would flip between them as well: the valid snapshot of the
+//     lexically smallest box name is used, which does not depend on file order
+//     or on which box wrote last. A tie on the name keeps the first.
 //   - every other account: the per-account host file and the box snapshots all
 //     use that account's own credential, so they share an identity and the
 //     freshest UpdatedAt wins, compared on min(UpdatedAt, now) so a box stamping
@@ -110,6 +114,7 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 	}
 	nowUnix := now.Unix()
 	_, hostDefault := out[account.Default]
+	defBox, haveDefBox := "", false
 	for _, f := range s.BoxFiles(boxRateLimitsRel, boxRateLimitsMax) {
 		if f.Account == account.Default && hostDefault {
 			continue
@@ -120,6 +125,13 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 		}
 		rl, ok := sanitizeRateLimits(rl, now)
 		if !ok {
+			continue
+		}
+		if f.Account == account.Default { // no host default snapshot here
+			if haveDefBox && f.Box >= defBox {
+				continue
+			}
+			out[account.Default], defBox, haveDefBox = rl, f.Box, true
 			continue
 		}
 		if cur, have := out[f.Account]; !have || min(rl.UpdatedAt, nowUnix) > min(cur.UpdatedAt, nowUnix) {

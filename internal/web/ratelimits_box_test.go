@@ -94,15 +94,17 @@ func TestRateLimitsDefaultHostPresentAlwaysWins(t *testing.T) {
 	}
 }
 
-// With no host default snapshot at all, a box fills default; the freshest of
-// several boxes wins, and an untrustworthy box (future-dated, garbage) does not.
+// With no host default snapshot at all, a box fills default; of several boxes
+// the smallest box name with a VALID snapshot wins (see
+// TestRateLimitsDefaultNoHostStableAcrossBoxes), and an untrustworthy box
+// (future-dated, garbage) is skipped before that choice.
 func TestRateLimitsDefaultNoHostBoxFills(t *testing.T) {
 	now := time.Now().Unix()
 	s := &Server{RateLimitsFile: filepath.Join(t.TempDir(), "absent.json"), BoxFiles: boxFilesOf(
-		session.BoxFile{Account: "default", Data: boxRL(now-300, 11, 12, now+3600)},
-		session.BoxFile{Account: "default", Data: boxRL(now-20, 55, 66, now+3600)},
-		session.BoxFile{Account: "default", Data: boxRL(now+3600, 99, 99, now+3600)}, // future: dropped
-		session.BoxFile{Account: "default", Data: []byte("not json")},
+		session.BoxFile{Box: "box-d", Account: "default", Data: boxRL(now-300, 11, 12, now+3600)},
+		session.BoxFile{Box: "box-c", Account: "default", Data: boxRL(now-20, 55, 66, now+3600)},
+		session.BoxFile{Box: "box-b", Account: "default", Data: boxRL(now+3600, 99, 99, now+3600)}, // future: dropped
+		session.BoxFile{Box: "box-a", Account: "default", Data: []byte("not json")},
 	)}
 	m := s.rateLimitsByAccount()
 	if m["default"].FiveHour == nil || m["default"].FiveHour.UsedPercentage != 55 {

@@ -6,9 +6,10 @@ import (
 )
 
 // BoxFile is one file a boxed session wrote, as read from its box home.
-// Account is the account the box's session runs under (account.Default for a
+// Box is the box's name (host-chosen), a stable key to order boxes by. Account is the account the box's session runs under (account.Default for a
 // default session). Data is untrusted: the caller must validate it.
 type BoxFile struct {
+	Box     string
 	Account string
 	Data    []byte
 }
@@ -48,7 +49,7 @@ func (m *Manager) BoxFiles(rel string, max int64) []BoxFile {
 		if !ok {
 			continue
 		}
-		out = append(out, BoxFile{Account: p.acct, Data: b})
+		out = append(out, BoxFile{Box: p.box, Account: p.acct, Data: b})
 	}
 	return out
 }
