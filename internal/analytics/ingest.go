@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/culiops/agent-box/internal/boxread"
 )
 
 // IngestStats summarises one ingest pass for logging / the API response.
@@ -77,9 +79,12 @@ func ingestFile(s *Store, path, project string, st *IngestStats) error {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
-	parsed, sessionID, consumed, err := ParseTranscript(f)
+	parsed, sessionID, consumed, overlongTail, err := parseTranscript(f)
 	if err != nil {
 		return err
+	}
+	if overlongTail {
+		log.Printf("analytics: %s: unterminated line over %d bytes skipped to EOF", path, boxread.MaxLineBytes)
 	}
 	if sessionID == "" {
 		sessionID = stemSessionID(path)

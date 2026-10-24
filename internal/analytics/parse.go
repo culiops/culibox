@@ -7,9 +7,10 @@
 package analytics
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
+
+	"github.com/culiops/agent-box/internal/boxread"
 )
 
 // TokKey identifies a token/prompt rollup bucket. Prompts have no model of their
@@ -174,11 +175,23 @@ func trimSpace(b []byte) []byte {
 // process is still writing) is NOT consumed, so the next incremental run re-reads
 // it once complete.
 //
-// bufio.Reader (never Scanner): a single JSONL line — a big tool_result or a
-// thinking block — can exceed Scanner's 64 KiB cap and be silently truncated.
+// boxread.LineReader (never Scanner): a single JSONL line — a big tool_result or
+// a thinking block — can exceed Scanner's 64 KiB cap and be silently truncated.
+// It is capped at boxread.MaxLineBytes instead of unbounded.
 func ParseTranscript(r io.Reader) (*Parsed, string, int64, error) {
+	p, sid, consumed, _, err := parseTranscript(r)
+	return p, sid, consumed, err
+}
+
+// parseTranscript is ParseTranscript plus a flag reporting an unterminated tail
+// longer than boxread.MaxLineBytes. Such a tail is consumed (it can never become
+// a parseable line, and must not be re-read every pass); the caller logs it.
+//
+// Lines longer than the cap are skipped, not parsed: a box can create a sparse
+// file with no newline, and an unbounded read would buffer all of it.
+func parseTranscript(r io.Reader) (*Parsed, string, int64, bool, error) {
 	p := newParsed()
-	br := bufio.NewReader(r)
+	lr := boxread.NewLineReader(r, boxread.MaxLineBytes)
 
 	// Prompts precede the assistant message that answers them, so a prompt is held
 	// until the model that answers is known, then attributed to it. pending maps a
@@ -197,15 +210,23 @@ func ParseTranscript(r io.Reader) (*Parsed, string, int64, error) {
 	}
 
 	var consumed int64
+	overlongTail := false
 	for {
-		line, err := br.ReadBytes('\n')
-		if len(line) > 0 && line[len(line)-1] == '\n' {
-			consumed += int64(len(line))
-			processLine(line, p, pending, &cur, &sessionID, flushPending)
+		line, n, over, err := lr.Next()
+		if err == nil { // newline-terminated: consumed, parsed unless over-long
+			consumed += int64(n)
+			if !over {
+				processLine(line, p, pending, &cur, &sessionID, flushPending)
+			}
+			continue
 		}
-		if err != nil {
-			break // EOF (partial trailing line, if any, is left unconsumed)
+		// EOF (or a read error). A short unterminated tail is left unconsumed so
+		// the next run re-reads it once complete.
+		if over {
+			consumed += int64(n)
+			overlongTail = true
 		}
+		break
 	}
 	// Prompts with no answering assistant in this batch: attribute to the last
 	// model seen (or "" if none — a rare unknown bucket, not silently dropped).
@@ -214,7 +235,7 @@ func ParseTranscript(r io.Reader) (*Parsed, string, int64, error) {
 			p.tok(day, cur).Prompts += c
 		}
 	}
-	return p, sessionID, consumed, nil
+	return p, sessionID, consumed, overlongTail, nil
 }
 
 // processLine folds one complete JSONL line into the rollup. cur/pending carry the

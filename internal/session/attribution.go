@@ -1,12 +1,23 @@
 package session
 
 import (
-	"bufio"
 	"encoding/json"
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/culiops/agent-box/internal/boxread"
 )
+
+// maxAttributionBytes bounds how much of one transcript AttributionFor reads. A
+// box can grow a transcript without limit; past the cap only what was read is
+// attributed.
+const maxAttributionBytes = 256 << 20
+
+// attributeCapped is attributeTools over at most cap bytes of r.
+func attributeCapped(r io.Reader, cap int64) Attribution {
+	return attributeTools(io.LimitReader(r, cap))
+}
 
 // ToolStat is one row of the context-attribution breakdown: how much a tool / MCP
 // server / skill has poured into the conversation over the session.
@@ -43,19 +54,21 @@ func displayKey(name string) (key, kind string) {
 }
 
 // attributeTools streams a JSONL transcript once and aggregates tool_result bytes
-// by tool. Pure (io.Reader in). Long-line-safe: bufio.Reader, never Scanner (a
-// single JSONL line — a big tool_result or thinking block — exceeds Scanner's
-// 64 KiB default and would be truncated/errored).
+// by tool. Pure (io.Reader in). Long-line-safe: boxread.LineReader, never Scanner
+// (a single JSONL line — a big tool_result or thinking block — exceeds Scanner's
+// 64 KiB default and would be truncated/errored). A line over
+// boxread.MaxLineBytes is skipped unparsed, so a hostile newline-free file
+// cannot make the daemon buffer it whole.
 func attributeTools(r io.Reader) Attribution {
 	idKey := map[string]string{}
 	calls := map[string]int{}
 	kind := map[string]string{}
 	bytesBy := map[string]int64{}
 	var a Attribution
-	br := bufio.NewReader(r)
+	lr := boxread.NewLineReader(r, boxread.MaxLineBytes)
 	for {
-		line, err := br.ReadBytes('\n')
-		if len(line) > 0 {
+		line, _, over, err := lr.Next()
+		if len(line) > 0 && !over {
 			var rec struct {
 				Message struct {
 					Role  string `json:"role"`
@@ -132,5 +145,5 @@ func (m *Manager) AttributionFor(id string) (Attribution, bool) {
 		return Attribution{}, false
 	}
 	defer f.Close()
-	return attributeTools(f), true
+	return attributeCapped(f, maxAttributionBytes), true
 }
