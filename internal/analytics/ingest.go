@@ -1,11 +1,13 @@
 package analytics
 
 import (
+	"errors"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // IngestStats summarises one ingest pass for logging / the API response.
@@ -43,9 +45,20 @@ func stemSessionID(path string) string {
 //     reverse, so re-reading from 0 would DOUBLE-count. Instead clamp the offset
 //     down to the new size and do not re-add; log it so a real rotation is visible.
 func ingestFile(s *Store, path, project string, st *IngestStats) error {
-	fi, err := os.Stat(path)
+	// Open first, then decide from the fd: roots may include box-written trees,
+	// so a FIFO must not block the open and a symlink must not redirect it.
+	// Size and mtime come from the opened fd, never from a separate path stat.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !fi.Mode().IsRegular() {
+		return errors.New("not a regular file")
 	}
 	size, mtime := fi.Size(), fi.ModTime().Unix()
 
@@ -61,11 +74,6 @@ func ingestFile(s *Store, path, project string, st *IngestStats) error {
 		return s.Apply("", project, path, newParsed(), size, size, mtime)
 	}
 
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
