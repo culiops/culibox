@@ -86,6 +86,9 @@ const (
 	// rateLimitsMaxReset bounds a plausible resets_at.
 	rateLimitsMaxReset = 400 * 24 * time.Hour
 	rateLimitsMinReset = 1e9 // unix seconds
+	// rateLimitsRecent is how fresh a box's default-account snapshot must be to
+	// compete on box name (see mergeBoxRateLimits).
+	rateLimitsRecent = 15 * time.Minute
 )
 
 // mergeBoxRateLimits folds the quota snapshots boxed sessions wrote into out.
@@ -101,8 +104,10 @@ const (
 //     there is no host default snapshot at all. Several boxes can then carry
 //     different tokens too (the box key does not include the profile token), so
 //     freshest-wins would flip between them as well: the valid snapshot of the
-//     lexically smallest box name is used, which does not depend on file order
-//     or on which box wrote last. A tie on the name keeps the first.
+//     lexically smallest box name among the snapshots updated within
+//     rateLimitsRecent is used, which does not depend on file order or on which
+//     box wrote last, and an idle or dead box's stale snapshot cannot hold the
+//     slot. If none is that recent, the freshest wins. A tie keeps the first.
 //   - every other account: the per-account host file and the box snapshots all
 //     use that account's own credential, so they share an identity and the
 //     freshest UpdatedAt wins, compared on min(UpdatedAt, now) so a box stamping
@@ -114,7 +119,8 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 	}
 	nowUnix := now.Unix()
 	_, hostDefault := out[account.Default]
-	defBox, haveDefBox := "", false
+	var defCands []session.BoxFile // box files behind defRLs, same index
+	var defRLs []RateLimits        // valid default snapshots
 	for _, f := range s.BoxFiles(boxRateLimitsRel, boxRateLimitsMax) {
 		if f.Account == account.Default && hostDefault {
 			continue
@@ -128,16 +134,39 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 			continue
 		}
 		if f.Account == account.Default { // no host default snapshot here
-			if haveDefBox && f.Box >= defBox {
-				continue
-			}
-			out[account.Default], defBox, haveDefBox = rl, f.Box, true
+			defCands, defRLs = append(defCands, f), append(defRLs, rl)
 			continue
 		}
 		if cur, have := out[f.Account]; !have || min(rl.UpdatedAt, nowUnix) > min(cur.UpdatedAt, nowUnix) {
 			out[f.Account] = rl
 		}
 	}
+	if best := pickDefaultBox(defCands, defRLs, now); best >= 0 {
+		out[account.Default] = defRLs[best]
+	}
+}
+
+// pickDefaultBox chooses which box's snapshot fills the default account when
+// the host has none: the smallest box name among the snapshots updated within
+// rateLimitsRecent of now, else the freshest (compared on min(UpdatedAt, now)).
+// The first of equals wins. -1 when there are no candidates.
+func pickDefaultBox(files []session.BoxFile, rls []RateLimits, now time.Time) int {
+	nowUnix := now.Unix()
+	cutoff := now.Add(-rateLimitsRecent).Unix()
+	best, bestRecent := -1, false
+	for i := range files {
+		recent := rls[i].UpdatedAt >= cutoff
+		switch {
+		case best < 0:
+		case recent && !bestRecent:
+		case recent && bestRecent && files[i].Box < files[best].Box:
+		case !recent && !bestRecent && min(rls[i].UpdatedAt, nowUnix) > min(rls[best].UpdatedAt, nowUnix):
+		default:
+			continue
+		}
+		best, bestRecent = i, recent
+	}
+	return best
 }
 
 // sanitizeRateLimits validates a snapshot a boxed session wrote (untrusted).
