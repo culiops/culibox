@@ -613,6 +613,9 @@ type Session struct {
 	// claudeSessionID is Claude Code's conversation id as last validated by
 	// locate (registry), so it follows /clear. Guarded by mu.
 	claudeSessionID string
+	// cwdFormsCache is cwdFormsOf(Cwd), filled on first use (cwdForms); Cwd is
+	// immutable, so it is never invalidated. Guarded by mu.
+	cwdFormsCache []string
 	// restarting latches the first Restart of an exited session, so a double
 	// click cannot start two replacements. Guarded by mu.
 	restarting bool

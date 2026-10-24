@@ -162,7 +162,7 @@ func TestLiveCwd(t *testing.T) {
 		{"empty", "", main, false, ""},
 	}
 	for _, c := range cases {
-		if got := liveCwd(c.raw, c.spawn, c.boxed); got != c.want {
+		if got := liveCwd(c.raw, []string{c.spawn}, c.boxed); got != c.want {
 			t.Errorf("%s: liveCwd(%q,%q,%v)=%q want %q", c.name, c.raw, c.spawn, c.boxed, got, c.want)
 		}
 	}

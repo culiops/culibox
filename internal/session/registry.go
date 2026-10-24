@@ -196,6 +196,10 @@ type located struct {
 	// tier. Everything under it was written by the contained agent, so every
 	// read of a path in it goes through boxread (openTranscript).
 	boxDir string
+	// cwds are the forms of the spawn dir a boxed session is known by (cleaned,
+	// and symlink-resolved when different); nil on the host tier or when the
+	// session has no usable state dir. Host-chosen, never box-supplied.
+	cwds []string
 }
 
 // locate resolves a claude session's transcript, in order:
@@ -256,7 +260,21 @@ func (m *Manager) locate(id string) located {
 	}
 	if box != "" {
 		l.boxDir = filepath.Join(stateDir, "boxstate", box)
+		l.cwds = s.cwdForms()
 		claudeDir = filepath.Join(l.boxDir, ".claude")
+	}
+	if l.boxDir != "" && !exited {
+		// Boxed tier, live: the box-home pidfile names the in-box pid and its
+		// registry entry names the exact transcript. Every read is guarded
+		// (boxread); any surprise silently falls through to the heuristic.
+		if e, ok := readBoxedRegistry(l.boxDir, id, l.cwds); ok {
+			l.reg = &e
+			m.noteClaudeSessionID(s, id, e.SessionID)
+			// Trusted as is, whether or not the transcript exists: never fall
+			// through to the newest-mtime heuristic and a sibling's file.
+			l.path = boxedTranscriptPath(l.boxDir, e, l.cwds)
+			return l
+		}
 	}
 	if box == "" && claudeDir != "" && !exited {
 		if pr, ok := backend.(PidResolver); ok {

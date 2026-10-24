@@ -226,7 +226,11 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !ok {
 		return Usage{}, false
 	}
-	u.Cwd = liveCwd(u.Cwd, l.cwd, l.boxed)
+	spawn := []string{l.cwd}
+	if l.boxed && len(l.cwds) > 0 {
+		spawn = l.cwds // the raw spawn dir and its resolved form
+	}
+	u.Cwd = liveCwd(u.Cwd, spawn, l.boxed)
 	if max, ok := contextMax(u.Model); ok && u.ContextTokens <= max {
 		u.ContextMax = max
 		pctv := u.ContextTokens * 100 / max
@@ -290,19 +294,41 @@ func readUsageTail(f *os.File, fi os.FileInfo) (data []byte, cut bool, err error
 // the spawn cwd is not already inside, and it becomes that worktree's root.
 // Boxed tier: the cwd must also be at or under the spawn cwd, the one mount that
 // names the same files in the container and on the host (box/argv.go: cwd:cwd).
-func liveCwd(raw, spawn string, boxed bool) string {
+// spawn holds every form the spawn dir is known by (the raw dir and, for a
+// symlinked one, its resolved path, which is what the box runs claude in); the
+// host tier passes just the one.
+func liveCwd(raw string, spawn []string, boxed bool) string {
 	if raw == "" || !filepath.IsAbs(raw) {
 		return ""
 	}
-	raw, spawn = filepath.Clean(raw), filepath.Clean(spawn)
-	if boxed && !within(raw, spawn) {
+	raw = filepath.Clean(raw)
+	forms := make([]string, len(spawn))
+	for i, sp := range spawn {
+		forms[i] = filepath.Clean(sp)
+	}
+	if boxed && !withinAny(raw, forms) {
 		return ""
 	}
 	root, ok := worktreeRoot(raw)
-	if !ok || within(spawn, root) {
+	if !ok {
 		return ""
 	}
+	for _, sp := range forms {
+		if within(sp, root) {
+			return ""
+		}
+	}
 	return root
+}
+
+// withinAny reports whether p is at or below any of dirs (all already Clean).
+func withinAny(p string, dirs []string) bool {
+	for _, d := range dirs {
+		if within(p, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // within reports whether p is dir or below it (both already Clean).
