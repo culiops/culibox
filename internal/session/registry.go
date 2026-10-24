@@ -237,6 +237,7 @@ func (m *Manager) locate(id string) located {
 	var bin, cwd, box, configDir string
 	var created time.Time
 	var exited bool
+	var sid string
 	if s != nil {
 		bin, cwd, box, configDir, created = s.Bin, s.Cwd, s.Box, s.ConfigDir, s.Created
 		s.mu.Lock()
@@ -246,6 +247,9 @@ func (m *Manager) locate(id string) located {
 	m.mu.Unlock()
 	if s == nil || !isClaudeBin(bin) {
 		return located{}
+	}
+	if box != "" {
+		sid = s.claudeSID() // the conversation id noted earlier, "" if none yet
 	}
 	l := located{claude: true, created: created, cwd: cwd, boxed: box != ""}
 	// The .claude dir this session's registry and transcripts live in: the
@@ -312,7 +316,7 @@ func (m *Manager) locate(id string) located {
 		return l
 	}
 	if l.boxDir != "" {
-		if p, ok := transcriptPathIn(l.boxDir, cwd, created); ok {
+		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, created); ok {
 			l.path = p
 		}
 		return l

@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/culiops/agent-box/internal/boxread"
 	"github.com/culiops/agent-box/internal/launcher"
 )
 
@@ -162,46 +161,74 @@ func contextMax(model string) (int, bool) {
 	}
 }
 
-// transcriptPathIn is transcriptPath for a boxed session: the same ordering
-// rules, but the directory is listed and every candidate opened through
-// boxread, so a symlinked projects dir or transcript, a FIFO, or a file the box
-// swapped in is skipped. The mtime comes from the opened fd, never from
-// DirEntry.Info (an lstat of a path the box chose). The returned path is
-// absolute under boxDir.
-func transcriptPathIn(boxDir, cwd string, created time.Time) (string, bool) {
-	relDir := filepath.Join(".claude", "projects", projectSlug(cwd))
-	ents, ok := boxread.ReadDir(boxDir, relDir, 4096)
-	if !ok {
+// transcriptPathIn is transcriptPath for a boxed session. It never trusts what
+// is in the box dir, and unlike the host heuristic it never guesses across
+// sessions:
+//   - sid known: only <sid>.jsonl under projects/<slug(c)>/ for each cwd form c.
+//     Not found means no transcript. The registry is skipped for an exited
+//     session, so this is what keeps a fresh or exited session from showing
+//     another session's file from the same box.
+//   - sid unknown: the newest regular *.jsonl whose mtime is not before
+//     created (a file older than the session cannot be its own). There is no
+//     "newest overall" fallback.
+//
+// cwds are the session's spawn-dir forms (cwdFormsOf): the box runs claude with
+// -w <resolved>, so the slug may be of the symlink-resolved path. One os.Root
+// on boxDir serves the whole call; candidates are ranked with root.Lstat
+// (confined, no final-symlink follow, never blocks, never DirEntry.Info), and
+// only the winner is opened later, through boxread (openTranscript), which
+// re-checks it with fstat. The returned path is absolute under boxDir.
+func transcriptPathIn(boxDir string, cwds []string, sid string, created time.Time) (string, bool) {
+	if sid != "" && !sessionIDRe.MatchString(sid) {
 		return "", false
 	}
-	var best, newest string
-	var bestT, newestT time.Time
-	for _, e := range ents {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+	root, err := os.OpenRoot(boxDir)
+	if err != nil {
+		return "", false
+	}
+	defer root.Close()
+	var best string
+	var bestT time.Time
+	for _, c := range cwds {
+		relDir := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)))
+		// A slug dir that is itself a symlink (even one staying inside the box)
+		// is refused: Lstat does not follow the final component.
+		if fi, err := root.Lstat(relDir); err != nil || !fi.IsDir() {
 			continue
 		}
-		// Never DirEntry.Info() here: it lstat's a box-chosen host path.
-		rel := filepath.Join(relDir, e.Name())
-		f, fi, ok := boxread.Open(boxDir, rel)
-		if !ok {
+		if sid != "" {
+			rel := filepath.Join(relDir, sid+".jsonl")
+			if fi, err := root.Lstat(rel); err == nil && fi.Mode().IsRegular() {
+				return filepath.Join(boxDir, rel), true
+			}
 			continue
 		}
-		f.Close()
-		p := filepath.Join(boxDir, rel)
-		if fi.ModTime().After(newestT) {
-			newestT, newest = fi.ModTime(), p
+		d, err := root.OpenFile(relDir, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			continue
 		}
-		if !fi.ModTime().Before(created) && fi.ModTime().After(bestT) {
-			bestT, best = fi.ModTime(), p
+		ents, err := d.ReadDir(4096)
+		d.Close()
+		if err != nil && len(ents) == 0 {
+			continue
+		}
+		for _, e := range ents {
+			name := e.Name()
+			stem, isJSONL := strings.CutSuffix(name, ".jsonl")
+			if e.IsDir() || !isJSONL || !sessionIDRe.MatchString(stem) {
+				continue
+			}
+			rel := filepath.Join(relDir, name)
+			fi, err := root.Lstat(rel)
+			if err != nil || !fi.Mode().IsRegular() || fi.ModTime().Before(created) {
+				continue
+			}
+			if fi.ModTime().After(bestT) {
+				bestT, best = fi.ModTime(), filepath.Join(boxDir, rel)
+			}
 		}
 	}
-	if best != "" {
-		return best, true
-	}
-	if newest != "" {
-		return newest, true
-	}
-	return "", false
+	return best, best != ""
 }
 
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
