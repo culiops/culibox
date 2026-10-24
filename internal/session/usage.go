@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/culiops/agent-box/internal/boxread"
 	"github.com/culiops/agent-box/internal/launcher"
 )
 
@@ -161,6 +162,47 @@ func contextMax(model string) (int, bool) {
 	}
 }
 
+// transcriptPathIn is transcriptPath for a boxed session: the same ordering
+// rules, but the directory is listed and every candidate opened through
+// boxread, so a symlinked projects dir or transcript, a FIFO, or a file the box
+// swapped in is skipped. The mtime comes from the opened fd, never from
+// DirEntry.Info (an lstat of a path the box chose). The returned path is
+// absolute under boxDir.
+func transcriptPathIn(boxDir, cwd string, created time.Time) (string, bool) {
+	relDir := filepath.Join(".claude", "projects", projectSlug(cwd))
+	ents, ok := boxread.ReadDir(boxDir, relDir, 4096)
+	if !ok {
+		return "", false
+	}
+	var best, newest string
+	var bestT, newestT time.Time
+	for _, e := range ents {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		rel := filepath.Join(relDir, e.Name())
+		f, fi, ok := boxread.Open(boxDir, rel)
+		if !ok {
+			continue
+		}
+		f.Close()
+		p := filepath.Join(boxDir, rel)
+		if fi.ModTime().After(newestT) {
+			newestT, newest = fi.ModTime(), p
+		}
+		if !fi.ModTime().Before(created) && fi.ModTime().After(bestT) {
+			bestT, best = fi.ModTime(), p
+		}
+	}
+	if best != "" {
+		return best, true
+	}
+	if newest != "" {
+		return newest, true
+	}
+	return "", false
+}
+
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
 // a non-claude session, one whose transcript can't be located/read, or one whose
 // tail carries no usage line. Same locator as PeekFor (registry, then boxstate,
@@ -170,7 +212,12 @@ func (m *Manager) UsageFor(id string) (Usage, bool) {
 	if !l.claude || l.path == "" {
 		return Usage{}, false
 	}
-	b, _, err := readUsageTail(l.path)
+	f, fi, ok := l.openTranscript()
+	if !ok {
+		return Usage{}, false
+	}
+	defer f.Close()
+	b, _, err := readUsageTail(f, fi)
 	if err != nil {
 		return Usage{}, false
 	}
@@ -219,16 +266,8 @@ func (m *Manager) ResolveBins() {
 // fix round 3 (2026-09-29) — parsePeekTailCut uses it to fail AskFull closed
 // when a byte cut, even one that happens to land exactly on a newline (so no
 // line fails to parse), could have hidden context just outside the window.
-func readUsageTail(path string) (data []byte, cut bool, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, false, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, false, err
-	}
+// The caller opens the file (host: os.Open; boxed: boxread.Open) and closes it.
+func readUsageTail(f *os.File, fi os.FileInfo) (data []byte, cut bool, err error) {
 	size := fi.Size()
 	off := int64(0)
 	if size > usageTailBytes {

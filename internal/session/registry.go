@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/culiops/agent-box/internal/boxread"
 	"github.com/culiops/agent-box/internal/procinfo"
 )
 
@@ -191,6 +192,10 @@ type located struct {
 	// liveCwd vetting of the transcript's own cwd.
 	cwd   string
 	boxed bool
+	// boxDir is <stateDir>/boxstate/<box> for a boxed session, "" on the host
+	// tier. Everything under it was written by the contained agent, so every
+	// read of a path in it goes through boxread (openTranscript).
+	boxDir string
 }
 
 // locate resolves a claude session's transcript, in order:
@@ -245,7 +250,8 @@ func (m *Manager) locate(id string) located {
 		claudeDir = configDir
 	}
 	if box != "" && stateDir != "" {
-		claudeDir = filepath.Join(stateDir, "boxstate", box, ".claude")
+		l.boxDir = filepath.Join(stateDir, "boxstate", box)
+		claudeDir = filepath.Join(l.boxDir, ".claude")
 	}
 	if box == "" && claudeDir != "" && !exited {
 		if pr, ok := backend.(PidResolver); ok {
@@ -276,10 +282,43 @@ func (m *Manager) locate(id string) located {
 	if claudeDir == "" {
 		return l
 	}
+	if l.boxDir != "" {
+		if p, ok := transcriptPathIn(l.boxDir, cwd, created); ok {
+			l.path = p
+		}
+		return l
+	}
 	if p, ok := transcriptPath(cwd, claudeDir, created); ok {
 		l.path = p
 	}
 	return l
+}
+
+// openTranscript opens the located transcript for reading and returns it with
+// its Fstat info; the caller closes the file. Boxed: through boxread, so a
+// symlink, a FIFO, or a path outside the box dir is "no data". Host: a plain
+// open, exactly as before.
+func (l located) openTranscript() (*os.File, os.FileInfo, bool) {
+	if l.path == "" {
+		return nil, nil, false
+	}
+	if l.boxDir != "" {
+		rel, err := filepath.Rel(l.boxDir, l.path)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil, nil, false
+		}
+		return boxread.Open(l.boxDir, rel)
+	}
+	f, err := os.Open(l.path)
+	if err != nil {
+		return nil, nil, false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, false
+	}
+	return f, fi, true
 }
 
 // noteClaudeSessionID remembers the conversation a validated registry entry

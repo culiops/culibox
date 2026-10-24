@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -674,14 +673,15 @@ func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
 	if !l.claude || l.path == "" {
 		return Peek{}, false, blocked
 	}
-	fi, err := os.Stat(l.path)
-	if err != nil {
+	f, fi, ok := l.openTranscript()
+	if !ok {
 		return Peek{}, false, blocked
 	}
+	defer f.Close()
 	if p, ok := m.peekCached(id, l.path, fi.ModTime(), fi.Size()); ok {
 		return p, true, blocked
 	}
-	b, cut, err := readUsageTail(l.path)
+	b, cut, err := readUsageTail(f, fi)
 	if err != nil {
 		return Peek{}, false, blocked
 	}

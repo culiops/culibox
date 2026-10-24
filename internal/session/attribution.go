@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
-	"os"
 	"sort"
 	"strings"
 )
@@ -128,8 +127,8 @@ func (m *Manager) AttributionFor(id string) (Attribution, bool) {
 	if !l.claude || l.path == "" {
 		return Attribution{}, false
 	}
-	f, err := os.Open(l.path)
-	if err != nil {
+	f, _, ok := l.openTranscript()
+	if !ok {
 		return Attribution{}, false
 	}
 	defer f.Close()
