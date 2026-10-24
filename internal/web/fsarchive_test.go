@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -319,5 +321,118 @@ func TestArchiveBoxedSkipsEscape(t *testing.T) {
 		if strings.Contains(w.Body.String(), "TOPSECRET") {
 			t.Fatal("secret in archive")
 		}
+	}
+}
+
+// Archiving a host directory that holds a boxed workspace and the data dir must
+// not take the data dir, and must still take the workspace's own files.
+func TestArchiveHostAncestorSkipsDeniedTree(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(ws, "f.txt"), "fine")
+	mustWrite(t, filepath.Join(home, "proj", "a.txt"), "a")
+
+	for _, probe := range []string{"", "&probe=1"} {
+		w := httptest.NewRecorder()
+		s.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?path="+home+probe, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("probe=%q: code = %d, want 200 (%s)", probe, w.Code, w.Body)
+		}
+		if probe != "" {
+			var m struct {
+				Files int `json:"files"`
+			}
+			if json.Unmarshal(w.Body.Bytes(), &m) != nil || m.Files != 2 {
+				t.Fatalf("probe body = %s, want 2 files (ws/f.txt, proj/a.txt; data/ excluded)", w.Body)
+			}
+			continue
+		}
+		base := filepath.Base(home)
+		joined := strings.Join(tarNames(t, w.Body.Bytes()), ",")
+		if strings.Contains(joined, "/data") || strings.Contains(joined, "cookie") {
+			t.Fatalf("denied tree archived: %s", joined)
+		}
+		for _, want := range []string{base + "/ws/f.txt", base + "/proj/a.txt"} {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("missing %s in %s", want, joined)
+			}
+		}
+	}
+}
+
+// walkArchiveTree must open a boxed workspace reached from a host walk through
+// the workspace's own root. The swap below is done from inside the callback, so
+// it is deterministic: after the directory was listed, a box replaces a file and
+// a directory with relative links out of the workspace. os.Root($HOME) would
+// follow both (they stay inside $HOME); the workspace's own root must not.
+func TestWalkArchiveTreeBoxedSubtreeUsesOwnRoot(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	secret := filepath.Join(home, ".claude", ".credentials.json")
+	mustWrite(t, secret, "TOPSECRET")
+	mustWrite(t, filepath.Join(ws, "a.txt"), "a")
+	mustWrite(t, filepath.Join(ws, "zz"), "zz")
+	mustMkdirAll(t, filepath.Join(ws, "zsub"))
+	mustWrite(t, filepath.Join(home, "proj", "p.txt"), "p")
+
+	pol, err := s.fsPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outer.Close()
+
+	rootOf := map[string]string{}
+	var visited, read []string
+	err = pol.walkArchiveTree(outer, ".", "H", false, false, func(root *os.Root, path, name string, d fs.DirEntry) error {
+		visited = append(visited, name)
+		rootOf[name] = root.Name()
+		if name == "H/ws/a.txt" {
+			os.Remove(filepath.Join(ws, "zz"))
+			mustSymlink(t, "../.claude/.credentials.json", filepath.Join(ws, "zz"))
+			os.Remove(filepath.Join(ws, "zsub"))
+			mustSymlink(t, "../.claude", filepath.Join(ws, "zsub"))
+		}
+		// (The host walk legitimately reads home/.claude; only reads under the
+		// workspace are evidence of a leak.)
+		if d.Type().IsRegular() && strings.HasPrefix(name, "H/ws/") {
+			if f, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0); err == nil {
+				b, _ := io.ReadAll(f)
+				f.Close()
+				read = append(read, string(b))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rootOf["H/ws/a.txt"]; got != ws {
+		t.Errorf("ws/a.txt opened through root %q, want the workspace's own root %q", got, ws)
+	}
+	if got := rootOf["H/proj/p.txt"]; got != home {
+		t.Errorf("proj/p.txt opened through root %q, want %q", got, home)
+	}
+	if strings.Contains(strings.Join(read, "|"), "TOPSECRET") {
+		t.Errorf("a swapped-in link read the secret: %v", read)
+	}
+	if len(read) == 0 {
+		t.Errorf("no workspace file was read; the test proves nothing")
+	}
+	for _, v := range visited {
+		if strings.HasPrefix(v, "H/ws/zsub/") || strings.Contains(v, "/data") {
+			t.Errorf("walk entered a tree it must not: %s", v)
+		}
+	}
+	// ws itself appears once as a directory, not twice.
+	n := 0
+	for _, v := range visited {
+		if v == "H/ws" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("ws directory visited %d times, want 1: %v", n, visited)
 	}
 }

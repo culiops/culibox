@@ -121,6 +121,19 @@ func newFsPolicy(home string, trees BoxTrees) (fsPolicy, error) {
 	return p, nil
 }
 
+// treeOf reports whether fi (a directory's info) is a denied tree or a boxed
+// workspace root, by identity. A walk that starts outside the boxed trees uses it
+// to notice when it is about to enter one.
+func (p fsPolicy) treeOf(fi os.FileInfo) (denied, contained bool) {
+	k, err := keyOf(fi)
+	if err != nil {
+		return false, false
+	}
+	_, denied = p.denied[k]
+	_, contained = p.contained[k]
+	return denied, contained
+}
+
 // fsPolicy snapshots the server's boxed trees. A nil BoxTrees means none: every
 // path resolves as a host path.
 func (s *Server) fsPolicy() (fsPolicy, error) {

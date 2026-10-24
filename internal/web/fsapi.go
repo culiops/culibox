@@ -147,9 +147,9 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 	out := make([]fsEntry, 0, len(ents))
 	for _, e := range ents {
 		var size int64
-		// Lstat through the root, not e.Info(): that stats a path string, which a
-		// box could re-point between the read and the stat.
-		if fi, err := root.Lstat(filepath.Join(t.Rel, e.Name())); err == nil {
+		// e.Info() is safe here: an entry read from a directory opened in a Root is
+		// lstat'ed relative to that directory's fd, not by path string.
+		if fi, err := e.Info(); err == nil {
 			size = fi.Size()
 		}
 		out = append(out, fsEntry{Name: e.Name(), IsDir: e.IsDir(), Size: size})
