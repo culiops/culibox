@@ -63,8 +63,8 @@ func TestBoxedPeekIgnoresFIFOTranscript(t *testing.T) {
 	var p Peek
 	var ok bool
 	within2s(t, "PeekFor", func() { p, ok = m.PeekFor("s1") })
-	if ok && p.Text != "from regular" {
-		t.Errorf("peek=%q, want the older regular transcript or a miss", p.Text)
+	if !ok || p.Text != "from regular" {
+		t.Errorf("peek=%q ok=%v, want the FIFO skipped and the older regular transcript used", p.Text, ok)
 	}
 }
 
@@ -168,5 +168,82 @@ func TestOpenTranscriptHost(t *testing.T) {
 	f.Close()
 	if fi.Size() == 0 {
 		t.Error("host fi has no size")
+	}
+}
+
+func TestBoxedEmptyStateDirYieldsNoTranscript(t *testing.T) {
+	m, home := newLocatorManager(t) // host transcripts exist under home/.claude
+	m.stateDir = ""
+	m.sessions["s1"].Box = "box-1"
+	m.sessions["s1"].ConfigDir = filepath.Join(home, ".claude")
+	if p, ok := m.PeekFor("s1"); ok {
+		t.Errorf("peek hit with no state dir: %q", p.Text)
+	}
+	if u, ok := m.UsageFor("s1"); ok {
+		t.Errorf("usage hit with no state dir: %+v", u)
+	}
+	if _, ok := m.AttributionFor("s1"); ok {
+		t.Error("attribution hit with no state dir")
+	}
+}
+
+// The final-open guard: a path inside boxDir that is (or was swapped to) a FIFO
+// or a symlink out must not be opened, whatever the lister said earlier.
+func TestOpenTranscriptRefusesFIFOInsideBoxDir(t *testing.T) {
+	bd := t.TempDir()
+	p := filepath.Join(bd, ".claude", "projects", "x", "t.jsonl")
+	mkFifo(t, p, time.Now())
+	l := located{claude: true, boxDir: bd, path: p}
+	var ok bool
+	within2s(t, "openTranscript", func() {
+		var f *os.File
+		f, _, ok = l.openTranscript()
+		if f != nil {
+			f.Close()
+		}
+	})
+	if ok {
+		t.Error("openTranscript opened a FIFO")
+	}
+}
+
+func TestOpenTranscriptRefusesSymlinkInsideBoxDir(t *testing.T) {
+	bd := t.TempDir()
+	host := writeTx(t, t.TempDir(), locCwd, "hostfile", "SECRET", time.Now())
+	p := filepath.Join(bd, "t.jsonl")
+	if err := os.Symlink(host, p); err != nil {
+		t.Fatal(err)
+	}
+	l := located{claude: true, boxDir: bd, path: p}
+	var ok bool
+	within2s(t, "openTranscript", func() {
+		var f *os.File
+		f, _, ok = l.openTranscript()
+		if f != nil {
+			f.Close()
+		}
+	})
+	if ok {
+		t.Error("openTranscript followed a symlink out of boxDir")
+	}
+}
+
+func TestBoxedPeekIgnoresSlugDirSymlinkedInsideBox(t *testing.T) {
+	m, bd := boxedLocManager(t)
+	other := filepath.Join(bd, "elsewhere")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "x.jsonl"), []byte(`{"message":{"role":"assistant","content":[{"type":"text","text":"inside"}]}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(projDirIn(bd)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, projDirIn(bd)); err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := m.PeekFor("s1"); ok {
+		t.Errorf("peek hit through a slug dir symlinked inside the box: %q", p.Text)
 	}
 }

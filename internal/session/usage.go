@@ -180,6 +180,7 @@ func transcriptPathIn(boxDir, cwd string, created time.Time) (string, bool) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
 			continue
 		}
+		// Never DirEntry.Info() here: it lstat's a box-chosen host path.
 		rel := filepath.Join(relDir, e.Name())
 		f, fi, ok := boxread.Open(boxDir, rel)
 		if !ok {

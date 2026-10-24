@@ -249,7 +249,12 @@ func (m *Manager) locate(id string) located {
 	if configDir != "" {
 		claudeDir = configDir
 	}
-	if box != "" && stateDir != "" {
+	if box != "" && stateDir == "" {
+		// A boxed session with no state dir has nowhere safe to look: never
+		// fall back to a host .claude (home or account config dir).
+		return l
+	}
+	if box != "" {
 		l.boxDir = filepath.Join(stateDir, "boxstate", box)
 		claudeDir = filepath.Join(l.boxDir, ".claude")
 	}
