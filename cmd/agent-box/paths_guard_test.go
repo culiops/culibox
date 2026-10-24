@@ -64,6 +64,9 @@ var pathEscapes = map[string]int{
 	"internal/config/contextpaths.go literal /tmp": 4,
 	// /tmp INSIDE the box: its tmpfs mount and the pid file kept on it.
 	"internal/box/argv.go literal /tmp": 2,
+	// /tmp INSIDE the box: where the Playwright MCP writes (PlaywrightOutBox);
+	// the host side of that bind lives under the data root (OutputDir).
+	"internal/box/boxout.go literal /tmp": 1,
 	// gh's config dir INSIDE a GitHub-bound box (GHConfigDir): dies with the box.
 	"internal/broker/boxfiles.go literal /tmp": 1,
 	// The bundle container's own tmpfs and HOME (clone fetch), not a host path.

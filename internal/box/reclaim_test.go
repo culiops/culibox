@@ -320,3 +320,42 @@ func TestReclaimOnAnUnusedInstanceIsNotAnError(t *testing.T) {
 		t.Fatalf("reclaimed something from an empty state root: %+v", done)
 	}
 }
+
+// The out dir lives beside the home, not inside it, so removing the home alone
+// would leave every reclaimed box's screenshots behind forever.
+func TestReclaimRemovesTheOutputDirToo(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	const name = "ab-box-eeeeeeeeeeee"
+	seedHome(t, m, name, 40*24*time.Hour)
+	leaf, err := m.prepareOutputDir(name, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(leaf, "shot.png"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done, err := m.ReclaimState(context.Background(), DefaultStateTTL)
+	if err != nil || len(done) != 1 {
+		t.Fatalf("want one reclaim, got %+v, %v", done, err)
+	}
+	if _, err := os.Stat(filepath.Dir(leaf)); !os.IsNotExist(err) {
+		t.Fatalf("out dir outlived its box: %v", err)
+	}
+}
+
+func TestReclaimKeepsTheOutputDirOfALiveBox(t *testing.T) {
+	m, _ := newTestManagerWithFake(t)
+	const name = "ab-box-ffffffffffff"
+	seedHome(t, m, name, 90*24*time.Hour)
+	leaf, err := m.prepareOutputDir(name, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.acquire(name)
+	if done, err := m.ReclaimState(context.Background(), DefaultStateTTL); err != nil || len(done) != 0 {
+		t.Fatalf("reclaimed a live box: %+v, %v", done, err)
+	}
+	if _, err := os.Stat(leaf); err != nil {
+		t.Fatalf("a live box's out dir was removed: %v", err)
+	}
+}

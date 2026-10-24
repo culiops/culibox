@@ -113,8 +113,8 @@ func TestRunArgsMountsExactlyTheWorkspaceAndState(t *testing.T) {
 	if !containsPair(got, "--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj") {
 		t.Fatalf("workspace must bind at its identical host path: %q", joined)
 	}
-	if n := countFlag(got, "--mount"); n != 2 {
-		t.Fatalf("expected exactly 2 mounts (workspace + state), got %d: %q", n, joined)
+	if n := countFlag(got, "--mount"); n != 3 {
+		t.Fatalf("expected exactly 3 mounts (workspace + state + out dir), got %d: %q", n, joined)
 	}
 	if countFlag(got, "-v") != 0 {
 		t.Fatalf("-v silently creates a missing source inside a VM; use --mount: %q", joined)
@@ -929,6 +929,7 @@ func TestRunningBoxFromBeforeARestartIsVerifiedBeforeReuse(t *testing.T) {
 	dir2 := t.TempDir()
 	name2, _ := m.boxName(dir2, BoxKey{})
 	f.running[name2] = true
+	f.mounts[name2] = []string{dir2, boxHome, PlaywrightOutBox}
 	verr = fmt.Errorf("%w: reached loopback", ErrBoxUnavailable)
 	stopsBefore := f.stops()
 	if _, _, _, err := m.Wrap(context.Background(), dir2, "s-3", BoxKey{}, []string{"claude"}, nil, nil); !errors.Is(err, ErrBoxUnavailable) {

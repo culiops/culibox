@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/extraca"
 )
 
@@ -461,6 +462,17 @@ func TestDockerfileSetsGoEnvUnderHome(t *testing.T) {
 func TestDockerfilePinsCodebaseMemoryVersion(t *testing.T) {
 	if !strings.Contains(string(dockerfile), "\nARG CBM_VERSION=0.10.8\n") {
 		t.Error("Dockerfile does not pin ARG CBM_VERSION=0.10.8")
+	}
+}
+
+// The host bind-mounts its out dir at box.PlaywrightOutBox so the boxed
+// Playwright MCP's screenshots reach the host. If the image's --output-dir ever
+// drifts from that path, the browser keeps writing inside the box and the UI
+// silently finds nothing.
+func TestDockerfilePlaywrightOutputDirMatchesTheHostMount(t *testing.T) {
+	want := `"--output-dir","` + box.PlaywrightOutBox + `"`
+	if !strings.Contains(string(dockerfile), want) {
+		t.Errorf("Dockerfile mcp.json lacks %s (box.PlaywrightOutBox)", want)
 	}
 }
 

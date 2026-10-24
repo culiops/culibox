@@ -38,6 +38,7 @@ func TestUnfencedRunArgsOnlyGainTheClaimsLabel(t *testing.T) {
 		"--user", strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid()),
 		"--mount", "type=bind,src=/home/claude/proj,dst=/home/claude/proj",
 		"--mount", "type=bind,src=" + m.stateDir("ab-box-abc") + ",dst=" + boxHome,
+		"--mount", "type=bind,src=" + OutputDir(m.opts.StateRoot, "ab-box-abc") + ",dst=" + PlaywrightOutBox,
 		"culiops/agent-box:base", "sleep", "infinity",
 	}
 	if !slices.Equal(got, want) {
@@ -158,6 +159,7 @@ func TestPreEgressIdleBoxIsRemovedAndRecreatedOnNetwork(t *testing.T) {
 	dir := t.TempDir()
 	name, _ := m.boxName(dir, BoxKey{Binding: "abc123abc123"})
 	f.running[name] = true // left over from M3a, no live session
+	f.mounts[name] = []string{dir, boxHome, PlaywrightOutBox}
 	if _, _, _, err := m.Wrap(context.Background(), dir, "s1", BoxKey{Binding: "abc123abc123"}, []string{"sh"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +180,7 @@ func TestPreEgressIdleBoxThatCannotBeRemovedIsRefused(t *testing.T) {
 	dir := t.TempDir()
 	name, _ := m.boxName(dir, BoxKey{Binding: "abc123abc123"})
 	f.running[name] = true
+	f.mounts[name] = []string{dir, boxHome, PlaywrightOutBox}
 	f.stopFails = 1
 	_, _, _, err := m.Wrap(context.Background(), dir, "s1", BoxKey{Binding: "abc123abc123"}, []string{"sh"}, nil, nil)
 	if !errors.Is(err, ErrBoxUnavailable) {
@@ -279,6 +282,7 @@ func TestPreEgressUnboundIdleBoxIsRecreatedOnNetwork(t *testing.T) {
 	dir := t.TempDir()
 	name, _ := m.boxName(dir, BoxKey{})
 	f.running[name] = true // an unfenced box left by an older build, no live session
+	f.mounts[name] = []string{dir, boxHome, PlaywrightOutBox}
 	if _, _, _, err := m.Wrap(context.Background(), dir, "s1", BoxKey{}, []string{"sh"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
