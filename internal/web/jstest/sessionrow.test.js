@@ -3,7 +3,7 @@
 globalThis.repliesEnabled = true;
 const test = require("node:test");
 const assert = require("node:assert");
-const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, awsSig, awsRailRows, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX } =
+const { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, awsSig, awsRailRows, elevActions, awsConnRailRows, awsBadgeParts, connWindowLine, liveWindowConn, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX } =
   require("../static/sessionrow.js");
 
 const sess = (over) => Object.assign({ id: "claude-1", attached: false, exited: false }, over);
@@ -176,6 +176,17 @@ test("actionFailText words each failure", () => {
   assert.match(actionFailText("restart", 404), /gone/);
   assert.match(actionFailText("interrupt", 0), /no connection/i);
   assert.match(actionFailText("interrupt", 500), /500/);
+});
+
+// A boxed restart that could not continue the old conversation says so once;
+// every other restart (resumed, host, an older daemon) says nothing.
+test("restartNotice names a fresh conversation only when the server skipped the resume", () => {
+  assert.strictEqual(restartNotice({ id: "claude-2", resume_skipped: "the previous conversation is not in this box's home" }),
+    "Started a new conversation: the previous one is not in this box anymore");
+  assert.strictEqual(restartNotice({ id: "claude-2" }), "");
+  assert.strictEqual(restartNotice({ id: "claude-2", resume_skipped: "" }), "");
+  assert.strictEqual(restartNotice(null), "");
+  assert.strictEqual(restartNotice(undefined), "");
 });
 
 test("actionFailText: 429 (ErrTooSoon) gets its own text for any action", () => {

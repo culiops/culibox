@@ -5,10 +5,13 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/culiops/agent-box/internal/account"
+	"github.com/culiops/agent-box/internal/boxread"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -37,15 +40,60 @@ var (
 	ErrBinUnresolved = errors.New("session's agent is not yet known")
 )
 
-// resumeFor is the conversation a restart continues: only a host-tier claude
-// with a known id. A boxed claude's conversation lives in its box's state
-// dir, and codex has no equivalent — both restart fresh.
-func resumeFor(runtime, bin, sid string) string {
-	if runtime != config.RuntimeHost || !isClaudeBin(bin) || !sessionIDRe.MatchString(sid) {
+// resumeFor is the conversation a restart continues: a claude with a known id,
+// on the host or in a box that is not exclusive. An exclusive (elevate-bound)
+// box's key includes the session id, so a restart lands in a new box and the
+// conversation is not there; codex has no equivalent. Both restart fresh. For a
+// boxed claude this only says resume may be tried: spawn still checks that the
+// transcript is in the target box before the flag is passed.
+func resumeFor(runtime, bin, sid string, exclusive bool) string {
+	if runtime != config.RuntimeHost && (runtime != config.RuntimeBox || exclusive) {
+		return ""
+	}
+	if !isClaudeBin(bin) || !sessionIDRe.MatchString(sid) {
 		return ""
 	}
 	return sid
 }
+
+// dropResume is argv without the first adjacent `--resume <sid>` pair that comes
+// before any "--" token (what follows "--" is the prompt, never a flag). The
+// result is always a fresh slice; the input is not touched. ok is false, and the
+// result an unchanged copy, when there was no such pair.
+func dropResume(argv []string, sid string) ([]string, bool) {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == "--" {
+			break
+		}
+		if argv[i] == "--resume" && argv[i+1] == sid {
+			out := make([]string, 0, len(argv)-2)
+			out = append(out, argv[:i]...)
+			return append(out, argv[i+2:]...), true
+		}
+	}
+	return slices.Clone(argv), false
+}
+
+// boxedTranscriptPresent reports whether sid's transcript is in the box home
+// boxDir for one of the spawn cwd forms (C1: that project dir only). The only
+// read is boxread.Open, which refuses a symlink, a non-regular file and any path
+// out of boxDir; the file is closed again at once. An empty boxDir is "no".
+func boxedTranscriptPresent(boxDir, sid string, cwds []string) bool {
+	if boxDir == "" || !sessionIDRe.MatchString(sid) {
+		return false
+	}
+	for _, c := range cwds {
+		rel := filepath.Join(".claude", "projects", projectSlug(filepath.Clean(c)), sid+".jsonl")
+		if f, _, ok := boxread.Open(boxDir, rel); ok {
+			f.Close()
+			return true
+		}
+	}
+	return false
+}
+
+// resumeSkippedNote is Info.ResumeSkipped's text.
+const resumeSkippedNote = "the previous conversation is not in this box's home"
 
 // Restart replaces an exited session (still in retention) with a new one
 // spawned from the same profile, cwd, runtime, options and name — resuming the
@@ -93,7 +141,7 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	}
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
-		Resume: resumeFor(s.Runtime, bin, sid),
+		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive),
 	})
 	if err != nil {
 		s.mu.Lock()

@@ -123,6 +123,15 @@ function actionFailText(action, status) {
   return (action === "restart" ? "Restart" : "Interrupt") + " failed (" + status + ").";
 }
 
+// restartNotice: the toast for a restart that could not continue the old
+// conversation (a boxed claude whose transcript is no longer in its box). The
+// server sets resume_skipped on the new session's info; the wording here is the
+// UI's own. "" when there is nothing to say.
+function restartNotice(info) {
+  if (!info || !info.resume_skipped) return "";
+  return "Started a new conversation: the previous one is not in this box anymore";
+}
+
 // jumpTarget: which session a number key addresses. 1-based over the sidebar
 // list, because the sidebar is the numbered thing on screen; the grid's panes
 // are not a usable index (there can be fewer panes than sessions, and one pane
@@ -486,6 +495,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

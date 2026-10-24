@@ -503,9 +503,15 @@ type Info struct {
 	// blocked AND replyable — the one case the card can answer (Manager.Answer
 	// refuses every other). Filled by List only.
 	AskFull string `json:"ask_full,omitempty"`
-	// Resumable: an exited host-tier claude whose conversation id is known —
-	// Restart will continue it (`--resume`). Filled by List only.
+	// Resumable: an exited claude (host, or a non-exclusive box) whose
+	// conversation id is known — Restart will try to continue it (`--resume`);
+	// for a boxed one that still depends on the transcript being in the box at
+	// restart time. Filled by List only.
 	Resumable bool `json:"resumable,omitempty"`
+	// ResumeSkipped is set on the NEW session of a boxed restart that had to
+	// start a fresh conversation because the old one's transcript was not in
+	// the box's home. The UI turns it into one toast.
+	ResumeSkipped string `json:"resume_skipped,omitempty"`
 	// Account is the agent account the session runs under; empty for the
 	// default account, so a default session's wire shape is unchanged.
 	Account string `json:"account,omitempty"`
@@ -616,6 +622,8 @@ type Session struct {
 	// cwdFormsCache is cwdFormsOf(Cwd), filled on first use (cwdForms); Cwd is
 	// immutable, so it is never invalidated. Guarded by mu.
 	cwdFormsCache []string
+	// resumeSkipped: see Info.ResumeSkipped. Set before publication, immutable.
+	resumeSkipped string
 	// restarting latches the first Restart of an exited session, so a double
 	// click cannot start two replacements. Guarded by mu.
 	restarting bool
@@ -965,7 +973,7 @@ func (s *Session) Info() Info {
 	if s.status != statusDetached {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
-	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account}
+	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
 	switch {
 	case s.EgressNonce != "" && s.Bindings().Any():
 		in.Egress = "allowlist"
@@ -1658,6 +1666,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var boxName string
 	var nonce, enonce string
 	var exclusive bool
+	var cwdForms []string    // boxed only: seeds Session.cwdFormsCache
+	var resumeSkipped string // boxed only: set when --resume was dropped
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
@@ -1805,6 +1815,24 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		argv, env, boxName = wrapped, wrappedEnv, name
 		exclusive = key.Session != ""
+		cwdForms = cwdFormsOf(spec.Cwd)
+		if spec.Resume != "" {
+			// A boxed claude started with an id whose transcript is not in its own
+			// home exits at once. The box home is the same expression locate uses;
+			// an unknown name or state dir means no look is possible, so no resume.
+			m.mu.Lock()
+			stateDir := m.stateDir
+			m.mu.Unlock()
+			boxDir := ""
+			if boxName != "" && stateDir != "" {
+				boxDir = filepath.Join(stateDir, "boxstate", boxName)
+			}
+			if !boxedTranscriptPresent(boxDir, spec.Resume, cwdForms) {
+				argv, _ = dropResume(argv, spec.Resume)
+				resumeSkipped = resumeSkippedNote
+				log.Printf("session %s: resume %s skipped: transcript not in box %s", id, spec.Resume, boxName)
+			}
+		}
 		if bundleHash != "" {
 			// Logged per spawn so a box still carrying an older bundle is
 			// visible rather than silent.
@@ -1874,6 +1902,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
 	sess.Exclusive = exclusive
+	sess.cwdFormsCache = cwdForms
+	sess.resumeSkipped = resumeSkipped
 	sess.base = maps.Clone(baseAccess) // its own: a re-probe writes into it
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
@@ -2220,7 +2250,7 @@ func (m *Manager) List() []Info {
 			// Bin is written under m.mu (ResolveBins), so this is the one place
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
-			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID()) != ""
+			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID(), s.Exclusive) != ""
 			o = append(o, i)
 		}
 		return o
