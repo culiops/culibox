@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"path/filepath"
+	"time"
 
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/session"
@@ -59,16 +60,85 @@ func (s *Server) rateLimitsByAccount() map[string]RateLimits {
 	if rl, ok := readRateLimits(s.RateLimitsFile); ok {
 		out[account.Default] = rl
 	}
-	if s.Accounts == nil {
-		return out
+	if s.Accounts != nil {
+		for _, a := range s.Accounts.List() {
+			if a.IsDefault {
+				continue
+			}
+			if rl, ok := readRateLimits(filepath.Join(a.ConfigDir, account.RateLimitsName)); ok {
+				out[a.Name] = rl
+			}
+		}
 	}
-	for _, a := range s.Accounts.List() {
-		if a.IsDefault {
+	s.mergeBoxRateLimits(out, time.Now())
+	return out
+}
+
+const (
+	// boxRateLimitsRel is where a boxed session's statusLine writes its quota,
+	// relative to the box home. boxRateLimitsMax caps what is read of it.
+	boxRateLimitsRel = ".claude/agent-box-rate-limits.json"
+	boxRateLimitsMax = 4096
+
+	// rateLimitsFutureSlack tolerates VM clock drift: a snapshot stamped further
+	// ahead of now than this is dropped, so a box cannot pin its value forever.
+	rateLimitsFutureSlack = 5 * time.Minute
+	// rateLimitsMaxReset bounds a plausible resets_at.
+	rateLimitsMaxReset = 400 * 24 * time.Hour
+	rateLimitsMinReset = 1e9 // unix seconds
+)
+
+// mergeBoxRateLimits folds the quota snapshots boxed sessions wrote into out:
+// per account, the freshest UpdatedAt across the existing entry and the
+// sanitized box snapshots wins (a tie keeps the existing one). With no box files
+// out is untouched.
+func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
+	if s.BoxFiles == nil {
+		return
+	}
+	for _, f := range s.BoxFiles(boxRateLimitsRel, boxRateLimitsMax) {
+		var rl RateLimits
+		if err := json.Unmarshal(f.Data, &rl); err != nil {
 			continue
 		}
-		if rl, ok := readRateLimits(filepath.Join(a.ConfigDir, account.RateLimitsName)); ok {
-			out[a.Name] = rl
+		rl, ok := sanitizeRateLimits(rl, now)
+		if !ok {
+			continue
+		}
+		if cur, have := out[f.Account]; !have || rl.UpdatedAt > cur.UpdatedAt {
+			out[f.Account] = rl
 		}
 	}
-	return out
+}
+
+// sanitizeRateLimits validates a snapshot a boxed session wrote (untrusted).
+// ok=false when updated_at is more than rateLimitsFutureSlack ahead of now, or
+// when no window survives. used_percentage is clamped to [0,100]; a window whose
+// resets_at is not a plausible unix time (>= 1e9 and <= now+400d) is dropped.
+func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
+	if rl.UpdatedAt > now.Add(rateLimitsFutureSlack).Unix() {
+		return RateLimits{}, false
+	}
+	if rl.UpdatedAt < 0 {
+		rl.UpdatedAt = 0
+	}
+	maxReset := now.Add(rateLimitsMaxReset).Unix()
+	clean := func(w *RateLimitWindow) *RateLimitWindow {
+		if w == nil || w.ResetsAt < rateLimitsMinReset || w.ResetsAt > maxReset {
+			return nil
+		}
+		c := *w
+		// !(x >= 0) also catches NaN.
+		if !(c.UsedPercentage >= 0) {
+			c.UsedPercentage = 0
+		} else if c.UsedPercentage > 100 {
+			c.UsedPercentage = 100
+		}
+		return &c
+	}
+	rl.FiveHour, rl.SevenDay = clean(rl.FiveHour), clean(rl.SevenDay)
+	if rl.FiveHour == nil && rl.SevenDay == nil {
+		return RateLimits{}, false
+	}
+	return rl, true
 }

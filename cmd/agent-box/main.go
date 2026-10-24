@@ -656,6 +656,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		ShellBin:     config.DetectShell(),
 
 		RateLimitsFile: rateLimitsFile,
+		BoxFiles:       mgr.BoxFiles,
 
 		Accounts: accts,
 		SecretOK: func(n string) bool { _, ok, err := resolver.Resolve(n); return ok && err == nil },
