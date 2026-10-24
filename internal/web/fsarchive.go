@@ -3,6 +3,7 @@ package web
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -23,6 +24,31 @@ const (
 	defaultMaxArchiveBytes int64 = 512 << 20
 	defaultMaxArchiveFiles       = 20000
 )
+
+// archiveBudget is the file-count and byte caps, charged one regular file at a
+// time. The measure pass and the stream both charge it, because the measure is
+// only a snapshot: a box can grow a (sparse) file or add files before the
+// stream walks the tree, so the stream must not trust it.
+type archiveBudget struct {
+	maxBytes int64
+	maxFiles int
+	bytes    int64
+	files    int
+}
+
+// take charges one regular file of the given size and reports which cap, if
+// any, it pushed over (files first, as the measure pass always did).
+func (b *archiveBudget) take(size int64) error {
+	b.files++
+	b.bytes += size
+	if b.files > b.maxFiles {
+		return errArchiveTooMany
+	}
+	if b.bytes > b.maxBytes {
+		return errArchiveTooBig
+	}
+	return nil
+}
 
 // walkArchiveTree walks start inside root, calling fn for every entry with the
 // root it must be opened through and its tar name (prefix, then the path below
@@ -102,10 +128,9 @@ func (p fsPolicy) walkArchiveTree(root *os.Root, start, prefix string, strict, s
 // indistinguishable from a successful download.
 //
 // It is best-effort against concurrent writes — the tree can change between the
-// measurement and the stream — which is an accepted race.
+// measurement and the stream — so streamArchive charges the same caps again.
 func measureTree(p fsPolicy, root *os.Root, start string, strict bool, maxBytes int64, maxFiles int) (int64, int, error) {
-	var total int64
-	var count int
+	bud := archiveBudget{maxBytes: maxBytes, maxFiles: maxFiles}
 	err := p.walkArchiveTree(root, start, "", strict, false, func(_ *os.Root, _, _ string, d fs.DirEntry) error {
 		// IsRegular() is already false for symlinks, sockets, fifos and devices,
 		// so this single test covers everything the archive will not include.
@@ -116,17 +141,9 @@ func measureTree(p fsPolicy, root *os.Root, start string, strict bool, maxBytes 
 		if err != nil {
 			return nil
 		}
-		count++
-		total += info.Size()
-		if count > maxFiles {
-			return errArchiveTooMany
-		}
-		if total > maxBytes {
-			return errArchiveTooBig
-		}
-		return nil
+		return bud.take(info.Size())
 	})
-	return total, count, err
+	return bud.bytes, bud.files, err
 }
 
 // handleFsArchive serves GET /api/fs/archive?path=<abs-dir> as a .tar.gz, or,
@@ -203,17 +220,26 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", contentDisposition(base+".tar.gz"))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
+	bud := archiveBudget{maxBytes: maxBytes, maxFiles: maxFiles}
+	_ = streamArchive(r.Context(), w, pol, root, t, base, &bud)
+}
+
+// streamArchive writes the .tar.gz of the tree at t to w. The status is
+// already 200 by now, so the only way to fail is to end the tarball: a walk
+// error (including the caps being passed, see archiveBudget) stops the walk
+// and the tar and gzip writers are still closed in order, leaving a tarball
+// that ends at a member boundary rather than a truncated one. It returns the
+// walk/close errors for the caller and tests; they are logged here already.
+func streamArchive(ctx context.Context, w io.Writer, pol fsPolicy, root *os.Root, t fsTarget, base string, bud *archiveBudget) error {
 	// BestSpeed, not the default level: this box also runs the user's agents,
 	// and a 512 MiB archive at level 6 is a long single-threaded CPU burn for a
 	// few percent of size on already-compressed screenshots and logs.
 	gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not start the archive")
-		return
+		return err
 	}
 	tw := tar.NewWriter(gz)
 
-	ctx := r.Context()
 	walkErr := pol.walkArchiveTree(root, t.Rel, base, t.Strict, false, func(root *os.Root, path, name string, d fs.DirEntry) error {
 		if ctx.Err() != nil {
 			return ctx.Err() // client hung up; stop compressing into a dead socket
@@ -262,6 +288,12 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil
 		}
+		// Charge the caps before the header: the file may have grown (or others
+		// appeared) since measureTree ran. Returning here stops the walk with
+		// the tar still at a member boundary, so the tarball ends cleanly.
+		if err := bud.take(hdr.Size); err != nil {
+			return err
+		}
 		hdr.Name = name
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
@@ -286,9 +318,16 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	// signal the problem, since the 200 went out with the first byte.
 	tarErr := tw.Close()
 	gzErr := gz.Close()
-	if walkErr != nil || tarErr != nil || gzErr != nil {
-		log.Printf("archive %s: walk=%v tar=%v gzip=%v", t.Abs, walkErr, tarErr, gzErr)
+	if errors.Is(walkErr, errArchiveTooBig) || errors.Is(walkErr, errArchiveTooMany) {
+		log.Printf("archive %s: the tree outgrew the cap after it was measured (%v); archive ended early",
+			t.Abs, walkErr)
+	} else if walkErr != nil {
+		log.Printf("archive %s: walk=%v", t.Abs, walkErr)
 	}
+	if tarErr != nil || gzErr != nil {
+		log.Printf("archive %s: tar=%v gzip=%v", t.Abs, tarErr, gzErr)
+	}
+	return errors.Join(walkErr, tarErr, gzErr)
 }
 
 // zeroReader is an endless source of NUL bytes, used to pad a tar member whose

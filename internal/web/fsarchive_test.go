@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -434,5 +435,95 @@ func TestWalkArchiveTreeBoxedSubtreeUsesOwnRoot(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("ws directory visited %d times, want 1: %v", n, visited)
+	}
+}
+
+func TestArchiveBudgetTake(t *testing.T) {
+	b := &archiveBudget{maxBytes: 10, maxFiles: 2}
+	if err := b.take(4); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.take(6); err != nil { // exactly at both caps is fine
+		t.Fatal(err)
+	}
+	if err := b.take(0); err != errArchiveTooMany {
+		t.Fatalf("third file: %v, want errArchiveTooMany", err)
+	}
+	b = &archiveBudget{maxBytes: 10, maxFiles: 5}
+	_ = b.take(8)
+	if err := b.take(3); err != errArchiveTooBig {
+		t.Fatalf("11 bytes: %v, want errArchiveTooBig", err)
+	}
+}
+
+// The measure pass is only a snapshot: a box can grow a file or add files
+// before the stream walks the tree. The stream enforces the caps itself, stops
+// the walk, and still ends a valid tarball (never a half-written member).
+func TestArchiveStreamEnforcesCapsItself(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "grown")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a", "b", "c"} {
+		os.WriteFile(filepath.Join(root, n+".bin"), bytes.Repeat([]byte(n), 100), 0o644)
+	}
+	s := &Server{Home: home}
+	pol, err := s.fsPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, err := pol.resolve(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := os.OpenRoot(tgt.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	cases := []struct {
+		name  string
+		bud   archiveBudget
+		files int
+		want  error
+	}{
+		{"file cap", archiveBudget{maxBytes: 1 << 20, maxFiles: 2}, 2, errArchiveTooMany},
+		{"byte cap", archiveBudget{maxBytes: 150, maxFiles: 100}, 1, errArchiveTooBig},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			bud := c.bud
+			err := streamArchive(t.Context(), &buf, pol, r, tgt, "grown", &bud)
+			if !errors.Is(err, c.want) {
+				t.Fatalf("stream error = %v, want %v", err, c.want)
+			}
+			gz, gerr := gzip.NewReader(&buf)
+			if gerr != nil {
+				t.Fatalf("not a valid gzip: %v", gerr)
+			}
+			tr := tar.NewReader(gz)
+			files := 0
+			for {
+				h, nerr := tr.Next()
+				if nerr == io.EOF {
+					break
+				}
+				if nerr != nil {
+					t.Fatalf("tarball is not cleanly terminated: %v", nerr)
+				}
+				if h.Typeflag == tar.TypeReg {
+					files++
+					if body, _ := io.ReadAll(tr); int64(len(body)) != h.Size {
+						t.Fatalf("%s: body %d bytes, header %d", h.Name, len(body), h.Size)
+					}
+				}
+			}
+			if files != c.files {
+				t.Fatalf("%d files in the stream, want %d", files, c.files)
+			}
+		})
 	}
 }
