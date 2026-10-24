@@ -27,6 +27,7 @@ import (
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxedws"
 	"github.com/culiops/agent-box/internal/boxvm"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
@@ -402,6 +403,26 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 	}
 
+	// Boxed-workspace record (fs API containment). A box can plant symlinks in
+	// its workspace for as long as the tree exists, so the fs API must treat
+	// every directory ever spawned boxed as contained. Opened here, after the
+	// layer (its Unboxable check filters entries) and before any spawn can happen.
+	// Corrupt or unreadable fails closed: serving without it would silently
+	// un-contain every workspace.
+	unboxable := func(string) (string, bool) { return "", false }
+	if layer != nil {
+		unboxable = layer.boxes.Unboxable
+	}
+	boxedReg, boxedExisted, err := boxedws.Open(dataDir, unboxable)
+	if err != nil {
+		log.Fatalf("boxed workspace record %s: %v", filepath.Join(dataDir, "boxed-workspaces.json"), err)
+	}
+	mgr.SetBoxedRecorder(boxedRecorder(boxedReg))
+	fsDenied := []string{dataDir}
+	if layer != nil && layer.stateRoot != dataDir {
+		fsDenied = append(fsDenied, layer.stateRoot)
+	}
+
 	// Seccomp gate (N4 spec 7.9). On Linux a box shares the daemon's kernel user
 	// keyring, where the unlocked store key lives; Docker's default seccomp
 	// profile blocks the keyctl calls that would read it. Measured once here
@@ -531,6 +552,15 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if err := mgr.Reconcile(); err != nil {
 		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
 	}
+	// First start of a build with the boxed-workspace record: seed it from what
+	// exists now. AFTER Reconcile, so retained boxed sessions are in the Manager.
+	if !boxedExisted {
+		var cli *box.CLIClient
+		if layer != nil {
+			cli = &layer.cli
+		}
+		seedBoxedRegistry(boxedReg, mgr, lnch.Clones(), lnch.BoxedDefaultCwds(), cli)
+	}
 	// AFTER session reconcile: that pass adopts every surviving box, so what
 	// remains unclaimed here is genuinely orphaned.
 	if layer != nil {
@@ -651,6 +681,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Protected:  protected,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime: boxRuntime,
+		BoxTrees:   boxTreesFunc(fsDenied, boxedReg, mgr.List, lnch.Clones),
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),

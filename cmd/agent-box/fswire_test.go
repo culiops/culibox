@@ -1,0 +1,94 @@
+package main
+
+import (
+	"slices"
+	"testing"
+
+	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxedws"
+	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/session"
+)
+
+func TestBoxTreesFunc(t *testing.T) {
+	data := t.TempDir()
+	reg, _, err := boxedws.Open(data, func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, live, clone, host := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	if err := reg.Add(recorded); err != nil {
+		t.Fatal(err)
+	}
+	sessions := []session.Info{
+		{ID: "a", Cwd: live, Runtime: config.RuntimeBox},
+		{ID: "b", Cwd: recorded, Runtime: config.RuntimeBox}, // also recorded: deduped
+		{ID: "c", Cwd: host, Runtime: config.RuntimeHost},    // host session: excluded
+		{ID: "d", Cwd: "", Runtime: config.RuntimeBox},       // no cwd: skipped
+	}
+	clones := []config.Clone{{Of: host, Dir: clone}, {Of: host, Dir: live}}
+	fn := boxTreesFunc([]string{data}, reg, func() []session.Info { return sessions }, func() []config.Clone { return clones })
+
+	got := fn()
+	if !slices.Equal(got.Denied, []string{data}) {
+		t.Fatalf("Denied = %v, want [%s]", got.Denied, data)
+	}
+	want := []string{recorded, live, clone}
+	slices.Sort(want)
+	slices.Sort(got.Contained)
+	if !slices.Equal(got.Contained, want) {
+		t.Fatalf("Contained = %v, want %v", got.Contained, want)
+	}
+
+	// Evaluated per call: a session spawned later is covered at once.
+	later := t.TempDir()
+	sessions = append(sessions, session.Info{ID: "e", Cwd: later, Runtime: config.RuntimeBox})
+	if !slices.Contains(fn().Contained, later) {
+		t.Fatalf("a later boxed session's cwd is missing from %v", fn().Contained)
+	}
+}
+
+func TestSeedDirs(t *testing.T) {
+	sessions := []session.Info{
+		{Cwd: "/w/boxed", Runtime: config.RuntimeBox},
+		{Cwd: "/w/host", Runtime: config.RuntimeHost},
+	}
+	clones := []config.Clone{{Of: "/r", Dir: "/w/clone"}}
+	profiles := []string{"/w/profile", "/w/boxed"}
+	boxes := []box.BoxInfo{
+		{Name: "a", Workspace: "/w/fromdocker"},
+		{Name: "b", Workspace: "/w/garbled", Unreadable: true},
+		{Name: "c", Workspace: ""},
+	}
+	got := seedDirs(sessions, clones, profiles, boxes)
+	want := []string{"/w/boxed", "/w/clone", "/w/profile", "/w/fromdocker"}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("seedDirs = %v, want %v", got, want)
+	}
+}
+
+func TestBoxedRecorder(t *testing.T) {
+	data := t.TempDir()
+	reg, _, err := boxedws.Open(data, func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := boxedRecorder(reg)
+	if err := rec(""); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.List(); len(got) != 0 {
+		t.Fatalf("empty cwd recorded %v", got)
+	}
+	// A relative cwd is recorded as the absolute path it names from the daemon's cwd.
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := rec("."); err != nil {
+		t.Fatal(err)
+	}
+	if got := reg.List(); len(got) != 1 || got[0] != dir {
+		t.Fatalf("relative cwd recorded %v, want [%s]", got, dir)
+	}
+}
