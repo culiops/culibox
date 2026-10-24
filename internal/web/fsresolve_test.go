@@ -39,6 +39,9 @@ func TestResolveFs(t *testing.T) {
 	mustSymlink(t, "/etc", filepath.Join(proj, "out"))
 	mustSymlink(t, "l2", filepath.Join(proj, "l1"))
 	mustSymlink(t, "l1", filepath.Join(proj, "l2"))
+	mustSymlink(t, "../ws/sub", filepath.Join(proj, "relw"))
+	mustSymlink(t, "../data/x", filepath.Join(proj, "reld"))
+	mustSymlink(t, "../ws/sub/../../proj", filepath.Join(proj, "climb"))
 	other, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +77,9 @@ func TestResolveFs(t *testing.T) {
 		{"empty", std, "", fsTarget{}, errBadPath},
 		{"relative", std, "rel/x", fsTarget{}, errBadPath},
 		{"link loop", std, filepath.Join(proj, "l1"), fsTarget{}, errBadPath},
+		{"host relative link into W", std, filepath.Join(proj, "relw"), strict(ws, "sub"), nil},
+		{"host relative link into denied", std, filepath.Join(proj, "reld"), fsTarget{}, errOutsideHome},
+		{"host link whose remainder climbs out of W", std, filepath.Join(proj, "climb"), fsTarget{}, errOutsideHome},
 		{"nested: outermost wins",
 			BoxTrees{Denied: []string{data}, Contained: []string{filepath.Join(ws, "inner"), ws}},
 			filepath.Join(ws, "inner", "x"), strict(ws, "inner/x"), nil},

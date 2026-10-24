@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 )
 
 var (
@@ -23,18 +24,21 @@ const (
 	defaultMaxArchiveFiles       = 20000
 )
 
-// measureTree walks root counting regular files and their total size. It runs
+// measureTree walks dir in fsys counting regular files and their total size. It runs
 // BEFORE any bytes are written so an over-cap directory can be refused with a
 // status code: once the gzip stream starts the status is already 200, and
 // aborting mid-stream hands the user a truncated .tar.gz that is
 // indistinguishable from a successful download.
 //
+// fsys is the target's os.Root (see handleFsArchive), so the walk cannot be led
+// out of it by a link a box plants mid-walk.
+//
 // It is best-effort against concurrent writes — the tree can change between the
 // measurement and the stream — which is an accepted race.
-func measureTree(root string, maxBytes int64, maxFiles int) (int64, int, error) {
+func measureTree(fsys fs.FS, dir string, maxBytes int64, maxFiles int) (int64, int, error) {
 	var total int64
 	var count int
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(fsys, dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable entries are skipped, not fatal
 		}
@@ -71,20 +75,27 @@ func measureTree(root string, maxBytes int64, maxFiles int) (int64, int, error) 
 // removes both symlink loops and any escape from $HOME; the cost, disclosed in
 // the UI, is that symlinked content is absent from the tarball.
 func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
-	p, err := containedPath(s.Home, r.URL.Query().Get("path"))
+	t, err := s.resolveFs(r.URL.Query().Get("path"))
 	if err != nil {
 		writeFsErr(w, err)
 		return
 	}
-	info, err := os.Stat(p)
+	root, err := os.OpenRoot(t.Root)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not found")
+		writeOpenErr(w, err)
+		return
+	}
+	defer root.Close()
+	info, err := root.Stat(t.Rel)
+	if err != nil {
+		writeOpenErr(w, err)
 		return
 	}
 	if !info.IsDir() {
 		writeErr(w, http.StatusBadRequest, "not a directory")
 		return
 	}
+	fsys := root.FS()
 
 	maxBytes := s.MaxArchiveBytes
 	if maxBytes <= 0 {
@@ -94,7 +105,7 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	if maxFiles <= 0 {
 		maxFiles = defaultMaxArchiveFiles
 	}
-	total, count, err := measureTree(p, maxBytes, maxFiles)
+	total, count, err := measureTree(fsys, t.Rel, maxBytes, maxFiles)
 	if err != nil {
 		switch {
 		case errors.Is(err, errArchiveTooBig):
@@ -117,7 +128,7 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := filepath.Base(p)
+	base := filepath.Base(t.Abs)
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", contentDisposition(base+".tar.gz"))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -132,9 +143,8 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	}
 	tw := tar.NewWriter(gz)
 
-	parent := filepath.Dir(p)
 	ctx := r.Context()
-	walkErr := filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(fsys, t.Rel, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -147,21 +157,25 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		if !d.IsDir() && !d.Type().IsRegular() {
 			return nil // sockets, fifos, devices
 		}
-		fi, err := d.Info()
+		// Names are the target's base name plus the path below it, as before.
+		below, err := filepath.Rel(t.Rel, path)
 		if err != nil {
 			return nil
 		}
-		rel, err := filepath.Rel(parent, path)
-		if err != nil {
-			return nil
+		name := base
+		if below != "." {
+			name += "/" + filepath.ToSlash(below)
 		}
-		hdr, err := tar.FileInfoHeader(fi, "")
-		if err != nil {
-			return nil
-		}
-		hdr.Name = filepath.ToSlash(rel)
 		if d.IsDir() {
-			hdr.Name += "/"
+			fi, err := root.Lstat(path)
+			if err != nil {
+				return nil
+			}
+			hdr, err := tar.FileInfoHeader(fi, "")
+			if err != nil {
+				return nil
+			}
+			hdr.Name = name + "/"
 			return tw.WriteHeader(hdr)
 		}
 
@@ -169,11 +183,24 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		// fails to open leaves the tar writer expecting a body that never
 		// arrives, and every later entry is corrupt — with the status already
 		// sent as 200. Skipping the file outright keeps the stream valid.
-		f, err := os.Open(path)
+		//
+		// The dirent said "regular file", but a box can swap it for a link or a
+		// FIFO between the listing and here. O_NOFOLLOW + O_NONBLOCK + an Fstat
+		// of what was actually opened decide, not the stale dirent.
+		f, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return nil
 		}
 		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil || !fi.Mode().IsRegular() {
+			return nil
+		}
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return nil
+		}
+		hdr.Name = name
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
@@ -198,7 +225,7 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	tarErr := tw.Close()
 	gzErr := gz.Close()
 	if walkErr != nil || tarErr != nil || gzErr != nil {
-		log.Printf("archive %s: walk=%v tar=%v gzip=%v", p, walkErr, tarErr, gzErr)
+		log.Printf("archive %s: walk=%v tar=%v gzip=%v", t.Abs, walkErr, tarErr, gzErr)
 	}
 }
 

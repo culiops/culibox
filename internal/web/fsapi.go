@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -70,7 +71,7 @@ type fsEntry struct {
 	Size  int64  `json:"size"`
 }
 
-// writeFsErr maps a containedPath sentinel error to an HTTP status.
+// writeFsErr maps a resolveFs (or containedPath) sentinel error to an HTTP status.
 func writeFsErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errBadPath):
@@ -86,24 +87,59 @@ func writeFsErr(w http.ResponseWriter, err error) {
 	}
 }
 
+// writeOpenErr maps an error from opening a target through its os.Root. A
+// missing path is 404; everything else is 403, because the open can only fail
+// for a reason the caller must not learn more about than "no": a link that
+// leaves the root, a permission, a swap raced in by a box. It is never a 500
+// that would invite a retry.
+func writeOpenErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeErr(w, http.StatusForbidden, "forbidden")
+}
+
+// openFsTarget opens t for reading through its root. Strict targets carry an
+// unresolved remainder, so this open is the boundary that refuses a box-planted
+// link out of the workspace; a path-based os.Open would follow it. The root is
+// closed before returning — a file opened through an os.Root stays valid.
+// O_NONBLOCK keeps the open of a FIFO from waiting for a writer; callers must
+// Fstat the result and refuse anything that is not what they expect.
+func openFsTarget(t fsTarget, flag int) (*os.File, error) {
+	root, err := os.OpenRoot(t.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.OpenFile(t.Rel, os.O_RDONLY|flag|syscall.O_NONBLOCK, 0)
+}
+
 // handleFsList serves GET /api/fs/list?path=<abs-dir> → the directory's entries,
 // directories first then files, each sorted by name.
 func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
-	p, err := containedPath(s.Home, r.URL.Query().Get("path"))
+	t, err := s.resolveFs(r.URL.Query().Get("path"))
 	if err != nil {
 		writeFsErr(w, err)
 		return
 	}
-	info, err := os.Stat(p)
+	root, err := os.OpenRoot(t.Root)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not found")
+		writeOpenErr(w, err)
 		return
 	}
-	if !info.IsDir() {
-		writeErr(w, http.StatusBadRequest, "not a directory")
+	defer root.Close()
+	d, err := root.OpenFile(t.Rel, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		if errors.Is(err, syscall.ENOTDIR) {
+			writeErr(w, http.StatusBadRequest, "not a directory")
+			return
+		}
+		writeOpenErr(w, err)
 		return
 	}
-	ents, err := os.ReadDir(p)
+	defer d.Close()
+	ents, err := d.ReadDir(-1)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "read error")
 		return
@@ -111,7 +147,9 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 	out := make([]fsEntry, 0, len(ents))
 	for _, e := range ents {
 		var size int64
-		if fi, err := e.Info(); err == nil {
+		// Lstat through the root, not e.Info(): that stats a path string, which a
+		// box could re-point between the read and the stat.
+		if fi, err := root.Lstat(filepath.Join(t.Rel, e.Name())); err == nil {
 			size = fi.Size()
 		}
 		out = append(out, fsEntry{Name: e.Name(), IsDir: e.IsDir(), Size: size})
@@ -122,7 +160,7 @@ func (s *Server) handleFsList(w http.ResponseWriter, r *http.Request) {
 		}
 		return out[i].Name < out[j].Name
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"path": p, "entries": out})
+	writeJSON(w, http.StatusOK, map[string]any{"path": t.Abs, "entries": out})
 }
 
 const maxTextBytes = 2 << 20 // 2 MiB preview cap for text files
@@ -139,27 +177,33 @@ type fsRead struct {
 // (so <img src> works); text is returned as JSON with a language hint; binary
 // returns metadata only (never raw bytes); text over maxTextBytes → 413.
 func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
-	p, err := containedPath(s.Home, r.URL.Query().Get("path"))
+	t, err := s.resolveFs(r.URL.Query().Get("path"))
 	if err != nil {
 		writeFsErr(w, err)
 		return
 	}
-	info, err := os.Stat(p)
+	f, err := openFsTarget(t, 0)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not found")
+		writeOpenErr(w, err)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "stat error")
 		return
 	}
 	if info.IsDir() {
 		writeErr(w, http.StatusBadRequest, "is a directory")
 		return
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "open error")
+	// A FIFO, socket or device is never a preview: reading a FIFO waits for a
+	// writer a box can simply never provide. This applies to host paths too.
+	if !info.Mode().IsRegular() {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	defer f.Close()
-	serveFsFile(w, r, f, info, filepath.Base(p))
+	serveFsFile(w, r, f, info, filepath.Base(t.Abs))
 }
 
 // serveFsFile writes the response for an already-opened regular file: raw

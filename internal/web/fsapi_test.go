@@ -13,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestContainedPath(t *testing.T) {
@@ -243,5 +245,153 @@ func TestFsReadReturnsVersionForText(t *testing.T) {
 	want := hex.EncodeToString(sum[:])
 	if got.Version != want {
 		t.Fatalf("version = %q, want %q", got.Version, want)
+	}
+}
+
+// boxedServer is a Server whose BoxTrees name ws as a boxed workspace and
+// home/data as a denied tree. home is symlink-resolved so expected paths match
+// what the resolver reports.
+func boxedServer(t *testing.T) (s *Server, home, ws string) {
+	t.Helper()
+	h, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws = filepath.Join(h, "ws")
+	data := filepath.Join(h, "data")
+	mustMkdirAll(t, ws)
+	mustMkdirAll(t, data)
+	mustWrite(t, filepath.Join(data, "cookie.secret"), "cookie")
+	s = &Server{Home: h, MaxArchiveBytes: 1 << 20, MaxArchiveFiles: 100}
+	s.BoxTrees = func() BoxTrees { return BoxTrees{Denied: []string{data}, Contained: []string{ws}} }
+	return s, h, ws
+}
+
+func fsGet(h http.HandlerFunc, route, p string, extra ...string) *httptest.ResponseRecorder {
+	rr := httptest.NewRecorder()
+	q := "?path=" + url.QueryEscape(p)
+	for _, e := range extra {
+		q += "&" + e
+	}
+	h(rr, httptest.NewRequest(http.MethodGet, route+q, nil))
+	return rr
+}
+
+func TestFsReadBoxedEscapeRefused(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	creds := filepath.Join(home, ".claude", ".credentials.json")
+	mustWrite(t, creds, "TOPSECRET")
+	mustSymlink(t, creds, filepath.Join(ws, "notes.txt"))
+
+	for _, extra := range [][]string{nil, {"download=1"}} {
+		rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "notes.txt"), extra...)
+		if rr.Code != http.StatusForbidden {
+			t.Fatalf("extra=%v: code = %d, want 403 (%s)", extra, rr.Code, rr.Body)
+		}
+		if strings.Contains(rr.Body.String(), "TOPSECRET") {
+			t.Fatalf("extra=%v: secret leaked: %s", extra, rr.Body)
+		}
+	}
+}
+
+func TestFsReadBoxedDirLinkRefused(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(home, ".claude", ".credentials.json"), "TOPSECRET")
+	mustSymlink(t, home, filepath.Join(ws, "cfg"))
+
+	rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "cfg", ".claude", ".credentials.json"))
+	if rr.Code != http.StatusForbidden || strings.Contains(rr.Body.String(), "TOPSECRET") {
+		t.Fatalf("read through dir link: code = %d body = %s, want 403", rr.Code, rr.Body)
+	}
+	rr = fsGet(s.handleFsList, "/api/fs/list", filepath.Join(ws, "cfg"))
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("list of dir link: code = %d, want 403 (%s)", rr.Code, rr.Body)
+	}
+}
+
+func TestFsReadBoxedDanglingAndInTreeLink(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(ws, "real.txt"), "real content")
+	// Relative targets: os.Root resolves a link only if it stays beneath the root
+	// by relative steps, so an absolute link is refused even when it points back
+	// into the tree (see TestFsReadBoxedAbsoluteInTreeLinkRefused).
+	mustSymlink(t, "missing", filepath.Join(ws, "d"))
+	mustSymlink(t, "real.txt", filepath.Join(ws, "l"))
+
+	if rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "d")); rr.Code != http.StatusNotFound {
+		t.Fatalf("dangling link: code = %d, want 404 (%s)", rr.Code, rr.Body)
+	}
+	rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "l"))
+	var fr fsRead
+	if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &fr) != nil || fr.Content != "real content" {
+		t.Fatalf("in-tree link: code = %d body = %s, want 200 with content", rr.Code, rr.Body)
+	}
+}
+
+// A FIFO opened for reading blocks until a writer shows up, so a plain open of
+// one is a request that never returns. It must be refused, host path or boxed.
+func TestFsReadFifoRefused(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	mustMkdirAll(t, filepath.Join(home, "proj"))
+	fifos := []string{filepath.Join(ws, "p"), filepath.Join(home, "proj", "p")}
+	for _, f := range fifos {
+		if err := syscall.Mkfifo(f, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range fifos {
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- fsGet(s.handleFsRead, "/api/fs/read", f) }()
+		select {
+		case rr := <-done:
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("%s: code = %d, want 403 (%s)", f, rr.Code, rr.Body)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: read of a FIFO hung", f)
+		}
+	}
+}
+
+func TestFsListBoxedRootItself(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	mustMkdirAll(t, filepath.Join(ws, "sub"))
+	rr := fsGet(s.handleFsList, "/api/fs/list", ws)
+	var got struct {
+		Path    string    `json:"path"`
+		Entries []fsEntry `json:"entries"`
+	}
+	if rr.Code != http.StatusOK || json.Unmarshal(rr.Body.Bytes(), &got) != nil {
+		t.Fatalf("code = %d body = %s, want 200", rr.Code, rr.Body)
+	}
+	if got.Path != ws {
+		t.Errorf("path = %q, want %q", got.Path, ws)
+	}
+	if len(got.Entries) != 1 || got.Entries[0].Name != "sub" || !got.Entries[0].IsDir {
+		t.Errorf("entries = %+v, want [sub]", got.Entries)
+	}
+}
+
+func TestFsDataDirDenied(t *testing.T) {
+	s, home, _ := boxedServer(t)
+	data := filepath.Join(home, "data")
+	if rr := fsGet(s.handleFsList, "/api/fs/list", data); rr.Code != http.StatusForbidden {
+		t.Errorf("list data dir: code = %d, want 403", rr.Code)
+	}
+	rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(data, "cookie.secret"))
+	if rr.Code != http.StatusForbidden || strings.Contains(rr.Body.String(), "cookie") {
+		t.Errorf("read cookie.secret: code = %d body = %s, want 403", rr.Code, rr.Body)
+	}
+}
+
+// Pins the cost of os.Root containment: an ABSOLUTE link is refused even when its
+// target is inside the same workspace. Safe direction, documented rather than
+// worked around (resolving it ourselves would reintroduce the race os.Root closes).
+func TestFsReadBoxedAbsoluteInTreeLinkRefused(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(ws, "real.txt"), "real content")
+	mustSymlink(t, filepath.Join(ws, "real.txt"), filepath.Join(ws, "abs"))
+	if rr := fsGet(s.handleFsRead, "/api/fs/read", filepath.Join(ws, "abs")); rr.Code != http.StatusForbidden {
+		t.Fatalf("absolute in-tree link: code = %d, want 403 (%s)", rr.Code, rr.Body)
 	}
 }

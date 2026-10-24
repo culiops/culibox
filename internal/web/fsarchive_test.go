@@ -287,3 +287,37 @@ func TestArchiveProbeReportsSizeAndRefusal(t *testing.T) {
 		t.Fatalf("over-cap probe code = %d, want 413", w.Code)
 	}
 }
+
+// A link planted in a boxed workspace that points at a host file or directory
+// must contribute nothing to the archive, and must not break it.
+func TestArchiveBoxedSkipsEscape(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(home, ".claude", ".credentials.json"), "TOPSECRET")
+	mustSymlink(t, filepath.Join(home, ".claude"), filepath.Join(ws, "evil"))
+	mustWrite(t, filepath.Join(ws, "f.txt"), "fine")
+
+	for _, probe := range []string{"", "&probe=1"} {
+		w := httptest.NewRecorder()
+		s.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?path="+ws+probe, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("probe=%q: code = %d, want 200 (%s)", probe, w.Code, w.Body)
+		}
+		if probe != "" {
+			var m struct {
+				Files int `json:"files"`
+			}
+			if json.Unmarshal(w.Body.Bytes(), &m) != nil || m.Files != 1 {
+				t.Fatalf("probe body = %s, want 1 file", w.Body)
+			}
+			continue
+		}
+		names := tarNames(t, w.Body.Bytes())
+		want := []string{"ws/", "ws/f.txt"}
+		if strings.Join(names, ",") != strings.Join(want, ",") {
+			t.Fatalf("tar entries = %v, want %v", names, want)
+		}
+		if strings.Contains(w.Body.String(), "TOPSECRET") {
+			t.Fatal("secret in archive")
+		}
+	}
+}
