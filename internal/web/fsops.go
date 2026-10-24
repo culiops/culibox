@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // File mutations: create a directory, rename, delete. Read-only browsing lives
@@ -68,7 +69,7 @@ func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 // resolveParent is THE rule for every mutation: resolve the PARENT directory and
 // keep the base name UNRESOLVED.
 //
-// containedPath runs EvalSymlinks over the whole path, so using it on a mutation
+// resolveFs follows links in the whole path, so using it on a mutation
 // target hands back the symlink's TARGET — a delete would destroy a tree the
 // user never pointed at and leave the link behind, and a rename would rename the
 // target and leave the link dangling. It also makes a link pointing outside home
@@ -76,9 +77,9 @@ func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 // shows both.
 //
 // The returned root must be closed by the caller.
-func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
+func (s *Server) resolveParent(abs string) (*os.Root, string, string, fsPolicy, error) {
 	if abs == "" || !filepath.IsAbs(abs) {
-		return nil, "", "", errBadPath
+		return nil, "", "", fsPolicy{}, errBadPath
 	}
 	clean := filepath.Clean(abs)
 	base := filepath.Base(clean)
@@ -86,45 +87,67 @@ func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
 	// may legally carry a name it rejects, and refusing to delete it would be a
 	// trap. Only the structural cases are refused.
 	if base == "." || base == ".." || base == string(os.PathSeparator) {
-		return nil, "", "", errBadPath
+		return nil, "", "", fsPolicy{}, errBadPath
 	}
-	_, root, relParent, err := s.openParent(filepath.Dir(clean))
+	// One snapshot serves the parent resolution and, through the returned policy,
+	// the caller's guardsTree check on the target.
+	pol, err := s.fsPolicy()
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", fsPolicy{}, err
 	}
-	return root, relParent, base, nil
+	_, root, relParent, err := pol.openParent(filepath.Dir(clean))
+	if err != nil {
+		return nil, "", "", fsPolicy{}, err
+	}
+	return root, relParent, base, pol, nil
 }
 
-// openParent resolves an existing directory and opens the home root it lives
-// under, returning the directory's root-relative path. resolveParent calls it
-// after splitting a target; mkdir calls it directly because its parent arrives
-// as its own field. Both go through the same containment sequence, so a change
-// to it cannot reach two handlers out of three.
+// openParent resolves an existing directory through resolveFs and opens the root
+// it lives under, returning the directory's absolute path and its root-relative
+// path. resolveParent calls it after splitting a target; mkdir and upload call it
+// directly because their parent arrives as its own field. All of them go through
+// the same containment sequence, so a change to it cannot reach one handler and
+// miss another.
+//
+// For a host path the root is $HOME and the directory is already fully resolved.
+// For a path inside a boxed workspace the root is the workspace and the directory
+// is NOT resolved: the Stat below, like every later operation, goes through the
+// os.Root, which refuses a box-planted link that leaves the workspace — so a
+// mutation can never be steered into the host tree.
 func (s *Server) openParent(dir string) (string, *os.Root, string, error) {
-	resolved, err := containedDir(s.Home, dir)
+	p, err := s.fsPolicy()
 	if err != nil {
 		return "", nil, "", err
 	}
-	root, rhome, err := openHomeRoot(s.Home)
+	return p.openParent(dir)
+}
+
+func (p fsPolicy) openParent(dir string) (string, *os.Root, string, error) {
+	t, err := p.resolve(dir)
 	if err != nil {
 		return "", nil, "", err
 	}
-	rel, err := relUnderHome(rhome, resolved)
+	root, err := os.OpenRoot(t.Root)
+	if err != nil {
+		return "", nil, "", err
+	}
+	fi, err := root.Stat(t.Rel)
 	if err != nil {
 		root.Close()
-		return "", nil, "", err
+		switch {
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+			return "", nil, "", os.ErrNotExist
+		default:
+			// A link that leaves the root, a permission, a swap: the caller
+			// learns only "forbidden", as writeOpenErr does for reads.
+			return "", nil, "", errOutsideHome
+		}
 	}
-	return resolved, root, rel, nil
-}
-
-// relUnderHome expresses dir relative to the resolved home, refusing anything
-// that climbs out of it.
-func relUnderHome(rhome, dir string) (string, error) {
-	rel, err := filepath.Rel(rhome, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", errOutsideHome
+	if !fi.IsDir() {
+		root.Close()
+		return "", nil, "", errNotDir
 	}
-	return rel, nil
+	return t.Abs, root, t.Rel, nil
 }
 
 // relOf joins a resolved parent with a base name for use against the root.
@@ -200,14 +223,19 @@ func (s *Server) handleFsRename(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad name")
 		return
 	}
-	root, relParent, base, err := s.resolveParent(req.Path)
+	root, relParent, base, pol, err := s.resolveParent(req.Path)
 	if err != nil {
 		writeFsErr(w, err)
 		return
 	}
 	defer root.Close()
-	if _, err := root.Lstat(relOf(relParent, base)); err != nil {
+	fi, err := root.Lstat(relOf(relParent, base))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if pol.guardsTree(fi) {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	// The same gate delete uses. Without it the two entries in one ⋯ menu compose
@@ -282,10 +310,12 @@ type deleteMeasure struct {
 	Capped  string // "" | "entries" | "bytes" — which bound stopped the walk
 }
 
-// measureForDelete walks INSIDE the os.Root, so the tree it measures is the tree
-// the delete will remove. Walking the caller's absolute path instead would let a
-// symlink repointed after resolution move the measurement outside $HOME — and,
-// worse, describe a different tree than the one destroyed.
+// measureForDelete walks INSIDE the os.Root, so a link repointed after resolution
+// cannot move the measurement outside the root, as walking the caller's absolute
+// path would. The numbers are still an estimate: a box racing the delete can swap
+// a directory between this walk and the removal when the root is $HOME. They only
+// feed the confirmation dialog; RemoveAll, which works on file descriptors and
+// resolves nothing again, is what bounds the damage.
 //
 // fs.WalkDir takes entry types from the dirent, so it never descends a symlink
 // and a loop cannot hang it.
@@ -343,7 +373,7 @@ func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
 	if !decodeOpBody(w, r, &req) {
 		return
 	}
-	root, relParent, base, err := s.resolveParent(req.Path)
+	root, relParent, base, pol, err := s.resolveParent(req.Path)
 	if err != nil {
 		writeFsErr(w, err)
 		return
@@ -353,6 +383,10 @@ func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
 	info, err := root.Lstat(rel)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if pol.guardsTree(info) {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	// A symlink is removed as a link whatever it points at, so it must never take

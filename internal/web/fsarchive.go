@@ -3,6 +3,7 @@ package web
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"errors"
 	"io"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 )
 
 var (
@@ -23,21 +25,113 @@ const (
 	defaultMaxArchiveFiles       = 20000
 )
 
-// measureTree walks root counting regular files and their total size. It runs
-// BEFORE any bytes are written so an over-cap directory can be refused with a
-// status code: once the gzip stream starts the status is already 200, and
+// archiveBudget is the file-count and byte caps, charged one regular file at a
+// time. The measure pass and the stream both charge it, because the measure is
+// only a snapshot: a box can grow a (sparse) file or add files before the
+// stream walks the tree, so the stream must not trust it.
+type archiveBudget struct {
+	maxBytes int64
+	maxFiles int
+	bytes    int64
+	files    int
+}
+
+// take charges one regular file of the given size and reports which cap, if
+// any, it pushed over (files first, as the measure pass always did).
+func (b *archiveBudget) take(size int64) error {
+	b.files++
+	b.bytes += size
+	if b.files > b.maxFiles {
+		return errArchiveTooMany
+	}
+	if b.bytes > b.maxBytes {
+		return errArchiveTooBig
+	}
+	return nil
+}
+
+// walkArchiveTree walks start inside root, calling fn for every entry with the
+// root it must be opened through and its tar name (prefix, then the path below
+// start).
+//
+// A strict walk (root is a boxed workspace, so os.Root already confines it) needs
+// nothing more. A host walk may descend into a tree it must not trust, and
+// os.Root($HOME) would follow any link a box plants beneath it, so the walk
+// tests every directory's identity against p: a denied tree is skipped outright,
+// and a boxed workspace is entered through its OWN root (outer.OpenRoot), whose
+// identity must match the dirent's or the subtree is skipped. Descending into a
+// boxed tree from a host walk counts as entering it. skipStart omits the start
+// entry itself (the caller already emitted it as the outer walk's directory).
+//
+// A directory that turns out to be a link by the time it is inspected (a box
+// swapped it after the listing) is skipped, never descended.
+func (p fsPolicy) walkArchiveTree(root *os.Root, start, prefix string, strict, skipStart bool,
+	fn func(root *os.Root, path, name string, d fs.DirEntry) error) error {
+	return fs.WalkDir(root.FS(), start, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // unreadable entries are skipped, not fatal
+		}
+		below, err := filepath.Rel(start, path)
+		if err != nil {
+			return nil
+		}
+		name := prefix
+		if below != "." {
+			name += "/" + filepath.ToSlash(below)
+		}
+		if !d.IsDir() {
+			return fn(root, path, name, d)
+		}
+		fi, err := d.Info()
+		if err != nil || fi.Mode()&os.ModeSymlink != 0 {
+			return fs.SkipDir
+		}
+		denied, contained := p.treeOf(fi)
+		if denied {
+			return fs.SkipDir
+		}
+		if skipStart && path == start {
+			return nil
+		}
+		if strict || !contained {
+			return fn(root, path, name, d)
+		}
+		if err := fn(root, path, name, d); err != nil {
+			return err
+		}
+		sub, err := root.OpenRoot(path)
+		if err != nil {
+			return fs.SkipDir
+		}
+		defer sub.Close()
+		si, err := sub.Stat(".")
+		if err != nil {
+			return fs.SkipDir
+		}
+		if k, kerr := keyOf(si); kerr != nil {
+			return fs.SkipDir
+		} else if want, werr := keyOf(fi); werr != nil || k != want {
+			return fs.SkipDir
+		}
+		if err := p.walkArchiveTree(sub, ".", name, true, true, fn); err != nil {
+			return err
+		}
+		return fs.SkipDir
+	})
+}
+
+// measureTree counts the regular files under start and their total size, walking
+// as walkArchiveTree does so it measures exactly what the stream will include. It
+// runs BEFORE any bytes are written so an over-cap directory can be refused with
+// a status code: once the gzip stream starts the status is already 200, and
 // aborting mid-stream hands the user a truncated .tar.gz that is
 // indistinguishable from a successful download.
 //
 // It is best-effort against concurrent writes — the tree can change between the
-// measurement and the stream — which is an accepted race.
-func measureTree(root string, maxBytes int64, maxFiles int) (int64, int, error) {
-	var total int64
-	var count int
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // unreadable entries are skipped, not fatal
-		}
+// measurement and the stream — so streamArchive charges the same caps again.
+func measureTree(p fsPolicy, root *os.Root, start string, strict bool, maxBytes int64, maxFiles int) (int64, int, error) {
+	bud := archiveBudget{maxBytes: maxBytes, maxFiles: maxFiles}
+	err := p.walkArchiveTree(root, start, "", strict, false, func(_ *os.Root, _, _ string, d fs.DirEntry) error {
 		// IsRegular() is already false for symlinks, sockets, fifos and devices,
 		// so this single test covers everything the archive will not include.
 		if !d.Type().IsRegular() {
@@ -47,17 +141,9 @@ func measureTree(root string, maxBytes int64, maxFiles int) (int64, int, error) 
 		if err != nil {
 			return nil
 		}
-		count++
-		total += info.Size()
-		if count > maxFiles {
-			return errArchiveTooMany
-		}
-		if total > maxBytes {
-			return errArchiveTooBig
-		}
-		return nil
+		return bud.take(info.Size())
 	})
-	return total, count, err
+	return bud.bytes, bud.files, err
 }
 
 // handleFsArchive serves GET /api/fs/archive?path=<abs-dir> as a .tar.gz, or,
@@ -71,14 +157,26 @@ func measureTree(root string, maxBytes int64, maxFiles int) (int64, int, error) 
 // removes both symlink loops and any escape from $HOME; the cost, disclosed in
 // the UI, is that symlinked content is absent from the tarball.
 func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
-	p, err := containedPath(s.Home, r.URL.Query().Get("path"))
+	// One policy snapshot serves the resolve, the measurement and the stream.
+	pol, err := s.fsPolicy()
 	if err != nil {
 		writeFsErr(w, err)
 		return
 	}
-	info, err := os.Stat(p)
+	t, err := pol.resolve(r.URL.Query().Get("path"))
 	if err != nil {
-		writeErr(w, http.StatusNotFound, "not found")
+		writeFsErr(w, err)
+		return
+	}
+	root, err := os.OpenRoot(t.Root)
+	if err != nil {
+		writeOpenErr(w, err)
+		return
+	}
+	defer root.Close()
+	info, err := root.Stat(t.Rel)
+	if err != nil {
+		writeOpenErr(w, err)
 		return
 	}
 	if !info.IsDir() {
@@ -94,7 +192,7 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	if maxFiles <= 0 {
 		maxFiles = defaultMaxArchiveFiles
 	}
-	total, count, err := measureTree(p, maxBytes, maxFiles)
+	total, count, err := measureTree(pol, root, t.Rel, t.Strict, maxBytes, maxFiles)
 	if err != nil {
 		switch {
 		case errors.Is(err, errArchiveTooBig):
@@ -117,27 +215,32 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	base := filepath.Base(p)
+	base := filepath.Base(t.Abs)
 	w.Header().Set("Content-Type", "application/gzip")
 	w.Header().Set("Content-Disposition", contentDisposition(base+".tar.gz"))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 
+	bud := archiveBudget{maxBytes: maxBytes, maxFiles: maxFiles}
+	_ = streamArchive(r.Context(), w, pol, root, t, base, &bud)
+}
+
+// streamArchive writes the .tar.gz of the tree at t to w. The status is
+// already 200 by now, so the only way to fail is to end the tarball: a walk
+// error (including the caps being passed, see archiveBudget) stops the walk
+// and the tar and gzip writers are still closed in order, leaving a tarball
+// that ends at a member boundary rather than a truncated one. It returns the
+// walk/close errors for the caller and tests; they are logged here already.
+func streamArchive(ctx context.Context, w io.Writer, pol fsPolicy, root *os.Root, t fsTarget, base string, bud *archiveBudget) error {
 	// BestSpeed, not the default level: this box also runs the user's agents,
 	// and a 512 MiB archive at level 6 is a long single-threaded CPU burn for a
 	// few percent of size on already-compressed screenshots and logs.
 	gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not start the archive")
-		return
+		return err
 	}
 	tw := tar.NewWriter(gz)
 
-	parent := filepath.Dir(p)
-	ctx := r.Context()
-	walkErr := filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
+	walkErr := pol.walkArchiveTree(root, t.Rel, base, t.Strict, false, func(root *os.Root, path, name string, d fs.DirEntry) error {
 		if ctx.Err() != nil {
 			return ctx.Err() // client hung up; stop compressing into a dead socket
 		}
@@ -147,21 +250,16 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		if !d.IsDir() && !d.Type().IsRegular() {
 			return nil // sockets, fifos, devices
 		}
-		fi, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		rel, err := filepath.Rel(parent, path)
-		if err != nil {
-			return nil
-		}
-		hdr, err := tar.FileInfoHeader(fi, "")
-		if err != nil {
-			return nil
-		}
-		hdr.Name = filepath.ToSlash(rel)
 		if d.IsDir() {
-			hdr.Name += "/"
+			fi, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			hdr, err := tar.FileInfoHeader(fi, "")
+			if err != nil {
+				return nil
+			}
+			hdr.Name = name + "/"
 			return tw.WriteHeader(hdr)
 		}
 
@@ -169,11 +267,34 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 		// fails to open leaves the tar writer expecting a body that never
 		// arrives, and every later entry is corrupt — with the status already
 		// sent as 200. Skipping the file outright keeps the stream valid.
-		f, err := os.Open(path)
+		//
+		// The dirent said "regular file", but a box can swap it for a link or a
+		// FIFO between the listing and here. The os.Root confinement is what stops
+		// a swapped link leaving a boxed workspace — O_NOFOLLOW does not, since
+		// os.Root follows links that stay inside it — so it only decides when the
+		// root is box-owned (walkArchiveTree opens every boxed tree through its own
+		// root). O_NONBLOCK keeps a swapped-in FIFO from blocking the open, and the
+		// Fstat of what was actually opened, not the stale dirent, picks regular.
+		f, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 		if err != nil {
 			return nil
 		}
 		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil || !fi.Mode().IsRegular() {
+			return nil
+		}
+		hdr, err := tar.FileInfoHeader(fi, "")
+		if err != nil {
+			return nil
+		}
+		// Charge the caps before the header: the file may have grown (or others
+		// appeared) since measureTree ran. Returning here stops the walk with
+		// the tar still at a member boundary, so the tarball ends cleanly.
+		if err := bud.take(hdr.Size); err != nil {
+			return err
+		}
+		hdr.Name = name
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
@@ -197,9 +318,16 @@ func (s *Server) handleFsArchive(w http.ResponseWriter, r *http.Request) {
 	// signal the problem, since the 200 went out with the first byte.
 	tarErr := tw.Close()
 	gzErr := gz.Close()
-	if walkErr != nil || tarErr != nil || gzErr != nil {
-		log.Printf("archive %s: walk=%v tar=%v gzip=%v", p, walkErr, tarErr, gzErr)
+	if errors.Is(walkErr, errArchiveTooBig) || errors.Is(walkErr, errArchiveTooMany) {
+		log.Printf("archive %s: the tree outgrew the cap after it was measured (%v); archive ended early",
+			t.Abs, walkErr)
+	} else if walkErr != nil {
+		log.Printf("archive %s: walk=%v", t.Abs, walkErr)
 	}
+	if tarErr != nil || gzErr != nil {
+		log.Printf("archive %s: tar=%v gzip=%v", t.Abs, tarErr, gzErr)
+	}
+	return errors.Join(walkErr, tarErr, gzErr)
 }
 
 // zeroReader is an endless source of NUL bytes, used to pad a tar member whose

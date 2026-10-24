@@ -679,3 +679,58 @@ func TestBundleDropsSurviveRestore(t *testing.T) {
 		t.Fatalf("restored BundleDrops = %+v, want %+v", got, want)
 	}
 }
+
+// The workspace is recorded as box-written right before Wrap and never after:
+// the box must not start in a directory the host has not yet marked.
+func TestBoxedSpawnRecordsWorkspaceBeforeWrap(t *testing.T) {
+	order := &callLog{}
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	boxes.order = order
+	cwd := t.TempDir()
+	m.SetBoxedRecorder(func(c string) error {
+		order.add("record:" + c)
+		return nil
+	})
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	got := order.got()
+	if len(got) != 3 || got[0] != "prepare" || got[1] != "record:"+cwd || got[2] != "wrap" {
+		t.Fatalf("call order = %v, want [prepare record:%s wrap]", got, cwd)
+	}
+}
+
+// A recorder failure refuses the spawn and the box never starts: an unrecorded
+// boxed workspace is exactly the hole the record closes.
+func TestBoxedSpawnRecorderErrorRefusesSpawn(t *testing.T) {
+	m, boxes := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	m.SetBoxedRecorder(func(string) error { return errors.New("disk full") })
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeBox, Cwd: t.TempDir()})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("spawn succeeded although the workspace could not be recorded")
+	}
+	if !strings.Contains(err.Error(), "record boxed workspace") || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("err = %v, want it to name the record failure", err)
+	}
+	if w, _, _ := boxes.counts(); w != 0 {
+		t.Fatalf("Wrap ran %d times after a failed record", w)
+	}
+}
+
+// A host-tier spawn writes nothing the box layer cares about.
+func TestHostSpawnDoesNotRecordWorkspace(t *testing.T) {
+	m, _ := managerWithBoxes(t, []string{"sh", "-c", "sleep 30"})
+	called := false
+	m.SetBoxedRecorder(func(string) error { called = true; return nil })
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "bash", Runtime: config.RuntimeHost, Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Kill(s.ID)
+	if called {
+		t.Fatal("a host spawn recorded its workspace as boxed")
+	}
+}

@@ -692,9 +692,9 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("kind") == "dir" {
 		kind = kindDirs
 	}
-	// $HOME is resolved once, up front: resolvePrefer needs it, and the
-	// containment check below uses it for every hit.
-	rhome, err := filepath.EvalSymlinks(s.Home)
+	// ONE policy snapshot per request: the prefer root and every hit below are
+	// judged against the same view of the boxed trees, and $HOME is resolved once.
+	pol, err := s.fsPolicy()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "home unresolvable")
 		return
@@ -707,7 +707,7 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 	var hits []searchHit
 	preferRel := ""
 	if kind == kindFiles {
-		if pabs, prel, ok := resolvePrefer(rhome, r.URL.Query().Get("prefer")); ok {
+		if pabs, prel, ok := resolvePrefer(pol, r.URL.Query().Get("prefer")); ok {
 			preferRel = prel
 			pentries, ptrunc := s.preferIndex(pabs, filepath.ToSlash(prel)).snapshot(kindFiles)
 			truncated = truncated || ptrunc
@@ -722,20 +722,22 @@ func (s *Server) handleFsSearch(w http.ResponseWriter, r *http.Request) {
 		hits = append(hits, h)
 	}
 
-	// Resolve and containment-check only what will actually be returned: a
-	// symlink inside $HOME pointing outside it must never be surfaced, exactly
-	// as /api/fs/list and /api/fs/read already guarantee.
+	// Resolve and containment-check only what will actually be returned: a link
+	// that leaves $HOME, or that a box planted inside a boxed workspace to reach
+	// a host file, must never be surfaced — exactly as /api/fs/list and
+	// /api/fs/read already guarantee. The same resolver decides here, so search
+	// cannot name a path the other endpoints would refuse.
 	out := make([]searchHit, 0, limit)
 	for _, h := range hits {
 		if len(out) >= limit {
 			break
 		}
 		abs := filepath.Join(s.Home, h.Rel)
-		resolved, err := containedUnder(rhome, abs)
+		t, err := pol.resolve(abs)
 		if err != nil {
 			continue
 		}
-		info, err := os.Stat(resolved)
+		info, err := statTarget(t)
 		if err != nil {
 			continue
 		}
@@ -777,23 +779,39 @@ func scoreEntries(entries []indexEntry, lq, prefix string) []searchHit {
 	return hits
 }
 
+// statTarget stats a resolved target the way its kind demands. Every target is
+// opened through its Root: for a strict (boxed) target Rel is unresolved, and
+// os.Root refuses any link in it that leaves the workspace, so a box-planted link
+// cannot make the stat — or the kind check built on it — touch a host file.
+func statTarget(t fsTarget) (os.FileInfo, error) {
+	root, err := os.OpenRoot(t.Root)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	return root.Stat(t.Rel)
+}
+
 // resolvePrefer turns ?prefer=<abs dir> into the directory to walk first and
 // its path relative to (resolved) $HOME. Anything unusable — relative, missing,
-// not a directory, outside home once symlinks resolve, or home itself — is
-// ignored (ok=false), never an error: preferring is a ranking hint, not a scope.
-func resolvePrefer(rhome, raw string) (abs, rel string, ok bool) {
+// not a directory, outside home once symlinks resolve, denied, or home itself —
+// is ignored (ok=false), never an error: preferring is a ranking hint, not a
+// scope. It resolves through pol, so a prefer root inside a boxed workspace is
+// held to the same os.Root containment as the hits it will produce.
+func resolvePrefer(pol fsPolicy, raw string) (abs, rel string, ok bool) {
 	if raw == "" {
 		return "", "", false
 	}
-	resolved, err := containedUnder(rhome, raw)
-	if err != nil || resolved == rhome {
+	t, err := pol.resolve(raw)
+	if err != nil || t.Abs == pol.rhome {
 		return "", "", false
 	}
-	fi, err := os.Stat(resolved)
+	fi, err := statTarget(t)
 	if err != nil || !fi.IsDir() {
 		return "", "", false
 	}
-	rel, err = filepath.Rel(rhome, resolved)
+	resolved := t.Abs
+	rel, err = filepath.Rel(pol.rhome, resolved)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return "", "", false
 	}

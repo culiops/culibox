@@ -1137,6 +1137,10 @@ func TestResolvePreferRejectsSkippedRoots(t *testing.T) {
 	mustMkdirAll(t, filepath.Join(home, "proj", "node_modules", "leftpad"))
 	mustMkdirAll(t, filepath.Join(home, "proj", "src"))
 
+	pol, err := (&Server{Home: home}).fsPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, rel := range []string{
 		".ssh",                      // skipDirs, at the root
 		".aws",                      // skipDirs, at the root
@@ -1145,13 +1149,13 @@ func TestResolvePreferRejectsSkippedRoots(t *testing.T) {
 		".claude/projects",          // skipRelPaths, exact
 		".claude/projects/slug",     // skipRelPaths, a prefix of it
 	} {
-		if _, _, ok := resolvePrefer(home, filepath.Join(home, rel)); ok {
+		if _, _, ok := resolvePrefer(pol, filepath.Join(home, rel)); ok {
 			t.Errorf("prefer=%q: resolved ok=true, want it silently ignored", rel)
 		}
 	}
 
 	// A sibling that shares no path with a skip rule must still resolve.
-	if _, rel, ok := resolvePrefer(home, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
+	if _, rel, ok := resolvePrefer(pol, filepath.Join(home, "proj", "src")); !ok || rel != filepath.Join("proj", "src") {
 		t.Fatalf("resolvePrefer(proj/src) = rel=%q ok=%v, want it to resolve normally", rel, ok)
 	}
 }
@@ -1173,5 +1177,87 @@ func TestPreferIndexUsesItsOwnBudget(t *testing.T) {
 	home := newFileIndex(s.Home)
 	if home.budget != indexBudget {
 		t.Fatalf("home index budget = %v, want indexBudget (%v)", home.budget, indexBudget)
+	}
+}
+
+// A box can plant a link in its workspace at any host file; search must not
+// surface it, while the workspace's real files stay findable.
+func TestFsSearchBoxedDropsEscape(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	creds := filepath.Join(home, ".claude", ".credentials.json")
+	mustWrite(t, creds, "TOPSECRET")
+	mustSymlink(t, creds, filepath.Join(ws, "creds.json"))
+	mustWrite(t, filepath.Join(ws, "creds-real.json"))
+
+	rr, out := doSearch(t, s, "q=creds")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d (%s)", rr.Code, rr.Body)
+	}
+	assertBoxedHits(t, out)
+}
+
+// assertBoxedHits checks the escape fixture: the regular workspace file is found
+// and the planted link is not. (The host credentials file itself legitimately
+// matches "creds" — it is a plain file under $HOME.)
+func assertBoxedHits(t *testing.T, out searchResp) {
+	t.Helper()
+	real := false
+	for _, r := range out.Results {
+		switch r.Rel {
+		case filepath.Join("ws", "creds.json"):
+			t.Fatalf("box-planted link surfaced: %v", hitRels(out))
+		case filepath.Join("ws", "creds-real.json"):
+			real = true
+		}
+	}
+	if !real {
+		t.Fatalf("regular workspace file missing: %v", hitRels(out))
+	}
+}
+
+func TestFsSearchPreferBoxedDropsEscape(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	creds := filepath.Join(home, ".claude", ".credentials.json")
+	mustWrite(t, creds, "TOPSECRET")
+	mustSymlink(t, creds, filepath.Join(ws, "creds.json"))
+	mustWrite(t, filepath.Join(ws, "creds-real.json"))
+
+	rr, out := doSearch(t, s, "q=creds&prefer="+url.QueryEscape(ws))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d (%s)", rr.Code, rr.Body)
+	}
+	assertBoxedHits(t, out)
+	// The prefer root itself may be a box-planted link; it is ignored, not followed.
+	mustMkdirAll(t, filepath.Join(home, "elsewhere"))
+	mustWrite(t, filepath.Join(home, "elsewhere", "creds-else.json"))
+	mustSymlink(t, filepath.Join(home, "elsewhere"), filepath.Join(ws, "jump"))
+	_, out = doSearch(t, s, "q=creds&prefer="+url.QueryEscape(filepath.Join(ws, "jump")))
+	for _, r := range out.Results {
+		if strings.Contains(r.Rel, "ws/jump") {
+			t.Fatalf("hit surfaced through a box-planted prefer link: %v", hitRels(out))
+		}
+	}
+}
+
+// The data dir holds the web cookie secret. Search used to hide it only because
+// it sat under .local, a skipDirs entry; wherever it lives it must be dropped.
+func TestFsSearchDataDirHidden(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(home, "abdata")
+	mustWrite(t, filepath.Join(data, "secretname"))
+	mustWrite(t, filepath.Join(home, "proj", "secretname-public"))
+	s := &Server{Home: home}
+	s.BoxTrees = func() BoxTrees { return BoxTrees{Denied: []string{data}} }
+
+	_, out := doSearch(t, s, "q=secretname")
+	if want := []string{filepath.Join("proj", "secretname-public")}; !reflect.DeepEqual(hitRels(out), want) {
+		t.Fatalf("hits = %v, want %v", hitRels(out), want)
+	}
+	_, out = doSearch(t, s, "q=secretname&prefer="+url.QueryEscape(data))
+	if want := []string{filepath.Join("proj", "secretname-public")}; !reflect.DeepEqual(hitRels(out), want) {
+		t.Fatalf("with prefer=data: hits = %v, want %v", hitRels(out), want)
 	}
 }

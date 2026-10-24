@@ -1145,6 +1145,11 @@ type Manager struct {
 	// no in-box comparison is made), read by the same walk that refused symlinks.
 	contextCheck func(path string) (*box.FileID, error)
 
+	// boxedRecorder persists a workspace as box-written before a boxed Wrap
+	// starts a box in it. Nil = nothing is recorded (tests, hosts without
+	// containment).
+	boxedRecorder func(cwd string) error
+
 	// peekMu guards peekCache. It is SEPARATE from m.mu on purpose: PeekFor is
 	// called from List after m.mu is released, and sharing the mutex would make
 	// that ordering fragile.
@@ -1267,6 +1272,17 @@ func (m *Manager) SetClone(h CloneHooks) {
 func (m *Manager) SetContextCheck(f func(path string) (*box.FileID, error)) {
 	m.mu.Lock()
 	m.contextCheck = f
+	m.mu.Unlock()
+}
+
+// SetBoxedRecorder installs the hook Spawn calls with spec.Cwd right before a
+// boxed Wrap. The record must be durable before the box can write anything: a
+// workspace the host does not know a box wrote in is one the fs API would treat
+// as host-owned. An error fails the spawn ("record boxed workspace: ...") and
+// Wrap is not called. Call once at boot. Nil records nothing.
+func (m *Manager) SetBoxedRecorder(f func(cwd string) error) {
+	m.mu.Lock()
+	m.boxedRecorder = f
 	m.mu.Unlock()
 }
 
@@ -1676,6 +1692,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
 		boxes := m.boxes
+		recordBoxed := m.boxedRecorder
 		m.mu.Unlock()
 		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust}
 		var bm []box.Mount
@@ -1799,6 +1816,13 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			key.Context = config.ContextHash(ctxPaths)
 			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))
 			log.Printf("session %s (profile %s): context paths %v", id, spec.Agent, ctxPaths)
+		}
+		if recordBoxed != nil {
+			// Last step before the box exists: from here the agent may write in
+			// the workspace, so the host must already remember that it did.
+			if err := recordBoxed(spec.Cwd); err != nil {
+				return nil, fmt.Errorf("record boxed workspace %q: %w", spec.Cwd, err)
+			}
 		}
 		agentArgv := slices.Clone(argv) // the pre-Wrap argv: the tail Wrap must leave intact
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
@@ -2243,6 +2267,23 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			_ = backend.Kill(id) // idempotent: remove the pidfile + any lingering server/socket
 		}
 	}()
+}
+
+// BoxedCwds returns the working directory of every boxed session, retained and
+// exited ones included (the tree a box wrote stays untrusted after it exits),
+// without List's per-session transcript peek. It is the fs API's containment
+// feed and runs on every /api/fs request, so it only reads fields under m.mu:
+// no I/O. Empty cwds are dropped; duplicates are the caller's to drop.
+func (m *Manager) BoxedCwds() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, s := range m.sessions {
+		if s.Runtime == config.RuntimeBox && s.Cwd != "" {
+			out = append(out, s.Cwd)
+		}
+	}
+	return out
 }
 
 // List returns all sessions, oldest first.

@@ -729,3 +729,28 @@ func TestContextPathsForCopies(t *testing.T) {
 		t.Fatal("ContextPathsFor must return a copy")
 	}
 }
+
+// BoxedDefaultCwds feeds the first-boot seed of the boxed-workspace record: it
+// lists the default_cwd of every profile that spawns boxed, by profile name.
+func TestBoxedDefaultCwds(t *testing.T) {
+	l := boxedLauncher(t, []config.AgentConfig{
+		{Name: "z", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: "/z"},
+		{Name: "a", Bin: "claude", Runtime: config.RuntimeBox, DefaultCwd: "/x"},
+		{Name: "b", Bin: "claude", Runtime: config.RuntimeHost, DefaultCwd: "/y"},
+		{Name: "c", Bin: "claude"},
+		{Name: "d", Bin: "claude", DefaultCwd: "/d"},
+	})
+	l.SetDefaultRuntime(config.RuntimeHost)
+	if got, want := l.BoxedDefaultCwds(), []string{"/x", "/z"}; !slices.Equal(got, want) {
+		t.Fatalf("BoxedDefaultCwds() = %v, want %v (host default runtime)", got, want)
+	}
+	// With the instance default box, d (no runtime of its own) is boxed too; c
+	// has no default_cwd so contributes nothing.
+	l.SetDefaultRuntime(config.RuntimeBox)
+	if got, want := l.BoxedDefaultCwds(), []string{"/x", "/d", "/z"}; !slices.Equal(got, want) {
+		t.Fatalf("BoxedDefaultCwds() = %v, want %v (box default runtime)", got, want)
+	}
+	if got := boxedLauncher(t, nil).BoxedDefaultCwds(); len(got) != 0 {
+		t.Fatalf("no profiles: got %v", got)
+	}
+}

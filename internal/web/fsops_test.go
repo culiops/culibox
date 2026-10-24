@@ -102,7 +102,7 @@ func TestMkdir_MethodAndOriginGuards(t *testing.T) {
 }
 
 // The parent is swapped for a symlink AFTER the Root is opened. Only the
-// post-open swap tests containment; a pre-open one is caught by containedDir.
+// post-open swap tests containment; a pre-open one is caught by openParent.
 func TestMkdir_RefusesSymlinkedParentSwappedAfterOpen(t *testing.T) {
 	_, home := opSrv(t)
 	outside := t.TempDir()
@@ -110,7 +110,8 @@ func TestMkdir_RefusesSymlinkedParentSwappedAfterOpen(t *testing.T) {
 	if err := os.Mkdir(real, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	root, rhome, err := openHomeRoot(home)
+	rhome := home // opSrv resolves home
+	root, err := os.OpenRoot(rhome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ func TestRename_SameNameIsANoOp(t *testing.T) {
 	}
 }
 
-// containedPath would resolve the link and rename its TARGET; resolveParent must not.
+// resolveFs would resolve the link and rename its TARGET; resolveParent must not.
 func TestRename_SymlinkRenamesTheLinkNotItsTarget(t *testing.T) {
 	s, home := opSrv(t)
 	os.WriteFile(filepath.Join(home, "real.txt"), []byte("target"), 0o644)
@@ -417,7 +418,8 @@ func TestDelete_MeasuresInsideTheRootNotTheRequestPath(t *testing.T) {
 	os.Mkdir(real, 0o755)
 	os.WriteFile(filepath.Join(real, "only"), []byte("x"), 0o644)
 
-	root, rhome, err := openHomeRoot(home)
+	rhome := home // opSrv resolves home
+	root, err := os.OpenRoot(rhome)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,5 +615,212 @@ func TestOps_ParentThatIsAFileIsABadRequestNotAServerError(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: want 400, got %d (%s)", tc.name, rec.Code, rec.Body)
 		}
+	}
+}
+
+// boxedLinked is a boxed server whose workspace holds cfg -> $HOME (a box-planted
+// link to the host tree that holds the credentials). home/victim and
+// home/victimdir/keep are host files a mutation through cfg must never touch.
+func boxedLinked(t *testing.T) (s *Server, home, ws string) {
+	t.Helper()
+	s, home, ws = boxedServer(t)
+	mustWrite(t, filepath.Join(home, "victim"), "host")
+	mustWrite(t, filepath.Join(home, "victimdir", "keep"), "host")
+	mustWrite(t, filepath.Join(home, ".bashrc"), "host")
+	mustSymlink(t, home, filepath.Join(ws, "cfg"))
+	return s, home, ws
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func mustContent(t *testing.T, p, want string) {
+	t.Helper()
+	got, err := os.ReadFile(p)
+	if err != nil || string(got) != want {
+		t.Fatalf("%s = %q, %v; want %q", p, got, err, want)
+	}
+}
+
+func TestMkdirBoxedDirLinkRefused(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	rec := httptest.NewRecorder()
+	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", mustJSON(t, map[string]string{"dir": filepath.Join(ws, "cfg"), "name": "planted"})))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403 (%s)", rec.Code, rec.Body)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "planted")); err == nil {
+		t.Fatal("directory created in the host tree through the box link")
+	}
+}
+
+func TestRenameDeleteBoxedDirLinkRefused(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	for _, victim := range []string{"victim", "victimdir"} {
+		p := filepath.Join(ws, "cfg", victim)
+		rec := httptest.NewRecorder()
+		s.handleFsRename(rec, opReq(t, "/api/fs/rename", mustJSON(t, map[string]string{"path": p, "name": "renamed"})))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("rename %s: code = %d, want 403 (%s)", victim, rec.Code, rec.Body)
+		}
+		rec = httptest.NewRecorder()
+		s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]any{"path": p, "recursive": true})))
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("delete %s: code = %d, want 403 (%s)", victim, rec.Code, rec.Body)
+		}
+	}
+	mustContent(t, filepath.Join(home, "victim"), "host")
+	mustContent(t, filepath.Join(home, "victimdir", "keep"), "host")
+	if _, err := os.Lstat(filepath.Join(home, "renamed")); err == nil {
+		t.Fatal("host entry was renamed through the box link")
+	}
+}
+
+// The link itself is the box's own entry: deleting or renaming it must work and
+// must touch only the link.
+func TestRenameDeleteBoxedLinkItself(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	link := filepath.Join(ws, "cfg")
+
+	rec := httptest.NewRecorder()
+	s.handleFsRename(rec, opReq(t, "/api/fs/rename", mustJSON(t, map[string]string{"path": link, "name": "cfg2"})))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename link: code = %d (%s)", rec.Code, rec.Body)
+	}
+	if fi, err := os.Lstat(filepath.Join(ws, "cfg2")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("renamed link missing: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]any{"path": filepath.Join(ws, "cfg2"), "recursive": true})))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete link: code = %d (%s)", rec.Code, rec.Body)
+	}
+	if _, err := os.Lstat(filepath.Join(ws, "cfg2")); err == nil {
+		t.Fatal("link still present")
+	}
+	mustContent(t, filepath.Join(home, "victim"), "host")
+	mustContent(t, filepath.Join(home, "victimdir", "keep"), "host")
+}
+
+// Ordinary work inside a boxed workspace is unaffected.
+func TestMutationsInsideBoxedWorkspaceWork(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	mustMkdirAll(t, filepath.Join(ws, "sub"))
+	rec := httptest.NewRecorder()
+	s.handleFsMkdir(rec, opReq(t, "/api/fs/mkdir", mustJSON(t, map[string]string{"dir": filepath.Join(ws, "sub"), "name": "d"})))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), filepath.Join(ws, "sub", "d")) {
+		t.Fatalf("mkdir: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleFsRename(rec, opReq(t, "/api/fs/rename", mustJSON(t, map[string]string{"path": filepath.Join(ws, "sub", "d"), "name": "e"})))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]string{"path": filepath.Join(ws, "sub", "e")})))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Named risk: deleting a directory INSIDE a boxed workspace walks box-planted
+// links. Root.RemoveAll must unlink them, not follow them out. (Deleting the
+// host directory that holds the workspace is refused outright; see
+// TestRenameDeleteGuardedTreesRefused.)
+func TestDeleteBoxedDirHoldingEscapingLinksSparesTargets(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	sub := filepath.Join(ws, "sub")
+	mustWrite(t, filepath.Join(sub, "f"), "f")
+	mustWrite(t, filepath.Join(home, "victim", "keep"), "host")
+	mustSymlink(t, "../../victim", filepath.Join(sub, "l"))
+	mustSymlink(t, home, filepath.Join(sub, "abs"))
+
+	rec := httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]any{"path": sub, "recursive": true})))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete sub: code = %d (%s)", rec.Code, rec.Body)
+	}
+	if _, err := os.Lstat(sub); err == nil {
+		t.Fatal("sub still present")
+	}
+	mustContent(t, filepath.Join(home, "victim", "keep"), "host")
+	mustContent(t, filepath.Join(home, "data", "cookie.secret"), "cookie") // via the abs link
+}
+
+// A denied or contained ROOT (or a directory holding one) is not an ordinary
+// host entry: removing or renaming it would drop the policy for what lives
+// there (the data dir stops being denied; a renamed workspace stops being
+// contained and its box-planted links are followed again).
+func TestRenameDeleteGuardedTreesRefused(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	proj := filepath.Join(home, "proj")
+	mustWrite(t, filepath.Join(proj, "ws2", "f"), "f")
+	mustWrite(t, filepath.Join(ws, "notes.txt"), "n")
+	creds := filepath.Join(home, ".claude", ".credentials.json")
+	mustWrite(t, creds, "TOPSECRET")
+	mustSymlink(t, creds, filepath.Join(ws, "evil"))
+	data := filepath.Join(home, "data")
+	nested := filepath.Join(proj, "ws2")
+	s.BoxTrees = func() BoxTrees {
+		return BoxTrees{Denied: []string{data}, Contained: []string{ws, nested}}
+	}
+
+	for _, target := range []string{data, ws, proj, nested} {
+		rec := httptest.NewRecorder()
+		s.handleFsRename(rec, opReq(t, "/api/fs/rename", mustJSON(t, map[string]string{"path": target, "name": "moved"})))
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("rename %s: code = %d, want 403 (%s)", target, rec.Code, rec.Body)
+		}
+		rec = httptest.NewRecorder()
+		s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]any{"path": target, "recursive": true})))
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("delete %s: code = %d, want 403 (%s)", target, rec.Code, rec.Body)
+		}
+	}
+	mustContent(t, filepath.Join(data, "cookie.secret"), "cookie")
+	mustContent(t, filepath.Join(ws, "notes.txt"), "n")
+	mustContent(t, filepath.Join(nested, "f"), "f")
+	if _, err := os.Lstat(filepath.Join(home, "moved")); err == nil {
+		t.Fatal("a guarded tree was renamed")
+	}
+}
+
+// A symlink that points AT a guarded tree is just a link: renaming or deleting
+// it is allowed and leaves the tree alone. An ordinary host dir still deletes.
+func TestRenameDeleteLinkToGuardedTreeAllowed(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	data := filepath.Join(home, "data")
+	mustSymlink(t, ws, filepath.Join(home, "lws"))
+	mustSymlink(t, data, filepath.Join(home, "ldata"))
+	mustWrite(t, filepath.Join(home, "plain", "x"), "x")
+
+	for _, l := range []string{"lws", "ldata"} {
+		rec := httptest.NewRecorder()
+		s.handleFsRename(rec, opReq(t, "/api/fs/rename", mustJSON(t, map[string]string{"path": filepath.Join(home, l), "name": l + "2"})))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("rename %s: %d %s", l, rec.Code, rec.Body)
+		}
+		rec = httptest.NewRecorder()
+		s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]any{"path": filepath.Join(home, l+"2"), "recursive": true})))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("delete %s: %d %s", l, rec.Code, rec.Body)
+		}
+	}
+	mustContent(t, filepath.Join(data, "cookie.secret"), "cookie")
+	if _, err := os.Stat(ws); err != nil {
+		t.Fatal("workspace gone")
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleFsDelete(rec, opReq(t, "/api/fs/delete", mustJSON(t, map[string]any{"path": filepath.Join(home, "plain"), "recursive": true})))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete plain: %d %s", rec.Code, rec.Body)
 	}
 }

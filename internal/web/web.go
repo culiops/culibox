@@ -68,6 +68,12 @@ type Server struct {
 	// untrusted and is sanitized before it reaches the quota display.
 	BoxFiles func(rel string, max int64) []session.BoxFile
 
+	// BoxTrees reports, per fs request, the host trees a box can write: denied
+	// ones are refused, contained ones (boxed workspaces) are served only through
+	// os.Root so a box-planted symlink cannot reach host files. Nil → no boxed
+	// trees (host behaviour).
+	BoxTrees func() BoxTrees
+
 	// Accounts is the agent-account registry behind /api/accounts. Nil → the
 	// feature is off: no routes, and only the default account's quota is shown.
 	Accounts *account.Store

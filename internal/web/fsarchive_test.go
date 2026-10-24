@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -285,5 +288,242 @@ func TestArchiveProbeReportsSizeAndRefusal(t *testing.T) {
 	small.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?probe=1&path="+root, nil))
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over-cap probe code = %d, want 413", w.Code)
+	}
+}
+
+// A link planted in a boxed workspace that points at a host file or directory
+// must contribute nothing to the archive, and must not break it.
+func TestArchiveBoxedSkipsEscape(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(home, ".claude", ".credentials.json"), "TOPSECRET")
+	mustSymlink(t, filepath.Join(home, ".claude"), filepath.Join(ws, "evil"))
+	mustWrite(t, filepath.Join(ws, "f.txt"), "fine")
+
+	for _, probe := range []string{"", "&probe=1"} {
+		w := httptest.NewRecorder()
+		s.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?path="+ws+probe, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("probe=%q: code = %d, want 200 (%s)", probe, w.Code, w.Body)
+		}
+		if probe != "" {
+			var m struct {
+				Files int `json:"files"`
+			}
+			if json.Unmarshal(w.Body.Bytes(), &m) != nil || m.Files != 1 {
+				t.Fatalf("probe body = %s, want 1 file", w.Body)
+			}
+			continue
+		}
+		names := tarNames(t, w.Body.Bytes())
+		want := []string{"ws/", "ws/f.txt"}
+		if strings.Join(names, ",") != strings.Join(want, ",") {
+			t.Fatalf("tar entries = %v, want %v", names, want)
+		}
+		if strings.Contains(w.Body.String(), "TOPSECRET") {
+			t.Fatal("secret in archive")
+		}
+	}
+}
+
+// Archiving a host directory that holds a boxed workspace and the data dir must
+// not take the data dir, and must still take the workspace's own files.
+func TestArchiveHostAncestorSkipsDeniedTree(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	mustWrite(t, filepath.Join(ws, "f.txt"), "fine")
+	mustWrite(t, filepath.Join(home, "proj", "a.txt"), "a")
+
+	for _, probe := range []string{"", "&probe=1"} {
+		w := httptest.NewRecorder()
+		s.handleFsArchive(w, httptest.NewRequest(http.MethodGet, "/api/fs/archive?path="+home+probe, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("probe=%q: code = %d, want 200 (%s)", probe, w.Code, w.Body)
+		}
+		if probe != "" {
+			var m struct {
+				Files int `json:"files"`
+			}
+			if json.Unmarshal(w.Body.Bytes(), &m) != nil || m.Files != 2 {
+				t.Fatalf("probe body = %s, want 2 files (ws/f.txt, proj/a.txt; data/ excluded)", w.Body)
+			}
+			continue
+		}
+		base := filepath.Base(home)
+		joined := strings.Join(tarNames(t, w.Body.Bytes()), ",")
+		if strings.Contains(joined, "/data") || strings.Contains(joined, "cookie") {
+			t.Fatalf("denied tree archived: %s", joined)
+		}
+		for _, want := range []string{base + "/ws/f.txt", base + "/proj/a.txt"} {
+			if !strings.Contains(joined, want) {
+				t.Fatalf("missing %s in %s", want, joined)
+			}
+		}
+	}
+}
+
+// walkArchiveTree must open a boxed workspace reached from a host walk through
+// the workspace's own root. The swap below is done from inside the callback, so
+// it is deterministic: after the directory was listed, a box replaces a file and
+// a directory with relative links out of the workspace. os.Root($HOME) would
+// follow both (they stay inside $HOME); the workspace's own root must not.
+func TestWalkArchiveTreeBoxedSubtreeUsesOwnRoot(t *testing.T) {
+	s, home, ws := boxedServer(t)
+	secret := filepath.Join(home, ".claude", ".credentials.json")
+	mustWrite(t, secret, "TOPSECRET")
+	mustWrite(t, filepath.Join(ws, "a.txt"), "a")
+	mustWrite(t, filepath.Join(ws, "zz"), "zz")
+	mustMkdirAll(t, filepath.Join(ws, "zsub"))
+	mustWrite(t, filepath.Join(home, "proj", "p.txt"), "p")
+
+	pol, err := s.fsPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := os.OpenRoot(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer outer.Close()
+
+	rootOf := map[string]string{}
+	var visited, read []string
+	err = pol.walkArchiveTree(outer, ".", "H", false, false, func(root *os.Root, path, name string, d fs.DirEntry) error {
+		visited = append(visited, name)
+		rootOf[name] = root.Name()
+		if name == "H/ws/a.txt" {
+			os.Remove(filepath.Join(ws, "zz"))
+			mustSymlink(t, "../.claude/.credentials.json", filepath.Join(ws, "zz"))
+			os.Remove(filepath.Join(ws, "zsub"))
+			mustSymlink(t, "../.claude", filepath.Join(ws, "zsub"))
+		}
+		// (The host walk legitimately reads home/.claude; only reads under the
+		// workspace are evidence of a leak.)
+		if d.Type().IsRegular() && strings.HasPrefix(name, "H/ws/") {
+			if f, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0); err == nil {
+				b, _ := io.ReadAll(f)
+				f.Close()
+				read = append(read, string(b))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rootOf["H/ws/a.txt"]; got != ws {
+		t.Errorf("ws/a.txt opened through root %q, want the workspace's own root %q", got, ws)
+	}
+	if got := rootOf["H/proj/p.txt"]; got != home {
+		t.Errorf("proj/p.txt opened through root %q, want %q", got, home)
+	}
+	if strings.Contains(strings.Join(read, "|"), "TOPSECRET") {
+		t.Errorf("a swapped-in link read the secret: %v", read)
+	}
+	if len(read) == 0 {
+		t.Errorf("no workspace file was read; the test proves nothing")
+	}
+	for _, v := range visited {
+		if strings.HasPrefix(v, "H/ws/zsub/") || strings.Contains(v, "/data") {
+			t.Errorf("walk entered a tree it must not: %s", v)
+		}
+	}
+	// ws itself appears once as a directory, not twice.
+	n := 0
+	for _, v := range visited {
+		if v == "H/ws" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("ws directory visited %d times, want 1: %v", n, visited)
+	}
+}
+
+func TestArchiveBudgetTake(t *testing.T) {
+	b := &archiveBudget{maxBytes: 10, maxFiles: 2}
+	if err := b.take(4); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.take(6); err != nil { // exactly at both caps is fine
+		t.Fatal(err)
+	}
+	if err := b.take(0); err != errArchiveTooMany {
+		t.Fatalf("third file: %v, want errArchiveTooMany", err)
+	}
+	b = &archiveBudget{maxBytes: 10, maxFiles: 5}
+	_ = b.take(8)
+	if err := b.take(3); err != errArchiveTooBig {
+		t.Fatalf("11 bytes: %v, want errArchiveTooBig", err)
+	}
+}
+
+// The measure pass is only a snapshot: a box can grow a file or add files
+// before the stream walks the tree. The stream enforces the caps itself, stops
+// the walk, and still ends a valid tarball (never a half-written member).
+func TestArchiveStreamEnforcesCapsItself(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, "grown")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"a", "b", "c"} {
+		os.WriteFile(filepath.Join(root, n+".bin"), bytes.Repeat([]byte(n), 100), 0o644)
+	}
+	s := &Server{Home: home}
+	pol, err := s.fsPolicy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tgt, err := pol.resolve(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := os.OpenRoot(tgt.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	cases := []struct {
+		name  string
+		bud   archiveBudget
+		files int
+		want  error
+	}{
+		{"file cap", archiveBudget{maxBytes: 1 << 20, maxFiles: 2}, 2, errArchiveTooMany},
+		{"byte cap", archiveBudget{maxBytes: 150, maxFiles: 100}, 1, errArchiveTooBig},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			bud := c.bud
+			err := streamArchive(t.Context(), &buf, pol, r, tgt, "grown", &bud)
+			if !errors.Is(err, c.want) {
+				t.Fatalf("stream error = %v, want %v", err, c.want)
+			}
+			gz, gerr := gzip.NewReader(&buf)
+			if gerr != nil {
+				t.Fatalf("not a valid gzip: %v", gerr)
+			}
+			tr := tar.NewReader(gz)
+			files := 0
+			for {
+				h, nerr := tr.Next()
+				if nerr == io.EOF {
+					break
+				}
+				if nerr != nil {
+					t.Fatalf("tarball is not cleanly terminated: %v", nerr)
+				}
+				if h.Typeflag == tar.TypeReg {
+					files++
+					if body, _ := io.ReadAll(tr); int64(len(body)) != h.Size {
+						t.Fatalf("%s: body %d bytes, header %d", h.Name, len(body), h.Size)
+					}
+				}
+			}
+			if files != c.files {
+				t.Fatalf("%d files in the stream, want %d", files, c.files)
+			}
+		})
 	}
 }
