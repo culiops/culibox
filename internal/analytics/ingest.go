@@ -48,15 +48,22 @@ func stemSessionID(path string) string {
 //     reverse, so re-reading from 0 would DOUBLE-count. Instead clamp the offset
 //     down to the new size and do not re-add; log it so a real rotation is visible.
 func ingestFile(s *Store, path, project string, st *IngestStats) error {
-	return ingestOpened(s, path, project, st, func() (*os.File, error) {
+	return ingestOpened(s, path, project, st, 0, func() (*os.File, error) {
 		return os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	})
 }
 
+// boxMaxReadPerPass caps the bytes read from one box-written transcript in one
+// pass. A box can `truncate -s 1T`; without a cap a single pass would hold the
+// serialized ingest for minutes. The offset advances by what was consumed, so
+// the following passes continue where this one stopped. A var so a test can
+// lower it.
+var boxMaxReadPerPass int64 = 1 << 30
+
 // ingestOpened is ingestFile with the open supplied by the caller, so a box
 // tree can be opened through an os.Root. path is only the store key and log
-// label; it is never opened here.
-func ingestOpened(s *Store, path, project string, st *IngestStats, open func() (*os.File, error)) error {
+// label; it is never opened here. maxRead > 0 caps the bytes read this pass.
+func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64, open func() (*os.File, error)) error {
 	// Open first, then decide from the fd: roots may include box-written trees,
 	// so a FIFO must not block the open and a symlink must not redirect it.
 	// Size and mtime come from the opened fd, never from a separate path stat.
@@ -89,7 +96,11 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, open func() (
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
-	parsed, sessionID, consumed, overlongTail, err := parseTranscript(f)
+	var src io.Reader = f
+	if maxRead > 0 && size-offset > maxRead {
+		src = io.LimitReader(f, maxRead)
+	}
+	parsed, sessionID, consumed, overlongTail, err := parseTranscript(src)
 	if err != nil {
 		return err
 	}
@@ -195,7 +206,7 @@ func ingestBoxRoot(s *Store, boxStateDir, root string, st *IngestStats) {
 		}
 		path := filepath.Join(boxDir, filepath.FromSlash(p))
 		st.Scanned++
-		err = ingestOpened(s, path, project, st, func() (*os.File, error) {
+		err = ingestOpened(s, path, project, st, boxMaxReadPerPass, func() (*os.File, error) {
 			// os.Root follows a symlink that stays inside the root even with
 			// O_NOFOLLOW, so the final component is checked explicitly.
 			if fi, lerr := br.Lstat(p); lerr != nil || fi.Mode()&os.ModeSymlink != 0 {
