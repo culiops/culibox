@@ -74,6 +74,10 @@ func (m *Manager) runArgs(boxName, cwd string, extraRO []Mount, fenced, exclusiv
 		// ~/.claude mounted it lands on the read-only rootfs, so every boxed
 		// session starts un-onboarded and unresumable while writes report success.
 		"--mount", bindMount(m.stateDir(boxName), boxHome, false),
+		// Where the boxed Playwright MCP saves screenshots (its --output-dir in
+		// the image's mcp.json). Writable, and outside the home on purpose: the
+		// host serves this one directory to the UI, never the home.
+		"--mount", bindMount(OutputDir(m.opts.StateRoot, boxName), PlaywrightOutBox, false),
 	}
 	// No box_cpus, no flag: the box can use every core docker has.
 	if m.opts.CPUs > 0 {

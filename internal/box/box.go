@@ -878,7 +878,7 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 				return fmt.Errorf("%w: extra_ca_certs: building the trust bundle: %v", ErrBoxUnavailable, err)
 			}
 		}
-		srcs := append([]string{cwd, m.stateDir(name)}, mountSources(extraRO)...)
+		srcs := append([]string{cwd, m.stateDir(name), OutputDir(m.opts.StateRoot, name)}, mountSources(extraRO)...)
 		if bundle != "" {
 			srcs = append(srcs, bundle)
 		}
@@ -895,6 +895,12 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 		if _, err := m.ensureStateDir(name, trust, extraRO); err != nil {
 			m.rearmIfIdle(name)
 			return err
+		}
+		// Like the home: made by us, as us, before docker can create it as root.
+		// Also where the previous run's old screenshots are pruned.
+		if _, err := m.prepareOutputDir(name, time.Now()); err != nil {
+			m.rearmIfIdle(name)
+			return fmt.Errorf("box: preparing output dir: %w", err)
 		}
 		memory, err := m.memoryCap(ctx)
 		if err != nil {
@@ -941,6 +947,11 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 // source spelled differently by docker must not turn every reuse into a
 // recreate.
 //
+// Every box this build creates also mounts the out dir (PlaywrightOutBox). It is
+// not in extraRO — the caller never asks for it — so it is judged here: present
+// is the norm, absent is a missing OPTIONAL mount (a box from before it existed
+// still runs; its screenshots just stay inside it).
+//
 //   - Exactly what this spawn would create: reuse.
 //   - Idle (no session of this process uses it): removed and recreated, for a
 //     missing mount and an extra one alike, so an idle box always matches what
@@ -956,15 +967,24 @@ func (m *Manager) ensure(ctx context.Context, name, cwd string, extraRO []Mount,
 // Caller holds opMu.
 func (m *Manager) reuseMounts(ctx context.Context, name, cwd string, have []string, extraRO []Mount, partial bool) (State, error) {
 	got := map[string]bool{}
+	hasOut := false
 	for _, d := range have {
+		d = filepath.Clean(d)
+		if d == PlaywrightOutBox {
+			hasOut = true // judged below, never an extra mount
+			continue
+		}
 		// The two every box has, and the CA bundle: its presence is judged by
 		// the label (reuseCA), never as an extra mount.
-		if d = filepath.Clean(d); d != cwd && d != boxHome && d != extraca.ContainerBundle {
+		if d != cwd && d != boxHome && d != extraca.ContainerBundle {
 			got[d] = true
 		}
 	}
 	want := map[string]bool{}
 	var missing, required []string
+	if !hasOut {
+		missing = append(missing, PlaywrightOutBox) // optional: never in required
+	}
 	for _, mt := range extraRO {
 		d := filepath.Clean(mt.Box)
 		want[d] = true

@@ -160,6 +160,7 @@ func TestRunArgsUnchangedWithoutCA(t *testing.T) {
 		"--user", uid,
 		"--mount", "type=bind,src=/w,dst=/w",
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=%s", m.stateDir("ab-box-abc"), boxHome),
+		"--mount", fmt.Sprintf("type=bind,src=%s,dst=%s", OutputDir(m.opts.StateRoot, "ab-box-abc"), PlaywrightOutBox),
 		"--mount", "type=bind,src=/h,dst=/b,readonly",
 		"culiops/agent-box:base", "sleep", "infinity",
 	}

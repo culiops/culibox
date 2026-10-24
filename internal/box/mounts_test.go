@@ -412,3 +412,56 @@ func TestLiveBoxWithoutPluginMountsIsReused(t *testing.T) {
 		}
 	}
 }
+
+// The out dir (PlaywrightOutBox) is an OPTIONAL mount every box created by this
+// build has: a box without it still works, its screenshots just stay inside.
+
+func TestBoxWithTheOutMountAndNothingExtraIsReused(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	name := mustBoxName(t, m, dir)
+	f.running[name] = true
+	f.mounts[name] = []string{dir, boxHome, PlaywrightOutBox}
+	m.AdoptBox(name)
+	m.ReleaseBox(name) // idle: only an exact match is reused
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 0 || f.runs() != 0 {
+		t.Fatalf("a box with the out mount is exactly what a fresh one is: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+func TestIdleBoxWithoutTheOutMountIsRecreated(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	name := mustBoxName(t, m, dir)
+	f.running[name] = true
+	f.mounts[name] = []string{dir, boxHome} // from before the out dir existed
+	m.AdoptBox(name)
+	m.ReleaseBox(name)
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if f.stops() != 1 || f.runs() != 1 {
+		t.Fatalf("want the idle box recreated with the out mount: stops=%d runs=%d", f.stops(), f.runs())
+	}
+	if last := f.runArgs[len(f.runArgs)-1]; !hasDst(last, PlaywrightOutBox) {
+		t.Fatalf("the recreated box lacks the out mount: %v", last)
+	}
+}
+
+func TestLiveBoxWithoutTheOutMountIsReused(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	dir := t.TempDir()
+	name := mustBoxName(t, m, dir)
+	f.running[name] = true
+	f.mounts[name] = []string{dir, boxHome}
+	m.AdoptBox(name) // a live session counts against it
+	if _, _, _, err := m.Wrap(context.Background(), dir, "bash-1", BoxKey{}, []string{"bash"}, nil, nil); err != nil {
+		t.Fatalf("a missing optional out mount must not refuse the spawn: %v", err)
+	}
+	if f.stops() != 0 || f.runs() != 0 {
+		t.Fatalf("a box with a live session is never replaced: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}

@@ -22,16 +22,27 @@ async function fsPost(path, body) {
 // fsPost above: copying a file has to tell "too large" (413) from "is a
 // directory" (400) from "not found" (404), and api() keeps only a message
 // string. status 0 means the request never completed at all.
-async function fsRead(path) {
+//
+// `url` overrides the endpoint: a box viewer reads the same response shapes from
+// boxFileURL, so everything downstream of the read is shared.
+async function fsRead(path, url) {
   let res;
   try {
-    res = await fetch("/api/fs/read?path=" + encodeURIComponent(path));
+    res = await fetch(url || ("/api/fs/read?path=" + encodeURIComponent(path)));
   } catch (_) {
     return { ok: false, status: 0, data: null };
   }
   let data = null;
   try { data = await res.json(); } catch (_) {}
   return { ok: res.ok, status: res.status, data };
+}
+
+// boxFileURL is the read-only route for a file inside a session's box (see
+// boxfile.go): same response shapes as /api/fs/read, `download` for the save.
+// Keyed on the session id because the client never learns box names.
+function boxFileURL(sessionId, path, download) {
+  return "/api/sessions/" + encodeURIComponent(sessionId) + "/boxfile?path=" + encodeURIComponent(path) +
+    (download ? "&download=1" : "");
 }
 
 // fsWrite is POST /api/fs/write as the same envelope. Wrapped in its own
@@ -146,5 +157,5 @@ function relativeTo(root, path, home) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath, relativeTo };
+  module.exports = { deleteConfirmText, deleteSummary, normalizePath, fsErrText, shortPath, relativeTo, boxFileURL };
 }

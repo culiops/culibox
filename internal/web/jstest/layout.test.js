@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { reconcileLayout, serializeLayout, readLayout, writeLayout, LAYOUT_KEY } = require("../static/layout.js");
+const { reconcileLayout, serializeLayout, readLayout, writeLayout, tabKey, LAYOUT_KEY } = require("../static/layout.js");
 
 // A minimal localStorage stand-in: readLayout/writeLayout are the only impure
 // functions here, and their contract (corrupt value → null, null → key removed)
@@ -316,4 +316,49 @@ test("a hand-edited scroll offset is coerced on the way OUT of reconcile too", (
 test("a v1 snapshot written before viewers existed still restores", () => {
   const plan = reconcileLayout(snap([cell(["a", "b"], 1)]), live("a", "b"));
   assert.deepStrictEqual(plan.cells, [{ tabs: [{ id: "a" }, { id: "b" }], active: 1 }]);
+});
+
+// A box viewer is the same file path as a host viewer but a different file: the
+// path only exists inside that session's box. Its key carries the session so two
+// boxes' identically-named screenshots, and a host file at the same path, never
+// collapse into one tab.
+test("a box viewer keys on its session and never collides with a host viewer", () => {
+  const p = "/tmp/playwright-mcp/a.png";
+  assert.strictEqual(tabKey({ box: "s1", path: p }), "b:s1:" + p);
+  assert.strictEqual(tabKey({ path: p }), "v:" + p);
+  assert.strictEqual(tabKey({ box: "", path: p }), "v:" + p);
+  assert.notStrictEqual(tabKey({ box: "s1", path: p }), tabKey({ box: "s2", path: p }));
+});
+
+test("a corrupt box field is ignored, a corrupt path with a box is dropped", () => {
+  assert.strictEqual(tabKey({ box: 42, path: "/x" }), "v:/x");
+  assert.strictEqual(tabKey({ box: "s1", path: 42 }), null);
+  assert.strictEqual(tabKey({ box: "s1", path: "" }), null);
+});
+
+test("a box viewer and a host viewer of the same path both survive a round trip", () => {
+  const p = "/tmp/playwright-mcp/a.png";
+  const a = { kind: "terminal", id: "a" };
+  const bv = { kind: "viewer", path: p, box: "s1", scroll: 7 };
+  const hv = { kind: "viewer", path: p, box: "", scroll: 3 };
+  const c0 = { tabs: [a, bv, hv], activeTab: bv };
+  const out = serializeLayout({ cells: [c0], focused: c0, maximized: null, cap: 4 });
+  const want = [{ id: "a" }, { path: p, box: "s1", scroll: 7 }, { path: p, scroll: 3 }];
+  assert.deepStrictEqual(out.cells[0].tabs, want);
+  const plan = reconcileLayout(out, live("a"));
+  assert.deepStrictEqual(plan.cells[0].tabs, want);
+  assert.strictEqual(plan.cells[0].active, 1);
+});
+
+test("reconcile drops a duplicate box viewer and ignores a box field that is not a string", () => {
+  const p = "/tmp/playwright-mcp/a.png";
+  const plan = reconcileLayout(snap([{ tabs: [
+    { path: p, box: "s1", scroll: 1 },
+    { path: p, box: "s1", scroll: 2 },
+    { path: "/x", box: 42, scroll: 0 },
+  ], active: 0 }]), live("a"));
+  assert.deepStrictEqual(plan.cells[0].tabs, [
+    { path: p, box: "s1", scroll: 1 },
+    { path: "/x", scroll: 0 },
+  ]);
 });

@@ -82,11 +82,12 @@ func TestCloneWrapMountsAreReadOnly(t *testing.T) {
 			writable = append(writable, args[i+1])
 		}
 	}
-	if len(writable) != 2 {
-		t.Fatalf("want exactly the workspace and the box home writable, got %q", writable)
+	if len(writable) != 3 {
+		t.Fatalf("want exactly the workspace, the box home and the out dir writable, got %q", writable)
 	}
-	if !strings.Contains(writable[0], "dst="+ws) || !strings.Contains(writable[1], "dst="+boxHome) {
-		t.Fatalf("the writable mounts must be the workspace and the home: %q", writable)
+	if !strings.Contains(writable[0], "dst="+ws) || !strings.Contains(writable[1], "dst="+boxHome) ||
+		!strings.HasSuffix(writable[2], "dst="+PlaywrightOutBox) {
+		t.Fatalf("the writable mounts must be the workspace, the home and the out dir: %q", writable)
 	}
 }
 

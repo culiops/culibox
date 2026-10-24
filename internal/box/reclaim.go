@@ -136,7 +136,11 @@ func (m *Manager) reclaimOne(ctx context.Context, name, dir string, ttl time.Dur
 		return nil, nil
 	}
 
-	if err := os.RemoveAll(dir); err != nil {
+	// The out dir sits beside the home, not in it, so it goes separately. Both
+	// are attempted whatever the first returns: a stubborn home must not keep
+	// the screenshots alive too.
+	err = errors.Join(os.RemoveAll(dir), os.RemoveAll(filepath.Dir(OutputDir(m.opts.StateRoot, name))))
+	if err != nil {
 		return nil, fmt.Errorf("box: reclaiming %s: %w", name, err)
 	}
 	_ = os.Remove(m.markerPath(name))

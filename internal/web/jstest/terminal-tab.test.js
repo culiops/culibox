@@ -1,7 +1,9 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { isBrokenMouseReport, hasSize, resolveTermPath } = require("../static/terminal-tab.js");
+// classifyTermPath normalises through fsops.js's global, as in the browser.
+global.normalizePath = require("../static/fsops.js").normalizePath;
+const { isBrokenMouseReport, hasSize, resolveTermPath, classifyTermPath } = require("../static/terminal-tab.js");
 
 test("an SGR mouse report with NaN coordinates is dropped", () => {
   assert.strictEqual(isBrokenMouseReport("\x1b[<0;NaN;NaNm"), true);
@@ -290,4 +292,49 @@ test("absolute and home paths ignore both cwds", () => {
   assert.strictEqual(resolveTermPath("/etc/x", "/r", "/r/wt", "/h"), "/etc/x");
   assert.strictEqual(resolveTermPath("~/x.md", "/r", "/r/wt", "/h"), "/h/x.md");
   assert.strictEqual(resolveTermPath("~/x.md", "/r", "/r/wt", ""), "~/x.md");
+});
+
+// classifyTermPath: where a clicked path lives for this session. A boxed
+// session's `~` and /tmp are the BOX's, not the host's.
+test("classifyTermPath: host session unchanged", () => {
+  assert.deepStrictEqual(classifyTermPath("~/a.md", "/r", "", "/h", false), { kind: "host", path: "/h/a.md" });
+  assert.deepStrictEqual(classifyTermPath("/tmp/playwright-mcp/p.png", "/r", "", "/h", false), { kind: "host", path: "/tmp/playwright-mcp/p.png" });
+});
+
+test("classifyTermPath: boxed, ~ is the box home", () => {
+  assert.deepStrictEqual(classifyTermPath("~/a.md", "/r", "", "/h", true), { kind: "boxonly", path: "/home/agent/a.md" });
+});
+
+test("classifyTermPath: boxed, absolute out-dir path", () => {
+  assert.deepStrictEqual(classifyTermPath("/tmp/playwright-mcp/page-1.png", "/r", "", "/h", true), { kind: "box", path: "/tmp/playwright-mcp/page-1.png" });
+});
+
+test("classifyTermPath: boxed, ../ prefix maps to the out dir at any depth", () => {
+  const want = { kind: "box", path: "/tmp/playwright-mcp/p.png" };
+  assert.deepStrictEqual(classifyTermPath("../../tmp/playwright-mcp/p.png", "/r", "/r/.claude/worktrees/w", "/h", true), want);
+  assert.deepStrictEqual(classifyTermPath("../../../../../../tmp/playwright-mcp/p.png", "/r", "/r/.claude/worktrees/w", "/h", true), want);
+});
+
+test("classifyTermPath: boxed, other /tmp and /home/agent are boxonly", () => {
+  assert.strictEqual(classifyTermPath("/tmp/claude-1001/x.txt", "/r", "", "/h", true).kind, "boxonly");
+  assert.strictEqual(classifyTermPath("/home/agent/.claude.json", "/r", "", "/h", true).kind, "boxonly");
+});
+
+test("classifyTermPath: boxed, a workspace under /tmp wins over the toast", () => {
+  assert.deepStrictEqual(classifyTermPath("/tmp/ab-x/src/a.go", "/tmp/ab-x", "", "/h", true), { kind: "host", path: "/tmp/ab-x/src/a.go" });
+  assert.deepStrictEqual(classifyTermPath("src/a.go", "/tmp/ab-x", "", "/h", true), { kind: "host", path: "/tmp/ab-x/src/a.go" });
+  // the live agent cwd counts too
+  assert.strictEqual(classifyTermPath("/tmp/ab-x/wt/a.go", "/tmp/ab-x", "/tmp/ab-x/wt", "/h", true).kind, "host");
+});
+
+test("classifyTermPath: boxed, a host workspace path stays host", () => {
+  assert.deepStrictEqual(classifyTermPath("docs/a.md", "/home/u/repo", "", "/h", true), { kind: "host", path: "/home/u/repo/docs/a.md" });
+});
+
+test("classifyTermPath: boxed, traversal out of the out dir is not box", () => {
+  assert.deepStrictEqual(classifyTermPath("/tmp/playwright-mcp/../x.png", "/r", "", "/h", true), { kind: "boxonly", path: "/tmp/x.png" });
+});
+
+test("classifyTermPath: a sibling dir sharing the cwd prefix is not the workspace", () => {
+  assert.strictEqual(classifyTermPath("/tmp/ab-xyz/a.go", "/tmp/ab-x", "", "/h", true).kind, "boxonly");
 });

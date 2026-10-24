@@ -108,7 +108,10 @@ function humanBytes(n) {
 // A folder is probed first. An <a download> navigation swallows the body of an
 // error response, so without the probe an over-cap folder gives a failed
 // download and no reason for it anywhere in the UI.
-async function downloadPath(path, isDir) {
+//
+// `fileURL` (files only) replaces the /api/fs/read URL: a box viewer passes its
+// boxFileURL(…, true), so the same save path serves a file that is not on the host.
+async function downloadPath(path, isDir, fileURL) {
   if (isDir) {
     let probe;
     try {
@@ -135,7 +138,7 @@ async function downloadPath(path, isDir) {
     a.href = "/api/fs/archive?path=" + encodeURIComponent(path);
     a.download = "";
   } else {
-    a.href = "/api/fs/read?download=1&path=" + encodeURIComponent(path);
+    a.href = fileURL || ("/api/fs/read?download=1&path=" + encodeURIComponent(path));
     // Deliberately no `download` attribute here. It makes the browser consume
     // the response whatever the status, so a 404 for a file deleted since the
     // tree was rendered would "download" a 30-byte JSON error named `read` with

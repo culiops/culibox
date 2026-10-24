@@ -96,3 +96,11 @@ test("no tab, an unknown kind, or a viewer with no path is not followed", () => 
   assert.strictEqual(follow({ kind: "viewer" }), null);
   assert.strictEqual(follow({ kind: "something-new", path: "/x" }), null);
 });
+
+test("a box viewer is never followed: its path does not exist on the host", () => {
+  // /tmp/playwright-mcp/… is a box path. Rooting the tree there would 403, or
+  // show an unrelated host directory that happens to share the name.
+  const boxed = { kind: "viewer", path: "/tmp/playwright-mcp/a.png", box: "s1" };
+  assert.strictEqual(treeFollowTarget(boxed, "/h"), null);
+  assert.strictEqual(treeFollowTarget(boxed, ""), null);
+});

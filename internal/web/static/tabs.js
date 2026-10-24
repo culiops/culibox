@@ -786,7 +786,8 @@ function openFile(path) {
   // which the snapshot then stored twice and the next boot silently collapsed.
   if (typeof normalizePath === "function") path = normalizePath(path);
   for (const c of cells) {
-    const t = c.tabs.find((t) => t.kind === "viewer" && t.path === path);
+    // !t.box: a box file at the same path is a different file (see openBoxFile).
+    const t = c.tabs.find((t) => t.kind === "viewer" && !t.box && t.path === path);
     if (t) {
       setFocusedCell(c); c.activate(t);
       if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
@@ -796,6 +797,29 @@ function openFile(path) {
   }
   const cell = focusedCellOrCreate();
   cell.addTab(new ViewerTab(path));
+  renderGrid();
+  if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+  if (typeof renderMobileChips === "function") renderMobileChips();
+}
+
+// openBoxFile opens (or focuses) a read-only viewer for a file inside a
+// session's box — today the Playwright output dir. terminal-tab.js calls it
+// through window.openBoxFile, typeof-guarded. Identical to openFile except for
+// identity: a box tab is matched on (session, path), never on the path alone, so
+// it cannot be mistaken for a host file at the same path or another box's.
+function openBoxFile(sessionId, path) {
+  if (typeof normalizePath === "function") path = normalizePath(path);
+  for (const c of cells) {
+    const t = c.tabs.find((t) => t.kind === "viewer" && t.box === sessionId && t.path === path);
+    if (t) {
+      setFocusedCell(c); c.activate(t);
+      if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+      if (typeof renderMobileChips === "function") renderMobileChips();
+      return;
+    }
+  }
+  const cell = focusedCellOrCreate();
+  cell.addTab(new ViewerTab(path, { box: sessionId }));
   renderGrid();
   if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
   if (typeof renderMobileChips === "function") renderMobileChips();
@@ -841,7 +865,8 @@ function closeViewersFor(path) {
   const prefix = path.replace(/\/+$/, "") + "/";
   const hit = (p) => p === path || (p && p.indexOf(prefix) === 0);
   for (const c of cells.slice()) {
-    for (const t of c.tabs.slice()) if (t.kind === "viewer" && hit(t.path)) c.closeTab(t);
+    // !t.box: a host delete/rename says nothing about a file inside a box.
+    for (const t of c.tabs.slice()) if (t.kind === "viewer" && !t.box && hit(t.path)) c.closeTab(t);
   }
 }
 
@@ -863,7 +888,9 @@ function applyPlan(plan, sessions) {
     for (const t of pc.tabs) {
       // `restored: true` marks a tab nobody clicked for: see ViewerTab.load,
       // which closes it rather than parking a red error on a deleted path.
-      if (t.path) cell.addTab(new ViewerTab(t.path, { scroll: t.scroll, restored: true }));
+      // `box` rides along for a box viewer: if its session or file is gone, the
+      // first read 404s and the restored tab closes itself like any dead file.
+      if (t.path) cell.addTab(new ViewerTab(t.path, { scroll: t.scroll, restored: true, box: t.box }));
       else cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
     }
     cell.activate(cell.tabs[pc.active] || cell.tabs[0]);

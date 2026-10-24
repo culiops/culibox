@@ -25,3 +25,14 @@ func TestBoxArgvNeverDisablesSeccompOrPrivileges(t *testing.T) {
 		}
 	}
 }
+
+// The out dir is how the boxed Playwright MCP's screenshots reach the host:
+// writable (the box writes into it) and keyed by the box name, outside the home.
+func TestRunArgsMountsOutputDir(t *testing.T) {
+	m := newTestManager(t)
+	got := m.runArgs(outTestBox, "/w", nil, false, false, "", DefaultMemory)
+	want := "type=bind,src=" + OutputDir(m.opts.StateRoot, outTestBox) + ",dst=/tmp/playwright-mcp"
+	if !containsPair(got, "--mount", want) {
+		t.Fatalf("missing writable out dir mount %q in %q", want, strings.Join(got, " "))
+	}
+}

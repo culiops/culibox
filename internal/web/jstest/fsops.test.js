@@ -141,3 +141,13 @@ test("relativeTo falls back to the absolute path when it is outside home too", (
 test("relativeTo returns the path unchanged when there is no root", () => {
   assert.strictEqual(relativeTo("", "/etc/hosts", "/home/claude"), "/etc/hosts");
 });
+
+test("boxFileURL addresses a session's box file route, encoding both parts", () => {
+  const { boxFileURL } = require("../static/fsops.js");
+  assert.strictEqual(
+    boxFileURL("s 1", "/tmp/playwright-mcp/a b.png"),
+    "/api/sessions/s%201/boxfile?path=%2Ftmp%2Fplaywright-mcp%2Fa%20b.png");
+  assert.strictEqual(
+    boxFileURL("s1", "/tmp/playwright-mcp/a.png", true),
+    "/api/sessions/s1/boxfile?path=%2Ftmp%2Fplaywright-mcp%2Fa.png&download=1");
+});
