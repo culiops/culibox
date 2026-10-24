@@ -708,6 +708,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		if svc, aerr := analytics.New(dbPath, roots, interval); aerr != nil {
 			log.Printf("analytics disabled: %v", aerr)
 		} else {
+			// Everything under boxstate/ is written by a contained agent: its
+			// transcript roots are walked through os.Root, never followed out.
+			svc.SetBoxState(filepath.Join(dataDir, "boxstate"))
 			analyticsSvc = svc
 			srv.Analytics = svc
 			log.Printf("analytics: db %s, %d root(s), ingest every %s", dbPath, len(roots), interval)
