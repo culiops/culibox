@@ -591,6 +591,30 @@ func (l *AgentLauncher) Clones() []config.Clone {
 	return ClonesOf(agents)
 }
 
+// BoxedDefaultCwds returns the non-empty default_cwd of every profile whose
+// effective tier (its own runtime, else the instance default, else box) is
+// config.RuntimeBox, in profile-name order. It seeds the boxed-workspace record
+// on first boot, when profiles that already spawn boxed have workspaces the
+// record has not yet seen; a later spawn records its own.
+func (l *AgentLauncher) BoxedDefaultCwds() []string {
+	l.mu.RLock()
+	names := make([]string, 0, len(l.agents))
+	for name := range l.agents {
+		names = append(names, name)
+	}
+	l.mu.RUnlock()
+	slices.Sort(names)
+	var out []string
+	for _, name := range names {
+		cfg, ok := l.agent(name)
+		if !ok || cfg.DefaultCwd == "" || l.tierOf(cfg) != config.RuntimeBox {
+			continue
+		}
+		out = append(out, cfg.DefaultCwd)
+	}
+	return out
+}
+
 // ClonesOf is Clones over an explicit profile list, for callers (the
 // `clone fetch` command) that read the profiles without a launcher.
 func ClonesOf(agents []config.AgentConfig) []config.Clone {
