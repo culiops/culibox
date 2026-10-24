@@ -22,6 +22,8 @@ func TestBoxFilesDistinctPairs(t *testing.T) {
 	m.sessions["b"] = &Session{ID: "b", Box: "box-1"}
 	m.sessions["c"] = &Session{ID: "c", Box: "box-2", Account: "work"}
 	m.sessions["d"] = &Session{ID: "d", Box: "box-3", Account: "default"}
+	m.sessions["d"].exited = true
+	m.sessions["d"].status = statusExited
 	m.sessions["h"] = &Session{ID: "h"}
 	for _, b := range []string{"box-1", "box-2", "box-3"} {
 		writeBoxFile(t, filepath.Join(boxHome(state, b), ".claude", "x.json"), `{"box":"`+b+`"}`, time.Now())

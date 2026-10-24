@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,6 +103,45 @@ func TestRateLimitsFresherWins(t *testing.T) {
 	s.BoxFiles = boxFilesOf(session.BoxFile{Account: "default", Data: []byte("not json")})
 	if m := s.rateLimitsByAccount(); m["default"].FiveHour.UsedPercentage != 10 {
 		t.Fatalf("garbage box must be ignored: %+v", m["default"])
+	}
+}
+
+// Freshness is compared on min(UpdatedAt, now), so a box stamping inside the
+// future slack gains at most "now". Host at now vs box at now+200s: both clamp
+// to now, a tie, and the existing source stays.
+func TestRateLimitsFutureStampTiesOnNow(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	reset := now.Unix() + 3600
+	host := RateLimits{UpdatedAt: now.Unix(), FiveHour: &RateLimitWindow{UsedPercentage: 10, ResetsAt: reset}}
+	s := &Server{BoxFiles: boxFilesOf(session.BoxFile{Account: "default", Data: boxRL(now.Unix()+200, 90, 90, reset)})}
+	out := map[string]RateLimits{"default": host}
+	s.mergeBoxRateLimits(out, now)
+	if out["default"].FiveHour.UsedPercentage != 10 {
+		t.Fatalf("tie must keep the existing source: %+v", out["default"])
+	}
+	// Host at now-1s: the box (clamped to now) is genuinely 1s fresher.
+	host.UpdatedAt = now.Unix() - 1
+	out = map[string]RateLimits{"default": host}
+	s.mergeBoxRateLimits(out, now)
+	if out["default"].FiveHour.UsedPercentage != 90 {
+		t.Fatalf("box clamped to now should beat now-1s: %+v", out["default"])
+	}
+	// Two future-stamped sources tie on now; the existing one stays.
+	host.UpdatedAt = now.Unix() + 250
+	out = map[string]RateLimits{"default": host}
+	s.mergeBoxRateLimits(out, now)
+	if out["default"].FiveHour.UsedPercentage != 10 {
+		t.Fatalf("future-vs-future must tie: %+v", out["default"])
+	}
+}
+
+func TestSanitizeRateLimitsNegativeZero(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	negZero := math.Copysign(0, -1)
+	rl := RateLimits{UpdatedAt: now.Unix(), FiveHour: &RateLimitWindow{UsedPercentage: negZero, ResetsAt: now.Unix() + 60}}
+	got, ok := sanitizeRateLimits(rl, now)
+	if !ok || math.Signbit(got.FiveHour.UsedPercentage) {
+		t.Fatalf("-0 must become +0: %+v ok=%v", got.FiveHour, ok)
 	}
 }
 

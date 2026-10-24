@@ -96,6 +96,7 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 	if s.BoxFiles == nil {
 		return
 	}
+	nowUnix := now.Unix()
 	for _, f := range s.BoxFiles(boxRateLimitsRel, boxRateLimitsMax) {
 		var rl RateLimits
 		if err := json.Unmarshal(f.Data, &rl); err != nil {
@@ -105,7 +106,10 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 		if !ok {
 			continue
 		}
-		if cur, have := out[f.Account]; !have || rl.UpdatedAt > cur.UpdatedAt {
+		// Compare on min(UpdatedAt, now): a box stamping inside the future slack
+		// must not always beat a genuinely fresh snapshot. A tie keeps the
+		// existing source.
+		if cur, have := out[f.Account]; !have || min(rl.UpdatedAt, nowUnix) > min(cur.UpdatedAt, nowUnix) {
 			out[f.Account] = rl
 		}
 	}
@@ -128,8 +132,8 @@ func sanitizeRateLimits(rl RateLimits, now time.Time) (RateLimits, bool) {
 			return nil
 		}
 		c := *w
-		// !(x >= 0) also catches NaN.
-		if !(c.UsedPercentage >= 0) {
+		// !(x > 0) catches NaN, negatives and -0 (normalized to +0).
+		if !(c.UsedPercentage > 0) {
 			c.UsedPercentage = 0
 		} else if c.UsedPercentage > 100 {
 			c.UsedPercentage = 100
