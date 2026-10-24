@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/launcher"
 )
@@ -408,5 +410,72 @@ func TestBoxedSpawnSeedsCwdForms(t *testing.T) {
 	s.mu.Unlock()
 	if !slices.Equal(got, cwdFormsOf(cwd)) || len(got) == 0 {
 		t.Fatalf("cwdFormsCache=%v want %v", got, cwdFormsOf(cwd))
+	}
+}
+
+// wrapShapeBoxes is a Boxes whose Wrap reshapes the fake's wrapped argv.
+type wrapShapeBoxes struct {
+	*fakeBoxes
+	reshape func(wrapped []string) []string
+}
+
+func (w wrapShapeBoxes) Wrap(ctx context.Context, cwd, sid string, key box.BoxKey, argv, env []string, ro []box.Mount) ([]string, []string, string, error) {
+	wrapped, env, name, err := w.fakeBoxes.Wrap(ctx, cwd, sid, key, argv, env, ro)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	return w.reshape(wrapped), env, name, nil
+}
+
+// A "--" in the wrapper's own prefix (docker args, a profile's args) must not
+// stop the resume from being dropped, nor make the skip note a lie.
+func TestRestartBoxedDropsResumeDespiteDashDashInWrapperPrefix(t *testing.T) {
+	m, _, argvFile := boxedRestartManager(t)
+	cwd := t.TempDir()
+	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "claude", Cwd: cwd})
+	old.mu.Lock()
+	old.claudeSessionID = "abcd-1234"
+	old.mu.Unlock()
+	m.SetBoxes(wrapShapeBoxes{&fakeBoxes{}, func(w []string) []string {
+		// /usr/bin/env -- <real wrapped argv...>: env accepts "--", so it still runs.
+		return append([]string{w[0], "--"}, w[1:]...)
+	}})
+	ns, err := m.Restart(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(ns.ID) })
+	if argv := ranArgv(t, ns, argvFile); slices.Contains(argv, "--resume") {
+		t.Fatalf("argv=%v still carries --resume", argv)
+	}
+	if ns.Info().ResumeSkipped == "" {
+		t.Fatal("ResumeSkipped not set though the resume was dropped")
+	}
+}
+
+// If the wrapper did not leave the agent argv as its tail the drop cannot be
+// trusted: fail closed, release the box, start nothing.
+func TestRestartBoxedFailsClosedWhenWrapperTailIsNotTheAgentArgv(t *testing.T) {
+	m, _, _ := boxedRestartManager(t)
+	cwd := t.TempDir()
+	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "claude", Cwd: cwd})
+	old.mu.Lock()
+	old.claudeSessionID = "abcd-1234"
+	old.mu.Unlock()
+	fb := &fakeBoxes{}
+	m.SetBoxes(wrapShapeBoxes{fb, func(w []string) []string {
+		return append(slices.Clone(w), "extra-trailing-arg")
+	}})
+	if _, err := m.Restart(old.ID); err == nil {
+		t.Fatal("restart must fail when the drop cannot be done safely")
+	}
+	if _, releases, _ := fb.counts(); releases != 1 {
+		t.Fatalf("releases=%d, want the box released once", releases)
+	}
+	if got := len(m.List()); got != 1 {
+		t.Fatalf("%d sessions listed, want only the old one: nothing may have started", got)
+	}
+	if _, ok := m.Get(old.ID); !ok {
+		t.Fatal("the old session must survive a failed restart")
 	}
 }

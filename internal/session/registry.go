@@ -50,6 +50,12 @@ var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,127}$`)
 // real processes.
 type procStartFunc func(pid int) (string, bool)
 
+// boxHome is a boxed session's home on the host: <stateDir>/boxstate/<box>. The
+// one place this path is built; everything under it is written by the box.
+func boxHome(stateDir, box string) string {
+	return filepath.Join(stateDir, "boxstate", box)
+}
+
 // procStartOf is the pid's start time as procinfo reports it. On Linux this is
 // /proc stat field 22, the same value Claude Code writes as procStart. On darwin
 // it is "<sec>.<usec>" while Claude Code writes a UTC ctime string; StartMatches
@@ -259,7 +265,7 @@ func (m *Manager) locate(id string) located {
 		return l
 	}
 	if box != "" {
-		l.boxDir = filepath.Join(stateDir, "boxstate", box)
+		l.boxDir = boxHome(stateDir, box)
 		l.cwds = s.cwdForms()
 		claudeDir = filepath.Join(l.boxDir, ".claude")
 	}

@@ -1795,6 +1795,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			env = append(env, config.ContextPathsEnv+"="+config.ContextPathsEnvValue(ctxPaths))
 			log.Printf("session %s (profile %s): context paths %v", id, spec.Agent, ctxPaths)
 		}
+		agentArgv := slices.Clone(argv) // the pre-Wrap argv: the tail Wrap must leave intact
 		wrapped, wrappedEnv, name, err := boxes.Wrap(context.Background(), spec.Cwd, id, key, argv, env, mounts)
 		if err != nil {
 			if errors.Is(err, box.ErrContextMountChanged) {
@@ -1825,10 +1826,26 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			m.mu.Unlock()
 			boxDir := ""
 			if boxName != "" && stateDir != "" {
-				boxDir = filepath.Join(stateDir, "boxstate", boxName)
+				boxDir = boxHome(stateDir, boxName)
 			}
 			if !boxedTranscriptPresent(boxDir, spec.Resume, cwdForms) {
-				argv, _ = dropResume(argv, spec.Resume)
+				// Drop only on the agent argv's own tail of the wrapped argv: the
+				// wrapper's prefix (docker args, a profile's args) may hold a "--"
+				// that would stop dropResume short. Fail closed: a claude started
+				// with --resume <missing id> exits at once.
+				n := len(agentArgv)
+				if len(argv) < n || !slices.Equal(argv[len(argv)-n:], agentArgv) {
+					m.releaseBoxNamed(boxName)
+					return nil, fmt.Errorf("session: box %s: wrapped argv does not end with the agent argv; not starting with a resume that cannot be dropped", boxName)
+				}
+				tail, ok := dropResume(argv[len(argv)-n:], spec.Resume)
+				if !ok {
+					m.releaseBoxNamed(boxName)
+					return nil, fmt.Errorf("session: box %s: could not drop --resume from the agent argv; not starting", boxName)
+				}
+				out := make([]string, 0, len(argv)-n+len(tail))
+				out = append(out, argv[:len(argv)-n]...)
+				argv = append(out, tail...)
 				resumeSkipped = resumeSkippedNote
 				log.Printf("session %s: resume %s skipped: transcript not in box %s", id, spec.Resume, boxName)
 			}
