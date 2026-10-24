@@ -61,7 +61,7 @@ func (s *Server) handleFsWrite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusRequestEntityTooLarge, "file too large to save")
 		return
 	}
-	root, relParent, base, err := s.resolveParent(req.Path)
+	root, relParent, base, _, err := s.resolveParent(req.Path)
 	if err != nil {
 		writeFsErr(w, err)
 		return

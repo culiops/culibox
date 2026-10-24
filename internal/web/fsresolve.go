@@ -62,6 +62,11 @@ type fsPolicy struct {
 	rhome     string
 	denied    map[fileKey]struct{}
 	contained map[fileKey]struct{}
+	// guarded is every kept denied or contained root plus all of its ancestors.
+	// Removing or renaming one of those directories would change what the policy
+	// sees (a renamed workspace is no longer contained, a renamed data dir no
+	// longer denied), so rename and delete refuse them; see guardsTree.
+	guarded map[fileKey]struct{}
 }
 
 // newFsPolicy builds the policy for home and trees. Entries that do not exist are
@@ -73,7 +78,7 @@ func newFsPolicy(home string, trees BoxTrees) (fsPolicy, error) {
 	if err != nil {
 		return fsPolicy{}, err
 	}
-	p := fsPolicy{rhome: rhome, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{}}
+	p := fsPolicy{rhome: rhome, denied: map[fileKey]struct{}{}, contained: map[fileKey]struct{}{}, guarded: map[fileKey]struct{}{}}
 
 	forbidden := map[fileKey]struct{}{}
 	addSelfAndAncestors := func(dir string) {
@@ -100,6 +105,7 @@ func newFsPolicy(home string, trees BoxTrees) (fsPolicy, error) {
 		}
 		p.denied[k] = struct{}{}
 		addSelfAndAncestors(rd)
+		addGuarded(p.guarded, rd)
 	}
 	for _, c := range trees.Contained {
 		fi, err := os.Stat(c)
@@ -117,8 +123,44 @@ func newFsPolicy(home string, trees BoxTrees) (fsPolicy, error) {
 			continue
 		}
 		p.contained[k] = struct{}{}
+		// Ancestors are walked on the resolved path: the lexical parents of a
+		// path that crosses a link are not the directory's real ancestors.
+		rc, err := filepath.EvalSymlinks(c)
+		if err != nil {
+			rc = c
+		}
+		addGuarded(p.guarded, rc)
 	}
 	return p, nil
+}
+
+// addGuarded adds dir and every ancestor of dir up to "/" to set, by identity.
+func addGuarded(set map[fileKey]struct{}, dir string) {
+	for {
+		if k, ok := statKey(dir); ok {
+			set[k] = struct{}{}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return
+		}
+		dir = parent
+	}
+}
+
+// guardsTree reports whether fi (a directory's Lstat info) is a denied or
+// contained root, or holds one. A symlink's Lstat info is the link's own, never
+// its target's, so a link pointing at a guarded tree is not guarded.
+func (p fsPolicy) guardsTree(fi os.FileInfo) bool {
+	if !fi.IsDir() {
+		return false
+	}
+	k, err := keyOf(fi)
+	if err != nil {
+		return false
+	}
+	_, ok := p.guarded[k]
+	return ok
 }
 
 // treeOf reports whether fi (a directory's info) is a denied tree or a boxed

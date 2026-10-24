@@ -77,9 +77,9 @@ func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 // shows both.
 //
 // The returned root must be closed by the caller.
-func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
+func (s *Server) resolveParent(abs string) (*os.Root, string, string, fsPolicy, error) {
 	if abs == "" || !filepath.IsAbs(abs) {
-		return nil, "", "", errBadPath
+		return nil, "", "", fsPolicy{}, errBadPath
 	}
 	clean := filepath.Clean(abs)
 	base := filepath.Base(clean)
@@ -87,13 +87,19 @@ func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
 	// may legally carry a name it rejects, and refusing to delete it would be a
 	// trap. Only the structural cases are refused.
 	if base == "." || base == ".." || base == string(os.PathSeparator) {
-		return nil, "", "", errBadPath
+		return nil, "", "", fsPolicy{}, errBadPath
 	}
-	_, root, relParent, err := s.openParent(filepath.Dir(clean))
+	// One snapshot serves the parent resolution and, through the returned policy,
+	// the caller's guardsTree check on the target.
+	pol, err := s.fsPolicy()
 	if err != nil {
-		return nil, "", "", err
+		return nil, "", "", fsPolicy{}, err
 	}
-	return root, relParent, base, nil
+	_, root, relParent, err := pol.openParent(filepath.Dir(clean))
+	if err != nil {
+		return nil, "", "", fsPolicy{}, err
+	}
+	return root, relParent, base, pol, nil
 }
 
 // openParent resolves an existing directory through resolveFs and opens the root
@@ -109,7 +115,15 @@ func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
 // os.Root, which refuses a box-planted link that leaves the workspace — so a
 // mutation can never be steered into the host tree.
 func (s *Server) openParent(dir string) (string, *os.Root, string, error) {
-	t, err := s.resolveFs(dir)
+	p, err := s.fsPolicy()
+	if err != nil {
+		return "", nil, "", err
+	}
+	return p.openParent(dir)
+}
+
+func (p fsPolicy) openParent(dir string) (string, *os.Root, string, error) {
+	t, err := p.resolve(dir)
 	if err != nil {
 		return "", nil, "", err
 	}
@@ -209,14 +223,19 @@ func (s *Server) handleFsRename(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad name")
 		return
 	}
-	root, relParent, base, err := s.resolveParent(req.Path)
+	root, relParent, base, pol, err := s.resolveParent(req.Path)
 	if err != nil {
 		writeFsErr(w, err)
 		return
 	}
 	defer root.Close()
-	if _, err := root.Lstat(relOf(relParent, base)); err != nil {
+	fi, err := root.Lstat(relOf(relParent, base))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if pol.guardsTree(fi) {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	// The same gate delete uses. Without it the two entries in one ⋯ menu compose
@@ -291,10 +310,12 @@ type deleteMeasure struct {
 	Capped  string // "" | "entries" | "bytes" — which bound stopped the walk
 }
 
-// measureForDelete walks INSIDE the os.Root, so the tree it measures is the tree
-// the delete will remove. Walking the caller's absolute path instead would let a
-// symlink repointed after resolution move the measurement outside $HOME — and,
-// worse, describe a different tree than the one destroyed.
+// measureForDelete walks INSIDE the os.Root, so a link repointed after resolution
+// cannot move the measurement outside the root, as walking the caller's absolute
+// path would. The numbers are still an estimate: a box racing the delete can swap
+// a directory between this walk and the removal when the root is $HOME. They only
+// feed the confirmation dialog; RemoveAll, which works on file descriptors and
+// resolves nothing again, is what bounds the damage.
 //
 // fs.WalkDir takes entry types from the dirent, so it never descends a symlink
 // and a loop cannot hang it.
@@ -352,7 +373,7 @@ func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
 	if !decodeOpBody(w, r, &req) {
 		return
 	}
-	root, relParent, base, err := s.resolveParent(req.Path)
+	root, relParent, base, pol, err := s.resolveParent(req.Path)
 	if err != nil {
 		writeFsErr(w, err)
 		return
@@ -362,6 +383,10 @@ func (s *Server) handleFsDelete(w http.ResponseWriter, r *http.Request) {
 	info, err := root.Lstat(rel)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	if pol.guardsTree(info) {
+		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
 	// A symlink is removed as a link whatever it points at, so it must never take
