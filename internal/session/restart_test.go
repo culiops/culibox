@@ -462,15 +462,31 @@ func TestRestartBoxedFailsClosedWhenWrapperTailIsNotTheAgentArgv(t *testing.T) {
 	old.mu.Lock()
 	old.claudeSessionID = "abcd-1234"
 	old.mu.Unlock()
-	fb := &fakeBoxes{}
+	// The old session's box release is asynchronous: status turns "exited"
+	// first, and the retention goroutine releases once Done closes. Count on ONE
+	// fake across the whole test and wait for that release, so the baseline is
+	// settled before the restart and the assertion is "exactly one more".
+	m.mu.Lock()
+	fb := m.boxes.(*fakeBoxes)
+	m.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, releases, _ := fb.counts(); releases == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the exited old session never released its box")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	m.SetBoxes(wrapShapeBoxes{fb, func(w []string) []string {
 		return append(slices.Clone(w), "extra-trailing-arg")
 	}})
 	if _, err := m.Restart(old.ID); err == nil {
 		t.Fatal("restart must fail when the drop cannot be done safely")
 	}
-	if _, releases, _ := fb.counts(); releases != 1 {
-		t.Fatalf("releases=%d, want the box released once", releases)
+	if wraps, releases, _ := fb.counts(); wraps != 2 || releases != 2 {
+		t.Fatalf("wraps=%d releases=%d, want 2 and 2: the failed restart acquired one box and must release exactly that one", wraps, releases)
 	}
 	if got := len(m.List()); got != 1 {
 		t.Fatalf("%d sessions listed, want only the old one: nothing may have started", got)
