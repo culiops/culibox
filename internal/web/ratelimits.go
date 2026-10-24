@@ -88,16 +88,32 @@ const (
 	rateLimitsMinReset = 1e9 // unix seconds
 )
 
-// mergeBoxRateLimits folds the quota snapshots boxed sessions wrote into out:
-// per account, the freshest UpdatedAt across the existing entry and the
-// sanitized box snapshots wins (a tie keeps the existing one). With no box files
-// out is untouched.
+// mergeBoxRateLimits folds the quota snapshots boxed sessions wrote into out.
+// With no box files out is untouched.
+//
+// The merge differs per account, because of which credential each source uses:
+//   - account.Default: the host default file is written by ANY host claude on the
+//     machine (including the user's own interactive one), while boxes
+//     authenticate with the profile's CLAUDE_CODE_OAUTH_TOKEN, so the two can be
+//     different subscriptions. Freshest-wins would flip the default quota
+//     between identities on every poll. So the host snapshot wins whenever it
+//     is present (the pre-box behaviour); box snapshots fill default only when
+//     there is no host default snapshot at all.
+//   - every other account: the per-account host file and the box snapshots all
+//     use that account's own credential, so they share an identity and the
+//     freshest UpdatedAt wins, compared on min(UpdatedAt, now) so a box stamping
+//     inside the future slack cannot always beat a fresh snapshot. A tie keeps
+//     the existing source.
 func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 	if s.BoxFiles == nil {
 		return
 	}
 	nowUnix := now.Unix()
+	_, hostDefault := out[account.Default]
 	for _, f := range s.BoxFiles(boxRateLimitsRel, boxRateLimitsMax) {
+		if f.Account == account.Default && hostDefault {
+			continue
+		}
 		var rl RateLimits
 		if err := json.Unmarshal(f.Data, &rl); err != nil {
 			continue
@@ -106,9 +122,6 @@ func (s *Server) mergeBoxRateLimits(out map[string]RateLimits, now time.Time) {
 		if !ok {
 			continue
 		}
-		// Compare on min(UpdatedAt, now): a box stamping inside the future slack
-		// must not always beat a genuinely fresh snapshot. A tie keeps the
-		// existing source.
 		if cur, have := out[f.Account]; !have || min(rl.UpdatedAt, nowUnix) > min(cur.UpdatedAt, nowUnix) {
 			out[f.Account] = rl
 		}

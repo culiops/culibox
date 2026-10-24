@@ -75,34 +75,71 @@ func TestRateLimitsBoxedNonDefaultAccount(t *testing.T) {
 	}
 }
 
-func TestRateLimitsFresherWins(t *testing.T) {
+// R7: the host default file is written by any host claude, boxes use the
+// profile's own token, so they can be different subscriptions. With a host
+// default snapshot present the host ALWAYS wins for default, even when older,
+// so the value never flips identity between polls.
+func TestRateLimitsDefaultHostPresentAlwaysWins(t *testing.T) {
 	now := time.Now().Unix()
 	host := filepath.Join(t.TempDir(), "rl.json")
-	hostBody := func(updated int64) {
-		if err := os.WriteFile(host, boxRL(updated, 10, 20, now+3600), 0o600); err != nil {
-			t.Fatal(err)
+	if err := os.WriteFile(host, boxRL(now-500, 10, 20, now+3600), 0o600); err != nil { // host OLDER than the box
+		t.Fatal(err)
+	}
+	box := session.BoxFile{Account: "default", Data: boxRL(now-10, 55, 66, now+3600)}
+	s := &Server{RateLimitsFile: host, BoxFiles: boxFilesOf(box)}
+	for i := 0; i < 3; i++ { // stable across polls
+		if m := s.rateLimitsByAccount(); m["default"].FiveHour.UsedPercentage != 10 || m["default"].SevenDay.UsedPercentage != 20 {
+			t.Fatalf("poll %d: older host must still win for default: %+v", i, m["default"])
 		}
 	}
-	box := session.BoxFile{Account: "default", Data: boxRL(now-100, 55, 66, now+3600)}
-	s := &Server{RateLimitsFile: host, BoxFiles: boxFilesOf(box)}
+}
 
-	hostBody(now - 500) // host older: box wins
-	if m := s.rateLimitsByAccount(); m["default"].FiveHour.UsedPercentage != 55 {
-		t.Fatalf("box should win: %+v", m["default"])
+// With no host default snapshot at all, a box fills default; the freshest of
+// several boxes wins, and an untrustworthy box (future-dated, garbage) does not.
+func TestRateLimitsDefaultNoHostBoxFills(t *testing.T) {
+	now := time.Now().Unix()
+	s := &Server{RateLimitsFile: filepath.Join(t.TempDir(), "absent.json"), BoxFiles: boxFilesOf(
+		session.BoxFile{Account: "default", Data: boxRL(now-300, 11, 12, now+3600)},
+		session.BoxFile{Account: "default", Data: boxRL(now-20, 55, 66, now+3600)},
+		session.BoxFile{Account: "default", Data: boxRL(now+3600, 99, 99, now+3600)}, // future: dropped
+		session.BoxFile{Account: "default", Data: []byte("not json")},
+	)}
+	m := s.rateLimitsByAccount()
+	if m["default"].FiveHour == nil || m["default"].FiveHour.UsedPercentage != 55 {
+		t.Fatalf("box should fill default: %+v", m["default"])
 	}
-	hostBody(now - 10) // host newer: host wins
-	if m := s.rateLimitsByAccount(); m["default"].FiveHour.UsedPercentage != 10 {
-		t.Fatalf("host should win: %+v", m["default"])
+}
+
+// A named account's host file and box snapshots share that account's own
+// credential, so the fresher one wins, compared on min(UpdatedAt, now).
+func TestRateLimitsNamedAccountFresherWins(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	reset := now.Unix() + 3600
+	acctRL := func(updated int64, five float64) RateLimits {
+		return RateLimits{UpdatedAt: updated, FiveHour: &RateLimitWindow{UsedPercentage: five, ResetsAt: reset}}
 	}
-	// A box cannot win by claiming a future time.
-	s.BoxFiles = boxFilesOf(session.BoxFile{Account: "default", Data: boxRL(now+3600, 99, 99, now+3600)})
-	if m := s.rateLimitsByAccount(); m["default"].FiveHour.UsedPercentage != 10 {
-		t.Fatalf("future-dated box must be ignored: %+v", m["default"])
+	run := func(hostUpdated, boxUpdated int64) float64 {
+		s := &Server{BoxFiles: boxFilesOf(session.BoxFile{Account: "work", Data: boxRL(boxUpdated, 90, 90, reset)})}
+		out := map[string]RateLimits{"work": acctRL(hostUpdated, 10)}
+		s.mergeBoxRateLimits(out, now)
+		return out["work"].FiveHour.UsedPercentage
 	}
-	// Garbage from a box is ignored; the host value stays.
-	s.BoxFiles = boxFilesOf(session.BoxFile{Account: "default", Data: []byte("not json")})
-	if m := s.rateLimitsByAccount(); m["default"].FiveHour.UsedPercentage != 10 {
-		t.Fatalf("garbage box must be ignored: %+v", m["default"])
+	n := now.Unix()
+	if got := run(n-500, n-100); got != 90 {
+		t.Fatalf("fresher box should win: %v", got)
+	}
+	if got := run(n-10, n-100); got != 10 {
+		t.Fatalf("fresher host should win: %v", got)
+	}
+	// Garbage and future-dated boxes never win.
+	s := &Server{BoxFiles: boxFilesOf(
+		session.BoxFile{Account: "work", Data: boxRL(n+3600, 99, 99, reset)},
+		session.BoxFile{Account: "work", Data: []byte("not json")},
+	)}
+	out := map[string]RateLimits{"work": acctRL(n-10, 10)}
+	s.mergeBoxRateLimits(out, now)
+	if out["work"].FiveHour.UsedPercentage != 10 {
+		t.Fatalf("untrusted boxes must be ignored: %+v", out["work"])
 	}
 }
 
@@ -113,25 +150,25 @@ func TestRateLimitsFutureStampTiesOnNow(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	reset := now.Unix() + 3600
 	host := RateLimits{UpdatedAt: now.Unix(), FiveHour: &RateLimitWindow{UsedPercentage: 10, ResetsAt: reset}}
-	s := &Server{BoxFiles: boxFilesOf(session.BoxFile{Account: "default", Data: boxRL(now.Unix()+200, 90, 90, reset)})}
-	out := map[string]RateLimits{"default": host}
+	s := &Server{BoxFiles: boxFilesOf(session.BoxFile{Account: "work", Data: boxRL(now.Unix()+200, 90, 90, reset)})}
+	out := map[string]RateLimits{"work": host}
 	s.mergeBoxRateLimits(out, now)
-	if out["default"].FiveHour.UsedPercentage != 10 {
-		t.Fatalf("tie must keep the existing source: %+v", out["default"])
+	if out["work"].FiveHour.UsedPercentage != 10 {
+		t.Fatalf("tie must keep the existing source: %+v", out["work"])
 	}
 	// Host at now-1s: the box (clamped to now) is genuinely 1s fresher.
 	host.UpdatedAt = now.Unix() - 1
-	out = map[string]RateLimits{"default": host}
+	out = map[string]RateLimits{"work": host}
 	s.mergeBoxRateLimits(out, now)
-	if out["default"].FiveHour.UsedPercentage != 90 {
-		t.Fatalf("box clamped to now should beat now-1s: %+v", out["default"])
+	if out["work"].FiveHour.UsedPercentage != 90 {
+		t.Fatalf("box clamped to now should beat now-1s: %+v", out["work"])
 	}
 	// Two future-stamped sources tie on now; the existing one stays.
 	host.UpdatedAt = now.Unix() + 250
-	out = map[string]RateLimits{"default": host}
+	out = map[string]RateLimits{"work": host}
 	s.mergeBoxRateLimits(out, now)
-	if out["default"].FiveHour.UsedPercentage != 10 {
-		t.Fatalf("future-vs-future must tie: %+v", out["default"])
+	if out["work"].FiveHour.UsedPercentage != 10 {
+		t.Fatalf("future-vs-future must tie: %+v", out["work"])
 	}
 }
 
