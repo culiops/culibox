@@ -54,6 +54,7 @@ type mockSvc struct {
 	restartID        string
 	restartInfo      session.Info
 	restartErr       error
+	boxOut           map[string]string // session id -> box output dir (boxed sessions only)
 }
 
 func (m *mockSvc) List() []session.Info { return m.list }
@@ -154,6 +155,10 @@ func (m *mockSvc) AttributionFor(id string) (session.Attribution, bool) {
 	return m.attr, m.attrOK
 }
 func (m *mockSvc) PeekFor(id string) (session.Peek, bool) { return m.peek, m.peekOK }
+func (m *mockSvc) BoxOutputDir(id string) (string, bool) {
+	d, ok := m.boxOut[id]
+	return d, ok
+}
 func (m *mockSvc) SetReplyable(id string, v bool) error {
 	m.setReplyableID, m.setReplyableV = id, v
 	return m.setReplyableErr

@@ -28,6 +28,9 @@ type SessionService interface {
 	UsageFor(id string) (session.Usage, bool)
 	AttributionFor(id string) (session.Attribution, bool)
 	PeekFor(id string) (session.Peek, bool)
+	// BoxOutputDir is the host dir a boxed session's Playwright output is
+	// mounted from; ok only for a known boxed session.
+	BoxOutputDir(id string) (string, bool)
 	SetReplyable(id string, v bool) error
 	SendMessage(id, text string) error
 	Interrupt(id string) error
@@ -279,6 +282,19 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}
+		return
+	}
+	// GET /api/sessions/{id}/boxfile?path=<abs box path>[&download=1] — a file
+	// the boxed session's Playwright MCP saved, served read-only. Everything in
+	// that directory is written by the box, so the path must sit under the one
+	// allowlisted box dir and the open goes through boxread. Nothing about the
+	// request or the file is logged.
+	if sid, ok := strings.CutSuffix(id, "/boxfile"); ok {
+		if r.Method != http.MethodGet {
+			writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleBoxFile(w, r, sid)
 		return
 	}
 	// GET /api/sessions/{id}/attribution — context-by-tool breakdown (full-transcript

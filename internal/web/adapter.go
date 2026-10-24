@@ -41,6 +41,8 @@ func (a ManagerService) UsageFor(id string) (session.Usage, bool) { return a.M.U
 
 func (a ManagerService) PeekFor(id string) (session.Peek, bool) { return a.M.PeekFor(id) }
 
+func (a ManagerService) BoxOutputDir(id string) (string, bool) { return a.M.BoxOutputDir(id) }
+
 func (a ManagerService) AttributionFor(id string) (session.Attribution, bool) {
 	return a.M.AttributionFor(id)
 }

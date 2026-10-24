@@ -153,13 +153,22 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "is a directory")
 		return
 	}
-	ext := strings.ToLower(filepath.Ext(p))
 	f, err := os.Open(p)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "open error")
 		return
 	}
 	defer f.Close()
+	serveFsFile(w, r, f, info, filepath.Base(p))
+}
+
+// serveFsFile writes the response for an already-opened regular file: raw
+// download, raw image, or the text / binary / too-large JSON preview. It is
+// the shared tail of /api/fs/read and the box file endpoint, so the two cannot
+// drift. name is the file's base name (it picks the extension and the download
+// filename); the caller has already authorised and opened f and closes it.
+func serveFsFile(w http.ResponseWriter, r *http.Request, f *os.File, info os.FileInfo, name string) {
+	ext := strings.ToLower(filepath.Ext(name))
 
 	// download=1 is a byte pipe, not a preview: it deliberately bypasses both
 	// preview guards below (the binary-metadata branch and the maxTextBytes
@@ -169,9 +178,9 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 	// saves it instead of trying to render it.
 	if r.URL.Query().Get("download") == "1" {
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", contentDisposition(filepath.Base(p)))
+		w.Header().Set("Content-Disposition", contentDisposition(name))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeContent(w, r, filepath.Base(p), info.ModTime(), f)
+		http.ServeContent(w, r, name, info.ModTime(), f)
 		return
 	}
 
@@ -182,7 +191,7 @@ func (s *Server) handleFsRead(w http.ResponseWriter, r *http.Request) {
 		// response so an SVG opened as a top-level navigation can't run script.
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "sandbox")
-		http.ServeContent(w, r, filepath.Base(p), info.ModTime(), f)
+		http.ServeContent(w, r, name, info.ModTime(), f)
 		return
 	}
 
