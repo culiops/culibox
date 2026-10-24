@@ -229,6 +229,7 @@ class TerminalTab {
     this.kind = "terminal";
     this.name = name || id;
     this.cwd = "";
+    this.runtime = ""; // "box" | "host", from /api/sessions
     this.agentCwd = ""; // live transcript cwd (a worktree), set by setUsage
     this.closed = false;
     this.ended = false;
@@ -368,6 +369,9 @@ class TerminalTab {
     // until some later focus change happens to rebuild it.
     api("/api/sessions").then((list) => {
       const s = (list || []).find((x) => x.id === id);
+      // runtime ("box" | "host") decides how a clicked path resolves; it is set
+      // even when cwd is empty.
+      if (s) this.runtime = s.runtime || "";
       if (s && s.cwd) {
         this.cwd = s.cwd;
         if (typeof syncFocusedTree === "function") syncFocusedTree();
@@ -390,7 +394,7 @@ class TerminalTab {
             text: l.text,
             activate: () => {
               if (l.kind === "url") openTerminalUrl(l.text);
-              else openFile(this.resolvePath(l.text));
+              else this.openClickedPath(l.text);
             },
           }));
           cb(links.length ? links : undefined);
@@ -430,6 +434,17 @@ class TerminalTab {
   onShow() { this.fit(); this.term.focus(); }
   onHide() {}
 
+  // openClickedPath: a boxed session's paths are the box's, so a click opens a
+  // host file, a box-viewer file, or says there is nothing to open.
+  openClickedPath(tok) {
+    const c = classifyTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR, this.runtime === "box");
+    if (c.kind === "host") openFile(c.path);
+    // Looked up on window: openBoxFile lives in a later-loaded script, and a bare
+    // reference to it fails lint.sh's cross-script check until that script exists.
+    // A top-level function declaration in a classic script IS a window property.
+    else if (c.kind === "box") { if (typeof window.openBoxFile === "function") window.openBoxFile(this.id, c.path); }
+    else if (typeof showToast === "function") showToast("This file is only inside the box");
+  }
   resolvePath(tok) { return resolveTermPath(tok, this.cwd, this.agentCwd, window.HOME_DIR); }
 
   connect() {
@@ -719,6 +734,42 @@ function resolveTermPath(tok, cwd, agentCwd, home) {
   return base ? base + "/" + tok.replace(/^\.\//, "") : tok;
 }
 
+// BOX_HOME / BOX_OUT_DIR are the box's own paths (Dockerfile: user "agent",
+// playwright-mcp --output-dir). Neither exists on the host.
+const BOX_HOME = "/home/agent";
+const BOX_OUT_DIR = "/tmp/playwright-mcp";
+
+// classifyTermPath decides where a clicked path lives for THIS session, so a
+// boxed session's `~` and /tmp are not read as the host's. Returns
+//   host    — open it as a host file at .path (also every host session)
+//   box     — a file in the box's allowlisted output dir (served by /boxfile)
+//   boxonly — exists only inside the box; there is nothing to open
+// Order matters: the workspace is mounted at the SAME path in the box and a
+// clone-mode workspace lives under /tmp/ab-*, so the workspace check must beat
+// the "other /tmp is box-only" rule.
+function classifyTermPath(tok, cwd, agentCwd, home, boxed) {
+  if (!boxed) return { kind: "host", path: resolveTermPath(tok, cwd, agentCwd, home) };
+  let p;
+  if (/^(?:\.\.\/)+tmp\/playwright-mcp\//.test(tok)) {
+    // The agent's live cwd can be deeper than the MCP server's (inside a
+    // worktree), so a relative `../../tmp/playwright-mcp/x` resolves to the wrong
+    // place by depth. The out dir is a fixed absolute path: take it as such.
+    p = "/" + tok.replace(/^(?:\.\.\/)+/, "");
+  } else if (tok.startsWith("~/")) {
+    p = BOX_HOME + tok.slice(1);
+  } else {
+    p = resolveTermPath(tok, cwd, agentCwd, "");
+  }
+  p = normalizePath(p); // also collapses `/tmp/playwright-mcp/../x` out of the out dir
+  if (p.startsWith(BOX_OUT_DIR + "/")) return { kind: "box", path: p };
+  for (const base of [cwd, agentCwd]) {
+    const b = base ? normalizePath(base) : "";
+    if (b && (p === b || p.startsWith(b === "/" ? "/" : b + "/"))) return { kind: "host", path: p };
+  }
+  if (p === BOX_HOME || p.startsWith(BOX_HOME + "/") || p.startsWith("/tmp/")) return { kind: "boxonly", path: p };
+  return { kind: "host", path: p };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isBrokenMouseReport, resolveTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
+  module.exports = { isBrokenMouseReport, resolveTermPath, classifyTermPath, hasSize, cellHeightOf, measureCellHeight, touchScrollStep, installTouchScroll, appOwnsMouse, emitWheel, installSwipe };
 }
