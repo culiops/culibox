@@ -92,8 +92,10 @@ func readBoxedRegistry(boxDir, sessionID string, cwds []string) (claudeRegEntry,
 	if err != nil || pid < 1 || pid > boxPidMax || strconv.Itoa(pid) != txt {
 		return claudeRegEntry{}, false
 	}
-	// boxread only checks the final component, and a symlink that stays inside
-	// the box is followed by os.Root, so refuse a sessions dir that is one.
+	// A consistency check, not a security boundary: os.Root already confines
+	// every read to the box, and the box can get past this check anyway (a
+	// symlinked .claude inside the box, or writing the json directly). It only
+	// keeps a symlinked sessions dir from being read as if it were the real one.
 	if _, ok := boxread.ReadDir(boxDir, boxSessionsRel, 1); !ok {
 		return claudeRegEntry{}, false
 	}

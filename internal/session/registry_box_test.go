@@ -362,6 +362,12 @@ func TestBoxedRegistryForgeries(t *testing.T) {
 		{"pidfile symlink out of the box", func(t *testing.T, bd string) {
 			symlinkPid(t, bd, filepath.Join(t.TempDir(), "host.pid"))
 		}},
+		{"pidfile +39 (sign)", func(t *testing.T, bd string) {
+			writeBoxFile(t, pid(bd), "+39\n", now.Add(-time.Minute))
+		}},
+		{"pidfile 039 (leading zero)", func(t *testing.T, bd string) {
+			writeBoxFile(t, pid(bd), "039\n", now.Add(-time.Minute))
+		}},
 		{"pid 0", func(t *testing.T, bd string) {
 			writeBoxFile(t, pid(bd), "0\n", now.Add(-time.Minute))
 			writeBoxFile(t, boxRegPath(bd, 0), regBoxJSON(0, "aaaa-1", locCwd, "idle"), now)
@@ -451,6 +457,41 @@ func TestBoxedRegistryTranscriptCandidatesAreGuarded(t *testing.T) {
 	within2s(t, "PeekFor", func() { _, ok = m.PeekFor("s1") })
 	if ok {
 		t.Error("PeekFor hit through a FIFO transcript named by the registry")
+	}
+}
+
+// .claude/projects symlinked OUT of the box, with an otherwise valid registry:
+// nothing outside may be read, and nothing may hang.
+func TestBoxedProjectsDirSymlinkedOutIsNeverRead(t *testing.T) {
+	m, bd := boxedRegManager(t)
+	outside := t.TempDir()
+	writeTx(t, outside, locCwd, "aaaa-1", "SECRET from outside", time.Now())
+	projects := filepath.Join(bd, ".claude", "projects")
+	if err := os.RemoveAll(projects); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, ".claude", "projects"), projects); err != nil {
+		t.Fatal(err)
+	}
+	var l located
+	within2s(t, "locate", func() { l = m.locate("s1") })
+	if l.reg == nil {
+		t.Fatal("registry should still validate; only the projects dir is hostile")
+	}
+	if l.path != "" {
+		t.Errorf("locate yielded a transcript path %q through a projects dir symlinked out of the box", l.path)
+	}
+	var p Peek
+	var ok bool
+	within2s(t, "PeekFor", func() { p, ok = m.PeekFor("s1") })
+	if ok || strings.Contains(p.Text, "SECRET") {
+		t.Errorf("peek ok=%v text=%q, outside content must never be returned", ok, p.Text)
+	}
+	if u, ok := m.UsageFor("s1"); ok {
+		t.Errorf("usage hit through an outside projects dir: %+v", u)
+	}
+	if _, ok := m.AttributionFor("s1"); ok {
+		t.Error("attribution hit through an outside projects dir")
 	}
 }
 
