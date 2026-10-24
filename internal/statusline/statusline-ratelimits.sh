@@ -90,7 +90,15 @@ if [ -s "$DELEGATE" ] && [ -z "${AGENTBOX_STATUSLINE_DELEGATING:-}" ]; then
     *)
       # Keep whatever it printed even on a non-zero exit (the default script's
       # last step can fail after the footer line is already out).
-      OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || true
+      # In a box (AGENTBOX_STATUSLINE_DELEGATE_FILE is set, and only the bundled
+      # command sets it) the host's command may hang on something the box lacks;
+      # bound it so it cannot block the footer or pile up against the pid limit.
+      # Host accounts keep the unbounded call. The harvest above already ran.
+      if [ -n "${AGENTBOX_STATUSLINE_DELEGATE_FILE:-}" ] && command -v timeout >/dev/null 2>&1; then
+        OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 timeout 5 sh -c "$CMD" 2>/dev/null) || true
+      else
+        OUT=$(printf '%s' "$INPUT" | AGENTBOX_STATUSLINE_DELEGATING=1 sh -c "$CMD" 2>/dev/null) || true
+      fi
       if [ -n "$OUT" ]; then
         printf '%s\n' "$OUT"
         exit 0
