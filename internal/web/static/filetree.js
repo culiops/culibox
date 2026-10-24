@@ -484,6 +484,10 @@ function treeFollowTarget(tab, home) {
   // explicit argument for tests, window.HOME_DIR in the browser.
   if (home === undefined) home = (typeof window !== "undefined" && window.HOME_DIR) || "";
   if (!tab) return null;
+  // A box viewer's path exists only inside that session's box, never on the
+  // host: /api/fs/list would 403 or list an unrelated host directory of the
+  // same name. Hold the current root (see the 403 note below).
+  if (tab.box) return null;
   // insideHome APPROXIMATES the server's rule, textually. /api/fs/list resolves
   // symlinks on both sides (containedUnder, fsapi.go:40-47); this cannot, so the
   // two can disagree. It errs safe in one direction — textually-outside but

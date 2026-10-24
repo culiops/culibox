@@ -26,15 +26,22 @@ function clampCap(v) {
 }
 
 // A stored tab is either a terminal (its session id) or a viewer (its path plus
-// how far down the file was read).
+// how far down the file was read). A viewer of a file inside a session's box also
+// carries that session's id as `box`: the path exists only in that box.
 //
-// tabKey identifies one across the snapshot: `t:<id>` or `v:<path>`. Paths
-// compare as plain strings, which is safe only because ViewerTab normalizes its
-// path in its constructor long before serializeLayout ever sees one — do NOT
-// pull normalizePath in here, it would cost this file the purity that makes it
-// testable under `node --test`.
+// tabKey identifies one across the snapshot: `t:<id>`, `v:<path>` or
+// `b:<session>:<path>`. Paths compare as plain strings, which is safe only
+// because ViewerTab normalizes its path in its constructor long before
+// serializeLayout ever sees one — do NOT pull normalizePath in here, it would
+// cost this file the purity that makes it testable under `node --test`.
+//
+// The box rule comes first: the same path as a host viewer is a different file,
+// and must not collapse into (or be deduplicated against) it. A `box` that is not
+// a non-empty string is ignored — a hand-edited snapshot degrades to a host
+// viewer, as before, rather than failing.
 function tabKey(t) {
   if (!t || typeof t !== "object") return null;
+  if (typeof t.path === "string" && t.path && typeof t.box === "string" && t.box) return "b:" + t.box + ":" + t.path;
   if (typeof t.path === "string" && t.path) return "v:" + t.path;
   if (typeof t.id === "string" && t.id) return "t:" + t.id;
   return null;
@@ -52,7 +59,12 @@ function clampScroll(v) {
 // storedTab → the entry written for a live tab, or null if it cannot be restored.
 function storedTab(t) {
   if (!t) return null;
-  if (t.kind === "viewer" && t.path) return { path: t.path, scroll: clampScroll(t.scroll) };
+  if (t.kind === "viewer" && t.path) {
+    // `box` only when set: a host viewer's stored shape is unchanged, so old
+    // snapshots and new ones stay interchangeable.
+    if (typeof t.box === "string" && t.box) return { path: t.path, box: t.box, scroll: clampScroll(t.scroll) };
+    return { path: t.path, scroll: clampScroll(t.scroll) };
+  }
   if (t.kind === "terminal" && t.id) return { id: t.id };
   return null;
 }
@@ -129,7 +141,8 @@ function reconcileLayout(saved, sessions) {
       // — `{id: "sess-1", path: 42}` — pass the terminal liveness check above and
       // then be emitted as a viewer, which applyPlan hands to `new ViewerTab(42)`
       // and which throws out of the restore, half-building the grid.
-      tabs.push(key[0] === "v" ? { path: t.path, scroll: clampScroll(t.scroll) } : { id: t.id });
+      if (key[0] === "b") tabs.push({ path: t.path, box: t.box, scroll: clampScroll(t.scroll) });
+      else tabs.push(key[0] === "v" ? { path: t.path, scroll: clampScroll(t.scroll) } : { id: t.id });
     }
     if (!tabs.length) return;
     // Follow the active tab by identity: after dropping dead tabs its old index

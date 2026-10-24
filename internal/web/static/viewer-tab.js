@@ -13,10 +13,18 @@ class ViewerTab {
     // otherwise open a second tab for a file already open, and survive that
     // file's deletion still rendering content that no longer exists.
     if (typeof normalizePath === "function") path = normalizePath(path);
-    this.id = "view:" + path;
+    // A box viewer shows a file that exists only inside one session's box (the
+    // Playwright output dir). It reads through boxFileURL, is read-only, and its
+    // identity carries the session: two boxes' identically-named screenshots, and
+    // a host file at the same path, are different tabs. Same shape as layout.js's
+    // `b:` tab key — keep them in step.
+    this.box = (opts && typeof opts.box === "string" && opts.box) || "";
+    this.id = this.box ? "view:box:" + this.box + ":" + path : "view:" + path;
     this.kind = "viewer";
     this.path = path;
-    this.name = path.split("/").pop() || path;
+    // The prefix is the operator's cue that this is not a host file (the tree and
+    // Edit behave differently, and the path means nothing on the host).
+    this.name = (this.box ? "box · " : "") + (path.split("/").pop() || path);
     this.statusText = "";
     this.onUpdate = null;
     this.auto = false;      // auto-reload poll on/off (per viewer, opt-in)
@@ -62,7 +70,7 @@ class ViewerTab {
     dl.className = "viewer-reload";
     dl.textContent = "⤓";
     dl.title = "Download this file";
-    dl.onclick = () => downloadPath(this.path, false);
+    dl.onclick = () => downloadPath(this.path, false, this.box ? boxFileURL(this.box, this.path, true) : undefined);
     this.toolbar.append(dl);
     // A word, not a glyph: a button's accessible name comes from its text
     // content before its title, and an unprobed codepoint ships as a tofu box no
@@ -74,12 +82,14 @@ class ViewerTab {
       cp.title = "Copy this file's contents";
       cp.onclick = () => this.copyContents(cp);
       this.toolbar.append(cp);
-      const edit = document.createElement("button");
-      edit.className = "viewer-auto";
-      edit.textContent = "Edit";
-      edit.title = "Edit this file";
-      edit.onclick = () => this.enterEdit();
-      this.toolbar.append(edit);
+      if (!this.box) { // a box file is read-only: the host cannot write into the box
+        const edit = document.createElement("button");
+        edit.className = "viewer-auto";
+        edit.textContent = "Edit";
+        edit.title = "Edit this file";
+        edit.onclick = () => this.enterEdit();
+        this.toolbar.append(edit);
+      }
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
       auto.onclick = () => this.toggleAuto(auto);
@@ -219,7 +229,7 @@ class ViewerTab {
       return;
     }
     if (!poll) this.setStatus("loading…");
-    const res = await fsRead(this.path);
+    const res = await fsRead(this.path, this.box ? boxFileURL(this.box, this.path) : undefined);
     const plan = copyContentPlan(res);
     if (plan.action !== "copy") {
       // A FAILED poll changes nothing. The screen still holds the text it had,
@@ -317,7 +327,7 @@ class ViewerTab {
   // those non-editable; "empty" is the one refusal reason that is still editable,
   // since Step 1 above seeds an empty buffer with a real version).
   enterEdit() {
-    if (this.editing) return;
+    if (this.editing || this.box) return; // a box file is read-only (no button either; this guards a stray caller)
     if (this.copyRefusal && this.copyRefusal !== "empty") return; // image/binary/loading/error stay non-editable
     // The vendor bundle can fail to reach the browser (blocked, offline, a
     // hiccup loading /vendor/codemirror.min.js). Checked before any state
@@ -489,7 +499,11 @@ class ViewerTab {
     // rewrite relative <img src> against the file's dir BEFORE attaching (no wasted 404 fetch)
     frag.querySelectorAll("img").forEach((img) => {
       const src = img.getAttribute("src") || "";
-      if (!/^(https?:|data:|\/)/.test(src)) img.setAttribute("src", "/api/fs/read?path=" + encodeURIComponent(dir + src));
+      if (!/^(https?:|data:|\/)/.test(src)) {
+        img.setAttribute("src", this.box
+          ? boxFileURL(this.box, dir + src)
+          : "/api/fs/read?path=" + encodeURIComponent(dir + src));
+      }
       // An <img> here reserves no height until it loads, so the document is
       // shorter than its final self when load() applies the offset and the
       // browser clamps it. Re-apply as each image settles. Safe to repeat: if
@@ -511,7 +525,7 @@ class ViewerTab {
     img.className = "viewer-img";
     img.alt = this.name;
     img.onerror = () => this.msg("could not load image", "err");
-    img.src = "/api/fs/read?path=" + encodeURIComponent(this.path);
+    img.src = this.box ? boxFileURL(this.box, this.path) : "/api/fs/read?path=" + encodeURIComponent(this.path);
     this.content.replaceChildren(img);
   }
 }
