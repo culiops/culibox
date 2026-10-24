@@ -681,7 +681,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Protected:  protected,
 		Terminal:   terminal.NewAttachHandler(mgr.Get),
 		BoxRuntime: boxRuntime,
-		BoxTrees:   boxTreesFunc(fsDenied, boxedReg, mgr.List, lnch.Clones),
+		BoxTrees:   boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),

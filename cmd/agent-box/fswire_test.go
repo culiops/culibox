@@ -20,14 +20,11 @@ func TestBoxTreesFunc(t *testing.T) {
 	if err := reg.Add(recorded); err != nil {
 		t.Fatal(err)
 	}
-	sessions := []session.Info{
-		{ID: "a", Cwd: live, Runtime: config.RuntimeBox},
-		{ID: "b", Cwd: recorded, Runtime: config.RuntimeBox}, // also recorded: deduped
-		{ID: "c", Cwd: host, Runtime: config.RuntimeHost},    // host session: excluded
-		{ID: "d", Cwd: "", Runtime: config.RuntimeBox},       // no cwd: skipped
-	}
+	// What Manager.BoxedCwds hands over: boxed sessions' cwds only. Duplicates
+	// of a recorded entry and empty cwds still arrive and must be dropped here.
+	cwds := []string{live, recorded, ""}
 	clones := []config.Clone{{Of: host, Dir: clone}, {Of: host, Dir: live}}
-	fn := boxTreesFunc([]string{data}, reg, func() []session.Info { return sessions }, func() []config.Clone { return clones })
+	fn := boxTreesFunc([]string{data}, reg, func() []string { return cwds }, func() []config.Clone { return clones })
 
 	got := fn()
 	if !slices.Equal(got.Denied, []string{data}) {
@@ -42,7 +39,7 @@ func TestBoxTreesFunc(t *testing.T) {
 
 	// Evaluated per call: a session spawned later is covered at once.
 	later := t.TempDir()
-	sessions = append(sessions, session.Info{ID: "e", Cwd: later, Runtime: config.RuntimeBox})
+	cwds = append(cwds, later)
 	if !slices.Contains(fn().Contained, later) {
 		t.Fatalf("a later boxed session's cwd is missing from %v", fn().Contained)
 	}

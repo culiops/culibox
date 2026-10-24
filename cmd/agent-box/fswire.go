@@ -16,12 +16,13 @@ import (
 // boxTreesFunc builds the fs API's per-request view of the host trees a box can
 // write. Denied is fixed (the data dir and the box state root). Contained is
 // recomputed on every call, so a boxed workspace spawned a moment ago is covered
-// at once: the durable record, plus the cwd of every live boxed session and the
-// directory of every clone profile. Host sessions are not contained (a host
+// at once: the durable record, plus the cwd of every boxed session (boxedCwds does no
+// I/O: this runs on every fs request) and the directory of every clone
+// profile. Host sessions are not contained (a host
 // agent's tree is the operator's own). Duplicates are dropped; the web policy
 // resolves and canonicalises each entry itself.
 func boxTreesFunc(denied []string, reg *boxedws.Registry,
-	sessions func() []session.Info, clones func() []config.Clone) func() web.BoxTrees {
+	boxedCwds func() []string, clones func() []config.Clone) func() web.BoxTrees {
 	return func() web.BoxTrees {
 		seen := map[string]bool{}
 		var contained []string
@@ -35,10 +36,8 @@ func boxTreesFunc(denied []string, reg *boxedws.Registry,
 		for _, d := range reg.List() {
 			add(d)
 		}
-		for _, s := range sessions() {
-			if s.Runtime == config.RuntimeBox {
-				add(s.Cwd)
-			}
+		for _, d := range boxedCwds() {
+			add(d)
 		}
 		for _, c := range clones() {
 			add(c.Dir)

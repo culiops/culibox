@@ -2269,6 +2269,23 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 	}()
 }
 
+// BoxedCwds returns the working directory of every boxed session, retained and
+// exited ones included (the tree a box wrote stays untrusted after it exits),
+// without List's per-session transcript peek. It is the fs API's containment
+// feed and runs on every /api/fs request, so it only reads fields under m.mu:
+// no I/O. Empty cwds are dropped; duplicates are the caller's to drop.
+func (m *Manager) BoxedCwds() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, s := range m.sessions {
+		if s.Runtime == config.RuntimeBox && s.Cwd != "" {
+			out = append(out, s.Cwd)
+		}
+	}
+	return out
+}
+
 // List returns all sessions, oldest first.
 func (m *Manager) List() []Info {
 	brk := func() BrokerHooks {
