@@ -159,8 +159,12 @@ func TestCreateExclusiveRefusesSymlinkedParent(t *testing.T) {
 	}
 }
 
-func TestContainedDir(t *testing.T) {
-	home := t.TempDir()
+func TestOpenParent(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Home: home}
 	sub := filepath.Join(home, "work")
 	if err := os.Mkdir(sub, 0o755); err != nil {
 		t.Fatal(err)
@@ -170,25 +174,32 @@ func TestContainedDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotDir, err := containedDir(home, sub)
+	gotDir, root, rel, err := s.openParent(sub)
 	if err != nil {
-		t.Fatalf("containedDir: %v", err)
+		t.Fatalf("openParent: %v", err)
 	}
-	if !strings.HasPrefix(gotDir, home) {
-		t.Fatalf("got %q, want a path under %q", gotDir, home)
+	root.Close()
+	if gotDir != sub || rel != "work" {
+		t.Fatalf("got (%q, %q), want (%q, work)", gotDir, rel, sub)
 	}
 
-	if _, err := containedDir(home, filepath.Dir(home)); !errors.Is(err, errOutsideHome) {
-		t.Errorf("outside home: err = %v, want errOutsideHome", err)
-	}
-	if _, err := containedDir(home, filepath.Join(home, "nope")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("missing dir: err = %v, want os.ErrNotExist", err)
-	}
-	if _, err := containedDir(home, regular); !errors.Is(err, errNotDir) {
-		t.Errorf("dir that is a regular file: err = %v, want errNotDir", err)
-	}
-	if _, err := containedDir(home, "relative/path"); !errors.Is(err, errBadPath) {
-		t.Errorf("relative path: err = %v, want errBadPath", err)
+	for _, tc := range []struct {
+		name string
+		dir  string
+		want error
+	}{
+		{"outside home", filepath.Dir(home), errOutsideHome},
+		{"missing dir", filepath.Join(home, "nope"), os.ErrNotExist},
+		{"dir that is a regular file", regular, errNotDir},
+		{"relative path", "relative/path", errBadPath},
+	} {
+		_, root, _, err := s.openParent(tc.dir)
+		if root != nil {
+			root.Close()
+		}
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
 	}
 }
 
@@ -454,4 +465,31 @@ func TestUploadDotfileCollisionKeepsTheName(t *testing.T) {
 	if len(got.Uploaded) != 1 || got.Uploaded[0].Name != ".bashrc-1" {
 		t.Fatalf("uploaded = %+v, want .bashrc-1", got.Uploaded)
 	}
+}
+
+func TestUploadIntoBoxedDirLinkRefused(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	s.MaxUploadBytes = 1 << 20
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, filepath.Join(ws, "cfg"), [][2]string{{"planted.txt", "x"}}))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403 (%s)", w.Code, w.Body)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "planted.txt")); err == nil {
+		t.Fatal("file created in the host tree through the box link")
+	}
+}
+
+func TestUploadIntoBoxedWorkspaceWorks(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	s.MaxUploadBytes = 1 << 20
+	mustMkdirAll(t, filepath.Join(ws, "sub"))
+	w := httptest.NewRecorder()
+	s.handleFsUpload(w, uploadReq(t, filepath.Join(ws, "sub"), [][2]string{{"a.txt", "alpha"}}))
+	var got uploadResp
+	json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != http.StatusOK || len(got.Uploaded) != 1 || got.Uploaded[0].Path != filepath.Join(ws, "sub", "a.txt") {
+		t.Fatalf("code=%d body=%s", w.Code, w.Body)
+	}
+	mustContent(t, filepath.Join(ws, "sub", "a.txt"), "alpha")
 }

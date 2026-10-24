@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // writeReq builds a same-origin JSON POST to /api/fs/write, mirroring how
@@ -203,5 +205,55 @@ func TestFsWriteCrossOriginForbidden(t *testing.T) {
 	s.handleFsWrite(rr, req)
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rr.Code)
+	}
+}
+
+func TestWriteBoxedDirLinkRefused(t *testing.T) {
+	s, home, ws := boxedLinked(t)
+	body := fmt.Sprintf(`{"path":%q,"content":"pwned","overwrite":true}`, filepath.Join(ws, "cfg", ".bashrc"))
+	rr := writeReq(t, s, body)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403 (%s)", rr.Code, rr.Body)
+	}
+	mustContent(t, filepath.Join(home, ".bashrc"), "host")
+	ents, _ := os.ReadDir(home)
+	for _, e := range ents {
+		if strings.HasPrefix(e.Name(), ".agentbox-tmp-") {
+			t.Fatalf("temp file left in the host tree: %s", e.Name())
+		}
+	}
+}
+
+func TestWriteInsideBoxedWorkspaceWorks(t *testing.T) {
+	s, _, ws := boxedServer(t)
+	p := filepath.Join(ws, "n.txt")
+	mustWrite(t, p, "old")
+	rr := writeReq(t, s, fmt.Sprintf(`{"path":%q,"content":"new","base_version":%q}`, p, hashText([]byte("old"))))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code = %d (%s)", rr.Code, rr.Body)
+	}
+	mustContent(t, p, "new")
+}
+
+// A box can leave a FIFO where a file is expected; reading it for the optimistic
+// lock must refuse instead of blocking for a writer.
+func TestWriteLockReadRefusesFifo(t *testing.T) {
+	dir := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o644); err != nil {
+		t.Skip("mkfifo not supported")
+	}
+	root := mustRoot(t, dir)
+	done := make(chan error, 1)
+	go func() {
+		_, err := readRootFile(root, "pipe")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errNotRegular) {
+			t.Fatalf("err = %v, want errNotRegular", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("readRootFile blocked on a FIFO")
 	}
 }

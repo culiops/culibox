@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // File mutations: create a directory, rename, delete. Read-only browsing lives
@@ -68,7 +69,7 @@ func decodeOpBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 // resolveParent is THE rule for every mutation: resolve the PARENT directory and
 // keep the base name UNRESOLVED.
 //
-// containedPath runs EvalSymlinks over the whole path, so using it on a mutation
+// resolveFs follows links in the whole path, so using it on a mutation
 // target hands back the symlink's TARGET — a delete would destroy a tree the
 // user never pointed at and leave the link behind, and a rename would rename the
 // target and leave the link dangling. It also makes a link pointing outside home
@@ -95,36 +96,44 @@ func (s *Server) resolveParent(abs string) (*os.Root, string, string, error) {
 	return root, relParent, base, nil
 }
 
-// openParent resolves an existing directory and opens the home root it lives
-// under, returning the directory's root-relative path. resolveParent calls it
-// after splitting a target; mkdir calls it directly because its parent arrives
-// as its own field. Both go through the same containment sequence, so a change
-// to it cannot reach two handlers out of three.
+// openParent resolves an existing directory through resolveFs and opens the root
+// it lives under, returning the directory's absolute path and its root-relative
+// path. resolveParent calls it after splitting a target; mkdir and upload call it
+// directly because their parent arrives as its own field. All of them go through
+// the same containment sequence, so a change to it cannot reach one handler and
+// miss another.
+//
+// For a host path the root is $HOME and the directory is already fully resolved.
+// For a path inside a boxed workspace the root is the workspace and the directory
+// is NOT resolved: the Stat below, like every later operation, goes through the
+// os.Root, which refuses a box-planted link that leaves the workspace — so a
+// mutation can never be steered into the host tree.
 func (s *Server) openParent(dir string) (string, *os.Root, string, error) {
-	resolved, err := containedDir(s.Home, dir)
+	t, err := s.resolveFs(dir)
 	if err != nil {
 		return "", nil, "", err
 	}
-	root, rhome, err := openHomeRoot(s.Home)
+	root, err := os.OpenRoot(t.Root)
 	if err != nil {
 		return "", nil, "", err
 	}
-	rel, err := relUnderHome(rhome, resolved)
+	fi, err := root.Stat(t.Rel)
 	if err != nil {
 		root.Close()
-		return "", nil, "", err
+		switch {
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+			return "", nil, "", os.ErrNotExist
+		default:
+			// A link that leaves the root, a permission, a swap: the caller
+			// learns only "forbidden", as writeOpenErr does for reads.
+			return "", nil, "", errOutsideHome
+		}
 	}
-	return resolved, root, rel, nil
-}
-
-// relUnderHome expresses dir relative to the resolved home, refusing anything
-// that climbs out of it.
-func relUnderHome(rhome, dir string) (string, error) {
-	rel, err := filepath.Rel(rhome, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return "", errOutsideHome
+	if !fi.IsDir() {
+		root.Close()
+		return "", nil, "", errNotDir
 	}
-	return rel, nil
+	return t.Abs, root, t.Rel, nil
 }
 
 // relOf joins a resolved parent with a base name for use against the root.

@@ -73,47 +73,6 @@ func hasUnsafeRunes(s string) bool {
 	return false
 }
 
-// containedDir resolves an upload destination: contained under home, existing,
-// and a directory. The write path needs this rather than containedPath on the
-// full target, because containedPath EvalSymlinks the whole path and returns
-// ENOENT for a file that does not exist yet — which is every upload.
-//
-// This resolution is a snapshot, so it is NOT the security boundary on its own;
-// see openHomeRoot.
-func containedDir(home, dir string) (string, error) {
-	d, err := containedPath(home, dir)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(d)
-	if err != nil {
-		return "", os.ErrNotExist
-	}
-	if !info.IsDir() {
-		return "", errNotDir
-	}
-	return d, nil
-}
-
-// openHomeRoot opens $HOME as an os.Root and returns it with the resolved home
-// path. Every upload write goes through this root.
-//
-// This is the actual containment boundary. os.Root resolves each path component
-// with openat/O_NOFOLLOW semantics, so a symlink swapped in for an ANCESTOR
-// directory between containedDir's EvalSymlinks and the open cannot be used to
-// escape. O_EXCL alone only guards the final component and loses that race.
-func openHomeRoot(home string) (*os.Root, string, error) {
-	rhome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		return nil, "", err
-	}
-	root, err := os.OpenRoot(rhome)
-	if err != nil {
-		return nil, "", err
-	}
-	return root, rhome, nil
-}
-
 // createExclusive creates a new file at relDir/name inside root, never
 // overwriting and never following a symlink at any component. O_EXCL supplies
 // the final-component guarantees — it fails when the name exists at all,
@@ -178,26 +137,12 @@ func (s *Server) handleFsUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	dir, err := containedDir(s.Home, r.URL.Query().Get("dir"))
+	dir, root, relDir, err := s.openParent(r.URL.Query().Get("dir"))
 	if err != nil {
-		if errors.Is(err, errNotDir) {
-			writeErr(w, http.StatusBadRequest, "not a directory")
-			return
-		}
 		writeFsErr(w, err)
 		return
 	}
-	root, rhome, err := openHomeRoot(s.Home)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "cannot open home")
-		return
-	}
 	defer root.Close()
-	relDir, err := filepath.Rel(rhome, dir)
-	if err != nil || relDir == ".." || strings.HasPrefix(relDir, ".."+string(os.PathSeparator)) {
-		writeErr(w, http.StatusForbidden, "forbidden")
-		return
-	}
 
 	limit := s.MaxUploadBytes
 	if limit <= 0 {

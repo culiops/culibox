@@ -16,7 +16,7 @@ type BoxTrees struct {
 }
 
 // fsTarget is where an fs request lands. A host target (Strict false) is fully
-// resolved below $HOME, as containedPath always did. A strict target is inside a
+// resolved below $HOME, as the old EvalSymlinks check did. A strict target is inside a
 // boxed workspace: Rel is the UNRESOLVED remainder and must only be opened
 // through os.Root(Root), which refuses any box-planted link that leaves it.
 type fsTarget struct {

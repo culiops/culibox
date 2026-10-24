@@ -74,6 +74,8 @@ func TestResolveFs(t *testing.T) {
 		{"host link outside home", std, filepath.Join(proj, "out", "hosts"), fsTarget{}, errOutsideHome},
 		{"missing", std, filepath.Join(proj, "nope"), fsTarget{}, os.ErrNotExist},
 		{"under a file", std, filepath.Join(proj, "a.txt", "x"), fsTarget{}, os.ErrNotExist},
+		{"dotdot traversal out of home", std,
+			filepath.Join(proj, "..", "..", filepath.Base(other), "f"), fsTarget{}, errOutsideHome},
 		{"empty", std, "", fsTarget{}, errBadPath},
 		{"relative", std, "rel/x", fsTarget{}, errBadPath},
 		{"link loop", std, filepath.Join(proj, "l1"), fsTarget{}, errBadPath},

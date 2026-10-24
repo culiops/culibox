@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,41 +16,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestContainedPath(t *testing.T) {
-	home := t.TempDir()
-	sub := filepath.Join(home, "proj")
-	mustMkdir(t, sub)
-	inFile := filepath.Join(sub, "a.txt")
-	if err := os.WriteFile(inFile, []byte("hi"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	outside := t.TempDir()
-	outFile := filepath.Join(outside, "secret")
-	if err := os.WriteFile(outFile, []byte("s"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	escape := filepath.Join(home, "escape")
-	if err := os.Symlink(outFile, escape); err != nil {
-		t.Skip("symlink not supported")
-	}
-
-	if got, err := containedPath(home, inFile); err != nil || got == "" {
-		t.Fatalf("in-home file: got (%q,%v), want ok", got, err)
-	}
-	if _, err := containedPath(home, "relative/path"); !errors.Is(err, errBadPath) {
-		t.Fatalf("relative: want errBadPath, got %v", err)
-	}
-	if _, err := containedPath(home, filepath.Join(sub, "nope.txt")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("missing: want ErrNotExist, got %v", err)
-	}
-	if _, err := containedPath(home, filepath.Join(sub, "..", "..", filepath.Base(outside), "secret")); !errors.Is(err, errOutsideHome) {
-		t.Fatalf("traversal: want errOutsideHome, got %v", err)
-	}
-	if _, err := containedPath(home, escape); !errors.Is(err, errOutsideHome) {
-		t.Fatalf("symlink escape: want errOutsideHome, got %v", err)
-	}
-}
 
 func TestIsBinary(t *testing.T) {
 	if isBinary([]byte("plain text\nline")) {

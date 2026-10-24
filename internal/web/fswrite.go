@@ -4,10 +4,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
+	"syscall"
 )
+
+// errNotRegular is a lock read that found something other than a regular file
+// (a FIFO, socket or device a box left in its place).
+var errNotRegular = errors.New("not a regular file")
 
 type writeReqBody struct {
 	Path        string `json:"path"`
@@ -93,6 +99,10 @@ func (s *Server) handleFsWrite(w http.ResponseWriter, r *http.Request) {
 		}
 		cur, err := readRootFile(root, rel)
 		if err != nil {
+			if errors.Is(err, errNotRegular) {
+				writeErr(w, http.StatusForbidden, "forbidden")
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, "read error")
 			return
 		}
@@ -123,13 +133,23 @@ func (s *Server) handleFsWrite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// readRootFile reads a root-relative file, bounded by the text cap.
+// readRootFile reads a root-relative file, bounded by the text cap. The open is
+// O_NONBLOCK and the result must be a regular file: a box can leave a FIFO where
+// the editor expects a file, and a blocking open or read of one would hang the
+// request until something wrote to it.
 func readRootFile(root *os.Root, rel string) ([]byte, error) {
-	f, err := root.Open(rel)
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errNotRegular
+	}
 	return io.ReadAll(io.LimitReader(f, maxTextBytes))
 }
 

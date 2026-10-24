@@ -19,38 +19,6 @@ var (
 	errOutsideHome = errors.New("outside home")
 )
 
-// containedPath resolves reqPath (which must be absolute) and guarantees it
-// lives inside home after resolving symlinks. It returns the resolved absolute
-// path, or a sentinel error: errBadPath (empty/relative), os.ErrNotExist
-// (missing), errOutsideHome (escapes home, including via a symlink).
-func containedPath(home, reqPath string) (string, error) {
-	rhome, err := filepath.EvalSymlinks(home)
-	if err != nil {
-		return "", err
-	}
-	return containedUnder(rhome, reqPath)
-}
-
-// containedUnder is containedPath with the home directory already resolved, for
-// callers checking many paths in a row (see handleFsSearch) that would otherwise
-// re-resolve $HOME on every one.
-func containedUnder(rhome, reqPath string) (string, error) {
-	if reqPath == "" || !filepath.IsAbs(reqPath) {
-		return "", errBadPath
-	}
-	resolved, err := filepath.EvalSymlinks(filepath.Clean(reqPath))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", os.ErrNotExist
-		}
-		return "", err
-	}
-	if resolved != rhome && !strings.HasPrefix(resolved, rhome+string(os.PathSeparator)) {
-		return "", errOutsideHome
-	}
-	return resolved, nil
-}
-
 // imageExt maps a lowercase extension to the MIME type served raw for <img>.
 var imageExt = map[string]string{
 	".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -71,7 +39,7 @@ type fsEntry struct {
 	Size  int64  `json:"size"`
 }
 
-// writeFsErr maps a resolveFs (or containedPath) sentinel error to an HTTP status.
+// writeFsErr maps a resolveFs (or openParent) sentinel error to an HTTP status.
 func writeFsErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errBadPath):
