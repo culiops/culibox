@@ -197,12 +197,16 @@ function cloneClauses(c, profile) {
     else {
       const n = Number(c.ahead) || 0;
       out.unsent = "branch " + br + ": " + (n > 0 ? n + " commit" + (n === 1 ? "" : "s") : "commits") +
-        " not sent to host (`agent-box clone fetch " + profile + " " + br + "`)";
+        " not sent to host (`agent-box clone fetch " + (b === "main" ? "" : "-base " + b + " ") + profile + " " + br + "`)";
     }
     out.info.push(out.unsent);
   }
   if (c.refreshed) {
-    if (c.ff_from) out.refreshed = b + " updated " + String(c.ff_from).slice(0, 7) + ".." + String(c.ff_to || "").slice(0, 7) + " (+" + c.ff_count + ")";
+    if (c.ff_from) {
+      // The count is box-derived: print it only when it is a positive number.
+      const n = Number(c.ff_count) || 0;
+      out.refreshed = b + " updated " + String(c.ff_from).slice(0, 7) + ".." + String(c.ff_to || "").slice(0, 7) + (n > 0 ? " (+" + n + ")" : "");
+    }
     else if (c.ff_refused) out.refreshed = "local " + b + " has commits host " + b + " lacks; not updated";
     else out.refreshed = "up to date with host " + b;
     out.info.push(out.refreshed);

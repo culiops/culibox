@@ -342,6 +342,17 @@ test("cloneRow: master base is used in every clause", () => {
   assert.ok(r.v.includes("feat is 2 behind master"));
   assert.ok(!r.v.includes("main"));
   assert.ok(r.title.includes("origin/master"));
+  // The fetch hint carries -base (flags before positionals) off the default branch only.
+  const u = cloneRow({ agent: "ab", clone: { base: "master", head_in_host: false, branch: "feat", ahead: 1 } });
+  assert.ok(u.v.includes("`agent-box clone fetch -base master ab feat`"));
+  assert.ok(!u.v.includes("main"));
+  const um = cloneRow({ agent: "ab", clone: { base: "main", head_in_host: false, branch: "feat", ahead: 1 } });
+  assert.ok(um.v.includes("`agent-box clone fetch ab feat`"));
+  assert.ok(!um.v.includes("-base"));
+  assert.ok(!cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 1 } }).v.includes("-base"));
+  // A missing or garbled ff_count drops the "(+N)" instead of printing undefined.
+  assert.strictEqual(cloneRow({ clone: { refreshed: true, base: "main", ff_from: "aaaaaaaaaa", ff_to: "bbbbbbbbbb" } }).v, "main updated aaaaaaa..bbbbbbb");
+  assert.ok(!cloneRow({ clone: { refreshed: true, ff_from: "aaaaaaaaaa", ff_to: "bbbbbbbbbb", ff_count: "x" } }).v.includes("+"));
   assert.ok(cloneRow({ clone: { refreshed: true, base: "master", ff_refused: true } }).v.includes("local master has commits host master lacks; not updated"));
   assert.ok(cloneRow({ clone: { skipped: "created", base: "master" } }).v.includes("new clone of host master"));
 });
