@@ -86,12 +86,30 @@ function bugCopy() {
   });
 }
 
-// bugOpenIssue copies the full report FIRST, then opens the issue. GitHub's URL
-// can only carry a short body (header + FAIL/WARN lines), so the clipboard is
-// what holds the reporter's words and the whole bundle. The window opens from
-// the copy callback, whether or not the copy worked (the user can still paste
-// by hand via Copy report); the click's transient user activation outlasts the
-// clipboard write, so the popup is not blocked.
+// bugStatusIssue writes the status line and, always, a real link to the issue
+// next to it: a popup blocker can swallow window.open (and with "noopener" it
+// returns null even on success, so a block cannot be detected), so the link is
+// the one-click way in. The URL was validated as https://github.com/... first.
+function bugStatusIssue(msg, url) {
+  const el = document.getElementById("bug-status");
+  if (!el) return;
+  el.textContent = msg + " ";
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.textContent = "Open the issue";
+  el.appendChild(a);
+}
+
+// bugOpenIssue runs, synchronously inside the click: copy with the
+// execCommand path (execCopy, app.js; it needs no await), then window.open.
+// Neither waits on a promise, so the open keeps the click's user activation and
+// Safari's popup blocker sees a plain click-initiated open. navigator.clipboard
+// is only a fallback when the synchronous copy failed, and its result is
+// reported afterwards. GitHub's URL carries only a short body (header +
+// FAIL/WARN lines); the clipboard holds the reporter's words and the whole
+// bundle, which is why the copy comes first.
 function bugOpenIssue() {
   if (bugBase === null) return;
   if (typeof bugIssueURL !== "string" || !bugIssueURL.startsWith("https://github.com/")) {
@@ -99,12 +117,28 @@ function bugOpenIssue() {
     return;
   }
   setDialogError("bug-modal", "");
-  copyText(bugFilled(), (ok) => {
-    bugSetStatus(ok ? "Report copied — paste it into the issue body."
-                    : "Could not copy the report — use Copy report, then paste it into the issue.");
+  const text = bugFilled();
+  const url = bugIssueURL;
+  window.__lastCopied = text; // same test hook copyText sets
+  const copied = execCopy(text);
+  window.open(url, "_blank", "noopener");
+  if (copied) {
+    bugStatusIssue("Report copied — paste it into the issue body.", url);
+    showToast("Report copied", {});
+    return;
+  }
+  // Synchronous copy failed: try the async clipboard (HTTPS only) and say how it went.
+  bugStatusIssue("Copying…", url);
+  const done = (ok) => {
+    bugStatusIssue(ok ? "Report copied — paste it into the issue body."
+                      : "Could not copy — use Copy report, then paste.", url);
     showToast(ok ? "Report copied" : "Could not copy the report", { error: !ok });
-    window.open(bugIssueURL, "_blank", "noopener");
-  });
+  };
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+  } else {
+    done(false);
+  }
 }
 
 // loadAboutInfo shows the build in the About tab. /api/meta is the one place

@@ -1086,6 +1086,7 @@
     }
     #bug-body .hint { overflow-wrap: anywhere; }
     #bug-status { margin: 0; }
+    #bug-status a { color: var(--accent); }
     #bug-modal .btn:disabled { opacity: .5; cursor: default; }
     #about-version { margin-top: 0; font-size: 14px; overflow-wrap: anywhere; }
     #spawn-modal { width: 580px; }
