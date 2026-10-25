@@ -273,7 +273,7 @@ func TestCloneCreationAndBoxGit(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cm, err := Prepare(ctx, Env{Git: g, Home: home}, c, false)
+	cm, _, err := Prepare(ctx, Env{Git: g, Home: home}, c, false)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}

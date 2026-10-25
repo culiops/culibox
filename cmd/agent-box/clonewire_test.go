@@ -55,8 +55,8 @@ func testHooks(t *testing.T, clones func() []config.Clone) *cloneHooks {
 	return &cloneHooks{
 		clones: clones,
 		file:   filepath.Join(t.TempDir(), cloneDirsFile),
-		prepare: func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, error) {
-			return box.CloneMounts{}, nil
+		prepare: func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
+			return box.CloneMounts{}, false, nil
 		},
 	}
 }
@@ -118,11 +118,11 @@ func TestRecordWrittenBeforePrepareRuns(t *testing.T) {
 	dir := filepath.Join(home, "clone")
 	h := testHooks(t, noClones)
 	boom := errors.New("clone failed midway")
-	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, error) {
+	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
 		if b, _ := os.ReadFile(h.file); string(b) != dir+"\n" {
 			t.Errorf("record at prepare time = %q, want %q", b, dir+"\n")
 		}
-		return box.CloneMounts{}, boom
+		return box.CloneMounts{}, false, boom
 	}
 	if _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); !errors.Is(err, boom) {
 		t.Fatalf("want the prepare error, got %v", err)
@@ -137,9 +137,9 @@ func TestRecordFailureFailsPrepareClosed(t *testing.T) {
 	h := testHooks(t, noClones)
 	h.file = filepath.Join(home, "missing-dir", cloneDirsFile) // tmp file cannot be created
 	called := false
-	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, error) {
+	h.prepare = func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
 		called = true
-		return box.CloneMounts{}, nil
+		return box.CloneMounts{}, false, nil
 	}
 	if _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: filepath.Join(home, "c")}, false); err == nil || called {
 		t.Fatalf("an unwritable record must refuse before creating anything: err=%v called=%v", err, called)
@@ -190,9 +190,9 @@ func TestPrepareRefusesBoxOwnedCloneOf(t *testing.T) {
 		t.Fatal(err)
 	}
 	called := false
-	prep := func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, error) {
+	prep := func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) {
 		called = true
-		return box.CloneMounts{}, nil
+		return box.CloneMounts{}, false, nil
 	}
 
 	// (a) another live profile's clone dir, and a repo nested in it.

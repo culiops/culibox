@@ -18,6 +18,7 @@ type Env struct {
 	Home       string             // the host user's home
 	Protected  []box.ProtectedDir // dirs no mount may be, contain or (Inside) sit in
 	MemoryRoot string             // the bundle source dir (~/.claude); "" = no memory mount
+	DataDir    string             // the daemon's data dir, for the base record; "" = no base record
 }
 
 // CheckOf refuses a clone_of agent-box must not clone from or mount the .git of
@@ -125,26 +126,36 @@ func CheckProfile(c config.Clone, home string, protected []box.ProtectedDir) err
 // is a read-only bind (D12); there is no other list. Any error refuses the
 // spawn: a required mount is never dropped. withMemory is the caller's call
 // (default account only); the memory mount is added only when the dir exists.
-func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (box.CloneMounts, error) {
+// created reports that this call made the clone; a new clone starts a trusted
+// base record holding the host's base tip taken before the clone.
+func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (cm box.CloneMounts, created bool, err error) {
 	if err := CheckOf(c.Of, e.Home, e.Protected); err != nil {
-		return box.CloneMounts{}, err
+		return box.CloneMounts{}, false, err
 	}
-	if _, err := EnsureClone(ctx, e.Git, c, e.Home); err != nil {
-		return box.CloneMounts{}, err
+	// The tip is read before the clone, so the record never holds a commit the
+	// clone could not have had. A failure only means there is no record to start.
+	_, tip, _ := BaseBranch(ctx, e.Git, c.Of)
+	created, err = EnsureClone(ctx, e.Git, c, e.Home)
+	if err != nil {
+		return box.CloneMounts{}, false, err
+	}
+	if created && tip != "" && e.DataDir != "" {
+		// A write error is ignored: a missing record already fails closed as unverified.
+		_ = ResetBaseRecord(e.DataDir, c.Dir, tip)
 	}
 	gitDir := filepath.Join(c.Of, ".git")
 	ro := []box.Mount{{Host: gitDir, Box: gitDir}}
 	for _, rel := range c.Shares {
 		isDir, err := shareSource(c.Of, rel, e.Protected)
 		if err != nil {
-			return box.CloneMounts{}, err
+			return box.CloneMounts{}, created, err
 		}
 		dst := filepath.Join(c.Dir, rel)
 		if why := box.MountUnsafe(dst); why != "" {
-			return box.CloneMounts{}, fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, dst, why)
+			return box.CloneMounts{}, created, fmt.Errorf("%w: %s: %s", box.ErrUnboxableWorkspace, dst, why)
 		}
 		if err := mountpoint(c.Dir, rel, isDir); err != nil {
-			return box.CloneMounts{}, err
+			return box.CloneMounts{}, created, err
 		}
 		ro = append(ro, box.Mount{Host: filepath.Join(c.Of, rel), Box: dst})
 	}
@@ -153,5 +164,5 @@ func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (box.C
 			ro = append(ro, m)
 		}
 	}
-	return box.CloneMounts{Hash: c.Hash(), RO: ro}, nil
+	return box.CloneMounts{Hash: c.Hash(), RO: ro}, created, nil
 }

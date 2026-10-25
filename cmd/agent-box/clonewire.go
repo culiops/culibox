@@ -40,7 +40,7 @@ type cloneHooks struct {
 
 	file    string // <dataDir>/clone-dirs
 	mu      sync.Mutex
-	prepare func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, error) // swappable for tests
+	prepare func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) // swappable for tests
 }
 
 func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory bool) (box.CloneMounts, error) {
@@ -62,7 +62,8 @@ func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory boo
 	if err := h.record(c.Dir); err != nil {
 		return box.CloneMounts{}, fmt.Errorf("%w: cannot record the clone dir in %s: %v", box.ErrBoxUnavailable, h.file, err)
 	}
-	return h.prepare(ctx, h.env, c, withMemory)
+	cm, _, err := h.prepare(ctx, h.env, c, withMemory) // created is wired through in a later task
+	return cm, err
 }
 
 // HostOrigin reads the host repo's origin URL. `of` passed checkOf in Prepare,
@@ -244,7 +245,7 @@ func newCloneHooks(goos string, layer *boxLayer, home, memRoot, dataDir string, 
 		return nil, nil
 	}
 	h := &cloneHooks{
-		env:     clone.Env{Home: home, Protected: protected, MemoryRoot: memRoot},
+		env:     clone.Env{Home: home, Protected: protected, MemoryRoot: memRoot, DataDir: dataDir},
 		clones:  clones,
 		file:    filepath.Join(dataDir, cloneDirsFile),
 		prepare: clone.Prepare,
