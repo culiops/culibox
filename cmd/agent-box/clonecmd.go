@@ -42,7 +42,7 @@ func realCloneBackends(cfg config.Config) (clone.Git, clone.Docker, error) {
 
 // runClone serves `agent-box clone fetch`: it brings a clone-mode profile's
 // branch home as box/<branch> in clone_of. It reads the profile store without
-// writing it, so it is safe to run while agent-box serves.
+// writing it, so it is safe to run while agent-box serves (a daemon restart aborts it; rerun).
 func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io.Writer) int {
 	fail := func(format string, args ...any) int {
 		fmt.Fprintf(w, "agent-box clone: "+format+"\n", args...)

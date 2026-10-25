@@ -186,7 +186,7 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 **Bringing code home**
 
 ```sh
-agent-box clone fetch [-config <path>] [-base <branch>] <profile> <branch>
+agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>
 ```
 
 The flags come before the two names. `-base` defaults to `main`. agent-box makes a git bundle of `<branch>` from the clone inside a throwaway container with no network and the clone mounted read-only, then verifies it and fetches it into `clone_of` as `box/<branch>`, with git's object checks on. The host never runs git against the clone's own `.git`, and never merges: the branch just appears. The command prints the commits that came, a warning for any commit message that carries an AI-attribution trailer, and the review line:
@@ -199,6 +199,8 @@ review: git -C /home/me/repo log -p main..box/feat-x; merge per your review poli
 ```
 
 Commit subjects are printed with control characters replaced, because a box wrote them. Bundles over 512 MiB are refused. The container runs the global `box_image`.
+
+**Keeping the clone current.** At each spawn of an existing clone, agent-box fast-forwards the clone's local `main` (else `master`) from the host, in a throwaway container with no network, and shows the result in the spawn toast and the steer rail. It is best effort and never fails a spawn. It skips a clone that a live session or another instance's box is using, and never touches a checked-out feature branch's work tree. `clone fetch` refuses a branch that carries history host `main` no longer has (for example after a rebase or force-push), or whose clone history agent-box cannot verify, such as a clone made before this tracking existed. `-allow-old-history` overrides that after you have reviewed the branch. A daemon restart aborts a `clone fetch` that is in flight; run it again.
 
 **Refusals**
 

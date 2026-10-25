@@ -22,7 +22,7 @@ const usage = `usage:
   agent-box box setup [-rebuild] [-recreate [-force]]  build the box image (macOS: also the box VM)
   agent-box box status                                 list boxes (macOS: and the box VM)
   agent-box box stop [-force]                          macOS: stop the box VM
-  agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>
+  agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>; safe while agent-box serves (a daemon restart aborts it; rerun)
   agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
   agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
 
