@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/clone"
@@ -102,6 +103,10 @@ func (h *cloneHooks) lockClone(ctx context.Context, key string) (release func(),
 	}
 }
 
+// hostCheckTimeout bounds the host checks of a refresh skipped after its lock
+// wait ran out the caller's deadline.
+const hostCheckTimeout = 10 * time.Second
+
 // Refresh refreshes the clone from host base before its box starts, unless a
 // box may be using it: a live session of this instance (in-use, asked only
 // once the clone's lock is held), a box of another instance or one whose
@@ -152,11 +157,23 @@ func (h *cloneHooks) Refresh(ctx context.Context, c config.Clone, o session.Refr
 		}
 	}
 
-	info := cloneInfoOf(h.refresh(ctx, h.env.Git, h.docker, clone.RefreshRequest{
+	// The lock wait may have used up the caller's deadline; the host checks of
+	// a skipped refresh then run on a fresh, short one, never on the expired
+	// context (its error text would reach the user).
+	rctx := ctx
+	if !locked {
+		var cancel context.CancelFunc
+		rctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), hostCheckTimeout)
+		defer cancel()
+	}
+	info := cloneInfoOf(h.refresh(rctx, h.env.Git, h.docker, clone.RefreshRequest{
 		Clone: c, Image: h.image, Instance: h.instance, DataDir: h.dataDir, Skip: skip,
 	}))
 	if listErr != "" {
-		info.Error = listErr
+		if info.Error != "" {
+			info.Error += "; "
+		}
+		info.Error += listErr
 	}
 	returned = true
 	return info, release

@@ -338,6 +338,7 @@ type refreshFake struct {
 	err    error
 	lists  int
 	reqs   []clone.RefreshRequest
+	ctxErr []error // each refresh's ctx.Err() at the time it ran
 	result clone.RefreshResult
 }
 
@@ -352,10 +353,11 @@ func newRefreshFake(t *testing.T) *refreshFake {
 		f.lists++
 		return f.boxes, f.err
 	}
-	h.refresh = func(_ context.Context, _ clone.Git, _ clone.Docker, r clone.RefreshRequest) clone.RefreshResult {
+	h.refresh = func(ctx context.Context, _ clone.Git, _ clone.Docker, r clone.RefreshRequest) clone.RefreshResult {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.reqs = append(f.reqs, r)
+		f.ctxErr = append(f.ctxErr, ctx.Err())
 		res := f.result
 		res.Skipped = r.Skip
 		return res
@@ -505,7 +507,8 @@ func TestCloneRefreshListingErrorFailsClosed(t *testing.T) {
 	if r := f.lastReq(t); r.Skip != clone.SkipOtherInstance {
 		t.Fatalf("skip = %q; want other-instance", r.Skip)
 	}
-	want := "cannot check whether another instance's box holds the clone: docker ps: exit status 1: ?[31mCannot connect"
+	// The listing error joins the refresh's own error; it does not replace it.
+	want := "from the refresh; cannot check whether another instance's box holds the clone: docker ps: exit status 1: ?[31mCannot connect"
 	if info.Error != want {
 		t.Fatalf("error = %q\nwant    %q", info.Error, want)
 	}
@@ -578,6 +581,12 @@ func TestCloneRefreshLockWaitTimesOut(t *testing.T) {
 	info, release := f.h.Refresh(ctx, config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{LiveSession: never})
 	if r := f.lastReq(t); r.Skip != clone.SkipInUse || info.Skipped != clone.SkipInUse {
 		t.Fatalf("skip = %q, info = %+v; want in-use after the lock wait timed out", r.Skip, info)
+	}
+	if info.Error != "" {
+		t.Fatalf("error = %q; the expired wait must not reach the user", info.Error)
+	}
+	if n := len(f.ctxErr); n != 2 || f.ctxErr[n-1] != nil { // [first spawn, timed-out wait]
+		t.Fatalf("the skipped refresh ran on the expired context: %v", f.ctxErr)
 	}
 	release() // a no-op: it must not free the lock the first spawn holds
 	if _, ok := f.h.lockClone(ctx, dir); ok {
