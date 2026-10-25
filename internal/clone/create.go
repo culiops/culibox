@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -205,24 +204,9 @@ func checkExisting(c config.Clone) (exists bool, err error) {
 	if !gst.IsDir() { // a symlink or a gitdir: file
 		return refuse(".git is not a plain directory")
 	}
-	cst, err := root.Lstat(".git/config")
+	data, err := readBoxFile(root, ".git/config", maxGitConfig)
 	if err != nil {
-		return refuse("no .git/config")
-	}
-	if !cst.Mode().IsRegular() || cst.Size() > maxGitConfig {
 		return refuse(".git/config is not a regular file of at most 64 KiB")
-	}
-	f, err := root.Open(".git/config")
-	if err != nil {
-		return refuse("cannot read .git/config")
-	}
-	defer f.Close()
-	if fst, err := f.Stat(); err != nil || !os.SameFile(cst, fst) {
-		return refuse(".git/config changed while it was read")
-	}
-	data, err := io.ReadAll(io.LimitReader(f, maxGitConfig+1))
-	if err != nil || len(data) > maxGitConfig {
-		return refuse("cannot read .git/config")
 	}
 	urls, ok := box.GitConfigValues(data, "remote.origin", "url")
 	if !ok {
