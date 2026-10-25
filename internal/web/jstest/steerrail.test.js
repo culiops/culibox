@@ -4,7 +4,7 @@
 // a screen reader cannot name is not a button anyone can use.
 const test = require("node:test");
 const assert = require("node:assert");
-const { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow } = require("../static/steerrail.js");
+const { railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix } = require("../static/steerrail.js");
 // The real tierBadge, not a hand-written stand-in: the point of the change these
 // tests cover is that the rail consumes tier.js's verdict rather than deriving a
 // second one, so a fixture that agreed with the rail but not with tier.js would
@@ -282,4 +282,127 @@ test("stRailRows: a production entry adds a row drawn as the AWS production chip
   const rows = stRailRows({ static_recent: [], tokens: [{ name: "a" }, { name: "b", prod: true }] });
   assert.deepStrictEqual(rows.map((r) => r.k), ["tokens", "prod tokens"]);
   assert.deepStrictEqual(rows[1], { k: "prod tokens", v: "b", chip: "bdg aws prod", wrap: true });
+});
+
+// Clone refresh state. The row and the toast tail are pure strings; the
+// rail draws them with textContent (kvRow), the toast with textContent too.
+test("cloneRow: null without s.clone", () => {
+  assert.strictEqual(cloneRow({}), null);
+  assert.strictEqual(toastCloneSuffix({}), "");
+  assert.strictEqual(cloneLevel(undefined), null);
+});
+
+test("cloneRow: up to date is an info row with the fetch-origin tooltip", () => {
+  const r = cloneRow({ agent: "ab", clone: { refreshed: true, base: "main", head_in_host: true } });
+  assert.strictEqual(r.k, "clone");
+  assert.strictEqual(r.v, "up to date with host main");
+  assert.strictEqual(r.wrap, true);
+  assert.strictEqual(r.chip, undefined);
+  assert.ok(r.title.includes("git fetch origin"));
+  assert.strictEqual(cloneLevel({ refreshed: true }), "info");
+});
+
+test("cloneRow: unsent work names the fetch command; detached has none", () => {
+  const r = cloneRow({ agent: "ab", clone: { refreshed: true, head_in_host: false, branch: "feat", ahead: 2 } });
+  assert.ok(r.v.includes("branch feat: 2 commits not sent to host (`agent-box clone fetch ab feat`)"));
+  const one = cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 1 } });
+  assert.ok(one.v.includes("1 commit not sent"));
+  const zero = cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 0 } });
+  assert.ok(zero.v.includes("branch feat: commits not sent to host (`agent-box clone fetch ab feat`)"));
+  const d = cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "" } });
+  assert.ok(d.v.includes("detached HEAD: commits not sent to host"));
+  assert.ok(!d.v.includes("clone fetch"));
+  // Unknown (absent) is not "unsent".
+  assert.ok(!cloneRow({ agent: "ab", clone: { refreshed: true, branch: "feat" } }).v.includes("not sent"));
+});
+
+test("cloneRow: rewritten is a warning naming stale branches, or 'may carry'", () => {
+  const r = cloneRow({ clone: { rewritten: true, refreshed: true, base: "main", stale_branches: ["a", "b"] } });
+  assert.strictEqual(r.chip, "v warn");
+  assert.ok(r.v.startsWith("Host main was rewritten since this clone last saw it. Branches a, b still carry the old history: rebase them onto origin/main or recreate the clone before `clone fetch`."));
+  const m = cloneRow({ clone: { rewritten: true, refreshed: false, base: "main", stale_branches: [] } });
+  assert.strictEqual(m.chip, "v warn");
+  assert.ok(m.v.includes("Branches may carry the old history: rebase them onto origin/main or recreate the clone before `clone fetch`."));
+  assert.strictEqual(cloneLevel({ rewritten: true, refreshed: false }), "warn");
+});
+
+test("cloneRow: rewritten but fully fixed is only info", () => {
+  const c = { rewritten: true, refreshed: true, base: "main", stale_branches: [], head_in_host: false, branch: "x", ahead: 3 };
+  const r = cloneRow({ agent: "ab", clone: c });
+  assert.strictEqual(r.chip, undefined);
+  assert.ok(r.v.includes("host main was rewritten earlier; no branch here carries the old history"));
+  assert.ok(!r.v.includes("Host main was rewritten since"));
+  assert.ok(!r.v.includes("not sent")); // unsent is suppressed while rewritten
+  assert.strictEqual(cloneLevel(c), "info");
+});
+
+test("cloneRow: master base is used in every clause", () => {
+  const r = cloneRow({ clone: { refreshed: true, base: "master", ff_from: "aaaaaaaaaa", ff_to: "bbbbbbbbbb", ff_count: 3, branch: "feat", behind: 2 } });
+  assert.ok(r.v.includes("master updated aaaaaaa..bbbbbbb (+3)"));
+  assert.ok(r.v.includes("feat is 2 behind master"));
+  assert.ok(!r.v.includes("main"));
+  assert.ok(r.title.includes("origin/master"));
+  // The fetch hint carries -base (flags before positionals) off the default branch only.
+  const u = cloneRow({ agent: "ab", clone: { base: "master", head_in_host: false, branch: "feat", ahead: 1 } });
+  assert.ok(u.v.includes("`agent-box clone fetch -base master ab feat`"));
+  assert.ok(!u.v.includes("main"));
+  const um = cloneRow({ agent: "ab", clone: { base: "main", head_in_host: false, branch: "feat", ahead: 1 } });
+  assert.ok(um.v.includes("`agent-box clone fetch ab feat`"));
+  assert.ok(!um.v.includes("-base"));
+  assert.ok(!cloneRow({ agent: "ab", clone: { head_in_host: false, branch: "feat", ahead: 1 } }).v.includes("-base"));
+  // A missing or garbled ff_count drops the "(+N)" instead of printing undefined.
+  assert.strictEqual(cloneRow({ clone: { refreshed: true, base: "main", ff_from: "aaaaaaaaaa", ff_to: "bbbbbbbbbb" } }).v, "main updated aaaaaaa..bbbbbbb");
+  assert.ok(!cloneRow({ clone: { refreshed: true, ff_from: "aaaaaaaaaa", ff_to: "bbbbbbbbbb", ff_count: "x" } }).v.includes("+"));
+  assert.ok(cloneRow({ clone: { refreshed: true, base: "master", ff_refused: true } }).v.includes("local master has commits host master lacks; not updated"));
+  assert.ok(cloneRow({ clone: { skipped: "created", base: "master" } }).v.includes("new clone of host master"));
+});
+
+test("cloneRow: in-use, other-instance and no-base texts", () => {
+  assert.strictEqual(cloneRow({ clone: { skipped: "in-use" } }).v, "not refreshed: another session is using this clone");
+  assert.strictEqual(cloneRow({ clone: { skipped: "other-instance" } }).v, "not refreshed: a box from another agent-box instance holds this clone");
+  assert.strictEqual(cloneRow({ clone: { skipped: "no-base" } }).v, "not refreshed: host repo has neither main nor master");
+});
+
+test("cloneRow: error and unverified are warnings", () => {
+  const r = cloneRow({ clone: { error: "x", unverified: true } });
+  assert.strictEqual(r.chip, "v warn");
+  assert.ok(r.v.includes("Clone not refreshed: x; the box is on older code."));
+  assert.ok(r.v.includes("This clone's history is unverified: created before refresh tracking. Recreate the clone to clear this."));
+});
+
+test("cloneRow: an error beside a completed refresh does not say the box is on older code", () => {
+  const r = cloneRow({ clone: { refreshed: true, error: "could not check host history: x" } });
+  assert.strictEqual(r.chip, "v warn");
+  assert.ok(r.v.includes("Clone refreshed, but could not check host history: x."));
+  assert.ok(!r.v.includes("older code"));
+  assert.ok(!r.v.includes("not refreshed"));
+  assert.strictEqual(toastCloneSuffix({ clone: { refreshed: true, error: "y" } }), " \u00b7 Clone refreshed, but y.");
+});
+
+test("toastCloneSuffix: one warn clause, else one short info clause", () => {
+  assert.strictEqual(toastCloneSuffix({ clone: { error: "x" } }), " \u00b7 Clone not refreshed: x; the box is on older code.");
+  assert.strictEqual(cloneLevel({ error: "x" }), "warn");
+  const s = { agent: "ab", clone: { refreshed: true, base: "main", head_in_host: false, branch: "f", ahead: 1 } };
+  assert.strictEqual(toastCloneSuffix(s), " \u00b7 clone: branch f: 1 commit not sent to host (`agent-box clone fetch ab f`)");
+  assert.strictEqual(toastCloneSuffix({ clone: { skipped: "in-use" } }), " \u00b7 clone: not refreshed: another session is using this clone");
+  assert.strictEqual(toastCloneSuffix({ clone: { refreshed: true, base: "main" } }), " \u00b7 clone: up to date with host main");
+  assert.strictEqual(toastCloneSuffix({ clone: {} }), "");
+});
+
+test("clone values stay literal text: markup in a branch is never interpreted", () => {
+  const evil = "<img src=x onerror=alert(1)>";
+  const s = { agent: "ab", clone: { head_in_host: false, branch: evil, ahead: 1, stale_branches: [evil], rewritten: true, error: evil } };
+  const r = cloneRow(s);
+  assert.ok(r.v.includes(evil)); // present verbatim, as a string
+  assert.ok(toastCloneSuffix(s).includes(evil));
+  assert.ok(cloneParts(s.clone, "ab").warn.join("").includes(evil));
+  // The render path: kvRow (the only consumer of the row) uses textContent, and
+  // the toast sets #toast-msg via textContent. Neither may use innerHTML.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const rail = fs.readFileSync(path.join(__dirname, "../static/steerrail.js"), "utf8");
+  const shell = fs.readFileSync(path.join(__dirname, "../static/shell.js"), "utf8");
+  assert.ok(/function kvRow[\s\S]*?b\.textContent = v;/.test(rail));
+  assert.ok(!/innerHTML/.test(rail));
+  assert.ok(/getElementById\("toast-msg"\)\.textContent = msg/.test(shell));
 });

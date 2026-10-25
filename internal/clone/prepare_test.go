@@ -152,7 +152,7 @@ func roByBox(ms []box.Mount) map[string]box.Mount {
 
 func TestPrepareMounts(t *testing.T) {
 	f := newShareFixture(t)
-	cm, err := Prepare(context.Background(), f.env(t), f.c, true)
+	cm, _, err := Prepare(context.Background(), f.env(t), f.c, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestPrepareMounts(t *testing.T) {
 		t.Errorf("docs/superpowers mountpoint: %v %v, want a directory", st, err)
 	}
 	// A second Prepare (the next spawn) accepts the mountpoints it made.
-	if _, err := Prepare(context.Background(), f.env(t), f.c, true); err != nil {
+	if _, _, err := Prepare(context.Background(), f.env(t), f.c, true); err != nil {
 		t.Errorf("second Prepare: %v", err)
 	}
 }
@@ -213,7 +213,7 @@ func TestPrepareNoMemory(t *testing.T) {
 			f := newShareFixture(t)
 			e := f.env(t)
 			tc.edit(t, &f, &e)
-			cm, err := Prepare(context.Background(), e, f.c, tc.withMemory)
+			cm, _, err := Prepare(context.Background(), e, f.c, tc.withMemory)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -293,7 +293,7 @@ func TestPrepareRefuses(t *testing.T) {
 			if tc.protected != nil {
 				e.Protected = tc.protected(f)
 			}
-			_, err := Prepare(context.Background(), e, f.c, true)
+			_, _, err := Prepare(context.Background(), e, f.c, true)
 			if !errors.Is(err, box.ErrUnboxableWorkspace) {
 				t.Fatalf("Prepare = %v, want ErrUnboxableWorkspace", err)
 			}
@@ -384,5 +384,94 @@ func TestClaudeProjectSlug(t *testing.T) {
 		if got := claudeProjectSlug(in); got != want {
 			t.Errorf("claudeProjectSlug(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestPrepareReportsCreated(t *testing.T) {
+	f := newShareFixture(t)
+	for i, want := range []bool{true, false} {
+		_, created, err := Prepare(context.Background(), f.env(t), f.c, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if created != want {
+			t.Errorf("Prepare #%d: created = %v, want %v", i+1, created, want)
+		}
+	}
+}
+
+func TestPrepareStartsTrustedRecord(t *testing.T) {
+	f := newShareFixture(t)
+	e := f.env(t)
+	e.DataDir = t.TempDir()
+	_, tip, err := BaseBranch(context.Background(), e.Git, f.of)
+	if err != nil || tip == "" {
+		t.Fatalf("BaseBranch = %q, %v", tip, err)
+	}
+	if _, _, err := Prepare(context.Background(), e, f.c, false); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := ReadBaseRecord(e.DataDir, f.dir)
+	if err != nil || !rec.Exists || rec.Unverified || !slices.Equal(rec.SHAs, []string{tip}) {
+		t.Fatalf("rec=%+v err=%v; want trusted [%s]", rec, err, tip)
+	}
+}
+
+func TestPrepareResetsRecordOnRecreate(t *testing.T) {
+	f := newShareFixture(t)
+	e := f.env(t)
+	e.DataDir = t.TempDir()
+	_, tip, err := BaseBranch(context.Background(), e.Git, f.of)
+	if err != nil || tip == "" {
+		t.Fatalf("BaseBranch = %q, %v", tip, err)
+	}
+	// A stale record for the same dir: unverified, with a SHA the host never had.
+	if err := AppendBase(e.DataDir, f.dir, shaN(7)); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ := ReadBaseRecord(e.DataDir, f.dir); !rec.Unverified {
+		t.Fatalf("setup: want an unverified record, got %+v", rec)
+	}
+	if _, created, err := Prepare(context.Background(), e, f.c, false); err != nil || !created {
+		t.Fatalf("Prepare created=%v err=%v", created, err)
+	}
+	rec, err := ReadBaseRecord(e.DataDir, f.dir)
+	if err != nil || rec.Unverified || !slices.Equal(rec.SHAs, []string{tip}) {
+		t.Fatalf("rec=%+v err=%v; want trusted [%s]", rec, err, tip)
+	}
+}
+
+// A new clone made while the host has no base branch has no tip to vouch for
+// it, so an older record for the same dir must go, not survive as trusted.
+func TestPrepareDropsStaleRecordWithoutTip(t *testing.T) {
+	f := newShareFixture(t)
+	fixtureGit(t, f.of, "branch", "-M", "trunk")
+	e := f.env(t)
+	e.DataDir = t.TempDir()
+	if err := ResetBaseRecord(e.DataDir, f.dir, shaN(7)); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := Prepare(context.Background(), e, f.c, false); err != nil || !created {
+		t.Fatalf("Prepare created=%v err=%v", created, err)
+	}
+	if rec, err := ReadBaseRecord(e.DataDir, f.dir); err != nil || rec.Exists {
+		t.Fatalf("rec=%+v err=%v; want no record", rec, err)
+	}
+	// With no record to remove, the removal is quiet.
+	if err := removeBaseRecord(e.DataDir, f.dir); err != nil {
+		t.Fatalf("removeBaseRecord on a missing record: %v", err)
+	}
+}
+
+func TestPrepareNoRecordWithoutDataDir(t *testing.T) {
+	f := newShareFixture(t)
+	e := f.env(t)
+	// An empty DataDir must not become a relative path in the working directory.
+	t.Chdir(t.TempDir())
+	if _, _, err := Prepare(context.Background(), e, f.c, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(baseRecordDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Lstat(%s) = %v, want not exist", baseRecordDir, err)
 	}
 }

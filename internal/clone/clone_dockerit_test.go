@@ -51,10 +51,10 @@ func citDocker(t *testing.T) (bin, image string) {
 	return bin, image
 }
 
-// citRemoveContainers removes every container of the test instance, box or
-// bundle container, and nothing else.
+// citRemoveContainers removes every container of the test instance, box,
+// bundle or refresh container, and nothing else.
 func citRemoveContainers(bin string) {
-	for _, label := range []string{box.LabelInstance, "io.culiops.agent-box.clonefetch"} {
+	for _, label := range []string{box.LabelInstance, LabelCloneFetch, LabelCloneRefresh} {
 		out, err := exec.Command(bin, "ps", "-aq", "--filter", "label="+label+"="+citInstance).Output()
 		if err != nil {
 			continue
@@ -68,7 +68,7 @@ func citRemoveContainers(bin string) {
 func citLeftovers(t *testing.T, bin string) []string {
 	t.Helper()
 	var all []string
-	for _, label := range []string{box.LabelInstance, "io.culiops.agent-box.clonefetch"} {
+	for _, label := range []string{box.LabelInstance, LabelCloneFetch, LabelCloneRefresh} {
 		out, err := exec.Command(bin, "ps", "-aq", "--filter", "label="+label+"="+citInstance).Output()
 		if err != nil {
 			t.Fatalf("docker ps: %v", err)
@@ -273,7 +273,7 @@ func TestCloneCreationAndBoxGit(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cm, err := Prepare(ctx, Env{Git: g, Home: home}, c, false)
+	cm, _, err := Prepare(ctx, Env{Git: g, Home: home}, c, false)
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
@@ -457,6 +457,11 @@ func TestCloneFetchAttacksInARealContainer(t *testing.T) {
 			if _, err := EnsureClone(ctx, g, c, home); err != nil {
 				t.Fatalf("EnsureClone: %v", err)
 			}
+			// A new clone is trusted: its base record holds the host's main.
+			data := citRealTemp(t)
+			if err := ResetBaseRecord(data, dir, citMustGit(t, of, "rev-parse", "main")); err != nil {
+				t.Fatal(err)
+			}
 			// The box's work: one commit on feat, made before the plant.
 			citMustGit(t, dir, "checkout", "-q", "-b", "feat")
 			citWrite(t, filepath.Join(dir, "feat.txt"), "feat\n")
@@ -473,6 +478,7 @@ func TestCloneFetchAttacksInARealContainer(t *testing.T) {
 				Instance: citInstance,
 				TempDir:  filepath.Join(citRealTemp(t), "tmp"),
 				Home:     home,
+				DataDir:  data,
 			})
 			t.Logf("Fetch: res=%+v err=%v", res, ferr)
 

@@ -57,9 +57,9 @@ func TestBundleArgs(t *testing.T) {
 		Instance: "DEV",
 	}
 	sha := strings.Repeat("ab", 20)
-	got := BundleArgs(r, sha)
+	got := BundleArgs(r, sha, "n")
 	want := []string{
-		"run", "--rm", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"run", "--rm", "--init", "--name", "n", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonefetch=DEV",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/src/of/.git/objects",
@@ -90,11 +90,24 @@ type fakeDocker struct {
 	tempDir string
 	calls   int
 	stderr  string // when set, fail like the container with this stderr (after the real git ran)
+	hang    bool   // when set, block until ctx is done, like a container that never exits
+	removed []string
+	args    []string // argv of the last RunStream
+}
+
+func (f *fakeDocker) Remove(_ context.Context, name string) error {
+	f.removed = append(f.removed, name)
+	return nil
 }
 
 func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Writer) error {
 	f.t.Helper()
 	f.calls++
+	f.args = slices.Clone(args)
+	if f.hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	// stdout must be the 0600 temp file (possibly behind the size cap), made under TempDir.
 	named, ok := stdout.(interface{ Name() string })
 	if !ok {
@@ -192,7 +205,16 @@ func newFetchFx(t *testing.T) *fetchFx {
 	x := &fetchFx{t: t, of: of, rec: rec}
 	temp := filepath.Join(t.TempDir(), "clone-fetch")
 	x.dock = &fakeDocker{t: t, tempDir: temp}
-	x.req = FetchRequest{Clone: c, Branch: "feat", Base: "main", Image: "img:1", Instance: "T", TempDir: temp, Home: home}
+	x.req = FetchRequest{Clone: c, Branch: "feat", Base: "main", Image: "img:1", Instance: "T", TempDir: temp, Home: home,
+		DataDir: t.TempDir()}
+	// The trusted record a clone creation starts: the host main it was made from.
+	tip, err := x.ofRev("refs/heads/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ResetBaseRecord(x.req.DataDir, c.Dir, tip); err != nil {
+		t.Fatal(err)
+	}
 	x.inClone("checkout", "-q", "-b", "feat")
 	x.commitInClone("feat.txt", "1", "add feat")
 	rec.reset()
@@ -519,7 +541,7 @@ func TestPackOffset(t *testing.T) {
 		{"no blank line", "# v2 git bundle\n" + sha + " refs/heads/x\n", 0, "truncated"},
 		{"long line", "# v2 git bundle\n" + strings.Repeat("x", 70<<10) + "\n\n", 0, "too long"},
 	} {
-		got, err := packOffset(write(tc.in))
+		got, _, err := packOffset(write(tc.in))
 		switch {
 		case tc.bad != "" && (err == nil || !strings.Contains(err.Error(), tc.bad)):
 			t.Errorf("%s: err = %v, want %q", tc.name, err, tc.bad)
@@ -741,4 +763,371 @@ func TestFetchRefusesASymlinkedParent(t *testing.T) {
 	if x.dock.calls != 0 {
 		t.Fatal("docker ran with a symlinked parent above the clone")
 	}
+}
+
+func TestPackOffsetCountsPrereqs(t *testing.T) {
+	sha, sha2 := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	for _, tc := range []struct {
+		name, in string
+		want     int
+	}{
+		{"v2 two", "# v2 git bundle\n-" + sha + " one\n-" + sha2 + " two\n" + sha + " refs/heads/x\n\nPACK", 2},
+		{"v3 one", "# v3 git bundle\n@object-format=sha1\n-" + sha + "\n" + sha + " refs/heads/x\n\nPACK", 1},
+		{"none", "# v2 git bundle\n" + sha + " refs/heads/x\n\nPACK", 0},
+	} {
+		p := filepath.Join(t.TempDir(), "b")
+		if err := os.WriteFile(p, []byte(tc.in), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		off, n, err := packOffset(f)
+		f.Close()
+		if err != nil || n != tc.want || off != int64(len(tc.in)-len("PACK")) {
+			t.Errorf("%s: packOffset = %d, %d, %v; want prereqs %d", tc.name, off, n, err, tc.want)
+		}
+		if n, err := bundlePrereqs(p); err != nil || n != tc.want {
+			t.Errorf("%s: bundlePrereqs = %d, %v; want %d", tc.name, n, err, tc.want)
+		}
+	}
+	if _, err := bundlePrereqs(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("bundlePrereqs of a missing file: no error")
+	}
+}
+
+// quarantineRefs lists refs/agent-box/ in clone_of: a fetch, refused or not,
+// must leave none behind.
+func (x *fetchFx) quarantineRefs() string {
+	x.t.Helper()
+	return gitIn(x.t, x.of, "", "for-each-ref", "--format=%(refname)", "refs/agent-box/")
+}
+
+// noBoxRef fails when box/<branch> or any quarantine ref exists in clone_of.
+func (x *fetchFx) noBoxRef(branch string) {
+	x.t.Helper()
+	if _, err := x.ofRev("refs/heads/box/" + branch); err == nil {
+		x.t.Errorf("box/%s exists after a refused fetch", branch)
+	}
+	if q := x.quarantineRefs(); q != "" {
+		x.t.Errorf("quarantine refs left in clone_of: %q", q)
+	}
+}
+
+// rewriteHostMain drops host main's tip, the base recorded when the clone was
+// made, and commits something else on its parent: the shape of a scrubbed
+// secret. feat in the clone is still built on the dropped tip, which it returns.
+func (x *fetchFx) rewriteHostMain() string {
+	x.t.Helper()
+	old, err := x.ofRev("refs/heads/main")
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	fixtureGit(x.t, x.of, "reset", "-q", "--hard", "HEAD~1")
+	if err := os.WriteFile(filepath.Join(x.of, "scrubbed"), []byte("s"), 0o644); err != nil {
+		x.t.Fatal(err)
+	}
+	fixtureGit(x.t, x.of, "add", "scrubbed")
+	fixtureGit(x.t, x.of, "commit", "-q", "-m", "scrubbed")
+	return old
+}
+
+func TestFetchRefusesUnrelatedHistory(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		x := newFetchFx(t)
+		x.inClone("checkout", "-q", "--orphan", "orphan")
+		x.inClone("commit", "-q", "-m", "unrelated root")
+		x.req.Branch, x.req.AllowOldHistory = "orphan", allow
+		_, err := x.fetch()
+		if err == nil || !strings.Contains(err.Error(), "refusing orphan: it shares no history with main in "+x.of) ||
+			!strings.Contains(err.Error(), "git rebase origin/main") {
+			t.Fatalf("allow=%v: err = %v, want a shares-no-history refusal", allow, err)
+		}
+		x.noBoxRef("orphan")
+		x.tempEmpty()
+	}
+}
+
+func TestFetchRefusesStaleHistory(t *testing.T) {
+	x := newFetchFx(t)
+	old := x.rewriteHostMain()
+	_, err := x.fetch()
+	if err == nil || !strings.Contains(err.Error(), "refusing feat: it carries history host main no longer has (recorded tip "+old[:12]+
+		" is an ancestor of feat)") || !strings.Contains(err.Error(), "git rebase origin/main") ||
+		!strings.Contains(err.Error(), "do not point a ref at them") {
+		t.Fatalf("err = %v, want a stale-history refusal naming %s", err, old[:12])
+	}
+	x.noBoxRef("feat")
+	x.tempEmpty()
+
+	// A rewrite from the root (filter-repo) leaves no shared history at all:
+	// the zero-prerequisite check refuses it first.
+	x = newFetchFx(t)
+	fixtureGit(t, x.of, "checkout", "-q", "--orphan", "new")
+	fixtureGit(t, x.of, "commit", "-q", "-m", "rewritten root")
+	fixtureGit(t, x.of, "branch", "-f", "main", "new")
+	fixtureGit(t, x.of, "checkout", "-q", "main")
+	if _, err := x.fetch(); err == nil || !strings.Contains(err.Error(), "shares no history") {
+		t.Fatalf("root rewrite: err = %v", err)
+	}
+	x.noBoxRef("feat")
+}
+
+func TestFetchAllowOldHistoryOverridesStale(t *testing.T) {
+	x := newFetchFx(t)
+	old := x.rewriteHostMain()
+	x.req.AllowOldHistory = true
+	res, err := x.fetch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.ofRev("refs/heads/box/feat"); err != nil {
+		t.Fatalf("box/feat missing after an overridden fetch: %v", err)
+	}
+	if len(res.Warnings) == 0 || !strings.HasPrefix(res.Warnings[0], "-allow-old-history: the history check was overridden (") ||
+		!strings.Contains(res.Warnings[0], old[:12]) || !strings.HasSuffix(res.Warnings[0], "; review box/feat before any merge or push") {
+		t.Fatalf("Warnings = %q", res.Warnings)
+	}
+	if q := x.quarantineRefs(); q != "" {
+		t.Errorf("quarantine refs left: %q", q)
+	}
+	// The override is for a known stale ancestor only: no stale SHA, no warning.
+	x = newFetchFx(t)
+	x.req.AllowOldHistory = true
+	if res, err := x.fetch(); err != nil || len(res.Warnings) != 0 {
+		t.Fatalf("clean fetch with the flag: %v, %q", err, res.Warnings)
+	}
+}
+
+func TestFetchRefusesUnverifiedRecord(t *testing.T) {
+	recPath := func(x *fetchFx) string {
+		p, err := baseRecordPath(x.req.DataDir, x.req.Clone.Dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(x *fetchFx)
+	}{
+		{"no record", func(x *fetchFx) { os.Remove(recPath(x)) }},
+		{"unverified", func(x *fetchFx) {
+			tip, _ := x.ofRev("refs/heads/main")
+			os.WriteFile(recPath(x), []byte("unverified\n"+tip+"\n"), 0o600)
+		}},
+		{"corrupt", func(x *fetchFx) { os.WriteFile(recPath(x), []byte("not a sha\n"), 0o600) }},
+		{"no data dir", func(x *fetchFx) { x.req.DataDir = "" }},
+	} {
+		x := newFetchFx(t)
+		tc.setup(x)
+		_, err := x.fetch()
+		if err == nil || !strings.Contains(err.Error(), "clone fetch: this clone's history is unverified (created before refresh tracking); "+
+			"recreate the clone, or pass -allow-old-history once you have checked feat") {
+			t.Fatalf("%s: err = %v, want the unverified refusal", tc.name, err)
+		}
+		if x.dock.calls != 0 {
+			t.Errorf("%s: docker ran %d time(s) for an unverified clone", tc.name, x.dock.calls)
+		}
+		x.noBoxRef("feat")
+
+		// The flag lets it through, loudly.
+		x.req.AllowOldHistory = true
+		res, err := x.fetch()
+		if err != nil {
+			t.Fatalf("%s with -allow-old-history: %v", tc.name, err)
+		}
+		if len(res.Warnings) == 0 || !strings.HasPrefix(res.Warnings[0], "-allow-old-history: the history check was overridden (") {
+			t.Errorf("%s: Warnings = %q", tc.name, res.Warnings)
+		}
+	}
+}
+
+func TestFetchRecordsHostBaseTip(t *testing.T) {
+	x := newFetchFx(t)
+	if err := os.WriteFile(filepath.Join(x.of, "later"), []byte("l"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, x.of, "add", "later")
+	fixtureGit(t, x.of, "commit", "-q", "-m", "later")
+	tip, err := x.ofRev("refs/heads/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := ReadBaseRecord(x.req.DataDir, x.req.Clone.Dir)
+	if err != nil || rec.Unverified || len(rec.SHAs) != 2 || rec.SHAs[1] != tip {
+		t.Fatalf("record = %+v, %v; want the trusted record ending in %s", rec, err, tip)
+	}
+}
+
+// A recorded base that host main rewrote away and git gc then deleted is
+// stale but absent from clone_of: it cannot be an ancestor of a fetched branch,
+// whose history git checked is all present, so it must not refuse.
+func TestFetchIgnoresStaleSHAGoneFromHost(t *testing.T) {
+	x := newFetchFx(t)
+	tip, _ := x.ofRev("refs/heads/main")
+	gone := strings.Repeat("ab", 20)
+	if err := ResetBaseRecord(x.req.DataDir, x.req.Clone.Dir, gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendBase(x.req.DataDir, x.req.Clone.Dir, tip); err != nil {
+		t.Fatal(err)
+	}
+	if res, err := x.fetch(); err != nil || len(res.Warnings) != 0 {
+		t.Fatalf("err = %v, Warnings = %q", err, res.Warnings)
+	}
+}
+
+// hookGit is a StdinGit that lets a test replace one host git call with an
+// error, or act right after one ran.
+type hookGit struct {
+	g     StdinGit
+	fail  func(sub string) error
+	after func(sub string)
+}
+
+// gitSub is the subcommand of a hardened argv: the first word after the -c pairs.
+func gitSub(args []string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] != "-c" {
+			return args[i]
+		}
+		i++
+	}
+	return ""
+}
+
+func (h *hookGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return h.RunStdin(ctx, dir, env, nil, args...)
+}
+
+func (h *hookGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	sub := gitSub(args)
+	if h.fail != nil {
+		if err := h.fail(sub); err != nil {
+			return nil, err
+		}
+	}
+	out, err := h.g.RunStdin(ctx, dir, env, stdin, args...)
+	if h.after != nil {
+		h.after(sub)
+	}
+	return out, err
+}
+
+// exitErr is a real *exec.ExitError with the given status.
+func exitErr(t *testing.T, code int) error {
+	t.Helper()
+	err := exec.Command("sh", "-c", fmt.Sprintf("exit %d", code)).Run()
+	if c, ok := exitCode(err); !ok || c != code {
+		t.Fatalf("exit %d gave %v", code, err)
+	}
+	return fmt.Errorf("git: %w", err)
+}
+
+func TestFetchLeavesNoQuarantineRef(t *testing.T) {
+	check := func(name string, x *fetchFx, g Git, ctx context.Context, wantErr string) {
+		t.Helper()
+		_, err := Fetch(ctx, g, x.dock, x.req)
+		switch {
+		case wantErr == "" && err != nil:
+			t.Errorf("%s: %v", name, err)
+		case wantErr != "" && (err == nil || !strings.Contains(err.Error(), wantErr)):
+			t.Errorf("%s: err = %v, want %q", name, err, wantErr)
+		}
+		if q := x.quarantineRefs(); q != "" {
+			t.Errorf("%s: quarantine refs left in clone_of: %q", name, q)
+		}
+		if wantErr != "" {
+			if _, err := x.ofRev("refs/heads/box/" + x.req.Branch); err == nil {
+				t.Errorf("%s: box/%s exists after a refused fetch", name, x.req.Branch)
+			}
+		}
+		x.tempEmpty()
+	}
+	bg := context.Background()
+
+	x := newFetchFx(t)
+	check("success", x, x.rec, bg, "")
+
+	x = newFetchFx(t)
+	x.rewriteHostMain()
+	check("stale", x, x.rec, bg, "carries history host main no longer has")
+
+	x = newFetchFx(t)
+	breakTip(t, x)
+	check("strict checks", x, x.rec, bg, "strict checks")
+
+	x = newFetchFx(t)
+	x.inClone("checkout", "-q", "--orphan", "orphan")
+	x.inClone("commit", "-q", "-m", "root")
+	x.req.Branch = "orphan"
+	check("unrelated", x, x.rec, bg, "shares no history")
+
+	// A StaleSHAs failure (rev-list output overflowing after a huge rewrite) is
+	// "cannot verify", which the flag does not cover.
+	x = newFetchFx(t)
+	x.rewriteHostMain()
+	x.req.AllowOldHistory = true
+	h := &hookGit{g: x.rec, fail: func(sub string) error {
+		if sub == "rev-list" {
+			return errors.New("git rev-list: output larger than 16777216 bytes")
+		}
+		return nil
+	}}
+	check("stale check error", x, h, bg, "clone fetch: cannot check feat against host history: git rev-list: output larger")
+
+	// merge-base exits 128 on a real error: refuse, never pass, flag or not.
+	x = newFetchFx(t)
+	x.rewriteHostMain()
+	x.req.AllowOldHistory = true
+	h = &hookGit{g: x.rec, fail: func(sub string) error {
+		if sub == "merge-base" {
+			return exitErr(t, 128)
+		}
+		return nil
+	}}
+	check("ancestor check error", x, h, bg, "clone fetch: cannot check feat against host history")
+
+	// The parent context ends right after the import: the cleanup still runs.
+	x = newFetchFx(t)
+	ctx, cancel := context.WithCancel(bg)
+	defer cancel()
+	h = &hookGit{g: x.rec, after: func(sub string) {
+		if sub == "fetch" {
+			if q, want := x.quarantineRefs(), quarantinePrefix+x.req.Clone.Hash()+"/feat"; q != want {
+				t.Errorf("after the import the quarantine ref is %q, want %s", q, want)
+			}
+			cancel()
+		}
+	}}
+	check("cancelled", x, h, ctx, "context canceled")
+}
+
+// Two profiles may share clone_of. Another fetch that overwrites the
+// quarantine ref between this one's import and its rev-parse must not get its
+// tip checked against this clone's record and published as box/<branch>.
+func TestFetchRefusesATipChangedDuringTheCheck(t *testing.T) {
+	x := newFetchFx(t)
+	other, err := x.ofRev("refs/heads/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := quarantinePrefix + x.req.Clone.Hash() + "/feat"
+	h := &hookGit{g: x.rec, after: func(sub string) {
+		if sub == "fetch" {
+			gitIn(t, x.of, "", "update-ref", q, other)
+		}
+	}}
+	_, err = Fetch(context.Background(), h, x.dock, x.req)
+	if err == nil || !strings.Contains(err.Error(),
+		"clone fetch: refusing feat: the imported tip changed while it was checked (a concurrent fetch?); retry") {
+		t.Fatalf("err = %v, want the changed-tip refusal", err)
+	}
+	x.noBoxRef("feat")
+	x.tempEmpty()
 }

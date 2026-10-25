@@ -160,6 +160,25 @@ func holdsWorkspace(state string) bool {
 // so an empty or relative label is something else's and is taken to overlap.
 func knownWorkspace(w string) bool { return filepath.IsAbs(w) }
 
+// OtherInstanceHolds reports whether a box outside this instance's knowledge
+// may have dir mounted: a live box of another instance over an overlapping
+// folder, or any live row whose workspace cannot be trusted (unreadable, or no
+// usable workspace label). A box of this instance with a known workspace never
+// counts: its sessions are this instance's own to check, and an idle one (kept
+// for its TTL) must not block. dir is the symlink-resolved path. It returns the
+// first holder's name.
+func OtherInstanceHolds(boxes []BoxInfo, dir, instance string) (holder string, busy bool) {
+	for _, b := range boxes {
+		if !holdsWorkspace(b.State) {
+			continue
+		}
+		if b.Unreadable || !knownWorkspace(b.Workspace) || (b.Instance != instance && Overlaps(b.Workspace, dir)) {
+			return b.Name, true
+		}
+	}
+	return "", false
+}
+
 // UnderMount reports whether path (absolute, symlinks resolved) is at or below
 // one of mounts. Component-wise, so /Users/ab is not under /Users/a.
 func UnderMount(path string, mounts []string) bool {
