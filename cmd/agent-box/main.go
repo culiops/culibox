@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -29,12 +30,14 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxedws"
 	"github.com/culiops/agent-box/internal/boxvm"
+	"github.com/culiops/agent-box/internal/bugreport"
 	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/logring"
 	"github.com/culiops/agent-box/internal/secretchain"
 	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
@@ -54,6 +57,14 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-box: %v\n%s", err, usage)
 		os.Exit(2)
+	}
+	// The daemon keeps its last log lines for the bug-report bundle. Installed
+	// before anything logs so a startup error is captured; the one-shot
+	// subcommands (doctor, bug-report, box, ...) keep plain stderr.
+	var ring *logring.Ring
+	if args.Cmd == "serve" {
+		ring = logring.New(200, 2048)
+		log.SetOutput(io.MultiWriter(os.Stderr, ring))
 	}
 	home, homeErr := serveHome(os.UserHomeDir)
 	xdg, abHome := os.Getenv("XDG_CONFIG_HOME"), os.Getenv("AGENT_BOX_HOME")
@@ -118,7 +129,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles)
+	serve(cfg, baseCfg, cred.File, cred.Bad, home, cfgFiles, doctor.Input{Config: cfg, Source: src,
+		Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}, ring)
 }
 
 // serveHome is the user's home dir, refused when empty or relative: the data
@@ -213,7 +225,9 @@ func buildCommit() string {
 	return "unknown"
 }
 
-func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, home string, cfgFiles []string) {
+func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, home string, cfgFiles []string,
+	doctorIn doctor.Input, ring *logring.Ring) {
+	started := time.Now()
 	// Absolute and clean: the darwin socket dir is a hash of this string, so two
 	// spellings of one dir must not yield two socket dirs.
 	dataDir, err := filepath.Abs(cfg.ResolvedDataDir(home))
@@ -719,7 +733,21 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Creds:     creds,
 		CredAWS:   credAWS,
 		CredAudit: storeAudit,
+
+		Commit: buildCommit(),
 	}
+	host, _ := os.Hostname()
+	srv.BugReport = buildBugReport(bugDeps{
+		checks:  func() []doctor.Result { return doctor.Checks(doctorIn) },
+		timeout: bugReportTimeout,
+		start:   started,
+		// Home and Host feed the redaction, so they are always set.
+		base: bugreport.Input{Producer: "daemon", Commit: buildCommit(), Home: home, Host: host, Config: cfg},
+		// The merged set the daemon actually runs: config seeds plus stored profiles.
+		profiles: pm.All,
+		sessions: mgr.List,
+		logs:     ring.Lines,
+	})
 	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)
 

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"io/fs"
 	"net/http"
@@ -73,6 +74,15 @@ type Server struct {
 	// os.Root so a box-planted symlink cannot reach host files. Nil → no boxed
 	// trees (host behaviour).
 	BoxTrees func() BoxTrees
+
+	// Commit is the build's commit, published in /api/meta so the UI and a bug
+	// report can name the build.
+	Commit string
+	// BugReport builds the redacted diagnostic bundle (markdown plus the
+	// prefilled issue link) behind GET /api/bugreport. Nil → that route answers
+	// 503. bugMu keeps one build in flight.
+	BugReport func(ctx context.Context) (markdown, issueURL string)
+	bugMu     sync.Mutex
 
 	// Accounts is the agent-account registry behind /api/accounts. Nil → the
 	// feature is off: no routes, and only the default account's quota is shown.
@@ -195,6 +205,7 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/options", s.handleOptions)
 	protected.HandleFunc("/api/tokens", s.handleTokens)
 	protected.HandleFunc("/api/tokens/", s.handleToken)
+	protected.HandleFunc("/api/bugreport", s.handleBugReport)
 	protected.HandleFunc("/logout", s.handleLogout)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
 		meta := map[string]any{
@@ -204,6 +215,7 @@ func (s *Server) Handler() http.Handler {
 			"box_runtime":   s.BoxRuntime,
 			"analytics":     s.Analytics != nil,
 			"replies":       s.RepliesEnabled,
+			"commit":        s.Commit,
 		}
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}

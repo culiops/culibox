@@ -95,6 +95,7 @@ func TestProtectedRoutesGatedAndRegistered(t *testing.T) {
 		{"POST", "/api/fs/rename", http.StatusBadRequest},
 		{"POST", "/api/fs/delete", http.StatusBadRequest},
 		{"GET", "/api/fs/delete", http.StatusMethodNotAllowed},
+		{"GET", "/api/bugreport", http.StatusServiceUnavailable}, // no builder wired
 	} {
 		rec = httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(probe.method, probe.path, nil))
