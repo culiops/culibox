@@ -70,3 +70,17 @@ func TestScrubFixRound1(t *testing.T) {
 		})
 	}
 }
+
+func TestScrubURLUserinfoWithAtInPassword(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u:p@ss@host/x":         "https://[redacted]@host/x",
+		"postgres://u:p%2Fw@db:5432/x":  "postgres://[redacted]@db:5432/x",
+		"a https://u:p@ss@host b":       "a https://[redacted]@host b",
+		"https://example.com/a@b":       "https://example.com/a@b",
+		"https://h/x https://u:p@ss@h2": "https://h/x https://[redacted]@h2",
+	} {
+		if got := Scrub(in); got != want {
+			t.Errorf("Scrub(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

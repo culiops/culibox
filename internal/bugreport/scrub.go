@@ -17,8 +17,10 @@ var (
 			`|(?:AKIA|ASIA)[A-Z0-9]{16}` +
 			`|xox[a-z]-[A-Za-z0-9-]+)`)
 
-	// scheme://user:pass@host: the userinfo is a credential.
-	urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+@`)
+	// scheme://user:pass@host: the userinfo is a credential. Greedy up to the
+	// LAST "@" before the first "/" so a password containing "@" is not left
+	// half-visible ("u:p@ss@host").
+	urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/]*@`)
 
 	// An AWS secret access key is 40 base64 characters with no prefix to key
 	// on, so it is only matched on a line that mentions aws or a secret.

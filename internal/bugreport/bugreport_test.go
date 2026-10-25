@@ -304,3 +304,40 @@ func TestHostNamedBoxKeepsSectionLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestIPLiteralsRedactedInAwkwardContexts(t *testing.T) {
+	in := baseInput()
+	redact := func(detail string) string {
+		in.Doctor = []doctor.Result{{Status: doctor.Warn, Check: "x", Detail: detail}}
+		md := Markdown(in)
+		i := strings.Index(md, "- WARN x: ")
+		return strings.TrimSpace(md[i+len("- WARN x: ") : strings.Index(md[i:], "\n")+i])
+	}
+	for _, c := range []struct{ in, want string }{
+		// IPv4 glued to word characters or punctuation.
+		{"ip_10.0.0.5", "ip_<ip>"},
+		{"x10.0.0.5y", "x<ip>y"},
+		{"host=10.0.0.5,", "host=<ip>,"},
+		{"reach 10.0.0.5.", "reach <ip>."},
+		{"(10.0.0.5:8080)", "(<ip>:8080)"},
+		{"010.000.000.005 padded", "<ip> padded"},
+		{"127.0.0.1 and 0.0.0.0 stay", "127.0.0.1 and 0.0.0.0 stay"},
+		// Five dotted numbers are a version, not an address: left alone.
+		{"1.2.3.4.5", "1.2.3.4.5"},
+		{"v300.1.1.1", "v300.1.1.1"},
+		// IPv6 whose neighbours a greedy match would swallow.
+		{"2001:db8::1: refused", "<ip>: refused"},
+		{"key:2001:db8::1", "key:<ip>"},
+		{"[2001:db8::1]:443", "[<ip>]:443"},
+		{"to 2001:db8::1, ok", "to <ip>, ok"},
+		{"addr 2001:db8::1.", "addr <ip>."},
+		{"fe80::1ff:fe23:4567:890a:", "<ip>:"},
+		{"::ffff:10.0.0.5 mapped", "<ip> mapped"},
+		{"loopback [::1]:8899 and ::1: x", "loopback [::1]:8899 and ::1: x"},
+		{"at 12:30:45 mac aa:bb:cc:dd:ee:ff", "at 12:30:45 mac aa:bb:cc:dd:ee:ff"},
+	} {
+		if got := redact(c.in); got != c.want {
+			t.Errorf("%q -> %q, want %q", c.in, got, c.want)
+		}
+	}
+}

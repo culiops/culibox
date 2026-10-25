@@ -26,11 +26,97 @@ const (
 )
 
 var (
-	ipv4Re = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}\b`)
-	// Loose candidate for an IPv6 literal; netip decides if it really is one,
-	// so timestamps like 12:30:45 survive.
-	ipv6Re = regexp.MustCompile(`(?i)[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}`)
+	// Candidates only; boundaries are checked by hand because \b treats "_" and
+	// letters as word characters ("ip_10.0.0.5", "x10.0.0.5y" must still match).
+	ipv4Re = regexp.MustCompile(`[0-9]+(?:\.[0-9]+){3}`)
+	// A run of characters an IPv6 literal can be made of (dots for ::ffff:1.2.3.4).
+	ipv6RunRe = regexp.MustCompile(`[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*`)
 )
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// maxIPv6Len is the longest textual IPv6 literal (mapped IPv4 form).
+const maxIPv6Len = 45
+
+// redactIPv4 replaces IPv4 literals other than loopback/unspecified. A match
+// is skipped when it is part of a longer dotted-number run ("1.2.3.4.5" is a
+// version, not an address, and is left alone); a sentence-ending dot is fine.
+func redactIPv4(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, m := range ipv4Re.FindAllStringIndex(s, -1) {
+		if m[1] < len(s) && (isDigit(s[m[1]]) || s[m[1]] == '.' && m[1]+1 < len(s) && isDigit(s[m[1]+1])) {
+			continue
+		}
+		if m[0] > 0 && (isDigit(s[m[0]-1]) || s[m[0]-1] == '.' && m[0] > 1 && isDigit(s[m[0]-2])) {
+			continue
+		}
+		ip, ok := parseIPv4(s[m[0]:m[1]])
+		if !ok {
+			continue
+		}
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			continue
+		}
+		b.WriteString(s[last:m[0]])
+		b.WriteString("<ip>")
+		last = m[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// parseIPv4 accepts zero-padded octets ("010.000.000.005"), which netip
+// rejects but some tools print.
+func parseIPv4(t string) (netip.Addr, bool) {
+	if ip, err := netip.ParseAddr(t); err == nil {
+		return ip, true
+	}
+	parts := strings.Split(t, ".")
+	for i, p := range parts {
+		p = strings.TrimLeft(p, "0")
+		if p == "" {
+			p = "0"
+		}
+		parts[i] = p
+	}
+	ip, err := netip.ParseAddr(strings.Join(parts, "."))
+	return ip, err == nil
+}
+
+// redactIPv6 replaces IPv6 literals other than loopback/unspecified. Inside
+// each candidate run it takes, from the left, the longest span that parses, so
+// a swallowed neighbour (a trailing ":" in "2001:db8::1: refused", a prefix in
+// "key:2001:db8::1") cannot make a real address survive unparsed.
+func redactIPv6(s string) string {
+	var b strings.Builder
+	last := 0
+	for _, run := range ipv6RunRe.FindAllStringIndex(s, -1) {
+		for i := run[0]; i < run[1]; {
+			end := min(run[1], i+maxIPv6Len)
+			hit := -1
+			var ip netip.Addr
+			for j := end; j > i+1; j-- {
+				if a, err := netip.ParseAddr(s[i:j]); err == nil {
+					hit, ip = j, a
+					break
+				}
+			}
+			if hit < 0 {
+				i++
+				continue
+			}
+			if u := ip.Unmap(); !u.IsLoopback() && !u.IsUnspecified() {
+				b.WriteString(s[last:i])
+				b.WriteString("<ip>")
+				last = hit
+			}
+			i = hit
+		}
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
 
 func newRedactor(in Input) *redactor {
 	r := &redactor{}
@@ -97,18 +183,8 @@ func (r *redactor) apply(s string, in Input) string {
 	if r.words != nil {
 		s = replaceWords(s, r.words, hostMark)
 	}
-	s = ipv4Re.ReplaceAllStringFunc(s, func(m string) string {
-		if ip, err := netip.ParseAddr(m); err == nil && (ip.IsLoopback() || ip.IsUnspecified()) {
-			return m
-		}
-		return "<ip>"
-	})
-	s = ipv6Re.ReplaceAllStringFunc(s, func(m string) string {
-		if ip, err := netip.ParseAddr(m); err == nil && !ip.IsLoopback() && !ip.IsUnspecified() {
-			return "<ip>"
-		}
-		return m
-	})
+	s = redactIPv6(s)
+	s = redactIPv4(s)
 	return strings.NewReplacer(hostMark, "<host>", pathMark, "<path>").Replace(s)
 }
 
