@@ -79,6 +79,11 @@ func main() {
 		os.Exit(doctor.Run(os.Stdout, doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
 			Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}))
 	}
+	if args.Cmd == "bug-report" {
+		host, _ := os.Hostname()
+		os.Exit(runBugReport(doctor.Input{Config: cfg, Source: src, ConfigErr: cfgErr,
+			Home: home, Commit: buildCommit(), CredErrors: cred.Problems()}, host, runtime.GOOS, os.Stdout, os.Stderr))
+	}
 	if homeErr != nil {
 		log.Fatalf("home: %v", homeErr)
 	}
