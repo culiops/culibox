@@ -70,12 +70,19 @@ func Run(w io.Writer, in Input) int {
 func runWithHost(w io.Writer, in Input, host string) int {
 	code := 0
 	for _, r := range Checks(in) {
-		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, redactHost(tilde(r.Detail, in.Home), host))
+		fmt.Fprintf(w, "%s %s: %s\n", r.Status, r.Check, Redact(r.Detail, in.Home, host))
 		if r.Status == Fail {
 			code = 1
 		}
 	}
 	return code
+}
+
+// Redact is the one redaction every rendering of a check detail goes through
+// (doctor's own output and the bug-report bundle): home becomes "~", then the
+// hostname becomes "<host>". The order matters, see redactHost.
+func Redact(detail, home, host string) string {
+	return redactHost(tilde(detail, home), host)
 }
 
 // redactHost is the backstop for the hostname rule: abduco's own error text can
