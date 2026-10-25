@@ -6,12 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 func noClones() []config.Clone { return nil }
@@ -19,13 +23,13 @@ func noClones() []config.Clone { return nil }
 func TestNewCloneHooksLinuxOnly(t *testing.T) {
 	home, data := t.TempDir(), t.TempDir()
 
-	if h, err := newCloneHooks("darwin", &boxLayer{}, home, "", data, nil, noClones); h != nil || err != nil {
+	if h, err := newCloneHooks("darwin", &boxLayer{}, home, "", data, "DEV", nil, noClones); h != nil || err != nil {
 		t.Fatalf("darwin: got %v, %v; want nil, nil", h, err)
 	}
 
 	// Linux without a layer: hooks are still installed (the box-owned guard
 	// needs no layer), the error says why, and Prepare refuses.
-	h, err := newCloneHooks("linux", nil, home, "", data, nil, noClones)
+	h, err := newCloneHooks("linux", nil, home, "", data, "DEV", nil, noClones)
 	if err == nil || h == nil {
 		t.Fatalf("linux without a layer: got %v, %v; want hooks and an error", h, err)
 	}
@@ -44,9 +48,14 @@ func TestNewCloneHooksLinuxOnly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
-	h, err = newCloneHooks("linux", &boxLayer{}, home, "", data, nil, noClones)
+	h, err = newCloneHooks("linux", &boxLayer{dockerBin: "/usr/bin/docker", image: "img:1"}, home, "", data, "DEV", nil, noClones)
 	if err != nil || h == nil || h.unavailable != "" {
 		t.Fatalf("linux with a layer: got %v, %v; want ready hooks", h, err)
+	}
+	if h.docker != (clone.ExecDocker{Bin: "/usr/bin/docker"}) || h.image != "img:1" || h.instance != "DEV" ||
+		h.dataDir != data || h.listBoxes == nil || h.refresh == nil {
+		t.Fatalf("refresh wiring: docker=%v image=%q instance=%q dataDir=%q listBoxes=%v refresh=%v",
+			h.docker, h.image, h.instance, h.dataDir, h.listBoxes != nil, h.refresh != nil)
 	}
 }
 
@@ -316,5 +325,366 @@ func TestContextSaveCheck(t *testing.T) {
 	// No clone hooks (not Linux): only CheckContextPath.
 	if _, err := contextSaveCheck(nil, home, nil, nil)(filepath.Join(otherClone, "sub")); err != nil {
 		t.Fatalf("without hooks the box-owned refusal does not apply: %v", err)
+	}
+}
+
+// refreshFake is a cloneHooks ready for Refresh, with the box listing and the
+// clone package's Refresh replaced by recorders.
+type refreshFake struct {
+	h *cloneHooks
+
+	mu     sync.Mutex
+	boxes  []box.BoxInfo
+	err    error
+	lists  int
+	reqs   []clone.RefreshRequest
+	result clone.RefreshResult
+}
+
+func newRefreshFake(t *testing.T) *refreshFake {
+	t.Helper()
+	f := &refreshFake{}
+	h := testHooks(t, noClones)
+	h.image, h.instance, h.dataDir = "img:1", "DEV", "/data"
+	h.listBoxes = func(context.Context) ([]box.BoxInfo, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.lists++
+		return f.boxes, f.err
+	}
+	h.refresh = func(_ context.Context, _ clone.Git, _ clone.Docker, r clone.RefreshRequest) clone.RefreshResult {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.reqs = append(f.reqs, r)
+		res := f.result
+		res.Skipped = r.Skip
+		return res
+	}
+	f.h = h
+	return f
+}
+
+func (f *refreshFake) listCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lists
+}
+
+func (f *refreshFake) lastReq(t *testing.T) clone.RefreshRequest {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.reqs) == 0 {
+		t.Fatal("clone.Refresh was not called")
+	}
+	return f.reqs[len(f.reqs)-1]
+}
+
+// cloneDir makes a clone dir and returns it with symlinks resolved, the form
+// the box workspace labels carry.
+func cloneDir(t *testing.T) string {
+	t.Helper()
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func never() bool { return false }
+
+// The daily loop: a session ends, its box idles for the TTL, and the next spawn
+// of the same profile must still refresh.
+func TestCloneRefreshRunsOverOwnIdleBox(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	f.boxes = []box.BoxInfo{{Name: "own", State: "running", Workspace: dir, Instance: "DEV"}}
+	c := config.Clone{Of: "/host/repo", Dir: dir}
+	info, release := f.h.Refresh(context.Background(), c, session.RefreshOpts{LiveSession: never})
+	defer release()
+	r := f.lastReq(t)
+	if r.Skip != "" || info.Skipped != "" {
+		t.Fatalf("an idle box of this instance must not block the refresh: skip=%q info=%+v", r.Skip, info)
+	}
+	if !reflect.DeepEqual(r.Clone, c) || r.Image != "img:1" || r.Instance != "DEV" || r.DataDir != "/data" {
+		t.Fatalf("request = %+v", r)
+	}
+	if f.listCount() != 1 {
+		t.Fatalf("listed %d times, want 1", f.listCount())
+	}
+}
+
+func TestCloneRefreshSkipsLiveSession(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	info, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir},
+		session.RefreshOpts{LiveSession: func() bool { return true }})
+	defer release()
+	if r := f.lastReq(t); r.Skip != clone.SkipInUse || info.Skipped != clone.SkipInUse {
+		t.Fatalf("skip = %q, info = %+v; want in-use", r.Skip, info)
+	}
+	if f.listCount() != 0 {
+		t.Fatal("a live session skips without listing boxes")
+	}
+}
+
+// A second spawn of the same clone waits for the first one's lock, and only
+// then may ask whether a live session exists: the first spawn publishes its
+// session before it releases.
+func TestCloneRefreshChecksLiveAfterLock(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	var calls, heldAtCall int
+	live := func() bool {
+		calls++
+		f.h.lockMu.Lock()
+		if ch := f.h.locks[dir]; ch != nil && len(ch) == 1 {
+			heldAtCall++
+		}
+		f.h.lockMu.Unlock()
+		return false
+	}
+	_, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{LiveSession: live})
+	release()
+	if calls != 1 || heldAtCall != 1 {
+		t.Fatalf("LiveSession called %d time(s), %d with the lock held; want 1, 1", calls, heldAtCall)
+	}
+}
+
+func TestCloneRefreshSkipsOtherInstanceBox(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	f.boxes = []box.BoxInfo{{Name: "prod-box", State: "running", Workspace: dir, Instance: "PROD"}}
+	info, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{LiveSession: never})
+	defer release()
+	if r := f.lastReq(t); r.Skip != clone.SkipOtherInstance || info.Skipped != clone.SkipOtherInstance {
+		t.Fatalf("skip = %q, info = %+v; want other-instance", r.Skip, info)
+	}
+	if info.Error != "" {
+		t.Fatalf("a held clone is a skip, not an error: %q", info.Error)
+	}
+}
+
+// The workspace label is the resolved path: a clone dir reached through a
+// symlink still matches it.
+func TestCloneRefreshResolvesTheCloneDir(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	f.boxes = []box.BoxInfo{{Name: "prod-box", State: "running", Workspace: dir, Instance: "PROD"}}
+	_, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: link}, session.RefreshOpts{})
+	defer release()
+	if r := f.lastReq(t); r.Skip != clone.SkipOtherInstance {
+		t.Fatalf("skip = %q; want other-instance through the symlink", r.Skip)
+	}
+}
+
+func TestCloneRefreshCreatedSkipsListing(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	info, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{Created: true})
+	defer release()
+	if r := f.lastReq(t); r.Skip != clone.SkipCreated || info.Skipped != clone.SkipCreated {
+		t.Fatalf("skip = %q, info = %+v; want created", r.Skip, info)
+	}
+	if f.listCount() != 0 {
+		t.Fatal("a new clone skips without listing boxes")
+	}
+}
+
+func TestCloneRefreshListingErrorFailsClosed(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	f.err = errors.New("docker ps: exit status 1: \x1b[31mCannot connect")
+	f.result = clone.RefreshResult{Error: "from the refresh"}
+	info, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{LiveSession: never})
+	defer release()
+	if r := f.lastReq(t); r.Skip != clone.SkipOtherInstance {
+		t.Fatalf("skip = %q; want other-instance", r.Skip)
+	}
+	want := "cannot check whether another instance's box holds the clone: docker ps: exit status 1: ?[31mCannot connect"
+	if info.Error != want {
+		t.Fatalf("error = %q\nwant    %q", info.Error, want)
+	}
+
+	// No listing at all fails closed the same way.
+	f = newRefreshFake(t)
+	f.h.listBoxes = nil
+	info, release = f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{})
+	defer release()
+	if info.Skipped != clone.SkipOtherInstance || !strings.Contains(info.Error, "cannot check") {
+		t.Fatalf("no listing: info = %+v", info)
+	}
+}
+
+func TestCloneRefreshUnavailable(t *testing.T) {
+	f := newRefreshFake(t)
+	f.h.unavailable = "no containment layer"
+	info, release := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: cloneDir(t)}, session.RefreshOpts{})
+	release()
+	if info.Error != "clone mode is unavailable (no containment layer)" || len(f.reqs) != 0 {
+		t.Fatalf("info = %+v, refresh calls = %d", info, len(f.reqs))
+	}
+}
+
+// refreshAsync runs Refresh in a goroutine; the channel yields its release.
+func refreshAsync(h *cloneHooks, ctx context.Context, dir string) <-chan func() {
+	done := make(chan func(), 1)
+	go func() {
+		_, release := h.Refresh(ctx, config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{})
+		done <- release
+	}()
+	return done
+}
+
+func TestCloneRefreshSerializesSameClone(t *testing.T) {
+	f := newRefreshFake(t)
+	a, b := cloneDir(t), cloneDir(t)
+	_, releaseA := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: a}, session.RefreshOpts{})
+
+	second := refreshAsync(f.h, context.Background(), a)
+	select {
+	case <-second:
+		t.Fatal("a second refresh of the same clone ran while the first held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	select {
+	case release := <-refreshAsync(f.h, context.Background(), b):
+		release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("a refresh of a different clone waited on another clone's lock")
+	}
+
+	releaseA()
+	select {
+	case release := <-second:
+		release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second refresh did not run after the first released")
+	}
+}
+
+func TestCloneRefreshLockWaitTimesOut(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	_, held := f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	info, release := f.h.Refresh(ctx, config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{LiveSession: never})
+	if r := f.lastReq(t); r.Skip != clone.SkipInUse || info.Skipped != clone.SkipInUse {
+		t.Fatalf("skip = %q, info = %+v; want in-use after the lock wait timed out", r.Skip, info)
+	}
+	release() // a no-op: it must not free the lock the first spawn holds
+	if _, ok := f.h.lockClone(ctx, dir); ok {
+		t.Fatal("the timed-out refresh's release freed another spawn's lock")
+	}
+
+	held()
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	rel, ok := f.h.lockClone(ctx2, dir)
+	if !ok {
+		t.Fatal("the lock stays taken after its holder released")
+	}
+	rel()
+	rel() // releasing twice must not block or free a later holder's lock
+}
+
+// A panic after the lock is taken must not leave the clone locked forever.
+func TestCloneRefreshPanicReleasesLock(t *testing.T) {
+	f := newRefreshFake(t)
+	dir := cloneDir(t)
+	f.h.refresh = func(context.Context, clone.Git, clone.Docker, clone.RefreshRequest) clone.RefreshResult {
+		panic("boom")
+	}
+	func() {
+		defer func() {
+			if p := recover(); p != "boom" {
+				t.Fatalf("recovered %v, want the original panic", p)
+			}
+		}()
+		f.h.Refresh(context.Background(), config.Clone{Of: "/r", Dir: dir}, session.RefreshOpts{})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rel, ok := f.h.lockClone(ctx, dir)
+	if !ok {
+		t.Fatal("a panicking refresh left the clone locked")
+	}
+	rel()
+}
+
+func TestCloneInfoOf(t *testing.T) {
+	yes := true
+	r := clone.RefreshResult{
+		Refreshed: true, Skipped: "in-use", Error: "e", Base: "master", Branch: "feat",
+		Report: clone.Report{
+			Head: "feat", HeadSHA: "abc", Ahead: 1, Behind: 2,
+			FFFrom: "a1", FFTo: "b2", FFCount: 3, FFRefused: true, Stale: []string{"old"},
+		},
+		HeadInHost: &yes, Rewritten: true, Unverified: true,
+	}
+	want := session.CloneInfo{
+		Refreshed: true, Skipped: "in-use", Error: "e", Base: "master", Branch: "feat",
+		Ahead: 1, Behind: 2, FFFrom: "a1", FFTo: "b2", FFCount: 3, FFRefused: true,
+		HeadInHost: &yes, StaleBranches: []string{"old"}, Rewritten: true, Unverified: true,
+	}
+	got := cloneInfoOf(r)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cloneInfoOf =\n%+v\nwant\n%+v", got, want)
+	}
+	// Every CloneInfo field is filled from the result: a field added later
+	// without a copy shows up here as zero.
+	v := reflect.ValueOf(got)
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).IsZero() {
+			t.Errorf("CloneInfo.%s is not copied", v.Type().Field(i).Name)
+		}
+	}
+}
+
+func TestSweepCloneContainers(t *testing.T) {
+	listed := map[string][]string{
+		clone.LabelCloneFetch + "=DEV":   {"clonefetch-1", "clonefetch-2"},
+		clone.LabelCloneRefresh + "=DEV": {"clonerefresh-1", "stuck"},
+	}
+	var queried, removed []string
+	list := func(_ context.Context, label string) ([]string, error) {
+		queried = append(queried, label)
+		return listed[label], nil
+	}
+	remove := func(_ context.Context, name string) error {
+		removed = append(removed, name)
+		if name == "stuck" {
+			return errors.New("docker rm: busy")
+		}
+		return nil
+	}
+	n := sweepCloneContainers(context.Background(), list, remove, "DEV")
+	if want := []string{clone.LabelCloneFetch + "=DEV", clone.LabelCloneRefresh + "=DEV"}; !reflect.DeepEqual(queried, want) {
+		t.Fatalf("queried %q, want %q", queried, want)
+	}
+	if want := []string{"clonefetch-1", "clonefetch-2", "clonerefresh-1", "stuck"}; !reflect.DeepEqual(removed, want) {
+		t.Fatalf("removed %q, want %q", removed, want)
+	}
+	if n != 3 {
+		t.Fatalf("count = %d, want 3 (the failed removal is not counted)", n)
+	}
+
+	// A failed listing of one label still sweeps the other.
+	removed = nil
+	failing := func(_ context.Context, label string) ([]string, error) {
+		if label == clone.LabelCloneFetch+"=DEV" {
+			return nil, errors.New("docker ps: down")
+		}
+		return []string{"clonerefresh-1"}, nil
+	}
+	if n := sweepCloneContainers(context.Background(), failing, remove, "DEV"); n != 1 || !reflect.DeepEqual(removed, []string{"clonerefresh-1"}) {
+		t.Fatalf("count = %d, removed %q", n, removed)
 	}
 }

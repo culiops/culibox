@@ -53,6 +53,10 @@ func ValidBranch(b string) error {
 // subjects, branch names, bundle-container stderr) goes through it.
 func sanitize(s string) string { return sanitizeN(s, 200) }
 
+// Sanitize is sanitize for callers outside the package that print text a box
+// or a foreign container can influence (a docker listing error).
+func Sanitize(s string) string { return sanitize(s) }
+
 func sanitizeN(s string, max int) string {
 	var b strings.Builder
 	n := 0
