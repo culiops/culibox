@@ -1,8 +1,11 @@
 package clone
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -42,7 +45,9 @@ func TestRunContainerRemovesOnFailure(t *testing.T) {
 // removeCtxDocker records whether the context handed to Remove was usable.
 type removeCtxDocker struct {
 	fakeDocker
+	called    bool
 	removeErr error
+	fail      error // returned by Remove when set
 }
 
 func (r *removeCtxDocker) RunStream(ctx context.Context, _ []string, _ io.Writer) error {
@@ -51,7 +56,11 @@ func (r *removeCtxDocker) RunStream(ctx context.Context, _ []string, _ io.Writer
 }
 
 func (r *removeCtxDocker) Remove(ctx context.Context, name string) error {
+	r.called = true
 	r.removeErr = ctx.Err()
+	if r.fail != nil {
+		return r.fail
+	}
 	return r.fakeDocker.Remove(ctx, name)
 }
 
@@ -65,8 +74,30 @@ func TestRunContainerRemovesWithAFreshContext(t *testing.T) {
 	if ctx.Err() == nil {
 		t.Fatal("the parent context should be done")
 	}
+	if !d.called {
+		t.Fatal("Remove was not called")
+	}
 	if d.removeErr != nil {
 		t.Errorf("Remove got a done context: %v", d.removeErr)
+	}
+}
+
+// The refresh container mounts the clone read-write: a removal that failed
+// must leave a trace, not vanish.
+func TestRunContainerLogsAFailedRemove(t *testing.T) {
+	var logged bytes.Buffer
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	d := &removeCtxDocker{fail: errors.New("docker rm: \x1b[31mdaemon gone")}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := runContainer(ctx, d, "agent-box-clonerefresh-T-1", nil, io.Discard)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the RunStream error", err)
+	}
+	got := logged.String()
+	if !strings.Contains(got, "agent-box-clonerefresh-T-1") || !strings.Contains(got, "daemon gone") || strings.ContainsRune(got, 0x1b) {
+		t.Errorf("log = %q, want the name and the sanitized removal error", got)
 	}
 }
 

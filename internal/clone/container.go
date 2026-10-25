@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -44,13 +45,16 @@ func containerName(kind, instance string) string {
 // runContainer runs one named container through d.RunStream. Killing the docker
 // CLI does not stop the container, so on any error it force-removes the
 // container by name, on a fresh context (the parent may be done). The RunStream
-// error is the one returned; a failed removal is best effort.
+// error is the one returned; a failed removal is logged, since the container
+// may still hold a clone mounted read-write (the boot sweep is the backstop).
 func runContainer(ctx context.Context, d Docker, name string, args []string, stdout io.Writer) error {
 	err := d.RunStream(ctx, args, stdout)
 	if err != nil {
 		rctx, cancel := context.WithTimeout(context.Background(), removeTimeout)
 		defer cancel()
-		_ = d.Remove(rctx, name)
+		if rerr := d.Remove(rctx, name); rerr != nil {
+			log.Printf("clone: removing container %s: %s", name, sanitize(rerr.Error()))
+		}
 	}
 	return err
 }
