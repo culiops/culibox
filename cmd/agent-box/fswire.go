@@ -98,6 +98,21 @@ func boxedRecorder(reg *boxedws.Registry) func(cwd string) error {
 	}
 }
 
+// recordBoxedProfiles records, on every boot, the directory of every clone
+// profile and the default_cwd of every profile that spawns boxed. Call it only
+// after the profile manager pushed profiles.json into the launcher: before
+// that the launcher holds only the config seeds. Running it every boot, not
+// only with the first-boot seed, also repairs a registry that a build seeding
+// before the profiles loaded marked seeded without them. Add is a no-op for a
+// recorded directory and logs the ones it skips.
+func recordBoxedProfiles(reg *boxedws.Registry, clones []config.Clone, profileCwds []string) {
+	for _, d := range seedDirs(nil, clones, profileCwds, nil) {
+		if err := reg.Add(d); err != nil {
+			log.Fatalf("boxed workspaces: recording %s: %v", d, err)
+		}
+	}
+}
+
 // seedBoxedRegistry writes the first-boot record. Call it only after sessions
 // were restored into the Manager (Reconcile) and pass that Manager's list: the
 // retained boxed sessions are part of the seed. listBoxes is the docker

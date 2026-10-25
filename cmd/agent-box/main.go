@@ -554,7 +554,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	}
 	// Seed the boxed-workspace record from what exists now, until a seed
 	// completes (a docker listing failure is retried next start). AFTER
-	// Reconcile, so retained boxed sessions are in the Manager.
+	// Reconcile, so retained boxed sessions are in the Manager, and BEFORE
+	// bootReconcile, which removes orphaned boxes the docker listing must see.
+	// The launcher holds only the config seeds here: profiles.json is recorded
+	// by recordBoxedProfiles once the profile manager has loaded it.
 	if !boxedSeeded {
 		var listBoxes func(context.Context) ([]box.BoxInfo, error)
 		if layer != nil {
@@ -616,6 +619,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		}
 	}
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
+	recordBoxedProfiles(boxedReg, lnch.Clones(), lnch.BoxedDefaultCwds())
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
 	var vmShared []string // the box VM's shared directories; nil without a VM
 	if layer != nil && layer.vm != nil {
