@@ -363,6 +363,10 @@ func TestAWSAccountIDsRedacted(t *testing.T) {
 		{"Account: 123456789012", "Account: <account>"},
 		{`{"AccountId": "123456789012"}`, `{"AccountId": "<account>"}`},
 		{"account_id=123456789012", "account_id=<account>"},
+		{"aws_account_id=123456789012", "aws_account_id=<account>"},
+		{"AWS_ACCOUNT_ID: 123456789012", "AWS_ACCOUNT_ID: <account>"},
+		{`{"sourceAccount":"123456789012"}`, `{"sourceAccount":"<account>"}`},
+		{"x=1 aws_account_id=123456789012", "x=1 aws_account_id=<account>"},
 	} {
 		got := redact(c.in)
 		if got != c.want {
@@ -370,6 +374,11 @@ func TestAWSAccountIDsRedacted(t *testing.T) {
 		}
 		if strings.Contains(got, "123456789012") || strings.Contains(got, "56789012") {
 			t.Errorf("%q leaked digits: %q", c.in, got)
+		}
+	}
+	for _, keep := range []string{"accountant 123456789012345", "account 123456789012345"} {
+		if got := redact(keep); got != keep {
+			t.Errorf("%q (15 digits, not an account id) changed to %q", keep, got)
 		}
 	}
 }

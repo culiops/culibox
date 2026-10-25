@@ -31,7 +31,7 @@ var (
 	// "account" key. Done before the address passes: left alone, the ":"s around
 	// the id read as an IPv6 literal and half of the digits survive.
 	arnAccount = regexp.MustCompile(`(arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:)[0-9]{12}(:)`)
-	accountKV  = regexp.MustCompile(`(?i)(\baccount[-_ ]?(?:id)?["']?\s*[:=]?\s*["']?)[0-9]{12}\b`)
+	accountKV  = regexp.MustCompile(`(?i)((?:^|[^A-Za-z0-9])[A-Za-z0-9_]*account[-_ ]?(?:id)?["']?\s*[:=]?\s*["']?)[0-9]{12}\b`)
 
 	// "Authorization: <scheme> <value>": keep the header and scheme, drop the
 	// value (and the whole value when there is no scheme).
