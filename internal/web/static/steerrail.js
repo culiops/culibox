@@ -190,7 +190,11 @@ function cloneClauses(c, profile) {
   } else if (c.rewritten) {
     out.info.push("host " + b + " was rewritten earlier; no branch here carries the old history");
   }
-  if (c.error) out.warn.push("Clone not refreshed: " + c.error + "; the box is on older code.");
+  if (c.error) {
+    // An error beside a completed refresh (a host check that failed) does not
+    // mean the box is on older code.
+    out.warn.push(c.refreshed ? "Clone refreshed, but " + c.error + "." : "Clone not refreshed: " + c.error + "; the box is on older code.");
+  }
   if (c.unverified) out.warn.push("This clone's history is unverified: created before refresh tracking. Recreate the clone to clear this.");
   if (c.head_in_host === false && !c.rewritten) {
     if (!br) out.unsent = "detached HEAD: commits not sent to host";

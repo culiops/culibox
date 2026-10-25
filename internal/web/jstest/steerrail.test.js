@@ -284,7 +284,7 @@ test("stRailRows: a production entry adds a row drawn as the AWS production chip
   assert.deepStrictEqual(rows[1], { k: "prod tokens", v: "b", chip: "bdg aws prod", wrap: true });
 });
 
-// Clone refresh state (Task 9). The row and the toast tail are pure strings; the
+// Clone refresh state. The row and the toast tail are pure strings; the
 // rail draws them with textContent (kvRow), the toast with textContent too.
 test("cloneRow: null without s.clone", () => {
   assert.strictEqual(cloneRow({}), null);
@@ -326,7 +326,7 @@ test("cloneRow: rewritten is a warning naming stale branches, or 'may carry'", (
   assert.strictEqual(cloneLevel({ rewritten: true, refreshed: false }), "warn");
 });
 
-test("cloneRow: rewritten but fully fixed is only info (Task 4 ruling)", () => {
+test("cloneRow: rewritten but fully fixed is only info", () => {
   const c = { rewritten: true, refreshed: true, base: "main", stale_branches: [], head_in_host: false, branch: "x", ahead: 3 };
   const r = cloneRow({ agent: "ab", clone: c });
   assert.strictEqual(r.chip, undefined);
@@ -368,6 +368,15 @@ test("cloneRow: error and unverified are warnings", () => {
   assert.strictEqual(r.chip, "v warn");
   assert.ok(r.v.includes("Clone not refreshed: x; the box is on older code."));
   assert.ok(r.v.includes("This clone's history is unverified: created before refresh tracking. Recreate the clone to clear this."));
+});
+
+test("cloneRow: an error beside a completed refresh does not say the box is on older code", () => {
+  const r = cloneRow({ clone: { refreshed: true, error: "could not check host history: x" } });
+  assert.strictEqual(r.chip, "v warn");
+  assert.ok(r.v.includes("Clone refreshed, but could not check host history: x."));
+  assert.ok(!r.v.includes("older code"));
+  assert.ok(!r.v.includes("not refreshed"));
+  assert.strictEqual(toastCloneSuffix({ clone: { refreshed: true, error: "y" } }), " \u00b7 Clone refreshed, but y.");
 });
 
 test("toastCloneSuffix: one warn clause, else one short info clause", () => {
