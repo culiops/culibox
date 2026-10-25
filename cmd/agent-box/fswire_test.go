@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -172,6 +173,11 @@ func TestRecordBoxedProfiles(t *testing.T) {
 	}
 	got := reg2.List()
 	want := []string{clone, inPlace}
+	for i, d := range want { // the registry stores resolved paths (/var -> /private/var on macOS)
+		if want[i], err = filepath.EvalSymlinks(d); err != nil {
+			t.Fatal(err)
+		}
+	}
 	slices.Sort(got)
 	slices.Sort(want)
 	if !seeded || !slices.Equal(got, want) {
