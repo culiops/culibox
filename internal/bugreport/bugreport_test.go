@@ -264,3 +264,43 @@ func TestMachineIdentifiersRedacted(t *testing.T) {
 		t.Errorf("full host not replaced:\n%s", md)
 	}
 }
+
+// The short hostname must only match whole tokens: "mac" is also the start of
+// "macOS", "box" of "box image", "dev" of "device".
+func TestShortHostnameMatchesWholeTokensOnly(t *testing.T) {
+	render := func(host, detail string) string {
+		in := baseInput()
+		in.Host = host
+		in.Doctor = []doctor.Result{{Status: doctor.Warn, Check: "x", Detail: detail}}
+		md := Markdown(in)
+		i := strings.Index(md, "- WARN x: ")
+		return strings.TrimSpace(md[i+len("- WARN x: ") : strings.Index(md[i:], "\n")+i])
+	}
+	for _, c := range []struct{ host, in, want string }{
+		{"mac.local", "macOS 13+ required", "macOS 13+ required"},
+		{"mac.local", "ssh mac:22 failed", "ssh <host>:22 failed"},
+		{"mac.local", "running on mac.", "running on <host>."},
+		{"mac.local", "mac-mac", "<host>-<host>"},
+		{"mac.local", "MAC and (mac) and mac", "<host> and (<host>) and <host>"},
+		{"mac.local", "Mac.Local is up", "<host> is up"},
+		{"mac.local", "macmac xmac mac2", "macmac xmac mac2"},
+		{"box.example.com", "box image and device", "<host> image and device"},
+		{"dev", "device dev", "device <host>"},
+		{"mac", "macOS on mac", "macOS on <host>"},
+	} {
+		if got := render(c.host, c.in); got != c.want {
+			t.Errorf("host %q: %q -> %q, want %q", c.host, c.in, got, c.want)
+		}
+	}
+}
+
+func TestHostNamedBoxKeepsSectionLabels(t *testing.T) {
+	in := baseInput()
+	in.Host = "box.example.com"
+	md := Markdown(in)
+	for _, w := range []string{"- box image: ", "- box memory: ", "- platform: "} {
+		if !strings.Contains(md, w) {
+			t.Errorf("label %q mangled:\n%s", w, md)
+		}
+	}
+}
