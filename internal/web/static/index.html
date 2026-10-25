@@ -223,6 +223,7 @@
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
       <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Access tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
+      <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
     </div>
 
     <div class="dbd split" id="manage" role="tabpanel" aria-labelledby="settings-tabs">
@@ -416,6 +417,12 @@
       <div class="dlg-err" id="acct-err"></div>
     </div>
 
+    <div class="dbd pad" id="about" role="tabpanel" hidden>
+      <p id="about-version">agent-box</p>
+      <p class="hint">Something not working? Build a report with your version, settings and a health check, with secrets and paths redacted. You review the text before anything leaves this page.</p>
+      <p><button type="button" class="btn" id="bug-open">Report a problem</button></p>
+    </div>
+
     <div class="dbd pad" id="creds" role="tabpanel" hidden>
       <div id="creds-body"></div>
       <div class="dlg-err" id="creds-err"></div>
@@ -462,6 +469,31 @@
       </select>
       <button id="acct-new" type="button" class="btn">+ new account</button>
       <button type="button" class="btn pri" data-close="settings-modal">Done</button>
+    </div>
+    <div class="dft" id="foot-about" hidden>
+      <span class="grow"></span>
+      <button type="button" class="btn pri" data-close="settings-modal">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="bug-modal">
+    <div class="dhd">
+      <span class="grow">Report a problem</span>
+      <button type="button" class="btn gh" data-close="bug-modal" aria-label="Close" title="Close (Esc)">&times;</button>
+    </div>
+    <div class="dbd pad" id="bug-body">
+      <label class="flab" for="bug-what">What happened? (optional)</label>
+      <textarea id="bug-what" class="fld" rows="3" placeholder="What did you do, and what did you expect?"></textarea>
+      <div class="flab">Report preview</div>
+      <pre id="bug-preview" aria-live="polite"></pre>
+      <p class="hint">The GitHub link only works if you have access to the repo. Review the text &mdash; it is exactly what will be shared.</p>
+      <div class="dlg-err" id="bug-err"></div>
+    </div>
+    <div class="dft" id="foot-bug">
+      <span id="bug-status" class="hint" role="status"></span>
+      <span class="grow"></span>
+      <button type="button" class="btn" id="bug-copy" disabled>Copy report</button>
+      <button type="button" class="btn pri" id="bug-gh" disabled>Open GitHub issue</button>
     </div>
   </dialog>
 
@@ -583,6 +615,7 @@
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
   <script src="/tokens.js"></script>
+  <script src="/bugreport.js"></script>
   <script src="/store.js"></script>
   <script src="/credentials.js"></script>
   <script src="/sessionrow.js"></script>
