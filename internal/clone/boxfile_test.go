@@ -153,14 +153,26 @@ func TestReadHeadDetached(t *testing.T) {
 func TestReadHeadRefusesSymlinkOut(t *testing.T) {
 	x := newHeadFx(t)
 	hp := filepath.Join(x.dir, ".git", "HEAD")
-	if err := os.Remove(hp); err != nil {
-		t.Fatal(err)
+	// Both targets hold a valid SHA, so a followed link would give ok == true:
+	// one outside the clone (os.Root containment), one inside (the Lstat and
+	// SameFile checks, which os.Root's O_NOFOLLOW handling does not provide).
+	outside := filepath.Join(t.TempDir(), "head")
+	inside := filepath.Join(x.dir, ".git", "HEAD.real")
+	for _, p := range []string{outside, inside} {
+		if err := os.WriteFile(p, []byte(x.head()+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.Symlink("/etc/hostname", hp); err != nil {
-		t.Fatal(err)
-	}
-	if b, sha, ok := ReadHead(x.dir); ok {
-		t.Fatalf("ReadHead followed a symlink out of the clone: %q, %q", b, sha)
+	for name, target := range map[string]string{"outside": outside, "inside": "HEAD.real"} {
+		if err := os.Remove(hp); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, hp); err != nil {
+			t.Fatal(err)
+		}
+		if b, sha, ok := ReadHead(x.dir); ok {
+			t.Errorf("%s: ReadHead followed a symlinked HEAD: %q, %q", name, b, sha)
+		}
 	}
 }
 
