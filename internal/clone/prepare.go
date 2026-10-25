@@ -139,9 +139,15 @@ func Prepare(ctx context.Context, e Env, c config.Clone, withMemory bool) (cm bo
 	if err != nil {
 		return box.CloneMounts{}, false, err
 	}
-	if created && tip != "" && e.DataDir != "" {
-		// A write error is ignored: a missing record already fails closed as unverified.
-		_ = ResetBaseRecord(e.DataDir, c.Dir, tip)
+	if created && e.DataDir != "" {
+		// A write error is ignored: a missing record already fails closed as
+		// unverified. With no tip, an older record for this dir must not vouch
+		// for the new clone, so it is removed.
+		if tip != "" {
+			_ = ResetBaseRecord(e.DataDir, c.Dir, tip)
+		} else {
+			_ = removeBaseRecord(e.DataDir, c.Dir)
+		}
 	}
 	gitDir := filepath.Join(c.Of, ".git")
 	ro := []box.Mount{{Host: gitDir, Box: gitDir}}

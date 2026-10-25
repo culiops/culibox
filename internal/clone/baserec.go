@@ -116,6 +116,24 @@ func ResetBaseRecord(dataDir, cloneDir, sha string) error {
 	return writeBaseFile(p, false, []string{sha})
 }
 
+// removeBaseRecord deletes the record of cloneDir, so the clone reads as
+// unverified. A missing record is not an error.
+func removeBaseRecord(dataDir, cloneDir string) error {
+	p, err := baseRecordPath(dataDir, cloneDir)
+	if err != nil {
+		return err
+	}
+	unlock, err := lockBases(dataDir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // AppendBase records sha as the newest base, unless it already is. With no
 // record yet, one is created marked unverified (never a trusted record). A
 // corrupt record is an error and is left alone.

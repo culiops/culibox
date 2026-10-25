@@ -2,11 +2,13 @@ package clone
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/culiops/agent-box/internal/config"
 )
@@ -69,7 +71,9 @@ type RefreshResult struct {
 // positional argument and every expansion is quoted; no host or box value is
 // ever part of the script text. Each git call turns hooks and fsmonitor off,
 // and the host repo is named by its path, never by the `origin` remote, so a
-// box-written remote.origin.url or uploadpack is not consulted. Branch names
+// box-written remote.origin.url or uploadpack is not consulted. A box-written
+// url.*.insteadOf still applies, but it can only redirect to paths inside the
+// container's two mounts. Branch names
 // come only from for-each-ref and symbolic-ref, as full refnames, so a name
 // like "-x" or "$(x)" is never an option or code. Only the report goes to
 // stdout; git's own output goes to stderr.
@@ -155,6 +159,10 @@ func RefreshArgs(r RefreshRequest, base string, stale []string, name string) []s
 	return append(args, stale...)
 }
 
+// hostCheckTimeout bounds the host-side check run after the refresh container,
+// which must work even when the refresh's own deadline has passed.
+const hostCheckTimeout = 10 * time.Second
+
 var countRE = regexp.MustCompile(`^[0-9]{1,9}$`)
 
 // parseReport reads the container's report: complete lines only, known keys
@@ -234,7 +242,11 @@ func Refresh(ctx context.Context, g Git, d Docker, r RefreshRequest) (res Refres
 	defer func() {
 		var sha string
 		res.Branch, sha, _ = ReadHead(dir) // read after the container exited
-		res.HeadInHost = HeadInHost(ctx, g, of, sha)
+		// A timed-out refresh still reports what the host can say about the
+		// clone, so this check gets its own short deadline.
+		hctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), hostCheckTimeout)
+		defer cancel()
+		res.HeadInHost = HeadInHost(hctx, g, of, sha)
 	}()
 
 	base, baseSHA, err := BaseBranch(ctx, g, of)
@@ -280,9 +292,12 @@ func Refresh(ctx context.Context, g Git, d Docker, r RefreshRequest) (res Refres
 	name := containerName("clonerefresh", r.Instance)
 	out := &capBuffer{max: maxReportBytes}
 	if err := runContainer(ctx, d, name, RefreshArgs(r, base, stale, name), out); err != nil {
-		if ctx.Err() != nil {
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded):
 			fail("timed out")
-		} else {
+		case ctx.Err() != nil:
+			fail("cancelled")
+		default:
 			fail("fetching host " + base + " in the box failed: " + sanitizeN(err.Error(), maxLongErr))
 		}
 		return res

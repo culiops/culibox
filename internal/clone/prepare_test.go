@@ -441,6 +441,28 @@ func TestPrepareResetsRecordOnRecreate(t *testing.T) {
 	}
 }
 
+// A new clone made while the host has no base branch has no tip to vouch for
+// it, so an older record for the same dir must go, not survive as trusted.
+func TestPrepareDropsStaleRecordWithoutTip(t *testing.T) {
+	f := newShareFixture(t)
+	fixtureGit(t, f.of, "branch", "-M", "trunk")
+	e := f.env(t)
+	e.DataDir = t.TempDir()
+	if err := ResetBaseRecord(e.DataDir, f.dir, shaN(7)); err != nil {
+		t.Fatal(err)
+	}
+	if _, created, err := Prepare(context.Background(), e, f.c, false); err != nil || !created {
+		t.Fatalf("Prepare created=%v err=%v", created, err)
+	}
+	if rec, err := ReadBaseRecord(e.DataDir, f.dir); err != nil || rec.Exists {
+		t.Fatalf("rec=%+v err=%v; want no record", rec, err)
+	}
+	// With no record to remove, the removal is quiet.
+	if err := removeBaseRecord(e.DataDir, f.dir); err != nil {
+		t.Fatalf("removeBaseRecord on a missing record: %v", err)
+	}
+}
+
 func TestPrepareNoRecordWithoutDataDir(t *testing.T) {
 	f := newShareFixture(t)
 	e := f.env(t)

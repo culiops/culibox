@@ -423,6 +423,24 @@ func TestRefreshTimeoutIsReported(t *testing.T) {
 	if len(x.dock.removed) != 1 || !strings.HasPrefix(x.dock.removed[0], "agent-box-clonerefresh-T-") {
 		t.Errorf("removed = %q", x.dock.removed)
 	}
+	// The host check after the container must not run on the expired context.
+	if res.HeadInHost == nil || !*res.HeadInHost {
+		t.Errorf("HeadInHost = %v after a timeout, want it computed (true)", res.HeadInHost)
+	}
+}
+
+func TestRefreshCancelledIsNotTimedOut(t *testing.T) {
+	x := newRefreshFx(t)
+	x.dock.hang = true
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(100 * time.Millisecond); cancel() }()
+	res := Refresh(ctx, x.rec, x.dock, x.req)
+	if res.Refreshed || res.Error != "cancelled" {
+		t.Errorf("res = %+v, want Error cancelled", res)
+	}
+	if res.HeadInHost == nil {
+		t.Error("host checks did not run after a cancel")
+	}
 }
 
 func TestRefreshFetchFailureExitsNonZero(t *testing.T) {
