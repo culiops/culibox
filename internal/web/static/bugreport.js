@@ -1,5 +1,5 @@
 // "Report a problem": Settings -> About shows the build, and a dialog previews
-// the redacted bundle from GET /api/bugreport so the user can read exactly what
+// the redacted bundle from POST /api/bugreport so the user can read exactly what
 // would be shared before copying it or opening a prefilled GitHub issue.
 
 // WHAT_MARKER is internal/bugreport's WhatHappenedMarker; it appears once under
@@ -57,7 +57,7 @@ async function openBugReport() {
   openDialog("bug-modal");
   if (what) what.focus();
   try {
-    const res = await api("/api/bugreport");
+    const res = await api("/api/bugreport", { method: "POST" });
     if (seq !== bugSeq) return;
     const md = res && typeof res.markdown === "string" ? res.markdown : "";
     if (md.trim() === "") throw new Error("the server returned an empty report");

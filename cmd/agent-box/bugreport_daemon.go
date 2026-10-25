@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/culiops/agent-box/internal/bugreport"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/doctor"
 	"github.com/culiops/agent-box/internal/session"
+	"github.com/culiops/agent-box/internal/web"
 )
 
 // bugReportTimeout bounds the doctor run behind Settings -> About -> Report a
@@ -28,19 +30,30 @@ type bugDeps struct {
 	logs     func() []string
 }
 
-// buildBugReport returns the closure behind GET /api/bugreport. Doctor runs in
+// buildBugReport returns the closure behind POST /api/bugreport. Doctor runs in
 // its own goroutine so a hung check cannot hold the request past d.timeout; the
-// goroutine may outlive it (each doctor check has its own timeout), and its
-// buffered result channel means it never blocks once abandoned. A panic inside
-// a check becomes a note, not a daemon crash.
-func buildBugReport(d bugDeps) func(context.Context) (string, string) {
-	return func(ctx context.Context) (string, string) {
+// goroutine may outlive the request (each doctor check has its own timeout), and
+// its buffered result channel means it never blocks once abandoned. A panic
+// inside a check becomes a note, not a daemon crash.
+//
+// The one-build-at-a-time guard belongs to that goroutine: it is taken when a
+// build starts and released only when the doctor run itself ends, so a request
+// that times out or is cancelled cannot free the slot while its doctor probes
+// (abduco, aws, STS, docker) are still running. A request that finds the slot
+// taken gets web.ErrBugReportBusy.
+func buildBugReport(d bugDeps) func(context.Context) (string, string, error) {
+	var running atomic.Bool
+	return func(ctx context.Context) (string, string, error) {
+		if !running.CompareAndSwap(false, true) {
+			return "", "", web.ErrBugReportBusy
+		}
 		type outcome struct {
 			res []doctor.Result
 			err any
 		}
 		ch := make(chan outcome, 1)
 		go func() {
+			defer running.Store(false) // runs last, after any recover below
 			defer func() {
 				if p := recover(); p != nil {
 					ch <- outcome{err: p}
@@ -70,7 +83,7 @@ func buildBugReport(d bugDeps) func(context.Context) (string, string) {
 			Sessions: bugSessionCounts(d.sessions()),
 			Logs:     d.logs(),
 		}
-		return bugreport.Markdown(in), bugreport.IssueURL(in)
+		return bugreport.Markdown(in), bugreport.IssueURL(in), nil
 	}
 }
 

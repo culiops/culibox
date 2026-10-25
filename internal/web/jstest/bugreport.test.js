@@ -136,3 +136,15 @@ test("an empty markdown in a 200 response is an error and leaves the buttons dis
   assert.equal(els["bug-gh"].disabled, true);
   assert.ok(calls.some((c) => c[0] === "err" && /empty report/.test(c[1])));
 });
+
+// The build is side-effecting (doctor probes the host), so the fetch must be a
+// POST: csrfGuard same-origin-checks cookie POSTs, and a cross-site GET
+// navigation would slip past it.
+test("the report is requested with POST, never a bare GET", async () => {
+  const seen = [];
+  const { t } = load({ api: async (path, opts) => { seen.push([path, opts]); return { markdown: "x " + M, issue_url: URL_OK }; } });
+  await t.openBugReport();
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0][0], "/api/bugreport");
+  assert.equal(seen[0][1] && seen[0][1].method, "POST");
+});

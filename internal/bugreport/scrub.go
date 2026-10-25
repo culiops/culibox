@@ -27,6 +27,12 @@ var (
 	awsHint = regexp.MustCompile(`(?i)aws|secret`)
 	awsKey  = regexp.MustCompile(`[A-Za-z0-9/+=]{40,}`)
 
+	// The 12-digit AWS account id inside an ARN, and a bare one after an
+	// "account" key. Done before the address passes: left alone, the ":"s around
+	// the id read as an IPv6 literal and half of the digits survive.
+	arnAccount = regexp.MustCompile(`(arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:)[0-9]{12}(:)`)
+	accountKV  = regexp.MustCompile(`(?i)(\baccount[-_ ]?(?:id)?["']?\s*[:=]?\s*["']?)[0-9]{12}\b`)
+
 	// "Authorization: <scheme> <value>": keep the header and scheme, drop the
 	// value (and the whole value when there is no scheme).
 	authHeader = regexp.MustCompile(
@@ -46,6 +52,8 @@ const redacted = "[redacted]"
 // Scrub replaces secret-looking values with "[redacted]", keeping the
 // surrounding text so the line stays readable.
 func Scrub(s string) string {
+	s = arnAccount.ReplaceAllString(s, "${1}<account>${2}")
+	s = accountKV.ReplaceAllString(s, "${1}<account>")
 	s = authHeader.ReplaceAllString(s, "${1}"+redacted)
 	s = bearer.ReplaceAllString(s, "${1}"+redacted)
 	s = tokenShapes.ReplaceAllString(s, "${1}"+redacted)

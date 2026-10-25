@@ -3,23 +3,25 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/culiops/agent-box/internal/config"
 )
 
-func bugServer(f func(ctx context.Context) (string, string)) *Server {
+func bugServer(f func(ctx context.Context) (string, string, error)) *Server {
 	return &Server{BugReport: f}
 }
 
+func bugPost() *http.Request { return httptest.NewRequest("POST", "/api/bugreport", nil) }
+
 func TestBugReportCookieOnly(t *testing.T) {
 	called := false
-	s := bugServer(func(context.Context) (string, string) { called = true; return "m", "u" })
-	r := httptest.NewRequest("GET", "/api/bugreport", nil)
+	s := bugServer(func(context.Context) (string, string, error) { called = true; return "m", "u", nil })
+	r := bugPost()
 	r = r.WithContext(context.WithValue(r.Context(), credKindKey, credBearer))
 	w := httptest.NewRecorder()
 	s.handleBugReport(w, r)
@@ -31,19 +33,66 @@ func TestBugReportCookieOnly(t *testing.T) {
 	}
 }
 
-func TestBugReportGetOnly(t *testing.T) {
-	s := bugServer(func(context.Context) (string, string) { return "m", "u" })
-	w := httptest.NewRecorder()
-	s.handleBugReport(w, asCookie(httptest.NewRequest("POST", "/api/bugreport", nil)))
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST code=%d want 405", w.Code)
+// The build is side-effecting, so only POST is served: a cross-site GET
+// navigation would carry the Lax session cookie past csrfGuard.
+func TestBugReportPostOnly(t *testing.T) {
+	called := false
+	s := bugServer(func(context.Context) (string, string, error) { called = true; return "m", "u", nil })
+	for _, m := range []string{"GET", "HEAD", "PUT", "DELETE", "PATCH"} {
+		w := httptest.NewRecorder()
+		s.handleBugReport(w, asCookie(httptest.NewRequest(m, "/api/bugreport", nil)))
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("%s code=%d want 405", m, w.Code)
+		}
+	}
+	if called {
+		t.Fatal("the bundle was built for a non-POST request")
+	}
+}
+
+// Through the full handler chain: a cookie POST from another origin is refused
+// by csrfGuard before the builder runs; a same-origin one is served; GET is 405.
+func TestBugReportCrossSiteRefusedThroughHandlerChain(t *testing.T) {
+	called := 0
+	s := &Server{AllowedHosts: []string{"example.com"}, API: &API{Sessions: &mockSvc{}}, Terminal: http.NotFoundHandler(),
+		Profiles:  NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {}),
+		BugReport: func(context.Context) (string, string, error) { called++; return "m", "u", nil }}
+	ck := issueCookie(t, s)
+	h := s.Handler()
+	do := func(method string, hdr [2]string) int {
+		r := httptest.NewRequest(method, "/api/bugreport", nil)
+		r.AddCookie(ck)
+		if hdr[0] != "" {
+			r.Header.Set(hdr[0], hdr[1])
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	if got := do("POST", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusForbidden {
+		t.Errorf("cross-site cookie POST: got %d, want 403", got)
+	}
+	if got := do("POST", [2]string{"Origin", "http://evil.example"}); got != http.StatusForbidden {
+		t.Errorf("foreign-origin cookie POST: got %d, want 403", got)
+	}
+	if called != 0 {
+		t.Fatalf("builder ran %d times for refused requests", called)
+	}
+	if got := do("GET", [2]string{"Sec-Fetch-Site", "cross-site"}); got != http.StatusMethodNotAllowed {
+		t.Errorf("cross-site GET: got %d, want 405", got)
+	}
+	if got := do("POST", [2]string{"Sec-Fetch-Site", "same-origin"}); got != http.StatusOK {
+		t.Errorf("same-origin POST: got %d, want 200", got)
+	}
+	if called != 1 {
+		t.Fatalf("builder ran %d times, want 1", called)
 	}
 }
 
 func TestBugReportReturnsJSON(t *testing.T) {
-	s := bugServer(func(context.Context) (string, string) { return "# report", "https://x/new" })
+	s := bugServer(func(context.Context) (string, string, error) { return "# report", "https://x/new", nil })
 	w := httptest.NewRecorder()
-	s.handleBugReport(w, asCookie(httptest.NewRequest("GET", "/api/bugreport", nil)))
+	s.handleBugReport(w, asCookie(bugPost()))
 	if w.Code != http.StatusOK {
 		t.Fatalf("code=%d want 200", w.Code)
 	}
@@ -59,54 +108,36 @@ func TestBugReportReturnsJSON(t *testing.T) {
 	}
 }
 
-func TestBugReportOneInFlight(t *testing.T) {
-	started, release := make(chan struct{}), make(chan struct{})
-	s := bugServer(func(context.Context) (string, string) {
-		close(started)
-		<-release
-		return "m", "u"
-	})
-	done := make(chan int, 1)
-	go func() {
-		w := httptest.NewRecorder()
-		s.handleBugReport(w, asCookie(httptest.NewRequest("GET", "/api/bugreport", nil)))
-		done <- w.Code
-	}()
-	<-started
+// The builder owns the in-flight state: ErrBugReportBusy is a 429, whether the
+// earlier build is another live request or one whose request was cancelled.
+func TestBugReportBusyIs429(t *testing.T) {
+	s := bugServer(func(context.Context) (string, string, error) { return "", "", ErrBugReportBusy })
 	w := httptest.NewRecorder()
-	s.handleBugReport(w, asCookie(httptest.NewRequest("GET", "/api/bugreport", nil)))
+	s.handleBugReport(w, asCookie(bugPost()))
 	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("second request code=%d want 429", w.Code)
+		t.Fatalf("code=%d want 429", w.Code)
 	}
 	if !strings.Contains(w.Body.String(), "a report is already being built") {
 		t.Errorf("body=%q", w.Body.String())
 	}
-	close(release)
-	select {
-	case code := <-done:
-		if code != http.StatusOK {
-			t.Fatalf("first request code=%d want 200", code)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("first request never finished")
-	}
 }
 
-func TestBugReportSlotFreedAfterReturn(t *testing.T) {
-	s := bugServer(func(context.Context) (string, string) { return "m", "u" })
-	for i := 0; i < 2; i++ {
-		w := httptest.NewRecorder()
-		s.handleBugReport(w, asCookie(httptest.NewRequest("GET", "/api/bugreport", nil)))
-		if w.Code != http.StatusOK {
-			t.Fatalf("request %d code=%d want 200", i, w.Code)
-		}
+func TestBugReportBuilderErrorIs500(t *testing.T) {
+	s := bugServer(func(context.Context) (string, string, error) { return "", "", errors.New("disk on fire") })
+	w := httptest.NewRecorder()
+	s.handleBugReport(w, asCookie(bugPost()))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code=%d want 500", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "disk on fire") {
+		t.Errorf("internal error text leaked: %q", w.Body.String())
 	}
 }
 
 func TestBugReportNilIs503(t *testing.T) {
 	s := &Server{}
 	w := httptest.NewRecorder()
-	s.handleBugReport(w, asCookie(httptest.NewRequest("GET", "/api/bugreport", nil)))
+	s.handleBugReport(w, asCookie(bugPost()))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code=%d want 503", w.Code)
 	}

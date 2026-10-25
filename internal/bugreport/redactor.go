@@ -26,9 +26,10 @@ const (
 )
 
 var (
-	// Candidates only; boundaries are checked by hand because \b treats "_" and
-	// letters as word characters ("ip_10.0.0.5", "x10.0.0.5y" must still match).
-	ipv4Re = regexp.MustCompile(`[0-9]+(?:\.[0-9]+){3}`)
+	// A maximal run of dotted numbers. Boundaries are the run itself, not \b,
+	// which treats "_" and letters as word characters ("ip_10.0.0.5" and
+	// "x10.0.0.5y" must still match).
+	dottedRunRe = regexp.MustCompile(`[0-9]+(?:\.[0-9]+)+`)
 	// A run of characters an IPv6 literal can be made of (dots for ::ffff:1.2.3.4).
 	ipv6RunRe = regexp.MustCompile(`[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*:[0-9A-Fa-f:.]*`)
 )
@@ -38,29 +39,56 @@ func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 // maxIPv6Len is the longest textual IPv6 literal (mapped IPv4 form).
 const maxIPv6Len = 45
 
-// redactIPv4 replaces IPv4 literals other than loopback/unspecified. A match
-// is skipped when it is part of a longer dotted-number run ("1.2.3.4.5" is a
-// version, not an address, and is left alone); a sentence-ending dot is fine.
+// redactIPv4 replaces IPv4 literals other than loopback/unspecified. It works
+// on whole dotted-number runs. A run of four parts is one candidate. A longer
+// run ("10.0.0.5.443" is tcpdump's ip.port, "1.2.3.4.5" may be a version) fails
+// closed: every four-part window inside it that parses as a redactable address
+// is replaced, and overlapping windows merge into one "<ip>". A sentence-ending
+// dot is not part of a run.
 func redactIPv4(s string) string {
 	var b strings.Builder
 	last := 0
-	for _, m := range ipv4Re.FindAllStringIndex(s, -1) {
-		if m[1] < len(s) && (isDigit(s[m[1]]) || s[m[1]] == '.' && m[1]+1 < len(s) && isDigit(s[m[1]+1])) {
+	for _, m := range dottedRunRe.FindAllStringIndex(s, -1) {
+		// Part boundaries within the run, as offsets into s.
+		starts := []int{m[0]}
+		for i := m[0]; i < m[1]; i++ {
+			if s[i] == '.' {
+				starts = append(starts, i+1)
+			}
+		}
+		if len(starts) < 4 {
 			continue
 		}
-		if m[0] > 0 && (isDigit(s[m[0]-1]) || s[m[0]-1] == '.' && m[0] > 1 && isDigit(s[m[0]-2])) {
-			continue
+		partEnd := func(k int) int { // end offset of part k (exclusive)
+			if k+1 < len(starts) {
+				return starts[k+1] - 1
+			}
+			return m[1]
 		}
-		ip, ok := parseIPv4(s[m[0]:m[1]])
-		if !ok {
-			continue
+		spanStart, spanEnd := -1, -1
+		flush := func() {
+			if spanStart < 0 {
+				return
+			}
+			b.WriteString(s[last:spanStart])
+			b.WriteString("<ip>")
+			last = spanEnd
+			spanStart, spanEnd = -1, -1
 		}
-		if ip.IsLoopback() || ip.IsUnspecified() {
-			continue
+		for k := 0; k+4 <= len(starts); k++ {
+			lo, hi := starts[k], partEnd(k+3)
+			ip, ok := parseIPv4(s[lo:hi])
+			if !ok || ip.IsLoopback() || ip.IsUnspecified() {
+				continue
+			}
+			if spanStart >= 0 && lo <= spanEnd {
+				spanEnd = hi // overlaps or touches the open span
+				continue
+			}
+			flush()
+			spanStart, spanEnd = lo, hi
 		}
-		b.WriteString(s[last:m[0]])
-		b.WriteString("<ip>")
-		last = m[1]
+		flush()
 	}
 	b.WriteString(s[last:])
 	return b.String()

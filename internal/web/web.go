@@ -79,10 +79,10 @@ type Server struct {
 	// report can name the build.
 	Commit string
 	// BugReport builds the redacted diagnostic bundle (markdown plus the
-	// prefilled issue link) behind GET /api/bugreport. Nil → that route answers
-	// 503. bugMu keeps one build in flight.
-	BugReport func(ctx context.Context) (markdown, issueURL string)
-	bugMu     sync.Mutex
+	// prefilled issue link) behind POST /api/bugreport. Nil → that route answers
+	// 503. It returns ErrBugReportBusy while an earlier build is still running;
+	// the builder, not the handler, owns that in-flight state.
+	BugReport func(ctx context.Context) (markdown, issueURL string, err error)
 
 	// Accounts is the agent-account registry behind /api/accounts. Nil → the
 	// feature is off: no routes, and only the default account's quota is shown.
