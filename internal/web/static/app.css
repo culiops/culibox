@@ -1071,6 +1071,24 @@
        hidden attribute silently does nothing and all three panels stack. */
     .dbd[hidden], .dft[hidden] { display: none; }
 
+    /* "Report a problem": same chrome as #settings-modal (.dhd / .dbd.pad / .dft).
+       The preview is the whole redacted bundle, which can run to hundreds of
+       lines, so the <pre> scrolls inside a capped box and wraps rather than
+       growing the dialog or the page sideways. */
+    #bug-modal { width: 760px; max-height: calc(100vh - 40px); }
+    #bug-modal[open] { display: flex; flex-direction: column; }
+    #bug-what { display: block; width: 100%; box-sizing: border-box; min-width: 0; margin-bottom: 14px;
+                border-radius: 0; resize: vertical; font-family: var(--font-family); }
+    #bug-preview {
+      margin: 0; padding: 10px 12px; max-height: 50vh; overflow: auto;
+      white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5;
+      font-family: var(--font-family); background: var(--surface-2); border: 1px solid var(--border);
+    }
+    #bug-body .hint { overflow-wrap: anywhere; }
+    #bug-status { margin: 0; }
+    #bug-status a { color: var(--accent); }
+    #bug-modal .btn:disabled { opacity: .5; cursor: default; }
+    #about-version { margin-top: 0; font-size: 14px; overflow-wrap: anywhere; }
     #spawn-modal { width: 580px; }
     #analytics-modal { width: 960px; max-width: 96vw; }
     #an-tabs { flex-wrap: wrap; }
@@ -2221,6 +2239,19 @@
         margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh;
         border: 0;
       }
+      #bug-modal {
+        margin: 0; width: 100%; max-width: 100%; height: 100dvh; max-height: 100dvh; border: 0;
+      }
+      #bug-body { flex: 1; min-height: 0; }
+      #bug-modal .fld { min-height: var(--tap); font-size: 13px; }
+      #bug-modal textarea.fld { min-height: 0; }
+      #bug-preview { max-height: 50vh; }
+      /* The footer's two buttons share the row, so the inline confirmation (the
+         only one visible here: the toast paints under the full-screen modal)
+         takes its own line above them. */
+      #foot-bug { height: auto; flex-wrap: wrap; padding: 8px 13px; }
+      #bug-status { flex-basis: 100%; order: -1; }
+      #bug-status:empty { display: none; }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* (The Files action buttons #ft-newdir/#ft-refresh/#ft-upload are sized
          with the promoted Files topbar above — on a phone the tree only ever
@@ -2288,6 +2319,12 @@
       .dhd .btn { min-width: var(--tap); min-height: var(--tap); }
       .tabs .t { flex: 1; min-height: var(--tap); display: flex; align-items: center;
                  justify-content: center; padding: 0 8px; }
+      /* Six settings tabs are wider than a phone. The strip scrolls on its own
+         (so the dialog and page never do) and each tab keeps its natural width. */
+      #settings-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+                       -webkit-overflow-scrolling: touch; }
+      #settings-tabs::-webkit-scrollbar { display: none; }
+      #settings-tabs .t { flex: 1 0 auto; white-space: nowrap; }
       .dft { height: 66px; padding: 0 13px; }
       .dft .btn { flex: 1; min-height: var(--tap); display: inline-flex;
                   align-items: center; justify-content: center; font-size: 13px; }

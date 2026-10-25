@@ -19,6 +19,7 @@ var commit string
 const usage = `usage:
   agent-box [serve] [-config <path>]                   run the web control-plane
   agent-box doctor  [-config <path>]                   check this machine; prints no secrets
+  agent-box bug-report [-config <path>]                redacted diagnostic bundle to paste into a bug report (macOS: | pbcopy)
   agent-box box setup [-rebuild] [-recreate [-force]]  build the box image (macOS: also the box VM)
   agent-box box status                                 list boxes (macOS: and the box VM)
   agent-box box stop [-force]                          macOS: stop the box VM
@@ -31,7 +32,7 @@ $AGENT_BOX_HOME (absolute) or ~/.local/share/agent-box.
 `
 
 type cliArgs struct {
-	Cmd        string // "serve" | "doctor" | "box" | "clone" | "store"
+	Cmd        string // "serve" | "doctor" | "bug-report" | "box" | "clone" | "store"
 	Sub        string // box: "setup" | "stop" | "status"; clone: "fetch"; store: "init" | "status" | ... | "list"
 	ID         string // store set|rm: the value id
 	ConfigPath string
@@ -60,7 +61,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	sub := ""
 	switch cmd {
-	case "serve", "doctor":
+	case "serve", "doctor", "bug-report":
 	case "box":
 		if len(argv) == 0 || strings.HasPrefix(argv[0], "-") {
 			return cliArgs{}, errors.New("box needs a subcommand: setup, stop or status")

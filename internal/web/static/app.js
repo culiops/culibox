@@ -47,11 +47,16 @@ function execCopy(text) {
   const ta = document.createElement("textarea");
   ta.value = text;
   ta.style.position = "fixed"; ta.style.top = "0"; ta.style.left = "0"; ta.style.opacity = "0";
-  document.body.appendChild(ta);
+  // document.body is inert while a showModal() dialog is open, so focus() and
+  // select() silently fail there and the copy with them. Host the textarea in
+  // the topmost open dialog (the last one in document order) when there is one.
+  const open = document.querySelectorAll("dialog[open]");
+  const host = open.length ? open[open.length - 1] : document.body;
+  host.appendChild(ta);
   ta.focus(); ta.select();
   let ok = false;
   try { ok = document.execCommand("copy"); } catch (_) { /* best effort */ }
-  document.body.removeChild(ta);
+  host.removeChild(ta);
   return ok;
 }
 

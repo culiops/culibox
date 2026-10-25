@@ -118,6 +118,8 @@ function selectSettingsTab(name) {
     const on = b.dataset.tab === name;
     b.classList.toggle("on", on);
     b.setAttribute("aria-selected", on ? "true" : "false");
+    // On a phone the strip scrolls on its own; keep the chosen tab in view.
+    if (on && typeof b.scrollIntoView === "function") b.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   for (const p of document.querySelectorAll("#settings-modal .dbd")) {
     p.hidden = p.id !== name;
@@ -141,6 +143,7 @@ function selectSettingsTab(name) {
   if (name === "tokens" && typeof loadTokens === "function") loadTokens();
   if (name === "accounts" && typeof loadAccounts === "function") loadAccounts();
   if (name === "creds" && typeof loadCredentials === "function") loadCredentials();
+  if (name === "about" && typeof loadAboutInfo === "function") loadAboutInfo();
   // The profile form's pickers list what Credentials holds now, not what it held at page load.
   if (name === "manage" && typeof refreshCredLists === "function") refreshCredLists();
   // And the profile list what the server holds now (a profile made through the

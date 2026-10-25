@@ -30,6 +30,8 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"serve"}, cliArgs{Cmd: "serve", ConfigPath: ""}},
 		{[]string{"serve", "--config", "/x.json"}, cliArgs{Cmd: "serve", ConfigPath: "/x.json", ConfigSet: true}},
 		{[]string{"doctor"}, cliArgs{Cmd: "doctor", ConfigPath: ""}},
+		{[]string{"bug-report"}, cliArgs{Cmd: "bug-report", ConfigPath: ""}},
+		{[]string{"bug-report", "-config", "x.json"}, cliArgs{Cmd: "bug-report", ConfigPath: "x.json", ConfigSet: true}},
 	}
 	for _, c := range cases {
 		got, err := parseArgs(c.argv)
@@ -37,7 +39,7 @@ func TestParseArgs(t *testing.T) {
 			t.Errorf("parseArgs(%q) = %+v,%v want %+v", c.argv, got, err, c.want)
 		}
 	}
-	for _, bad := range [][]string{{"deploy"}, {"serve", "extra"}, {"-nope"}} {
+	for _, bad := range [][]string{{"deploy"}, {"serve", "extra"}, {"-nope"}, {"bug-report", "extra"}, {"bug-report", "-rebuild"}} {
 		if _, err := parseArgs(bad); err == nil {
 			t.Errorf("parseArgs(%q): want error", bad)
 		}
