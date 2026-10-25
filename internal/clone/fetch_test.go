@@ -57,9 +57,9 @@ func TestBundleArgs(t *testing.T) {
 		Instance: "DEV",
 	}
 	sha := strings.Repeat("ab", 20)
-	got := BundleArgs(r, sha)
+	got := BundleArgs(r, sha, "n")
 	want := []string{
-		"run", "--rm", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"run", "--rm", "--init", "--name", "n", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--label", "io.culiops.agent-box.clonefetch=DEV",
 		"-e", "HOME=/tmp", "-e", "GIT_CONFIG_NOSYSTEM=1", "-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=/src/of/.git/objects",
@@ -90,11 +90,24 @@ type fakeDocker struct {
 	tempDir string
 	calls   int
 	stderr  string // when set, fail like the container with this stderr (after the real git ran)
+	hang    bool   // when set, block until ctx is done, like a container that never exits
+	removed []string
+	args    []string // argv of the last RunStream
+}
+
+func (f *fakeDocker) Remove(_ context.Context, name string) error {
+	f.removed = append(f.removed, name)
+	return nil
 }
 
 func (f *fakeDocker) RunStream(ctx context.Context, args []string, stdout io.Writer) error {
 	f.t.Helper()
 	f.calls++
+	f.args = slices.Clone(args)
+	if f.hang {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	// stdout must be the 0600 temp file (possibly behind the size cap), made under TempDir.
 	named, ok := stdout.(interface{ Name() string })
 	if !ok {

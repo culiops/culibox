@@ -55,6 +55,8 @@ var (
 // Docker runs one docker CLI invocation, streaming its stdout to a writer.
 type Docker interface {
 	RunStream(ctx context.Context, args []string, stdout io.Writer) error
+	// Remove force-removes the named container; one already gone is not an error.
+	Remove(ctx context.Context, name string) error
 }
 
 // ExecDocker is the real Docker, running the docker binary at Bin (resolve it
@@ -161,15 +163,16 @@ type FetchResult struct {
 // it as a box, spec correction 9). --pull=never: a deleted pinned tag must fail,
 // never be pulled from a registry by name. GIT_ALTERNATE_OBJECT_DIRECTORIES lets the
 // range ^<baseSHA> resolve when clone_of's base moved past what the clone has
-// (correction 7).
-func BundleArgs(r FetchRequest, baseSHA string) []string {
+// (correction 7). --init puts a reaper at PID 1, so the container ends on a
+// stop signal; --name lets a failed run be removed (see runContainer).
+func BundleArgs(r FetchRequest, baseSHA, name string) []string {
 	of, dir := r.Clone.Of, r.Clone.Dir
 	gitDir := of + "/.git"
 	return []string{
-		"run", "--rm", "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"run", "--rm", "--init", "--name", name, "--pull=never", "--network", "none", "--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only",
 		"--tmpfs", boxTmp + ":rw,nosuid,nodev,noexec,size=64m", "--pids-limit", "128", "--memory", "1g",
 		"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
-		"--label", "io.culiops.agent-box.clonefetch=" + r.Instance,
+		"--label", LabelCloneFetch + "=" + r.Instance,
 		"-e", "HOME=" + boxTmp, "-e", "GIT_CONFIG_NOSYSTEM=1",
 		"-e", "GIT_ALTERNATE_OBJECT_DIRECTORIES=" + gitDir + "/objects",
 		"--mount", "type=bind,src=" + dir + ",dst=" + dir + ",readonly",
@@ -300,7 +303,8 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	// 5. The bundle, made in the container. Success is the exit status alone:
 	// an empty range exits 128 but has already written a header to stdout.
 	cw := &capWriter{f: f, max: maxBundleBytes}
-	runErr := d.RunStream(ctx, BundleArgs(r, base), cw)
+	name := containerName("clonefetch", r.Instance)
+	runErr := runContainer(ctx, d, name, BundleArgs(r, base, name), cw)
 	if cw.err != nil {
 		return res, fmt.Errorf("clone fetch: the bundle is larger than %d bytes; refusing it", maxBundleBytes)
 	}
