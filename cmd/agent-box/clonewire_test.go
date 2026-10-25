@@ -33,7 +33,7 @@ func TestNewCloneHooksLinuxOnly(t *testing.T) {
 	if _, owned := h.BoxOwned(dir); owned {
 		t.Fatal("nothing owns the dir yet")
 	}
-	_, perr := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false)
+	_, _, perr := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false)
 	if !errors.Is(perr, box.ErrBoxUnavailable) {
 		t.Fatalf("Prepare without a layer: want ErrBoxUnavailable, got %v", perr)
 	}
@@ -90,11 +90,11 @@ func TestPreparedDirStaysOwnedWithoutTheProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := testHooks(t, noClones)
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); err != nil {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); err != nil {
 		t.Fatal(err)
 	}
 	// Idempotent: a second Prepare adds no second line.
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); err != nil {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := os.ReadFile(h.file); string(b) != dir+"\n" {
@@ -124,7 +124,7 @@ func TestRecordWrittenBeforePrepareRuns(t *testing.T) {
 		}
 		return box.CloneMounts{}, false, boom
 	}
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); !errors.Is(err, boom) {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "r"), Dir: dir}, false); !errors.Is(err, boom) {
 		t.Fatalf("want the prepare error, got %v", err)
 	}
 	if _, owned := h.BoxOwned(dir); !owned {
@@ -141,10 +141,10 @@ func TestRecordFailureFailsPrepareClosed(t *testing.T) {
 		called = true
 		return box.CloneMounts{}, false, nil
 	}
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: filepath.Join(home, "c")}, false); err == nil || called {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: filepath.Join(home, "c")}, false); err == nil || called {
 		t.Fatalf("an unwritable record must refuse before creating anything: err=%v called=%v", err, called)
 	}
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: "relative/dir"}, false); err == nil || called {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: "relative/dir"}, false); err == nil || called {
 		t.Fatalf("a non-absolute dir must be refused: err=%v called=%v", err, called)
 	}
 }
@@ -161,7 +161,7 @@ func TestUnreadableRecordFailsClosed(t *testing.T) {
 	if !owned || !strings.Contains(why, h.file) {
 		t.Fatalf("a corrupt record must report owned naming the file, got %q, %v", why, owned)
 	}
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: filepath.Join(home, "c")}, false); err == nil {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: "/r", Dir: filepath.Join(home, "c")}, false); err == nil {
 		t.Fatal("Prepare must refuse over a corrupt record")
 	}
 
@@ -201,7 +201,7 @@ func TestPrepareRefusesBoxOwnedCloneOf(t *testing.T) {
 	})
 	h.prepare = prep
 	for _, of := range []string{otherClone, filepath.Join(otherClone, "nested", "repo")} {
-		_, err := h.Prepare(context.Background(), config.Clone{Of: of, Dir: mine}, false)
+		_, _, err := h.Prepare(context.Background(), config.Clone{Of: of, Dir: mine}, false)
 		if !errors.Is(err, box.ErrUnboxableWorkspace) || !strings.Contains(err.Error(), "is box-owned") ||
 			!strings.Contains(err.Error(), "a clone must be made from a host-owned repo") {
 			t.Errorf("clone_of %s: want the box-owned refusal, got %v", of, err)
@@ -220,7 +220,7 @@ func TestPrepareRefusesBoxOwnedCloneOf(t *testing.T) {
 	if err := h.record(otherClone); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: otherClone, Dir: mine}, false); !errors.Is(err, box.ErrUnboxableWorkspace) {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: otherClone, Dir: mine}, false); !errors.Is(err, box.ErrUnboxableWorkspace) {
 		t.Fatalf("a recorded clone dir as clone_of: want ErrUnboxableWorkspace, got %v", err)
 	}
 	if called {
@@ -228,7 +228,7 @@ func TestPrepareRefusesBoxOwnedCloneOf(t *testing.T) {
 	}
 
 	// A host-owned repo is fine.
-	if _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "repo"), Dir: mine}, false); err != nil || !called {
+	if _, _, err := h.Prepare(context.Background(), config.Clone{Of: filepath.Join(home, "repo"), Dir: mine}, false); err != nil || !called {
 		t.Fatalf("a host-owned clone_of must pass: err=%v called=%v", err, called)
 	}
 }

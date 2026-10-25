@@ -2,12 +2,15 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -58,6 +61,13 @@ type fakeCloneHooks struct {
 	origin      string // HostOrigin's answer
 	originErr   error
 	originOf    []string // the clone_of paths HostOrigin was asked about
+
+	created   bool // Prepare's "created" answer
+	info      CloneInfo
+	refreshes []RefreshOpts
+	released  int
+	order     *callLog // optional: shared with fakeBoxes.order
+	onRelease func()   // runs inside the release func, before it is counted
 }
 
 func (f *fakeCloneHooks) HostOrigin(_ context.Context, of string) (string, error) {
@@ -67,15 +77,43 @@ func (f *fakeCloneHooks) HostOrigin(_ context.Context, of string) (string, error
 	return f.origin, f.originErr
 }
 
-func (f *fakeCloneHooks) Prepare(_ context.Context, c config.Clone, withMemory bool) (box.CloneMounts, error) {
+func (f *fakeCloneHooks) Prepare(_ context.Context, c config.Clone, withMemory bool) (box.CloneMounts, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.prepares = append(f.prepares, c)
 	f.withMemory = append(f.withMemory, withMemory)
 	if f.prepareErr != nil {
-		return box.CloneMounts{}, f.prepareErr
+		return box.CloneMounts{}, false, f.prepareErr
 	}
-	return box.CloneMounts{Hash: "h"}, nil
+	return box.CloneMounts{Hash: "h"}, f.created, nil
+}
+
+func (f *fakeCloneHooks) Refresh(_ context.Context, _ config.Clone, o RefreshOpts) (CloneInfo, func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.refreshes = append(f.refreshes, o)
+	f.order.add("refresh")
+	return f.info, func() {
+		f.order.add("release")
+		if f.onRelease != nil {
+			f.onRelease()
+		}
+		f.mu.Lock()
+		f.released++
+		f.mu.Unlock()
+	}
+}
+
+func (f *fakeCloneHooks) nRefreshes() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.refreshes)
+}
+
+func (f *fakeCloneHooks) nReleased() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.released
 }
 
 func (f *fakeCloneHooks) BoxOwned(cwd string) (string, bool) {
@@ -510,5 +548,245 @@ func TestSpawnCloneSetsGHRepo(t *testing.T) {
 				t.Fatalf("HostOrigin called for a session without a GitHub binding: %q", c.hooks.originOf)
 			}
 		})
+	}
+}
+
+func TestCloneSpawnRefreshesAfterPrepare(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	order := &callLog{}
+	hooks := &fakeCloneHooks{created: true, order: order}
+	m, boxes := cloneManager(t, l, hooks)
+	boxes.order = order
+	hooks.onRelease = func() {
+		// The session is published before the lock is released: m.mu is free
+		// here because Spawn calls release after Unlock.
+		m.mu.Lock()
+		n := len(m.sessions)
+		m.mu.Unlock()
+		if n != 1 {
+			t.Errorf("at release time m.sessions holds %d sessions, want the new one", n)
+		}
+	}
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+
+	if hooks.nRefreshes() != 1 {
+		t.Fatalf("Refresh called %d times, want 1", hooks.nRefreshes())
+	}
+	if !hooks.refreshes[0].Created {
+		t.Fatal("RefreshOpts.Created must carry Prepare's answer")
+	}
+	// "prepare" is the box layer's own Prepare, which runs before the clone's.
+	var got []string
+	for _, c := range order.got() {
+		if c == "refresh" || c == "wrap" || c == "release" {
+			got = append(got, c)
+		}
+	}
+	if want := []string{"refresh", "wrap", "release"}; !slices.Equal(got, want) {
+		t.Fatalf("order = %v, want %v", got, want)
+	}
+	if hooks.nReleased() != 1 {
+		t.Fatalf("released %d times, want 1", hooks.nReleased())
+	}
+}
+
+func TestCloneSpawnLiveSessionFlag(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{}
+	m, _ := cloneManager(t, l, hooks)
+	s1, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = m.Kill(s1.ID)
+	_ = m.Kill(s2.ID)
+	s3, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s3.ID) })
+	if len(hooks.refreshes) != 3 {
+		t.Fatalf("Refresh called %d times, want 3", len(hooks.refreshes))
+	}
+	for i, want := range []bool{false, true, false} {
+		if got := hooks.refreshes[i].LiveSession; got != want {
+			t.Errorf("spawn %d: LiveSession = %v, want %v", i+1, got, want)
+		}
+	}
+}
+
+func TestCloneSpawnReleasesOnWrapFailure(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{}
+	m, boxes := cloneManager(t, l, hooks)
+	boxes.wrapErr = errors.New("docker said no")
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a failed Wrap still spawned")
+	}
+	if hooks.nRefreshes() != 1 || hooks.nReleased() != 1 {
+		t.Fatalf("refreshes=%d released=%d, want 1 and 1", hooks.nRefreshes(), hooks.nReleased())
+	}
+}
+
+func TestCloneSpawnReleasesOnEarlyFailure(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{}
+	m, boxes := cloneManager(t, l, hooks)
+	m.SetBoxedRecorder(func(string) error { return errors.New("x") })
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err == nil {
+		_ = m.Kill(s.ID)
+		t.Fatal("a failed recorder still spawned")
+	}
+	if boxes.wraps != 0 {
+		t.Fatal("Wrap ran after the recorder refused")
+	}
+	if hooks.nReleased() != 1 {
+		t.Fatalf("released %d times, want 1", hooks.nReleased())
+	}
+}
+
+func TestCloneSpawnRefreshErrorDoesNotBlock(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{info: CloneInfo{Error: "boom"}}
+	m, _ := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if c := s.Info().Clone; c == nil || c.Error != "boom" {
+		t.Fatalf("Info().Clone = %+v, want Error boom", c)
+	}
+}
+
+func TestCloneInfoOnTheWire(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	no := false
+	hooks := &fakeCloneHooks{info: CloneInfo{Refreshed: true, Base: "main", Branch: "feat/x", Ahead: 2, Behind: 0, HeadInHost: &no, StaleBranches: []string{"old"}}}
+	m, _ := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	b, err := json.Marshal(s.Info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"clone":{"refreshed":true,"base":"main","branch":"feat/x","ahead":2,"behind":0,"head_in_host":false,"stale_branches":["old"]}`
+	if !strings.Contains(string(b), want) {
+		t.Fatalf("wire shape = %s, want it to contain %s", b, want)
+	}
+	// Info hands out a copy: mutating it must not reach the session.
+	in := s.Info()
+	in.Clone.StaleBranches[0] = "changed"
+	*in.Clone.HeadInHost = true
+	if again := s.Info().Clone; again.StaleBranches[0] != "old" || *again.HeadInHost {
+		t.Fatalf("Info().Clone aliases the session's: %+v", again)
+	}
+}
+
+func TestCloneInfoSurvivesRestore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	yes := true
+	want := CloneInfo{Refreshed: true, Base: "master", Branch: "b", Ahead: 1, Behind: 3, FFFrom: "a", FFTo: "b", FFCount: 3,
+		HeadInHost: &yes, StaleBranches: []string{"x", "y"}, Rewritten: true, Unverified: true}
+	hooks := &fakeCloneHooks{info: want}
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	m.SetClone(hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	if got := sidecarEntry(t, path, s.ID).Clone; !reflect.DeepEqual(got, &want) {
+		t.Fatalf("sidecar Clone = %+v, want %+v", got, &want)
+	}
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(&fakeBoxes{})
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	if got := r.Info().Clone; !reflect.DeepEqual(got, &want) {
+		t.Fatalf("restored Clone = %+v, want %+v", got, &want)
+	}
+}
+
+func TestNonCloneSpawnHasNoCloneInfo(t *testing.T) {
+	for _, rt := range []string{config.RuntimeBox, config.RuntimeHost} {
+		l := cloneLauncher{tieredLauncher: tieredLauncher{argv: []string{"sh", "-c", "sleep 30"}, runtime: rt}}
+		hooks := &fakeCloneHooks{}
+		m, _ := cloneManager(t, l, hooks)
+		s, err := m.Spawn(launcher.SpawnSpec{Agent: "plain", Cwd: t.TempDir()})
+		if err != nil {
+			t.Fatalf("%s: %v", rt, err)
+		}
+		if hooks.nRefreshes() != 0 {
+			t.Errorf("%s: Refresh called for a non-clone spawn", rt)
+		}
+		if s.Info().Clone != nil {
+			t.Errorf("%s: Info().Clone = %+v, want nil", rt, s.Info().Clone)
+		}
+		_ = m.Kill(s.ID)
+	}
+}
+
+// The ended session is still in m.sessions (retention) when Restart spawns its
+// replacement: an exited session must not count as live, or the daily
+// kill-then-respawn loop would never refresh.
+func TestRestartRefreshesAgain(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{}
+	m, _ := cloneManager(t, l, hooks)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.signal(syscall.SIGTERM)
+	select {
+	case <-s.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("session did not exit")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !s.Exited() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	ns, err := m.Restart(s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(ns.ID) })
+	if len(hooks.refreshes) != 2 {
+		t.Fatalf("Refresh called %d times, want 2", len(hooks.refreshes))
+	}
+	if hooks.refreshes[1].LiveSession {
+		t.Fatal("the exited session counted as live on restart")
 	}
 }

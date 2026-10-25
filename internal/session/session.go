@@ -232,13 +232,66 @@ type CloneHooks interface {
 	// Prepare makes the clone ready on the host (creating it if absent) and
 	// returns the box identity and read-only mounts for it. withMemory adds the
 	// clone's claude memory mount, which only the default account gets.
-	Prepare(ctx context.Context, c config.Clone, withMemory bool) (box.CloneMounts, error)
+	// created reports that this call made the clone (it did not exist before).
+	Prepare(ctx context.Context, c config.Clone, withMemory bool) (box.CloneMounts, bool, error)
+	// Refresh brings an existing clone up to date with host main before the box
+	// starts. Never an error: failures are in the result. release must be
+	// called once the new session is published in m.sessions, or the spawn
+	// failed; it is never nil.
+	Refresh(ctx context.Context, c config.Clone, o RefreshOpts) (CloneInfo, func())
 	// BoxOwned reports whether cwd is inside any profile's clone, with the
 	// reason a host-tier spawn there is refused.
 	BoxOwned(cwd string) (reason string, owned bool)
 	// HostOrigin is the host repo's remote.origin.url ("" when unset). It reads
 	// `of`, the user's repo, never the box's clone.
 	HostOrigin(ctx context.Context, of string) (string, error)
+}
+
+// cloneRefreshTimeout bounds one Refresh. It is best-effort and never fails a
+// spawn, so a slow or wedged one is cut off rather than waited for.
+const cloneRefreshTimeout = 60 * time.Second
+
+// RefreshOpts is what Spawn tells Refresh about the clone it is about to start.
+type RefreshOpts struct {
+	Created     bool
+	LiveSession bool // a non-exited boxed session in this manager has a Cwd overlapping the clone dir
+}
+
+// CloneInfo is the outcome of the clone refresh done before a clone-mode box
+// started, for the UI. Skipped is why nothing was fetched ("created", "in-use",
+// "other-instance", "no-base"). Box output is display-only here: the clone
+// layer has already validated and sanitized every string. Immutable once the
+// session is published; Info hands out copies.
+type CloneInfo struct {
+	Refreshed     bool     `json:"refreshed"`
+	Skipped       string   `json:"skipped,omitempty"`
+	Error         string   `json:"error,omitempty"` // sanitized
+	Base          string   `json:"base,omitempty"`  // "main" | "master"
+	Branch        string   `json:"branch,omitempty"`
+	Ahead         int      `json:"ahead"`
+	Behind        int      `json:"behind"`
+	FFFrom        string   `json:"ff_from,omitempty"`
+	FFTo          string   `json:"ff_to,omitempty"`
+	FFCount       int      `json:"ff_count,omitempty"`
+	FFRefused     bool     `json:"ff_refused,omitempty"`
+	HeadInHost    *bool    `json:"head_in_host,omitempty"` // absent = unknown
+	StaleBranches []string `json:"stale_branches,omitempty"`
+	Rewritten     bool     `json:"rewritten,omitempty"`
+	Unverified    bool     `json:"unverified,omitempty"`
+}
+
+// copy returns an independent CloneInfo (own slice, own pointer), nil for nil.
+func (c *CloneInfo) copy() *CloneInfo {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.StaleBranches = slices.Clone(c.StaleBranches)
+	if c.HeadInHost != nil {
+		v := *c.HeadInHost
+		out.HeadInHost = &v
+	}
+	return &out
 }
 
 // cloneGHRepo is "owner/repo" for a clone-mode box when the host repo's origin
@@ -537,6 +590,9 @@ type Info struct {
 	// whose bundle was consulted only; absent otherwise, so a host session's
 	// wire shape is unchanged. Reasons are fixed strings, never an error text.
 	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
+	// Clone is what refreshing the clone before this spawn did. Clone-mode
+	// sessions only; absent otherwise.
+	Clone *CloneInfo `json:"clone,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -583,6 +639,9 @@ type Session struct {
 	// (see Info.BundleDrops). Immutable after publication, read without the
 	// lock; Info hands out a copy.
 	BundleDrops []bundle.Drop
+	// Clone is the clone refresh result for a clone-mode session. Immutable
+	// after publication, read without the lock; Info hands out a deep copy.
+	Clone *CloneInfo
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
@@ -981,6 +1040,7 @@ func (s *Session) Info() Info {
 		in.Egress = "open"
 	}
 	in.BundleDrops = slices.Clone(s.BundleDrops)
+	in.Clone = s.Clone.copy()
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
 			Elevate: elevateInfo(s.AWS.Elevate), Fields: awsprobe.Lookup(s.base, "").Fields()}
@@ -1578,14 +1638,41 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// container start. Creating a repo copy can take minutes; the error is
 	// returned as is because it already carries its own remedy.
 	var cloneMounts *box.CloneMounts
+	var cloneInfo *CloneInfo
+	// Held until the new session is published (or the spawn fails): a second
+	// concurrent spawn of this clone must then see the first as a live session.
+	releaseClone := func() {}
+	defer func() { releaseClone() }()
 	if cl != nil {
 		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		cm, err := ch.Prepare(cctx, *cl, acct.IsDefault)
+		cm, created, err := ch.Prepare(cctx, *cl, acct.IsDefault)
 		cancel()
 		if err != nil {
 			return nil, err
 		}
 		cloneMounts = &cm
+		// Computed under m.mu, then Refresh runs outside it: it can take a
+		// while and must not stall the manager.
+		live := false
+		m.mu.Lock()
+		for _, o := range m.sessions {
+			if o.Runtime != config.RuntimeBox || !box.Overlaps(o.Cwd, cl.Dir) {
+				continue
+			}
+			o.mu.Lock()
+			alive := o.status != statusExited
+			o.mu.Unlock()
+			if alive {
+				live = true
+				break
+			}
+		}
+		m.mu.Unlock()
+		rctx, rcancel := context.WithTimeout(context.Background(), cloneRefreshTimeout)
+		info, release := ch.Refresh(rctx, *cl, RefreshOpts{Created: created, LiveSession: live})
+		rcancel()
+		releaseClone = sync.OnceFunc(release)
+		cloneInfo = &info
 	}
 
 	// The bundle is resolved BEFORE Build: its flags must sit ahead of the "--"
@@ -1947,6 +2034,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.BrokerNonce = nonce
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
+	sess.Clone = cloneInfo
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
 	sess.resumeSkipped = resumeSkipped
@@ -1959,11 +2047,12 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
+	releaseClone() // published: the next spawn of this clone sees this session as live
 
 	if sc != nil {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
-			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Exclusive: exclusive,
+			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			BaseAccess: maps.Clone(baseAccess)})
 	}
 	m.watchRetention(id, sess)
@@ -2678,6 +2767,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 		sess.EgressNonce = md.BrokerNonce
 	}
 	sess.BundleDrops = md.BundleDrops
+	sess.Clone = md.Clone.copy()
 	sess.Exclusive = md.Exclusive
 	// nil for a record from before the probe: every key reads "not checked"
 	// and is watched below, never a clean result.

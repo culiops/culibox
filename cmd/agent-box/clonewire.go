@@ -15,6 +15,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/clone"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/session"
 )
 
 // cloneDirsFile is the durable record of every directory agent-box has made (or
@@ -43,27 +44,31 @@ type cloneHooks struct {
 	prepare func(context.Context, clone.Env, config.Clone, bool) (box.CloneMounts, bool, error) // swappable for tests
 }
 
-func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory bool) (box.CloneMounts, error) {
+func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory bool) (box.CloneMounts, bool, error) {
 	if h.unavailable != "" {
-		return box.CloneMounts{}, fmt.Errorf("%w: clone mode is unavailable (%s)", box.ErrBoxUnavailable, h.unavailable)
+		return box.CloneMounts{}, false, fmt.Errorf("%w: clone mode is unavailable (%s)", box.ErrBoxUnavailable, h.unavailable)
 	}
 	if !usableDir(c.Dir) {
-		return box.CloneMounts{}, fmt.Errorf("%w: clone dir %q is not an absolute clean path", box.ErrUnboxableWorkspace, c.Dir)
+		return box.CloneMounts{}, false, fmt.Errorf("%w: clone dir %q is not an absolute clean path", box.ErrUnboxableWorkspace, c.Dir)
 	}
 	// A clone_of the box can write is a host code-execution path (it plants
 	// .git hooks the host's fetch then fires): refuse it before anything is
 	// recorded or created.
 	if err := h.checkOf(c.Of); err != nil {
-		return box.CloneMounts{}, err
+		return box.CloneMounts{}, false, err
 	}
 	// Record BEFORE creating anything, so a crash between creation and record
 	// cannot leave a box-written clone that nothing remembers. A record that
 	// cannot be written fails the spawn.
 	if err := h.record(c.Dir); err != nil {
-		return box.CloneMounts{}, fmt.Errorf("%w: cannot record the clone dir in %s: %v", box.ErrBoxUnavailable, h.file, err)
+		return box.CloneMounts{}, false, fmt.Errorf("%w: cannot record the clone dir in %s: %v", box.ErrBoxUnavailable, h.file, err)
 	}
-	cm, _, err := h.prepare(ctx, h.env, c, withMemory) // created is wired through in a later task
-	return cm, err
+	return h.prepare(ctx, h.env, c, withMemory)
+}
+
+// Refresh is a compile adapter: Task 8 of the clone-refresh plan replaces it.
+func (h *cloneHooks) Refresh(context.Context, config.Clone, session.RefreshOpts) (session.CloneInfo, func()) {
+	return session.CloneInfo{}, func() {}
 }
 
 // HostOrigin reads the host repo's origin URL. `of` passed checkOf in Prepare,

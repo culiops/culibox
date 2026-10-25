@@ -84,6 +84,10 @@ type sessionMeta struct {
 	// kept so the UI still says so after a daemon restart. Records from before
 	// A3 lack it and read as none.
 	BundleDrops []bundle.Drop `json:"bundle_drops,omitempty"`
+	// Clone is the clone refresh result of a clone-mode session, kept so the UI
+	// still shows it after a daemon restart. Records from before the refresh
+	// lack it and read as none.
+	Clone *CloneInfo `json:"clone,omitempty"`
 	// Exclusive: the session's box is its own (an elevate binding). Records
 	// written before M3b have no key and read as false.
 	Exclusive bool `json:"exclusive,omitempty"`
