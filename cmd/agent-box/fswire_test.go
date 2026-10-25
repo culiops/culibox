@@ -9,6 +9,7 @@ import (
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxedws"
 	"github.com/culiops/agent-box/internal/config"
+	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/session"
 )
 
@@ -137,4 +138,43 @@ func TestSeedBoxedRegistryCompleteness(t *testing.T) {
 			t.Fatal("without a containment layer the seed is complete")
 		}
 	})
+}
+
+// Profiles from profiles.json reach the launcher only when the profile manager
+// is built, after the first-boot seed ran. recordBoxedProfiles runs after that
+// on every boot, so a boxed profile's directory is recorded even in a registry
+// an earlier build already marked seeded with nothing in it.
+func TestRecordBoxedProfiles(t *testing.T) {
+	data := t.TempDir()
+	none := func(string) (string, bool) { return "", false }
+	reg, _, err := boxedws.Open(data, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Seed(nil, true); err != nil { // what the buggy boot left behind
+		t.Fatal(err)
+	}
+	inPlace, clone, host, repo := t.TempDir(), t.TempDir(), t.TempDir(), t.TempDir()
+	l := launcher.New([]config.AgentConfig{{Name: "bash", Bin: "bash"}}, nil, nil)
+	l.SetDefaultRuntime("") // unset: profiles without a runtime spawn boxed
+	l.SetAgents([]config.AgentConfig{
+		{Name: "bash", Bin: "bash"},
+		{Name: "inplace", Bin: "claude", DefaultCwd: inPlace},
+		{Name: "clone", Bin: "claude", Runtime: config.RuntimeBox, CloneOf: repo, DefaultCwd: clone},
+		{Name: "host", Bin: "claude", Runtime: config.RuntimeHost, DefaultCwd: host},
+	})
+
+	recordBoxedProfiles(reg, l.Clones(), l.BoxedDefaultCwds())
+
+	reg2, seeded, err := boxedws.Open(data, none)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := reg2.List()
+	want := []string{clone, inPlace}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !seeded || !slices.Equal(got, want) {
+		t.Fatalf("seeded=%v recorded=%v, want seeded=true %v", seeded, got, want)
+	}
 }
