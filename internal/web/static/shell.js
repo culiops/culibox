@@ -118,6 +118,8 @@ function selectSettingsTab(name) {
     const on = b.dataset.tab === name;
     b.classList.toggle("on", on);
     b.setAttribute("aria-selected", on ? "true" : "false");
+    // On a phone the strip scrolls on its own; keep the chosen tab in view.
+    if (on && typeof b.scrollIntoView === "function") b.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
   for (const p of document.querySelectorAll("#settings-modal .dbd")) {
     p.hidden = p.id !== name;

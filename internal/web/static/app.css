@@ -2245,7 +2245,12 @@
       #bug-modal .fld { min-height: var(--tap); font-size: 13px; }
       #bug-modal textarea.fld { min-height: 0; }
       #bug-preview { max-height: 50vh; }
-      #bug-status { display: none; }
+      /* The footer's two buttons share the row, so the inline confirmation (the
+         only one visible here: the toast paints under the full-screen modal)
+         takes its own line above them. */
+      #foot-bug { height: auto; flex-wrap: wrap; padding: 8px 13px; }
+      #bug-status { flex-basis: 100%; order: -1; }
+      #bug-status:empty { display: none; }
       #toast { right: 8px; left: 8px; max-width: none; bottom: 40px; }
       /* (The Files action buttons #ft-newdir/#ft-refresh/#ft-upload are sized
          with the promoted Files topbar above — on a phone the tree only ever
@@ -2313,6 +2318,12 @@
       .dhd .btn { min-width: var(--tap); min-height: var(--tap); }
       .tabs .t { flex: 1; min-height: var(--tap); display: flex; align-items: center;
                  justify-content: center; padding: 0 8px; }
+      /* Six settings tabs are wider than a phone. The strip scrolls on its own
+         (so the dialog and page never do) and each tab keeps its natural width. */
+      #settings-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+                       -webkit-overflow-scrolling: touch; }
+      #settings-tabs::-webkit-scrollbar { display: none; }
+      #settings-tabs .t { flex: 1 0 auto; white-space: nowrap; }
       .dft { height: 66px; padding: 0 13px; }
       .dft .btn { flex: 1; min-height: var(--tap); display: inline-flex;
                   align-items: center; justify-content: center; font-size: 13px; }

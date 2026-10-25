@@ -59,8 +59,10 @@ async function openBugReport() {
   try {
     const res = await api("/api/bugreport");
     if (seq !== bugSeq) return;
-    bugBase = String(res.markdown || "");
-    bugIssueURL = String(res.issue_url || "");
+    const md = res && typeof res.markdown === "string" ? res.markdown : "";
+    if (md.trim() === "") throw new Error("the server returned an empty report");
+    bugBase = md;
+    bugIssueURL = String((res && res.issue_url) || "");
     bugRender();
     bugSetReady(true);
   } catch (e) {
@@ -84,9 +86,25 @@ function bugCopy() {
   });
 }
 
+// bugOpenIssue copies the full report FIRST, then opens the issue. GitHub's URL
+// can only carry a short body (header + FAIL/WARN lines), so the clipboard is
+// what holds the reporter's words and the whole bundle. The window opens from
+// the copy callback, whether or not the copy worked (the user can still paste
+// by hand via Copy report); the click's transient user activation outlasts the
+// clipboard write, so the popup is not blocked.
 function bugOpenIssue() {
-  if (!bugIssueURL) return;
-  window.open(bugIssueURL, "_blank", "noopener");
+  if (bugBase === null) return;
+  if (typeof bugIssueURL !== "string" || !bugIssueURL.startsWith("https://github.com/")) {
+    setDialogError("bug-modal", "No valid GitHub link was returned; use Copy report instead.");
+    return;
+  }
+  setDialogError("bug-modal", "");
+  copyText(bugFilled(), (ok) => {
+    bugSetStatus(ok ? "Report copied — paste it into the issue body."
+                    : "Could not copy the report — use Copy report, then paste it into the issue.");
+    showToast(ok ? "Report copied" : "Could not copy the report", { error: !ok });
+    window.open(bugIssueURL, "_blank", "noopener");
+  });
 }
 
 // loadAboutInfo shows the build in the About tab. /api/meta is the one place
