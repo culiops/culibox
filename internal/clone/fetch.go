@@ -32,9 +32,10 @@ var (
 	fetchTimeout         = 10 * time.Minute
 )
 
-// quarantinePrefix is where a fetched branch waits in clone_of while its
-// history is checked against the base record. Only a branch that passes moves
-// to box/<branch>; the quarantine ref is deleted on every path out.
+// quarantinePrefix is where a fetched branch waits in clone_of, as
+// <prefix><clone hash>/<branch>, while its history is checked against the base
+// record. Only a branch that passes moves to box/<branch>; the quarantine ref
+// is deleted on every path out.
 const quarantinePrefix = "refs/agent-box/quarantine/"
 
 // quarantineCleanup bounds the deferred delete of the quarantine ref. It runs
@@ -294,7 +295,9 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	// The quarantine ref of step 7 goes on every path out from here, success
 	// included, and also one an earlier killed fetch left. The delete gets a
 	// fresh context: a cancelled ctx must not leave refused history reachable.
-	quarantine := quarantinePrefix + r.Branch
+	// Scoped to the clone: two profiles may share clone_of, and one's fetch
+	// must not overwrite the ref the other is checking.
+	quarantine := quarantinePrefix + c.Hash() + "/" + r.Branch
 	defer func() {
 		cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), quarantineCleanup)
 		defer ccancel()
@@ -415,8 +418,10 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 
 	// 6a. A bundle with no prerequisite commit shares no history with the
 	// base: an orphan branch, or one built on a base the host rewrote from its
-	// root. Nothing in it can be checked against the record, so the flag does
-	// not override this.
+	// root. The flag does not override this. It is advisory, for an honest box
+	// only: the box writes the header, and can list any commit the host has as
+	// a prerequisite (bundle verify accepts that). The real guard is 7b, on the
+	// imported history that fetch's connectivity check proved complete.
 	n, err := bundlePrereqs(tmp)
 	if err != nil {
 		return res, fmt.Errorf("clone fetch: reading the bundle header: %w", err)
@@ -453,6 +458,18 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 	tip := strings.TrimSpace(string(out))
 	if !shaRE.MatchString(tip) {
 		return res, fmt.Errorf("clone fetch: %s: unexpected rev-parse output", quarantine)
+	}
+	// The ref must still hold what this bundle brought: the tip it names.
+	out, err = hostGit("bundle", "list-heads", tmp, "refs/heads/"+r.Branch)
+	if err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	head, name, _ := strings.Cut(strings.TrimSpace(string(out)), " ")
+	if !shaRE.MatchString(head) || name != "refs/heads/"+r.Branch {
+		return res, fmt.Errorf("clone fetch: refusing %s: the bundle does not name exactly one tip for it", r.Branch)
+	}
+	if head != tip {
+		return res, fmt.Errorf("clone fetch: refusing %s: the imported tip changed while it was checked (a concurrent fetch?); retry", r.Branch)
 	}
 
 	// 7b. A recorded base that host history no longer has (a rewrite, e.g. a

@@ -1099,11 +1099,35 @@ func TestFetchLeavesNoQuarantineRef(t *testing.T) {
 	defer cancel()
 	h = &hookGit{g: x.rec, after: func(sub string) {
 		if sub == "fetch" {
-			if q := x.quarantineRefs(); q != quarantinePrefix+"feat" {
-				t.Errorf("after the import the quarantine ref is %q, want %s", q, quarantinePrefix+"feat")
+			if q, want := x.quarantineRefs(), quarantinePrefix+x.req.Clone.Hash()+"/feat"; q != want {
+				t.Errorf("after the import the quarantine ref is %q, want %s", q, want)
 			}
 			cancel()
 		}
 	}}
 	check("cancelled", x, h, ctx, "context canceled")
+}
+
+// Two profiles may share clone_of. Another fetch that overwrites the
+// quarantine ref between this one's import and its rev-parse must not get its
+// tip checked against this clone's record and published as box/<branch>.
+func TestFetchRefusesATipChangedDuringTheCheck(t *testing.T) {
+	x := newFetchFx(t)
+	other, err := x.ofRev("refs/heads/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := quarantinePrefix + x.req.Clone.Hash() + "/feat"
+	h := &hookGit{g: x.rec, after: func(sub string) {
+		if sub == "fetch" {
+			gitIn(t, x.of, "", "update-ref", q, other)
+		}
+	}}
+	_, err = Fetch(context.Background(), h, x.dock, x.req)
+	if err == nil || !strings.Contains(err.Error(),
+		"clone fetch: refusing feat: the imported tip changed while it was checked (a concurrent fetch?); retry") {
+		t.Fatalf("err = %v, want the changed-tip refusal", err)
+	}
+	x.noBoxRef("feat")
+	x.tempEmpty()
 }
