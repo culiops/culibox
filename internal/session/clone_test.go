@@ -65,9 +65,14 @@ type fakeCloneHooks struct {
 	created   bool // Prepare's "created" answer
 	info      CloneInfo
 	refreshes []RefreshOpts
+	lives     []bool // what opts.LiveSession() answered, per Refresh
 	released  int
 	order     *callLog // optional: shared with fakeBoxes.order
-	onRelease func()   // runs inside the release func, before it is counted
+	onRelease func()   // runs inside the release func, before the clone lock is dropped
+
+	locks     map[string]chan struct{} // per-clone-dir lock, like the real hooks'
+	entered   chan struct{}            // optional: signalled on entry to Refresh, before the lock
+	afterLock func()                   // optional: runs once the lock is held, before LiveSession is asked
 }
 
 func (f *fakeCloneHooks) HostOrigin(_ context.Context, of string) (string, error) {
@@ -88,10 +93,31 @@ func (f *fakeCloneHooks) Prepare(_ context.Context, c config.Clone, withMemory b
 	return box.CloneMounts{Hash: "h"}, f.created, nil
 }
 
-func (f *fakeCloneHooks) Refresh(_ context.Context, _ config.Clone, o RefreshOpts) (CloneInfo, func()) {
+// Refresh takes the clone's lock first and only then asks LiveSession, as the
+// real hooks must; release drops the lock.
+func (f *fakeCloneHooks) Refresh(_ context.Context, c config.Clone, o RefreshOpts) (CloneInfo, func()) {
+	if f.entered != nil {
+		f.entered <- struct{}{}
+	}
+	f.mu.Lock()
+	if f.locks == nil {
+		f.locks = map[string]chan struct{}{}
+	}
+	lock := f.locks[c.Dir]
+	if lock == nil {
+		lock = make(chan struct{}, 1)
+		f.locks[c.Dir] = lock
+	}
+	f.mu.Unlock()
+	lock <- struct{}{}
+	if f.afterLock != nil {
+		f.afterLock()
+	}
+	live := o.LiveSession != nil && o.LiveSession()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refreshes = append(f.refreshes, o)
+	f.lives = append(f.lives, live)
 	f.order.add("refresh")
 	return f.info, func() {
 		f.order.add("release")
@@ -101,6 +127,7 @@ func (f *fakeCloneHooks) Refresh(_ context.Context, _ config.Clone, o RefreshOpt
 		f.mu.Lock()
 		f.released++
 		f.mu.Unlock()
+		<-lock
 	}
 }
 
@@ -613,11 +640,11 @@ func TestCloneSpawnLiveSessionFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = m.Kill(s3.ID) })
-	if len(hooks.refreshes) != 3 {
-		t.Fatalf("Refresh called %d times, want 3", len(hooks.refreshes))
+	if len(hooks.lives) != 3 {
+		t.Fatalf("Refresh called %d times, want 3", len(hooks.lives))
 	}
 	for i, want := range []bool{false, true, false} {
-		if got := hooks.refreshes[i].LiveSession; got != want {
+		if got := hooks.lives[i]; got != want {
 			t.Errorf("spawn %d: LiveSession = %v, want %v", i+1, got, want)
 		}
 	}
@@ -786,7 +813,57 @@ func TestRestartRefreshesAgain(t *testing.T) {
 	if len(hooks.refreshes) != 2 {
 		t.Fatalf("Refresh called %d times, want 2", len(hooks.refreshes))
 	}
-	if hooks.refreshes[1].LiveSession {
+	if len(hooks.lives) != 2 || hooks.lives[1] {
 		t.Fatal("the exited session counted as live on restart")
+	}
+}
+
+// Spawn A holds the clone lock and is not yet published; spawn B is already
+// waiting for that lock. B must ask LiveSession only after it gets the lock,
+// when A is published, so it sees A as live and does not refresh over A's box.
+func TestCloneSpawnLiveSessionSeenAfterConcurrentPublish(t *testing.T) {
+	l, dir := testCloneLauncher(t, config.RuntimeBox)
+	hooks := &fakeCloneHooks{entered: make(chan struct{}, 2)}
+	m, _ := cloneManager(t, l, hooks)
+
+	unblockA := make(chan struct{})
+	var first sync.Once
+	hooks.afterLock = func() {
+		first.Do(func() { <-unblockA }) // only the spawn that gets the lock first waits
+	}
+
+	type result struct {
+		s   *Session
+		err error
+	}
+	spawn := func() chan result {
+		ch := make(chan result, 1)
+		go func() {
+			s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+			ch <- result{s, err}
+		}()
+		return ch
+	}
+	a := spawn()
+	<-hooks.entered // A is inside Refresh and holds the lock
+	b := spawn()
+	<-hooks.entered // B has reached Refresh; it can only wait on A's lock
+	close(unblockA)
+
+	for _, ch := range []chan result{a, b} {
+		select {
+		case r := <-ch:
+			if r.err != nil {
+				t.Fatal(r.err)
+			}
+			t.Cleanup(func() { _ = m.Kill(r.s.ID) })
+		case <-time.After(10 * time.Second):
+			t.Fatal("spawn did not finish")
+		}
+	}
+	hooks.mu.Lock()
+	defer hooks.mu.Unlock()
+	if len(hooks.lives) != 2 || hooks.lives[0] || !hooks.lives[1] {
+		t.Fatalf("LiveSession answers = %v, want [false true]: B must see A's published session", hooks.lives)
 	}
 }

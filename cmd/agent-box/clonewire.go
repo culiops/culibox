@@ -66,7 +66,7 @@ func (h *cloneHooks) Prepare(ctx context.Context, c config.Clone, withMemory boo
 	return h.prepare(ctx, h.env, c, withMemory)
 }
 
-// Refresh is a compile adapter: Task 8 of the clone-refresh plan replaces it.
+// Refresh is a placeholder that refreshes nothing; the real one comes in a later commit.
 func (h *cloneHooks) Refresh(context.Context, config.Clone, session.RefreshOpts) (session.CloneInfo, func()) {
 	return session.CloneInfo{}, func() {}
 }

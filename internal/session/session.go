@@ -253,8 +253,13 @@ const cloneRefreshTimeout = 60 * time.Second
 
 // RefreshOpts is what Spawn tells Refresh about the clone it is about to start.
 type RefreshOpts struct {
-	Created     bool
-	LiveSession bool // a non-exited boxed session in this manager has a Cwd overlapping the clone dir
+	Created bool
+	// LiveSession reports whether a non-exited boxed session in this manager has
+	// a Cwd overlapping the clone dir. The hooks must call it only AFTER taking
+	// the per-clone lock: a spawn that holds the lock publishes its session
+	// before releasing it, so a call made after waiting for the lock sees it.
+	// nil means false.
+	LiveSession func() bool
 }
 
 // CloneInfo is the outcome of the clone refresh done before a clone-mode box
@@ -1651,23 +1656,25 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			return nil, err
 		}
 		cloneMounts = &cm
-		// Computed under m.mu, then Refresh runs outside it: it can take a
-		// while and must not stall the manager.
-		live := false
-		m.mu.Lock()
-		for _, o := range m.sessions {
-			if o.Runtime != config.RuntimeBox || !box.Overlaps(o.Cwd, cl.Dir) {
-				continue
+		// The scan runs under m.mu but only when the hooks call it, after they
+		// hold the per-clone lock. Refresh itself runs outside m.mu: it can
+		// take a while and must not stall the manager.
+		live := func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			for _, o := range m.sessions {
+				if o.Runtime != config.RuntimeBox || !box.Overlaps(o.Cwd, cl.Dir) {
+					continue
+				}
+				o.mu.Lock()
+				alive := o.status != statusExited
+				o.mu.Unlock()
+				if alive {
+					return true
+				}
 			}
-			o.mu.Lock()
-			alive := o.status != statusExited
-			o.mu.Unlock()
-			if alive {
-				live = true
-				break
-			}
+			return false
 		}
-		m.mu.Unlock()
 		rctx, rcancel := context.WithTimeout(context.Background(), cloneRefreshTimeout)
 		info, release := ch.Refresh(rctx, *cl, RefreshOpts{Created: created, LiveSession: live})
 		rcancel()
