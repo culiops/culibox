@@ -51,13 +51,21 @@ type Input struct {
 	Profiles   []config.AgentConfig
 	Live       *Live  // nil for the CLI
 	LogHint    string // CLI only: where to find logs
+
+	r *redactor // built once per Markdown/IssueURL call
 }
 
-// clean is the one path every free-form string takes into the bundle: doctor's
-// home/host redaction, then the token scrub, then flattened to one line so a
-// value cannot start a heading or close a code fence.
+// clean is the one path every free-form string takes into the bundle. The
+// token scrub runs FIRST, on the raw text: replacing the hostname or home first
+// can split a token ("ghp_ABC<host>DEF...") so no pattern matches it any more.
+// The result is one line, and a code fence is neutralised so a log line cannot
+// close the fence around the logs.
 func (in Input) clean(s string) string {
-	s = Scrub(doctor.Redact(s, in.Home, in.Host))
+	r := in.r
+	if r == nil {
+		r = newRedactor(in)
+	}
+	s = r.apply(Scrub(s), in)
 	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 	return strings.ReplaceAll(s, "```", "'''")
 }
@@ -78,6 +86,7 @@ func (in Input) doctorLine(r doctor.Result) string {
 
 // Markdown renders the full bundle.
 func Markdown(in Input) string {
+	in.r = newRedactor(in)
 	var b strings.Builder
 	b.WriteString(in.headerLines())
 
@@ -137,8 +146,8 @@ func (in Input) configSummary(b *strings.Builder) {
 	line("default runtime", c.RuntimeFor(config.AgentConfig{}))
 	line("allow_public", strconv.FormatBool(c.AllowPublic))
 	line("replies_enabled", strconv.FormatBool(c.RepliesEnabled))
-	line("bundle source", orDefault(c.BundleSource))
-	line("box image", c.BoxImageOrDefault())
+	line("bundle source", bundleSourceClass(c.BundleSource))
+	line("box image", imageClass(c.BoxImageOrDefault()))
 	line("box idle ttl (s)", intOrDefault(c.BoxIdleTTLSeconds))
 	line("box pids limit", intOrDefault(c.BoxPidsLimit))
 	line("box tmp size", orDefault(c.BoxTmpSize))
@@ -205,6 +214,7 @@ func (in Input) liveState(b *strings.Builder) {
 // FAIL/WARN doctor lines, cut on whole lines so the encoded URL stays under
 // maxURLLen. The full bundle is pasted by hand; the link is a convenience.
 func IssueURL(in Input) string {
+	in.r = newRedactor(in)
 	var lines []string
 	for _, r := range in.Doctor {
 		if r.Status == doctor.Fail || r.Status == doctor.Warn {
@@ -271,3 +281,43 @@ func BindClass(addr string) string {
 
 // tailnet is Tailscale's CGNAT range.
 var tailnet = netip.MustParsePrefix("100.64.0.0/10")
+
+// bundleSourceClass hides the path: a custom bundle_source is a filesystem
+// location that may sit outside $HOME where tilde cannot hide it.
+func bundleSourceClass(v string) string {
+	switch v {
+	case "":
+		return "auto"
+	case "off":
+		return "off"
+	}
+	return "custom"
+}
+
+// imageClass shows the box image only for the two registries we publish to or
+// pull from by default; anything else may name an internal registry, so only
+// its digest prefix (enough to tell builds apart) is kept.
+func imageClass(ref string) string {
+	first, _, hasSlash := strings.Cut(ref, "/")
+	// A first segment is a registry host only if it looks like one.
+	registry := ""
+	if hasSlash && (strings.ContainsAny(first, ".:") || first == "localhost") {
+		registry = first
+	}
+	if registry == "" || registry == "ghcr.io" || registry == "docker.io" {
+		return ref
+	}
+	if _, d, ok := strings.Cut(ref, "@sha256:"); ok && len(d) >= 12 && isHex(d[:12]) {
+		return "custom@" + strings.ToLower(d[:12])
+	}
+	return "custom"
+}
+
+func isHex(s string) bool {
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}

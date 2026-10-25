@@ -152,7 +152,7 @@ func TestIssueURL(t *testing.T) {
 		t.Errorf("title/labels = %q / %q", q.Get("title"), q.Get("labels"))
 	}
 	body := q.Get("body")
-	for _, w := range []string{"agent-box bug report v1", "FAIL abduco", "WARN port", "full report: paste below", "~"} {
+	for _, w := range []string{"agent-box bug report v1", "FAIL abduco", "WARN port", "full report: paste below", "broken at ~"} {
 		if !strings.Contains(body, w) {
 			t.Errorf("body missing %q:\n%s", w, body)
 		}
@@ -172,5 +172,95 @@ func TestIssueURL(t *testing.T) {
 	q, _ = url.ParseQuery(strings.TrimPrefix(u, base))
 	if !strings.HasSuffix(strings.TrimSpace(q.Get("body")), "full report: paste below") {
 		t.Errorf("truncated body lost its ending:\n%s", q.Get("body"))
+	}
+}
+
+// Replacing the hostname before scrubbing split tokens: Host "mac" turned
+// ghp_ABCmacDEF... into ghp_ABC<host>DEF..., which no pattern matches.
+func TestHostnameInsideTokenDoesNotDefeatScrub(t *testing.T) {
+	in := baseInput()
+	in.Host = "mac"
+	in.Doctor = []doctor.Result{{Status: doctor.Fail, Check: "net",
+		Detail: "ghp_ABCmacDEFGHIJKLMNOPQRSTUVWXYZ0123456 and Bearer eyJmac.payloadmac.sigmac"}}
+	in.Live = &Live{Logs: []string{"retry with ghp_ABCmacDEFGHIJKLMNOPQRSTUVWXYZ0123456"}}
+	for name, out := range map[string]string{"markdown": Markdown(in), "issue url": IssueURL(in)} {
+		if u, err := url.QueryUnescape(out); err == nil {
+			out = u
+		}
+		for _, bad := range []string{"ghp_ABC", "DEFGHIJKL", "eyJ", "payload", "sigmac"} {
+			if strings.Contains(out, bad) {
+				t.Errorf("%s leaks %q:\n%s", name, bad, out)
+			}
+		}
+	}
+}
+
+func TestBundleSourceAndBoxImageClasses(t *testing.T) {
+	for src, want := range map[string]string{"": "bundle source: auto", "off": "bundle source: off", "/opt/secret-bundle": "bundle source: custom"} {
+		in := baseInput()
+		in.Config.BundleSource = src
+		md := Markdown(in)
+		if !strings.Contains(md, want) || strings.Contains(md, "/opt/secret-bundle") {
+			t.Errorf("source %q: want %q, no path:\n%s", src, want, md)
+		}
+	}
+	const digest = "sha256:0123456789abcdef0123456789abcdef"
+	for img, want := range map[string]string{
+		"":                                   "box image: culiops/agent-box:base",
+		"ghcr.io/culiops/agent-box:base":     "box image: ghcr.io/culiops/agent-box:base",
+		"docker.io/library/debian:12":        "box image: docker.io/library/debian:12",
+		"registry.corp.example.com/team/x:1": "box image: custom\n",
+		"registry.corp.example.com/team/x@" + digest: "box image: custom@0123456789ab\n",
+		"localhost:5000/x":                           "box image: custom\n",
+		"10.0.0.5:5000/x:1":                          "box image: custom\n",
+	} {
+		in := baseInput()
+		in.Config.BoxImage = img
+		md := Markdown(in)
+		if !strings.Contains(md, want) {
+			t.Errorf("image %q: want %q in:\n%s", img, want, md)
+		}
+		for _, bad := range []string{"corp.example.com", "10.0.0.5", "localhost:5000", "team/x"} {
+			if strings.Contains(md, bad) {
+				t.Errorf("image %q leaks %q", img, bad)
+			}
+		}
+	}
+}
+
+func TestMachineIdentifiersRedacted(t *testing.T) {
+	in := baseInput()
+	in.Host = "Buildbox.corp.example.com"
+	in.Config.BindAddr = "gw-internal.example.net:9000"
+	in.Config.AllowedHosts = []string{"agent.example.org:8443", "tunnel.example.io"}
+	in.Config.DataDir = "/srv/agent-data"
+	in.Config.ProfilesPath = "/srv/agent-data/profiles.json"
+	in.Doctor = []doctor.Result{{Status: doctor.Warn, Check: "x", Detail: strings.Join([]string{
+		"store /srv/agent-data/profiles.json and /srv/agent-data/db",
+		"dial 203.0.113.9:443 and 10.1.2.3 and 2001:db8::1 and fe80::1ff:fe23:4567:890a",
+		"host BUILDBOX / buildbox.corp.example.com up; gw-internal.example.net reached",
+		"agent.example.org:8443 tunnel.example.io",
+		"loopback 127.0.0.1:8899 [::1]:8899 at 12:30:45",
+	}, " ")}}
+	md := Markdown(in)
+	for _, bad := range []string{"/srv/agent-data", "203.0.113.9", "10.1.2.3", "2001:db8", "fe80", "BUILDBOX", "buildbox",
+		"corp.example.com", "gw-internal", "agent.example.org", "tunnel.example.io"} {
+		if strings.Contains(md, bad) {
+			t.Errorf("leaks %q:\n%s", bad, md)
+		}
+	}
+	for _, keep := range []string{"127.0.0.1:8899", "[::1]:8899", "12:30:45", "<path>", "<ip>", "<host>"} {
+		if !strings.Contains(md, keep) {
+			t.Errorf("lost %q:\n%s", keep, md)
+		}
+	}
+
+	// A short host name (<3 chars) is not replaced: it would mangle ordinary text.
+	in = baseInput()
+	in.Host = "ab.example.com"
+	in.Doctor = []doctor.Result{{Status: doctor.Pass, Check: "x", Detail: "abstract table about ab.example.com"}}
+	md = Markdown(in)
+	if !strings.Contains(md, "abstract table about <host>") {
+		t.Errorf("full host not replaced:\n%s", md)
 	}
 }

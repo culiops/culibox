@@ -46,3 +46,27 @@ func TestScrubNeverLeavesTheValue(t *testing.T) {
 		}
 	}
 }
+
+func TestScrubFixRound1(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"ghu", "x ghu_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 y", "x [redacted] y"},
+		{"ghr", "x ghr_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 y", "x [redacted] y"},
+		{"glued to underscore", "GH_ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "GH_[redacted]"},
+		{"start of string", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", "[redacted]"},
+		{"two adjacent", "ghp_AAAAAAAAAAAAAAAAAAAAAAAA ghs_BBBBBBBBBBBBBBBBBBBBBBBB", "[redacted] [redacted]"},
+		{"url userinfo", "clone https://bob:s3cr3t@git.example.com/x.git ok", "clone https://[redacted]@git.example.com/x.git ok"},
+		{"url user only", "ssh://git@host/x", "ssh://[redacted]@host/x"},
+		{"url no userinfo", "https://example.com/a@b", "https://example.com/a@b"},
+		{"aws secret, aws line", "aws error: bad key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws error: bad key [redacted]"},
+		{"aws secret, secret line", "the Secret was wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "the Secret was [redacted]"},
+		{"40 chars, unrelated line", "see wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "see wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+		{"aws hint only on other line", "aws ok\nsee wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "aws ok\nsee wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Scrub(c.in); got != c.want {
+				t.Fatalf("Scrub(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
