@@ -11,8 +11,8 @@
 // terminal is noise.
 let toastTimer = null;
 
-// showToast(msg, {undo, ms, error}): `undo` is a callback; supplying it reveals
-// the Undo button and clicking it dismisses the toast after running the callback.
+// showToast(msg, {undo, ms, error, warn}): `undo` is a callback; supplying it reveals
+// the Undo button and clicking it dismisses the toast after running the callback. `warn` tints the border (a milder `error`).
 function showToast(msg, opts) {
   opts = opts || {};
   const box = document.getElementById("toast");
@@ -20,6 +20,7 @@ function showToast(msg, opts) {
   if (!box) return;
   document.getElementById("toast-msg").textContent = msg;
   box.classList.toggle("err", !!opts.error);
+  box.classList.toggle("warn", !!opts.warn && !opts.error);
   if (opts.undo) {
     undoBtn.hidden = false;
     undoBtn.onclick = () => { hideToast(); opts.undo(); };

@@ -195,6 +195,7 @@
     }
     .kv { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; padding: 3px 0; }
     .kv .v { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kv .v.warn { color: var(--warn); }
     /* A row whose value must be read whole (the broker's last error carries the
        command to run) wraps instead of clipping. */
     .kv .bdg { align-self: center; }
@@ -1612,6 +1613,7 @@
     #toast-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
     #toast.show { display: flex; }
     #toast.err { border-left-color: var(--danger); }
+    #toast.warn { border-left-color: var(--warn); }
     #toast-msg { flex: 1; min-width: 0; overflow-wrap: anywhere; }
     #toast-undo { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 3px 11px; cursor: pointer; font: inherit; font-size: 12px; }
     #toast-undo:hover { border-color: var(--accent); color: #fff; }

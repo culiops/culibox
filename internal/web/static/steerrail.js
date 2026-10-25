@@ -167,6 +167,98 @@ function dropsRow(s) {
   return { k: "left out", v, wrap: true };
 }
 
+// cloneParts: what a clone-mode session's refresh state says, as plain strings.
+// Every value in `c` is box-derived text (branch names, error text); it is
+// sanitized server-side, but this layer treats it as untrusted anyway and only
+// ever builds strings. The callers render them with textContent, never HTML.
+// `warn` clauses want attention; `info` clauses are a status line. `unsent`,
+// `skipped` and `refreshed` are the same clauses as in `info`, kept apart so the
+// toast can pick the one that matters most.
+function cloneClauses(c, profile) {
+  const out = { warn: [], info: [], unsent: "", skipped: "", refreshed: "" };
+  if (!c) return out;
+  const b = c.base || "main";
+  const br = c.branch;
+  const stale = c.stale_branches || [];
+  // The host record keeps an old tip for good, so `rewritten` alone stays true
+  // after every branch is fixed. It is loud only while a branch still carries
+  // the old history, or while there is no box report to check against.
+  if (c.rewritten && (stale.length || !c.refreshed)) {
+    out.warn.push("Host " + b + " was rewritten since this clone last saw it. " +
+      (stale.length ? "Branches " + stale.join(", ") + " still carry the old history" : "Branches may carry the old history") +
+      ": rebase them onto origin/" + b + " or recreate the clone before `clone fetch`.");
+  } else if (c.rewritten) {
+    out.info.push("host " + b + " was rewritten earlier; no branch here carries the old history");
+  }
+  if (c.error) out.warn.push("Clone not refreshed: " + c.error + "; the box is on older code.");
+  if (c.unverified) out.warn.push("This clone's history is unverified: created before refresh tracking. Recreate the clone to clear this.");
+  if (c.head_in_host === false && !c.rewritten) {
+    if (!br) out.unsent = "detached HEAD: commits not sent to host";
+    else {
+      const n = Number(c.ahead) || 0;
+      out.unsent = "branch " + br + ": " + (n > 0 ? n + " commit" + (n === 1 ? "" : "s") : "commits") +
+        " not sent to host (`agent-box clone fetch " + profile + " " + br + "`)";
+    }
+    out.info.push(out.unsent);
+  }
+  if (c.refreshed) {
+    if (c.ff_from) out.refreshed = b + " updated " + String(c.ff_from).slice(0, 7) + ".." + String(c.ff_to || "").slice(0, 7) + " (+" + c.ff_count + ")";
+    else if (c.ff_refused) out.refreshed = "local " + b + " has commits host " + b + " lacks; not updated";
+    else out.refreshed = "up to date with host " + b;
+    out.info.push(out.refreshed);
+  }
+  const skipText = {
+    "in-use": "not refreshed: another session is using this clone",
+    "other-instance": "not refreshed: a box from another agent-box instance holds this clone",
+    "created": "new clone of host " + b,
+    "no-base": "not refreshed: host repo has neither main nor master",
+  };
+  if (c.skipped && skipText[c.skipped]) {
+    out.skipped = skipText[c.skipped];
+    out.info.push(out.skipped);
+  }
+  if (br && br !== b && c.behind > 0) out.info.push(br + " is " + c.behind + " behind " + b);
+  return out;
+}
+
+function cloneParts(c, profile) {
+  const o = cloneClauses(c, profile);
+  return { warn: o.warn, info: o.info };
+}
+
+// cloneLevel: the severity of a session's clone state, null when it has none.
+function cloneLevel(c) {
+  if (!c) return null;
+  return cloneClauses(c, "").warn.length ? "warn" : "info";
+}
+
+// cloneRow: the rail's "clone" row, one wrapping line. null without s.clone.
+// `s.agent` is the profile name used in the `clone fetch` hint.
+function cloneRow(s) {
+  const c = s && s.clone;
+  if (!c) return null;
+  const p = cloneParts(c, s.agent);
+  return {
+    k: "clone",
+    v: [...p.warn, ...p.info].join(" \u00b7 "),
+    wrap: true,
+    chip: p.warn.length ? "v warn" : undefined,
+    title: "In the box, `git fetch origin` refreshes origin/" + (c.base || "main") + " at any time.",
+  };
+}
+
+// toastCloneSuffix: the spawn toast's tail. One warning clause if there is one,
+// else the single most useful short status (unsent work, then why a refresh was
+// skipped, then the refresh result). "" without s.clone.
+function toastCloneSuffix(s) {
+  const c = s && s.clone;
+  if (!c) return "";
+  const o = cloneClauses(c, s.agent);
+  if (o.warn.length) return " \u00b7 " + o.warn[0];
+  const first = o.unsent || o.skipped || o.refreshed;
+  return first ? " \u00b7 clone: " + first : "";
+}
+
 // ctxFill: the context meter. The server omits pct when the window maximum is
 // unknown or already exceeded, so a present pct is its verdict and outranks a
 // local division; with neither, the bar is not drawn at all rather than drawn
@@ -343,9 +435,9 @@ function renderSteerFacts(s) {
       ...awsConnRailRows(s, brokerSt, Date.now(), awsConnExpanded.has(s.id)),
       ...ghRailRows(brokerSt), ...stRailRows(brokerSt), egressRow(brokerSt)]
     : s.egress ? [egressRow(egressRailCache.get(s.id))] : [];
-  // The bundle's drops ride after the egress row, and on a boxed session with
+  // The bundle's drops and the clone's refresh state ride after the egress row, and on a boxed session with
   // no egress row at all; railMeta skips null rows.
-  const extraRows = [...egressRows, dropsRow(s)];
+  const extraRows = [...egressRows, dropsRow(s), cloneRow(s)];
   const meta = railMeta(s, usage, s.cwd ? shortPath(s.cwd) : "", Date.now(), badge, extraRows);
   const f = ctxFill(usage);
   const key = [s.id, meta.name, meta.activity,
@@ -1207,5 +1299,5 @@ function stRailRows(st) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, ghRowText, ghRailRows };
+  module.exports = { stRowText, stRailRows, railItems, railMeta, startedText, ctxFill, awsStatsRows, egressRow, dropLabel, toastDropsSuffix, dropsRow, cloneParts, cloneLevel, cloneRow, toastCloneSuffix, ghRowText, ghRailRows };
 }
