@@ -26,6 +26,8 @@ func TestParseCloneFetch(t *testing.T) {
 		{[]string{"clone", "fetch", "-base", "dev", "p", "b"}, cliArgs{Cmd: "clone", Sub: "fetch", Profile: "p", Branch: "b", Base: "dev"}},
 		{[]string{"clone", "fetch", "-config", "/x.json", "p", "feat/x"},
 			cliArgs{Cmd: "clone", Sub: "fetch", ConfigPath: "/x.json", ConfigSet: true, Profile: "p", Branch: "feat/x", Base: "main"}},
+		{[]string{"clone", "fetch", "-allow-old-history", "p", "b"},
+			cliArgs{Cmd: "clone", Sub: "fetch", Profile: "p", Branch: "b", Base: "main", AllowOldHistory: true}},
 	}
 	for _, c := range ok {
 		got, err := parseArgs(c.argv)
@@ -34,16 +36,18 @@ func TestParseCloneFetch(t *testing.T) {
 		}
 	}
 	for _, bad := range [][]string{
-		{"clone", "fetch", "p"},                    // missing branch
-		{"clone", "fetch", "p", "b", "extra"},      // a third positional
-		{"clone", "status"},                        // unknown subcommand
-		{"clone"},                                  // no subcommand
-		{"clone", "-base", "x"},                    // flag where the subcommand belongs
-		{"box", "setup", "-base", "x"},             // -base is for clone only
-		{"serve", "-base", "x"},                    // ditto
-		{"clone", "fetch", "p", "b", "-base", "x"}, // flags after positionals
-		{"clone", "fetch", "-base", "", "p", "b"},  // an empty base
-		{"clone", "fetch", "-rebuild", "p", "b"},   // box flags do not apply
+		{"clone", "fetch", "p"},                            // missing branch
+		{"clone", "fetch", "p", "b", "extra"},              // a third positional
+		{"clone", "status"},                                // unknown subcommand
+		{"clone"},                                          // no subcommand
+		{"clone", "-base", "x"},                            // flag where the subcommand belongs
+		{"box", "setup", "-base", "x"},                     // -base is for clone only
+		{"serve", "-base", "x"},                            // ditto
+		{"clone", "fetch", "p", "b", "-base", "x"},         // flags after positionals
+		{"clone", "fetch", "-base", "", "p", "b"},          // an empty base
+		{"clone", "fetch", "-rebuild", "p", "b"},           // box flags do not apply
+		{"box", "setup", "-allow-old-history"},             // -allow-old-history is for clone fetch only
+		{"clone", "fetch", "p", "b", "-allow-old-history"}, // flags after positionals
 	} {
 		if _, err := parseArgs(bad); err == nil {
 			t.Errorf("parseArgs(%q): want error", bad)
@@ -171,7 +175,16 @@ func TestRunCloneOutput(t *testing.T) {
 		Commits:  []string{"abc1234 add thing", "def5678 fix thing"},
 		Warnings: []string{"1 commit carries an attribution trailer"},
 	}
-	rc, out := runCloneArgs(e, "p", "feat/x", "main")
+	var buf bytes.Buffer
+	rc := runClone(cliArgs{Cmd: "clone", Sub: "fetch", Profile: "p", Branch: "feat/x", Base: "main", AllowOldHistory: true},
+		e.cfg, e.home, nil, &buf)
+	out := buf.String()
+	if e.req.DataDir != e.data {
+		t.Errorf("DataDir = %q, want the data dir %q (where the base record lives)", e.req.DataDir, e.data)
+	}
+	if !e.req.AllowOldHistory {
+		t.Error("-allow-old-history did not reach the fetch")
+	}
 	want := "fetched box/feat/x (2 commit(s) not on main):\n" +
 		"  abc1234 add thing\n" +
 		"  def5678 fix thing\n" +

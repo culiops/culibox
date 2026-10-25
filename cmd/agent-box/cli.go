@@ -22,7 +22,7 @@ const usage = `usage:
   agent-box box setup [-rebuild] [-recreate [-force]]  build the box image (macOS: also the box VM)
   agent-box box status                                 list boxes (macOS: and the box VM)
   agent-box box stop [-force]                          macOS: stop the box VM
-  agent-box clone fetch [-config <path>] [-base <branch>] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>
+  agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>   bring a clone-mode box's branch home as box/<branch>
   agent-box store init|status|unlock|lock|passwd|list [-config <path>]   the encrypted value store
   agent-box store set|rm [-config <path>] <id>         put a value (read from stdin, never argv) or delete one
 
@@ -42,6 +42,8 @@ type cliArgs struct {
 	Profile    string // clone fetch: the clone-mode profile
 	Branch     string // clone fetch: the branch in the clone to bring home
 	Base       string // clone fetch: the branch in clone_of the range starts after (default main)
+
+	AllowOldHistory bool // clone fetch: let a known stale or unverified history through, loudly
 }
 
 // storeSubs are the `agent-box store` subcommands. There is no get: a value
@@ -95,6 +97,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	recreate := fs.Bool("recreate", false, "box setup: delete and recreate the box VM (macOS)")
 	force := fs.Bool("force", false, "box stop, box setup -recreate: go ahead even with boxes running or the VM state unknown")
 	base := fs.String("base", "", "clone fetch: the branch in clone_of the fetched range starts after (default main)")
+	allowOld := fs.Bool("allow-old-history", false, "clone fetch: fetch a branch whose history agent-box cannot verify, or that carries history host main rewrote away (printed as a warning)")
 	if err := fs.Parse(argv); err != nil {
 		return cliArgs{}, err
 	}
@@ -129,6 +132,9 @@ func parseArgs(argv []string) (cliArgs, error) {
 	if baseSet && cmd != "clone" {
 		return cliArgs{}, errors.New("-base only applies to clone fetch")
 	}
+	if *allowOld && cmd != "clone" {
+		return cliArgs{}, errors.New("-allow-old-history only applies to clone fetch")
+	}
 	if cmd == "clone" {
 		if baseSet && *base == "" {
 			return cliArgs{}, errors.New("-base needs a branch name")
@@ -139,7 +145,7 @@ func parseArgs(argv []string) (cliArgs, error) {
 	}
 	return cliArgs{Cmd: cmd, Sub: sub, ConfigPath: *path, ConfigSet: set,
 		Rebuild: *rebuild, Recreate: *recreate, Force: *force,
-		Profile: profile, Branch: branch, Base: *base, ID: id}, nil
+		Profile: profile, Branch: branch, Base: *base, ID: id, AllowOldHistory: *allowOld}, nil
 }
 
 // shutdownSignals end the daemon through DetachAll. SIGHUP is the one a laptop

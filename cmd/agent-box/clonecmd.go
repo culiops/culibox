@@ -126,6 +126,9 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 		TempDir:   filepath.Join(dataDir, "clone-fetch"),
 		Home:      home,
 		Protected: protectedDirs(dataDir, cfgFiles, profilesPath, bundle.DefaultSource()),
+
+		DataDir:         dataDir,
+		AllowOldHistory: a.AllowOldHistory,
 	})
 	if err != nil {
 		return fail("%v", err)

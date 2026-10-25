@@ -32,6 +32,15 @@ var (
 	fetchTimeout         = 10 * time.Minute
 )
 
+// quarantinePrefix is where a fetched branch waits in clone_of while its
+// history is checked against the base record. Only a branch that passes moves
+// to box/<branch>; the quarantine ref is deleted on every path out.
+const quarantinePrefix = "refs/agent-box/quarantine/"
+
+// quarantineCleanup bounds the deferred delete of the quarantine ref. It runs
+// on a fresh context, so a cancelled or timed-out fetch still removes it.
+const quarantineCleanup = 10 * time.Second
+
 // boxTmp is the bundle container's own tmpfs and HOME, not a host path.
 const boxTmp = "/tmp"
 
@@ -147,6 +156,9 @@ type FetchRequest struct {
 
 	Home      string             // the host user's home (CheckOf)
 	Protected []box.ProtectedDir // dirs no mount may be, contain or sit in
+
+	DataDir         string // the host data dir that holds the clone's base record
+	AllowOldHistory bool   // -allow-old-history: let a known stale or unverified history through, loudly
 }
 
 // FetchResult is what came home.
@@ -279,6 +291,80 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		return res, fmt.Errorf("base branch %s in %s: unexpected rev-parse output", r.Base, c.Of)
 	}
 
+	// The quarantine ref of step 7 goes on every path out from here, success
+	// included, and also one an earlier killed fetch left. The delete gets a
+	// fresh context: a cancelled ctx must not leave refused history reachable.
+	quarantine := quarantinePrefix + r.Branch
+	defer func() {
+		cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), quarantineCleanup)
+		defer ccancel()
+		if _, qerr := g.Run(cctx, c.Of, CleanEnv(), hardened("update-ref", "-d", quarantine)...); qerr != nil {
+			msg := fmt.Sprintf("could not remove %s from %s (%s); remove it: git -C %s update-ref -d %s",
+				quarantine, c.Of, sanitizeN(qerr.Error(), maxLongErr), c.Of, quarantine)
+			if err != nil {
+				err = fmt.Errorf("%w; and %s", err, msg)
+			} else {
+				res.Warnings = append(res.Warnings, msg)
+			}
+		}
+	}()
+
+	// 3b. The host's record of the bases it gave this clone (main, else
+	// master), with the current host base added first so a later rewrite of it
+	// is caught too. Without a trusted record the history cannot be checked:
+	// refuse before any container runs, unless -allow-old-history.
+	bb, bbSHA, err := BaseBranch(ctx, g, c.Of)
+	if err != nil {
+		if ctx.Err() != nil {
+			return res, fmt.Errorf("clone fetch: %w", ctx.Err())
+		}
+		return res, fmt.Errorf("clone fetch: cannot check %s against host history: %s", r.Branch, sanitizeN(err.Error(), maxLongErr))
+	}
+	rebase := bb // the branch the fix rebases on
+	if rebase == "" {
+		rebase = r.Base
+	}
+	var overridden []string // what -allow-old-history let through, for the warning
+	if bb == "" {
+		if !r.AllowOldHistory {
+			return res, fmt.Errorf("clone fetch: cannot check %s against host history: %s has no main or master branch", r.Branch, c.Of)
+		}
+		overridden = append(overridden, c.Of+" has no main or master branch to check against")
+	}
+	var rec BaseRecord
+	var recErr error
+	if r.DataDir == "" {
+		recErr = errors.New("no data dir")
+	} else {
+		if bb != "" {
+			recErr = AppendBase(r.DataDir, c.Dir, bbSHA)
+		}
+		if recErr == nil {
+			rec, recErr = ReadBaseRecord(r.DataDir, c.Dir)
+		}
+	}
+	var unverified string
+	switch {
+	case recErr != nil:
+		rec = BaseRecord{}
+		unverified = "the base record cannot be used: " + sanitizeN(recErr.Error(), maxErrRunes)
+	case !rec.Exists:
+		unverified = "no base record"
+	case rec.Unverified:
+		unverified = "the base record is unverified"
+	}
+	if unverified != "" {
+		if !r.AllowOldHistory {
+			msg := fmt.Sprintf("clone fetch: this clone's history is unverified (created before refresh tracking); "+
+				"recreate the clone, or pass -allow-old-history once you have checked %s", r.Branch)
+			if recErr != nil {
+				msg += " (" + unverified + ")"
+			}
+			return res, errors.New(msg)
+		}
+		overridden = append(overridden, unverified)
+	}
+
 	// 4. A fresh 0600 temp file the host chose; removed on every path out.
 	tempDir, err := filepath.Abs(r.TempDir) // git runs with -C <of>: a relative path would mean another place
 	if err != nil {
@@ -327,6 +413,19 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		return res, fmt.Errorf("clone fetch: the bundle does not verify: %w", err)
 	}
 
+	// 6a. A bundle with no prerequisite commit shares no history with the
+	// base: an orphan branch, or one built on a base the host rewrote from its
+	// root. Nothing in it can be checked against the record, so the flag does
+	// not override this.
+	n, err := bundlePrereqs(tmp)
+	if err != nil {
+		return res, fmt.Errorf("clone fetch: reading the bundle header: %w", err)
+	}
+	if n == 0 {
+		return res, fmt.Errorf("clone fetch: refusing %s: it shares no history with %s in %s (the bundle has no prerequisite commits). "+
+			"In the box: git rebase origin/%s, or recreate the clone", r.Branch, r.Base, c.Of, rebase)
+	}
+
 	// 6b. git does not fsck the objects of a bundle fetch (measured, git 2.43:
 	// fetch.fsckObjects/transfer.fsckObjects pass a commit with no author
 	// email), so the pack goes through index-pack --strict first. A failure
@@ -339,14 +438,63 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		return res, fmt.Errorf("clone fetch: the bundle's objects fail git's strict checks: %s", sanitizeN(err.Error(), maxLongErr))
 	}
 
-	// 7. Into clone_of as box/<branch>, forced.
-	ref := "refs/heads/box/" + r.Branch
+	// 7. Into clone_of's quarantine ref, forced. The checks below use the SHA
+	// read here, never the ref again, so what moves to box/<branch> is exactly
+	// what was checked.
 	if _, err := hostGit("-c", "fetch.fsckObjects=true", "-c", "transfer.fsckObjects=true",
 		"fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
-		tmp, "+refs/heads/"+r.Branch+":"+ref); err != nil {
+		tmp, "+refs/heads/"+r.Branch+":"+quarantine); err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	out, err = hostGit("rev-parse", "--verify", "--end-of-options", quarantine+"^{commit}")
+	if err != nil {
+		return res, fmt.Errorf("clone fetch: %w", err)
+	}
+	tip := strings.TrimSpace(string(out))
+	if !shaRE.MatchString(tip) {
+		return res, fmt.Errorf("clone fetch: %s: unexpected rev-parse output", quarantine)
+	}
+
+	// 7b. A recorded base that host history no longer has (a rewrite, e.g. a
+	// scrubbed secret) must not be an ancestor of the branch. A check that
+	// cannot run refuses even with the flag: it covers a known stale ancestor,
+	// not an unknown one.
+	if bb != "" {
+		cannot := func(err error) error {
+			if ctx.Err() != nil {
+				return fmt.Errorf("clone fetch: %w", ctx.Err())
+			}
+			return fmt.Errorf("clone fetch: cannot check %s against host history: %s", r.Branch, sanitizeN(err.Error(), maxLongErr))
+		}
+		stale, err := StaleSHAs(ctx, g, c.Of, bb, rec.SHAs)
+		if err != nil {
+			return res, cannot(err)
+		}
+		hit, err := staleAncestor(ctx, g, c.Of, stale, tip)
+		if err != nil {
+			return res, cannot(err)
+		}
+		if hit != "" {
+			if !r.AllowOldHistory {
+				return res, fmt.Errorf("clone fetch: refusing %s: it carries history host %s no longer has (recorded tip %s is an ancestor of %s). "+
+					"In the box: git rebase origin/%s, or recreate the clone. The refused objects stay unreachable in %s until git gc; "+
+					"a push sends only reachable objects, so do not point a ref at them.", r.Branch, bb, hit[:12], r.Branch, bb, c.Of)
+			}
+			overridden = append(overridden, fmt.Sprintf("recorded tip %s of host %s is an ancestor of %s", hit[:12], bb, r.Branch))
+		}
+	}
+
+	// 7c. Checked: box/<branch> takes the tip (forced); the deferred delete
+	// drops the quarantine ref.
+	ref := "refs/heads/box/" + r.Branch
+	if _, err := hostGit("update-ref", ref, tip); err != nil {
 		return res, fmt.Errorf("clone fetch: %w", err)
 	}
 	res = FetchResult{Ref: ref, BaseSHA: base}
+	if len(overridden) > 0 {
+		res.Warnings = append([]string{fmt.Sprintf("-allow-old-history: the history check was overridden (%s); review box/%s before any merge or push",
+			strings.Join(overridden, "; "), r.Branch)}, res.Warnings...)
+	}
 
 	// 8. What came: sanitized lines, and the attribution trailers a push must not carry.
 	out, err = hostGit("log", "--no-show-signature", "--format=%h%x09%s%x00%B%x1e", base+".."+ref)
@@ -435,9 +583,9 @@ const (
 // because git accepts "@" capability lines anywhere in a v3 header: in a v3
 // header an "@" line must be @object-format=sha1|sha256 (so a @filter, which
 // makes a partial bundle, is refused wherever it sits), and a v2 header has none.
-func packOffset(f *os.File) (int64, error) {
+// prereqs counts the "-<sha>" prerequisite lines.
+func packOffset(f *os.File) (off int64, prereqs int, err error) {
 	br := bufio.NewReaderSize(f, maxBundleHeaderLine)
-	var off int64
 	readLine := func() (string, error) {
 		line, err := br.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
@@ -454,7 +602,7 @@ func packOffset(f *os.File) (int64, error) {
 	}
 	sig, err := readLine()
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var v3 bool
 	switch sig {
@@ -462,20 +610,76 @@ func packOffset(f *os.File) (int64, error) {
 	case "# v3 git bundle":
 		v3 = true
 	default:
-		return 0, fmt.Errorf("not a git bundle (signature %q)", sanitize(sig))
+		return 0, 0, fmt.Errorf("not a git bundle (signature %q)", sanitize(sig))
 	}
 	for {
 		line, err := readLine()
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		if line == "" {
-			return off, nil
+			return off, prereqs, nil
+		}
+		if line[0] == '-' {
+			prereqs++
 		}
 		if line[0] == '@' && !(v3 && (line == "@object-format=sha1" || line == "@object-format=sha256")) {
-			return 0, fmt.Errorf("bundle capability %q is not supported", sanitize(line))
+			return 0, 0, fmt.Errorf("bundle capability %q is not supported", sanitize(line))
 		}
 	}
+}
+
+// bundlePrereqs is the number of prerequisite commits in the bundle at path.
+// A bundle of a branch that shares history with the base has at least one.
+func bundlePrereqs(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	_, n, err := packOffset(f)
+	return n, err
+}
+
+// staleAncestor returns the first of stale (StaleSHAs output) that is an
+// ancestor of tip, or "". A stale SHA that is missing from of, or not a
+// commit, cannot be one: the fetch that made tip checked that all its history
+// is present. Any git failure other than merge-base's "no" (exit 1) is an
+// error, never a pass.
+func staleAncestor(ctx context.Context, g Git, of string, stale []string, tip string) (string, error) {
+	if len(stale) == 0 {
+		return "", nil
+	}
+	sg, ok := g.(StdinGit)
+	if !ok {
+		return "", errors.New("this git runner cannot take stdin")
+	}
+	out, err := sg.RunStdin(ctx, of, CleanEnv(), strings.NewReader(strings.Join(stale, "\n")+"\n"), hardened("cat-file", "--batch-check")...)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	if len(lines) != len(stale) {
+		return "", fmt.Errorf("cat-file --batch-check: %d answers for %d SHAs", len(lines), len(stale))
+	}
+	for i, line := range lines {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != stale[i] {
+			return "", fmt.Errorf("cat-file --batch-check: unexpected line %q", sanitize(line))
+		}
+		if f[1] != "commit" {
+			continue
+		}
+		_, err := g.Run(ctx, of, CleanEnv(), hardened("merge-base", "--is-ancestor", stale[i], tip)...)
+		if err == nil {
+			return stale[i], nil
+		}
+		if code, ok := exitCode(err); ok && code == 1 && ctx.Err() == nil {
+			continue
+		}
+		return "", err
+	}
+	return "", nil
 }
 
 // strictIndexPack feeds the pack inside the bundle file to `git index-pack
@@ -494,7 +698,7 @@ func strictIndexPack(ctx context.Context, g Git, of, bundle, packOut string) err
 		return err
 	}
 	defer f.Close()
-	off, err := packOffset(f)
+	off, _, err := packOffset(f)
 	if err != nil {
 		return err
 	}
