@@ -42,6 +42,7 @@ type Live struct {
 // Input is everything the bundle is built from.
 type Input struct {
 	Producer   string // "cli" | "daemon"
+	Version    string // git describe of the release tag; empty when unstamped
 	Commit     string
 	Now        time.Time
 	Home, Host string
@@ -73,6 +74,11 @@ func (in Input) clean(s string) string {
 func (in Input) headerLines() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n", header)
+	version := in.Version
+	if version == "" {
+		version = "unknown"
+	}
+	fmt.Fprintf(&b, "- version: %s\n", in.clean(version))
 	fmt.Fprintf(&b, "- commit: %s\n", in.clean(in.Commit))
 	fmt.Fprintf(&b, "- platform: %s/%s, %s\n", runtime.GOOS, runtime.GOARCH, runtime.Version())
 	fmt.Fprintf(&b, "- producer: %s\n", in.clean(in.Producer))

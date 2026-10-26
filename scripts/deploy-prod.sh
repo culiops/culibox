@@ -65,8 +65,16 @@ if [ "${AB_PROD_CONFIRM:-}" != "yes" ]; then
 fi
 
 mkdir -p "$(dirname "$BIN")"
-echo "building → $BIN"
-"$GO" build -o "$BIN" "$REPO/cmd/agent-box"
+# Releases are vX.Y.Z tags on main. An untagged build still deploys (and shows
+# as v0.1.0+N in the header), but say so: tag first if this is a release.
+version=$("$REPO/scripts/version.sh")
+case "$version" in
+  v[0-9]*.*.*-[0-9]*-g*) echo "note: HEAD is not tagged — shipping $version. Tag a release first: git tag -a vX.Y.Z -m '...'" ;;
+  v[0-9]*) ;;
+  *) echo "note: no vX.Y.Z tag yet — shipping $version" ;;
+esac
+echo "building Culibox $version → $BIN"
+"$GO" build -ldflags "-X main.version=$version -X main.commit=$(git -C "$REPO" rev-parse HEAD)" -o "$BIN" "$REPO/cmd/agent-box"
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"
 sleep 1
@@ -87,4 +95,4 @@ fi
 # to break.
 systemctl --user --no-pager --lines=0 status "$SERVICE" | sed -n '1,5p'
 git -C "$REPO" rev-parse HEAD > "$STAMP"
-echo "deployed $head → $STAMP"
+echo "deployed $version ($head) → $STAMP"

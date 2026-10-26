@@ -148,3 +148,14 @@ test("the report is requested with POST, never a bare GET", async () => {
   assert.equal(seen[0][0], "/api/bugreport");
   assert.equal(seen[0][1] && seen[0][1].method, "POST");
 });
+
+test("versionLabel shortens git describe output for the header", () => {
+  const { versionLabel } = require("../static/bugreport.js");
+  assert.strictEqual(versionLabel("v0.1.0"), "v0.1.0");
+  assert.strictEqual(versionLabel("v0.1.0-3-gf17d0e5"), "v0.1.0+3");
+  assert.strictEqual(versionLabel("v0.1.0-3-gf17d0e5-dirty"), "v0.1.0+3*");
+  assert.strictEqual(versionLabel("v0.1.0-dirty"), "v0.1.0*");
+  assert.strictEqual(versionLabel("f17d0e5"), "f17d0e5"); // no tag yet: describe --always gives the sha
+  assert.strictEqual(versionLabel(""), "");
+  assert.strictEqual(versionLabel(undefined), "");
+});

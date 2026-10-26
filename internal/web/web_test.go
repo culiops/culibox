@@ -209,8 +209,11 @@ func TestHandleMeta(t *testing.T) {
 		[]config.AgentConfig{{Name: "zsh", Bin: "/usr/bin/zsh"}},
 		nil, "", nil, newFakeStore(), func([]config.AgentConfig) {},
 	)
-	s := &Server{AllowedHosts: []string{"example.com"}, EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm}
+	s := &Server{AllowedHosts: []string{"example.com"}, EnvLabel: "PROD", EnvColor: "#b45309", ShellProfile: "zsh", ShellBin: "/usr/bin/zsh", Profiles: pm, Version: "v0.1.0"}
 	got := metaGet(t, s)
+	if got["version"] != "v0.1.0" {
+		t.Fatalf("version: got %v", got["version"])
+	}
 	if got["env_label"] != "PROD" || got["env_color"] != "#b45309" {
 		t.Fatalf("got %v", got)
 	}

@@ -31,6 +31,7 @@ func runBugReport(in doctor.Input, host, goos string, out, errw io.Writer) int {
 	}
 	bi := bugreport.Input{
 		Producer:   "cli",
+		Version:    version,
 		Commit:     in.Commit,
 		Now:        time.Now().UTC(),
 		Home:       in.Home,

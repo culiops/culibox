@@ -78,6 +78,9 @@ type Server struct {
 	// Commit is the build's commit, published in /api/meta so the UI and a bug
 	// report can name the build.
 	Commit string
+	// Version is the release (git describe of a vX.Y.Z tag), shown in the
+	// header and the About tab. Empty when the build was not stamped.
+	Version string
 	// BugReport builds the redacted diagnostic bundle (markdown plus the
 	// prefilled issue link) behind POST /api/bugreport. Nil → that route answers
 	// 503. It returns ErrBugReportBusy while an earlier build is still running;
@@ -216,6 +219,7 @@ func (s *Server) Handler() http.Handler {
 			"analytics":     s.Analytics != nil,
 			"replies":       s.RepliesEnabled,
 			"commit":        s.Commit,
+			"version":       s.Version,
 		}
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}

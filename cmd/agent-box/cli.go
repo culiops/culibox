@@ -16,6 +16,11 @@ import (
 // commit is stamped at build time: go build -ldflags "-X main.commit=<sha>".
 var commit string
 
+// version is the release, stamped at build time from `git describe --tags`
+// (scripts/version.sh): go build -ldflags "-X main.version=v0.1.0". Empty
+// when unstamped.
+var version string
+
 const usage = `usage:
   agent-box [serve] [-config <path>]                   run the web control-plane
   agent-box doctor  [-config <path>]                   check this machine; prints no secrets

@@ -25,6 +25,11 @@
     #env-strip[hidden] { display: none; }
     #env-badge { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: #fff; padding: 2px 8px; border-radius: var(--radius); }
     #env-badge[hidden] { display: none; }
+    /* Desktop names the instance in the status bar, so the header carries the
+       release instead. Mobile has no status bar: it keeps the env badge. */
+    @media (min-width: 701px) { #env-badge { display: none; } }
+    #version-badge { font-size: 11px; color: var(--muted); white-space: nowrap; }
+    #version-badge[hidden] { display: none; }
     /* --fg, not --muted: a muted label on a control that works reads as disabled,
        and these are the only way to reach the sidebar, the palette and settings.
        #analytics-open joins this rule (it used to have no CSS of its own,
@@ -1820,6 +1825,7 @@
       html.sidebar-hidden .rail48 { display: none; }
       #split-v, #split-h { display: none; }              /* nothing to resize when one pane fills the screen */
       #hint { display: none; }                            /* the bottom nav replaces the desktop status bar */
+      #version-badge { display: none; }                   /* the env badge stays here instead (see #env-badge) */
 
       /* Session-list group headers (M1): "Needs you" / "Running" / "Idle"
          above their rows, uppercase and muted like other section labels.

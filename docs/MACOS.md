@@ -8,7 +8,7 @@ boxed tier, which runs them in a container inside Culibox's own colima VM; see
 
     brew install go abduco
     tar xzf agent-box-src-<sha>.tar.gz && cd agent-box-src-<sha>
-    go build -ldflags "-X main.commit=<sha>" -o agent-box ./cmd/agent-box
+    go build -ldflags "-X main.commit=<sha> -X main.version=<version>" -o agent-box ./cmd/agent-box
     go test ./internal/procinfo/... ./internal/abduco/... ./internal/session/... ./internal/config/...
 
 A binary you build yourself is not quarantined by Gatekeeper.
