@@ -141,6 +141,16 @@ function bugOpenIssue() {
   }
 }
 
+// versionLabel turns `git describe --tags --always --dirty` output into the
+// header's short form: "v0.1.0", "v0.1.0+3" (3 commits past the tag), a
+// trailing "*" for a dirty tree, or the bare sha before any tag exists.
+function versionLabel(v) {
+  if (!v) return "";
+  const m = /^(.*)-(\d+)-g[0-9a-f]+(-dirty)?$/.exec(v);
+  if (m) return m[1] + "+" + m[2] + (m[3] ? "*" : "");
+  return v.endsWith("-dirty") ? v.slice(0, -"-dirty".length) + "*" : v;
+}
+
 // loadAboutInfo shows the build in the About tab. /api/meta is the one place
 // the commit is published.
 async function loadAboutInfo() {
@@ -148,7 +158,8 @@ async function loadAboutInfo() {
   if (!el) return;
   try {
     const meta = await api("/api/meta");
-    el.textContent = "Culibox " + (meta && meta.commit ? meta.commit : "(unknown build)");
+    const v = meta && meta.version ? meta.version + " · " : "";
+    el.textContent = "Culibox " + v + (meta && meta.commit ? "commit " + meta.commit : "(unknown build)");
   } catch (_) {
     el.textContent = "Culibox (build unknown)";
   }
@@ -174,5 +185,5 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { WHAT_MARKER, fillWhatHappened };
+  module.exports = { WHAT_MARKER, fillWhatHappened, versionLabel };
 }

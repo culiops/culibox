@@ -4955,6 +4955,8 @@ initMobileShell();
     refreshSessions(); // re-render rows now that the tier label is known
     if (globalThis.repliesEnabled && typeof renderSteerRail === "function") renderSteerRail(); // the rail was built before this answer
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
+    const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
+    if (ver && vl) { ver.textContent = vl; ver.title = "Culibox " + meta.version; ver.hidden = false; }
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;

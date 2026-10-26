@@ -63,8 +63,10 @@ Build:
 ```sh
 git clone https://github.com/culiops/agent-box.git
 cd agent-box
-go build -o agent-box ./cmd/agent-box
+go build -ldflags "-X main.version=$(scripts/version.sh)" -o agent-box ./cmd/agent-box
 ```
+
+Releases are `vX.Y.Z` git tags. `scripts/version.sh` prints the checkout's version (`v0.1.0`, or `v0.1.0-3-g<sha>` for 3 commits past the tag). The header shows it, and the About tab and `agent-box bug-report` name it. A build without the flag works but shows no version.
 
 Check the machine:
 
