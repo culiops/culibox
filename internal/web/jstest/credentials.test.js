@@ -249,7 +249,7 @@ test("awsCheckView: denied explains the trust, sso_expired offers sign-in; neith
   const d = awsCheckView({ assume: "denied", verdict: "unverified", reason: "assume_denied" });
   assert.strictEqual(d.badge, "Trust missing");
   assert.match(d.text, /role without write access/);
-  assert.match(d.text, /agent-box does not create it/);
+  assert.match(d.text, /Culibox does not create it/);
   const s = awsCheckView({ assume: "sso_expired", verdict: "unverified" });
   assert.strictEqual(s.badge, "SSO expired");
   assert.strictEqual(s.signIn, true);

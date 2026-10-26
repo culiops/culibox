@@ -223,7 +223,7 @@ function awsConnFromRow(row) {
   return c;
 }
 
-const CRED_TRUST_HELP = "The role does not trust the signer. Ask the account admin for a role without write access that trusts agent-box's signing identity; agent-box does not create it.";
+const CRED_TRUST_HELP = "The role does not trust the signer. Ask the account admin for a role without write access that trusts Culibox's signing identity; Culibox does not create it.";
 
 // awsCheckView: how a check answer reads on a row. badge/text describe the
 // assume step; verdict (assume ok only) is baseText's reading of the write

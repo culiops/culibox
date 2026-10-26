@@ -148,9 +148,9 @@ async function loadAboutInfo() {
   if (!el) return;
   try {
     const meta = await api("/api/meta");
-    el.textContent = "agent-box " + (meta && meta.commit ? meta.commit : "(unknown build)");
+    el.textContent = "Culibox " + (meta && meta.commit ? meta.commit : "(unknown build)");
   } catch (_) {
-    el.textContent = "agent-box (build unknown)";
+    el.textContent = "Culibox (build unknown)";
   }
 }
 

@@ -1030,7 +1030,7 @@ function buildEnableRepliesButton(id, after) {
   en.type = "button";
   en.className = "btn";
   en.textContent = "Enable replies";
-  en.title = "Allow answering this session from agent-box";
+  en.title = "Allow answering this session from Culibox";
   en.onclick = async (e) => {
     e.stopPropagation();
     en.disabled = true;
@@ -2930,7 +2930,7 @@ function renderGhOwners(rows) {
     sel.value = r.token ? "token:" + r.token : r.app ? "app:" + r.app : apps.length ? "app:" + apps[0] : pats.length ? "token:" + pats[0] : "";
     const note = document.createElement("p");
     note.className = "tiny pf-gh-pat-note";
-    note.textContent = "A personal access token is not narrowed by agent-box: the permissions above do not apply to it and it may reach more than these repositories. agent-box only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
+    note.textContent = "A personal access token is not narrowed by Culibox: the permissions above do not apply to it and it may reach more than these repositories. Culibox only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
     note.hidden = !sel.value.startsWith("token:");
     sel.addEventListener("change", () => { note.hidden = !sel.value.startsWith("token:"); });
     const owner = document.createElement("input");
@@ -4962,7 +4962,7 @@ initMobileShell();
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
     strip.hidden = false;
-    signalAttention(); // title = (N) [ENV] Agent Box, now that ENV is known
+    signalAttention(); // title = (N) [ENV] Culibox, now that ENV is known
     updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh

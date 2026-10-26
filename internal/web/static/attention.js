@@ -119,7 +119,7 @@ function maskHint(text) {
 // attentionTitle: the tab title. The waiting count goes FIRST so it survives a
 // tab strip that truncates from the right.
 function attentionTitle(n, env) {
-  return (n > 0 ? "(" + n + ") " : "") + (env ? "[" + env + "] " : "") + "Agent Box";
+  return (n > 0 ? "(" + n + ") " : "") + (env ? "[" + env + "] " : "") + "Culibox";
 }
 
 // faviconHref: the amber-dot icon while anything needs you.
@@ -145,7 +145,7 @@ function needsTransitions(prevIds, sessions) {
 // tailnet http:// origins are not secure contexts, and browsers only expose
 // notifications to secure ones.
 function notifyAvailability(secure, permission) {
-  if (!secure) return { enabled: false, reason: "Requires HTTPS — open via agent-box.culiops.dev" };
+  if (!secure) return { enabled: false, reason: "Requires HTTPS — open Culibox over an https:// URL" };
   if (permission === "unsupported") return { enabled: false, reason: "This browser does not support notifications." };
   return { enabled: true, reason: "" };
 }
