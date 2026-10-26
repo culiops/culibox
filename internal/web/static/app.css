@@ -19,7 +19,7 @@
       display: flex; align-items: center; gap: 1ch;
       padding: .5lh 2ch; border-bottom: 1px solid var(--border); background: var(--panel);
     }
-    header .dot { width: 10px; height: 10px; background: var(--accent); }
+    header .brand-mark { flex: none; width: 18px; height: 18px; background: url(/favicon.svg) center / contain no-repeat; }
     header h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
     #env-strip { height: 3px; width: 100%; flex-shrink: 0; }
     #env-strip[hidden] { display: none; }
@@ -2203,7 +2203,7 @@
          needed: with the label alone the name still truncated to "Agent Co…". */
       /* The dot is decoration; the DEV/PROD badge beside it is the one that
          carries meaning. Trading it buys the ~16px the full name needs. */
-      header .dot { display: none; }
+      header .brand-mark { display: none; }
       header h1 { font-size: 14px; }
       /* On a device with no keyboard the #hint shortcut text is noise. Hide it
          so the status fields (env · sessions · cwd) stay a compact line. */
