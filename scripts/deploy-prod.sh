@@ -55,6 +55,15 @@ else
   git -C "$REPO" log --oneline -5 | sed 's/^/  /'
 fi
 
+# Releases are vX.Y.Z tags on main. An untagged build still deploys (and shows
+# as v0.1.0+N in the header), but say so: tag first if this is a release.
+version=$("$REPO/scripts/version.sh")
+case "$version" in
+  v[0-9]*.*.*-[0-9]*-g*) echo "note: HEAD is not tagged — shipping $version. Tag a release first: git tag -a vX.Y.Z -m '...'" ;;
+  v[0-9]*) ;;
+  *) echo "note: no vX.Y.Z tag yet — shipping $version" ;;
+esac
+
 # Rollout rule: dev auto-updates (air live-reload); PRODUCTION never auto-deploys.
 # A prod release requires explicit human approval — either type 'deploy' at the
 # prompt, or pass AB_PROD_CONFIRM=yes (only after a human has approved the
@@ -65,14 +74,6 @@ if [ "${AB_PROD_CONFIRM:-}" != "yes" ]; then
 fi
 
 mkdir -p "$(dirname "$BIN")"
-# Releases are vX.Y.Z tags on main. An untagged build still deploys (and shows
-# as v0.1.0+N in the header), but say so: tag first if this is a release.
-version=$("$REPO/scripts/version.sh")
-case "$version" in
-  v[0-9]*.*.*-[0-9]*-g*) echo "note: HEAD is not tagged — shipping $version. Tag a release first: git tag -a vX.Y.Z -m '...'" ;;
-  v[0-9]*) ;;
-  *) echo "note: no vX.Y.Z tag yet — shipping $version" ;;
-esac
 echo "building Culibox $version → $BIN"
 "$GO" build -ldflags "-X main.version=$version -X main.commit=$(git -C "$REPO" rev-parse HEAD)" -o "$BIN" "$REPO/cmd/agent-box"
 echo "restarting $SERVICE"

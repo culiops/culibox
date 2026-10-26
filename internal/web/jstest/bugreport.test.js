@@ -156,6 +156,8 @@ test("versionLabel shortens git describe output for the header", () => {
   assert.strictEqual(versionLabel("v0.1.0-3-gf17d0e5-dirty"), "v0.1.0+3*");
   assert.strictEqual(versionLabel("v0.1.0-dirty"), "v0.1.0*");
   assert.strictEqual(versionLabel("f17d0e5"), "f17d0e5"); // no tag yet: describe --always gives the sha
+  assert.strictEqual(versionLabel("v1.0.0-rc.1"), "v1.0.0-rc.1");
+  assert.strictEqual(versionLabel("v1.0.0-rc.1-3-gabc1234"), "v1.0.0-rc.1+3");
   assert.strictEqual(versionLabel(""), "");
   assert.strictEqual(versionLabel(undefined), "");
 });
