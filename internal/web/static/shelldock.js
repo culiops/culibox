@@ -95,6 +95,20 @@ function placeShell(model, shellId, parentId) {
   return { action: "own", cellIndex: -1 };
 }
 
+// dockRatioFromPointer: the dock's share of the pane while its splitter is
+// dragged. `rect` is the pane body's box; the dock sits at its bottom ("below")
+// or right edge, so the share is the distance from the pointer to that edge.
+// Rounded to 1/1000 so a stored snapshot carries no float noise, and clamped
+// like any stored ratio. A pane with no size answers the default, never NaN.
+function dockRatioFromPointer(placement, rect, x, y) {
+  if (!rect) return DOCK_RATIO_DEFAULT;
+  const right = dockPlacementOf(placement) === "right";
+  const span = right ? rect.width : rect.height;
+  if (!(span > 0)) return DOCK_RATIO_DEFAULT;
+  const r = right ? (rect.left + rect.width - x) / span : (rect.top + rect.height - y) / span;
+  return clampDockRatio(Math.round(r * 1000) / 1000);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DOCK_PLACEMENTS, newDock, dockAdd, dockRemove, dockSetPlacement, clampDockRatio, normalizeDock, placeShell };
+  module.exports = { DOCK_PLACEMENTS, newDock, dockAdd, dockRemove, dockSetPlacement, clampDockRatio, normalizeDock, placeShell, dockRatioFromPointer };
 }

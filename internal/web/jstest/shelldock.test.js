@@ -122,3 +122,32 @@ test("placeShell never matches a viewer tab as a parent", () => {
   const m = { cells: [{ tabs: [{ kind: "viewer", path: "/x", id: "p1" }] }] };
   assert.deepStrictEqual(d.placeShell(m, "s2", "p1"), { action: "own", cellIndex: -1 });
 });
+
+// ---- splitter ----
+const rect = { left: 100, top: 50, width: 800, height: 400 }; // right 900, bottom 450
+
+test("dockRatioFromPointer below: the share of the pane under the pointer", () => {
+  assert.strictEqual(d.dockRatioFromPointer("below", rect, 0, 290), 0.4);  // 160 of 400
+  assert.strictEqual(d.dockRatioFromPointer("below", rect, 0, 250), 0.5);
+});
+
+test("dockRatioFromPointer right: the share of the pane right of the pointer", () => {
+  assert.strictEqual(d.dockRatioFromPointer("right", rect, 500, 0), 0.5);
+  assert.strictEqual(d.dockRatioFromPointer("right", rect, 580, 0), 0.4);  // 320 of 800
+});
+
+test("dockRatioFromPointer clamps a drag past either edge", () => {
+  assert.strictEqual(d.dockRatioFromPointer("below", rect, 0, 0), 0.8);
+  assert.strictEqual(d.dockRatioFromPointer("below", rect, 0, 9999), 0.2);
+  assert.strictEqual(d.dockRatioFromPointer("right", rect, 0, 0), 0.8);
+  assert.strictEqual(d.dockRatioFromPointer("right", rect, 9999, 0), 0.2);
+});
+
+test("dockRatioFromPointer of a pane with no size is the default, never NaN", () => {
+  assert.strictEqual(d.dockRatioFromPointer("below", { left: 0, top: 0, width: 0, height: 0 }, 5, 5), 0.4);
+  assert.strictEqual(d.dockRatioFromPointer("right", null, 5, 5), 0.4);
+});
+
+test("dockRatioFromPointer treats an unknown placement as below", () => {
+  assert.strictEqual(d.dockRatioFromPointer("left", rect, 0, 250), 0.5);
+});

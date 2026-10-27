@@ -1761,6 +1761,9 @@
     .cell-max, .cell-del { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 13px; padding: 0 4px; }
     .cell-max:hover { color: var(--accent); } .cell-del:hover { color: var(--danger); }
     .cell-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    /* The companion-shell dock is desktop-only (desktop.css draws it). Here it is
+       never shown, so a mobile pane body is its one tab, as in v0.2.0. */
+    .dock { display: none; }
     .cell-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; padding: 10px; text-align: center; margin: 4px; border: 1px dashed color-mix(in srgb, var(--border) 55%, var(--bg)); }
     .tab-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     #grid.maximized { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }

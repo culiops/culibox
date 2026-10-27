@@ -657,7 +657,10 @@ function initMobileShell() {
 // session model.
 function openTerminalTabs() {
   const out = [];
-  if (typeof eachTerminal === "function") eachTerminal((t) => out.push(t)); // cell order, then tab order
+  // Pane tabs only, cell order then tab order. Not eachTerminal: that also walks
+  // desktop docks, whose shells have no pane tab to focus (mobile undocks a
+  // shell when it is opened, see openTerminal).
+  if (typeof cells !== "undefined") for (const c of cells) for (const t of c.tabs) if (t.kind === "terminal") out.push(t);
   return out;
 }
 

@@ -130,6 +130,9 @@ class Cell {
     // focus to this pane's session, and only then does the click land, which
     // would read "already open here" and close it. See headerDrawerPress.
     this.el.addEventListener("mousedown", () => { this._pressFocused = focusedCell === this; }, true);
+    // Which half of the pane the press landed in, the dock or the rest: see
+    // focusedShell. Before setFocusedCell, so a focus move already sees it.
+    this.el.addEventListener("mousedown", (e) => this._noteDockFocus(e.target), true);
     this.el.addEventListener("mousedown", () => setFocusedCell(this), true);
     // Desktop header narrow rule (D9): below NARROW_PANE_PX the header keeps
     // one chip. A ResizeObserver, not a media query: a pane narrows with the
@@ -153,6 +156,18 @@ class Cell {
     // that syncNeeds' first call happens to treat correctly.
     this._needsKey = "";
     this._strip = null;
+    // Companion-shell dock (spec 5.5): shells docked below or right of this
+    // pane. `dock` is shelldock.js's pure model ({placement, ids, active,
+    // ratio}, null when there is none), dockTabs the live TerminalTab of each
+    // docked id. A docked shell is attached HERE and nowhere else: never also in
+    // this.tabs, never in another cell (dockShell moves, it never re-attaches).
+    this.dock = null;
+    this.dockTabs = new Map();
+    this._dockHidden = false; // Hide: out of view, tabs and sockets kept (page-local)
+    this._dockFocus = false;  // the last press in this pane landed in the dock
+    this._dockPrefs = null;   // placement + ratio of the last dock, for the next one
+    this._dockEl = null;
+    this._dockBarKey = "";
     this.renderBar();
     this.renderBody();
   }
@@ -166,6 +181,7 @@ class Cell {
 
   activate(tab) {
     if (tab && tab.kind === "terminal") this._lastTerm = tab; // see cellTerminal
+    this._dockFocus = false; // showing a pane tab is asking for it, not the dock
     if (this.activeTab === tab) {
       this.renderBody(); tab.onShow?.();
     } else {
@@ -186,6 +202,10 @@ class Cell {
     this.tabs.splice(i, 1);
     if (this._lastTerm === tab) this._lastTerm = null;
     tab.dispose?.();
+    // A dock hangs off a terminal in its own pane. With the last one closed, its
+    // views close too, as when the pane itself is closed; the shells keep running
+    // and are reachable from the sidebar (layout.js drops such a dock the same way).
+    if (!this.tabs.some((t) => t.kind === "terminal")) this._dropDock();
     if (this.tabs.length === 0 && cells.length > 1) { removeCell(this); return; } // reflow: drop the emptied window
     if (this.activeTab === tab) {
       this.activeTab = this.tabs[Math.min(i, this.tabs.length - 1)] || null;
@@ -217,6 +237,9 @@ class Cell {
     if (i < 0) return;
     this.tabs.splice(i, 1);
     if (this._lastTerm === tab) this._lastTerm = null;
+    // Same rule as closeTab: no terminal left, no dock. A caller that wants the
+    // dock to follow the tab (moveToOwnPane) moves it first.
+    if (!this.tabs.some((t) => t.kind === "terminal")) this._dropDock();
     if (this.tabs.length === 0 && cells.length > 1) { removeCell(this); return; } // reflow: drop the emptied window
     if (this.activeTab === tab) {
       this.activeTab = this.tabs[Math.min(i, this.tabs.length - 1)] || null;
@@ -229,17 +252,396 @@ class Cell {
   }
 
   renderBody() {
+    let main;
     if (this.activeTab) {
-      this.body.replaceChildren(this.activeTab.el);
-      // The element just lost and regained its layout box, so anything inside it
-      // that scrolls is back at the top: let the tab put its position back.
-      this.activeTab.onAttach?.();
+      main = this.activeTab.el;
     } else {
-      const ph = document.createElement("div");
-      ph.className = "cell-empty";
-      ph.textContent = "Click a session or a file to open it here";
-      this.body.replaceChildren(ph);
+      main = document.createElement("div");
+      main.className = "cell-empty";
+      main.textContent = "Click a session or a file to open it here";
     }
+    // [main | dock]: the dock follows the pane's own tab in the body, which
+    // desktop.css stacks ("below") or sets side by side ("right"). Its splitter
+    // rides inside it, so the one rule `.dock { display: none }` in app.css
+    // leaves a mobile body exactly what it was: the tab alone.
+    const shell = this._shownShell();
+    const dockOn = !!shell;
+    this.body.classList.toggle("dock-below", dockOn && this.dock.placement === "below");
+    this.body.classList.toggle("dock-right", dockOn && this.dock.placement === "right");
+    if (dockOn) {
+      this.body.style.setProperty("--dock-ratio", String(this.dock.ratio));
+      this._renderDock(shell);
+      this.body.replaceChildren(main, this._dockEl);
+    } else {
+      this.body.style.removeProperty("--dock-ratio");
+      this.body.replaceChildren(main);
+    }
+    // The element just lost and regained its layout box, so anything inside it
+    // that scrolls is back at the top: let the tab put its position back.
+    this.activeTab?.onAttach?.();
+  }
+
+  // --- companion-shell dock ------------------------------------------------
+  // The public dock API (Task 7 builds on it): dockShell, activateShell,
+  // undockShell, detachShell, removeShell, setDockPlacement, setDockRatio,
+  // hideDock, dockTabFor, focusedShell. Every one keeps the rule that a shell
+  // id is attached in exactly one TerminalTab on the page.
+
+  // _shownShell → the docked TerminalTab on screen, or null (no dock, or hidden).
+  _shownShell() {
+    if (!this.dock || this._dockHidden) return null;
+    return this.dockTabs.get(this.dock.active) || null;
+  }
+
+  // dockTabFor(id) → the TerminalTab docked here for that session, or null.
+  dockTabFor(id) { return this.dockTabs.get(id) || null; }
+
+  // focusedShell → the docked shell the operator last pressed into, while it is
+  // on screen; null otherwise, and always on mobile, where the dock is not drawn.
+  // focusedTerminal() asks this first, so insert path, paste and the per-session
+  // commands reach the shell. The pane's focus ring stays on the cell.
+  focusedShell() {
+    if (!this._dockFocus) return null;
+    if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return null;
+    return this._shownShell();
+  }
+
+  _noteDockFocus(target) {
+    const inDock = !!(this._dockEl && this._shownShell() && this._dockEl.contains(target));
+    if (inDock === this._dockFocus) return;
+    this._dockFocus = inDock;
+    if (this === focusedCell) this._dockFocusMoved();
+  }
+
+  // _dockFocusMoved: focusedTerminal() changed without the focused cell
+  // changing, so what follows it (the selected row, the rail) is repainted.
+  // Never a header rebuild: this runs from a mousedown (see setFocusedCell).
+  _dockFocusMoved() {
+    if (typeof syncSelectedRow === "function") syncSelectedRow();
+    renderSteerRail();
+  }
+
+  // _adoptShell files a live tab in the dock, without rendering. The base dock
+  // (placement + ratio) is the one already here, else `base`, else the last one
+  // this pane had, else newDock's.
+  _adoptShell(tab, base) {
+    tab.onUpdate = () => this.syncDockBar();
+    this.dockTabs.set(tab.id, tab);
+    const start = this.dock || base || (this._dockPrefs && Object.assign(newDock(), this._dockPrefs)) || null;
+    this.dock = dockAdd(start, tab.id);
+  }
+
+  // dockShell(id, name) docks a session in this pane, shows it with the
+  // keyboard (activateShell) and returns its TerminalTab. The single way a shell enters a dock: it never builds a second
+  // TerminalTab for a session already open. One docked here is only activated;
+  // one open in another pane (its tab or its dock) is MOVED, socket intact; one
+  // that is a tab of this very pane stays that tab and is activated (it may be
+  // the terminal the dock would hang off). The caller decides where (placeShell).
+  dockShell(id, name) {
+    if (this.dockTabs.has(id)) { this.activateShell(id); return this.dockTabs.get(id); }
+    const own = this.tabs.find((t) => t.kind === "terminal" && t.id === id);
+    if (own) { this.activate(own); return own; }
+    const tab = takeTerminalTab(id) || new TerminalTab(id, name);
+    this._adoptShell(tab);
+    // Shown, focused and saved exactly as a click on its strip tab would.
+    this.activateShell(id);
+    if (typeof syncSelectedRow === "function") syncSelectedRow();
+    return tab;
+  }
+
+  // activateShell(id) shows that docked shell (un-hiding the dock) and gives it
+  // the keyboard and focusedTerminal(). false when it is not docked here.
+  activateShell(id) {
+    const tab = this.dockTabs.get(id);
+    if (!tab) return false;
+    this.dock = dockAdd(this.dock, id);
+    this._dockHidden = false;
+    this._dockFocus = true;
+    this.renderBody();
+    tab.onShow?.(); // fit + keyboard
+    this._fitDock();
+    if (this === focusedCell) this._dockFocusMoved();
+    scheduleSaveLayout();
+    return true;
+  }
+
+  // detachShell(id) takes a shell out of the dock WITHOUT ending its view: the
+  // tab comes back with its socket open, for a caller that re-homes it (own
+  // pane, undock). null when it is not docked here. The emptied dock goes, and
+  // its placement and ratio are kept for this pane's next one.
+  detachShell(id) {
+    const tab = this.dockTabs.get(id);
+    if (!tab) return null;
+    this.dockTabs.delete(id);
+    tab.onUpdate = null;
+    const before = this.dock;
+    this.dock = dockRemove(this.dock, id);
+    if (!this.dock) {
+      this._dockPrefs = { placement: before.placement, ratio: before.ratio };
+      this._dockHidden = false;
+    }
+    const wasFocus = this._dockFocus;
+    if (!this._shownShell()) this._dockFocus = false;
+    this.renderBody();
+    this._fitDock();
+    scheduleSaveLayout();
+    if (wasFocus && this === focusedCell) this._dockFocusMoved();
+    return tab;
+  }
+
+  // removeShell(id) closes a docked shell's view (its socket closes; the
+  // session keeps running, like closing a tab). Used for a killed or ended shell.
+  removeShell(id) {
+    const tab = this.detachShell(id);
+    if (tab) tab.dispose?.();
+  }
+
+  // undockShell(id) turns a docked shell into an ordinary tab of this pane, the
+  // active one (the v0.2.0 shape: mobile opens it this way). The same tab
+  // object, so nothing re-attaches. Returns it, or null when not docked here.
+  undockShell(id) {
+    const tab = this.detachShell(id);
+    if (tab) this.addTab(tab);
+    return tab;
+  }
+
+  // setDockPlacement("below" | "right"): anything else is "below" (shelldock.js).
+  setDockPlacement(p) {
+    if (!this.dock) return;
+    this.dock = dockSetPlacement(this.dock, p);
+    this._dockHidden = false;
+    this.renderBody();
+    this._fitDock();
+    scheduleSaveLayout();
+  }
+
+  // setDockRatio(r): the dock's share of the pane, clamped to what the splitter
+  // can draw. The splitter calls it once, when the drag ends.
+  setDockRatio(r) {
+    if (!this.dock) return;
+    this.dock = Object.assign({}, this.dock, { ratio: clampDockRatio(r) });
+    this.body.style.setProperty("--dock-ratio", String(this.dock.ratio));
+    this._fitDock();
+    markLayoutUnsaved();
+    scheduleSaveLayout();
+  }
+
+  // hideDock takes the dock out of view. The shells keep running AND keep
+  // their tabs and sockets here, so the sidebar row (openTerminal) brings the
+  // dock back without a second attach. Page-local: a reload shows it again.
+  hideDock() {
+    if (!this.dock) return;
+    this._dockHidden = true;
+    const wasFocus = this._dockFocus;
+    this._dockFocus = false;
+    this.renderBody();
+    this._fitDock();
+    if (wasFocus && this === focusedCell) this._dockFocusMoved();
+    if (typeof syncSelectedRow === "function") syncSelectedRow();
+  }
+
+  // _restoreDock rebuilds a reconciled snapshot's dock (layout.js has already
+  // dropped ids that are gone or open as tabs). Placement, ratio and the
+  // active shell come back exactly as stored.
+  _restoreDock(d, nameOf) {
+    for (const id of d.ids) this._adoptShell(new TerminalTab(id, nameOf.get(id)));
+    this.dock = { placement: d.placement, ids: d.ids.slice(), active: d.active, ratio: d.ratio };
+  }
+
+  // _moveDockTo hands this pane's whole dock to another (applyCap folding a
+  // pane, a parent moved to a pane of its own). Tabs are carried, never
+  // disposed. The receiver keeps its own active shell and placement if it has
+  // a dock already.
+  _moveDockTo(other) {
+    if (!this.dock) return;
+    const had = !!other.dock;
+    const keepActive = had ? other.dock.active : this.dock.active;
+    const base = { placement: this.dock.placement, ids: [], active: null, ratio: this.dock.ratio };
+    for (const id of this.dock.ids) {
+      const t = this.dockTabs.get(id);
+      if (t) other._adoptShell(t, base);
+    }
+    if (other.dock) other.dock = dockAdd(other.dock, keepActive);
+    if (!had) other._dockHidden = this._dockHidden; // a hidden dock stays hidden
+    this.dockTabs = new Map();
+    this.dock = null;
+    this._dockHidden = false;
+    this._dockFocus = false;
+  }
+
+  // _dropDock closes every docked view (sockets close, sessions keep running).
+  _dropDock() {
+    if (!this.dock && !this.dockTabs.size) return;
+    for (const t of this.dockTabs.values()) t.dispose?.();
+    this.dockTabs = new Map();
+    this.dock = null;
+    this._dockHidden = false;
+    this._dockFocus = false;
+  }
+
+  // _fitDock refits both halves through the terminals' own fit path, once
+  // layout has settled. (Each terminal's ResizeObserver also catches it; this
+  // covers a change that leaves the element's box where it was.)
+  _fitDock() {
+    requestAnimationFrame(() => {
+      this.activeTab?.fit?.();
+      this._shownShell()?.fit();
+    });
+  }
+
+  // syncDockBar repaints the shell bar when what it shows moved (labels come
+  // from the session list, so a poll can renumber them). Keyed, never per
+  // poll: a bar rebuilt between mousedown and click would eat the click.
+  syncDockBar() {
+    const shell = this._shownShell();
+    if (shell && this._dockEl) this._renderDockBar(shell);
+  }
+
+  // _renderDock builds the dock node once and refreshes its bar and body.
+  _renderDock(shell) {
+    if (!this._dockEl) this._buildDock();
+    this._renderDockBar(shell);
+    if (this._dockBody.firstChild !== shell.el) this._dockBody.replaceChildren(shell.el);
+    const right = this.dock.placement === "right";
+    this._dockSplit.setAttribute("aria-orientation", right ? "vertical" : "horizontal");
+  }
+
+  _buildDock() {
+    const dock = document.createElement("div");
+    dock.className = "dock";
+    const split = document.createElement("div");
+    split.className = "dock-split";
+    split.setAttribute("role", "separator");
+    split.title = "Drag to resize the shell, double-click to reset";
+    const bar = document.createElement("div");
+    bar.className = "dock-bar";
+    const body = document.createElement("div");
+    body.className = "dock-body";
+    dock.append(split, bar, body);
+    this._dockEl = dock;
+    this._dockSplit = split;
+    this._dockBar = bar;
+    this._dockBody = body;
+    // The drag writes one CSS variable per move and nothing else: the ratio is
+    // committed (saved, terminals refit) once, on release. The body's box is
+    // measured once per drag, at the press.
+    split.addEventListener("pointerdown", (e) => {
+      if (!this.dock || e.button !== 0) return;
+      e.preventDefault();
+      split.setPointerCapture(e.pointerId);
+      split.classList.add("dragging");
+      const rect = this.body.getBoundingClientRect();
+      const placement = this.dock.placement;
+      let r = null;
+      const move = (ev) => {
+        r = dockRatioFromPointer(placement, rect, ev.clientX, ev.clientY);
+        this.body.style.setProperty("--dock-ratio", String(r));
+      };
+      const up = (ev) => {
+        try { split.releasePointerCapture(ev.pointerId); } catch (_) {}
+        split.classList.remove("dragging");
+        split.removeEventListener("pointermove", move);
+        split.removeEventListener("pointerup", up);
+        split.removeEventListener("pointercancel", up);
+        if (r !== null) this.setDockRatio(r);
+      };
+      split.addEventListener("pointermove", move);
+      split.addEventListener("pointerup", up);
+      split.addEventListener("pointercancel", up);
+    });
+    split.addEventListener("dblclick", () => this.setDockRatio(newDock().ratio));
+  }
+
+  // _dockBarModel: what the shell bar shows, as plain data (also its repaint key).
+  _dockBarModel(shell) {
+    const list = lastSessions || [];
+    const find = (id) => list.find((x) => x.id === id) || null;
+    const tabs = this.dock.ids.map((id) => {
+      const s = find(id);
+      const t = this.dockTabs.get(id);
+      const st = t && t.status() !== "connected" ? t.status() : "";
+      return { id, label: s ? shellLabel(s, list) : (t && t.name) || "shell", on: id === this.dock.active, st };
+    });
+    const s = find(shell.id);
+    const chip = s && typeof deskContainmentChip === "function"
+      ? deskContainmentChip(s, typeof boxRuntime === "string" ? boxRuntime : "") : null;
+    const cwd = (s && s.cwd) || shell.cwd || "";
+    return { tabs, chip, cwd, placement: this.dock.placement, canAdd: !!window.shellProfile };
+  }
+
+  // _renderDockBar paints the shell bar (spec 5.5; sl-1.png, v5-3.png): the
+  // strip `shell 1 · shell 2 · +`, the containment chip, the cwd, then Below,
+  // Right, Own pane and Hide. Every label goes in through textContent.
+  _renderDockBar(shell) {
+    const m = this._dockBarModel(shell);
+    const key = JSON.stringify(m);
+    if (key === this._dockBarKey && this._dockBar.firstChild) return;
+    this._dockBarKey = key;
+    const el = (tag, text) => {
+      const n = document.createElement(tag);
+      if (text != null) n.textContent = text;
+      if (tag === "button") n.type = "button";
+      return n;
+    };
+    const strip = el("div");
+    strip.className = "dock-tabs";
+    strip.setAttribute("role", "tablist");
+    strip.setAttribute("aria-label", "Shells");
+    m.tabs.forEach((t, i) => {
+      if (i) { const dot = el("span", "·"); dot.className = "dock-dot"; dot.setAttribute("aria-hidden", "true"); strip.append(dot); }
+      const b = el("button", t.label);
+      b.className = "dock-tab" + (t.on ? " on" : "");
+      b.setAttribute("role", "tab");
+      b.setAttribute("aria-selected", t.on ? "true" : "false");
+      b.title = t.st ? t.label + " · " + t.st : t.label;
+      b.onclick = (e) => { e.stopPropagation(); this.activateShell(t.id); };
+      strip.append(b);
+      if (t.st) { const st = el("span", t.st); st.className = "dock-st"; strip.append(st); }
+    });
+    if (m.canAdd) {
+      const dot = el("span", "·"); dot.className = "dock-dot"; dot.setAttribute("aria-hidden", "true");
+      const add = el("button", "+");
+      add.className = "dock-add";
+      add.title = "+ Shell for the same session, docked here";
+      add.setAttribute("aria-label", add.title);
+      add.onclick = (e) => {
+        e.stopPropagation();
+        add.disabled = true;
+        Promise.resolve(spawnShellIn(this, this.dock ? this.dock.placement : "below")).finally(() => { add.disabled = false; });
+      };
+      strip.append(dot, add);
+    }
+    const kids = [strip];
+    if (m.chip) {
+      const chip = el("span", m.chip.text);
+      chip.className = "ph-chip " + m.chip.tone;
+      if (m.chip.title) chip.title = m.chip.title;
+      kids.push(chip);
+    }
+    const cwd = el("span", typeof shortPath === "function" ? shortPath(m.cwd) : m.cwd);
+    cwd.className = "dock-cwd mono";
+    cwd.title = m.cwd;
+    kids.push(cwd);
+    const ics = el("span");
+    ics.className = "dock-ics";
+    const ic = (kind, label, on, run) => {
+      const b = el("button");
+      b.className = "dock-ic" + (on ? " on" : "");
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      if (on !== null) b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.append(dockIcon(kind));
+      b.onclick = (e) => { e.stopPropagation(); run(); };
+      return b;
+    };
+    ics.append(
+      ic("below", "Below", m.placement === "below", () => this.setDockPlacement("below")),
+      ic("right", "Right", m.placement === "right", () => this.setDockPlacement("right")),
+      ic("own", "Own pane", null, () => { const t = this._shownShell(); if (t) moveToOwnPane(this, t); }),
+      ic("hide", "Hide (the shells keep running)", null, () => this.hideDock()),
+    );
+    kids.push(ics);
+    this._dockBar.replaceChildren(...kids);
   }
 
   renderBar() {
@@ -625,7 +1027,7 @@ class Cell {
   repaintReply() {
     // Desktop: the poll may have changed what the strip shows (the ask, the
     // need, replies on/off); syncStrip rebuilds only when its key moved.
-    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncHeaderName(); this.syncStrip(); return; }
+    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncHeaderName(); this.syncStrip(); this.syncDockBar(); return; }
     this._strip?._paint();
   }
 
@@ -645,7 +1047,56 @@ class Cell {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
     this.dropStrip();
     this.tabs.forEach((t) => t.dispose?.());
+    this._dropDock(); // the docked views go with the pane; the shells keep running
   }
+}
+
+// dockIcon: the shell bar's placement glyphs as inline SVG (sl-1.png), built
+// node by node. Below and Right draw the pane with the dock's half filled; Own
+// pane two overlapping windows; Hide a cross.
+function dockIcon(kind) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 14 14");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.2");
+  const add = (tag, attrs) => {
+    const n = document.createElementNS(NS, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    svg.append(n);
+  };
+  if (kind === "below" || kind === "right") {
+    add("rect", { x: "1.5", y: "1.5", width: "11", height: "11", rx: "1.5" });
+    add("rect", kind === "below"
+      ? { x: "1.5", y: "8", width: "11", height: "4.5", fill: "currentColor", stroke: "none" }
+      : { x: "7", y: "1.5", width: "5.5", height: "11", fill: "currentColor", stroke: "none" });
+  } else if (kind === "own") {
+    add("rect", { x: "1.5", y: "4.5", width: "8", height: "8", rx: "1.2" });
+    add("path", { d: "M4.5 4.5V2.7c0-.7.5-1.2 1.2-1.2h5.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H9.5" });
+  } else {
+    add("path", { d: "M3.5 3.5l7 7M10.5 3.5l-7 7" });
+  }
+  return svg;
+}
+
+// takeTerminalTab(id) takes an open session's TerminalTab out of wherever it
+// is (a pane's tabs or a dock) WITHOUT disposing it, for a caller that re-homes
+// it: a session admits one socket, so moving is the only safe way to show it
+// somewhere else. null when it is not open on this page.
+function takeTerminalTab(id) {
+  for (const c of cells) {
+    if (c.dockTabs.has(id)) return c.detachShell(id);
+    const t = c.tabs.find((x) => x.kind === "terminal" && x.id === id);
+    if (t) { c.detachTab(t); return t; }
+  }
+  return null;
+}
+
+// dockHolding(id) → the cell whose dock holds that session, or null.
+function dockHolding(id) {
+  return cells.find((c) => c.dockTabs.has(id)) || null;
 }
 
 // buildNeedStrip: the desktop ask strip (spec 5.3). The amber label, then
@@ -861,7 +1312,11 @@ function setFocusedCell(cell) {
 }
 
 // focusedTerminal returns the terminal tab active in the focused cell, or null.
+// A docked shell the operator pressed into wins (Cell.focusedShell), so insert
+// path, paste and the per-session commands reach the shell, not its parent.
 function focusedTerminal() {
+  const sh = focusedCell ? focusedCell.focusedShell() : null;
+  if (sh) return sh;
   const t = focusedTab();
   return t && t.kind === "terminal" ? t : null;
 }
@@ -872,9 +1327,13 @@ function focusedTab() {
   return (focusedCell && focusedCell.activeTab) || null;
 }
 // eachTerminal / eachViewer iterate live tabs across all cells: used by fontPrefs
-// to apply a changed default to every open terminal / viewer.
+// to apply a changed default to every open terminal / viewer. Docked shells are
+// terminals too (font, activity, usage, "in a pane"): each cell's tabs, then its dock.
 function eachTerminal(cb) {
-  for (const c of cells) for (const t of c.tabs) if (t.kind === "terminal") cb(t);
+  for (const c of cells) {
+    for (const t of c.tabs) if (t.kind === "terminal") cb(t);
+    for (const t of c.dockTabs.values()) cb(t);
+  }
 }
 function eachViewer(cb) {
   for (const c of cells) for (const t of c.tabs) if (t.kind === "viewer") cb(t);
@@ -1010,6 +1469,7 @@ function applyCap(n) {
     const extra = cells.pop();
     const keep = cells[cells.length - 1];
     for (const t of extra.tabs) { t.onUpdate = () => keep.renderBar(); keep.tabs.push(t); }
+    extra._moveDockTo(keep); // docked shells fold in with their pane, sockets intact
     if (!keep.activeTab && keep.tabs.length) keep.activeTab = keep.tabs[0];
     if (maximized === extra) maximized = null;
     if (focusedCell === extra) setFocusedCellRaw(keep);
@@ -1054,6 +1514,27 @@ function applyCap(n) {
 // globals (mobileActive/setMobileScreen live in mobileshell.js/app.js).
 function openTerminal(id, name, opts) {
   opts = opts || {};
+  // One terminal, one place: a docked shell is already attached, in its dock.
+  // placeShell finds where (a dock or a tab: those never share an id).
+  const at = placeShell({ cells: cells.map((c) => ({ tabs: c.tabs, dock: c.dock })) }, id, null);
+  const dc = at.action === "activate" ? cells[at.cellIndex] : null;
+  if (dc && dc.dockTabs.has(id)) {
+    if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) {
+      // Mobile draws no dock: the shell becomes an ordinary tab of its pane
+      // (v0.2.0), and the loop below focuses it like any other. A new pane tab
+      // means a new chip: repaint now, as the new-tab path below does, not on
+      // the next poll.
+      dc.undockShell(id);
+      refreshSessions();
+    } else if (opts.newPane) {
+      moveToOwnPane(dc, dc.dockTabFor(id));
+      return;
+    } else {
+      setFocusedCell(dc);
+      dc.activateShell(id);
+      return;
+    }
+  }
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) {
@@ -1092,6 +1573,24 @@ function openTerminal(id, name, opts) {
 // is and focus it, which is the honest outcome; only the capped one says so out
 // loud, because that is the one the operator asked for and did not get.
 function moveToOwnPane(from, tab) {
+  // A docked shell: out of the dock into a window of its own (the shell bar's
+  // Own pane). The dock is not a tab, so "alone in its cell" does not apply.
+  if (from.dockTabFor(tab.id) === tab) {
+    if (cells.length >= cap) {
+      setFocusedCell(from); from.activateShell(tab.id);
+      showToast("Pane limit reached: the shell stays docked.");
+      return;
+    }
+    maximized = null; // see below
+    const cell = new Cell();
+    cells.push(cell);
+    from.detachShell(tab.id);
+    cell.addTab(tab);
+    setFocusedCell(cell);
+    renderGrid();
+    refreshSessions();
+    return;
+  }
   if (from.tabs.length === 1) { setFocusedCell(from); from.activate(tab); return; }
   if (cells.length >= cap) {
     setFocusedCell(from); from.activate(tab);
@@ -1108,6 +1607,9 @@ function moveToOwnPane(from, tab) {
   maximized = null;
   const cell = new Cell();
   cells.push(cell);
+  // The dock hangs off a terminal of its pane: if this tab is the last one
+  // there, the dock moves with it instead of closing.
+  if (from.dock && !from.tabs.some((t) => t !== tab && t.kind === "terminal")) from._moveDockTo(cell);
   from.detachTab(tab);
   cell.addTab(tab); // re-points tab.onUpdate at its new cell
   setFocusedCell(cell);
@@ -1174,12 +1676,15 @@ function openBoxFile(sessionId, path) {
 }
 
 function closeTabEverywhere(tab) {
-  for (const c of cells) if (c.tabs.includes(tab)) { c.closeTab(tab); return; }
+  for (const c of cells) {
+    if (c.tabs.includes(tab)) { c.closeTab(tab); return; }
+    if (tab && c.dockTabFor(tab.id) === tab) { c.removeShell(tab.id); return; }
+  }
 }
 
 function retitleTerminal(id, name) {
   for (const c of cells) {
-    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
+    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id) || c.dockTabFor(id);
     if (t) t.setTitle(name);
   }
 }
@@ -1189,7 +1694,7 @@ function retitleTerminal(id, name) {
 // itself, because an evicted tab stays open while its socket is gone.
 function terminalTabFor(id) {
   for (const c of cells) {
-    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
+    const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id) || c.dockTabFor(id);
     if (t) return t;
   }
   return null;
@@ -1200,6 +1705,7 @@ function closeTerminal(id) {
   for (const c of cells) {
     const t = c.tabs.find((t) => t.kind === "terminal" && t.id === id);
     if (t) { c.closeTab(t); return; }
+    if (c.dockTabFor(id)) { c.removeShell(id); return; }
   }
 }
 
@@ -1241,6 +1747,9 @@ function applyPlan(plan, sessions) {
       if (t.path) cell.addTab(new ViewerTab(t.path, { scroll: t.scroll, restored: true, box: t.box }));
       else cell.addTab(new TerminalTab(t.id, nameOf.get(t.id)));
     }
+    // A stored dock id becomes a TerminalTab in the dock, never a pane tab:
+    // reconcileLayout already removed every id that is gone or open as a tab.
+    if (pc.dock) cell._restoreDock(pc.dock, nameOf);
     cell.activate(cell.tabs[pc.active] || cell.tabs[0]);
   }
   // applyCap first: it is what collapses extra panes if a snapshot ever holds

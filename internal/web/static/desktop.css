@@ -497,4 +497,51 @@
   #ask-modal.info { width: 560px; max-width: 92vw; }
   #ask-modal.info #ask-cancel { display: none; }
   #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; overflow-x: auto; }
+
+  /* --- companion-shell dock (spec 5.5; sl-1.png right, v5-3.png below) ----- */
+  /* The pane body becomes [tab | dock]. Dragging the splitter moves only
+     --dock-ratio; tabs.js commits it on release. */
+  .cell-body.dock-below { flex-direction: column; }
+  .cell-body.dock-right { flex-direction: row; }
+  .cell-body.dock-below > .tab-body, .cell-body.dock-right > .tab-body,
+  .cell-body.dock-below > .cell-empty, .cell-body.dock-right > .cell-empty { flex: 1 1 0; min-width: 0; min-height: 0; }
+  .dock {
+    position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+    flex: 0 0 calc(var(--dock-ratio, 0.4) * 100%); background: var(--bg);
+  }
+  .dock-below > .dock { border-top: 1px solid var(--line); }
+  .dock-right > .dock { border-left: 1px solid var(--line); }
+  /* The splitter straddles the dock's edge, out of the flow: no layout of its own. */
+  .dock-split { position: absolute; z-index: 3; touch-action: none; }
+  .dock-below .dock-split { left: 0; right: 0; top: -4px; height: 7px; cursor: row-resize; }
+  .dock-right .dock-split { top: 0; bottom: 0; left: -4px; width: 7px; cursor: col-resize; }
+  .dock-split:hover, .dock-split.dragging { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .dock-bar {
+    flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; height: 28px;
+    padding: 0 6px 0 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .dock-tabs { flex: none; display: flex; align-items: center; gap: 2px; min-width: 0; }
+  .dock-tab, .dock-add {
+    padding: 1px 3px; font: 600 12px/18px var(--font-ui); color: var(--muted);
+    background: none; border: 0; border-radius: var(--r-chip); cursor: pointer; white-space: nowrap;
+  }
+  .dock-tab.on, .dock-tab:hover, .dock-add:hover { color: var(--fg); }
+  .dock-add { font-weight: 500; font-size: 13px; }
+  .dock-add:disabled { opacity: .45; cursor: default; }
+  .dock-dot { color: var(--faint); font-size: 12px; }
+  .dock-st { color: var(--muted); font-size: 11px; }
+  .dock-cwd {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); font-size: 12px;
+  }
+  .dock-ics { flex: none; display: flex; align-items: center; gap: 2px; margin-left: auto; }
+  .dock-ic {
+    width: 24px; height: 22px; display: inline-grid; place-items: center; padding: 0;
+    color: var(--muted); background: none; border: 0; border-radius: var(--r-chip); cursor: pointer;
+  }
+  .dock-ic svg { width: 14px; height: 14px; }
+  .dock-ic:hover { color: var(--fg); background: var(--raise); }
+  .dock-ic.on { color: var(--fg); background: var(--background3); }
+  .dock-tab:focus-visible, .dock-add:focus-visible, .dock-ic:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .dock-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 }
