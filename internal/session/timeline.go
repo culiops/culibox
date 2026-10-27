@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -110,6 +111,11 @@ type tlInput struct {
 		NewString string `json:"new_string"`
 	} `json:"edits"`
 }
+
+// tlToolIDRe bounds a tool_use id before it is ever kept as a map key: real
+// ids are "toolu_…" tokens. The id is agent-written, so an unbounded one
+// (16 MiB x 512 pending) would be a memory bomb.
+var tlToolIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 
 // tlSkipPrefixes mark user text that is Claude Code plumbing (slash commands
 // and their echoes), not something the human said.
@@ -241,6 +247,9 @@ func (st *timelineState) feed(line []byte) {
 
 // toolUse records a tool_use as a pending event.
 func (st *timelineState) toolUse(ts int64, b *tlBlock) {
+	if !tlToolIDRe.MatchString(b.ID) {
+		return // cannot be matched to a result, and must not be stored
+	}
 	var in tlInput
 	_ = json.Unmarshal(b.Input, &in) // a mistyped field leaves its zero value
 	name := cleanArg(b.Name)
@@ -286,14 +295,15 @@ func (st *timelineState) toolUse(ts int64, b *tlBlock) {
 	}
 	st.toolCalls++
 	seq := st.add(ev)
-	if b.ID != "" {
-		st.addPending(&pendingTool{id: b.ID, seq: seq, ts: ts, tool: name, path: path, add: add, del: del})
-	}
+	st.addPending(&pendingTool{id: b.ID, seq: seq, ts: ts, tool: name, path: path, add: add, del: del})
 }
 
 // toolResult finishes the pending event a tool_result answers. Only its error
 // flag, timing, a Bash exit code and a Read line count are taken from it.
 func (st *timelineState) toolResult(ts int64, b *tlBlock) {
+	if !tlToolIDRe.MatchString(b.ToolUseID) {
+		return
+	}
 	p := st.takePending(b.ToolUseID)
 	if p == nil {
 		return
@@ -416,7 +426,10 @@ func (m *Manager) TimelineFor(id string, beforeMS int64, limit int) (Timeline, b
 		if beforeMS > 0 && evs[i].TS >= beforeMS {
 			continue
 		}
-		if len(tl.Events) == limit {
+		// A page may run past limit to finish the millisecond it ends in:
+		// the next page asks for events strictly older, so a same-ms event
+		// left behind would be lost.
+		if len(tl.Events) >= limit && evs[i].TS != tl.Events[len(tl.Events)-1].TS {
 			tl.More = true
 			break
 		}

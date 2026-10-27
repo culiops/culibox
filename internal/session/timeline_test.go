@@ -572,3 +572,92 @@ func TestTimelineForgottenWithSession(t *testing.T) {
 		t.Error("state survived timelineForget")
 	}
 }
+
+func TestTimelineIgnoresUnboundedToolIDs(t *testing.T) {
+	m, home := newLocatorManager(t)
+	huge := strings.Repeat("a", 1<<20)
+	tlWrite(t, home, "aaaa-1",
+		tlUse(t, 0, huge, "Bash", map[string]any{"command": "bomb"})+
+			tlUse(t, 1, "has space", "Bash", map[string]any{"command": "bad charset"})+
+			tlUse(t, 2, "", "Bash", map[string]any{"command": "no id"})+
+			tlUse(t, 3, "toolu_ok-1", "Bash", map[string]any{"command": "fine"})+
+			tlResult(t, 4, huge, false, "x")+
+			tlResult(t, 5, "toolu_ok-1", false, "x"))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 1 || tl.Events[0].Detail != "fine" || tl.Events[0].State != "ok" || tl.Events[0].MS != 2 {
+		t.Fatalf("events = %+v", tl.Events)
+	}
+	st := m.timelineFor("s1")
+	if n := len(st.pending) + st.order.Len(); n != 0 {
+		t.Errorf("pending holds %d entries", n)
+	}
+	// A hostile id that is merely unanswered is not remembered either.
+	tlAppend(t, st.path, tlUse(t, 6, huge, "Bash", map[string]any{"command": "bomb2"}))
+	tlGet(t, m, "s1")
+	if len(st.pending) != 0 {
+		t.Errorf("pending grew on a 1 MiB id: %d", len(st.pending))
+	}
+}
+
+// tlUses is one assistant record carrying several tool_use blocks (parallel
+// calls share one timestamp).
+func tlUses(t *testing.T, ms int64, ids ...string) string {
+	var bs []any
+	for _, id := range ids {
+		bs = append(bs, map[string]any{"type": "tool_use", "id": id, "name": "Bash", "input": map[string]any{"command": "c-" + id}})
+	}
+	return tlJSON(t, map[string]any{"type": "assistant", "timestamp": tlT(ms), "message": map[string]any{"role": "assistant", "content": bs}})
+}
+
+func TestTimelinePagingKeepsSameMillisecondGroupWhole(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1", tlYou(t, 1, "old1")+tlYou(t, 2, "old2")+
+		tlUses(t, 10, "g1", "g2", "g3", "g4")+tlYou(t, 11, "newest"))
+	p1, _ := m.TimelineFor("s1", 0, 3) // newest, then 2 of the 4 same-ms calls
+	if len(p1.Events) != 5 || !p1.More {
+		t.Fatalf("page 1: %d events more=%v (want the whole ms group: 5)", len(p1.Events), p1.More)
+	}
+	p2, _ := m.TimelineFor("s1", p1.Events[len(p1.Events)-1].TS, 3)
+	if len(p2.Events) != 2 || p2.More || p2.Events[0].Detail != "old2" || p2.Events[1].Detail != "old1" {
+		t.Fatalf("page 2: %+v more=%v", p2.Events, p2.More)
+	}
+	seen := map[string]int{}
+	for _, e := range append(p1.Events, p2.Events...) {
+		seen[e.Detail]++
+	}
+	if len(seen) != 7 {
+		t.Errorf("lost or duplicated events: %v", seen)
+	}
+	for d, n := range seen {
+		if n != 1 {
+			t.Errorf("%s returned %d times", d, n)
+		}
+	}
+}
+
+func TestBoundTranscriptKeepsTheWorktreeFileAfterExit(t *testing.T) {
+	m, home, main, wt := newWorktreeLocator(t)
+	writeTxLines(t, home, wt, "aaaa-1", time.Now().Add(-time.Minute),
+		strings.TrimSuffix(tlYou(t, 0, "in the worktree"), "\n"))
+	writeTxLines(t, home, main, "zzzz-9", time.Now(), strings.TrimSuffix(tlYou(t, 0, "sibling"), "\n"))
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 1 || tl.Events[0].Detail != "in the worktree" {
+		t.Fatalf("live: %+v", tl.Events)
+	}
+	// The session exits: its registry entry is gone and locate stops consulting it.
+	if err := os.Remove(filepath.Join(home, ".claude", "sessions", "101.json")); err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["s1"].status = statusExited
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 1 || tl.Events[0].Detail != "in the worktree" {
+		t.Fatalf("after exit: %+v", tl.Events)
+	}
+	// A different state path (not this conversation's file) is not reused.
+	st := m.timelineFor("s1")
+	st.mu.Lock()
+	st.path = filepath.Join(home, ".claude", "projects", projectSlug(main), "zzzz-9.jsonl")
+	st.mu.Unlock()
+	if l, _ := m.boundTranscript("s1"); l.path == st.path {
+		t.Error("reused a cached path that is not <sid>.jsonl")
+	}
+}

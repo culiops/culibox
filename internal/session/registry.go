@@ -420,6 +420,14 @@ func (m *Manager) boundTranscript(id string) (located, bool) {
 	if !sessionIDRe.MatchString(sid) {
 		return l, false
 	}
+	// The path the timeline already parsed while the session was live and
+	// bound: a registry cwd that moved the transcript into a worktree's
+	// project dir is gone with the registry, but the file is still ours. Only
+	// when it is exactly this conversation's file; never a directory search.
+	if p := m.timelinePath(id); p != "" && filepath.Base(p) == sid+".jsonl" {
+		l.path = p
+		return l, true
+	}
 	if l.boxDir != "" {
 		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, nil, l.created); ok {
 			l.path = p

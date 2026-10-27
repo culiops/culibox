@@ -208,3 +208,17 @@ func (st *timelineState) fileList() []FileChange {
 	}
 	return out
 }
+
+// timelinePath is the transcript the session's parse is bound to ("" if none
+// yet). It was proven to be the session's own when it was parsed live.
+func (m *Manager) timelinePath(id string) string {
+	m.timelineMu.Lock()
+	st := m.timelines[id]
+	m.timelineMu.Unlock()
+	if st == nil {
+		return ""
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.path
+}
