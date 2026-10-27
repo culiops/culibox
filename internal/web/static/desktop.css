@@ -408,6 +408,78 @@
   /* The rail: a column of the drawer, not an overlay of its own. */
   #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
 
+  /* --- Files drawer body: tree 200px | viewer (spec 5.4) ------------------ */
+  #drawer[data-kind="files"] .dr-body { flex-direction: row; }
+  #drawer:not([data-kind="files"]) .dr-tree, #drawer:not([data-kind="files"]) .dr-viewer,
+  #drawer:not([data-kind="files"]) .dr-acts { display: none; }
+  .dr-tree {
+    flex: 0 0 200px; width: 200px; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column; border-right: 1px solid var(--line);
+  }
+  #drawer .dr-tree #files-pane { min-width: 0; }
+  #drawer .dr-tree #files-phd { padding-left: 8px; padding-right: 6px; }
+  #drawer .dr-tree .files-body { padding: 6px 6px 8px; }
+  /* A box session's tree is its workspace only: no root picker (the root
+     stays the session cwd, drawerRootTree). */
+  #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
+  .dr-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .dr-vtop {
+    flex: none; display: flex; align-items: baseline; gap: 6px; min-width: 0;
+    padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .dr-vpath {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 500 12px var(--font-mono); color: var(--fg);
+  }
+  .dr-vst { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
+  .dr-vtop:has(.dr-vpath:empty) { display: none; }
+  .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: 12px; }
+  /* The drawer header carries the viewer's actions, so its own toolbar goes. */
+  #drawer .viewer-tools { display: none; }
+  /* Long lines scroll, never wrap. */
+  #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
+  /* Header actions: Copy · Insert path · Edit · Open in pane · ⋯, or Cancel · Save. */
+  .dr-acts { flex: none; position: relative; display: flex; align-items: center; gap: 2px; }
+  .dr-act {
+    height: 24px; padding: 0 8px; font: 500 12px var(--font-ui); color: var(--muted); cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--r-ctl); white-space: nowrap;
+  }
+  .dr-act[hidden] { display: none; }
+  .dr-act:hover:not(:disabled) { color: var(--fg); background: var(--raise); }
+  /* Dimmed, not struck through (primitives.css): with no file every action is
+     off at once, and a row of struck words reads as an error. */
+  .dr-act:disabled { opacity: .4; cursor: default; text-decoration: none; }
+  .dr-act:focus-visible, .dr-mi:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .dr-act.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .dr-act.pri:hover:not(:disabled) { color: var(--bg); background: color-mix(in srgb, var(--accent) 85%, #fff); }
+  .dr-menu {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 130px;
+    display: flex; flex-direction: column; padding: 4px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 8px 24px #000a;
+  }
+  .dr-menu[hidden] { display: none; }
+  .dr-mi {
+    text-align: left; padding: 5px 10px; font: 400 12px var(--font-ui); color: var(--fg); cursor: pointer;
+    background: transparent; border: 0; border-radius: var(--r-chip);
+  }
+  .dr-mi:hover:not(:disabled) { background: var(--raise); }
+  .dr-mi:disabled { color: var(--faint); cursor: default; text-decoration: none; }
+  .dr-mi.on { color: var(--accent); font-weight: 600; }
+  /* In the drawer the header holds Save and Cancel; the viewer's own edit bar
+     keeps only its message and the conflict's Reload / Overwrite, and shows
+     only when it has something to say. */
+  #drawer .viewer-editbar .viewer-save, #drawer .viewer-editbar .viewer-cancel { display: none; }
+  #drawer .viewer-editbar:not(:has(.viewer-edit-msg:not(:empty))) { display: none; }
+  #drawer .viewer-editbar .viewer-edit-msg { margin-left: 0; margin-right: auto; }
+  /* "The agent may change this file again": neutral with an accent edge, never
+     amber or red (D23). Shown wherever a desktop viewer edits. */
+  .edit-warn {
+    display: block; flex: none; padding: 6px 12px; font: 400 12px var(--font-ui); color: var(--muted);
+    background: var(--panel); border-bottom: 1px solid var(--line); border-left: 2px solid var(--accent);
+  }
+
   /* --- the ask strip under a pane header (spec 5.3) ----------------------- */
   /* Amber label, the command in mono on one line (click to expand), then the
      actions, right-aligned. renderNeedsBody's .nbody dissolves into this grid

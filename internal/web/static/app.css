@@ -1792,6 +1792,9 @@
     .viewer-edit-msg.err { color: var(--danger); }
     .viewer-edit { flex: 1; min-height: 0; }
     .viewer-edit .CodeMirror { height: 100%; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-code); }
+    /* The "agent may change this file" strip above the editor: desktop only
+       (desktop.css shows it); mobile edit mode stays as it was. */
+    .edit-warn { display: none; }
     /* markdown */
     .md-body { padding: 14px 18px; font-size: var(--fs-md); line-height: 1.6; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); max-width: 900px; }
     .md-body h1, .md-body h2, .md-body h3 { border-bottom: 1px solid var(--border); padding-bottom: .3em; margin: 1.2em 0 .6em; }

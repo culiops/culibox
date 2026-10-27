@@ -207,9 +207,23 @@ function applyDrawer(next, opts) {
   const dr = $("drawer");
   const body = $("drawer-body");
   if (!dr || !body) return;
+  // A dirty buffer in the Files drawer's viewer asks before anything takes it
+  // away (closing, Access, another session); Cancel leaves the drawer as it is.
+  // The ask is async, so this call ends here and a confirmed one comes back in.
+  if (!(opts && opts.discardOk) && typeof drawerWouldDiscard === "function" && drawerWouldDiscard(drawerState, next)) {
+    drawerConfirmLeave().then((ok) => {
+      if (!ok) return;
+      drawerDiscard();
+      applyDrawer(next, Object.assign({}, opts, { discardOk: true }));
+    });
+    return;
+  }
+  const prev = drawerState;
   drawerState = next;
   const rail = $("steer-rail");
-  if (next.open === "files") moveIntoDrawer($("files-pane"), body);
+  // The tree is the left column of the Files body; the viewer column beside it
+  // is filesdrawer.js's.
+  if (next.open === "files") moveIntoDrawer($("files-pane"), $("drawer-tree") || body);
   if (next.open === "access") {
     moveIntoDrawer(rail, body);
     // The rail describes the focused terminal (railSession), so bring this
@@ -228,6 +242,7 @@ function applyDrawer(next, opts) {
   positionDrawer();
   if (next.open === "access") renderSteerRail();
   if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
+  if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   for (const c of cells) paintDrawerTabs(c);
 }
 
@@ -296,9 +311,19 @@ function drawerFollowFocus() {
   const term = cellTerminal(focusedCell);
   const sid = term ? term.id : null;
   if (sid !== drawerState.sessionId) {
-    drawerState = { open: drawerState.open, sessionId: sid };
+    const next = { open: drawerState.open, sessionId: sid };
+    // A dirty buffer in the Files viewer asks first. Cancel keeps the drawer on
+    // its session; Discard re-runs this against wherever focus is by then.
+    if (typeof drawerWouldDiscard === "function" && drawerWouldDiscard(drawerState, next)) {
+      drawerConfirmLeave().then((ok) => { if (ok) { drawerDiscard(); drawerFollowFocus(); } });
+      positionDrawer();
+      return;
+    }
+    const prev = drawerState;
+    drawerState = next;
     paintDrawerHead();
     for (const c of cells) paintDrawerTabs(c);
+    if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   }
   positionDrawer();
 }
@@ -333,8 +358,11 @@ function positionDrawer() {
 }
 
 // restoreDrawerNodes puts every moved node back exactly where it came from and
-// closes the drawer. Run on the crossing into mobile.
+// closes the drawer. Run on the crossing into mobile. The Files viewer is let
+// go too (a dirty one is kept whole for the next desktop drawer: see
+// drawerFilesDetach); no prompt can stop a resize.
 function restoreDrawerNodes() {
+  if (typeof drawerFilesDetach === "function") drawerFilesDetach();
   for (const [node, o] of drawerOrigins) {
     if (o.next && o.next.parentNode === o.parent) o.parent.insertBefore(node, o.next);
     else o.parent.appendChild(node);

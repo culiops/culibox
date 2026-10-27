@@ -1693,6 +1693,8 @@ function openBoxFile(sessionId, path) {
 }
 
 function closeTabEverywhere(tab) {
+  // The desktop Files drawer's viewer is in no cell (filesdrawer.js).
+  if (tab && typeof drawerViewerTab === "function" && drawerViewerTab() === tab) { drawerClearViewer(); return; }
   for (const c of cells) {
     if (c.tabs.includes(tab)) { c.closeTab(tab); return; }
     if (tab && c.dockTabFor(tab.id) === tab) { c.removeShell(tab.id); return; }
@@ -1739,6 +1741,9 @@ function closeViewersFor(path) {
     // !t.box: a host delete/rename says nothing about a file inside a box.
     for (const t of c.tabs.slice()) if (t.kind === "viewer" && !t.box && hit(t.path)) c.closeTab(t);
   }
+  // The Files drawer's viewer too, on the same rule.
+  const dv = typeof drawerViewerTab === "function" ? drawerViewerTab() : null;
+  if (dv && !dv.box && hit(dv.path)) drawerClearViewer();
 }
 
 // --- restore (see layout.js) -------------------------------------------------
