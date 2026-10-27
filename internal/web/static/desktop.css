@@ -424,6 +424,22 @@
   #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
   /* A session workspace the fs API refuses is never a root (S1): the column
      says so instead of showing whatever tree was there before. */
+  /* "Go to file…" (Ctrl+P): a filename jump at the top of the tree column. The
+     list is fixed-position (set from the input's rect in drawerGoPosition) so
+     the 200px column does not clip it; .ft-opt/.ft-note rows are shared. */
+  .dr-goto { flex: none; padding: 6px 8px 0; }
+  #drawer-goto-in {
+    width: 100%; box-sizing: border-box; padding: 4px 7px; font: 12px var(--font-ui);
+    color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  }
+  #drawer-goto-in::placeholder { color: var(--muted); }
+  #drawer-goto-in:focus { border-color: var(--accent); outline: none; }
+  #drawer-goto-list {
+    position: fixed; z-index: 30; max-height: 260px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 20px #0009;
+  }
+  #drawer-goto-list[hidden] { display: none; }
+  #drawer[data-noroot="1"] .dr-goto { display: none; }
   .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
   #drawer[data-noroot="1"] .dr-tnote { display: block; }
   #drawer[data-noroot="1"] .dr-tree #files-pane { display: none; }

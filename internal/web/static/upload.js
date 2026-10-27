@@ -6,12 +6,23 @@
 
 // uploadFiles POSTs to /api/fs/upload with XHR rather than fetch: fetch cannot
 // report upload progress, and progress is the point of the feedback here.
+// dropHint: the toast for a drop that has nowhere to go. On desktop the folder
+// to drop on is in the Files drawer, which is not always on screen, so the
+// message names it; mobile keeps its Files-screen wording.
+function dropHint(kind, desktop) {
+  const where = desktop ? "the Files drawer" : "Files";
+  if (kind === "nodest") return "No destination folder yet. Drop onto a folder in " + where + " instead";
+  return "Drop onto a terminal pane, or onto a folder in " + where;
+}
+
+function desktopNow() { return typeof drawerDesktop === "function" && drawerDesktop(); }
+
 function uploadFiles(files, destDir, opts) {
   opts = opts || {};
   const list = Array.from(files || []);
   if (!list.length) return Promise.resolve(null);
   if (!destDir) {
-    showToast("No destination folder yet. Drop onto a folder in Files instead", { error: true });
+    showToast(dropHint("nodest", desktopNow()), { error: true });
     return Promise.resolve(null);
   }
   const fd = new FormData();
@@ -258,7 +269,7 @@ function clipboardFiles(e) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt };
+  module.exports = { shouldRefreshTree, shellQuote, pasteFileName, humanBytes, insertTextAtPrompt, dropHint };
 }
 
 // pasteFileName keeps the name the browser supplied and only invents one when
@@ -293,7 +304,7 @@ function initUpload() {
   window.addEventListener("drop", (e) => {
     if (!dragHasFiles(e)) return;
     e.preventDefault();
-    showToast("Drop onto a terminal pane, or onto a folder in Files", { error: true });
+    showToast(dropHint("miss", desktopNow()), { error: true });
   });
 
   // Files pane ＋ button: the only upload route on mobile, where drag does not

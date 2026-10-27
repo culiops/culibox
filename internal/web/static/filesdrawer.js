@@ -193,7 +193,7 @@ function drawerFilesApply(prev, next) {
   const was = !!prev && prev.open === "files";
   const now = !!next && next.open === "files";
   const moved = !prev || !next || prev.sessionId !== next.sessionId;
-  if (was && (!now || moved)) drawerParkViewer();
+  if (was && (!now || moved)) { drawerParkViewer(); drawerGoReset(); }
   if (now && (!was || moved || !drawerViewer)) drawerRecall(next.sessionId);
   else drawerPaint();
 }
@@ -209,6 +209,205 @@ function drawerFilesDetach() {
   if (v.auto) v.toggleAuto();
   drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
   v.el.remove();
+}
+
+// --- Go to file… (Ctrl+P) ----------------------------------------------------
+// A filename jump at the top of the tree column, over the existing bounded file
+// search (goToFileURL). Thin by design (north star): it finds a FILE BY NAME
+// under the tree's root and shows it in the viewer; it is not search-in-files.
+// The debounce + AbortController are the directory picker's pattern.
+
+const DRAWER_GO_DEBOUNCE_MS = 150, DRAWER_GO_FETCH_MS = 4000;
+let drawerGoSeq = 0, drawerGoTimer = null, drawerGoAbort = null;
+let drawerGoRows = [], drawerGoActive = -1;
+
+function drawerGoStop() {
+  drawerGoSeq++; // a late reply is for a query nobody is waiting on
+  if (drawerGoTimer) { clearTimeout(drawerGoTimer); drawerGoTimer = null; }
+  if (drawerGoAbort) { drawerGoAbort.abort(); drawerGoAbort = null; }
+}
+
+function drawerGoClose() {
+  const list = drawerEl("drawer-goto-list");
+  const input = drawerEl("drawer-goto-in");
+  drawerGoRows = []; drawerGoActive = -1;
+  if (list) { list.hidden = true; list.replaceChildren(); }
+  if (input) { input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); }
+}
+
+// drawerGoReset: the query and its list are for one session's tree; leaving it
+// (close, another session) drops both.
+function drawerGoReset() {
+  drawerGoStop();
+  drawerGoClose();
+  const input = drawerEl("drawer-goto-in");
+  if (input) input.value = "";
+}
+
+function drawerGoPosition() {
+  const input = drawerEl("drawer-goto-in");
+  const list = drawerEl("drawer-goto-list");
+  if (!input || !list) return;
+  const r = input.getBoundingClientRect();
+  const w = Math.min(Math.max(r.width, 340), window.innerWidth - r.left - 8);
+  list.style.left = Math.round(r.left) + "px";
+  list.style.top = Math.round(r.bottom + 2) + "px";
+  list.style.width = Math.round(w) + "px";
+}
+
+// drawerGoRender: rows are {label, hint, path}; `note` (no rows, or the search
+// failed) is one muted line that is not an option, so arrows and Enter skip it.
+function drawerGoRender(rows, note) {
+  const list = drawerEl("drawer-goto-list");
+  const input = drawerEl("drawer-goto-in");
+  if (!list || !input) return;
+  drawerGoRows = rows; drawerGoActive = -1;
+  input.removeAttribute("aria-activedescendant");
+  const els = rows.map((r, i) => {
+    const el = document.createElement("div");
+    el.className = "ft-opt";
+    el.id = "drawer-goto-opt-" + i;
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-selected", "false");
+    el.title = r.path;
+    const lab = document.createElement("span");
+    lab.textContent = r.label;
+    const hint = document.createElement("span");
+    hint.className = "hint";
+    hint.textContent = r.hint;
+    el.append(lab, hint);
+    el.onclick = () => drawerGoChoose(i);
+    return el;
+  });
+  if (note) {
+    const el = document.createElement("div");
+    el.className = "ft-note";
+    el.setAttribute("role", "option");
+    el.setAttribute("aria-disabled", "true");
+    el.textContent = note;
+    els.push(el);
+  }
+  list.replaceChildren(...els);
+  // A click on a row must not blur the input first (blur closes the list).
+  list.onmousedown = (e) => e.preventDefault();
+  drawerGoPosition();
+  list.hidden = els.length === 0;
+  input.setAttribute("aria-expanded", list.hidden ? "false" : "true");
+}
+
+function drawerGoMove(delta) {
+  const list = drawerEl("drawer-goto-list");
+  const input = drawerEl("drawer-goto-in");
+  const n = drawerGoRows.length;
+  if (!list || !input || !n) return;
+  const was = list.children[drawerGoActive];
+  if (was) was.setAttribute("aria-selected", "false");
+  drawerGoActive = drawerGoActive < 0 ? (delta > 0 ? 0 : n - 1) : (drawerGoActive + delta + n) % n;
+  const el = list.children[drawerGoActive];
+  el.setAttribute("aria-selected", "true");
+  input.setAttribute("aria-activedescendant", el.id);
+  el.scrollIntoView({ block: "nearest" });
+}
+
+// drawerGoChoose opens hit `i` through drawerShowFile, so a dirty buffer still
+// asks before it is replaced. If the user keeps the buffer, nothing opens and
+// the query stays in the box.
+async function drawerGoChoose(i) {
+  const r = drawerGoRows[i];
+  if (!r) return;
+  if (!(await drawerShowFile(r.path))) return;
+  drawerGoReset();
+  const input = drawerEl("drawer-goto-in");
+  if (input) input.blur();
+}
+
+async function drawerGoSearch(q, seq) {
+  const ac = new AbortController();
+  drawerGoAbort = ac;
+  const timer = setTimeout(() => ac.abort(), DRAWER_GO_FETCH_MS);
+  const root = typeof ftRoot === "function" ? ftRoot() : "";
+  let data = null, failed = false;
+  try {
+    const res = await fetch(goToFileURL(q, root), { signal: ac.signal });
+    if (res.ok) data = await res.json();
+    else failed = true;
+  } catch (_) {
+    failed = true; // offline, timed out, or aborted by a newer query (guarded below)
+  } finally { clearTimeout(timer); }
+  if (seq !== drawerGoSeq) return;
+  drawerGoAbort = null;
+  if (failed || !data) { drawerGoRender([], "file search unavailable"); return; }
+  const rows = hitsUnderRoot(data.results || [], root).map((h) => {
+    const rel = relativeTo(root, h.path);
+    const cut = rel.lastIndexOf("/");
+    return { label: cut >= 0 ? rel.slice(cut + 1) : rel, hint: cut >= 0 ? rel.slice(0, cut) : "", path: h.path };
+  });
+  drawerGoRender(rows, rows.length ? "" : data.truncated ? "no match yet, the index is still filling" : "no matching files");
+}
+
+function drawerGoInput() {
+  const input = drawerEl("drawer-goto-in");
+  if (!input) return;
+  drawerGoStop();
+  const q = input.value.trim();
+  if (!q) { drawerGoClose(); return; }
+  const seq = drawerGoSeq;
+  drawerGoTimer = setTimeout(() => { drawerGoTimer = null; drawerGoSearch(q, seq); }, DRAWER_GO_DEBOUNCE_MS);
+}
+
+function drawerGoKey(e) {
+  const input = e.currentTarget;
+  const list = drawerEl("drawer-goto-list");
+  const open = !!list && !list.hidden;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!open) return;
+    e.preventDefault();
+    drawerGoMove(e.key === "ArrowDown" ? 1 : -1);
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    if (!drawerGoRows.length) return;
+    drawerGoChoose(drawerGoActive >= 0 ? drawerGoActive : 0);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation(); // clears the query; the drawer itself stays
+    if (input.value || open) drawerGoReset();
+    else input.blur();
+  }
+}
+
+// drawerGoFocus: Ctrl+P. True when it took the key. Only while the Files
+// drawer is open on desktop with a tree to search; anywhere else the browser
+// keeps its own Ctrl+P.
+function drawerGoFocus() {
+  const input = drawerEl("drawer-goto-in");
+  if (!input || !drawerOwnsFileClicks()) return false;
+  const dr = drawerEl("drawer");
+  if (!dr || dr.hidden || dr.dataset.noroot === "1") return false;
+  input.focus();
+  input.select();
+  return true;
+}
+
+function initDrawerGoto() {
+  const input = drawerEl("drawer-goto-in");
+  if (!input) return;
+  input.addEventListener("input", drawerGoInput);
+  input.addEventListener("keydown", drawerGoKey);
+  input.addEventListener("blur", drawerGoClose);
+  input.addEventListener("focus", () => { if (input.value.trim()) drawerGoInput(); });
+  window.addEventListener("resize", drawerGoClose);
+  // Capture phase, like the app's other global shortcuts: xterm and
+  // CodeMirror would otherwise see the key first. A terminal keeps its own
+  // Ctrl+P (readline's previous-history); the shortcut works from anywhere else.
+  document.addEventListener("keydown", (e) => {
+    if (e.code !== "KeyP" || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    const ae = document.activeElement;
+    if (ae && ae.classList && ae.classList.contains("xterm-helper-textarea")) return;
+    if (typeof dialogsOpen === "function" && dialogsOpen() > 0) return;
+    if (!drawerGoFocus()) return;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
 }
 
 // --- header actions ----------------------------------------------------------
@@ -379,3 +578,4 @@ function initFilesDrawer() {
 }
 
 initFilesDrawer();
+initDrawerGoto();

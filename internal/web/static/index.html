@@ -137,7 +137,12 @@
         <button id="drawer-x" type="button" title="Close the drawer" aria-label="Close the drawer">&#10005;</button>
       </div>
       <div id="drawer-body" class="dr-body">
-        <div id="drawer-tree" class="dr-tree"><p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
+        <div id="drawer-tree" class="dr-tree">
+          <div class="dr-goto">
+            <input id="drawer-goto-in" type="text" placeholder="Go to file…" title="Go to file (Ctrl+P)" aria-label="Go to file" role="combobox" aria-expanded="false" aria-controls="drawer-goto-list" aria-autocomplete="list" autocomplete="off" spellcheck="false">
+            <div id="drawer-goto-list" role="listbox" aria-label="Matching files" hidden></div>
+          </div>
+          <p class="dr-tnote">This session's workspace can't be browsed here.</p></div>
         <div id="drawer-viewer" class="dr-viewer">
           <div class="dr-vtop"><span id="drawer-vpath" class="dr-vpath"></span><span id="drawer-vst" class="dr-vst"></span></div>
           <div id="drawer-vhost" class="dr-vhost" hidden></div>

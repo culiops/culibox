@@ -101,3 +101,44 @@ test("discardAsk: the prompt names the file, exactly", () => {
   assert.equal(o.danger, true);
   assert.equal(typeof o.confirmLabel, "string");
 });
+
+test("goToFileURL: the bounded file search, preferring the tree's root", () => {
+  assert.strictEqual(d.goToFileURL("main", "/home/u/a"),
+    "/api/fs/search?limit=40&q=main&prefer=%2Fhome%2Fu%2Fa");
+});
+
+test("goToFileURL: the query and the root are encoded", () => {
+  assert.strictEqual(d.goToFileURL("a b&c/d", "/home/u/my proj"),
+    "/api/fs/search?limit=40&q=a%20b%26c%2Fd&prefer=%2Fhome%2Fu%2Fmy%20proj");
+});
+
+test("goToFileURL: with no root there is nothing to prefer", () => {
+  assert.strictEqual(d.goToFileURL("x", ""), "/api/fs/search?limit=40&q=x");
+  assert.strictEqual(d.goToFileURL("x", null), "/api/fs/search?limit=40&q=x");
+});
+
+test("hitsUnderRoot keeps only paths under the root", () => {
+  const hits = [
+    { path: "/home/u/a/main.go", rel: "a/main.go" },
+    { path: "/home/u/a/sub/x.go", rel: "a/sub/x.go" },
+    { path: "/home/u/b/main.go", rel: "b/main.go" },
+  ];
+  assert.deepEqual(d.hitsUnderRoot(hits, "/home/u/a").map((h) => h.path),
+    ["/home/u/a/main.go", "/home/u/a/sub/x.go"]);
+});
+
+test("hitsUnderRoot: root /home/u/a does NOT match /home/u/ab/x", () => {
+  const hits = [{ path: "/home/u/ab/x" }, { path: "/home/u/a/x" }, { path: "/home/u/a" }];
+  assert.deepEqual(d.hitsUnderRoot(hits, "/home/u/a").map((h) => h.path), ["/home/u/a/x"]);
+});
+
+test("hitsUnderRoot: a trailing slash on the root changes nothing", () => {
+  const hits = [{ path: "/home/u/a/x" }, { path: "/home/u/ab/x" }];
+  assert.deepEqual(d.hitsUnderRoot(hits, "/home/u/a/").map((h) => h.path), ["/home/u/a/x"]);
+});
+
+test("hitsUnderRoot: no root, no hits; bad input is empty, never a throw", () => {
+  assert.deepEqual(d.hitsUnderRoot([{ path: "/x" }], ""), []);
+  assert.deepEqual(d.hitsUnderRoot(null, "/home/u"), []);
+  assert.deepEqual(d.hitsUnderRoot([null, {}, { path: 5 }, { path: "/home/u/a" }], "/home/u"), [{ path: "/home/u/a" }]);
+});

@@ -74,6 +74,26 @@ function discardAsk(name) {
   };
 }
 
+// goToFileURL: the Files drawer's "Go to file…" query. The existing bounded,
+// indexed filename search (no new endpoint, and not a search inside files);
+// prefer=<tree root> lists that subtree's matches first.
+function goToFileURL(q, root) {
+  let u = "/api/fs/search?limit=40&q=" + encodeURIComponent(q);
+  if (root) u += "&prefer=" + encodeURIComponent(root);
+  return u;
+}
+
+// hitsUnderRoot: the hits whose path lies inside `root`. The search also
+// returns matches elsewhere under $HOME (the preferred subtree only comes
+// first), but the drawer's tree shows one root, so a jump must stay in it.
+// Compared on a path boundary: root /home/u/a does not own /home/u/ab/x. No
+// root, no hits.
+function hitsUnderRoot(hits, root) {
+  if (!Array.isArray(hits) || !root) return [];
+  const prefix = String(root).replace(/\/+$/, "") + "/";
+  return hits.filter((h) => !!h && typeof h.path === "string" && h.path.startsWith(prefix) && h.path.length > prefix.length);
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { drawerActions, rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked };
+  module.exports = { drawerActions, rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot };
 }
