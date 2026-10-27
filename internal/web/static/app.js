@@ -376,6 +376,16 @@ function steerViaPaneView(open) {
   return true;
 }
 
+// paintSteerToggle: the ◧ toggle's aria-pressed follows steerOpen(), so on
+// desktop it is pressed while the focused pane shows Access, however the view
+// got there (header tab, palette, sub-line) or left (Terminal, another pane
+// focused). Called from Cell._syncView and setFocusedCell (tabs.js). On mobile
+// steerOpen() is the rail's own state, the same value setSteerOpen writes.
+function paintSteerToggle() {
+  const t = $("steer-toggle");
+  if (t) t.setAttribute("aria-pressed", steerOpen() ? "true" : "false");
+}
+
 $("drawer-x").onclick = () => closeDrawerFor();
 if (typeof ResizeObserver === "function") new ResizeObserver(() => positionDrawer()).observe($("grid"));
 
@@ -5753,6 +5763,7 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     applyCollapsed(bootFlags(deskStorage(), mobileActive(window.innerWidth)).ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
     if (mobileActive(window.innerWidth)) restoreDrawerNodes();
     else paintSideCost(); // the footer was skipped while narrow
+    paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
     if (typeof renderGrid === "function") renderGrid();
   });

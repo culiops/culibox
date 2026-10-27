@@ -68,6 +68,14 @@ function paneViewTarget(model, sid, focusIndex) {
   return null;
 }
 
+// steerRailOpen: is "the session detail rail" open, for its ◧ toggle and
+// toggleSteerRail (steerrail.js)? On desktop the rail is never shown (it stays
+// hidden in #layout): what it opens is the focused pane's Access view, so that
+// is the answer. On mobile it is the rail's own hidden state, as before.
+function steerRailOpen(desktop, focusedView, railShown) {
+  return desktop ? focusedView === "access" : !!railShown;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { PANE_VIEWS, paneViewRenderers, paneViewKind, paneViewFor, paneViewTarget };
+  module.exports = { PANE_VIEWS, paneViewRenderers, paneViewKind, paneViewFor, paneViewTarget, steerRailOpen };
 }

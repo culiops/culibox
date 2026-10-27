@@ -357,6 +357,7 @@ class Cell {
     const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
     if (this.view !== "terminal" && (!term || mobile)) this.view = "terminal";
     this.body.classList.toggle("has-view", this.view !== "terminal"); // hides the tab under it (desktop.css)
+    if (typeof paintSteerToggle === "function") paintSteerToggle(); // ◧ follows the focused pane's Access
     if (this.view === "terminal") { this._dropView(); return; }
     if (!this._viewHost) {
       const h = document.createElement("div");
@@ -1447,6 +1448,7 @@ function setFocusedCell(cell) {
   cells.forEach((c) => c.el.classList.toggle("focus", c === focusedCell));
   syncFocusedTree(); // tree follows the focused tab
   renderSteerRail(); // and so does the rail: it describes the focused session
+  if (typeof paintSteerToggle === "function") paintSteerToggle(); // ◧: the new pane's Access view or not
   if (typeof syncSelectedRow === "function") syncSelectedRow();
   scheduleSaveLayout();
 }

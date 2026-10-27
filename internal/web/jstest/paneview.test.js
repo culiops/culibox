@@ -79,3 +79,12 @@ test("paneViewTarget: a session open nowhere has no pane yet", () => {
 test("paneViewTarget: a viewer path is never a session", () => {
   assert.equal(p.paneViewTarget(grid(), "/w/x.go", 0), null);
 });
+
+test("steerRailOpen: desktop reads the focused pane's Access view, mobile the rail itself", () => {
+  assert.equal(p.steerRailOpen(true, "access", false), true, "desktop: Access open = open, whatever the hidden rail says");
+  assert.equal(p.steerRailOpen(true, "activity", true), false, "desktop: another view is not the rail");
+  assert.equal(p.steerRailOpen(true, "terminal", true), false);
+  assert.equal(p.steerRailOpen(true, null, true), false, "desktop: no focused pane");
+  assert.equal(p.steerRailOpen(false, "access", false), false, "mobile: the rail's own state");
+  assert.equal(p.steerRailOpen(false, "terminal", true), true);
+});

@@ -309,9 +309,15 @@ function railSession() {
   return (lastSessions || []).find((s) => s.id === id) || null;
 }
 
+// steerOpen: the rail's open state, which on desktop is the focused pane's
+// Access view (steerRailOpen, paneview.js): the rail itself stays hidden there,
+// so reading it alone made toggleSteerRail open Access forever, never close it.
 function steerOpen() {
   const el = document.getElementById("steer-rail");
-  return !!el && !el.hidden;
+  const shown = !!el && !el.hidden;
+  if (typeof steerRailOpen !== "function" || typeof steerViaPaneView !== "function") return shown;
+  const desktop = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+  return steerRailOpen(desktop, focusedCell ? focusedCell.view : null, shown);
 }
 
 function setSteerOpen(open) {
