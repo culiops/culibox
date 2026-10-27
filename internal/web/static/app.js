@@ -182,8 +182,10 @@ function closeDrawerFor(sessionId, kind) {
 function headerDrawerPress(cell, kind, sessionId, e) {
   if (e && e.detail > 0 && !cell._pressFocused) { openDrawer(kind, sessionId); return; }
   // A keyboard press on an unfocused pane: focus it first, so the drawer hangs
-  // under this pane's header and describes this pane's session.
-  if (focusedCell !== cell) setFocusedCell(cell);
+  // under this pane's header. That focus change runs drawerFollowFocus, which
+  // already moves an open drawer to this pane's session, so a toggle would
+  // close it: open, the same rule as the mouse press above.
+  if (focusedCell !== cell) { setFocusedCell(cell); openDrawer(kind, sessionId); return; }
   toggleDrawer(kind, sessionId);
 }
 
