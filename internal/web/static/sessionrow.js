@@ -78,7 +78,14 @@ function canInterrupt(s) {
 // promises the confirm that follows. Both are house rules: destructive actions
 // sit at the end, past everything reversible, and every destructive trigger says
 // that it will ask. "Duplicate…" carries one too: it opens the spawn form.
-function menuItems(s) {
+//
+// opts.nested: the session is a companion shell listed under its parent (desktop
+// sidebar). Only the actions that mean something for a shell stay (rename,
+// files, copy cwd, new pane, end); restart, duplicate, interrupt, the reply
+// opt-in and context-by-tool do not.
+const NESTED_SHELL_ACTIONS = ["rename", "files", "copycwd", "newpane", "end"];
+
+function menuItems(s, opts) {
   const v = s || {};
   const items = [{ id: "rename", label: "Rename…", danger: false }];
   if (v.cwd) items.push({ id: "files", label: "Open files here", danger: false });
@@ -95,6 +102,7 @@ function menuItems(s) {
   if (v.exited) items.push({ id: "restart", label: v.resumable ? "Restart (resume conversation)" : "Restart", danger: false });
   items.push({ id: "duplicate", label: "Duplicate…", danger: false });
   items.push({ id: "end", label: "End session…", danger: true });
+  if (opts && opts.nested) return items.filter((m) => NESTED_SHELL_ACTIONS.indexOf(m.id) >= 0);
   return items;
 }
 

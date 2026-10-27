@@ -197,6 +197,11 @@
   #sessions .drow:hover .kbtn, #sessions .drow:focus-within .kbtn, #sessions .drow .kbtn:focus-visible {
     width: 20px; opacity: 1;
   }
+  /* Touch screens wider than 700px have no hover, so the ⋯ would never show:
+     keep it visible (#12). Nested in the desktop block on purpose. */
+  @media (hover: none) {
+    #sessions .drow .kbtn { width: 20px; opacity: 1; }
+  }
   #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
   #sessions .drow .kbtn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #sessions .drow .nm:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
@@ -205,6 +210,16 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #sessions .drow .sub.amber { color: var(--amber); }
+  /* A companion shell under its parent (v5-3): "↳ shell N" + the chip, indented,
+     one line, no sub-line. The status dot is the shell's own, smaller than a
+     session's so the row reads as a child. */
+  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 18px; }
+  #sessions .drow .nest-arrow {
+    flex: none; width: 9px; font: 400 12px/18px var(--font-ui); color: var(--faint); text-align: center;
+  }
+  #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 6px; margin-right: 1px; }
+  #sessions .drow.nested .nm { color: var(--muted); }
+  #sessions .drow.nested.sel .nm, #sessions .drow.nested:hover .nm { color: var(--fg); }
 
   /* --- pane header: one line (spec 5.3) ---------------------------------- */
   /* The old tab strip's bar, re-drawn by Cell.renderHeader. Two columns: the
@@ -393,6 +408,100 @@
   /* The rail: a column of the drawer, not an overlay of its own. */
   #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
 
+  /* --- Files drawer body: tree 200px | viewer (spec 5.4) ------------------ */
+  #drawer[data-kind="files"] .dr-body { flex-direction: row; }
+  #drawer:not([data-kind="files"]) .dr-tree, #drawer:not([data-kind="files"]) .dr-viewer,
+  #drawer:not([data-kind="files"]) .dr-acts { display: none; }
+  .dr-tree {
+    flex: 0 0 200px; width: 200px; min-width: 0; min-height: 0;
+    display: flex; flex-direction: column; border-right: 1px solid var(--line);
+  }
+  #drawer .dr-tree #files-pane { min-width: 0; }
+  #drawer .dr-tree #files-phd { padding-left: 8px; padding-right: 6px; }
+  #drawer .dr-tree .files-body { padding: 6px 6px 8px; }
+  /* A box session's tree is its workspace only: no root picker (the root
+     stays the session cwd, drawerRootTree). */
+  #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
+  /* "Go to file…" (Ctrl+P): a filename jump at the top of the tree column. The
+     list is fixed-position (set from the input's rect in drawerGoPosition) so
+     the 200px column does not clip it; .ft-opt/.ft-note rows are shared. */
+  .dr-goto { flex: none; padding: 6px 8px 0; }
+  #drawer-goto-in {
+    width: 100%; box-sizing: border-box; padding: 4px 7px; font: 12px var(--font-ui);
+    color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  }
+  #drawer-goto-in::placeholder { color: var(--muted); }
+  #drawer-goto-in:focus { border-color: var(--accent); outline: none; }
+  #drawer-goto-list {
+    position: fixed; z-index: 30; max-height: 260px; overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--line); box-shadow: 0 8px 20px #0009;
+  }
+  #drawer-goto-list[hidden] { display: none; }
+  #drawer[data-noroot="1"] .dr-goto { display: none; }
+  /* A session workspace the fs API refuses is never a root (S1): the column
+     says so instead of showing whatever tree was there before. */
+  .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  #drawer[data-noroot="1"] .dr-tnote { display: block; }
+  #drawer[data-noroot="1"] .dr-tree #files-pane { display: none; }
+  #drawer[data-noroot="1"] .dr-vempty { visibility: hidden; } /* "pick a file in the tree": there is none */
+  .dr-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+  .dr-vtop {
+    flex: none; display: flex; align-items: baseline; gap: 6px; min-width: 0;
+    padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .dr-vpath {
+    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 500 12px var(--font-mono); color: var(--fg);
+  }
+  .dr-vst { flex: none; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .dr-vhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .dr-vhost[hidden], .dr-vempty[hidden] { display: none; }
+  .dr-vtop:has(.dr-vpath:empty) { display: none; }
+  .dr-vempty { flex: 1; padding: 18px 14px; color: var(--muted); font-size: 12px; }
+  /* The drawer header carries the viewer's actions, so its own toolbar goes. */
+  #drawer .viewer-tools { display: none; }
+  /* Long lines scroll, never wrap. */
+  #drawer .viewer-pre { white-space: pre; width: max-content; min-width: 100%; }
+  /* Header actions: Copy · Insert path · Edit · Open in pane · ⋯, or Cancel · Save. */
+  .dr-acts { flex: none; position: relative; display: flex; align-items: center; gap: 2px; }
+  .dr-act {
+    height: 24px; padding: 0 8px; font: 500 12px var(--font-ui); color: var(--muted); cursor: pointer;
+    background: transparent; border: 1px solid transparent; border-radius: var(--r-ctl); white-space: nowrap;
+  }
+  .dr-act[hidden] { display: none; }
+  .dr-act:hover:not(:disabled) { color: var(--fg); background: var(--raise); }
+  /* Dimmed, not struck through (primitives.css): with no file every action is
+     off at once, and a row of struck words reads as an error. */
+  .dr-act:disabled { opacity: .4; cursor: default; text-decoration: none; }
+  .dr-act:focus-visible, .dr-mi:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .dr-act.pri { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .dr-act.pri:hover:not(:disabled) { color: var(--bg); background: color-mix(in srgb, var(--accent) 85%, #fff); }
+  .dr-menu {
+    position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 130px;
+    display: flex; flex-direction: column; padding: 4px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: 0 8px 24px #000a;
+  }
+  .dr-menu[hidden] { display: none; }
+  .dr-mi {
+    text-align: left; padding: 5px 10px; font: 400 12px var(--font-ui); color: var(--fg); cursor: pointer;
+    background: transparent; border: 0; border-radius: var(--r-chip);
+  }
+  .dr-mi:hover:not(:disabled) { background: var(--raise); }
+  .dr-mi:disabled { color: var(--faint); cursor: default; text-decoration: none; }
+  .dr-mi.on { color: var(--accent); font-weight: 600; }
+  /* In the drawer the header holds Save and Cancel; the viewer's own edit bar
+     keeps only its message and the conflict's Reload / Overwrite, and shows
+     only when it has something to say. */
+  #drawer .viewer-editbar .viewer-save, #drawer .viewer-editbar .viewer-cancel { display: none; }
+  #drawer .viewer-editbar:not(:has(.viewer-edit-msg:not(:empty))) { display: none; }
+  #drawer .viewer-editbar .viewer-edit-msg { margin-left: 0; margin-right: auto; }
+  /* "The agent may change this file again": neutral with an accent edge, never
+     amber or red (D23). Shown wherever a desktop viewer edits. */
+  .edit-warn {
+    display: block; flex: none; padding: 6px 12px; font: 400 12px var(--font-ui); color: var(--muted);
+    background: var(--panel); border-bottom: 1px solid var(--line); border-left: 2px solid var(--accent);
+  }
+
   /* --- the ask strip under a pane header (spec 5.3) ----------------------- */
   /* Amber label, the command in mono on one line (click to expand), then the
      actions, right-aligned. renderNeedsBody's .nbody dissolves into this grid
@@ -482,4 +591,82 @@
   #ask-modal.info { width: 560px; max-width: 92vw; }
   #ask-modal.info #ask-cancel { display: none; }
   #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; overflow-x: auto; }
+
+  /* --- companion-shell dock (spec 5.5; sl-1.png right, v5-3.png below) ----- */
+  /* The pane body becomes [tab | dock]. Dragging the splitter moves only
+     --dock-ratio; tabs.js commits it on release. */
+  .cell-body.dock-below { flex-direction: column; }
+  .cell-body.dock-right { flex-direction: row; }
+  .cell-body.dock-below > .tab-body, .cell-body.dock-right > .tab-body,
+  .cell-body.dock-below > .cell-empty, .cell-body.dock-right > .cell-empty { flex: 1 1 0; min-width: 0; min-height: 0; }
+  .dock {
+    position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+    flex: 0 0 calc(var(--dock-ratio, 0.4) * 100%); background: var(--bg);
+  }
+  .dock-below > .dock { border-top: 1px solid var(--line); }
+  .dock-right > .dock { border-left: 1px solid var(--line); }
+  /* The splitter straddles the dock's edge, out of the flow: no layout of its own. */
+  .dock-split { position: absolute; z-index: 3; touch-action: none; }
+  .dock-below .dock-split { left: 0; right: 0; top: -4px; height: 7px; cursor: row-resize; }
+  .dock-right .dock-split { top: 0; bottom: 0; left: -4px; width: 7px; cursor: col-resize; }
+  .dock-split:hover, .dock-split.dragging { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .dock-bar {
+    flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; height: 28px;
+    padding: 0 6px 0 12px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  /* The icon group (Below / Right / Own pane / Hide) never shrinks and never
+     leaves the bar: the strip, the chip and the cwd give way first, the cwd
+     before the others, down to nothing in a very narrow dock. */
+  .dock-tabs { flex: 0 1 auto; display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
+  .dock-bar > .ph-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dock-tab, .dock-add {
+    padding: 1px 3px; font: 600 12px/18px var(--font-ui); color: var(--muted);
+    background: none; border: 0; border-radius: var(--r-chip); cursor: pointer; white-space: nowrap;
+  }
+  .dock-tab.on, .dock-tab:hover, .dock-add:hover { color: var(--fg); }
+  .dock-add { font-weight: 500; font-size: 13px; }
+  .dock-add:disabled { opacity: .45; cursor: default; }
+  .dock-dot { color: var(--faint); font-size: 12px; }
+  .dock-st { color: var(--muted); font-size: 11px; }
+  .dock-cwd {
+    flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--muted); font-size: 12px;
+  }
+  .dock-ics { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; margin-left: auto; }
+  .dock-ic {
+    width: 24px; height: 22px; flex: none; display: inline-grid; place-items: center; padding: 0;
+    color: var(--muted); background: none; border: 0; border-radius: var(--r-chip); cursor: pointer;
+  }
+  .dock-ic svg { width: 14px; height: 14px; }
+  .dock-ic:hover { color: var(--fg); background: var(--raise); }
+  .dock-ic.on { color: var(--fg); background: var(--background3); }
+  .dock-tab:focus-visible, .dock-add:focus-visible, .dock-ic:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .dock-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+
+  /* CodeMirror 5 on the dark UI (the drawer's editor and the pane's): the
+     vendor stylesheet only ships the white default theme. Specificity beats
+     .cm-s-default; every text colour is >= 4.5:1 on --bg (#0d0f12). */
+  .CodeMirror.cm-s-default { background: var(--bg); color: var(--fg); }
+  .CodeMirror.cm-s-default .CodeMirror-gutters { background: var(--panel); border-right: 1px solid var(--line); }
+  .CodeMirror.cm-s-default .CodeMirror-linenumber { color: var(--muted); }
+  .CodeMirror.cm-s-default .CodeMirror-cursor { border-left: 1px solid var(--fg); }
+  .CodeMirror.cm-s-default .CodeMirror-selected { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  .CodeMirror.cm-s-default.CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent) 38%, transparent); }
+  .CodeMirror.cm-s-default .CodeMirror-matchingbracket { color: var(--ok) !important; }
+  .CodeMirror.cm-s-default .CodeMirror-nonmatchingbracket { color: var(--danger) !important; }
+  .CodeMirror.cm-s-default .cm-header { color: #d2a8ff; }
+  .CodeMirror.cm-s-default .cm-quote, .CodeMirror.cm-s-default .cm-tag,
+  .CodeMirror.cm-s-default .cm-type, .CodeMirror.cm-s-default .cm-variable-3 { color: #7ee787; }
+  .CodeMirror.cm-s-default .cm-keyword { color: #ff7b72; }
+  .CodeMirror.cm-s-default .cm-atom, .CodeMirror.cm-s-default .cm-number,
+  .CodeMirror.cm-s-default .cm-variable-2, .CodeMirror.cm-s-default .cm-attribute { color: #79c0ff; }
+  .CodeMirror.cm-s-default .cm-def { color: #d2a8ff; }
+  .CodeMirror.cm-s-default .cm-comment { color: #8b949e; }
+  .CodeMirror.cm-s-default .cm-string { color: #a5d6ff; }
+  .CodeMirror.cm-s-default .cm-string-2, .CodeMirror.cm-s-default .cm-builtin { color: #ffa657; }
+  .CodeMirror.cm-s-default .cm-meta, .CodeMirror.cm-s-default .cm-qualifier,
+  .CodeMirror.cm-s-default .cm-hr { color: var(--muted); }
+  .CodeMirror.cm-s-default .cm-bracket { color: #a8b0ba; }
+  .CodeMirror.cm-s-default .cm-link { color: var(--accent); }
+  .CodeMirror.cm-s-default .cm-error { color: var(--danger); }
 }

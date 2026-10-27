@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -45,6 +46,9 @@ type API struct {
 	// ProfileCwd returns the named profile's default_cwd ("" = none); a spawn
 	// that omits cwd uses it before DefaultCwd. nil = no profile defaults.
 	ProfileCwd func(agent string) string
+	// QuickShell returns the verified quick-shell profile name ("" = none); a
+	// companion shell (POST /api/sessions/{id}/shell) runs it. nil = none.
+	QuickShell func() string
 	// OptionsDropped reports the spawn option overrides the profile refused,
 	// for the 201 body only (never persisted). nil = nothing is reported.
 	OptionsDropped func(launcher.SpawnSpec) []launcher.OptionDrop
@@ -191,6 +195,70 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// handleSpawnShell serves POST /api/sessions/{id}/shell: a quick shell in the
+// parent's working directory and tier, recorded as the parent's companion. The
+// body is ignored, so cwd, tier and parent can only come from the server's own
+// session list. This is the only place a session's ParentID is set; it is
+// reachable from the signed-in browser only (never a bearer token, never an
+// agent, which has no cookie), so an agent cannot hide a session under another
+// or have one ended with a parent it chose. Nesting is one level: a shell's
+// target is replaced by its own parent, but only by one created no later than
+// the shell (a newer one reused a freed id after a restart). When nothing alive
+// is left to belong to (the parent exited or is gone), the shell opens
+// unlinked in the target's own cwd and tier, as "+ Shell" always did.
+func (a *API) handleSpawnShell(w http.ResponseWriter, r *http.Request, targetID string) {
+	if r.Method != http.MethodPost {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if credKindOf(r) != credCookie || !strictSameOrigin(r) {
+		writeErr(w, http.StatusForbidden, "shells are started from the web UI")
+		return
+	}
+	byID := make(map[string]session.Info)
+	for _, in := range a.Sessions.List() {
+		byID[in.ID] = in
+	}
+	target, ok := byID[targetID]
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such session")
+		return
+	}
+	parent, linked := target, true
+	if target.ParentID != "" {
+		p, ok := byID[target.ParentID]
+		// The client's nesting rule, server-side: a parent must be top-level
+		// and no newer than its shell, or the shell is listed as top-level.
+		if ok && p.ParentID == "" && !p.Created.After(target.Created) {
+			parent = p
+		} else {
+			linked = false
+		}
+	}
+	if parent.Exited {
+		linked = false
+	}
+	spec := launcher.SpawnSpec{Cwd: target.Cwd, Runtime: target.Runtime}
+	if linked {
+		spec = launcher.SpawnSpec{Cwd: parent.Cwd, Runtime: parent.Runtime, ParentID: parent.ID}
+	}
+	shell := ""
+	if a.QuickShell != nil {
+		shell = a.QuickShell()
+	}
+	if shell == "" {
+		writeErr(w, http.StatusConflict, "no shell profile")
+		return
+	}
+	spec.Agent, spec.Name = shell, "sh:"+filepath.Base(spec.Cwd)
+	info, err := a.Sessions.Spawn(spec)
+	if err != nil {
+		writeSpawnErr(w, shell, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, info)
 }
 
 // handleSession serves DELETE (kill) on /api/sessions/{id}.
@@ -448,6 +516,12 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		default:
 			writeErr(w, http.StatusGone, "session is gone")
 		}
+		return
+	}
+	// POST /api/sessions/{id}/shell — start a companion shell nested under the
+	// session; the only writer of ParentID.
+	if sid, ok := strings.CutSuffix(id, "/shell"); ok {
+		a.handleSpawnShell(w, r, sid)
 		return
 	}
 	// POST /api/sessions/{id}/restart — replace an exited session (still in

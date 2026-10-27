@@ -127,6 +127,14 @@ async function runItem(item) {
   catch (e) { showToast("Failed: " + e.message, { error: true }); }
 }
 
+// palSessionRun: what picking a session row does. A shell nested under its
+// parent (isNestedShell, the sidebar row's test) is revealed beside the parent
+// like a sidebar click; anything else is opened. Its runNewPane stays the
+// explicit "own pane" override.
+function palSessionRun(s, nested, act) {
+  return nested ? () => act.reveal(s.id) : () => act.open(s.id, s.name || s.id);
+}
+
 // --- item sources ------------------------------------------------------------
 // The first nine rows carry their jump shortcut instead of the cwd: past nine
 // there is no key to advertise, and a hint that names a key nothing is bound
@@ -146,7 +154,7 @@ function paletteSessions(mac) {
       kind: "session", label: name, hint: jumpHint || (s.cwd ? shortPath(s.cwd) : ""),
       sub: s.summary || "", match: palSessionMatchText(s),
       dotCls: act.cls, dotTitle: act.title,
-      run: () => openTerminal(s.id, name),
+      run: palSessionRun(s, isNestedShell(s, lastSessions), { reveal: revealShell, open: openTerminal }),
       runNewPane: () => openTerminal(s.id, name, { newPane: true }),
     };
   });
@@ -171,6 +179,18 @@ function paletteShellCommands(mac, desktop, act) {
   ];
 }
 
+// paletteShellSpawn: the "+ Shell" entries. Desktop names the three places a
+// shell can go (spawnShellIn's placements); the shortcut docks below. Mobile
+// draws no dock, so it keeps its one v0.2.0 entry.
+function paletteShellSpawn(desktop, spawn) {
+  if (!desktop) return [{ kind: "new", label: "New shell here", hint: "Ctrl+Shift+`", run: () => spawn("below") }];
+  return [
+    { kind: "new", label: "+ Shell below", hint: "Ctrl+Shift+`", run: () => spawn("below") },
+    { kind: "new", label: "+ Shell right", hint: "", run: () => spawn("right") },
+    { kind: "new", label: "+ Shell in own pane", hint: "", run: () => spawn("own") },
+  ];
+}
+
 // mac is computed once by the caller (palRefresh) and threaded through here
 // and into paletteSessions(), instead of adding another copy of this regex
 // alongside the ones already in app.js (twice) and palette.js's shortcut-hint
@@ -185,7 +205,8 @@ function paletteCommands(mac) {
   }
   cmds.push({ kind: "new", label: "New session…", hint: "", run: () => openSpawnDialog() });
   if (window.shellProfile) {
-    cmds.push({ kind: "new", label: "New shell here", hint: "Ctrl+Shift+`", run: () => spawnShellIn(focusedCell) });
+    const deskShell = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+    cmds.push(...paletteShellSpawn(deskShell, (placement) => spawnShellIn(focusedCell, placement)));
   }
   // The focused session's control commands, through the same dispatch the
   // row menu uses (runSessionAction) — one handler per action.
@@ -541,5 +562,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun };
 }

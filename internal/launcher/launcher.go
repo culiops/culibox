@@ -53,6 +53,10 @@ type SpawnSpec struct {
 	// Build places them after the option flags and BEFORE the "--" that ends
 	// options — appended afterwards, they would become operands.
 	ExtraArgs []string
+	// ParentID is the session this one is a companion shell of. Set only by
+	// the web layer's shell endpoint, never from a spawn request body. Build
+	// ignores it; it is never put in an agent's env.
+	ParentID string
 }
 
 // Builder composes argv + env for a spawn.

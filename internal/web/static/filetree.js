@@ -225,7 +225,12 @@ async function ftRenderDir(path, container, prefix) {
         await openChildren();
       }
     } else {
-      row.onclick = () => openFile(full);
+      // The desktop Files drawer shows the file beside the tree instead of in a
+      // pane (filesdrawer.js; typeof-guarded, it loads later). Mobile: openFile.
+      row.onclick = () => {
+        if (typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerShowFile(full);
+        else openFile(full);
+      };
     }
   }
 }

@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { askOutcome, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy, setDialogError } =
+const { askOutcome, askAltVisible, matchesRequired, promptValue, shouldRefocusTerminal, askIsBusy, setDialogError } =
   require("../static/shell.js");
 
 // A <dialog> closed by Esc, by a backdrop click, or by dialog.close() with no
@@ -80,4 +80,26 @@ test("setDialogError scrolls a new message into view, and only a message", () =>
   } finally {
     delete global.document;
   }
+});
+
+// The third button of askChoice. "alt" is only ever set by #ask-alt, so it maps
+// to itself; every other close route still fails safe to a cancel.
+test("alt maps to alt and nothing else changes", () => {
+  assert.strictEqual(askOutcome("alt"), "alt");
+  assert.strictEqual(askOutcome("confirm"), "confirm");
+  for (const v of ["", "cancel", "ALT", " alt", undefined, null]) {
+    assert.strictEqual(askOutcome(v), "cancel", String(v));
+  }
+});
+
+// Every existing dialog passes no altLabel and must keep its two buttons.
+test("the alt button shows only when a label is given", () => {
+  assert.strictEqual(askAltVisible("End session only"), true);
+  for (const v of [undefined, null, ""]) assert.strictEqual(askAltVisible(v), false, String(v));
+});
+
+// The alt button ships hidden, so a dialog that never names it cannot show it.
+test("index.html ships #ask-alt hidden, after Cancel", () => {
+  const html = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "index.html"), "utf8");
+  assert.match(html, /<button id="ask-cancel"[^>]*>Cancel<\/button>\s*<button id="ask-alt"[^>]*\bhidden\b/);
 });

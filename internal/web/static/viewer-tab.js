@@ -70,7 +70,7 @@ class ViewerTab {
     dl.className = "viewer-reload";
     dl.textContent = "⤓";
     dl.title = "Download this file";
-    dl.onclick = () => downloadPath(this.path, false, this.box ? boxFileURL(this.box, this.path, true) : undefined);
+    dl.onclick = () => this.download();
     this.toolbar.append(dl);
     // A word, not a glyph: a button's accessible name comes from its text
     // content before its title, and an unprobed codepoint ships as a tofu box no
@@ -92,16 +92,17 @@ class ViewerTab {
       }
       const auto = document.createElement("button");
       auto.className = "viewer-auto"; auto.textContent = "Auto"; auto.title = "Auto-reload every 2s";
-      auto.onclick = () => this.toggleAuto(auto);
+      auto.onclick = () => this.toggleAuto();
+      this.autoBtn = auto; // toggleAuto keeps its "on" state, whoever toggles
       this.toolbar.append(auto);
     }
     if (this.zoomVar) { // text viewers only: images have nothing to size
       const zout = document.createElement("button");
       zout.className = "viewer-zoom"; zout.textContent = "A−"; zout.title = "Smaller (Ctrl+-)";
-      zout.onclick = () => this.zoom(-fontPrefs.STEP);
+      zout.onclick = () => this.fontStep(-1);
       const zin = document.createElement("button");
       zin.className = "viewer-zoom"; zin.textContent = "A+"; zin.title = "Bigger (Ctrl+=)";
-      zin.onclick = () => this.zoom(+fontPrefs.STEP);
+      zin.onclick = () => this.fontStep(+1);
       this.toolbar.append(zout, zin);
     }
     const pathLbl = document.createElement("span");
@@ -155,11 +156,20 @@ class ViewerTab {
     requestAnimationFrame(() => { this.applying = false; });
   }
   dispose() { if (this.timer) clearInterval(this.timer); } // stop polling on close (no leak)
-  toggleAuto(btn) {
+  // The toolbar buttons' actions as methods, so a host that hides this toolbar
+  // (the desktop Files drawer has its own header) can offer the same ones.
+  reload() { return this.load(); }
+  download() {
+    downloadPath(this.path, false, this.box ? boxFileURL(this.box, this.path, true) : undefined);
+  }
+  copy(btn) { this.copyContents(btn || null); }
+  fontStep(d) { this.zoom(d * fontPrefs.STEP); }
+  toggleAuto() {
     this.auto = !this.auto;
-    btn.classList.toggle("on", this.auto);
+    if (this.autoBtn) this.autoBtn.classList.toggle("on", this.auto);
     if (this.auto) this.timer = setInterval(() => this.load(true), 2000);
     else { clearInterval(this.timer); this.timer = null; }
+    this.onUpdate?.();
   }
   // Live zoom (transient): override the pane-local CSS var so only this viewer's
   // text resizes; the var lives on this.el, an ancestor of the rendered content,
@@ -303,18 +313,19 @@ class ViewerTab {
   // for markdown is the markdown and not the rendered HTML. Focus returns to the
   // button: copyText's textarea fallback leaves it on <body>, and pulling it into
   // the terminal pane is not what someone working in this toolbar asked for.
+  // `btn` may be null (a caller with no button of its own): focus stays put.
   copyContents(btn) {
     const plan = this.copyRefusal
       ? { action: "refuse", reason: this.copyRefusal }
       : { action: "copy", text: this.lastContent, lines: countLines(this.lastContent) };
     if (plan.action === "refuse") {
       const m = copyResultMessage(plan, this.name, false);
-      btn.focus(); // a refusal leaves focus where a success would, not on nothing
+      btn?.focus(); // a refusal leaves focus where a success would, not on nothing
       showToast(m.text, { error: m.error });
       return;
     }
     copyText(plan.text, (ok) => {
-      btn.focus();
+      btn?.focus();
       const m = copyResultMessage(plan, this.name, ok);
       showToast(m.text, { error: m.error });
     });
@@ -342,7 +353,13 @@ class ViewerTab {
     this.baseVersion = this.version || "";
     const holder = document.createElement("div");
     holder.className = "viewer-edit";
-    this.content.replaceChildren(holder);
+    // The save is guarded (sha256 base version), but the agent beside this
+    // editor may write the file meanwhile: say so before the conflict does.
+    // Neutral, never amber or red (D23). Hidden on mobile (app.css).
+    const warn = document.createElement("div");
+    warn.className = "edit-warn";
+    warn.textContent = "The agent may change this file again. Saving checks it has not changed since you opened it.";
+    this.content.replaceChildren(warn, holder);
     this.showingMsg = false;
     let mode = "text/plain";
     if (window.CodeMirror) {
@@ -363,6 +380,9 @@ class ViewerTab {
       "Cmd-S": () => { this.save(false); return false; },
     });
     this.renderEditBar();
+    // A fresh edit: a "saved" left from the last one says nothing about this
+    // buffer. setStatus also tells a host header to show Cancel · Save.
+    this.setStatus("");
   }
 
   // renderEditBar builds the action row above the editor: Save · Cancel, plus a
@@ -373,12 +393,12 @@ class ViewerTab {
     const bar = document.createElement("div");
     bar.className = "viewer-editbar";
     const save = document.createElement("button");
-    save.className = "viewer-auto";
+    save.className = "viewer-auto viewer-save";
     save.textContent = "Save";
     save.title = "Save (Ctrl/Cmd-S)";
     save.onclick = () => this.save(false);
     const cancel = document.createElement("button");
-    cancel.className = "viewer-auto";
+    cancel.className = "viewer-auto viewer-cancel";
     cancel.textContent = "Cancel";
     cancel.title = "Discard changes and return to the read view";
     cancel.onclick = () => this.cancelEdit();
@@ -444,6 +464,7 @@ class ViewerTab {
     this.editBar = null;
     this.editMsg = null;
     this.conflictBtns = null;
+    this.onUpdate?.(); // back to the read view's actions
     if (typeof savedText === "string") {
       this.lastContent = savedText;
       this.renderCode(savedText, this.lang);
@@ -539,7 +560,11 @@ function escapeHtml(s) {
 // but the reference below only ever runs on the beforeunload event — long after
 // every page script has finished — so the forward reference is safe (the same
 // pattern load() already relies on for closeTabEverywhere).
+//
+// The desktop Files drawer's viewer is in no cell, so it is asked separately
+// (drawerHasUnsaved, filesdrawer.js, loaded later on the same terms).
 window.addEventListener("beforeunload", (e) => {
-  const anyDirty = cells.some((c) => c.tabs.some((t) => t.kind === "viewer" && t.dirty && t.dirty()));
+  const anyDirty = cells.some((c) => c.tabs.some((t) => t.kind === "viewer" && t.dirty && t.dirty()))
+    || (typeof drawerHasUnsaved === "function" && drawerHasUnsaved());
   if (anyDirty) { e.preventDefault(); e.returnValue = ""; }
 });

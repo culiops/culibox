@@ -1181,6 +1181,9 @@
     .ask-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     .ask-actions button { background: var(--bg); color: var(--fg); border: 1px solid var(--border); padding: 6px 14px; font: inherit; font-size: 13px; cursor: pointer; }
     .ask-actions button:hover { border-color: var(--accent); }
+    /* The three-button dialog (End session): one-line labels; the row wraps instead. Matches only while #ask-alt is shown. */
+    .ask-actions:has(#ask-alt:not([hidden])) { flex-wrap: wrap; }
+    .ask-actions:has(#ask-alt:not([hidden])) button { white-space: nowrap; }
     #ask-ok { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
     #ask-ok:hover { filter: brightness(1.12); }
     #ask-ok:disabled { opacity: .5; cursor: default; filter: none; }
@@ -1761,6 +1764,9 @@
     .cell-max, .cell-del { color: var(--muted); border: none; background: none; cursor: pointer; font-size: 13px; padding: 0 4px; }
     .cell-max:hover { color: var(--accent); } .cell-del:hover { color: var(--danger); }
     .cell-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    /* The companion-shell dock is desktop-only (desktop.css draws it). Here it is
+       never shown, so a mobile pane body is its one tab, as in v0.2.0. */
+    .dock { display: none; }
     .cell-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 13px; padding: 10px; text-align: center; margin: 4px; border: 1px dashed color-mix(in srgb, var(--border) 55%, var(--bg)); }
     .tab-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
     #grid.maximized { grid-template-columns: 1fr !important; grid-template-rows: 1fr !important; }
@@ -1789,6 +1795,9 @@
     .viewer-edit-msg.err { color: var(--danger); }
     .viewer-edit { flex: 1; min-height: 0; }
     .viewer-edit .CodeMirror { height: 100%; font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-code); }
+    /* The "agent may change this file" strip above the editor: desktop only
+       (desktop.css shows it); mobile edit mode stays as it was. */
+    .edit-warn { display: none; }
     /* markdown */
     .md-body { padding: 14px 18px; font-size: var(--fs-md); line-height: 1.6; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--fg); max-width: 900px; }
     .md-body h1, .md-body h2, .md-body h3 { border-bottom: 1px solid var(--border); padding-bottom: .3em; margin: 1.2em 0 .6em; }

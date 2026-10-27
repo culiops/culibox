@@ -298,9 +298,13 @@ const STEER_KEY = "agent-box:steerRail";
 
 // The rail describes the session in the focused TERMINAL tab. A focused file
 // viewer is not a session and deliberately leaves the rail on its empty state
-// rather than showing whichever agent happens to be nearby.
+// rather than showing whichever agent happens to be nearby. A shell docked in
+// the pane is not it either, even with the keyboard: the desktop Access drawer
+// shows this rail under a header naming the pane's agent (cellTerminal), so
+// the rail must describe, grant to and reply to that same session.
 function railSession() {
-  const id = typeof selectedSessionId === "function" ? selectedSessionId() : null;
+  const t = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
+  const id = t ? t.id : null;
   if (!id) return null;
   return (lastSessions || []).find((s) => s.id === id) || null;
 }

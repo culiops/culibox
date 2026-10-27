@@ -56,6 +56,27 @@ function clampScroll(v) {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+// dockApi → the dock normaliser from shelldock.js. Resolved at call time so load
+// order cannot matter: a browser global when the page loaded it first, a require
+// under node.
+function dockApi() {
+  return typeof normalizeDock === "function" ? { normalizeDock } : require("./shelldock.js");
+}
+
+// storedDock → the dock written for a live cell, or null when there is nothing to
+// write. `taken` holds the terminal ids already placed (tabs everywhere, docks of
+// earlier cells): an id appears once in the snapshot, and a tab wins over a dock.
+// A dock needs a terminal tab in its own cell to hang off.
+function storedDock(dock, hasTerminal, taken) {
+  if (!hasTerminal) return null;
+  const d = dockApi().normalizeDock(dock);
+  if (!d) return null;
+  const ids = d.ids.filter((id) => !taken.has(id));
+  if (!ids.length) return null;
+  ids.forEach((id) => taken.add(id));
+  return Object.assign(d, { ids, active: ids.includes(d.active) ? d.active : ids[0] });
+}
+
 // storedTab → the entry written for a live tab, or null if it cannot be restored.
 function storedTab(t) {
   if (!t) return null;
@@ -77,6 +98,8 @@ function storedTab(t) {
 function serializeLayout(model) {
   const cells = [];
   const newIndex = new Map(); // live cell -> index in the snapshot
+  const pairs = [];           // [live cell, its entry]
+  const taken = new Set();    // terminal ids placed as tabs
   for (const c of model.cells || []) {
     // Keep the live tabs, not their stored form: the active index is found by
     // identity against the objects the grid holds.
@@ -84,9 +107,19 @@ function serializeLayout(model) {
     if (!kept.length) continue;
     const active = Math.max(0, kept.indexOf(c.activeTab));
     newIndex.set(c, cells.length);
-    cells.push({ tabs: kept.map(storedTab), active });
+    const entry = { tabs: kept.map(storedTab), active };
+    cells.push(entry);
+    pairs.push([c, entry]);
+    for (const t of entry.tabs) if (!t.path) taken.add(t.id);
   }
   if (!cells.length) return null;
+  // Docks go in after every tab is known, so a tab in a later cell still beats a
+  // dock id in an earlier one.
+  for (const [c, entry] of pairs) {
+    if (!c.dock) continue;
+    const dock = storedDock(c.dock, entry.tabs.some((t) => !t.path), taken);
+    if (dock) entry.dock = dock;
+  }
   return {
     v: LAYOUT_V,
     cap: clampCap(model.cap),
@@ -124,6 +157,7 @@ function reconcileLayout(saved, sessions) {
   const seen = new Set(); // one session — or one file — cannot be open in two panes
   const cells = [];
   const kept = [];        // original index of each surviving cell
+  const raw = [];         // each surviving cell's stored dock, settled after the tabs
   saved.cells.forEach((c, i) => {
     if (!c || !Array.isArray(c.tabs)) return;
     const activeKey = tabKey(c.tabs[c.active]);
@@ -150,8 +184,22 @@ function reconcileLayout(saved, sessions) {
     const active = Math.max(0, tabs.findIndex((x) => tabKey(x) === activeKey));
     kept.push(i);
     cells.push({ tabs, active });
+    raw.push(c.dock);
   });
   if (!cells.length) return null;
+  // Docks come second: every tab of every cell has claimed its id by now, so an
+  // id in both a dock and a tab — even a tab in a later cell — stays a tab. A
+  // dock survives only with a running shell in it and a running terminal tab in
+  // its cell to hang off; anything else in `dock` is garbage and is dropped.
+  cells.forEach((cell, n) => {
+    if (!cell.tabs.some((t) => !t.path)) return;
+    const d = dockApi().normalizeDock(raw[n]);
+    if (!d) return;
+    const ids = d.ids.filter((id) => live.has(id) && !seen.has("t:" + id));
+    if (!ids.length) return;
+    ids.forEach((id) => seen.add("t:" + id));
+    cell.dock = Object.assign(d, { ids, active: ids.includes(d.active) ? d.active : ids[0] });
+  });
   const focused = kept.indexOf(saved.focused);
   const maximized = kept.indexOf(saved.maximized);
   return {

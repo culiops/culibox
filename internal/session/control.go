@@ -141,7 +141,7 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	}
 	ns, err := m.Spawn(launcher.SpawnSpec{
 		Agent: s.Agent, Name: name, Cwd: s.Cwd, Runtime: s.Runtime, Options: opts, Account: acct,
-		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive),
+		Resume: resumeFor(s.Runtime, bin, sid, s.Exclusive), ParentID: s.ParentID,
 	})
 	if err != nil {
 		s.mu.Lock()

@@ -366,7 +366,15 @@ function initWidthSplitter() {
 // close(). Treat anything that is not the confirm button as a cancel, so an
 // unrecognised close path fails safe.
 function askOutcome(returnValue) {
-  return returnValue === "confirm" ? "confirm" : "cancel";
+  if (returnValue === "confirm") return "confirm";
+  if (returnValue === "alt") return "alt"; // only #ask-alt sets it
+  return "cancel";
+}
+
+// askAltVisible: the optional third button exists only when a dialog names it,
+// so every dialog written before it keeps exactly its two buttons.
+function askAltVisible(altLabel) {
+  return typeof altLabel === "string" && altLabel !== "";
 }
 
 // matchesRequired gates the typed-name confirmations. An empty or missing
@@ -417,6 +425,9 @@ function askDialog(opts) {
   document.getElementById("ask-title").textContent = opts.title || "";
   document.getElementById("ask-body").textContent = opts.body || "";
   ok.textContent = opts.confirmLabel || "OK";
+  const alt = document.getElementById("ask-alt");
+  alt.hidden = !askAltVisible(opts.altLabel);
+  alt.textContent = opts.altLabel || "";
   d.classList.toggle("danger", !!opts.danger);
   d.classList.toggle("info", !!opts.info); // read-only: desktop.css hides Cancel
 
@@ -454,6 +465,7 @@ function askDialog(opts) {
     };
     d.addEventListener("close", settle);
     ok.onclick = () => d.close("confirm");
+    alt.onclick = () => d.close("alt");
     document.getElementById("ask-cancel").onclick = () => d.close("cancel");
     document.getElementById("ask-x").onclick = () => d.close("cancel");
     d.returnValue = "";               // clear the previous answer before showing
@@ -462,6 +474,12 @@ function askDialog(opts) {
     // descendant, which is the ×, making Enter and Space a cancel.
     if (opts.input) input.focus(); else ok.focus();
   });
+}
+
+// askChoice resolves "confirm", "alt" (the optional third button) or "cancel".
+async function askChoice(opts) {
+  const r = await askDialog(Object.assign({}, opts, { input: false }));
+  return r.outcome;
 }
 
 // askConfirm resolves true only on an explicit confirmation.
@@ -512,6 +530,7 @@ function setDialogError(dialogId, msg) {
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     askOutcome,
+    askAltVisible,
     matchesRequired,
     promptValue,
     shouldRefocusTerminal,

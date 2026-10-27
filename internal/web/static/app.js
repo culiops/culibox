@@ -207,15 +207,32 @@ function applyDrawer(next, opts) {
   const dr = $("drawer");
   const body = $("drawer-body");
   if (!dr || !body) return;
+  // A dirty buffer in the Files drawer's viewer asks before anything takes it
+  // away (closing, Access, another session); Cancel leaves the drawer as it is.
+  // The ask is async, so this call ends here and a confirmed one comes back in.
+  if (!(opts && opts.discardOk) && typeof drawerWouldDiscard === "function" && drawerWouldDiscard(drawerState, next)) {
+    drawerConfirmLeave().then((ok) => {
+      if (!ok) return;
+      drawerDiscard();
+      applyDrawer(next, Object.assign({}, opts, { discardOk: true }));
+    });
+    return;
+  }
+  const prev = drawerState;
   drawerState = next;
   const rail = $("steer-rail");
-  if (next.open === "files") moveIntoDrawer($("files-pane"), body);
+  // The tree is the left column of the Files body; the viewer column beside it
+  // is filesdrawer.js's.
+  if (next.open === "files") moveIntoDrawer($("files-pane"), $("drawer-tree") || body);
   if (next.open === "access") {
     moveIntoDrawer(rail, body);
     // The rail describes the focused terminal (railSession), so bring this
     // session's tab to the front first if it is open somewhere; never open one.
+    // The pane's terminal, not the keyboard's: a docked shell holding the keys
+    // must not make this re-open the agent and pull focus out of the shell.
     const t = next.sessionId ? terminalTabFor(next.sessionId) : null;
-    if (t && selectedSessionId() !== t.id) openTerminal(t.id, t.title());
+    const shown = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
+    if (t && (shown ? shown.id : null) !== t.id) openTerminal(t.id, t.title());
   }
   // The rail's hidden attribute stays steerOpen()'s truth.
   if (rail && rail.parentElement === body) rail.hidden = next.open !== "access";
@@ -225,6 +242,7 @@ function applyDrawer(next, opts) {
   positionDrawer();
   if (next.open === "access") renderSteerRail();
   if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
+  if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   for (const c of cells) paintDrawerTabs(c);
 }
 
@@ -293,9 +311,21 @@ function drawerFollowFocus() {
   const term = cellTerminal(focusedCell);
   const sid = term ? term.id : null;
   if (sid !== drawerState.sessionId) {
-    drawerState = { open: drawerState.open, sessionId: sid };
+    const next = { open: drawerState.open, sessionId: sid };
+    // A dirty buffer in the Files viewer asks first (once: a Cancel is kept
+    // until focus comes back or the buffer changes). Cancel keeps the drawer,
+    // and its tree (drawerKeepsTree), on its session; Discard follows focus.
+    if (typeof drawerHoldOnFollow === "function" && drawerHoldOnFollow(next)) {
+      positionDrawer();
+      return;
+    }
+    const prev = drawerState;
+    drawerState = next;
     paintDrawerHead();
     for (const c of cells) paintDrawerTabs(c);
+    if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
+  } else if (typeof drawerFocusSame === "function") {
+    drawerFocusSame();
   }
   positionDrawer();
 }
@@ -330,8 +360,11 @@ function positionDrawer() {
 }
 
 // restoreDrawerNodes puts every moved node back exactly where it came from and
-// closes the drawer. Run on the crossing into mobile.
+// closes the drawer. Run on the crossing into mobile. The Files viewer is let
+// go too (a dirty one is kept whole for the next desktop drawer: see
+// drawerFilesDetach); no prompt can stop a resize.
 function restoreDrawerNodes() {
+  if (typeof drawerFilesDetach === "function") drawerFilesDetach();
   for (const [node, o] of drawerOrigins) {
     if (o.next && o.next.parentNode === o.parent) o.parent.insertBefore(node, o.next);
     else o.parent.appendChild(node);
@@ -657,7 +690,10 @@ function initMobileShell() {
 // session model.
 function openTerminalTabs() {
   const out = [];
-  if (typeof eachTerminal === "function") eachTerminal((t) => out.push(t)); // cell order, then tab order
+  // Pane tabs only, cell order then tab order. Not eachTerminal: that also walks
+  // desktop docks, whose shells have no pane tab to focus (mobile undocks a
+  // shell when it is opened, see openTerminal).
+  if (typeof cells !== "undefined") for (const c of cells) for (const t of c.tabs) if (t.kind === "terminal") out.push(t);
   return out;
 }
 
@@ -1434,9 +1470,10 @@ async function restartSession(s) {
     return;
   }
   const ns = await res.json();
+  const wasDocked = !!dockHolding(s.id) && !mobileActive(window.innerWidth); // a docked shell comes back docked
   closeTerminal(s.id);
   await refreshSessions();
-  openTerminal(ns.id, ns.name);
+  if (!(wasDocked && dockShellBesideParent(ns))) openTerminal(ns.id, ns.name);
   const note = restartNotice(ns);
   if (note) showToast(note);
 }
@@ -1805,9 +1842,20 @@ function renderSession(s, opts) {
   const nm = document.createElement("button");
   nm.type = "button";
   nm.className = "nm";
-  nm.textContent = s.name || s.id;
+  // A companion shell listed under its parent (desktop sidebar only) reads
+  // "↳ shell N". Mobile never passes compact, so its rows are unchanged.
+  const nested = compact && isNestedShell(s, lastSessions);
+  nm.textContent = nested ? shellLabel(s, lastSessions) : (s.name || s.id);
   sname.appendChild(nm);
   grow.appendChild(sname);
+  if (nested) {
+    li.classList.add("nested");
+    const arrow = document.createElement("span");
+    arrow.className = "nest-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "\u21B3"; // ↳
+    li.insertBefore(arrow, adot);
+  }
 
   if (!compact) {
     const smeta = document.createElement("div");
@@ -1825,7 +1873,8 @@ function renderSession(s, opts) {
     return li;
   }
 
-  nm.onclick = () => openTerminal(s.id, s.name);
+  // A nested shell is revealed beside its parent (docked), not opened as a pane.
+  nm.onclick = () => (nested ? revealShell(s.id) : openTerminal(s.id, s.name));
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
 
   if (compact) {
@@ -1944,7 +1993,8 @@ function paintCompactRow(li, sname, grow, s) {
   // No stopPropagation: see the mobile row's note on the document-click closers.
   kb.onclick = () => openSessionMenu(kb, s);
   sname.appendChild(kb); // on the name line, after the chip
-  const sub = rowSubline(s);
+  // A nested shell has no sub-line: it has no summary and no ask to show.
+  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s);
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
@@ -2720,6 +2770,8 @@ function rowLocal(s) {
     // The compact row's chip turns "write" when a window opens and back when it
     // lapses, which no session field says by itself.
     elev: sessionElevated(s, Date.now()),
+    // A nested shell's "shell N" depends on its siblings, not on its own record.
+    shellLabel: isNestedShell(s, lastSessions) ? shellLabel(s, lastSessions) : "",
   };
 }
 
@@ -2844,6 +2896,9 @@ async function refreshSessions() {
   lastSessions = sessions || [];
   sessionsLoaded = true;
   refreshEmptyState();
+  // The Files drawer reads the list (box tier, workspace): at a boot restore
+  // it opened before the list was here.
+  if (drawerState.open === "files" && typeof drawerPaint === "function") drawerPaint();
   // The focused session's account can only be known once the list is here.
   syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing
@@ -5238,7 +5293,9 @@ function openSessionMenu(anchor, s, extra) {
     b.onclick = () => { closeSessionMenu(false); it.run(); };
     return b;
   });
-  const nodes = own.concat(s ? menuItems(s).map((it) => {
+  // Desktop only: a shell listed under its parent gets the short shell menu.
+  const nestedShell = !!s && !mobileActive(window.innerWidth) && isNestedShell(s, lastSessions);
+  const nodes = own.concat(s ? menuItems(s, { nested: nestedShell }).map((it) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = it.danger ? "mi dgr" : "mi";
@@ -5360,13 +5417,12 @@ document.addEventListener("keydown", (e) => {
 // command palette, and the row menu's End session… item). killSession itself
 // stays unguarded: Undo on a fresh spawn must not ask twice.
 async function confirmKill(id, name) {
-  const ok = await askConfirm({
-    title: "End session",
-    body: 'End session "' + (name || id) + '"? This cannot be undone.',
-    confirmLabel: "End",
-    danger: true,
-  });
-  if (ok) killSession(id);
+  const shells = liveShellsOf(id, lastSessions);
+  const outcome = await askChoice(killDialogOpts(name, id, shells.length));
+  // "End session only" leaves the shells running as top-level rows (the parent
+  // is gone, so nothing nests them any more).
+  const ids = killIdsFor(outcome, id, shells);
+  for (const sid of ids) await killSession(sid);
 }
 
 async function killSession(id) {
@@ -5387,50 +5443,79 @@ async function killSession(id) {
 }
 
 // --- quick shell -------------------------------------------------------------
-// Spawn the detected shell profile in a cell's working dir, then hand off to the
-// normal openTerminal path so auto-split/cap placement stays in one place.
+// "+ Shell" starts a companion shell of the cell's terminal neighbour through
+// POST /api/sessions/{id}/shell, which takes the directory, tier and parent
+// link from that session server-side (one path for desktop and mobile, so the
+// parent link exists everywhere). placement: "below" | "right" docks it in the
+// pane holding its parent, "own" gives it a pane; mobile opens it as a tab,
+// exactly as before docks existed (shellSpawnRoute).
 // Per-cell (not global) in-flight guard: a double click on one window is ignored,
 // but +sh on another window still works instead of dying silently.
 const shellSpawning = new WeakSet();
-async function spawnShellIn(cell) {
+async function spawnShellIn(cell, placement = "below") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   shellSpawning.add(cell);
   try {
+    // Only a gate and the form fallback's preselection now: the shell endpoint
+    // picks the profile itself, server-side.
     // Re-read the profile name instead of trusting the boot-time cache: the server
     // withholds it once a stored profile takes over the seed's name, and profiles
     // can be created after this page loaded.
     const profile = await currentShellProfile();
     if (!profile) { showToast("No shell profile available, check the console log.", { error: true }); return; }
-    const plan = shellSpawnPlan(await resolveCellNeighbour(cell));
+    const neighbour = await resolveCellNeighbour(cell);
+    const plan = shellSpawnPlan(neighbour);
     if (plan.mode === "form") {
       // Nothing to sit beside: there is no context to inherit, so let the user
       // choose one rather than guessing a directory that may not be containable.
       openSpawnDialog(profile);
       return;
     }
-    const cwd = plan.cwd;
-    // Always prefix the label: with no cwd the server would name the session after
-    // default_cwd's basename, which reads exactly like an agent session.
-    const base = cwd.replace(/\/$/, "").split("/").pop();
-    const req = { agent: profile, cwd, name: "sh:" + (base || profile) };
-    if (plan.runtime) req.runtime = plan.runtime; // match the neighbour's tier
-    const s = await api("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    await refreshSessions();
+    const s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+    await refreshSessions(); // the strip's "shell N" label reads the new list
     // The cell can be destroyed while we await (applyCap collapses windows, a pane
     // can be removed). Attaching to a detached cell would leak a live xterm + socket
     // that is never rendered, so fall back to normal placement instead.
-    if (cells.includes(cell)) setFocusedCell(cell);
-    openTerminal(s.id, s.name);
+    const alive = cells.includes(cell);
+    // No parent_id: the target had ended (or lost its parent), so the server
+    // opened an unlinked shell in its directory. Nothing to dock beside.
+    const route = shellSpawnRoute(placement, mobileActive(window.innerWidth), !!s.parent_id);
+    if (route === "tab" || route === "own") {
+      if (alive) setFocusedCell(cell);
+      openTerminal(s.id, s.name, route === "own" ? { newPane: true } : undefined);
+      return;
+    }
+    // The server answers with the real parent (a shell's own target is
+    // flattened to its parent). No pane holds it (e.g. "+ Shell" in a shell's
+    // own pane whose agent is closed): open the parent and dock beside it, as a
+    // sidebar click does, so a dock's host is always the shell's parent.
+    if (dockShellBesideParent(s, route)) return;
+    revealShell(s.id);
+    const host = dockHolding(s.id);
+    if (host) host.setDockPlacement(route);
+    else if (!terminalTabFor(s.id)) openTerminal(s.id, s.name); // not in the list yet: never leave it unshown
   } catch (e) {
+    // 403 / 404 / 409 carry the server's sentence ("no shell profile").
     showToast("Shell failed: " + e.message, { error: true });
     if (spawnRefusedLocked(e.status, e.code)) refreshStore();
   } finally {
     shellSpawning.delete(cell);
   }
+}
+
+// revealShell(id) shows a companion shell from its sidebar row: activated
+// where it already is (its dock, or a tab), else docked in the pane holding
+// its parent, else the parent is opened first and the shell docked beside it.
+// Mobile opens it like any session (openTerminal undocks a docked one).
+// Every branch reuses an open tab: a second attach would supersede the first.
+function revealShell(id) {
+  const s = lastSessions.find((x) => x.id === id);
+  if (!s) return;
+  const parent = s.parent_id ? lastSessions.find((p) => p.id === s.parent_id) || null : null;
+  const model = { cells: cells.map((c) => ({ tabs: c.tabs, dock: c.dock })) };
+  const plan = revealPlan(model, s.id, parent, mobileActive(window.innerWidth));
+  if (plan === "open-parent") openTerminal(parent.id, parent.name);
+  if (plan === "open" || !dockShellBesideParent(s)) openTerminal(s.id, s.name);
 }
 
 // resolveCellNeighbour falls back to the server when a terminal tab exists but hasn't
@@ -5696,7 +5781,7 @@ setInterval(async () => {
   refreshStore();
 }, 30000);
 
-// Ctrl+Shift+` → new shell in the focused window. Capture phase + stopPropagation
+// Ctrl+Shift+` → + Shell below, in the focused window. Capture phase + stopPropagation
 // for the same reason as the zoom handler below: xterm listens on its textarea and
 // would otherwise swallow the combo while a terminal has focus.
 document.addEventListener("keydown", (e) => {
@@ -5705,7 +5790,8 @@ document.addEventListener("keydown", (e) => {
   if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   e.preventDefault();
   e.stopPropagation();
-  spawnShellIn(focusedCell);
+  if (e.repeat) return; // swallowed, but a held key must not start a shell per repeat
+  spawnShellIn(focusedCell, "below");
 }, true);
 
 // Live zoom the focused pane: Ctrl/Cmd + '='/'+' bigger, '-'/'_' smaller, '0' reset.
@@ -5794,6 +5880,9 @@ document.addEventListener("keydown", (e) => {
 // handler above and the command palette. Return false when the focused tab has
 // nothing to zoom, so the caller can leave the key event alone.
 function zoomableTab() {
+  // A docked shell with the keyboard zooms itself, not the agent beside it.
+  const sh = focusedCell && focusedCell.focusedShell ? focusedCell.focusedShell() : null;
+  if (sh) return sh;
   const tab = focusedCell && focusedCell.activeTab;
   return tab && (tab.kind === "terminal" || (tab.kind === "viewer" && tab.zoomVar)) ? tab : null;
 }

@@ -72,3 +72,15 @@ test("insertTextAtPrompt reports a missing terminal", () => {
 test("insertTextAtPrompt reports a refused send", () => {
   assert.deepStrictEqual(insertTextAtPrompt(fakeTerm(false), "/tmp/a.js "), { ok: false, reason: "disconnected" });
 });
+
+const { dropHint } = require("../static/upload.js");
+
+test("dropHint: mobile keeps today's exact strings", () => {
+  assert.strictEqual(dropHint("nodest", false), "No destination folder yet. Drop onto a folder in Files instead");
+  assert.strictEqual(dropHint("miss", false), "Drop onto a terminal pane, or onto a folder in Files");
+});
+
+test("dropHint: desktop names the Files drawer", () => {
+  assert.strictEqual(dropHint("nodest", true), "No destination folder yet. Drop onto a folder in the Files drawer instead");
+  assert.strictEqual(dropHint("miss", true), "Drop onto a terminal pane, or onto a folder in the Files drawer");
+});

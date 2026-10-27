@@ -157,3 +157,32 @@ test("paletteShellCommands: mobile keeps the old entries and gets none of the ne
   const ids = paletteShellCommands(false, false, {}).map((c) => c.id);
   assert.deepEqual(ids.sort(), ["steer-rail", "toggle-files"]);
 });
+
+test("paletteShellSpawn: desktop offers + Shell below (the shortcut), right and own pane", () => {
+  const { paletteShellSpawn } = require("../static/palette.js");
+  const asked = [];
+  const cmds = paletteShellSpawn(true, (p) => asked.push(p));
+  assert.deepEqual(cmds.map((c) => c.label), ["+ Shell below", "+ Shell right", "+ Shell in own pane"]);
+  assert.deepEqual(cmds.map((c) => c.hint), ["Ctrl+Shift+`", "", ""]);
+  for (const c of cmds) { assert.equal(c.kind, "new"); c.run(); }
+  assert.deepEqual(asked, ["below", "right", "own"]);
+});
+
+test("paletteShellSpawn: mobile keeps the one v0.2.0 entry", () => {
+  const { paletteShellSpawn } = require("../static/palette.js");
+  const asked = [];
+  const cmds = paletteShellSpawn(false, (p) => asked.push(p));
+  assert.deepEqual(cmds.map((c) => [c.label, c.hint]), [["New shell here", "Ctrl+Shift+`"]]);
+  cmds[0].run();
+  assert.deepEqual(asked, ["below"]);
+});
+
+test("palSessionRun: a nested shell is revealed beside its parent, any other session opened", () => {
+  const { palSessionRun } = require("../static/palette.js");
+  const calls = [];
+  const act = { reveal: (id) => calls.push(["reveal", id]), open: (id, name) => calls.push(["open", id, name]) };
+  palSessionRun({ id: "sh-1", name: "sh:w" }, true, act)();
+  palSessionRun({ id: "a-1", name: "agent" }, false, act)();
+  palSessionRun({ id: "a-2" }, false, act)();
+  assert.deepEqual(calls, [["reveal", "sh-1"], ["open", "a-1", "agent"], ["open", "a-2", "a-2"]]);
+});
