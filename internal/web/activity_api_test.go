@@ -3,8 +3,10 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,15 +83,34 @@ func credRow(at time.Time, provider, entry string, o broker.Outcome) broker.Row 
 	return broker.Row{Time: at, SessionID: "s1", Provider: provider, Entry: entry, Outcome: o}
 }
 
-func auditAPI(svc SessionService, creds []broker.Row, appr []broker.ApprovalRow) *API {
+// auditAPI is an API whose activity rows come from a real audit store holding
+// exactly these rows for session s1, so the tests exercise the SQL paging.
+func auditAPI(t *testing.T, svc SessionService, creds []broker.Row, appr []broker.ApprovalRow) *API {
+	t.Helper()
+	au, err := broker.OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { au.Close() })
+	for _, r := range creds {
+		r.SessionID = "s1"
+		if err := au.Record(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, r := range appr {
+		r.SessionID = "s1"
+		if err := au.RecordApproval(r); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return &API{Sessions: svc, Activity: ActivityAuditAdapter{
-		Credentials: func(string, int) ([]broker.Row, error) { return creds, nil },
-		Approvals:   func(string, int) ([]broker.ApprovalRow, error) { return appr, nil },
+		Credentials: au.ActivityRows, Approvals: au.ActivityApprovals, Minted: au.CountMinted,
 	}}
 }
 
 func TestActivityCookieOnly(t *testing.T) {
-	a := auditAPI(newActivitySvc(), nil, nil)
+	a := auditAPI(t, newActivitySvc(), nil, nil)
 	if rec := activityGet(a, "/api/sessions/s1/activity", credBearer); rec.Code != 403 {
 		t.Fatalf("bearer: got %d", rec.Code)
 	}
@@ -115,7 +136,7 @@ func TestActivityCookieOnly(t *testing.T) {
 
 func TestActivityLimitClamp(t *testing.T) {
 	svc := newActivitySvc()
-	a := auditAPI(svc, nil, nil)
+	a := auditAPI(t, svc, nil, nil)
 	for _, c := range []struct {
 		q    string
 		want int
@@ -144,7 +165,7 @@ func TestActivityDropsAuditRowsBeforeCreated(t *testing.T) {
 		{Time: activityCreated.Add(20 * time.Second), Action: broker.ActionGranted, Minutes: 15, Reason: "fix"},
 		{Time: old, Action: broker.ActionGranted, Minutes: 60, Reason: "stale"},
 	}
-	m := decodeActivity(t, activityGet(auditAPI(newActivitySvc(), creds, appr), "/api/sessions/s1/activity", credCookie))
+	m := decodeActivity(t, activityGet(auditAPI(t, newActivitySvc(), creds, appr), "/api/sessions/s1/activity", credCookie))
 	evs := activityEvents(t, m)
 	if len(evs) != 2 {
 		t.Fatalf("want the 2 rows from after created, got %v", evs)
@@ -159,7 +180,7 @@ func TestActivityDropsAuditRowsBeforeCreated(t *testing.T) {
 	creds = []broker.Row{credRow(activityCreated.Add(300*time.Millisecond), "aws", "x", broker.OutcomeMinted)}
 	svc := newActivitySvc()
 	svc.info.Created = activityCreated.Add(900 * time.Millisecond)
-	m = decodeActivity(t, activityGet(auditAPI(svc, creds, nil), "/api/sessions/s1/activity", credCookie))
+	m = decodeActivity(t, activityGet(auditAPI(t, svc, creds, nil), "/api/sessions/s1/activity", credCookie))
 	if len(activityEvents(t, m)) != 1 {
 		t.Fatalf("same-second row dropped: %v", m)
 	}
@@ -181,7 +202,7 @@ func TestActivityMergesNewestFirst(t *testing.T) {
 		credRow(activityCreated.Add(10*time.Second), "github", "", broker.OutcomeDeniedScope),
 	}
 	appr := []broker.ApprovalRow{{Time: activityCreated.Add(20 * time.Second), Action: broker.ActionGranted, Minutes: 15, Reason: "hotfix"}}
-	a := auditAPI(svc, creds, appr)
+	a := auditAPI(t, svc, creds, appr)
 	m := decodeActivity(t, activityGet(a, "/api/sessions/s1/activity", credCookie))
 	evs := activityEvents(t, m)
 	wantDetail := []string{"t50", "aws culipulse-prod", "t30", `granted 15 min · "hotfix"`, "github", "t5"}
@@ -244,33 +265,102 @@ func TestActivityCutFinishesTheMillisecond(t *testing.T) {
 	svc := newActivitySvc()
 	svc.tl.Events = []session.TimelineEvent{tlEv(base, "a"), tlEv(base, "b")}
 	creds := []broker.Row{credRow(time.UnixMilli(base), "aws", "c", broker.OutcomeMinted), credRow(activityCreated.Add(5*time.Second), "aws", "old", broker.OutcomeMinted)}
-	m := decodeActivity(t, activityGet(auditAPI(svc, creds, nil), "/api/sessions/s1/activity?limit=1", credCookie))
+	m := decodeActivity(t, activityGet(auditAPI(t, svc, creds, nil), "/api/sessions/s1/activity?limit=1", credCookie))
 	evs := activityEvents(t, m)
 	if len(evs) != 3 || m["more"] != true {
 		t.Fatalf("want all 3 same-ms rows and more=true, got %v more=%v", evs, m["more"])
 	}
-	m = decodeActivity(t, activityGet(auditAPI(svc, creds[:1], nil), "/api/sessions/s1/activity?limit=3", credCookie))
+	m = decodeActivity(t, activityGet(auditAPI(t, svc, creds[:1], nil), "/api/sessions/s1/activity?limit=3", credCookie))
 	if m["more"] != false {
 		t.Fatalf("nothing left, more = %v", m["more"])
 	}
 }
 
-// A capped audit read that still reaches below the cursor says more; one whose
-// window sits above the cursor does not (it would page forever).
-func TestActivityAuditCapSetsMore(t *testing.T) {
+// A session with more than the 200-row cap of credential rows pages back to its
+// oldest row: no loss, no duplicates. Hidden outcomes do not shrink a page, and
+// summary.credentials is the true minted count since created.
+func TestActivityPagesPastTheAuditCap(t *testing.T) {
 	var creds []broker.Row
-	for i := 0; i < activityAuditCap; i++ {
-		creds = append(creds, credRow(activityCreated.Add(time.Duration(1000-i)*time.Second), "aws", "e", broker.OutcomeMinted))
+	const minted = 250
+	for i := 0; i < minted; i++ {
+		creds = append(creds, credRow(activityCreated.Add(time.Duration(1+i/2)*time.Second), "aws", "e"+strconvI(int64(i)), broker.OutcomeMinted))
 	}
-	a := auditAPI(newActivitySvc(), creds, nil)
-	m := decodeActivity(t, activityGet(a, "/api/sessions/s1/activity?limit=200", credCookie))
-	if m["more"] != true {
-		t.Fatalf("capped read: more = %v", m["more"])
+	for i := 0; i < 300; i++ { // probes among them, and rows from before created
+		creds = append(creds, credRow(activityCreated.Add(time.Duration(1+i/3)*time.Second), "aws", "probe", broker.OutcomeProbeMinted))
 	}
-	oldest := creds[len(creds)-1].Time.UnixMilli()
-	m = decodeActivity(t, activityGet(a, "/api/sessions/s1/activity?before="+strconvI(oldest), credCookie))
-	if m["more"] != false || len(activityEvents(t, m)) != 0 {
-		t.Fatalf("window above the cursor: %v", m)
+	for i := 0; i < 20; i++ {
+		creds = append(creds, credRow(activityCreated.Add(-time.Duration(1+i)*time.Minute), "aws", "stale", broker.OutcomeMinted))
+	}
+	a := auditAPI(t, newActivitySvc(), creds, nil)
+	seen := map[string]bool{}
+	before := ""
+	var total int
+	for page := 0; page < 20; page++ {
+		m := decodeActivity(t, activityGet(a, "/api/sessions/s1/activity?limit=200"+before, credCookie))
+		if got := m["summary"].(map[string]any)["credentials"]; got != float64(minted) {
+			t.Fatalf("page %d: summary.credentials = %v, want %d", page, got, minted)
+		}
+		evs := activityEvents(t, m)
+		for _, e := range evs {
+			d := e["detail"].(string)
+			if d == "aws probe" || d == "aws stale" {
+				t.Fatalf("hidden or pre-created row shown: %v", e)
+			}
+			if seen[d] {
+				t.Fatalf("duplicate %s on page %d", d, page)
+			}
+			seen[d] = true
+			total++
+		}
+		if m["more"] != true {
+			break
+		}
+		if len(evs) == 0 {
+			t.Fatalf("page %d: more with an empty page", page)
+		}
+		before = "&before=" + strconvI(int64(evs[len(evs)-1]["ts"].(float64)))
+	}
+	if total != minted {
+		t.Fatalf("paged %d rows, want %d", total, minted)
+	}
+}
+
+// A failed audit read (rows or count) makes the reply partial, never a quiet
+// empty history, and does not put the error text in it.
+func TestActivityAuditFailureIsPartial(t *testing.T) {
+	boom := errors.New("database is locked: token ghp_SECRET")
+	for name, ad := range map[string]ActivityAuditAdapter{
+		"credentials": {Credentials: func(string, int64, int64, int) ([]broker.Row, error) { return nil, boom }},
+		"approvals":   {Approvals: func(string, int64, int64, int) ([]broker.ApprovalRow, error) { return nil, boom }},
+		"count":       {Minted: func(string, int64) (int, error) { return 0, boom }},
+	} {
+		svc := newActivitySvc()
+		svc.tl.Events = []session.TimelineEvent{tlEv(activityCreated.UnixMilli()+1000, "ls")}
+		rec := activityGet(&API{Sessions: svc, Activity: ad}, "/api/sessions/s1/activity", credCookie)
+		m := decodeActivity(t, rec)
+		if m["partial"] != true || len(activityEvents(t, m)) != 1 || strings.Contains(rec.Body.String(), "SECRET") {
+			t.Fatalf("%s: partial = %v, body %s", name, m["partial"], rec.Body)
+		}
+	}
+	// And a healthy audit does not claim it.
+	m := decodeActivity(t, activityGet(auditAPI(t, newActivitySvc(), nil, nil), "/api/sessions/s1/activity", credCookie))
+	if m["partial"] != false {
+		t.Fatalf("healthy audit: partial = %v", m["partial"])
+	}
+}
+
+// A transcript page that has more behind it must not be skipped over by audit
+// rows older than its end: the merged page stops at the transcript's floor.
+func TestActivityTranscriptFloorBoundsTheMerge(t *testing.T) {
+	base := activityCreated.UnixMilli()
+	svc := newActivitySvc()
+	svc.tl.Events = []session.TimelineEvent{tlEv(base+50_000, "t50"), tlEv(base+40_000, "t40")}
+	svc.tl.More = true
+	creds := []broker.Row{credRow(activityCreated.Add(45*time.Second), "aws", "c45", broker.OutcomeMinted), credRow(activityCreated.Add(10*time.Second), "aws", "c10", broker.OutcomeMinted)}
+	m := decodeActivity(t, activityGet(auditAPI(t, svc, creds, nil), "/api/sessions/s1/activity", credCookie))
+	evs := activityEvents(t, m)
+	if len(evs) != 3 || m["more"] != true || evs[2]["detail"] != "t40" {
+		t.Fatalf("want t50,c45,t40 and more, got %v", evs)
 	}
 }
 
@@ -280,7 +370,7 @@ func TestActivityNonClaude(t *testing.T) {
 	svc.tl = session.Timeline{Claude: false, Events: []session.TimelineEvent{}, Files: nil}
 	creds := []broker.Row{credRow(activityCreated.Add(time.Minute), "static", "", broker.OutcomeFetched)}
 	creds[0].Subject = "npm-token"
-	m := decodeActivity(t, activityGet(auditAPI(svc, creds, nil), "/api/sessions/s1/activity", credCookie))
+	m := decodeActivity(t, activityGet(auditAPI(t, svc, creds, nil), "/api/sessions/s1/activity", credCookie))
 	evs := activityEvents(t, m)
 	if m["claude"] != false || len(evs) != 1 || evs[0]["kind"] != "credential" || evs[0]["detail"] != "static npm-token" {
 		t.Fatalf("body = %v", m)
@@ -296,7 +386,7 @@ func TestActivityNoSecrets(t *testing.T) {
 	row.Error = "github said " + token
 	row.RoleARN, row.SourceIdentity, row.ScopeHash, row.Profile = "arn:aws:iam::1:role/secret-role", "src-ident", "scope-hash", "prof"
 	appr := broker.ApprovalRow{Time: activityCreated.Add(2 * time.Minute), Action: broker.ActionRefused, Error: "err " + token, Cred: "cred-" + token, RoleARN: "arn:aws:iam::1:role/secret-role"}
-	rec := activityGet(auditAPI(newActivitySvc(), []broker.Row{row}, []broker.ApprovalRow{appr}), "/api/sessions/s1/activity", credCookie)
+	rec := activityGet(auditAPI(t, newActivitySvc(), []broker.Row{row}, []broker.ApprovalRow{appr}), "/api/sessions/s1/activity", credCookie)
 	body := rec.Body.String()
 	for _, bad := range []string{token, "github said", "secret-role", "src-ident", "scope-hash", "cred-"} {
 		if strings.Contains(body, bad) {
@@ -321,7 +411,7 @@ func TestActivityRowSelectionAndReasonBound(t *testing.T) {
 		{Time: activityCreated.Add(5 * time.Second), Action: broker.ActionDropped},
 		{Time: activityCreated.Add(6 * time.Second), Action: broker.ActionGranted, Minutes: 5, Reason: strings.Repeat("x", 500) + "\n"},
 	}
-	evs := activityEvents(t, decodeActivity(t, activityGet(auditAPI(newActivitySvc(), creds, appr), "/api/sessions/s1/activity", credCookie)))
+	evs := activityEvents(t, decodeActivity(t, activityGet(auditAPI(t, newActivitySvc(), creds, appr), "/api/sessions/s1/activity", credCookie)))
 	if len(evs) != 3 {
 		t.Fatalf("events = %v", evs)
 	}

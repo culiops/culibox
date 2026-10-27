@@ -298,22 +298,30 @@ func (a EgressStatusAdapter) EgressStatus(id string) (any, bool) {
 }
 
 // ActivityAuditAdapter serves a session's credential and approval audit rows to
-// the activity timeline. A nil func reads as no rows.
+// the activity timeline. Times are unix seconds; a nil func reads as no rows.
 type ActivityAuditAdapter struct {
-	Credentials func(id string, limit int) ([]broker.Row, error)
-	Approvals   func(id string, limit int) ([]broker.ApprovalRow, error)
+	Credentials func(id string, sinceTS, beforeTS int64, limit int) ([]broker.Row, error)
+	Approvals   func(id string, sinceTS, beforeTS int64, limit int) ([]broker.ApprovalRow, error)
+	Minted      func(id string, sinceTS int64) (int, error)
 }
 
-func (a ActivityAuditAdapter) ActivityCredentials(id string, limit int) ([]broker.Row, error) {
+func (a ActivityAuditAdapter) ActivityCredentials(id string, sinceTS, beforeTS int64, limit int) ([]broker.Row, error) {
 	if a.Credentials == nil {
 		return nil, nil
 	}
-	return a.Credentials(id, limit)
+	return a.Credentials(id, sinceTS, beforeTS, limit)
 }
 
-func (a ActivityAuditAdapter) ActivityApprovals(id string, limit int) ([]broker.ApprovalRow, error) {
+func (a ActivityAuditAdapter) ActivityApprovals(id string, sinceTS, beforeTS int64, limit int) ([]broker.ApprovalRow, error) {
 	if a.Approvals == nil {
 		return nil, nil
 	}
-	return a.Approvals(id, limit)
+	return a.Approvals(id, sinceTS, beforeTS, limit)
+}
+
+func (a ActivityAuditAdapter) ActivityMinted(id string, sinceTS int64) (int, error) {
+	if a.Minted == nil {
+		return 0, nil
+	}
+	return a.Minted(id, sinceTS)
 }

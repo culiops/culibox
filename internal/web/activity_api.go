@@ -32,8 +32,12 @@ const (
 // the activity timeline. Implemented by ActivityAuditAdapter; nil on the API =
 // the credential broker is not running, and the timeline has transcript rows only.
 type ActivityAuditService interface {
-	ActivityCredentials(id string, limit int) ([]broker.Row, error)
-	ActivityApprovals(id string, limit int) ([]broker.ApprovalRow, error)
+	// Times are unix seconds: rows with ts >= sinceTS and, when beforeTS > 0,
+	// ts < beforeTS, at most limit of them.
+	ActivityCredentials(id string, sinceTS, beforeTS int64, limit int) ([]broker.Row, error)
+	ActivityApprovals(id string, sinceTS, beforeTS int64, limit int) ([]broker.ApprovalRow, error)
+	// ActivityMinted counts every credential the session was handed since sinceTS.
+	ActivityMinted(id string, sinceTS int64) (int, error)
 }
 
 // activityResponse is the wire shape of GET /api/sessions/{id}/activity.
@@ -108,25 +112,44 @@ func (a *API) handleActivity(w http.ResponseWriter, r *http.Request, sid string)
 	}
 
 	var cred, appr []session.TimelineEvent
-	var credMore, apprMore bool
+	var credMore, apprMore, auditFailed bool
 	minted := 0
 	if a.Activity != nil {
 		// Whole seconds: audit rows have no finer clock, so a row written in the
 		// second the session was created is the session's own.
-		since := info.Created.Truncate(time.Second)
-		cred, credMore, minted = credentialEvents(a.Activity, sid, since, before)
-		appr, apprMore = approvalEvents(a.Activity, sid, since, before)
+		since := info.Created.Truncate(time.Second).Unix()
+		// before is in ms; an audit row at second s shows at s*1000.
+		var beforeTS int64
+		if before > 0 {
+			beforeTS = (before + 999) / 1000
+		}
+		var err error
+		if cred, credMore, err = credentialEvents(a.Activity, sid, since, beforeTS); err != nil {
+			log.Printf("activity %s: reading credential rows: %v", sid, err)
+			auditFailed = true
+		}
+		if appr, apprMore, err = approvalEvents(a.Activity, sid, since, beforeTS); err != nil {
+			log.Printf("activity %s: reading approval rows: %v", sid, err)
+			auditFailed = true
+		}
+		if minted, err = a.Activity.ActivityMinted(sid, since); err != nil {
+			log.Printf("activity %s: counting credentials: %v", sid, err)
+			auditFailed = true
+		}
 	}
-	events, more := mergeActivity(limit, tl.Events, cred, appr)
+	events, more := mergeActivity(limit,
+		activitySource{tl.Events, tl.More}, activitySource{cred, credMore}, activitySource{appr, apprMore})
 	files := tl.Files
 	if files == nil {
 		files = []session.FileChange{}
 	}
 	resp := activityResponse{
-		Claude:  tl.Claude,
-		Events:  events,
-		More:    more || tl.More || credMore || apprMore,
-		Partial: tl.Partial,
+		Claude: tl.Claude,
+		Events: events,
+		More:   more,
+		// A failed audit read leaves the timeline and the credential count
+		// incomplete; say so rather than claim an empty history.
+		Partial: tl.Partial || auditFailed,
 		Files:   files,
 		Summary: activitySummary{
 			ToolCalls: tl.ToolCalls, FilesChanged: len(files), Credentials: minted,
@@ -156,34 +179,25 @@ func runningSeconds(info session.Info, events []session.TimelineEvent) int64 {
 	return 0
 }
 
-// credentialEvents turns the session's credential audit rows into timeline
-// events older than before (0 = all) and not older than since. more is true when
-// the capped read may leave rows below the cursor; minted counts the successful
-// rows since the session began (whatever the page).
-func credentialEvents(src ActivityAuditService, sid string, since time.Time, before int64) (evs []session.TimelineEvent, more bool, minted int) {
-	rows, err := src.ActivityCredentials(sid, activityAuditCap)
+// credentialEvents turns one page of the session's credential audit rows
+// (read in SQL: not older than since, older than beforeTS, newest first, capped)
+// into timeline events. more is true when the read may have left older rows.
+func credentialEvents(src ActivityAuditService, sid string, since, beforeTS int64) ([]session.TimelineEvent, bool, error) {
+	rows, err := src.ActivityCredentials(sid, since, beforeTS, activityAuditCap)
 	if err != nil {
-		log.Printf("activity %s: reading credential rows: %v", sid, err)
-		return nil, false, 0
+		return nil, false, err
 	}
+	rows, more := completeSeconds(rows, func(r broker.Row) int64 { return r.Time.Unix() })
+	var evs []session.TimelineEvent
 	for _, r := range rows {
-		if r.Time.Before(since) {
-			continue
-		}
 		state, show := credentialState(r.Outcome)
-		if !show {
+		// The query already filters; these keep a misbehaving source honest.
+		if !show || r.Time.Unix() < since || (beforeTS > 0 && r.Time.Unix() >= beforeTS) {
 			continue
 		}
-		if state == "minted" {
-			minted++
-		}
-		ts := r.Time.UnixMilli()
-		if before > 0 && ts >= before {
-			continue
-		}
-		evs = append(evs, session.TimelineEvent{TS: ts, Kind: "credential", Detail: credentialDetail(r), State: state})
+		evs = append(evs, session.TimelineEvent{TS: r.Time.UnixMilli(), Kind: "credential", Detail: credentialDetail(r), State: state})
 	}
-	return evs, auditWindowOpen(len(rows), rows, func(i int) time.Time { return rows[i].Time }, since, before), minted
+	return evs, more, nil
 }
 
 // credentialState maps a broker outcome to a row state. Base-role probes and
@@ -213,26 +227,22 @@ func credentialDetail(r broker.Row) string {
 	return activityText(provider+" "+entry, 120)
 }
 
-// approvalEvents is credentialEvents for the write-window log. Sign-in rows are
-// not part of a window's life and are not shown.
-func approvalEvents(src ActivityAuditService, sid string, since time.Time, before int64) (evs []session.TimelineEvent, more bool) {
-	rows, err := src.ActivityApprovals(sid, activityAuditCap)
+// approvalEvents is credentialEvents for the write-window log.
+func approvalEvents(src ActivityAuditService, sid string, since, beforeTS int64) ([]session.TimelineEvent, bool, error) {
+	rows, err := src.ActivityApprovals(sid, since, beforeTS, activityAuditCap)
 	if err != nil {
-		log.Printf("activity %s: reading approval rows: %v", sid, err)
-		return nil, false
+		return nil, false, err
 	}
+	rows, more := completeSeconds(rows, func(r broker.ApprovalRow) int64 { return r.Time.Unix() })
+	var evs []session.TimelineEvent
 	for _, r := range rows {
-		if r.Time.Before(since) {
-			continue
-		}
 		switch r.Action {
 		case broker.ActionGranted, broker.ActionExtended, broker.ActionDropped,
 			broker.ActionExpired, broker.ActionEnded, broker.ActionRefused:
 		default:
 			continue
 		}
-		ts := r.Time.UnixMilli()
-		if before > 0 && ts >= before {
+		if r.Time.Unix() < since || (beforeTS > 0 && r.Time.Unix() >= beforeTS) {
 			continue
 		}
 		detail := string(r.Action)
@@ -242,20 +252,29 @@ func approvalEvents(src ActivityAuditService, sid string, since time.Time, befor
 		if reason := activityText(r.Reason, activityReasonMax); reason != "" {
 			detail += ` · "` + reason + `"`
 		}
-		evs = append(evs, session.TimelineEvent{TS: ts, Kind: "approval", Detail: detail, State: string(r.Action)})
+		evs = append(evs, session.TimelineEvent{TS: r.Time.UnixMilli(), Kind: "approval", Detail: detail, State: string(r.Action)})
 	}
-	return evs, auditWindowOpen(len(rows), rows, func(i int) time.Time { return rows[i].Time }, since, before)
+	return evs, more, nil
 }
 
-// auditWindowOpen reports whether a capped, newest-first read may have left
-// older rows that this cursor could still reach: the read hit its cap and its
-// oldest row is still inside the session's life and below the cursor.
-func auditWindowOpen[T any](n int, rows []T, at func(int) time.Time, since time.Time, before int64) bool {
-	if n < activityAuditCap {
-		return false
+// completeSeconds handles the cap of a newest-first audit read. A read that hit
+// its cap may have stopped inside a second, and the next page asks for strictly
+// older seconds, so the trailing partial second is dropped (it is read whole by
+// that next page) and more is true. A capped read of a single second is kept
+// as is.
+func completeSeconds[T any](rows []T, at func(T) int64) ([]T, bool) {
+	if len(rows) < activityAuditCap {
+		return rows, false
 	}
-	oldest := at(n - 1)
-	return !oldest.Before(since) && (before == 0 || oldest.UnixMilli() < before)
+	last := at(rows[len(rows)-1])
+	n := len(rows)
+	for n > 0 && at(rows[n-1]) == last {
+		n--
+	}
+	if n == 0 {
+		return rows, true
+	}
+	return rows[:n], true
 }
 
 // activityText makes audit text safe for one row: masked, control characters
@@ -275,25 +294,49 @@ func activityText(s string, max int) string {
 	return string([]rune(s)[:max-1]) + "…"
 }
 
-// mergeActivity interleaves the transcript page with the audit events, newest
-// first, and cuts the result to limit. Like TimelineFor, the cut finishes the
-// millisecond it lands in, so a client paging with before=<oldest ts> never
-// loses a same-ms row. more is set when the cut left anything behind.
-func mergeActivity(limit int, lists ...[]session.TimelineEvent) ([]session.TimelineEvent, bool) {
+// activitySource is one newest-first list of events and whether older ones
+// exist beyond its end.
+type activitySource struct {
+	evs  []session.TimelineEvent
+	more bool
+}
+
+// mergeActivity interleaves the sources, newest first, and cuts the result to
+// limit. Two things keep a client paging with before=<oldest ts> from losing
+// rows. A source that has more behind it is only known down to its oldest row,
+// so nothing older than the highest such floor is returned (the next page
+// reads it). And, like TimelineFor, the limit cut finishes the millisecond it
+// lands in. more is set when anything is left behind.
+func mergeActivity(limit int, sources ...activitySource) ([]session.TimelineEvent, bool) {
 	var all []session.TimelineEvent
-	for _, l := range lists {
-		all = append(all, l...)
+	more := false
+	var floor int64
+	for _, src := range sources {
+		all = append(all, src.evs...)
+		if src.more {
+			more = true
+			if n := len(src.evs); n > 0 && src.evs[n-1].TS > floor {
+				floor = src.evs[n-1].TS
+			}
+		}
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].TS > all[j].TS })
+	if floor > 0 {
+		n := len(all)
+		for n > 0 && all[n-1].TS < floor {
+			n--
+		}
+		all = all[:n]
+	}
 	if all == nil {
-		return []session.TimelineEvent{}, false
+		return []session.TimelineEvent{}, more
 	}
 	if len(all) <= limit {
-		return all, false
+		return all, more
 	}
 	cut := limit
 	for cut < len(all) && all[cut].TS == all[cut-1].TS {
 		cut++
 	}
-	return all[:cut], cut < len(all)
+	return all[:cut], more || cut < len(all)
 }

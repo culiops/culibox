@@ -182,8 +182,9 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 				return audit.ForSessionProvider(id, broker.ProviderStatic, n)
 			}},
 		Activity: web.ActivityAuditAdapter{
-			Credentials: audit.ForSession,
-			Approvals:   audit.ApprovalsForSession,
+			Credentials: audit.ActivityRows,
+			Approvals:   audit.ActivityApprovals,
+			Minted:      audit.CountMinted,
 		},
 		SSO: sso, Tokens: tokens, GitHub: minter, Minter: stsMinter, Sim: simulator,
 		Stop: func(ctx context.Context) {
