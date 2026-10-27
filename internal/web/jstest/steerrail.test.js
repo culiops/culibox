@@ -72,6 +72,25 @@ test("a waiting session's name stays undecorated even though its label carries t
   assert.strictEqual(a.label, "review — waiting for you");
 });
 
+test("a rail entry carries the session name as its hover title", () => {
+  const [, a, b] = railItems([{ id: "abc123", name: "review", activity: "waiting" }, { id: "d" }], {});
+  assert.strictEqual(a.title, "review");
+  assert.strictEqual(b.title, "d", "an unnamed session titles by id");
+});
+
+test("an entry is elevated only while a write window is open, on the record or a connection", () => {
+  const now = Date.parse("2026-10-27T10:00:00Z");
+  const live = "2026-10-27T10:30:00Z", gone = "2026-10-27T09:00:00Z";
+  const items = railItems([
+    { id: "a", name: "a", activity: "working", aws: { elevated_until: live } },
+    { id: "b", name: "b", activity: "working", aws_connections: [{ name: "x", elevated_until: live }] },
+    { id: "c", name: "c", activity: "working", aws: { elevated_until: gone } },
+    { id: "d", name: "d", activity: "working" },
+  ], { nowMs: now });
+  assert.deepStrictEqual(items.slice(1, 5).map((i) => i.elevated), [true, true, false, false]);
+  assert.strictEqual(items[0].elevated, false, "the toggle is never elevated");
+});
+
 test("an absent list is empty, never a throw", () => {
   assert.deepStrictEqual(railItems(null, null).map((i) => i.kind), ["toggle", "new"]);
 });

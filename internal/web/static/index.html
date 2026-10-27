@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/tokens.css">
   <link rel="stylesheet" href="/primitives.css">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/desktop.css">
   <script>/* apply persisted sidebar state before first paint (no flash) */try{if(localStorage.getItem('sidebarHidden')==='1')document.documentElement.classList.add('sidebar-hidden');}catch(e){}</script>
   <script>/* apply persisted font sizes before first paint (no flash) */try{var _fp=JSON.parse(localStorage.getItem('agent-box:fontPrefs')||'{}');var _mob=window.innerWidth<=700;var _d=_mob?{code:['--fs-code',13],markdown:['--fs-md',15],filetree:['--fs-tree',14]}:{code:['--fs-code',12.5],markdown:['--fs-md',14],filetree:['--fs-tree',12]};for(var _k in _d){var _v=Number(_fp[_k]);if(!isFinite(_v))_v=_d[_k][1];_v=Math.min(32,Math.max(8,_v));document.documentElement.style.setProperty(_d[_k][0],_v+'px');}}catch(e){}</script>
   <script>/* apply persisted sidebar split before first paint (no flash) */try{var _sp=Number(localStorage.getItem('agent-box:sidebarSplit'));if(isFinite(_sp)&&_sp>0)document.documentElement.style.setProperty('--sidebar-split',Math.min(85,Math.max(15,_sp))+'%');}catch(e){}</script>
@@ -46,6 +47,25 @@
   <div id="layout">
     <nav id="rail48" class="rail48" aria-label="Sessions"></nav>
     <aside id="sidebar">
+      <div id="side-top">
+        <div class="side-brand">
+          <svg class="side-logo" width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.5 3.5H4.5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="8" r="2" fill="var(--ok)"/></svg>
+          <span class="side-name">Culibox</span>
+          <span id="side-version" hidden></span>
+          <span id="side-env" hidden></span>
+        </div>
+        <div class="side-ctl">
+          <div class="layouts" id="side-layouts">
+            <button data-cols="1" title="One pane" aria-label="One pane">1</button>
+            <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
+            <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
+          </div>
+          <span class="side-fill"></span>
+          <button id="side-palette" type="button" title="Command palette" aria-label="Open command palette">&#8984;</button>
+          <button id="side-collapse" type="button" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
+        </div>
+        <button id="side-new" type="button" class="pbtn">New session</button>
+      </div>
       <div id="sessions-pane">
         <div class="phd" id="sessions-phd">
           <button class="cv" id="sessions-cv" type="button" aria-expanded="true" aria-controls="sessions" title="Collapse sessions">&#9662;</button>
@@ -82,6 +102,17 @@
           <div id="filetree"></div>
         </div>
       </div>
+      <div id="side-foot">
+        <div id="limits-side"></div>
+        <div class="side-stats">
+          <span id="side-cost" hidden></span>
+          <span id="side-elevated">0 elevated</span>
+        </div>
+        <div class="side-links">
+          <button id="side-analytics" type="button" hidden>Analytics</button>
+          <button id="side-settings" type="button">Settings</button>
+        </div>
+      </div>
     </aside>
     <div id="split-v" role="separator" aria-orientation="vertical" title="Drag to resize the sidebar"></div>
     <div id="term-topbar">
@@ -97,6 +128,15 @@
     <main id="grid" class="empty">
       <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
+    <aside id="drawer" aria-label="Session drawer" hidden>
+      <div class="dr-head">
+        <span id="drawer-title" class="dr-title">Files</span>
+        <span id="drawer-sess" class="dr-sess"></span>
+        <span class="dr-fill"></span>
+        <button id="drawer-x" type="button" title="Close the drawer" aria-label="Close the drawer">&#10005;</button>
+      </div>
+      <div id="drawer-body" class="dr-body"></div>
+    </aside>
     <aside id="steer-rail" class="rail" aria-label="Session detail" hidden>
       <div class="rsec" id="steer-head"></div>
       <div class="rsec" id="steer-elev" hidden></div>
@@ -631,6 +671,7 @@
   <script src="/envrows.js"></script>
   <script src="/mobileterm.js"></script>
   <script src="/mobileshell.js"></script>
+  <script src="/deskshell.js"></script>
   <script src="/chipmodel.js"></script>
   <script src="/palette.js"></script>
   <script src="/sheet.js"></script>

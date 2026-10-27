@@ -116,18 +116,247 @@ function toggleSidebar() {
   // ☰ without), so the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
   const active = document.activeElement;
-  const fromToggle = !!active && (active === $("sidebar-toggle") || (!!rail && active === rail.firstElementChild));
+  const railToggle = rail && rail.querySelector(".ri.tog"); // not the first .ri: + comes before the dots and the ☰
+  const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === railToggle));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
   if (fromToggle) {
-    const next = hidden ? rail && rail.firstElementChild : $("sidebar-toggle");
+    const next = hidden ? rail && rail.querySelector(".ri.tog") : $("side-collapse");
     if (next) next.focus();
   }
 }
 $("sidebar-toggle").onclick = toggleSidebar;
+$("side-collapse").onclick = toggleSidebar;
 $("steer-toggle").onclick = toggleSteerRail;
+
+// --- desktop pane drawer (spec 5.3/5.4) ---------------------------------------
+// One drawer over the right of the pane grid, below the focused pane's header,
+// showing either the file tree (Files) or the session detail rail (Access). The
+// two are the EXISTING #files-pane and #steer-rail nodes, moved in on first use
+// (a DOM move, not a copy: every listener, the tree's state and the rail's
+// composer travel with them) and put back exactly where they were when the
+// viewport crosses into mobile, whose Files screen expects #files-pane inside
+// #sidebar. drawerFor (deskshell.js) owns the toggle decision.
+//
+// Declared up here, before boot builds the first cells: tabs.js reads it while
+// painting a header, and a `let` read before its line throws.
+let drawerState = { open: null, sessionId: null };
+// The key of the empty state the grid shows now ("" when it shows panes), so a
+// poll repaints it only when what it says changed. Declared up here for the
+// same reason as drawerState: renderGrid reads it while boot builds the cells.
+let emptyShownKey = "";
+// The boot restore has run (or given up): until then the grid may be about to
+// get its tabs back, so the empty state stays silent instead of flashing.
+let bootRestoreDone = false;
+// node -> { parent, next }: where a moved node came from. Filled on the first
+// move only, emptied by restoreDrawerNodes.
+const drawerOrigins = new Map();
+
+function drawerDesktop() {
+  return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+}
+
+// toggleDrawer: a header tab's press. Opens `kind` for the session, closes it if
+// that is what is already showing, or switches.
+function toggleDrawer(kind, sessionId) {
+  if (!drawerDesktop()) return;
+  applyDrawer(drawerFor(drawerState, kind, sessionId == null ? null : sessionId));
+}
+
+// openDrawer: show `kind` for the session whatever is showing now (menu items,
+// openSteerFor, a press that also moved focus). opts.explicitRoot: an explicit
+// "show me this session's files" (the menu's Open files here), which re-roots
+// the tree even if it already follows the session; see drawerRootTree.
+function openDrawer(kind, sessionId, opts) {
+  if (!drawerDesktop()) return;
+  applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
+}
+
+// closeDrawerFor: close the drawer if it is showing `kind` (any, if undefined)
+// for `sessionId` (any, if undefined).
+function closeDrawerFor(sessionId, kind) {
+  if (!drawerState.open) return;
+  if (sessionId !== undefined && drawerState.sessionId !== sessionId) return;
+  if (kind !== undefined && drawerState.open !== kind) return;
+  applyDrawer({ open: null, sessionId: drawerState.sessionId });
+}
+
+// headerDrawerPress: a Files/Access press in a pane header. A mouse press on a
+// pane that was not focused has already moved focus there, and with it an open
+// drawer (drawerFollowFocus), so toggling would close what the user just asked
+// to see: open instead. A keyboard press moves no focus (e.detail is 0).
+function headerDrawerPress(cell, kind, sessionId, e) {
+  if (e && e.detail > 0 && !cell._pressFocused) { openDrawer(kind, sessionId); return; }
+  // A keyboard press on an unfocused pane: focus it first, so the drawer hangs
+  // under this pane's header. That focus change runs drawerFollowFocus, which
+  // already moves an open drawer to this pane's session, so a toggle would
+  // close it: open, the same rule as the mouse press above.
+  if (focusedCell !== cell) { setFocusedCell(cell); openDrawer(kind, sessionId); return; }
+  toggleDrawer(kind, sessionId);
+}
+
+function moveIntoDrawer(node, body) {
+  if (!node || node.parentElement === body) return;
+  if (!drawerOrigins.has(node)) drawerOrigins.set(node, { parent: node.parentElement, next: node.nextSibling });
+  body.appendChild(node);
+}
+
+function applyDrawer(next, opts) {
+  const dr = $("drawer");
+  const body = $("drawer-body");
+  if (!dr || !body) return;
+  drawerState = next;
+  const rail = $("steer-rail");
+  if (next.open === "files") moveIntoDrawer($("files-pane"), body);
+  if (next.open === "access") {
+    moveIntoDrawer(rail, body);
+    // The rail describes the focused terminal (railSession), so bring this
+    // session's tab to the front first if it is open somewhere; never open one.
+    const t = next.sessionId ? terminalTabFor(next.sessionId) : null;
+    if (t && selectedSessionId() !== t.id) openTerminal(t.id, t.title());
+  }
+  // The rail's hidden attribute stays steerOpen()'s truth.
+  if (rail && rail.parentElement === body) rail.hidden = next.open !== "access";
+  dr.dataset.kind = next.open || "";
+  dr.hidden = !next.open;
+  paintDrawerHead();
+  positionDrawer();
+  if (next.open === "access") renderSteerRail();
+  if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
+  for (const c of cells) paintDrawerTabs(c);
+}
+
+// drawerRootTree roots the tree at the drawer's session. A header tab press
+// uses its terminal's cwd under the same follow-key syncFocusedTree uses (so a
+// tree already following it does not reload). `explicit` (the menu's Open
+// files here) passes NO key, like the mobile path: an explicit request must
+// re-root even when the key says the tree already follows this session (a
+// manual root change since then leaves the key in place), and no key also
+// clears the guard, so the tree resumes following focus at the next change.
+// Without a usable terminal cwd: the session's recorded cwd; with no session,
+// whatever the focused tab resolves to.
+function drawerRootTree(sessionId, explicit) {
+  const t = sessionId ? terminalTabFor(sessionId) : null;
+  const s = sessionId ? (lastSessions || []).find((x) => x.id === sessionId) : null;
+  // A cwd /api/fs/list refuses (outside $HOME) is never a root: the tree would
+  // be replaced by one "forbidden" line, and the mobile Files screen shares it.
+  // Such a session leaves the tree where it is, the same as syncFocusedTree.
+  if (explicit) {
+    const cwd = (s && s.cwd) || (t && t.cwd) || "";
+    if (cwd && rootableCwd(cwd)) { syncTreeToRoot(cwd).catch(() => {}); return; }
+  }
+  if (t && t.cwd && rootableCwd(t.cwd)) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
+  if (s && s.cwd && rootableCwd(s.cwd)) { syncTreeToRoot(s.cwd).catch(() => {}); return; }
+  syncFocusedTree();
+}
+
+function drawerSessionName(id) {
+  if (!id) return "";
+  const s = (lastSessions || []).find((x) => x.id === id);
+  if (s) return s.name || s.id;
+  const t = terminalTabFor(id);
+  return t ? t.title() : id;
+}
+
+function paintDrawerHead() {
+  const title = $("drawer-title");
+  const sess = $("drawer-sess");
+  if (!title || !sess) return;
+  title.textContent = drawerState.open === "access" ? "Access" : "Files";
+  const n = drawerSessionName(drawerState.sessionId);
+  sess.textContent = n ? "\u00B7 " + n : "";
+  sess.title = n;
+}
+
+// paintDrawerTabs: the underline on a pane's Files/Access tab follows the
+// drawer. Classes only, never a rebuild: see drawerFollowFocus.
+function paintDrawerTabs(cell) {
+  if (!cell || !cell.bar) return;
+  const term = cellTerminal(cell);
+  const sid = term ? term.id : null;
+  // A pane of files has no session; its tab is the drawer's only while it is
+  // the focused one.
+  const mine = drawerState.sessionId === sid && (sid !== null || cell === focusedCell);
+  for (const b of cell.bar.querySelectorAll(".ph-tab[data-k]")) {
+    const on = mine && drawerState.open === b.dataset.k;
+    b.classList.toggle("open", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+// drawerFollowFocus: the drawer's tree and rail already follow the focused tab
+// (syncFocusedTree / renderSteerRail), so its session and its header do too.
+function drawerFollowFocus() {
+  if (!drawerState.open || !drawerDesktop()) return;
+  const term = cellTerminal(focusedCell);
+  const sid = term ? term.id : null;
+  if (sid !== drawerState.sessionId) {
+    drawerState = { open: drawerState.open, sessionId: sid };
+    paintDrawerHead();
+    for (const c of cells) paintDrawerTabs(c);
+  }
+  positionDrawer();
+}
+
+// drawerTabClosed: a tab was closed. If it was the drawer's session's last tab,
+// the drawer moves to whatever the focused pane shows.
+function drawerTabClosed(id) {
+  if (!drawerState.open || drawerState.sessionId !== id || !id || terminalTabFor(id)) return;
+  drawerFollowFocus();
+}
+
+// positionDrawer: below the focused pane's header (and its ask strip), over the right of the grid,
+// min(720px, 62% of the grid) wide (the width is CSS; it needs the grid's px).
+function positionDrawer() {
+  const dr = $("drawer");
+  if (!dr || dr.hidden) return;
+  const lay = $("layout");
+  const grid = $("grid");
+  if (!lay || !grid) return;
+  const lr = lay.getBoundingClientRect();
+  const gr = grid.getBoundingClientRect();
+  const cell = currentMaximized() || focusedCell;
+  let top = gr.top;
+  if (cell && cell.el.isConnected && !cell.bar.hidden) top = cell.bar.getBoundingClientRect().bottom;
+  // The pane's ask strip sits under its header and stays readable (and its
+  // buttons pressable) while a drawer is open, so the drawer starts below it.
+  if (cell && cell.el.isConnected && cell._strip && cell._strip.isConnected && cell._strip.classList.contains("needstrip")) {
+    top = cell._strip.getBoundingClientRect().bottom;
+  }
+  dr.style.top = Math.max(0, Math.round(top - lr.top)) + "px";
+  dr.style.setProperty("--grid-w", Math.round(gr.width) + "px");
+}
+
+// restoreDrawerNodes puts every moved node back exactly where it came from and
+// closes the drawer. Run on the crossing into mobile.
+function restoreDrawerNodes() {
+  for (const [node, o] of drawerOrigins) {
+    if (o.next && o.next.parentNode === o.parent) o.parent.insertBefore(node, o.next);
+    else o.parent.appendChild(node);
+    // Closed with the drawer: a rail left unhidden would dock in its old place
+    // the next time the window is wide.
+    if (node.id === "steer-rail") node.hidden = true;
+  }
+  drawerOrigins.clear();
+  drawerState = { open: null, sessionId: null };
+  const dr = $("drawer");
+  if (dr) { dr.hidden = true; dr.dataset.kind = ""; }
+}
+
+// steerViaDrawer is setSteerOpen's desktop route (steerrail.js): the rail never
+// docks on desktop, it opens in the Access drawer for the focused session.
+// false on mobile, where setSteerOpen keeps its own behaviour.
+function steerViaDrawer(open) {
+  if (!drawerDesktop()) return false;
+  if (open) openDrawer("access", (cellTerminal(focusedCell) || {}).id);
+  else closeDrawerFor(undefined, "access");
+  return true;
+}
+
+$("drawer-x").onclick = () => closeDrawerFor();
+if (typeof ResizeObserver === "function") new ResizeObserver(() => positionDrawer()).observe($("grid"));
 
 // renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
 // signature: the session list is replaced every three seconds, and a rebuild
@@ -135,22 +364,36 @@ $("steer-toggle").onclick = toggleSteerRail;
 // in tabs.js records, where a full renderBar() ate the first press of every
 // pane button. Nothing here holds a value, so a signature is all it needs.
 let rail48Key = "";
+// The brand mark above the rail's ☰ (spec 5.1): a copy of the sidebar top's
+// logo, so the two cannot drift. Decorative; the page title names the app.
+function railLogo() {
+  const wrap = document.createElement("span");
+  wrap.className = "rail-logo";
+  wrap.setAttribute("aria-hidden", "true");
+  const src = document.querySelector("#side-top .side-logo");
+  if (src) wrap.appendChild(src.cloneNode(true));
+  return wrap;
+}
 function renderRail48() {
   const rail = $("rail48");
   if (!rail) return;
-  const items = railItems(lastSessions, { focusedId: selectedSessionId() });
-  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0].join(":")).join("|");
+  // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
+  const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId() });
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || ""].join(":")).join("|");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.kind === "new" ? " add" : "");
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog" : "");
     b.setAttribute("aria-label", it.label);
-    b.title = it.label;
+    // A session's hover text is its bare name (the "waiting" suffix is in the
+    // accessible name and the dot's colour); the toggle and add keep their label.
+    b.title = it.kind === "session" ? it.title : it.label;
     if (it.kind === "session") {
       const d = document.createElement("span");
-      d.className = activityClass(it.activity).cls;
+      // An expired sign-in needs you while the agent still works: the dot says so too.
+      d.className = activityClass(it.alert ? "waiting" : it.activity).cls;
       b.appendChild(d);
       // it.name, not it.label: label carries "— waiting for you" for the
       // button's accessible name, and a freshly-opened tab is titled from this
@@ -165,7 +408,73 @@ function renderRail48() {
   const mid = document.createElement("div");
   mid.className = "rin";
   mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
-  rail.replaceChildren(mk(items[0]), mid, mk(items[items.length - 1]));
+  // Logo, the primary + under it, the session dots, then the quota bars and the
+  // ☰ at the foot (p2); renderRateLimits fills the bars. Re-parked on every
+  // rebuild because replaceChildren drops them.
+  rail.replaceChildren(railLogo(), mk(items[items.length - 1]), mid, railMeters(), mk(items[0]));
+  paintRailMeters();
+}
+
+// paintSideElevated: the sidebar footer's "N elevated", red while any session
+// has an AWS write window open. A lapsed window clears on the next poll.
+function paintSideElevated() {
+  const el = $("side-elevated");
+  if (!el) return;
+  const n = elevatedCount(lastSessions, Date.now());
+  el.textContent = n + " elevated";
+  el.classList.toggle("hot", n > 0);
+}
+
+// paintSideCost: the footer's "$ today", the same sum the Analytics page shows
+// for today (summary over costTodayRange, folded and formatted like it). Only
+// asked when the analytics feature is on; a failed read leaves it hidden, with
+// no toast: the footer is a glance, not a place for errors.
+let sideCostOn = false;
+async function paintSideCost() {
+  const el = $("side-cost");
+  if (!el) return;
+  if (!sideCostOn) { el.hidden = true; return; }
+  // The footer is desktop-only: on mobile nothing shows the sum, so no fetch.
+  if (mobileActive(window.innerWidth)) return;
+  try {
+    const r = costTodayRange(Date.now());
+    const summary = await api("/api/analytics/summary?from=" + r.from + "&to=" + r.to);
+    el.textContent = usd(foldCostByDay((summary && summary.byDayModel) || []).totals.cost) + " today";
+    el.title = "Spend today (UTC), as the Analytics page counts it";
+    el.hidden = false;
+  } catch (_) { el.hidden = true; }
+}
+
+// The rail's two mini quota bars (5h, week), from the same reading as the
+// sidebar footer's meters: #limits-side holds the rendered .mtr rows, so this
+// reads their fill rather than re-deriving the account and the window.
+function railMeters() {
+  const box = document.createElement("div");
+  box.id = "rail-meters";
+  box.className = "rail-meters";
+  box.setAttribute("aria-hidden", "true");
+  for (const k of ["5h", "wk"]) {
+    const bar = document.createElement("span");
+    bar.className = "rm";
+    bar.dataset.win = k;
+    bar.appendChild(document.createElement("i"));
+    box.appendChild(bar);
+  }
+  return box;
+}
+
+function paintRailMeters() {
+  const box = $("rail-meters"), src = $("limits-side");
+  if (!box) return;
+  const rows = src ? Array.from(src.querySelectorAll(".mtr")) : [];
+  let any = false;
+  for (const bar of box.children) {
+    const row = rows.find((r) => r.firstElementChild && r.firstElementChild.textContent === bar.dataset.win);
+    const fill = row && row.querySelector(".bar i");
+    bar.hidden = !fill;
+    if (fill) { bar.firstElementChild.style.width = fill.style.width; bar.classList.toggle("hot", row.classList.contains("hot")); any = true; }
+  }
+  box.hidden = !any;
 }
 
 // Live count of open dialogs, for shortcutsBlocked (shell.js): the same source
@@ -240,6 +549,10 @@ function renderCollapsedSummaries(state) {
 }
 
 function togglePane(kind) {
+  // Desktop ignores the legacy pane collapse (desktop.css): the list always
+  // shows and the tree lives in the drawer. A toggle there would only write a
+  // key the next phone-width visit obeys.
+  if (!mobileActive(window.innerWidth)) return;
   const state = readCollapsed();
   state[kind] = !state[kind];
   try { localStorage.setItem(PANES_KEY, saveCollapsed(state)); } catch (_) {}
@@ -762,6 +1075,19 @@ function hintShortcuts() {
     : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
 }
 
+// showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
+// desktop). The rows are built from the same facts the old status bar showed,
+// plus the box runtime; the text goes in through textContent in askDialog.
+function showShortcuts() {
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  return askDialog({
+    title: "Keyboard shortcuts",
+    body: shortcutText(shortcutRows(mac, boxRuntime)),
+    confirmLabel: "Close",
+    info: true,
+  });
+}
+
 // updateStatusLine keeps the bottom bar describing the current state. Everything
 // it shows duplicates something already on screen — the env badge, the sessions
 // count, the focused pane. The bar is now a permanent status bar with no dismiss.
@@ -849,7 +1175,7 @@ function renderRateLimits(rl) {
   acctHeaderShown = name;
   const lims = acctLimitsMap(rl)[name] || null;
   const age = acctLimitsAge(lims && lims.updated_at, Math.floor(Date.now() / 1000));
-  for (const id of ["limits", "limits-mobile"]) {
+  for (const id of ["limits", "limits-mobile", "limits-side"]) {
     const host = document.getElementById(id);
     if (!host) continue;
     const count = renderRateLimitsInto(host, lims);
@@ -861,8 +1187,9 @@ function renderRateLimits(rl) {
     }
     host.classList.toggle("stale", !!(count && age.stale));
     host.title = count ? (name + " · updated " + age.text) : "";
-    if (id === "limits-mobile") host.hidden = count === 0;
+    if (id === "limits-mobile" || id === "limits-side") host.hidden = count === 0;
   }
+  paintRailMeters(); // the rail's mini bars mirror #limits-side
 }
 
 // --- sidebar: session list ---------------------------------------------------
@@ -1386,11 +1713,13 @@ async function toggleCardPeek(s) {
     cardExpanded.delete(s.id);
     cardPeekCache.delete(s.id);
     cardAskSeen.delete(s.id);
+    cells.forEach((c) => c.syncNeeds()); // the desktop strip collapses at once
     await refreshSessions();
     return;
   }
   cardExpanded.add(s.id);
   cardAskSeen.set(s.id, s.ask_full || ""); // what the operator is about to read
+  cells.forEach((c) => c.syncNeeds()); // the desktop strip, showing "Loading…"
   await refreshSessions(); // rebuilds the card now, showing "Loading…"
   let status = 0;
   let payload = null;
@@ -1404,6 +1733,9 @@ async function toggleCardPeek(s) {
   if (!cardExpanded.has(s.id)) return; // collapsed again while the fetch was in flight
   const st = peekState(!!s.claude, status, payload);
   cardPeekCache.set(s.id, { text: st.text, muted: st.kind !== "text" });
+  // The desktop ask strip draws the cached text; it repaints on the cache
+  // arriving (its key reads cardPeekCache), not on the sidebar row.
+  cells.forEach((c) => c.syncNeeds());
   const li = sessionRowFor(s.id);
   const txt = li && li.querySelector(".nbody .peektxt");
   if (!txt) return; // the row moved on (e.g. stopped waiting) before this landed
@@ -1428,10 +1760,16 @@ function renderSession(s, opts) {
   // row, expanded in place with no click (renderNeedsBody). Row order is never
   // changed for it.
   const card = !!(opts && opts.card);
+  // compact: the desktop sidebar's row (dot, name, one chip, ⋯, one sub-line).
+  // Desktop never renders the needs-you card: the ask strip over the pane
+  // carries it.
+  const compact = !!(opts && opts.compact);
   const li = document.createElement("li");
   // rowClasses decides the state; this function only paints it. Selected and
   // needs-you are separate axes and a row can carry both.
-  li.className = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) }).join(" ") + (card ? " dcard" : "");
+  const cls = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) });
+  // The compact row says "needs you" with its amber sub-line, not the row tint.
+  li.className = (compact ? cls.filter((c) => c !== "needs").concat("drow") : cls).join(" ") + (card ? " dcard" : "");
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
@@ -1471,10 +1809,12 @@ function renderSession(s, opts) {
   sname.appendChild(nm);
   grow.appendChild(sname);
 
-  const smeta = document.createElement("div");
-  smeta.className = "smeta";
-  smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
-  grow.appendChild(smeta);
+  if (!compact) {
+    const smeta = document.createElement("div");
+    smeta.className = "smeta";
+    smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    grow.appendChild(smeta);
+  }
   li.appendChild(grow);
 
   if (killing.has(s.id)) {
@@ -1487,6 +1827,11 @@ function renderSession(s, opts) {
 
   nm.onclick = () => openTerminal(s.id, s.name);
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
+
+  if (compact) {
+    paintCompactRow(li, sname, grow, s);
+    return li;
+  }
 
   // Containment tier. Shown for every live session, not only the risky one: a
   // badge that appears only when something is wrong trains you to ignore its
@@ -1568,11 +1913,71 @@ function renderSession(s, opts) {
   return li;
 }
 
-// renderDesktopEntry: what the desktop list renders for one session — the
-// needs-you card for a session that needs you (waiting, or an expired AWS
-// sign-in), the plain row otherwise.
-function renderDesktopEntry(s) {
-  return needsYou(s) ? renderSession(s, { card: true }) : renderSession(s);
+// paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
+// the ⋯ menu button and the sub-line. The chip carries the tier or the open
+// write window; the account and AWS binding are in the row's tooltip instead of
+// further chips, so a row never grows a second line of badges.
+function paintCompactRow(li, sname, grow, s) {
+  const nowMs = Date.now();
+  const chip = rowChip(s, nowMs, boxRuntime);
+  const facts = [s.id];
+  const ab = acctBadge(s);
+  if (ab) facts.push(ab.title);
+  const aws = awsBadge(s, nowMs);
+  if (aws) facts.push("AWS: " + aws.title);
+  li.title = facts.join("\n");
+  if (chip) {
+    const c = document.createElement("span");
+    c.className = "dchip " + chip.tone;
+    c.textContent = chip.text;
+    const tier = tierBadge(s, boxRuntime);
+    c.title = chip.tone === "write" ? (aws ? aws.title : "AWS write window open") : tier ? tier.title : "";
+    sname.appendChild(c);
+  }
+  const kb = document.createElement("button");
+  kb.type = "button";
+  kb.className = "kbtn";
+  kb.textContent = "⋯"; // U+22EF, as on the mobile row
+  kb.setAttribute("aria-label", "Session actions");
+  kb.setAttribute("aria-haspopup", "menu");
+  kb.title = "Session actions";
+  // No stopPropagation: see the mobile row's note on the document-click closers.
+  kb.onclick = () => openSessionMenu(kb, s);
+  sname.appendChild(kb); // on the name line, after the chip
+  const sub = rowSubline(s);
+  if (sub.text) {
+    const d = document.createElement("div");
+    d.className = sub.amber ? "sub amber" : "sub";
+    d.textContent = sub.text;
+    // The name button is the keyboard path; the sub-line is the same action for
+    // a pointer (spec 7: it replaces the old summary-to-peek click).
+    d.onclick = () => openTerminal(s.id, s.name);
+    grow.appendChild(d);
+  }
+}
+
+// renderDesktopEntry: what the desktop list renders for one item — a group
+// header, or a compact row for a session.
+function renderDesktopEntry(it) {
+  if (it.header) {
+    const h = document.createElement("li");
+    h.className = it.key === "needs-you" ? "grp hot" : "grp";
+    h.dataset.sid = it.id;
+    h.textContent = it.label + " \u00b7 " + it.count;
+    return h;
+  }
+  return renderSession(it.s, { compact: true });
+}
+
+// deskEntries: the desktop list as reconcile items, a header before each
+// group's rows. Keys are "grp:<key>" for headers and the session id for rows.
+function deskEntries(sessions) {
+  const out = [];
+  for (const g of deskGroups(sessions)) {
+    out.push({ id: "grp:" + g.key, header: true, key: g.key, label: g.label, count: g.count });
+    for (const s of g.sessions) out.push({ id: s.id, s });
+  }
+  return out;
 }
 
 // buildCardComposer: the one-line reply composer a desktop needs-you card
@@ -1598,18 +2003,46 @@ function buildCardComposer(s) {
   });
 }
 
+// stripOpenButton: the ask strip's "Open terminal": show me the agent, so no
+// drawer stays over it, then focus (or open) the session's terminal. One builder
+// for the three strip bodies (store, ask card, SSO).
+function stripOpenButton(s) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "btn";
+  b.textContent = "Open terminal";
+  b.onclick = () => { closeDrawerFor(s.id); openTerminal(s.id, s.name); };
+  return b;
+}
+
 // renderNeedsBody builds the expanded part of a desktop needs-you card
 // (cardContent decides which blocks). Sends go through the one gated path —
 // sendState here, canReply on the server — and never offer digits (see
 // cardContent). It shares its composer with togglePeek's inline reply panel
 // via buildReplyComposer — see that function's own comment for what differs
 // between the two callers.
-function renderNeedsBody(s) {
+//
+// opts.strip: the body of the desktop ask strip over a pane (tabs.js
+// buildNeedStrip). Same blocks, same gates and the same sendAnswer; only the
+// wording of two buttons differs ("Yes", not "1 Yes", and "Open terminal"), and
+// the open button also closes a drawer, as the pane header's Terminal tab does.
+function renderNeedsBody(s, opts) {
+  const inStrip = !!(opts && opts.strip);
   const c = cardContent(s);
   // An expired AWS sign-in outranks turn/ask for which card shows.
-  if (c.sso) return renderSSOBody(s, { mobile: false });
+  if (c.sso) return renderSSOBody(s, { mobile: false, strip: inStrip });
   // A locked store: the card is the unlock form (store.js).
-  if (c.unlock) return renderStoreBody(s, { mobile: false });
+  if (c.unlock) {
+    const sb = renderStoreBody(s, { mobile: false });
+    if (inStrip) {
+      // The store card has no Open of its own; the strip always offers one.
+      const sacts = document.createElement("div");
+      sacts.className = "nacts";
+      sacts.appendChild(stripOpenButton(s));
+      sb.appendChild(sacts);
+    }
+    return sb;
+  }
   const body = document.createElement("div");
   body.className = "nbody";
   // The text block doubles as the expand/collapse control — the sidebar's old
@@ -1630,6 +2063,12 @@ function renderNeedsBody(s) {
     const cached = cardPeekCache.get(s.id);
     txt.textContent = cached ? cached.text : "Loading…";
     txt.classList.toggle("muted", !!(cached && cached.muted));
+    // A pending tool call has no message to fetch, so the peek says "No message
+    // yet." The strip's job there is the whole command, wrapped, not that note.
+    if (inStrip && c.ask && cached && cached.muted) {
+      txt.textContent = c.text;
+      txt.classList.remove("muted");
+    }
   } else {
     txt.textContent = c.text;
   }
@@ -1662,8 +2101,10 @@ function renderNeedsBody(s) {
     acts.appendChild(buildEnableRepliesButton(s.id, () => {
       // replyable is in the signature, so the card re-rendered with its reply
       // field; land the operator in it rather than on <body>.
+      // Desktop has no card: the field is in the ask strip over the pane.
       const li = sessionRowFor(s.id);
-      const fld = li && li.querySelector(".nbody .fld");
+      const strip = mobileActive(window.innerWidth) ? null : Array.from(document.querySelectorAll(".needstrip")).find((n) => n.dataset.sid === s.id);
+      const fld = (li && li.querySelector(".nbody .fld")) || (strip && strip.querySelector(".fld"));
       if (fld) fld.focus();
     }));
   }
@@ -1693,7 +2134,7 @@ function renderNeedsBody(s) {
     // disable BOTH synchronously (before the await inside sendAnswer), or the
     // sibling stays clickable for the whole round trip and silently no-ops
     // through the pendingAnswers latch instead of visibly going inert.
-    const pair = [["yes", "1 Yes"], ["no", "No"]].map(([choice, label]) => {
+    const pair = [["yes", inStrip ? "Yes" : "1 Yes"], ["no", "No"]].map(([choice, label]) => {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "btn";
@@ -1713,12 +2154,15 @@ function renderNeedsBody(s) {
       acts.appendChild(b);
     }
   }
-  const open = document.createElement("button");
-  open.type = "button";
-  open.className = c.ask ? "btn pri" : "btn";
-  open.textContent = c.ask ? "Open to answer" : "Open";
-  open.onclick = () => openTerminal(s.id, s.name);
-  acts.appendChild(open);
+  if (inStrip) acts.appendChild(stripOpenButton(s));
+  else {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = c.ask ? "btn pri" : "btn";
+    open.textContent = c.ask ? "Open to answer" : "Open";
+    open.onclick = () => openTerminal(s.id, s.name);
+    acts.appendChild(open);
+  }
   body.appendChild(acts);
   if (ans.note) {
     const why = document.createElement("span");
@@ -2064,6 +2508,7 @@ function ssoNote(text) {
 // when ssoCard says it is trusted, and its href is set as a property.
 function renderSSOBody(s, opts) {
   const mobile = !!(opts && opts.mobile);
+  const inStrip = !!(opts && opts.strip); // the desktop ask strip (tabs.js buildNeedStrip)
   ensureSSOStatus(s.id);
   const m = ssoModel(s);
   const body = document.createElement("div");
@@ -2130,12 +2575,15 @@ function renderSSOBody(s, opts) {
   acts.appendChild(copy);
 
   if (!mobile) {
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "btn";
-    open.textContent = "Open";
-    open.onclick = () => openTerminal(s.id, s.name);
-    acts.appendChild(open);
+    if (inStrip) acts.appendChild(stripOpenButton(s));
+    else {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "btn";
+      open.textContent = "Open";
+      open.onclick = () => openTerminal(s.id, s.name);
+      acts.appendChild(open);
+    }
   }
   body.appendChild(acts);
 
@@ -2241,9 +2689,13 @@ function syncSelectedRow() {
   const id = selectedSessionId();
   const ul = $("sessions");
   if (!ul) return;
+  // inpane: sessions with a tab open in ANY pane, not only the focused one.
+  const open = new Set();
+  eachTerminal((t) => open.add(t.id));
   for (const li of ul.children) {
     if (!li.classList || !li.classList.contains("srow")) continue;
     li.classList.toggle("sel", !!id && li.dataset.sid === id);
+    li.classList.toggle("inpane", open.has(li.dataset.sid));
   }
   renderRail48(); // the focus ring moved, so .ri.on must move with it
 }
@@ -2252,11 +2704,11 @@ function syncSelectedRow() {
 // exactly what renderSession reads beyond the session record itself.
 function rowLocal(s) {
   const tab = terminalTabFor(s.id);
-  const u = usageOf(tab);
   return {
     killing: killing.has(s.id),
     heldHere: !!tab && tab.status() === "connected",
-    pct: u && typeof u.pct === "number" ? u.pct : null,
+    // No context %: the compact row does not draw it (the pane header does), and
+    // it moves every few minutes, which would rebuild the row for nothing.
     boxRuntime: boxRuntime,
     // The reply surfaces are built only when /api/meta says replies are on, and
     // that answer lands after the first render, so it must move the signature.
@@ -2265,6 +2717,9 @@ function rowLocal(s) {
     expanded: cardExpanded.has(s.id),
     answering: pendingAnswers.has(s.id),
     sso: ssoLocalSig(s.id),
+    // The compact row's chip turns "write" when a window opens and back when it
+    // lapses, which no session field says by itself.
+    elev: sessionElevated(s, Date.now()),
   };
 }
 
@@ -2388,6 +2843,7 @@ async function refreshSessions() {
   }
   lastSessions = sessions || [];
   sessionsLoaded = true;
+  refreshEmptyState();
   // The focused session's account can only be known once the list is here.
   syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing
@@ -2452,6 +2908,7 @@ async function refreshSessions() {
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   renderRail48(); // the list changed
+  paintSideElevated();
   updateStatusLine();
   renderCollapsedSummaries();
   // A menu whose session has left the list would act on a dead id. Only that
@@ -2483,7 +2940,9 @@ async function refreshSessions() {
     }
     ul.replaceChildren(...nodes);
   } else {
-    rowById = reconcileRows(ul, lastSessions, renderDesktopEntry, (s) => rowSig(s, rowLocal(s)));
+    rowById = reconcileRows(ul, deskEntries(lastSessions), renderDesktopEntry, (it) => (it.header
+      ? JSON.stringify(["grp", it.label, it.count])
+      : rowSig(it.s, rowLocal(it.s))));
   }
   // The answer block is a sibling, so it can only be inserted once its row is
   // in the document. On mobile a needs-you session's row is built but never
@@ -2495,7 +2954,8 @@ async function refreshSessions() {
   const reopen = lastSessions.find((s) => s.id === openPeekId);
   if (reopen) {
     const li = rowById.get(reopen.id);
-    const isCard = !!(li && li.classList.contains("dcard"));
+    // A desktop compact row has no peek: its sub-line opens the session.
+    const isCard = !!(li && (li.classList.contains("dcard") || li.classList.contains("drow")));
     if (li && li.isConnected && !isCard && !peekRowFor(li)) togglePeek(li, reopen);
     else if (!li || !li.isConnected || isCard) openPeekId = null;
   }
@@ -2531,6 +2991,7 @@ async function loadProfiles(retry = true) {
     renderProfileSeg();
     renderOptions();
     renderProfileList();
+    refreshEmptyState();
     return true;
   } catch (_) {
     if (retry) setTimeout(() => loadProfiles(false), 2000);
@@ -3942,6 +4403,10 @@ async function spawnSession(req, opts) {
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
     }));
   } catch (_) {}
+  {
+    const st = deskStorage();
+    writeRecent(st, pushRecentProfile(readRecent(st), req.agent));
+  }
   await refreshSessions();
   openTerminal(s.id, s.name);
   if (opts.toast !== false) {
@@ -4158,11 +4623,133 @@ async function openSpawnDialog(preselectAgent, prefill) {
   $("sess-name").focus();
 }
 
+// --- desktop empty states (spec 5.9) -----------------------------------------
+// What the pane area says when no pane has a tab: "none" (sessions exist; the
+// recent profiles to start from) or "first" (a fresh install: three steps).
+// Everything profile- or path-derived goes in through textContent.
+function emptyStateInput() {
+  return {
+    // Unknown sessions (null) keep the model silent: a built-in-only user with
+    // live sessions must not see the first-run screen while the poll is out.
+    sessions: sessionsLoaded && bootRestoreDone ? lastSessions : null,
+    profiles: profilesLoaded ? profiles : null,
+    recent: readRecent(deskStorage()),
+  };
+}
+
+// The "touches" line of a recent profile in S1: binary · tier · default
+// workspace. /api/profiles carries no binary today, only `claude`.
+function profileTouches(p) {
+  const bin = p.bin || (p.claude ? "claude" : "");
+  return [bin, p.runtime, p.default_cwd ? shortPath(p.default_cwd) : ""].filter(Boolean).join(" \u00b7 ");
+}
+
+function emptyEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function emptyKbd(text) { return emptyEl("span", "empst-kbd", text); }
+
+function emptyHint() {
+  const hint = emptyEl("div", "empst-hint");
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const pal = emptyEl("span");
+  for (const k of mac ? ["\u2318", "K"] : ["Ctrl", "Shift", "K"]) pal.append(emptyKbd(k), " ");
+  pal.append("command palette");
+  hint.append(pal, emptyEl("span", "", "All profiles in New session"));
+  return hint;
+}
+
+function emptyNoneEl(m) {
+  const root = emptyEl("div", "placeholder empst");
+  root.append(
+    emptyEl("h1", "empst-title", "No session open"),
+    emptyEl("p", "empst-sub", "Pick a session on the left, or start an agent from a profile you used recently."),
+  );
+  if (m.profiles.length) {
+    const rows = emptyEl("div", "empst-rows");
+    for (const name of m.profiles) {
+      const p = profiles.find((x) => x.name === name);
+      if (!p) continue;
+      const row = emptyEl("div", "empst-row");
+      const start = emptyEl("button", "btn", "Start");
+      start.type = "button";
+      start.onclick = () => openSpawnDialog(name);
+      row.append(emptyEl("b", "empst-name", name), start, emptyEl("small", "empst-touch", profileTouches(p)));
+      rows.append(row);
+    }
+    root.append(rows);
+  }
+  root.append(emptyHint());
+  return root;
+}
+
+function emptyFirstEl() {
+  const root = emptyEl("div", "placeholder empst");
+  root.append(
+    emptyEl("h1", "empst-title", "Welcome to Culibox"),
+    emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
+  );
+  const docker = !metaLoaded ? "" : (boxRuntime ? " (found)" : " (not found)");
+  const step = (n, title, desc, label, cls, run) => {
+    const el = emptyEl("div", "empst-step");
+    const btn = emptyEl("button", cls, label);
+    btn.type = "button";
+    btn.onclick = run;
+    el.append(emptyEl("span", "empst-n", String(n)), emptyEl("b", "empst-t", title), btn, emptyEl("small", "empst-d", desc));
+    return el;
+  };
+  const steps = emptyEl("div", "empst-steps");
+  steps.append(
+    step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
+    // The same press as "+ new profile" in Settings: one profile form. A new
+    // profile already opens on the box tier.
+    step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
+      () => { openSettings("manage"); $("pf-new").click(); }),
+    step(3, "Connect your cloud", "AWS SSO or a GitHub App. Agents get short-lived, read-only credentials.", "Add credentials", "btn",
+      () => openSettings("creds")),
+  );
+  root.append(steps, emptyEl("div", "empst-hint", "Settings \u2192 Profiles \u00b7 Credentials"));
+  return root;
+}
+
+// desktopEmptyState: the node renderGrid shows in place of the panes, or null
+// (mobile, a pane has a tab, or nothing is known yet: the pane's own "Click a
+// session" note then stands in).
+function desktopEmptyState() {
+  emptyShownKey = "";
+  if (!drawerDesktop() || cells.some((c) => c.tabs.length)) return null;
+  const m = emptyStateModel(emptyStateInput());
+  if (!m.kind) return null;
+  emptyShownKey = emptyStateKey(m);
+  return m.kind === "first" ? emptyFirstEl() : emptyNoneEl(m);
+}
+
+function emptyStateKey(m) {
+  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, m.profiles.map((n) => {
+    const p = profiles.find((x) => x.name === n);
+    return [n, p ? profileTouches(p) : ""];
+  })]);
+}
+
+// refreshEmptyState: the poll, a profile load or the meta answer changed what
+// the empty state should say; repaint only when it did.
+function refreshEmptyState() {
+  if (!drawerDesktop() || cells.some((c) => c.tabs.length)) return;
+  const m = emptyStateModel(emptyStateInput());
+  const key = m.kind ? emptyStateKey(m) : "";
+  if (key !== emptyShownKey) renderGrid();
+}
+
 function initSpawnControl() {
   // The .seg's own buildSeg onChange (wired in syncRuntimeField) already calls
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
   // control, so there is no native "change" event to hook here.
   $("spawn-go").onclick = () => openSpawnDialog();
+  $("side-new").onclick = () => openSpawnDialog(); // the sidebar top's button: the same flow as "+ new"
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
@@ -4297,10 +4884,13 @@ function runSessionAction(action, s) {
     // No follow-key: this is an explicit request and must re-root even when the
     // tree is already following this session, and passing none also clears the
     // guard, so the tree resumes following the focused tab at the next focus
-    // change. Unawaited from a click handler, hence the catch.
+    // change. Unawaited from a click handler, hence the catch. Desktop (R5)
+    // opens the Files drawer instead, and explicitRoot makes drawerRootTree do
+    // the same keyless re-root.
     files: () => {
+      if (!mobileActive(window.innerWidth)) { openDrawer("files", s.id, { explicitRoot: true }); return; }
       syncTreeToRoot(s.cwd).catch(() => {});
-      if (mobileActive(window.innerWidth)) setMobileScreen("files");
+      setMobileScreen("files");
     },
     attribution: () => openSteerFor(s.id),
     copycwd: () => copyPath(s.cwd),
@@ -4633,10 +5223,22 @@ function openReplySheet(s) {
   }, { height: "min(648px, 92dvh)" });
 }
 
-function openSessionMenu(anchor, s) {
+// `extra` (optional) are pane-level rows ({label, run}) shown above the session's
+// own, for a narrow pane header that has no room for their buttons; `s` may then
+// be null (a pane of files has no session).
+function openSessionMenu(anchor, s, extra) {
   const menu = $("session-menu");
   if (!menu) return;
-  const nodes = menuItems(s).map((it) => {
+  const own = (extra || []).map((it) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mi";
+    b.setAttribute("role", "menuitem");
+    b.textContent = it.label;
+    b.onclick = () => { closeSessionMenu(false); it.run(); };
+    return b;
+  });
+  const nodes = own.concat(s ? menuItems(s).map((it) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = it.danger ? "mi dgr" : "mi";
@@ -4646,9 +5248,16 @@ function openSessionMenu(anchor, s) {
     // leave the menu floating over it.
     b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
     return b;
-  });
+  }) : []);
   menu.replaceChildren(...nodes);
-  sessionMenuSid = s.id;
+  sessionMenuSid = s ? s.id : null;
+  placeSessionMenu(menu, anchor);
+}
+
+// placeSessionMenu opens #session-menu under `anchor` (above it if it would
+// clip) and focuses its first item. Shared by the session menu and the pane
+// header's tab switcher, which reuses the same element and its closing rules.
+function placeSessionMenu(menu, anchor) {
   sessionMenuAnchor = anchor;
 
   menu.classList.add("open"); // must be visible before it can be measured
@@ -4667,6 +5276,46 @@ function openSessionMenu(anchor, s) {
   // last item ends a running agent.
   const first = menu.querySelector(".mi");
   if (first) first.focus();
+}
+
+// toggleSessionMenuAt: a ⋯ that opens the session menu, and closes it again
+// when pressed while its own menu is open.
+function toggleSessionMenuAt(anchor, s, extra) {
+  const menu = $("session-menu");
+  if (menu && menu.classList.contains("open") && sessionMenuAnchor === anchor) { closeSessionMenu(true); return; }
+  openSessionMenu(anchor, s, extra);
+}
+
+// openTabSwitcher: the pane header's `name ▾ · N` menu. One row per tab in the
+// pane (the shown one marked), each with its own close. Same element and the
+// same outside-click / Escape / arrow rules as the session menu.
+function openTabSwitcher(anchor, cell) {
+  const menu = $("session-menu");
+  if (!menu) return;
+  if (menu.classList.contains("open") && sessionMenuAnchor === anchor) { closeSessionMenu(true); return; }
+  const rows = cell.tabs.map((t) => {
+    const row = document.createElement("div");
+    row.className = "mi-row";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mi" + (t === cell.activeTab ? " cur" : "");
+    b.setAttribute("role", "menuitem");
+    b.textContent = (t.kind === "terminal" ? "\u25B8 " : "") + t.title();
+    b.title = t.kind === "viewer" ? t.path || t.title() : t.title();
+    b.onclick = () => { closeSessionMenu(false); setFocusedCell(cell); cell.activate(t); };
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "mi-x";
+    x.textContent = "\u00D7";
+    x.title = t.kind === "terminal" ? "Close tab (the session keeps running)" : "Close tab";
+    x.setAttribute("aria-label", "Close " + t.title());
+    x.onclick = () => { closeSessionMenu(false); cell.closeTab(t); };
+    row.append(b, x);
+    return row;
+  });
+  menu.replaceChildren(...rows);
+  sessionMenuSid = null; // not about one session: the list poll must not close it
+  placeSessionMenu(menu, anchor);
 }
 
 // sessionRowFor(id): the live row for a session id, or null if none is on
@@ -4818,6 +5467,7 @@ async function currentShellProfile() {
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
   return window.shellProfile;
@@ -4858,6 +5508,10 @@ function initSettings() {
 window.addEventListener("resize", fitAll);
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
+$("side-analytics").addEventListener("click", openAnalytics);
+$("side-palette").addEventListener("click", openPalette);
+// "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
+setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
 {
   const anRefresh = $("analytics-refresh");
   if (anRefresh) anRefresh.addEventListener("click", async () => {
@@ -4879,9 +5533,12 @@ $("analytics-open").addEventListener("click", openAnalytics);
   });
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
-$("layouts").addEventListener("click", (e) => {
-  if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
-});
+// The header's group (mobile) and the sidebar top's (desktop) are the same control.
+for (const grp of document.querySelectorAll(".layouts")) {
+  grp.addEventListener("click", (e) => {
+    if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
+  });
+}
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();
@@ -4891,19 +5548,22 @@ initWidthSplitter();
 // until lastSessions is initialized — this is why the call lives down here
 // in the boot sequence rather than up near the sidebar-toggle wiring, where
 // lastSessions's declaration has not been reached yet.
-applyCollapsed(readCollapsed());
+// The legacy keys are read through bootFlags (deskshell.js): on desktop the stored
+// collapse is ignored (the pre-paint classes are cleared here, desktop.css
+// neutralises them until then) and a stored Access rail is never opened.
+const bootKeys = bootFlags(deskStorage(), mobileActive(window.innerWidth));
+applyCollapsed(bootKeys.ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
 // The steer rail's own persisted state. It lives down here for the same reason
 // applyCollapsed does — opening the rail paints it, which reads lastSessions,
 // whose declaration is not reached until this point in the boot sequence — and
 // it is deliberately NOT a pre-paint <head> script: the rail is a right-hand
 // panel, so arriving a frame late shifts nothing, and the four hand-mirrored
 // parses already in <head> are enough to keep in step.
-let steerRestore = false;
-try { steerRestore = localStorage.getItem(STEER_KEY) === "1"; } catch (_) {}
-// Outside the catch on purpose: the try is there for a storage backend that
-// throws, and opening the rail paints it. A rendering failure swallowed here
-// would present as "the rail just doesn't restore", with nothing in the console.
-if (steerRestore) setSteerOpen(true);
+// bootFlags already absorbed a storage backend that throws, and opening the rail
+// paints it, so a rendering failure here is NOT swallowed: it would present as
+// "the rail just doesn't restore", with nothing in the console. Desktop never
+// opens it (the rail lives in the drawer's Access view there).
+if (bootKeys.openAccess) setSteerOpen(true);
 initSpawnControl();
 initSpawnWsPicker();
 initPalette();
@@ -4919,9 +5579,14 @@ loadOptionDefs().then(newProfile);
   if (sessions === null) {
     if (retry) { setTimeout(() => restoreBoot(false), 2000); return; }
     endRestore(false); // never persist the empty boot grid over a real snapshot
+    bootRestoreDone = true;
+    refreshEmptyState();
     return;
   }
-  restoreLayout(sessions);
+  // finally: a throwing restore must not keep the empty state silent for the
+  // life of the page (it waits on bootRestoreDone).
+  try { restoreLayout(sessions); }
+  finally { bootRestoreDone = true; refreshEmptyState(); }
 })();
 initFileTree();
 initUpload();
@@ -4947,9 +5612,14 @@ initMobileShell();
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
+    const sideAn = $("side-analytics");
+    if (sideAn) sideAn.hidden = !(meta && meta.analytics);
+    sideCostOn = !!(meta && meta.analytics);
+    paintSideCost();
     lastRateLimits = (meta && meta.rate_limits) || null;
     renderRateLimits(lastRateLimits); // account 5h/weekly meters in the header
     refreshSessions(); // re-render rows now that the tier label is known
@@ -4957,12 +5627,20 @@ initMobileShell();
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
     const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
     if (ver && vl) { ver.textContent = vl; ver.title = "Culibox " + meta.version; ver.hidden = false; }
+    const sideVer = $("side-version");
+    if (sideVer && vl) { sideVer.textContent = vl; sideVer.title = "Culibox " + meta.version; sideVer.hidden = false; }
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
     window.__envLabel = meta.env_label; // the status line's lowercase copy reads this
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
+    const sideEnv = $("side-env");
+    if (sideEnv) {
+      sideEnv.textContent = meta.env_label;
+      if (meta.env_color) sideEnv.style.background = meta.env_color;
+      sideEnv.hidden = false;
+    }
     strip.hidden = false;
     signalAttention(); // title = (N) [ENV] Culibox, now that ENV is known
     updateStatusLine();
@@ -4991,6 +5669,13 @@ setInterval(refreshSessions, 3000);
 // for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
+    // Mobile's Files screen expects #files-pane back in #sidebar.
+    // The pane-collapse html classes follow the layout: the stored state on
+    // mobile (as at a fresh load), none on desktop, where app.css's
+    // .files-collapsed rule would otherwise hide the tree inside the drawer.
+    applyCollapsed(bootFlags(deskStorage(), mobileActive(window.innerWidth)).ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
+    if (mobileActive(window.innerWidth)) restoreDrawerNodes();
+    else paintSideCost(); // the footer was skipped while narrow
     refreshSessions();
     if (typeof renderGrid === "function") renderGrid();
   });
@@ -5051,8 +5736,15 @@ document.addEventListener("keydown", (e) => {
   if (!mod) return;
   const code = e.code;
   let hit = null;
-  if (e.altKey && code === "KeyS") hit = () => togglePane("sessions");
-  else if (e.altKey && code === "KeyF") hit = () => togglePane("files");
+  // Desktop has no sessions pane to collapse; the combo is an alias of the
+  // sidebar <-> rail toggle (spec 7 keeps the binding).
+  if (e.altKey && code === "KeyS") hit = mobileActive(window.innerWidth) ? () => togglePane("sessions") : toggleSidebar;
+  else if (e.altKey && code === "KeyF") {
+    // Desktop: the tree lives in the Files drawer, so the combo toggles that
+    // for the focused session; mobile keeps the pane collapse.
+    hit = mobileActive(window.innerWidth) ? () => togglePane("files")
+      : () => toggleDrawer("files", (cellTerminal(focusedCell) || {}).id);
+  }
   // Toggle sidebar: ⌘B is free on macOS, but the unshifted Ctrl+B belongs to
   // the shells and TUIs these panes host — backward-char in readline, page-up
   // in vim, tmux's default prefix — so on every other platform the binding
@@ -5088,7 +5780,7 @@ document.addEventListener("keydown", (e) => {
   if (!JUMP_MOD(e)) return;
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return;
-  const s = jumpTarget(Number(m[1]), lastSessions);
+  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, mobileActive(window.innerWidth)));
   e.preventDefault();
   e.stopPropagation();
   // Out of range is a deliberate no-op, not a wrap-around: pressing 7 with four

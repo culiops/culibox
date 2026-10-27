@@ -133,7 +133,9 @@ async function runItem(item) {
 // to is worse than no hint. mac is threaded in from the caller (palRefresh)
 // rather than computed again here — see the mac note on paletteCommands.
 function paletteSessions(mac) {
-  return lastSessions.map((s, i) => {
+  // In the order Alt+digit uses, so the hint on a row is the key that opens it.
+  const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
+  return jumpOrder(lastSessions, mobile).map((s, i) => {
     const name = s.name || s.id;
     const jumpHint = i < 9 ? (mac ? "⌥" + (i + 1) : "Alt+" + (i + 1)) : "";
     // Reuses the same activityClass() the sidebar's own status dot is built
@@ -148,6 +150,25 @@ function paletteSessions(mac) {
       runNewPane: () => openTerminal(s.id, name, { newPane: true }),
     };
   });
+}
+
+// paletteShellCommands: the view commands whose set differs between desktop and
+// mobile. Desktop has the Files/Access drawers and the shortcuts dialog; the tree
+// no longer lives in a collapsible pane there, so "Collapse/expand files" would
+// be a dead entry (R17) and is mobile-only. `act` carries the callbacks, so this
+// stays a pure function of its inputs.
+function paletteShellCommands(mac, desktop, act) {
+  if (!desktop) {
+    return [
+      { id: "steer-rail", kind: "view", label: "Toggle session detail rail", hint: "", run: act.steerRail },
+      { id: "toggle-files", kind: "view", label: "Collapse/expand files", hint: mac ? "⌥⌘F" : "Alt+Ctrl+F", run: act.toggleFiles },
+    ];
+  }
+  return [
+    { id: "access-drawer", kind: "view", label: "Session details (Access)", hint: "", run: act.accessDrawer },
+    { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: mac ? "⌥⌘F" : "Ctrl+Alt+F", run: act.filesDrawer },
+    { id: "shortcuts", kind: "view", label: "Keyboard shortcuts", hint: "", run: act.shortcuts },
+  ];
 }
 
 // mac is computed once by the caller (palRefresh) and threaded through here
@@ -188,9 +209,20 @@ function paletteCommands(mac) {
   if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {
     cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
   }
-  cmds.push({ kind: "view", label: "Toggle session detail rail", hint: "", run: toggleSteerRail });
-  cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
-  cmds.push({ kind: "view", label: "Collapse/expand files", hint: mac ? "⌥⌘F" : "Alt+Ctrl+F", run: () => togglePane("files") });
+  // Desktop: the rail lives in the pane drawer's Access view (R6: one entry).
+  const desktop = typeof mobileActive === "function" && !mobileActive(window.innerWidth) && typeof toggleDrawer === "function";
+  const focusedId = () => (cellTerminal(focusedCell) || {}).id;
+  const shell = paletteShellCommands(mac, desktop, {
+    shortcuts: showShortcuts,
+    filesDrawer: () => toggleDrawer("files", focusedId()),
+    accessDrawer: () => toggleDrawer("access", focusedId()),
+    steerRail: toggleSteerRail,
+    toggleFiles: () => togglePane("files"),
+  });
+  const shellCmd = (id) => shell.find((c) => c.id === id);
+  for (const id of ["access-drawer", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
+  if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
+  for (const id of ["toggle-files", "files-drawer", "shortcuts"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
   cmds.push({ kind: "view", label: "Increase font size", hint: "Ctrl +", run: () => zoomFocused(+fontPrefs.STEP) });
   cmds.push({ kind: "view", label: "Decrease font size", hint: "Ctrl -", run: () => zoomFocused(-fontPrefs.STEP) });
@@ -509,5 +541,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands };
 }

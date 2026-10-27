@@ -1,0 +1,485 @@
+/* Desktop-only stylesheet (> 700px). EVERYTHING here lives inside the single
+   media block below: mobile (<= 700px) is unchanged by construction, and
+   jstest/desktop-scope.test.js fails the build if a rule escapes it. Later
+   desktop-shell tasks append their rules inside the same block. Loaded after
+   app.css so equal-specificity rules here win the cascade. */
+@media (min-width: 701px) {
+  /* Inter v4.1 (rsms/inter, SIL OFL 1.1 — vendor/inter/LICENSE.txt), the
+     variable build, self-hosted. No CDN. */
+  @font-face {
+    font-family: "Inter";
+    src: url("/vendor/inter/InterVariable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  :root {
+    /* New tokens. */
+    --raise: #1b1f24; --line: #23282f; --faint: #5d6570;
+    --amber: #f5b94a; --red: #f06a6a;
+    --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --r-chip: 4px; --r-ctl: 6px; --r-card: 8px; --r-dlg: 10px;
+
+    /* The existing tokens, remapped to the graphite palette. Colour roles:
+       amber = needs-you only, green = status only, red = write/prod/destructive
+       /error only. */
+    --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
+    --accent: #6ea8fe; --ok: #4ccf8a;
+    --border: #23282f; --rule: #23282f;
+    --background0: #0d0f12; --background1: #14171b; --background2: #1b1f24;
+    --background3: #2a3038;
+    --foreground0: #e6e8eb; --foreground1: #8b939e; --foreground2: #5d6570;
+    --warn: #f5b94a; --danger: #f06a6a;
+    --radius: 6px;
+    --warn-fg: #f5b94a; /* the needs-you dot and stripe: amber, as the role says */
+    --sidebar-w: 290px;
+
+    /* R9: every component sets its font from --font-family, which is the
+       monospace stack. The terminal does NOT read it (terminal-tab.js passes
+       xterm its own fontFamily; CodeMirror, the viewers and the file tree
+       hard-code ui-monospace in app.css), so remapping it makes all UI text
+       Inter and leaves machine text mono. */
+    --font-family: var(--font-ui);
+  }
+
+  body { font-family: var(--font-ui); font-size: 13px; background: var(--bg); }
+
+  /* Monospace stays for the terminal, code, paths and ids. */
+  .xterm, pre, code, .mono, .cm-editor, .CodeMirror { font-family: var(--font-mono); }
+
+  /* Secrets and key material are machine text. */
+  #creds textarea.fld, #creds .fld.secret-area { font-family: var(--font-mono); }
+
+  /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
+  /* The controls moved into the sidebar top and footer. #env-strip stays: it is
+     the 3px whole-page environment signal (spec 7), and #side-env repeats the
+     label. Mobile keeps header and #hint untouched (this block is > 700px). */
+  header, #hint { display: none; }
+
+  /* --- sidebar top -------------------------------------------------------- */
+  #side-top { display: flex; flex: none; flex-direction: column; gap: 10px; padding: 14px 12px 10px; }
+  .side-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .side-logo { flex: none; }
+  .side-name { font-size: 14px; font-weight: 600; white-space: nowrap; }
+  #side-version { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  #side-env {
+    font-size: 10px; font-weight: 700; letter-spacing: .05em; color: #fff; background: var(--raise);
+    padding: 1px 6px; border-radius: var(--r-chip); white-space: nowrap;
+  }
+  #side-version[hidden], #side-env[hidden] { display: none; }
+  .side-ctl { display: flex; align-items: center; gap: 4px; }
+  .side-fill { flex: 1; }
+  #side-top .layouts { gap: 3px; }
+  #side-top .layouts button {
+    min-width: 26px; height: 24px; padding: 0 7px; font: 500 12px var(--font-ui); line-height: 1;
+    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  }
+  #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
+  #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
+  #side-palette, #side-collapse {
+    width: 26px; height: 24px; padding: 0; font: 13px var(--font-ui); line-height: 1; cursor: pointer;
+    background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
+  }
+  #side-palette:hover, #side-collapse:hover { color: var(--fg); background: var(--raise); }
+  .pbtn {
+    width: 100%; padding: 8px 12px; font: 600 13px var(--font-ui); cursor: pointer;
+    background: var(--accent); color: #0b1220; border: 0; border-radius: var(--r-ctl);
+  }
+  .pbtn:hover { filter: brightness(1.08); }
+  #side-top button:focus-visible, #side-foot button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+  /* --- legacy layout keys (spec 7) ---------------------------------------- */
+  /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit
+     (--sidebar-split) predate this shell. The sessions list is the sidebar's
+     whole body and always shows; the split handle and the file pane go (the pane
+     lives in the drawer once moved, and is still in the sidebar until the first
+     use, so the rule is scoped to #sidebar and never hides it in #drawer). The
+     ids out-rank app.css's .sessions-collapsed / .files-collapsed selectors. */
+  #sidebar #sessions-pane { flex: 1 1 auto; min-height: 0; }
+  #sidebar #sessions-pane > #sessions { display: block; }
+  #sidebar #split-h, #sidebar #files-pane { display: none; }
+  /* Its caret, count, + new and pip are the group headers, the New session button
+     and the rail dots now; a caret that no longer collapses anything goes too. */
+  #sidebar #sessions-phd { display: none; }
+
+  /* --- sidebar footer ----------------------------------------------------- */
+  #side-foot {
+    margin-top: auto; /* stays at the bottom whatever the panes above it do */
+    display: flex; flex: none; flex-direction: column; gap: 8px; padding: 10px 12px 8px;
+    border-top: 1px solid var(--line); background: var(--panel);
+  }
+  #limits-side { display: flex; flex-direction: column; gap: 6px; }
+  #limits-side[hidden] { display: none; }
+  #limits-side.stale { opacity: .5; }
+  #limits-side .acct-lab { font-size: 11px; color: var(--faint); }
+  #limits-side .mtr { gap: 8px; font-size: 12px; color: var(--muted); }
+  #limits-side .mtr > span:first-child { width: 2.4em; }
+  #limits-side .mtr .bar { flex: 1; width: auto; min-width: 24px; height: 4px; border-radius: 2px; background: var(--line); }
+  #limits-side .mtr .bar i { background: var(--accent); border-radius: 2px; }
+  #limits-side .mtr .rs { min-width: 6.4em; text-align: right; }
+  #limits-side .mtr .pc { min-width: 3ch; text-align: right; }
+  #limits-side .mtr.hot .bar i { background: var(--fg); }
+  #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
+  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  #side-cost { font-variant-numeric: tabular-nums; }
+  #side-cost[hidden] { display: none; }
+  #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
+  #side-elevated.hot { color: var(--red); font-weight: 600; }
+  .side-links { display: flex; gap: 2px; margin: 0 -6px; }
+  .side-links button {
+    padding: 5px 8px; font: 12.5px var(--font-ui); cursor: pointer;
+    background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
+  }
+  .side-links button:hover { color: var(--fg); background: var(--raise); }
+  .side-links button[hidden] { display: none; }
+
+
+  /* --- the 52px rail (sidebar hidden) ------------------------------------- */
+  .sidebar-hidden .rail48 { width: 52px; padding: 10px 0; gap: 4px; background: var(--panel); border-right: 1px solid var(--line); }
+  .rail-logo { display: flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 28px; margin-bottom: 4px; }
+  .ri { width: 36px; height: 32px; border-radius: var(--r-ctl); }
+  .ri:hover { background: var(--raise); }
+  .ri.tog { flex: none; } /* the rail's ☰ (toggleSidebar hands focus to it) */
+  /* app.css gives a waiting row a tint and a 3px stripe; the rail says it with
+     the amber dot alone, and keeps the accent mark for the focused one. */
+  .ri.alert { background: transparent; box-shadow: none; }
+  .ri.on, .ri.on.alert { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
+  .ri .dot { width: 10px; height: 10px; }
+  /* + under the logo is the one primary control of the rail (p2). */
+  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 18px var(--font-ui); color: #0b1220; background: var(--accent); }
+  .ri.add:hover { background: var(--accent); filter: brightness(1.08); }
+  /* Elevated: a red ring around the status dot (D23), whatever its colour. */
+  .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
+  .rail-meters { display: flex; flex: none; flex-direction: column; gap: 3px; width: 26px; padding: 8px 0 6px; }
+  .rail-meters[hidden] { display: none; }
+  .rm { display: block; position: relative; height: 3px; border-radius: 2px; background: var(--line); }
+  .rm[hidden] { display: none; }
+  .rm i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: 2px; background: var(--accent); }
+  .rm.hot i { background: var(--fg); }
+
+  /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
+  #sessions { padding: 2px 8px 8px; }
+  .grp {
+    list-style: none; padding: 14px 6px 5px; font-size: 11px; font-weight: 500;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
+  }
+  .grp:first-child { padding-top: 6px; }
+  .grp.hot { color: var(--amber); }
+  #sessions .drow {
+    position: relative; gap: 9px; align-items: flex-start; padding: 7px 8px 8px; margin-bottom: 1px;
+    border: 0; border-radius: var(--r-chip); background: transparent;
+  }
+  #sessions .drow:hover { background: var(--raise); }
+  #sessions .drow.sel { background: var(--raise); }
+  /* Open in some pane (not necessarily the focused one): a faint left bar. */
+  #sessions .drow.inpane { box-shadow: inset 2px 0 0 var(--faint); }
+  #sessions .drow.sel.inpane { box-shadow: inset 2px 0 0 var(--accent); }
+  #sessions .drow .dot { margin-top: 5px; }
+  #sessions .drow .sname { gap: 6px; font-size: 13px; line-height: 18px; }
+  #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
+  #sessions .drow .bdg { flex: none; }
+  /* One chip. Neutral: box is a raised tile, host adds a 1px outline, and only
+     an open write window is red (D23). */
+  .dchip {
+    flex: none; padding: 0 6px; font: 500 11px/17px var(--font-ui); white-space: nowrap;
+    color: var(--muted); background: var(--raise); border-radius: var(--r-chip);
+  }
+  .dchip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  .dchip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  #sessions .drow:hover .dchip.box { background: var(--line); }
+  /* The ⋯ takes no room until the row is hovered or something in it is
+     focused; it stays tabbable so a keyboard user reaches it. */
+  #sessions .drow .kbtn {
+    flex: none; width: 0; padding: 0; overflow: hidden; opacity: 0; height: 18px;
+    color: var(--muted); border-radius: var(--r-chip);
+  }
+  #sessions .drow:hover .kbtn, #sessions .drow:focus-within .kbtn, #sessions .drow .kbtn:focus-visible {
+    width: 20px; opacity: 1;
+  }
+  #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
+  #sessions .drow .kbtn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #sessions .drow .nm:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  #sessions .drow .sub {
+    margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--muted); cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #sessions .drow .sub.amber { color: var(--amber); }
+
+  /* --- pane header: one line (spec 5.3) ---------------------------------- */
+  /* The old tab strip's bar, re-drawn by Cell.renderHeader. Two columns: the
+     left one gives way (ellipsis on the name and chips), the right one never
+     wraps. */
+  /* The left column never drops below --ph-main-min (dot, a name stub, one
+     chip: D9), so the right column is the one that gives way (minmax(0, auto)
+     lets it shrink). The bar is a size container: the narrow rules below read
+     its own width, not the window's. */
+  .cell-bar {
+    --ph-main-min: 140px;
+    position: relative; container-type: inline-size;
+    display: grid; grid-template-columns: minmax(var(--ph-main-min), 1fr) minmax(0, auto); align-items: center; column-gap: 10px;
+    height: 38px; padding: 0 8px 0 12px; overflow: hidden; white-space: nowrap;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .cell-bar[hidden] { display: none; }
+  .ph-main { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+  .ph-main .ph-dot { flex: none; }
+  .ph-name {
+    /* The model shrinks ~1000x faster, and the 1px keeps the sub-pixel share the
+       name still loses from clipping its last letters. */
+    flex: 0 1 auto; min-width: 5ch; padding-right: 1px; overflow: hidden; text-overflow: ellipsis;
+    font: 600 13.5px var(--font-ui); color: var(--fg);
+  }
+  .ph-switch {
+    display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 6px; margin: 0 -6px;
+    background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
+  }
+  .ph-switch:hover { background: var(--raise); }
+  .ph-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ph-cnt { flex: none; font-weight: 500; font-size: 12px; color: var(--muted); }
+  .ph-st { flex: none; font-size: 12px; color: var(--muted); }
+  /* Neutral containment and read credential; only an open write window is
+     red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
+     long cloud/write chips give way down to a stub, then the name does. */
+  .ph-chip {
+    flex: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+    padding: 0 6px; font: 500 11px/18px var(--font-ui); color: var(--muted);
+    background: var(--raise); border-radius: var(--r-chip);
+  }
+  .ph-chip.cloud, .ph-chip.write { flex: 0 1 auto; min-width: 7ch; }
+  .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  .ph-chip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
+  /* The model gives way before the name does: an ellipsis, never a cut letter. */
+  .ph-model {
+    flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11.5px; color: var(--muted);
+  }
+  .ph-ctx {
+    flex: none; padding: 1px 4px; font: 12px var(--font-ui); font-variant-numeric: tabular-nums;
+    color: var(--muted); background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
+  }
+  .ph-ctx:hover { color: var(--fg); background: var(--raise); }
+  .ph-side { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; overflow: hidden; padding: 1px 2px; }
+  .ph-ics { display: contents; }
+  .ph-tabs { display: flex; align-items: center; gap: 2px; }
+  .ph-tab {
+    padding: 4px 9px; font: 12.5px var(--font-ui); color: var(--muted);
+    background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
+  }
+  .ph-tab:hover { color: var(--fg); }
+  .ph-tab.on { color: var(--fg); background: var(--raise); }
+  /* Files and Access are toggles over the pane: an underline while open. */
+  .ph-tab.open { color: var(--fg); border-radius: 0; box-shadow: inset 0 -2px 0 var(--accent); }
+  .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
+  .ph-shell {
+    padding: 4px 10px; font: 500 12px var(--font-ui); color: var(--fg); cursor: pointer;
+    background: var(--raise); border: 0; border-radius: var(--r-ctl);
+  }
+  .ph-shell:hover { background: var(--line); }
+  .ph-shell:disabled { opacity: .45; cursor: default; }
+  .ph-shell[hidden] { display: none; }
+  /* ⋯ ⛶ × take no room until the header is hovered or holds focus; ⛶ stays
+     while its pane is maximized, so the way back is never hidden. */
+  .ph-ic {
+    flex: none; width: 0; height: 24px; padding: 0; overflow: hidden; opacity: 0;
+    font: 14px var(--font-ui); line-height: 1; color: var(--muted); cursor: pointer;
+    background: transparent; border: 0; border-radius: var(--r-ctl);
+  }
+  .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { width: 24px; opacity: 1; }
+  .ph-ic:hover { color: var(--fg); background: var(--raise); }
+  .ph-more { font-size: 15px; }
+  /* A narrow header's one control is always visible, never an overlay. */
+  .ph-ics.nar .ph-more { width: 24px; opacity: 1; }
+  .ph-max.pin { color: var(--fg); }
+  .ph-del:hover { color: var(--red); }
+  .cell-bar button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+  /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
+     tabs tighten, + Shell loses its label and the separator goes; ⋯ alone stays in
+     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 540px is the bar's content
+     box, i.e. a pane under NARROW_PANE_PX (560) in tabs.js. */
+  @container (max-width: 540px) {
+    .ph-sep { display: none; }
+    .ph-tab { padding: 4px 5px; }
+    .ph-shell { font-size: 0; padding: 4px 8px; }
+    .ph-shell::before { content: "+"; font: 500 14px/1 var(--font-ui); }
+  }
+  /* Too narrow for the tabs at all: dot, name and chip only. Files and Access
+     stay one click away in the pane's ⋯ menu (Open files here, Context by tool). */
+  @container (max-width: 250px) {
+    .ph-tabs, .ph-shell { display: none; }
+  }
+
+  /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
+     an 8px gutter: the room goes to the panes, and two panes at 1440px stay
+     above the narrow threshold. */
+  /* isolation: the xterm scrollbar of a pane (z-index 11) must not paint above
+     the drawer (z-index 10) that covers it. */
+  #grid { gap: 1px; padding: 0; background: var(--line); isolation: isolate; }
+  #grid.empty { background: var(--bg); }
+
+  /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
+  .cell.focus:not(.drop-hot) { outline: none; }
+  .cell.focus::before {
+    content: ""; position: absolute; inset: 0; z-index: 6; pointer-events: none;
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  /* The amber pane frame is gone on desktop: the ask strip under the header
+     carries "this agent needs you" (spec 5.3), and the focus ring stays alone. */
+  .cell.needs::after { content: none; }
+
+  /* The tab switcher reuses #session-menu: a row is the tab plus its close. */
+  .mi-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+  .mi-row:last-child { border-bottom: 0; }
+  .mi-row .mi { flex: 1; min-width: 0; border-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mi.cur { color: var(--accent); }
+  .mi-x {
+    flex: none; width: 34px; font: 15px var(--font-ui); color: var(--muted); cursor: pointer;
+    background: transparent; border: 0;
+  }
+  .mi-x:hover { color: var(--red); background: var(--raise); }
+
+  /* --- the pane drawer: Files / Access (spec 5.4) ------------------------- */
+  /* Over the right of the grid, below the focused pane's header (JS sets top
+     and --grid-w). The docked rail is gone on desktop: it lives in here. */
+  #layout > #steer-rail { display: none; }
+  #drawer {
+    position: absolute; top: 0; right: 0; bottom: 0; z-index: 10;
+    width: min(720px, calc(var(--grid-w, 100%) * .62));
+    display: flex; flex-direction: column; min-height: 0;
+    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 30px #0009;
+  }
+  #drawer[hidden] { display: none; }
+  .dr-head {
+    flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 14px;
+    font-weight: 600; border-bottom: 1px solid var(--line);
+  }
+  .dr-title { flex: none; }
+  .dr-sess { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
+  .dr-fill { flex: 1; }
+  #drawer-x {
+    flex: none; width: 26px; height: 24px; font: 13px var(--font-ui); color: var(--muted); cursor: pointer;
+    background: transparent; border: 0; border-radius: var(--r-ctl);
+  }
+  #drawer-x:hover { color: var(--fg); background: var(--raise); }
+  #drawer-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* Both moved nodes stay in the body once moved; the kind picks one. */
+  #drawer:not([data-kind="files"]) #files-pane { display: none; }
+  /* The tree: open whatever the sidebar's collapse state says, its own header
+     reduced to the toolbar (the drawer header names it). */
+  #drawer #files-pane { flex: 1 1 auto; min-height: 0; }
+  #drawer #files-pane > .files-body { display: flex; padding-top: 6px; }
+  #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
+  #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
+  /* Containment chips are neutral (D23): amber is for needs-you only, so the
+     old rail's amber host chip and green box chip are re-dressed here. */
+  #drawer .bdg.host, #drawer .bdg.box { color: var(--muted); background: var(--raise); border-color: transparent; }
+  #drawer .bdg.host { border-color: var(--faint); }
+  /* --warn is amber here, and the old rail used it for AWS write state. A write
+     window (open, or the base role able to) is red (D23); amber stays for
+     needs-you. Same shapes as app.css: solid open window, dashed "could write",
+     and the filled ringed chip for production while writing. */
+  #drawer .bdg.aws.write { color: var(--red); border-color: var(--red); }
+  #drawer .bdg.aws.rolew { color: var(--red); border-color: var(--red); }
+  #drawer .bdg.aws.prod.rolew { color: var(--red); border-color: var(--red); }
+  #drawer .bdg.aws.prod.rolew .awsw, #drawer .bdg.aws.prod.write .awsw { color: var(--red); font-weight: 700; }
+  #drawer .bdg.aws.prod.write {
+    border-color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent);
+    box-shadow: 0 0 0 2px var(--red);
+  }
+  #drawer .connln.warn { color: var(--red); }
+  /* The rail: a column of the drawer, not an overlay of its own. */
+  #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
+
+  /* --- the ask strip under a pane header (spec 5.3) ----------------------- */
+  /* Amber label, the command in mono on one line (click to expand), then the
+     actions, right-aligned. renderNeedsBody's .nbody dissolves into this grid
+     (display: contents), so Yes/No/Open terminal share the first line and the
+     composer, the full command and the notes take the rows below. The same
+     wording and gates as the old sidebar card; only the place moved. */
+  .needstrip {
+    flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline;
+    gap: 6px 10px; padding: 6px 12px; min-width: 0; font-size: 12px;
+    background: color-mix(in srgb, var(--amber) 9%, var(--bg)); border-bottom: 1px solid var(--line);
+  }
+  .needstrip .nbody { display: contents; }
+  .ns-label { grid-area: 1 / 1; color: var(--amber); font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+  .needstrip .peektxt {
+    grid-area: 1 / 2; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer; font-weight: 400; color: var(--fg);
+  }
+  .needstrip .peektxt.ask { font: 11.5px var(--font-mono); }
+  .needstrip .peektxt.muted { font-style: italic; color: var(--muted); }
+  .needstrip .peektxt:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: var(--r-chip); }
+  .needstrip.open .peektxt { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; gap: 6px; margin: 0; }
+  .needstrip .nacts .btn { padding: 3px 10px; border-radius: var(--r-ctl); background: var(--raise); border: 1px solid var(--line); }
+  .needstrip .nacts .btn:hover { background: var(--background3); }
+  .needstrip .nacts .btn.off { background: var(--raise); }
+  /* The one amber-filled button in the product: Yes (amber = needs-you only). */
+  .needstrip .nacts .btn[data-choice="yes"] { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
+  .needstrip .nacts .btn[data-choice="yes"].off { opacity: .42; }
+  .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
+  .needstrip .askfull {
+    min-width: 0; padding: 6px 8px; font: 11.5px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-chip);
+  }
+  .needstrip .rep { display: flex; gap: 6px; }
+  .needstrip .rep .fld { flex: 1; min-width: 0; }
+  .needstrip .peek-why, .needstrip .maskhint { font-size: 11.5px; color: var(--muted); }
+  /* An expired AWS sign-in or a locked store: the form is the content, so the
+     body keeps its own layout beside the label. */
+  .needstrip.rich { display: flex; align-items: flex-start; }
+  .needstrip.rich .ns-label { padding-top: 2px; }
+  .needstrip.rich .nbody { display: block; flex: 1; min-width: 0; }
+  .needstrip.rich .nacts { margin-top: 8px; flex-wrap: wrap; }
+  .needstrip.rich .ssotxt, .needstrip.rich .storetxt { margin: 0; }
+
+  /* --- empty states (5.9) ---------------------------------------------------
+     #grid.empty already centres its one child (app.css). The width is the
+     mockup's 620px column. */
+  .empst {
+    display: grid; gap: 18px; width: 100%; max-width: 620px; padding: 30px; box-sizing: border-box;
+    font-family: var(--font-ui); font-size: 13px; line-height: 1.45; color: var(--fg);
+  }
+  #grid .empst { color: var(--fg); } /* beats app.css's `#grid .placeholder` muted */
+  .empst-title { margin: 0; font-size: 20px; font-weight: 600; }
+  .empst-sub { margin: 0; color: var(--muted); font-size: 13px; }
+  .empst-rows, .empst-steps { display: grid; gap: 6px; }
+  .empst-steps { gap: 8px; }
+  .empst-row, .empst-step {
+    display: grid; align-items: center; gap: 2px 12px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card);
+  }
+  .empst-row { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; }
+  .empst-step { grid-template-columns: 26px minmax(0, 1fr) auto; padding: 12px 14px; }
+  .empst-name, .empst-t { font-weight: 500; min-width: 0; overflow-wrap: anywhere; }
+  .empst-touch, .empst-d { grid-column: 1; color: var(--muted); font-size: 11.5px; min-width: 0; overflow-wrap: anywhere; }
+  .empst-step .empst-d { grid-column: 2; font-size: 12px; }
+  .empst-row .btn, .empst-step .btn, .empst-step .pbtn { grid-row: 1 / 3; align-self: center; }
+  .empst-step .btn, .empst-step .pbtn { grid-column: 3; }
+  .empst-row .btn { grid-column: 2; }
+  .empst .btn {
+    padding: 4px 10px; font: 400 12px var(--font-ui); color: var(--fg); background: var(--raise);
+    border: 0; border-radius: var(--r-ctl); cursor: pointer; white-space: nowrap;
+  }
+  .empst .btn:hover { background: var(--background3); }
+  .empst .pbtn { width: auto; padding: 6px 12px; font-size: 12.5px; white-space: nowrap; }
+  .empst button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .empst-n {
+    grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 12px; font-weight: 600; background: var(--raise); color: var(--muted);
+  }
+  .empst-hint { display: flex; flex-wrap: wrap; gap: 14px; color: var(--faint); font-size: 12px; }
+  .empst-kbd {
+    font: 11px var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px;
+    border-radius: var(--r-chip); padding: 0 5px; color: var(--muted);
+  }
+
+  /* --- keyboard shortcuts dialog (read-only ask dialog) ----------------------- */
+  #ask-modal.info { width: 560px; max-width: 92vw; }
+  #ask-modal.info #ask-cancel { display: none; }
+  #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; overflow-x: auto; }
+}

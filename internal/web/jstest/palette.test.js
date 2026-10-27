@@ -139,3 +139,21 @@ test("palModHint follows the selected row's kind (⌘↵ keeps inserting a file'
   assert.strictEqual(palModHint("file", true), "⌘↵ insert path");
   assert.strictEqual(palModHint("view", false), "");
 });
+
+test("paletteShellCommands: desktop offers shortcuts, files drawer and the Access entry once", () => {
+  const { paletteShellCommands } = require("../static/palette.js");
+  const noop = {};
+  const cmds = paletteShellCommands(false, true, noop);
+  const ids = cmds.map((c) => c.id);
+  for (const id of ["shortcuts", "files-drawer", "access-drawer"]) assert.ok(ids.includes(id), id);
+  assert.ok(!ids.includes("steer-rail"), "no second Access entry");
+  assert.ok(!ids.includes("toggle-files"), "the old files collapse is dead on desktop (R17)");
+  assert.equal(cmds.find((c) => c.id === "access-drawer").label, "Session details (Access)");
+  assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Ctrl+Alt+F");
+});
+
+test("paletteShellCommands: mobile keeps the old entries and gets none of the new", () => {
+  const { paletteShellCommands } = require("../static/palette.js");
+  const ids = paletteShellCommands(false, false, {}).map((c) => c.id);
+  assert.deepEqual(ids.sort(), ["steer-rail", "toggle-files"]);
+});
