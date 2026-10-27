@@ -73,6 +73,55 @@ test("sessionGroups omits a group with no members", () => {
   assert.deepEqual(g.map((x) => x.key), ["running"]);
 });
 
+// v0.2.0 mobile list, frozen: a list without parent_id must group exactly so.
+test("sessionGroups without parent_id is byte-identical to v0.2.0 (mobile parity)", () => {
+  const sessions = [
+    { id: "a", status: "detached" },
+    { id: "b", status: "working" },
+    { id: "c", status: "waiting" },
+    { id: "d", status: "crashed" },
+    { id: "e", status: "working" },
+    { id: "f", status: "waiting" },
+    { id: "g", status: "idle" },
+  ];
+  const g = m.sessionGroups(sessions, (s) => s.status);
+  assert.deepEqual(g, [
+    { key: "needs-you", label: "Needs you", count: 2, sessions: [sessions[2], sessions[5]] },
+    { key: "running", label: "Running", count: 2, sessions: [sessions[1], sessions[4]] },
+    { key: "idle", label: "Idle", count: 3, sessions: [sessions[0], sessions[3], sessions[6]] },
+  ]);
+  const noStatusFn = m.sessionGroups([{ id: "x", status: "working" }]);
+  assert.deepEqual(noStatusFn.map((x) => x.key), ["running"]);
+  assert.deepEqual(m.sessionGroups(null), []);
+});
+
+test("sessionGroups nests a shell right after its parent, in the parent's group", () => {
+  const p = { id: "p", status: "idle" };
+  const other = { id: "o", status: "idle" };
+  const child = { id: "c", status: "working", parent_id: "p", created: "2026-10-27T09:00:00Z" };
+  const g = m.sessionGroups([child, p, other], (s) => s.status);
+  assert.deepEqual(g.map((x) => x.key), ["idle"], "the running shell does not make a Running group");
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["p", "c", "o"]);
+});
+
+test("sessionGroups: group count excludes nested shells", () => {
+  const p = { id: "p", status: "working" };
+  const c1 = { id: "c1", status: "idle", parent_id: "p", created: "2026-10-27T09:00:00Z" };
+  const c2 = { id: "c2", status: "waiting", parent_id: "p", created: "2026-10-27T09:05:00Z" };
+  const g = m.sessionGroups([p, c2, c1], (s) => s.status);
+  assert.equal(g.length, 1);
+  assert.equal(g[0].count, 1);
+  assert.deepEqual(g[0].sessions.map((s) => s.id), ["p", "c1", "c2"], "children in created order");
+});
+
+test("sessionGroups: an orphan shell is a normal row bucketed by its own status", () => {
+  const p = { id: "p", status: "idle" };
+  const orphan = { id: "o", status: "waiting", parent_id: "gone" };
+  const g = m.sessionGroups([p, orphan], (s) => s.status);
+  assert.deepEqual(g.map((x) => x.key), ["needs-you", "idle"]);
+  assert.deepEqual(g[0].sessions, [orphan]);
+});
+
 // I1: mobile has no un-maximize control, so the grid must ignore a persisted
 // `maximized` cell while mobile is active — but must still honour it on
 // desktop, where the ❐ control lives and restore-on-refresh is the point.

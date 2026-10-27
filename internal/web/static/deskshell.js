@@ -21,11 +21,13 @@ function deskDep(name) {
     isElevated: typeof isElevated === "function" ? isElevated : null,
     minutesLeft: typeof minutesLeft === "function" ? minutesLeft : null,
     awsBadgeParts: typeof awsBadgeParts === "function" ? awsBadgeParts : null,
+    isNestedShell: typeof isNestedShell === "function" ? isNestedShell : null,
   };
   if (g[name]) return g[name];
   const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js",
     needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
-    isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js" }[name];
+    isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js",
+    isNestedShell: "./shellnest.js" }[name];
   return require(mod)[name];
 }
 
@@ -41,9 +43,13 @@ function deskGroups(sessions) {
 
 // jumpOrder: the list Alt+1..9 and the palette's first nine index into. On
 // desktop that is the sidebar's visible order; mobile has no such list on
-// screen and keeps the API order.
+// screen and keeps the API order. Nested shells are left out of both: the
+// numbers (and the rail dots) are for agents.
 function jumpOrder(sessions, mobile) {
-  return mobile ? sessions : deskOrder(deskGroups(sessions));
+  const nested = deskDep("isNestedShell");
+  const list = sessions || [];
+  const agents = list.some((s) => nested(s, list)) ? list.filter((s) => !nested(s, list)) : list;
+  return mobile ? agents : deskOrder(deskGroups(agents));
 }
 
 // deskOrder: the groups flattened in the order the sidebar shows them. Alt+1..9

@@ -86,6 +86,24 @@ test("jumpOrder: Alt+1..9 and the palette follow the sidebar order on desktop, t
   assert.deepEqual(d.jumpOrder(null, false), []);
 });
 
+test("jumpOrder skips nested shells, so Alt+1..9 and the rail target agents only", () => {
+  const shell = { id: "sh", name: "sh", activity: "working", parent_id: "i", created: "2026-10-27T09:00:00Z" };
+  const list = [idle, shell, working, waiting];
+  assert.deepEqual(d.jumpOrder(list, false).map((s) => s.id), ["w", "r", "i"]);
+  assert.deepEqual(d.jumpOrder(list, true).map((s) => s.id), ["i", "r", "w"], "mobile: API order, no shell");
+  const orphan = { ...shell, parent_id: "gone" };
+  assert.ok(d.jumpOrder([idle, orphan], false).some((s) => s.id === "sh"), "an orphan shell is an ordinary row");
+});
+
+test("deskGroups lists a shell right after its parent and does not count it", () => {
+  const shell = { id: "sh", name: "sh", activity: "waiting", need: "ask", ask: "x", parent_id: "i", created: "2026-10-27T09:00:00Z" };
+  const g = d.deskGroups([shell, idle, working]);
+  assert.deepEqual(g.map((x) => x.key), ["running", "idle"], "the waiting shell makes no Needs you group");
+  const idleGroup = g.find((x) => x.key === "idle");
+  assert.equal(idleGroup.count, 1);
+  assert.deepEqual(idleGroup.sessions.map((s) => s.id), ["i", "sh"]);
+});
+
 test("paneHeaderModel: full slots in order for a wide pane", () => {
   const tab = { kind: "terminal", usage: () => ({ model: "opus-5", pct: 42 }) };
   const s = { ...working, name: "api", aws_connections: [{ name: "prod", label: "prod", account_id: "1", role_arn: "arn:aws:iam::1:role/r", elevated_until: FUTURE }] };

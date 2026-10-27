@@ -68,24 +68,41 @@ function navModel(activeScreen, waitingCount) {
   });
 }
 
+// The shell-nesting helpers (shellnest.js) are browser globals; under node they
+// are required. Resolved at call time so load order cannot matter.
+function mobileNestDep() {
+  return typeof shellChildren === "function" && typeof isNestedShell === "function"
+    ? { shellChildren, isNestedShell }
+    : require("./shellnest.js");
+}
+
 // Group the session list the way the mobile Sessions screen shows it: the ones
 // that need a person first, then the ones doing work, then everything at rest.
 // "waiting" is the only needs-you state; "working" is running; anything else
 // (idle/done/detached/crashed/unknown) is at rest. Empty groups are dropped so
 // no header ever sits above nothing.
 function sessionGroups(sessions, statusFn) {
+  const nest = mobileNestDep();
+  const list = sessions || [];
+  const kids = nest.shellChildren(list);
   const buckets = { "needs-you": [], running: [], idle: [] };
-  for (const s of sessions || []) {
+  for (const s of list) {
+    // A nested shell rides with its parent (below), never in a bucket of its own.
+    if (nest.isNestedShell(s, list)) continue;
     const st = statusFn ? statusFn(s) : s.status;
     // statusFn maps a session that needsYou (waiting, or an expired AWS sign-in) to "waiting".
-    if (st === "waiting") buckets["needs-you"].push(s);
-    else if (st === "working") buckets.running.push(s);
-    else buckets.idle.push(s);
+    const key = st === "waiting" ? "needs-you" : st === "working" ? "running" : "idle";
+    buckets[key].push(s);
   }
   const labels = { "needs-you": "Needs you", running: "Running", idle: "Idle" };
   return ["needs-you", "running", "idle"]
     .filter((k) => buckets[k].length)
-    .map((k) => ({ key: k, label: labels[k], count: buckets[k].length, sessions: buckets[k] }));
+    .map((k) => {
+      // count is the agents; the shells listed after each are not counted.
+      const rows = [];
+      for (const s of buckets[k]) rows.push(s, ...(kids.get(s.id) || []));
+      return { key: k, label: labels[k], count: buckets[k].length, sessions: rows };
+    });
 }
 
 if (typeof module !== "undefined" && module.exports) {
