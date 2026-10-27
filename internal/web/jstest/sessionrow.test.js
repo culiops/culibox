@@ -121,9 +121,10 @@ test("menuItems always ends with the one dangerous item", () => {
 
 // A companion shell listed under its parent keeps only what means something for
 // a shell: no restart, duplicate, reply opt-in or context-by-tool.
-test("menuItems for a nested shell keeps rename, copy cwd, new pane and end", () => {
+test("menuItems for a nested shell keeps rename, files, copy cwd, new pane and end", () => {
   const sh = { claude: false, cwd: "/home/x", exited: true, status: "live", parent_id: "p" };
-  assert.deepEqual(menuItems(sh, { nested: true }).map((i) => i.id), ["rename", "copycwd", "newpane", "end"]);
+  assert.deepEqual(menuItems(sh, { nested: true }).map((i) => i.id), ["rename", "files", "copycwd", "newpane", "end"]);
+  assert.ok(!menuItems(sh, { nested: true }).some((i) => i.id === "interrupt"), "interrupt stays hidden");
   const noCwd = { claude: false, parent_id: "p" };
   assert.deepEqual(menuItems(noCwd, { nested: true }).map((i) => i.id), ["rename", "newpane", "end"]);
   const last = menuItems(sh, { nested: true }).pop();

@@ -80,9 +80,10 @@ function canInterrupt(s) {
 // that it will ask. "Duplicate…" carries one too: it opens the spawn form.
 //
 // opts.nested: the session is a companion shell listed under its parent (desktop
-// sidebar). Only the actions that mean something for a shell stay: restart,
-// duplicate, the reply opt-in and context-by-tool do not.
-const NESTED_SHELL_ACTIONS = ["rename", "copycwd", "newpane", "end"];
+// sidebar). Only the actions that mean something for a shell stay (rename,
+// files, copy cwd, new pane, end); restart, duplicate, interrupt, the reply
+// opt-in and context-by-tool do not.
+const NESTED_SHELL_ACTIONS = ["rename", "files", "copycwd", "newpane", "end"];
 
 function menuItems(s, opts) {
   const v = s || {};
