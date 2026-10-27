@@ -58,8 +58,10 @@ type ProfileView struct {
 	// names, GitHubOwners the owners (not their App or PAT references).
 	Bin            string   `json:"bin,omitempty"`
 	AWSConnections []string `json:"aws_connections,omitempty"`
-	GitHubOwners   []string `json:"github_owners,omitempty"`
-	Tokens         []string `json:"tokens,omitempty"`
+	// AWSInline is the legacy inline AWS binding, named like a connection.
+	AWSInline    *ProfileAWSInline `json:"aws_inline,omitempty"`
+	GitHubOwners []string          `json:"github_owners,omitempty"`
+	Tokens       []string          `json:"tokens,omitempty"`
 	// Network is the posture a session of this profile reports ("allowlist",
 	// "open" or "": session.EgressMode applied to the profile's bindings).
 	Network string `json:"network,omitempty"`
@@ -67,6 +69,15 @@ type ProfileView struct {
 	// clone-mode profile clones.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+}
+
+// ProfileAWSInline names a profile's legacy inline AWS binding for the spawn
+// dialog: its label ("aws" when it has none, as the Access view names it), the
+// prod flag and the elevate window. No source profile, ARN, region or bucket.
+type ProfileAWSInline struct {
+	Name              string `json:"name"`
+	Prod              bool   `json:"prod,omitempty"`
+	ElevateMaxMinutes int    `json:"elevate_max_minutes,omitempty"`
 }
 
 // profileStore is the subset of *store.Store the manager needs (injectable).
@@ -406,6 +417,16 @@ func (m *ProfileManager) Views() []ProfileView {
 			AWSConnections: slices.Clone(a.AWSConnections),
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,
+		}
+		if a.AWS != nil {
+			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod}
+			if in.Name == "" {
+				in.Name = "aws"
+			}
+			if a.AWS.Elevate != nil {
+				in.ElevateMaxMinutes = a.AWS.Elevate.Max()
+			}
+			pv.AWSInline = in
 		}
 		if a.GitHub != nil {
 			for _, o := range a.GitHub.Owners {

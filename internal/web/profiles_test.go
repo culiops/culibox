@@ -752,3 +752,48 @@ func TestProfileViewTouches(t *testing.T) {
 		}
 	}
 }
+
+// A legacy inline AWS binding reaches the view by name only: its label (or
+// "aws" when it has none, as the Access view names it), the prod flag and the
+// elevate window. Never the source profile, role ARNs, region, bucket list or
+// egress hosts.
+func TestProfileViewSurfacesTheInlineAWSBinding(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{Name: "legacy", Bin: "claude", Runtime: config.RuntimeBox, AWS: &config.AWSBinding{
+			SourceProfile: "src-profile-x", RoleARN: "arn:aws:iam::123456789012:role/ReadOnlyX", Region: "eu-west-1",
+			S3Read: []string{"secret-bucket-x"}, Label: "legacy-prod", Prod: true, EgressAllow: []string{"internal.example"},
+			Elevate: &config.AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/WriteX", MaxMinutes: 30},
+		}},
+		{Name: "bare", Bin: "claude", Runtime: config.RuntimeBox, AWS: &config.AWSBinding{
+			SourceProfile: "p", RoleARN: "arn:aws:iam::123456789012:role/R", Region: "eu-west-1"}},
+		{Name: "none", Bin: "claude", Runtime: config.RuntimeBox},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	got := map[string]ProfileView{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v
+	}
+	l := got["legacy"].AWSInline
+	if l == nil || l.Name != "legacy-prod" || !l.Prod || l.ElevateMaxMinutes != 30 {
+		t.Fatalf("legacy inline = %+v", l)
+	}
+	b := got["bare"].AWSInline
+	if b == nil || b.Name != "aws" || b.Prod || b.ElevateMaxMinutes != 0 {
+		t.Fatalf("bare inline = %+v", b)
+	}
+	if got["none"].AWSInline != nil {
+		t.Errorf("a profile with no inline binding carries one: %+v", got["none"].AWSInline)
+	}
+	raw, err := json.Marshal(pm.Views())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"src-profile-x", "arn:aws", "ReadOnlyX", "WriteX", "eu-west-1", "secret-bucket-x", "internal.example", "role_arn", "source_profile", "s3_read"} {
+		if strings.Contains(string(raw), bad) {
+			t.Errorf("profile JSON contains %q: %s", bad, raw)
+		}
+	}
+	if !strings.Contains(string(raw), `"aws_inline":{"name":"legacy-prod","prod":true,"elevate_max_minutes":30}`) {
+		t.Errorf("wire shape: %s", raw)
+	}
+}

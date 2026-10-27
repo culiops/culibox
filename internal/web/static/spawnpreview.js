@@ -15,6 +15,17 @@ function spawnDep(name, file) {
 }
 
 const spawnNames = (l) => (Array.isArray(l) ? l.filter((x) => typeof x === "string" && x !== "") : []);
+// spawnAWS: the AWS entries a profile reaches, named connections first, then the
+// legacy inline binding (profile.aws_inline) named like one. An unnamed inline
+// entry is left out: a name is never guessed.
+function spawnAWS(p) {
+  const out = spawnNames(p && p.aws_connections).map((name) => ({ name }));
+  const inl = p && p.aws_inline;
+  if (inl && typeof inl.name === "string" && inl.name !== "") {
+    out.push({ name: inl.name, inline: true, prod: inl.prod === true, max: Number(inl.elevate_max_minutes) > 0 ? Number(inl.elevate_max_minutes) : 0 });
+  }
+  return out;
+}
 const spawnBase = (p) => String(p || "").split("/").filter(Boolean).pop() || "";
 
 // spawnTierOf: the tier a profile runs under. boxRuntime, when given, is the
@@ -33,7 +44,7 @@ function profileTouchLine(p, boxRuntime) {
     return "host · " + (SPAWN_SHELL_BINS.has(spawnBase(prof.bin)) ? spawnBase(prof.bin) : "not contained");
   }
   const parts = ["box"];
-  const aws = spawnNames(prof.aws_connections), gh = spawnNames(prof.github_owners), tok = spawnNames(prof.tokens);
+  const aws = spawnAWS(prof).map((e) => e.name), gh = spawnNames(prof.github_owners), tok = spawnNames(prof.tokens);
   if (aws.length) parts.push("aws " + aws.join(", "));
   if (gh.length) parts.push("gh " + gh.join(", "));
   if (tok.length) parts.push("tok " + tok.join(", "));
@@ -72,11 +83,15 @@ function reachRows(o) {
 
   const metaConns = x.meta && Array.isArray(x.meta.aws_connections) ? x.meta.aws_connections : [];
   const credConns = x.creds && Array.isArray(x.creds.aws) ? x.creds.aws : [];
-  for (const name of spawnNames(p.aws_connections)) {
-    const m = metaConns.find((c) => c && c.name === name) || {};
-    const c = credConns.find((e) => e && e.name === name) || {};
+  const awsEntries = spawnAWS(p);
+  for (const ent of awsEntries) {
+    const name = ent.name;
+    // The inline binding is not in meta/credentials (those list named
+    // connections), so its own flags from the profile view are what is known.
+    const m = ent.inline ? { prod: ent.prod, write_capable: ent.max > 0 } : metaConns.find((c) => c && c.name === name) || {};
+    const c = ent.inline ? {} : credConns.find((e) => e && e.name === name) || {};
     const prod = m.prod === true || c.prod === true;
-    const elevate = c.elevate && typeof c.elevate === "object" ? c.elevate : null;
+    const elevate = ent.inline ? (ent.max > 0 ? { max_minutes: ent.max } : null) : c.elevate && typeof c.elevate === "object" ? c.elevate : null;
     const writable = m.write_capable === true || !!elevate;
     let v = name + " · read";
     if (writable) {
@@ -105,7 +120,7 @@ function reachRows(o) {
     rows.push({ k: "Account", v: a && a !== "default" ? a : "default (~/.claude)" });
   }
 
-  if (spawnStoreLocked(x.creds) && (spawnNames(p.aws_connections).length || owners.length || tokens.length)) {
+  if (spawnStoreLocked(x.creds) && (awsEntries.length || owners.length || tokens.length)) {
     rows.push({ k: "Store", v: "credential store locked — unlock before spawn", tone: "warn" });
   }
   return rows;

@@ -212,3 +212,31 @@ test("swsKeydown ignores Ctrl/Cmd+Enter so the form hotkey is the only handler, 
   assert.ok(body.indexOf("e.ctrlKey || e.metaKey") < body.indexOf("e.preventDefault();\n  swsEnter"));
   assert.match(app, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\)/);
 });
+
+// A legacy inline AWS binding (profile.aws_inline: name, prod, elevate_max_minutes)
+// is shown like a named connection everywhere the dialog summarises reach.
+const legacy = { name: "legacy", runtime: "box", bin: "claude", claude: true, aws_inline: { name: "legacy-prod", prod: true, elevate_max_minutes: 30 } };
+
+test("touch line: an inline AWS binding is named like a connection", () => {
+  assert.strictEqual(profileTouchLine(legacy), "box · aws legacy-prod");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a"], aws_inline: { name: "b" } }), "box · aws a, b");
+  assert.strictEqual(profileTouchLine({ runtime: "box", aws_inline: {} }), "box · no credentials", "an unnamed inline entry is left out, never guessed");
+});
+
+test("reach rows: an inline AWS binding gets an AWS row with its PROD flag and elevate window", () => {
+  const rows = reachRows({ profile: legacy, tier: "box", cwd: "~/x", meta: null, creds: null });
+  const aws = byK(rows, "AWS");
+  assert.strictEqual(aws.length, 1);
+  assert.strictEqual(aws[0].v, "legacy-prod · read · write only after you elevate (max 30 min)");
+  assert.strictEqual(aws[0].name, "legacy-prod");
+  assert.strictEqual(aws[0].prod, true);
+  const plain = reachRows({ profile: { claude: true, aws_inline: { name: "old" } }, tier: "box", cwd: "~/x" });
+  assert.strictEqual(byK(plain, "AWS")[0].v, "old · read only");
+  assert.ok(!byK(plain, "AWS")[0].prod);
+});
+
+test("reach rows: a locked store warns for a profile whose only binding is the inline AWS one", () => {
+  const locked = creds({ store: { initialized: true, locked: true, platform: "linux" } });
+  const rows = reachRows({ profile: legacy, tier: "box", cwd: "~/x", meta: null, creds: locked });
+  assert.strictEqual(byK(rows, "Store").length, 1);
+});
