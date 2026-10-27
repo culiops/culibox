@@ -346,3 +346,16 @@ test("accLoadDone: a failed read ends the read, keeps the old data and marks the
   const first = accLoadDone({ inflight: true }, { ok: false }, 5);
   assert.deepStrictEqual([first.aws, first.inflight, first.loaded, first.failed], [null, false, false, true]);
 });
+
+// mountAccess is DOM-bound (no pure seam), so this pins the shape of its
+// re-target branch: focus in the old session's grant panel is dropped and the
+// whole view repaints for the new session, rather than waiting on typing().
+test("accesstab.js: re-targeting to another session blurs the grant panel and force-repaints", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/accesstab.js"), "utf8");
+  const i = src.indexOf("if (next && next !== sid) {");
+  assert.ok(i > 0, "update() has a re-target branch");
+  const branch = src.slice(i, src.indexOf("accPrune();", i));
+  assert.match(branch, /\.blur\(\)/, "focus leaves the old grant panel");
+  assert.match(branch, /paint\(true\)/, "the whole view repaints, past typing()");
+  assert.match(branch, /return;/, "the soft paint(false) does not follow");
+});

@@ -546,6 +546,16 @@ function mountAccess(host, sid0) {
         sid = next;
         accViews.set(sid, paint);
         keys.cont = keys.creds = keys.events = "";
+        // Focus in the old session's grant panel would make typing() hold the
+        // credentials section back, leaving that panel (and its Enter) under
+        // the new session's containment card. Drop the focus and repaint it
+        // all; drafts are keyed by sid, so each session keeps its own.
+        const a = document.activeElement;
+        if (a && host.contains(a) && typeof a.blur === "function") a.blur();
+        ctx.focusReason = false;
+        accLoad(sid, false);
+        paint(true);
+        return;
       }
       accPrune();
       accLoad(sid, false);

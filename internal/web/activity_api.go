@@ -22,7 +22,8 @@ const (
 	activityDefaultLimit = 100
 	activityMaxLimit     = 200
 	// activityAuditCap is the hard cap of each audit read (credentials,
-	// approvals). Rows are not paged in SQL, so the cap is what bounds the work.
+	// approvals). The reads page in SQL (ts window plus LIMIT), so one page is
+	// at most this many rows however long the session's audit history is.
 	activityAuditCap = 200
 	// activityReasonMax is the rune budget of an approval reason in a row.
 	activityReasonMax = 200
