@@ -2686,6 +2686,16 @@ func (m *Manager) Reconcile() error {
 				sc.put(id, md)
 			}
 		}
+		if md.ParentID != "" && !aliveSet[md.ParentID] {
+			// The parent did not survive the restart, so its id is free again
+			// (counters are reseeded from live ids only) and the next session of
+			// that agent may reuse it. Drop the link before publication so a
+			// stranger can never adopt this shell or end it with itself.
+			md.ParentID = ""
+			if sc != nil {
+				sc.put(id, md)
+			}
+		}
 		if err := m.reattach(id, md); err != nil {
 			// Leave the abduco session running; it can be recovered on a later
 			// restart. Don't fail the whole reconcile for one bad re-attach.

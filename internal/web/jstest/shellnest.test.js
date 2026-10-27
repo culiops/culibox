@@ -24,7 +24,7 @@ test("shellChildren breaks a created tie, or a missing created, by list order", 
   const a = { id: "a", parent_id: "p" };
   const b = { id: "b", parent_id: "p" };
   assert.deepEqual(n.shellChildren([parent, b, a]).get("p").map((s) => s.id), ["b", "a"]);
-  const c = { id: "c", parent_id: "p", created: "2026-10-27T08:00:00Z" };
+  const c = { id: "c", parent_id: "p", created: "2026-10-27T09:05:00Z" };
   assert.deepEqual(n.shellChildren([parent, a, c]).get("p").map((s) => s.id), ["c", "a"], "dated before undated");
 });
 
@@ -35,6 +35,24 @@ test("isNestedShell needs a parent_id AND a parent in the list", () => {
   assert.equal(n.isNestedShell({ id: "x" }, [parent]), false);
   assert.equal(n.isNestedShell(null, [parent]), false);
   assert.equal(n.isNestedShell(sh1, null), false);
+});
+
+test("a parent created after its shell is a later session that reused the id, not the parent", () => {
+  // After a daemon restart ids restart from live sessions: a new "p" may take
+  // the freed id of the ended parent a surviving shell still points at.
+  const stranger = { id: "p", name: "new agent", created: "2026-10-27T10:00:00Z" };
+  const old = { id: "o", name: "sh:old", parent_id: "p", created: "2026-10-27T09:30:00Z", status: "working" };
+  assert.equal(n.isNestedShell(old, [stranger, old]), false);
+  assert.equal(n.shellChildren([stranger, old]).size, 0);
+  assert.equal(n.shellLabel(old, [stranger, old]), "sh:old");
+  assert.deepEqual(n.liveShellsOf("p", [stranger, old]), [], "End all must not reach it");
+});
+
+test("a parent created at or before its shell still nests it", () => {
+  const same = { id: "s3", parent_id: "p", created: parent.created };
+  assert.equal(n.isNestedShell(sh1, [parent, sh1]), true);
+  assert.equal(n.isNestedShell(same, [parent, same]), true, "same instant");
+  assert.equal(n.isNestedShell({ id: "u", parent_id: "p" }, [parent]), true, "no created on the shell");
 });
 
 test("a shell's parent being itself a shell, or itself, does not nest (no session may vanish)", () => {

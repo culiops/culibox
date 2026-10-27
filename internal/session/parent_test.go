@@ -32,9 +32,36 @@ func TestSpawnRecordsParentID(t *testing.T) {
 
 func TestReconcileRestoresParentID(t *testing.T) {
 	fb := newFakeBackend()
+	fb.seedLive("claude-1")
+	fb.seedLive("bash-1")
+	now := time.Now()
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-1": {Agent: "claude", Cwd: "/w", Created: now.Add(-time.Minute)},
+		"bash-1":   {Agent: "bash", Cwd: "/w", Created: now, ParentID: "claude-1"},
+	})
+	m := newReconcileManager(t, fb, path)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("bash-1"); _ = m.Kill("claude-1") })
+	s, ok := m.Get("bash-1")
+	if !ok {
+		t.Fatal("not reattached")
+	}
+	if got := s.Info().ParentID; got != "claude-1" {
+		t.Fatalf("restored ParentID = %q, want claude-1", got)
+	}
+}
+
+// A parent that did not survive the restart frees its id: the counter is
+// reseeded from live ids only, so the next session of that agent may reuse it.
+// The surviving shell must not keep a link a stranger could inherit.
+func TestReconcileDropsParentIDOfDeadParent(t *testing.T) {
+	fb := newFakeBackend()
 	fb.seedLive("bash-1")
 	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
-		"bash-1": {Agent: "bash", Cwd: "/w", Created: time.Now(), ParentID: "p1"},
+		"claude-1": {Agent: "claude", Cwd: "/w", Created: time.Now().Add(-time.Minute)},
+		"bash-1":   {Agent: "bash", Cwd: "/w", Created: time.Now(), ParentID: "claude-1"},
 	})
 	m := newReconcileManager(t, fb, path)
 	if err := m.Reconcile(); err != nil {
@@ -45,8 +72,11 @@ func TestReconcileRestoresParentID(t *testing.T) {
 	if !ok {
 		t.Fatal("not reattached")
 	}
-	if got := s.Info().ParentID; got != "p1" {
-		t.Fatalf("restored ParentID = %q, want p1", got)
+	if got := s.Info().ParentID; got != "" {
+		t.Fatalf("ParentID of a dead parent = %q, want \"\"", got)
+	}
+	if md := sidecarEntry(t, path, "bash-1"); md.ParentID != "" {
+		t.Fatalf("sidecar ParentID = %q, want \"\"", md.ParentID)
 	}
 }
 

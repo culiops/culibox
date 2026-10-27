@@ -10,11 +10,20 @@
 // itself a shell. The second rule keeps a hand-made parent chain or cycle from
 // hiding sessions: only top-level rows are ever walked for children, so a
 // nested row whose parent is also nested would never be listed at all.
+//
+// A third rule: the parent must not be newer than the shell. A row with the
+// parent's id but created after the shell is a later session that reused a
+// freed id (ids restart from live sessions after a daemon restart), and must
+// never adopt the shell or end it with itself. A missing `created` on either
+// side does not block nesting.
 
 function shellParentOf(s, sessions) {
   if (!s || !s.parent_id) return null;
   for (const p of sessions || []) {
-    if (p && p.id === s.parent_id) return p.parent_id ? null : p;
+    if (p && p.id === s.parent_id) {
+      if (p.parent_id) return null;
+      return Date.parse(p.created) > Date.parse(s.created) ? null : p;
+    }
   }
   return null;
 }
