@@ -94,6 +94,16 @@ function accEventRows(aws) {
   return out.slice(0, ACCESS_EVENTS);
 }
 
+// accSSO: what is KNOWN about a connection's SSO sign-in, never a guess. "expired"
+// when the daemon flagged it; "valid" only when a non-expired source in the
+// status names it (the connections that sign in through each source); "" when
+// nothing says it uses SSO (static keys, or the status not loaded yet).
+function accSSO(c, aws) {
+  if (c.sso_expired) return "expired";
+  const srcs = aws && aws.sso && Array.isArray(aws.sso.sources) ? aws.sso.sources : [];
+  return srcs.some((src) => src && src.expired === false && Array.isArray(src.names) && src.names.includes(c.name)) ? "valid" : "";
+}
+
 // accRow: one AWS connection's row.
 function accRow(c, o) {
   const { aws, conns, nowMs, stats, hostWarning, legacy } = o;
@@ -119,7 +129,7 @@ function accRow(c, o) {
   return {
     kind: "aws", name: c.name, conn: c.conn, prod: !!c.prod, sub,
     scope: live ? "write (elevated)" : "read",
-    sso: c.sso_expired ? "expired" : "valid",
+    sso: accSSO(c, aws),
     last: stats ? (t ? hhmm(stats.last_mint) : "never") : "",
     actions: list,
     grant: gp ? {

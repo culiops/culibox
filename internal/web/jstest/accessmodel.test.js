@@ -92,14 +92,14 @@ test("containment: optional rows are absent, not empty strings, when the session
   assert.strictEqual(c.model, "");
 });
 
-test("read connection: one row, Elevate offered, SSO valid, last credential time, PROD flag", () => {
+test("read connection: one row, Elevate offered, SSO unknown, last credential time, PROD flag", () => {
   const m = model({ session: sess(), aws: status() });
   assert.strictEqual(m.creds.rows.length, 1);
   const r = m.creds.rows[0];
   assert.strictEqual(r.name, "culipulse-prod");
   assert.strictEqual(r.prod, true);
   assert.strictEqual(r.scope, "read");
-  assert.strictEqual(r.sso, "valid");
+  assert.strictEqual(r.sso, "", "nothing says this connection uses SSO, so the row claims nothing");
   assert.deepStrictEqual(r.actions, ["elevate"]);
   assert.match(r.sub, /402100009917/);
   assert.match(r.sub, /agent-investigate/);
@@ -170,9 +170,26 @@ test("expired SSO: the row says so and the card hangs under the connection a Sig
   const cs = [conn({ name: "a", prod: false }), conn({ name: "b", prod: false, sso_expired: "src" })];
   const m = model({ session: sess({ aws_connections: cs }), aws: status({ connections: [] }) });
   assert.strictEqual(m.creds.rows.find((r) => r.name === "b").sso, "expired");
-  assert.strictEqual(m.creds.rows.find((r) => r.name === "a").sso, "valid");
+  assert.strictEqual(m.creds.rows.find((r) => r.name === "a").sso, "", "a connection nothing names is not called valid");
   assert.strictEqual(m.creds.ssoFor, "b");
   assert.strictEqual(model({ session: sess(), aws: status() }).creds.ssoFor, "");
+});
+
+test("SSO state is never a guess: valid only when a non-expired source names the connection", () => {
+  const cs = [conn({ name: "a", prod: false }), conn({ name: "b", prod: false }), conn({ name: "c", prod: false, sso_expired: "src" })];
+  const sso = { sources: [
+    { names: ["a"], expired: false, login: { state: "waiting", code: "ABCD" } },
+    { names: ["c"], expired: true },
+  ] };
+  const rows = model({ session: sess({ aws_connections: cs }), aws: status({ connections: [], sso }) }).creds.rows;
+  const by = (n) => rows.find((r) => r.name === n).sso;
+  assert.strictEqual(by("a"), "valid");
+  assert.strictEqual(by("b"), "", "static keys / unlisted: unknown");
+  assert.strictEqual(by("c"), "expired", "the expired flag wins over any source naming it");
+  const none = model({ session: sess({ aws_connections: cs }), aws: null }).creds.rows;
+  assert.deepStrictEqual(none.map((r) => [r.name, r.sso]), [["a", ""], ["b", ""], ["c", "expired"]], "before /aws loads nothing is claimed");
+  const odd = model({ session: sess({ aws_connections: cs }), aws: status({ sso: { sources: [null, { names: "a" }, { expired: false }] } }) }).creds.rows;
+  assert.ok(odd.every((r) => r.sso !== "valid"), "malformed sources claim nothing");
 });
 
 test("a running sign-in flow keeps the card even before the flag flips", () => {

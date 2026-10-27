@@ -214,7 +214,7 @@ function accRowBlock(r, ctx) {
 
   if (r.kind === "aws") {
     row.appendChild(accCell("Scope", r.scope, r.scope === "read" ? "" : "ac-write"));
-    const sso = accCell("SSO", r.sso, r.sso === "expired" ? "ac-need" : "ac-ok");
+    const sso = accCell("SSO", r.sso || "—", r.sso === "expired" ? "ac-need" : r.sso === "valid" ? "ac-ok" : "");
     row.appendChild(sso);
     row.appendChild(accCell("Last credential", r.last || "—"));
   } else {
