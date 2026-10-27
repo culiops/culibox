@@ -299,9 +299,9 @@ const STEER_KEY = "agent-box:steerRail";
 // The rail describes the session in the focused TERMINAL tab. A focused file
 // viewer is not a session and deliberately leaves the rail on its empty state
 // rather than showing whichever agent happens to be nearby. A shell docked in
-// the pane is not it either, even with the keyboard: the desktop Access drawer
-// shows this rail under a header naming the pane's agent (cellTerminal), so
-// the rail must describe, grant to and reply to that same session.
+// the pane is not it either, even with the keyboard: the pane header names the
+// pane's agent (cellTerminal), so the rail must describe, grant to and reply
+// to that same session. (Desktop never shows the rail: Access is a pane view.)
 function railSession() {
   const t = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
   const id = t ? t.id : null;
@@ -315,9 +315,9 @@ function steerOpen() {
 }
 
 function setSteerOpen(open) {
-  // Desktop: the rail no longer docks beside the grid; it opens in the pane
-  // drawer's Access view (app.js steerViaDrawer). Mobile keeps the code below.
-  if (typeof steerViaDrawer === "function" && steerViaDrawer(open)) return;
+  // Desktop: the rail no longer docks beside the grid; opening it opens the
+  // focused pane's Access view (app.js steerViaPaneView). Mobile keeps the code below.
+  if (typeof steerViaPaneView === "function" && steerViaPaneView(open)) return;
   const el = document.getElementById("steer-rail");
   if (!el) return;
   el.hidden = !open;

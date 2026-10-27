@@ -133,12 +133,13 @@ $("steer-toggle").onclick = toggleSteerRail;
 
 // --- desktop pane drawer (spec 5.3/5.4) ---------------------------------------
 // One drawer over the right of the pane grid, below the focused pane's header,
-// showing either the file tree (Files) or the session detail rail (Access). The
-// two are the EXISTING #files-pane and #steer-rail nodes, moved in on first use
-// (a DOM move, not a copy: every listener, the tree's state and the rail's
-// composer travel with them) and put back exactly where they were when the
-// viewport crosses into mobile, whose Files screen expects #files-pane inside
-// #sidebar. drawerFor (deskshell.js) owns the toggle decision.
+// showing the file tree (Files). The tree is the EXISTING #files-pane node,
+// moved in on first use (a DOM move, not a copy: every listener and the tree's
+// state travel with it) and put back exactly where it was when the viewport
+// crosses into mobile, whose Files screen expects #files-pane inside #sidebar.
+// drawerFor (deskshell.js) owns the toggle decision. Activity and Access are
+// not drawers: they are views in the pane body (tabs.js Cell.setView), and the
+// steer rail stays hidden in #layout on desktop.
 //
 // Declared up here, before boot builds the first cells: tabs.js reads it while
 // painting a header, and a `let` read before its line throws.
@@ -166,7 +167,7 @@ function toggleDrawer(kind, sessionId) {
 }
 
 // openDrawer: show `kind` for the session whatever is showing now (menu items,
-// openSteerFor, a press that also moved focus). opts.explicitRoot: an explicit
+// a press that also moved focus). opts.explicitRoot: an explicit
 // "show me this session's files" (the menu's Open files here), which re-roots
 // the tree even if it already follows the session; see drawerRootTree.
 function openDrawer(kind, sessionId, opts) {
@@ -183,7 +184,7 @@ function closeDrawerFor(sessionId, kind) {
   applyDrawer({ open: null, sessionId: drawerState.sessionId });
 }
 
-// headerDrawerPress: a Files/Access press in a pane header. A mouse press on a
+// headerDrawerPress: a Files press in a pane header. A mouse press on a
 // pane that was not focused has already moved focus there, and with it an open
 // drawer (drawerFollowFocus), so toggling would close what the user just asked
 // to see: open instead. A keyboard press moves no focus (e.detail is 0).
@@ -208,7 +209,7 @@ function applyDrawer(next, opts) {
   const body = $("drawer-body");
   if (!dr || !body) return;
   // A dirty buffer in the Files drawer's viewer asks before anything takes it
-  // away (closing, Access, another session); Cancel leaves the drawer as it is.
+  // away (closing, another session); Cancel leaves the drawer as it is.
   // The ask is async, so this call ends here and a confirmed one comes back in.
   if (!(opts && opts.discardOk) && typeof drawerWouldDiscard === "function" && drawerWouldDiscard(drawerState, next)) {
     drawerConfirmLeave().then((ok) => {
@@ -220,27 +221,13 @@ function applyDrawer(next, opts) {
   }
   const prev = drawerState;
   drawerState = next;
-  const rail = $("steer-rail");
   // The tree is the left column of the Files body; the viewer column beside it
   // is filesdrawer.js's.
   if (next.open === "files") moveIntoDrawer($("files-pane"), $("drawer-tree") || body);
-  if (next.open === "access") {
-    moveIntoDrawer(rail, body);
-    // The rail describes the focused terminal (railSession), so bring this
-    // session's tab to the front first if it is open somewhere; never open one.
-    // The pane's terminal, not the keyboard's: a docked shell holding the keys
-    // must not make this re-open the agent and pull focus out of the shell.
-    const t = next.sessionId ? terminalTabFor(next.sessionId) : null;
-    const shown = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
-    if (t && (shown ? shown.id : null) !== t.id) openTerminal(t.id, t.title());
-  }
-  // The rail's hidden attribute stays steerOpen()'s truth.
-  if (rail && rail.parentElement === body) rail.hidden = next.open !== "access";
   dr.dataset.kind = next.open || "";
   dr.hidden = !next.open;
   paintDrawerHead();
   positionDrawer();
-  if (next.open === "access") renderSteerRail();
   if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
   if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   for (const c of cells) paintDrawerTabs(c);
@@ -282,14 +269,15 @@ function paintDrawerHead() {
   const title = $("drawer-title");
   const sess = $("drawer-sess");
   if (!title || !sess) return;
-  title.textContent = drawerState.open === "access" ? "Access" : "Files";
+  title.textContent = "Files";
   const n = drawerSessionName(drawerState.sessionId);
   sess.textContent = n ? "\u00B7 " + n : "";
   sess.title = n;
 }
 
-// paintDrawerTabs: the underline on a pane's Files/Access tab follows the
-// drawer. Classes only, never a rebuild: see drawerFollowFocus.
+// paintDrawerTabs: the underline on a pane's Files tab follows the drawer
+// (the only header tab with data-k; Activity/Access are views, Cell.setView).
+// Classes only, never a rebuild: see drawerFollowFocus.
 function paintDrawerTabs(cell) {
   if (!cell || !cell.bar) return;
   const term = cellTerminal(cell);
@@ -304,8 +292,8 @@ function paintDrawerTabs(cell) {
   }
 }
 
-// drawerFollowFocus: the drawer's tree and rail already follow the focused tab
-// (syncFocusedTree / renderSteerRail), so its session and its header do too.
+// drawerFollowFocus: the drawer's tree already follows the focused tab
+// (syncFocusedTree), so its session and its header do too.
 function drawerFollowFocus() {
   if (!drawerState.open || !drawerDesktop()) return;
   const term = cellTerminal(focusedCell);
@@ -362,29 +350,29 @@ function positionDrawer() {
 // restoreDrawerNodes puts every moved node back exactly where it came from and
 // closes the drawer. Run on the crossing into mobile. The Files viewer is let
 // go too (a dirty one is kept whole for the next desktop drawer: see
-// drawerFilesDetach); no prompt can stop a resize.
+// drawerFilesDetach); no prompt can stop a resize. Every pane goes back to
+// Terminal as well: mobile has no pane views.
 function restoreDrawerNodes() {
   if (typeof drawerFilesDetach === "function") drawerFilesDetach();
   for (const [node, o] of drawerOrigins) {
     if (o.next && o.next.parentNode === o.parent) o.parent.insertBefore(node, o.next);
     else o.parent.appendChild(node);
-    // Closed with the drawer: a rail left unhidden would dock in its old place
-    // the next time the window is wide.
-    if (node.id === "steer-rail") node.hidden = true;
   }
   drawerOrigins.clear();
   drawerState = { open: null, sessionId: null };
   const dr = $("drawer");
   if (dr) { dr.hidden = true; dr.dataset.kind = ""; }
+  for (const c of cells) c.setView("terminal");
 }
 
-// steerViaDrawer is setSteerOpen's desktop route (steerrail.js): the rail never
-// docks on desktop, it opens in the Access drawer for the focused session.
+// steerViaPaneView is setSteerOpen's desktop route (steerrail.js): the rail
+// never docks on desktop; opening it opens the focused pane's Access view
+// (its agent, never a docked shell), closing it returns that pane to Terminal.
 // false on mobile, where setSteerOpen keeps its own behaviour.
-function steerViaDrawer(open) {
+function steerViaPaneView(open) {
   if (!drawerDesktop()) return false;
-  if (open) openDrawer("access", (cellTerminal(focusedCell) || {}).id);
-  else closeDrawerFor(undefined, "access");
+  if (open) { openPaneView(null, "access"); return true; }
+  if (focusedCell && focusedCell.view === "access") focusedCell.setView("terminal");
   return true;
 }
 
@@ -2000,8 +1988,9 @@ function paintCompactRow(li, sname, grow, s) {
     d.className = sub.amber ? "sub amber" : "sub";
     d.textContent = sub.text;
     // The name button is the keyboard path; the sub-line is the same action for
-    // a pointer (spec 7: it replaces the old summary-to-peek click).
-    d.onclick = () => openTerminal(s.id, s.name);
+    // a pointer (spec 7: it replaces the old summary-to-peek click). An SSO
+    // sign-in line opens the session's Access view instead, where sign-in lives.
+    d.onclick = () => { if (sub.view === "access" && openPaneView(s.id, "access")) return; openTerminal(s.id, s.name); };
     grow.appendChild(d);
   }
 }
@@ -2946,6 +2935,8 @@ async function refreshSessions() {
   // immediately before it actually sends, so a stale pending here only ever
   // makes a control look more open than it is, never less closed than reality.
   cells.forEach((c) => c.repaintReply());
+  // An open Activity / Access view repaints from the same list (Cell.updateView).
+  cells.forEach((c) => c.updateView());
   // Same treatment for the steer rail's composer, and for the same reason: it
   // re-gates, it never rebuilds, so a half-typed reply keeps its caret.
   if (typeof repaintSteerRail === "function") repaintSteerRail();
@@ -4947,7 +4938,8 @@ function runSessionAction(action, s) {
       syncTreeToRoot(s.cwd).catch(() => {});
       setMobileScreen("files");
     },
-    attribution: () => openSteerFor(s.id),
+    // Desktop: the Activity view, whose right column carries Context by tool.
+    attribution: () => { if (!mobileActive(window.innerWidth)) openPaneView(s.id, "activity"); else openSteerFor(s.id); },
     copycwd: () => copyPath(s.cwd),
     newpane: () => openTerminal(s.id, name, { newPane: true }),
     // Mobile-only: jump to (attaching if needed) and focus this session's
@@ -5647,7 +5639,7 @@ applyCollapsed(bootKeys.ignoreCollapsed ? { sessions: false, files: false } : re
 // bootFlags already absorbed a storage backend that throws, and opening the rail
 // paints it, so a rendering failure here is NOT swallowed: it would present as
 // "the rail just doesn't restore", with nothing in the console. Desktop never
-// opens it (the rail lives in the drawer's Access view there).
+// opens it (Access is a pane view there).
 if (bootKeys.openAccess) setSteerOpen(true);
 initSpawnControl();
 initSpawnWsPicker();

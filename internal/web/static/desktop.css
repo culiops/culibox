@@ -284,7 +284,8 @@
   }
   .ph-tab:hover { color: var(--fg); }
   .ph-tab.on { color: var(--fg); background: var(--raise); }
-  /* Files and Access are toggles over the pane: an underline while open. */
+  /* Files is a toggle over the pane (the drawer): an underline while open.
+     Terminal, Activity and Access are the pane's views: .on above. */
   .ph-tab.open { color: var(--fg); border-radius: 0; box-shadow: inset 0 -2px 0 var(--accent); }
   .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
   .ph-shell {
@@ -320,8 +321,9 @@
     .ph-shell { font-size: 0; padding: 4px 8px; }
     .ph-shell::before { content: "+"; font: 500 14px/1 var(--font-ui); }
   }
-  /* Too narrow for the tabs at all: dot, name and chip only. Files and Access
-     stay one click away in the pane's ⋯ menu (Open files here, Context by tool). */
+  /* Too narrow for the tabs at all: dot, name and chip only. Files and Activity
+     stay one click away in the pane's ⋯ menu (Open files here, Context by tool),
+     Access in the palette. */
   @container (max-width: 250px) {
     .ph-tabs, .ph-shell { display: none; }
   }
@@ -355,9 +357,9 @@
   }
   .mi-x:hover { color: var(--red); background: var(--raise); }
 
-  /* --- the pane drawer: Files / Access (spec 5.4) ------------------------- */
+  /* --- the pane drawer: Files (spec 5.4) ---------------------------------- */
   /* Over the right of the grid, below the focused pane's header (JS sets top
-     and --grid-w). The docked rail is gone on desktop: it lives in here. */
+     and --grid-w). The docked rail is gone on desktop: Access is a pane view. */
   #layout > #steer-rail { display: none; }
   #drawer {
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 10;
@@ -380,7 +382,7 @@
   #drawer-x:hover { color: var(--fg); background: var(--raise); }
   #drawer-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-  /* Both moved nodes stay in the body once moved; the kind picks one. */
+  /* The moved tree stays in the body once moved; the kind shows it. */
   #drawer:not([data-kind="files"]) #files-pane { display: none; }
   /* The tree: open whatever the sidebar's collapse state says, its own header
      reduced to the toolbar (the drawer header names it). */
@@ -388,25 +390,6 @@
   #drawer #files-pane > .files-body { display: flex; padding-top: 6px; }
   #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
   #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
-  /* Containment chips are neutral (D23): amber is for needs-you only, so the
-     old rail's amber host chip and green box chip are re-dressed here. */
-  #drawer .bdg.host, #drawer .bdg.box { color: var(--muted); background: var(--raise); border-color: transparent; }
-  #drawer .bdg.host { border-color: var(--faint); }
-  /* --warn is amber here, and the old rail used it for AWS write state. A write
-     window (open, or the base role able to) is red (D23); amber stays for
-     needs-you. Same shapes as app.css: solid open window, dashed "could write",
-     and the filled ringed chip for production while writing. */
-  #drawer .bdg.aws.write { color: var(--red); border-color: var(--red); }
-  #drawer .bdg.aws.rolew { color: var(--red); border-color: var(--red); }
-  #drawer .bdg.aws.prod.rolew { color: var(--red); border-color: var(--red); }
-  #drawer .bdg.aws.prod.rolew .awsw, #drawer .bdg.aws.prod.write .awsw { color: var(--red); font-weight: 700; }
-  #drawer .bdg.aws.prod.write {
-    border-color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent);
-    box-shadow: 0 0 0 2px var(--red);
-  }
-  #drawer .connln.warn { color: var(--red); }
-  /* The rail: a column of the drawer, not an overlay of its own. */
-  #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
 
   /* --- Files drawer body: tree 200px | viewer (spec 5.4) ------------------ */
   #drawer[data-kind="files"] .dr-body { flex-direction: row; }
@@ -591,6 +574,28 @@
   #ask-modal.info { width: 560px; max-width: 92vw; }
   #ask-modal.info #ask-cancel { display: none; }
   #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; overflow-x: auto; }
+
+  /* --- pane views: Activity / Access (spec 5.7, 5.8; ea-3.png, sa-1.png) ---- */
+  /* div.pane-view covers the agent's half of the pane body, below the header
+     and the ask strip (both sit above .cell-body). The tab under it keeps its
+     box (attached and sized: visibility, never display: none), so xterm's own
+     layers (z up to 11) cannot paint through and its textarea cannot take the
+     keyboard. With a dock the view stops at the dock's edge: the dock takes
+     --dock-ratio of the body, so the view leaves exactly that. Under the dock
+     splitter (z 3) and the focus ring (z 6). */
+  .cell-body { position: relative; }
+  .cell-body.has-view > .tab-body { visibility: hidden; }
+  .pane-view {
+    position: absolute; inset: 0; z-index: 2; min-width: 0; min-height: 0; overflow: auto;
+    background: var(--bg); color: var(--fg); font: 13px var(--font-ui);
+  }
+  .cell-body.dock-below > .pane-view { bottom: calc(var(--dock-ratio, 0.4) * 100%); }
+  .cell-body.dock-right > .pane-view { right: calc(var(--dock-ratio, 0.4) * 100%); }
+  .pane-view:focus { outline: none; }
+  /* A view whose content is not built yet: its name and the session. */
+  .pv-ph { display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; }
+  .pv-ph-t { margin: 0; font: 600 14px var(--font-ui); color: var(--fg); }
+  .pv-ph-s { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 
   /* --- companion-shell dock (spec 5.5; sl-1.png right, v5-3.png below) ----- */
   /* The pane body becomes [tab | dock]. Dragging the splitter moves only
