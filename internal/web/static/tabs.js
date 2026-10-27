@@ -200,6 +200,10 @@ class Cell {
     // Gated like activate() for the same reason: an unfocused cell's close says
     // nothing about where the tree belongs.
     if (this === focusedCell) { syncFocusedTree(); renderSteerRail(); }
+    // The desktop drawer may name this very session even from an unfocused pane
+    // (Open files here); it must not keep naming a closed one. (The focused case
+    // is already covered: syncFocusedTree ends in drawerFollowFocus.)
+    if (typeof drawerTabClosed === "function") drawerTabClosed(tab.id);
   }
 
   // detachTab takes a tab OUT of this cell without ending it: same bookkeeping
@@ -381,7 +385,10 @@ class Cell {
     if (a) {
       const dot = el("span");
       dot.className = a.cls + " ph-dot";
-      if (a.title) { dot.title = a.title; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", a.title); }
+      // Narrow: the connection state (see .ph-st below) joins the title.
+      const st = this._narrow && t && t.kind === "terminal" && typeof t.status === "function" && t.status() !== "connected" ? t.status() : "";
+      const title = [a.title, st].filter(Boolean).join(" \u00B7 ");
+      if (title) { dot.title = title; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", title); }
       main.append(dot);
     }
     // Several tabs in one pane: the name is a switcher, `name ▾ · N` (spec 7).
@@ -404,9 +411,12 @@ class Cell {
     }
     main.append(name);
     // A connection state other than the healthy one is a real signal (the old
-    // strip showed it too): connecting…, reconnecting…, ended, taken over.
-    if (t && t.kind === "terminal" && typeof t.status === "function" && t.status() !== "connected" && t.status()) {
-      const st = el("span", t.status());
+    // strip showed it too): connecting…, reconnecting…, ended, taken over. A
+    // narrow header is dot + name + ONE chip (D9), so there it rides in the
+    // dot's title instead.
+    const stText = t && t.kind === "terminal" && typeof t.status === "function" && t.status() !== "connected" ? t.status() : "";
+    if (stText && !this._narrow) {
+      const st = el("span", stText);
       st.className = "ph-st";
       main.append(st);
     }

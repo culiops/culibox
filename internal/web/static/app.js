@@ -158,10 +158,12 @@ function toggleDrawer(kind, sessionId) {
 }
 
 // openDrawer: show `kind` for the session whatever is showing now (menu items,
-// openSteerFor, a press that also moved focus).
-function openDrawer(kind, sessionId) {
+// openSteerFor, a press that also moved focus). opts.explicitRoot: an explicit
+// "show me this session's files" (the menu's Open files here), which re-roots
+// the tree even if it already follows the session; see drawerRootTree.
+function openDrawer(kind, sessionId, opts) {
   if (!drawerDesktop()) return;
-  applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId });
+  applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
 // closeDrawerFor: close the drawer if it is showing `kind` (any, if undefined)
@@ -178,8 +180,11 @@ function closeDrawerFor(sessionId, kind) {
 // drawer (drawerFollowFocus), so toggling would close what the user just asked
 // to see: open instead. A keyboard press moves no focus (e.detail is 0).
 function headerDrawerPress(cell, kind, sessionId, e) {
-  if (e && e.detail > 0 && !cell._pressFocused) openDrawer(kind, sessionId);
-  else toggleDrawer(kind, sessionId);
+  if (e && e.detail > 0 && !cell._pressFocused) { openDrawer(kind, sessionId); return; }
+  // A keyboard press on an unfocused pane: focus it first, so the drawer hangs
+  // under this pane's header and describes this pane's session.
+  if (focusedCell !== cell) setFocusedCell(cell);
+  toggleDrawer(kind, sessionId);
 }
 
 function moveIntoDrawer(node, body) {
@@ -188,7 +193,7 @@ function moveIntoDrawer(node, body) {
   body.appendChild(node);
 }
 
-function applyDrawer(next) {
+function applyDrawer(next, opts) {
   const dr = $("drawer");
   const body = $("drawer-body");
   if (!dr || !body) return;
@@ -209,18 +214,27 @@ function applyDrawer(next) {
   paintDrawerHead();
   positionDrawer();
   if (next.open === "access") renderSteerRail();
-  if (next.open === "files") drawerRootTree(next.sessionId);
+  if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
   for (const c of cells) paintDrawerTabs(c);
 }
 
-// drawerRootTree roots the tree at the drawer's session: its terminal's cwd
-// under the same follow-key syncFocusedTree uses (so a tree already following
-// it does not reload), else the session's recorded cwd. With no session it is
-// whatever the focused tab resolves to, as before.
-function drawerRootTree(sessionId) {
+// drawerRootTree roots the tree at the drawer's session. A header tab press
+// uses its terminal's cwd under the same follow-key syncFocusedTree uses (so a
+// tree already following it does not reload). `explicit` (the menu's Open
+// files here) passes NO key, like the mobile path: an explicit request must
+// re-root even when the key says the tree already follows this session (a
+// manual root change since then leaves the key in place), and no key also
+// clears the guard, so the tree resumes following focus at the next change.
+// Without a usable terminal cwd: the session's recorded cwd; with no session,
+// whatever the focused tab resolves to.
+function drawerRootTree(sessionId, explicit) {
   const t = sessionId ? terminalTabFor(sessionId) : null;
-  if (t && t.cwd) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
   const s = sessionId ? (lastSessions || []).find((x) => x.id === sessionId) : null;
+  if (explicit) {
+    const cwd = (s && s.cwd) || (t && t.cwd) || "";
+    if (cwd) { syncTreeToRoot(cwd).catch(() => {}); return; }
+  }
+  if (t && t.cwd) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
   if (s && s.cwd) { syncTreeToRoot(s.cwd).catch(() => {}); return; }
   syncFocusedTree();
 }
@@ -271,6 +285,13 @@ function drawerFollowFocus() {
     for (const c of cells) paintDrawerTabs(c);
   }
   positionDrawer();
+}
+
+// drawerTabClosed: a tab was closed. If it was the drawer's session's last tab,
+// the drawer moves to whatever the focused pane shows.
+function drawerTabClosed(id) {
+  if (!drawerState.open || drawerState.sessionId !== id || !id || terminalTabFor(id)) return;
+  drawerFollowFocus();
 }
 
 // positionDrawer: below the focused pane's header, over the right of the grid,
@@ -4639,10 +4660,11 @@ function runSessionAction(action, s) {
     // No follow-key: this is an explicit request and must re-root even when the
     // tree is already following this session, and passing none also clears the
     // guard, so the tree resumes following the focused tab at the next focus
-    // change. Unawaited from a click handler, hence the catch.
+    // change. Unawaited from a click handler, hence the catch. Desktop (R5)
+    // opens the Files drawer instead, and explicitRoot makes drawerRootTree do
+    // the same keyless re-root.
     files: () => {
-      // Desktop (R5): the Files drawer, rooted at this session.
-      if (!mobileActive(window.innerWidth)) { openDrawer("files", s.id); return; }
+      if (!mobileActive(window.innerWidth)) { openDrawer("files", s.id, { explicitRoot: true }); return; }
       syncTreeToRoot(s.cwd).catch(() => {});
       setMobileScreen("files");
     },
