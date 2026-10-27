@@ -614,7 +614,11 @@
     flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; height: 28px;
     padding: 0 6px 0 12px; background: var(--panel); border-bottom: 1px solid var(--line);
   }
-  .dock-tabs { flex: none; display: flex; align-items: center; gap: 2px; min-width: 0; }
+  /* The icon group (Below / Right / Own pane / Hide) never shrinks and never
+     leaves the bar: the strip, the chip and the cwd give way first, the cwd
+     before the others, down to nothing in a very narrow dock. */
+  .dock-tabs { flex: 0 1 auto; display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
+  .dock-bar > .ph-chip { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dock-tab, .dock-add {
     padding: 1px 3px; font: 600 12px/18px var(--font-ui); color: var(--muted);
     background: none; border: 0; border-radius: var(--r-chip); cursor: pointer; white-space: nowrap;
@@ -625,12 +629,12 @@
   .dock-dot { color: var(--faint); font-size: 12px; }
   .dock-st { color: var(--muted); font-size: 11px; }
   .dock-cwd {
-    flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 0 10 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: var(--muted); font-size: 12px;
   }
-  .dock-ics { flex: none; display: flex; align-items: center; gap: 2px; margin-left: auto; }
+  .dock-ics { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; margin-left: auto; }
   .dock-ic {
-    width: 24px; height: 22px; display: inline-grid; place-items: center; padding: 0;
+    width: 24px; height: 22px; flex: none; display: inline-grid; place-items: center; padding: 0;
     color: var(--muted); background: none; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   .dock-ic svg { width: 14px; height: 14px; }
@@ -638,4 +642,31 @@
   .dock-ic.on { color: var(--fg); background: var(--background3); }
   .dock-tab:focus-visible, .dock-add:focus-visible, .dock-ic:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   .dock-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
+
+  /* CodeMirror 5 on the dark UI (the drawer's editor and the pane's): the
+     vendor stylesheet only ships the white default theme. Specificity beats
+     .cm-s-default; every text colour is >= 4.5:1 on --bg (#0d0f12). */
+  .CodeMirror.cm-s-default { background: var(--bg); color: var(--fg); }
+  .CodeMirror.cm-s-default .CodeMirror-gutters { background: var(--panel); border-right: 1px solid var(--line); }
+  .CodeMirror.cm-s-default .CodeMirror-linenumber { color: var(--muted); }
+  .CodeMirror.cm-s-default .CodeMirror-cursor { border-left: 1px solid var(--fg); }
+  .CodeMirror.cm-s-default .CodeMirror-selected { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+  .CodeMirror.cm-s-default.CodeMirror-focused .CodeMirror-selected { background: color-mix(in srgb, var(--accent) 38%, transparent); }
+  .CodeMirror.cm-s-default .CodeMirror-matchingbracket { color: var(--ok) !important; }
+  .CodeMirror.cm-s-default .CodeMirror-nonmatchingbracket { color: var(--danger) !important; }
+  .CodeMirror.cm-s-default .cm-header { color: #d2a8ff; }
+  .CodeMirror.cm-s-default .cm-quote, .CodeMirror.cm-s-default .cm-tag,
+  .CodeMirror.cm-s-default .cm-type, .CodeMirror.cm-s-default .cm-variable-3 { color: #7ee787; }
+  .CodeMirror.cm-s-default .cm-keyword { color: #ff7b72; }
+  .CodeMirror.cm-s-default .cm-atom, .CodeMirror.cm-s-default .cm-number,
+  .CodeMirror.cm-s-default .cm-variable-2, .CodeMirror.cm-s-default .cm-attribute { color: #79c0ff; }
+  .CodeMirror.cm-s-default .cm-def { color: #d2a8ff; }
+  .CodeMirror.cm-s-default .cm-comment { color: #8b949e; }
+  .CodeMirror.cm-s-default .cm-string { color: #a5d6ff; }
+  .CodeMirror.cm-s-default .cm-string-2, .CodeMirror.cm-s-default .cm-builtin { color: #ffa657; }
+  .CodeMirror.cm-s-default .cm-meta, .CodeMirror.cm-s-default .cm-qualifier,
+  .CodeMirror.cm-s-default .cm-hr { color: var(--muted); }
+  .CodeMirror.cm-s-default .cm-bracket { color: #a8b0ba; }
+  .CodeMirror.cm-s-default .cm-link { color: var(--accent); }
+  .CodeMirror.cm-s-default .cm-error { color: var(--danger); }
 }
