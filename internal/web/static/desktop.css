@@ -1,0 +1,41 @@
+/* Desktop-only stylesheet (> 700px). EVERYTHING here lives inside the single
+   media block below: mobile (<= 700px) is unchanged by construction, and
+   jstest/desktop-scope.test.js fails the build if a rule escapes it. Later
+   desktop-shell tasks append their rules inside the same block. Loaded after
+   app.css so equal-specificity rules here win the cascade. */
+@media (min-width: 701px) {
+  /* Inter v4.1 (rsms/inter, SIL OFL 1.1 — vendor/inter/LICENSE.txt), the
+     variable build, self-hosted. No CDN. */
+  @font-face {
+    font-family: "Inter";
+    src: url("/vendor/inter/InterVariable.woff2") format("woff2");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  :root {
+    /* New tokens. */
+    --raise: #1b1f24; --line: #23282f; --faint: #5d6570;
+    --amber: #f5b94a; --red: #f06a6a;
+    --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --r-chip: 4px; --r-ctl: 6px; --r-card: 8px; --r-dlg: 10px;
+
+    /* The existing tokens, remapped to the graphite palette. Colour roles:
+       amber = needs-you only, green = status only, red = write/prod/destructive
+       /error only. */
+    --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
+    --accent: #6ea8fe; --ok: #4ccf8a;
+    --border: #23282f; --rule: #23282f;
+    --background0: #0d0f12; --background1: #14171b; --background2: #1b1f24;
+    --background3: #2a3038;
+    --foreground0: #e6e8eb; --foreground1: #8b939e; --foreground2: #5d6570;
+    --warn: #f5b94a; --danger: #f06a6a;
+    --radius: 6px;
+  }
+
+  body { font-family: var(--font-ui); font-size: 13px; background: var(--bg); }
+
+  /* Monospace stays for the terminal, code, paths and ids. */
+  .xterm, pre, code, .mono, .cm-editor, .CodeMirror { font-family: var(--font-mono); }
+}
