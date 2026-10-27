@@ -324,7 +324,8 @@ test("shortcutRows lists the real bindings and ends with the runtime row", () =>
   assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+`"), "quick shell");
   assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "runc" });
   for (const r of rows) assert.ok(r.keys && r.action, "no empty cell");
-  assert.ok(!rows.some((r) => /Collapse/.test(r.action)), "the sessions collapse is a no-op on desktop");
+  assert.ok(!rows.some((r) => /Collapse/.test(r.action)), "there is no sessions collapse on desktop");
+  assert.ok(rows.some((r) => r.keys === "Ctrl+Alt+S" && r.action === "Toggle sidebar / rail"), "Ctrl+Alt+S aliases the sidebar toggle");
 });
 
 test("shortcutRows uses the mac symbols and the sysbox label", () => {
@@ -334,6 +335,7 @@ test("shortcutRows uses the mac symbols and the sysbox label", () => {
   assert.ok(rows.some((r) => r.keys === "⌥⌘F" && r.action === "Files drawer"));
   assert.ok(rows.some((r) => r.keys === "⌘B"));
   assert.ok(!rows.some((r) => /Ctrl\+Shift\+K|Ctrl\+Alt/.test(r.keys)), "no non-mac combo for the same action");
+  assert.ok(rows.some((r) => r.keys === "⌥⌘S" && r.action === "Toggle sidebar / rail"));
   assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "sysbox" });
   assert.deepEqual(d.shortcutRows(false, "").slice(-1)[0], { keys: "Runtime", action: "runc" });
 });

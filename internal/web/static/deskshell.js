@@ -290,6 +290,7 @@ function shortcutRows(isMac, boxRuntime) {
     { keys: alt + "1…9", action: "Jump to session" },
     { keys: "Ctrl+Shift+`", action: "New shell here" },
     { keys: isMac ? "⌘B" : "Ctrl+Shift+B", action: "Toggle sidebar / rail" },
+    { keys: isMac ? "⌥⌘S" : "Ctrl+Alt+S", action: "Toggle sidebar / rail" },
     { keys: isMac ? "⌥⌘F" : "Ctrl+Alt+F", action: "Files drawer" },
     { keys: (isMac ? "⌘" : "Ctrl") + " + / - / 0", action: "Zoom in / out / reset" },
     { keys: isMac ? "⌘C" : "Ctrl+Shift+C", action: "Terminal: copy selection" },

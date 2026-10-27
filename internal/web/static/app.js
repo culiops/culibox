@@ -5653,6 +5653,10 @@ setInterval(refreshSessions, 3000);
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
     // Mobile's Files screen expects #files-pane back in #sidebar.
+    // The pane-collapse html classes follow the layout: the stored state on
+    // mobile (as at a fresh load), none on desktop, where app.css's
+    // .files-collapsed rule would otherwise hide the tree inside the drawer.
+    applyCollapsed(bootFlags(deskStorage(), mobileActive(window.innerWidth)).ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
     if (mobileActive(window.innerWidth)) restoreDrawerNodes();
     else paintSideCost(); // the footer was skipped while narrow
     refreshSessions();
@@ -5715,7 +5719,9 @@ document.addEventListener("keydown", (e) => {
   if (!mod) return;
   const code = e.code;
   let hit = null;
-  if (e.altKey && code === "KeyS") hit = () => togglePane("sessions");
+  // Desktop has no sessions pane to collapse; the combo is an alias of the
+  // sidebar <-> rail toggle (spec 7 keeps the binding).
+  if (e.altKey && code === "KeyS") hit = mobileActive(window.innerWidth) ? () => togglePane("sessions") : toggleSidebar;
   else if (e.altKey && code === "KeyF") {
     // Desktop: the tree lives in the Files drawer, so the combo toggles that
     // for the focused session; mobile keeps the pane collapse.

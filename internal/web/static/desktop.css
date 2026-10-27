@@ -88,8 +88,6 @@
   }
   .pbtn:hover { filter: brightness(1.08); }
   #side-top button:focus-visible, #side-foot button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
-  /* #side-new is the sidebar's "New session"; the Sessions header's "+ new" would be a second one. */
-  #sessions-phd #spawn-go { display: none; }
 
   /* --- legacy layout keys (spec 7) ---------------------------------------- */
   /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit
