@@ -170,6 +170,16 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   };
 }
 
+// drawerFor: the pane drawer's next state when a header tab (Files or Access)
+// is pressed for `sessionId`. The same kind for the same session closes it; any
+// other press opens the asked kind on the asked session, so one drawer is open
+// at a time and switching kinds or panes never takes two clicks.
+function drawerFor(state, kind, sessionId) {
+  const cur = state || { open: null, sessionId: null };
+  if (cur.open === kind && cur.sessionId === sessionId) return { open: null, sessionId };
+  return { open: kind, sessionId };
+}
+
 // needStripModel: the ask strip under a pane header, null unless the session
 // needs you. cardContent's text is the command for an ask, else the need's own sentence.
 function needStripModel(s) {
@@ -206,5 +216,5 @@ function pushRecentProfile(list, name) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, needStripModel, emptyStateModel, pushRecentProfile };
+    paneHeaderModel, drawerFor, needStripModel, emptyStateModel, pushRecentProfile };
 }

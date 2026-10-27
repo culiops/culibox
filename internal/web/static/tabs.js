@@ -48,6 +48,8 @@ function setFocusedCellRaw(cell) {
 }
 let cap = 4; // max windows before opens stack as tabs (the 1/2/4 buttons set it)
 let maximized = null;
+// Below this width a pane's desktop header keeps dot + name + one chip (D9).
+const NARROW_PANE_PX = 560;
 
 // `restoring` is what protects the stored snapshot during boot: every layout call
 // boot makes (applyCap(4) and friends) would otherwise write an empty grid over it
@@ -122,7 +124,31 @@ class Cell {
     this.body = document.createElement("div");
     this.body.className = "cell-body";
     this.el.append(this.bar, this.body);
+    // Registered BEFORE the focus listener below, so it sees focus as it was
+    // when the press began. The desktop header's Files/Access tabs need that:
+    // a press on an unfocused pane moves focus first, the open drawer follows
+    // focus to this pane's session, and only then does the click land, which
+    // would read "already open here" and close it. See headerDrawerPress.
+    this.el.addEventListener("mousedown", () => { this._pressFocused = focusedCell === this; }, true);
     this.el.addEventListener("mousedown", () => setFocusedCell(this), true);
+    // Desktop header narrow rule (D9): below NARROW_PANE_PX the header keeps
+    // one chip. A ResizeObserver, not a media query: a pane narrows with the
+    // layout (1/2/4, sidebar, window) and only the cell knows its own width.
+    // It re-renders only when the verdict flips, so a drag costs nothing per
+    // pixel. dispose() disconnects it.
+    this._narrow = false;
+    this._ro = null;
+    if (typeof ResizeObserver === "function") {
+      this._ro = new ResizeObserver((entries) => {
+        const w = entries.length ? entries[entries.length - 1].contentRect.width : 0;
+        if (!w) return; // detached (another pane is maximized): keep the last verdict
+        const narrow = w < NARROW_PANE_PX;
+        if (narrow === this._narrow) return;
+        this._narrow = narrow;
+        if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) this.renderBar();
+      });
+      this._ro.observe(this.el);
+    }
     // Explicit so the sentinel is deliberate, not an implicit `undefined`
     // that syncNeeds' first call happens to treat correctly.
     this._needsKey = "";
@@ -139,6 +165,7 @@ class Cell {
   }
 
   activate(tab) {
+    if (tab && tab.kind === "terminal") this._lastTerm = tab; // see cellTerminal
     if (this.activeTab === tab) {
       this.renderBody(); tab.onShow?.();
     } else {
@@ -157,6 +184,7 @@ class Cell {
     const i = this.tabs.indexOf(tab);
     if (i < 0) return;
     this.tabs.splice(i, 1);
+    if (this._lastTerm === tab) this._lastTerm = null;
     tab.dispose?.();
     if (this.tabs.length === 0 && cells.length > 1) { removeCell(this); return; } // reflow: drop the emptied window
     if (this.activeTab === tab) {
@@ -184,6 +212,7 @@ class Cell {
     const i = this.tabs.indexOf(tab);
     if (i < 0) return;
     this.tabs.splice(i, 1);
+    if (this._lastTerm === tab) this._lastTerm = null;
     if (this.tabs.length === 0 && cells.length > 1) { removeCell(this); return; } // reflow: drop the emptied window
     if (this.activeTab === tab) {
       this.activeTab = this.tabs[Math.min(i, this.tabs.length - 1)] || null;
@@ -210,6 +239,15 @@ class Cell {
   }
 
   renderBar() {
+    // Desktop: the one-line pane header. Mobile hides .cell-bar altogether and
+    // keeps the tab strip below exactly as it was.
+    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) {
+      this.renderHeader();
+      this.bar.hidden = this.tabs.length === 0;
+      this.el.classList.toggle("focus", this === focusedCell);
+      this.syncNeeds();
+      return;
+    }
     const tabs = this.tabs.map((t) => {
       const b = document.createElement("div");
       b.className = "tab" + (t === this.activeTab ? " act" : "");
@@ -310,6 +348,161 @@ class Cell {
     this.syncNeeds();
   }
 
+  // renderHeader builds the desktop pane header (spec 5.3): one line, fixed
+  // slot order, empty slots collapse. Left: dot, name (a switcher when the pane
+  // holds several tabs), chips, model, context %. Right: Terminal · Files ·
+  // Access, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
+  // what shows; this only paints it. Rebuilt on every renderBar like the strip
+  // it replaces, so no listener outlives its node.
+  renderHeader() {
+    if (this.tabs.length === 0) { this.bar.replaceChildren(); return; }
+    const t = this.activeTab;
+    const term = cellTerminal(this);
+    const sid = term ? term.id : null;
+    const s = sid ? (lastSessions || []).find((x) => x.id === sid) || null : null;
+    const m = paneHeaderModel({
+      tab: t, session: t && t.kind === "terminal" ? s : null, nowMs: Date.now(),
+      boxRuntime: typeof boxRuntime === "string" ? boxRuntime : "", narrow: this._narrow,
+    });
+    // Classes are assigned as literals at each call site (not passed in), so
+    // classnames.test.js can see every one of them.
+    const el = (tag, text) => {
+      const n = document.createElement(tag);
+      if (text != null) n.textContent = text;
+      if (tag === "button") n.type = "button";
+      return n;
+    };
+
+    const main = el("div");
+    main.className = "ph-main";
+    // The terminal's own pushed activity, like the old tab dot; a viewer has none.
+    const a = t && t.kind === "terminal" && typeof t.activity === "function"
+      ? activityClass(t.activity(), typeof t.needWhy === "function" ? t.needWhy() : "") : m.dot;
+    if (a) {
+      const dot = el("span");
+      dot.className = a.cls + " ph-dot";
+      if (a.title) { dot.title = a.title; dot.setAttribute("role", "img"); dot.setAttribute("aria-label", a.title); }
+      main.append(dot);
+    }
+    // Several tabs in one pane: the name is a switcher, `name ▾ · N` (spec 7).
+    let name;
+    if (this.tabs.length > 1) {
+      name = el("button");
+      name.className = "ph-name ph-switch";
+      const nm = el("span", m.name);
+      nm.className = "ph-nm";
+      const cnt = el("span", "\u25BE \u00B7 " + this.tabs.length);
+      cnt.className = "ph-cnt";
+      name.append(nm, cnt);
+      name.title = m.name + " (" + this.tabs.length + " tabs in this pane)";
+      name.setAttribute("aria-haspopup", "menu");
+      name.onclick = (e) => { e.stopPropagation(); openTabSwitcher(name, this); };
+    } else {
+      name = el("span", m.name);
+      name.className = "ph-name";
+      name.title = m.name;
+    }
+    main.append(name);
+    // A connection state other than the healthy one is a real signal (the old
+    // strip showed it too): connecting…, reconnecting…, ended, taken over.
+    if (t && t.kind === "terminal" && typeof t.status === "function" && t.status() !== "connected" && t.status()) {
+      const st = el("span", t.status());
+      st.className = "ph-st";
+      main.append(st);
+    }
+    for (const c of m.chips) {
+      const chip = el("span", c.text);
+      chip.className = "ph-chip " + c.tone;
+      if (c.title) chip.title = c.title;
+      main.append(chip);
+    }
+    // The agent account, when it is not the default: where you type into a
+    // session, the account must be visible (it was on the old tab).
+    if (!this._narrow && t && t.kind === "terminal") {
+      const ab = acctBadgeEl(s);
+      if (ab) main.append(ab);
+    }
+    if (m.model) {
+      const mo = el("span", m.model);
+      mo.className = "ph-model mono";
+      main.append(mo);
+    }
+    if (m.ctx && sid) {
+      // R2: the same action as the old tab's usage chip, Context by tool.
+      const ctx = el("button", m.ctx);
+      ctx.className = "ph-ctx";
+      const ut = typeof usageTitle === "function" ? usageTitle(t.usage()) : "";
+      ctx.title = (ut ? ut + " \u2014 " : "") + "click for context by tool";
+      ctx.onclick = (e) => { e.stopPropagation(); openSteerFor(sid); };
+      main.append(ctx);
+    }
+
+    const side = el("div");
+    side.className = "ph-side";
+    const tabs = el("div");
+    tabs.className = "ph-tabs";
+    tabs.setAttribute("role", "group");
+    tabs.setAttribute("aria-label", "Pane views");
+    if (term) {
+      const tt = el("button", "Terminal");
+      tt.className = "ph-tab" + (t === term ? " on" : "");
+      tt.onclick = (e) => {
+        e.stopPropagation();
+        // Terminal means "show me the agent": its tab, and no drawer over it.
+        if (typeof closeDrawerFor === "function") closeDrawerFor(sid);
+        if (this.activeTab !== term) this.activate(term);
+      };
+      tabs.append(tt);
+    }
+    for (const [kind, label] of [["files", "Files"], ["access", "Access"]]) {
+      if (kind === "access" && !term) continue; // a pane of files has no session to describe
+      const b = el("button", label);
+      b.className = "ph-tab";
+      b.dataset.k = kind;
+      b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, kind, sid, e); };
+      tabs.append(b);
+    }
+    const sep = el("span");
+    sep.className = "ph-sep";
+    side.append(tabs, sep);
+    const sh = el("button", "+ Shell");
+    sh.className = "ph-shell";
+    sh.title = "New shell beside this session, same directory and tier (Ctrl+Shift+`)";
+    sh.hidden = !window.shellProfile; // no detected shell → no quick shell
+    sh.onclick = (e) => {
+      e.stopPropagation();
+      sh.disabled = true;
+      Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
+    };
+    side.append(sh);
+    if (s) {
+      // The same menu as the sidebar row's ⋯, End session included (spec 7).
+      const more = el("button", "\u22EF");
+      more.className = "ph-ic ph-more";
+      more.title = "Session actions";
+      more.setAttribute("aria-label", "Session actions");
+      more.setAttribute("aria-haspopup", "menu");
+      more.onclick = (e) => { e.stopPropagation(); toggleSessionMenuAt(more, s); };
+      side.append(more);
+    }
+    // ⛶ stays visible while maximized: a stored maximized pane must always have
+    // its way back (spec 7, localStorage hazards).
+    const max = el("button", maximized === this ? "\u2750" : "\u26F6");
+    max.className = "ph-ic ph-max" + (maximized === this ? " pin" : "");
+    max.title = maximized === this ? "Restore" : "Maximize";
+    max.setAttribute("aria-label", max.title);
+    max.onclick = (e) => { e.stopPropagation(); toggleMax(this); };
+    const del = el("button", "\u00D7");
+    del.className = "ph-ic ph-del";
+    del.title = "Close pane (the session keeps running)";
+    del.setAttribute("aria-label", "Close pane");
+    del.onclick = (e) => { e.stopPropagation(); removeCell(this); };
+    side.append(max, del);
+
+    this.bar.replaceChildren(main, side);
+    paintDrawerTabs(this);
+  }
+
   // syncNeeds paints the pane's "this agent needs you" state: an amber frame,
   // and an answer strip so the question can be answered without leaving the
   // wall. Driven by the same activity push that moves the tab's dot.
@@ -354,7 +547,10 @@ class Cell {
     this._strip?._paint();
   }
 
-  dispose() { this.tabs.forEach((t) => t.dispose?.()); }
+  dispose() {
+    if (this._ro) { this._ro.disconnect(); this._ro = null; }
+    this.tabs.forEach((t) => t.dispose?.());
+  }
 }
 
 // buildReplyStrip: the answer strip under a waiting pane. Three quick replies,
@@ -573,6 +769,18 @@ function cellCwd(cell) {
   return "";
 }
 
+// cellTerminal → the terminal tab a pane is about: the active tab when it is
+// one, else the terminal last shown in the cell (a file opened over an agent
+// still belongs to that agent), else the newest terminal tab, else null.
+function cellTerminal(cell) {
+  if (!cell) return null;
+  const act = cell.activeTab;
+  if (act && act.kind === "terminal") return act;
+  if (cell._lastTerm && cell.tabs.includes(cell._lastTerm)) return cell._lastTerm;
+  for (let i = cell.tabs.length - 1; i >= 0; i--) if (cell.tabs[i].kind === "terminal") return cell.tabs[i];
+  return null;
+}
+
 // syncFocusedTree re-roots the file tree to whatever the focused TAB resolves
 // to — a terminal's cwd, or the directory holding the file a viewer is showing.
 // treeFollowTarget owns that decision and returns null when there is nothing to
@@ -585,6 +793,10 @@ function syncFocusedTree() {
   if (typeof treeFollowTarget !== "function" || typeof syncTreeToRoot !== "function") return;
   const target = treeFollowTarget(focusedTab());
   if (target) syncTreeToRoot(target.root, target.key);
+  // The desktop drawer describes the focused pane too, so it follows the same
+  // change. It only repaints classes and text: this runs from a cell's
+  // mousedown, where a rebuilt header would eat the click.
+  if (typeof drawerFollowFocus === "function") drawerFollowFocus();
 }
 
 function ensureFirstCell() {
@@ -647,6 +859,8 @@ function renderGrid() {
   show.forEach((c) => c.activeTab?.onAttach?.());
   cells.forEach((c) => c.renderBar());
   requestAnimationFrame(fitAll);
+  // The desktop drawer hangs below the focused pane's header, which just moved.
+  if (typeof positionDrawer === "function") positionDrawer();
 }
 
 function fitAll() {
@@ -672,6 +886,7 @@ function applyCap(n) {
     if (maximized === extra) maximized = null;
     if (focusedCell === extra) setFocusedCellRaw(keep);
     extra.tabs = []; // detach: do NOT dispose (tabs live on in `keep`)
+    if (extra._ro) { extra._ro.disconnect(); extra._ro = null; } // the cell itself is gone
   }
   if (!cells.includes(focusedCell)) setFocusedCellRaw(cells[cells.length - 1] || null);
   ensureFirstCell();
@@ -791,6 +1006,7 @@ function openFile(path) {
     const t = c.tabs.find((t) => t.kind === "viewer" && !t.box && t.path === path);
     if (t) {
       setFocusedCell(c); c.activate(t);
+      if (typeof closeDrawerFor === "function") closeDrawerFor(undefined, "files");
       if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
       if (typeof renderMobileChips === "function") renderMobileChips();
       return;
@@ -799,6 +1015,9 @@ function openFile(path) {
   const cell = focusedCellOrCreate();
   cell.addTab(new ViewerTab(path));
   renderGrid();
+  // Desktop: a file opened from the Files drawer opens in the pane UNDER the
+  // drawer, so the drawer gets out of its way.
+  if (typeof closeDrawerFor === "function") closeDrawerFor(undefined, "files");
   if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
   if (typeof renderMobileChips === "function") renderMobileChips();
 }

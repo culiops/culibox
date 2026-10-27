@@ -227,3 +227,20 @@ test("costTodayRange is today's UTC date for both ends, the convention analytics
   assert.deepEqual(d.costTodayRange(Date.parse("2026-10-27T23:30:00Z")), { from: "2026-10-27", to: "2026-10-27" });
   assert.deepEqual(d.costTodayRange(Date.parse("2026-10-28T00:00:00Z")), { from: "2026-10-28", to: "2026-10-28" });
 });
+
+test("drawerFor opens a closed drawer on the asked kind and session", () => {
+  assert.deepEqual(d.drawerFor({ open: null, sessionId: null }, "files", "a"), { open: "files", sessionId: "a" });
+  assert.deepEqual(d.drawerFor(undefined, "access", "a"), { open: "access", sessionId: "a" }, "no state yet = closed");
+});
+
+test("drawerFor closes when the same kind is asked for the same session", () => {
+  assert.deepEqual(d.drawerFor({ open: "files", sessionId: "a" }, "files", "a"), { open: null, sessionId: "a" });
+});
+
+test("drawerFor switches drawers when a different kind is asked", () => {
+  assert.deepEqual(d.drawerFor({ open: "files", sessionId: "a" }, "access", "a"), { open: "access", sessionId: "a" });
+});
+
+test("drawerFor keeps the drawer open on a different session with the same kind", () => {
+  assert.deepEqual(d.drawerFor({ open: "files", sessionId: "a" }, "files", "b"), { open: "files", sessionId: "b" });
+});

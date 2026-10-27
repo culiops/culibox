@@ -311,6 +311,9 @@ function steerOpen() {
 }
 
 function setSteerOpen(open) {
+  // Desktop: the rail no longer docks beside the grid; it opens in the pane
+  // drawer's Access view (app.js steerViaDrawer). Mobile keeps the code below.
+  if (typeof steerViaDrawer === "function" && steerViaDrawer(open)) return;
   const el = document.getElementById("steer-rail");
   if (!el) return;
   el.hidden = !open;

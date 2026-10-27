@@ -128,6 +128,15 @@
     <main id="grid" class="empty">
       <div class="placeholder">Spawn or open a session. Panes appear here.</div>
     </main>
+    <aside id="drawer" aria-label="Session drawer" hidden>
+      <div class="dr-head">
+        <span id="drawer-title" class="dr-title">Files</span>
+        <span id="drawer-sess" class="dr-sess"></span>
+        <span class="dr-fill"></span>
+        <button id="drawer-x" type="button" title="Close the drawer" aria-label="Close the drawer">&#10005;</button>
+      </div>
+      <div id="drawer-body" class="dr-body"></div>
+    </aside>
     <aside id="steer-rail" class="rail" aria-label="Session detail" hidden>
       <div class="rsec" id="steer-head"></div>
       <div class="rsec" id="steer-elev" hidden></div>

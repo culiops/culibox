@@ -190,7 +190,13 @@ function paletteCommands(mac) {
   if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {
     cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
   }
-  cmds.push({ kind: "view", label: "Toggle session detail rail", hint: "", run: toggleSteerRail });
+  // Desktop: the rail lives in the pane drawer's Access view (R6: one entry).
+  if (typeof mobileActive === "function" && !mobileActive(window.innerWidth) && typeof toggleDrawer === "function") {
+    cmds.push({ kind: "view", label: "Session details (Access)", hint: "",
+      run: () => toggleDrawer("access", (cellTerminal(focusedCell) || {}).id) });
+  } else {
+    cmds.push({ kind: "view", label: "Toggle session detail rail", hint: "", run: toggleSteerRail });
+  }
   cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
   cmds.push({ kind: "view", label: "Collapse/expand files", hint: mac ? "⌥⌘F" : "Alt+Ctrl+F", run: () => togglePane("files") });
   cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });

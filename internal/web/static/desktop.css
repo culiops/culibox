@@ -93,6 +93,7 @@
 
   /* --- sidebar footer ----------------------------------------------------- */
   #side-foot {
+    margin-top: auto; /* stays at the bottom whatever the panes above it do */
     display: flex; flex: none; flex-direction: column; gap: 8px; padding: 10px 12px 8px;
     border-top: 1px solid var(--line); background: var(--panel);
   }
@@ -187,4 +188,139 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #sessions .drow .sub.amber { color: var(--amber); }
+
+  /* --- pane header: one line (spec 5.3) ---------------------------------- */
+  /* The old tab strip's bar, re-drawn by Cell.renderHeader. Two columns: the
+     left one gives way (ellipsis on the name and chips), the right one never
+     wraps. */
+  .cell-bar {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px;
+    height: 38px; padding: 0 8px 0 12px; overflow: hidden; white-space: nowrap;
+    background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .cell-bar[hidden] { display: none; }
+  .ph-main { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+  .ph-main .ph-dot { flex: none; }
+  .ph-name {
+    flex: 0 1 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis;
+    font: 600 13.5px var(--font-ui); color: var(--fg);
+  }
+  .ph-switch {
+    display: inline-flex; align-items: baseline; gap: 6px; padding: 2px 6px; margin: 0 -6px;
+    background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
+  }
+  .ph-switch:hover { background: var(--raise); }
+  .ph-nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .ph-cnt { flex: none; font-weight: 500; font-size: 12px; color: var(--muted); }
+  .ph-st { flex: none; font-size: 12px; color: var(--muted); }
+  /* Neutral containment and read credential; only an open write window is
+     red (D23). A short chip never shrinks (a clipped "h…" says nothing); the
+     long cloud/write chips give way down to a stub, then the name does. */
+  .ph-chip {
+    flex: none; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+    padding: 0 6px; font: 500 11px/18px var(--font-ui); color: var(--muted);
+    background: var(--raise); border-radius: var(--r-chip);
+  }
+  .ph-chip.cloud, .ph-chip.write { flex: 0 1 auto; min-width: 7ch; }
+  .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  .ph-chip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
+  .ph-model { flex: none; font-size: 11.5px; color: var(--muted); }
+  .ph-ctx {
+    flex: none; padding: 1px 4px; font: 12px var(--font-ui); font-variant-numeric: tabular-nums;
+    color: var(--muted); background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
+  }
+  .ph-ctx:hover { color: var(--fg); background: var(--raise); }
+  .ph-side { display: flex; align-items: center; gap: 2px; }
+  .ph-tabs { display: flex; align-items: center; gap: 2px; }
+  .ph-tab {
+    padding: 4px 9px; font: 12.5px var(--font-ui); color: var(--muted);
+    background: transparent; border: 0; border-radius: var(--r-ctl); cursor: pointer;
+  }
+  .ph-tab:hover { color: var(--fg); }
+  .ph-tab.on { color: var(--fg); background: var(--raise); }
+  /* Files and Access are toggles over the pane: an underline while open. */
+  .ph-tab.open { color: var(--fg); border-radius: 0; box-shadow: inset 0 -2px 0 var(--accent); }
+  .ph-sep { width: 1px; height: 16px; margin: 0 6px; background: var(--line); }
+  .ph-shell {
+    padding: 4px 10px; font: 500 12px var(--font-ui); color: var(--fg); cursor: pointer;
+    background: var(--raise); border: 0; border-radius: var(--r-ctl);
+  }
+  .ph-shell:hover { background: var(--line); }
+  .ph-shell:disabled { opacity: .45; cursor: default; }
+  .ph-shell[hidden] { display: none; }
+  /* ⋯ ⛶ × take no room until the header is hovered or holds focus; ⛶ stays
+     while its pane is maximized, so the way back is never hidden. */
+  .ph-ic {
+    flex: none; width: 0; height: 24px; padding: 0; overflow: hidden; opacity: 0;
+    font: 14px var(--font-ui); line-height: 1; color: var(--muted); cursor: pointer;
+    background: transparent; border: 0; border-radius: var(--r-ctl);
+  }
+  .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { width: 24px; opacity: 1; }
+  .ph-ic:hover { color: var(--fg); background: var(--raise); }
+  .ph-more { font-size: 15px; }
+  .ph-max.pin { color: var(--fg); }
+  .ph-del:hover { color: var(--red); }
+  .cell-bar button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+  /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
+     an 8px gutter: the room goes to the panes, and two panes at 1440px stay
+     above the narrow threshold. */
+  #grid { gap: 1px; padding: 0; background: var(--line); }
+  #grid.empty { background: var(--bg); }
+
+  /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
+  .cell.focus:not(.drop-hot) { outline: none; }
+  .cell.focus::before {
+    content: ""; position: absolute; inset: 0; z-index: 6; pointer-events: none;
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  .cell.needs.focus::after { inset: 1px; }
+
+  /* The tab switcher reuses #session-menu: a row is the tab plus its close. */
+  .mi-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+  .mi-row:last-child { border-bottom: 0; }
+  .mi-row .mi { flex: 1; min-width: 0; border-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mi.cur { color: var(--accent); }
+  .mi-x {
+    flex: none; width: 34px; font: 15px var(--font-ui); color: var(--muted); cursor: pointer;
+    background: transparent; border: 0;
+  }
+  .mi-x:hover { color: var(--red); background: var(--raise); }
+
+  /* --- the pane drawer: Files / Access (spec 5.4) ------------------------- */
+  /* Over the right of the grid, below the focused pane's header (JS sets top
+     and --grid-w). The docked rail is gone on desktop: it lives in here. */
+  #layout > #steer-rail { display: none; }
+  #drawer {
+    position: absolute; top: 0; right: 0; bottom: 0; z-index: 10;
+    width: min(720px, calc(var(--grid-w, 100%) * .62));
+    display: flex; flex-direction: column; min-height: 0;
+    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -12px 0 30px #0009;
+  }
+  #drawer[hidden] { display: none; }
+  .dr-head {
+    flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 14px;
+    font-weight: 600; border-bottom: 1px solid var(--line);
+  }
+  .dr-title { flex: none; }
+  .dr-sess { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
+  .dr-fill { flex: 1; }
+  #drawer-x {
+    flex: none; width: 26px; height: 24px; font: 13px var(--font-ui); color: var(--muted); cursor: pointer;
+    background: transparent; border: 0; border-radius: var(--r-ctl);
+  }
+  #drawer-x:hover { color: var(--fg); background: var(--raise); }
+  #drawer-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .dr-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* Both moved nodes stay in the body once moved; the kind picks one. */
+  #drawer:not([data-kind="files"]) #files-pane { display: none; }
+  /* The tree: open whatever the sidebar's collapse state says, its own header
+     reduced to the toolbar (the drawer header names it). */
+  #drawer #files-pane { flex: 1 1 auto; min-height: 0; }
+  #drawer #files-pane > .files-body { display: flex; padding-top: 6px; }
+  #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
+  #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
+  /* The rail: a column of the drawer, not an overlay of its own. */
+  #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
 }

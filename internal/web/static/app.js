@@ -130,6 +130,195 @@ $("sidebar-toggle").onclick = toggleSidebar;
 $("side-collapse").onclick = toggleSidebar;
 $("steer-toggle").onclick = toggleSteerRail;
 
+// --- desktop pane drawer (spec 5.3/5.4) ---------------------------------------
+// One drawer over the right of the pane grid, below the focused pane's header,
+// showing either the file tree (Files) or the session detail rail (Access). The
+// two are the EXISTING #files-pane and #steer-rail nodes, moved in on first use
+// (a DOM move, not a copy: every listener, the tree's state and the rail's
+// composer travel with them) and put back exactly where they were when the
+// viewport crosses into mobile, whose Files screen expects #files-pane inside
+// #sidebar. drawerFor (deskshell.js) owns the toggle decision.
+//
+// Declared up here, before boot builds the first cells: tabs.js reads it while
+// painting a header, and a `let` read before its line throws.
+let drawerState = { open: null, sessionId: null };
+// node -> { parent, next }: where a moved node came from. Filled on the first
+// move only, emptied by restoreDrawerNodes.
+const drawerOrigins = new Map();
+
+function drawerDesktop() {
+  return !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+}
+
+// toggleDrawer: a header tab's press. Opens `kind` for the session, closes it if
+// that is what is already showing, or switches.
+function toggleDrawer(kind, sessionId) {
+  if (!drawerDesktop()) return;
+  applyDrawer(drawerFor(drawerState, kind, sessionId == null ? null : sessionId));
+}
+
+// openDrawer: show `kind` for the session whatever is showing now (menu items,
+// openSteerFor, a press that also moved focus).
+function openDrawer(kind, sessionId) {
+  if (!drawerDesktop()) return;
+  applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId });
+}
+
+// closeDrawerFor: close the drawer if it is showing `kind` (any, if undefined)
+// for `sessionId` (any, if undefined).
+function closeDrawerFor(sessionId, kind) {
+  if (!drawerState.open) return;
+  if (sessionId !== undefined && drawerState.sessionId !== sessionId) return;
+  if (kind !== undefined && drawerState.open !== kind) return;
+  applyDrawer({ open: null, sessionId: drawerState.sessionId });
+}
+
+// headerDrawerPress: a Files/Access press in a pane header. A mouse press on a
+// pane that was not focused has already moved focus there, and with it an open
+// drawer (drawerFollowFocus), so toggling would close what the user just asked
+// to see: open instead. A keyboard press moves no focus (e.detail is 0).
+function headerDrawerPress(cell, kind, sessionId, e) {
+  if (e && e.detail > 0 && !cell._pressFocused) openDrawer(kind, sessionId);
+  else toggleDrawer(kind, sessionId);
+}
+
+function moveIntoDrawer(node, body) {
+  if (!node || node.parentElement === body) return;
+  if (!drawerOrigins.has(node)) drawerOrigins.set(node, { parent: node.parentElement, next: node.nextSibling });
+  body.appendChild(node);
+}
+
+function applyDrawer(next) {
+  const dr = $("drawer");
+  const body = $("drawer-body");
+  if (!dr || !body) return;
+  drawerState = next;
+  const rail = $("steer-rail");
+  if (next.open === "files") moveIntoDrawer($("files-pane"), body);
+  if (next.open === "access") {
+    moveIntoDrawer(rail, body);
+    // The rail describes the focused terminal (railSession), so bring this
+    // session's tab to the front first if it is open somewhere; never open one.
+    const t = next.sessionId ? terminalTabFor(next.sessionId) : null;
+    if (t && selectedSessionId() !== t.id) openTerminal(t.id, t.title());
+  }
+  // The rail's hidden attribute stays steerOpen()'s truth.
+  if (rail && rail.parentElement === body) rail.hidden = next.open !== "access";
+  dr.dataset.kind = next.open || "";
+  dr.hidden = !next.open;
+  paintDrawerHead();
+  positionDrawer();
+  if (next.open === "access") renderSteerRail();
+  if (next.open === "files") drawerRootTree(next.sessionId);
+  for (const c of cells) paintDrawerTabs(c);
+}
+
+// drawerRootTree roots the tree at the drawer's session: its terminal's cwd
+// under the same follow-key syncFocusedTree uses (so a tree already following
+// it does not reload), else the session's recorded cwd. With no session it is
+// whatever the focused tab resolves to, as before.
+function drawerRootTree(sessionId) {
+  const t = sessionId ? terminalTabFor(sessionId) : null;
+  if (t && t.cwd) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
+  const s = sessionId ? (lastSessions || []).find((x) => x.id === sessionId) : null;
+  if (s && s.cwd) { syncTreeToRoot(s.cwd).catch(() => {}); return; }
+  syncFocusedTree();
+}
+
+function drawerSessionName(id) {
+  if (!id) return "";
+  const s = (lastSessions || []).find((x) => x.id === id);
+  if (s) return s.name || s.id;
+  const t = terminalTabFor(id);
+  return t ? t.title() : id;
+}
+
+function paintDrawerHead() {
+  const title = $("drawer-title");
+  const sess = $("drawer-sess");
+  if (!title || !sess) return;
+  title.textContent = drawerState.open === "access" ? "Access" : "Files";
+  const n = drawerSessionName(drawerState.sessionId);
+  sess.textContent = n ? "\u00B7 " + n : "";
+  sess.title = n;
+}
+
+// paintDrawerTabs: the underline on a pane's Files/Access tab follows the
+// drawer. Classes only, never a rebuild: see drawerFollowFocus.
+function paintDrawerTabs(cell) {
+  if (!cell || !cell.bar) return;
+  const term = cellTerminal(cell);
+  const sid = term ? term.id : null;
+  // A pane of files has no session; its tab is the drawer's only while it is
+  // the focused one.
+  const mine = drawerState.sessionId === sid && (sid !== null || cell === focusedCell);
+  for (const b of cell.bar.querySelectorAll(".ph-tab[data-k]")) {
+    const on = mine && drawerState.open === b.dataset.k;
+    b.classList.toggle("open", on);
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+// drawerFollowFocus: the drawer's tree and rail already follow the focused tab
+// (syncFocusedTree / renderSteerRail), so its session and its header do too.
+function drawerFollowFocus() {
+  if (!drawerState.open || !drawerDesktop()) return;
+  const term = cellTerminal(focusedCell);
+  const sid = term ? term.id : null;
+  if (sid !== drawerState.sessionId) {
+    drawerState = { open: drawerState.open, sessionId: sid };
+    paintDrawerHead();
+    for (const c of cells) paintDrawerTabs(c);
+  }
+  positionDrawer();
+}
+
+// positionDrawer: below the focused pane's header, over the right of the grid,
+// min(720px, 62% of the grid) wide (the width is CSS; it needs the grid's px).
+function positionDrawer() {
+  const dr = $("drawer");
+  if (!dr || dr.hidden) return;
+  const lay = $("layout");
+  const grid = $("grid");
+  if (!lay || !grid) return;
+  const lr = lay.getBoundingClientRect();
+  const gr = grid.getBoundingClientRect();
+  const cell = currentMaximized() || focusedCell;
+  let top = gr.top;
+  if (cell && cell.el.isConnected && !cell.bar.hidden) top = cell.bar.getBoundingClientRect().bottom;
+  dr.style.top = Math.max(0, Math.round(top - lr.top)) + "px";
+  dr.style.setProperty("--grid-w", Math.round(gr.width) + "px");
+}
+
+// restoreDrawerNodes puts every moved node back exactly where it came from and
+// closes the drawer. Run on the crossing into mobile.
+function restoreDrawerNodes() {
+  for (const [node, o] of drawerOrigins) {
+    if (o.next && o.next.parentNode === o.parent) o.parent.insertBefore(node, o.next);
+    else o.parent.appendChild(node);
+    // Closed with the drawer: a rail left unhidden would dock in its old place
+    // the next time the window is wide.
+    if (node.id === "steer-rail") node.hidden = true;
+  }
+  drawerOrigins.clear();
+  drawerState = { open: null, sessionId: null };
+  const dr = $("drawer");
+  if (dr) { dr.hidden = true; dr.dataset.kind = ""; }
+}
+
+// steerViaDrawer is setSteerOpen's desktop route (steerrail.js): the rail never
+// docks on desktop, it opens in the Access drawer for the focused session.
+// false on mobile, where setSteerOpen keeps its own behaviour.
+function steerViaDrawer(open) {
+  if (!drawerDesktop()) return false;
+  if (open) openDrawer("access", (cellTerminal(focusedCell) || {}).id);
+  else closeDrawerFor(undefined, "access");
+  return true;
+}
+
+$("drawer-x").onclick = () => closeDrawerFor();
+if (typeof ResizeObserver === "function") new ResizeObserver(() => positionDrawer()).observe($("grid"));
+
 // renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
 // signature: the session list is replaced every three seconds, and a rebuild
 // under the pointer swallows a click — the same trap setFocusedCell's comment
@@ -4452,8 +4641,10 @@ function runSessionAction(action, s) {
     // guard, so the tree resumes following the focused tab at the next focus
     // change. Unawaited from a click handler, hence the catch.
     files: () => {
+      // Desktop (R5): the Files drawer, rooted at this session.
+      if (!mobileActive(window.innerWidth)) { openDrawer("files", s.id); return; }
       syncTreeToRoot(s.cwd).catch(() => {});
-      if (mobileActive(window.innerWidth)) setMobileScreen("files");
+      setMobileScreen("files");
     },
     attribution: () => openSteerFor(s.id),
     copycwd: () => copyPath(s.cwd),
@@ -4802,6 +4993,13 @@ function openSessionMenu(anchor, s) {
   });
   menu.replaceChildren(...nodes);
   sessionMenuSid = s.id;
+  placeSessionMenu(menu, anchor);
+}
+
+// placeSessionMenu opens #session-menu under `anchor` (above it if it would
+// clip) and focuses its first item. Shared by the session menu and the pane
+// header's tab switcher, which reuses the same element and its closing rules.
+function placeSessionMenu(menu, anchor) {
   sessionMenuAnchor = anchor;
 
   menu.classList.add("open"); // must be visible before it can be measured
@@ -4820,6 +5018,46 @@ function openSessionMenu(anchor, s) {
   // last item ends a running agent.
   const first = menu.querySelector(".mi");
   if (first) first.focus();
+}
+
+// toggleSessionMenuAt: a ⋯ that opens the session menu, and closes it again
+// when pressed while its own menu is open.
+function toggleSessionMenuAt(anchor, s) {
+  const menu = $("session-menu");
+  if (menu && menu.classList.contains("open") && sessionMenuAnchor === anchor) { closeSessionMenu(true); return; }
+  openSessionMenu(anchor, s);
+}
+
+// openTabSwitcher: the pane header's `name ▾ · N` menu. One row per tab in the
+// pane (the shown one marked), each with its own close. Same element and the
+// same outside-click / Escape / arrow rules as the session menu.
+function openTabSwitcher(anchor, cell) {
+  const menu = $("session-menu");
+  if (!menu) return;
+  if (menu.classList.contains("open") && sessionMenuAnchor === anchor) { closeSessionMenu(true); return; }
+  const rows = cell.tabs.map((t) => {
+    const row = document.createElement("div");
+    row.className = "mi-row";
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mi" + (t === cell.activeTab ? " cur" : "");
+    b.setAttribute("role", "menuitem");
+    b.textContent = (t.kind === "terminal" ? "\u25B8 " : "") + t.title();
+    b.title = t.kind === "viewer" ? t.path || t.title() : t.title();
+    b.onclick = () => { closeSessionMenu(false); setFocusedCell(cell); cell.activate(t); };
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "mi-x";
+    x.textContent = "\u00D7";
+    x.title = t.kind === "terminal" ? "Close tab (the session keeps running)" : "Close tab";
+    x.setAttribute("aria-label", "Close " + t.title());
+    x.onclick = () => { closeSessionMenu(false); cell.closeTab(t); };
+    row.append(b, x);
+    return row;
+  });
+  menu.replaceChildren(...rows);
+  sessionMenuSid = null; // not about one session: the list poll must not close it
+  placeSessionMenu(menu, anchor);
 }
 
 // sessionRowFor(id): the live row for a session id, or null if none is on
@@ -5163,6 +5401,8 @@ setInterval(refreshSessions, 3000);
 // for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
+    // Mobile's Files screen expects #files-pane back in #sidebar.
+    if (mobileActive(window.innerWidth)) restoreDrawerNodes();
     refreshSessions();
     if (typeof renderGrid === "function") renderGrid();
   });
