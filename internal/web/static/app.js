@@ -4367,11 +4367,20 @@ function swsKeydown(e) {
   if (e.key === "ArrowUp") { e.preventDefault(); swsMove(-1); return; }
   if (e.key === "Escape") { swsClose(); return; }
   if (e.key !== "Enter") return;
+  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl), which asks
+  // spawnHotkeyAction and calls swsEnter itself when the field is not settled:
+  // handling it here too would act twice.
+  if (e.ctrlKey || e.metaKey) return;
   // Prevented unconditionally: this field lives inside the #spawn form, and
   // Enter's default action there is submitting it — the caption's own "↵ to
   // pick" promise would be a lie if Enter here silently spawned the session
   // instead of resolving the field.
   e.preventDefault();
+  swsEnter();
+}
+// swsEnter: what Enter means in the workspace field: pick the highlighted row,
+// else resolve a typed path or take the first row.
+function swsEnter() {
   if (swsActive >= 0) { swsChoose(swsActive); return; }
   const c = classifyPickerQuery(swsInput.value);
   const act = pickerEnterAction(c.mode, swsRows.length);
@@ -4816,13 +4825,17 @@ function initSpawnControl() {
   const foot = $("spawn-foot-hint");
   if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";
   // From any field of the form (it bubbles up from the first message, the name,
-  // the selects). A button keeps its own Enter; the workspace field keeps Enter
-  // for picking while its list is open.
+  // the selects). A button keeps its own Enter; the workspace field spawns only
+  // when it shows the directory in use, else the key picks/resolves like Enter.
   $("spawn").addEventListener("keydown", (e) => {
     if (!isSubmitHotkey(e, mac)) return;
     if (e.target && (e.target.tagName === "BUTTON" || (e.target.closest && e.target.closest("#spawn-unlock")))) return;
-    if (e.target === $("spawn-ws-input") && !$("spawn-ws-list").hidden) return;
     e.preventDefault();
+    if (e.target === $("spawn-ws-input")) {
+      // The field may show text that is not the directory in use (spawnHotkeyAction).
+      const act = spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden });
+      if (act === "pick") { swsEnter(); return; }
+    }
     $("spawn").requestSubmit();
   });
 }

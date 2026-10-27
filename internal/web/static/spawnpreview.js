@@ -59,14 +59,15 @@ function spawnStoreLocked(creds) {
 //            store {initialized, locked, platform}, aws [{name, prod, elevate{max_minutes}}]
 // A row is {k, v, prod?, name?, tone?}. An AWS row with prod set is drawn by the
 // caller as name + a red PROD tag + the rest of v (v starts with name). tone:
-// "bad" (red, destructive reach) or "warn" (amber, needs you).
+// "warn" (amber, needs you). Containment is never coloured: red is for PROD and
+// write only (the PROD flag), a host session is told in words.
 function reachRows(o) {
   const x = o || {};
   const p = x.profile || {};
   const host = x.tier === "host";
   const rows = [];
   rows.push(host
-    ? { k: "Files", v: "your whole user account", tone: "bad" }
+    ? { k: "Files", v: "your whole user account" }
     : { k: "Files", v: (x.cwd || "the workspace") + " read/write · nothing else on this machine" });
 
   const metaConns = x.meta && Array.isArray(x.meta.aws_connections) ? x.meta.aws_connections : [];
@@ -95,7 +96,7 @@ function reachRows(o) {
   const tokens = spawnNames(p.tokens);
   if (tokens.length) rows.push({ k: "Tokens", v: tokens.join(", ") });
 
-  if (host) rows.push({ k: "Network", v: "not contained", tone: "bad" });
+  if (host) rows.push({ k: "Network", v: "not contained" });
   else if (p.network === "allowlist") rows.push({ k: "Network", v: "allowlist only" });
   else if (p.network === "open") rows.push({ k: "Network", v: "open" });
 
@@ -136,6 +137,19 @@ function pickSpawnCwd(o) {
   return spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier);
 }
 
+// spawnHotkeyAction: what Ctrl/Cmd+Enter does from the workspace field. The field
+// doubles as a live search box, so its text can differ from the directory that
+// will really be used (a fuzzy query, a path not resolved yet) and its dropdown
+// can be open. Spawning then would start the session in the PREVIOUS directory
+// while the field shows another, so the keypress does what plain Enter does (pick
+// or resolve) and the next one spawns. Only a field that shows exactly the
+// directory in use, with its list closed, spawns.
+function spawnHotkeyAction(o) {
+  const x = o || {};
+  if (x.listOpen) return "pick";
+  return String(x.text == null ? "" : x.text).trim() === String(x.cwd == null ? "" : x.cwd).trim() ? "submit" : "pick";
+}
+
 // spawnNamePlaceholder: what the Name field says it will use when left empty.
 function spawnNamePlaceholder(cwd) {
   const b = spawnBase(cwd);
@@ -143,5 +157,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnStoreLocked, spawnTierOf };
+  module.exports = { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf };
 }

@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder } = require("../static/spawnpreview.js");
+const { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction } = require("../static/spawnpreview.js");
 
 const sre = {
   name: "culipulse-sre", runtime: "box", bin: "claude", claude: true,
@@ -89,6 +89,14 @@ test("reach rows: host reaches the whole account and is not contained", () => {
   assert.strictEqual(byK(rows, "Files")[0].v, "your whole user account");
   assert.strictEqual(byK(rows, "Network")[0].v, "not contained");
   assert.strictEqual(byK(rows, "AWS").length, 0);
+});
+
+test("reach rows: containment is never coloured (D23): host rows carry no tone; red is only the PROD flag", () => {
+  const host = reachRows({ profile: { name: "claude", runtime: "host", claude: true }, tier: "host", cwd: "~/x" });
+  for (const r of host) assert.ok(!r.tone, r.k + " must be neutral");
+  const box = reachRows({ profile: sre, tier: "box", cwd: "~/x", meta, creds: creds() });
+  for (const r of box) assert.ok(!r.tone, r.k);
+  assert.ok(!/\.sr-row[^{]*\{[^}]*--red/.test(read("desktop.css")));
 });
 
 test("reach rows: network open, named account, tokens, non-claude has no Account row", () => {
@@ -180,4 +188,27 @@ test("Ctrl/Cmd+Enter is wired on the whole spawn form, not only the first messag
   const app = read("app.js");
   assert.match(app, /\$\("spawn"\)\.addEventListener\("keydown"[\s\S]{0,400}isSubmitHotkey/);
   assert.ok(!/\$\("spawn-prompt"\)\.addEventListener\("keydown"/.test(app));
+});
+
+test("hotkey from the workspace field spawns only when it shows the directory in use", () => {
+  assert.strictEqual(spawnHotkeyAction({ text: "/home/u/proj", cwd: "/home/u/proj", listOpen: false }), "submit");
+  assert.strictEqual(spawnHotkeyAction({ text: " /home/u/proj ", cwd: "/home/u/proj", listOpen: false }), "submit");
+  assert.strictEqual(spawnHotkeyAction({ text: "", cwd: "", listOpen: false }), "submit");
+});
+
+test("hotkey from the workspace field picks/resolves instead of spawning in the wrong directory", () => {
+  // a fuzzy query typed over a resolved directory: swsCwd still holds the old one
+  assert.strictEqual(spawnHotkeyAction({ text: "culi", cwd: "/home/u/old", listOpen: false }), "pick");
+  assert.strictEqual(spawnHotkeyAction({ text: "~/proj", cwd: "/home/u/proj", listOpen: false }), "pick");
+  // an open list always picks first, even when the text matches
+  assert.strictEqual(spawnHotkeyAction({ text: "/home/u/proj", cwd: "/home/u/proj", listOpen: true }), "pick");
+  assert.strictEqual(spawnHotkeyAction({}), "submit");
+});
+
+test("swsKeydown ignores Ctrl/Cmd+Enter so the form hotkey is the only handler, and it asks the guard", () => {
+  const app = read("app.js");
+  const body = app.slice(app.indexOf("function swsKeydown"), app.indexOf("function swsEnter"));
+  assert.match(body, /if \(e\.ctrlKey \|\| e\.metaKey\) return;/);
+  assert.ok(body.indexOf("e.ctrlKey || e.metaKey") < body.indexOf("e.preventDefault();\n  swsEnter"));
+  assert.match(app, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\)/);
 });
