@@ -1230,6 +1230,12 @@ type Manager struct {
 	peekMu    sync.Mutex
 	peekCache map[string]peekEntry
 
+	// timelineMu guards timelines, the per-session incremental activity
+	// parses (timeline_cache.go). Like peekMu it is separate from m.mu and
+	// never taken while m.mu is held.
+	timelineMu sync.Mutex
+	timelines  map[string]*timelineState
+
 	// procStart reads a pid's starttime for the registry's pid-reuse guard.
 	// NewManager sets procStartOf; a nil value (struct-literal test managers)
 	// disables the registry path, falling back to the heuristic.
@@ -2365,6 +2371,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		backend := m.backend
 		m.mu.Unlock()
 		m.peekForget(id) // the cached transcript parse dies with the session
+		m.timelineForget(id)
 		m.brokerForget(sess)
 		m.egressForget(sess)
 		if sc != nil {
@@ -2614,6 +2621,7 @@ func (m *Manager) removeSession(id string, s *Session) {
 	sc := m.sidecar
 	m.mu.Unlock()
 	m.peekForget(id) // the cached transcript parse dies with the session
+	m.timelineForget(id)
 	m.brokerForget(s)
 	m.egressForget(s)
 	if sc != nil {

@@ -206,6 +206,10 @@ type located struct {
 	// and symlink-resolved when different); nil on the host tier or when the
 	// session has no usable state dir. Host-chosen, never box-supplied.
 	cwds []string
+	// claudeDir is the .claude dir the session's registry and transcripts live
+	// in (home, account config dir, or the per-box one); "" when nothing is
+	// known. The activity timeline stats the registry file under it.
+	claudeDir string
 }
 
 // locate resolves a claude session's transcript, in order:
@@ -285,6 +289,7 @@ func (m *Manager) locate(id string) located {
 		l.cwds = s.cwdForms()
 		claudeDir = filepath.Join(l.boxDir, ".claude")
 	}
+	l.claudeDir = claudeDir
 	if l.boxDir != "" && !exited {
 		// Boxed tier, live: the box-home pidfile names the in-box pid and its
 		// registry entry names the exact transcript. Every read is guarded
@@ -384,4 +389,54 @@ func (m *Manager) noteClaudeSessionID(s *Session, id, sid string) {
 	if sc != nil {
 		sc.setClaudeSessionID(id, sid)
 	}
+}
+
+// boundTranscript is locate for the activity timeline, which must show only a
+// transcript PROVEN to be this session's. It returns locate's answer only when
+// a live registry entry validated (l.reg != nil: the registry names the exact
+// sessionId, and locate never falls back from a validated entry). Otherwise —
+// an exited session, or a registry that failed validation — the only candidate
+// is the exact <sid>.jsonl of the persisted claudeSessionID; the newest-by-cwd
+// heuristic locate falls back to is never used, because it can hand back a
+// sibling's conversation. ok=false means no bound transcript; l.claude still
+// says whether this is a claude session at all (zero l = unknown session).
+func (m *Manager) boundTranscript(id string) (located, bool) {
+	l := m.locate(id)
+	if !l.claude {
+		return l, false
+	}
+	if l.reg != nil {
+		return l, l.path != ""
+	}
+	l.path = "" // whatever the heuristic picked is not ours
+	m.mu.Lock()
+	s := m.sessions[id]
+	home := m.home
+	m.mu.Unlock()
+	if s == nil {
+		return l, false
+	}
+	sid := s.claudeSID()
+	if !sessionIDRe.MatchString(sid) {
+		return l, false
+	}
+	if l.boxDir != "" {
+		if p, ok := transcriptPathIn(l.boxDir, l.cwds, sid, nil, l.created); ok {
+			l.path = p
+			return l, true
+		}
+		return l, false
+	}
+	if l.boxed {
+		return l, false // boxed with no state dir: never a host .claude
+	}
+	claudeDir := l.claudeDir
+	if claudeDir == "" && home != "" {
+		claudeDir = filepath.Join(home, ".claude")
+	}
+	if claudeDir == "" {
+		return l, false
+	}
+	l.path = filepath.Join(claudeDir, "projects", projectSlug(filepath.Clean(l.cwd)), sid+".jsonl")
+	return l, true
 }

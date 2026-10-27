@@ -1,0 +1,574 @@
+package session
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/culiops/agent-box/internal/boxread"
+)
+
+// tlBase is the fixture clock; tlT(n) is n ms after it as the RFC3339 stamp a
+// transcript record carries.
+var tlBase = time.Date(2026, 10, 27, 10, 0, 0, 0, time.UTC)
+
+func tlT(ms int64) string {
+	return tlBase.Add(time.Duration(ms) * time.Millisecond).Format("2006-01-02T15:04:05.000Z07:00")
+}
+func tlMS(ms int64) int64 { return tlBase.UnixMilli() + ms }
+
+func tlJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b) + "\n"
+}
+
+func tlUse(t *testing.T, ms int64, id, name string, input map[string]any) string {
+	return tlJSON(t, map[string]any{"type": "assistant", "timestamp": tlT(ms), "message": map[string]any{
+		"role": "assistant", "id": "msg_" + id,
+		"content": []any{map[string]any{"type": "tool_use", "id": id, "name": name, "input": input}}}})
+}
+
+func tlResult(t *testing.T, ms int64, id string, isErr bool, text string) string {
+	return tlJSON(t, map[string]any{"type": "user", "timestamp": tlT(ms), "message": map[string]any{
+		"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "is_error": isErr, "content": text}}}})
+}
+
+func tlYou(t *testing.T, ms int64, text string) string {
+	return tlJSON(t, map[string]any{"type": "user", "timestamp": tlT(ms), "message": map[string]any{"role": "user", "content": text}})
+}
+
+// tlWrite puts body at the transcript path of sid under the fixture cwd and
+// returns it (the home is the locator manager's).
+func tlWrite(t *testing.T, home, sid, body string) string {
+	t.Helper()
+	dir := filepath.Join(home, ".claude", "projects", projectSlug(locCwd))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, sid+".jsonl")
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func tlAppend(t *testing.T, p, body string) {
+	t.Helper()
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(body); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tlGet(t *testing.T, m *Manager, id string) Timeline {
+	t.Helper()
+	tl, ok := m.TimelineFor(id, 0, 1000)
+	if !ok {
+		t.Fatalf("TimelineFor(%s): unknown session", id)
+	}
+	return tl
+}
+
+func TestTimelineJoinsToolResult(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1", tlUse(t, 0, "t1", "Bash", map[string]any{"command": "ls -la"})+
+		tlResult(t, 1400, "t1", false, "total 0")+
+		tlUse(t, 2000, "t2", "Bash", map[string]any{"command": "sleep 99"}))
+	tl := tlGet(t, m, "s1")
+	if !tl.Claude || len(tl.Events) != 2 {
+		t.Fatalf("timeline = %+v", tl)
+	}
+	if e := tl.Events[1]; e.Tool != "Bash" || e.Detail != "ls -la" || e.State != "ok" || e.MS != 1400 || e.TS != tlMS(0) || e.Kind != "tool" {
+		t.Errorf("answered call = %+v", e)
+	}
+	if e := tl.Events[0]; e.State != "pending" || e.Detail != "sleep 99" {
+		t.Errorf("unanswered call = %+v", e)
+	}
+	if tl.ToolCalls != 2 {
+		t.Errorf("ToolCalls = %d", tl.ToolCalls)
+	}
+}
+
+func TestTimelineBashExitCode(t *testing.T) {
+	m, home := newLocatorManager(t)
+	const secret = "SECRET-RESULT-BODY"
+	tlWrite(t, home, "aaaa-1", tlUse(t, 0, "t1", "Bash", map[string]any{"command": "false"})+
+		tlResult(t, 10, "t1", true, "Exit code 254\n"+secret))
+	e := tlGet(t, m, "s1").Events[0]
+	if e.State != "error" || e.Exit == nil || *e.Exit != 254 {
+		t.Fatalf("event = %+v", e)
+	}
+	if b, _ := json.Marshal(e); strings.Contains(string(b), secret) || strings.Contains(string(b), "Exit code") {
+		t.Errorf("result text leaked: %s", b)
+	}
+}
+
+func TestTimelineEditCounts(t *testing.T) {
+	m, home := newLocatorManager(t)
+	body := strings.Repeat("line\n", 18)
+	tlWrite(t, home, "aaaa-1",
+		tlUse(t, 0, "e1", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "", "new_string": body})+
+			tlUse(t, 10, "w1", "Write", map[string]any{"file_path": "/w/b.go", "content": "1\n2\n3"})+
+			tlUse(t, 20, "m1", "MultiEdit", map[string]any{"file_path": "/w/a.go", "edits": []any{
+				map[string]any{"old_string": "a\nb", "new_string": "c"},
+				map[string]any{"old_string": "d", "new_string": "e\nf\ng"}}})+
+			tlUse(t, 30, "e2", "Edit", map[string]any{"file_path": "/w/c.go", "old_string": "x", "new_string": "y"})+
+			tlResult(t, 40, "e2", true, "String to replace not found"))
+	tl := tlGet(t, m, "s1")
+	byTool := map[string]TimelineEvent{}
+	for _, e := range tl.Events {
+		byTool[e.Tool+e.Detail] = e
+	}
+	if e := byTool["Edit/w/a.go"]; e.Add == nil || *e.Add != 18 || e.Del == nil || *e.Del != 0 {
+		t.Errorf("Edit = %+v", e)
+	}
+	if e := byTool["Write/w/b.go"]; e.Add == nil || *e.Add != 3 || e.Del == nil || *e.Del != 0 {
+		t.Errorf("Write = %+v", e)
+	}
+	if e := byTool["MultiEdit/w/a.go"]; e.Add == nil || *e.Add != 4 || e.Del == nil || *e.Del != 3 {
+		t.Errorf("MultiEdit = %+v", e)
+	}
+	got := map[string]FileChange{}
+	for _, f := range tl.Files {
+		if _, dup := got[f.Path]; dup {
+			t.Errorf("%s listed twice", f.Path)
+		}
+		got[f.Path] = f
+	}
+	if f := got["/w/a.go"]; f.Add != 22 || f.Del != 3 {
+		t.Errorf("a.go total = %+v, want +22 -3", f)
+	}
+	if f := got["/w/b.go"]; f.Add != 3 || f.Del != 0 {
+		t.Errorf("b.go total = %+v", f)
+	}
+	if f := got["/w/c.go"]; f.Add != 0 || f.Del != 0 {
+		t.Errorf("a failed edit must not count: %+v", f)
+	}
+	if tl.Files[0].Path != "/w/c.go" {
+		t.Errorf("Files not most-recent first: %+v", tl.Files)
+	}
+}
+
+func TestTimelineDetailRules(t *testing.T) {
+	m, home := newLocatorManager(t)
+	long := strings.Repeat("é", 1000)
+	tok := "ghp_" + strings.Repeat("a", 36)
+	const body = "BODY-NEVER-SHOWN"
+	tlWrite(t, home, "aaaa-1",
+		tlUse(t, 0, "1", "Bash", map[string]any{"command": long})+
+			tlUse(t, 1, "2", "Bash", map[string]any{"command": "curl -H " + tok})+
+			tlUse(t, 2, "3", "Read", map[string]any{"file_path": "/w/r.txt"})+
+			tlUse(t, 3, "4", "Edit", map[string]any{"file_path": "/w/e.txt", "old_string": body, "new_string": body})+
+			tlUse(t, 4, "5", "Write", map[string]any{"file_path": "/w/w.txt", "content": body})+
+			tlUse(t, 5, "6", "WebFetch", map[string]any{"url": "https://x.test/p", "prompt": body})+
+			tlUse(t, 6, "7", "WebSearch", map[string]any{"query": "go json"})+
+			tlUse(t, 7, "8", "Grep", map[string]any{"pattern": "foo.*bar", "path": "/secret"})+
+			tlUse(t, 8, "9", "Glob", map[string]any{"pattern": "**/*.go"})+
+			tlUse(t, 9, "10", "Task", map[string]any{"description": "audit", "prompt": body})+
+			tlUse(t, 10, "11", "mcp__aws__list", map[string]any{"region": "x", "prompt": body})+
+			tlUse(t, 11, "12", "TodoWrite", map[string]any{"todos": body}))
+	tl := tlGet(t, m, "s1")
+	want := map[string]string{"Bash": "", "Read": "/w/r.txt", "Edit": "/w/e.txt", "Write": "/w/w.txt", "WebFetch": "https://x.test/p",
+		"WebSearch": "go json", "Grep": "foo.*bar", "Glob": "**/*.go", "Task": "audit", "mcp__aws__list": "", "TodoWrite": ""}
+	for _, e := range tl.Events {
+		if e.Tool == "Bash" {
+			continue
+		}
+		if e.Detail != want[e.Tool] {
+			t.Errorf("%s detail = %q, want %q", e.Tool, e.Detail, want[e.Tool])
+		}
+	}
+	// events are newest first: Bash(token) is the second to last, Bash(long) the last
+	if d := tl.Events[len(tl.Events)-2].Detail; d != "curl -H [masked:github-token]" {
+		t.Errorf("token detail = %q", d)
+	}
+	d := tl.Events[len(tl.Events)-1].Detail
+	if r := []rune(d); len(r) != 300 || r[299] != '…' {
+		t.Errorf("long detail = %d runes, last %q", len(r), r[len(r)-1])
+	}
+	b, _ := json.Marshal(tl)
+	if bytes.Contains(b, []byte(body)) || bytes.Contains(b, []byte("/secret")) {
+		t.Errorf("body text leaked: %s", b)
+	}
+}
+
+func TestTimelineUserTurns(t *testing.T) {
+	m, home := newLocatorManager(t)
+	meta := tlJSON(t, map[string]any{"type": "user", "isMeta": true, "timestamp": tlT(2), "message": map[string]any{"role": "user", "content": "caveat"}})
+	side := tlJSON(t, map[string]any{"type": "user", "isSidechain": true, "timestamp": tlT(3), "message": map[string]any{"role": "user", "content": "subagent prompt"}})
+	blocks := tlJSON(t, map[string]any{"type": "user", "timestamp": tlT(5), "message": map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "text", "text": "from blocks"}}}})
+	tlWrite(t, home, "aaaa-1",
+		tlYou(t, 0, "fix the build "+strings.Repeat("z", 400))+
+			tlResult(t, 1, "zz", false, "orphan")+meta+side+
+			tlYou(t, 4, "<command-name>/clear</command-name>\n<command-message>clear</command-message>")+blocks+
+			tlJSON(t, map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": "no timestamp"}}))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 2 {
+		t.Fatalf("events = %+v", tl.Events)
+	}
+	if e := tl.Events[0]; e.Kind != "you" || e.Detail != "from blocks" || e.Tool != "" {
+		t.Errorf("newest = %+v", e)
+	}
+	if e := tl.Events[1]; e.Kind != "you" || len([]rune(e.Detail)) != 300 || !strings.HasPrefix(e.Detail, "fix the build") {
+		t.Errorf("oldest = %+v", e)
+	}
+}
+
+func TestTimelineIncremental(t *testing.T) {
+	m, home := newLocatorManager(t)
+	p := tlWrite(t, home, "aaaa-1", tlUse(t, 0, "t1", "Bash", map[string]any{"command": "one"})+tlYou(t, 10, "hi"))
+	if n := len(tlGet(t, m, "s1").Events); n != 2 {
+		t.Fatalf("first parse = %d", n)
+	}
+	st := m.timelineFor("s1")
+	fi, _ := os.Stat(p)
+	if st.offset != fi.Size() {
+		t.Fatalf("offset %d, size %d", st.offset, fi.Size())
+	}
+	before := st.offset
+	tlAppend(t, p, tlResult(t, 20, "t1", false, "ok")+tlUse(t, 30, "t2", "Bash", map[string]any{"command": "two"}))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 3 || tl.Events[0].Detail != "two" || tl.Events[2].State != "ok" || tl.Events[2].MS != 20 {
+		t.Fatalf("after append = %+v", tl.Events)
+	}
+	if st.offset <= before {
+		t.Errorf("offset did not advance: %d -> %d", before, st.offset)
+	}
+	// An unterminated line is left for the next pass, not consumed.
+	half := tlUse(t, 40, "t3", "Bash", map[string]any{"command": "three"})
+	tlAppend(t, p, half[:len(half)-1])
+	if n := len(tlGet(t, m, "s1").Events); n != 3 {
+		t.Fatalf("partial line parsed: %d events", n)
+	}
+	tlAppend(t, p, "\n")
+	if n := len(tlGet(t, m, "s1").Events); n != 4 {
+		t.Fatalf("completed line not parsed: %d events", n)
+	}
+	// A truncated file starts over rather than duplicating.
+	if err := os.WriteFile(p, []byte(tlYou(t, 50, "fresh")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 1 || tl.Events[0].Detail != "fresh" {
+		t.Fatalf("after truncate = %+v", tl.Events)
+	}
+}
+
+func TestTimelineClearSwitchesFile(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1", tlYou(t, 0, "before clear"))
+	if n := len(tlGet(t, m, "s1").Events); n != 1 {
+		t.Fatalf("events = %d", n)
+	}
+	tlWrite(t, home, "cccc-3", tlYou(t, 5000, "after clear"))
+	writeReg(t, home, 101, regJSON(101, "cccc-3", "5000", "idle"))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 3 {
+		t.Fatalf("events = %+v", tl.Events)
+	}
+	if tl.Events[0].Detail != "after clear" || tl.Events[1].Kind != "clear" || tl.Events[2].Detail != "before clear" {
+		t.Errorf("order = %+v", tl.Events)
+	}
+	if ts := tl.Events[1].TS; ts < tl.Events[2].TS || ts > tl.Events[0].TS {
+		t.Errorf("divider ts %d not between %d and %d", ts, tl.Events[2].TS, tl.Events[0].TS)
+	}
+}
+
+// tlFiller writes n bytes of newline-terminated junk lines (each < 1 MiB).
+func tlFiller(t *testing.T, f *os.File, n int) {
+	t.Helper()
+	line := bytes.Repeat([]byte("j"), 1<<20-1)
+	line = append(line, '\n')
+	for n > 0 {
+		c := min(n, len(line))
+		if c < len(line) {
+			chunk := bytes.Repeat([]byte("j"), c)
+			chunk[c-1] = '\n'
+			if _, err := f.Write(chunk); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		if _, err := f.Write(line); err != nil {
+			t.Fatal(err)
+		}
+		n -= c
+	}
+}
+
+func TestTimelineBoundedScan(t *testing.T) {
+	m, home := newLocatorManager(t)
+	e0 := tlUse(t, 0, "t0", "Bash", map[string]any{"command": "too old"})
+	e1 := tlUse(t, 1, "t1", "Bash", map[string]any{"command": "first of the window"})
+	e2 := tlUse(t, 2, "t2", "Bash", map[string]any{"command": "last"})
+	// [e0][junk][e1][junk][e2] with the last 64 MiB starting exactly at e1.
+	window := timelineMaxScanBytes
+	rest := window - len(e1) - len(e2)
+	p := tlWrite(t, home, "aaaa-1", e0)
+	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tlFiller(t, f, 5<<20)
+	f.WriteString(e1)
+	tlFiller(t, f, rest)
+	f.WriteString(e2)
+	f.Close()
+
+	tl := tlGet(t, m, "s1")
+	if !tl.Partial {
+		t.Error("Partial not set for a file past the scan cap")
+	}
+	var got []string
+	for _, e := range tl.Events {
+		got = append(got, e.Detail)
+	}
+	// e0 is outside the window; e1 is where the window lands, i.e. the first
+	// (possibly partial) line, which is dropped.
+	if len(got) != 1 || got[0] != "last" {
+		t.Errorf("events = %v, want only [last]", got)
+	}
+	if st := m.timelineFor("s1"); st.offset != int64(5<<20+len(e0)+len(e1)+rest+len(e2)) {
+		t.Errorf("offset = %d", st.offset)
+	}
+}
+
+func TestTimelineRingBound(t *testing.T) {
+	m, home := newLocatorManager(t)
+	var sb strings.Builder
+	for i := range timelineMaxEvents + 500 {
+		sb.WriteString(tlYou(t, int64(i), fmt.Sprintf("msg %d", i)))
+	}
+	tlWrite(t, home, "aaaa-1", sb.String())
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != timelineMaxEvents || !tl.Partial {
+		t.Fatalf("events=%d partial=%v", len(tl.Events), tl.Partial)
+	}
+	if tl.Events[0].Detail != "msg 1499" || tl.Events[999].Detail != "msg 500" {
+		t.Errorf("window = %q .. %q", tl.Events[0].Detail, tl.Events[999].Detail)
+	}
+	// Past the compaction point (2x) the state itself stays bounded too.
+	for i := range 3 * timelineMaxEvents {
+		sb.Reset()
+		sb.WriteString(tlYou(t, int64(2000+i), "x"))
+		tlAppend(t, filepath.Join(home, ".claude", "projects", projectSlug(locCwd), "aaaa-1.jsonl"), sb.String())
+		if i%500 == 0 {
+			tlGet(t, m, "s1")
+		}
+	}
+	tlGet(t, m, "s1")
+	if n := len(m.timelineFor("s1").evs); n >= 2*timelineMaxEvents {
+		t.Errorf("state holds %d events", n)
+	}
+}
+
+func TestTimelinePendingBound(t *testing.T) {
+	m, home := newLocatorManager(t)
+	var sb strings.Builder
+	for i := range timelinePendingMax + 50 {
+		sb.WriteString(tlUse(t, int64(i), fmt.Sprintf("p%d", i), "Bash", map[string]any{"command": "x"}))
+	}
+	tlWrite(t, home, "aaaa-1", sb.String())
+	tlGet(t, m, "s1")
+	if n := len(m.timelineFor("s1").pending); n != timelinePendingMax {
+		t.Errorf("pending = %d, want %d", n, timelinePendingMax)
+	}
+}
+
+func TestTimelineSkipsOverlongLine(t *testing.T) {
+	m, home := newLocatorManager(t)
+	over := `{"timestamp":"` + tlT(0) + `","pad":"` + strings.Repeat("a", boxread.MaxLineBytes) + "\"}\n"
+	p := tlWrite(t, home, "aaaa-1", "not json at all\n"+over+tlYou(t, 5, "after the big one"))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 1 || tl.Events[0].Detail != "after the big one" {
+		t.Fatalf("events = %+v", tl.Events)
+	}
+	// An overlong line still being written is consumed, not re-read forever.
+	tlAppend(t, p, `{"pad":"`+strings.Repeat("b", boxread.MaxLineBytes))
+	tlGet(t, m, "s1")
+	st := m.timelineFor("s1")
+	fi, _ := os.Stat(p)
+	if st.offset != fi.Size() || !st.skip {
+		t.Errorf("offset=%d size=%d skip=%v", st.offset, fi.Size(), st.skip)
+	}
+	tlAppend(t, p, "tail of it\n"+tlYou(t, 9, "next"))
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 2 || tl.Events[0].Detail != "next" {
+		t.Errorf("after the discarded line ended: %+v", tl.Events)
+	}
+}
+
+// tlBoxed turns s1 into a boxed session whose box home is bd, exited so the
+// live registry is not consulted.
+func tlBoxed(t *testing.T) (m *Manager, bd string) {
+	t.Helper()
+	m, _ = newLocatorManager(t)
+	m.stateDir = t.TempDir()
+	bd = filepath.Join(m.stateDir, "boxstate", "box-1")
+	if err := os.MkdirAll(bd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := m.sessions["s1"]
+	s.Box = "box-1"
+	s.status = statusExited
+	s.claudeSessionID = "aaaa-1"
+	return m, bd
+}
+
+func TestTimelineBoxSymlinkRefused(t *testing.T) {
+	m, bd := tlBoxed(t)
+	outside := t.TempDir()
+	tlWrite(t, outside, "aaaa-1", tlYou(t, 0, "host secret"))
+	if err := os.Symlink(filepath.Join(outside, ".claude"), filepath.Join(bd, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	tl := tlGet(t, m, "s1")
+	if !tl.Claude || len(tl.Events) != 0 {
+		t.Errorf("symlinked .claude read: %+v", tl)
+	}
+
+	// A symlinked transcript, even one staying inside the box, is refused too.
+	if err := os.Remove(filepath.Join(bd, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	real := tlWrite(t, bd, "real", tlYou(t, 0, "linked"))
+	if err := os.Symlink(real, filepath.Join(filepath.Dir(real), "aaaa-1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 0 {
+		t.Errorf("symlinked transcript read: %+v", tl.Events)
+	}
+
+	// Control: the same box with a regular file reads fine.
+	if err := os.Remove(filepath.Join(filepath.Dir(real), "aaaa-1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	tlWrite(t, bd, "aaaa-1", tlYou(t, 0, "plain"))
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 1 || tl.Events[0].Detail != "plain" {
+		t.Errorf("regular box transcript: %+v", tl.Events)
+	}
+}
+
+func TestBoundTranscriptRefusesHeuristic(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1", tlYou(t, 0, "from A"))
+	tlWrite(t, home, "bbbb-2", tlYou(t, 0, "from B"))
+	newer := time.Now().Add(time.Minute)
+	if err := os.Chtimes(filepath.Join(home, ".claude", "projects", projectSlug(locCwd), "bbbb-2.jsonl"), newer, newer); err != nil {
+		t.Fatal(err)
+	}
+	s := m.sessions["s1"]
+	s.status = statusExited // exited: locate runs the cwd+mtime heuristic
+
+	if l := m.locate("s1"); l.path == "" {
+		t.Fatal("precondition: the heuristic should pick a sibling's file here")
+	}
+	if _, ok := m.boundTranscript("s1"); ok {
+		t.Error("bound without a claudeSessionID")
+	}
+	tl := tlGet(t, m, "s1")
+	if !tl.Claude || len(tl.Events) != 0 {
+		t.Errorf("heuristic leaked: %+v", tl)
+	}
+
+	s.claudeSessionID = "aaaa-1"
+	l, ok := m.boundTranscript("s1")
+	want := filepath.Join(home, ".claude", "projects", projectSlug(locCwd), "aaaa-1.jsonl")
+	if !ok || l.path != want {
+		t.Errorf("bound = %q %v, want %q", l.path, ok, want)
+	}
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 1 || tl.Events[0].Detail != "from A" {
+		t.Errorf("events = %+v", tl.Events)
+	}
+
+	s.claudeSessionID = "../../etc/passwd"
+	if _, ok := m.boundTranscript("s1"); ok {
+		t.Error("an unvalidated sid was bound")
+	}
+}
+
+func TestBoundTranscriptLiveRegistryMissingFile(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "bbbb-2", tlYou(t, 0, "sibling")) // s1's own file (aaaa-1) is gone
+	if err := os.Remove(filepath.Join(home, ".claude", "projects", projectSlug(locCwd), "aaaa-1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.boundTranscript("s1"); ok {
+		t.Error("validated registry with no file must not be bound to a sibling")
+	}
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 0 {
+		t.Errorf("events = %+v", tl.Events)
+	}
+}
+
+func TestTimelineNotClaudeAndUnknown(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	m.sessions["s1"].Bin = "/bin/bash"
+	if tl, ok := m.TimelineFor("s1", 0, 10); !ok || tl.Claude || len(tl.Events) != 0 {
+		t.Errorf("non-claude = %+v %v", tl, ok)
+	}
+	if _, ok := m.TimelineFor("nope", 0, 10); ok {
+		t.Error("unknown session reported known")
+	}
+}
+
+func TestTimelineWaitingSince(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1", tlYou(t, 0, "hi"))
+	regPath := filepath.Join(home, ".claude", "sessions", "101.json")
+	at := time.Now().Add(-2 * time.Minute).Truncate(time.Millisecond)
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "waiting"))
+	if err := os.Chtimes(regPath, at, at); err != nil {
+		t.Fatal(err)
+	}
+	if got := tlGet(t, m, "s1").WaitingSince; got != at.UnixMilli() {
+		t.Errorf("WaitingSince = %d, want %d", got, at.UnixMilli())
+	}
+	writeReg(t, home, 101, regJSON(101, "aaaa-1", "5000", "idle"))
+	if got := tlGet(t, m, "s1").WaitingSince; got != 0 {
+		t.Errorf("idle WaitingSince = %d", got)
+	}
+}
+
+func TestTimelinePaging(t *testing.T) {
+	m, home := newLocatorManager(t)
+	var sb strings.Builder
+	for i := range 250 {
+		sb.WriteString(tlYou(t, int64(i+1), fmt.Sprintf("m%d", i)))
+	}
+	tlWrite(t, home, "aaaa-1", sb.String())
+	p1, _ := m.TimelineFor("s1", 0, 100)
+	if len(p1.Events) != 100 || !p1.More || p1.Events[0].Detail != "m249" || p1.Events[99].Detail != "m150" {
+		t.Fatalf("page 1: %d events more=%v", len(p1.Events), p1.More)
+	}
+	p2, _ := m.TimelineFor("s1", p1.Events[99].TS, 100)
+	if len(p2.Events) != 100 || !p2.More || p2.Events[0].Detail != "m149" || p2.Events[99].Detail != "m50" {
+		t.Fatalf("page 2: %d events more=%v first=%q", len(p2.Events), p2.More, p2.Events[0].Detail)
+	}
+	p3, _ := m.TimelineFor("s1", p2.Events[99].TS, 100)
+	if len(p3.Events) != 50 || p3.More {
+		t.Fatalf("page 3: %d events more=%v", len(p3.Events), p3.More)
+	}
+}
+
+func TestTimelineForgottenWithSession(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1", tlYou(t, 0, "hi"))
+	tlGet(t, m, "s1")
+	m.timelineForget("s1")
+	if _, ok := m.timelines["s1"]; ok {
+		t.Error("state survived timelineForget")
+	}
+}
