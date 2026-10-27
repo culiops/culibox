@@ -109,3 +109,20 @@ func TestAuditSanitisesHost(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionIDsDistinct(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	for _, sid := range []string{"a-1", "a-1", "b-2"} {
+		if err := a.Record(Row{Time: time.Unix(100, 0), SessionID: sid, Host: "h", Port: 443, Outcome: OutcomeAllowed}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := a.SessionIDs()
+	if err != nil || len(got) != 2 || got[0] != "a-1" || got[1] != "b-2" {
+		t.Fatalf("SessionIDs = %v, %v", got, err)
+	}
+}

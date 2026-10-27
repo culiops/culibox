@@ -451,3 +451,25 @@ func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
 	}
 	return out, rows.Err()
 }
+
+// SessionIDs returns every distinct session id that has a credential or
+// approval row, sorted. The manager uses it to learn which ids were ever issued,
+// so a new session never takes over an old one's history. Both queries are
+// index scans (idx_audit_session, idx_approval_session).
+func (a *Audit) SessionIDs() ([]string, error) {
+	rows, err := a.db.Query(`SELECT session_id FROM credential_audit GROUP BY session_id
+		UNION SELECT session_id FROM approval_audit GROUP BY session_id ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

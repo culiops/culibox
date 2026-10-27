@@ -1198,6 +1198,10 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	// idMark is the highest id number ever issued per agent, persisted at
+	// idStatePath ("" = not persisted); see idfloor.go.
+	idMark      map[string]int
+	idStatePath string
 	// storeLocked reports whether the encrypted store is locked right now.
 	// Nil = no store: no session ever needs it unlocked.
 	storeLocked func() bool
@@ -1425,6 +1429,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		launcher:  l,
 		backend:   backend,
 		counters:  map[string]int{},
+		idMark:    map[string]int{},
 		ringCap:   ringCap,
 		retention: retention,
 		procStart: procStartOf,
@@ -2836,7 +2841,12 @@ const maxNameLen = 64
 // nextIDLocked returns the next free stable id "<agent>-<n>" (caller holds mu).
 // The id is the immutable technical key (abduco session, pidfile, WS route); the
 // user-facing name is a separate mutable label (see deriveName / Rename).
+// It counts on from the highest number ever issued for the agent, not just from
+// the live sessions, so an id is never reissued (see idfloor.go).
 func (m *Manager) nextIDLocked(agent string) string {
+	if m.idMark[agent] > m.counters[agent] {
+		m.counters[agent] = m.idMark[agent]
+	}
 	for {
 		m.counters[agent]++
 		id := fmt.Sprintf("%s-%d", agent, m.counters[agent])
@@ -2846,6 +2856,8 @@ func (m *Manager) nextIDLocked(agent string) string {
 		if m.backend != nil && m.backend.Alive(id) {
 			continue
 		}
+		m.idMark[agent] = m.counters[agent]
+		m.persistIDMarksLocked()
 		return id
 	}
 }

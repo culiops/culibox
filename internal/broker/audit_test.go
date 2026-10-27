@@ -838,3 +838,30 @@ func TestCredActionValues(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionIDsDistinct(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if ids, err := a.SessionIDs(); err != nil || len(ids) != 0 {
+		t.Fatalf("empty store: %v, %v", ids, err)
+	}
+	for _, sid := range []string{"a-1", "a-1"} {
+		if err := a.Record(Row{Time: time.Unix(100, 0), SessionID: sid, Outcome: OutcomeMinted}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An id that only ever asked for a write window is still an issued id.
+	if err := a.RecordApproval(ApprovalRow{Time: time.Unix(100, 0), SessionID: "b-2", Action: ActionRefused}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RecordApproval(ApprovalRow{Time: time.Unix(101, 0), SessionID: "a-1", Action: ActionRefused}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.SessionIDs()
+	if err != nil || !slices.Equal(got, []string{"a-1", "b-2"}) {
+		t.Fatalf("SessionIDs = %v, %v", got, err)
+	}
+}
