@@ -349,6 +349,10 @@ function drawerGoInput() {
   const input = drawerEl("drawer-goto-in");
   if (!input) return;
   drawerGoStop();
+  // The rows on screen are for the previous text: Enter during the debounce
+  // must not open one of them.
+  drawerGoRows = []; drawerGoActive = -1;
+  input.removeAttribute("aria-activedescendant");
   const q = input.value.trim();
   if (!q) { drawerGoClose(); return; }
   const seq = drawerGoSeq;
@@ -393,9 +397,12 @@ function initDrawerGoto() {
   if (!input) return;
   input.addEventListener("input", drawerGoInput);
   input.addEventListener("keydown", drawerGoKey);
-  input.addEventListener("blur", drawerGoClose);
+  // Stop first: a debounce or fetch still pending would re-open the list over
+  // the viewer after the input has lost focus, and nothing would close it.
+  const dismiss = () => { drawerGoStop(); drawerGoClose(); };
+  input.addEventListener("blur", dismiss);
   input.addEventListener("focus", () => { if (input.value.trim()) drawerGoInput(); });
-  window.addEventListener("resize", drawerGoClose);
+  window.addEventListener("resize", dismiss);
   // Capture phase, like the app's other global shortcuts: xterm and
   // CodeMirror would otherwise see the key first. A terminal keeps its own
   // Ctrl+P (readline's previous-history); the shortcut works from anywhere else.

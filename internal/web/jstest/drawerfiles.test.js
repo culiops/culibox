@@ -142,3 +142,8 @@ test("hitsUnderRoot: no root, no hits; bad input is empty, never a throw", () =>
   assert.deepEqual(d.hitsUnderRoot(null, "/home/u"), []);
   assert.deepEqual(d.hitsUnderRoot([null, {}, { path: 5 }, { path: "/home/u/a" }], "/home/u"), [{ path: "/home/u/a" }]);
 });
+
+test("hitsUnderRoot: root / holds every absolute path", () => {
+  const hits = [{ path: "/home/u/a" }, { path: "/etc/x" }, { path: "/" }];
+  assert.deepEqual(d.hitsUnderRoot(hits, "/").map((h) => h.path), ["/home/u/a", "/etc/x"]);
+});

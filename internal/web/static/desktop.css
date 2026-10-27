@@ -422,8 +422,6 @@
   /* A box session's tree is its workspace only: no root picker (the root
      stays the session cwd, drawerRootTree). */
   #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
-  /* A session workspace the fs API refuses is never a root (S1): the column
-     says so instead of showing whatever tree was there before. */
   /* "Go to file…" (Ctrl+P): a filename jump at the top of the tree column. The
      list is fixed-position (set from the input's rect in drawerGoPosition) so
      the 200px column does not clip it; .ft-opt/.ft-note rows are shared. */
@@ -440,6 +438,8 @@
   }
   #drawer-goto-list[hidden] { display: none; }
   #drawer[data-noroot="1"] .dr-goto { display: none; }
+  /* A session workspace the fs API refuses is never a root (S1): the column
+     says so instead of showing whatever tree was there before. */
   .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
   #drawer[data-noroot="1"] .dr-tnote { display: block; }
   #drawer[data-noroot="1"] .dr-tree #files-pane { display: none; }
