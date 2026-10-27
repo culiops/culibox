@@ -62,6 +62,14 @@ function elevatedCount(sessions, nowMs) {
   return (sessions || []).filter((s) => sessionElevated(s, nowMs)).length;
 }
 
+// costTodayRange: the from/to of the sidebar footer's "$ today". UTC, because
+// that is what the Analytics page's own "today" is (analytics.js anTodayUTC),
+// and the footer must equal what that page shows.
+function costTodayRange(nowMs) {
+  const day = new Date(nowMs).toISOString().slice(0, 10);
+  return { from: day, to: day };
+}
+
 // deskContainmentChip: the tier as a chip. tierBadge's "danger" tone is the host
 // tier; null for an exited session, whose tier is not actionable.
 function deskContainmentChip(s, boxRuntime) {
@@ -183,6 +191,6 @@ function pushRecentProfile(list, name) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, sessionElevated, elevatedCount, rowChip, rowSubline,
+  module.exports = { deskGroups, deskOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
     paneHeaderModel, needStripModel, emptyStateModel, pushRecentProfile };
 }

@@ -185,6 +185,8 @@ function initDialogs() {
   }
   const settingsOpen = document.getElementById("settings-open");
   if (settingsOpen) settingsOpen.onclick = () => openSettings("manage");
+  const sideSettings = document.getElementById("side-settings");
+  if (sideSettings) sideSettings.onclick = () => openSettings("manage");
   const toastX = document.getElementById("toast-x");
   if (toastX) toastX.onclick = hideToast;
 }
@@ -348,9 +350,9 @@ function initWidthSplitter() {
   });
 
   // Double-click restores the default, mirroring the horizontal handle's escape
-  // hatch from a drag that went wrong. 322 mirrors tokens.css's --sidebar-w
+  // hatch from a drag that went wrong. 290 mirrors desktop.css's --sidebar-w
   // default; the two must move together.
-  handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(322)); fitAll(); });
+  handle.addEventListener("dblclick", () => { persistSidebarWidth(setSidebarWidth(290)); fitAll(); });
 }
 
 // --- ask dialog --------------------------------------------------------------

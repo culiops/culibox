@@ -660,7 +660,8 @@ function fitAll() {
 // kept cell (so "1" instantly stacks everything into one window).
 function applyCap(n) {
   cap = n;
-  for (const b of document.getElementById("layouts").children) {
+  // Every .layouts group: the header's (mobile) and the sidebar top's (desktop).
+  for (const b of document.querySelectorAll(".layouts button")) {
     b.classList.toggle("active", Number(b.dataset.cols) === n);
   }
   while (cells.length > cap) {

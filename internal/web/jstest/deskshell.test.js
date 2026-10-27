@@ -199,3 +199,12 @@ test("emptyStateModel says nothing until profiles have loaded", () => {
   assert.equal(d.emptyStateModel({ sessions: [], profiles: undefined, recent: [] }).kind, null);
   assert.equal(d.emptyStateModel({ sessions: [working], profiles: [], recent: [] }).kind, null);
 });
+
+test("costTodayRange is today's UTC date for both ends, the convention analytics.js uses", () => {
+  const r = d.costTodayRange(Date.parse("2026-10-27T10:00:00Z"));
+  assert.deepEqual(r, { from: "2026-10-27", to: "2026-10-27" });
+  // 23:30 UTC on the 27th is already the 28th in UTC+7: UTC is what the
+  // Analytics page (anTodayUTC) calls today, so the footer must agree with it.
+  assert.deepEqual(d.costTodayRange(Date.parse("2026-10-27T23:30:00Z")), { from: "2026-10-27", to: "2026-10-27" });
+  assert.deepEqual(d.costTodayRange(Date.parse("2026-10-28T00:00:00Z")), { from: "2026-10-28", to: "2026-10-28" });
+});

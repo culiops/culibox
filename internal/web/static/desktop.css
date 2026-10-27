@@ -32,10 +32,111 @@
     --foreground0: #e6e8eb; --foreground1: #8b939e; --foreground2: #5d6570;
     --warn: #f5b94a; --danger: #f06a6a;
     --radius: 6px;
+    --warn-fg: #f5b94a; /* the needs-you dot and stripe: amber, as the role says */
+    --sidebar-w: 290px;
+
+    /* R9: every component sets its font from --font-family, which is the
+       monospace stack. The terminal does NOT read it (terminal-tab.js passes
+       xterm its own fontFamily; CodeMirror, the viewers and the file tree
+       hard-code ui-monospace in app.css), so remapping it makes all UI text
+       Inter and leaves machine text mono. */
+    --font-family: var(--font-ui);
   }
 
   body { font-family: var(--font-ui); font-size: 13px; background: var(--bg); }
 
   /* Monospace stays for the terminal, code, paths and ids. */
   .xterm, pre, code, .mono, .cm-editor, .CodeMirror { font-family: var(--font-mono); }
+
+  /* Secrets and key material are machine text. */
+  #creds textarea.fld, #creds .fld.secret-area { font-family: var(--font-mono); }
+
+  /* --- shell: no header, no status bar (spec 5.1) ------------------------- */
+  /* The controls moved into the sidebar top and footer. #env-strip stays: it is
+     the 3px whole-page environment signal (spec 7), and #side-env repeats the
+     label. Mobile keeps header and #hint untouched (this block is > 700px). */
+  header, #hint { display: none; }
+
+  /* --- sidebar top -------------------------------------------------------- */
+  #side-top { display: flex; flex: none; flex-direction: column; gap: 10px; padding: 14px 12px 10px; }
+  .side-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .side-logo { flex: none; }
+  .side-name { font-size: 14px; font-weight: 600; white-space: nowrap; }
+  #side-version { font-size: 12px; color: var(--faint); white-space: nowrap; }
+  #side-env {
+    font-size: 10px; font-weight: 700; letter-spacing: .05em; color: #fff; background: var(--raise);
+    padding: 1px 6px; border-radius: var(--r-chip); white-space: nowrap;
+  }
+  #side-version[hidden], #side-env[hidden] { display: none; }
+  .side-ctl { display: flex; align-items: center; gap: 4px; }
+  .side-fill { flex: 1; }
+  #side-top .layouts { gap: 3px; }
+  #side-top .layouts button {
+    min-width: 26px; height: 24px; padding: 0 7px; font: 500 12px var(--font-ui); line-height: 1;
+    background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-ctl);
+  }
+  #side-top .layouts button:hover { color: var(--fg); background: var(--raise); }
+  #side-top .layouts button.active { color: var(--accent); background: var(--raise); border-color: var(--accent); }
+  #side-palette, #side-collapse {
+    width: 26px; height: 24px; padding: 0; font: 13px var(--font-ui); line-height: 1; cursor: pointer;
+    background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
+  }
+  #side-palette:hover, #side-collapse:hover { color: var(--fg); background: var(--raise); }
+  .pbtn {
+    width: 100%; padding: 8px 12px; font: 600 13px var(--font-ui); cursor: pointer;
+    background: var(--accent); color: #0b1220; border: 0; border-radius: var(--r-ctl);
+  }
+  .pbtn:hover { filter: brightness(1.08); }
+  #side-top button:focus-visible, #side-foot button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  /* #side-new is the sidebar's "New session"; the Sessions header's "+ new" would be a second one. */
+  #sessions-phd #spawn-go { display: none; }
+
+  /* --- sidebar footer ----------------------------------------------------- */
+  #side-foot {
+    display: flex; flex: none; flex-direction: column; gap: 8px; padding: 10px 12px 8px;
+    border-top: 1px solid var(--line); background: var(--panel);
+  }
+  #limits-side { display: flex; flex-direction: column; gap: 6px; }
+  #limits-side[hidden] { display: none; }
+  #limits-side.stale { opacity: .5; }
+  #limits-side .acct-lab { font-size: 11px; color: var(--faint); }
+  #limits-side .mtr { gap: 8px; font-size: 12px; color: var(--muted); }
+  #limits-side .mtr > span:first-child { width: 2.4em; }
+  #limits-side .mtr .bar { flex: 1; width: auto; min-width: 24px; height: 4px; border-radius: 2px; background: var(--line); }
+  #limits-side .mtr .bar i { background: var(--accent); border-radius: 2px; }
+  #limits-side .mtr .rs { min-width: 6.4em; text-align: right; }
+  #limits-side .mtr .pc { min-width: 3ch; text-align: right; }
+  #limits-side .mtr.hot .bar i { background: var(--fg); }
+  #limits-side .mtr.hot .pc, #limits-side .mtr.hot .rs { color: var(--fg); }
+  .side-stats { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; color: var(--muted); }
+  #side-cost { font-variant-numeric: tabular-nums; }
+  #side-cost[hidden] { display: none; }
+  #side-elevated { margin-left: auto; font-variant-numeric: tabular-nums; }
+  #side-elevated.hot { color: var(--red); font-weight: 600; }
+  .side-links { display: flex; gap: 2px; margin: 0 -6px; }
+  .side-links button {
+    padding: 5px 8px; font: 12.5px var(--font-ui); cursor: pointer;
+    background: transparent; color: var(--muted); border: 0; border-radius: var(--r-ctl);
+  }
+  .side-links button:hover { color: var(--fg); background: var(--raise); }
+  .side-links button[hidden] { display: none; }
+
+
+  /* --- the 52px rail (sidebar hidden) ------------------------------------- */
+  .sidebar-hidden .rail48 { width: 52px; padding: 10px 0; gap: 4px; background: var(--panel); border-right: 1px solid var(--line); }
+  .ri { width: 36px; height: 32px; border-radius: var(--r-ctl); }
+  .ri:hover { background: var(--raise); }
+  /* app.css gives a waiting row a tint and a 3px stripe; the rail says it with
+     the amber dot alone, and keeps the accent mark for the focused one. */
+  .ri.alert { background: transparent; box-shadow: none; }
+  .ri.on, .ri.on.alert { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
+  .ri .dot { width: 10px; height: 10px; }
+  /* Elevated: a red ring around the status dot (D23), whatever its colour. */
+  .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
+  .rail-meters { display: flex; flex: none; flex-direction: column; gap: 3px; width: 26px; padding: 8px 0 6px; }
+  .rail-meters[hidden] { display: none; }
+  .rm { display: block; position: relative; height: 3px; border-radius: 2px; background: var(--line); }
+  .rm[hidden] { display: none; }
+  .rm i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: 2px; background: var(--accent); }
+  .rm.hot i { background: var(--fg); }
 }

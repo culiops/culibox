@@ -116,17 +116,18 @@ function toggleSidebar() {
   // ☰ without), so the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
   const active = document.activeElement;
-  const fromToggle = !!active && (active === $("sidebar-toggle") || (!!rail && active === rail.firstElementChild));
+  const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === rail.firstElementChild));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
   if (fromToggle) {
-    const next = hidden ? rail && rail.firstElementChild : $("sidebar-toggle");
+    const next = hidden ? rail && rail.firstElementChild : $("side-collapse");
     if (next) next.focus();
   }
 }
 $("sidebar-toggle").onclick = toggleSidebar;
+$("side-collapse").onclick = toggleSidebar;
 $("steer-toggle").onclick = toggleSteerRail;
 
 // renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
@@ -139,18 +140,21 @@ function renderRail48() {
   const rail = $("rail48");
   if (!rail) return;
   const items = railItems(lastSessions, { focusedId: selectedSessionId() });
-  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0].join(":")).join("|");
+  const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || ""].join(":")).join("|");
   if (key === rail48Key) return;
   rail48Key = key;
   const mk = (it) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.kind === "new" ? " add" : "");
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "");
     b.setAttribute("aria-label", it.label);
-    b.title = it.label;
+    // A session's hover text is its bare name (the "waiting" suffix is in the
+    // accessible name and the dot's colour); the toggle and add keep their label.
+    b.title = it.kind === "session" ? it.title : it.label;
     if (it.kind === "session") {
       const d = document.createElement("span");
-      d.className = activityClass(it.activity).cls;
+      // An expired sign-in needs you while the agent still works: the dot says so too.
+      d.className = activityClass(it.alert ? "waiting" : it.activity).cls;
       b.appendChild(d);
       // it.name, not it.label: label carries "— waiting for you" for the
       // button's accessible name, and a freshly-opened tab is titled from this
@@ -165,7 +169,70 @@ function renderRail48() {
   const mid = document.createElement("div");
   mid.className = "rin";
   mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
-  rail.replaceChildren(mk(items[0]), mid, mk(items[items.length - 1]));
+  // The quota bars sit between the sessions and the add button; renderRateLimits
+  // fills them. Re-parked on every rebuild because replaceChildren drops them.
+  rail.replaceChildren(mk(items[0]), mid, railMeters(), mk(items[items.length - 1]));
+  paintRailMeters();
+}
+
+// paintSideElevated: the sidebar footer's "N elevated", red while any session
+// has an AWS write window open. A lapsed window clears on the next poll.
+function paintSideElevated() {
+  const el = $("side-elevated");
+  if (!el) return;
+  const n = elevatedCount(lastSessions, Date.now());
+  el.textContent = n + " elevated";
+  el.classList.toggle("hot", n > 0);
+}
+
+// paintSideCost: the footer's "$ today", the same sum the Analytics page shows
+// for today (summary over costTodayRange, folded and formatted like it). Only
+// asked when the analytics feature is on; a failed read leaves it hidden, with
+// no toast: the footer is a glance, not a place for errors.
+let sideCostOn = false;
+async function paintSideCost() {
+  const el = $("side-cost");
+  if (!el) return;
+  if (!sideCostOn) { el.hidden = true; return; }
+  try {
+    const r = costTodayRange(Date.now());
+    const summary = await api("/api/analytics/summary?from=" + r.from + "&to=" + r.to);
+    el.textContent = usd(foldCostByDay((summary && summary.byDayModel) || []).totals.cost) + " today";
+    el.title = "Spend today (UTC), as the Analytics page counts it";
+    el.hidden = false;
+  } catch (_) { el.hidden = true; }
+}
+
+// The rail's two mini quota bars (5h, week), from the same reading as the
+// sidebar footer's meters: #limits-side holds the rendered .mtr rows, so this
+// reads their fill rather than re-deriving the account and the window.
+function railMeters() {
+  const box = document.createElement("div");
+  box.id = "rail-meters";
+  box.className = "rail-meters";
+  box.setAttribute("aria-hidden", "true");
+  for (const k of ["5h", "wk"]) {
+    const bar = document.createElement("span");
+    bar.className = "rm";
+    bar.dataset.win = k;
+    bar.appendChild(document.createElement("i"));
+    box.appendChild(bar);
+  }
+  return box;
+}
+
+function paintRailMeters() {
+  const box = $("rail-meters"), src = $("limits-side");
+  if (!box) return;
+  const rows = src ? Array.from(src.querySelectorAll(".mtr")) : [];
+  let any = false;
+  for (const bar of box.children) {
+    const row = rows.find((r) => r.firstElementChild && r.firstElementChild.textContent === bar.dataset.win);
+    const fill = row && row.querySelector(".bar i");
+    bar.hidden = !fill;
+    if (fill) { bar.firstElementChild.style.width = fill.style.width; bar.classList.toggle("hot", row.classList.contains("hot")); any = true; }
+  }
+  box.hidden = !any;
 }
 
 // Live count of open dialogs, for shortcutsBlocked (shell.js): the same source
@@ -849,7 +916,7 @@ function renderRateLimits(rl) {
   acctHeaderShown = name;
   const lims = acctLimitsMap(rl)[name] || null;
   const age = acctLimitsAge(lims && lims.updated_at, Math.floor(Date.now() / 1000));
-  for (const id of ["limits", "limits-mobile"]) {
+  for (const id of ["limits", "limits-mobile", "limits-side"]) {
     const host = document.getElementById(id);
     if (!host) continue;
     const count = renderRateLimitsInto(host, lims);
@@ -861,8 +928,9 @@ function renderRateLimits(rl) {
     }
     host.classList.toggle("stale", !!(count && age.stale));
     host.title = count ? (name + " · updated " + age.text) : "";
-    if (id === "limits-mobile") host.hidden = count === 0;
+    if (id === "limits-mobile" || id === "limits-side") host.hidden = count === 0;
   }
+  paintRailMeters(); // the rail's mini bars mirror #limits-side
 }
 
 // --- sidebar: session list ---------------------------------------------------
@@ -2452,6 +2520,7 @@ async function refreshSessions() {
   const cnt = $("sessions-count");
   if (cnt) cnt.textContent = String(lastSessions.length);
   renderRail48(); // the list changed
+  paintSideElevated();
   updateStatusLine();
   renderCollapsedSummaries();
   // A menu whose session has left the list would act on a dead id. Only that
@@ -4163,6 +4232,7 @@ function initSpawnControl() {
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
   // control, so there is no native "change" event to hook here.
   $("spawn-go").onclick = () => openSpawnDialog();
+  $("side-new").onclick = () => openSpawnDialog(); // the sidebar top's button: the same flow as "+ new"
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
@@ -4858,6 +4928,10 @@ function initSettings() {
 window.addEventListener("resize", fitAll);
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
+$("side-analytics").addEventListener("click", openAnalytics);
+$("side-palette").addEventListener("click", openPalette);
+// "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
+setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
 {
   const anRefresh = $("analytics-refresh");
   if (anRefresh) anRefresh.addEventListener("click", async () => {
@@ -4879,9 +4953,12 @@ $("analytics-open").addEventListener("click", openAnalytics);
   });
 }
 // Layout buttons 1/2/4 → set the max-window cap (auto-split grows up to it).
-$("layouts").addEventListener("click", (e) => {
-  if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
-});
+// The header's group (mobile) and the sidebar top's (desktop) are the same control.
+for (const grp of document.querySelectorAll(".layouts")) {
+  grp.addEventListener("click", (e) => {
+    if (e.target.dataset && e.target.dataset.cols) applyCap(Number(e.target.dataset.cols));
+  });
+}
 applyCap(4); // default: auto-split up to 4 windows
 initDialogs();
 initSplitter();
@@ -4950,6 +5027,10 @@ initMobileShell();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
+    const sideAn = $("side-analytics");
+    if (sideAn) sideAn.hidden = !(meta && meta.analytics);
+    sideCostOn = !!(meta && meta.analytics);
+    paintSideCost();
     lastRateLimits = (meta && meta.rate_limits) || null;
     renderRateLimits(lastRateLimits); // account 5h/weekly meters in the header
     refreshSessions(); // re-render rows now that the tier label is known
@@ -4957,12 +5038,20 @@ initMobileShell();
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
     const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
     if (ver && vl) { ver.textContent = vl; ver.title = "Culibox " + meta.version; ver.hidden = false; }
+    const sideVer = $("side-version");
+    if (sideVer && vl) { sideVer.textContent = vl; sideVer.title = "Culibox " + meta.version; sideVer.hidden = false; }
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
     window.__envLabel = meta.env_label; // the status line's lowercase copy reads this
     if (meta.env_color) { badge.style.background = meta.env_color; strip.style.background = meta.env_color; }
     badge.hidden = false;
+    const sideEnv = $("side-env");
+    if (sideEnv) {
+      sideEnv.textContent = meta.env_label;
+      if (meta.env_color) sideEnv.style.background = meta.env_color;
+      sideEnv.hidden = false;
+    }
     strip.hidden = false;
     signalAttention(); // title = (N) [ENV] Culibox, now that ENV is known
     updateStatusLine();

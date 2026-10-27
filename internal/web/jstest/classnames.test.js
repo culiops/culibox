@@ -20,7 +20,7 @@ const STATIC = path.join(__dirname, "..", "static");
 // Classes we define. Vendored stylesheets count: xterm, CodeMirror and
 // highlight.js define names our markup legitimately uses.
 const CSS_FILES = [
-  "tokens.css", "primitives.css", "app.css",
+  "tokens.css", "primitives.css", "app.css", "desktop.css",
   "xterm/xterm.css", "vendor/highlight-theme.css", "vendor/codemirror.min.css",
   "vendor/webtui/box.css", "vendor/webtui/separator.css",
 ];

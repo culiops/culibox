@@ -13,9 +13,15 @@ function railNeedsYou(s) {
   return (typeof needsYou === "function" ? needsYou : require("./attention.js").needsYou)(s);
 }
 
+// railElevated: a write window is open on the session (deskshell.js owns the rule).
+function railElevated(s, nowMs) {
+  return (typeof sessionElevated === "function" ? sessionElevated : require("./deskshell.js").sessionElevated)(s, nowMs);
+}
+
 function railItems(sessions, ctx) {
   const c = ctx || {};
-  const out = [{ kind: "toggle", label: "Show sidebar", glyph: "☰", on: false, alert: false }];
+  const nowMs = typeof c.nowMs === "number" ? c.nowMs : Date.now();
+  const out = [{ kind: "toggle", label: "Show sidebar", glyph: "☰", on: false, alert: false, elevated: false }];
   for (const s of sessions || []) {
     // needsYou, not activity alone: an expired AWS sign-in wants the operator
     // while the agent still reads "working".
@@ -34,9 +40,13 @@ function railItems(sessions, ctx) {
       activity: (s && s.activity) || "",
       on: !!c.focusedId && !!s && s.id === c.focusedId,
       alert: !!waiting,
+      // elevated: a write window is open (the rail draws a red ring). title is
+      // the hover text: the bare name, so a dot alone says which session it is.
+      elevated: railElevated(s, nowMs),
+      title: name,
     });
   }
-  out.push({ kind: "new", label: "New session", glyph: "+", on: false, alert: false });
+  out.push({ kind: "new", label: "New session", glyph: "+", on: false, alert: false, elevated: false });
   return out;
 }
 

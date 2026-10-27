@@ -47,6 +47,25 @@
   <div id="layout">
     <nav id="rail48" class="rail48" aria-label="Sessions"></nav>
     <aside id="sidebar">
+      <div id="side-top">
+        <div class="side-brand">
+          <svg class="side-logo" width="18" height="18" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.5 3.5H4.5a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="8" r="2" fill="var(--ok)"/></svg>
+          <span class="side-name">Culibox</span>
+          <span id="side-version" hidden></span>
+          <span id="side-env" hidden></span>
+        </div>
+        <div class="side-ctl">
+          <div class="layouts" id="side-layouts">
+            <button data-cols="1" title="One pane" aria-label="One pane">1</button>
+            <button data-cols="2" title="Two panes" aria-label="Two panes">2</button>
+            <button data-cols="4" class="active" title="Four panes" aria-label="Four panes">4</button>
+          </div>
+          <span class="side-fill"></span>
+          <button id="side-palette" type="button" title="Command palette" aria-label="Open command palette">&#8984;</button>
+          <button id="side-collapse" type="button" title="Hide sidebar" aria-label="Hide sidebar">&#171;</button>
+        </div>
+        <button id="side-new" type="button" class="pbtn">New session</button>
+      </div>
       <div id="sessions-pane">
         <div class="phd" id="sessions-phd">
           <button class="cv" id="sessions-cv" type="button" aria-expanded="true" aria-controls="sessions" title="Collapse sessions">&#9662;</button>
@@ -81,6 +100,17 @@
             <div id="ft-root-list" role="listbox" aria-label="Directories" hidden></div>
           </div>
           <div id="filetree"></div>
+        </div>
+      </div>
+      <div id="side-foot">
+        <div id="limits-side"></div>
+        <div class="side-stats">
+          <span id="side-cost" hidden></span>
+          <span id="side-elevated">0 elevated</span>
+        </div>
+        <div class="side-links">
+          <button id="side-analytics" type="button" hidden>Analytics</button>
+          <button id="side-settings" type="button">Settings</button>
         </div>
       </div>
     </aside>
