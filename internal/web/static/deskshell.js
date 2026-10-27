@@ -189,11 +189,14 @@ function needStripModel(s) {
   return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text };
 }
 
-// stripLabel: the strip's visible label. An ask reads "Asks to run" (spec 5.3);
-// the other needs keep needStripModel's own words.
+// stripLabel: the strip's visible label, in sentence case. An ask reads "Asks to
+// run" (spec 5.3); the other needs keep needStripModel's own words with the
+// first letter raised ("Your turn", "Store locked"; "AWS sign-in" is untouched).
+// The mapping lives here, not in needLabel: the mobile card shares that text.
 function stripLabel(label) {
   if (label === "asks") return "Asks to run";
-  return label || "waiting";
+  const t = label || "waiting";
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 // stripKey: the repaint key of a pane's ask strip. It moves with everything the

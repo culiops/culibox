@@ -140,11 +140,12 @@ test("needStripModel: null unless the session needs you", () => {
   assert.equal(t.text, "done, your move");
 });
 
-test("stripLabel: an ask reads Asks to run, other needs keep the model's words", () => {
+test("stripLabel: an ask reads Asks to run, other needs are sentence case", () => {
   assert.equal(d.stripLabel("asks"), "Asks to run");
-  assert.equal(d.stripLabel("your turn"), "your turn");
+  assert.equal(d.stripLabel("your turn"), "Your turn");
+  assert.equal(d.stripLabel("store locked"), "Store locked");
   assert.equal(d.stripLabel("AWS sign-in"), "AWS sign-in");
-  assert.equal(d.stripLabel(""), "waiting");
+  assert.equal(d.stripLabel(""), "Waiting");
 });
 
 test("stripKey: stable across tab kinds, moves with the ask, the need and replies", () => {

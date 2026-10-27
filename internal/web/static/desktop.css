@@ -145,6 +145,9 @@
   .ri.alert { background: transparent; box-shadow: none; }
   .ri.on, .ri.on.alert { background: var(--raise); box-shadow: inset 2px 0 0 var(--accent); }
   .ri .dot { width: 10px; height: 10px; }
+  /* + under the logo is the one primary control of the rail (p2). */
+  .ri.add { height: 34px; margin: 2px 0 8px; font: 600 18px var(--font-ui); color: #0b1220; background: var(--accent); }
+  .ri.add:hover { background: var(--accent); filter: brightness(1.08); }
   /* Elevated: a red ring around the status dot (D23), whatever its colour. */
   .ri.elev .dot { box-shadow: 0 0 0 2px var(--red); }
   .rail-meters { display: flex; flex: none; flex-direction: column; gap: 3px; width: 26px; padding: 8px 0 6px; }
@@ -206,8 +209,14 @@
   /* The old tab strip's bar, re-drawn by Cell.renderHeader. Two columns: the
      left one gives way (ellipsis on the name and chips), the right one never
      wraps. */
+  /* The left column never drops below --ph-main-min (dot, a name stub, one
+     chip: D9), so the right column is the one that gives way (minmax(0, auto)
+     lets it shrink). The bar is a size container: the narrow rules below read
+     its own width, not the window's. */
   .cell-bar {
-    display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 10px;
+    --ph-main-min: 140px;
+    position: relative; container-type: inline-size;
+    display: grid; grid-template-columns: minmax(var(--ph-main-min), 1fr) minmax(0, auto); align-items: center; column-gap: 10px;
     height: 38px; padding: 0 8px 0 12px; overflow: hidden; white-space: nowrap;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
@@ -215,7 +224,9 @@
   .ph-main { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
   .ph-main .ph-dot { flex: none; }
   .ph-name {
-    flex: 0 1 auto; min-width: 5ch; overflow: hidden; text-overflow: ellipsis;
+    /* The model shrinks ~1000x faster, and the 1px keeps the sub-pixel share the
+       name still loses from clipping its last letters. */
+    flex: 0 1 auto; min-width: 5ch; padding-right: 1px; overflow: hidden; text-overflow: ellipsis;
     font: 600 13.5px var(--font-ui); color: var(--fg);
   }
   .ph-switch {
@@ -238,13 +249,18 @@
   .ph-chip.host { box-shadow: inset 0 0 0 1px var(--faint); }
   .ph-chip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
   .ph-main .bdg.acct { flex: 0 3 auto; min-width: 0; }
-  .ph-model { flex: none; font-size: 11.5px; color: var(--muted); }
+  /* The model gives way before the name does: an ellipsis, never a cut letter. */
+  .ph-model {
+    flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11.5px; color: var(--muted);
+  }
   .ph-ctx {
     flex: none; padding: 1px 4px; font: 12px var(--font-ui); font-variant-numeric: tabular-nums;
     color: var(--muted); background: transparent; border: 0; border-radius: var(--r-chip); cursor: pointer;
   }
   .ph-ctx:hover { color: var(--fg); background: var(--raise); }
-  .ph-side { display: flex; align-items: center; gap: 2px; }
+  .ph-side { display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-width: 0; overflow: hidden; padding: 1px 2px; }
+  .ph-ics { display: contents; }
   .ph-tabs { display: flex; align-items: center; gap: 2px; }
   .ph-tab {
     padding: 4px 9px; font: 12.5px var(--font-ui); color: var(--muted);
@@ -276,10 +292,35 @@
   .ph-del:hover { color: var(--red); }
   .cell-bar button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
+  /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
+     tabs tighten, + Shell loses its label and the separator goes; ⋯ ⛶ × float
+     over the tabs on hover instead of taking width. 540px is the bar's content
+     box, i.e. a pane under NARROW_PANE_PX (560) in tabs.js. */
+  @container (max-width: 540px) {
+    .ph-sep { display: none; }
+    .ph-tab { padding: 4px 5px; }
+    .ph-shell { font-size: 0; padding: 4px 8px; }
+    .ph-shell::before { content: "+"; font: 500 14px/1 var(--font-ui); }
+    .ph-ics {
+      position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 2px;
+      padding: 0 8px 0 22px; opacity: 0; pointer-events: none;
+      background: linear-gradient(90deg, transparent, var(--bg) 18px);
+    }
+    .cell-bar:hover .ph-ics, .cell-bar:focus-within .ph-ics, .ph-ics:has(.pin) { opacity: 1; pointer-events: auto; }
+    .ph-ics .ph-ic { width: 24px; opacity: 1; }
+  }
+  /* Too narrow for the tabs at all: dot, name and chip only. Files and Access
+     stay one click away in the pane's ⋯ menu (Open files here, Context by tool). */
+  @container (max-width: 250px) {
+    .ph-tabs, .ph-shell { display: none; }
+  }
+
   /* Panes meet on a 1px line, edge to edge (p0/p2), instead of floating in
      an 8px gutter: the room goes to the panes, and two panes at 1440px stay
      above the narrow threshold. */
-  #grid { gap: 1px; padding: 0; background: var(--line); }
+  /* isolation: the xterm scrollbar of a pane (z-index 11) must not paint above
+     the drawer (z-index 10) that covers it. */
+  #grid { gap: 1px; padding: 0; background: var(--line); isolation: isolate; }
   #grid.empty { background: var(--bg); }
 
   /* The focused pane: an inset 1px accent ring (replaces the 2px outline). */
@@ -336,6 +377,10 @@
   #drawer #files-pane > .files-body { display: flex; padding-top: 6px; }
   #drawer #files-phd .cv, #drawer #files-phd .path, #drawer #files-phd > span:not(.grow):not(.path) { display: none; }
   #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
+  /* Containment chips are neutral (D23): amber is for needs-you only, so the
+     old rail's amber host chip and green box chip are re-dressed here. */
+  #drawer .bdg.host, #drawer .bdg.box { color: var(--muted); background: var(--raise); border-color: transparent; }
+  #drawer .bdg.host { border-color: var(--faint); }
   /* The rail: a column of the drawer, not an overlay of its own. */
   #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
 

@@ -240,12 +240,15 @@ function applyDrawer(next, opts) {
 function drawerRootTree(sessionId, explicit) {
   const t = sessionId ? terminalTabFor(sessionId) : null;
   const s = sessionId ? (lastSessions || []).find((x) => x.id === sessionId) : null;
+  // A cwd /api/fs/list refuses (outside $HOME) is never a root: the tree would
+  // be replaced by one "forbidden" line, and the mobile Files screen shares it.
+  // Such a session leaves the tree where it is, the same as syncFocusedTree.
   if (explicit) {
     const cwd = (s && s.cwd) || (t && t.cwd) || "";
-    if (cwd) { syncTreeToRoot(cwd).catch(() => {}); return; }
+    if (cwd && rootableCwd(cwd)) { syncTreeToRoot(cwd).catch(() => {}); return; }
   }
-  if (t && t.cwd) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
-  if (s && s.cwd) { syncTreeToRoot(s.cwd).catch(() => {}); return; }
+  if (t && t.cwd && rootableCwd(t.cwd)) { syncTreeToRoot(t.cwd, "sess:" + t.id).catch(() => {}); return; }
+  if (s && s.cwd && rootableCwd(s.cwd)) { syncTreeToRoot(s.cwd).catch(() => {}); return; }
   syncFocusedTree();
 }
 
@@ -374,7 +377,8 @@ function railLogo() {
 function renderRail48() {
   const rail = $("rail48");
   if (!rail) return;
-  const items = railItems(lastSessions, { focusedId: selectedSessionId() });
+  // Dots follow the sidebar's order (needs you first), as the Alt+N numbers do.
+  const items = railItems(jumpOrder(lastSessions, mobileActive(window.innerWidth)), { focusedId: selectedSessionId() });
   const key = items.map((i) => [i.kind, i.id || "", i.activity, i.on ? 1 : 0, i.alert ? 1 : 0, i.elevated ? 1 : 0, i.title || ""].join(":")).join("|");
   if (key === rail48Key) return;
   rail48Key = key;
@@ -404,9 +408,10 @@ function renderRail48() {
   const mid = document.createElement("div");
   mid.className = "rin";
   mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
-  // The quota bars sit between the sessions and the add button; renderRateLimits
-  // fills them. Re-parked on every rebuild because replaceChildren drops them.
-  rail.replaceChildren(railLogo(), mk(items[0]), mid, railMeters(), mk(items[items.length - 1]));
+  // Logo, the primary + under it, the session dots, then the quota bars and the
+  // ☰ at the foot (p2); renderRateLimits fills the bars. Re-parked on every
+  // rebuild because replaceChildren drops them.
+  rail.replaceChildren(railLogo(), mk(items[items.length - 1]), mid, railMeters(), mk(items[0]));
   paintRailMeters();
 }
 

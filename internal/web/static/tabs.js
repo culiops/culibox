@@ -368,6 +368,7 @@ class Cell {
       tab: t, session: t && t.kind === "terminal" ? s : null, nowMs: Date.now(),
       boxRuntime: typeof boxRuntime === "string" ? boxRuntime : "", narrow: this._narrow,
     });
+    this._hdrName = m.name; // see syncHeaderName
     // Classes are assigned as literals at each call site (not passed in), so
     // classnames.test.js can see every one of them.
     const el = (tag, text) => {
@@ -486,15 +487,15 @@ class Cell {
       Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
     };
     side.append(sh);
+    let more = null;
     if (s) {
       // The same menu as the sidebar row's ⋯, End session included (spec 7).
-      const more = el("button", "\u22EF");
+      more = el("button", "\u22EF");
       more.className = "ph-ic ph-more";
       more.title = "Session actions";
       more.setAttribute("aria-label", "Session actions");
       more.setAttribute("aria-haspopup", "menu");
       more.onclick = (e) => { e.stopPropagation(); toggleSessionMenuAt(more, s); };
-      side.append(more);
     }
     // ⛶ stays visible while maximized: a stored maximized pane must always have
     // its way back (spec 7, localStorage hazards).
@@ -508,7 +509,13 @@ class Cell {
     del.title = "Close pane (the session keeps running)";
     del.setAttribute("aria-label", "Close pane");
     del.onclick = (e) => { e.stopPropagation(); removeCell(this); };
-    side.append(max, del);
+    // One wrapper for the three icons: a wide header lays them out in the flow
+    // (display: contents), a narrow one floats them over the tabs on hover so
+    // they never take the name's room (D9).
+    const ics = el("span");
+    ics.className = "ph-ics";
+    ics.append(...(more ? [more, max, del] : [max, del]));
+    side.append(ics);
 
     this.bar.replaceChildren(main, side);
     paintDrawerTabs(this);
@@ -586,8 +593,20 @@ class Cell {
   repaintReply() {
     // Desktop: the poll may have changed what the strip shows (the ask, the
     // need, replies on/off); syncStrip rebuilds only when its key moved.
-    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncStrip(); return; }
+    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncHeaderName(); this.syncStrip(); return; }
     this._strip?._paint();
+  }
+
+  // syncHeaderName: the desktop header paints the session's name from the
+  // polled list, so a rename (this tab's PATCH resolves before the next poll)
+  // must repaint it. Rebuilds only when the name moved: a header rebuilt on
+  // every poll would eat the press that lands during it (see setFocusedCell).
+  syncHeaderName() {
+    const t = this.activeTab;
+    if (!t || t.kind !== "terminal") return;
+    const s = (lastSessions || []).find((x) => x.id === t.id) || null;
+    const name = (s && (s.name || s.id)) || t.name || "";
+    if (name !== this._hdrName) this.renderBar();
   }
 
   dispose() {
