@@ -534,6 +534,14 @@ function treeFollowTarget(tab, home) {
   return null;
 }
 
+// rootableCwd: may the tree be rooted at this session cwd? The same verdict
+// treeFollowTarget gives a terminal tab (inside $HOME, not empty), for callers
+// that root the tree from a session record rather than a tab: the desktop
+// drawer. A cwd that /api/fs/list would refuse must never become the root.
+function rootableCwd(cwd, home) {
+  return treeFollowTarget({ kind: "terminal", id: "", cwd: cwd || "" }, home) !== null;
+}
+
 // syncTreeToRoot re-roots the tree, but ONLY when the follow KEY changes — so a
 // manual root pick survives until a different tab is focused. The root is a
 // plain input now, so any path just overwrites it; there is no option list to
@@ -639,5 +647,5 @@ async function initFileTree() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { iconFor, treeBranch, treeFollowTarget, actionsLabel };
+  module.exports = { iconFor, treeBranch, treeFollowTarget, rootableCwd, actionsLabel };
 }

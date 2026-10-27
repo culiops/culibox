@@ -1,7 +1,7 @@
 "use strict";
 const test = require("node:test");
 const assert = require("node:assert");
-const { treeFollowTarget } = require("../static/filetree.js");
+const { treeFollowTarget, rootableCwd } = require("../static/filetree.js");
 
 // Every case passes HOME explicitly. treeFollowTarget also reads window.HOME_DIR
 // when the argument is omitted (the shortPath/relativeTo convention in
@@ -103,4 +103,13 @@ test("a box viewer is never followed: its path does not exist on the host", () =
   const boxed = { kind: "viewer", path: "/tmp/playwright-mcp/a.png", box: "s1" };
   assert.strictEqual(treeFollowTarget(boxed, "/h"), null);
   assert.strictEqual(treeFollowTarget(boxed, ""), null);
+});
+
+test("rootableCwd: a session cwd is a root only inside $HOME (the drawer must not root where fs/list 403s)", () => {
+  assert.strictEqual(rootableCwd("/home/claude", HOME), true);
+  assert.strictEqual(rootableCwd("/home/claude/culipulse", HOME), true);
+  assert.strictEqual(rootableCwd("/tmp/abvws", HOME), false);
+  assert.strictEqual(rootableCwd("/home/claudette", HOME), false);
+  assert.strictEqual(rootableCwd("", HOME), false);
+  assert.strictEqual(rootableCwd(undefined, HOME), false);
 });
