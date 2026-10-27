@@ -1,0 +1,158 @@
+"use strict";
+// activitytab.js: the view's lifecycle against a minimal fake DOM (the repo has no
+// jsdom). Covers what the pure model cannot: a view re-targeted to another session
+// must not keep the previous session's reply box.
+const test = require("node:test");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const path = require("node:path");
+const vm = require("node:vm");
+
+const STATIC = path.join(__dirname, "..", "static");
+
+class Text { constructor(t) { this.text = t; this.parent = null; } get textContent() { return this.text; } set textContent(v) { this.text = String(v); } }
+class Node {
+  constructor(tag, doc) {
+    this.tag = tag; this.doc = doc; this.children = []; this.parent = null; this.own = "";
+    this.className = ""; this.attrs = {}; this.style = {}; this.dataset = {}; this.hidden = false; this.disabled = false;
+    this.isConnected = true; this.tabIndex = -1;
+    const self = this;
+    this.classList = {
+      toggle(c, on) {
+        const set = new Set(self.className.split(/\s+/).filter(Boolean));
+        if (on === undefined ? !set.has(c) : on) set.add(c); else set.delete(c);
+        self.className = [...set].join(" ");
+      },
+      contains: (c) => self.className.split(/\s+/).includes(c),
+    };
+  }
+  get textContent() { return this.own + this.children.map((c) => c.textContent).join(""); }
+  set textContent(v) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = String(v); }
+  get firstChild() { return this.children[0] || null; }
+  setAttribute(k, v) { this.attrs[k] = String(v); }
+  appendChild(c) { if (c.parent) c.parent.children.splice(c.parent.children.indexOf(c), 1); c.parent = this; this.children.push(c); return c; }
+  append(...cs) { cs.forEach((c) => this.appendChild(c)); }
+  replaceChildren(...cs) { this.children.forEach((c) => { c.parent = null; }); this.children = []; this.own = ""; cs.forEach((c) => this.appendChild(c)); }
+  remove() { if (this.parent) { this.parent.children.splice(this.parent.children.indexOf(this), 1); this.parent = null; } }
+  focus() { this.doc.activeElement = this; }
+  click() { if (this.onclick) this.onclick({ target: this }); }
+  all(sel, out) {
+    for (const c of this.children) {
+      if (!(c instanceof Node)) continue;
+      const hit = sel[0] === "." ? c.className.split(/\s+/).includes(sel.slice(1)) : c.tag === sel;
+      if (hit) out.push(c);
+      c.all(sel, out);
+    }
+    return out;
+  }
+  querySelectorAll(sel) { return this.all(sel, []); }
+  querySelector(sel) { return this.all(sel, [])[0] || null; }
+}
+
+// One page: scripts run as classic scripts in a shared global scope, like the browser.
+function page() {
+  const doc = { activeElement: null, hidden: false };
+  doc.createElement = (t) => new Node(t, doc);
+  doc.createTextNode = (t) => new Text(t);
+  const box = {
+    document: doc, window: { getSelection: () => null }, console, AbortController, Promise, JSON, Date,
+    lastSessions: [], paneViewRenderers: {}, replyFocused: false, replyDraft: null, repliesEnabled: true,
+    composers: [],
+    fetch: async () => ({ status: 200, json: async () => ({ claude: true, events: [], more: false, files: [], summary: {} }) }),
+    api: async () => ({ tools: [] }),
+    terminalTabFor: () => null,
+    maskHint: () => "",
+    // Stand-ins for app.js: the composer is bound to the session object it was built for.
+    buildCardComposer(s) {
+      const form = doc.createElement("div");
+      form.appendChild(doc.createElement("input"));
+      const c = { form, why: doc.createElement("span"), refresh() {}, sid: s.id };
+      box.composers.push(c);
+      return c;
+    },
+    buildEnableRepliesButton() { return doc.createElement("button"); },
+  };
+  box.globalThis = box;
+  const ctx = vm.createContext(box);
+  for (const f of ["attribution.js", "activitymodel.js", "activitytab.js"]) {
+    new vm.Script(fs.readFileSync(path.join(STATIC, f), "utf8"), { filename: f }).runInContext(ctx);
+  }
+  return { box, doc, host: doc.createElement("div") };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const claude = (id, over) => Object.assign({ id, claude: true, summary: "said " + id, replyable: true, activity: "idle" }, over);
+
+test("a mounted Claude view shows the latest message and a reply box", async () => {
+  const { box, host } = page();
+  box.lastSessions = [claude("s1")];
+  box.paneViewRenderers.activity(host, "s1");
+  await tick();
+  assert.match(host.textContent, /Latest message/);
+  assert.match(host.textContent, /said s1/);
+  assert.strictEqual(host.querySelectorAll("input").length, 1);
+  assert.strictEqual(box.composers.length, 1);
+});
+
+test("re-targeted to a non-Claude session: no stale message, reply box or filter bar", async () => {
+  const { box, host } = page();
+  box.lastSessions = [claude("s1"), { id: "s2", claude: false }];
+  const h = box.paneViewRenderers.activity(host, "s1");
+  await tick();
+  assert.strictEqual(host.querySelectorAll("input").length, 1);
+  h.update("s2");
+  await tick();
+  assert.strictEqual(host.querySelectorAll("input").length, 0, "the old session's reply box is gone");
+  assert.doesNotMatch(host.textContent, /Latest message|said s1/);
+  assert.strictEqual(host.querySelectorAll(".act-pill").length, 0);
+  assert.match(host.textContent, /Activity is available for Claude sessions/);
+  // And back: a fresh box, built for the session now shown.
+  h.update("s1");
+  await tick();
+  assert.strictEqual(host.querySelectorAll("input").length, 1);
+  assert.strictEqual(box.composers[box.composers.length - 1].sid, "s1");
+});
+
+test("re-targeted to another Claude session: one reply box, bound to the new session", async () => {
+  const { box, host } = page();
+  box.lastSessions = [claude("s1"), claude("s2")];
+  const h = box.paneViewRenderers.activity(host, "s1");
+  await tick();
+  h.update("s2");
+  await tick();
+  assert.strictEqual(host.querySelectorAll("input").length, 1);
+  assert.strictEqual(box.composers[box.composers.length - 1].sid, "s2");
+  assert.match(host.textContent, /said s2/);
+  assert.doesNotMatch(host.textContent, /said s1/);
+});
+
+test("a session that leaves the list takes its reply box with it", async () => {
+  const { box, host } = page();
+  box.lastSessions = [claude("s1")];
+  const h = box.paneViewRenderers.activity(host, "s1");
+  await tick();
+  box.lastSessions = [claude("zz")];
+  h.update("s1");
+  assert.strictEqual(host.querySelectorAll("input").length, 0);
+  assert.match(host.textContent, /no longer listed/);
+});
+
+test("removing a focused reply box releases the poll's reply-focus hold", async () => {
+  const { box, doc, host } = page();
+  box.lastSessions = [claude("s1"), { id: "s2", claude: false }];
+  const h = box.paneViewRenderers.activity(host, "s1");
+  await tick();
+  host.querySelector("input").focus();
+  box.replyFocused = true;
+  h.update("s2");
+  assert.strictEqual(box.replyFocused, false);
+  assert.ok(doc.activeElement);
+});
+
+test("a diff's +a −d is neutral text: green and red are status and error roles only", () => {
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  for (const cls of ["act-add", "act-del"]) {
+    const rules = css.split("}").filter((r) => new RegExp("\\." + cls + "\\b").test(r.split("{")[0]));
+    assert.ok(rules.length, cls + " is styled");
+    for (const r of rules) assert.doesNotMatch(r, /var\(--(ok|danger|amber)\)/, cls);
+  }
+});

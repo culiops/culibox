@@ -148,8 +148,9 @@ function actTiles(tiles) {
   return wrap;
 }
 
-// actOutcome: the right-aligned cell. A diff's +a is green and its −d red, as in
-// the mockup; any other outcome is one word of one colour role.
+// actOutcome: the right-aligned cell. A diff's +a −d is neutral text (green is
+// status and red is write/error only, D23); any other outcome is one word of one
+// colour role.
 function actOutcome(o) {
   const cell = actEl("div", "act-out");
   if (o.tone === "add") {
@@ -322,6 +323,16 @@ function mountActivity(host, sid0) {
   const bar = { node: null, pills: [], live: null, liveTxt: null };
   const put = (slot, node) => { slot.replaceChildren(...(node ? [node] : [])); };
 
+  // resetMsg: drop the latest-message block and its reply box. The box is bound to
+  // one session, so it must never outlive a re-target, a session that left the
+  // list, or a switch to a session with no reply path.
+  function resetMsg() {
+    const f = inputOf();
+    if (f && document.activeElement === f) replyFocused = false; // its blur will not fire once it is gone
+    put(slots.msg, null);
+    msg.box = null; msg.comp = null; msg.enable = null; msg.live = null;
+  }
+
   function paintMsg(s) {
     if (!msg.box) {
       msg.box = actEl("section", "act-msg");
@@ -372,8 +383,8 @@ function mountActivity(host, sid0) {
     const s = lastSessions.find((x) => x.id === sid);
     if (!s) {
       for (const k of Object.keys(keys)) keys[k] = "";
-      msg.box = null; msg.comp = null; msg.enable = null; msg.live = null; bar.node = null;
-      put(slots.msg, null); put(slots.tiles, null); put(slots.bar, null); put(slots.note, null);
+      resetMsg();
+      bar.node = null; put(slots.tiles, null); put(slots.bar, null); put(slots.note, null);
       put(slots.foot, null); put(slots.tools, null); put(slots.ctx, null); put(slots.files, null);
       put(slots.list, actEl("div", "act-empty", "This session is no longer listed."));
       return;
@@ -389,7 +400,7 @@ function mountActivity(host, sid0) {
 
     // Latest message and reply box: only a Claude session has either.
     if (model.notClaude) {
-      if (msg.box) { put(slots.msg, null); msg.box = null; msg.comp = null; msg.enable = null; msg.live = null; }
+      if (msg.box || slots.msg.firstChild) resetMsg();
     } else {
       paintMsg(s);
     }
@@ -487,7 +498,9 @@ function mountActivity(host, sid0) {
         sid = next;
         actViews.set(sid, paint);
         for (const k of Object.keys(keys)) keys[k] = "";
-        msg.box = null; msg.comp = null; msg.enable = null; msg.live = null;
+        resetMsg();
+        bar.node = null;
+        put(slots.bar, null);
         old.seq++;
         scanOnce();
       }

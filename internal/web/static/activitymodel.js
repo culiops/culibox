@@ -89,8 +89,8 @@ function outcomeText(e, nowMs) {
 }
 
 // actTone: the colour role of an outcome (D23). Amber is the ask only; red is an
-// error, a refusal or a write window; green is a success; the +a of a diff is the
-// diff convention; everything else is neutral.
+// error, a refusal or a write window; green is a success; tone "add" (a diff)
+// is neutral text in the view; everything else is neutral.
 function actTone(e) {
   if (!e || typeof e !== "object") return "muted";
   const st = actStr(e.state);
