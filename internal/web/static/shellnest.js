@@ -51,6 +51,42 @@ function shellLabel(s, sessions) {
   return "shell " + (idx + 1);
 }
 
+// liveShellsOf: the parent's nested shells that have not exited, oldest first.
+// "detached" still counts: the process is alive, only no client is attached.
+function liveShellsOf(parentId, sessions) {
+  return (shellChildren(sessions).get(parentId) || []).filter((s) => s.status !== "exited");
+}
+
+// killDialogOpts: the question confirmKill asks. With no live shells it is the
+// plain End dialog, word for word what shipped before nesting; with n > 0 it
+// adds the second way out ("End session only" leaves the shells as top-level
+// rows, the parent being gone).
+function killDialogOpts(name, id, n) {
+  const label = name || id;
+  if (!(n > 0)) {
+    return {
+      title: "End session",
+      body: 'End session "' + label + '"? This cannot be undone.',
+      confirmLabel: "End",
+      danger: true,
+    };
+  }
+  return {
+    title: "End session",
+    body: 'End "' + label + '" and its ' + n + (n === 1 ? " shell" : " shells") + "? This cannot be undone.",
+    confirmLabel: "End all",
+    altLabel: "End session only",
+    danger: true,
+  };
+}
+
+// killIdsFor: which sessions to end for the user's answer, parent first.
+function killIdsFor(outcome, parentId, shells) {
+  if (outcome === "confirm") return [parentId, ...(shells || []).map((s) => s.id)];
+  if (outcome === "alt") return [parentId];
+  return [];
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { shellChildren, isNestedShell, shellLabel };
+  module.exports = { shellChildren, isNestedShell, shellLabel, liveShellsOf, killDialogOpts, killIdsFor };
 }

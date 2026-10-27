@@ -66,3 +66,44 @@ test("shellLabel finds a session by id, so a copy of the row gets the same label
   assert.equal(n.shellLabel(Object.assign({}, sh2), list), "shell 2");
   assert.equal(n.shellLabel(Object.assign({}, sh1), list), "shell 1");
 });
+
+// --- ending a parent -----------------------------------------------------------
+const live = { ...sh1, status: "live" };
+const gone = { ...sh2, status: "exited" };
+
+test("liveShellsOf counts a shell unless it has exited", () => {
+  const det = { ...sh1, id: "s3", status: "detached" };
+  assert.deepEqual(n.liveShellsOf("p", [parent, live, gone, det]).map((s) => s.id), ["s1", "s3"]);
+  assert.deepEqual(n.liveShellsOf("p", [parent, gone]), []);
+  assert.deepEqual(n.liveShellsOf("p", [parent]), []);
+  assert.deepEqual(n.liveShellsOf("nope", [parent, live]), []);
+  assert.deepEqual(n.liveShellsOf("p", undefined), []);
+});
+
+test("killDialogOpts with no live shells is the plain End dialog", () => {
+  assert.deepEqual(n.killDialogOpts("agent", "p", 0), {
+    title: "End session",
+    body: 'End session "agent"? This cannot be undone.',
+    confirmLabel: "End",
+    danger: true,
+  });
+  assert.strictEqual(n.killDialogOpts("", "p", 0).body, 'End session "p"? This cannot be undone.');
+});
+
+test("killDialogOpts with shells offers End all, End session only", () => {
+  const one = n.killDialogOpts("agent", "p", 1);
+  assert.strictEqual(one.body, 'End "agent" and its 1 shell? This cannot be undone.');
+  assert.strictEqual(one.confirmLabel, "End all");
+  assert.strictEqual(one.altLabel, "End session only");
+  assert.strictEqual(one.danger, true);
+  assert.strictEqual(one.title, "End session");
+  assert.strictEqual(n.killDialogOpts("agent", "p", 3).body, 'End "agent" and its 3 shells? This cannot be undone.');
+});
+
+test("killIdsFor: confirm ends the parent then its shells, alt only the parent, cancel nothing", () => {
+  const kids = [live, { ...sh2, status: "live" }];
+  assert.deepEqual(n.killIdsFor("confirm", "p", kids), ["p", "s1", "s2"]);
+  assert.deepEqual(n.killIdsFor("alt", "p", kids), ["p"]);
+  assert.deepEqual(n.killIdsFor("cancel", "p", kids), []);
+  assert.deepEqual(n.killIdsFor("confirm", "p", []), ["p"]);
+});

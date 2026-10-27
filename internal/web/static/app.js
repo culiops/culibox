@@ -5384,13 +5384,12 @@ document.addEventListener("keydown", (e) => {
 // command palette, and the row menu's End session… item). killSession itself
 // stays unguarded: Undo on a fresh spawn must not ask twice.
 async function confirmKill(id, name) {
-  const ok = await askConfirm({
-    title: "End session",
-    body: 'End session "' + (name || id) + '"? This cannot be undone.',
-    confirmLabel: "End",
-    danger: true,
-  });
-  if (ok) killSession(id);
+  const shells = liveShellsOf(id, lastSessions);
+  const outcome = await askChoice(killDialogOpts(name, id, shells.length));
+  // "End session only" leaves the shells running as top-level rows (the parent
+  // is gone, so nothing nests them any more).
+  const ids = killIdsFor(outcome, id, shells);
+  for (const sid of ids) await killSession(sid);
 }
 
 async function killSession(id) {
