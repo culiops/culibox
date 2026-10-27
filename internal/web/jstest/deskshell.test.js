@@ -324,6 +324,7 @@ test("shortcutRows lists the real bindings and ends with the runtime row", () =>
   assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+`"), "quick shell");
   assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "runc" });
   for (const r of rows) assert.ok(r.keys && r.action, "no empty cell");
+  assert.ok(!rows.some((r) => /Collapse/.test(r.action)), "the sessions collapse is a no-op on desktop");
 });
 
 test("shortcutRows uses the mac symbols and the sysbox label", () => {
@@ -340,4 +341,57 @@ test("shortcutRows uses the mac symbols and the sysbox label", () => {
 test("shortcutText renders one line per row, the runtime row as 'Runtime: x'", () => {
   const t = d.shortcutText([{ keys: "Ctrl+Shift+K", action: "Command palette" }, { keys: "Runtime", action: "runc" }]);
   assert.equal(t, "Ctrl+Shift+K  Command palette\n\nRuntime: runc");
+});
+
+// --- bootFlags: legacy localStorage keys (spec 7, Task 9) ----------------------
+
+const store = (obj) => ({ getItem: (k) => (k in obj ? obj[k] : null) });
+const LEGACY = {
+  sidebarHidden: "1",
+  "agent-box:steerRail": "1",
+  "agent-box:panesCollapsed": '{"sessions":true,"files":true}',
+  "agent-box:sidebarSplit": "40",
+};
+
+test("bootFlags on desktop never opens Access and ignores the legacy pane keys", () => {
+  assert.deepEqual(d.bootFlags(store(LEGACY), false),
+    { sidebarHidden: true, openAccess: false, ignoreCollapsed: true, ignoreSplit: true });
+});
+
+test("bootFlags on mobile keeps the stored values as they are", () => {
+  const f = d.bootFlags(store(LEGACY), true);
+  assert.equal(f.openAccess, true);
+  assert.equal(f.ignoreCollapsed, false);
+  assert.equal(f.ignoreSplit, false);
+  assert.equal(f.sidebarHidden, true);
+});
+
+test("bootFlags reads off values as off", () => {
+  const f = d.bootFlags(store({ sidebarHidden: "0", "agent-box:steerRail": "0" }), true);
+  assert.deepEqual(f, { sidebarHidden: false, openAccess: false, ignoreCollapsed: false, ignoreSplit: false });
+  assert.deepEqual(d.bootFlags(store({}), false),
+    { sidebarHidden: false, openAccess: false, ignoreCollapsed: true, ignoreSplit: true });
+});
+
+test("bootFlags with a throwing or missing storage gives the defaults", () => {
+  const boom = { getItem() { throw new Error("blocked"); } };
+  assert.deepEqual(d.bootFlags(boom, true), { sidebarHidden: false, openAccess: false, ignoreCollapsed: false, ignoreSplit: false });
+  assert.deepEqual(d.bootFlags(boom, false), { sidebarHidden: false, openAccess: false, ignoreCollapsed: true, ignoreSplit: true });
+  assert.deepEqual(d.bootFlags(null, true), { sidebarHidden: false, openAccess: false, ignoreCollapsed: false, ignoreSplit: false });
+});
+
+// --- paneTitle: the pane-header name's tooltip (R22a) ---------------------------
+
+test("paneTitle adds the cwd only for a terminal tab", () => {
+  const s = { cwd: "/home/u/proj" };
+  assert.equal(d.paneTitle("api", { kind: "terminal" }, s, 1), "api · /home/u/proj");
+  assert.equal(d.paneTitle("notes.md", { kind: "viewer" }, s, 1), "notes.md");
+  assert.equal(d.paneTitle("api", { kind: "terminal" }, { cwd: "" }, 1), "api");
+  assert.equal(d.paneTitle("api", { kind: "terminal" }, null, 1), "api");
+  assert.equal(d.paneTitle("api", null, s, 1), "api");
+});
+
+test("paneTitle appends the tab count only when the pane has several", () => {
+  assert.equal(d.paneTitle("api", { kind: "terminal" }, { cwd: "/x" }, 3), "api · /x (3 tabs in this pane)");
+  assert.equal(d.paneTitle("a.md", { kind: "viewer" }, null, 2), "a.md (2 tabs in this pane)");
 });

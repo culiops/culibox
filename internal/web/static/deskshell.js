@@ -291,7 +291,6 @@ function shortcutRows(isMac, boxRuntime) {
     { keys: "Ctrl+Shift+`", action: "New shell here" },
     { keys: isMac ? "⌘B" : "Ctrl+Shift+B", action: "Toggle sidebar / rail" },
     { keys: isMac ? "⌥⌘F" : "Ctrl+Alt+F", action: "Files drawer" },
-    { keys: isMac ? "⌥⌘S" : "Ctrl+Alt+S", action: "Collapse sessions" },
     { keys: (isMac ? "⌘" : "Ctrl") + " + / - / 0", action: "Zoom in / out / reset" },
     { keys: isMac ? "⌘C" : "Ctrl+Shift+C", action: "Terminal: copy selection" },
     { keys: "Ctrl+V", action: "Terminal: paste" },
@@ -312,7 +311,31 @@ function shortcutText(rows) {
   return rt ? body.join("\n") + "\n\nRuntime: " + rt.action : body.join("\n");
 }
 
+// bootFlags: what boot reads from the legacy localStorage keys, decided once so
+// the desktop rules are testable. The keys predate the desktop shell and are not
+// renamed (spec 7): on desktop the Access rail lives in the drawer (never opened
+// from a stored "1"), the pane collapse hid panes that no longer exist as such,
+// and the sessions/files split has no splitter. Mobile keeps every stored value.
+// A blocked or absent storage reads as defaults; the two "ignore" flags depend on
+// the layout alone.
+function bootFlags(storage, isMobile) {
+  const get = (k) => { try { return storage ? storage.getItem(k) : null; } catch (_) { return null; } };
+  return {
+    sidebarHidden: get("sidebarHidden") === "1",
+    openAccess: !!isMobile && get("agent-box:steerRail") === "1",
+    ignoreCollapsed: !isMobile,
+    ignoreSplit: !isMobile,
+  };
+}
+
+// paneTitle: the tooltip of the pane header's name. The cwd belongs to a terminal
+// tab; a viewer tab shows a file, and the cell's session cwd would mislabel it.
+function paneTitle(name, tab, session, tabCount) {
+  const cwd = tab && tab.kind === "terminal" && session && session.cwd ? " \u00B7 " + session.cwd : "";
+  return name + cwd + (tabCount > 1 ? " (" + tabCount + " tabs in this pane)" : "");
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText };
+    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
 }

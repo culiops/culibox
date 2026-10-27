@@ -91,6 +91,20 @@
   /* #side-new is the sidebar's "New session"; the Sessions header's "+ new" would be a second one. */
   #sessions-phd #spawn-go { display: none; }
 
+  /* --- legacy layout keys (spec 7) ---------------------------------------- */
+  /* agent-box:panesCollapsed (pre-paint html classes) and agent-box:sidebarSplit
+     (--sidebar-split) predate this shell. The sessions list is the sidebar's
+     whole body and always shows; the split handle and the file pane go (the pane
+     lives in the drawer once moved, and is still in the sidebar until the first
+     use, so the rule is scoped to #sidebar and never hides it in #drawer). The
+     ids out-rank app.css's .sessions-collapsed / .files-collapsed selectors. */
+  #sidebar #sessions-pane { flex: 1 1 auto; min-height: 0; }
+  #sidebar #sessions-pane > #sessions { display: block; }
+  #sidebar #split-h, #sidebar #files-pane { display: none; }
+  /* Its caret, count, + new and pip are the group headers, the New session button
+     and the rail dots now; a caret that no longer collapses anything goes too. */
+  #sidebar #sessions-phd { display: none; }
+
   /* --- sidebar footer ----------------------------------------------------- */
   #side-foot {
     margin-top: auto; /* stays at the bottom whatever the panes above it do */
@@ -125,6 +139,7 @@
 
   /* --- the 52px rail (sidebar hidden) ------------------------------------- */
   .sidebar-hidden .rail48 { width: 52px; padding: 10px 0; gap: 4px; background: var(--panel); border-right: 1px solid var(--line); }
+  .rail-logo { display: flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 28px; margin-bottom: 4px; }
   .ri { width: 36px; height: 32px; border-radius: var(--r-ctl); }
   .ri:hover { background: var(--raise); }
   /* app.css gives a waiting row a tint and a 3px stripe; the rail says it with

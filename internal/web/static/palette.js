@@ -166,7 +166,7 @@ function paletteShellCommands(mac, desktop, act) {
   }
   return [
     { id: "access-drawer", kind: "view", label: "Session details (Access)", hint: "", run: act.accessDrawer },
-    { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: mac ? "⌥⌘F" : "Alt+Ctrl+F", run: act.filesDrawer },
+    { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: mac ? "⌥⌘F" : "Ctrl+Alt+F", run: act.filesDrawer },
     { id: "shortcuts", kind: "view", label: "Keyboard shortcuts", hint: "", run: act.shortcuts },
   ];
 }
@@ -221,7 +221,7 @@ function paletteCommands(mac) {
   });
   const shellCmd = (id) => shell.find((c) => c.id === id);
   for (const id of ["access-drawer", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
-  cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
+  if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
   for (const id of ["toggle-files", "files-drawer", "shortcuts"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
   cmds.push({ kind: "view", label: "Increase font size", hint: "Ctrl +", run: () => zoomFocused(+fontPrefs.STEP) });

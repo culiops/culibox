@@ -149,7 +149,7 @@ test("paletteShellCommands: desktop offers shortcuts, files drawer and the Acces
   assert.ok(!ids.includes("steer-rail"), "no second Access entry");
   assert.ok(!ids.includes("toggle-files"), "the old files collapse is dead on desktop (R17)");
   assert.equal(cmds.find((c) => c.id === "access-drawer").label, "Session details (Access)");
-  assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Alt+Ctrl+F");
+  assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Ctrl+Alt+F");
 });
 
 test("paletteShellCommands: mobile keeps the old entries and gets none of the new", () => {

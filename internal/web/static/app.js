@@ -116,13 +116,14 @@ function toggleSidebar() {
   // ☰ without), so the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
   const active = document.activeElement;
-  const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === rail.firstElementChild));
+  const railToggle = rail && rail.querySelector(".ri"); // first button; the logo before it is not focusable
+  const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === railToggle));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
   if (fromToggle) {
-    const next = hidden ? rail && rail.firstElementChild : $("side-collapse");
+    const next = hidden ? rail && rail.querySelector(".ri") : $("side-collapse");
     if (next) next.focus();
   }
 }
@@ -360,6 +361,16 @@ if (typeof ResizeObserver === "function") new ResizeObserver(() => positionDrawe
 // in tabs.js records, where a full renderBar() ate the first press of every
 // pane button. Nothing here holds a value, so a signature is all it needs.
 let rail48Key = "";
+// The brand mark above the rail's ☰ (spec 5.1): a copy of the sidebar top's
+// logo, so the two cannot drift. Decorative; the page title names the app.
+function railLogo() {
+  const wrap = document.createElement("span");
+  wrap.className = "rail-logo";
+  wrap.setAttribute("aria-hidden", "true");
+  const src = document.querySelector("#side-top .side-logo");
+  if (src) wrap.appendChild(src.cloneNode(true));
+  return wrap;
+}
 function renderRail48() {
   const rail = $("rail48");
   if (!rail) return;
@@ -395,7 +406,7 @@ function renderRail48() {
   mid.replaceChildren(...items.filter((i) => i.kind === "session").map(mk));
   // The quota bars sit between the sessions and the add button; renderRateLimits
   // fills them. Re-parked on every rebuild because replaceChildren drops them.
-  rail.replaceChildren(mk(items[0]), mid, railMeters(), mk(items[items.length - 1]));
+  rail.replaceChildren(railLogo(), mk(items[0]), mid, railMeters(), mk(items[items.length - 1]));
   paintRailMeters();
 }
 
@@ -418,6 +429,8 @@ async function paintSideCost() {
   const el = $("side-cost");
   if (!el) return;
   if (!sideCostOn) { el.hidden = true; return; }
+  // The footer is desktop-only: on mobile nothing shows the sum, so no fetch.
+  if (mobileActive(window.innerWidth)) return;
   try {
     const r = costTodayRange(Date.now());
     const summary = await api("/api/analytics/summary?from=" + r.from + "&to=" + r.to);
@@ -531,6 +544,10 @@ function renderCollapsedSummaries(state) {
 }
 
 function togglePane(kind) {
+  // Desktop ignores the legacy pane collapse (desktop.css): the list always
+  // shows and the tree lives in the drawer. A toggle there would only write a
+  // key the next phone-width visit obeys.
+  if (!mobileActive(window.innerWidth)) return;
   const state = readCollapsed();
   state[kind] = !state[kind];
   try { localStorage.setItem(PANES_KEY, saveCollapsed(state)); } catch (_) {}
@@ -1981,6 +1998,18 @@ function buildCardComposer(s) {
   });
 }
 
+// stripOpenButton: the ask strip's "Open terminal": show me the agent, so no
+// drawer stays over it, then focus (or open) the session's terminal. One builder
+// for the three strip bodies (store, ask card, SSO).
+function stripOpenButton(s) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "btn";
+  b.textContent = "Open terminal";
+  b.onclick = () => { closeDrawerFor(s.id); openTerminal(s.id, s.name); };
+  return b;
+}
+
 // renderNeedsBody builds the expanded part of a desktop needs-you card
 // (cardContent decides which blocks). Sends go through the one gated path —
 // sendState here, canReply on the server — and never offer digits (see
@@ -2004,12 +2033,7 @@ function renderNeedsBody(s, opts) {
       // The store card has no Open of its own; the strip always offers one.
       const sacts = document.createElement("div");
       sacts.className = "nacts";
-      const sopen = document.createElement("button");
-      sopen.type = "button";
-      sopen.className = "btn";
-      sopen.textContent = "Open terminal";
-      sopen.onclick = () => { closeDrawerFor(s.id); openTerminal(s.id, s.name); };
-      sacts.appendChild(sopen);
+      sacts.appendChild(stripOpenButton(s));
       sb.appendChild(sacts);
     }
     return sb;
@@ -2072,8 +2096,10 @@ function renderNeedsBody(s, opts) {
     acts.appendChild(buildEnableRepliesButton(s.id, () => {
       // replyable is in the signature, so the card re-rendered with its reply
       // field; land the operator in it rather than on <body>.
+      // Desktop has no card: the field is in the ask strip over the pane.
       const li = sessionRowFor(s.id);
-      const fld = li && li.querySelector(".nbody .fld");
+      const strip = mobileActive(window.innerWidth) ? null : Array.from(document.querySelectorAll(".needstrip")).find((n) => n.dataset.sid === s.id);
+      const fld = (li && li.querySelector(".nbody .fld")) || (strip && strip.querySelector(".fld"));
       if (fld) fld.focus();
     }));
   }
@@ -2123,15 +2149,15 @@ function renderNeedsBody(s, opts) {
       acts.appendChild(b);
     }
   }
-  const open = document.createElement("button");
-  open.type = "button";
-  open.className = c.ask && !inStrip ? "btn pri" : "btn";
-  open.textContent = inStrip ? "Open terminal" : c.ask ? "Open to answer" : "Open";
-  open.onclick = () => {
-    if (inStrip) closeDrawerFor(s.id); // "show me the agent": no drawer over it
-    openTerminal(s.id, s.name);
-  };
-  acts.appendChild(open);
+  if (inStrip) acts.appendChild(stripOpenButton(s));
+  else {
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = c.ask ? "btn pri" : "btn";
+    open.textContent = c.ask ? "Open to answer" : "Open";
+    open.onclick = () => openTerminal(s.id, s.name);
+    acts.appendChild(open);
+  }
   body.appendChild(acts);
   if (ans.note) {
     const why = document.createElement("span");
@@ -2544,15 +2570,15 @@ function renderSSOBody(s, opts) {
   acts.appendChild(copy);
 
   if (!mobile) {
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "btn";
-    open.textContent = inStrip ? "Open terminal" : "Open";
-    open.onclick = () => {
-      if (inStrip) closeDrawerFor(s.id);
-      openTerminal(s.id, s.name);
-    };
-    acts.appendChild(open);
+    if (inStrip) acts.appendChild(stripOpenButton(s));
+    else {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "btn";
+      open.textContent = "Open";
+      open.onclick = () => openTerminal(s.id, s.name);
+      acts.appendChild(open);
+    }
   }
   body.appendChild(acts);
 
@@ -5505,19 +5531,22 @@ initWidthSplitter();
 // until lastSessions is initialized — this is why the call lives down here
 // in the boot sequence rather than up near the sidebar-toggle wiring, where
 // lastSessions's declaration has not been reached yet.
-applyCollapsed(readCollapsed());
+// The legacy keys are read through bootFlags (deskshell.js): on desktop the stored
+// collapse is ignored (the pre-paint classes are cleared here, desktop.css
+// neutralises them until then) and a stored Access rail is never opened.
+const bootKeys = bootFlags(deskStorage(), mobileActive(window.innerWidth));
+applyCollapsed(bootKeys.ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
 // The steer rail's own persisted state. It lives down here for the same reason
 // applyCollapsed does — opening the rail paints it, which reads lastSessions,
 // whose declaration is not reached until this point in the boot sequence — and
 // it is deliberately NOT a pre-paint <head> script: the rail is a right-hand
 // panel, so arriving a frame late shifts nothing, and the four hand-mirrored
 // parses already in <head> are enough to keep in step.
-let steerRestore = false;
-try { steerRestore = localStorage.getItem(STEER_KEY) === "1"; } catch (_) {}
-// Outside the catch on purpose: the try is there for a storage backend that
-// throws, and opening the rail paints it. A rendering failure swallowed here
-// would present as "the rail just doesn't restore", with nothing in the console.
-if (steerRestore) setSteerOpen(true);
+// bootFlags already absorbed a storage backend that throws, and opening the rail
+// paints it, so a rendering failure here is NOT swallowed: it would present as
+// "the rail just doesn't restore", with nothing in the console. Desktop never
+// opens it (the rail lives in the drawer's Access view there).
+if (bootKeys.openAccess) setSteerOpen(true);
 initSpawnControl();
 initSpawnWsPicker();
 initPalette();
@@ -5537,9 +5566,10 @@ loadOptionDefs().then(newProfile);
     refreshEmptyState();
     return;
   }
-  restoreLayout(sessions);
-  bootRestoreDone = true;
-  refreshEmptyState();
+  // finally: a throwing restore must not keep the empty state silent for the
+  // life of the page (it waits on bootRestoreDone).
+  try { restoreLayout(sessions); }
+  finally { bootRestoreDone = true; refreshEmptyState(); }
 })();
 initFileTree();
 initUpload();
@@ -5624,6 +5654,7 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
     // Mobile's Files screen expects #files-pane back in #sidebar.
     if (mobileActive(window.innerWidth)) restoreDrawerNodes();
+    else paintSideCost(); // the footer was skipped while narrow
     refreshSessions();
     if (typeof renderGrid === "function") renderGrid();
   });

@@ -401,14 +401,14 @@ class Cell {
       const cnt = el("span", "\u25BE \u00B7 " + this.tabs.length);
       cnt.className = "ph-cnt";
       name.append(nm, cnt);
-      name.title = m.name + (s && s.cwd ? " \u00B7 " + s.cwd : "") + " (" + this.tabs.length + " tabs in this pane)";
+      name.title = paneTitle(m.name, t, s, this.tabs.length);
       name.setAttribute("aria-haspopup", "menu");
       name.onclick = (e) => { e.stopPropagation(); openTabSwitcher(name, this); };
     } else {
       name = el("span", m.name);
       name.className = "ph-name";
       // The focused session's cwd: the one status-bar fact with no other home.
-      name.title = m.name + (s && s.cwd ? " \u00B7 " + s.cwd : "");
+      name.title = paneTitle(m.name, t, s, 1);
     }
     main.append(name);
     // A connection state other than the healthy one is a real signal (the old
@@ -534,7 +534,7 @@ class Cell {
     const key = needs ? String(t.id) + (globalThis.repliesEnabled === true ? ":r" : "") : "";
     if (key === this._needsKey) return;
     this._needsKey = key;
-    if (this._strip) { this._strip.remove(); this._strip = null; }
+    if (this._strip) { this._strip._dispose?.(); this._strip.remove(); this._strip = null; }
     if (needs) {
       // buildReplyStrip returns null for a non-claude session: it can still be
       // seen to be waiting (the frame), it just cannot be answered this way.
