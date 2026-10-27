@@ -176,3 +176,13 @@ test("paletteShellSpawn: mobile keeps the one v0.2.0 entry", () => {
   cmds[0].run();
   assert.deepEqual(asked, ["below"]);
 });
+
+test("palSessionRun: a nested shell is revealed beside its parent, any other session opened", () => {
+  const { palSessionRun } = require("../static/palette.js");
+  const calls = [];
+  const act = { reveal: (id) => calls.push(["reveal", id]), open: (id, name) => calls.push(["open", id, name]) };
+  palSessionRun({ id: "sh-1", name: "sh:w" }, true, act)();
+  palSessionRun({ id: "a-1", name: "agent" }, false, act)();
+  palSessionRun({ id: "a-2" }, false, act)();
+  assert.deepEqual(calls, [["reveal", "sh-1"], ["open", "a-1", "agent"], ["open", "a-2", "a-2"]]);
+});

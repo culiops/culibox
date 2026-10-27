@@ -5424,6 +5424,8 @@ async function spawnShellIn(cell, placement = "below") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   shellSpawning.add(cell);
   try {
+    // Only a gate and the form fallback's preselection now: the shell endpoint
+    // picks the profile itself, server-side.
     // Re-read the profile name instead of trusting the boot-time cache: the server
     // withholds it once a stored profile takes over the seed's name, and profiles
     // can be created after this page loaded.
@@ -5451,12 +5453,13 @@ async function spawnShellIn(cell, placement = "below") {
     }
     // The server answers with the real parent (a shell's own target is
     // flattened to its parent). No pane holds it (e.g. "+ Shell" in a shell's
-    // own pane whose agent is closed): dock under the pane that asked.
+    // own pane whose agent is closed): open the parent and dock beside it, as a
+    // sidebar click does, so a dock's host is always the shell's parent.
     if (dockShellBesideParent(s, route)) return;
-    if (!alive) { openTerminal(s.id, s.name); return; }
-    setFocusedCell(cell);
-    cell.dockShell(s.id, s.name);
-    cell.setDockPlacement(route);
+    revealShell(s.id);
+    const host = dockHolding(s.id);
+    if (host) host.setDockPlacement(route);
+    else if (!terminalTabFor(s.id)) openTerminal(s.id, s.name); // not in the list yet: never leave it unshown
   } catch (e) {
     // 403 / 404 / 409 carry the server's sentence ("parent session has ended").
     showToast("Shell failed: " + e.message, { error: true });
