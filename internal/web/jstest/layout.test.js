@@ -362,3 +362,108 @@ test("reconcile drops a duplicate box viewer and ignores a box field that is not
     { path: "/x", scroll: 0 },
   ]);
 });
+
+// ---- shell dock ----
+const dockCell = (ids, dock, active) => Object.assign(cell(ids, active), { dock });
+const dk = (ids, extra) => Object.assign({ placement: "below", ids, active: ids[0] || null, ratio: 0.4 }, extra || {});
+
+test("a live dock is kept, with its placement, active shell and ratio", () => {
+  const saved = snap([dockCell(["p"], dk(["s1", "s2"], { placement: "right", active: "s2", ratio: 0.6 }))]);
+  const plan = reconcileLayout(saved, live("p", "s1", "s2"));
+  assert.deepStrictEqual(plan.cells[0].dock, { placement: "right", ids: ["s1", "s2"], active: "s2", ratio: 0.6 });
+});
+
+test("reconcile drops dock ids that are not running", () => {
+  const plan = reconcileLayout(snap([dockCell(["p"], dk(["s1", "gone"], { active: "gone" }))]), live("p", "s1"));
+  assert.deepStrictEqual(plan.cells[0].dock, { placement: "below", ids: ["s1"], active: "s1", ratio: 0.4 });
+});
+
+test("reconcile drops a dock left empty", () => {
+  const plan = reconcileLayout(snap([dockCell(["p"], dk(["gone"]))]), live("p"));
+  assert.ok(!("dock" in plan.cells[0]));
+});
+
+test("reconcile drops dock of a cell whose parent is gone", () => {
+  const plan = reconcileLayout(snap([dockCell(["p"], dk(["s1"])), cell(["q"])]), live("s1", "q"));
+  assert.deepStrictEqual(plan.cells, [{ tabs: [{ id: "q" }], active: 0 }]);
+});
+
+test("reconcile drops a dock whose cell holds only viewers", () => {
+  const c = { tabs: [{ path: "/a/b" }], active: 0, dock: dk(["s1"]) };
+  const plan = reconcileLayout(snap([c]), live("s1"));
+  assert.deepStrictEqual(plan.cells, [{ tabs: [{ path: "/a/b", scroll: 0 }], active: 0 }]);
+});
+
+test("reconcile dedups an id present in a dock and a tab", () => {
+  const plan = reconcileLayout(snap([dockCell(["p", "s1"], dk(["s1", "s2"], { active: "s1" }))]), live("p", "s1", "s2"));
+  assert.deepStrictEqual(plan.cells[0].tabs, [{ id: "p" }, { id: "s1" }]);
+  assert.deepStrictEqual(plan.cells[0].dock, { placement: "below", ids: ["s2"], active: "s2", ratio: 0.4 });
+});
+
+test("reconcile keeps the tab when the duplicate is a tab in a LATER cell", () => {
+  const plan = reconcileLayout(snap([dockCell(["p"], dk(["s1"])), cell(["s1"])]), live("p", "s1"));
+  assert.deepStrictEqual(plan.cells[1].tabs, [{ id: "s1" }]);
+  assert.ok(!("dock" in plan.cells[0]));
+});
+
+test("reconcile docks one id once across cells", () => {
+  const plan = reconcileLayout(snap([dockCell(["p"], dk(["s1"])), dockCell(["q"], dk(["s1", "s2"]))]), live("p", "q", "s1", "s2"));
+  assert.deepStrictEqual(plan.cells[0].dock.ids, ["s1"]);
+  assert.deepStrictEqual(plan.cells[1].dock.ids, ["s2"]);
+});
+
+test("reconcile normalises a dock's placement and ratio", () => {
+  const plan = reconcileLayout(snap([dockCell(["p"], dk(["s1"], { placement: "left", ratio: 5 }))]), live("p", "s1"));
+  assert.deepStrictEqual(plan.cells[0].dock, { placement: "below", ids: ["s1"], active: "s1", ratio: 0.8 });
+});
+
+test("garbage dock (string, ratio \"x\", placement \"left\") boots with dock normalised or dropped, never throws", () => {
+  const sessions = live("p", "s1");
+  for (const dock of ["oops", 7, [], [1], { ids: "s1" }, { ids: [null, {}, 3] }, { ids: ["s1"], ratio: "x", placement: "left", active: 5 }, true]) {
+    let plan;
+    assert.doesNotThrow(() => { plan = reconcileLayout(snap([{ tabs: [{ id: "p" }], active: 0, dock }]), sessions); });
+    assert.deepStrictEqual(plan.cells[0].tabs, [{ id: "p" }]);
+    if ("dock" in plan.cells[0]) assert.deepStrictEqual(plan.cells[0].dock, { placement: "below", ids: ["s1"], active: "s1", ratio: 0.4 });
+  }
+});
+
+test("a v0.2.0 snapshot (no dock anywhere) round-trips unchanged", () => {
+  const v020 = {
+    v: 1, cap: 4, focused: 1, maximized: null,
+    cells: [
+      { tabs: [{ id: "a" }, { path: "/home/u/notes.md", scroll: 120 }], active: 1 },
+      { tabs: [{ path: "/work/x.go", box: "bx", scroll: 0 }, { id: "b" }], active: 1 },
+    ],
+  };
+  const plan = reconcileLayout(JSON.parse(JSON.stringify(v020)), live("a", "b"));
+  assert.deepStrictEqual(plan, { cap: 4, focused: 1, maximized: null, cells: v020.cells });
+  const tabs = (c) => c.tabs.map((t) => (t.path ? { kind: "viewer", path: t.path, box: t.box, scroll: t.scroll } : { kind: "terminal", id: t.id }));
+  const cells = v020.cells.map((c) => ({ tabs: tabs(c) }));
+  cells.forEach((c, i) => { c.activeTab = c.tabs[v020.cells[i].active]; });
+  assert.deepStrictEqual(serializeLayout({ cells, focused: cells[1], maximized: null, cap: 4 }), v020);
+});
+
+test("serializeLayout stores a cell's dock", () => {
+  const c = { tabs: [{ kind: "terminal", id: "p" }], dock: dk(["s1", "s2"], { placement: "right", active: "s2", ratio: 0.55 }) };
+  c.activeTab = c.tabs[0];
+  const s = serializeLayout({ cells: [c], focused: c, maximized: null, cap: 4 });
+  assert.deepStrictEqual(s.cells[0].dock, { placement: "right", ids: ["s1", "s2"], active: "s2", ratio: 0.55 });
+});
+
+test("serializeLayout omits an empty dock, and a dock on a cell with no terminal", () => {
+  const a = { tabs: [{ kind: "terminal", id: "p" }], dock: dk([]) };
+  const b = { tabs: [{ kind: "viewer", path: "/x" }], dock: dk(["s1"]) };
+  for (const c of [a, b]) c.activeTab = c.tabs[0];
+  const s = serializeLayout({ cells: [a, b], focused: a, maximized: null, cap: 4 });
+  assert.ok(!("dock" in s.cells[0]));
+  assert.ok(!("dock" in s.cells[1]));
+});
+
+test("serializeLayout does not store a dock id that is also a tab, and a dock round-trips", () => {
+  const c = { tabs: [{ kind: "terminal", id: "p" }, { kind: "terminal", id: "s1" }], dock: dk(["s1", "s2"]) };
+  c.activeTab = c.tabs[0];
+  const s = serializeLayout({ cells: [c], focused: c, maximized: null, cap: 4 });
+  assert.deepStrictEqual(s.cells[0].dock, { placement: "below", ids: ["s2"], active: "s2", ratio: 0.4 });
+  const plan = reconcileLayout(JSON.parse(JSON.stringify(s)), live("p", "s1", "s2"));
+  assert.deepStrictEqual(plan.cells[0].dock, s.cells[0].dock);
+});
