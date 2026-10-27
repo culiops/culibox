@@ -88,11 +88,11 @@ test("drawerLeavesFile: closing, switching kind or switching session leaves the 
   assert.equal(d.drawerLeavesFile({ open: null, sessionId: null }, files("A")), false);
 });
 
-test("rememberDrawerFile keeps a box viewer's session, and only a real one", () => {
-  let m = d.rememberDrawerFile(new Map(), "A", { path: "/tmp/playwright-mcp/s.png", scroll: 0, box: "A" });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/tmp/playwright-mcp/s.png", scroll: 0, box: "A" });
-  m = d.rememberDrawerFile(m, "A", { path: "/h/u/a", scroll: 0, box: "" });
-  assert.deepEqual(d.drawerFileFor(m, "A"), { path: "/h/u/a", scroll: 0 });
+test("drawerTreeBlocked: a session whose known workspace cannot be browsed blocks the tree", () => {
+  assert.equal(d.drawerTreeBlocked("A", "/tmp/ab-x/ws", false), true, "refused cwd");
+  assert.equal(d.drawerTreeBlocked("A", "/h/u/ws", true), false, "rootable cwd");
+  assert.equal(d.drawerTreeBlocked("A", "", false), false, "cwd not known yet: hold, do not block");
+  assert.equal(d.drawerTreeBlocked(null, "/tmp/x", false), false, "a pane of files has no session workspace");
 });
 
 test("discardAsk: the prompt names the file, exactly", () => {

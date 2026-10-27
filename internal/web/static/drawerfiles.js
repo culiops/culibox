@@ -29,25 +29,30 @@ function drawerActions(state) {
 }
 
 // Per-session memory, in memory only: a session id (null for a pane of files)
-// -> the file the drawer last showed for it and how far down it was read
-// (plus `box`, the session a box-only file is read through, when there is one).
+// -> the file the drawer last showed for it and how far down it was read.
 // Returns a new Map; the one passed in is left as it was.
 function rememberDrawerFile(map, sid, file) {
   const out = new Map(map || []);
   const path = file && file.path;
   if (!path) { out.delete(sid); return out; }
   const n = Number(file.scroll);
-  const f = { path, scroll: Number.isFinite(n) && n > 0 ? Math.round(n) : 0 };
-  // A box viewer's identity carries its session (viewer-tab.js); keep it.
-  if (typeof file.box === "string" && file.box) f.box = file.box;
-  out.set(sid, f);
+  out.set(sid, { path, scroll: Number.isFinite(n) && n > 0 ? Math.round(n) : 0 });
   return out;
 }
 
 function drawerFileFor(map, sid) {
   if (!map || !map.has(sid)) return null;
   const f = map.get(sid);
-  return f.box ? { path: f.path, scroll: f.scroll, box: f.box } : { path: f.path, scroll: f.scroll };
+  return { path: f.path, scroll: f.scroll };
+}
+
+// drawerTreeBlocked: should the tree column say "can't be browsed" instead of
+// showing a tree? Yes when the drawer names a session whose workspace is known
+// and is one /api/fs/list refuses (rootable = filetree.js's rootableCwd, the
+// S1 rule): the tree would otherwise still show some other place, under a
+// header naming this session. A cwd not known yet holds; no session, no block.
+function drawerTreeBlocked(sid, cwd, rootable) {
+  return !!sid && !!cwd && !rootable;
 }
 
 // drawerLeavesFile: does going from `prev` to `next` drawer state take the
@@ -70,5 +75,5 @@ function discardAsk(name) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { drawerActions, rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk };
+  module.exports = { drawerActions, rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked };
 }

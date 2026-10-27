@@ -422,6 +422,12 @@
   /* A box session's tree is its workspace only: no root picker (the root
      stays the session cwd, drawerRootTree). */
   #drawer[data-kind="files"][data-box="1"] .ft-row { display: none; }
+  /* A session workspace the fs API refuses is never a root (S1): the column
+     says so instead of showing whatever tree was there before. */
+  .dr-tnote { display: none; margin: 0; padding: 14px 12px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+  #drawer[data-noroot="1"] .dr-tnote { display: block; }
+  #drawer[data-noroot="1"] .dr-tree #files-pane { display: none; }
+  #drawer[data-noroot="1"] .dr-vempty { visibility: hidden; } /* "pick a file in the tree": there is none */
   .dr-viewer { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
   .dr-vtop {
     flex: none; display: flex; align-items: baseline; gap: 6px; min-width: 0;

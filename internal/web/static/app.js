@@ -312,10 +312,10 @@ function drawerFollowFocus() {
   const sid = term ? term.id : null;
   if (sid !== drawerState.sessionId) {
     const next = { open: drawerState.open, sessionId: sid };
-    // A dirty buffer in the Files viewer asks first. Cancel keeps the drawer on
-    // its session; Discard re-runs this against wherever focus is by then.
-    if (typeof drawerWouldDiscard === "function" && drawerWouldDiscard(drawerState, next)) {
-      drawerConfirmLeave().then((ok) => { if (ok) { drawerDiscard(); drawerFollowFocus(); } });
+    // A dirty buffer in the Files viewer asks first (once: a Cancel is kept
+    // until focus comes back or the buffer changes). Cancel keeps the drawer,
+    // and its tree (drawerKeepsTree), on its session; Discard follows focus.
+    if (typeof drawerHoldOnFollow === "function" && drawerHoldOnFollow(next)) {
       positionDrawer();
       return;
     }
@@ -324,6 +324,8 @@ function drawerFollowFocus() {
     paintDrawerHead();
     for (const c of cells) paintDrawerTabs(c);
     if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
+  } else if (typeof drawerFocusSame === "function") {
+    drawerFocusSame();
   }
   positionDrawer();
 }
@@ -2894,6 +2896,9 @@ async function refreshSessions() {
   lastSessions = sessions || [];
   sessionsLoaded = true;
   refreshEmptyState();
+  // The Files drawer reads the list (box tier, workspace): at a boot restore
+  // it opened before the list was here.
+  if (drawerState.open === "files" && typeof drawerPaint === "function") drawerPaint();
   // The focused session's account can only be known once the list is here.
   syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing

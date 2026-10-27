@@ -1386,7 +1386,11 @@ function cellTerminal(cell) {
 function syncFocusedTree() {
   if (typeof treeFollowTarget !== "function" || typeof syncTreeToRoot !== "function") return;
   const target = treeFollowTarget(focusedTab());
-  if (target) syncTreeToRoot(target.root, target.key);
+  // The Files drawer holding a dirty buffer for another session (it asks, or
+  // the user kept it) keeps the tree there too, so tree, header and viewer
+  // name one session. A Discard runs this again, unheld.
+  const held = typeof drawerKeepsTree === "function" && drawerKeepsTree();
+  if (target && !held) syncTreeToRoot(target.root, target.key);
   // The desktop drawer describes the focused pane too, so it follows the same
   // change. It only repaints classes and text: this runs from a cell's
   // mousedown, where a rebuilt header would eat the click.

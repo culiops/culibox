@@ -14,8 +14,13 @@
 
 let drawerViewer = null;      // the ViewerTab in the viewer column, or null
 let drawerViewerSid = null;   // the session it was opened for
-let drawerFileMem = new Map(); // session id -> {path, scroll[, box]}
+let drawerFileMem = new Map(); // session id -> {path, scroll}
 let drawerAsking = false;     // a discard prompt is on screen: never stack a second
+// The user answered Cancel to "discard?" on a focus switch: {sid, gen}, the
+// buffer's session and its CodeMirror change generation then. Until focus is
+// back on that session or the buffer changes, a later focus event (a click,
+// a terminal's cwd arriving) holds quietly instead of asking again.
+let drawerKept = null;
 let drawerActBtns = null;     // data-act -> button
 let drawerMenuBtns = null;    // data-m -> menu item
 
@@ -59,20 +64,66 @@ async function drawerConfirmLeave() {
 
 // drawerDiscard drops the dirty edit (the user confirmed): back to the read view.
 function drawerDiscard() {
+  drawerKept = null;
   if (drawerViewer && drawerViewer.editing) drawerViewer.exitEdit();
+}
+
+function drawerKeptStill() {
+  const v = drawerViewer;
+  return !!drawerKept && !!v && !!v.cm && drawerKept.sid === drawerViewerSid && v.cm.isClean(drawerKept.gen);
+}
+
+// drawerHoldOnFollow: focus moved to `next.sessionId` (drawerFollowFocus). True
+// when the drawer must stay on its session instead: a dirty buffer, asked
+// about now (once), or already kept by a Cancel. Discard follows focus, tree
+// included (syncFocusedTree); Cancel records the keep.
+function drawerHoldOnFollow(next) {
+  if (!drawerWouldDiscard(drawerState, next)) { drawerKept = null; return false; }
+  if (drawerAsking || drawerKeptStill()) return true;
+  drawerConfirmLeave().then((ok) => {
+    if (ok) { drawerDiscard(); syncFocusedTree(); return; }
+    const v = drawerViewer;
+    drawerKept = v && v.cm ? { sid: drawerViewerSid, gen: v.cm.changeGeneration() } : null;
+  });
+  return true;
+}
+
+// drawerFocusSame: focus is on the drawer's own session (again). A keep only
+// lasts while focus is away from it.
+function drawerFocusSame() {
+  drawerKept = null;
+  if (drawerState.open === "files") drawerPaint();
+}
+
+// drawerKeepsTree: the Files drawer is holding its session against the focused
+// pane (drawerHoldOnFollow), so the tree must not follow focus either: header,
+// viewer and tree name one session. syncFocusedTree asks before re-rooting.
+function drawerKeepsTree() {
+  if (!drawerOwnsFileClicks() || !drawerHasUnsaved()) return false;
+  const t = typeof cellTerminal === "function" ? cellTerminal(focusedCell) : null;
+  return (t ? t.id : null) !== drawerState.sessionId;
+}
+
+// drawerSessionCwd: the drawer's session's workspace as far as the page knows
+// (its terminal's resolved cwd, else the session list's), "" when unknown.
+function drawerSessionCwd(sid) {
+  if (!sid) return "";
+  const t = typeof terminalTabFor === "function" ? terminalTabFor(sid) : null;
+  if (t && t.cwd) return t.cwd;
+  const s = (lastSessions || []).find((x) => x.id === sid);
+  return (s && s.cwd) || "";
 }
 
 // drawerShowFile: a tree row was clicked while the drawer owns file clicks.
 // Resolves false when the user kept a dirty buffer instead.
-async function drawerShowFile(path, opts) {
+async function drawerShowFile(path) {
   if (!path) return false;
   if (typeof normalizePath === "function") path = normalizePath(path);
-  const box = (opts && opts.box) || "";
   const v = drawerViewer;
-  if (v && v.path === path && (v.box || "") === box && drawerViewerSid === drawerState.sessionId) return true;
+  if (v && v.path === path && drawerViewerSid === drawerState.sessionId) return true;
   if (!(await drawerConfirmLeave())) return false;
   drawerParkViewer(); // remembers the file being left, for this session
-  drawerMountViewer(drawerState.sessionId, path, { box, scroll: 0 });
+  drawerMountViewer(drawerState.sessionId, path, { scroll: 0 });
   return true;
 }
 
@@ -94,7 +145,7 @@ function drawerMountViewer(sid, path, opts) {
 function drawerParkViewer() {
   const v = drawerViewer;
   if (!v) return;
-  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll, box: v.box });
+  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
   v.dispose();
   v.onUpdate = null;
   v.el.remove();
@@ -131,7 +182,7 @@ function drawerRecall(sid) {
   }
   drawerParkViewer();
   const f = drawerFileFor(drawerFileMem, sid);
-  if (f) drawerMountViewer(sid, f.path, { scroll: f.scroll, restored: true, box: f.box });
+  if (f) drawerMountViewer(sid, f.path, { scroll: f.scroll, restored: true });
   else drawerPaint();
 }
 
@@ -156,7 +207,7 @@ function drawerFilesDetach() {
   if (!v) return;
   if (!drawerHasUnsaved()) { drawerParkViewer(); return; }
   if (v.auto) v.toggleAuto();
-  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll, box: v.box });
+  drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
   v.el.remove();
 }
 
@@ -182,11 +233,11 @@ function drawerInsertPath() {
 function drawerOpenInPane() {
   const v = drawerViewer;
   if (!v || v.editing) return;
-  const path = v.path, box = v.box, scroll = v.scroll;
+  const path = v.path, scroll = v.scroll;
   drawerClearViewer();
-  if (box) openBoxFile(box, path); else openFile(path);
+  openFile(path);
   for (const c of cells) {
-    const t = c.tabs.find((x) => x.kind === "viewer" && (x.box || "") === (box || "") && x.path === path);
+    const t = c.tabs.find((x) => x.kind === "viewer" && !x.box && x.path === path);
     if (t) { t.scroll = scroll; t.applyScroll(); break; }
   }
 }
@@ -230,7 +281,15 @@ function drawerPaint() {
   if (!dr || !drawerActBtns) return;
   const sess = drawerState.sessionId ? (lastSessions || []).find((x) => x.id === drawerState.sessionId) : null;
   // A box session's tree shows only its workspace: the root picker goes.
+  // (Repainted on every session poll: at a boot restore the list arrives
+  // after the drawer has opened.)
   dr.dataset.box = sess && sess.runtime === TIER_BOX ? "1" : "";
+  // A workspace the fs API refuses is never a root (S1), so instead of the
+  // tree some other place would leave there, the column says so.
+  const cwd = drawerSessionCwd(drawerState.sessionId);
+  const blocked = drawerState.open === "files" &&
+    drawerTreeBlocked(drawerState.sessionId, cwd, typeof rootableCwd === "function" && rootableCwd(cwd));
+  dr.dataset.noroot = blocked ? "1" : "";
   const v = drawerState.open === "files" && drawerViewerSid === drawerState.sessionId ? drawerViewer : null;
   const image = !!v && IMAGE_EXTS.has(extOf(v.path));
   const a = drawerActions({ path: v ? v.path : null, editing: !!(v && v.editing), box: !!(v && v.box), dirty: drawerHasUnsaved(), image });
@@ -254,11 +313,11 @@ function drawerPaint() {
   const host = drawerEl("drawer-vhost");
   const empty = drawerEl("drawer-vempty");
   if (pathEl) {
-    const shown = v ? (v.box ? "box · " + v.path : relativeTo(typeof ftRoot === "function" ? ftRoot() : "", v.path)) : "";
+    const shown = v ? relativeTo(typeof ftRoot === "function" ? ftRoot() : "", v.path) : "";
     pathEl.textContent = shown;
     pathEl.title = v ? v.path : "";
   }
-  if (stEl) stEl.textContent = v && v.statusText ? "· " + v.statusText : "";
+  if (stEl) stEl.textContent = v && v.statusText ? "\u00B7 " + v.statusText : "";
   if (host) host.hidden = !v;
   if (empty) empty.hidden = !!v;
 }
