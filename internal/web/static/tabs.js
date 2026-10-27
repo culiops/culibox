@@ -307,6 +307,8 @@ class Cell {
   }
 
   _noteDockFocus(target) {
+    // The splitter is the dock's edge, not the shell: a drag leaves focus alone.
+    if (this._dockSplit && this._dockSplit.contains(target)) return;
     const inDock = !!(this._dockEl && this._shownShell() && this._dockEl.contains(target));
     if (inDock === this._dockFocus) return;
     this._dockFocus = inDock;
@@ -314,11 +316,11 @@ class Cell {
   }
 
   // _dockFocusMoved: focusedTerminal() changed without the focused cell
-  // changing, so what follows it (the selected row, the rail) is repainted.
-  // Never a header rebuild: this runs from a mousedown (see setFocusedCell).
+  // changing, so the selected row that follows it is repainted. Not the rail:
+  // it stays on the pane's agent (focusedPaneTerminal). Never a header
+  // rebuild: this runs from a mousedown (see setFocusedCell).
   _dockFocusMoved() {
     if (typeof syncSelectedRow === "function") syncSelectedRow();
-    renderSteerRail();
   }
 
   // _adoptShell files a live tab in the dock, without rendering. The base dock
@@ -1311,12 +1313,19 @@ function setFocusedCell(cell) {
   scheduleSaveLayout();
 }
 
-// focusedTerminal returns the terminal tab active in the focused cell, or null.
-// A docked shell the operator pressed into wins (Cell.focusedShell), so insert
-// path, paste and the per-session commands reach the shell, not its parent.
+// focusedTerminal returns the terminal receiving the operator's keys: a docked
+// shell they pressed into (Cell.focusedShell), else the terminal tab active in
+// the focused cell, else null. Insert path, paste, zoom and the selected row
+// follow it, so they reach the shell.
 function focusedTerminal() {
   const sh = focusedCell ? focusedCell.focusedShell() : null;
-  if (sh) return sh;
+  return sh || focusedPaneTerminal();
+}
+// focusedPaneTerminal: the terminal tab active in the focused cell, ignoring
+// its dock: the pane's AGENT. The steer rail / Access drawer describe this one,
+// because their header (cellTerminal) names it: a grant or a reply must go to
+// the session the drawer is titled with, never to a shell docked beside it.
+function focusedPaneTerminal() {
   const t = focusedTab();
   return t && t.kind === "terminal" ? t : null;
 }
@@ -1573,28 +1582,15 @@ function openTerminal(id, name, opts) {
 // is and focus it, which is the honest outcome; only the capped one says so out
 // loud, because that is the one the operator asked for and did not get.
 function moveToOwnPane(from, tab) {
-  // A docked shell: out of the dock into a window of its own (the shell bar's
-  // Own pane). The dock is not a tab, so "alone in its cell" does not apply.
-  if (from.dockTabFor(tab.id) === tab) {
-    if (cells.length >= cap) {
-      setFocusedCell(from); from.activateShell(tab.id);
-      showToast("Pane limit reached: the shell stays docked.");
-      return;
-    }
-    maximized = null; // see below
-    const cell = new Cell();
-    cells.push(cell);
-    from.detachShell(tab.id);
-    cell.addTab(tab);
-    setFocusedCell(cell);
-    renderGrid();
-    refreshSessions();
-    return;
-  }
-  if (from.tabs.length === 1) { setFocusedCell(from); from.activate(tab); return; }
+  // A docked shell (the shell bar's Own pane) takes the same path; only the
+  // way out of `from` differs. The dock is not a tab, so "alone in its cell"
+  // does not apply to it.
+  const docked = from.dockTabFor(tab.id) === tab;
+  const stay = () => { setFocusedCell(from); if (docked) from.activateShell(tab.id); else from.activate(tab); };
+  if (!docked && from.tabs.length === 1) { stay(); return; }
   if (cells.length >= cap) {
-    setFocusedCell(from); from.activate(tab);
-    showToast("Pane limit reached: the tab stays where it is.");
+    stay();
+    showToast(docked ? "Pane limit reached: the shell stays docked." : "Pane limit reached: the tab stays where it is.");
     return;
   }
   // renderGrid shows only the maximized cell on desktop (`show = max ? [max]
@@ -1607,10 +1603,14 @@ function moveToOwnPane(from, tab) {
   maximized = null;
   const cell = new Cell();
   cells.push(cell);
-  // The dock hangs off a terminal of its pane: if this tab is the last one
-  // there, the dock moves with it instead of closing.
-  if (from.dock && !from.tabs.some((t) => t !== tab && t.kind === "terminal")) from._moveDockTo(cell);
-  from.detachTab(tab);
+  if (docked) {
+    from.detachShell(tab.id); // out of the dock, socket open
+  } else {
+    // The dock hangs off a terminal of its pane: if this tab is the last one
+    // there, the dock moves with it instead of closing.
+    if (from.dock && !from.tabs.some((t) => t !== tab && t.kind === "terminal")) from._moveDockTo(cell);
+    from.detachTab(tab);
+  }
   cell.addTab(tab); // re-points tab.onUpdate at its new cell
   setFocusedCell(cell);
   renderGrid();

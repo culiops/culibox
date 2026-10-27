@@ -214,8 +214,11 @@ function applyDrawer(next, opts) {
     moveIntoDrawer(rail, body);
     // The rail describes the focused terminal (railSession), so bring this
     // session's tab to the front first if it is open somewhere; never open one.
+    // The pane's terminal, not the keyboard's: a docked shell holding the keys
+    // must not make this re-open the agent and pull focus out of the shell.
     const t = next.sessionId ? terminalTabFor(next.sessionId) : null;
-    if (t && selectedSessionId() !== t.id) openTerminal(t.id, t.title());
+    const shown = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
+    if (t && (shown ? shown.id : null) !== t.id) openTerminal(t.id, t.title());
   }
   // The rail's hidden attribute stays steerOpen()'s truth.
   if (rail && rail.parentElement === body) rail.hidden = next.open !== "access";
@@ -5813,6 +5816,9 @@ document.addEventListener("keydown", (e) => {
 // handler above and the command palette. Return false when the focused tab has
 // nothing to zoom, so the caller can leave the key event alone.
 function zoomableTab() {
+  // A docked shell with the keyboard zooms itself, not the agent beside it.
+  const sh = focusedCell && focusedCell.focusedShell ? focusedCell.focusedShell() : null;
+  if (sh) return sh;
   const tab = focusedCell && focusedCell.activeTab;
   return tab && (tab.kind === "terminal" || (tab.kind === "viewer" && tab.zoomVar)) ? tab : null;
 }
