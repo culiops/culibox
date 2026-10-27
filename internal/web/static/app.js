@@ -116,14 +116,14 @@ function toggleSidebar() {
   // ☰ without), so the one just pressed disappears: hand focus to the other.
   const rail = $("rail48");
   const active = document.activeElement;
-  const railToggle = rail && rail.querySelector(".ri"); // first button; the logo before it is not focusable
+  const railToggle = rail && rail.querySelector(".ri.tog"); // not the first .ri: + comes before the dots and the ☰
   const fromToggle = !!active && (active === $("sidebar-toggle") || active === $("side-collapse") || (!!rail && active === railToggle));
   const hidden = document.documentElement.classList.toggle("sidebar-hidden");
   try { localStorage.setItem("sidebarHidden", hidden ? "1" : "0"); } catch (_) {}
   renderGrid(); // reflow/refit terminals to the new width
   renderRail48(); // the rail has just appeared or gone
   if (fromToggle) {
-    const next = hidden ? rail && rail.querySelector(".ri") : $("side-collapse");
+    const next = hidden ? rail && rail.querySelector(".ri.tog") : $("side-collapse");
     if (next) next.focus();
   }
 }
@@ -385,7 +385,7 @@ function renderRail48() {
   const mk = (it) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "");
+    b.className = "ri" + (it.on ? " on" : "") + (it.alert ? " alert" : "") + (it.elevated ? " elev" : "") + (it.kind === "new" ? " add" : "") + (it.kind === "toggle" ? " tog" : "");
     b.setAttribute("aria-label", it.label);
     // A session's hover text is its bare name (the "waiting" suffix is in the
     // accessible name and the dot's colour); the toggle and add keep their label.
@@ -5223,10 +5223,22 @@ function openReplySheet(s) {
   }, { height: "min(648px, 92dvh)" });
 }
 
-function openSessionMenu(anchor, s) {
+// `extra` (optional) are pane-level rows ({label, run}) shown above the session's
+// own, for a narrow pane header that has no room for their buttons; `s` may then
+// be null (a pane of files has no session).
+function openSessionMenu(anchor, s, extra) {
   const menu = $("session-menu");
   if (!menu) return;
-  const nodes = menuItems(s).map((it) => {
+  const own = (extra || []).map((it) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "mi";
+    b.setAttribute("role", "menuitem");
+    b.textContent = it.label;
+    b.onclick = () => { closeSessionMenu(false); it.run(); };
+    return b;
+  });
+  const nodes = own.concat(s ? menuItems(s).map((it) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = it.danger ? "mi dgr" : "mi";
@@ -5236,9 +5248,9 @@ function openSessionMenu(anchor, s) {
     // leave the menu floating over it.
     b.onclick = () => { closeSessionMenu(false); runSessionAction(it.id, s); };
     return b;
-  });
+  }) : []);
   menu.replaceChildren(...nodes);
-  sessionMenuSid = s.id;
+  sessionMenuSid = s ? s.id : null;
   placeSessionMenu(menu, anchor);
 }
 
@@ -5268,10 +5280,10 @@ function placeSessionMenu(menu, anchor) {
 
 // toggleSessionMenuAt: a ⋯ that opens the session menu, and closes it again
 // when pressed while its own menu is open.
-function toggleSessionMenuAt(anchor, s) {
+function toggleSessionMenuAt(anchor, s, extra) {
   const menu = $("session-menu");
   if (menu && menu.classList.contains("open") && sessionMenuAnchor === anchor) { closeSessionMenu(true); return; }
-  openSessionMenu(anchor, s);
+  openSessionMenu(anchor, s, extra);
 }
 
 // openTabSwitcher: the pane header's `name ▾ · N` menu. One row per tab in the

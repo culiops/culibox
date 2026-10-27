@@ -487,21 +487,31 @@ class Cell {
       Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
     };
     side.append(sh);
+    // A narrow header keeps ONE control, ⋯, always in the flow: Maximize and
+    // Close pane move into its menu, because a hover overlay would sit on top of
+    // the Access tab and + Shell. ⛶ stays in the flow only while pinned, so the
+    // way back from a maximized pane is never hidden.
+    const narrow = this._narrow;
+    const pinned = maximized === this;
     let more = null;
-    if (s) {
+    if (s || narrow) {
       // The same menu as the sidebar row's ⋯, End session included (spec 7).
       more = el("button", "\u22EF");
       more.className = "ph-ic ph-more";
-      more.title = "Session actions";
-      more.setAttribute("aria-label", "Session actions");
+      more.title = narrow ? "Pane and session actions" : "Session actions";
+      more.setAttribute("aria-label", more.title);
       more.setAttribute("aria-haspopup", "menu");
-      more.onclick = (e) => { e.stopPropagation(); toggleSessionMenuAt(more, s); };
+      const paneItems = narrow ? [
+        { label: pinned ? "Restore pane" : "Maximize pane", run: () => toggleMax(this) },
+        { label: "Close pane (the session keeps running)", run: () => removeCell(this) },
+      ] : null;
+      more.onclick = (e) => { e.stopPropagation(); toggleSessionMenuAt(more, s, paneItems); };
     }
     // ⛶ stays visible while maximized: a stored maximized pane must always have
     // its way back (spec 7, localStorage hazards).
-    const max = el("button", maximized === this ? "\u2750" : "\u26F6");
-    max.className = "ph-ic ph-max" + (maximized === this ? " pin" : "");
-    max.title = maximized === this ? "Restore" : "Maximize";
+    const max = el("button", pinned ? "\u2750" : "\u26F6");
+    max.className = "ph-ic ph-max" + (pinned ? " pin" : "");
+    max.title = pinned ? "Restore" : "Maximize";
     max.setAttribute("aria-label", max.title);
     max.onclick = (e) => { e.stopPropagation(); toggleMax(this); };
     const del = el("button", "\u00D7");
@@ -509,12 +519,11 @@ class Cell {
     del.title = "Close pane (the session keeps running)";
     del.setAttribute("aria-label", "Close pane");
     del.onclick = (e) => { e.stopPropagation(); removeCell(this); };
-    // One wrapper for the three icons: a wide header lays them out in the flow
-    // (display: contents), a narrow one floats them over the tabs on hover so
-    // they never take the name's room (D9).
+    // One wrapper for the icons: a wide header lays them out in the flow
+    // (display: contents), hover-revealed; a narrow one shows ⋯ alone (D9).
     const ics = el("span");
-    ics.className = "ph-ics";
-    ics.append(...(more ? [more, max, del] : [max, del]));
+    ics.className = "ph-ics" + (narrow ? " nar" : "");
+    ics.append(...(narrow ? (pinned ? [more, max] : [more]) : more ? [more, max, del] : [max, del]));
     side.append(ics);
 
     this.bar.replaceChildren(main, side);
@@ -567,14 +576,33 @@ class Cell {
       pendingSends.has(s.id), ssoLocalSig(s.id)].join("|") : "";
     const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local : "";
     if (key === this._needsKey) return;
+    // A half-typed reply outranks a repaint: while the strip holds focus, a poll
+    // that moved only something incidental (summary, AWS connections, SSO state)
+    // leaves it alone, as the old card's holdList did. The key is NOT stored, so
+    // the repaint lands on the first sync after focus leaves. A new need or a new
+    // ask (its full text hashed), or the need ending, still replaces it at once.
+    const holdSig = model ? stripHoldKey(s) : "";
+    if (this._strip && model && holdSig === this._holdSig && this._strip.contains(document.activeElement)) return;
     this._needsKey = key;
-    if (this._strip) { this._strip._dispose?.(); this._strip.remove(); this._strip = null; }
+    this._holdSig = holdSig;
+    this.dropStrip();
     if (model) {
       this._strip = buildNeedStrip(s, model, () => positionDrawer());
       this.bar.after(this._strip);
     }
     // The drawer hangs below the strip too (positionDrawer), so it moves with it.
     if (typeof positionDrawer === "function") positionDrawer();
+  }
+
+  // dropStrip removes the pane's strip. A focused reply field removed from the
+  // page may or may not fire its blur, and replyFocused (app.js) holds the
+  // session list's rebuild, so it is cleared here rather than left to the event.
+  dropStrip() {
+    if (!this._strip) return;
+    if (this._strip.contains(document.activeElement) && typeof replyFocused !== "undefined") replyFocused = false;
+    this._strip._dispose?.();
+    this._strip.remove();
+    this._strip = null;
   }
 
   // repaintReply refreshes the answer strip's disabled/.off/title state in
@@ -611,7 +639,7 @@ class Cell {
 
   dispose() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
-    if (this._strip) this._strip._dispose?.();
+    this.dropStrip();
     this.tabs.forEach((t) => t.dispose?.());
   }
 }

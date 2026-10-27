@@ -316,12 +316,22 @@ test("drawerFor keeps the drawer open on a different session with the same kind"
   assert.deepEqual(d.drawerFor({ open: "files", sessionId: "a" }, "files", "b"), { open: "files", sessionId: "b" });
 });
 
+test("stripHoldKey moves with the session, need and ask, not with the incidental fields", () => {
+  const a = { id: "s1", need: "ask", ask: "ls", ask_full: "ls -la", summary: "x", aws_connections: null };
+  assert.equal(d.stripHoldKey(a), d.stripHoldKey({ ...a, summary: "y", aws_connections: [{ name: "p" }] }));
+  assert.notEqual(d.stripHoldKey(a), d.stripHoldKey({ ...a, ask_full: "rm -rf x" }));
+  assert.notEqual(d.stripHoldKey(a), d.stripHoldKey({ ...a, need: "turn" }));
+  assert.notEqual(d.stripHoldKey(a), d.stripHoldKey({ ...a, id: "s2" }));
+  assert.equal(d.stripHoldKey(null), "");
+});
+
 test("shortcutRows lists the real bindings and ends with the runtime row", () => {
   const rows = d.shortcutRows(false, "runc");
   assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+K" && r.action === "Command palette"));
   assert.ok(rows.some((r) => r.keys === "Alt+1…9" && r.action === "Jump to session"));
   assert.ok(rows.some((r) => r.keys === "Ctrl+Alt+F" && r.action === "Files drawer"));
   assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+B"), "sidebar toggle");
+  assert.ok(rows.some((r) => r.keys === "Ctrl+V" && r.action === "Terminal: paste"));
   assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+`"), "quick shell");
   assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "runc" });
   for (const r of rows) assert.ok(r.keys && r.action, "no empty cell");
@@ -335,6 +345,9 @@ test("shortcutRows uses the mac symbols and the sysbox label", () => {
   assert.ok(rows.some((r) => r.keys === "⌥1…9" && r.action === "Jump to session"));
   assert.ok(rows.some((r) => r.keys === "⌥⌘F" && r.action === "Files drawer"));
   assert.ok(rows.some((r) => r.keys === "⌘B"));
+  // Mac pastes with the browser's native ⌘V; Ctrl+V there is the terminal's own ^V.
+  assert.ok(rows.some((r) => r.keys === "⌘V" && r.action === "Terminal: paste"));
+  assert.ok(!rows.some((r) => r.keys === "Ctrl+V"));
   assert.ok(!rows.some((r) => /Ctrl\+Shift\+K|Ctrl\+Alt/.test(r.keys)), "no non-mac combo for the same action");
   assert.ok(rows.some((r) => r.keys === "⌥⌘S" && r.action === "Toggle sidebar / rail"));
   assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "sysbox" });

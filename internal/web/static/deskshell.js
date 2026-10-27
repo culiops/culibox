@@ -214,6 +214,14 @@ function stripKey(s, activeKind, repliesEnabled) {
   ]);
 }
 
+// stripHoldKey: what makes a strip with focus in it worth replacing at once: a
+// different session, need or ask. Everything else stripKey carries (summary, AWS
+// connections, SSO state) waits until focus leaves, so a half-typed reply survives.
+function stripHoldKey(s) {
+  if (!s) return "";
+  return JSON.stringify([s.id, s.need || "", s.ask || "", deskHash(s.ask_full)]);
+}
+
 // deskHash: a cheap 32-bit string hash (FNV-1a) for keys; not for security. The
 // answer guard is the sha256 sendAnswer sends.
 function deskHash(str) {
@@ -297,7 +305,7 @@ function shortcutRows(isMac, boxRuntime) {
     { keys: isMac ? "⌥⌘F" : "Ctrl+Alt+F", action: "Files drawer" },
     { keys: (isMac ? "⌘" : "Ctrl") + " + / - / 0", action: "Zoom in / out / reset" },
     { keys: isMac ? "⌘C" : "Ctrl+Shift+C", action: "Terminal: copy selection" },
-    { keys: "Ctrl+V", action: "Terminal: paste" },
+    { keys: isMac ? "⌘V" : "Ctrl+V", action: "Terminal: paste" },
     { keys: isMac ? "⌘S" : "Ctrl+S", action: "Editor: save" },
     { keys: isMac ? "⌘Enter" : "Ctrl+Enter", action: "New session: spawn" },
     { keys: "Runtime", action: rt },
@@ -341,5 +349,5 @@ function paneTitle(name, tab, session, tabCount) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
+    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
 }

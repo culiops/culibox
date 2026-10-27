@@ -140,6 +140,7 @@
   .rail-logo { display: flex; flex: none; align-items: center; justify-content: center; width: 36px; height: 28px; margin-bottom: 4px; }
   .ri { width: 36px; height: 32px; border-radius: var(--r-ctl); }
   .ri:hover { background: var(--raise); }
+  .ri.tog { flex: none; } /* the rail's ☰ (toggleSidebar hands focus to it) */
   /* app.css gives a waiting row a tint and a 3px stripe; the rail says it with
      the amber dot alone, and keeps the accent mark for the focused one. */
   .ri.alert { background: transparent; box-shadow: none; }
@@ -288,26 +289,21 @@
   .cell-bar:hover .ph-ic, .cell-bar:focus-within .ph-ic, .ph-ic.pin { width: 24px; opacity: 1; }
   .ph-ic:hover { color: var(--fg); background: var(--raise); }
   .ph-more { font-size: 15px; }
+  /* A narrow header's one control is always visible, never an overlay. */
+  .ph-ics.nar .ph-more { width: 24px; opacity: 1; }
   .ph-max.pin { color: var(--fg); }
   .ph-del:hover { color: var(--red); }
   .cell-bar button:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 
   /* Narrow pane (D9): the name keeps its room, so the right side shrinks. The
-     tabs tighten, + Shell loses its label and the separator goes; ⋯ ⛶ × float
-     over the tabs on hover instead of taking width. 540px is the bar's content
+     tabs tighten, + Shell loses its label and the separator goes; ⋯ alone stays in
+     the flow (see .ph-ics.nar), Maximize and Close pane live in its menu. 540px is the bar's content
      box, i.e. a pane under NARROW_PANE_PX (560) in tabs.js. */
   @container (max-width: 540px) {
     .ph-sep { display: none; }
     .ph-tab { padding: 4px 5px; }
     .ph-shell { font-size: 0; padding: 4px 8px; }
     .ph-shell::before { content: "+"; font: 500 14px/1 var(--font-ui); }
-    .ph-ics {
-      position: absolute; top: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 2px;
-      padding: 0 8px 0 22px; opacity: 0; pointer-events: none;
-      background: linear-gradient(90deg, transparent, var(--bg) 18px);
-    }
-    .cell-bar:hover .ph-ics, .cell-bar:focus-within .ph-ics, .ph-ics:has(.pin) { opacity: 1; pointer-events: auto; }
-    .ph-ics .ph-ic { width: 24px; opacity: 1; }
   }
   /* Too narrow for the tabs at all: dot, name and chip only. Files and Access
      stay one click away in the pane's ⋯ menu (Open files here, Context by tool). */
@@ -381,6 +377,19 @@
      old rail's amber host chip and green box chip are re-dressed here. */
   #drawer .bdg.host, #drawer .bdg.box { color: var(--muted); background: var(--raise); border-color: transparent; }
   #drawer .bdg.host { border-color: var(--faint); }
+  /* --warn is amber here, and the old rail used it for AWS write state. A write
+     window (open, or the base role able to) is red (D23); amber stays for
+     needs-you. Same shapes as app.css: solid open window, dashed "could write",
+     and the filled ringed chip for production while writing. */
+  #drawer .bdg.aws.write { color: var(--red); border-color: var(--red); }
+  #drawer .bdg.aws.rolew { color: var(--red); border-color: var(--red); }
+  #drawer .bdg.aws.prod.rolew { color: var(--red); border-color: var(--red); }
+  #drawer .bdg.aws.prod.rolew .awsw, #drawer .bdg.aws.prod.write .awsw { color: var(--red); font-weight: 700; }
+  #drawer .bdg.aws.prod.write {
+    border-color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent);
+    box-shadow: 0 0 0 2px var(--red);
+  }
+  #drawer .connln.warn { color: var(--red); }
   /* The rail: a column of the drawer, not an overlay of its own. */
   #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
 
