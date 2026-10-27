@@ -46,6 +46,7 @@ type mockSvc struct {
 	spawnedPrompt    string
 	spawnedReplyable *bool
 	spawnedParentID  string
+	spawnedSpec      launcher.SpawnSpec
 	interruptID      string
 	interruptErr     error
 	answerID         string
@@ -68,6 +69,7 @@ func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedPrompt = s.Prompt
 	m.spawnedReplyable = s.Replyable
 	m.spawnedParentID = s.ParentID
+	m.spawnedSpec = s
 	if m.spawnErr != nil {
 		return session.Info{}, m.spawnErr
 	}

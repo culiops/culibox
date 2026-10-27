@@ -744,6 +744,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		Version: version,
 		Commit:  buildCommit(),
 	}
+	// A companion shell runs the verified quick-shell profile, read when used.
+	api.QuickShell = srv.QuickShell
 	host, _ := os.Hostname()
 	srv.BugReport = buildBugReport(bugDeps{
 		checks:  func() []doctor.Result { return doctor.Checks(doctorIn) },
