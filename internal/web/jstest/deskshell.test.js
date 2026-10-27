@@ -67,6 +67,25 @@ test("rowSubline: amber needs-you text, else summary or the activity word", () =
   assert.deepEqual(d.rowSubline({}), { text: "", amber: false });
 });
 
+test("rowSubline: a connection-level SSO expiry reads SSO expired, never a bare Waiting", () => {
+  const conn = { name: "dev", sso_expired: "dev-sso" };
+  const r = d.rowSubline({ activity: "working", aws_connections: [conn] });
+  assert.deepEqual(r, { text: "SSO expired \u00b7 Sign in", amber: true });
+  // The legacy single-record need keeps its own named text.
+  assert.equal(d.rowSubline({ activity: "working", need: "sso", aws: { sso_expired: "x" } }).text.startsWith("AWS sign-in: "), true);
+  // An agent that is itself asking keeps the ask text even with an expired connection.
+  assert.ok(d.rowSubline({ activity: "waiting", need: "ask", ask: "ls", aws_connections: [conn] }).text.startsWith("asks: "));
+});
+
+test("jumpOrder: Alt+1..9 and the palette follow the sidebar order on desktop, the API order on mobile", () => {
+  const { jumpTarget } = require("../static/sessionrow.js");
+  const list = [idle, working, waiting];
+  assert.equal(jumpTarget(1, d.jumpOrder(list, false)).id, "w", "the needs-you session is 1");
+  assert.deepEqual(d.jumpOrder(list, false).map((s) => s.id), ["w", "r", "i"]);
+  assert.equal(d.jumpOrder(list, true), list, "mobile keeps the API order");
+  assert.deepEqual(d.jumpOrder(null, false), []);
+});
+
 test("paneHeaderModel: full slots in order for a wide pane", () => {
   const tab = { kind: "terminal", usage: () => ({ model: "opus-5", pct: 42 }) };
   const s = { ...working, name: "api", aws_connections: [{ name: "prod", label: "prod", account_id: "1", role_arn: "arn:aws:iam::1:role/r", elevated_until: FUTURE }] };

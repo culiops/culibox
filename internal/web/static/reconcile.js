@@ -95,7 +95,7 @@ function rowSig(s, local) {
     v.activity || "", v.need || "", v.ask || "", v.ask_full || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
     !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,
-    l.boxRuntime || "", !!l.replies, !!l.sending, !!l.expanded, !!l.answering,
+    l.boxRuntime || "", !!l.replies, !!l.sending, !!l.expanded, !!l.answering, !!l.elev,
     // The AWS chip (label, prod, the amber write state) and the SSO card's text
     // read the binding; elevated_until appears and goes with a grant and a drop.
     l.sso || "", v.aws ? JSON.stringify(v.aws) : "",

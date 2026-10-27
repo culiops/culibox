@@ -15,6 +15,7 @@ function deskDep(name) {
     needsYou: typeof needsYou === "function" ? needsYou : null,
     cardContent: typeof cardContent === "function" ? cardContent : null,
     needLabel: typeof needLabel === "function" ? needLabel : null,
+    connSSOSources: typeof connSSOSources === "function" ? connSSOSources : null,
     sessionDot: typeof sessionDot === "function" ? sessionDot : null,
     tierBadge: typeof tierBadge === "function" ? tierBadge : null,
     isElevated: typeof isElevated === "function" ? isElevated : null,
@@ -23,7 +24,7 @@ function deskDep(name) {
   };
   if (g[name]) return g[name];
   const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js",
-    needLabel: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
+    needLabel: "./attention.js", connSSOSources: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
     isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js" }[name];
   return require(mod)[name];
 }
@@ -36,6 +37,13 @@ const DESK_RECENT_MAX = 3;
 function deskGroups(sessions) {
   const needs = deskDep("needsYou");
   return deskDep("sessionGroups")(sessions, (s) => (needs(s) ? "waiting" : s.activity));
+}
+
+// jumpOrder: the list Alt+1..9 and the palette's first nine index into. On
+// desktop that is the sidebar's visible order; mobile has no such list on
+// screen and keeps the API order.
+function jumpOrder(sessions, mobile) {
+  return mobile ? sessions : deskOrder(deskGroups(sessions));
 }
 
 // deskOrder: the groups flattened in the order the sidebar shows them. Alt+1..9
@@ -92,6 +100,12 @@ function rowChip(s, nowMs, boxRuntime) {
 // (No idle duration: the session record carries none.)
 function rowSubline(s) {
   if (deskDep("needsYou")(s)) {
+    // A named connection's expired sign-in on an agent that is not itself
+    // waiting has no needLabel and would read "Waiting for input.", which says
+    // nothing about the sign-in.
+    if (!deskDep("needLabel")(s) && s.activity !== "waiting" && deskDep("connSSOSources")(s).length) {
+      return { text: "SSO expired \u00b7 Sign in", amber: true };
+    }
     // A waiting session can have no named need (needLabel ""): no dangling ": ".
     const why = deskDep("needLabel")(s);
     const text = deskDep("cardContent")(s).text;
@@ -191,6 +205,6 @@ function pushRecentProfile(list, name) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { deskGroups, deskOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
+  module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
     paneHeaderModel, needStripModel, emptyStateModel, pushRecentProfile };
 }

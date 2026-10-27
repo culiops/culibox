@@ -139,4 +139,52 @@
   .rm[hidden] { display: none; }
   .rm i { position: absolute; inset: 0 auto 0 0; display: block; border-radius: 2px; background: var(--accent); }
   .rm.hot i { background: var(--fg); }
+
+  /* --- session list: grouped compact rows (spec 5.2) ---------------------- */
+  #sessions { padding: 2px 8px 8px; }
+  .grp {
+    list-style: none; padding: 14px 6px 5px; font-size: 11px; font-weight: 500;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--faint);
+  }
+  .grp:first-child { padding-top: 6px; }
+  .grp.hot { color: var(--amber); }
+  #sessions .drow {
+    position: relative; gap: 9px; align-items: flex-start; padding: 7px 8px 8px; margin-bottom: 1px;
+    border: 0; border-radius: var(--r-chip); background: transparent;
+  }
+  #sessions .drow:hover { background: var(--raise); }
+  #sessions .drow.sel { background: var(--raise); }
+  /* Open in some pane (not necessarily the focused one): a faint left bar. */
+  #sessions .drow.inpane { box-shadow: inset 2px 0 0 var(--faint); }
+  #sessions .drow.sel.inpane { box-shadow: inset 2px 0 0 var(--accent); }
+  #sessions .drow .dot { margin-top: 5px; }
+  #sessions .drow .sname { gap: 6px; font-size: 13px; line-height: 18px; }
+  #sessions .drow .nm { flex: 1; min-width: 0; color: var(--fg); }
+  #sessions .drow .bdg { flex: none; }
+  /* One chip. Neutral: box is a raised tile, host adds a 1px outline, and only
+     an open write window is red (D23). */
+  .dchip {
+    flex: none; padding: 0 6px; font: 500 11px/17px var(--font-ui); white-space: nowrap;
+    color: var(--muted); background: var(--raise); border-radius: var(--r-chip);
+  }
+  .dchip.host { box-shadow: inset 0 0 0 1px var(--faint); }
+  .dchip.write { color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  #sessions .drow:hover .dchip.box { background: var(--line); }
+  /* The ⋯ takes no room until the row is hovered or something in it is
+     focused; it stays tabbable so a keyboard user reaches it. */
+  #sessions .drow .kbtn {
+    flex: none; width: 0; padding: 0; overflow: hidden; opacity: 0; height: 18px;
+    color: var(--muted); border-radius: var(--r-chip);
+  }
+  #sessions .drow:hover .kbtn, #sessions .drow:focus-within .kbtn, #sessions .drow .kbtn:focus-visible {
+    width: 20px; opacity: 1;
+  }
+  #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
+  #sessions .drow .kbtn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #sessions .drow .nm:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  #sessions .drow .sub {
+    margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--muted); cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #sessions .drow .sub.amber { color: var(--amber); }
 }

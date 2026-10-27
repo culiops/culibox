@@ -133,7 +133,9 @@ async function runItem(item) {
 // to is worse than no hint. mac is threaded in from the caller (palRefresh)
 // rather than computed again here — see the mac note on paletteCommands.
 function paletteSessions(mac) {
-  return lastSessions.map((s, i) => {
+  // In the order Alt+digit uses, so the hint on a row is the key that opens it.
+  const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
+  return jumpOrder(lastSessions, mobile).map((s, i) => {
     const name = s.name || s.id;
     const jumpHint = i < 9 ? (mac ? "⌥" + (i + 1) : "Alt+" + (i + 1)) : "";
     // Reuses the same activityClass() the sidebar's own status dot is built

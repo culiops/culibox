@@ -1496,10 +1496,16 @@ function renderSession(s, opts) {
   // row, expanded in place with no click (renderNeedsBody). Row order is never
   // changed for it.
   const card = !!(opts && opts.card);
+  // compact: the desktop sidebar's row (dot, name, one chip, ⋯, one sub-line).
+  // Desktop never renders the needs-you card: the ask strip over the pane
+  // carries it.
+  const compact = !!(opts && opts.compact);
   const li = document.createElement("li");
   // rowClasses decides the state; this function only paints it. Selected and
   // needs-you are separate axes and a row can carry both.
-  li.className = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) }).join(" ") + (card ? " dcard" : "");
+  const cls = rowClasses(s, { selectedId: selectedSessionId(), killing: killing.has(s.id) });
+  // The compact row says "needs you" with its amber sub-line, not the row tint.
+  li.className = (compact ? cls.filter((c) => c !== "needs").concat("drow") : cls).join(" ") + (card ? " dcard" : "");
   li.dataset.sid = s.id;
   li.title = s.id; // tiebreaker when two labels match
 
@@ -1539,10 +1545,12 @@ function renderSession(s, opts) {
   sname.appendChild(nm);
   grow.appendChild(sname);
 
-  const smeta = document.createElement("div");
-  smeta.className = "smeta";
-  smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
-  grow.appendChild(smeta);
+  if (!compact) {
+    const smeta = document.createElement("div");
+    smeta.className = "smeta";
+    smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    grow.appendChild(smeta);
+  }
   li.appendChild(grow);
 
   if (killing.has(s.id)) {
@@ -1555,6 +1563,11 @@ function renderSession(s, opts) {
 
   nm.onclick = () => openTerminal(s.id, s.name);
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
+
+  if (compact) {
+    paintCompactRow(li, sname, grow, s);
+    return li;
+  }
 
   // Containment tier. Shown for every live session, not only the risky one: a
   // badge that appears only when something is wrong trains you to ignore its
@@ -1636,11 +1649,71 @@ function renderSession(s, opts) {
   return li;
 }
 
-// renderDesktopEntry: what the desktop list renders for one session — the
-// needs-you card for a session that needs you (waiting, or an expired AWS
-// sign-in), the plain row otherwise.
-function renderDesktopEntry(s) {
-  return needsYou(s) ? renderSession(s, { card: true }) : renderSession(s);
+// paintCompactRow adds the rest of a desktop sidebar row: ONE chip (rowChip),
+// the ⋯ menu button and the sub-line. The chip carries the tier or the open
+// write window; the account and AWS binding are in the row's tooltip instead of
+// further chips, so a row never grows a second line of badges.
+function paintCompactRow(li, sname, grow, s) {
+  const nowMs = Date.now();
+  const chip = rowChip(s, nowMs, boxRuntime);
+  const facts = [s.id];
+  const ab = acctBadge(s);
+  if (ab) facts.push(ab.title);
+  const aws = awsBadge(s, nowMs);
+  if (aws) facts.push("AWS: " + aws.title);
+  li.title = facts.join("\n");
+  if (chip) {
+    const c = document.createElement("span");
+    c.className = "dchip " + chip.tone;
+    c.textContent = chip.text;
+    const tier = tierBadge(s, boxRuntime);
+    c.title = chip.tone === "write" ? (aws ? aws.title : "AWS write window open") : tier ? tier.title : "";
+    sname.appendChild(c);
+  }
+  const kb = document.createElement("button");
+  kb.type = "button";
+  kb.className = "kbtn";
+  kb.textContent = "⋯"; // U+22EF, as on the mobile row
+  kb.setAttribute("aria-label", "Session actions");
+  kb.setAttribute("aria-haspopup", "menu");
+  kb.title = "Session actions";
+  // No stopPropagation: see the mobile row's note on the document-click closers.
+  kb.onclick = () => openSessionMenu(kb, s);
+  sname.appendChild(kb); // on the name line, after the chip
+  const sub = rowSubline(s);
+  if (sub.text) {
+    const d = document.createElement("div");
+    d.className = sub.amber ? "sub amber" : "sub";
+    d.textContent = sub.text;
+    // The name button is the keyboard path; the sub-line is the same action for
+    // a pointer (spec 7: it replaces the old summary-to-peek click).
+    d.onclick = () => openTerminal(s.id, s.name);
+    grow.appendChild(d);
+  }
+}
+
+// renderDesktopEntry: what the desktop list renders for one item — a group
+// header, or a compact row for a session.
+function renderDesktopEntry(it) {
+  if (it.header) {
+    const h = document.createElement("li");
+    h.className = it.key === "needs-you" ? "grp hot" : "grp";
+    h.dataset.sid = it.id;
+    h.textContent = it.label + " \u00b7 " + it.count;
+    return h;
+  }
+  return renderSession(it.s, { compact: true });
+}
+
+// deskEntries: the desktop list as reconcile items, a header before each
+// group's rows. Keys are "grp:<key>" for headers and the session id for rows.
+function deskEntries(sessions) {
+  const out = [];
+  for (const g of deskGroups(sessions)) {
+    out.push({ id: "grp:" + g.key, header: true, key: g.key, label: g.label, count: g.count });
+    for (const s of g.sessions) out.push({ id: s.id, s });
+  }
+  return out;
 }
 
 // buildCardComposer: the one-line reply composer a desktop needs-you card
@@ -2309,9 +2382,13 @@ function syncSelectedRow() {
   const id = selectedSessionId();
   const ul = $("sessions");
   if (!ul) return;
+  // inpane: sessions with a tab open in ANY pane, not only the focused one.
+  const open = new Set();
+  eachTerminal((t) => open.add(t.id));
   for (const li of ul.children) {
     if (!li.classList || !li.classList.contains("srow")) continue;
     li.classList.toggle("sel", !!id && li.dataset.sid === id);
+    li.classList.toggle("inpane", open.has(li.dataset.sid));
   }
   renderRail48(); // the focus ring moved, so .ri.on must move with it
 }
@@ -2320,11 +2397,11 @@ function syncSelectedRow() {
 // exactly what renderSession reads beyond the session record itself.
 function rowLocal(s) {
   const tab = terminalTabFor(s.id);
-  const u = usageOf(tab);
   return {
     killing: killing.has(s.id),
     heldHere: !!tab && tab.status() === "connected",
-    pct: u && typeof u.pct === "number" ? u.pct : null,
+    // No context %: the compact row does not draw it (the pane header does), and
+    // it moves every few minutes, which would rebuild the row for nothing.
     boxRuntime: boxRuntime,
     // The reply surfaces are built only when /api/meta says replies are on, and
     // that answer lands after the first render, so it must move the signature.
@@ -2333,6 +2410,9 @@ function rowLocal(s) {
     expanded: cardExpanded.has(s.id),
     answering: pendingAnswers.has(s.id),
     sso: ssoLocalSig(s.id),
+    // The compact row's chip turns "write" when a window opens and back when it
+    // lapses, which no session field says by itself.
+    elev: sessionElevated(s, Date.now()),
   };
 }
 
@@ -2552,7 +2632,9 @@ async function refreshSessions() {
     }
     ul.replaceChildren(...nodes);
   } else {
-    rowById = reconcileRows(ul, lastSessions, renderDesktopEntry, (s) => rowSig(s, rowLocal(s)));
+    rowById = reconcileRows(ul, deskEntries(lastSessions), renderDesktopEntry, (it) => (it.header
+      ? JSON.stringify(["grp", it.label, it.count])
+      : rowSig(it.s, rowLocal(it.s))));
   }
   // The answer block is a sibling, so it can only be inserted once its row is
   // in the document. On mobile a needs-you session's row is built but never
@@ -2564,7 +2646,8 @@ async function refreshSessions() {
   const reopen = lastSessions.find((s) => s.id === openPeekId);
   if (reopen) {
     const li = rowById.get(reopen.id);
-    const isCard = !!(li && li.classList.contains("dcard"));
+    // A desktop compact row has no peek: its sub-line opens the session.
+    const isCard = !!(li && (li.classList.contains("dcard") || li.classList.contains("drow")));
     if (li && li.isConnected && !isCard && !peekRowFor(li)) togglePeek(li, reopen);
     else if (!li || !li.isConnected || isCard) openPeekId = null;
   }
@@ -5177,7 +5260,7 @@ document.addEventListener("keydown", (e) => {
   if (!JUMP_MOD(e)) return;
   const m = /^Digit([1-9])$/.exec(e.code); // .code, not .key: layout-independent under a modifier
   if (!m) return;
-  const s = jumpTarget(Number(m[1]), lastSessions);
+  const s = jumpTarget(Number(m[1]), jumpOrder(lastSessions, mobileActive(window.innerWidth)));
   e.preventDefault();
   e.stopPropagation();
   // Out of range is a deliberate no-op, not a wrap-around: pressing 7 with four
