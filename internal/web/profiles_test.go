@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -686,5 +687,68 @@ func TestContextWarnings(t *testing.T) {
 	got = pm2.ContextWarnings(contextProfile("", many))
 	if len(got) != 1 || !strings.HasSuffix(strings.TrimSuffix(got[0], "; the box will be able to read and send them"), ", …)") {
 		t.Fatalf("more than 5 names must end with an ellipsis, got %q", got)
+	}
+}
+
+func TestProfileViewTouches(t *testing.T) {
+	seeds := []config.AgentConfig{
+		{
+			Name: "ops", Bin: "claude", Runtime: config.RuntimeBox,
+			AWS:            nil,
+			AWSConnections: []string{"sandbox", "prod-ro"},
+			GitHub: &config.GitHubBinding{Owners: []config.GitHubOwner{
+				{Owner: "acme", App: "acme-app", Repos: []string{"web"}},
+				{Owner: "culiops", Token: "pat-secret-name"},
+			}},
+			Tokens:       []string{"sentry-read"},
+			ContextPaths: []string{"/srv/docs"},
+			CloneOf:      "/home/u/repo",
+			DefaultCwd:   "/home/u/repo-clone",
+		},
+		{Name: "plain", Bin: "claude", Runtime: config.RuntimeBox},
+		{Name: "hosted", Bin: "bash", Runtime: config.RuntimeHost},
+	}
+	pm := NewProfileManager(seeds, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	pm.SetEgressAll(true)
+	got := map[string]ProfileView{}
+	for _, v := range pm.Views() {
+		got[v.Name] = v
+	}
+	v := got["ops"]
+	if v.Bin != "claude" || !slices.Equal(v.AWSConnections, []string{"sandbox", "prod-ro"}) ||
+		!slices.Equal(v.GitHubOwners, []string{"acme", "culiops"}) || !slices.Equal(v.Tokens, []string{"sentry-read"}) ||
+		v.Network != "allowlist" || !slices.Equal(v.ContextPaths, []string{"/srv/docs"}) || v.CloneOf != "/home/u/repo" {
+		t.Fatalf("ops view = %+v", v)
+	}
+	if got["plain"].Network != "open" {
+		t.Errorf("an unbound boxed profile's network = %q, want open", got["plain"].Network)
+	}
+	if got["hosted"].Network != "" {
+		t.Errorf("a host-tier profile's network = %q, want empty", got["hosted"].Network)
+	}
+	// Without mandatory egress an unbound box has no egress control (macOS).
+	pm.SetEgressAll(false)
+	for _, pv := range pm.Views() {
+		switch pv.Name {
+		case "plain":
+			if pv.Network != "" {
+				t.Errorf("unbound box without egress control: network = %q", pv.Network)
+			}
+		case "ops":
+			if pv.Network != "allowlist" {
+				t.Errorf("bound box: network = %q", pv.Network)
+			}
+		}
+	}
+
+	// Names only: nothing secret-shaped rides along.
+	b, err := json.Marshal(pm.Views())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"role_arn", `"value"`, "secret", "arn:aws", "pat-secret-name", "acme-app"} {
+		if strings.Contains(string(b), bad) {
+			t.Errorf("profile JSON contains %q: %s", bad, b)
+		}
 	}
 }

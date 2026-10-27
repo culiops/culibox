@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -327,5 +329,103 @@ func TestEgressStatusRoute(t *testing.T) {
 	w = do(a, "GET", "box-2")
 	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"egress":{"allowed":0,"denied":0,"mode":"open"}}` {
 		t.Errorf("box-2: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestAWSStatusApprovals(t *testing.T) {
+	au, err := broker.OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { au.Close() })
+	created := time.Unix(1_800_000_000, 0)
+	rec := func(sid string, at time.Time, a broker.Action, reason, entry string) {
+		t.Helper()
+		r := broker.ApprovalRow{SessionID: sid, Time: at, Action: a, Minutes: 30, Reason: reason, Entry: entry}
+		if a == broker.ActionGranted {
+			r.Until = at.Add(30 * time.Minute)
+		}
+		if err := au.RecordApproval(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Rows from before the session existed (an earlier session's id, reused),
+	// and another session's row, must never show.
+	rec("claude-3", created.Add(-time.Hour), broker.ActionGranted, "old session", "prod")
+	rec("claude-9", created.Add(time.Minute), broker.ActionGranted, "someone else", "prod")
+	// 25 newer rows: only the newest 20 come back.
+	for i := 0; i < 25; i++ {
+		rec("claude-3", created.Add(time.Duration(i+1)*time.Minute), broker.ActionGranted, fmt.Sprintf("r%02d", i), "prod")
+	}
+	// Operator text is cleaned like the activity timeline's.
+	rec("claude-3", created.Add(time.Hour), broker.ActionExtended, "fix\nit\x1b[31m "+strings.Repeat("x", 300), "")
+
+	info := map[string]session.Info{
+		"claude-3": {ID: "claude-3", Created: created, AWS: &session.AWSInfo{Label: "sandbox"}},
+	}
+	ad := awsAdapter(info, nil, nil, nil)
+	ad.Approvals = func(id string, sinceTS int64, limit int) ([]broker.ApprovalRow, error) {
+		return au.ActivityApprovals(id, sinceTS, 0, limit)
+	}
+	decode := func(cookie bool) map[string]any {
+		t.Helper()
+		st, ok := ad.AWSStatusFor("claude-3", cookie)
+		if !ok {
+			t.Fatal("bound session reported no status")
+		}
+		raw, _ := json.Marshal(st)
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	m := decode(true)
+	appr, _ := m["approvals"].([]any)
+	if len(appr) != 20 {
+		t.Fatalf("approvals = %d rows, want the newest 20", len(appr))
+	}
+	first := appr[0].(map[string]any)
+	if first["action"] != "extended" || first["ts"] != float64(created.Add(time.Hour).UnixMilli()) || first["minutes"] != float64(30) {
+		t.Fatalf("newest row = %v", first)
+	}
+	reason, _ := first["reason"].(string)
+	if strings.ContainsAny(reason, "\n\x1b") || len([]rune(reason)) > 200 || !strings.HasPrefix(reason, "fix it") {
+		t.Fatalf("reason not cleaned: %q", reason)
+	}
+	second := appr[1].(map[string]any)
+	if second["action"] != "granted" || second["name"] != "prod" || second["reason"] != "r24" ||
+		second["until"] != float64(created.Add(25*time.Minute+30*time.Minute).UnixMilli()) {
+		t.Fatalf("granted row = %v", second)
+	}
+	for _, a := range appr {
+		row := a.(map[string]any)
+		if row["ts"].(float64) < float64(created.UnixMilli()) {
+			t.Fatalf("a row older than the session: %v", row)
+		}
+		if r, _ := row["reason"].(string); r == "old session" || r == "someone else" {
+			t.Fatalf("another session's row: %v", row)
+		}
+	}
+
+	// A token (PAT / bearer) caller never gets operator text.
+	if _, has := decode(false)["approvals"]; has {
+		t.Fatal("approvals present for a non-cookie caller")
+	}
+
+	// No approvals yet: [] on the wire, never null; unwired: absent.
+	ad.Approvals = func(string, int64, int) ([]broker.ApprovalRow, error) { return nil, nil }
+	if a, ok := decode(true)["approvals"].([]any); !ok || len(a) != 0 {
+		t.Fatalf("empty approvals = %v", decode(true)["approvals"])
+	}
+	ad.Approvals = nil
+	if _, has := decode(true)["approvals"]; has {
+		t.Fatal("approvals present without a reader")
+	}
+	// A failed read leaves the status without them (and logs), not an error.
+	ad.Approvals = func(string, int64, int) ([]broker.ApprovalRow, error) { return nil, errors.New("disk") }
+	if _, has := decode(true)["approvals"]; has {
+		t.Fatal("approvals present after a failed read")
 	}
 }

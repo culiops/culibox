@@ -180,6 +180,9 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			},
 			RecentStatic: func(id string, n int) ([]broker.Row, error) {
 				return audit.ForSessionProvider(id, broker.ProviderStatic, n)
+			},
+			Approvals: func(id string, since int64, n int) ([]broker.ApprovalRow, error) {
+				return audit.ActivityApprovals(id, since, 0, n)
 			}},
 		Activity: web.ActivityAuditAdapter{
 			Credentials: audit.ActivityRows,

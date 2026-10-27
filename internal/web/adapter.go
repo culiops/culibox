@@ -3,6 +3,7 @@ package web
 import (
 	"log"
 	"slices"
+	"time"
 
 	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/egress"
@@ -102,6 +103,11 @@ type AWSStatusAdapter struct {
 	// SSO is the session's AWS sign-in state, with the host command and any
 	// running flow; nil or ok false leaves the reply without an sso object.
 	SSO func(id string) (SSOStatus, bool)
+	// Approvals is the session's write-window log, newest first: rows at or
+	// after sinceTS (unix seconds; the session's creation, so a recycled id
+	// never shows an earlier session's rows) and at most limit. nil = the
+	// reply carries no approvals.
+	Approvals func(id string, sinceTS int64, limit int) ([]broker.ApprovalRow, error)
 	// Grant fills the grant panel's host-session warning and any refusal reason.
 	// It is called only for a binding that can elevate (it lists boxes).
 	Grant func(id string) GrantContext
@@ -161,6 +167,12 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 			srows = []broker.Row{}
 		}
 		out["static_recent"] = srows
+	}
+	// Approval reasons are operator text, so only the browser session gets them.
+	if cookie && a.Approvals != nil {
+		if ap, ok := a.approvalsOf(id, info.Created); ok {
+			out["approvals"] = ap
+		}
 	}
 	if g := info.GitHub; g != nil {
 		owners := g.Owners
@@ -240,6 +252,44 @@ func (a AWSStatusAdapter) AWSStatusFor(id string, cookie bool) (any, bool) {
 			}
 			out["sso"] = s
 		}
+	}
+	return out, true
+}
+
+// approvalStatus is one entry of "approvals". ts and until are unix
+// milliseconds, like the activity timeline's; name is the AWS connection the
+// window was for (absent for the inline binding).
+type approvalStatus struct {
+	TS      int64  `json:"ts"`
+	Action  string `json:"action"`
+	Minutes int    `json:"minutes,omitempty"`
+	Until   int64  `json:"until,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Name    string `json:"name,omitempty"`
+}
+
+// approvalsOf reads the session's last awsRecentRows approval rows since
+// created, with the reason cleaned like the activity timeline's. ok is false
+// when the read failed: the status is still useful without them.
+func (a AWSStatusAdapter) approvalsOf(id string, created time.Time) ([]approvalStatus, bool) {
+	rows, err := a.Approvals(id, created.Unix(), awsRecentRows)
+	if err != nil {
+		log.Printf("aws status %s: reading approval rows: %v", id, err)
+		return nil, false
+	}
+	out := make([]approvalStatus, 0, len(rows)) // [] on the wire, never null
+	for _, r := range rows {
+		// The reader filters in SQL; this keeps a reader that does not from
+		// showing an earlier session's rows (a recycled id).
+		if r.Time.Before(created.Truncate(time.Second)) || len(out) == awsRecentRows {
+			continue
+		}
+		ap := approvalStatus{TS: r.Time.UnixMilli(), Action: string(r.Action), Minutes: r.Minutes,
+			Reason: activityText(r.Reason, activityReasonMax), Name: r.Entry}
+		if !r.Until.IsZero() {
+			ap.Until = r.Until.UnixMilli()
+		}
+		out = append(out, ap)
 	}
 	return out, true
 }

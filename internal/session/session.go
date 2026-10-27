@@ -600,6 +600,13 @@ type Info struct {
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
+	// ContextPaths are the host paths the box can read (the profile's
+	// context_paths at spawn, mounted read-only at the same path); CloneOf is
+	// the host repo a clone-mode session was cloned from. Both are snapshots
+	// taken at spawn: a later profile edit never changes a running session's.
+	// Absent without them, so a plain session's wire shape is unchanged.
+	ContextPaths []string `json:"context_paths,omitempty"`
+	CloneOf      string   `json:"clone_of,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -652,6 +659,11 @@ type Session struct {
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
+	// ContextPaths and CloneOf are the spawn-time snapshots Info reports (see
+	// Info.ContextPaths). Immutable after publication, read without the lock;
+	// Info hands out a copy.
+	ContextPaths []string
+	CloneOf      string
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
@@ -1043,14 +1055,11 @@ func (s *Session) Info() Info {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, ParentID: s.ParentID, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
-	switch {
-	case s.EgressNonce != "" && s.Bindings().Any():
-		in.Egress = "allowlist"
-	case s.EgressNonce != "":
-		in.Egress = "open"
-	}
+	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any())
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.Clone = s.Clone.copy()
+	in.ContextPaths = slices.Clone(s.ContextPaths)
+	in.CloneOf = s.CloneOf
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
 			Elevate: elevateInfo(s.AWS.Elevate), Fields: awsprobe.Lookup(s.base, "").Fields()}
@@ -1077,6 +1086,21 @@ func (s *Session) Info() Info {
 		in.Tokens = append(in.Tokens, ti)
 	}
 	return in
+}
+
+// EgressMode is the network posture a session reports: "allowlist" (egress
+// control on and at least one credential binding: only its hosts), "open"
+// (egress control on, unbound: any host through the authenticated proxy) or ""
+// (no egress control). Info and the profile list both use it, so a profile
+// previews exactly what its session will show.
+func EgressMode(egress, bound bool) string {
+	switch {
+	case egress && bound:
+		return "allowlist"
+	case egress:
+		return "open"
+	}
+	return ""
 }
 
 // BaseAccess is a copy of the session's base-role probe results.
@@ -2058,6 +2082,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
+	sess.ContextPaths = slices.Clone(ctxPaths)
+	if cl != nil {
+		sess.CloneOf = cl.Of
+	}
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
 	sess.resumeSkipped = resumeSkipped
@@ -2077,6 +2105,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
 			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID})
 	}
 	m.watchRetention(id, sess)
@@ -2804,6 +2833,8 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.Clone = md.Clone.copy()
+	sess.ContextPaths = slices.Clone(md.ContextPaths)
+	sess.CloneOf = md.CloneOf
 	sess.Exclusive = md.Exclusive
 	// nil for a record from before the probe: every key reads "not checked"
 	// and is watched below, never a clean result.

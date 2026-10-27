@@ -88,6 +88,11 @@ type sessionMeta struct {
 	// still shows it after a daemon restart. Records from before the refresh
 	// lack it and read as none.
 	Clone *CloneInfo `json:"clone,omitempty"`
+	// ContextPaths and CloneOf are the profile's context_paths and clone source
+	// as of the spawn, so the UI still shows what the box could read after a
+	// restart or a profile edit. Records from before lack both and read as none.
+	ContextPaths []string `json:"context_paths,omitempty"`
+	CloneOf      string   `json:"clone_of,omitempty"`
 	// Exclusive: the session's box is its own (an elevate binding). Records
 	// written before M3b have no key and read as false.
 	Exclusive bool `json:"exclusive,omitempty"`
