@@ -452,6 +452,8 @@
     background: transparent; border: 1px solid transparent; border-radius: var(--r-ctl); white-space: nowrap;
   }
   .dr-act[hidden] { display: none; }
+  /* A file (or a folder above one) the agent changed: a dot after the name. */
+  #drawer .ft-chg { flex: none; color: var(--accent); font-size: 8px; line-height: 1; padding: 0 4px; }
   .dr-act:hover:not(:disabled) { color: var(--fg); background: var(--raise); }
   /* Dimmed, not struck through (primitives.css): with no file every action is
      off at once, and a row of struck words reads as an error. */

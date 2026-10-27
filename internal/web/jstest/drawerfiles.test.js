@@ -147,3 +147,32 @@ test("hitsUnderRoot: root / holds every absolute path", () => {
   const hits = [{ path: "/home/u/a" }, { path: "/etc/x" }, { path: "/" }];
   assert.deepEqual(d.hitsUnderRoot(hits, "/").map((h) => h.path), ["/home/u/a", "/etc/x"]);
 });
+
+const sorted = (s) => [...s].sort();
+
+test("changedSet: a changed file and each folder above it under the root, never the root", () => {
+  assert.deepEqual(sorted(d.changedSet([{ path: "/w/a/b.go" }], "/w")), ["/w/a", "/w/a/b.go"]);
+  assert.deepEqual(sorted(d.changedSet([{ path: "/w/a/b/c.go" }], "/w/")), ["/w/a", "/w/a/b", "/w/a/b/c.go"]);
+  assert.deepEqual(sorted(d.changedSet([{ path: "/w/top.go" }, { path: "/w/a/x" }, { path: "/w/a/y" }], "/w")), ["/w/a", "/w/a/x", "/w/a/y", "/w/top.go"]);
+});
+
+test("changedSet: outside the root, the root itself and a sibling that shares its prefix are ignored", () => {
+  assert.equal(d.changedSet([{ path: "/w2/x" }, { path: "/etc/x" }, { path: "/w" }, { path: "/w/" }, { path: "/" }], "/w").size, 0);
+});
+
+test("changedSet: paths are normalized before they are compared", () => {
+  assert.deepEqual(sorted(d.changedSet([{ path: "/w//a/./b/../c.go/" }], "/w")), ["/w/a", "/w/a/c.go"]);
+  assert.equal(d.changedSet([{ path: "/w/../etc/x" }], "/w").size, 0);
+});
+
+test("changedSet: root / holds every absolute path; a relative path is never a match", () => {
+  assert.deepEqual(sorted(d.changedSet([{ path: "/a/b" }], "/")), ["/a", "/a/b"]);
+  assert.equal(d.changedSet([{ path: "a/b" }], "/w").size, 0);
+});
+
+test("changedSet: no root or bad input is an empty set, never a throw", () => {
+  assert.equal(d.changedSet([{ path: "/w/a" }], "").size, 0);
+  assert.equal(d.changedSet(null, "/w").size, 0);
+  assert.equal(d.changedSet({}, "/w").size, 0);
+  assert.deepEqual(sorted(d.changedSet([null, {}, { path: 5 }, "/w/z", { path: "/w/a" }], "/w")), ["/w/a"]);
+});

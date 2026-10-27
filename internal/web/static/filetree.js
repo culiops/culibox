@@ -105,11 +105,38 @@ let lastSyncedKey = null;       // which tab the tree is currently following (se
 let ftGen = 0;                  // bumped per root load; a superseded load must not paint
 let ftExpanded = new Set();     // absolute dir paths the user has opened; see treestate.js
 
+// The Files drawer marks what the agent changed (filesdrawer.js decides which
+// paths): a dot after the name. A row's path is kept here, not in the DOM, so
+// the dots can be repainted when the answer arrives after the tree is drawn.
+// `set` null = no marks (mobile, or the drawer is not showing Files): the span
+// is only ever added while the drawer owns file clicks.
+const ftRowPaths = new WeakMap();
+function ftMarkRow(row, path, set) {
+  const have = row.querySelector(":scope > .ft-chg");
+  if (!set || !set.has(path)) { if (have) have.remove(); return; }
+  if (have) return;
+  const dot = document.createElement("span");
+  dot.className = "ft-chg";
+  dot.textContent = "\u25CF";
+  dot.title = "changed by the agent";
+  const name = row.querySelector(":scope > .ft-name");
+  if (name) name.after(dot); else row.append(dot);
+}
+function ftPaintChanged(set) {
+  if (!ftTreeEl) return;
+  for (const row of ftTreeEl.querySelectorAll(".ft-node")) {
+    const p = ftRowPaths.get(row);
+    if (p) ftMarkRow(row, p, set);
+  }
+}
+
 async function ftRenderDir(path, container, prefix) {
   prefix = prefix || "";
   let data;
   try { data = await api("/api/fs/list?path=" + encodeURIComponent(path)); }
   catch (e) { const d = document.createElement("div"); d.className = "ft-err"; d.textContent = e.message; container.append(d); return; }
+  const chg = typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks() && typeof drawerChangedFor === "function"
+    ? drawerChangedFor(ftRoot()) : null;
   for (let i = 0; i < data.entries.length; i++) {
     const ent = data.entries[i];
     // Indexed, not for..of: a row cannot draw itself without knowing whether it
@@ -163,6 +190,8 @@ async function ftRenderDir(path, container, prefix) {
     more.setAttribute("aria-label", moreLabel);
     more.onclick = (e) => { e.stopPropagation(); openRowMenu(more, full, ent.name, ent.is_dir); };
     row.append(more);
+    ftRowPaths.set(row, full);
+    ftMarkRow(row, full, chg);
     // Appended BEFORE the directory branch, not after it: auto-open below calls
     // row.after(childBox), and ChildNode.after() is a silent no-op while the node
     // has no parent — so an orphaned row would render its restored subtree into a
@@ -247,6 +276,8 @@ async function ftLoadRoot() {
   await ftRenderDir(ftRoot(), box);
   if (gen !== ftGen) return; // a newer root started meanwhile: drop this render
   ftTreeEl.replaceChildren(...box.childNodes);
+  // A refresh asks again what the agent has changed since (Files drawer only).
+  if (typeof drawerLoadChanged === "function" && typeof drawerOwnsFileClicks === "function" && drawerOwnsFileClicks()) drawerLoadChanged(drawerState.sessionId);
 }
 
 // --- row actions -------------------------------------------------------------
