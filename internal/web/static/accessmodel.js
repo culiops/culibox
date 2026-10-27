@@ -241,6 +241,33 @@ function accessModel(o) {
   };
 }
 
+// accReadReply: one status reply as data. 200 is its JSON, 204 is null (no
+// binding); anything else, and a body that is not valid JSON, is undefined
+// ("could not read": the caller keeps what it had). Never throws.
+async function accReadReply(res) {
+  try {
+    if (res.status === 204) return null;
+    if (res.status !== 200) return undefined;
+    return await res.json();
+  } catch (_) { return undefined; }
+}
+
+// accLoadDone: the load state after one read finished. `r` is {aws, egress, ok};
+// a failed read (ok false) keeps the previous data and marks the load failed,
+// and the read is over either way (inflight false), so a bad reply can never
+// block the next one.
+function accLoadDone(prev, r, nowMs) {
+  const p = prev || {};
+  const ok = !!(r && r.ok);
+  return {
+    aws: ok ? r.aws : p.aws === undefined ? null : p.aws,
+    egress: ok ? r.egress : p.egress === undefined ? null : p.egress,
+    at: nowMs, inflight: false,
+    loaded: ok || !!p.loaded,
+    failed: !ok,
+  };
+}
+
 // accEventTime: an event's time cell. The clock alone for today, the date and
 // clock for an earlier day (the list reaches back past midnight).
 const ACC_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -269,5 +296,5 @@ function grantFormState(f) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { accessModel, grantFormState, accEventTime, ACCESS_EVENTS };
+  module.exports = { accessModel, grantFormState, accEventTime, accReadReply, accLoadDone, ACCESS_EVENTS };
 }

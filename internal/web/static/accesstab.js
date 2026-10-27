@@ -65,25 +65,25 @@ function accLoad(sid, force) {
   const s = lastSessions.find((x) => x.id === sid);
   if (!s) return;
   d.inflight = true;
-  const get = (tail) => fetch("/api/sessions/" + encodeURIComponent(sid) + tail)
-    .then((res) => (res.status === 200 ? res.json() : res.status === 204 ? null : undefined), () => undefined);
+  const get = (tail) => fetch("/api/sessions/" + encodeURIComponent(sid) + tail).then(accReadReply, () => undefined);
   (async () => {
-    let aws = null;
-    let ok = true;
-    if (accBound(s)) {
-      aws = await get("/aws");
-      if (aws === undefined) { ok = false; aws = d.aws; }
-    }
-    let egress = null;
-    if (ok && !aws && s.egress) {
-      egress = await get("/egress");
-      if (egress === undefined) { ok = false; egress = d.egress; }
-    }
-    d.aws = aws;
-    d.egress = egress;
-    d.at = Date.now();
-    d.inflight = false;
-    if (ok) { d.loaded = true; d.failed = false; } else if (!d.loaded) d.failed = true;
+    let r = { ok: false };
+    try {
+      let aws = null;
+      let ok = true;
+      if (accBound(s)) {
+        aws = await get("/aws");
+        if (aws === undefined) ok = false;
+      }
+      let egress = null;
+      if (ok && !aws && s.egress) {
+        egress = await get("/egress");
+        if (egress === undefined) ok = false;
+      }
+      r = { ok, aws, egress };
+    } catch (_) { r = { ok: false }; }
+    // Whatever happened, the read is over: inflight is reset by accLoadDone.
+    Object.assign(d, accLoadDone(d, r, Date.now()));
     const v = accViews.get(sid);
     if (v) v(false);
   })();

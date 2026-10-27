@@ -306,3 +306,26 @@ test("accesstab.js writes operator and server text with textContent only", () =>
   const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/accesstab.js"), "utf8");
   assert.doesNotMatch(src.replace(/\/\/.*$/gm, ""), /innerHTML|outerHTML|insertAdjacentHTML|document\.write/);
 });
+
+// --- the load path is total ---------------------------------------------------
+
+test("accReadReply: 200 is the JSON, 204 is null, anything else or a bad body is undefined, never a throw", async () => {
+  const { accReadReply } = require("../static/accessmodel.js");
+  const res = (status, json) => ({ status, json: json || (async () => { throw new SyntaxError("Unexpected token"); }) });
+  assert.deepStrictEqual(await accReadReply(res(200, async () => ({ a: 1 }))), { a: 1 });
+  assert.strictEqual(await accReadReply(res(204)), null);
+  assert.strictEqual(await accReadReply(res(500)), undefined);
+  assert.strictEqual(await accReadReply(res(200)), undefined, "a 200 whose body is not JSON");
+  assert.strictEqual(await accReadReply({ status: 200, json() { throw new Error("sync"); } }), undefined);
+});
+
+test("accLoadDone: a failed read ends the read, keeps the old data and marks the load failed", () => {
+  const { accLoadDone } = require("../static/accessmodel.js");
+  const prev = { aws: { stats: 1 }, egress: null, at: 1, inflight: true, loaded: true, failed: false };
+  const bad = accLoadDone(prev, { ok: false }, 99);
+  assert.deepStrictEqual(bad, { aws: { stats: 1 }, egress: null, at: 99, inflight: false, loaded: true, failed: true });
+  const good = accLoadDone(bad, { ok: true, aws: null, egress: { egress: {} } }, 100);
+  assert.deepStrictEqual([good.aws, good.inflight, good.loaded, good.failed], [null, false, true, false]);
+  const first = accLoadDone({ inflight: true }, { ok: false }, 5);
+  assert.deepStrictEqual([first.aws, first.inflight, first.loaded, first.failed], [null, false, false, true]);
+});
