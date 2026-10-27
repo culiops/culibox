@@ -525,6 +525,8 @@ type Info struct {
 	Activity string `json:"activity"`
 	Name     string `json:"name"`              // mutable display label (id is the stable key)
 	Runtime  string `json:"runtime,omitempty"` // box | host
+	// ParentID is the session this one is a companion shell of ("" = top-level).
+	ParentID string `json:"parent_id,omitempty"`
 	// Options are the per-spawn option overrides this session started with
 	// (bools and enum choices — never secrets). Duplicate pre-fills from them.
 	Options map[string]any `json:"options,omitempty"`
@@ -609,6 +611,9 @@ type Session struct {
 	Runtime string // box | host; immutable for the session's lifetime
 	Box     string // container name for a boxed session; "" on the host tier
 	Bin     string // resolved agent binary (for claude-only features like usage)
+	// ParentID is the session this is a companion shell of. Set before
+	// publication and never mutated, so read without a lock.
+	ParentID string
 	// Account is the agent account the session runs under ("" = default).
 	// ConfigDir is that account's config dir, set only for a host-tier session
 	// under a non-default account: a boxed session's config lives in its box,
@@ -1037,7 +1042,7 @@ func (s *Session) Info() Info {
 	if s.status != statusDetached {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
-	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
+	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, ParentID: s.ParentID, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
 	switch {
 	case s.EgressNonce != "" && s.Bindings().Any():
 		in.Egress = "allowlist"
@@ -2051,6 +2056,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.replyable = replyable
 	sess.submitted = submitted
 	sess.options = opts
+	sess.ParentID = spec.ParentID
 	m.sessions[id] = sess
 	sc := m.sidecar
 	m.mu.Unlock()
@@ -2060,7 +2066,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
-			BaseAccess: maps.Clone(baseAccess)})
+			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -2786,6 +2792,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// on restores the operator's opt-ins.
 	sess.replyable = md.Replyable && m.repliesOn
 	sess.options = md.Options
+	sess.ParentID = md.ParentID
 	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
 		sess.claudeSessionID = md.ClaudeSessionID
 	}

@@ -95,6 +95,9 @@ type sessionMeta struct {
 	// legacy binding, else the connection name), updated by a re-probe.
 	// Records from before the probe lack it: every key reads "not checked".
 	BaseAccess map[string]awsprobe.Result `json:"base_access,omitempty"`
+	// ParentID is the session this one is a companion shell of; empty for a
+	// top-level session. Written once at spawn, restored by Reconcile.
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 // sidecar is a tiny JSON store (id -> sessionMeta) written atomically. It carries

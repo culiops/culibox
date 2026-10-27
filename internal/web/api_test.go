@@ -45,6 +45,7 @@ type mockSvc struct {
 
 	spawnedPrompt    string
 	spawnedReplyable *bool
+	spawnedParentID  string
 	interruptID      string
 	interruptErr     error
 	answerID         string
@@ -66,6 +67,7 @@ func (m *mockSvc) Spawn(s launcher.SpawnSpec) (session.Info, error) {
 	m.spawnedLogin = s.Login
 	m.spawnedPrompt = s.Prompt
 	m.spawnedReplyable = s.Replyable
+	m.spawnedParentID = s.ParentID
 	if m.spawnErr != nil {
 		return session.Info{}, m.spawnErr
 	}
@@ -1163,5 +1165,21 @@ func TestSpawnErrStoreLocked(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "DB_PASSWORD") {
 		t.Fatal("the secret name leaked into the response")
+	}
+}
+
+// parent_id is set only by the cookie-only shell endpoint. A spawn body that
+// names one (an agent forging nesting through the PAT path) is ignored.
+func TestSpawnBodyCannotSetParentID(t *testing.T) {
+	svc := &mockSvc{spawnInfo: session.Info{ID: "x"}}
+	a := &API{Sessions: svc, DefaultCwd: "/tmp"}
+	rec := httptest.NewRecorder()
+	a.handleSessions(rec, httptest.NewRequest("POST", "/api/sessions",
+		strings.NewReader(`{"agent":"bash","parent_id":"p1"}`)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body = %s", rec.Code, rec.Body)
+	}
+	if svc.spawnedParentID != "" {
+		t.Fatalf("spec.ParentID = %q, want empty", svc.spawnedParentID)
 	}
 }
