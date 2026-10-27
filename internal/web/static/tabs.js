@@ -924,8 +924,11 @@ function renderGrid() {
   const grid = document.getElementById("grid");
   const max = currentMaximized();
   grid.className = "cols-" + gridCols() + (max ? " maximized" : "");
-  const show = max ? [max] : cells;
-  grid.replaceChildren(...show.map((c) => c.el));
+  // Desktop with no tab anywhere: the empty state stands in for the panes.
+  const empty = typeof desktopEmptyState === "function" ? desktopEmptyState() : null;
+  if (empty) grid.classList.add("empty");
+  const show = empty ? [] : max ? [max] : cells;
+  grid.replaceChildren(...(empty ? [empty] : show.map((c) => c.el)));
   // `show`, not `cells`: with a pane maximized the others are NOT in the
   // document, and the renderBar sweep on the next line is a trap to copy —
   // restoring scroll on a detached element is a silent no-op.

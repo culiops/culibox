@@ -142,6 +142,10 @@ $("steer-toggle").onclick = toggleSteerRail;
 // Declared up here, before boot builds the first cells: tabs.js reads it while
 // painting a header, and a `let` read before its line throws.
 let drawerState = { open: null, sessionId: null };
+// The key of the empty state the grid shows now ("" when it shows panes), so a
+// poll repaints it only when what it says changed. Declared up here for the
+// same reason as drawerState: renderGrid reads it while boot builds the cells.
+let emptyShownKey = "";
 // node -> { parent, next }: where a moved node came from. Filled on the first
 // move only, emptied by restoreDrawerNodes.
 const drawerOrigins = new Map();
@@ -2792,6 +2796,7 @@ async function refreshSessions() {
   }
   lastSessions = sessions || [];
   sessionsLoaded = true;
+  refreshEmptyState();
   // The focused session's account can only be known once the list is here.
   syncRateLimitsAccount();
   // A card's expanded state (and its cached full text) belongs to it needing
@@ -2939,6 +2944,7 @@ async function loadProfiles(retry = true) {
     renderProfileSeg();
     renderOptions();
     renderProfileList();
+    refreshEmptyState();
     return true;
   } catch (_) {
     if (retry) setTimeout(() => loadProfiles(false), 2000);
@@ -4350,6 +4356,7 @@ async function spawnSession(req, opts) {
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
     }));
   } catch (_) {}
+  writeRecent(localStorage, pushRecentProfile(readRecent(localStorage), req.agent));
   await refreshSessions();
   openTerminal(s.id, s.name);
   if (opts.toast !== false) {
@@ -4564,6 +4571,125 @@ async function openSpawnDialog(preselectAgent, prefill) {
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
+}
+
+// --- desktop empty states (spec 5.9) -----------------------------------------
+// What the pane area says when no pane has a tab: "none" (sessions exist; the
+// recent profiles to start from) or "first" (a fresh install: three steps).
+// Everything profile- or path-derived goes in through textContent.
+function emptyStateInput() {
+  return {
+    sessions: sessionsLoaded ? lastSessions : null,
+    profiles: profilesLoaded ? profiles : null,
+    recent: readRecent(localStorage),
+  };
+}
+
+// The "touches" line of a recent profile in S1: binary · tier · default
+// workspace. /api/profiles carries no binary today, only `claude`.
+function profileTouches(p) {
+  const bin = p.bin || (p.claude ? "claude" : "");
+  return [bin, p.runtime, p.default_cwd ? shortPath(p.default_cwd) : ""].filter(Boolean).join(" \u00b7 ");
+}
+
+function emptyEl(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function emptyKbd(text) { return emptyEl("span", "empst-kbd", text); }
+
+function emptyHint() {
+  const hint = emptyEl("div", "empst-hint");
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  const pal = emptyEl("span");
+  for (const k of mac ? ["\u2318", "K"] : ["Ctrl", "Shift", "K"]) pal.append(emptyKbd(k), " ");
+  pal.append("command palette");
+  hint.append(pal, emptyEl("span", "", "All profiles in New session"));
+  return hint;
+}
+
+function emptyNoneEl(m) {
+  const root = emptyEl("div", "placeholder empst");
+  root.append(
+    emptyEl("h1", "empst-title", "No session open"),
+    emptyEl("p", "empst-sub", "Pick a session on the left, or start an agent from a profile you used recently."),
+  );
+  if (m.profiles.length) {
+    const rows = emptyEl("div", "empst-rows");
+    for (const name of m.profiles) {
+      const p = profiles.find((x) => x.name === name);
+      if (!p) continue;
+      const row = emptyEl("div", "empst-row");
+      const start = emptyEl("button", "btn", "Start");
+      start.type = "button";
+      start.onclick = () => openSpawnDialog(name);
+      row.append(emptyEl("b", "empst-name", name), start, emptyEl("small", "empst-touch", profileTouches(p)));
+      rows.append(row);
+    }
+    root.append(rows);
+  }
+  root.append(emptyHint());
+  return root;
+}
+
+function emptyFirstEl() {
+  const root = emptyEl("div", "placeholder empst");
+  root.append(
+    emptyEl("h1", "empst-title", "Welcome to Culibox"),
+    emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
+  );
+  const docker = !metaLoaded ? "" : (boxRuntime ? " (found)" : " (not found)");
+  const step = (n, title, desc, label, cls, run) => {
+    const el = emptyEl("div", "empst-step");
+    const btn = emptyEl("button", cls, label);
+    btn.type = "button";
+    btn.onclick = run;
+    el.append(emptyEl("span", "empst-n", String(n)), emptyEl("b", "empst-t", title), btn, emptyEl("small", "empst-d", desc));
+    return el;
+  };
+  const steps = emptyEl("div", "empst-steps");
+  steps.append(
+    step(1, "Start an agent", "Claude Code on this machine, in a folder you choose. Works now.", "New session", "pbtn", () => openSpawnDialog()),
+    // The same press as "+ new profile" in Settings: one profile form. A new
+    // profile already opens on the box tier.
+    step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
+      () => { openSettings("manage"); $("pf-new").click(); }),
+    step(3, "Connect your cloud", "AWS SSO or a GitHub App. Agents get short-lived, read-only credentials.", "Add credentials", "btn",
+      () => openSettings("creds")),
+  );
+  root.append(steps, emptyEl("div", "empst-hint", "Settings \u2192 Profiles \u00b7 Credentials"));
+  return root;
+}
+
+// desktopEmptyState: the node renderGrid shows in place of the panes, or null
+// (mobile, a pane has a tab, or nothing is known yet: the pane's own "Click a
+// session" note then stands in).
+function desktopEmptyState() {
+  emptyShownKey = "";
+  if (!drawerDesktop() || cells.some((c) => c.tabs.length)) return null;
+  const m = emptyStateModel(emptyStateInput());
+  if (!m.kind) return null;
+  emptyShownKey = emptyStateKey(m);
+  return m.kind === "first" ? emptyFirstEl() : emptyNoneEl(m);
+}
+
+function emptyStateKey(m) {
+  return JSON.stringify([m.kind, metaLoaded, !!boxRuntime, m.profiles.map((n) => {
+    const p = profiles.find((x) => x.name === n);
+    return [n, p ? profileTouches(p) : ""];
+  })]);
+}
+
+// refreshEmptyState: the poll, a profile load or the meta answer changed what
+// the empty state should say; repaint only when it did.
+function refreshEmptyState() {
+  if (!drawerDesktop() || cells.some((c) => c.tabs.length)) return;
+  const m = emptyStateModel(emptyStateInput());
+  const key = m.kind ? emptyStateKey(m) : "";
+  if (key !== emptyShownKey) renderGrid();
 }
 
 function initSpawnControl() {
@@ -5277,6 +5403,7 @@ async function currentShellProfile() {
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
   return window.shellProfile;
@@ -5413,6 +5540,7 @@ initMobileShell();
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on

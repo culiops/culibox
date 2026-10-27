@@ -167,7 +167,7 @@ test("emptyStateModel: first run, none open, and recent profiles that still exis
   assert.equal(d.emptyStateModel({ sessions: [working], profiles: builtin, recent: [] }).kind, "none");
   // the real /api/profiles marks a built-in with editable:false
   assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", editable: false }], recent: [] }).kind, "first");
-  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", editable: false }, { name: "mine", editable: true }], recent: [] }).kind, null);
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: [{ name: "claude", editable: false }, { name: "mine", editable: true }], recent: [] }).kind, "none", "custom profiles, no sessions: never a blank pane");
   const r = d.emptyStateModel({ sessions: [working], profiles: [{ name: "claude", editable: false }, { name: "hubs-dev", editable: true }], recent: ["gone", "hubs-dev"] });
   assert.deepEqual(r.profiles, ["hubs-dev"]);
   const many = ["a", "b", "c", "d"].map((name) => ({ name, editable: true }));
@@ -233,11 +233,38 @@ test("a waiting session with no named need has no dangling label", () => {
   assert.equal(d.rowSubline(s).text.startsWith(":"), false);
 });
 
-test("emptyStateModel says nothing until profiles have loaded", () => {
+test("emptyStateModel says nothing about first run until profiles have loaded", () => {
   assert.equal(d.emptyStateModel({ sessions: [], profiles: [], recent: [] }).kind, null);
   assert.equal(d.emptyStateModel({ sessions: [], profiles: null, recent: [] }).kind, null);
   assert.equal(d.emptyStateModel({ sessions: [], profiles: undefined, recent: [] }).kind, null);
-  assert.equal(d.emptyStateModel({ sessions: [working], profiles: [], recent: [] }).kind, null);
+});
+
+test("emptyStateModel with sessions present is \"none\" even while profiles load", () => {
+  for (const profiles of [[], null, undefined]) {
+    const m = d.emptyStateModel({ sessions: [working], profiles, recent: ["a"] });
+    assert.equal(m.kind, "none");
+    assert.deepEqual(m.profiles, [], "no profiles known yet, so no recent rows");
+  }
+});
+
+test("readRecent/writeRecent round-trip in order and never throw", () => {
+  const mem = {};
+  const ok = { getItem: (k) => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); } };
+  assert.deepEqual(d.readRecent(ok), []);
+  d.writeRecent(ok, ["b", "a", "c"]);
+  assert.deepEqual(d.readRecent(ok), ["b", "a", "c"]);
+  assert.ok("agent-box:recentProfiles" in mem);
+  mem["agent-box:recentProfiles"] = "{not json";
+  assert.deepEqual(d.readRecent(ok), []);
+  mem["agent-box:recentProfiles"] = JSON.stringify({ a: 1 });
+  assert.deepEqual(d.readRecent(ok), [], "a non-array is not a list");
+  mem["agent-box:recentProfiles"] = JSON.stringify(["a", 3, "", null, "b"]);
+  assert.deepEqual(d.readRecent(ok), ["a", "b"], "only non-empty strings survive");
+  const bad = { getItem() { throw new Error("denied"); }, setItem() { throw new Error("full"); } };
+  assert.deepEqual(d.readRecent(bad), []);
+  assert.doesNotThrow(() => d.writeRecent(bad, ["a"]));
+  assert.deepEqual(d.readRecent(null), []);
+  assert.doesNotThrow(() => d.writeRecent(null, ["a"]));
 });
 
 test("costTodayRange is today's UTC date for both ends, the convention analytics.js uses", () => {

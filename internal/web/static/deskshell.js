@@ -222,20 +222,22 @@ function deskHash(str) {
 
 // emptyStateModel: which empty state the pane area shows. "first": nothing has
 // ever been set up (no sessions and only built-in profiles, which the server
-// marks editable:false). "none": sessions exist but no pane is open (the caller
-// only asks when that is so). profiles: up to three recently spawned profile
-// names that still exist.
+// marks editable:false). "none": anything else with no pane open (the caller
+// only asks when that is so), including sessions that exist while the profiles
+// are still loading: a blank pane would be worse than "No session open".
+// null only while profiles have not loaded and there are no sessions, so the
+// first-run screen never flashes at someone with custom profiles. profiles: up
+// to three recently spawned profile names that still exist.
 function emptyStateModel({ sessions, profiles, recent }) {
   const ps = Array.isArray(profiles) ? profiles : [];
   const have = new Set(ps.map((p) => p.name));
   const names = (Array.isArray(recent) ? recent : []).filter((n) => have.has(n)).slice(0, DESK_RECENT_MAX);
   const hasSessions = Array.isArray(sessions) && sessions.length > 0;
-  let kind = null;
-  // No profiles means they have not loaded yet: say nothing rather than flash
-  // the first-run screen at someone with custom profiles.
-  if (!ps.length) kind = null;
-  else if (hasSessions) kind = "none";
-  else if (ps.every((p) => p.builtin === true || !p.editable)) kind = "first";
+  let kind = "none";
+  if (!hasSessions) {
+    if (!ps.length) kind = null;
+    else if (ps.every((p) => p.builtin === true || !p.editable)) kind = "first";
+  }
   return { kind, profiles: names };
 }
 
@@ -245,7 +247,26 @@ function pushRecentProfile(list, name) {
   return (name ? [name, ...rest] : rest).slice(0, DESK_RECENT_MAX);
 }
 
+const DESK_RECENT_KEY = "agent-box:recentProfiles";
+
+// readRecent / writeRecent: the recent-profiles list in localStorage. Storage
+// can be absent, full or blocked, and the list is a convenience, so neither
+// ever throws: a bad read is an empty list, a failed write is dropped.
+function readRecent(storage) {
+  try {
+    const v = JSON.parse(storage.getItem(DESK_RECENT_KEY) || "[]");
+    return Array.isArray(v) ? v.filter((n) => typeof n === "string" && n).slice(0, DESK_RECENT_MAX) : [];
+  } catch (_) {
+    return [];
+  }
+}
+function writeRecent(storage, list) {
+  try {
+    storage.setItem(DESK_RECENT_KEY, JSON.stringify(Array.isArray(list) ? list.slice(0, DESK_RECENT_MAX) : []));
+  } catch (_) { /* a convenience, not state */ }
+}
+
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, emptyStateModel, pushRecentProfile };
+    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent };
 }
