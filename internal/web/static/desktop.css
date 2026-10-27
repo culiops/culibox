@@ -746,11 +746,97 @@
 
   /* Recent credential events. */
   .ac-ev { border-top: 1px solid var(--line); overflow-x: auto; }
-  .ac-evrow { display: grid; grid-template-columns: 90px 80px minmax(160px, 1fr) 150px 70px; min-width: 520px; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--line); align-items: start; }
+  .ac-evrow { display: grid; grid-template-columns: 90px 80px minmax(160px, 1fr) 150px 70px; min-width: 520px; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--line); align-items: stretch; }
   .ac-evrow:first-child { border-top: 0; }
   .ac-evhead { padding-top: 8px; padding-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
   .ac-evt { font-variant-numeric: tabular-nums; }
   .ac-evs { min-width: 0; overflow-wrap: anywhere; }
   .ac-evs .ac-sub { font-family: var(--font-ui); }
 
+  /* --- Activity view (spec 5.8; ea-3.png) ------------------------------------ */
+  /* Colour roles: amber = the pending ask only, red = error / refusal / write
+     window, green = status (ok, minted, live). The pane's width, not the
+     window's, decides where the right column goes: .pane-view is the container. */
+  .pane-view[data-view="activity"] { container-type: inline-size; }
+  .act-wrap { display: flex; flex-direction: column; min-width: 0; }
+  .act-main { min-width: 0; }
+  .act-side { display: flex; flex-direction: column; gap: 4px; padding: 4px 16px 18px; min-width: 0; border-top: 1px solid var(--line); }
+  @container (min-width: 1100px) {
+    .act-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: stretch; }
+    .act-side { border-top: 0; border-left: 1px solid var(--line); padding-top: 14px; }
+  }
+  .act-lab { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .act-note { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  .act-note[hidden] { display: none; }
+  .act-lead { padding: 14px 16px 4px; font-size: 13px; }
+  .act-empty { padding: 14px 16px; color: var(--muted); }
+  .act-err { color: var(--danger); font-size: 12px; }
+
+  .act-tiles { display: flex; flex-wrap: wrap; gap: 8px 26px; padding: 14px 16px 12px; border-bottom: 1px solid var(--line); }
+  .act-tile { min-width: 0; }
+  .act-n { font: 700 17px var(--font-ui); color: var(--fg); font-variant-numeric: tabular-nums; }
+  .act-tl { margin-top: 1px; color: var(--muted); font-size: 12px; }
+
+  .act-msg { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .act-msgtxt { color: var(--fg); overflow-wrap: anywhere; white-space: pre-wrap; max-height: 9em; overflow-y: auto; }
+  .act-msgtxt.act-quiet { color: var(--muted); font-style: italic; }
+  .act-msg .rep { display: flex; gap: 6px; }
+  .act-msg .rep .fld { flex: 1; min-width: 0; }
+  .act-msg .peek-why { display: block; margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+  .act-msg .peek-why:empty { display: none; }
+  .act-msgtail:empty { display: none; }
+
+  .act-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 16px; }
+  .act-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+  .act-pill {
+    padding: 2px 11px; font: 500 12px/20px var(--font-ui); color: var(--muted); background: none;
+    border: 1px solid var(--line); border-radius: 999px; cursor: pointer;
+  }
+  .act-pill:hover { color: var(--fg); }
+  .act-pill.on { color: var(--fg); background: var(--raise); border-color: var(--faint); }
+  .act-pill:focus-visible, .act-row:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  .act-live { display: flex; align-items: center; gap: 6px; color: var(--ok); font-size: 12px; }
+  .act-live.stale { color: var(--muted); }
+  .act-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+
+  .act-list { display: flex; flex-direction: column; }
+  .act-row {
+    display: grid; grid-template-columns: 76px 92px minmax(0, 1fr) auto; gap: 12px; align-items: baseline;
+    padding: 7px 16px; cursor: pointer; border-top: 1px solid transparent;
+  }
+  .act-row:hover { background: var(--panel); }
+  .act-row.ask { background: color-mix(in srgb, var(--amber) 9%, var(--bg)); }
+  .act-row.ask .act-kind { color: var(--amber); }
+  .act-row.you { background: var(--panel); border-top-color: var(--line); border-bottom: 1px solid var(--line); margin: 4px 0; }
+  .act-row.you .act-kind { color: var(--accent); }
+  .act-time { color: var(--faint); font: 12px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .act-kind { color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-detail { min-width: 0; font: 12.5px var(--font-mono); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-row.you .act-detail { font-family: var(--font-ui); font-size: 13px; }
+  .act-row.open .act-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
+  .act-out { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .act-ok { color: var(--ok); }
+  .act-amber { color: var(--amber); }
+  .act-muted { color: var(--muted); }
+  .act-add { color: var(--ok); }
+  .act-del { color: var(--danger); }
+  .act-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 16px 16px; }
+  .act-foot:empty { display: none; }
+  .act-foot .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 4px 12px; }
+
+  .act-sec { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+  .act-sech { display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .act-st { flex: 1; min-width: 0; }
+  .act-sech .btn { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 1px 8px; font-size: 11px; text-transform: none; letter-spacing: 0; }
+  .act-tool { display: grid; grid-template-columns: minmax(0, 76px) minmax(0, 1fr) 34px; gap: 10px; align-items: center; font-size: 12.5px; }
+  .act-tname { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .act-tbar { display: block; height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
+  .act-tbar i { display: block; height: 100%; background: var(--accent); }
+  .act-tpct { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .act-ctx { margin: -2px 0 12px; display: flex; flex-direction: column; gap: 5px; }
+  .act-ctxbar { height: 7px; background: var(--raise); border-radius: 2px; overflow: hidden; }
+  .act-ctxbar i { display: block; height: 100%; background: var(--accent); }
+  .act-file { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; font: 12px var(--font-mono); }
+  .act-fpath { min-width: 0; overflow-wrap: anywhere; }
+  .act-fdelta { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
 }
