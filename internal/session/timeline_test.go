@@ -121,10 +121,13 @@ func TestTimelineEditCounts(t *testing.T) {
 	body := strings.Repeat("line\n", 18)
 	tlWrite(t, home, "aaaa-1",
 		tlUse(t, 0, "e1", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "", "new_string": body})+
+			tlResult(t, 1, "e1", false, "ok")+
 			tlUse(t, 10, "w1", "Write", map[string]any{"file_path": "/w/b.go", "content": "1\n2\n3"})+
+			tlResult(t, 11, "w1", false, "ok")+
 			tlUse(t, 20, "m1", "MultiEdit", map[string]any{"file_path": "/w/a.go", "edits": []any{
 				map[string]any{"old_string": "a\nb", "new_string": "c"},
 				map[string]any{"old_string": "d", "new_string": "e\nf\ng"}}})+
+			tlResult(t, 21, "m1", false, "ok")+
 			tlUse(t, 30, "e2", "Edit", map[string]any{"file_path": "/w/c.go", "old_string": "x", "new_string": "y"})+
 			tlResult(t, 40, "e2", true, "String to replace not found"))
 	tl := tlGet(t, m, "s1")
@@ -154,11 +157,42 @@ func TestTimelineEditCounts(t *testing.T) {
 	if f := got["/w/b.go"]; f.Add != 3 || f.Del != 0 {
 		t.Errorf("b.go total = %+v", f)
 	}
-	if f := got["/w/c.go"]; f.Add != 0 || f.Del != 0 {
-		t.Errorf("a failed edit must not count: %+v", f)
+	if _, listed := got["/w/c.go"]; listed {
+		t.Errorf("a failed edit must not list its file: %+v", tl.Files)
 	}
-	if tl.Files[0].Path != "/w/c.go" {
+	if len(tl.Files) != 2 || tl.Files[0].Path != "/w/a.go" {
 		t.Errorf("Files not most-recent first: %+v", tl.Files)
+	}
+}
+
+// A file counts as changed only once its edit has an ok result: an edit still
+// waiting on a permission prompt, a denied one and a failed one changed
+// nothing, so none of them is listed (and none moves summary.files_changed).
+func TestTimelineFilesCountOnlyAppliedEdits(t *testing.T) {
+	m, home := newLocatorManager(t)
+	tlWrite(t, home, "aaaa-1",
+		tlUse(t, 0, "p1", "Edit", map[string]any{"file_path": "/w/pending.go", "old_string": "a", "new_string": "b"})+
+			tlUse(t, 10, "d1", "Write", map[string]any{"file_path": "/w/denied.go", "content": "x\n"})+
+			tlResult(t, 11, "d1", true, "The user doesn't want to proceed with this tool use."+" "+"[Request interrupted]")+
+			tlUse(t, 20, "n1", "NotebookEdit", map[string]any{"notebook_path": "/w/nb.ipynb"})+
+			tlUse(t, 30, "n2", "NotebookEdit", map[string]any{"notebook_path": "/w/nb2.ipynb"})+
+			tlResult(t, 31, "n2", false, "ok"))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Files) != 1 || tl.Files[0].Path != "/w/nb2.ipynb" || tl.Files[0].Add != 0 || tl.Files[0].Del != 0 {
+		t.Fatalf("Files = %+v, want only the applied notebook edit", tl.Files)
+	}
+	if tl.ToolCalls != 4 {
+		t.Errorf("ToolCalls = %d: every call still counts, only Files is gated", tl.ToolCalls)
+	}
+	// The pending edit's result arrives later (the user allowed it).
+	p := m.timelinePath("s1")
+	if p == "" {
+		t.Fatal("no bound path")
+	}
+	tlAppend(t, p, tlResult(t, 50, "p1", false, "ok"))
+	tl = tlGet(t, m, "s1")
+	if len(tl.Files) != 2 || tl.Files[0].Path != "/w/pending.go" {
+		t.Errorf("after the ok result: %+v", tl.Files)
 	}
 }
 
@@ -659,5 +693,99 @@ func TestBoundTranscriptKeepsTheWorktreeFileAfterExit(t *testing.T) {
 	st.mu.Unlock()
 	if l, _ := m.boundTranscript("s1"); l.path == st.path {
 		t.Error("reused a cached path that is not <sid>.jsonl")
+	}
+}
+
+// moveTranscript moves sid's transcript from one project dir to another the
+// way Claude Code's EnterWorktree/ExitWorktree does (same file name, new dir).
+func moveTranscript(t *testing.T, home, fromCwd, toCwd, sid string) {
+	t.Helper()
+	from := filepath.Join(home, ".claude", "projects", projectSlug(fromCwd), sid+".jsonl")
+	toDir := filepath.Join(home, ".claude", "projects", projectSlug(toCwd))
+	if err := os.MkdirAll(toDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(from, filepath.Join(toDir, sid+".jsonl")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// EnterWorktree moves the SAME conversation's transcript to another project
+// dir (and ExitWorktree moves it back): that is not a /clear. Nothing may be
+// read twice, no divider appears, and lines appended afterwards still parse.
+func TestTimelineWorktreeMoveOfTheSameConversationIsNotAClear(t *testing.T) {
+	m, home, main, wt := newWorktreeLocator(t)
+	// Registry cwd is the worktree; the file starts in the spawn dir.
+	writeTxLines(t, home, main, "aaaa-1", time.Now(),
+		strings.TrimSuffix(tlYou(t, 0, "first"), "\n"),
+		strings.TrimSuffix(tlUse(t, 10, "e1", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "a", "new_string": "b\nc"}), "\n"),
+		strings.TrimSuffix(tlResult(t, 20, "e1", false, "ok"), "\n"),
+		strings.TrimSuffix(tlUse(t, 30, "b1", "Bash", map[string]any{"command": "sleep 9"}), "\n"))
+	check := func(stage string, events, calls int, files int) Timeline {
+		t.Helper()
+		tl := tlGet(t, m, "s1")
+		if len(tl.Events) != events || tl.ToolCalls != calls || len(tl.Files) != files {
+			t.Fatalf("%s: events=%d calls=%d files=%d, want %d/%d/%d: %+v", stage, len(tl.Events), tl.ToolCalls, len(tl.Files), events, calls, files, tl.Events)
+		}
+		for _, e := range tl.Events {
+			if e.Kind == "clear" {
+				t.Fatalf("%s: a clear divider appeared: %+v", stage, tl.Events)
+			}
+		}
+		return tl
+	}
+	tl := check("before the move", 3, 2, 1)
+	if tl.Events[0].State != "pending" {
+		t.Fatalf("in-flight row = %+v", tl.Events[0])
+	}
+	if tl.Files[0].Add != 2 || tl.Files[0].Del != 1 {
+		t.Fatalf("file total = %+v", tl.Files[0])
+	}
+
+	moveTranscript(t, home, main, wt, "aaaa-1") // EnterWorktree
+	check("after the move (no growth)", 3, 2, 1)
+	wtFile := filepath.Join(home, ".claude", "projects", projectSlug(wt), "aaaa-1.jsonl")
+	tlAppend(t, wtFile, tlResult(t, 40, "b1", false, "done")+tlUse(t, 50, "b2", "Bash", map[string]any{"command": "ls"}))
+	tl = check("after growth in the worktree", 4, 3, 1)
+	if tl.Events[1].State != "ok" || tl.Events[0].State != "pending" {
+		t.Fatalf("in-flight state lost across the move: %+v", tl.Events)
+	}
+
+	moveTranscript(t, home, wt, main, "aaaa-1") // ExitWorktree: A -> B -> A
+	check("after moving back", 4, 3, 1)
+	tlAppend(t, filepath.Join(home, ".claude", "projects", projectSlug(main), "aaaa-1.jsonl"),
+		tlResult(t, 60, "b2", false, "ok")+tlYou(t, 70, "last"))
+	tl = check("after growth back home", 5, 3, 1)
+	if tl.Events[0].Detail != "last" || tl.Events[1].State != "ok" {
+		t.Fatalf("newest rows = %+v", tl.Events[:2])
+	}
+}
+
+// A moved transcript that is now SHORTER than what was read (rewritten, not
+// just moved) is re-read from the start with the derived state reset: no
+// double counting.
+func TestTimelineWorktreeMoveToASmallerFileResetsInsteadOfAppending(t *testing.T) {
+	m, home, main, wt := newWorktreeLocator(t)
+	writeTxLines(t, home, main, "aaaa-1", time.Now(),
+		strings.TrimSuffix(tlUse(t, 0, "e1", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "a", "new_string": "b"}), "\n"),
+		strings.TrimSuffix(tlResult(t, 1, "e1", false, "ok"), "\n"),
+		strings.TrimSuffix(tlYou(t, 2, "a long enough line to make this file larger than the next one"), "\n"))
+	if tl := tlGet(t, m, "s1"); len(tl.Events) != 2 || tl.ToolCalls != 1 {
+		t.Fatalf("before: %+v", tl)
+	}
+	if err := os.Remove(filepath.Join(home, ".claude", "projects", projectSlug(main), "aaaa-1.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	writeTxLines(t, home, wt, "aaaa-1", time.Now(),
+		strings.TrimSuffix(tlUse(t, 0, "e1", "Edit", map[string]any{"file_path": "/w/a.go", "old_string": "a", "new_string": "b"}), "\n"),
+		strings.TrimSuffix(tlResult(t, 1, "e1", false, "ok"), "\n"))
+	tl := tlGet(t, m, "s1")
+	if len(tl.Events) != 1 || tl.ToolCalls != 1 || len(tl.Files) != 1 || tl.Files[0].Add != 1 {
+		t.Fatalf("after: %+v", tl)
+	}
+	for _, e := range tl.Events {
+		if e.Kind == "clear" {
+			t.Fatalf("a clear divider appeared: %+v", tl.Events)
+		}
 	}
 }

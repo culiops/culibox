@@ -258,6 +258,7 @@ func (st *timelineState) toolUse(ts int64, b *tlBlock) {
 	}
 	ev := TimelineEvent{TS: ts, Kind: "tool", Tool: name, State: "pending"}
 	var path string // set for an edit that changes the file totals
+	var notebook string
 	var add, del int
 	switch name {
 	case "Bash":
@@ -279,7 +280,7 @@ func (st *timelineState) toolUse(ts int64, b *tlBlock) {
 		}
 	case "NotebookEdit":
 		ev.Detail = tlDetail(in.NotebookPath)
-		st.touch(ev.Detail, 0, 0)
+		notebook = ev.Detail
 	case "WebFetch":
 		ev.Detail = tlDetail(in.URL)
 	case "WebSearch":
@@ -291,8 +292,12 @@ func (st *timelineState) toolUse(ts int64, b *tlBlock) {
 	}
 	if path != "" {
 		ev.Add, ev.Del = intp(add), intp(del)
-		st.touch(path, add, del)
+	} else {
+		path = notebook // counted as a changed file, with no line totals
 	}
+	// The file totals are NOT touched here: an edit waiting on a permission
+	// prompt, or one that is denied or fails, changed nothing. toolResult
+	// counts it on an ok result.
 	st.toolCalls++
 	seq := st.add(ev)
 	st.addPending(&pendingTool{id: b.ID, seq: seq, ts: ts, tool: name, path: path, add: add, del: del})
@@ -308,6 +313,9 @@ func (st *timelineState) toolResult(ts int64, b *tlBlock) {
 	if p == nil {
 		return
 	}
+	if !b.IsError && p.path != "" {
+		st.touch(p.path, p.add, p.del) // counted even if its row left the ring
+	}
 	ev := st.at(p.seq)
 	if ev == nil {
 		return
@@ -315,9 +323,6 @@ func (st *timelineState) toolResult(ts int64, b *tlBlock) {
 	ev.State = "ok"
 	if b.IsError {
 		ev.State = "error"
-		if p.path != "" {
-			st.untouch(p.path, p.add, p.del)
-		}
 	}
 	if ts >= p.ts {
 		ev.MS = ts - p.ts
@@ -336,13 +341,23 @@ func (st *timelineState) toolResult(ts int64, b *tlBlock) {
 // timelineMaxScanBytes, and feeds every complete line to the parser.
 func (st *timelineState) advance(f *os.File, size int64, path string) {
 	if st.path != path {
-		if st.path != "" {
+		switch {
+		case st.path == "":
+			st.path, st.offset, st.skip = path, 0, false
+		case filepath.Base(st.path) == filepath.Base(path):
+			// The same conversation id under another project dir: Claude
+			// Code's EnterWorktree/ExitWorktree moves the transcript. It is
+			// not a seam, so keep the parse and the offset; a file that is
+			// now shorter is re-read from the start by the size check below,
+			// which resets what was derived rather than appending to it.
+			st.path = path
+		default:
 			// /clear (or a resume) moved the session to a new conversation:
 			// keep what we have and mark the seam.
 			st.abandonPending()
 			st.clearSeq = st.add(TimelineEvent{TS: time.Now().UnixMilli(), Kind: "clear"})
+			st.path, st.offset, st.skip = path, 0, false
 		}
-		st.path, st.offset, st.skip = path, 0, false
 	}
 	if size < st.offset {
 		st.resetContent() // truncated or replaced: start over

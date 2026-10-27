@@ -16,7 +16,7 @@ const timelineFilesMax = 200
 
 // pendingTool is what a tool_use remembers for its tool_result to finish: where
 // its event sits (seq, stable across ring compaction), when it started, and
-// enough of the edit to take it back out of the file totals if it failed. None
+// enough of the edit to add it to the file totals once its result is ok. None
 // of it is ever tool output.
 type pendingTool struct {
 	id       string
@@ -185,14 +185,6 @@ func (st *timelineState) touch(path string, add, del int) {
 	r.Add += add
 	r.Del += del
 	r.tick = st.tick
-}
-
-// untouch takes a failed edit's counts back out.
-func (st *timelineState) untouch(path string, add, del int) {
-	if r := st.files[path]; r != nil {
-		r.Add = max(0, r.Add-add)
-		r.Del = max(0, r.Del-del)
-	}
 }
 
 // fileList is the touched files, most recent first.
