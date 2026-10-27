@@ -18,12 +18,13 @@ function deskDep(name) {
     sessionDot: typeof sessionDot === "function" ? sessionDot : null,
     tierBadge: typeof tierBadge === "function" ? tierBadge : null,
     isElevated: typeof isElevated === "function" ? isElevated : null,
+    minutesLeft: typeof minutesLeft === "function" ? minutesLeft : null,
     awsBadgeParts: typeof awsBadgeParts === "function" ? awsBadgeParts : null,
   };
   if (g[name]) return g[name];
   const mod = { sessionGroups: "./mobileshell.js", needsYou: "./attention.js", cardContent: "./attention.js",
     needLabel: "./attention.js", sessionDot: "./attention.js", tierBadge: "./tier.js",
-    isElevated: "./sessionrow.js", awsBadgeParts: "./sessionrow.js" }[name];
+    isElevated: "./sessionrow.js", minutesLeft: "./sessionrow.js", awsBadgeParts: "./sessionrow.js" }[name];
   return require(mod)[name];
 }
 
@@ -83,10 +84,27 @@ function rowChip(s, nowMs, boxRuntime) {
 // (No idle duration: the session record carries none.)
 function rowSubline(s) {
   if (deskDep("needsYou")(s)) {
-    return { text: deskDep("needLabel")(s) + ": " + deskDep("cardContent")(s).text, amber: true };
+    // A waiting session can have no named need (needLabel ""): no dangling ": ".
+    const why = deskDep("needLabel")(s);
+    const text = deskDep("cardContent")(s).text;
+    return { text: why ? why + ": " + text : text, amber: true };
   }
   const v = s || {};
   return { text: v.summary || deskDep("sessionDot")(v).title || "", amber: false };
+}
+
+// deskWriteChip: the one red chip, "aws <conn> · WRITE · 23m": which connection
+// has a write window open and how long it has left. When several are open it
+// names the count and shows the soonest to lapse, the one that ends first being
+// the one a reader must act on. Only called while sessionElevated.
+function deskWriteChip(s, nowMs, title) {
+  const is = deskDep("isElevated");
+  const conns = Array.isArray(s.aws_connections) ? s.aws_connections : [];
+  let live = conns.filter((c) => is(c, nowMs));
+  if (!live.length && is(s.aws, nowMs)) live = [s.aws];
+  const left = Math.min(...live.map((c) => deskDep("minutesLeft")(c.elevated_until, nowMs)));
+  const who = live.length > 1 ? "\u00d7" + live.length : live[0].label || live[0].name || "";
+  return { text: "aws " + (who ? who + " " : "") + "\u00b7 WRITE \u00b7 " + (left < 1 ? "<1m" : left + "m"), tone: "write", title };
 }
 
 function deskBaseName(p) {
@@ -108,15 +126,19 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   const chips = [];
   const cont = s ? deskContainmentChip(s, boxRuntime) : null;
   if (cont) chips.push(cont);
+  // Only an open write window is red; a read credential is neutral, and
+  // whether it is production stays in the title.
   const parts = s ? deskDep("awsBadgeParts")(s, nowMs) : null;
-  if (parts) {
-    chips.push({ text: parts.label, tone: parts.write ? "write" : parts.prod ? "prod" : "cloud", title: parts.title });
-  } else if (sessionElevated(s, nowMs)) {
-    chips.push({ text: "write", tone: "write", title: "AWS write window open" });
+  if (sessionElevated(s, nowMs)) {
+    chips.push(deskWriteChip(s, nowMs, parts ? parts.title : "AWS write window open"));
+  } else if (parts) {
+    chips.push({ text: parts.label, tone: "cloud", title: parts.title });
   }
   if (narrow) {
+    // One chip at most: the write window if there is one, else containment. A
+    // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, name, chips: w ? [w] : chips.slice(0, 1), model: null, ctx: null };
+    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
@@ -131,7 +153,8 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
 function needStripModel(s) {
   if (!deskDep("needsYou")(s)) return null;
   const c = deskDep("cardContent")(s);
-  return { label: deskDep("needLabel")(s), text: c.text };
+  // A waiting session can have no named need; label it as the row's dot does.
+  return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text };
 }
 
 // emptyStateModel: which empty state the pane area shows. "first": nothing has
@@ -145,7 +168,10 @@ function emptyStateModel({ sessions, profiles, recent }) {
   const names = (Array.isArray(recent) ? recent : []).filter((n) => have.has(n)).slice(0, DESK_RECENT_MAX);
   const hasSessions = Array.isArray(sessions) && sessions.length > 0;
   let kind = null;
-  if (hasSessions) kind = "none";
+  // No profiles means they have not loaded yet: say nothing rather than flash
+  // the first-run screen at someone with custom profiles.
+  if (!ps.length) kind = null;
+  else if (hasSessions) kind = "none";
   else if (ps.every((p) => p.builtin === true || !p.editable)) kind = "first";
   return { kind, profiles: names };
 }

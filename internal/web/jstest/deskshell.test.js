@@ -73,7 +73,7 @@ test("paneHeaderModel: full slots in order for a wide pane", () => {
   const m = d.paneHeaderModel({ tab, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
   assert.equal(m.name, "api");
   assert.deepEqual(m.chips.map((c) => c.tone), ["box", "write"]);
-  assert.equal(m.chips[1].text, "prod");
+  assert.equal(m.chips[1].text, "aws prod \u00b7 WRITE \u00b7 30m");
   assert.equal(m.model, "opus-5");
   assert.equal(m.ctx, "42%");
   assert.ok(m.dot && m.dot.cls);
@@ -140,4 +140,62 @@ test("pushRecentProfile: most recent first, de-duplicated, max three", () => {
   assert.deepEqual(d.pushRecentProfile(["a", "b", "c"], "d"), ["d", "a", "b"]);
   assert.deepEqual(d.pushRecentProfile(null, "a"), ["a"]);
   assert.deepEqual(d.pushRecentProfile(["a"], ""), ["a"]);
+});
+
+const conn = (extra) => ({ name: "dev", label: "dev", account_id: "1", role_arn: "arn:aws:iam::1:role/r", ...extra });
+
+test("write chip carries the connection and the minutes left", () => {
+  const exp = new Date(NOW + 23 * 60000).toISOString();
+  const m = d.paneHeaderModel({ tab: { kind: "terminal" }, session: { ...working, aws_connections: [conn({ elevated_until: exp })] }, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  const c = m.chips.find((x) => x.tone === "write");
+  assert.equal(c.text, "aws dev \u00b7 WRITE \u00b7 23m");
+  assert.ok(c.text.endsWith("\u00b7 WRITE \u00b7 23m"));
+});
+
+test("write chip with several live windows shows the count and the soonest expiry", () => {
+  const soon = new Date(NOW + 5 * 60000).toISOString();
+  const later = new Date(NOW + 40 * 60000).toISOString();
+  const s = { ...working, aws_connections: [conn({ name: "a", elevated_until: later }), conn({ name: "b", elevated_until: soon }), conn({ name: "c" })] };
+  const m = d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.equal(m.chips.find((x) => x.tone === "write").text, "aws \u00d72 \u00b7 WRITE \u00b7 5m");
+});
+
+test("a legacy-only elevated session still gets a timed write chip", () => {
+  const exp = new Date(NOW + 12 * 60000).toISOString();
+  const m = d.paneHeaderModel({ tab: { kind: "terminal" }, session: { ...working, aws: { elevated_until: exp } }, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  assert.equal(m.chips.find((x) => x.tone === "write").text, "aws \u00b7 WRITE \u00b7 12m");
+});
+
+test("a read credential chip is neutral, even for a production connection", () => {
+  const s = { ...working, aws_connections: [conn({ prod: true })] };
+  const m = d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false });
+  const c = m.chips[1];
+  assert.equal(c.tone, "cloud");
+  assert.equal(c.text, "dev");
+  assert.ok(!m.chips.some((x) => x.tone === "prod" || x.tone === "write"));
+});
+
+test("narrow with a read cloud chip keeps containment; with no containment, no chip", () => {
+  const s = { ...working, aws_connections: [conn({})] };
+  const a = d.paneHeaderModel({ tab: { kind: "terminal" }, session: s, nowMs: NOW, boxRuntime: "runc", narrow: true });
+  assert.deepEqual(a.chips.map((c) => c.tone), ["box"]);
+  const b = d.paneHeaderModel({ tab: { kind: "terminal" }, session: { ...s, exited: true }, nowMs: NOW, boxRuntime: "runc", narrow: true });
+  assert.deepEqual(b.chips, [], "a read cloud chip is never surfaced when narrow");
+});
+
+test("a waiting session with no named need has no dangling label", () => {
+  const s = { id: "x", name: "x", activity: "waiting", summary: "Waiting for input." };
+  assert.deepEqual(d.rowSubline({ activity: "waiting" }), { text: "Waiting for input.", amber: true });
+  const strip = d.needStripModel({ activity: "waiting" });
+  assert.equal(strip.label, "waiting for input");
+  assert.ok(strip.label.length > 0);
+  assert.equal(strip.text, "Waiting for input.");
+  assert.equal(d.rowSubline(s).text.startsWith(":"), false);
+});
+
+test("emptyStateModel says nothing until profiles have loaded", () => {
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: [], recent: [] }).kind, null);
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: null, recent: [] }).kind, null);
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: undefined, recent: [] }).kind, null);
+  assert.equal(d.emptyStateModel({ sessions: [working], profiles: [], recent: [] }).kind, null);
 });
