@@ -1440,9 +1440,10 @@ async function restartSession(s) {
     return;
   }
   const ns = await res.json();
+  const wasDocked = !!dockHolding(s.id) && !mobileActive(window.innerWidth); // a docked shell comes back docked
   closeTerminal(s.id);
   await refreshSessions();
-  openTerminal(ns.id, ns.name);
+  if (!(wasDocked && dockShellBesideParent(ns))) openTerminal(ns.id, ns.name);
   const note = restartNotice(ns);
   if (note) showToast(note);
 }
@@ -1842,7 +1843,8 @@ function renderSession(s, opts) {
     return li;
   }
 
-  nm.onclick = () => openTerminal(s.id, s.name);
+  // A nested shell is revealed beside its parent (docked), not opened as a pane.
+  nm.onclick = () => (nested ? revealShell(s.id) : openTerminal(s.id, s.name));
   nm.ondblclick = (e) => { e.stopPropagation(); startRename(li, nm, s); };
 
   if (compact) {
@@ -5409,12 +5411,16 @@ async function killSession(id) {
 }
 
 // --- quick shell -------------------------------------------------------------
-// Spawn the detected shell profile in a cell's working dir, then hand off to the
-// normal openTerminal path so auto-split/cap placement stays in one place.
+// "+ Shell" starts a companion shell of the cell's terminal neighbour through
+// POST /api/sessions/{id}/shell, which takes the directory, tier and parent
+// link from that session server-side (one path for desktop and mobile, so the
+// parent link exists everywhere). placement: "below" | "right" docks it in the
+// pane holding its parent, "own" gives it a pane; mobile opens it as a tab,
+// exactly as before docks existed (shellSpawnRoute).
 // Per-cell (not global) in-flight guard: a double click on one window is ignored,
 // but +sh on another window still works instead of dying silently.
 const shellSpawning = new WeakSet();
-async function spawnShellIn(cell) {
+async function spawnShellIn(cell, placement = "below") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   shellSpawning.add(cell);
   try {
@@ -5423,36 +5429,56 @@ async function spawnShellIn(cell) {
     // can be created after this page loaded.
     const profile = await currentShellProfile();
     if (!profile) { showToast("No shell profile available, check the console log.", { error: true }); return; }
-    const plan = shellSpawnPlan(await resolveCellNeighbour(cell));
+    const neighbour = await resolveCellNeighbour(cell);
+    const plan = shellSpawnPlan(neighbour);
     if (plan.mode === "form") {
       // Nothing to sit beside: there is no context to inherit, so let the user
       // choose one rather than guessing a directory that may not be containable.
       openSpawnDialog(profile);
       return;
     }
-    const cwd = plan.cwd;
-    // Always prefix the label: with no cwd the server would name the session after
-    // default_cwd's basename, which reads exactly like an agent session.
-    const base = cwd.replace(/\/$/, "").split("/").pop();
-    const req = { agent: profile, cwd, name: "sh:" + (base || profile) };
-    if (plan.runtime) req.runtime = plan.runtime; // match the neighbour's tier
-    const s = await api("/api/sessions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
-    });
-    await refreshSessions();
+    const s = await api("/api/sessions/" + encodeURIComponent(neighbour.id) + "/shell", { method: "POST" });
+    await refreshSessions(); // the strip's "shell N" label reads the new list
     // The cell can be destroyed while we await (applyCap collapses windows, a pane
     // can be removed). Attaching to a detached cell would leak a live xterm + socket
     // that is never rendered, so fall back to normal placement instead.
-    if (cells.includes(cell)) setFocusedCell(cell);
-    openTerminal(s.id, s.name);
+    const alive = cells.includes(cell);
+    const route = shellSpawnRoute(placement, mobileActive(window.innerWidth));
+    if (route === "tab" || route === "own") {
+      if (alive) setFocusedCell(cell);
+      openTerminal(s.id, s.name, route === "own" ? { newPane: true } : undefined);
+      return;
+    }
+    // The server answers with the real parent (a shell's own target is
+    // flattened to its parent). No pane holds it (e.g. "+ Shell" in a shell's
+    // own pane whose agent is closed): dock under the pane that asked.
+    if (dockShellBesideParent(s, route)) return;
+    if (!alive) { openTerminal(s.id, s.name); return; }
+    setFocusedCell(cell);
+    cell.dockShell(s.id, s.name);
+    cell.setDockPlacement(route);
   } catch (e) {
+    // 403 / 404 / 409 carry the server's sentence ("parent session has ended").
     showToast("Shell failed: " + e.message, { error: true });
     if (spawnRefusedLocked(e.status, e.code)) refreshStore();
   } finally {
     shellSpawning.delete(cell);
   }
+}
+
+// revealShell(id) shows a companion shell from its sidebar row: activated
+// where it already is (its dock, or a tab), else docked in the pane holding
+// its parent, else the parent is opened first and the shell docked beside it.
+// Mobile opens it like any session (openTerminal undocks a docked one).
+// Every branch reuses an open tab: a second attach would supersede the first.
+function revealShell(id) {
+  const s = lastSessions.find((x) => x.id === id);
+  if (!s) return;
+  const parent = s.parent_id ? lastSessions.find((p) => p.id === s.parent_id) || null : null;
+  const model = { cells: cells.map((c) => ({ tabs: c.tabs, dock: c.dock })) };
+  const plan = revealPlan(model, s.id, parent, mobileActive(window.innerWidth));
+  if (plan === "open-parent") openTerminal(parent.id, parent.name);
+  if (plan === "open" || !dockShellBesideParent(s)) openTerminal(s.id, s.name);
 }
 
 // resolveCellNeighbour falls back to the server when a terminal tab exists but hasn't
@@ -5718,7 +5744,7 @@ setInterval(async () => {
   refreshStore();
 }, 30000);
 
-// Ctrl+Shift+` → new shell in the focused window. Capture phase + stopPropagation
+// Ctrl+Shift+` → + Shell below, in the focused window. Capture phase + stopPropagation
 // for the same reason as the zoom handler below: xterm listens on its textarea and
 // would otherwise swallow the combo while a terminal has focus.
 document.addEventListener("keydown", (e) => {
@@ -5727,7 +5753,7 @@ document.addEventListener("keydown", (e) => {
   if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   e.preventDefault();
   e.stopPropagation();
-  spawnShellIn(focusedCell);
+  spawnShellIn(focusedCell, "below");
 }, true);
 
 // Live zoom the focused pane: Ctrl/Cmd + '='/'+' bigger, '-'/'_' smaller, '0' reset.

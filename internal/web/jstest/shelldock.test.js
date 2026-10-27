@@ -123,6 +123,41 @@ test("placeShell never matches a viewer tab as a parent", () => {
   assert.deepStrictEqual(d.placeShell(m, "s2", "p1"), { action: "own", cellIndex: -1 });
 });
 
+// ---- + Shell routing and the sidebar reveal ----
+test("shellSpawnRoute: below/right dock, own gets a pane, anything else docks below", () => {
+  assert.strictEqual(d.shellSpawnRoute("below", false), "below");
+  assert.strictEqual(d.shellSpawnRoute("right", false), "right");
+  assert.strictEqual(d.shellSpawnRoute("own", false), "own");
+  assert.strictEqual(d.shellSpawnRoute(undefined, false), "below");
+  assert.strictEqual(d.shellSpawnRoute("left", false), "below");
+});
+
+test("shellSpawnRoute: mobile always opens the shell as a tab, whatever was asked", () => {
+  for (const p of ["below", "right", "own", undefined]) assert.strictEqual(d.shellSpawnRoute(p, true), "tab");
+});
+
+test("revealPlan: a shell already open anywhere is only opened (activated) where it is", () => {
+  assert.strictEqual(d.revealPlan(model(), "s1", { id: "p1" }, false), "open");
+  assert.strictEqual(d.revealPlan(model(), "s9", { id: "p1" }, false), "open");
+});
+
+test("revealPlan: a closed shell docks into the pane holding its parent", () => {
+  assert.strictEqual(d.revealPlan(model(), "s2", { id: "p2" }, false), "dock");
+  // An ended parent that is still on screen still takes the dock.
+  assert.strictEqual(d.revealPlan(model(), "s2", { id: "p1", exited: true }, false), "dock");
+});
+
+test("revealPlan: parent not on screen -> open the parent first, unless it has ended", () => {
+  assert.strictEqual(d.revealPlan(model(), "s2", { id: "gone" }, false), "open-parent");
+  assert.strictEqual(d.revealPlan(model(), "s2", { id: "gone", exited: true }, false), "open");
+});
+
+test("revealPlan: no parent, or mobile, opens the shell like any session", () => {
+  assert.strictEqual(d.revealPlan(model(), "s2", null, false), "open");
+  assert.strictEqual(d.revealPlan(model(), "s2", { id: "p2" }, true), "open");
+  assert.strictEqual(d.revealPlan(model(), "s2", { id: "gone" }, true), "open");
+});
+
 // ---- splitter ----
 const rect = { left: 100, top: 50, width: 800, height: 400 }; // right 900, bottom 450
 

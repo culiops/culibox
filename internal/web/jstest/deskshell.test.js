@@ -355,7 +355,7 @@ test("shortcutRows lists the real bindings and ends with the runtime row", () =>
   assert.ok(rows.some((r) => r.keys === "Ctrl+Alt+F" && r.action === "Files drawer"));
   assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+B"), "sidebar toggle");
   assert.ok(rows.some((r) => r.keys === "Ctrl+V" && r.action === "Terminal: paste"));
-  assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+`"), "quick shell");
+  assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+`" && r.action === "+ Shell below"), "quick shell docks below");
   assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "runc" });
   for (const r of rows) assert.ok(r.keys && r.action, "no empty cell");
   assert.ok(!rows.some((r) => /Collapse/.test(r.action)), "there is no sessions collapse on desktop");

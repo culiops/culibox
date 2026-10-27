@@ -109,6 +109,28 @@ function dockRatioFromPointer(placement, rect, x, y) {
   return clampDockRatio(Math.round(r * 1000) / 1000);
 }
 
+// shellSpawnRoute: where "+ Shell" puts the new shell. Desktop docks it
+// "below" (the default, also for anything unknown) or "right" of its parent,
+// or gives it its "own" pane; mobile draws no dock, so there it is a "tab",
+// exactly as before docks existed.
+function shellSpawnRoute(placement, mobile) {
+  if (mobile) return "tab";
+  return placement === "own" ? "own" : dockPlacementOf(placement);
+}
+
+// revealPlan: what a click on a shell's sidebar row does. "open" = the plain
+// openTerminal path (it activates a shell already open, in its dock or tab,
+// and never attaches twice); "dock" = dock it in the pane holding `parent`;
+// "open-parent" = open the parent first, then dock beside it. An ended parent
+// that is not on screen is not reopened just to hang a shell off it.
+function revealPlan(model, shellId, parent, mobile) {
+  if (mobile || !parent) return "open";
+  const at = placeShell(model, shellId, parent.id);
+  if (at.action === "activate") return "open";
+  if (at.action === "dock") return "dock";
+  return parent.exited ? "open" : "open-parent";
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { DOCK_PLACEMENTS, newDock, dockAdd, dockRemove, dockSetPlacement, clampDockRatio, normalizeDock, placeShell, dockRatioFromPointer };
+  module.exports = { DOCK_PLACEMENTS, newDock, dockAdd, dockRemove, dockSetPlacement, clampDockRatio, normalizeDock, placeShell, dockRatioFromPointer, shellSpawnRoute, revealPlan };
 }

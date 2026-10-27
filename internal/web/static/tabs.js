@@ -748,7 +748,7 @@ class Cell {
     this.bar.replaceChildren(...tabs, spacer, ctl);
     // An empty cell used to wear the full +sh / ⛶ / × strip over a black
     // rectangle, which reads as a broken terminal rather than an empty pane.
-    // Quick-shell stays reachable from the palette ("New shell here") and
+    // Quick-shell stays reachable from the palette ("+ Shell below") and
     // Ctrl+Shift+`. NOTE: .cell-bar carries an author `display: flex`, so the
     // hidden attribute alone does nothing: see .cell-bar[hidden] in the stylesheet.
     this.bar.hidden = this.tabs.length === 0;
@@ -883,12 +883,13 @@ class Cell {
     side.append(tabs, sep);
     const sh = el("button", "+ Shell");
     sh.className = "ph-shell";
-    sh.title = "New shell beside this session, same directory and tier (Ctrl+Shift+`)";
+    sh.title = "New shell for this session, same directory and tier, docked below by default (Ctrl+Shift+`)";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
     sh.onclick = (e) => {
       e.stopPropagation();
       sh.disabled = true;
-      Promise.resolve(spawnShellIn(this)).finally(() => { sh.disabled = false; });
+      // Joins an open dock where it is: the button never flips Right to Below.
+      Promise.resolve(spawnShellIn(this, this.dock ? this.dock.placement : "below")).finally(() => { sh.disabled = false; });
     };
     side.append(sh);
     // A narrow header keeps ONE control, ⋯, always in the flow: Maximize and
@@ -1570,6 +1571,22 @@ function openTerminal(id, name, opts) {
   renderGrid();
   refreshSessions();
   if (typeof mobileActive === "function" && typeof setMobileScreen === "function" && mobileActive(window.innerWidth)) setMobileScreen("terminal");
+}
+
+// dockShellBesideParent shows shell session `s` ({id, name, parent_id}) beside
+// its parent: docked in the pane that holds the parent, with `placement`
+// ("below"/"right") when given, else that pane's own. A shell already open
+// anywhere is only activated where it is (openTerminal), never attached twice.
+// false, touching nothing, when no pane holds the parent: the caller decides.
+function dockShellBesideParent(s, placement) {
+  const at = placeShell({ cells: cells.map((c) => ({ tabs: c.tabs, dock: c.dock })) }, s.id, s.parent_id || null);
+  if (at.action === "own") return false;
+  if (at.action === "activate") { openTerminal(s.id, s.name); return true; }
+  const c = cells[at.cellIndex];
+  setFocusedCell(c);
+  c.dockShell(s.id, s.name);
+  if (placement) c.setDockPlacement(placement);
+  return true;
 }
 
 // moveToOwnPane moves an already-open terminal tab out of the cell it shares

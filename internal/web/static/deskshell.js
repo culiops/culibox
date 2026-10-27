@@ -307,7 +307,7 @@ function shortcutRows(isMac, boxRuntime) {
     { keys: "Ctrl+Shift+Space", action: "Command palette" },
     { keys: isMac ? "⌘Enter" : "Ctrl+Enter", action: "Palette: open in new pane / insert file path" },
     { keys: alt + "1…9", action: "Jump to session" },
-    { keys: "Ctrl+Shift+`", action: "New shell here" },
+    { keys: "Ctrl+Shift+`", action: "+ Shell below" },
     { keys: isMac ? "⌘B" : "Ctrl+Shift+B", action: "Toggle sidebar / rail" },
     { keys: isMac ? "⌥⌘S" : "Ctrl+Alt+S", action: "Toggle sidebar / rail" },
     { keys: isMac ? "⌥⌘F" : "Ctrl+Alt+F", action: "Files drawer" },

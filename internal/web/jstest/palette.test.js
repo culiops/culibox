@@ -157,3 +157,22 @@ test("paletteShellCommands: mobile keeps the old entries and gets none of the ne
   const ids = paletteShellCommands(false, false, {}).map((c) => c.id);
   assert.deepEqual(ids.sort(), ["steer-rail", "toggle-files"]);
 });
+
+test("paletteShellSpawn: desktop offers + Shell below (the shortcut), right and own pane", () => {
+  const { paletteShellSpawn } = require("../static/palette.js");
+  const asked = [];
+  const cmds = paletteShellSpawn(true, (p) => asked.push(p));
+  assert.deepEqual(cmds.map((c) => c.label), ["+ Shell below", "+ Shell right", "+ Shell in own pane"]);
+  assert.deepEqual(cmds.map((c) => c.hint), ["Ctrl+Shift+`", "", ""]);
+  for (const c of cmds) { assert.equal(c.kind, "new"); c.run(); }
+  assert.deepEqual(asked, ["below", "right", "own"]);
+});
+
+test("paletteShellSpawn: mobile keeps the one v0.2.0 entry", () => {
+  const { paletteShellSpawn } = require("../static/palette.js");
+  const asked = [];
+  const cmds = paletteShellSpawn(false, (p) => asked.push(p));
+  assert.deepEqual(cmds.map((c) => [c.label, c.hint]), [["New shell here", "Ctrl+Shift+`"]]);
+  cmds[0].run();
+  assert.deepEqual(asked, ["below"]);
+});
