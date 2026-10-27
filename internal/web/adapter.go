@@ -41,6 +41,10 @@ func (a ManagerService) UsageFor(id string) (session.Usage, bool) { return a.M.U
 
 func (a ManagerService) PeekFor(id string) (session.Peek, bool) { return a.M.PeekFor(id) }
 
+func (a ManagerService) TimelineFor(id string, beforeMS int64, limit int) (session.Timeline, bool) {
+	return a.M.TimelineFor(id, beforeMS, limit)
+}
+
 func (a ManagerService) BoxOutputDir(id string) (string, bool) { return a.M.BoxOutputDir(id) }
 
 func (a ManagerService) AttributionFor(id string) (session.Attribution, bool) {
@@ -291,4 +295,25 @@ func (a EgressStatusAdapter) EgressStatus(id string) (any, bool) {
 	}
 	es, _ := a.Stats(id)
 	return map[string]any{"egress": map[string]any{"mode": info.Egress, "allowed": es.Allowed, "denied": es.Denied}}, true
+}
+
+// ActivityAuditAdapter serves a session's credential and approval audit rows to
+// the activity timeline. A nil func reads as no rows.
+type ActivityAuditAdapter struct {
+	Credentials func(id string, limit int) ([]broker.Row, error)
+	Approvals   func(id string, limit int) ([]broker.ApprovalRow, error)
+}
+
+func (a ActivityAuditAdapter) ActivityCredentials(id string, limit int) ([]broker.Row, error) {
+	if a.Credentials == nil {
+		return nil, nil
+	}
+	return a.Credentials(id, limit)
+}
+
+func (a ActivityAuditAdapter) ActivityApprovals(id string, limit int) ([]broker.ApprovalRow, error) {
+	if a.Approvals == nil {
+		return nil, nil
+	}
+	return a.Approvals(id, limit)
 }

@@ -700,6 +700,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			status.Grant = es.grantContext
 		}
 		api.AWS = status
+		api.Activity = brokerSvc.Activity
 	}
 	if egressSvc != nil {
 		stopEgress = egressSvc.Stop
