@@ -296,7 +296,7 @@ function drawerTabClosed(id) {
   drawerFollowFocus();
 }
 
-// positionDrawer: below the focused pane's header, over the right of the grid,
+// positionDrawer: below the focused pane's header (and its ask strip), over the right of the grid,
 // min(720px, 62% of the grid) wide (the width is CSS; it needs the grid's px).
 function positionDrawer() {
   const dr = $("drawer");
@@ -309,6 +309,11 @@ function positionDrawer() {
   const cell = currentMaximized() || focusedCell;
   let top = gr.top;
   if (cell && cell.el.isConnected && !cell.bar.hidden) top = cell.bar.getBoundingClientRect().bottom;
+  // The pane's ask strip sits under its header and stays readable (and its
+  // buttons pressable) while a drawer is open, so the drawer starts below it.
+  if (cell && cell.el.isConnected && cell._strip && cell._strip.isConnected && cell._strip.classList.contains("needstrip")) {
+    top = cell._strip.getBoundingClientRect().bottom;
+  }
   dr.style.top = Math.max(0, Math.round(top - lr.top)) + "px";
   dr.style.setProperty("--grid-w", Math.round(gr.width) + "px");
 }
@@ -1666,11 +1671,13 @@ async function toggleCardPeek(s) {
     cardExpanded.delete(s.id);
     cardPeekCache.delete(s.id);
     cardAskSeen.delete(s.id);
+    cells.forEach((c) => c.syncNeeds()); // the desktop strip collapses at once
     await refreshSessions();
     return;
   }
   cardExpanded.add(s.id);
   cardAskSeen.set(s.id, s.ask_full || ""); // what the operator is about to read
+  cells.forEach((c) => c.syncNeeds()); // the desktop strip, showing "Loading…"
   await refreshSessions(); // rebuilds the card now, showing "Loading…"
   let status = 0;
   let payload = null;
@@ -1684,6 +1691,9 @@ async function toggleCardPeek(s) {
   if (!cardExpanded.has(s.id)) return; // collapsed again while the fetch was in flight
   const st = peekState(!!s.claude, status, payload);
   cardPeekCache.set(s.id, { text: st.text, muted: st.kind !== "text" });
+  // The desktop ask strip draws the cached text; it repaints on the cache
+  // arriving (its key reads cardPeekCache), not on the sidebar row.
+  cells.forEach((c) => c.syncNeeds());
   const li = sessionRowFor(s.id);
   const txt = li && li.querySelector(".nbody .peektxt");
   if (!txt) return; // the row moved on (e.g. stopped waiting) before this landed
@@ -1957,12 +1967,33 @@ function buildCardComposer(s) {
 // cardContent). It shares its composer with togglePeek's inline reply panel
 // via buildReplyComposer — see that function's own comment for what differs
 // between the two callers.
-function renderNeedsBody(s) {
+//
+// opts.strip: the body of the desktop ask strip over a pane (tabs.js
+// buildNeedStrip). Same blocks, same gates and the same sendAnswer; only the
+// wording of two buttons differs ("Yes", not "1 Yes", and "Open terminal"), and
+// the open button also closes a drawer, as the pane header's Terminal tab does.
+function renderNeedsBody(s, opts) {
+  const inStrip = !!(opts && opts.strip);
   const c = cardContent(s);
   // An expired AWS sign-in outranks turn/ask for which card shows.
-  if (c.sso) return renderSSOBody(s, { mobile: false });
+  if (c.sso) return renderSSOBody(s, { mobile: false, strip: inStrip });
   // A locked store: the card is the unlock form (store.js).
-  if (c.unlock) return renderStoreBody(s, { mobile: false });
+  if (c.unlock) {
+    const sb = renderStoreBody(s, { mobile: false });
+    if (inStrip) {
+      // The store card has no Open of its own; the strip always offers one.
+      const sacts = document.createElement("div");
+      sacts.className = "nacts";
+      const sopen = document.createElement("button");
+      sopen.type = "button";
+      sopen.className = "btn";
+      sopen.textContent = "Open terminal";
+      sopen.onclick = () => { closeDrawerFor(s.id); openTerminal(s.id, s.name); };
+      sacts.appendChild(sopen);
+      sb.appendChild(sacts);
+    }
+    return sb;
+  }
   const body = document.createElement("div");
   body.className = "nbody";
   // The text block doubles as the expand/collapse control — the sidebar's old
@@ -1983,6 +2014,12 @@ function renderNeedsBody(s) {
     const cached = cardPeekCache.get(s.id);
     txt.textContent = cached ? cached.text : "Loading…";
     txt.classList.toggle("muted", !!(cached && cached.muted));
+    // A pending tool call has no message to fetch, so the peek says "No message
+    // yet." The strip's job there is the whole command, wrapped, not that note.
+    if (inStrip && c.ask && cached && cached.muted) {
+      txt.textContent = c.text;
+      txt.classList.remove("muted");
+    }
   } else {
     txt.textContent = c.text;
   }
@@ -2046,7 +2083,7 @@ function renderNeedsBody(s) {
     // disable BOTH synchronously (before the await inside sendAnswer), or the
     // sibling stays clickable for the whole round trip and silently no-ops
     // through the pendingAnswers latch instead of visibly going inert.
-    const pair = [["yes", "1 Yes"], ["no", "No"]].map(([choice, label]) => {
+    const pair = [["yes", inStrip ? "Yes" : "1 Yes"], ["no", "No"]].map(([choice, label]) => {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "btn";
@@ -2068,9 +2105,12 @@ function renderNeedsBody(s) {
   }
   const open = document.createElement("button");
   open.type = "button";
-  open.className = c.ask ? "btn pri" : "btn";
-  open.textContent = c.ask ? "Open to answer" : "Open";
-  open.onclick = () => openTerminal(s.id, s.name);
+  open.className = c.ask && !inStrip ? "btn pri" : "btn";
+  open.textContent = inStrip ? "Open terminal" : c.ask ? "Open to answer" : "Open";
+  open.onclick = () => {
+    if (inStrip) closeDrawerFor(s.id); // "show me the agent": no drawer over it
+    openTerminal(s.id, s.name);
+  };
   acts.appendChild(open);
   body.appendChild(acts);
   if (ans.note) {
@@ -2417,6 +2457,7 @@ function ssoNote(text) {
 // when ssoCard says it is trusted, and its href is set as a property.
 function renderSSOBody(s, opts) {
   const mobile = !!(opts && opts.mobile);
+  const inStrip = !!(opts && opts.strip); // the desktop ask strip (tabs.js buildNeedStrip)
   ensureSSOStatus(s.id);
   const m = ssoModel(s);
   const body = document.createElement("div");
@@ -2486,8 +2527,11 @@ function renderSSOBody(s, opts) {
     const open = document.createElement("button");
     open.type = "button";
     open.className = "btn";
-    open.textContent = "Open";
-    open.onclick = () => openTerminal(s.id, s.name);
+    open.textContent = inStrip ? "Open terminal" : "Open";
+    open.onclick = () => {
+      if (inStrip) closeDrawerFor(s.id);
+      openTerminal(s.id, s.name);
+    };
     acts.appendChild(open);
   }
   body.appendChild(acts);

@@ -189,6 +189,37 @@ function needStripModel(s) {
   return { label: deskDep("needLabel")(s) || deskDep("sessionDot")(s).title || "waiting", text: c.text };
 }
 
+// stripLabel: the strip's visible label. An ask reads "Asks to run" (spec 5.3);
+// the other needs keep needStripModel's own words.
+function stripLabel(label) {
+  if (label === "asks") return "Asks to run";
+  return label || "waiting";
+}
+
+// stripKey: the repaint key of a pane's ask strip. It moves with everything the
+// strip paints from the session (ask text, need, the full command, replyability,
+// the sentence an SSO or turn need shows) and with the replies kill-switch, and
+// NOT with the pane's active tab kind: a viewer tab becoming active must leave an
+// expanded strip, or a half-typed reply, alone. "" when there is nothing to show.
+function stripKey(s, activeKind, repliesEnabled) {
+  void activeKind; // part of the signature on purpose: it must NOT matter
+  if (!s) return "";
+  return JSON.stringify([
+    s.id, s.need || "", s.activity || "", s.ask || "", deskHash(s.ask_full), s.summary || "",
+    !!s.replyable, !!s.claude, repliesEnabled === true,
+    s.aws ? JSON.stringify(s.aws) : "", JSON.stringify(s.aws_connections || null),
+  ]);
+}
+
+// deskHash: a cheap 32-bit string hash (FNV-1a) for keys; not for security. The
+// answer guard is the sha256 sendAnswer sends.
+function deskHash(str) {
+  const t = String(str == null ? "" : str);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  return t.length + ":" + h.toString(16);
+}
+
 // emptyStateModel: which empty state the pane area shows. "first": nothing has
 // ever been set up (no sessions and only built-in profiles, which the server
 // marks editable:false). "none": sessions exist but no pane is open (the caller
@@ -216,5 +247,5 @@ function pushRecentProfile(list, name) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, drawerFor, needStripModel, emptyStateModel, pushRecentProfile };
+    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, emptyStateModel, pushRecentProfile };
 }

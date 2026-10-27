@@ -521,6 +521,8 @@ class Cell {
   // every render — it holds a text field, and rebuilding it under a typing
   // operator drops the caret.
   syncNeeds() {
+    // Desktop: the ask strip under the pane header (spec 5.3), on every tab.
+    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncStrip(); return; }
     const t = this.activeTab;
     // The tab's activity is fed through needsYou (app.js refreshSessions), so this
     // frames a session with an expired AWS sign-in as well as a waiting one.
@@ -540,6 +542,33 @@ class Cell {
     }
   }
 
+  // syncStrip paints the desktop ask strip: `div.needstrip` directly under
+  // .cell-bar, for the pane's SESSION (its terminal tab, even while a viewer tab
+  // is active, so the strip stays when Files is open). It is rebuilt only when
+  // its key moves, never per poll or per tab switch: an expanded strip, a
+  // half-typed reply and an SSO form all live in it.
+  syncStrip() {
+    const term = cellTerminal(this);
+    const s = term ? (lastSessions || []).find((x) => x.id === term.id) || null : null;
+    const model = s ? needStripModel(s) : null;
+    this.el.classList.toggle("needs", !!model);
+    // The page-local inputs the body reads beyond the session record (the same
+    // list rowLocal feeds rowSig), so a flow moving on or the full text
+    // arriving repaints it. The active tab kind is deliberately absent.
+    const local = model ? [cardExpanded.has(s.id), cardPeekCache.has(s.id), pendingAnswers.has(s.id),
+      pendingSends.has(s.id), ssoLocalSig(s.id)].join("|") : "";
+    const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local : "";
+    if (key === this._needsKey) return;
+    this._needsKey = key;
+    if (this._strip) { this._strip._dispose?.(); this._strip.remove(); this._strip = null; }
+    if (model) {
+      this._strip = buildNeedStrip(s, model, () => positionDrawer());
+      this.bar.after(this._strip);
+    }
+    // The drawer hangs below the strip too (positionDrawer), so it moves with it.
+    if (typeof positionDrawer === "function") positionDrawer();
+  }
+
   // repaintReply refreshes the answer strip's disabled/.off/title state in
   // place, if this pane currently has one — otherwise a no-op. Driven once
   // per poll from refreshSessions (app.js), because syncNeeds only rebuilds
@@ -554,13 +583,47 @@ class Cell {
   // which only sets disabled/class/title on existing elements. A caret
   // mid-reply is untouched.
   repaintReply() {
+    // Desktop: the poll may have changed what the strip shows (the ask, the
+    // need, replies on/off); syncStrip rebuilds only when its key moved.
+    if (typeof mobileActive === "function" && !mobileActive(window.innerWidth)) { this.syncStrip(); return; }
     this._strip?._paint();
   }
 
   dispose() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
+    if (this._strip) this._strip._dispose?.();
     this.tabs.forEach((t) => t.dispose?.());
   }
+}
+
+// buildNeedStrip: the desktop ask strip (spec 5.3). The amber label, then
+// renderNeedsBody's blocks (app.js): the one-line mono text (click expands it to
+// the full message), Yes/No and the composer ONLY when replies are on and the
+// session is replyable, and Open terminal. D24: with replies off that is the
+// whole strip. Every string in it is agent-controlled and goes in through
+// textContent (renderNeedsBody and the label here); nothing is parsed as HTML.
+// An SSO or store-locked session shows its own sign-in / unlock body instead of
+// the ask text (cardContent decides) and gets the .rich layout.
+// onSize runs when the strip's height changes, so the drawer under it follows.
+function buildNeedStrip(s, model, onSize) {
+  const strip = document.createElement("div");
+  strip.className = "needstrip";
+  strip.dataset.sid = s.id;
+  const c = cardContent(s);
+  const rich = !!(c.sso || c.unlock);
+  if (rich) strip.classList.add("rich");
+  if (cardExpanded.has(s.id)) strip.classList.add("open");
+  const label = document.createElement("span");
+  label.className = "ns-label";
+  label.textContent = stripLabel(model.label);
+  strip.append(label, renderNeedsBody(s, { strip: true }));
+  let ro = null;
+  if (typeof ResizeObserver === "function" && typeof onSize === "function") {
+    ro = new ResizeObserver(() => onSize());
+    ro.observe(strip);
+  }
+  strip._dispose = () => { if (ro) { ro.disconnect(); ro = null; } };
+  return strip;
 }
 
 // buildReplyStrip: the answer strip under a waiting pane. Three quick replies,

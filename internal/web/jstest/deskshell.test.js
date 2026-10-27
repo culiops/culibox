@@ -140,6 +140,27 @@ test("needStripModel: null unless the session needs you", () => {
   assert.equal(t.text, "done, your move");
 });
 
+test("stripLabel: an ask reads Asks to run, other needs keep the model's words", () => {
+  assert.equal(d.stripLabel("asks"), "Asks to run");
+  assert.equal(d.stripLabel("your turn"), "your turn");
+  assert.equal(d.stripLabel("AWS sign-in"), "AWS sign-in");
+  assert.equal(d.stripLabel(""), "waiting");
+});
+
+test("stripKey: stable across tab kinds, moves with the ask, the need and replies", () => {
+  const a = { id: "w", activity: "waiting", need: "ask", ask: "ls", ask_full: "ls -la", replyable: true, claude: true };
+  // Review Focus 3: a viewer tab becoming active must not repaint (and so not
+  // collapse) the strip.
+  assert.equal(d.stripKey(a, "terminal", true), d.stripKey(a, "viewer", true));
+  assert.notEqual(d.stripKey(a, "terminal", true), d.stripKey({ ...a, ask: "rm x" }, "terminal", true));
+  assert.notEqual(d.stripKey(a, "terminal", true), d.stripKey({ ...a, ask_full: "ls -la /" }, "terminal", true));
+  assert.notEqual(d.stripKey(a, "terminal", true), d.stripKey({ ...a, need: "turn" }, "terminal", true));
+  assert.notEqual(d.stripKey(a, "terminal", true), d.stripKey({ ...a, replyable: false }, "terminal", true));
+  assert.notEqual(d.stripKey(a, "terminal", false), d.stripKey(a, "terminal", true));
+  assert.equal(d.stripKey(a, "terminal", true), d.stripKey({ ...a }, "terminal", true), "equal input, equal key");
+  assert.equal(d.stripKey(null, "terminal", true), "", "no session, no strip");
+});
+
 test("emptyStateModel: first run, none open, and recent profiles that still exist", () => {
   const builtin = [{ name: "claude", builtin: true }];
   assert.equal(d.emptyStateModel({ sessions: [], profiles: builtin, recent: [] }).kind, "first");

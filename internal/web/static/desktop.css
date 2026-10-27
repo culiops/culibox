@@ -275,7 +275,9 @@
     content: ""; position: absolute; inset: 0; z-index: 6; pointer-events: none;
     box-shadow: inset 0 0 0 1px var(--accent);
   }
-  .cell.needs.focus::after { inset: 1px; }
+  /* The amber pane frame is gone on desktop: the ask strip under the header
+     carries "this agent needs you" (spec 5.3), and the focus ring stays alone. */
+  .cell.needs::after { content: none; }
 
   /* The tab switcher reuses #session-menu: a row is the tab plus its close. */
   .mi-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
@@ -323,4 +325,48 @@
   #drawer #files-phd #ft-newdir, #drawer #files-phd #ft-refresh, #drawer #files-phd #ft-upload { display: revert; }
   /* The rail: a column of the drawer, not an overlay of its own. */
   #drawer .rail { position: static; flex: 1 1 auto; width: auto; max-width: none; border-left: 0; }
+
+  /* --- the ask strip under a pane header (spec 5.3) ----------------------- */
+  /* Amber label, the command in mono on one line (click to expand), then the
+     actions, right-aligned. renderNeedsBody's .nbody dissolves into this grid
+     (display: contents), so Yes/No/Open terminal share the first line and the
+     composer, the full command and the notes take the rows below. The same
+     wording and gates as the old sidebar card; only the place moved. */
+  .needstrip {
+    flex: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline;
+    gap: 6px 10px; padding: 6px 12px; min-width: 0; font-size: 12px;
+    background: color-mix(in srgb, var(--amber) 9%, var(--bg)); border-bottom: 1px solid var(--line);
+  }
+  .needstrip .nbody { display: contents; }
+  .ns-label { grid-area: 1 / 1; color: var(--amber); font-weight: 600; font-size: 11.5px; white-space: nowrap; }
+  .needstrip .peektxt {
+    grid-area: 1 / 2; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer; font-weight: 400; color: var(--fg);
+  }
+  .needstrip .peektxt.ask { font: 11.5px var(--font-mono); }
+  .needstrip .peektxt.muted { font-style: italic; color: var(--muted); }
+  .needstrip .peektxt:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: var(--r-chip); }
+  .needstrip.open .peektxt { overflow: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .needstrip .nacts { grid-area: 1 / 3; display: flex; flex-wrap: nowrap; gap: 6px; margin: 0; }
+  .needstrip .nacts .btn { padding: 3px 10px; border-radius: var(--r-ctl); background: var(--raise); border: 1px solid var(--line); }
+  .needstrip .nacts .btn:hover { background: var(--background3); }
+  .needstrip .nacts .btn.off { background: var(--raise); }
+  /* The one amber-filled button in the product: Yes (amber = needs-you only). */
+  .needstrip .nacts .btn[data-choice="yes"] { background: var(--amber); border-color: var(--amber); color: #1a1304; font-weight: 600; }
+  .needstrip .nacts .btn[data-choice="yes"].off { opacity: .42; }
+  .needstrip .askfull, .needstrip .rep, .needstrip .peek-why, .needstrip .maskhint { grid-column: 1 / -1; margin: 0; min-width: 0; }
+  .needstrip .askfull {
+    min-width: 0; padding: 6px 8px; font: 11.5px/1.45 var(--font-mono); white-space: pre-wrap; word-break: break-all;
+    background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-chip);
+  }
+  .needstrip .rep { display: flex; gap: 6px; }
+  .needstrip .rep .fld { flex: 1; min-width: 0; }
+  .needstrip .peek-why, .needstrip .maskhint { font-size: 11.5px; color: var(--muted); }
+  /* An expired AWS sign-in or a locked store: the form is the content, so the
+     body keeps its own layout beside the label. */
+  .needstrip.rich { display: flex; align-items: flex-start; }
+  .needstrip.rich .ns-label { padding-top: 2px; }
+  .needstrip.rich .nbody { display: block; flex: 1; min-width: 0; }
+  .needstrip.rich .nacts { margin-top: 8px; flex-wrap: wrap; }
+  .needstrip.rich .ssotxt, .needstrip.rich .storetxt { margin: 0; }
 }
