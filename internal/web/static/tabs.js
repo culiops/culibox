@@ -401,13 +401,14 @@ class Cell {
       const cnt = el("span", "\u25BE \u00B7 " + this.tabs.length);
       cnt.className = "ph-cnt";
       name.append(nm, cnt);
-      name.title = m.name + " (" + this.tabs.length + " tabs in this pane)";
+      name.title = m.name + (s && s.cwd ? " \u00B7 " + s.cwd : "") + " (" + this.tabs.length + " tabs in this pane)";
       name.setAttribute("aria-haspopup", "menu");
       name.onclick = (e) => { e.stopPropagation(); openTabSwitcher(name, this); };
     } else {
       name = el("span", m.name);
       name.className = "ph-name";
-      name.title = m.name;
+      // The focused session's cwd: the one status-bar fact with no other home.
+      name.title = m.name + (s && s.cwd ? " \u00B7 " + s.cwd : "");
     }
     main.append(name);
     // A connection state other than the healthy one is a real signal (the old

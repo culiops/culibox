@@ -418,6 +418,7 @@ function askDialog(opts) {
   document.getElementById("ask-body").textContent = opts.body || "";
   ok.textContent = opts.confirmLabel || "OK";
   d.classList.toggle("danger", !!opts.danger);
+  d.classList.toggle("info", !!opts.info); // read-only: desktop.css hides Cancel
 
   const label = document.getElementById("ask-label");
   label.hidden = input.hidden = !opts.input;

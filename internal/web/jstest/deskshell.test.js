@@ -314,3 +314,30 @@ test("drawerFor switches drawers when a different kind is asked", () => {
 test("drawerFor keeps the drawer open on a different session with the same kind", () => {
   assert.deepEqual(d.drawerFor({ open: "files", sessionId: "a" }, "files", "b"), { open: "files", sessionId: "b" });
 });
+
+test("shortcutRows lists the real bindings and ends with the runtime row", () => {
+  const rows = d.shortcutRows(false, "runc");
+  assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+K" && r.action === "Command palette"));
+  assert.ok(rows.some((r) => r.keys === "Alt+1…9" && r.action === "Jump to session"));
+  assert.ok(rows.some((r) => r.keys === "Ctrl+Alt+F" && r.action === "Files drawer"));
+  assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+B"), "sidebar toggle");
+  assert.ok(rows.some((r) => r.keys === "Ctrl+Shift+`"), "quick shell");
+  assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "runc" });
+  for (const r of rows) assert.ok(r.keys && r.action, "no empty cell");
+});
+
+test("shortcutRows uses the mac symbols and the sysbox label", () => {
+  const rows = d.shortcutRows(true, "sysbox-runc");
+  assert.ok(rows.some((r) => r.keys === "⌘K" && r.action === "Command palette"));
+  assert.ok(rows.some((r) => r.keys === "⌥1…9" && r.action === "Jump to session"));
+  assert.ok(rows.some((r) => r.keys === "⌥⌘F" && r.action === "Files drawer"));
+  assert.ok(rows.some((r) => r.keys === "⌘B"));
+  assert.ok(!rows.some((r) => /Ctrl\+Shift\+K|Ctrl\+Alt/.test(r.keys)), "no non-mac combo for the same action");
+  assert.deepEqual(rows[rows.length - 1], { keys: "Runtime", action: "sysbox" });
+  assert.deepEqual(d.shortcutRows(false, "").slice(-1)[0], { keys: "Runtime", action: "runc" });
+});
+
+test("shortcutText renders one line per row, the runtime row as 'Runtime: x'", () => {
+  const t = d.shortcutText([{ keys: "Ctrl+Shift+K", action: "Command palette" }, { keys: "Runtime", action: "runc" }]);
+  assert.equal(t, "Ctrl+Shift+K  Command palette\n\nRuntime: runc");
+});

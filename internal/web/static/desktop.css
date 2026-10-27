@@ -410,4 +410,9 @@
     font: 11px var(--font-mono); border: 1px solid var(--line); border-bottom-width: 2px;
     border-radius: var(--r-chip); padding: 0 5px; color: var(--muted);
   }
+
+  /* --- keyboard shortcuts dialog (read-only ask dialog) ----------------------- */
+  #ask-modal.info { width: 560px; max-width: 92vw; }
+  #ask-modal.info #ask-cancel { display: none; }
+  #ask-modal.info #ask-body { font: 12px/1.7 var(--font-mono); white-space: pre; overflow-x: auto; }
 }

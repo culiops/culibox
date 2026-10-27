@@ -1053,6 +1053,19 @@ function hintShortcuts() {
     : `${runc} · Ctrl+Shift+K palette · Ctrl+Shift+B sidebar · Alt+1-9 session`;
 }
 
+// showShortcuts: the read-only "Keyboard shortcuts" dialog (palette command,
+// desktop). The rows are built from the same facts the old status bar showed,
+// plus the box runtime; the text goes in through textContent in askDialog.
+function showShortcuts() {
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
+  return askDialog({
+    title: "Keyboard shortcuts",
+    body: shortcutText(shortcutRows(mac, boxRuntime)),
+    confirmLabel: "Close",
+    info: true,
+  });
+}
+
 // updateStatusLine keeps the bottom bar describing the current state. Everything
 // it shows duplicates something already on screen — the env badge, the sessions
 // count, the focused pane. The bar is now a permanent status bar with no dismiss.
@@ -5672,7 +5685,12 @@ document.addEventListener("keydown", (e) => {
   const code = e.code;
   let hit = null;
   if (e.altKey && code === "KeyS") hit = () => togglePane("sessions");
-  else if (e.altKey && code === "KeyF") hit = () => togglePane("files");
+  else if (e.altKey && code === "KeyF") {
+    // Desktop: the tree lives in the Files drawer, so the combo toggles that
+    // for the focused session; mobile keeps the pane collapse.
+    hit = mobileActive(window.innerWidth) ? () => togglePane("files")
+      : () => toggleDrawer("files", (cellTerminal(focusedCell) || {}).id);
+  }
   // Toggle sidebar: ⌘B is free on macOS, but the unshifted Ctrl+B belongs to
   // the shells and TUIs these panes host — backward-char in readline, page-up
   // in vim, tmux's default prefix — so on every other platform the binding
