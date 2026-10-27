@@ -46,7 +46,8 @@ function isNestedShell(s, sessions) {
 // creation time; the session's own name when it is not nested.
 function shellLabel(s, sessions) {
   if (!isNestedShell(s, sessions)) return s ? s.name : "";
-  const idx = shellChildren(sessions).get(s.parent_id).indexOf(s);
+  // By id, not identity: a caller may hold a copy of the row's session.
+  const idx = shellChildren(sessions).get(s.parent_id).findIndex((c) => c.id === s.id);
   return "shell " + (idx + 1);
 }
 

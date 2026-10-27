@@ -1805,9 +1805,20 @@ function renderSession(s, opts) {
   const nm = document.createElement("button");
   nm.type = "button";
   nm.className = "nm";
-  nm.textContent = s.name || s.id;
+  // A companion shell listed under its parent (desktop sidebar only) reads
+  // "↳ shell N". Mobile never passes compact, so its rows are unchanged.
+  const nested = compact && isNestedShell(s, lastSessions);
+  nm.textContent = nested ? shellLabel(s, lastSessions) : (s.name || s.id);
   sname.appendChild(nm);
   grow.appendChild(sname);
+  if (nested) {
+    li.classList.add("nested");
+    const arrow = document.createElement("span");
+    arrow.className = "nest-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "\u21B3"; // ↳
+    li.insertBefore(arrow, adot);
+  }
 
   if (!compact) {
     const smeta = document.createElement("div");
@@ -1944,7 +1955,8 @@ function paintCompactRow(li, sname, grow, s) {
   // No stopPropagation: see the mobile row's note on the document-click closers.
   kb.onclick = () => openSessionMenu(kb, s);
   sname.appendChild(kb); // on the name line, after the chip
-  const sub = rowSubline(s);
+  // A nested shell has no sub-line: it has no summary and no ask to show.
+  const sub = li.classList.contains("nested") ? { text: "" } : rowSubline(s);
   if (sub.text) {
     const d = document.createElement("div");
     d.className = sub.amber ? "sub amber" : "sub";
@@ -2720,6 +2732,8 @@ function rowLocal(s) {
     // The compact row's chip turns "write" when a window opens and back when it
     // lapses, which no session field says by itself.
     elev: sessionElevated(s, Date.now()),
+    // A nested shell's "shell N" depends on its siblings, not on its own record.
+    shellLabel: isNestedShell(s, lastSessions) ? shellLabel(s, lastSessions) : "",
   };
 }
 
@@ -5238,7 +5252,9 @@ function openSessionMenu(anchor, s, extra) {
     b.onclick = () => { closeSessionMenu(false); it.run(); };
     return b;
   });
-  const nodes = own.concat(s ? menuItems(s).map((it) => {
+  // Desktop only: a shell listed under its parent gets the short shell menu.
+  const nestedShell = !!s && !mobileActive(window.innerWidth) && isNestedShell(s, lastSessions);
+  const nodes = own.concat(s ? menuItems(s, { nested: nestedShell }).map((it) => {
     const b = document.createElement("button");
     b.type = "button";
     b.className = it.danger ? "mi dgr" : "mi";

@@ -166,3 +166,13 @@ test("rowSig moves with the AWS connections (badge, SSO flag, write window)", ()
   assert.notStrictEqual(rowSig(Object.assign({}, base, { aws_connections: [{ ...base.aws_connections[0], sso_expired: "corp" }] }), {}), s0);
   assert.notStrictEqual(rowSig(Object.assign({}, base, { aws_connections: [] }), {}), s0);
 });
+
+test("rowSig changes when a shell's label changes, and when its parent does", () => {
+  const sh = { id: "s1", name: "sh", activity: "idle", parent_id: "p" };
+  const s0 = rowSig(sh, { shellLabel: "shell 1" });
+  assert.notStrictEqual(rowSig(sh, { shellLabel: "shell 2" }), s0, "renumbering repaints the row");
+  assert.notStrictEqual(rowSig(sh, { shellLabel: "" }), s0, "un-nesting repaints the row");
+  assert.notStrictEqual(rowSig(Object.assign({}, sh, { parent_id: "q" }), { shellLabel: "shell 1" }), s0, "re-parenting repaints the row");
+  assert.notStrictEqual(rowSig(Object.assign({}, sh, { parent_id: "" }), { shellLabel: "shell 1" }), s0);
+  assert.strictEqual(rowSig(Object.assign({}, sh), { shellLabel: "shell 1" }), s0);
+});

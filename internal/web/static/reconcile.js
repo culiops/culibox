@@ -85,13 +85,14 @@ function reconcileRows(ul, sessions, render, sigOf) {
 // rowSig is the signature of everything a desktop row or needs-you card
 // renders: the session's own fields plus page-local state (`local`) the row
 // reads — a teardown in flight, whether this page holds the terminal, the
-// context %, the tier label, and a reply in flight. A field the row does not
+// context %, the tier label, a reply in flight, and a nested shell's "shell N"
+// label (which moves when a sibling appears or goes). A field the row does not
 // render must NOT be here, or the row re-renders (and drops focus) for nothing.
 function rowSig(s, local) {
   const v = s || {};
   const l = local || {};
   return JSON.stringify([
-    v.id, v.name || "", v.agent || "", v.cwd || "", v.runtime || "",
+    v.id, v.parent_id || "", l.shellLabel || "", v.name || "", v.agent || "", v.cwd || "", v.runtime || "",
     v.activity || "", v.need || "", v.ask || "", v.ask_full || "", v.summary || "",
     !!v.replyable, !!v.attached, !!v.claude, !!v.exited,
     !!l.killing, !!l.heldHere, typeof l.pct === "number" ? l.pct : null,

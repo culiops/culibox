@@ -31,7 +31,12 @@ test("desktop.css is one @media (min-width: 701px) block and nothing else", () =
   }
   assert.strictEqual(depth, 0, "braces must balance");
   assert.deepStrictEqual(zeroAt, [css.length - 1], "depth may return to 0 only at the last character");
-  assert.strictEqual((css.match(/@media/g) || []).length, 1, "no other @media");
+  // The only other @media allowed is one nested (hover: none) rule: the row's
+  // ⋯ stays visible on a touch screen wider than 700px (#12). Nested, so it is
+  // still inside the desktop block (depth check above).
+  const medias = css.match(/@media[^{]*/g) || [];
+  assert.strictEqual(medias.filter((m) => /min-width:\s*701px/.test(m)).length, 1, "one desktop @media");
+  assert.deepStrictEqual(medias.filter((m) => !/min-width:\s*701px/.test(m)).map((m) => m.trim()), ["@media (hover: none)"], "only the nested touch rule");
 });
 
 test("index.html links desktop.css after app.css", () => {

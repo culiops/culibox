@@ -197,6 +197,11 @@
   #sessions .drow:hover .kbtn, #sessions .drow:focus-within .kbtn, #sessions .drow .kbtn:focus-visible {
     width: 20px; opacity: 1;
   }
+  /* Touch screens wider than 700px have no hover, so the ⋯ would never show:
+     keep it visible (#12). Nested in the desktop block on purpose. */
+  @media (hover: none) {
+    #sessions .drow .kbtn { width: 20px; opacity: 1; }
+  }
   #sessions .drow .kbtn:hover { background: var(--line); color: var(--fg); }
   #sessions .drow .kbtn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
   #sessions .drow .nm:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
@@ -205,6 +210,16 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   #sessions .drow .sub.amber { color: var(--amber); }
+  /* A companion shell under its parent (v5-3): "↳ shell N" + the chip, indented,
+     one line, no sub-line. The status dot is the shell's own, smaller than a
+     session's so the row reads as a child. */
+  #sessions .drow.nested { gap: 5px; align-items: flex-start; padding: 3px 8px 4px 18px; }
+  #sessions .drow .nest-arrow {
+    flex: none; width: 9px; font: 400 12px/18px var(--font-ui); color: var(--faint); text-align: center;
+  }
+  #sessions .drow.nested .dot { width: 6px; height: 6px; margin-top: 6px; margin-right: 1px; }
+  #sessions .drow.nested .nm { color: var(--muted); }
+  #sessions .drow.nested.sel .nm, #sessions .drow.nested:hover .nm { color: var(--fg); }
 
   /* --- pane header: one line (spec 5.3) ---------------------------------- */
   /* The old tab strip's bar, re-drawn by Cell.renderHeader. Two columns: the

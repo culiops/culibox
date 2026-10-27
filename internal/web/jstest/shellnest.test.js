@@ -60,3 +60,9 @@ test("shellLabel falls back to the name when the shell is not nested", () => {
   assert.equal(n.shellLabel(sh1, [sh1]), "sh-a");
   assert.equal(n.shellLabel(parent, [parent, sh1]), "agent");
 });
+
+test("shellLabel finds a session by id, so a copy of the row gets the same label", () => {
+  const list = [parent, sh1, sh2];
+  assert.equal(n.shellLabel(Object.assign({}, sh2), list), "shell 2");
+  assert.equal(n.shellLabel(Object.assign({}, sh1), list), "shell 1");
+});
