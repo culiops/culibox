@@ -112,10 +112,13 @@ function dockRatioFromPointer(placement, rect, x, y) {
 // shellSpawnRoute: where "+ Shell" puts the new shell. Desktop docks it
 // "below" (the default, also for anything unknown) or "right" of its parent,
 // or gives it its "own" pane; mobile draws no dock, so there it is a "tab",
-// exactly as before docks existed.
-function shellSpawnRoute(placement, mobile) {
+// exactly as before docks existed. An unlinked shell (`linked` false: the
+// server found nothing alive for it to belong to) has no parent to dock
+// beside, so below/right open it as a plain "tab" in the asking pane.
+function shellSpawnRoute(placement, mobile, linked = true) {
   if (mobile) return "tab";
-  return placement === "own" ? "own" : dockPlacementOf(placement);
+  if (placement === "own") return "own";
+  return linked ? dockPlacementOf(placement) : "tab";
 }
 
 // revealPlan: what a click on a shell's sidebar row does. "open" = the plain

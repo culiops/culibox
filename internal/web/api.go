@@ -199,13 +199,16 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 // handleSpawnShell serves POST /api/sessions/{id}/shell: a quick shell in the
 // parent's working directory and tier, recorded as the parent's companion. The
-// body is ignored, so cwd, tier and parent can only come from the parent
-// itself. This is the only place a session's ParentID is set; it is reachable
-// from the signed-in browser only (never a bearer token, never an agent, which
-// has no cookie), so an agent cannot hide a session under another or have one
-// ended with a parent it chose. Nesting is one level: a shell's target is
-// replaced by its own parent.
-func (a *API) handleSpawnShell(w http.ResponseWriter, r *http.Request, parentID string) {
+// body is ignored, so cwd, tier and parent can only come from the server's own
+// session list. This is the only place a session's ParentID is set; it is
+// reachable from the signed-in browser only (never a bearer token, never an
+// agent, which has no cookie), so an agent cannot hide a session under another
+// or have one ended with a parent it chose. Nesting is one level: a shell's
+// target is replaced by its own parent, but only by one created no later than
+// the shell (a newer one reused a freed id after a restart). When nothing alive
+// is left to belong to (the parent exited or is gone), the shell opens
+// unlinked in the target's own cwd and tier, as "+ Shell" always did.
+func (a *API) handleSpawnShell(w http.ResponseWriter, r *http.Request, targetID string) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -218,17 +221,28 @@ func (a *API) handleSpawnShell(w http.ResponseWriter, r *http.Request, parentID 
 	for _, in := range a.Sessions.List() {
 		byID[in.ID] = in
 	}
-	parent, ok := byID[parentID]
+	target, ok := byID[targetID]
 	if !ok {
 		writeErr(w, http.StatusNotFound, "no such session")
 		return
 	}
-	if parent.ParentID != "" {
-		parent, ok = byID[parent.ParentID]
+	parent, linked := target, true
+	if target.ParentID != "" {
+		p, ok := byID[target.ParentID]
+		// The client's nesting rule, server-side: a parent must be top-level
+		// and no newer than its shell, or the shell is listed as top-level.
+		if ok && p.ParentID == "" && !p.Created.After(target.Created) {
+			parent = p
+		} else {
+			linked = false
+		}
 	}
-	if !ok || parent.Exited {
-		writeErr(w, http.StatusConflict, "parent session has ended")
-		return
+	if parent.Exited {
+		linked = false
+	}
+	spec := launcher.SpawnSpec{Cwd: target.Cwd, Runtime: target.Runtime}
+	if linked {
+		spec = launcher.SpawnSpec{Cwd: parent.Cwd, Runtime: parent.Runtime, ParentID: parent.ID}
 	}
 	shell := ""
 	if a.QuickShell != nil {
@@ -238,10 +252,8 @@ func (a *API) handleSpawnShell(w http.ResponseWriter, r *http.Request, parentID 
 		writeErr(w, http.StatusConflict, "no shell profile")
 		return
 	}
-	info, err := a.Sessions.Spawn(launcher.SpawnSpec{
-		Agent: shell, Cwd: parent.Cwd, Runtime: parent.Runtime,
-		Name: "sh:" + filepath.Base(parent.Cwd), ParentID: parent.ID,
-	})
+	spec.Agent, spec.Name = shell, "sh:"+filepath.Base(spec.Cwd)
+	info, err := a.Sessions.Spawn(spec)
 	if err != nil {
 		writeSpawnErr(w, shell, err)
 		return

@@ -136,6 +136,15 @@ test("shellSpawnRoute: mobile always opens the shell as a tab, whatever was aske
   for (const p of ["below", "right", "own", undefined]) assert.strictEqual(d.shellSpawnRoute(p, true), "tab");
 });
 
+test("shellSpawnRoute: an unlinked shell (nothing alive to belong to) is a plain tab, never docked", () => {
+  assert.strictEqual(d.shellSpawnRoute("below", false, false), "tab");
+  assert.strictEqual(d.shellSpawnRoute("right", false, false), "tab");
+  assert.strictEqual(d.shellSpawnRoute(undefined, false, false), "tab");
+  assert.strictEqual(d.shellSpawnRoute("own", false, false), "own", "an explicit own pane is still honoured");
+  assert.strictEqual(d.shellSpawnRoute("below", true, false), "tab");
+  assert.strictEqual(d.shellSpawnRoute("below", false, true), "below");
+});
+
 test("revealPlan: a shell already open anywhere is only opened (activated) where it is", () => {
   assert.strictEqual(d.revealPlan(model(), "s1", { id: "p1" }, false), "open");
   assert.strictEqual(d.revealPlan(model(), "s9", { id: "p1" }, false), "open");

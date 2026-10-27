@@ -5477,7 +5477,9 @@ async function spawnShellIn(cell, placement = "below") {
     // can be removed). Attaching to a detached cell would leak a live xterm + socket
     // that is never rendered, so fall back to normal placement instead.
     const alive = cells.includes(cell);
-    const route = shellSpawnRoute(placement, mobileActive(window.innerWidth));
+    // No parent_id: the target had ended (or lost its parent), so the server
+    // opened an unlinked shell in its directory. Nothing to dock beside.
+    const route = shellSpawnRoute(placement, mobileActive(window.innerWidth), !!s.parent_id);
     if (route === "tab" || route === "own") {
       if (alive) setFocusedCell(cell);
       openTerminal(s.id, s.name, route === "own" ? { newPane: true } : undefined);
@@ -5493,7 +5495,7 @@ async function spawnShellIn(cell, placement = "below") {
     if (host) host.setDockPlacement(route);
     else if (!terminalTabFor(s.id)) openTerminal(s.id, s.name); // not in the list yet: never leave it unshown
   } catch (e) {
-    // 403 / 404 / 409 carry the server's sentence ("parent session has ended").
+    // 403 / 404 / 409 carry the server's sentence ("no shell profile").
     showToast("Shell failed: " + e.message, { error: true });
     if (spawnRefusedLocked(e.status, e.code)) refreshStore();
   } finally {
@@ -5788,6 +5790,7 @@ document.addEventListener("keydown", (e) => {
   if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   e.preventDefault();
   e.stopPropagation();
+  if (e.repeat) return; // swallowed, but a held key must not start a shell per repeat
   spawnShellIn(focusedCell, "below");
 }, true);
 

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/culiops/agent-box/internal/session"
 )
@@ -71,17 +72,37 @@ func TestShellSpawnUnknownParent(t *testing.T) {
 	}
 }
 
+// "+ Shell" beside a finished agent opens a shell where it worked, as before
+// companion shells existed; with nothing alive to belong to, it is unlinked.
 func TestShellSpawnExitedParent(t *testing.T) {
 	p := liveParent()
 	p.Exited = true
-	svc := &mockSvc{list: []session.Info{p}}
+	svc := &mockSvc{list: []session.Info{p}, spawnInfo: session.Info{ID: "s1"}}
 	rec := httptest.NewRecorder()
 	shellAPI(svc, "sh").handleSession(rec, shellReq("p1", "http://"+host, "", credCookie))
-	if rec.Code != 409 || !strings.Contains(rec.Body.String(), "parent session has ended") {
+	if rec.Code != 201 {
 		t.Fatalf("got %d %s", rec.Code, rec.Body)
 	}
-	if svc.spawnedSpec.Agent != "" {
-		t.Fatalf("spawned under an exited parent")
+	sp := svc.spawnedSpec
+	if sp.Agent != "sh" || sp.Cwd != "/work/proj" || sp.Runtime != "box" || sp.Name != "sh:proj" || sp.ParentID != "" {
+		t.Fatalf("want an unlinked shell in the ended session's cwd and tier, spec = %+v", sp)
+	}
+}
+
+// A live shell whose parent has ended: unlinked, in the shell's own cwd/tier.
+func TestShellSpawnFlattenedParentExited(t *testing.T) {
+	p := liveParent()
+	p.Exited = true
+	child := session.Info{ID: "s1", Cwd: "/work/other", Runtime: "host", ParentID: "p1", Created: p.Created}
+	svc := &mockSvc{list: []session.Info{p, child}, spawnInfo: session.Info{ID: "s2"}}
+	rec := httptest.NewRecorder()
+	shellAPI(svc, "sh").handleSession(rec, shellReq("s1", "http://"+host, "", credCookie))
+	if rec.Code != 201 {
+		t.Fatalf("got %d %s", rec.Code, rec.Body)
+	}
+	sp := svc.spawnedSpec
+	if sp.ParentID != "" || sp.Cwd != "/work/other" || sp.Runtime != "host" || sp.Name != "sh:other" {
+		t.Fatalf("want an unlinked shell in the target's cwd and tier, spec = %+v", sp)
 	}
 }
 
@@ -128,12 +149,51 @@ func TestShellSpawnFlattensToGrandparent(t *testing.T) {
 }
 
 func TestShellSpawnFlattenedParentGone(t *testing.T) {
-	child := session.Info{ID: "s1", Cwd: "/x", ParentID: "gone"}
-	svc := &mockSvc{list: []session.Info{child}}
+	child := session.Info{ID: "s1", Cwd: "/x/orphan", Runtime: "host", ParentID: "gone"}
+	svc := &mockSvc{list: []session.Info{child}, spawnInfo: session.Info{ID: "s2"}}
 	rec := httptest.NewRecorder()
 	shellAPI(svc, "sh").handleSession(rec, shellReq("s1", "http://"+host, "", credCookie))
-	if rec.Code != 409 {
+	if rec.Code != 201 {
 		t.Fatalf("got %d %s", rec.Code, rec.Body)
+	}
+	sp := svc.spawnedSpec
+	if sp.ParentID != "" || sp.Cwd != "/x/orphan" || sp.Runtime != "host" || sp.Name != "sh:orphan" {
+		t.Fatalf("want an unlinked shell in the orphan's cwd and tier, spec = %+v", sp)
+	}
+}
+
+// A "parent" created after its shell is a later session that reused a freed id
+// (ids restart from live sessions after a daemon restart): never flatten onto it.
+func TestShellSpawnFlattenSkipsNewerParent(t *testing.T) {
+	t0 := time.Now()
+	stranger := liveParent()
+	stranger.Created = t0
+	child := session.Info{ID: "s1", Cwd: "/x/orphan", Runtime: "host", ParentID: "p1", Created: t0.Add(-time.Hour)}
+	svc := &mockSvc{list: []session.Info{stranger, child}, spawnInfo: session.Info{ID: "s2"}}
+	rec := httptest.NewRecorder()
+	shellAPI(svc, "sh").handleSession(rec, shellReq("s1", "http://"+host, "", credCookie))
+	if rec.Code != 201 {
+		t.Fatalf("got %d %s", rec.Code, rec.Body)
+	}
+	sp := svc.spawnedSpec
+	if sp.ParentID != "" || sp.Cwd != "/x/orphan" || sp.Runtime != "host" {
+		t.Fatalf("flattened onto a newer session that reused the id: %+v", sp)
+	}
+}
+
+// A hand-made chain (the target's parent is itself a shell) is never followed:
+// the client lists such a target as top-level, so it gets an unlinked shell.
+func TestShellSpawnFlattenStopsAtShellParent(t *testing.T) {
+	mid := session.Info{ID: "s1", Cwd: "/work/proj", Runtime: "box", ParentID: "p1"}
+	target := session.Info{ID: "s2", Cwd: "/x/leaf", Runtime: "host", ParentID: "s1"}
+	svc := &mockSvc{list: []session.Info{liveParent(), mid, target}, spawnInfo: session.Info{ID: "s3"}}
+	rec := httptest.NewRecorder()
+	shellAPI(svc, "sh").handleSession(rec, shellReq("s2", "http://"+host, "", credCookie))
+	if rec.Code != 201 {
+		t.Fatalf("got %d %s", rec.Code, rec.Body)
+	}
+	if sp := svc.spawnedSpec; sp.ParentID != "" || sp.Cwd != "/x/leaf" || sp.Runtime != "host" {
+		t.Fatalf("followed a parent chain: %+v", sp)
 	}
 }
 
