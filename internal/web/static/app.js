@@ -133,12 +133,13 @@ $("steer-toggle").onclick = toggleSteerRail;
 
 // --- desktop pane drawer (spec 5.3/5.4) ---------------------------------------
 // One drawer over the right of the pane grid, below the focused pane's header,
-// showing either the file tree (Files) or the session detail rail (Access). The
-// two are the EXISTING #files-pane and #steer-rail nodes, moved in on first use
-// (a DOM move, not a copy: every listener, the tree's state and the rail's
-// composer travel with them) and put back exactly where they were when the
-// viewport crosses into mobile, whose Files screen expects #files-pane inside
-// #sidebar. drawerFor (deskshell.js) owns the toggle decision.
+// showing the file tree (Files). The tree is the EXISTING #files-pane node,
+// moved in on first use (a DOM move, not a copy: every listener and the tree's
+// state travel with it) and put back exactly where it was when the viewport
+// crosses into mobile, whose Files screen expects #files-pane inside #sidebar.
+// drawerFor (deskshell.js) owns the toggle decision. Activity and Access are
+// not drawers: they are views in the pane body (tabs.js Cell.setView), and the
+// steer rail stays hidden in #layout on desktop.
 //
 // Declared up here, before boot builds the first cells: tabs.js reads it while
 // painting a header, and a `let` read before its line throws.
@@ -166,7 +167,7 @@ function toggleDrawer(kind, sessionId) {
 }
 
 // openDrawer: show `kind` for the session whatever is showing now (menu items,
-// openSteerFor, a press that also moved focus). opts.explicitRoot: an explicit
+// a press that also moved focus). opts.explicitRoot: an explicit
 // "show me this session's files" (the menu's Open files here), which re-roots
 // the tree even if it already follows the session; see drawerRootTree.
 function openDrawer(kind, sessionId, opts) {
@@ -183,7 +184,7 @@ function closeDrawerFor(sessionId, kind) {
   applyDrawer({ open: null, sessionId: drawerState.sessionId });
 }
 
-// headerDrawerPress: a Files/Access press in a pane header. A mouse press on a
+// headerDrawerPress: a Files press in a pane header. A mouse press on a
 // pane that was not focused has already moved focus there, and with it an open
 // drawer (drawerFollowFocus), so toggling would close what the user just asked
 // to see: open instead. A keyboard press moves no focus (e.detail is 0).
@@ -208,7 +209,7 @@ function applyDrawer(next, opts) {
   const body = $("drawer-body");
   if (!dr || !body) return;
   // A dirty buffer in the Files drawer's viewer asks before anything takes it
-  // away (closing, Access, another session); Cancel leaves the drawer as it is.
+  // away (closing, another session); Cancel leaves the drawer as it is.
   // The ask is async, so this call ends here and a confirmed one comes back in.
   if (!(opts && opts.discardOk) && typeof drawerWouldDiscard === "function" && drawerWouldDiscard(drawerState, next)) {
     drawerConfirmLeave().then((ok) => {
@@ -220,27 +221,13 @@ function applyDrawer(next, opts) {
   }
   const prev = drawerState;
   drawerState = next;
-  const rail = $("steer-rail");
   // The tree is the left column of the Files body; the viewer column beside it
   // is filesdrawer.js's.
   if (next.open === "files") moveIntoDrawer($("files-pane"), $("drawer-tree") || body);
-  if (next.open === "access") {
-    moveIntoDrawer(rail, body);
-    // The rail describes the focused terminal (railSession), so bring this
-    // session's tab to the front first if it is open somewhere; never open one.
-    // The pane's terminal, not the keyboard's: a docked shell holding the keys
-    // must not make this re-open the agent and pull focus out of the shell.
-    const t = next.sessionId ? terminalTabFor(next.sessionId) : null;
-    const shown = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
-    if (t && (shown ? shown.id : null) !== t.id) openTerminal(t.id, t.title());
-  }
-  // The rail's hidden attribute stays steerOpen()'s truth.
-  if (rail && rail.parentElement === body) rail.hidden = next.open !== "access";
   dr.dataset.kind = next.open || "";
   dr.hidden = !next.open;
   paintDrawerHead();
   positionDrawer();
-  if (next.open === "access") renderSteerRail();
   if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
   if (typeof drawerFilesApply === "function") drawerFilesApply(prev, next);
   for (const c of cells) paintDrawerTabs(c);
@@ -282,14 +269,15 @@ function paintDrawerHead() {
   const title = $("drawer-title");
   const sess = $("drawer-sess");
   if (!title || !sess) return;
-  title.textContent = drawerState.open === "access" ? "Access" : "Files";
+  title.textContent = "Files";
   const n = drawerSessionName(drawerState.sessionId);
   sess.textContent = n ? "\u00B7 " + n : "";
   sess.title = n;
 }
 
-// paintDrawerTabs: the underline on a pane's Files/Access tab follows the
-// drawer. Classes only, never a rebuild: see drawerFollowFocus.
+// paintDrawerTabs: the underline on a pane's Files tab follows the drawer
+// (the only header tab with data-k; Activity/Access are views, Cell.setView).
+// Classes only, never a rebuild: see drawerFollowFocus.
 function paintDrawerTabs(cell) {
   if (!cell || !cell.bar) return;
   const term = cellTerminal(cell);
@@ -304,8 +292,8 @@ function paintDrawerTabs(cell) {
   }
 }
 
-// drawerFollowFocus: the drawer's tree and rail already follow the focused tab
-// (syncFocusedTree / renderSteerRail), so its session and its header do too.
+// drawerFollowFocus: the drawer's tree already follows the focused tab
+// (syncFocusedTree), so its session and its header do too.
 function drawerFollowFocus() {
   if (!drawerState.open || !drawerDesktop()) return;
   const term = cellTerminal(focusedCell);
@@ -362,30 +350,40 @@ function positionDrawer() {
 // restoreDrawerNodes puts every moved node back exactly where it came from and
 // closes the drawer. Run on the crossing into mobile. The Files viewer is let
 // go too (a dirty one is kept whole for the next desktop drawer: see
-// drawerFilesDetach); no prompt can stop a resize.
+// drawerFilesDetach); no prompt can stop a resize. Every pane goes back to
+// Terminal as well: mobile has no pane views.
 function restoreDrawerNodes() {
   if (typeof drawerFilesDetach === "function") drawerFilesDetach();
   for (const [node, o] of drawerOrigins) {
     if (o.next && o.next.parentNode === o.parent) o.parent.insertBefore(node, o.next);
     else o.parent.appendChild(node);
-    // Closed with the drawer: a rail left unhidden would dock in its old place
-    // the next time the window is wide.
-    if (node.id === "steer-rail") node.hidden = true;
   }
   drawerOrigins.clear();
   drawerState = { open: null, sessionId: null };
   const dr = $("drawer");
   if (dr) { dr.hidden = true; dr.dataset.kind = ""; }
+  for (const c of cells) c.setView("terminal");
 }
 
-// steerViaDrawer is setSteerOpen's desktop route (steerrail.js): the rail never
-// docks on desktop, it opens in the Access drawer for the focused session.
+// steerViaPaneView is setSteerOpen's desktop route (steerrail.js): the rail
+// never docks on desktop; opening it opens the focused pane's Access view
+// (its agent, never a docked shell), closing it returns that pane to Terminal.
 // false on mobile, where setSteerOpen keeps its own behaviour.
-function steerViaDrawer(open) {
+function steerViaPaneView(open) {
   if (!drawerDesktop()) return false;
-  if (open) openDrawer("access", (cellTerminal(focusedCell) || {}).id);
-  else closeDrawerFor(undefined, "access");
+  if (open) { openPaneView(null, "access"); return true; }
+  if (focusedCell && focusedCell.view === "access") focusedCell.setView("terminal");
   return true;
+}
+
+// paintSteerToggle: the ◧ toggle's aria-pressed follows steerOpen(), so on
+// desktop it is pressed while the focused pane shows Access, however the view
+// got there (header tab, palette, sub-line) or left (Terminal, another pane
+// focused). Called from Cell._syncView and setFocusedCell (tabs.js). On mobile
+// steerOpen() is the rail's own state, the same value setSteerOpen writes.
+function paintSteerToggle() {
+  const t = $("steer-toggle");
+  if (t) t.setAttribute("aria-pressed", steerOpen() ? "true" : "false");
 }
 
 $("drawer-x").onclick = () => closeDrawerFor();
@@ -2000,8 +1998,9 @@ function paintCompactRow(li, sname, grow, s) {
     d.className = sub.amber ? "sub amber" : "sub";
     d.textContent = sub.text;
     // The name button is the keyboard path; the sub-line is the same action for
-    // a pointer (spec 7: it replaces the old summary-to-peek click).
-    d.onclick = () => openTerminal(s.id, s.name);
+    // a pointer (spec 7: it replaces the old summary-to-peek click). An SSO
+    // sign-in line opens the session's Access view instead, where sign-in lives.
+    d.onclick = () => { if (sub.view === "access" && openPaneView(s.id, "access")) return; openTerminal(s.id, s.name); };
     grow.appendChild(d);
   }
 }
@@ -2553,12 +2552,14 @@ function ssoNote(text) {
 
 // renderSSOBody builds the SSO card's body for the desktop card and the mobile
 // card (`mobile`: no composer or Open of its own, the mobile card has its own
-// Reply…/Open row). Every server-provided string (the card text, the code, the
-// URL, the command) goes in through textContent; the URL becomes a link only
-// when ssoCard says it is trusted, and its href is set as a property.
+// Reply…/Open row; `bare`: the Access view's card, which has neither either).
+// Every server-provided string (the card text, the code, the URL, the command)
+// goes in through textContent; the URL becomes a link only when ssoCard says it
+// is trusted, and its href is set as a property.
 function renderSSOBody(s, opts) {
   const mobile = !!(opts && opts.mobile);
   const inStrip = !!(opts && opts.strip); // the desktop ask strip (tabs.js buildNeedStrip)
+  const bare = !!(opts && opts.bare); // the Access view's card (accesstab.js): no Open, no reply box
   ensureSSOStatus(s.id);
   const m = ssoModel(s);
   const body = document.createElement("div");
@@ -2624,7 +2625,7 @@ function renderSSOBody(s, opts) {
   });
   acts.appendChild(copy);
 
-  if (!mobile) {
+  if (!mobile && !bare) {
     if (inStrip) acts.appendChild(stripOpenButton(s));
     else {
       const open = document.createElement("button");
@@ -2647,7 +2648,7 @@ function renderSSOBody(s, opts) {
   }
 
   // P8: an SSO card does not take the reply box away from a replyable session.
-  if (!mobile && m.reply) {
+  if (!mobile && !bare && m.reply) {
     const composer = buildCardComposer(s);
     body.appendChild(composer.form);
     composer.refresh();
@@ -2946,6 +2947,8 @@ async function refreshSessions() {
   // immediately before it actually sends, so a stale pending here only ever
   // makes a control look more open than it is, never less closed than reality.
   cells.forEach((c) => c.repaintReply());
+  // An open Activity / Access view repaints from the same list (Cell.updateView).
+  cells.forEach((c) => c.updateView());
   // Same treatment for the steer rail's composer, and for the same reason: it
   // re-gates, it never rebuilds, so a half-typed reply keeps its caret.
   if (typeof repaintSteerRail === "function") repaintSteerRail();
@@ -3076,6 +3079,7 @@ function renderProfileSeg() {
       sel.dispatchEvent(new Event("change"));
     });
   }
+  renderSpawnPlist(); // the desktop dialog's profile list (spawnpanel.js); a no-op on mobile
 }
 // D5 routes the Effort enum into its own slot beside Containment; every other
 // profile option (Model, Bypass permissions) stays in the Advanced group
@@ -3098,12 +3102,16 @@ function renderOptions() {
   const p = currentProfile();
   const opts = (p && p.options) || [];
   const effortRows = [], advRows = [];
+  const deskModelSlot = drawerDesktop();
   for (const o of opts) {
     const row = document.createElement("div");
     row.className = "opt";
     const lbl = document.createElement("label");
     lbl.textContent = o.label || o.key;
     let ctrl;
+    // Desktop: Model sits beside Effort ("Model · effort", spec 5.6) as a select,
+    // which is as narrow as the model name rather than a seg of long names.
+    const deskModel = deskModelSlot && o.key === "model" && o.type !== "bool";
     if (o.type === "bool") {
       ctrl = document.createElement("input");
       ctrl.type = "checkbox";
@@ -3112,7 +3120,7 @@ function renderOptions() {
       ctrl.onchange = () => syncSpawnExtras(false); // the bypass warning reads it
     } else {
       const choices = o.choices || [];
-      if (choices.length > 0 && choices.length <= 5) {
+      if (!deskModel && choices.length > 0 && choices.length <= 5) {
         ctrl = document.createElement("div");
         ctrl.className = "seg";
         buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), o.value || "");
@@ -3134,7 +3142,8 @@ function renderOptions() {
     ctrl.dataset.key = o.key;
     ctrl.dataset.type = o.type;
     row.append(lbl, ctrl);
-    (isEffortOptionKey(o.key) ? effortRows : advRows).push(row);
+    if (deskModel) effortRows.unshift(row);
+    else (isEffortOptionKey(o.key) ? effortRows : advRows).push(row);
   }
   const effortSlot = $("effort-slot"), effortRow = $("effort-row");
   if (effortSlot) effortSlot.replaceChildren(...effortRows);
@@ -3167,6 +3176,7 @@ $("agent").addEventListener("change", () => {
   syncSpawnAccount();
   applyProfileCwd();
   syncSpawnExtras(true);
+  syncSpawnPreview();
 });
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
@@ -4357,11 +4367,20 @@ function swsKeydown(e) {
   if (e.key === "ArrowUp") { e.preventDefault(); swsMove(-1); return; }
   if (e.key === "Escape") { swsClose(); return; }
   if (e.key !== "Enter") return;
+  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl), which asks
+  // spawnHotkeyAction and calls swsEnter itself when the field is not settled:
+  // handling it here too would act twice.
+  if (e.ctrlKey || e.metaKey) return;
   // Prevented unconditionally: this field lives inside the #spawn form, and
   // Enter's default action there is submitting it — the caption's own "↵ to
   // pick" promise would be a lie if Enter here silently spawned the session
   // instead of resolving the field.
   e.preventDefault();
+  swsEnter();
+}
+// swsEnter: what Enter means in the workspace field: pick the highlighted row,
+// else resolve a typed path or take the first row.
+function swsEnter() {
   if (swsActive >= 0) { swsChoose(swsActive); return; }
   const c = classifyPickerQuery(swsInput.value);
   const act = pickerEnterAction(c.mode, swsRows.length);
@@ -4535,6 +4554,7 @@ function paintSpawnAccount(prefillAccount) {
   }));
   sel.value = pick;
   row.hidden = false;
+  syncSpawnPreview(); // the reach box's Account row reads the picked account
 }
 
 // syncSpawnExtras shows the first-message field and the replies toggle only
@@ -4586,6 +4606,7 @@ let spawnPromptDraft = "";
 // refusal (box.ErrUnboxableWorkspace, surfaced by handleSessions in api.go),
 // which still runs regardless of what this function decides to show.
 function updateRuntimeWarning() {
+  syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
   if (segValue(seg) === "host") {
@@ -4630,9 +4651,11 @@ async function openSpawnDialog(preselectAgent, prefill) {
     spawnOpening = false;
   }
   const last = loadLastSpawn();
+  // An explicit profile (palette, Start, Duplicate) is honoured as asked; the
+  // default pick is the last used, never the quick-shell profile.
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent
-    : (last && last.agent && profiles.some((p) => p.name === last.agent) ? last.agent : "");
+    : pickSpawnProfile(profiles, last, window.shellProfile || "");
   if (want) {
     $("agent").value = want;
     renderOptions();
@@ -4648,24 +4671,13 @@ async function openSpawnDialog(preselectAgent, prefill) {
   $("spawn-prompt").value = spawnPromptDraft;
   spawnPromptDraft = "";
   syncSpawnExtras(true);
-  // Fresh open: don't carry a stale pick across dialog sessions. Then, in
-  // priority order — profile default_cwd wins over the last spawn's cwd,
-  // which wins over a sane tier-appropriate default (mirrors the old
-  // <select>'s implicit first-usable-option default, now that nothing does
-  // that automatically for a free-text field):
-  setSwsCwd("");
-  applyProfileCwd(); // sets swsCwd from the profile, if it declares one
-  const profile = currentProfile();
-  if (!swsCwd) {
-    if (last && last.cwd && !(profile && profile.default_cwd)) {
-      // Unlike the old <select>, an unusable-on-this-tier last cwd is no
-      // longer silently dropped — it's restored and the warning below names
-      // why, so choosing box vs. host stays the user's call, not a discard.
-      setSwsCwd(last.cwd);
-    } else {
-      setSwsCwd(defaultWorkspace(workspacesCache, segValue($("runtime-seg"))));
-    }
-  }
+  // Fresh open: don't carry a stale pick across dialog sessions. In priority
+  // order (pickSpawnCwd): the profile's default_cwd, the last spawn's directory
+  // only when that spawn was of THIS profile (another profile's leftover is never
+  // prefilled), then the first workspace usable on the tier. A last cwd that is
+  // unusable on this tier is still restored; the warning below names why, so
+  // choosing box vs. host stays the user's call, not a silent discard.
+  setSwsCwd(pickSpawnCwd({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) }));
   if (prefill) {
     if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
@@ -4673,6 +4685,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   hideSpawnUnlock();
+  spawnPanelOpen();
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
@@ -4806,10 +4819,24 @@ function initSpawnControl() {
   $("spawn-go").onclick = () => openSpawnDialog();
   $("side-new").onclick = () => openSpawnDialog(); // the sidebar top's button: the same flow as "+ new"
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
+  $("spawn-account").addEventListener("change", syncSpawnPreview);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
-  $("spawn-prompt").addEventListener("keydown", (e) => {
-    if (isSubmitHotkey(e, mac)) { e.preventDefault(); $("spawn").requestSubmit(); }
+  const foot = $("spawn-foot-hint");
+  if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";
+  // From any field of the form (it bubbles up from the first message, the name,
+  // the selects). A button keeps its own Enter; the workspace field spawns only
+  // when it shows the directory in use, else the key picks/resolves like Enter.
+  $("spawn").addEventListener("keydown", (e) => {
+    if (!isSubmitHotkey(e, mac)) return;
+    if (e.target && (e.target.tagName === "BUTTON" || (e.target.closest && e.target.closest("#spawn-unlock")))) return;
+    e.preventDefault();
+    if (e.target === $("spawn-ws-input")) {
+      // The field may show text that is not the directory in use (spawnHotkeyAction).
+      const act = spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden });
+      if (act === "pick") { swsEnter(); return; }
+    }
+    $("spawn").requestSubmit();
   });
 }
 
@@ -4851,6 +4878,7 @@ function showSpawnUnlock(message) {
     done.append(note, retry);
     slot.replaceChildren(done);
     retry.focus();
+    spawnCredsRefetch(); // the reach box's Store row clears
   });
   box.replaceChildren(txt, slot);
   box.hidden = false;
@@ -4947,7 +4975,8 @@ function runSessionAction(action, s) {
       syncTreeToRoot(s.cwd).catch(() => {});
       setMobileScreen("files");
     },
-    attribution: () => openSteerFor(s.id),
+    // Desktop: the Activity view, whose right column carries Context by tool.
+    attribution: () => { if (!mobileActive(window.innerWidth)) openPaneView(s.id, "activity"); else openSteerFor(s.id); },
     copycwd: () => copyPath(s.cwd),
     newpane: () => openTerminal(s.id, name, { newPane: true }),
     // Mobile-only: jump to (attaching if needed) and focus this session's
@@ -5647,7 +5676,7 @@ applyCollapsed(bootKeys.ignoreCollapsed ? { sessions: false, files: false } : re
 // bootFlags already absorbed a storage backend that throws, and opening the rail
 // paints it, so a rendering failure here is NOT swallowed: it would present as
 // "the rail just doesn't restore", with nothing in the console. Desktop never
-// opens it (the rail lives in the drawer's Access view there).
+// opens it (Access is a pane view there).
 if (bootKeys.openAccess) setSteerOpen(true);
 initSpawnControl();
 initSpawnWsPicker();
@@ -5761,6 +5790,7 @@ if (typeof mobileMediaQuery === "function" && window.matchMedia) {
     applyCollapsed(bootFlags(deskStorage(), mobileActive(window.innerWidth)).ignoreCollapsed ? { sessions: false, files: false } : readCollapsed());
     if (mobileActive(window.innerWidth)) restoreDrawerNodes();
     else paintSideCost(); // the footer was skipped while narrow
+    paintSteerToggle(); // its meaning changed with the layout (steerRailOpen)
     refreshSessions();
     if (typeof renderGrid === "function") renderGrid();
   });

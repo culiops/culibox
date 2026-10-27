@@ -72,7 +72,7 @@ function spawnPrefill(s) {
   return { agent: v.agent || "", cwd: v.cwd || "", runtime: v.runtime || "", account: v.account || "", options: Object.assign({}, v.options || {}) };
 }
 
-// isSubmitHotkey: Ctrl+Enter (⌘+Enter on mac) in the first-message field
+// isSubmitHotkey: Ctrl+Enter (⌘+Enter on mac) in any field of the spawn form
 // spawns; plain Enter stays a newline. AltGr (ctrl+alt off-mac) and an IME
 // committing a candidate are excluded.
 function isSubmitHotkey(e, mac) {

@@ -232,3 +232,58 @@ test("connPickerKind: text for one, segmented for two, a select from three", () 
   // read-only connections do not count toward the switch
   assert.strictEqual(grantPanel(null, st, [wc("a"), wc("b"), wc("c", { write_capable: false, elevate: undefined })], "", NOW).picker, "seg");
 });
+
+// --- elevGrant / elevDrop: the requests the rail and the Access view share ----
+
+function stubFetch(res) {
+  const calls = [];
+  global.fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (res instanceof Error) throw res;
+    return { status: res.status, json: async () => { if (res.body === undefined) throw new Error("no json"); return res.body; } };
+  };
+  return calls;
+}
+
+test("elevGrant: POSTs the grant body and resolves the elevation view", async () => {
+  const { elevGrant } = require("../static/elevation.js");
+  const calls = stubFetch({ status: 200, body: { elevation: { active: true, name: "c" } } });
+  const v = await elevGrant("s/1", { name: "c", minutes: 30, reason: " why ", confirm_label: "prod" });
+  assert.deepStrictEqual(v, { active: true, name: "c" });
+  assert.strictEqual(calls[0].url, "/api/sessions/s%2F1/aws/elevate");
+  assert.strictEqual(calls[0].init.method, "POST");
+  assert.deepStrictEqual(JSON.parse(calls[0].init.body), { minutes: 30, reason: "why", confirm_label: "prod", name: "c" });
+});
+
+test("elevGrant: a label and a name are sent only when given, as the rail always did", async () => {
+  const { elevGrant } = require("../static/elevation.js");
+  const calls = stubFetch({ status: 200, body: { elevation: null } });
+  await elevGrant("s", { name: "", minutes: 60, reason: "", confirm_label: undefined });
+  assert.deepStrictEqual(JSON.parse(calls[0].init.body), { minutes: 60 });
+  await elevGrant("s", { minutes: 30, reason: "r", confirm_label: "" }); // a prod binding, label still empty
+  assert.deepStrictEqual(JSON.parse(calls[1].init.body), { minutes: 30, reason: "r", confirm_label: "" });
+});
+
+test("elevGrant: a refusal rejects with the server's sentence and the status", async () => {
+  const { elevGrant } = require("../static/elevation.js");
+  stubFetch({ status: 409, body: { error: "Drop b first" } });
+  await assert.rejects(elevGrant("s", { minutes: 30 }), (e) => e.message === "Drop b first" && e.status === 409);
+  stubFetch({ status: 403, body: { error: "x" } });
+  await assert.rejects(elevGrant("s", { minutes: 30 }), (e) => e.message === grantErrorText(403) && e.status === 403);
+  stubFetch(new Error("offline"));
+  await assert.rejects(elevGrant("s", { minutes: 30 }), (e) => e.message === "Elevate failed: no connection." && e.status === 0);
+  stubFetch({ status: 500 }); // no JSON body
+  await assert.rejects(elevGrant("s", { minutes: 30 }), (e) => e.message === "Elevate failed (500)." && e.status === 500);
+});
+
+test("elevDrop: DELETE with no body; failures carry the toast text", async () => {
+  const { elevDrop, dropErrorText } = require("../static/elevation.js");
+  const calls = stubFetch({ status: 200, body: { elevation: { active: false, last_valid: "2026-10-27T15:40:00Z" } } });
+  assert.strictEqual((await elevDrop("s", "c")).active, false);
+  assert.strictEqual(calls[0].init.method, "DELETE");
+  assert.strictEqual(calls[0].init.body, undefined, "a drop names no connection");
+  stubFetch({ status: 410, body: {} });
+  await assert.rejects(elevDrop("s"), (e) => e.message === "That session is gone." && e.status === 410);
+  assert.strictEqual(dropErrorText(0), "Drop failed: no connection.");
+  assert.strictEqual(dropErrorText(500), "Drop failed (500).");
+});

@@ -1318,6 +1318,10 @@
        only things marking it as the secondary controls below the primary D5
        fields above. */
     .spawn-adv { border-top: 1px solid var(--border); padding-top: 10px; }
+    /* Desktop-only parts of the New session dialog (desktop.css shows them above
+       700px): the profile list, the reach box, the footer hint, and the "Model ·"
+       lead of the Effort label. Not rendered at all on a phone. */
+    #spawn-plist, #spawn-reach, #spawn-foot-hint, .spawn-lbl-model { display: none; }
     .spawn-adv-label {
       display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--muted); margin-bottom: 8px;

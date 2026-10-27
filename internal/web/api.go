@@ -29,6 +29,9 @@ type SessionService interface {
 	UsageFor(id string) (session.Usage, bool)
 	AttributionFor(id string) (session.Attribution, bool)
 	PeekFor(id string) (session.Peek, bool)
+	// TimelineFor is a page of the session's transcript timeline (see
+	// session.Manager.TimelineFor); ok is false for an unknown session.
+	TimelineFor(id string, beforeMS int64, limit int) (session.Timeline, bool)
 	// BoxOutputDir is the host dir a boxed session's Playwright output is
 	// mounted from; ok only for a known boxed session.
 	BoxOutputDir(id string) (string, bool)
@@ -60,6 +63,10 @@ type API struct {
 	// box that has no AWS binding; nil = egress control is not running, and the
 	// route is a 404.
 	Egress EgressStatusService
+	// Activity supplies the credential and approval rows of GET
+	// /api/sessions/{id}/activity; nil = the broker is not running, and the
+	// timeline has transcript rows only.
+	Activity ActivityAuditService
 }
 
 // EgressStatusService reports a boxed session's egress mode and proxy counters.
@@ -350,6 +357,13 @@ func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.WriteHeader(http.StatusNoContent)
 		}
+		return
+	}
+	// GET /api/sessions/{id}/activity[?before=<ms>&limit=<n>] — the transcript
+	// timeline merged with the credential and approval audit rows. Cookie
+	// session only.
+	if sid, ok := strings.CutSuffix(id, "/activity"); ok {
+		a.handleActivity(w, r, sid)
 		return
 	}
 	// GET /api/sessions/{id}/boxfile?path=<abs box path>[&download=1] — a file

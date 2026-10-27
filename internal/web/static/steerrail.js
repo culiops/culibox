@@ -299,9 +299,9 @@ const STEER_KEY = "agent-box:steerRail";
 // The rail describes the session in the focused TERMINAL tab. A focused file
 // viewer is not a session and deliberately leaves the rail on its empty state
 // rather than showing whichever agent happens to be nearby. A shell docked in
-// the pane is not it either, even with the keyboard: the desktop Access drawer
-// shows this rail under a header naming the pane's agent (cellTerminal), so
-// the rail must describe, grant to and reply to that same session.
+// the pane is not it either, even with the keyboard: the pane header names the
+// pane's agent (cellTerminal), so the rail must describe, grant to and reply
+// to that same session. (Desktop never shows the rail: Access is a pane view.)
 function railSession() {
   const t = typeof focusedPaneTerminal === "function" ? focusedPaneTerminal() : null;
   const id = t ? t.id : null;
@@ -309,15 +309,21 @@ function railSession() {
   return (lastSessions || []).find((s) => s.id === id) || null;
 }
 
+// steerOpen: the rail's open state, which on desktop is the focused pane's
+// Access view (steerRailOpen, paneview.js): the rail itself stays hidden there,
+// so reading it alone made toggleSteerRail open Access forever, never close it.
 function steerOpen() {
   const el = document.getElementById("steer-rail");
-  return !!el && !el.hidden;
+  const shown = !!el && !el.hidden;
+  if (typeof steerRailOpen !== "function" || typeof steerViaPaneView !== "function") return shown;
+  const desktop = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+  return steerRailOpen(desktop, focusedCell ? focusedCell.view : null, shown);
 }
 
 function setSteerOpen(open) {
-  // Desktop: the rail no longer docks beside the grid; it opens in the pane
-  // drawer's Access view (app.js steerViaDrawer). Mobile keeps the code below.
-  if (typeof steerViaDrawer === "function" && steerViaDrawer(open)) return;
+  // Desktop: the rail no longer docks beside the grid; opening it opens the
+  // focused pane's Access view (app.js steerViaPaneView). Mobile keeps the code below.
+  if (typeof steerViaPaneView === "function" && steerViaPaneView(open)) return;
   const el = document.getElementById("steer-rail");
   if (!el) return;
   el.hidden = !open;
@@ -1171,60 +1177,50 @@ function buildElevPanel(s, gp, extend) {
   return box;
 }
 
-// submitElevGrant: POST the grant (an extension is the same endpoint). The
-// browser adds Origin itself; the server accepts only a signed-in browser.
+// submitElevGrant: POST the grant (an extension is the same endpoint); the
+// request itself is elevGrant's (elevation.js), shared with the Access view.
 async function submitElevGrant(s, gp) {
   if (elevBusy) return;
   const id = s.id;
   elevBusy = id;
   elevErr = { id: "", text: "" };
   elevRepaint(id);
-  let status = 0;
-  let body = null;
+  let failure = null;
   try {
-    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(grantBody(elevDraft.minutes, elevDraft.reason, elevDraft.label, gp.needLabel, hasConns(s) ? gp.selected : "")),
+    await elevGrant(id, {
+      name: hasConns(s) ? gp.selected : "", minutes: elevDraft.minutes, reason: elevDraft.reason,
+      confirm_label: gp.needLabel ? elevDraft.label : undefined,
     });
-    status = res.status;
-    try { body = await res.json(); } catch (_) { body = null; }
-  } catch (_) { status = 0; }
+  } catch (e) { failure = e; }
   elevBusy = null;
-  if (status === 200) {
+  if (!failure) {
     elevPanelFor = null;
     elevErr = { id: "", text: "" };
     elevDraft = { id: "", minutes: 0, reason: "", label: "" };
     loadAwsRailStats(id);
     if (typeof refreshSessions === "function") refreshSessions();
   } else {
-    elevErr = { id: id, text: grantErrorText(status, body && body.error) };
+    elevErr = { id: id, text: failure.message };
   }
   elevRepaint(id);
 }
 
-// dropElevation: lowering power needs no panel and no label.
+// dropElevation: lowering power needs no panel and no label (elevDrop's request).
 async function dropElevation(s) {
   if (elevBusy) return;
   const id = s.id;
   elevBusy = id;
   elevRepaint(id);
-  let status = 0;
-  let body = null;
-  try {
-    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", { method: "DELETE" });
-    status = res.status;
-    try { body = await res.json(); } catch (_) { body = null; }
-  } catch (_) { status = 0; }
+  let view = null;
+  let failure = null;
+  try { view = await elevDrop(id); } catch (e) { failure = e; }
   elevBusy = null;
-  if (status === 200) {
-    showToast(dropToast(body && body.elevation));
+  if (!failure) {
+    showToast(dropToast(view));
     loadAwsRailStats(id);
     if (typeof refreshSessions === "function") refreshSessions();
   } else {
-    showToast(status === 0 ? "Drop failed: no connection."
-      : status === 404 || status === 410 ? "That session is gone."
-        : "Drop failed (" + status + ").", { error: true });
+    showToast(failure.message, { error: true });
   }
   elevRepaint(id);
 }

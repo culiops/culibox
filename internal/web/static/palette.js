@@ -161,9 +161,9 @@ function paletteSessions(mac) {
 }
 
 // paletteShellCommands: the view commands whose set differs between desktop and
-// mobile. Desktop has the Files/Access drawers and the shortcuts dialog; the tree
-// no longer lives in a collapsible pane there, so "Collapse/expand files" would
-// be a dead entry (R17) and is mobile-only. `act` carries the callbacks, so this
+// mobile. Desktop has the Files drawer, the Activity/Access pane views and the
+// shortcuts dialog; the tree no longer lives in a collapsible pane there, so
+// "Collapse/expand files" would be a dead entry (R17) and is mobile-only. `act` carries the callbacks, so this
 // stays a pure function of its inputs.
 function paletteShellCommands(mac, desktop, act) {
   if (!desktop) {
@@ -173,7 +173,8 @@ function paletteShellCommands(mac, desktop, act) {
     ];
   }
   return [
-    { id: "access-drawer", kind: "view", label: "Session details (Access)", hint: "", run: act.accessDrawer },
+    { id: "activity-view", kind: "view", label: "Activity", hint: "", run: act.activityView },
+    { id: "access-view", kind: "view", label: "Access", hint: "", run: act.accessView },
     { id: "files-drawer", kind: "view", label: "Toggle files drawer", hint: mac ? "⌥⌘F" : "Ctrl+Alt+F", run: act.filesDrawer },
     { id: "shortcuts", kind: "view", label: "Keyboard shortcuts", hint: "", run: act.shortcuts },
   ];
@@ -195,14 +196,19 @@ function paletteShellSpawn(desktop, spawn) {
 // and into paletteSessions(), instead of adding another copy of this regex
 // alongside the ones already in app.js (twice) and palette.js's shortcut-hint
 // block below.
+// One "New session · X" entry per profile. The hint stays empty on both
+// layouts (v0.3.0): ProfileView.bin is for the spawn dialog, and an absolute
+// shell path is no use as a right-aligned palette hint.
+function paletteProfileSpawns(list, open) {
+  return list.map((p) => ({ kind: "new", label: "New session · " + p.name, hint: "", run: () => open(p.name) }));
+}
+
 function paletteCommands(mac) {
   const cmds = [];
   // Every spawn goes through the form: under containment the workspace choice
   // IS the security boundary, so the palette preselects the profile and lets
   // the form ask the rest rather than starting an agent from a keystroke.
-  for (const p of profiles) {
-    cmds.push({ kind: "new", label: "New session · " + p.name, hint: p.bin || "", run: () => openSpawnDialog(p.name) });
-  }
+  cmds.push(...paletteProfileSpawns(profiles, openSpawnDialog));
   cmds.push({ kind: "new", label: "New session…", hint: "", run: () => openSpawnDialog() });
   if (window.shellProfile) {
     const deskShell = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
@@ -230,18 +236,20 @@ function paletteCommands(mac) {
   if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {
     cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
   }
-  // Desktop: the rail lives in the pane drawer's Access view (R6: one entry).
+  // Desktop: the rail's content lives in the pane's Access view (R6: one
+  // entry), beside the Activity view. Both toggle on the focused pane's agent.
   const desktop = typeof mobileActive === "function" && !mobileActive(window.innerWidth) && typeof toggleDrawer === "function";
   const focusedId = () => (cellTerminal(focusedCell) || {}).id;
   const shell = paletteShellCommands(mac, desktop, {
     shortcuts: showShortcuts,
     filesDrawer: () => toggleDrawer("files", focusedId()),
-    accessDrawer: () => toggleDrawer("access", focusedId()),
+    activityView: () => { if (focusedCell) focusedCell.toggleView("activity"); },
+    accessView: () => { if (focusedCell) focusedCell.toggleView("access"); },
     steerRail: toggleSteerRail,
     toggleFiles: () => togglePane("files"),
   });
   const shellCmd = (id) => shell.find((c) => c.id === id);
-  for (const id of ["access-drawer", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
+  for (const id of ["activity-view", "access-view", "steer-rail"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   if (!desktop) cmds.push({ kind: "view", label: "Collapse/expand sessions", hint: mac ? "⌥⌘S" : "Alt+Ctrl+S", run: () => togglePane("sessions") });
   for (const id of ["toggle-files", "files-drawer", "shortcuts"]) if (shellCmd(id)) cmds.push(shellCmd(id));
   cmds.push({ kind: "view", label: "Refresh files", hint: "re-read the tree", run: () => ftLoadRoot() });
@@ -562,5 +570,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns };
 }

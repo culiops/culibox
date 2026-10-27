@@ -193,7 +193,12 @@ function drawerFilesApply(prev, next) {
   const was = !!prev && prev.open === "files";
   const now = !!next && next.open === "files";
   const moved = !prev || !next || prev.sessionId !== next.sessionId;
-  if (was && (!now || moved)) { drawerParkViewer(); drawerGoReset(); }
+  if (was && (!now || moved)) {
+    drawerParkViewer(); drawerGoReset();
+    if (prev.sessionId) drawerChangedFiles.delete(prev.sessionId);
+  }
+  if (now && (!was || moved)) { drawerPaintChanged(); drawerLoadChanged(next.sessionId); }
+  else if (!now) drawerPaintChanged();
   if (now && (!was || moved || !drawerViewer)) drawerRecall(next.sessionId);
   else drawerPaint();
 }
@@ -203,12 +208,53 @@ function drawerFilesApply(prev, next) {
 // nothing typed is lost (beforeunload still guards it) and the next desktop
 // Files drawer for its session puts it back as it was.
 function drawerFilesDetach() {
+  drawerPaintChanged(); // the mobile tree carries no dots (drawerOwnsFileClicks is false by now)
   const v = drawerViewer;
   if (!v) return;
   if (!drawerHasUnsaved()) { drawerParkViewer(); return; }
   if (v.auto) v.toggleAuto();
   drawerFileMem = rememberDrawerFile(drawerFileMem, drawerViewerSid, { path: v.path, scroll: v.scroll });
   v.el.remove();
+}
+
+// --- agent-changed dots ------------------------------------------------------
+// The tree marks the files the agent changed (and the folders above them). The
+// list comes from the Activity endpoint's `files` (Task 3: absolute paths as the
+// agent wrote them, most recent first), asked when the drawer opens on a session
+// and on every tree refresh. The answer is only a hint: any failure leaves the
+// tree as it was, with no dot, and a box session whose paths differ from the
+// tree's just shows none.
+
+let drawerChangedFiles = new Map(); // session id -> [{path, add, del}]
+let drawerChangedSeq = 0;           // a reply is dropped unless it is the newest ask
+
+// drawerChangedFor: the set of tree paths to mark under `root` for the
+// drawer's session (empty when nothing is known).
+function drawerChangedFor(root) {
+  return changedSet(drawerChangedFiles.get(drawerState.sessionId), root);
+}
+
+// drawerPaintChanged brings the dots on the tree in step with what is known,
+// and takes them all off whenever the drawer is not what shows the tree.
+function drawerPaintChanged() {
+  if (typeof ftPaintChanged !== "function") return;
+  ftPaintChanged(drawerOwnsFileClicks() && typeof ftRoot === "function" ? drawerChangedFor(ftRoot()) : null);
+}
+
+async function drawerLoadChanged(sid) {
+  if (!sid) return;
+  const seq = ++drawerChangedSeq;
+  let files;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(sid) + "/activity?limit=1");
+    const body = await accReadReply(res);
+    if (body && Array.isArray(body.files)) files = body.files;
+  } catch (_) { /* offline: no dots */ }
+  // Newer ask, or the drawer moved on (another session, closed): not for now.
+  if (seq !== drawerChangedSeq || !drawerOwnsFileClicks() || drawerState.sessionId !== sid) return;
+  if (!files) return; // could not read it: keep what was shown
+  drawerChangedFiles.set(sid, files);
+  drawerPaintChanged();
 }
 
 // --- Go to file… (Ctrl+P) ----------------------------------------------------

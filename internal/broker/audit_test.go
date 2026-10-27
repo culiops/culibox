@@ -838,3 +838,88 @@ func TestCredActionValues(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionIDsDistinct(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if ids, err := a.SessionIDs(); err != nil || len(ids) != 0 {
+		t.Fatalf("empty store: %v, %v", ids, err)
+	}
+	for _, sid := range []string{"a-1", "a-1"} {
+		if err := a.Record(Row{Time: time.Unix(100, 0), SessionID: sid, Outcome: OutcomeMinted}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An id that only ever asked for a write window is still an issued id.
+	if err := a.RecordApproval(ApprovalRow{Time: time.Unix(100, 0), SessionID: "b-2", Action: ActionRefused}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.RecordApproval(ApprovalRow{Time: time.Unix(101, 0), SessionID: "a-1", Action: ActionRefused}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := a.SessionIDs()
+	if err != nil || !slices.Equal(got, []string{"a-1", "b-2"}) {
+		t.Fatalf("SessionIDs = %v, %v", got, err)
+	}
+}
+
+func TestAuditActivityQueries(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	t0 := time.Unix(1_800_000_000, 0)
+	rec := func(sec int, sid string, o Outcome) {
+		t.Helper()
+		if err := a.Record(Row{Time: t0.Add(time.Duration(sec) * time.Second), SessionID: sid, Outcome: o}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec(0, "s", OutcomeMinted) // before since
+	rec(10, "s", OutcomeMinted)
+	rec(20, "s", OutcomeProbeMinted) // hidden
+	rec(30, "s", OutcomeRevoked)     // hidden
+	rec(40, "s", OutcomeDeniedToken)
+	rec(50, "s", OutcomeFetched)
+	rec(50, "other", OutcomeMinted)
+	since := t0.Add(5 * time.Second).Unix()
+
+	rows, err := a.ActivityRows("s", since, 0, 10)
+	if err != nil || len(rows) != 3 || rows[0].Outcome != OutcomeFetched || rows[2].Outcome != OutcomeMinted {
+		t.Fatalf("rows = %+v, err %v", rows, err)
+	}
+	// before is exclusive; limit applies after the hidden outcomes are filtered.
+	rows, err = a.ActivityRows("s", since, t0.Add(50*time.Second).Unix(), 1)
+	if err != nil || len(rows) != 1 || rows[0].Outcome != OutcomeDeniedToken {
+		t.Fatalf("rows = %+v, err %v", rows, err)
+	}
+	if n, err := a.CountMinted("s", since); err != nil || n != 2 { // minted@10 + fetched@50
+		t.Fatalf("CountMinted = %d, %v", n, err)
+	}
+	if n, _ := a.CountMinted("s", 0); n != 3 {
+		t.Fatalf("CountMinted from 0 = %d, want 3", n)
+	}
+
+	ap := func(sec int, act Action) {
+		t.Helper()
+		if err := a.RecordApproval(ApprovalRow{Time: t0.Add(time.Duration(sec) * time.Second), SessionID: "s", Action: act}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ap(0, ActionGranted)
+	ap(10, ActionGranted)
+	ap(20, ActionSSOLoginOK)
+	ap(30, ActionDropped)
+	got, err := a.ActivityApprovals("s", since, 0, 10)
+	if err != nil || len(got) != 2 || got[0].Action != ActionDropped || got[1].Action != ActionGranted {
+		t.Fatalf("approvals = %+v, err %v", got, err)
+	}
+	got, _ = a.ActivityApprovals("s", since, t0.Add(30*time.Second).Unix(), 10)
+	if len(got) != 1 || got[0].Action != ActionGranted {
+		t.Fatalf("approvals before = %+v", got)
+	}
+}

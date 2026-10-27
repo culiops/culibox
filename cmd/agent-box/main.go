@@ -396,6 +396,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if err := mgr.SetSidecarPath(filepath.Join(dataDir, "sessions.json")); err != nil {
 		log.Printf("session sidecar unreadable (%v); starting without restart-recovery metadata", err)
 	}
+	mgr.SetIDStatePath(filepath.Join(dataDir, "session-ids.json")) // ids are never reissued
 
 	// Containment layer. Installed BEFORE session reconcile so reattached boxed
 	// sessions can adopt their boxes; box reconcile runs AFTER, so the orphan
@@ -568,6 +569,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		log.Printf("SIGHUP is ignored (nohup): closing the terminal will not stop agent-box")
 	}
 
+	// The audit databases are the other record of which ids were issued: floor
+	// the counters with them, so a lost session-ids.json cannot make a new
+	// session inherit an old one's audit history.
+	mgr.SeedIDFloor(auditIDFloor(dataDir))
 	if err := mgr.Reconcile(); err != nil {
 		log.Printf("session reconcile: %v (continuing; some sessions may not have been recovered)", err)
 	}
@@ -647,6 +652,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	pm := web.NewProfileManager(agents, cfg.Options, cfg.DefaultRuntime, protected, st, lnch.SetAgents)
 	recordBoxedProfiles(boxedReg, lnch.Clones(), lnch.BoxedDefaultCwds())
 	pm.SetCloneCheck(cloneSaveCheck(h, home, protected))
+	// As mgr.SetEgressAll above: the profile list previews each box's network.
+	pm.SetEgressAll(layer != nil && runtime.GOOS == "linux")
 	var vmShared []string // the box VM's shared directories; nil without a VM
 	if layer != nil && layer.vm != nil {
 		vmShared = layer.vm.Config().Mounts()
@@ -695,6 +702,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			status.Grant = es.grantContext
 		}
 		api.AWS = status
+		api.Activity = brokerSvc.Activity
 	}
 	if egressSvc != nil {
 		stopEgress = egressSvc.Stop

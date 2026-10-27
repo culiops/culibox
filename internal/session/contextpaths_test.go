@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -364,5 +365,107 @@ func TestSpawnContextLogNamesProfile(t *testing.T) {
 	want := "session " + s.ID + " (profile ctx): context paths [/srv/b/docs]"
 	if !strings.Contains(buf.String(), want) {
 		t.Fatalf("log = %q, want %q", buf.String(), want)
+	}
+}
+
+// snapLauncher is a cloneLauncher whose context_paths can be edited after a
+// spawn, like a profile edit; the clone source is edited through l.clone.
+type snapLauncher struct {
+	cloneLauncher
+	paths *[]string
+}
+
+func (l snapLauncher) ContextPathsFor(agent string) ([]string, error) {
+	if agent != "clone" {
+		return nil, nil
+	}
+	return slices.Clone(*l.paths), nil
+}
+
+func TestContextPathsSnapshotAtSpawn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.json")
+	cl, dir := testCloneLauncher(t, config.RuntimeBox)
+	paths := []string{"/srv/b/docs", "/srv/b/notes"}
+	l := snapLauncher{cloneLauncher: cl, paths: &paths}
+	fb := newFakeBackend()
+	m := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m.SetBoxes(&fakeBoxes{})
+	m.SetClone(&fakeCloneHooks{})
+	m.SetContextCheck(func(string) (*box.FileID, error) { return nil, nil })
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "clone", Cwd: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+
+	// A profile edit after the spawn does not change the running session.
+	paths[0] = "/srv/b/other"
+	cl.clone.Of = "/home/u/other-repo"
+	in := s.Info()
+	if want := []string{"/srv/b/docs", "/srv/b/notes"}; !slices.Equal(in.ContextPaths, want) {
+		t.Fatalf("Info.ContextPaths = %v, want the spawn-time %v", in.ContextPaths, want)
+	}
+	if in.CloneOf != "/home/u/repo" {
+		t.Fatalf("Info.CloneOf = %q, want the spawn-time /home/u/repo", in.CloneOf)
+	}
+	// Info hands out a copy.
+	in.ContextPaths[0] = "changed"
+	if got := s.Info().ContextPaths[0]; got != "/srv/b/docs" {
+		t.Fatalf("Info aliases the session's list: %q", got)
+	}
+	b, err := json.Marshal(s.Info())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"context_paths":["/srv/b/docs","/srv/b/notes"]`, `"clone_of":"/home/u/repo"`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("wire shape = %s, want it to contain %s", b, want)
+		}
+	}
+
+	// It survives a sidecar round trip, still the spawn-time values.
+	md := sidecarEntry(t, path, s.ID)
+	if !slices.Equal(md.ContextPaths, []string{"/srv/b/docs", "/srv/b/notes"}) || md.CloneOf != "/home/u/repo" {
+		t.Fatalf("sidecar = %v / %q", md.ContextPaths, md.CloneOf)
+	}
+	fb.seedLive(s.ID)
+	m2 := NewManager(l, fb, 1<<16, time.Minute)
+	if err := m2.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	m2.SetBoxes(&fakeBoxes{})
+	if err := m2.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := m2.Get(s.ID)
+	if !ok {
+		t.Fatal("session not reattached")
+	}
+	t.Cleanup(func() { _ = m2.Kill(r.ID) })
+	ri := r.Info()
+	if !slices.Equal(ri.ContextPaths, []string{"/srv/b/docs", "/srv/b/notes"}) || ri.CloneOf != "/home/u/repo" {
+		t.Fatalf("restored = %v / %q", ri.ContextPaths, ri.CloneOf)
+	}
+}
+
+// A session that has neither keeps its wire shape, and a sidecar record written
+// before the fields existed still loads.
+func TestNoContextPathsKeepsWireShape(t *testing.T) {
+	var md sessionMeta
+	if err := json.Unmarshal([]byte(`{"agent":"claude","cwd":"/w","created":"2026-01-01T00:00:00Z"}`), &md); err != nil {
+		t.Fatal(err)
+	}
+	if md.ContextPaths != nil || md.CloneOf != "" {
+		t.Fatalf("old record decoded to %v / %q", md.ContextPaths, md.CloneOf)
+	}
+	b, err := json.Marshal(Info{ID: "claude-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "context_paths") || strings.Contains(string(b), "clone_of") {
+		t.Fatalf("wire shape = %s", b)
 	}
 }

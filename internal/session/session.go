@@ -600,6 +600,13 @@ type Info struct {
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
+	// ContextPaths are the host paths the box can read (the profile's
+	// context_paths at spawn, mounted read-only at the same path); CloneOf is
+	// the host repo a clone-mode session was cloned from. Both are snapshots
+	// taken at spawn: a later profile edit never changes a running session's.
+	// Absent without them, so a plain session's wire shape is unchanged.
+	ContextPaths []string `json:"context_paths,omitempty"`
+	CloneOf      string   `json:"clone_of,omitempty"`
 }
 
 // Session owns one agent child process and its PTY.
@@ -652,6 +659,11 @@ type Session struct {
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
+	// ContextPaths and CloneOf are the spawn-time snapshots Info reports (see
+	// Info.ContextPaths). Immutable after publication, read without the lock;
+	// Info hands out a copy.
+	ContextPaths []string
+	CloneOf      string
 	// Exclusive: this session's box is its own (an elevate binding). Immutable;
 	// the broker refuses a grant without it.
 	Exclusive bool
@@ -1043,14 +1055,11 @@ func (s *Session) Info() Info {
 		activity = activityOf(s.exited, s.exitCodeKnown, s.exitCode, s.lastActivityAt, time.Now(), idleThreshold, s.agentKind, s.submitted)
 	}
 	in := Info{ID: s.ID, Agent: s.Agent, Cwd: s.Cwd, Created: s.Created, Exited: s.exited, Status: s.status, Activity: activity, Name: s.name, Runtime: s.Runtime, ParentID: s.ParentID, Attached: s.sub != nil, Replyable: s.replyable, Options: s.options, Account: s.Account, ResumeSkipped: s.resumeSkipped}
-	switch {
-	case s.EgressNonce != "" && s.Bindings().Any():
-		in.Egress = "allowlist"
-	case s.EgressNonce != "":
-		in.Egress = "open"
-	}
+	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any())
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.Clone = s.Clone.copy()
+	in.ContextPaths = slices.Clone(s.ContextPaths)
+	in.CloneOf = s.CloneOf
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
 			Elevate: elevateInfo(s.AWS.Elevate), Fields: awsprobe.Lookup(s.base, "").Fields()}
@@ -1077,6 +1086,21 @@ func (s *Session) Info() Info {
 		in.Tokens = append(in.Tokens, ti)
 	}
 	return in
+}
+
+// EgressMode is the network posture a session reports: "allowlist" (egress
+// control on and at least one credential binding: only its hosts), "open"
+// (egress control on, unbound: any host through the authenticated proxy) or ""
+// (no egress control). Info and the profile list both use it, so a profile
+// previews exactly what its session will show.
+func EgressMode(egress, bound bool) string {
+	switch {
+	case egress && bound:
+		return "allowlist"
+	case egress:
+		return "open"
+	}
+	return ""
 }
 
 // BaseAccess is a copy of the session's base-role probe results.
@@ -1198,6 +1222,10 @@ type Manager struct {
 	boxes     Boxes       // nil = containment unavailable; every spawn is host tier
 	bundles   Bundles     // nil = boxed sessions run without user config
 	broker    BrokerHooks // nil = credential broker not running; bound profiles are refused
+	// idMark is the highest id number ever issued per agent, persisted at
+	// idStatePath ("" = not persisted); see idfloor.go.
+	idMark      map[string]int
+	idStatePath string
 	// storeLocked reports whether the encrypted store is locked right now.
 	// Nil = no store: no session ever needs it unlocked.
 	storeLocked func() bool
@@ -1225,6 +1253,12 @@ type Manager struct {
 	// that ordering fragile.
 	peekMu    sync.Mutex
 	peekCache map[string]peekEntry
+
+	// timelineMu guards timelines, the per-session incremental activity
+	// parses (timeline_cache.go). Like peekMu it is separate from m.mu and
+	// never taken while m.mu is held.
+	timelineMu sync.Mutex
+	timelines  map[string]*timelineState
 
 	// procStart reads a pid's starttime for the registry's pid-reuse guard.
 	// NewManager sets procStartOf; a nil value (struct-literal test managers)
@@ -1425,6 +1459,7 @@ func NewManager(l launcher.Builder, backend Backend, ringCap int, retention time
 		launcher:  l,
 		backend:   backend,
 		counters:  map[string]int{},
+		idMark:    map[string]int{},
 		ringCap:   ringCap,
 		retention: retention,
 		procStart: procStartOf,
@@ -2047,6 +2082,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.EgressNonce = enonce
 	sess.BundleDrops = bundleDrops
 	sess.Clone = cloneInfo
+	sess.ContextPaths = slices.Clone(ctxPaths)
+	if cl != nil {
+		sess.CloneOf = cl.Of
+	}
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
 	sess.resumeSkipped = resumeSkipped
@@ -2066,6 +2105,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		sc.put(id, sessionMeta{Agent: spec.Agent, Name: name, Cwd: spec.Cwd, Created: created, Runtime: runtime, Box: boxName,
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
+			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
 			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID})
 	}
 	m.watchRetention(id, sess)
@@ -2360,6 +2400,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 		backend := m.backend
 		m.mu.Unlock()
 		m.peekForget(id) // the cached transcript parse dies with the session
+		m.timelineForget(id)
 		m.brokerForget(sess)
 		m.egressForget(sess)
 		if sc != nil {
@@ -2609,6 +2650,7 @@ func (m *Manager) removeSession(id string, s *Session) {
 	sc := m.sidecar
 	m.mu.Unlock()
 	m.peekForget(id) // the cached transcript parse dies with the session
+	m.timelineForget(id)
 	m.brokerForget(s)
 	m.egressForget(s)
 	if sc != nil {
@@ -2791,6 +2833,8 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	}
 	sess.BundleDrops = md.BundleDrops
 	sess.Clone = md.Clone.copy()
+	sess.ContextPaths = slices.Clone(md.ContextPaths)
+	sess.CloneOf = md.CloneOf
 	sess.Exclusive = md.Exclusive
 	// nil for a record from before the probe: every key reads "not checked"
 	// and is watched below, never a clean result.
@@ -2836,7 +2880,12 @@ const maxNameLen = 64
 // nextIDLocked returns the next free stable id "<agent>-<n>" (caller holds mu).
 // The id is the immutable technical key (abduco session, pidfile, WS route); the
 // user-facing name is a separate mutable label (see deriveName / Rename).
+// It counts on from the highest number ever issued for the agent, not just from
+// the live sessions, so an id is never reissued (see idfloor.go).
 func (m *Manager) nextIDLocked(agent string) string {
+	if m.idMark[agent] > m.counters[agent] {
+		m.counters[agent] = m.idMark[agent]
+	}
 	for {
 		m.counters[agent]++
 		id := fmt.Sprintf("%s-%d", agent, m.counters[agent])
@@ -2846,6 +2895,8 @@ func (m *Manager) nextIDLocked(agent string) string {
 		if m.backend != nil && m.backend.Alive(id) {
 			continue
 		}
+		m.idMark[agent] = m.counters[agent]
+		m.persistIDMarksLocked()
 		return id
 	}
 }

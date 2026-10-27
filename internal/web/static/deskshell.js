@@ -103,19 +103,22 @@ function rowChip(s, nowMs, boxRuntime) {
 
 // rowSubline: the row's second line. What the session needs, in amber, when it
 // needs you; otherwise its summary, else the activity word the old row showed.
-// (No idle duration: the session record carries none.)
+// (No idle duration: the session record carries none.) A sign-in line carries
+// view: "access": a click opens the session's Access view, where sign-in lives.
 function rowSubline(s) {
   if (deskDep("needsYou")(s)) {
     // A named connection's expired sign-in on an agent that is not itself
     // waiting has no needLabel and would read "Waiting for input.", which says
     // nothing about the sign-in.
     if (!deskDep("needLabel")(s) && s.activity !== "waiting" && deskDep("connSSOSources")(s).length) {
-      return { text: "SSO expired \u00b7 Sign in", amber: true };
+      return { text: "SSO expired \u00b7 Sign in", amber: true, view: "access" };
     }
     // A waiting session can have no named need (needLabel ""): no dangling ": ".
     const why = deskDep("needLabel")(s);
     const text = deskDep("cardContent")(s).text;
-    return { text: why ? why + ": " + text : text, amber: true };
+    const out = { text: why ? why + ": " + text : text, amber: true };
+    if (s.need === "sso") out.view = "access";
+    return out;
   }
   const v = s || {};
   return { text: v.summary || deskDep("sessionDot")(v).title || "", amber: false };
@@ -176,8 +179,8 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   };
 }
 
-// drawerFor: the pane drawer's next state when a header tab (Files or Access)
-// is pressed for `sessionId`. The same kind for the same session closes it; any
+// drawerFor: the pane drawer's next state when the header's Files tab is
+// pressed for `sessionId` (Activity and Access are pane views: paneview.js). The same kind for the same session closes it; any
 // other press opens the asked kind on the asked session, so one drawer is open
 // at a time and switching kinds or panes never takes two clicks.
 function drawerFor(state, kind, sessionId) {
@@ -333,8 +336,8 @@ function shortcutText(rows) {
 
 // bootFlags: what boot reads from the legacy localStorage keys, decided once so
 // the desktop rules are testable. The keys predate the desktop shell and are not
-// renamed (spec 7): on desktop the Access rail lives in the drawer (never opened
-// from a stored "1"), the pane collapse hid panes that no longer exist as such,
+// renamed (spec 7): on desktop the rail is never shown (Access is a pane view;
+// never opened from a stored "1"), the pane collapse hid panes that no longer exist as such,
 // and the sessions/files split has no splitter. Mobile keeps every stored value.
 // A blocked or absent storage reads as defaults; the two "ignore" flags depend on
 // the layout alone.

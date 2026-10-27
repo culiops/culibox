@@ -70,11 +70,16 @@ test("rowSubline: amber needs-you text, else summary or the activity word", () =
 test("rowSubline: a connection-level SSO expiry reads SSO expired, never a bare Waiting", () => {
   const conn = { name: "dev", sso_expired: "dev-sso" };
   const r = d.rowSubline({ activity: "working", aws_connections: [conn] });
-  assert.deepEqual(r, { text: "SSO expired \u00b7 Sign in", amber: true });
-  // The legacy single-record need keeps its own named text.
-  assert.equal(d.rowSubline({ activity: "working", need: "sso", aws: { sso_expired: "x" } }).text.startsWith("AWS sign-in: "), true);
-  // An agent that is itself asking keeps the ask text even with an expired connection.
-  assert.ok(d.rowSubline({ activity: "waiting", need: "ask", ask: "ls", aws_connections: [conn] }).text.startsWith("asks: "));
+  assert.deepEqual(r, { text: "SSO expired \u00b7 Sign in", amber: true, view: "access" });
+  // The legacy single-record need keeps its own named text, and opens Access too.
+  const legacy = d.rowSubline({ activity: "working", need: "sso", aws: { sso_expired: "x" } });
+  assert.equal(legacy.text.startsWith("AWS sign-in: "), true);
+  assert.equal(legacy.view, "access");
+  // An agent that is itself asking keeps the ask text even with an expired
+  // connection, and its line opens the terminal (no view).
+  const ask = d.rowSubline({ activity: "waiting", need: "ask", ask: "ls", aws_connections: [conn] });
+  assert.ok(ask.text.startsWith("asks: "));
+  assert.equal(ask.view, undefined);
 });
 
 test("jumpOrder: Alt+1..9 and the palette follow the sidebar order on desktop, the API order on mobile", () => {

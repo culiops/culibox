@@ -37,7 +37,9 @@ var errBrokerListen = errors.New("credential broker disabled")
 type brokerService struct {
 	Hooks  broker.Hooks         // installed on the session manager
 	Status web.AWSStatusAdapter // behind GET /api/sessions/{id}/aws; serve adds the egress counters
-	SSO    *ssologin.Runner     // the in-UI AWS sign-in; nil when the aws CLI is not on the daemon's PATH
+	// Activity feeds the credential and approval rows of GET /api/sessions/{id}/activity.
+	Activity web.ActivityAuditAdapter
+	SSO      *ssologin.Runner // the in-UI AWS sign-in; nil when the aws CLI is not on the daemon's PATH
 	// Minter and Sim are what the broker mints and probes with; the credentials
 	// screen's AWS service reuses them.
 	Minter broker.Minter
@@ -178,7 +180,15 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 			},
 			RecentStatic: func(id string, n int) ([]broker.Row, error) {
 				return audit.ForSessionProvider(id, broker.ProviderStatic, n)
+			},
+			Approvals: func(id string, since int64, n int) ([]broker.ApprovalRow, error) {
+				return audit.ActivityApprovals(id, since, 0, n)
 			}},
+		Activity: web.ActivityAuditAdapter{
+			Credentials: audit.ActivityRows,
+			Approvals:   audit.ActivityApprovals,
+			Minted:      audit.CountMinted,
+		},
 		SSO: sso, Tokens: tokens, GitHub: minter, Minter: stsMinter, Sim: simulator,
 		Stop: func(ctx context.Context) {
 			// First: a killed sign-in writes its sso_login_failed row, and the

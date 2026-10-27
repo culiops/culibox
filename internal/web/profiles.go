@@ -18,6 +18,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/launcher"
+	"github.com/culiops/agent-box/internal/session"
 	"github.com/culiops/agent-box/internal/store"
 )
 
@@ -51,6 +52,32 @@ type ProfileView struct {
 	// BypassArgs: the profile's own args already bypass permission checks, so
 	// the spawn form must warn when replies are on even with the option off.
 	BypassArgs bool `json:"bypass_args,omitempty"`
+	// Bin is the profile's agent binary. The rest say what a session of it can
+	// reach, for the spawn dialog's "touches" line: names only, never a role
+	// ARN, a token reference or a value. Tokens are the static_tokens entry
+	// names, GitHubOwners the owners (not their App or PAT references).
+	Bin            string   `json:"bin,omitempty"`
+	AWSConnections []string `json:"aws_connections,omitempty"`
+	// AWSInline is the legacy inline AWS binding, named like a connection.
+	AWSInline    *ProfileAWSInline `json:"aws_inline,omitempty"`
+	GitHubOwners []string          `json:"github_owners,omitempty"`
+	Tokens       []string          `json:"tokens,omitempty"`
+	// Network is the posture a session of this profile reports ("allowlist",
+	// "open" or "": session.EgressMode applied to the profile's bindings).
+	Network string `json:"network,omitempty"`
+	// ContextPaths are the host paths its box can read; CloneOf the repo a
+	// clone-mode profile clones.
+	ContextPaths []string `json:"context_paths,omitempty"`
+	CloneOf      string   `json:"clone_of,omitempty"`
+}
+
+// ProfileAWSInline names a profile's legacy inline AWS binding for the spawn
+// dialog: its label ("aws" when it has none, as the Access view names it), the
+// prod flag and the elevate window. No source profile, ARN, region or bucket.
+type ProfileAWSInline struct {
+	Name              string `json:"name"`
+	Prod              bool   `json:"prod,omitempty"`
+	ElevateMaxMinutes int    `json:"elevate_max_minutes,omitempty"`
 }
 
 // profileStore is the subset of *store.Store the manager needs (injectable).
@@ -102,6 +129,19 @@ type ProfileManager struct {
 	// wired at boot, so a profile cannot be saved naming a connection that does
 	// not exist. nil = none defined.
 	awsConns []config.AWSConnection
+	// egressAll: every boxed spawn goes through the egress proxy, bound or not
+	// (Linux; Manager.SetEgressAll). It decides whether an unbound boxed profile
+	// previews as "open" or as no egress control.
+	egressAll bool
+}
+
+// SetEgressAll records whether egress is mandatory for every boxed spawn, so a
+// profile's network preview matches what its session will report. Call at boot,
+// with Manager.SetEgressAll.
+func (m *ProfileManager) SetEgressAll(all bool) {
+	m.mu.Lock()
+	m.egressAll = all
+	m.mu.Unlock()
 }
 
 // SetAWSConnections installs the instance's named AWS connections, which Save
@@ -357,16 +397,41 @@ func (m *ProfileManager) Views() []ProfileView {
 	merged := m.merged()
 	out := make([]ProfileView, 0, len(merged))
 	for _, a := range merged {
+		rt := config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a)
+		bound := a.AWS != nil || len(a.AWSConnections) > 0 || a.GitHub != nil || len(a.Tokens) > 0
 		pv := ProfileView{
 			Name:          a.Name,
 			Account:       a.Account,
 			Editable:      editable[a.Name],
-			Runtime:       config.Config{DefaultRuntime: m.defaultRuntime}.RuntimeFor(a),
+			Runtime:       rt,
 			DefaultCwd:    a.DefaultCwd,
 			AcceptsPrompt: launcher.AcceptsPrompt(a.Bin),
 			Claude:        launcher.IsClaudeBin(a.Bin),
 			Replyable:     a.Replyable && launcher.IsClaudeBin(a.Bin),
 			BypassArgs:    argsBypassPermissions(a.Args),
+			Bin:           a.Bin,
+			Tokens:        slices.Clone(a.Tokens),
+			// A boxed spawn has egress when it is bound or egress is mandatory
+			// (the needEgress rule of Manager.Spawn); the host tier never has it.
+			Network:        session.EgressMode(rt == config.RuntimeBox && (bound || m.egressAll), bound),
+			AWSConnections: slices.Clone(a.AWSConnections),
+			ContextPaths:   slices.Clone(a.ContextPaths),
+			CloneOf:        a.CloneOf,
+		}
+		if a.AWS != nil {
+			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod}
+			if in.Name == "" {
+				in.Name = "aws"
+			}
+			if a.AWS.Elevate != nil {
+				in.ElevateMaxMinutes = a.AWS.Elevate.Max()
+			}
+			pv.AWSInline = in
+		}
+		if a.GitHub != nil {
+			for _, o := range a.GitHub.Owners {
+				pv.GitHubOwners = append(pv.GitHubOwners, o.Owner)
+			}
 		}
 		for _, def := range m.options {
 			if v, ok := a.Options[def.Key]; ok && def.AppliesTo(a.Bin) {

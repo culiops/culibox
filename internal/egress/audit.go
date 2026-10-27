@@ -136,3 +136,22 @@ func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
 	}
 	return out, rows.Err()
 }
+
+// SessionIDs returns every distinct session id that has an egress row, sorted
+// (an index scan over idx_egress_session). See broker.Audit.SessionIDs.
+func (a *Audit) SessionIDs() ([]string, error) {
+	rows, err := a.db.Query(`SELECT session_id FROM egress_audit GROUP BY session_id ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

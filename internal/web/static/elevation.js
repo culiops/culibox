@@ -120,6 +120,58 @@ function grantErrorText(status, msg) {
   return "Elevate failed (" + status + ").";
 }
 
+// dropErrorText: the toast for a failed Drop.
+function dropErrorText(status) {
+  if (status === 0) return "Drop failed: no connection.";
+  if (status === 404 || status === 410) return "That session is gone.";
+  return "Drop failed (" + status + ").";
+}
+
+// elevCall: one request to .../aws/elevate. Resolves {status, body}; a network
+// failure is status 0 and an unreadable body is null, never a throw.
+async function elevCall(sid, init) {
+  let status = 0;
+  let body = null;
+  try {
+    const res = await fetch("/api/sessions/" + encodeURIComponent(sid) + "/aws/elevate", init);
+    status = res.status;
+    try { body = await res.json(); } catch (_) { body = null; }
+  } catch (_) { status = 0; }
+  return { status, body };
+}
+
+// elevError: the rejection of elevGrant / elevDrop. message is the text to show
+// the operator (the server's own sentence where it names what to change);
+// status is the HTTP status, 0 for no connection.
+function elevError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+// elevGrant: POST a grant (an extension is the same endpoint). Resolves the
+// elevation view; rejects with an elevError. `confirm_label` is sent only when
+// given (the caller passes it for a prod binding alone), `name` only for a
+// session with connections, so a legacy body is unchanged. The browser adds
+// Origin itself; the server accepts only a signed-in browser.
+async function elevGrant(sid, o) {
+  const g = o || {};
+  const { status, body } = await elevCall(sid, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(grantBody(g.minutes, g.reason, g.confirm_label, g.confirm_label !== undefined, g.name)),
+  });
+  if (status === 200) return (body && body.elevation) || null;
+  throw elevError(status, grantErrorText(status, body && body.error));
+}
+
+// elevDrop: lowering power needs no panel and no label. A drop names no
+// connection (the server never reads a body), so `name` is not sent; it is
+// accepted so a caller can say which row it pressed.
+async function elevDrop(sid) {
+  const { status, body } = await elevCall(sid, { method: "DELETE" });
+  if (status === 200) return (body && body.elevation) || null;
+  throw elevError(status, dropErrorText(status));
+}
+
 // Textually identical to the server's allowlist in internal/ssologin/ssologin.go
 // (regionRe, portalRe). Change them together.
 const SSO_REGION_RE = /^device\.sso\.[a-z]{2}(-[a-z]+)+-\d{1,2}\.amazonaws\.com$/;
@@ -212,5 +264,5 @@ function dropToast(view) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { connPickerKind, grantPanel, grantBody, grantErrorText, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName };
+  module.exports = { connPickerKind, grantPanel, grantBody, grantErrorText, dropErrorText, elevGrant, elevDrop, trustedSSOURL, ssoCard, dropToast, ssoLoginOf, ssoCommandOf, ssoSignInName };
 }

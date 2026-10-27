@@ -329,6 +329,37 @@ func (a *Audit) ApprovalsForSession(sessionID string, limit int) ([]ApprovalRow,
 	return out, rows.Err()
 }
 
+// ActivityApprovals returns up to limit approval rows of a session for the
+// activity timeline, newest first: ts >= sinceTS, and ts < beforeTS when
+// beforeTS > 0 (unix seconds), only the actions that are part of a write
+// window's life (sign-in rows are left out).
+func (a *Audit) ActivityApprovals(sessionID string, sinceTS, beforeTS int64, limit int) ([]ApprovalRow, error) {
+	rows, err := a.db.Query(`SELECT ts, session_id, profile, account_id, role_arn, action, until, minutes, reason, cred, error, entry
+		FROM approval_audit WHERE session_id = ? AND ts >= ? AND (? = 0 OR ts < ?)
+		AND action IN ('granted','extended','dropped','expired','ended','refused')
+		ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, sinceTS, beforeTS, beforeTS, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ApprovalRow
+	for rows.Next() {
+		var r ApprovalRow
+		var ts, until int64
+		var action string
+		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &action, &until, &r.Minutes,
+			&r.Reason, &r.Cred, &r.Error, &r.Entry); err != nil {
+			return nil, err
+		}
+		r.Time, r.Action = time.Unix(ts, 0), Action(action)
+		if until != 0 {
+			r.Until = time.Unix(until, 0)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // windowActionsSQL lists the rows that decide whether a write window is in
 // force: the two that open or lengthen one and the three that end one. Refused
 // and sign-in rows are not part of a window's life and are ignored.
@@ -427,6 +458,30 @@ func (a *Audit) ForSessionExcept(sessionID, provider string, limit int) ([]Row, 
 		FROM credential_audit WHERE session_id = ? AND provider != ? ORDER BY ts DESC, id DESC LIMIT ?`, sessionID, provider, limit)
 }
 
+// activityHiddenOutcomesSQL lists the outcomes the activity timeline never shows:
+// base-role probes and GitHub revokes are the daemon's own housekeeping.
+const activityHiddenOutcomesSQL = `('probe_minted','probe_failed','revoked','revoke_failed')`
+
+// ActivityRows returns up to limit credential rows of a session for the
+// activity timeline, newest first: ts >= sinceTS, and ts < beforeTS when
+// beforeTS > 0 (both unix seconds), without the daemon's own probe and revoke
+// rows. Filtering happens in SQL so hidden rows never take a place in a page.
+func (a *Audit) ActivityRows(sessionID string, sinceTS, beforeTS int64, limit int) ([]Row, error) {
+	return a.queryRows(`SELECT `+auditCols+`
+		FROM credential_audit WHERE session_id = ? AND ts >= ? AND (? = 0 OR ts < ?)
+		AND outcome NOT IN `+activityHiddenOutcomesSQL+` ORDER BY ts DESC, id DESC LIMIT ?`,
+		sessionID, sinceTS, beforeTS, beforeTS, limit)
+}
+
+// CountMinted counts the credentials a session was handed (minted, or a static
+// value fetched) since sinceTS (unix seconds), on the (session_id, ts) index.
+func (a *Audit) CountMinted(sessionID string, sinceTS int64) (int, error) {
+	var n int
+	err := a.db.QueryRow(`SELECT COUNT(*) FROM credential_audit WHERE session_id = ? AND ts >= ?
+		AND outcome IN ('minted','fetched')`, sessionID, sinceTS).Scan(&n)
+	return n, err
+}
+
 func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
 	rows, err := a.db.Query(query, args...)
 	if err != nil {
@@ -448,6 +503,28 @@ func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
 			r.Expires = time.Unix(exp, 0)
 		}
 		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// SessionIDs returns every distinct session id that has a credential or
+// approval row, sorted. The manager uses it to learn which ids were ever issued,
+// so a new session never takes over an old one's history. Both queries are
+// index scans (idx_audit_session, idx_approval_session).
+func (a *Audit) SessionIDs() ([]string, error) {
+	rows, err := a.db.Query(`SELECT session_id FROM credential_audit GROUP BY session_id
+		UNION SELECT session_id FROM approval_audit GROUP BY session_id ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
 	}
 	return out, rows.Err()
 }

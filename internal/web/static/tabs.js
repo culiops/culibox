@@ -168,6 +168,25 @@ class Cell {
     this._dockPrefs = null;   // placement + ratio of the last dock, for the next one
     this._dockEl = null;
     this._dockBarKey = "";
+    // Pane view (spec 5.7, 5.8; paneview.js): "terminal", or Activity / Access
+    // of the pane's agent drawn in div.pane-view over the agent's half of the
+    // body. Page-local: never in the layout snapshot. See setView.
+    this.view = "terminal";
+    this._viewHost = null;
+    this._viewHandle = null; // the renderer's {update, dispose}
+    this._viewKey = "";      // kind + session the host was filled for
+    // A view covers the agent's terminal but leaves it attached and sized.
+    // desktop.css hides it (visibility), which also keeps its textarea from
+    // taking focus; should anything under the host still take it (a reconnect,
+    // onShow), keys typed into Activity would reach the agent unseen, so it is
+    // handed to the host. The dock is not covered.
+    this.body.addEventListener("focusin", (e) => {
+      const h = this._viewHost;
+      if (this.view === "terminal" || !h || h.contains(e.target)) return;
+      if (this._dockEl && this._dockEl.contains(e.target)) return;
+      if (e.target && typeof e.target.blur === "function") e.target.blur();
+      h.focus({ preventScroll: true });
+    });
     this.renderBar();
     this.renderBody();
   }
@@ -182,7 +201,12 @@ class Cell {
   activate(tab) {
     if (tab && tab.kind === "terminal") this._lastTerm = tab; // see cellTerminal
     this._dockFocus = false; // showing a pane tab is asking for it, not the dock
+    // ...and not a view over it: the row's open, the strip's Open terminal and
+    // the Terminal tab all land here. openPaneView sets its view after this.
+    const viewWas = this.view;
+    this.view = "terminal";
     if (this.activeTab === tab) {
+      if (viewWas !== "terminal") this.renderBar();
       this.renderBody(); tab.onShow?.();
     } else {
       if (this.activeTab) this.activeTab.onHide?.();
@@ -276,9 +300,106 @@ class Cell {
       this.body.style.removeProperty("--dock-ratio");
       this.body.replaceChildren(main);
     }
+    // replaceChildren took the view host out with the rest: put it back (or
+    // drop it, if the pane lost what it described).
+    this._syncView();
     // The element just lost and regained its layout box, so anything inside it
     // that scrolls is back at the top: let the tab put its position back.
     this.activeTab?.onAttach?.();
+  }
+
+  // --- pane views: Activity / Access (spec 5.7, 5.8) -------------------------
+  // The API the view contents build on: setView(kind), toggleView(kind),
+  // updateView() (per poll), and paneViewRenderers (paneview.js) for what fills
+  // the host. A view always describes cellTerminal(this), the pane's agent,
+  // never a shell docked beside it. Desktop only: mobile is always Terminal.
+
+  // setView shows `kind` ("terminal", "activity", "access"). A pane with no
+  // terminal tab, or a mobile viewport, has only Terminal.
+  setView(kind) {
+    const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
+    let next = paneViewKind(kind);
+    if (mobile || !cellTerminal(this)) next = "terminal";
+    if (next === this.view) { this._syncView(); return; }
+    const was = this.view;
+    this.view = next;
+    this.renderBar(); // the header's .on
+    this._syncView();
+    if (next !== "terminal") {
+      // Off the terminal's textarea and onto the view, so keys stop reaching
+      // the agent (see the focusin guard in the constructor).
+      if (this._viewHost && this === focusedCell) this._viewHost.focus({ preventScroll: true });
+    } else if (was !== "terminal" && this === focusedCell && this.activeTab && this.activeTab.kind === "terminal") {
+      this.activeTab.onShow?.(); // back on Terminal: the keyboard goes with it
+    }
+  }
+
+  // toggleView: a header tab's press (paneViewFor owns the rule).
+  toggleView(kind) {
+    this.setView(paneViewFor({ view: this.view, hasSession: !!cellTerminal(this) }, kind));
+  }
+
+  // updateView: the session list was just refreshed (app.js refreshSessions).
+  // The pane may now be about another session; the renderer repaints itself.
+  updateView() {
+    if (this.view === "terminal") return;
+    this._syncView();
+    const term = cellTerminal(this);
+    if (this._viewHandle && typeof this._viewHandle.update === "function" && term) this._viewHandle.update(term.id);
+  }
+
+  // _syncView makes the host match this.view: absent on Terminal; otherwise in
+  // the body, filled by the kind's renderer for the pane's agent, refilled only
+  // when the kind or the session changes (a renderer's half-typed field must
+  // survive every other repaint).
+  _syncView() {
+    const term = cellTerminal(this);
+    const mobile = typeof mobileActive === "function" && mobileActive(window.innerWidth);
+    if (this.view !== "terminal" && (!term || mobile)) this.view = "terminal";
+    this.body.classList.toggle("has-view", this.view !== "terminal"); // hides the tab under it (desktop.css)
+    if (typeof paintSteerToggle === "function") paintSteerToggle(); // ◧ follows the focused pane's Access
+    if (this.view === "terminal") { this._dropView(); return; }
+    if (!this._viewHost) {
+      const h = document.createElement("div");
+      h.className = "pane-view";
+      h.tabIndex = -1;
+      h.setAttribute("role", "region");
+      this._viewHost = h;
+    }
+    const host = this._viewHost;
+    if (host.parentElement !== this.body) this.body.appendChild(host);
+    const key = this.view + "\n" + term.id;
+    if (key === this._viewKey) return;
+    this._disposeView();
+    host.replaceChildren();
+    host.dataset.view = this.view;
+    host.setAttribute("aria-label", this.view === "access" ? "Access" : "Activity");
+    this._viewKey = key;
+    const render = paneViewRenderers[this.view];
+    let h = null;
+    try {
+      h = typeof render === "function" ? render(host, term.id) : paintPaneViewPlaceholder(host, this.view, term);
+    } catch (err) {
+      // A broken renderer must not take the pane (or the poll) down with it.
+      console.error("pane view " + this.view + ":", err);
+      host.replaceChildren();
+      paintPaneViewPlaceholder(host, this.view, term);
+    }
+    this._viewHandle = typeof h === "function" ? { dispose: h } : h || null;
+  }
+
+  _disposeView() {
+    const h = this._viewHandle;
+    this._viewHandle = null;
+    this._viewKey = "";
+    if (h && typeof h.dispose === "function") {
+      try { h.dispose(); } catch (err) { console.error("pane view dispose:", err); }
+    }
+  }
+
+  _dropView() {
+    this._disposeView();
+    if (this._viewHost) { this._viewHost.remove(); this._viewHost = null; }
   }
 
   // --- companion-shell dock ------------------------------------------------
@@ -759,7 +880,7 @@ class Cell {
   // renderHeader builds the desktop pane header (spec 5.3): one line, fixed
   // slot order, empty slots collapse. Left: dot, name (a switcher when the pane
   // holds several tabs), chips, model, context %. Right: Terminal · Files ·
-  // Access, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
+  // Activity · Access, + Shell, then ⋯ ⛶ × on hover. paneHeaderModel (deskshell.js) owns
   // what shows; this only paints it. Rebuilt on every renderBar like the strip
   // it replaces, so no listener outlives its node.
   renderHeader() {
@@ -767,6 +888,7 @@ class Cell {
     const t = this.activeTab;
     const term = cellTerminal(this);
     const sid = term ? term.id : null;
+    if (!term) this.view = "terminal"; // a view needs the agent it describes (_syncView drops the host)
     const s = sid ? (lastSessions || []).find((x) => x.id === sid) || null : null;
     const m = paneHeaderModel({
       tab: t, session: t && t.kind === "terminal" ? s : null, nowMs: Date.now(),
@@ -849,7 +971,7 @@ class Cell {
       ctx.className = "ph-ctx";
       const ut = typeof usageTitle === "function" ? usageTitle(t.usage()) : "";
       ctx.title = (ut ? ut + " \u2014 " : "") + "click for context by tool";
-      ctx.onclick = (e) => { e.stopPropagation(); openSteerFor(sid); };
+      ctx.onclick = (e) => { e.stopPropagation(); openPaneView(sid, "activity"); };
       main.append(ctx);
     }
 
@@ -859,23 +981,38 @@ class Cell {
     tabs.className = "ph-tabs";
     tabs.setAttribute("role", "group");
     tabs.setAttribute("aria-label", "Pane views");
+    // Terminal, Activity and Access are the pane's views (.on, one of the
+    // three); Files is the drawer's toggle (.open, paintDrawerTabs).
     if (term) {
       const tt = el("button", "Terminal");
-      tt.className = "ph-tab" + (t === term ? " on" : "");
+      tt.className = "ph-tab" + (t === term && this.view === "terminal" ? " on" : "");
       tt.onclick = (e) => {
         e.stopPropagation();
-        // Terminal means "show me the agent": its tab, and no drawer over it.
+        // Terminal means "show me the agent": its tab, and no drawer or view over it.
         if (typeof closeDrawerFor === "function") closeDrawerFor(sid);
         if (this.activeTab !== term) this.activate(term);
+        else this.setView("terminal");
       };
       tabs.append(tt);
     }
-    for (const [kind, label] of [["files", "Files"], ["access", "Access"]]) {
-      if (kind === "access" && !term) continue; // a pane of files has no session to describe
+    const files = el("button", "Files");
+    files.className = "ph-tab";
+    files.dataset.k = "files";
+    files.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, "files", sid, e); };
+    tabs.append(files);
+    // A pane of files has no session to describe: no Activity, no Access.
+    for (const [kind, label] of term ? [["activity", "Activity"], ["access", "Access"]] : []) {
       const b = el("button", label);
-      b.className = "ph-tab";
-      b.dataset.k = kind;
-      b.onclick = (e) => { e.stopPropagation(); headerDrawerPress(this, kind, sid, e); };
+      b.className = "ph-tab" + (this.view === kind ? " on" : "");
+      b.dataset.v = kind;
+      b.setAttribute("aria-pressed", this.view === kind ? "true" : "false");
+      b.onclick = (e) => {
+        e.stopPropagation();
+        // A keyboard press on an unfocused pane focuses it first (a mouse press
+        // already has), so the view and the keyboard land on the same pane.
+        if (focusedCell !== this) setFocusedCell(this);
+        this.toggleView(kind);
+      };
       tabs.append(b);
     }
     const sep = el("span");
@@ -1049,6 +1186,7 @@ class Cell {
   dispose() {
     if (this._ro) { this._ro.disconnect(); this._ro = null; }
     this.dropStrip();
+    this._dropView();
     this.tabs.forEach((t) => t.dispose?.());
     this._dropDock(); // the docked views go with the pane; the shells keep running
   }
@@ -1310,6 +1448,7 @@ function setFocusedCell(cell) {
   cells.forEach((c) => c.el.classList.toggle("focus", c === focusedCell));
   syncFocusedTree(); // tree follows the focused tab
   renderSteerRail(); // and so does the rail: it describes the focused session
+  if (typeof paintSteerToggle === "function") paintSteerToggle(); // ◧: the new pane's Access view or not
   if (typeof syncSelectedRow === "function") syncSelectedRow();
   scheduleSaveLayout();
 }
@@ -1323,9 +1462,9 @@ function focusedTerminal() {
   return sh || focusedPaneTerminal();
 }
 // focusedPaneTerminal: the terminal tab active in the focused cell, ignoring
-// its dock: the pane's AGENT. The steer rail / Access drawer describe this one,
-// because their header (cellTerminal) names it: a grant or a reply must go to
-// the session the drawer is titled with, never to a shell docked beside it.
+// its dock: the pane's AGENT. The steer rail and the pane views describe this
+// one, because the pane header (cellTerminal) names it: a grant or a reply must
+// go to the session the pane is titled with, never to a shell docked beside it.
 function focusedPaneTerminal() {
   const t = focusedTab();
   return t && t.kind === "terminal" ? t : null;
@@ -1372,6 +1511,50 @@ function cellTerminal(cell) {
   if (act && act.kind === "terminal") return act;
   if (cell._lastTerm && cell.tabs.includes(cell._lastTerm)) return cell._lastTerm;
   for (let i = cell.tabs.length - 1; i >= 0; i--) if (cell.tabs[i].kind === "terminal") return cell.tabs[i];
+  return null;
+}
+
+// openPaneView shows the Activity or Access view (`kind`) of session `sid` in
+// the pane that holds it, opening its terminal first when no pane does; no
+// `sid` means the focused pane's agent. A docked shell's id lands on the agent
+// its dock hangs off (paneViewTarget): a view never describes a shell docked
+// beside it. Opens, never toggles (the header tab toggles: Cell.toggleView).
+// The palette, the header's context %, the ⋯ menu's Context by tool and the
+// sidebar's "SSO expired · Sign in" use it. false on mobile, which has no views.
+function openPaneView(sid, kind) {
+  if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return false;
+  const model = () => ({ cells: cells.map((c) => ({ term: (cellTerminal(c) || {}).id || null, tabs: c.tabs, dock: c.dock })) });
+  let at = paneViewTarget(model(), sid, cells.indexOf(focusedCell));
+  if (!at && sid != null) {
+    const s = (lastSessions || []).find((x) => x.id === sid);
+    openTerminal(sid, (s && (s.name || s.id)) || sid);
+    at = paneViewTarget(model(), sid, cells.indexOf(focusedCell));
+  }
+  if (!at) return false;
+  const cell = cells[at.cellIndex];
+  const t = cell.tabs.find((x) => x.kind === "terminal" && x.id === at.sid);
+  setFocusedCell(cell);
+  // Another of the pane's terminals in front: bring this one up first (activate
+  // returns the pane to Terminal, so the view is set after it).
+  if (t && cellTerminal(cell) !== t) cell.activate(t);
+  cell.setView(kind);
+  return true;
+}
+
+// paintPaneViewPlaceholder fills a view whose kind has no renderer yet
+// (paneViewRenderers): its name and the session it describes.
+function paintPaneViewPlaceholder(host, kind, term) {
+  const s = (lastSessions || []).find((x) => x.id === term.id);
+  const wrap = document.createElement("div");
+  wrap.className = "pv-ph";
+  const h = document.createElement("h2");
+  h.className = "pv-ph-t";
+  h.textContent = kind === "access" ? "Access" : "Activity";
+  const n = document.createElement("div");
+  n.className = "pv-ph-s";
+  n.textContent = (s && (s.name || s.id)) || term.title();
+  wrap.append(h, n);
+  host.append(wrap);
   return null;
 }
 

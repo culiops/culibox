@@ -94,6 +94,39 @@ function hitsUnderRoot(hits, root) {
   return hits.filter((h) => !!h && typeof h.path === "string" && h.path.startsWith(prefix) && h.path.length > prefix.length);
 }
 
+// changedSet: the paths to mark with the agent-changed dot in the tree under
+// `root`. `files` is the activity reply's [{path, add, del}] (absolute paths as
+// the agent wrote them). The set holds each changed file and every folder
+// between it and the root, so a collapsed folder shows the dot too; the root
+// itself is never in it, and a path outside the root (or relative, or equal to
+// the root) is ignored. Paths are normalized (no `.`, `..`, doubled or
+// trailing slashes) and compared by segment, so /w2/x does not belong to /w.
+function changedSet(files, root) {
+  const out = new Set();
+  const base = changedSegs(root);
+  if (!base || !Array.isArray(files)) return out;
+  for (const f of files) {
+    const segs = f && typeof f.path === "string" ? changedSegs(f.path) : null;
+    if (!segs || segs.length <= base.length) continue;
+    if (!base.every((seg, i) => segs[i] === seg)) continue;
+    for (let n = base.length + 1; n <= segs.length; n++) out.add("/" + segs.slice(0, n).join("/"));
+  }
+  return out;
+}
+
+// changedSegs: the segments of an absolute path, normalized; null for anything
+// else (not a string, relative, empty) and for a path that climbs above "/".
+function changedSegs(p) {
+  if (typeof p !== "string" || p.charAt(0) !== "/") return null;
+  const out = [];
+  for (const part of p.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") { if (!out.length) return null; out.pop(); continue; }
+    out.push(part);
+  }
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { drawerActions, rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot };
+  module.exports = { drawerActions, rememberDrawerFile, drawerFileFor, drawerLeavesFile, discardAsk, drawerTreeBlocked, goToFileURL, hitsUnderRoot, changedSet };
 }

@@ -154,6 +154,9 @@ func (m *mockSvc) Rename(id, name string) error {
 	m.renamedID, m.renamedName = id, name
 	return m.renameErr
 }
+func (m *mockSvc) TimelineFor(id string, beforeMS int64, limit int) (session.Timeline, bool) {
+	return session.Timeline{}, false
+}
 func (m *mockSvc) UsageFor(id string) (session.Usage, bool) { return m.usage, m.usageOK }
 func (m *mockSvc) AttributionFor(id string) (session.Attribution, bool) {
 	return m.attr, m.attrOK

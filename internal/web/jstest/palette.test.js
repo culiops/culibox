@@ -140,15 +140,20 @@ test("palModHint follows the selected row's kind (⌘↵ keeps inserting a file'
   assert.strictEqual(palModHint("view", false), "");
 });
 
-test("paletteShellCommands: desktop offers shortcuts, files drawer and the Access entry once", () => {
+test("paletteShellCommands: desktop offers shortcuts, files drawer and the Activity and Access views once", () => {
   const { paletteShellCommands } = require("../static/palette.js");
-  const noop = {};
-  const cmds = paletteShellCommands(false, true, noop);
+  const ran = [];
+  const cmds = paletteShellCommands(false, true, { activityView: () => ran.push("activity"), accessView: () => ran.push("access") });
   const ids = cmds.map((c) => c.id);
-  for (const id of ["shortcuts", "files-drawer", "access-drawer"]) assert.ok(ids.includes(id), id);
+  for (const id of ["shortcuts", "files-drawer", "activity-view", "access-view"]) assert.ok(ids.includes(id), id);
+  assert.ok(!ids.includes("access-drawer"), "Access is a pane view, not a drawer");
   assert.ok(!ids.includes("steer-rail"), "no second Access entry");
   assert.ok(!ids.includes("toggle-files"), "the old files collapse is dead on desktop (R17)");
-  assert.equal(cmds.find((c) => c.id === "access-drawer").label, "Session details (Access)");
+  assert.equal(cmds.find((c) => c.id === "access-view").label, "Access");
+  assert.equal(cmds.find((c) => c.id === "activity-view").label, "Activity");
+  cmds.find((c) => c.id === "activity-view").run();
+  cmds.find((c) => c.id === "access-view").run();
+  assert.deepEqual(ran, ["activity", "access"]);
   assert.equal(cmds.find((c) => c.id === "files-drawer").hint, "Ctrl+Alt+F");
 });
 
@@ -185,4 +190,16 @@ test("palSessionRun: a nested shell is revealed beside its parent, any other ses
   palSessionRun({ id: "a-1", name: "agent" }, false, act)();
   palSessionRun({ id: "a-2" }, false, act)();
   assert.deepEqual(calls, [["reveal", "sh-1"], ["open", "a-1", "agent"], ["open", "a-2", "a-2"]]);
+});
+
+test("paletteProfileSpawns: one entry per profile, no hint (bin is not shown), opens the dialog on it", () => {
+  const { paletteProfileSpawns } = require("../static/palette.js");
+  const opened = [];
+  const cmds = paletteProfileSpawns([{ name: "host-zsh", bin: "/usr/bin/zsh" }, { name: "claude", bin: "claude" }], (n) => opened.push(n));
+  assert.deepEqual(cmds.map((c) => [c.kind, c.label, c.hint]), [
+    ["new", "New session · host-zsh", ""],
+    ["new", "New session · claude", ""],
+  ]);
+  cmds.forEach((c) => c.run());
+  assert.deepEqual(opened, ["host-zsh", "claude"]);
 });
