@@ -146,6 +146,9 @@ let drawerState = { open: null, sessionId: null };
 // poll repaints it only when what it says changed. Declared up here for the
 // same reason as drawerState: renderGrid reads it while boot builds the cells.
 let emptyShownKey = "";
+// The boot restore has run (or given up): until then the grid may be about to
+// get its tabs back, so the empty state stays silent instead of flashing.
+let bootRestoreDone = false;
 // node -> { parent, next }: where a moved node came from. Filled on the first
 // move only, emptied by restoreDrawerNodes.
 const drawerOrigins = new Map();
@@ -4356,7 +4359,10 @@ async function spawnSession(req, opts) {
       agent: req.agent, cwd: req.cwd || "", options: req.options || {},
     }));
   } catch (_) {}
-  writeRecent(localStorage, pushRecentProfile(readRecent(localStorage), req.agent));
+  {
+    const st = deskStorage();
+    writeRecent(st, pushRecentProfile(readRecent(st), req.agent));
+  }
   await refreshSessions();
   openTerminal(s.id, s.name);
   if (opts.toast !== false) {
@@ -4579,9 +4585,11 @@ async function openSpawnDialog(preselectAgent, prefill) {
 // Everything profile- or path-derived goes in through textContent.
 function emptyStateInput() {
   return {
-    sessions: sessionsLoaded ? lastSessions : null,
+    // Unknown sessions (null) keep the model silent: a built-in-only user with
+    // live sessions must not see the first-run screen while the poll is out.
+    sessions: sessionsLoaded && bootRestoreDone ? lastSessions : null,
     profiles: profilesLoaded ? profiles : null,
-    recent: readRecent(localStorage),
+    recent: readRecent(deskStorage()),
   };
 }
 
@@ -5512,9 +5520,13 @@ loadOptionDefs().then(newProfile);
   if (sessions === null) {
     if (retry) { setTimeout(() => restoreBoot(false), 2000); return; }
     endRestore(false); // never persist the empty boot grid over a real snapshot
+    bootRestoreDone = true;
+    refreshEmptyState();
     return;
   }
   restoreLayout(sessions);
+  bootRestoreDone = true;
+  refreshEmptyState();
 })();
 initFileTree();
 initUpload();

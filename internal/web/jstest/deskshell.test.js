@@ -247,6 +247,28 @@ test("emptyStateModel with sessions present is \"none\" even while profiles load
   }
 });
 
+test("emptyStateModel is silent while the session list is unknown", () => {
+  const builtin = [{ name: "claude", editable: false }];
+  assert.equal(d.emptyStateModel({ sessions: null, profiles: builtin, recent: [] }).kind, null, "no first-run flash for a user with live sessions");
+  assert.equal(d.emptyStateModel({ sessions: undefined, profiles: builtin, recent: [] }).kind, null);
+  assert.equal(d.emptyStateModel({ sessions: [], profiles: builtin, recent: [] }).kind, "first", "a known empty list still means first run");
+});
+
+test("deskStorage returns null when reading localStorage throws, and the helpers cope", () => {
+  const had = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, get() { throw new Error("SecurityError"); } });
+  try {
+    let st;
+    assert.doesNotThrow(() => { st = d.deskStorage(); });
+    assert.equal(st, null);
+    assert.deepEqual(d.readRecent(st), []);
+    assert.doesNotThrow(() => d.writeRecent(st, ["a"]));
+  } finally {
+    if (had) Object.defineProperty(globalThis, "localStorage", had); else delete globalThis.localStorage;
+  }
+  assert.equal(d.deskStorage(), null, "absent storage is null too");
+});
+
 test("readRecent/writeRecent round-trip in order and never throw", () => {
   const mem = {};
   const ok = { getItem: (k) => (k in mem ? mem[k] : null), setItem: (k, v) => { mem[k] = String(v); } };
