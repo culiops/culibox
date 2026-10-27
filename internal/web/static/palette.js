@@ -196,14 +196,19 @@ function paletteShellSpawn(desktop, spawn) {
 // and into paletteSessions(), instead of adding another copy of this regex
 // alongside the ones already in app.js (twice) and palette.js's shortcut-hint
 // block below.
+// One "New session · X" entry per profile. The hint stays empty on both
+// layouts (v0.3.0): ProfileView.bin is for the spawn dialog, and an absolute
+// shell path is no use as a right-aligned palette hint.
+function paletteProfileSpawns(list, open) {
+  return list.map((p) => ({ kind: "new", label: "New session · " + p.name, hint: "", run: () => open(p.name) }));
+}
+
 function paletteCommands(mac) {
   const cmds = [];
   // Every spawn goes through the form: under containment the workspace choice
   // IS the security boundary, so the palette preselects the profile and lets
   // the form ask the rest rather than starting an agent from a keystroke.
-  for (const p of profiles) {
-    cmds.push({ kind: "new", label: "New session · " + p.name, hint: p.bin || "", run: () => openSpawnDialog(p.name) });
-  }
+  cmds.push(...paletteProfileSpawns(profiles, openSpawnDialog));
   cmds.push({ kind: "new", label: "New session…", hint: "", run: () => openSpawnDialog() });
   if (window.shellProfile) {
     const deskShell = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
@@ -565,5 +570,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns };
 }

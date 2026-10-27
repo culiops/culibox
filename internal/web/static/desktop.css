@@ -817,9 +817,12 @@
   .act-row.you .act-detail { font-family: var(--font-ui); font-size: 13px; }
   .act-row.open .act-detail { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
   .act-out { color: var(--muted); font-size: 12px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .act-ok { color: var(--ok); }
-  .act-amber { color: var(--amber); }
-  .act-muted { color: var(--muted); }
+  /* Tone classes are compounded with .act-out: a bare .act-err/.act-ok declared
+     earlier loses to .act-out's muted colour (equal specificity, later rule). */
+  .act-ok, .act-out.act-ok { color: var(--ok); }
+  .act-amber, .act-out.act-amber { color: var(--amber); }
+  .act-out.act-err { color: var(--danger); }
+  .act-muted, .act-out.act-muted { color: var(--muted); }
   .act-add, .act-del { color: var(--muted); }
   .act-foot { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 10px 16px 16px; }
   .act-foot:empty { display: none; }
@@ -845,7 +848,9 @@
   /* 820px: the profile list on the left, the form and the reach box on the
      right. The Profile control of the form (#spawn-agent-row) is replaced by the
      list, which writes the same #agent select; it stays in the DOM. */
-  #spawn-modal { width: 820px; max-width: 96vw; }
+  /* The dialog fits the viewport (the base 88vh left the Spawn row clipped at
+     1280x800): the body scrolls and the action row stays pinned to its bottom. */
+  #spawn-modal { width: 820px; max-width: 96vw; max-height: calc(100vh - 32px); }
   #spawn-modal .dlg-body { display: flex; padding: 0; }
   #spawn-plist {
     display: flex; flex-direction: column; gap: 2px; flex: none; width: 236px; box-sizing: border-box;
@@ -905,6 +910,9 @@
     font-size: 10px; font-weight: 700; letter-spacing: .05em; color: var(--red);
   }
 
-  #spawn .spawn-actions { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  #spawn .spawn-actions {
+    position: sticky; bottom: 0; z-index: 2; margin-top: 4px; padding: 12px 0 14px;
+    background: var(--panel); border-top: 1px solid var(--line);
+  }
   #spawn-foot-hint { display: inline; margin-right: auto; font-size: 12px; color: var(--faint); }
 }

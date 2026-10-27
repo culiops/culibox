@@ -191,3 +191,15 @@ test("palSessionRun: a nested shell is revealed beside its parent, any other ses
   palSessionRun({ id: "a-2" }, false, act)();
   assert.deepEqual(calls, [["reveal", "sh-1"], ["open", "a-1", "agent"], ["open", "a-2", "a-2"]]);
 });
+
+test("paletteProfileSpawns: one entry per profile, no hint (bin is not shown), opens the dialog on it", () => {
+  const { paletteProfileSpawns } = require("../static/palette.js");
+  const opened = [];
+  const cmds = paletteProfileSpawns([{ name: "host-zsh", bin: "/usr/bin/zsh" }, { name: "claude", bin: "claude" }], (n) => opened.push(n));
+  assert.deepEqual(cmds.map((c) => [c.kind, c.label, c.hint]), [
+    ["new", "New session · host-zsh", ""],
+    ["new", "New session · claude", ""],
+  ]);
+  cmds.forEach((c) => c.run());
+  assert.deepEqual(opened, ["host-zsh", "claude"]);
+});

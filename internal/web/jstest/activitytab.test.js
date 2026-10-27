@@ -156,3 +156,27 @@ test("a diff's +a −d is neutral text: green and red are status and error roles
     for (const r of rules) assert.doesNotMatch(r, /var\(--(ok|danger|amber)\)/, cls);
   }
 });
+
+// .act-out sets the muted default; a tone class that does not out-rank it (equal
+// specificity, declared earlier) silently paints "error · exit 2" grey. Every tone
+// the outcome cell can carry must be compounded with .act-out.
+test("outcome tone colours out-rank the muted .act-out default", () => {
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = css.split("}").map((r) => r.split("{")).filter((r) => r.length === 2);
+  const colour = (sel) => {
+    const hit = rules.filter(([s]) => s.split(",").map((x) => x.trim()).includes(sel));
+    assert.ok(hit.length, sel + " is styled");
+    return hit.map(([, b]) => (b.match(/color:\s*var\(--(\w+)\)/) || [])[1]).pop();
+  };
+  assert.strictEqual(colour(".act-out"), "muted");
+  assert.strictEqual(colour(".act-out.act-err"), "danger");
+  assert.strictEqual(colour(".act-out.act-ok"), "ok");
+  assert.strictEqual(colour(".act-out.act-amber"), "amber");
+  assert.strictEqual(colour(".act-out.act-muted"), "muted");
+});
+
+test("the New session dialog fits the viewport and keeps its action row pinned", () => {
+  const css = fs.readFileSync(path.join(STATIC, "desktop.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.match(css, /#spawn-modal\s*\{[^}]*max-height:\s*calc\(100vh - 32px\)/);
+  assert.match(css, /#spawn \.spawn-actions\s*\{[^}]*position:\s*sticky;[^}]*bottom:\s*0/);
+});
