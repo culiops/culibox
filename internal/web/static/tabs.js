@@ -576,13 +576,17 @@ class Cell {
       pendingSends.has(s.id), ssoLocalSig(s.id)].join("|") : "";
     const key = model ? "d:" + stripKey(s, this.activeTab && this.activeTab.kind, globalThis.repliesEnabled === true) + "|" + local : "";
     if (key === this._needsKey) return;
-    // A half-typed reply outranks a repaint: while the strip holds focus, a poll
-    // that moved only something incidental (summary, AWS connections, SSO state)
-    // leaves it alone, as the old card's holdList did. The key is NOT stored, so
-    // the repaint lands on the first sync after focus leaves. A new need or a new
-    // ask (its full text hashed), or the need ending, still replaces it at once.
-    const holdSig = model ? stripHoldKey(s) : "";
-    if (this._strip && model && holdSig === this._holdSig && this._strip.contains(document.activeElement)) return;
+    // A half-typed reply outranks a repaint: while the reply FIELD has focus, a
+    // poll that moved only something incidental (summary, AWS connections, SSO
+    // state) leaves the strip alone, as the old card's holdList did. Focus on any
+    // other control (the expand text, Enable replies) holds nothing: those clicks
+    // change what the strip must show. The key is NOT stored, so the repaint lands
+    // on the first sync after focus leaves. A new need or ask, or a change to the
+    // reply gate (stripHoldKey), still replaces it at once.
+    const repOn = globalThis.repliesEnabled === true;
+    const holdSig = model ? stripHoldKey(s, repOn) : "";
+    const ae = document.activeElement;
+    if (this._strip && model && holdSig === this._holdSig && ae && ae.matches && ae.matches(".fld") && this._strip.contains(ae)) return;
     this._needsKey = key;
     this._holdSig = holdSig;
     this.dropStrip();

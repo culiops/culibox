@@ -316,13 +316,18 @@ test("drawerFor keeps the drawer open on a different session with the same kind"
   assert.deepEqual(d.drawerFor({ open: "files", sessionId: "a" }, "files", "b"), { open: "files", sessionId: "b" });
 });
 
-test("stripHoldKey moves with the session, need and ask, not with the incidental fields", () => {
-  const a = { id: "s1", need: "ask", ask: "ls", ask_full: "ls -la", summary: "x", aws_connections: null };
-  assert.equal(d.stripHoldKey(a), d.stripHoldKey({ ...a, summary: "y", aws_connections: [{ name: "p" }] }));
-  assert.notEqual(d.stripHoldKey(a), d.stripHoldKey({ ...a, ask_full: "rm -rf x" }));
-  assert.notEqual(d.stripHoldKey(a), d.stripHoldKey({ ...a, need: "turn" }));
-  assert.notEqual(d.stripHoldKey(a), d.stripHoldKey({ ...a, id: "s2" }));
-  assert.equal(d.stripHoldKey(null), "");
+test("stripHoldKey moves with the session, need, ask and the reply gate, not with incidental fields", () => {
+  const a = { id: "s1", need: "turn", ask: "ls", ask_full: "ls -la", summary: "x", aws_connections: null, replyable: true, claude: true };
+  assert.equal(d.stripHoldKey(a, true), d.stripHoldKey({ ...a, summary: "y", aws_connections: [{ name: "p" }] }, true));
+  assert.notEqual(d.stripHoldKey(a, true), d.stripHoldKey({ ...a, ask_full: "rm -rf x" }, true));
+  assert.notEqual(d.stripHoldKey(a, true), d.stripHoldKey({ ...a, need: "ask" }, true));
+  assert.notEqual(d.stripHoldKey(a, true), d.stripHoldKey({ ...a, id: "s2" }, true));
+  // The gate: revoked replyability and the kill-switch must rebuild a strip being typed in.
+  assert.notEqual(d.stripHoldKey(a, true), d.stripHoldKey({ ...a, replyable: false }, true));
+  assert.notEqual(d.stripHoldKey(a, true), d.stripHoldKey({ ...a, claude: false }, true));
+  assert.notEqual(d.stripHoldKey(a, true), d.stripHoldKey(a, false));
+  assert.equal(d.stripHoldKey(a, false), d.stripHoldKey(a, undefined));
+  assert.equal(d.stripHoldKey(null, true), "");
 });
 
 test("shortcutRows lists the real bindings and ends with the runtime row", () => {

@@ -214,12 +214,14 @@ function stripKey(s, activeKind, repliesEnabled) {
   ]);
 }
 
-// stripHoldKey: what makes a strip with focus in it worth replacing at once: a
-// different session, need or ask. Everything else stripKey carries (summary, AWS
-// connections, SSO state) waits until focus leaves, so a half-typed reply survives.
-function stripHoldKey(s) {
+// stripHoldKey: what replaces a strip even while its reply field has focus: a
+// different session, need or ask, and anything that opens or closes the reply
+// gate (the replies kill-switch, the session's replyable/claude flags). Every
+// other stripKey input (summary, AWS connections, SSO state) waits until focus
+// leaves, so a half-typed reply survives; a closed gate must always show closed.
+function stripHoldKey(s, repliesEnabled) {
   if (!s) return "";
-  return JSON.stringify([s.id, s.need || "", s.ask || "", deskHash(s.ask_full)]);
+  return JSON.stringify([s.id, s.need || "", s.ask || "", deskHash(s.ask_full), !!s.replyable, !!s.claude, repliesEnabled === true]);
 }
 
 // deskHash: a cheap 32-bit string hash (FNV-1a) for keys; not for security. The
