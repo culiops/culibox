@@ -838,4 +838,72 @@
   .act-file { display: flex; gap: 10px; align-items: baseline; justify-content: space-between; font: 12px var(--font-mono); }
   .act-fpath { min-width: 0; overflow-wrap: anywhere; }
   .act-fdelta { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  /* --- New session dialog (spec 5.6) -------------------------------------- */
+  /* 820px: the profile list on the left, the form and the reach box on the
+     right. The Profile control of the form (#spawn-agent-row) is replaced by the
+     list, which writes the same #agent select; it stays in the DOM. */
+  #spawn-modal { width: 820px; max-width: 96vw; }
+  #spawn-modal .dlg-body { display: flex; padding: 0; }
+  #spawn-plist {
+    display: flex; flex-direction: column; gap: 2px; flex: none; width: 236px; box-sizing: border-box;
+    padding: 12px 8px; border-right: 1px solid var(--line); overflow-y: auto;
+  }
+  .sp-head { padding: 2px 10px 8px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  .sp-item {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; box-sizing: border-box;
+    padding: 8px 10px; text-align: left; font: inherit; color: var(--fg); cursor: pointer;
+    background: transparent; border: 0; border-left: 2px solid transparent; border-radius: var(--r-ctl);
+  }
+  .sp-item:hover { background: var(--raise); }
+  .sp-item.sel { background: var(--raise); border-left-color: var(--accent); }
+  .sp-name { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+  .sp-touch { font-size: 12px; font-weight: 400; color: var(--muted); overflow-wrap: anywhere; }
+
+  #spawn { flex: 1; min-width: 0; align-content: start; padding: 14px 18px; grid-template-columns: repeat(12, minmax(0, 1fr)); }
+  #spawn label { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--muted); }
+  #spawn select, #spawn input, #spawn textarea { border-color: var(--line); border-radius: var(--r-ctl); }
+  .spawn-lbl-model { display: inline; }
+  #spawn-agent-row, #spawn-prompt-hint { display: none; }
+  /* #tier-explain is shown and hidden by an inline style (syncRuntimeField); the
+     reach box says the same thing, so it stays hidden here. */
+  #tier-explain { display: none !important; }
+
+  /* Fields in the order of the design; the grid is 12 columns wide. */
+  #spawn > #spawn-ws-row, #spawn > #spawn-name-row { grid-column: span 6; }
+  #spawn > #effort-row { grid-column: span 8; }
+  #spawn > #runtime-row { grid-column: span 4; }
+  #spawn > #spawn-ws-row { order: 1; }
+  #spawn > #spawn-name-row { order: 2; }
+  #spawn > #spawn-prompt-row { order: 3; }
+  #spawn > #effort-row { order: 4; }
+  #spawn > #runtime-row { order: 5; }
+  #spawn > #spawn-account-row { order: 6; }
+  #spawn > #spawn-replies-row { order: 7; }
+  #spawn > #spawn-warn-row { order: 8; }
+  #spawn > #spawn-adv { order: 9; }
+  #spawn > #spawn-reach { order: 10; }
+  #spawn > #spawn-unlock { order: 11; }
+  #spawn > #spawn-err { order: 12; }
+  #spawn > .spawn-actions { order: 13; }
+  #effort-slot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  #effort-slot .opt, #effort-slot .opt.opt-seg { flex: none; flex-direction: row; align-items: center; }
+  #effort-slot select { width: auto; max-width: 190px; font-family: var(--font-mono); }
+  #spawn-name-row input::placeholder { color: var(--faint); }
+
+  /* The reach box: what this session will be able to touch, from the profile. */
+  #spawn-reach { display: block; box-sizing: border-box; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-card); }
+  .sr-title { margin-bottom: 8px; font-size: 13px; font-weight: 600; color: var(--fg); }
+  .sr-row { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; padding: 3px 0; font-size: 13px; line-height: 1.45; }
+  .sr-k { color: var(--muted); }
+  .sr-v { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+  .sr-row.tone-bad .sr-v { color: var(--red); }
+  .sr-row.tone-warn .sr-v { color: var(--amber); }
+  .sr-prod {
+    margin: 0 6px; padding: 0 5px; border: 1px solid var(--red); border-radius: var(--r-chip);
+    font-size: 10px; font-weight: 700; letter-spacing: .05em; color: var(--red);
+  }
+
+  #spawn .spawn-actions { margin-top: 4px; padding-top: 12px; border-top: 1px solid var(--line); }
+  #spawn-foot-hint { display: inline; margin-right: auto; font-size: 12px; color: var(--faint); }
 }

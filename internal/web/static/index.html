@@ -204,19 +204,20 @@
       <span class="spawn-title">New session</span>
     </div>
     <div class="dlg-body">
+      <div id="spawn-plist" role="group" aria-label="Profile"></div>
       <form id="spawn">
-        <div>
+        <div id="spawn-agent-row">
           <label for="agent">Profile</label>
           <div class="seg" id="agent-seg" data-value="" role="group" aria-label="Profile" hidden></div>
           <select id="agent"></select>
           <div class="form-hint">Defaults come from the profile (Settings ⚙). Anything
             you change here applies to this run only.</div>
         </div>
-        <div>
+        <div id="spawn-name-row">
           <label for="sess-name">Name (optional)</label>
           <input id="sess-name" type="text" placeholder="auto: working dir name" autocomplete="off" spellcheck="false">
         </div>
-        <div class="span2">
+        <div class="span2" id="spawn-ws-row">
           <label for="spawn-ws-input">Workspace</label>
           <input id="spawn-ws-input" type="text" role="combobox" autocomplete="off"
                  spellcheck="false" aria-expanded="false" aria-controls="spawn-ws-list"
@@ -235,7 +236,7 @@
           <div class="seg" id="runtime-seg" data-value="" role="group" aria-label="Containment"></div>
         </div>
         <div id="effort-row">
-          <label>Effort</label>
+          <label><span class="spawn-lbl-model">Model &middot; </span>Effort</label>
           <div id="effort-slot"></div>
         </div>
         <div class="span2" id="spawn-account-row" hidden>
@@ -246,7 +247,7 @@
           <div><b>box</b> — the agent sees only <span id="tier-explain-cwd"></span>.</div>
           <div><b class="dgr">host</b> — the agent has your whole account.</div>
         </div>
-        <div class="span2">
+        <div class="span2" id="spawn-warn-row">
           <div class="warnbox" id="runtime-warn" hidden>Runs on your host with your user's full access: files, keys, network.</div>
         </div>
         <div class="span2" id="spawn-replies-row" hidden>
@@ -257,9 +258,11 @@
           <span class="spawn-adv-label">Advanced</span>
           <div id="options"></div>
         </div>
+        <div class="span2" id="spawn-reach" role="group" aria-label="This agent will be able to"></div>
         <div class="span2 spawn-unlock" id="spawn-unlock" role="region" aria-label="Unlock the secret store" hidden></div>
         <div class="dlg-err span2" id="spawn-err"></div>
         <div class="spawn-actions span2">
+          <span id="spawn-foot-hint">Ctrl+Enter to spawn</span>
           <button type="button" class="btn gh" data-close="spawn-modal">Cancel</button>
           <button type="submit" class="btn pri">Spawn ⏎</button>
         </div>
@@ -698,6 +701,8 @@
   <script src="/sheet.js"></script>
   <script src="/drawerfiles.js"></script>
   <script src="/filesdrawer.js"></script>
+  <script src="/spawnpreview.js"></script>
+  <script src="/spawnpanel.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

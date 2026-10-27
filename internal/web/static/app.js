@@ -3079,6 +3079,7 @@ function renderProfileSeg() {
       sel.dispatchEvent(new Event("change"));
     });
   }
+  renderSpawnPlist(); // the desktop dialog's profile list (spawnpanel.js); a no-op on mobile
 }
 // D5 routes the Effort enum into its own slot beside Containment; every other
 // profile option (Model, Bypass permissions) stays in the Advanced group
@@ -3101,12 +3102,16 @@ function renderOptions() {
   const p = currentProfile();
   const opts = (p && p.options) || [];
   const effortRows = [], advRows = [];
+  const deskModelSlot = drawerDesktop();
   for (const o of opts) {
     const row = document.createElement("div");
     row.className = "opt";
     const lbl = document.createElement("label");
     lbl.textContent = o.label || o.key;
     let ctrl;
+    // Desktop: Model sits beside Effort ("Model · effort", spec 5.6) as a select,
+    // which is as narrow as the model name rather than a seg of long names.
+    const deskModel = deskModelSlot && o.key === "model" && o.type !== "bool";
     if (o.type === "bool") {
       ctrl = document.createElement("input");
       ctrl.type = "checkbox";
@@ -3115,7 +3120,7 @@ function renderOptions() {
       ctrl.onchange = () => syncSpawnExtras(false); // the bypass warning reads it
     } else {
       const choices = o.choices || [];
-      if (choices.length > 0 && choices.length <= 5) {
+      if (!deskModel && choices.length > 0 && choices.length <= 5) {
         ctrl = document.createElement("div");
         ctrl.className = "seg";
         buildSeg(ctrl, choices.map((c) => ({ value: c, label: c })), o.value || "");
@@ -3137,7 +3142,8 @@ function renderOptions() {
     ctrl.dataset.key = o.key;
     ctrl.dataset.type = o.type;
     row.append(lbl, ctrl);
-    (isEffortOptionKey(o.key) ? effortRows : advRows).push(row);
+    if (deskModel) effortRows.unshift(row);
+    else (isEffortOptionKey(o.key) ? effortRows : advRows).push(row);
   }
   const effortSlot = $("effort-slot"), effortRow = $("effort-row");
   if (effortSlot) effortSlot.replaceChildren(...effortRows);
@@ -3170,6 +3176,7 @@ $("agent").addEventListener("change", () => {
   syncSpawnAccount();
   applyProfileCwd();
   syncSpawnExtras(true);
+  syncSpawnPreview();
 });
 
 // applyProfileCwd overwrites the workspace picker with the selected profile's
@@ -4538,6 +4545,7 @@ function paintSpawnAccount(prefillAccount) {
   }));
   sel.value = pick;
   row.hidden = false;
+  syncSpawnPreview(); // the reach box's Account row reads the picked account
 }
 
 // syncSpawnExtras shows the first-message field and the replies toggle only
@@ -4589,6 +4597,7 @@ let spawnPromptDraft = "";
 // refusal (box.ErrUnboxableWorkspace, surfaced by handleSessions in api.go),
 // which still runs regardless of what this function decides to show.
 function updateRuntimeWarning() {
+  syncSpawnPreview(); // tier or workspace changed: the desktop reach box follows
   const seg = $("runtime-seg"), warn = $("runtime-warn");
   if (!seg || !warn) return;
   if (segValue(seg) === "host") {
@@ -4633,9 +4642,11 @@ async function openSpawnDialog(preselectAgent, prefill) {
     spawnOpening = false;
   }
   const last = loadLastSpawn();
+  // An explicit profile (palette, Start, Duplicate) is honoured as asked; the
+  // default pick is the last used, never the quick-shell profile.
   const want = preselectAgent && profiles.some((p) => p.name === preselectAgent)
     ? preselectAgent
-    : (last && last.agent && profiles.some((p) => p.name === last.agent) ? last.agent : "");
+    : pickSpawnProfile(profiles, last, window.shellProfile || "");
   if (want) {
     $("agent").value = want;
     renderOptions();
@@ -4651,24 +4662,13 @@ async function openSpawnDialog(preselectAgent, prefill) {
   $("spawn-prompt").value = spawnPromptDraft;
   spawnPromptDraft = "";
   syncSpawnExtras(true);
-  // Fresh open: don't carry a stale pick across dialog sessions. Then, in
-  // priority order — profile default_cwd wins over the last spawn's cwd,
-  // which wins over a sane tier-appropriate default (mirrors the old
-  // <select>'s implicit first-usable-option default, now that nothing does
-  // that automatically for a free-text field):
-  setSwsCwd("");
-  applyProfileCwd(); // sets swsCwd from the profile, if it declares one
-  const profile = currentProfile();
-  if (!swsCwd) {
-    if (last && last.cwd && !(profile && profile.default_cwd)) {
-      // Unlike the old <select>, an unusable-on-this-tier last cwd is no
-      // longer silently dropped — it's restored and the warning below names
-      // why, so choosing box vs. host stays the user's call, not a discard.
-      setSwsCwd(last.cwd);
-    } else {
-      setSwsCwd(defaultWorkspace(workspacesCache, segValue($("runtime-seg"))));
-    }
-  }
+  // Fresh open: don't carry a stale pick across dialog sessions. In priority
+  // order (pickSpawnCwd): the profile's default_cwd, the last spawn's directory
+  // only when that spawn was of THIS profile (another profile's leftover is never
+  // prefilled), then the first workspace usable on the tier. A last cwd that is
+  // unusable on this tier is still restored; the warning below names why, so
+  // choosing box vs. host stays the user's call, not a silent discard.
+  setSwsCwd(pickSpawnCwd({ profile: currentProfile(), last, workspaces: workspacesCache, tier: segValue($("runtime-seg")) }));
   if (prefill) {
     if (want === prefill.agent) applySpawnPrefill(prefill);
     else showToast('Profile "' + prefill.agent + '" no longer exists — pick one', { error: true });
@@ -4676,6 +4676,7 @@ async function openSpawnDialog(preselectAgent, prefill) {
   onSwsCwdChanged();
   swsSetCaption(spawnWsIdleNote(swsIdleRows().length));
   hideSpawnUnlock();
+  spawnPanelOpen();
   openDialog("spawn-modal");
   setDialogError("spawn-modal", fresh ? "" : "Could not refresh profiles — showing the settings loaded earlier. Reopen to retry.");
   $("sess-name").focus();
@@ -4809,10 +4810,20 @@ function initSpawnControl() {
   $("spawn-go").onclick = () => openSpawnDialog();
   $("side-new").onclick = () => openSpawnDialog(); // the sidebar top's button: the same flow as "+ new"
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
+  $("spawn-account").addEventListener("change", syncSpawnPreview);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
   $("spawn-prompt-hint").textContent = (mac ? "⌘" : "Ctrl") + "+Enter spawns";
-  $("spawn-prompt").addEventListener("keydown", (e) => {
-    if (isSubmitHotkey(e, mac)) { e.preventDefault(); $("spawn").requestSubmit(); }
+  const foot = $("spawn-foot-hint");
+  if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";
+  // From any field of the form (it bubbles up from the first message, the name,
+  // the selects). A button keeps its own Enter; the workspace field keeps Enter
+  // for picking while its list is open.
+  $("spawn").addEventListener("keydown", (e) => {
+    if (!isSubmitHotkey(e, mac)) return;
+    if (e.target && (e.target.tagName === "BUTTON" || (e.target.closest && e.target.closest("#spawn-unlock")))) return;
+    if (e.target === $("spawn-ws-input") && !$("spawn-ws-list").hidden) return;
+    e.preventDefault();
+    $("spawn").requestSubmit();
   });
 }
 
@@ -4854,6 +4865,7 @@ function showSpawnUnlock(message) {
     done.append(note, retry);
     slot.replaceChildren(done);
     retry.focus();
+    spawnCredsRefetch(); // the reach box's Store row clears
   });
   box.replaceChildren(txt, slot);
   box.hidden = false;
