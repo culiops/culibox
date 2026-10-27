@@ -674,4 +674,83 @@
   .CodeMirror.cm-s-default .cm-bracket { color: #a8b0ba; }
   .CodeMirror.cm-s-default .cm-link { color: var(--accent); }
   .CodeMirror.cm-s-default .cm-error { color: var(--danger); }
+  /* --- Access view (spec 5.7; sa-1.png, sa-2.png) ---------------------------- */
+  /* Colour roles: red = write / prod / error only, amber = needs-you only,
+     green = status only. Containment is neutral text. */
+  .ac-wrap { display: flex; flex-direction: column; gap: 12px; padding: 14px 16px 18px; min-width: 0; }
+  .ac-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-card); min-width: 0; overflow: hidden; }
+  .ac-card.elevated { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+  .ac-head { display: flex; align-items: baseline; gap: 12px; padding: 11px 14px; }
+  .ac-title { font: 600 13px var(--font-ui); color: var(--fg); }
+  .ac-meta { margin-left: auto; color: var(--muted); font-size: 12px; text-align: right; }
+  .ac-lab { font-size: 11px; color: var(--muted); }
+  .ac-val { margin-top: 3px; color: var(--fg); overflow-wrap: anywhere; }
+  .ac-sub { margin-top: 2px; color: var(--faint); font-size: 11.5px; overflow-wrap: anywhere; }
+  .ac-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); border-top: 1px solid var(--line); }
+  .ac-cols .ac-cell { padding: 10px 14px; box-shadow: -1px 0 0 var(--line); }
+  .ac-tier.host { display: inline-block; padding: 0 6px; border-radius: var(--r-chip); box-shadow: inset 0 0 0 1px var(--faint); }
+  .ac-kvs { border-top: 1px solid var(--line); padding: 6px 14px; }
+  .ac-kv { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 4px 0; }
+  .ac-kvv { min-width: 0; overflow-wrap: anywhere; }
+  .ac-cloneline { color: var(--muted); font-size: 12px; }
+  .ac-cloneline.warn { color: var(--fg); font-weight: 600; }
+  .ac-ok { color: var(--ok); }
+  .ac-bad, .ac-write { color: var(--danger); }
+  .ac-need { color: var(--amber); }
+  .ac-empty { padding: 14px; color: var(--muted); }
+  .ac-note { padding: 0 14px 8px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  .ac-note.err { color: var(--danger); }
+
+  /* The open write window: a red band across the top of the credentials card. */
+  .ac-banner {
+    display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+    background: color-mix(in srgb, var(--danger) 14%, var(--panel)); color: var(--fg);
+  }
+  .ac-banner strong { color: var(--danger); font-weight: 700; }
+  .ac-btxt { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  .ac-dropnow { flex: none; border-color: var(--danger); color: var(--danger); border-radius: var(--r-ctl); }
+
+  .ac-rowblk { border-top: 1px solid var(--line); }
+  .ac-row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: flex-start; padding: 10px 14px; }
+  .ac-row > .ac-id { flex: 1.5 1 220px; min-width: 0; }
+  .ac-row > .ac-cell { flex: 1 1 110px; min-width: 0; }
+  .ac-nameline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .ac-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ac-prod {
+    flex: none; font: 700 10px/16px var(--font-ui); letter-spacing: .04em; padding: 0 5px;
+    color: var(--danger); border: 1px solid var(--danger); border-radius: var(--r-chip);
+  }
+  .ac-acts { display: flex; gap: 6px; justify-content: flex-end; flex: 0 0 auto; margin-left: auto; }
+  .ac-acts .btn, .ac-pbtns .btn, .ac-dropnow { border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); padding: 4px 10px; }
+  .ac-acts .btn.dgr, .ac-dropnow { border-color: var(--danger); color: var(--danger); }
+  .ac-pbtns .btn.pri { border-color: var(--accent); color: var(--accent); }
+  .ac-sso { padding: 0 14px 10px; }
+  .ac-sso .ssocard { background: var(--raise); border: 1px solid var(--line); border-radius: var(--r-ctl); padding: 10px 12px; }
+
+  /* The inline grant panel. */
+  .ac-panel { display: flex; flex-direction: column; gap: 10px; margin: 0 14px 12px; padding: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  .ac-plead { overflow-wrap: anywhere; }
+  .ac-pfields { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  .ac-pcol { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .ac-pcol.grow { flex: 1 1 200px; }
+  .ac-pcol .fld { width: 100%; box-sizing: border-box; border-radius: var(--r-ctl); background: var(--raise); border-color: var(--line); }
+  .ac-panel .seg { border-radius: var(--r-ctl); border-color: var(--line); overflow: hidden; }
+  .ac-prole { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
+  .ac-hint { color: var(--muted); font-size: 11.5px; }
+  .ac-hint:empty { display: none; }
+  .ac-err { color: var(--danger); overflow-wrap: anywhere; }
+  .ac-err[hidden] { display: none; }
+  .ac-warn { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-size: 12px; overflow-wrap: anywhere; }
+  .ac-warn ul { margin: 4px 0 0; padding-left: 16px; }
+  .ac-pbtns { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* Recent credential events. */
+  .ac-ev { border-top: 1px solid var(--line); overflow-x: auto; }
+  .ac-evrow { display: grid; grid-template-columns: 90px 80px minmax(160px, 1fr) 150px 70px; min-width: 520px; gap: 12px; padding: 7px 14px; border-top: 1px solid var(--line); align-items: start; }
+  .ac-evrow:first-child { border-top: 0; }
+  .ac-evhead { padding-top: 8px; padding-bottom: 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .ac-evt { font-variant-numeric: tabular-nums; }
+  .ac-evs { min-width: 0; overflow-wrap: anywhere; }
+  .ac-evs .ac-sub { font-family: var(--font-ui); }
+
 }

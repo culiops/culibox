@@ -1177,60 +1177,50 @@ function buildElevPanel(s, gp, extend) {
   return box;
 }
 
-// submitElevGrant: POST the grant (an extension is the same endpoint). The
-// browser adds Origin itself; the server accepts only a signed-in browser.
+// submitElevGrant: POST the grant (an extension is the same endpoint); the
+// request itself is elevGrant's (elevation.js), shared with the Access view.
 async function submitElevGrant(s, gp) {
   if (elevBusy) return;
   const id = s.id;
   elevBusy = id;
   elevErr = { id: "", text: "" };
   elevRepaint(id);
-  let status = 0;
-  let body = null;
+  let failure = null;
   try {
-    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(grantBody(elevDraft.minutes, elevDraft.reason, elevDraft.label, gp.needLabel, hasConns(s) ? gp.selected : "")),
+    await elevGrant(id, {
+      name: hasConns(s) ? gp.selected : "", minutes: elevDraft.minutes, reason: elevDraft.reason,
+      confirm_label: gp.needLabel ? elevDraft.label : undefined,
     });
-    status = res.status;
-    try { body = await res.json(); } catch (_) { body = null; }
-  } catch (_) { status = 0; }
+  } catch (e) { failure = e; }
   elevBusy = null;
-  if (status === 200) {
+  if (!failure) {
     elevPanelFor = null;
     elevErr = { id: "", text: "" };
     elevDraft = { id: "", minutes: 0, reason: "", label: "" };
     loadAwsRailStats(id);
     if (typeof refreshSessions === "function") refreshSessions();
   } else {
-    elevErr = { id: id, text: grantErrorText(status, body && body.error) };
+    elevErr = { id: id, text: failure.message };
   }
   elevRepaint(id);
 }
 
-// dropElevation: lowering power needs no panel and no label.
+// dropElevation: lowering power needs no panel and no label (elevDrop's request).
 async function dropElevation(s) {
   if (elevBusy) return;
   const id = s.id;
   elevBusy = id;
   elevRepaint(id);
-  let status = 0;
-  let body = null;
-  try {
-    const res = await fetch("/api/sessions/" + encodeURIComponent(id) + "/aws/elevate", { method: "DELETE" });
-    status = res.status;
-    try { body = await res.json(); } catch (_) { body = null; }
-  } catch (_) { status = 0; }
+  let view = null;
+  let failure = null;
+  try { view = await elevDrop(id); } catch (e) { failure = e; }
   elevBusy = null;
-  if (status === 200) {
-    showToast(dropToast(body && body.elevation));
+  if (!failure) {
+    showToast(dropToast(view));
     loadAwsRailStats(id);
     if (typeof refreshSessions === "function") refreshSessions();
   } else {
-    showToast(status === 0 ? "Drop failed: no connection."
-      : status === 404 || status === 410 ? "That session is gone."
-        : "Drop failed (" + status + ").", { error: true });
+    showToast(failure.message, { error: true });
   }
   elevRepaint(id);
 }

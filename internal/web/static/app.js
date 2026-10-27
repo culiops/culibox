@@ -2552,12 +2552,14 @@ function ssoNote(text) {
 
 // renderSSOBody builds the SSO card's body for the desktop card and the mobile
 // card (`mobile`: no composer or Open of its own, the mobile card has its own
-// Reply…/Open row). Every server-provided string (the card text, the code, the
-// URL, the command) goes in through textContent; the URL becomes a link only
-// when ssoCard says it is trusted, and its href is set as a property.
+// Reply…/Open row; `bare`: the Access view's card, which has neither either).
+// Every server-provided string (the card text, the code, the URL, the command)
+// goes in through textContent; the URL becomes a link only when ssoCard says it
+// is trusted, and its href is set as a property.
 function renderSSOBody(s, opts) {
   const mobile = !!(opts && opts.mobile);
   const inStrip = !!(opts && opts.strip); // the desktop ask strip (tabs.js buildNeedStrip)
+  const bare = !!(opts && opts.bare); // the Access view's card (accesstab.js): no Open, no reply box
   ensureSSOStatus(s.id);
   const m = ssoModel(s);
   const body = document.createElement("div");
@@ -2623,7 +2625,7 @@ function renderSSOBody(s, opts) {
   });
   acts.appendChild(copy);
 
-  if (!mobile) {
+  if (!mobile && !bare) {
     if (inStrip) acts.appendChild(stripOpenButton(s));
     else {
       const open = document.createElement("button");
@@ -2646,7 +2648,7 @@ function renderSSOBody(s, opts) {
   }
 
   // P8: an SSO card does not take the reply box away from a replyable session.
-  if (!mobile && m.reply) {
+  if (!mobile && !bare && m.reply) {
     const composer = buildCardComposer(s);
     body.appendChild(composer.form);
     composer.refresh();
