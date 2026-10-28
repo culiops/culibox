@@ -30,7 +30,7 @@ func TestParseTranscriptSkipsOverlongLine(t *testing.T) {
 
 func TestParseTranscriptOverlongUnterminatedTailConsumed(t *testing.T) {
 	in := line1 + strings.Repeat("a", 17<<20)
-	_, _, consumed, over, err := parseTranscript(strings.NewReader(in))
+	_, _, consumed, over, _, err := parseTranscript(strings.NewReader(in), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestParseTranscriptOverlongUnterminatedTailConsumed(t *testing.T) {
 		t.Fatalf("over=%v consumed=%d want true/%d", over, consumed, len(in))
 	}
 	// A short unterminated tail is still left for the next run.
-	_, _, consumed, over, _ = parseTranscript(strings.NewReader(line1 + `{"a":`))
+	_, _, consumed, over, _, _ = parseTranscript(strings.NewReader(line1+`{"a":`), nil)
 	if over || consumed != int64(len(line1)) {
 		t.Fatalf("short tail: over=%v consumed=%d want false/%d", over, consumed, len(line1))
 	}
@@ -67,7 +67,7 @@ func TestIngestSparseNoNewlineBounded(t *testing.T) {
 	if st.Errors != 0 {
 		t.Errorf("errors=%d", st.Errors)
 	}
-	_, off, _, err := s.State(path)
+	_, off, _, _, err := s.State(path)
 	if err != nil {
 		t.Fatal(err)
 	}

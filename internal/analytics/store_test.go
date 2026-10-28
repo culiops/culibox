@@ -23,11 +23,11 @@ func delta(day, model string, in, out, cr, cc, prompts int64) *Parsed {
 
 func TestApplyIsAdditive(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 100, 20, 5, 3, 2), 500, 500, 1); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 100, 20, 5, 3, 2), 500, 500, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A second batch for the same session/day/model adds to the first.
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 50, 10, 1, 0, 1), 800, 800, 2); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 50, 10, 1, 0, 1), 800, 800, 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.ByDayModel("2026-08-01", "2026-08-31")
@@ -45,13 +45,13 @@ func TestApplyIsAdditive(t *testing.T) {
 
 func TestStateRoundTrip(t *testing.T) {
 	s := openTemp(t)
-	if _, _, ok, _ := s.State("/t/a.jsonl"); ok {
+	if _, _, ok, _, _ := s.State("/t/a.jsonl"); ok {
 		t.Fatal("state should be absent before any Apply")
 	}
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", newParsed(), 1234, 1200, 42); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", newParsed(), 1234, 1200, 42, nil); err != nil {
 		t.Fatal(err)
 	}
-	size, off, ok, err := s.State("/t/a.jsonl")
+	size, off, ok, _, err := s.State("/t/a.jsonl")
 	if err != nil || !ok {
 		t.Fatalf("state missing after Apply: ok=%v err=%v", ok, err)
 	}
@@ -64,10 +64,10 @@ func TestStateRoundTrip(t *testing.T) {
 // agent-console → agent-box rename produced exactly this).
 func TestProjectDisambiguatesSameSession(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("SAME", "agent-console", "/t/old.jsonl", delta("2026-08-05", "m1", 100, 0, 0, 0, 1), 1, 1, 1); err != nil {
+	if err := s.Apply("SAME", "agent-console", "/t/old.jsonl", delta("2026-08-05", "m1", 100, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", delta("2026-08-05", "m1", 200, 0, 0, 0, 1), 1, 1, 1); err != nil {
+	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", delta("2026-08-05", "m1", 200, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err := s.Sessions("2026-08-01", "2026-08-31", 10)
@@ -82,7 +82,7 @@ func TestProjectDisambiguatesSameSession(t *testing.T) {
 func TestTokensPerPrompt(t *testing.T) {
 	s := openTemp(t)
 	// 300 total tokens (100+20+... let's make it clean), 4 prompts → 75/prompt.
-	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "m1", 200, 60, 30, 10, 4), 1, 1, 1); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "m1", 200, 60, 30, 10, 4), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10)
@@ -115,7 +115,7 @@ func TestIngestRefusesConcurrent(t *testing.T) {
 func TestRowsCarryCost(t *testing.T) {
 	s := openTemp(t)
 	// 1,000,000 opus input tokens = $5 exactly.
-	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	dm, err := s.ByDayModel("2026-08-01", "2026-08-31")
@@ -139,10 +139,10 @@ func TestRowsCarryCost(t *testing.T) {
 func TestByModel(t *testing.T) {
 	s := openTemp(t)
 	// Two sessions, same model, different days → 1 model row, 2 sessions.
-	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
-	s.Apply("S2", "p", "/t/b.jsonl", delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1, nil)
+	s.Apply("S2", "p", "/t/b.jsonl", delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
 	// A different model.
-	s.Apply("S3", "p", "/t/c.jsonl", delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S3", "p", "/t/c.jsonl", delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.ByModel("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +168,8 @@ func TestByModel(t *testing.T) {
 // under two project slugs is two sessions (the rename case the PK guards).
 func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.ByModel("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -183,9 +183,9 @@ func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 // project totals and the per-project model mix in one call.
 func TestByProject(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("S1", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("S3", "beta", "/t/c.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S1", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S3", "beta", "/t/c.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.ByProject("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -213,10 +213,10 @@ func TestSessionCosts(t *testing.T) {
 	s := openTemp(t)
 	// One session spanning two days and two models → one aggregate, cost summed,
 	// model "mixed", day = the later one.
-	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
-	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1, nil)
+	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
 	// A cheaper single-model session.
-	s.Apply("S2", "p", "/t/c.jsonl", delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S2", "p", "/t/c.jsonl", delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -239,8 +239,8 @@ func TestSessionCosts(t *testing.T) {
 // keep them separate, matching the rollup PK.
 func TestSessionCostsProjectDisambiguates(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestToolsAggregate(t *testing.T) {
 	p := newParsed()
 	p.Attrs[AttrKey{Day: "2026-08-05", Kind: "skill", Name: "brainstorming"}] = 3
 	p.Attrs[AttrKey{Day: "2026-08-05", Kind: "mcp_server", Name: "playwright"}] = 1
-	if err := s.Apply("S1", "p", "/t/a.jsonl", p, 1, 1, 1); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", p, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	tools, err := s.Tools("2026-08-01", "2026-08-31", 10)

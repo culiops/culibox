@@ -106,7 +106,7 @@ func TestIngestShrinkNoDouble(t *testing.T) {
 	if rows[0].Input != 100 || rows[0].Output != 20 {
 		t.Fatalf("shrink double-counted: %+v", rows[0])
 	}
-	_, off, _, _ := s.State(path)
+	_, off, _, _, _ := s.State(path)
 	if off != int64(len(line1)) {
 		t.Errorf("offset not clamped to new size: got %d want %d", off, len(line1))
 	}
@@ -191,5 +191,38 @@ func TestIngestSkipsSymlinkedJSONL(t *testing.T) {
 	rows, _ := s.ByDayModel("2026-08-01", "2026-08-31")
 	if len(rows) != 0 {
 		t.Fatalf("symlink target was ingested: %+v", rows)
+	}
+}
+
+// A message whose content blocks span two ingest batches (a live transcript
+// mid-write) is counted once.
+func TestDedupeAcrossBatches(t *testing.T) {
+	rec := func(id, ts string) string {
+		return `{"sessionId":"S1","timestamp":"` + ts + `","message":{"id":"` + id + `","role":"assistant","model":"m1","usage":{"input_tokens":10,"output_tokens":5}}}` + "\n"
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "-home-proj", "S1.jsonl")
+	writeFile(t, path, rec("msg_A", "2026-08-05T10:00:01Z")+rec("msg_A", "2026-08-05T10:00:02Z"))
+	s := openTemp(t)
+	var st IngestStats
+	ingestRoot(s, root, &st)
+
+	appendFile(t, path, rec("msg_A", "2026-08-05T10:00:03Z")+rec("msg_B", "2026-08-05T10:00:04Z"))
+	st = IngestStats{}
+	ingestRoot(s, root, &st)
+
+	rows, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Input != 20 || rows[0].Output != 10 {
+		t.Fatalf("rows = %+v, want one row in=20 out=10 (msg_A once, msg_B once)", rows)
+	}
+	_, _, _, seen, err := s.State(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != "msg_A" || seen[1] != "msg_B" {
+		t.Fatalf("seen = %v want [msg_A msg_B]", seen)
 	}
 }

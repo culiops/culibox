@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite" (no CGO)
 )
@@ -24,7 +25,8 @@ CREATE TABLE IF NOT EXISTS ingest_state (
   path TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
   read_offset INTEGER NOT NULL,
-  mtime INTEGER NOT NULL
+  mtime INTEGER NOT NULL,
+  seen_ids TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS session_rollup (
   day TEXT NOT NULL,
@@ -75,23 +77,26 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-// State returns the recorded size and read offset for a transcript path.
-func (s *Store) State(path string) (size, offset int64, ok bool, err error) {
-	row := s.db.QueryRow(`SELECT size, read_offset FROM ingest_state WHERE path=?`, path)
-	switch err = row.Scan(&size, &offset); err {
+// State returns the recorded size and read offset for a transcript path, and the
+// message ids already counted near that offset (oldest first), which let a
+// message split across two ingest batches be counted once.
+func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, err error) {
+	var ids string
+	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids FROM ingest_state WHERE path=?`, path)
+	switch err = row.Scan(&size, &offset, &ids); err {
 	case nil:
-		return size, offset, true, nil
+		return size, offset, true, strings.Fields(ids), nil
 	case sql.ErrNoRows:
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	default:
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 }
 
 // Apply writes one transcript batch's rollup deltas AND the new ingest_state row
 // in a single transaction, so a crash can never advance the offset without the
 // matching rows (or vice versa). session_id and project tag every delta row.
-func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, mtime int64) error {
+func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, mtime int64, seen []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -126,9 +131,9 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 	}
 
 	const upsertState = `
-INSERT INTO ingest_state(path,size,read_offset,mtime) VALUES(?,?,?,?)
-ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime`
-	if _, err := tx.Exec(upsertState, path, size, offset, mtime); err != nil {
+INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids) VALUES(?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids`
+	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " ")); err != nil {
 		return fmt.Errorf("state upsert: %w", err)
 	}
 

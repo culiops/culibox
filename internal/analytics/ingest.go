@@ -81,7 +81,7 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 	}
 	size, mtime := fi.Size(), fi.ModTime().Unix()
 
-	_, offset, _, err := s.State(path)
+	_, offset, _, seen, err := s.State(path)
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 	}
 	if size < offset {
 		log.Printf("analytics: %s shrank (%d < %d); clamping offset, not re-ingesting", path, size, offset)
-		return s.Apply("", project, path, newParsed(), size, size, mtime)
+		return s.Apply("", project, path, newParsed(), size, size, mtime, seen)
 	}
 
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
@@ -100,7 +100,7 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 	if maxRead > 0 && size-offset > maxRead {
 		src = io.LimitReader(f, maxRead)
 	}
-	parsed, sessionID, consumed, overlongTail, err := parseTranscript(src)
+	parsed, sessionID, consumed, overlongTail, seen, err := parseTranscript(src, seen)
 	if err != nil {
 		return err
 	}
@@ -114,7 +114,7 @@ func ingestOpened(s *Store, path, project string, st *IngestStats, maxRead int64
 	if consumed > 0 { // a size bump that was only a partial trailing line isn't a "file ingested"
 		st.Files++
 	}
-	return s.Apply(sessionID, project, path, parsed, size, offset+consumed, mtime)
+	return s.Apply(sessionID, project, path, parsed, size, offset+consumed, mtime, seen)
 }
 
 // ingestRoot walks one root recursively and ingests every *.jsonl under a slug

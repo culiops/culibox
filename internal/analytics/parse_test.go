@@ -134,3 +134,119 @@ func TestParseTranscriptSkipsBlankLines(t *testing.T) {
 		t.Errorf("blank input produced rows: %+v %+v", p.Tokens, p.Attrs)
 	}
 }
+
+// Claude Code writes one record per content block (thinking/text/tool_use), each
+// repeating the message's full usage. The message must be counted once.
+func msgRec(id, ts, usage string) string {
+	idField := ""
+	if id != "" {
+		idField = `"id":"` + id + `",`
+	}
+	return `{"sessionId":"S1","timestamp":"` + ts + `","message":{` + idField + `"role":"assistant","model":"claude-opus-4-8","usage":` + usage + `}}` + "\n"
+}
+
+const splitUsage = `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_1h_input_tokens":40,"ephemeral_5m_input_tokens":0}}`
+
+func TestUsageCountedOncePerMessageID(t *testing.T) {
+	j := msgRec("msg_A", "2026-08-05T10:00:01Z", splitUsage) +
+		msgRec("msg_A", "2026-08-05T10:00:02Z", splitUsage) +
+		msgRec("msg_A", "2026-08-05T10:00:03Z", splitUsage)
+	p, _, _, err := ParseTranscript(strings.NewReader(j))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok == nil {
+		t.Fatal("no row")
+	}
+	if tok.Input != 10 || tok.Output != 5 || tok.CacheRead != 100 || tok.CacheCreation != 40 || tok.CacheWrite1h != 40 {
+		t.Fatalf("tokens = %+v, want in=10 out=5 cr=100 cc=40 1h=40", tok)
+	}
+	want := MessageCostUSD("claude-opus-4-8", MsgUsage{Input: 10, Output: 5, CacheRead: 100, CacheWrite5m: 0, CacheWrite1h: 40})
+	if want == 0 || tok.Cost != want {
+		t.Fatalf("cost = %v, want %v", tok.Cost, want)
+	}
+}
+
+func TestCacheSplitLegacyAndMixed(t *testing.T) {
+	// Legacy: total only -> whole total is a 5m write.
+	legacy := `{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":40}`
+	p, _, _, _ := ParseTranscript(strings.NewReader(msgRec("m1", "2026-08-05T10:00:01Z", legacy)))
+	tok := p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.CacheCreation != 40 || tok.CacheWrite1h != 0 {
+		t.Fatalf("legacy tokens = %+v", tok)
+	}
+	if want := MessageCostUSD("claude-opus-4-8", MsgUsage{Input: 10, Output: 5, CacheWrite5m: 40}); tok.Cost != want || want == 0 {
+		t.Fatalf("legacy cost = %v want %v", tok.Cost, want)
+	}
+	// Split present, 5m part is total - 1h.
+	mixed := `{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":50,"cache_creation":{"ephemeral_1h_input_tokens":20,"ephemeral_5m_input_tokens":30}}`
+	p, _, _, _ = ParseTranscript(strings.NewReader(msgRec("m2", "2026-08-05T10:00:01Z", mixed)))
+	tok = p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.CacheCreation != 50 || tok.CacheWrite1h != 20 {
+		t.Fatalf("mixed tokens = %+v", tok)
+	}
+	if want := MessageCostUSD("claude-opus-4-8", MsgUsage{Input: 1, Output: 1, CacheWrite5m: 30, CacheWrite1h: 20}); tok.Cost != want {
+		t.Fatalf("mixed cost = %v want %v", tok.Cost, want)
+	}
+	// 1h larger than the total is clamped; never count more than the total.
+	over := `{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":99}}`
+	p, _, _, _ = ParseTranscript(strings.NewReader(msgRec("m3", "2026-08-05T10:00:01Z", over)))
+	tok = p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.CacheCreation != 10 || tok.CacheWrite1h != 10 {
+		t.Fatalf("clamped tokens = %+v", tok)
+	}
+}
+
+func TestRecordsWithoutIDStillCount(t *testing.T) {
+	u := `{"input_tokens":10,"output_tokens":5}`
+	j := msgRec("", "2026-08-05T10:00:01Z", u) + msgRec("", "2026-08-05T10:00:02Z", u)
+	p, _, _, _ := ParseTranscript(strings.NewReader(j))
+	tok := p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.Input != 20 || tok.Output != 10 {
+		t.Fatalf("id-less records not both counted: %+v", tok)
+	}
+}
+
+func TestAttributionStillPerRecord(t *testing.T) {
+	rec := `{"sessionId":"S1","timestamp":"2026-08-05T10:00:01Z","attributionSkill":"brainstorming","message":{"id":"msg_A","role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":1,"output_tokens":1}}}` + "\n"
+	p, _, _, _ := ParseTranscript(strings.NewReader(rec + rec + rec))
+	if n := p.Attrs[AttrKey{Day: "2026-08-05", Kind: "skill", Name: "brainstorming"}]; n != 3 {
+		t.Fatalf("attribution = %d, want 3 (per record)", n)
+	}
+	tok := p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.Input != 1 {
+		t.Fatalf("input = %d want 1", tok.Input)
+	}
+}
+
+// A duplicate record must still flush a held prompt to its model.
+func TestDuplicateRecordStillFlushesPrompt(t *testing.T) {
+	u := `{"input_tokens":1,"output_tokens":1}`
+	j := msgRec("msg_A", "2026-08-05T10:00:01Z", u) +
+		`{"sessionId":"S1","timestamp":"2026-08-05T10:00:02Z","message":{"role":"user","content":"next"}}` + "\n" +
+		msgRec("msg_A", "2026-08-05T10:00:03Z", u)
+	p, _, _, _ := ParseTranscript(strings.NewReader(j))
+	tok := p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.Prompts != 1 || tok.Input != 1 {
+		t.Fatalf("tok = %+v want prompts=1 input=1", tok)
+	}
+}
+
+func TestSeenRingCappedAt64(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 70; i++ {
+		b.WriteString(msgRec("msg_"+string(rune('a'+i%26))+string(rune('A'+i/26)), "2026-08-05T10:00:01Z", `{"input_tokens":1}`))
+	}
+	_, _, _, _, seen, err := parseTranscript(strings.NewReader(b.String()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 64 {
+		t.Fatalf("len(seen) = %d want 64", len(seen))
+	}
+	// oldest first: the last id counted is last.
+	if seen[63] != "msg_"+string(rune('a'+69%26))+string(rune('A'+69/26)) {
+		t.Fatalf("seen not oldest-first: last=%q", seen[63])
+	}
+}
