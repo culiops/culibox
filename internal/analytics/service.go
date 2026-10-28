@@ -42,7 +42,7 @@ func New(dbPath string, roots []string, interval time.Duration) (*Service, error
 		return nil, err
 	}
 	if interval <= 0 {
-		interval = 24 * time.Hour
+		interval = 2 * time.Minute
 	}
 	svc := &Service{store: st, roots: roots, interval: interval}
 	// Seed the map from what is already stored, so a restart does not show
@@ -102,6 +102,8 @@ func (s *Service) Ingest() (IngestStats, error) {
 		return IngestStats{}, ErrIngestBusy
 	}
 	defer s.mu.Unlock()
+	s.store.beginPass()
+	defer s.store.endPass()
 	var st IngestStats
 	// Roots are glob patterns, expanded on every pass so an agent account or box
 	// created after startup is ingested without a restart. A literal path is a
@@ -141,8 +143,11 @@ func (s *Service) Start(ctx context.Context) {
 				log.Printf("analytics: scheduled ingest skipped: %v", err)
 				continue
 			}
-			log.Printf("analytics: ingest — %d files, %d bytes, %d errors",
-				stats.Files, stats.BytesRead, stats.Errors)
+			// Every couple of minutes: say nothing about a pass that found nothing.
+			if stats.Files > 0 || stats.Errors > 0 {
+				log.Printf("analytics: ingest — %d files, %d bytes, %d errors",
+					stats.Files, stats.BytesRead, stats.Errors)
+			}
 		}
 	}
 }

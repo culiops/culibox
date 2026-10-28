@@ -806,7 +806,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 				filepath.Join(dataDir, "accounts", "*", "claude", "projects"),
 			}
 		}
-		interval := 24 * time.Hour
+		interval := 2 * time.Minute
 		if cfg.Analytics.IngestInterval != "" {
 			if d, perr := time.ParseDuration(cfg.Analytics.IngestInterval); perr == nil && d > 0 {
 				interval = d

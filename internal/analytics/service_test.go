@@ -141,3 +141,25 @@ func TestRefreshCostsKeepsMapOnError(t *testing.T) {
 		t.Errorf("CostOf after a failed refresh = %v, want the previous 4.0", got)
 	}
 }
+
+// The pass-local state cache must follow Apply: the same transcript reached
+// twice in one pass (overlapping roots) is read from its new offset the second
+// time, never counted again.
+func TestIngestSamePathTwiceInOnePassCountsOnce(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "-p", "S1.jsonl"), line1+line2)
+	svc, err := New(filepath.Join(t.TempDir(), "a.db"), []string{root, root}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Close()
+	for pass := 0; pass < 2; pass++ {
+		if _, err := svc.Ingest(); err != nil {
+			t.Fatal(err)
+		}
+		rows, _ := svc.ByDayModel("2026-08-01", "2026-08-31")
+		if len(rows) != 1 || rows[0].Input != 100 || rows[0].Output != 20 {
+			t.Fatalf("pass %d: rows %+v, want input 100 output 20 counted once", pass, rows)
+		}
+	}
+}
