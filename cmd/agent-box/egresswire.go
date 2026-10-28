@@ -34,6 +34,7 @@ type egressService struct {
 	Svc      *egress.Service                      // installed on the session manager and the box layer
 	Stats    func(id string) (egress.Stats, bool) // behind the egress object of GET /api/sessions/{id}/aws
 	Stop     func(context.Context)
+	Audit    *egress.Audit // the audit store the retention job prunes; closed by Stop
 	AddHosts []string
 }
 
@@ -172,6 +173,7 @@ func startEgress(dataDir string, layer *boxLayer, cfg config.Config, goos string
 	return &egressService{
 		AddHosts: addHosts,
 		Svc:      svc,
+		Audit:    audit,
 		Stats:    proxy.Stats,
 		Stop: func(ctx context.Context) {
 			// Close blocks until every tunnel is audited (or ctx ends); only then

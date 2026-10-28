@@ -27,6 +27,7 @@
   "comment_extra_ca": "PEM files of extra CA certificates (e.g. a corporate TLS-inspection root) that every box trusts on top of the image's own. Export only the root you need, not a whole system bundle. Empty = none. Read at daemon start.",
   "extra_ca_certs": [],
   "box_idle_ttl_seconds": 900,
+  "audit_egress_retention_days": 90,
   "docker_bin": "docker",
 
   "comment_bundle": "What a contained session may see of your agent configuration. Sourced by allowlist only: CLAUDE.md, skills/, agents/, commands/, plus a filtered settings.json and the MCP servers that can actually run inside the image. Credentials, history and transcripts are never copied. Empty = auto-detect ($CLAUDE_CONFIG_DIR, else ~/.claude); 'off' disables bundling.",

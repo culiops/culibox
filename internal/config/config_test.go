@@ -600,3 +600,39 @@ func TestValidate_NoAgentsExplainsFileReplacesDefaults(t *testing.T) {
 		}
 	}
 }
+
+// audit_egress_retention_days is a pointer on purpose: unset → 90, explicit 0 →
+// keep forever (every other int key reads 0 as "default").
+func TestEgressRetentionDays(t *testing.T) {
+	iptr := func(n int) *int { return &n }
+	if got := (Config{}).EgressRetentionDays(); got != 90 {
+		t.Errorf("unset = %d, want 90", got)
+	}
+	if got := (Config{AuditEgressRetentionDays: iptr(0)}).EgressRetentionDays(); got != 0 {
+		t.Errorf("explicit 0 = %d, want 0 (keep forever)", got)
+	}
+	if got := (Config{AuditEgressRetentionDays: iptr(30)}).EgressRetentionDays(); got != 30 {
+		t.Errorf("30 = %d", got)
+	}
+	base := Config{BindAddr: "127.0.0.1:8080", Agents: []AgentConfig{{Name: "a", Bin: "a"}}}
+	for _, ok := range []int{0, 1, 36500} {
+		c := base
+		c.AuditEgressRetentionDays = iptr(ok)
+		if err := c.Validate(); err != nil {
+			t.Errorf("%d should validate: %v", ok, err)
+		}
+	}
+	for _, bad := range []int{-1, 40000} {
+		c := base
+		c.AuditEgressRetentionDays = iptr(bad)
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "audit_egress_retention_days") {
+			t.Errorf("%d: err = %v, want audit_egress_retention_days out of range", bad, err)
+		}
+	}
+	// JSON: absent vs explicit 0 survive a round trip through Load.
+	c, err := Load(writeTemp(t, `{"bind_addr":"127.0.0.1:8080","agents":[{"name":"a","bin":"a"}],"audit_egress_retention_days":0}`))
+	if err != nil || c.AuditEgressRetentionDays == nil || c.EgressRetentionDays() != 0 {
+		t.Errorf("explicit 0 from JSON: %+v, %v", c.AuditEgressRetentionDays, err)
+	}
+}

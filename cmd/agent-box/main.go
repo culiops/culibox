@@ -846,6 +846,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		go analyticsSvc.Start(analyticsCtx)
 	}
 
+	// Prune old egress audit rows (once at start, then daily) while the egress
+	// audit store is open; StopRetention waits for it before StopEgress closes it.
+	stopRetention := func() {}
+	if egressSvc != nil {
+		stopRetention = runRetention(egressSvc.Audit, cfg.EgressRetentionDays(), log.Printf)
+	}
+
 	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
 	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
 	// UI's spawn request has no deadline either. Adding a write timeout here
@@ -862,9 +869,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 				_ = analyticsSvc.Close()
 			}
 		},
-		StopEgress:   stopEgress,
-		StopBroker:   stopBroker,
-		ShutdownHTTP: httpSrv.Shutdown,
+		StopRetention: stopRetention,
+		StopEgress:    stopEgress,
+		StopBroker:    stopBroker,
+		ShutdownHTTP:  httpSrv.Shutdown,
 	}, log.Printf)
 
 	log.Printf("agent-box listening on %s (allowed hosts: %s)", cfg.BindAddr, strings.Join(cfg.HostAllowlist(), ", "))

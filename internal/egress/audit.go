@@ -116,6 +116,37 @@ func cleanHost(h string) string {
 	return b.String()
 }
 
+// pruneGap is the pause between Prune batches, so a large backlog does not hold
+// the shared audit file's write lock back to back.
+const pruneGap = 50 * time.Millisecond
+
+// Prune deletes egress rows older than before, at most batch rows per statement
+// (an index scan over idx_egress_ts), pausing between batches so the proxy's
+// own Record calls are not starved. It returns the number deleted. Only
+// egress_audit is touched; the broker and store tables in the same file are not.
+func (a *Audit) Prune(before time.Time, batch int) (int64, error) {
+	if batch < 1 {
+		batch = 1000
+	}
+	var total int64
+	for {
+		res, err := a.db.Exec(`DELETE FROM egress_audit WHERE id IN
+			(SELECT id FROM egress_audit WHERE ts < ? ORDER BY ts LIMIT ?)`, before.Unix(), batch)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < int64(batch) {
+			return total, nil
+		}
+		time.Sleep(pruneGap)
+	}
+}
+
 // ForSession returns up to limit rows for a session, newest first.
 func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
 	rows, err := a.db.Query(`SELECT ts, session_id, box, host, port, outcome, bytes_up, bytes_down, duration_ms, suppressed

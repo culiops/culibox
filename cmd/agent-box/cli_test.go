@@ -153,6 +153,22 @@ func TestAwaitShutdown_StopsEgressBeforeTheBroker(t *testing.T) {
 	}
 }
 
+func TestAwaitShutdown_StopsRetentionBeforeEgress(t *testing.T) {
+	var steps []string
+	stop := make(chan os.Signal, 1)
+	stop <- syscall.SIGTERM
+	awaitShutdown(stop, shutdownSteps{
+		DetachAll:     func() int { return 0 },
+		StopAnalytics: func() {},
+		StopRetention: func() { steps = append(steps, "retention") },
+		StopEgress:    func(context.Context) { steps = append(steps, "egress") },
+		ShutdownHTTP:  func(context.Context) error { steps = append(steps, "http"); return nil },
+	}, func(string, ...any) {})
+	if got := strings.Join(steps, ","); got != "retention,egress,http" {
+		t.Errorf("steps = %s, want retention,egress,http", got)
+	}
+}
+
 // Carry 1: the Host guard refuses everything when AllowedHosts is unset, so the
 // serve wiring must fill it from the config.
 func TestConfigureServer_HostAllowlistWired(t *testing.T) {
