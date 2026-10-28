@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS egress_audit (
 );
 CREATE INDEX IF NOT EXISTS idx_egress_session ON egress_audit(session_id, ts);
 CREATE INDEX IF NOT EXISTS idx_egress_ts ON egress_audit(ts);
+-- Covers the Audit page's Summary (counts and session list), so that range read
+-- is index-only. Created on existing databases at the next daemon start.
+CREATE INDEX IF NOT EXISTS idx_egress_cover ON egress_audit(ts, session_id, outcome, suppressed);
 `
 
 // Audit is the egress audit log, a table in the same file as the broker's

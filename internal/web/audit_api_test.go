@@ -320,3 +320,37 @@ func TestCSVCell(t *testing.T) {
 		}
 	}
 }
+
+// Every audit route refuses a window wider than 31 days (a cross-site GET with
+// from=0 must not read the whole table) and accepts exactly 31 days.
+func TestAuditWindowCap(t *testing.T) {
+	f := newAuditFixture(t)
+	f.approval(1, "fix")
+	f.egressRow(2)
+	h, ck, _ := f.server(t)
+	to := time.Now().Unix()
+	win := func(width int64) string {
+		return "from=" + strconv.FormatInt(to-width, 10) + "&to=" + strconv.FormatInt(to, 10)
+	}
+	const day = int64(86400)
+	for _, p := range auditRoutes {
+		for name, q := range map[string]string{
+			"from=0":      "from=0&to=" + strconv.FormatInt(to, 10),
+			"from=0 only": "from=0",
+			"31d+1s":      win(31*day + 1),
+			"90d":         win(90 * day),
+			"default to":  "from=1",
+		} {
+			if rec := auditReq(h, "GET", p+"?"+q, ck, ""); rec.Code != 400 || !strings.Contains(rec.Body.String(), "bad audit query") {
+				t.Errorf("%s?%s (%s): got %d %s, want 400", p, q, name, rec.Code, rec.Body)
+			}
+		}
+		for name, q := range map[string]string{
+			"31d": win(31 * day), "30d": win(30 * day), "7d": win(7 * day), "24h": win(day), "default": "",
+		} {
+			if rec := auditReq(h, "GET", p+"?"+q, ck, ""); rec.Code != 200 {
+				t.Errorf("%s?%s (%s): got %d %s, want 200", p, q, name, rec.Code, rec.Body)
+			}
+		}
+	}
+}

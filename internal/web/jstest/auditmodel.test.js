@@ -161,3 +161,16 @@ test("index.html carries the page markup and loads both scripts after accesstab.
   assert.ok(html.indexOf('<script src="/auditmodel.js">') > at);
   assert.ok(html.indexOf('<script src="/auditpage.js">') > html.indexOf('<script src="/auditmodel.js">'));
 });
+
+// The server refuses a window wider than 31 days (auditlog.MaxWindow): every
+// range the page can send, in the list and the export, must fit.
+test("every range's window is within the server's 31-day cap", () => {
+  const now = 1_800_000_000;
+  for (const range of ["24h", "7d", "30d", undefined, "bogus"]) {
+    for (const href of [auditQuery({ range }, now), auditCsvHref({ range }, now)]) {
+      const from = Number(/from=(\d+)/.exec(href)[1]);
+      const to = Number(/to=(\d+)/.exec(href)[1]);
+      assert.ok(to - from <= 31 * 86400, range + ": " + (to - from));
+    }
+  }
+});

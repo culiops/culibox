@@ -32,9 +32,10 @@ const (
 
 // Caps and defaults.
 const (
-	MaxLimit     = 500   // rows in one page
-	MaxCSV       = 10000 // rows in one CSV export
-	MaxSessions  = 200   // distinct sessions in a Summary
+	MaxLimit     = 500        // rows in one page
+	MaxCSV       = 10000      // rows in one CSV export
+	MaxSessions  = 200        // distinct sessions in a Summary
+	MaxWindow    = 31 * 86400 // widest [From, To] a read accepts, in seconds (31 days)
 	defaultLimit = 100
 )
 
@@ -60,7 +61,9 @@ type Event struct {
 // (settings + store). From and To are inclusive unix seconds. To == 0 means no
 // upper bound (an open-ended read); callers that expose this over HTTP should
 // always pass an explicit To. Before is the Cursor of the last row of the
-// previous page.
+// previous page. A bounded range may span at most MaxWindow (31 days), else
+// ErrBadQuery; only the unbounded To == 0 read is exempt, and no HTTP caller may
+// make it.
 type Query struct {
 	Filter, Session string
 	From, To        int64
@@ -201,9 +204,12 @@ func formatCursor(ts int64, src int, id int64) string {
 	return strconv.FormatInt(ts, 10) + "." + strconv.Itoa(src) + "." + strconv.FormatInt(id, 10)
 }
 
-// rng validates a [from, to] range; to 0 means unbounded.
+// rng validates a [from, to] range; to 0 means unbounded. A bounded range wider
+// than MaxWindow is refused, so no read costs more than 31 days of rows, whatever
+// the retention. Query, Each and Summary all pass through here: it is the one
+// place the cap is enforced.
 func rng(from, to int64) (int64, int64, error) {
-	if from < 0 || to < 0 || (to != 0 && to < from) {
+	if from < 0 || to < 0 || (to != 0 && to < from) || (to != 0 && to-from > MaxWindow) {
 		return 0, 0, ErrBadQuery
 	}
 	if to == 0 {
@@ -358,7 +364,8 @@ func buildPage(tabs []table, q Query, from, to int64, cur *cursor) (string, []an
 }
 
 // Each walks the matching events newest first, calling fn for each, until max
-// rows (capped at MaxCSV) or fn returns an error. q.Before starts the walk.
+// rows (capped at MaxCSV) or fn returns an error. q.Before starts the walk. The
+// range is held to the same MaxWindow as Query.
 func (r *Reader) Each(q Query, max int, fn func(Event) error) error {
 	if max <= 0 || max > MaxCSV {
 		max = MaxCSV
@@ -386,7 +393,25 @@ func (r *Reader) Each(q Query, max int, fn func(Event) error) error {
 	return nil
 }
 
-// Summary counts the range [from, to] (to 0 = no upper bound).
+// egressCountsSQL counts the egress rows of the range in ONE pass: allowed rows
+// one each, refused rows 1 + suppressed (the proxy folds throttled refusals into
+// one row). Every column it reads is in idx_egress_cover, so no table lookup.
+const egressCountsSQL = `SELECT
+	SUM(CASE WHEN outcome IN ('allowed','allowed_private') THEN 1 ELSE 0 END),
+	SUM(CASE WHEN outcome IN ('allowed','allowed_private') THEN 0 ELSE 1 + suppressed END)
+	FROM egress_audit WHERE ts BETWEEN ?1 AND ?2`
+
+// sessionsSQL lists the range's sessions, most recently active first. Its egress
+// branch reads session_id and ts from idx_egress_cover as well.
+const sessionsSQL = `SELECT session_id FROM (
+		SELECT session_id, MAX(ts) AS m FROM credential_audit WHERE ts BETWEEN ?1 AND ?2 GROUP BY session_id
+		UNION ALL SELECT session_id, MAX(ts) FROM approval_audit WHERE ts BETWEEN ?1 AND ?2 GROUP BY session_id
+		UNION ALL SELECT session_id, MAX(ts) FROM egress_audit WHERE ts BETWEEN ?1 AND ?2 GROUP BY session_id)
+	WHERE session_id <> '' GROUP BY session_id ORDER BY MAX(m) DESC, session_id LIMIT ?3`
+
+// Summary counts the range [from, to] (to 0 = no upper bound; a bounded range
+// wider than MaxWindow is ErrBadQuery). Cost is bounded by the window, not by
+// retention: the egress counts are one ts-range pass over the covering index.
 func (r *Reader) Summary(from, to int64) (Summary, error) {
 	from, to, err := rng(from, to)
 	if err != nil {
@@ -409,18 +434,17 @@ func (r *Reader) Summary(from, to int64) (Summary, error) {
 		{&s.Refused, `SELECT (SELECT COUNT(*) FROM credential_audit WHERE ts BETWEEN ?1 AND ?2 AND outcome IN ('denied_token','denied_session','denied_scope'))
 			+ (SELECT COUNT(*) FROM approval_audit WHERE ts BETWEEN ?1 AND ?2 AND action = 'refused')`},
 		{&s.Elevations, `SELECT COUNT(*) FROM approval_audit WHERE ts BETWEEN ? AND ? AND action = 'granted'`},
-		{&s.EgressAllowed, `SELECT COUNT(*) FROM egress_audit WHERE ts BETWEEN ? AND ? AND outcome IN ('allowed','allowed_private')`},
-		{&s.EgressDenied, `SELECT SUM(1 + suppressed) FROM egress_audit WHERE ts BETWEEN ? AND ? AND outcome NOT IN ('allowed','allowed_private')`},
 	} {
 		if err := one(c.dst, c.q); err != nil {
 			return Summary{}, err
 		}
 	}
-	rows, err := r.db.Query(`SELECT session_id FROM (
-			SELECT session_id, MAX(ts) AS m FROM credential_audit WHERE ts BETWEEN ?1 AND ?2 GROUP BY session_id
-			UNION ALL SELECT session_id, MAX(ts) FROM approval_audit WHERE ts BETWEEN ?1 AND ?2 GROUP BY session_id
-			UNION ALL SELECT session_id, MAX(ts) FROM egress_audit WHERE ts BETWEEN ?1 AND ?2 GROUP BY session_id)
-		WHERE session_id <> '' GROUP BY session_id ORDER BY MAX(m) DESC, session_id LIMIT ?3`, from, to, MaxSessions)
+	var allowed, denied sql.NullInt64
+	if err := r.db.QueryRow(egressCountsSQL, from, to).Scan(&allowed, &denied); err != nil {
+		return Summary{}, err
+	}
+	s.EgressAllowed, s.EgressDenied = int(allowed.Int64), int(denied.Int64)
+	rows, err := r.db.Query(sessionsSQL, from, to, MaxSessions)
 	if err != nil {
 		return Summary{}, err
 	}

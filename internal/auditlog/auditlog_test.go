@@ -485,3 +485,92 @@ func TestWhereFoldsCursorIntoRange(t *testing.T) {
 		t.Errorf("hi widened past To: %v", args)
 	}
 }
+
+// A window wider than MaxWindow is refused by every read, so one request can
+// never reach back across the whole table. Exactly MaxWindow still passes.
+func TestWindowCap(t *testing.T) {
+	s := newSeeder(t)
+	s.egress(1_000_000, "a", egress.OutcomeAllowed, 0)
+	r := s.open()
+	const to = 5_000_000
+	ok := Query{From: to - MaxWindow, To: to}
+	wide := Query{From: to - MaxWindow - 1, To: to}
+	if MaxWindow != 31*86400 {
+		t.Fatalf("MaxWindow = %d, want 31 days", MaxWindow)
+	}
+	if _, err := r.Query(ok); err != nil {
+		t.Errorf("Query at exactly 31d: %v", err)
+	}
+	if _, err := r.Query(wide); !errors.Is(err, ErrBadQuery) {
+		t.Errorf("Query at 31d+1s: err = %v, want ErrBadQuery", err)
+	}
+	if _, err := r.Query(Query{From: 0, To: to}); !errors.Is(err, ErrBadQuery) {
+		t.Errorf("Query from=0: err = %v, want ErrBadQuery", err)
+	}
+	if _, err := r.Summary(ok.From, ok.To); err != nil {
+		t.Errorf("Summary at exactly 31d: %v", err)
+	}
+	if _, err := r.Summary(wide.From, wide.To); !errors.Is(err, ErrBadQuery) {
+		t.Errorf("Summary at 31d+1s: err = %v, want ErrBadQuery", err)
+	}
+	if _, err := r.Summary(0, to); !errors.Is(err, ErrBadQuery) {
+		t.Errorf("Summary from=0: err = %v, want ErrBadQuery", err)
+	}
+	each := func(q Query) error { return r.Each(q, 10, func(Event) error { return nil }) }
+	if err := each(ok); err != nil {
+		t.Errorf("Each at exactly 31d: %v", err)
+	}
+	if err := each(wide); !errors.Is(err, ErrBadQuery) {
+		t.Errorf("Each at 31d+1s: err = %v, want ErrBadQuery", err)
+	}
+}
+
+// planOf returns the EXPLAIN QUERY PLAN detail lines of one statement.
+func planOf(t *testing.T, r *Reader, query string, args ...any) []string {
+	t.Helper()
+	rows, err := r.db.Query("EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var a, b, c int
+		var d string
+		if err := rows.Scan(&a, &b, &c, &d); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, d)
+	}
+	return plan
+}
+
+// The egress part of Summary reads only the index: one pass for both counts,
+// and the session list's egress branch, none of them going back to the table.
+func TestSummaryEgressIsIndexOnly(t *testing.T) {
+	s := newSeeder(t)
+	for i := 0; i < 300; i++ {
+		s.egress(int64(1000+i), fmt.Sprintf("s%d", i%7), egress.OutcomeAllowed, 0)
+	}
+	r := s.open()
+	if n := strings.Count(egressCountsSQL, "egress_audit"); n != 1 {
+		t.Errorf("egress counts read egress_audit %d times, want one pass", n)
+	}
+	for name, plan := range map[string][]string{
+		"counts":   planOf(t, r, egressCountsSQL, 1, 5000),
+		"sessions": planOf(t, r, sessionsSQL, 1, 5000, MaxSessions),
+	} {
+		covered := 0
+		for _, d := range plan {
+			if strings.Contains(d, "egress_audit") && strings.HasPrefix(d, "SEARCH") {
+				if !strings.Contains(d, "COVERING INDEX") {
+					t.Errorf("%s: egress read is not index-only: %s", name, d)
+				}
+				covered++
+			}
+		}
+		if covered != 1 {
+			t.Errorf("%s: %d egress searches in plan\n%s", name, covered, strings.Join(plan, "\n"))
+		}
+	}
+}
