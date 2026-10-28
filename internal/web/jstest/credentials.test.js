@@ -577,4 +577,5 @@ test("desktop creds table: fixed-layout column widths are percentages", () => {
   assert.ok(widths.length >= 4, "column widths are declared");
   for (const w of widths) assert.match(w, /^\d+%$/);
   assert.ok(widths.reduce((n, w) => n + parseInt(w, 10), 0) < 100, "Used by keeps a share");
+  assert.match(css, /\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th \{ white-space: normal;/, "headers wrap in share-sized columns");
 });

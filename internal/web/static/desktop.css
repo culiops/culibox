@@ -1194,6 +1194,8 @@
      its own columns and keeps the automatic layout. Every width is a share of the
      table: fixed px columns starved Used by to 0px below a ~1150px window. */
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
+  /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
