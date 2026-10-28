@@ -207,6 +207,21 @@ test("stackedLayout: huge span falls back to index mode (no absurd compression)"
   assert.equal(lay.bars[1].slot, 1);
 });
 
+test("modelColor returns the --an-N token, so the desktop palette can swap the hues", () => {
+  assert.equal(modelColor(["a", "b"], "b"), "var(--an-2)");
+  assert.equal(modelColor(["a", "b"], "a"), "var(--an-1)");
+  const models = ["a", "b", "c", "d", "e", "f", "g", "h"];
+  assert.equal(modelColor(models, "g"), "var(--an-7)");
+  assert.equal(modelColor(models, "h"), "var(--an-1)"); // index 7 wraps
+  assert.equal(modelColor(models, "zzz"), "var(--an-1)"); // unknown model: first slot, as before
+});
+
+test("analytics.js hard-codes no chart hex: every chart colour is a var()", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "analytics.js"), "utf8");
+  assert.deepEqual(src.match(/#[0-9a-fA-F]{6}\b/g) || [], []);
+  assert.doesNotMatch(src, /"var\(--(danger|ok)\)"/, "diverging fills use --an-up / --an-down");
+});
+
 test("modelColor: stable per model index, wraps the palette", () => {
   const models = ["a", "b", "c", "d", "e", "f", "g", "h"];
   assert.equal(modelColor(models, "a"), modelColor(models, "a")); // stable

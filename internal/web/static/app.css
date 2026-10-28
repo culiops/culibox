@@ -8,6 +8,14 @@
       font-display: block;
     }
     .nf { font-family: "Symbols Nerd Font"; font-size: 1em; line-height: 1; }
+    /* Analytics chart colours (analytics.js reads them as var(--an-N)). These are
+       today's Catppuccin hexes and today's compare colours, so mobile is
+       unchanged; desktop.css swaps in a palette with no status hue. */
+    :root {
+      --an-1: #89b4fa; --an-2: #a6e3a1; --an-3: #fab387; --an-4: #cba6f7;
+      --an-5: #f38ba8; --an-6: #94e2d5; --an-7: #f9e2af;
+      --an-up: var(--danger); --an-down: var(--ok);
+    }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {

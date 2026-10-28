@@ -26,6 +26,13 @@
        /error only. */
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
+    /* Analytics chart palette (S4 Task 8): categorical, no green/amber/red
+       (those are status colours). Hues are >= 25 degrees of HSL hue from --ok,
+       --amber and --red (desktop-scope.test.js). Order validated with the
+       dataviz validator, dark mode, surface #14171b. */
+    --an-1: #3d86ea; --an-2: #d462b1; --an-3: #3a6fd0; --an-4: #af6af2;
+    --an-5: #07a2c6; --an-6: #994c96; --an-7: #7b84e8;
+    --an-up: #d462b1; --an-down: #3d86ea;
     --border: #23282f; --rule: #23282f;
     --background0: #0d0f12; --background1: #14171b; --background2: #1b1f24;
     --background3: #2a3038;
@@ -1240,4 +1247,59 @@
   #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 12px; color: var(--fg); }
   #page-host > #audit-page.as-page #au-more:hover { background: var(--raise); }
   #page-host > #audit-page.as-page #au-more[hidden] { display: none; }
+
+  /* --- Analytics page (S4; pg-4.png) ------------------------------------------ */
+  /* The dialog is re-parented into #page-host (pagehost.js). A grid puts the
+     title and the tab/controls head on one 52px row; the body spans below. The
+     range caption moves into the first chart's hint (analytics.js), so the
+     header's own #analytics-range is hidden. */
+  #page-host > #analytics-modal.as-page { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 52px minmax(0, 1fr); }
+  #page-host > #analytics-modal.as-page > .dlg-title {
+    grid-column: 1; grid-row: 1; position: static; transform: none; pointer-events: auto; align-self: stretch; width: auto; max-width: none;
+    margin: 0; padding: 0 12px 0 20px; background: var(--bg); border-bottom: 1px solid var(--line);
+    font-size: 16px; font-weight: 600; letter-spacing: 0; color: var(--fg);
+  }
+  #page-host > #analytics-modal.as-page > .dlg-head { grid-column: 2; grid-row: 1; gap: 12px; padding: 0 20px 0 0; border-bottom: 1px solid var(--line); background: var(--bg); }
+  #page-host > #analytics-modal.as-page #analytics-range { display: none; }
+  #page-host > #analytics-modal.as-page #an-ctl { display: flex; align-items: center; }
+  #page-host > #analytics-modal.as-page #an-tabs { flex-wrap: nowrap; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-tabs button:hover { color: var(--fg); background: var(--raise); }
+  #page-host > #analytics-modal.as-page #an-tabs button.act { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-controls { flex-wrap: nowrap; gap: 2px; margin: 0; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-controls > span { display: none; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 10px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip:hover { color: var(--fg); background: var(--raise); }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip.on { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-controls > .an-chip:last-child { margin-left: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  #page-host > #analytics-modal.as-page #analytics-refresh { padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page #analytics-refresh:hover { background: var(--line); }
+  #page-host > #analytics-modal.as-page #analytics-refresh:disabled { opacity: .6; cursor: default; }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x::before { content: "Esc"; font-size: 12px; }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x:hover { color: var(--fg); background: var(--raise); }
+  #page-host > #analytics-modal.as-page > .dlg-body { grid-column: 1 / -1; grid-row: 2; padding: 20px; background: var(--bg); }
+
+  /* Cards: --panel, --r-card, 1px --line. */
+  #page-host > #analytics-modal.as-page .an-customrow { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+  #page-host > #analytics-modal.as-page .an-customrow .an-chip { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page .an-date { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page .an-kpis { gap: 12px; margin-bottom: 16px; }
+  #page-host > #analytics-modal.as-page .an-kpi { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #analytics-modal.as-page .an-kpi .v { font-size: 22px; font-weight: 600; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-kpi .v.cost { color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-kpi .l { margin-top: 4px; font-size: 13px; letter-spacing: 0; text-transform: none; }
+  #page-host > #analytics-modal.as-page .an-box { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #analytics-modal.as-page .an-box h4 { font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-section { margin: 0 0 16px; }
+  #page-host > #analytics-modal.as-page .an-section h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-hint { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+  #page-host > #analytics-modal.as-page .an-grid2 { gap: 12px; }
+  #page-host > #analytics-modal.as-page .an-hbar .track { background: var(--raise); }
+  /* Compare: the diverging bars and their numbers share --an-up / --an-down;
+     a cost rise is not "red" here, it is a palette hue. The amber note stripe is
+     needs-you only, so the compare note goes neutral. */
+  #page-host > #analytics-modal.as-page .an-divrow .val.an-up { color: var(--an-up); }
+  #page-host > #analytics-modal.as-page .an-divrow .val.an-down { color: var(--an-down); }
+  #page-host > #analytics-modal.as-page .an-cmpnote { border-left-color: var(--faint); background: var(--raise); }
 }
