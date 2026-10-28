@@ -4110,6 +4110,16 @@ function selectedProfileName() { return selectedProfile; }
 // Duplicate), which the page's preselect below must never replace.
 let pfUserDraft = false;
 let pfPreselecting = false;
+// pfMarkDraft: any edit to the editor while no profile is selected makes the
+// form a draft, so a preselect still in flight leaves it alone. A selected
+// profile needs no flag (the preselect bails on selectedProfile), and fillForm
+// is programmatic, so it fires none of these events. A click counts only on a
+// segmented control (tier, runtime), the one input that is a button.
+function pfMarkDraft(e) {
+  if (selectedProfile) return;
+  if (e.type === "click" && !(e.target.closest && e.target.closest(".seg button"))) return;
+  pfUserDraft = true;
+}
 // preselectPageProfile: the desktop Settings page opens Profiles on a profile
 // (pg-1b), the first one you own, else the first one, rather than on a blank
 // draft. Page only: a phone keeps its list-first view.
@@ -4196,6 +4206,7 @@ $("pf-adv").addEventListener("click", () => setPfAdvOpen(!$("pf-adv").closest(".
 // Any edit in the form re-derives the Can touch line; a seg or a picker change
 // is a click, so clicks count too.
 for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);
+for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, pfMarkDraft);
 // The two "+ add" buttons append a blank row of the matching kind and hand
 // focus to its name field, so typing the variable name is the very next thing
 // that happens.
