@@ -26,6 +26,7 @@ import (
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
+	"github.com/culiops/agent-box/internal/auditlog"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxedws"
@@ -769,6 +770,18 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)
 
+	// Audit page: a read-only view of audit.db, opened after the broker and
+	// egress audits so their schemas exist. Not fatal: without it the routes are
+	// not registered and /api/meta says audit=false.
+	var auditReader *auditlog.Reader
+	if r, aerr := auditlog.Open(filepath.Join(dataDir, "audit.db")); aerr != nil {
+		log.Printf("audit page disabled: %v", aerr)
+	} else {
+		auditReader = r // a typed nil must never reach srv.Audit
+		srv.Audit = r
+		srv.AuditRetentionDays = cfg.EgressRetentionDays()
+	}
+
 	// Analytics: durable token/prompt rollups mined from the Claude Code
 	// transcripts. Enabled by default; only an explicit config false turns it off.
 	// Roots default to ~/.claude/projects (all host + direct usage — the bulk) plus
@@ -872,7 +885,14 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		StopRetention: stopRetention,
 		StopEgress:    stopEgress,
 		StopBroker:    stopBroker,
-		ShutdownHTTP:  httpSrv.Shutdown,
+		ShutdownHTTP: func(ctx context.Context) error {
+			// The reader closes after the drain, so no request reads a closed handle.
+			err := httpSrv.Shutdown(ctx)
+			if auditReader != nil {
+				_ = auditReader.Close()
+			}
+			return err
+		},
 	}, log.Printf)
 
 	log.Printf("agent-box listening on %s (allowed hosts: %s)", cfg.BindAddr, strings.Join(cfg.HostAllowlist(), ", "))
