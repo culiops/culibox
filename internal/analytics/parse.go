@@ -293,27 +293,13 @@ func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, c
 		}
 		u := rec.Message.Usage
 		// Transcripts are untrusted (a contained agent writes them): a negative
-		// count must never lower the shared totals or the stored cost.
-		in, out, cr := u.Input, u.Output, u.CacheRead
-		if in < 0 {
-			in = 0
-		}
-		if out < 0 {
-			out = 0
-		}
-		if cr < 0 {
-			cr = 0
-		}
-		cc := u.CacheCreation
-		if cc < 0 {
-			cc = 0
-		}
+		// count must never lower the shared totals or the stored cost, and a huge
+		// one must not overflow them.
+		in, out, cr := clampTokens(u.Input), clampTokens(u.Output), clampTokens(u.CacheRead)
+		cc := clampTokens(u.CacheCreation)
 		w1h := int64(0)
 		if u.CacheSplit != nil {
-			w1h = u.CacheSplit.E1h
-			if w1h < 0 {
-				w1h = 0
-			}
+			w1h = clampTokens(u.CacheSplit.E1h)
 			if w1h > cc {
 				w1h = cc // the record's total is the authority; never count more
 			}
@@ -335,6 +321,21 @@ func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, c
 	if isHumanPrompt(&rec) {
 		pending[day]++
 	}
+}
+
+// maxTokensPerRecord caps any one count in a record: real messages are bounded by
+// a <=1M-token context window, so more than this is hostile and would overflow int64 totals.
+const maxTokensPerRecord = 1_000_000_000
+
+// clampTokens bounds a token count from an untrusted transcript to [0, maxTokensPerRecord].
+func clampTokens(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+	if n > maxTokensPerRecord {
+		return maxTokensPerRecord
+	}
+	return n
 }
 
 // maxSeenIDs bounds the remembered message ids per transcript. A message's

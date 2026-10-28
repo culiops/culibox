@@ -1,6 +1,8 @@
 package analytics
 
 import (
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 )
@@ -196,6 +198,35 @@ func TestNegativeTokenCountsClampedToZero(t *testing.T) {
 	want := MessageCostUSD(model, MsgUsage{Input: 10, Output: 5, CacheRead: 100})
 	if tok.Input != 10 || tok.Output != 5 || tok.CacheRead != 100 || want == 0 || tok.Cost != want {
 		t.Fatalf("after normal record = %+v, want in=10 out=5 cr=100 cost=%v", tok, want)
+	}
+}
+
+// A hostile record claiming MaxInt64 is capped per count, so totals cannot wrap
+// and a following normal record still adds correctly.
+func TestHugeTokenCountsCappedNoOverflow(t *testing.T) {
+	day, model := "2026-08-05", "claude-opus-4-8"
+	huge := fmt.Sprintf(`{"input_tokens":%d,"output_tokens":%d,"cache_read_input_tokens":%d,"cache_creation_input_tokens":%d,"cache_creation":{"ephemeral_1h_input_tokens":%d}}`,
+		int64(math.MaxInt64), int64(math.MaxInt64), int64(math.MaxInt64), int64(math.MaxInt64), int64(math.MaxInt64))
+	norm := `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100}`
+	p, _, _, err := ParseTranscript(strings.NewReader(
+		msgRec("h1", day+"T10:00:01Z", huge) + msgRec("h2", day+"T10:00:02Z", huge) + msgRec("h3", day+"T10:00:03Z", norm)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := p.Tokens[TokKey{Day: day, Model: model}]
+	if tok == nil {
+		t.Fatal("no row")
+	}
+	const m = int64(maxTokensPerRecord)
+	if tok.Input != 2*m+10 || tok.Output != 2*m+5 || tok.CacheRead != 2*m+100 || tok.CacheCreation != 2*m || tok.CacheWrite1h != 2*m {
+		t.Fatalf("tokens = %+v, want each huge count capped at %d", tok, m)
+	}
+	one, _, _, _ := ParseTranscript(strings.NewReader(msgRec("h1", day+"T10:00:01Z", huge)))
+	if got := one.Tokens[TokKey{Day: day, Model: model}].Input; got != m {
+		t.Fatalf("single huge record input = %d, want exactly %d", got, m)
+	}
+	if tok.Cost <= 0 {
+		t.Fatalf("cost = %v, want positive (no wrap)", tok.Cost)
 	}
 }
 

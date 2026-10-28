@@ -124,7 +124,7 @@ func TestBoxedPeekIgnoresSymlinkedProjectsDir(t *testing.T) {
 	if err := os.Symlink(projDirIn(hostHome), projDirIn(bd)); err != nil {
 		t.Fatal(err)
 	}
-	bindSID(m, "s1", "hostfile") // bound, so transcriptPathIn's regular-file Lstat check is what refuses
+	bindSID(m, "s1", "hostfile") // bound; the slug dir is the symlink, so transcriptPathIn's directory check (root.Lstat + IsDir) refuses
 	if p, ok := m.PeekFor("s1"); ok {
 		t.Errorf("peek hit through a symlinked projects dir: %q", p.Text)
 	}
