@@ -1123,4 +1123,66 @@
   #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #about-version { font-size: 14px; color: var(--fg); }
   #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: 12.5px; color: var(--muted); }
+
+  /* Credentials as tables (S4 Task 6, pg-2): a quiet store strip, then one
+     bordered table per provider. Colour roles (D23): amber = needs you (missing,
+     locked, expired, not checked), red = write / prod / error, green = status;
+     mono only for machine text (account ids, role names, client ids, env names,
+     hosts). The card rules in app.css stay for the mobile modal. */
+  #page-host > #settings-modal.as-page #creds-body { gap: 14px; }
+  #page-host > #settings-modal.as-page #creds .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
+  #page-host > #settings-modal.as-page #creds .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
+  #page-host > #settings-modal.as-page #creds .cstrip .txt { font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .cstrip .txt b { color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #creds .cstrip.need .txt b { color: var(--amber); }
+  #page-host > #settings-modal.as-page #creds .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
+  #page-host > #settings-modal.as-page #creds .st::before { display: none; }
+  #page-host > #settings-modal.as-page #creds .cstrip .st { gap: 7px; }
+  #page-host > #settings-modal.as-page #creds .cstrip .st::before { display: inline-block; }
+  #page-host > #settings-modal.as-page #creds .st.ready { color: var(--ok); }
+  #page-host > #settings-modal.as-page #creds .st.missing, #page-host > #settings-modal.as-page #creds .st.locked, #page-host > #settings-modal.as-page #creds .st.notset { color: var(--amber); }
+  #page-host > #settings-modal.as-page #creds .st.invalid { color: var(--red); }
+  #page-host > #settings-modal.as-page #creds .hint { font-size: 12.5px; line-height: 1.6; }
+  #page-host > #settings-modal.as-page #creds .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #creds .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #creds .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page #creds .btn.dgr:hover { background: var(--danger-tint); }
+  #page-host > #settings-modal.as-page #creds .warnbox, #page-host > #settings-modal.as-page #creds .amberbox, #page-host > #settings-modal.as-page #creds .confirm { border-radius: var(--r-ctl); }
+
+  #page-host > #settings-modal.as-page #creds .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .hint, #page-host > #settings-modal.as-page #creds .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #creds .ctab { width: 100%; border-collapse: collapse; }
+  #page-host > #settings-modal.as-page #creds .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+  #page-host > #settings-modal.as-page #creds .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #creds .ctab .c-main { color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .ctab .c-main.mono { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #creds .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab .c-sub.mono { font-size: 11.5px; }
+  #page-host > #settings-modal.as-page #creds .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
+  #page-host > #settings-modal.as-page #creds .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.ok { color: var(--ok); }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.ok::before { content: "✓ "; }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.warn { color: var(--amber); }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.bad { color: var(--red); }
+  #page-host > #settings-modal.as-page #creds .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page #creds .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab .ent-act { justify-content: flex-end; }
+  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .ctab .ctab-x > td { padding: 0; }
+  #page-host > #settings-modal.as-page #creds .ctab .ctab-ex > * { margin: 0 16px 12px; }
+
+  #page-host > #settings-modal.as-page #creds .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #creds .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .vfold > summary::-webkit-details-marker { display: none; }
+  #page-host > #settings-modal.as-page #creds .vfold > summary::before { content: "▸ "; }
+  #page-host > #settings-modal.as-page #creds .vfold[open] > summary::before { content: "▾ "; }
+  #page-host > #settings-modal.as-page #creds .vfold > summary:hover { color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
+  #page-host > #settings-modal.as-page #creds .vfold-b > .btn { align-self: flex-start; }
 }

@@ -124,6 +124,78 @@ function credRoleName(arn) {
   return i >= 0 ? s.slice(i + 6) : s;
 }
 
+// --- the desktop page's tables (pure: the DOM is built in credTable) ---------------
+//
+// One table per provider group. A cell is {text, sub, cls, kind, mono, subMono,
+// tag, seed, title}: `kind` "st" or "pv" is a status / probe verdict coloured by
+// `cls`; `tag` is the PROD badge. The actions column is not here: it is DOM.
+
+const CRED_TABLE_HEADS = {
+  aws: ["Connection", "Account · role", "SSO", "Write probe", "Used by", ""],
+  github: ["App", "Client ID · key", "Status", "Used by", ""],
+  token: ["Token", "Env · agent may reach", "Status", "Used by", ""],
+};
+
+function credTableHead(key) {
+  return CRED_TABLE_HEADS[key === "aws" || key === "github" ? key : "token"].slice();
+}
+
+// credProbeCell: the write-probe verdict, short. The full D4 sentence for a
+// "writes" verdict is the warnbox under the row, so the cell only says it.
+function credProbeCell(e) {
+  if (e.status !== "ok") return { text: "–", cls: "", kind: "pv", sub: "" };
+  const v = baseText(e.base);
+  return { text: v.cls === "bad" ? "Can write" : v.text, cls: v.cls, kind: "pv", sub: checkedText(e.base && e.base.checked_at, new Date()) };
+}
+
+function credElevateText(el) {
+  if (!el) return "no elevation";
+  return "elevate: " + credRoleName(el.role_arn) + (el.max_minutes ? " · max " + el.max_minutes + "m" : "");
+}
+
+function credTableRow(key, e) {
+  const used = { text: usedByText(e.used_by) };
+  const st = { text: statusText(e.status), cls: statusClass(e.status), kind: "st" };
+  if (key === "aws") {
+    const probe = credProbeCell(e);
+    return {
+      cells: [
+        { text: e.name, tag: e.prod ? "PROD" : "", seed: isSeed(e), sub: credElevateText(e.elevate) },
+        { text: e.account_id || "", sub: credRoleName(e.role_arn), mono: true, subMono: true },
+        st, probe, used,
+      ],
+      danger: e.status === "ok" && probe.cls === "bad",
+      entry: e,
+    };
+  }
+  if (key === "github") {
+    return {
+      cells: [
+        { text: e.name, seed: isSeed(e) },
+        { text: e.client_id || "", sub: e.key_ref_kind || "", mono: true },
+        st, used,
+      ],
+      danger: false,
+      entry: e,
+    };
+  }
+  return {
+    cells: [
+      { text: e.name, sub: e.label || "", title: e.description || "", tag: e.prod ? "PROD" : "", seed: isSeed(e) },
+      { text: (e.env || []).join(", "), sub: (e.hosts || []).join(", "), mono: true, subMono: true },
+      st, used,
+    ],
+    danger: false,
+    entry: e,
+  };
+}
+
+// credTableRows: one row per entry of an AWS, GitHub App or token group.
+function credTableRows(g) {
+  const key = g && g.key === "aws" ? "aws" : g && g.key === "github" ? "github" : "token";
+  return ((g && g.entries) || []).map((e) => credTableRow(key, e));
+}
+
 const CRED_REF_PREFIXES = [
   [/^static_tokens\/(.+)$/, "token "],
   [/^github_apps\/(.+)$/, "GitHub App "],
@@ -473,7 +545,7 @@ if (typeof module !== "undefined" && module.exports) {
     templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
     tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
-    providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText,
+    providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
   };
@@ -673,8 +745,118 @@ const CRED_EMPTY = {
   values: "No stored values.",
 };
 
+// credTableMode: the desktop Settings page draws tables where the modal draws
+// cards. Keyed on the dialog being a page, not on the width, so a mobile modal
+// resized wide keeps its cards.
+function credTableMode() {
+  if (typeof document === "undefined") return false;
+  const m = document.getElementById("settings-modal");
+  return !!m && m.classList.contains("as-page");
+}
+
+// credEntryHost: where an entry's inline confirmation goes. A card is its own
+// host; a table entry gets a full-width row under it (made on first use).
+function credEntryHost(btn) {
+  const card = btn && btn.closest ? btn.closest(".ent") : null;
+  if (card) return card;
+  const tb = btn && btn.closest ? btn.closest("tbody.crow") : null;
+  return tb ? credEntryExtra(tb) : null;
+}
+
+function credEntryExtra(tb) {
+  let x = tb.querySelector(".ctab-ex");
+  if (!x) {
+    const tr = credEl("tr", "ctab-x");
+    const td = credEl("td");
+    td.colSpan = 99;
+    x = credEl("div", "ctab-ex");
+    td.appendChild(x);
+    tr.appendChild(td);
+    tb.appendChild(tr);
+  }
+  return x;
+}
+
+function credCellNode(c) {
+  const td = credEl("td");
+  if (c.title) td.title = c.title;
+  const main = credEl("div", "c-main" + (c.mono ? " mono" : ""));
+  if (c.kind === "st" || c.kind === "pv") {
+    main.appendChild(credEl("span", c.kind + (c.cls ? " " + c.cls : ""), c.text));
+  } else {
+    main.appendChild(document.createTextNode(c.text));
+  }
+  if (c.tag) main.appendChild(credBadge("prod", c.tag));
+  if (c.seed) main.appendChild(credBadge("seed", "from config.json"));
+  td.appendChild(main);
+  if (c.sub) td.appendChild(credEl("div", "c-sub" + (c.subMono ? " mono" : ""), c.sub));
+  return td;
+}
+
+// credTable: the group's table. One <tbody class="crow"> per entry: the row, and
+// under it (full width) the write warning, a broken entry's error, or a delete
+// confirmation.
+function credTable(g) {
+  const table = credEl("table", "ctab");
+  const tr = credEl("tr");
+  for (const h of credTableHead(g.key)) tr.appendChild(credEl("th", null, h));
+  table.appendChild(credEl("thead")).appendChild(tr);
+  for (const r of credTableRows(g)) {
+    const tb = credEl("tbody", "crow");
+    const row = credEl("tr", r.danger ? "danger" : "");
+    for (const c of r.cells) row.appendChild(credCellNode(c));
+    const act = credEl("td", "ctab-act");
+    act.appendChild(credActions(r.entry, loadCredentials));
+    row.appendChild(act);
+    tb.appendChild(row);
+    if (r.entry.error) {
+      const ex = credEntryExtra(tb);
+      ex.appendChild(credEl("p", "ent-err", r.entry.error));
+    }
+    if (r.danger) {
+      const ex = credEntryExtra(tb);
+      const box = credEl("div", "warnbox", baseText(r.entry.base).text);
+      box.setAttribute("role", "alert");
+      const acts = credWriteActions(r.entry.base);
+      if (acts.length) box.appendChild(credEl("div", "remedy", "Allowed here: " + acts.join(", ")));
+      box.appendChild(credEl("div", "remedy", CRED_D4_REMEDY));
+      ex.appendChild(box);
+    }
+    table.appendChild(tb);
+  }
+  return table;
+}
+
+// Stored values are folded on the page: write-only, so there is little to look
+// at. The fold keeps its state through a repaint (Replace and Delete reload).
+let credValuesOpen = false;
+
+function credValuesFold(g) {
+  const sec = credEl("section", "sec ctab-fold");
+  sec.dataset.group = g.key;
+  sec.setAttribute("aria-label", g.title);
+  const d = credEl("details", "vfold");
+  d.open = credValuesOpen;
+  d.addEventListener("toggle", () => { credValuesOpen = d.open; });
+  d.appendChild(credEl("summary", null, g.title + " (" + g.entries.length + ") · write-only, Replace or Delete"));
+  const body = credEl("div", "vfold-b");
+  const add = credActionHandlers.value && credActionHandlers.value.add;
+  if (typeof add === "function") {
+    const b = credEl("button", "btn", "Set a value");
+    b.type = "button";
+    b.onclick = () => add(g, loadCredentials);
+    body.appendChild(b);
+  }
+  body.appendChild(g.entries.length ? credValuesBody(g.entries) : credEl("p", "hint", CRED_EMPTY.values));
+  d.appendChild(body);
+  sec.appendChild(d);
+  return sec;
+}
+
 function credSection(g) {
-  const sec = credEl("section", "sec");
+  const tables = credTableMode();
+  if (tables && g.key === "values") return credValuesFold(g);
+  const sec = credEl("section", tables ? "sec ctab-sec" : "sec");
   sec.dataset.group = g.key;
   sec.setAttribute("aria-label", g.title);
   const h = credEl("div", "sec-h");
@@ -697,6 +879,11 @@ function credSection(g) {
   }
   if (g.key === "values") { sec.appendChild(credValuesBody(g.entries)); return sec; }
   if (g.key === "legacy") { sec.appendChild(credLegacyBody(g.entries)); return sec; }
+  if (tables) {
+    sec.appendChild(credTable(g));
+    if (g.key.startsWith("token:")) sec.appendChild(credEl("p", "honest", CRED_N3));
+    return sec;
+  }
   const stack = credEl("div", "stack");
   for (const e of g.entries) {
     stack.appendChild(g.key === "aws" ? credAWSCard(e) : g.key === "github" ? credAppCard(e) : credTokenCard(e));
@@ -709,8 +896,9 @@ function credSection(g) {
 // of the tab (it used to be a tab of its own).
 function credStrip(view) {
   const st = view.store || {};
-  const strip = credEl("div", "strip");
   const locked = st.initialized && st.locked && st.platform !== "darwin";
+  // On the desktop page the strip is quiet (amber only when it needs you).
+  const strip = credEl("div", credTableMode() ? "strip cstrip" + (locked || !st.initialized ? " need" : "") : "strip");
   if (!st.initialized) {
     strip.appendChild(credEl("span", "st notset", "Not set up"));
     strip.appendChild(credEl("div", "txt", "There is no encrypted store yet. Without one, tokens can only come from the daemon's environment or a file."));
@@ -1555,7 +1743,7 @@ async function awsSaveAll() {
 
 // awsDelete: an inline confirmation in the card (no browser dialog), then DELETE.
 function awsDelete(entry, reload, btn) {
-  const card = btn && btn.closest ? btn.closest(".ent") : null;
+  const card = credEntryHost(btn);
   if (!card || card.querySelector(".confirm")) return;
   const box = awsEl("div", "confirm");
   box.appendChild(awsEl("p", null, "Delete the connection " + entry.name + "? The AWS role and your host profile are not touched."));
@@ -1805,7 +1993,7 @@ async function credSend(method, path, body) {
 // --- token add / edit ----------------------------------------------------------
 
 function credTokensEmpty() {
-  const sec = credEl("section", "sec");
+  const sec = credEl("section", credTableMode() ? "sec ctab-sec" : "sec");
   sec.dataset.group = "tokens";
   sec.setAttribute("aria-label", "Tokens");
   const h = credEl("div", "sec-h");
@@ -2196,14 +2384,14 @@ function credConfirmDelete(host, text, path, noun, reload) {
   credActionHandlers.token = {
     add: (g) => credTokenAdd(g),
     edit: (e) => credTokenEdit(e),
-    delete: (e, reload, btn) => credConfirmDelete(btn.closest(".ent"),
+    delete: (e, reload, btn) => credConfirmDelete(credEntryHost(btn),
       "Delete the token " + e.name + "? The value " + (e.value_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "is not touched."),
       "/api/credentials/tokens/" + encodeURIComponent(e.name), "token", reload),
   };
   credActionHandlers.github = {
     add: () => credAppForm(null),
     edit: (e) => credAppForm(e),
-    delete: (e, reload, btn) => credConfirmDelete(btn.closest(".ent"),
+    delete: (e, reload, btn) => credConfirmDelete(credEntryHost(btn),
       "Delete the GitHub App " + e.name + "? The private key " + (e.key_ref_kind === "store" ? "stays in the encrypted store; delete it under Stored values if you no longer need it." : "file is not touched."),
       "/api/credentials/github-apps/" + encodeURIComponent(e.name), "GitHub App", reload),
   };
