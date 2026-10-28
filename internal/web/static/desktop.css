@@ -1301,5 +1301,8 @@
      needs-you only, so the compare note goes neutral. */
   #page-host > #analytics-modal.as-page .an-divrow .val.an-up { color: var(--an-up); }
   #page-host > #analytics-modal.as-page .an-divrow .val.an-down { color: var(--an-down); }
+  /* KPI deltas: neutral text, the up/down arrow carries the direction. The
+     base red/green (and good/bad) pairs are status colours (D23). */
+  #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); }
   #page-host > #analytics-modal.as-page .an-cmpnote { border-left-color: var(--faint); background: var(--raise); }
 }

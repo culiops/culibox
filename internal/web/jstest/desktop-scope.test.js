@@ -119,3 +119,13 @@ test("app.css base --an-* are today's hex, and up/down are today's danger/ok (mo
   assert.match(css, /--an-up:\s*var\(--danger\)/);
   assert.match(css, /--an-down:\s*var\(--ok\)/);
 });
+
+test("app.css hides #an-ctl at base (an empty flex item would shift mobile's header by one gap); desktop shows it", () => {
+  assert.match(stripComments(read("app.css")), /#an-ctl\s*\{\s*display:\s*none;?\s*\}/);
+  assert.match(stripComments(read("desktop.css")), /#page-host > #analytics-modal\.as-page #an-ctl\s*\{[^}]*display:\s*flex/);
+});
+
+test("desktop KPI deltas are neutral, not the status red/green", () => {
+  const css = stripComments(read("desktop.css"));
+  assert.match(css, /#page-host > #analytics-modal\.as-page \.an-kdelta\s*\{\s*color:\s*var\(--muted\)/);
+});

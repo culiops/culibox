@@ -405,6 +405,7 @@ function anRender() {
   }
   const d = AN.data;
   if (!d || !d.costByDay.days.length) {
+    if (page) body.appendChild(el("p", "an-hint", `${d ? d.from : AN.from} → ${d ? d.to : AN.to} (UTC)`));
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }

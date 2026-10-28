@@ -16,6 +16,9 @@
       --an-5: #f38ba8; --an-6: #94e2d5; --an-7: #f9e2af;
       --an-up: var(--danger); --an-down: var(--ok);
     }
+    /* The desktop page's header slot for the range chips; on mobile the chips
+       stay in the body, and an empty flex item would still add one gap. */
+    #an-ctl { display: none; }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
