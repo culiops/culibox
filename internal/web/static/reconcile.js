@@ -102,6 +102,8 @@ function rowSig(s, local) {
     l.sso || "", v.aws ? JSON.stringify(v.aws) : "",
     // Named connections: the chip (count, prod, write) and the SSO text read them.
     JSON.stringify(v.aws_connections),
+    // The row's "$": absent (history not fully known) is not the same as 0.
+    typeof v.cost_usd === "number" ? v.cost_usd : null,
   ]);
 }
 

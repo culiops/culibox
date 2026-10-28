@@ -439,3 +439,35 @@ test("paneTitle appends the tab count only when the pane has several", () => {
   assert.equal(d.paneTitle("api", { kind: "terminal" }, { cwd: "/x" }, 3), "api · /x (3 tabs in this pane)");
   assert.equal(d.paneTitle("a.md", { kind: "viewer" }, null, 2), "a.md (2 tabs in this pane)");
 });
+
+test("fmtSessionCost: sub-cent, zero, two decimals, whole dollars from $100", () => {
+  assert.equal(d.fmtSessionCost(0.004), "<$0.01");
+  assert.equal(d.fmtSessionCost(0.0099), "<$0.01");
+  assert.equal(d.fmtSessionCost(0), "$0.00");
+  assert.equal(d.fmtSessionCost(0.01), "$0.01");
+  assert.equal(d.fmtSessionCost(3.1), "$3.10");
+  assert.equal(d.fmtSessionCost(99.994), "$99.99");
+  assert.equal(d.fmtSessionCost(123.4), "$123");
+  assert.equal(d.fmtSessionCost(1234.5), "$1235");
+  assert.equal(d.fmtSessionCost(undefined), null);
+  assert.equal(d.fmtSessionCost(null), null);
+  assert.equal(d.fmtSessionCost("3.1"), null);
+  assert.equal(d.fmtSessionCost(NaN), null);
+});
+
+test("fmtSessionCost: a value that rounds to 100 renders as $100, never $100.00", () => {
+  assert.equal(d.fmtSessionCost(99.996), "$100");
+  assert.equal(d.fmtSessionCost(99.999), "$100");
+  assert.equal(d.fmtSessionCost(100), "$100");
+  assert.equal(d.fmtSessionCost(99.99), "$99.99");
+});
+
+test("paneHeaderModel: cost is the last slot on a wide pane, null when narrow, in a viewer, or when absent", () => {
+  const tab = { kind: "terminal", usage: () => ({ model: "opus-5", pct: 42 }) };
+  const s = { ...working, cost_usd: 1.84 };
+  assert.equal(d.paneHeaderModel({ tab, session: s, nowMs: NOW, boxRuntime: "runc", narrow: false }).cost, "$1.84");
+  assert.equal(d.paneHeaderModel({ tab, session: s, nowMs: NOW, boxRuntime: "runc", narrow: true }).cost, null);
+  assert.equal(d.paneHeaderModel({ tab: { kind: "viewer", path: "/a/b.md" }, session: s, nowMs: NOW, boxRuntime: "", narrow: false }).cost, null);
+  assert.equal(d.paneHeaderModel({ tab, session: working, nowMs: NOW, boxRuntime: "runc", narrow: false }).cost, null);
+  assert.equal(d.paneHeaderModel({ tab, session: { ...working, cost_usd: 0 }, nowMs: NOW, boxRuntime: "runc", narrow: false }).cost, "$0.00");
+});

@@ -974,6 +974,12 @@ class Cell {
       ctx.onclick = (e) => { e.stopPropagation(); openPaneView(sid, "activity"); };
       main.append(ctx);
     }
+    if (m.cost) {
+      const cost = el("span", m.cost);
+      cost.className = "ph-cost mono";
+      cost.title = "Session cost (all conversations since spawn, as Analytics counts it)";
+      main.append(cost);
+    }
 
     const side = el("div");
     side.className = "ph-side";

@@ -1977,6 +1977,16 @@ function paintCompactRow(li, sname, grow, s) {
   const aws = awsBadge(s, nowMs);
   if (aws) facts.push("AWS: " + aws.title);
   li.title = facts.join("\n");
+  // The session's cost, muted mono, before the chip. cost_usd is absent unless
+  // the whole conversation history is known, and then no "$" is shown at all.
+  const costText = fmtSessionCost(s.cost_usd);
+  if (costText) {
+    const dc = document.createElement("span");
+    dc.className = "dcost mono";
+    dc.textContent = costText;
+    dc.title = "Session cost (all conversations since spawn, as Analytics counts it)";
+    sname.appendChild(dc);
+  }
   if (chip) {
     const c = document.createElement("span");
     c.className = "dchip " + chip.tone;
