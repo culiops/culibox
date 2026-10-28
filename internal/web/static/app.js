@@ -3436,6 +3436,10 @@ async function refreshPfCreds() {
 // New session box's own rules (reachRows) and renderer (paintReachRows). Run
 // from fillForm, after the credential lists repaint, and (debounced) on every
 // edit inside the form. Base CSS hides the box on a phone, where it is skipped.
+// pfTouchKey: what #pf-touch shows now. The box is aria-live, so it is only
+// repainted when the text changes; a keystroke that changes nothing it says
+// must not make a screen reader read the whole line again.
+let pfTouchKey = "";
 function renderPfTouch() {
   const box = $("pf-touch");
   if (!box || !drawerDesktop()) return;
@@ -3451,6 +3455,9 @@ function renderPfTouch() {
     meta: { aws_connections: awscEntries },
     creds: pfCredsView,
   });
+  const key = JSON.stringify(rows);
+  if (key === pfTouchKey && box.childNodes.length) return;
+  pfTouchKey = key;
   paintReachRows(box, rows, { inline: true, title: "Can touch" });
 }
 let pfTouchTimer = 0;
@@ -3976,22 +3983,30 @@ function readForm() {
 // These three run while #settings-modal is open, so their errors go to the
 // dialog's own inline line. A toast is fixed-position and paints beneath a modal
 // backdrop, which would leave the failure invisible.
+// pfSaveError: a Save that did not happen. On the desktop page the line can be
+// about a field folded under Advanced (the allowlist's rows, or a server refusal
+// naming args, an option or the base environment), so any failed Save opens the
+// fold: a message pointing at a field nobody can see is a dead end.
+function pfSaveError(msg) {
+  setDialogError("settings-modal", msg);
+  setPfAdvOpen(true);
+}
 async function saveProfile() {
   const p = readForm();
   setDialogError("settings-modal", "");
-  if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
+  if (!p.name || !p.bin) { pfSaveError("Name and Command are required."); return; }
   const rowsErr = rowError(pfEnvRows);
-  if (rowsErr) { setDialogError("settings-modal", rowsErr); return; }
+  if (rowsErr) { pfSaveError(rowsErr); return; }
   // No permission ticked: shown on the GH block itself as well as in the dialog's line.
   const ghErr = ghFormError({ owners: readGhRows(), permissions: readGhPerms() });
   $("pf-gh-perm-err").textContent = ghErr;
   $("pf-gh-perm-err").hidden = !ghErr;
-  if (ghErr) { setDialogError("settings-modal", ghErr); return; }
+  if (ghErr) { pfSaveError(ghErr); return; }
   // From the editor's state, not the typed name: a saved profile's name is
   // read-only, and a draft (New, Duplicate) always creates, so Save cannot
   // leave a copy behind.
   const target = saveTarget(selectedProfile, p.name, profiles.map((x) => x.name));
-  if (target.error) { setDialogError("settings-modal", target.error); return; }
+  if (target.error) { pfSaveError(target.error); return; }
   // Containment is the one field whose consequence is worth naming before it is
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
@@ -4005,7 +4020,7 @@ async function saveProfile() {
   try {
     saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) {
-    setDialogError("settings-modal", "Save failed: " + e.message);
+    pfSaveError("Save failed: " + e.message);
     // A refusal that names a token entry is also shown on the Tokens block.
     if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
       $("pf-st-err").textContent = String(e.message);
@@ -4135,12 +4150,11 @@ function discardProfileEdits() {
 $("pf-discard").addEventListener("click", discardProfileEdits);
 // Advanced (desktop page): folds base environment, the other options, replies,
 // args and the allowlist. CSS only hides them; every field stays in the form.
-$("pf-adv").addEventListener("click", () => {
-  const ped = $("pf-adv").closest(".ped");
-  const open = !ped.classList.contains("adv-open");
-  ped.classList.toggle("adv-open", open);
+function setPfAdvOpen(open) {
+  $("pf-adv").closest(".ped").classList.toggle("adv-open", open);
   $("pf-adv").setAttribute("aria-expanded", open ? "true" : "false");
-});
+}
+$("pf-adv").addEventListener("click", () => setPfAdvOpen(!$("pf-adv").closest(".ped").classList.contains("adv-open")));
 // Any edit in the form re-derives the Can touch line; a seg or a picker change
 // is a click, so clicks count too.
 for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);

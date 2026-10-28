@@ -49,7 +49,9 @@ test("the profile form gains the Can touch box first, three section heads and th
   const ped = HTML.slice(HTML.indexOf('<div class="ped">'), HTML.indexOf('<div class="dbd pad" id="settings"'));
   assert.match(ped, /^<div class="ped">\s*<div id="pf-touch" class="pf-touch" aria-live="polite"><\/div>/);
   for (const sec of ["agent", "where", "touch"]) assert.match(ped, new RegExp('<h3 class="pf-sec" data-sec="' + sec + '">'));
-  assert.match(ped, /<button id="pf-adv" class="pf-adv" type="button" aria-expanded="false">Advanced · base environment, options, args, environment variables, replies<\/button>/);
+  assert.match(ped, /<button id="pf-adv" class="pf-adv" type="button" aria-expanded="false" aria-controls="pf-base-col pf-options pf-replyable-row pf-args-row pf-env-block">Advanced · base environment, options, args, environment variables, replies<\/button>/);
+  // Every id aria-controls names exists.
+  for (const id of ["pf-base-col", "pf-options", "pf-replyable-row", "pf-args-row", "pf-env-block"]) assert.match(ped, new RegExp('id="' + id + '"'), id);
   for (const id of ["pf-name-col", "pf-bin-col", "pf-base-col", "pf-cwd-col", "pf-args-row"]) {
     assert.match(ped, new RegExp('id="' + id + '"'), id);
   }
@@ -115,4 +117,29 @@ test("the page rules live in desktop.css and target #settings-modal.as-page", ()
   assert.match(css, /#page-host > #settings-modal\.as-page/);
   // Done is modal chrome: hidden on the page.
   assert.match(css, /#page-host > #settings-modal\.as-page \[data-close\]:not\(#settings-esc\)\s*\{[^}]*display: none/);
+});
+
+// Fix round 1: a failed Save can be about a field folded under Advanced (the
+// allowlist's rows, or a server refusal naming args or an option), so every
+// failed Save opens the fold; a reload failure after a good Save does not.
+test("a failed Save opens the Advanced fold", () => {
+  const e = body(APP, "pfSaveError");
+  assert.match(e, /setDialogError\("settings-modal", msg\)/);
+  assert.match(e, /setPfAdvOpen\(true\)/);
+  const o = body(APP, "setPfAdvOpen");
+  assert.match(o, /classList\.toggle\("adv-open", open\)/);
+  assert.match(o, /aria-expanded/);
+  const save = body(APP, "saveProfile");
+  for (const err of ['"Name and Command are required."', "rowsErr", "ghErr", "target.error", '"Save failed: " + e.message']) {
+    assert.ok(save.includes("pfSaveError(" + err + ")"), "saveProfile reports " + err + " through pfSaveError");
+  }
+  assert.ok(!/setDialogError\("settings-modal", "Name and Command|setDialogError\("settings-modal", rowsErr|setDialogError\("settings-modal", "Save failed/.test(save), "no failed-Save path bypasses the fold");
+});
+
+// Fix round 1: #pf-touch is aria-live, so an unchanged line is not repainted.
+test("Can touch repaints only when its text changes", () => {
+  const r = body(APP, "renderPfTouch");
+  assert.match(r, /const key = JSON\.stringify\(rows\)/);
+  assert.match(r, /if \(key === pfTouchKey[^)]*\) return;/);
+  assert.ok(r.indexOf("pfTouchKey = key") < r.indexOf("paintReachRows("), "the key is stored before the paint");
 });
