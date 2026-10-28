@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -549,6 +550,13 @@ type Info struct {
 	// re-lists after a spawn and never renders a row from those responses; a
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
+	// CostUSD is the summed analytics cost of every conversation this session
+	// has had since spawn. Present only for a claude session whose whole
+	// conversation history is known (costComplete) while a cost source is set:
+	// a partial history would understate it, and an understated price is a
+	// guess. Present and 0 means no cost has been ingested yet (ingest lags the
+	// transcript), not that the session is free. Filled by List only.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 	// Need says why a waiting claude session needs you: "ask" (blocked on a
 	// permission/choice prompt) or "turn" (it finished its turn); or "sso" (a
 	// bound session, claude or not, whose AWS sign-in on the host has expired;
@@ -700,6 +708,19 @@ type Session struct {
 	// claudeSessionID is Claude Code's conversation id as last validated by
 	// locate (registry), so it follows /clear. Guarded by mu.
 	claudeSessionID string
+	// claudeSessionIDs is every conversation id noted since spawn, oldest
+	// first, at most maxConversationIDs; costComplete says it is the whole
+	// history (see sessionMeta.CostComplete). Guarded by mu.
+	claudeSessionIDs []string
+	costComplete     bool
+	// restoredUnchecked is set when the session was re-attached after a daemon
+	// restart and no registry read has happened since: the first sid noted
+	// decides whether a /clear slipped by while nobody was watching. Memory
+	// only; guarded by mu.
+	restoredUnchecked bool
+	// convMu orders the sidecar writes of the three fields above (and
+	// claudeSessionID): taken before the snapshot, held across the write.
+	convMu sync.Mutex
 	// cwdFormsCache is cwdFormsOf(Cwd), filled on first use (cwdForms); Cwd is
 	// immutable, so it is never invalidated. Guarded by mu.
 	cwdFormsCache []string
@@ -1140,6 +1161,47 @@ func (s *Session) claudeSID() string {
 	return s.claudeSessionID
 }
 
+// conversations returns a copy of every conversation id this session has had
+// since spawn and whether that list is the whole history.
+func (s *Session) conversations() (ids []string, complete bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.claudeSessionIDs), s.costComplete
+}
+
+// addConversationLocked appends sid to the history unless it is already there.
+// A sid that fails sessionIDRe, or one past maxConversationIDs, is not
+// recorded and leaves the history incomplete. It reports whether anything
+// changed. s.mu must be held.
+func (s *Session) addConversationLocked(sid string) (changed bool) {
+	if slices.Contains(s.claudeSessionIDs, sid) {
+		return false
+	}
+	if !sessionIDRe.MatchString(sid) || len(s.claudeSessionIDs) >= maxConversationIDs {
+		changed = s.costComplete
+		s.costComplete = false
+		return changed
+	}
+	s.claudeSessionIDs = append(s.claudeSessionIDs, sid)
+	return true
+}
+
+// inheritConversations folds a predecessor's history in front of this
+// session's own (Restart: the replacement is a new session that resumes the
+// old conversation). It is complete only if both were. It returns the merged
+// state for the caller to persist.
+func (s *Session) inheritConversations(ids []string, wasComplete bool) ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	own := s.claudeSessionIDs
+	s.claudeSessionIDs = nil
+	s.costComplete = s.costComplete && wasComplete
+	for _, sid := range slices.Concat(ids, own) {
+		s.addConversationLocked(sid)
+	}
+	return slices.Clone(s.claudeSessionIDs), s.costComplete
+}
+
 // SetName updates the mutable display label.
 func (s *Session) SetName(name string) {
 	s.mu.Lock()
@@ -1234,6 +1296,7 @@ type Manager struct {
 	clone       CloneHooks  // nil = clone mode unavailable; clone profiles are refused
 	home        string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	costSrc     CostSource  // prices a session's conversations (analytics); nil = off, no session reports a cost
 	repliesOn   bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
 	// contextCheck is the on-disk check of one context path (existence,
@@ -1300,6 +1363,27 @@ func (m *Manager) SetBroker(h BrokerHooks) {
 	if h != nil {
 		h.SetBaseNotify(m.baseProbed) // outside m.mu: the broker takes its own lock
 	}
+}
+
+// CostSource prices conversations by their Claude conversation id. The
+// analytics service implements it; it is an interface so this package does not
+// import analytics.
+type CostSource interface {
+	CostOf(sids []string) float64
+}
+
+// SetCostSource sets where List reads each session's cost. A nil interface, or
+// a typed nil (a nil *Service stored in the interface, which compares non-nil
+// and would panic on first use), means "no source".
+func (m *Manager) SetCostSource(c CostSource) {
+	if c != nil {
+		if v := reflect.ValueOf(c); v.Kind() == reflect.Pointer && v.IsNil() {
+			c = nil
+		}
+	}
+	m.mu.Lock()
+	m.costSrc = c
+	m.mu.Unlock()
 }
 
 // SetStoreLocked installs the store's current-state probe. A listed session the
@@ -2088,6 +2172,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
+	// Only a claude session born here has seen every conversation it will
+	// have; its history starts empty and is complete until proven otherwise.
+	sess.costComplete = isClaudeBin(bin)
 	sess.resumeSkipped = resumeSkipped
 	sess.base = maps.Clone(baseAccess) // its own: a re-probe writes into it
 	sess.onSubmitted = m.submittedHook(id)
@@ -2106,7 +2193,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
-			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID})
+			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -2441,12 +2528,25 @@ func (m *Manager) List() []Info {
 		defer m.mu.Unlock()
 		return m.storeLocked
 	}()
+	costSrc := func() CostSource {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.costSrc
+	}()
 	// The critical section is a closure so the unlock is a defer again: it used
 	// to be an explicit Unlock (so PeekFor, which takes the same non-reentrant
 	// mutex, could run after it), which meant a panic inside s.Info() would
 	// leave m.mu held forever and wedge every spawn, kill, get and list for the
 	// process lifetime. The closure keeps BOTH properties, and makes "no early
 	// return between Lock and Unlock" structural rather than a rule to remember.
+	// Conversation histories are copied inside the critical section (s.mu under
+	// m.mu is the order Info() already takes) and priced after it: CostOf takes
+	// the analytics lock, which is never held together with a session lock.
+	type history struct {
+		ids      []string
+		complete bool
+	}
+	histories := map[string]history{}
 	out := func() []Info {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2457,6 +2557,10 @@ func (m *Manager) List() []Info {
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
 			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID(), s.Exclusive) != ""
+			if costSrc != nil && i.Claude {
+				ids, complete := s.conversations()
+				histories[i.ID] = history{ids, complete}
+			}
 			o = append(o, i)
 		}
 		return o
@@ -2467,6 +2571,15 @@ func (m *Manager) List() []Info {
 	// the daemon on the first poll.
 	var storeIsLocked *bool
 	for i := range out {
+		// A cost is shown only for a history known to be whole: a partial sum
+		// would understate it. A known conversation with no cost ingested yet is
+		// a real $0.00 (ingest lags the transcript), so it is present. A whole
+		// history with no conversation at all is absent: we never saw one (the
+		// registry may never validate), so $0.00 would be a guess.
+		if h, ok := histories[out[i].ID]; ok && h.complete && len(h.ids) > 0 {
+			c := costSrc.CostOf(h.ids)
+			out[i].CostUSD = &c
+		}
 		p, ok, blocked := m.peekAndBlocked(out[i].ID)
 		if ok {
 			out[i].Summary = summaryLine(p.Text)
@@ -2847,9 +2960,33 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.replyable = md.Replyable && m.repliesOn
 	sess.options = md.Options
 	sess.ParentID = md.ParentID
+	sess.costComplete = md.CostComplete
 	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
 		sess.claudeSessionID = md.ClaudeSessionID
+	} else if md.ClaudeSessionID != "" {
+		sess.costComplete = false // dropped: the history cannot vouch for its own current conversation
 	}
+	// The history is trusted only whole: one entry that is not a plain id (a
+	// hand-edited or corrupt file) drops them all and the cost reads partial.
+	// A record from before the list holds just the singular id and can never
+	// be complete, since earlier conversations were not kept.
+	if slices.ContainsFunc(md.ClaudeSessionIDs, func(sid string) bool { return !sessionIDRe.MatchString(sid) }) {
+		sess.costComplete = false
+	} else {
+		sess.claudeSessionIDs = slices.Clone(md.ClaudeSessionIDs)
+	}
+	if len(sess.claudeSessionIDs) > maxConversationIDs {
+		sess.claudeSessionIDs, sess.costComplete = sess.claudeSessionIDs[:maxConversationIDs], false
+	}
+	if sess.claudeSessionID != "" {
+		sess.addConversationLocked(sess.claudeSessionID) // not yet published: no lock needed
+		if !slices.Contains(md.ClaudeSessionIDs, sess.claudeSessionID) {
+			sess.costComplete = false // the list did not know its own current conversation
+		}
+	}
+	// The daemon was down for an unknown stretch: until the first registry read
+	// the current conversation is only what the sidecar last saw.
+	sess.restoredUnchecked = true
 	// nil = a record written before the flag existed, or an orphan adopted with
 	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
 	sess.submitted = md.Submitted == nil || *md.Submitted

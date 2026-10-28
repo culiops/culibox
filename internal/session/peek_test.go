@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -584,5 +585,110 @@ func TestSendMessageRefusedWhenRepliesDisabled(t *testing.T) {
 	}
 	if got := written(t, r); got != "hi\r" {
 		t.Errorf("switch on: PTY received %q want %q", got, "hi\r")
+	}
+}
+
+// fakeCost is a CostSource that records what it was asked and prices every id
+// at a flat rate, so a test can tell "summed" from "not asked".
+type fakeCost struct {
+	mu    sync.Mutex
+	calls [][]string
+	per   float64
+}
+
+func (f *fakeCost) CostOf(sids []string) float64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, append([]string(nil), sids...))
+	return f.per * float64(len(sids))
+}
+
+func TestListCostOnlyWhenComplete(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	add := func(id, bin string, ids []string, complete bool) {
+		m.sessions[id] = &Session{
+			ID: id, Agent: "claude", Bin: bin, Created: time.Now().Add(-time.Hour),
+			claudeSessionIDs: ids, costComplete: complete,
+		}
+	}
+	const claude = "/usr/local/bin/claude"
+	add("complete", claude, []string{"c1", "c2"}, true)
+	add("zero", claude, nil, true)
+	add("one", claude, []string{"o1"}, true)
+	add("partial", claude, []string{"p1"}, false)
+	add("codex", "/usr/local/bin/codex", []string{"x1"}, true)
+	delete(m.sessions, "s1")
+
+	cost := func(out []Info, id string) *float64 {
+		for _, i := range out {
+			if i.ID == id {
+				return i.CostUSD
+			}
+		}
+		t.Fatalf("session %q not listed", id)
+		return nil
+	}
+
+	// No cost source: never present.
+	for _, id := range []string{"complete", "zero", "one", "partial", "codex"} {
+		if c := cost(m.List(), id); c != nil {
+			t.Errorf("no source: %s cost_usd=%v, want absent", id, *c)
+		}
+	}
+
+	fc := &fakeCost{per: 1.5}
+	m.SetCostSource(fc)
+	out := m.List()
+	if c := cost(out, "complete"); c == nil || *c != 3.0 {
+		t.Errorf("complete claude session: cost_usd=%v, want 3", c)
+	}
+	// Complete but no conversation recorded: we never saw one, so a $0.00 would
+	// be a guess (the registry may never validate). Absent.
+	if c := cost(out, "zero"); c != nil {
+		t.Errorf("complete, no ids: cost_usd=%v, want absent", *c)
+	}
+	// One known conversation with no ingested rows yet: a real $0.00 (lag).
+	if c := cost(out, "one"); c == nil || *c != 1.5 {
+		t.Errorf("complete, one id: cost_usd=%v, want 1.5 present", c)
+	}
+	if c := cost(out, "partial"); c != nil {
+		t.Errorf("incomplete history: cost_usd=%v, want absent", *c)
+	}
+	if c := cost(out, "codex"); c != nil {
+		t.Errorf("non-claude session: cost_usd=%v, want absent", *c)
+	}
+	for _, call := range fc.calls {
+		for _, id := range call {
+			if id == "p1" || id == "x1" {
+				t.Errorf("CostOf was asked about %q, which must not be priced", id)
+			}
+		}
+	}
+
+	// One id with no ingested rows prices to 0: present, and exactly 0.
+	m.SetCostSource(&fakeCost{per: 0})
+	if c := cost(m.List(), "one"); c == nil || *c != 0 {
+		t.Errorf("one id, no ingested rows: cost_usd=%v, want 0 present", c)
+	}
+	m.SetCostSource(fc)
+
+	// Absent means the key is missing from the JSON; zero means "cost_usd":0.
+	for _, i := range out {
+		raw, _ := json.Marshal(i)
+		has := strings.Contains(string(raw), `"cost_usd"`)
+		if want := i.ID == "complete" || i.ID == "one"; has != want {
+			t.Errorf("%s: cost_usd key present=%v, want %v (%s)", i.ID, has, want, raw)
+		}
+	}
+}
+
+// A typed nil (a nil *T stored in the interface) must read as "no source".
+func TestSetCostSourceTypedNil(t *testing.T) {
+	m, _ := newPeekTestManager(t, "/tmp/proj", "")
+	m.sessions["s1"].costComplete = true
+	var nilSvc *fakeCost
+	m.SetCostSource(nilSvc)
+	if c := m.List()[0].CostUSD; c != nil {
+		t.Errorf("typed-nil source: cost_usd=%v, want absent (and no panic)", *c)
 	}
 }

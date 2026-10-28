@@ -142,14 +142,37 @@ function deskBaseName(p) {
   return String(p || "").split("/").filter(Boolean).pop() || String(p || "");
 }
 
+// fmtSessionCost: a session's cost as the row and header show it. Non-numbers
+// (the server omits cost_usd unless the whole conversation history is known)
+// give null. Sub-cent but non-zero is "<$0.01", exactly 0 is "$0.00", under $100
+// two decimals, from $100 whole dollars. The boundary is decided on the value
+// ROUNDED TO CENTS, so 99.996 (which toFixed(2) would print "$100.00") is "$100".
+function fmtSessionCost(n) {
+  if (typeof n !== "number" || !isFinite(n)) return null;
+  if (n <= 0) return "$0.00";
+  if (n < 0.01) return "<$0.01";
+  if (Math.round(n * 100) >= 10000) return "$" + Math.round(n);
+  return "$" + n.toFixed(2);
+}
+
+// headerSyncKey: what syncHeaderName compares to decide the pane header must be
+// rebuilt on a poll. The header is gated (a rebuild per poll eats a press), so
+// every polled value it paints outside tab.onUpdate has to be in this key: the
+// session's name and its formatted cost (cost_usd moves on the 2m ingest with no
+// other signal, e.g. on an idle session). The cost is formatted here, not taken
+// from paneHeaderModel, so a narrow pane (which hides it) does not look stale.
+function headerSyncKey(name, session) {
+  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null]);
+}
+
 // paneHeaderModel: the pane header's one line, in fixed slot order: containment,
-// cloud, model, ctx. Below the narrow threshold only ONE chip survives (the
-// write chip if there is one, else containment) and model/ctx are dropped, so
+// cloud, model, ctx, cost. Below the narrow threshold only ONE chip survives (the
+// write chip if there is one, else containment) and model/ctx/cost are dropped, so
 // the name keeps the room. The name itself is never shortened here: CSS ellipsis
 // does that, and a test pins that a long name passes through.
 function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
   if (tab && tab.kind === "viewer") {
-    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null };
+    return { dot: null, name: deskBaseName(tab.path || tab.name), chips: [], model: null, ctx: null, cost: null };
   }
   const s = session || null;
   const name = (s && (s.name || s.id)) || (tab && tab.name) || "";
@@ -169,13 +192,14 @@ function paneHeaderModel({ tab, session, nowMs, boxRuntime, narrow }) {
     // One chip at most: the write window if there is one, else containment. A
     // read credential is not worth the room.
     const w = chips.find((c) => c.tone === "write");
-    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null };
+    return { dot, name, chips: w ? [w] : cont ? [cont] : [], model: null, ctx: null, cost: null };
   }
   const u = tab && typeof tab.usage === "function" ? tab.usage() : null;
   return {
     dot, name, chips,
     model: u && u.model ? String(u.model) : null,
     ctx: u && typeof u.pct === "number" ? u.pct + "%" : null,
+    cost: s ? fmtSessionCost(s.cost_usd) : null,
   };
 }
 
@@ -360,5 +384,5 @@ function paneTitle(name, tab, session, tabCount) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
 }

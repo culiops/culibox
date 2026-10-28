@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite" (no CGO)
 )
@@ -21,6 +22,19 @@ import (
 // rename), and without project in the key those would clobber each other's rows.
 type Store struct {
 	db *sql.DB
+
+	// states, when non-nil, is an in-memory copy of ingest_state for the
+	// duration of one ingest pass (beginPass/endPass). A no-change pass would
+	// otherwise run one prepared SELECT per transcript, which is most of its
+	// cost. Apply keeps it current, so a path seen twice in one pass reads its
+	// own latest offset exactly as the SELECT would.
+	stMu   sync.Mutex
+	states map[string]fileState
+}
+
+type fileState struct {
+	size, offset int64
+	seen         string // space-joined message ids, as stored
 }
 
 const schema = `
@@ -197,6 +211,16 @@ func (s *Store) Close() error { return s.db.Close() }
 // message ids already counted near that offset (oldest first), which let a
 // message split across two ingest batches be counted once.
 func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, err error) {
+	s.stMu.Lock()
+	if s.states != nil {
+		st, found := s.states[path]
+		s.stMu.Unlock()
+		if !found {
+			return 0, 0, false, nil, nil
+		}
+		return st.size, st.offset, true, strings.Fields(st.seen), nil
+	}
+	s.stMu.Unlock()
 	var ids string
 	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids FROM ingest_state WHERE path=?`, path)
 	switch err = row.Scan(&size, &offset, &ids); err {
@@ -207,6 +231,38 @@ func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, 
 	default:
 		return 0, 0, false, nil, err
 	}
+}
+
+// beginPass loads every ingest_state row into memory so State is a map lookup
+// until endPass. Passes are serialized by Service.mu, so nothing else writes
+// ingest_state meanwhile. On error State keeps querying the DB.
+func (s *Store) beginPass() {
+	rows, err := s.db.Query(`SELECT path, size, read_offset, seen_ids FROM ingest_state`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	m := map[string]fileState{}
+	for rows.Next() {
+		var p string
+		var fs fileState
+		if rows.Scan(&p, &fs.size, &fs.offset, &fs.seen) != nil {
+			return
+		}
+		m[p] = fs
+	}
+	if rows.Err() != nil {
+		return
+	}
+	s.stMu.Lock()
+	s.states = m
+	s.stMu.Unlock()
+}
+
+func (s *Store) endPass() {
+	s.stMu.Lock()
+	s.states = nil
+	s.stMu.Unlock()
 }
 
 // Apply writes one transcript batch's rollup deltas AND the new ingest_state row
@@ -256,7 +312,15 @@ ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_of
 		return fmt.Errorf("state upsert: %w", err)
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.stMu.Lock()
+	if s.states != nil {
+		s.states[path] = fileState{size: size, offset: offset, seen: strings.Join(seen, " ")}
+	}
+	s.stMu.Unlock()
+	return nil
 }
 
 // --- query types --------------------------------------------------------------
@@ -504,6 +568,27 @@ GROUP BY session_id, project, model`, from, to)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Cost > out[j].Cost })
 	return out, nil
+}
+
+// ConversationCosts returns the total cost per conversation id (session_id)
+// over every day it ran. It is the whole history, not a window: a session's
+// price is what its conversations cost since they began.
+func (s *Store) ConversationCosts() (map[string]float64, error) {
+	rows, err := s.db.Query(`SELECT session_id, SUM(cost_usd) FROM session_rollup GROUP BY session_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var sid string
+		var c float64
+		if err := rows.Scan(&sid, &c); err != nil {
+			return nil, err
+		}
+		out[sid] = c
+	}
+	return out, rows.Err()
 }
 
 // Tools returns attribution aggregates (skill/plugin/mcp) in [from,to], busiest first.

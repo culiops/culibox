@@ -1,9 +1,11 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -529,5 +531,158 @@ func TestExitedSessionUsesPersistedSID(t *testing.T) {
 	}
 	if _, ok := m.AttributionFor("s1"); !ok {
 		t.Error("exited s1 AttributionFor ok=false; want its own transcript")
+	}
+}
+
+// waitConversations polls until s's history satisfies ok, or fails after 1s.
+func waitConversations(t *testing.T, s *Session, what string, ok func(ids []string) bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if ids, _ := s.conversations(); ok(ids) {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	ids, _ := s.conversations()
+	t.Fatalf("timed out waiting for %s; conversations=%v", what, ids)
+}
+
+func startPoller(t *testing.T, m *Manager) (stop func() time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { m.PollConversations(ctx, 10*time.Millisecond); close(done) }()
+	stopped := false
+	stop = func() time.Duration {
+		stopped = true
+		start := time.Now()
+		cancel()
+		<-done
+		return time.Since(start)
+	}
+	t.Cleanup(func() {
+		if !stopped {
+			stop()
+		}
+	})
+	return stop
+}
+
+func TestPollerRecordsEveryClear(t *testing.T) {
+	m, home := newLocatorManager(t)
+	s := m.sessions["s1"]
+	startPoller(t, m)
+	waitConversations(t, s, "aaaa-1", func(ids []string) bool { return slices.Contains(ids, "aaaa-1") })
+	writeReg(t, home, 101, regJSON(101, "bbbb-2", "5000", "idle"))
+	waitConversations(t, s, "bbbb-2", func(ids []string) bool { return slices.Contains(ids, "bbbb-2") })
+	writeReg(t, home, 101, regJSON(101, "cccc-3", "5000", "idle"))
+	waitConversations(t, s, "cccc-3", func(ids []string) bool { return slices.Contains(ids, "cccc-3") })
+	if ids, _ := s.conversations(); !slices.Equal(ids, []string{"aaaa-1", "bbbb-2", "cccc-3"}) {
+		t.Fatalf("conversations=%v want [aaaa-1 bbbb-2 cccc-3]", ids)
+	}
+}
+
+func TestPollerSkipsExited(t *testing.T) {
+	m, home := newLocatorManager(t)
+	m.sessions["s1"].status = statusExited
+	startPoller(t, m)
+	s2 := m.sessions["s2"]
+	waitConversations(t, s2, "bbbb-2", func(ids []string) bool { return slices.Contains(ids, "bbbb-2") })
+	// Rewrite s1's registry, then let s2 see a second change: by then the
+	// poller has made at least one more full pass over every session.
+	writeReg(t, home, 101, regJSON(101, "cccc-3", "5000", "idle"))
+	writeReg(t, home, 202, regJSON(202, "dddd-4", "6000", "idle"))
+	waitConversations(t, s2, "dddd-4", func(ids []string) bool { return slices.Contains(ids, "dddd-4") })
+	if ids, _ := m.sessions["s1"].conversations(); len(ids) != 0 {
+		t.Fatalf("an exited session was polled: %v", ids)
+	}
+	if got := m.liveClaudeIDs(); !slices.Equal(got, []string{"s2"}) {
+		t.Fatalf("liveClaudeIDs=%v want [s2]", got)
+	}
+}
+
+func TestPollerStopsOnCancel(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	stop := startPoller(t, m)
+	time.Sleep(30 * time.Millisecond) // let it run a few ticks
+	if d := stop(); d > 100*time.Millisecond {
+		t.Fatalf("PollConversations took %v to return after cancel", d)
+	}
+}
+
+// restoredLocatorManager reconciles one live claude session "claude-2" from a
+// sidecar record, with the locator fixtures (registry for pid 101) wired in.
+func restoredLocatorManager(t *testing.T, meta sessionMeta, regSID string) (*Manager, *Session, string) {
+	t.Helper()
+	home := t.TempDir()
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{"claude-2": meta})
+	m := NewManager(tieredLauncher{}, pidBackend{fb, map[string]int{"claude-2": 101}}, 1<<16, time.Minute)
+	m.home = home
+	m.procStart = func(pid int) (string, bool) { return "5000", pid == 101 }
+	if err := m.SetSidecarPath(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	s, ok := m.Get("claude-2")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
+	if !isClaudeBin(s.Bin) {
+		t.Fatalf("restored Bin=%q is not claude", s.Bin)
+	}
+	writeReg(t, home, 101, regJSON(101, regSID, "5000", "idle"))
+	return m, s, path
+}
+
+func TestDowntimeSidChangeMarksIncomplete(t *testing.T) {
+	meta := sessionMeta{Agent: "claude", Cwd: locCwd, Created: time.Now(), CostComplete: true,
+		ClaudeSessionID: "aaaa-1", ClaudeSessionIDs: []string{"aaaa-1"}}
+
+	t.Run("changed while down", func(t *testing.T) {
+		m, s, path := restoredLocatorManager(t, meta, "bbbb-2")
+		if ids, complete := s.conversations(); !slices.Equal(ids, []string{"aaaa-1"}) || !complete {
+			t.Fatalf("a restore alone must not touch the flag: ids=%v complete=%v", ids, complete)
+		}
+		m.locate("claude-2")
+		ids, complete := s.conversations()
+		if !slices.Equal(ids, []string{"aaaa-1", "bbbb-2"}) || complete {
+			t.Fatalf("ids=%v complete=%v want [aaaa-1 bbbb-2] false", ids, complete)
+		}
+		md := sidecarEntry(t, path, "claude-2")
+		if !slices.Equal(md.ClaudeSessionIDs, []string{"aaaa-1", "bbbb-2"}) || md.CostComplete {
+			t.Fatalf("sidecar ids=%v complete=%v", md.ClaudeSessionIDs, md.CostComplete)
+		}
+	})
+
+	t.Run("unchanged stays complete", func(t *testing.T) {
+		m, s, path := restoredLocatorManager(t, meta, "aaaa-1")
+		m.locate("claude-2")
+		if ids, complete := s.conversations(); !slices.Equal(ids, []string{"aaaa-1"}) || !complete {
+			t.Fatalf("ids=%v complete=%v want [aaaa-1] true", ids, complete)
+		}
+		// The check is spent: a /clear after the first look is an ordinary note.
+		writeReg(t, m.home, 101, regJSON(101, "cccc-3", "5000", "idle"))
+		m.locate("claude-2")
+		if ids, complete := s.conversations(); !slices.Equal(ids, []string{"aaaa-1", "cccc-3"}) || !complete {
+			t.Fatalf("after A->C: ids=%v complete=%v want [aaaa-1 cccc-3] true", ids, complete)
+		}
+		if md := sidecarEntry(t, path, "claude-2"); !md.CostComplete {
+			t.Fatal("sidecar lost cost_complete")
+		}
+	})
+}
+
+func TestSpawnedSessionIsNotDowntimeChecked(t *testing.T) {
+	m, s, _ := spawnClaude(t)
+	m.noteClaudeSessionID(s, s.ID, "aaaa-1")
+	m.noteClaudeSessionID(s, s.ID, "bbbb-2")
+	if _, complete := s.conversations(); !complete {
+		t.Fatal("a live spawn's first note must not be treated as a downtime change")
 	}
 }

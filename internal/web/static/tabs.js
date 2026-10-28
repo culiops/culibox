@@ -894,7 +894,7 @@ class Cell {
       tab: t, session: t && t.kind === "terminal" ? s : null, nowMs: Date.now(),
       boxRuntime: typeof boxRuntime === "string" ? boxRuntime : "", narrow: this._narrow,
     });
-    this._hdrName = m.name; // see syncHeaderName
+    this._hdrKey = headerSyncKey(m.name, s); // see syncHeaderName
     // Classes are assigned as literals at each call site (not passed in), so
     // classnames.test.js can see every one of them.
     const el = (tag, text) => {
@@ -973,6 +973,12 @@ class Cell {
       ctx.title = (ut ? ut + " \u2014 " : "") + "click for context by tool";
       ctx.onclick = (e) => { e.stopPropagation(); openPaneView(sid, "activity"); };
       main.append(ctx);
+    }
+    if (m.cost) {
+      const cost = el("span", m.cost);
+      cost.className = "ph-cost mono";
+      cost.title = "Session cost (all conversations since spawn, as Analytics counts it)";
+      main.append(cost);
     }
 
     const side = el("div");
@@ -1171,16 +1177,17 @@ class Cell {
     this._strip?._paint();
   }
 
-  // syncHeaderName: the desktop header paints the session's name from the
-  // polled list, so a rename (this tab's PATCH resolves before the next poll)
-  // must repaint it. Rebuilds only when the name moved: a header rebuilt on
-  // every poll would eat the press that lands during it (see setFocusedCell).
+  // syncHeaderName: the desktop header paints the session's name and cost from
+  // the polled list, so a rename (this tab's PATCH resolves before the next
+  // poll) or a cost change must repaint it. Rebuilds only when headerSyncKey
+  // moved: a header rebuilt on every poll would eat the press that lands during
+  // it (see setFocusedCell).
   syncHeaderName() {
     const t = this.activeTab;
     if (!t || t.kind !== "terminal") return;
     const s = (lastSessions || []).find((x) => x.id === t.id) || null;
     const name = (s && (s.name || s.id)) || t.name || "";
-    if (name !== this._hdrName) this.renderBar();
+    if (headerSyncKey(name, s) !== this._hdrKey) this.renderBar();
   }
 
   dispose() {

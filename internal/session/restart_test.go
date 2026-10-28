@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -493,5 +494,247 @@ func TestRestartBoxedFailsClosedWhenWrapperTailIsNotTheAgentArgv(t *testing.T) {
 	}
 	if _, ok := m.Get(old.ID); !ok {
 		t.Fatal("the old session must survive a failed restart")
+	}
+}
+
+// spawnClaude spawns a live (sleeping) claude session on a sidecar-backed
+// manager, the path every new session takes.
+func spawnClaude(t *testing.T) (*Manager, *Session, string) {
+	t.Helper()
+	l := &ctlLauncher{argv: []string{"sleep", "30"}, bin: "/usr/bin/claude"}
+	m, path := newCtlManager(t, l)
+	s, err := m.Spawn(launcher.SpawnSpec{Agent: "claude", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(s.ID) })
+	return m, s, path
+}
+
+func TestNoteAppendsConversationHistory(t *testing.T) {
+	m, s, path := spawnClaude(t)
+	if ids, complete := s.conversations(); len(ids) != 0 || !complete {
+		t.Fatalf("a new spawn: ids=%v complete=%v, want [] true", ids, complete)
+	}
+	for _, sid := range []string{"aaaa-1", "bbbb-2", "aaaa-1"} {
+		m.noteClaudeSessionID(s, s.ID, sid)
+	}
+	ids, complete := s.conversations()
+	if !slices.Equal(ids, []string{"aaaa-1", "bbbb-2"}) || !complete {
+		t.Fatalf("conversations() = %v,%v want [aaaa-1 bbbb-2],true", ids, complete)
+	}
+	md := sidecarEntry(t, path, s.ID)
+	if !slices.Equal(md.ClaudeSessionIDs, []string{"aaaa-1", "bbbb-2"}) || !md.CostComplete || md.ClaudeSessionID != "aaaa-1" {
+		t.Fatalf("sidecar ids=%v complete=%v sid=%q", md.ClaudeSessionIDs, md.CostComplete, md.ClaudeSessionID)
+	}
+	// conversations() hands out a copy: mutating it must not reach the session.
+	ids[0] = "zzzz-9"
+	if again, _ := s.conversations(); again[0] != "aaaa-1" {
+		t.Fatalf("conversations() leaked its backing array: %v", again)
+	}
+}
+
+func TestLegacySessionNeverCostComplete(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/w", Created: time.Now(), ClaudeSessionID: "abcd-1234"},
+	})
+	m := newReconcileManager(t, fb, path)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := m.Get("claude-2")
+	if !ok {
+		t.Fatal("survivor not re-attached")
+	}
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	if ids, complete := s.conversations(); !slices.Equal(ids, []string{"abcd-1234"}) || complete {
+		t.Fatalf("legacy restore: ids=%v complete=%v want [abcd-1234] false", ids, complete)
+	}
+	m.noteClaudeSessionID(s, "claude-2", "efgh-5678")
+	if ids, complete := s.conversations(); !slices.Equal(ids, []string{"abcd-1234", "efgh-5678"}) || complete {
+		t.Fatalf("legacy after a note: ids=%v complete=%v want both ids, false", ids, complete)
+	}
+	if md := sidecarEntry(t, path, "claude-2"); md.CostComplete {
+		t.Fatal("a note upgraded a legacy session to cost_complete")
+	}
+}
+
+func TestRestoreDropsHistoryWithABadEntry(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/w", Created: time.Now(), CostComplete: true,
+			ClaudeSessionID: "abcd-1234", ClaudeSessionIDs: []string{"abcd-1234", "../../etc"}},
+	})
+	m := newReconcileManager(t, fb, path)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := m.Get("claude-2")
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	// The list is dropped whole, but the current conversation (the singular
+	// field, validated separately) is still known, so it alone survives.
+	if ids, complete := s.conversations(); !slices.Equal(ids, []string{"abcd-1234"}) || complete {
+		t.Fatalf("a bad entry: ids=%v complete=%v want [abcd-1234] false", ids, complete)
+	}
+}
+
+// A singular id that is not a plain id is dropped, and with it the proof that
+// the history is whole: the cost must read partial, not complete.
+func TestRestoreBadSingularSIDMarksIncomplete(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/w", Created: time.Now(), CostComplete: true,
+			ClaudeSessionID: "../../etc", ClaudeSessionIDs: []string{"aaaa-1"}},
+	})
+	m := newReconcileManager(t, fb, path)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := m.Get("claude-2")
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	if _, complete := s.conversations(); complete {
+		t.Fatal("a dropped singular sid left the history complete")
+	}
+	if got := claudeSIDOf(s); got != "" {
+		t.Fatalf("bad singular sid kept: %q", got)
+	}
+}
+
+func TestRestoreKeepsACompleteHistory(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/w", Created: time.Now(), CostComplete: true,
+			ClaudeSessionID: "bbbb-2", ClaudeSessionIDs: []string{"aaaa-1", "bbbb-2"}},
+	})
+	m := newReconcileManager(t, fb, path)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := m.Get("claude-2")
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	if ids, complete := s.conversations(); !slices.Equal(ids, []string{"aaaa-1", "bbbb-2"}) || !complete {
+		t.Fatalf("ids=%v complete=%v want [aaaa-1 bbbb-2] true", ids, complete)
+	}
+}
+
+func TestHistoryCapMarksIncomplete(t *testing.T) {
+	m, s, path := spawnClaude(t)
+	for i := 0; i < maxConversationIDs+1; i++ {
+		m.noteClaudeSessionID(s, s.ID, fmt.Sprintf("conv-%d", i))
+	}
+	ids, complete := s.conversations()
+	if len(ids) != maxConversationIDs || complete {
+		t.Fatalf("len=%d complete=%v want %d,false", len(ids), complete, maxConversationIDs)
+	}
+	if got := claudeSIDOf(s); got != fmt.Sprintf("conv-%d", maxConversationIDs) {
+		t.Fatalf("the cap must not stop the current sid following: %q", got)
+	}
+	md := sidecarEntry(t, path, s.ID)
+	if len(md.ClaudeSessionIDs) != maxConversationIDs || md.CostComplete {
+		t.Fatalf("sidecar len=%d complete=%v", len(md.ClaudeSessionIDs), md.CostComplete)
+	}
+}
+
+func TestNoteRejectsInvalidSID(t *testing.T) {
+	m, s, _ := spawnClaude(t)
+	m.noteClaudeSessionID(s, s.ID, "aaaa-1")
+	m.noteClaudeSessionID(s, s.ID, "../../etc")
+	ids, complete := s.conversations()
+	if !slices.Equal(ids, []string{"aaaa-1"}) {
+		t.Fatalf("ids=%v want [aaaa-1]", ids)
+	}
+	if complete {
+		t.Fatal("a conversation we refused to record must make the history incomplete")
+	}
+}
+
+func TestRestartKeepsHistory(t *testing.T) {
+	l := &ctlLauncher{argv: []string{"sh", "-c", "exit 0"}, bin: "/usr/bin/claude"}
+	m, path := newCtlManager(t, l)
+	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "claude", Cwd: t.TempDir()})
+	m.noteClaudeSessionID(old, old.ID, "aaaa-1")
+	m.noteClaudeSessionID(old, old.ID, "bbbb-2")
+
+	ns, err := m.Restart(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(ns.ID) })
+	if ids, complete := ns.conversations(); !slices.Equal(ids, []string{"aaaa-1", "bbbb-2"}) || !complete {
+		t.Fatalf("restart: ids=%v complete=%v want [aaaa-1 bbbb-2] true", ids, complete)
+	}
+	md := sidecarEntry(t, path, ns.ID)
+	if !slices.Equal(md.ClaudeSessionIDs, []string{"aaaa-1", "bbbb-2"}) || !md.CostComplete {
+		t.Fatalf("restart sidecar: ids=%v complete=%v", md.ClaudeSessionIDs, md.CostComplete)
+	}
+}
+
+func TestRestartOfAnIncompleteSessionStaysIncomplete(t *testing.T) {
+	l := &ctlLauncher{argv: []string{"sh", "-c", "exit 0"}, bin: "/usr/bin/claude"}
+	m, path := newCtlManager(t, l)
+	old := exitedSession(t, m, launcher.SpawnSpec{Agent: "claude", Cwd: t.TempDir()})
+	old.mu.Lock()
+	old.claudeSessionIDs = []string{"aaaa-1"}
+	old.costComplete = false
+	old.mu.Unlock()
+
+	ns, err := m.Restart(old.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Kill(ns.ID) })
+	if ids, complete := ns.conversations(); !slices.Equal(ids, []string{"aaaa-1"}) || complete {
+		t.Fatalf("ids=%v complete=%v want [aaaa-1] false", ids, complete)
+	}
+	if md := sidecarEntry(t, path, ns.ID); md.CostComplete {
+		t.Fatal("the restarted session's sidecar claims completeness")
+	}
+}
+
+// A snapshot taken before a newer one but written after it must not shorten
+// the stored list or lift its completeness (the stale-write interleaving).
+func TestSidecarNeverShortensStoredHistory(t *testing.T) {
+	sc, err := openSidecar(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.put("s1", sessionMeta{Agent: "claude", CostComplete: true})
+	sc.setClaudeSessionID("s1", "bbbb-2", []string{"aaaa-1", "bbbb-2"}, true) // the newer snapshot, written first
+	sc.setClaudeSessionID("s1", "aaaa-1", []string{"aaaa-1"}, true)           // the older one, arriving late
+	md := sc.all()["s1"]
+	if !slices.Equal(md.ClaudeSessionIDs, []string{"aaaa-1", "bbbb-2"}) || !md.CostComplete {
+		t.Fatalf("stale write: ids=%v complete=%v want [aaaa-1 bbbb-2] true", md.ClaudeSessionIDs, md.CostComplete)
+	}
+	// An incomplete record is never lifted back to complete by a later write.
+	sc.setClaudeSessionID("s1", "bbbb-2", []string{"aaaa-1", "bbbb-2"}, false)
+	sc.setClaudeSessionID("s1", "bbbb-2", []string{"aaaa-1", "bbbb-2"}, true)
+	if sc.all()["s1"].CostComplete {
+		t.Fatal("a later write lifted cost_complete back to true")
+	}
+}
+
+// Many concurrent notes must leave the sidecar equal to the in-memory history
+// (run with -race): per-session ordering of snapshot+write.
+func TestConcurrentNotesPersistTheWholeHistory(t *testing.T) {
+	m, s, path := spawnClaude(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.noteClaudeSessionID(s, s.ID, fmt.Sprintf("conv-%d", i))
+		}()
+	}
+	wg.Wait()
+	ids, complete := s.conversations()
+	md := sidecarEntry(t, path, s.ID)
+	if len(ids) != 40 || !complete || !slices.Equal(md.ClaudeSessionIDs, ids) || !md.CostComplete || md.ClaudeSessionID != claudeSIDOf(s) {
+		t.Fatalf("sidecar diverged: mem %d ids complete=%v, disk %d ids complete=%v sid=%q/%q",
+			len(ids), complete, len(md.ClaudeSessionIDs), md.CostComplete, md.ClaudeSessionID, claudeSIDOf(s))
 	}
 }
