@@ -1395,6 +1395,7 @@
     .pitem:hover { background: var(--surface-2); }
     .pitem.on { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
     .pitem .lk { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .pitem .psub { display: none; } /* the desktop page shows it (desktop.css) */
 
     .ped { flex: 1; min-width: 0; padding: 20px 22px; overflow-y: auto; }
     /* A built-in profile, seen from the editor. Accent rather than danger: it

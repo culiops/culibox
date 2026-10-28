@@ -423,6 +423,28 @@ function anRender() {
   // recent day so a window with a leading empty gap doesn't render blank.
   const tw = body.querySelector(".an-timewrap");
   if (tw) tw.scrollLeft = tw.scrollWidth;
+  anFitTimeChart();
+}
+
+// anFitTimeChart: on the desktop page the daily chart is redrawn at its card's
+// width, so it fills a wide card and fits a narrow one (the modal keeps its
+// fixed 720px floor and scrolls). Called after each render and on resize.
+function anFitTimeChart() {
+  const body = document.getElementById("analytics-body");
+  const d = AN.data;
+  if (!body || !d || !anIsPage()) return;
+  const tw = body.querySelector(".an-timewrap");
+  if (!tw) return;
+  const w = Math.floor(tw.clientWidth);
+  if (w <= 0 || String(w) === tw.dataset.fitw) return;
+  const fresh = anStackedTime(d.costByDay, d.from, d.to, w);
+  fresh.dataset.fitw = String(w);
+  tw.replaceWith(fresh);
+  fresh.scrollLeft = fresh.scrollWidth;
+}
+if (typeof document !== "undefined" && typeof ResizeObserver === "function") {
+  const anBody = document.getElementById("analytics-body");
+  if (anBody) new ResizeObserver(() => anFitTimeChart()).observe(anBody);
 }
 
 // anIsPage: the dialog is re-parented as a desktop page (pagehost.js).
@@ -818,11 +840,12 @@ function anTitle(t) { const e = document.createElementNS(NS, "title"); e.textCon
 
 // stacked daily cost bars. Bars sit at their true date offset within [from,to]
 // (empty days show as gaps) unless the span is very wide, where stackedLayout
-// falls back to sequential positioning.
-function anStackedTime(agg, from, to) {
+// falls back to sequential positioning. `fitW` (the desktop page) draws it at
+// that width, with a narrower floor per day; without it the width is fixed.
+function anStackedTime(agg, from, to, fitW) {
   const lay = stackedLayout(agg.days, from, to);
   const slots = Math.max(1, lay.slots);
-  const H = 170, pad = 24, W = Math.max(slots * 22, 720);
+  const H = 170, pad = 24, W = fitW ? Math.max(slots * 8, fitW) : Math.max(slots * 22, 720);
   const max = Math.max(1, agg.maxCost);
   const slotW = (W - 2 * pad) / slots;
   const bw = Math.min(16, Math.max(2, slotW - 3));

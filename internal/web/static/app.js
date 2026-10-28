@@ -4040,6 +4040,7 @@ async function saveProfile() {
   // The profile now exists, so the editor is no longer a draft even if the
   // reload below fails (a second Save must PUT, not POST again).
   selectedProfile = p.name;
+  pfUserDraft = false;
   try {
     // No background retry: one that succeeds later would leave the "Saved, but
     // reloading it failed" line on screen next to a good list.
@@ -4063,6 +4064,7 @@ function duplicateProfile() {
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
   selectedProfile = "";
+  pfUserDraft = true;
   fillForm(draft);
   setDialogError("settings-modal", "");
   $("settings-modal").classList.add("editing");
@@ -4074,6 +4076,7 @@ function duplicateProfile() {
 async function editProfile(name) {
   setDialogError("settings-modal", "");
   selectedProfile = name;
+  pfUserDraft = false;
   // Same drill-down as newProfile(); inert above 700px, where both columns
   // are already on screen.
   $("settings-modal").classList.add("editing");
@@ -4103,6 +4106,34 @@ async function deleteProfile(name) {
 // marker is not inferred from the name.
 let selectedProfile = "";
 function selectedProfileName() { return selectedProfile; }
+// pfUserDraft: the editor holds a draft the user started (+ new profile,
+// Duplicate), which the page's preselect below must never replace.
+let pfUserDraft = false;
+let pfPreselecting = false;
+// preselectPageProfile: the desktop Settings page opens Profiles on a profile
+// (pg-1b), the first one you own, else the first one, rather than on a blank
+// draft. Page only: a phone keeps its list-first view.
+async function preselectPageProfile() {
+  const page = () => $("settings-modal").classList.contains("as-page");
+  if (!page() || selectedProfile || pfUserDraft || pfPreselecting) return;
+  pfPreselecting = true;
+  try {
+    if (!profilesLoaded) await loadProfiles(false);
+    const p = profiles.find((x) => x.editable) || profiles[0];
+    if (!p || !page() || selectedProfile || pfUserDraft) return;
+    const full = await api("/api/profiles/" + encodeURIComponent(p.name));
+    if (!page() || selectedProfile || pfUserDraft) return;
+    selectedProfile = p.name;
+    fillForm(full);
+    setDialogError("settings-modal", "");
+    renderProfileList();
+    syncEditorActions();
+  } catch (_) {
+    // Nothing chosen: the blank form stays, as before.
+  } finally {
+    pfPreselecting = false;
+  }
+}
 function renderProfileList() {
   $("pf-list").replaceChildren(...profiles.map((p) => {
     const li = document.createElement("li");
@@ -4118,6 +4149,12 @@ function renderProfileList() {
       lk.textContent = "built-in";
       b.appendChild(lk);
     }
+    // The desktop page's second line (pg-1b): "claude · box", "built-in · host".
+    // Hidden at <= 700px, where the row stays one line.
+    const sub = document.createElement("span");
+    sub.className = "psub";
+    sub.textContent = [p.editable ? p.bin : "built-in", p.runtime].filter(Boolean).join(" · ");
+    b.appendChild(sub);
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);
     return li;
@@ -4129,6 +4166,7 @@ $("pf-save").addEventListener("click", saveProfile);
 // mobile editor view, so the class is added here, at the actual button press,
 // rather than inside newProfile() itself.
 $("pf-new").addEventListener("click", () => {
+  pfUserDraft = true;
   newProfile();
   $("settings-modal").classList.add("editing");
 });

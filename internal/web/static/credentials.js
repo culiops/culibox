@@ -784,7 +784,9 @@ function credCellNode(c) {
   if (c.kind === "st" || c.kind === "pv") {
     main.appendChild(credEl("span", c.kind + (c.cls ? " " + c.cls : ""), c.text));
   } else {
-    main.appendChild(document.createTextNode(c.text));
+    // One unit, so a badge after it drops to the next line rather than the
+    // name breaking at its hyphen ("legacy-/aws").
+    main.appendChild(credEl("span", "c-nm", c.text));
   }
   if (c.tag) main.appendChild(credBadge("prod", c.tag));
   if (c.seed) main.appendChild(credBadge("seed", "from config.json"));

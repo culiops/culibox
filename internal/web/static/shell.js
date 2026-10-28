@@ -112,6 +112,8 @@ function openSettings(tab, group) {
   if (tab === "creds" && group && typeof credFocusGroup === "function") credFocusGroup(group);
   selectSettingsTab(tab || "manage");
   openDialog("settings-modal");
+  // On the desktop page Profiles opens on a profile, not a blank draft (app.js).
+  if ((tab || "manage") === "manage" && typeof preselectPageProfile === "function") preselectPageProfile();
   // shell.js loads before app.js, so initNotifyToggle may not exist yet on the
   // very first paint — guard it. Reopening Settings must reflect a permission
   // revoked in the browser meanwhile, so this re-reads on every open.
@@ -155,6 +157,7 @@ function selectSettingsTab(name) {
   // API or in another tab). loadProfiles repaints the list, never the editor,
   // so an open form keeps its unsaved edits.
   if (name === "manage" && typeof loadProfiles === "function") loadProfiles(false);
+  if (name === "manage" && typeof preselectPageProfile === "function") preselectPageProfile();
 }
 
 function initDialogs() {

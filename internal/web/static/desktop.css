@@ -141,6 +141,13 @@
   .side-links button:hover { color: var(--fg); background: var(--raise); }
   .side-links button[hidden] { display: none; }
   .side-links .on { color: var(--fg); font-weight: 600; } /* the open page's link */
+  /* "Audit · Analytics · Settings": a dot between shown links, in the 2px gap,
+     outside the button's hover fill. */
+  .side-links button { position: relative; }
+  .side-links button:not([hidden]) ~ button:not([hidden])::before {
+    content: "·"; position: absolute; left: -1px; top: 50%; transform: translate(-50%, -50%);
+    font-weight: 400; color: var(--faint); pointer-events: none;
+  }
 
 
   /* --- the 52px rail (sidebar hidden) ------------------------------------- */
@@ -1017,7 +1024,11 @@
   }
   #page-host > #settings-modal.as-page #manage .pitem:hover { background: var(--raise); }
   #page-host > #settings-modal.as-page #manage .pitem.on { background: var(--raise); border-left-color: var(--accent); box-shadow: none; }
-  #page-host > #settings-modal.as-page #manage .pitem .lk { font-size: 12px; color: var(--faint); }
+  /* Two lines (pg-1b): the name, then "claude · box" / "built-in · host", which
+     carries the built-in marker, so the right-hand "built-in" goes. */
+  #page-host > #settings-modal.as-page #manage .pitem { flex-wrap: wrap; row-gap: 1px; }
+  #page-host > #settings-modal.as-page #manage .pitem .lk { display: none; }
+  #page-host > #settings-modal.as-page #manage .pitem .psub { display: block; flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--faint); }
   #page-host > #settings-modal.as-page #manage .plist-foot { padding: 8px 10px; border: 0; }
   #page-host > #settings-modal.as-page #manage .plist-foot .btn { width: auto; padding: 0; border: 0; background: none; font-family: var(--font-ui); font-size: 13px; color: var(--accent); }
   #page-host > #settings-modal.as-page #manage .plist-foot .btn:hover { text-decoration: underline; }
@@ -1044,8 +1055,10 @@
   #page-host > #settings-modal.as-page #manage #pf-name-col { order: 11; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-account-col { order: 12; grid-column: 3 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-bin-col { order: 13; grid-column: 1 / span 2; }
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] { order: 14; grid-column: 3 / span 1; }
-  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effort"], #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effortLevel"] { order: 15; grid-column: 4 / span 1; }
+  /* Model and effort stack in the right half, beside Binary: their segmented
+     controls carry real model ids, which never fit side by side in a quarter. */
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] { order: 14; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effort"], #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effortLevel"] { order: 15; grid-column: 3 / span 2; }
   #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
   #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
@@ -1102,6 +1115,9 @@
   #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; }
   #page-host > #settings-modal.as-page #manage .seg button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #settings-modal.as-page #manage .seg button.dgr.on { background: var(--danger-tint); color: var(--danger); }
+  /* An option's segmented control wraps inside its column rather than run past it. */
+  #page-host > #settings-modal.as-page #pf-options .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; }
+  #page-host > #settings-modal.as-page #pf-options .seg button { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
   #page-host > #settings-modal.as-page #manage .lockbar, #page-host > #settings-modal.as-page #manage .pf-sumbox, #page-host > #settings-modal.as-page #manage .pf-confirm { border-radius: var(--r-card); }
   #page-host > #settings-modal.as-page #manage .warnbox { border-radius: var(--r-ctl); }
@@ -1165,6 +1181,22 @@
   #page-host > #settings-modal.as-page #creds .ctab { width: 100%; border-collapse: collapse; }
   #page-host > #settings-modal.as-page #creds .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
   #page-host > #settings-modal.as-page #creds .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+  /* Names and statuses break between words, never inside one ("Missin/g"). */
+  #page-host > #settings-modal.as-page #creds .ctab .c-main { overflow-wrap: break-word; }
+  #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
+  /* AWS sizes its columns to content: a name holds its column open whole. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab .pv { overflow-wrap: normal; }
+  /* The GitHub and token tables share one set of column starts (pg-2). AWS has
+     its own columns and keeps the automatic layout. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 22%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 30%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 96px; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 136px; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #creds .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
   #page-host > #settings-modal.as-page #creds .ctab .c-main { color: var(--fg); }
   #page-host > #settings-modal.as-page #creds .ctab .c-main.mono { font-size: 12.5px; }
@@ -1219,17 +1251,17 @@
 
   #page-host > #audit-page.as-page .au-filters { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--line); }
   #page-host > #audit-page.as-page .au-filters .grow { flex: 1; }
-  #page-host > #audit-page.as-page .au-filters button { padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; cursor: pointer; }
+  #page-host > #audit-page.as-page .au-filters button { flex: none; white-space: nowrap; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; cursor: pointer; }
   #page-host > #audit-page.as-page .au-filters button:hover { color: var(--fg); }
   #page-host > #audit-page.as-page .au-filters button.on { background: var(--raise); color: var(--fg); border-color: var(--faint); }
-  #page-host > #audit-page.as-page #au-session { min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #audit-page.as-page #au-session { flex: 0 1 auto; width: auto; min-width: 0; max-width: 240px; min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 13px; }
 
   #page-host > #audit-page.as-page .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
   #page-host > #audit-page.as-page #au-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
   #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
   #page-host > #audit-page.as-page #au-table th:nth-child(1) { width: 120px; }
   #page-host > #audit-page.as-page #au-table th:nth-child(2) { width: 160px; }
-  #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 96px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 116px; }
   #page-host > #audit-page.as-page #au-table th:nth-child(5) { width: 220px; }
   #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
@@ -1253,26 +1285,32 @@
      title and the tab/controls head on one 52px row; the body spans below. The
      range caption moves into the first chart's hint (analytics.js), so the
      header's own #analytics-range is hidden. */
-  #page-host > #analytics-modal.as-page { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: 52px minmax(0, 1fr); }
+  #page-host > #analytics-modal.as-page { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(52px, auto) minmax(0, 1fr); }
   #page-host > #analytics-modal.as-page > .dlg-title {
     grid-column: 1; grid-row: 1; position: static; transform: none; pointer-events: auto; align-self: stretch; width: auto; max-width: none;
-    margin: 0; padding: 0 12px 0 20px; background: var(--bg); border-bottom: 1px solid var(--line);
+    margin: 0; padding: 15px 8px 0 20px; background: var(--bg); border-bottom: 1px solid var(--line);
     font-size: 16px; font-weight: 600; letter-spacing: 0; color: var(--fg);
+    /* Level with the head's first row, also when the head wraps to two. */
+    display: flex; align-items: flex-start; white-space: nowrap;
   }
-  #page-host > #analytics-modal.as-page > .dlg-head { grid-column: 2; grid-row: 1; gap: 12px; padding: 0 20px 0 0; border-bottom: 1px solid var(--line); background: var(--bg); }
+  /* The head wraps when it cannot fit one row (below ~1280): the range,
+     Compare, Re-scan and ✕ drop to a second row, right-aligned, never clipped. */
+  #page-host > #analytics-modal.as-page > .dlg-head { grid-column: 2; grid-row: 1; flex-wrap: wrap; justify-content: flex-end; gap: 8px 6px; min-width: 0; padding: 9px 20px 9px 0; border-bottom: 1px solid var(--line); background: var(--bg); }
+  #page-host > #analytics-modal.as-page > .dlg-head > * { flex: none; }
+  #page-host > #analytics-modal.as-page > .dlg-head > .spacer { flex: 1 1 0; }
   #page-host > #analytics-modal.as-page #analytics-range { display: none; }
   #page-host > #analytics-modal.as-page #an-ctl { display: flex; align-items: center; }
   #page-host > #analytics-modal.as-page #an-tabs { flex-wrap: nowrap; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
-  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 9px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
   #page-host > #analytics-modal.as-page #an-tabs button:hover { color: var(--fg); background: var(--raise); }
   #page-host > #analytics-modal.as-page #an-tabs button.act { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #analytics-modal.as-page #an-ctl .an-controls { flex-wrap: nowrap; gap: 2px; margin: 0; }
   #page-host > #analytics-modal.as-page #an-ctl .an-controls > span { display: none; }
-  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 10px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 8px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
   #page-host > #analytics-modal.as-page #an-ctl .an-chip:hover { color: var(--fg); background: var(--raise); }
   #page-host > #analytics-modal.as-page #an-ctl .an-chip.on { background: var(--raise); color: var(--fg); font-weight: 600; }
   #page-host > #analytics-modal.as-page #an-ctl .an-controls > .an-chip:last-child { margin-left: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); }
-  #page-host > #analytics-modal.as-page #analytics-refresh { padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page #analytics-refresh { white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
   #page-host > #analytics-modal.as-page #analytics-refresh:hover { background: var(--line); }
   #page-host > #analytics-modal.as-page #analytics-refresh:disabled { opacity: .6; cursor: default; }
   #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
@@ -1364,6 +1402,9 @@
   #ask-modal .dlg-title {
     position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
     margin: 0; padding: 16px 44px 4px 20px; background: none; font-size: 15px; font-weight: 600; color: var(--fg);
+    /* A long title wraps (the whole name of what is deleted stays readable) and
+       keeps 44px clear for the close cross. */
+    box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35;
   }
   #ask-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
   #ask-modal .dlg-x { padding: 2px 8px; border-radius: var(--r-ctl); }
