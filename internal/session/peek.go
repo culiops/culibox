@@ -669,9 +669,9 @@ func (m *Manager) PeekFor(id string) (Peek, bool) {
 // session is sitting on a prompt. blocked can be true with ok=false (registry
 // readable, transcript not).
 func (m *Manager) peekAndBlocked(id string) (Peek, bool, bool) {
-	l := m.locate(id)
+	l, bound := m.boundTranscript(id)
 	blocked := l.reg != nil && l.reg.Status == regStatusWaiting
-	if !l.claude || l.path == "" {
+	if !bound {
 		return Peek{}, false, blocked
 	}
 	var f *os.File

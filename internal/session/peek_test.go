@@ -222,6 +222,10 @@ func newPeekTestManager(t *testing.T, cwd, body string) (*Manager, string) {
 		// A claude that has been given a turn; zero lastActivityAt reads stale,
 		// so Info() says "waiting" — what the reply tests assume.
 		agentKind: true, submitted: true,
+		// Bound to its transcript the way a session that has been seen live
+		// is: by its persisted conversation id (session.jsonl above). Usage,
+		// summary and peek read only a bound transcript, never a cwd guess.
+		claudeSessionID: "session",
 	}
 	return m, p
 }

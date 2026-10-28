@@ -252,11 +252,11 @@ func transcriptPathIn(boxDir string, cwds []string, sid string, exclude map[stri
 
 // UsageFor reads the latest transcript usage for a claude session. ok=false for
 // a non-claude session, one whose transcript can't be located/read, or one whose
-// tail carries no usage line. Same locator as PeekFor (registry, then boxstate,
-// then cwd+mtime).
+// tail carries no usage line. Reads only a transcript bound to this session
+// (boundTranscript): never the newest-by-cwd guess, which can be a sibling's.
 func (m *Manager) UsageFor(id string) (Usage, bool) {
-	l := m.locate(id)
-	if !l.claude || l.path == "" {
+	l, ok := m.boundTranscript(id)
+	if !ok {
 		return Usage{}, false
 	}
 	f, fi, ok := l.openTranscript()

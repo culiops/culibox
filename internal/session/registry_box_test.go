@@ -160,9 +160,7 @@ func TestBoxedLocateFallsBackWithoutPidfile(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Errorf("reg=%+v with no pidfile", l.reg)
 	}
-	if got := peekText(t, m, "s1"); got != "from B" {
-		t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
 	if _, _, blocked := m.peekAndBlocked("s1"); blocked {
 		t.Error("blocked without a registry")
 	}
@@ -183,9 +181,7 @@ func TestBoxedLocateIgnoresKeyFileOnly(t *testing.T) {
 	if _, _, blocked := m.peekAndBlocked("s1"); blocked {
 		t.Error("blocked from a key file")
 	}
-	if got := peekText(t, m, "s1"); got != "from B" {
-		t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
 }
 
 func TestBoxedLocateExitedSkipsRegistry(t *testing.T) {
@@ -196,9 +192,7 @@ func TestBoxedLocateExitedSkipsRegistry(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Errorf("exited session used the registry; reg=%+v", l.reg)
 	}
-	if got := peekText(t, m, "s1"); got != "from B" {
-		t.Errorf("peek=%q want heuristic %q", got, "from B")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
 }
 
 // A validated entry is trusted as is: its transcript missing means "no
@@ -434,8 +428,11 @@ func TestBoxedRegistryForgeries(t *testing.T) {
 			if blocked {
 				t.Error("blocked from a forged registry")
 			}
-			if !ok || p.Text != "from B" {
-				t.Errorf("peek=%q ok=%v, want the heuristic fallback %q", p.Text, ok, "from B")
+			if ok {
+				t.Errorf("peek=%q read a transcript for a session with only a forged registry; it is unbound", p.Text)
+			}
+			if got := filepath.Base(l.path); got != "bbbb-2.jsonl" {
+				t.Errorf("locate heuristic path=%q want bbbb-2.jsonl", got)
 			}
 			if got := m.sessions["s1"].claudeSID(); got != "" {
 				t.Errorf("claudeSID=%q noted from a forged entry", got)
