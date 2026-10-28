@@ -2,6 +2,7 @@ package auditlog
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,13 +38,13 @@ func TestDescribe(t *testing.T) {
 	rec(s.e.Record(egress.Row{Time: at(12), SessionID: "s1", Host: "registry.npmjs.org", Port: 443, Outcome: egress.OutcomeAllowed, BytesDown: 14 << 20}))
 	rec(s.e.Record(egress.Row{Time: at(13), SessionID: "s1", Host: "evil.example", Port: 80, Outcome: egress.OutcomeDenied, Suppressed: 3, BytesDown: 1<<20 - 1}))
 	rec(s.e.Record(egress.Row{Time: at(14), SessionID: "s1", Host: "dl.example", Port: 443, Outcome: egress.OutcomeAllowed, BytesDown: 3 << 29}))
-	_, err := s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?, 'created', 'token', 'cloudflare-dns', 'you', 'ignored')`, ts(15))
+	_, err := s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (?, 'created', 'token', 'cloudflare-dns', 'web', 'ignored')`, ts(15))
 	rec(err)
-	_, err = s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor) VALUES (?, 'aws_checked', 'aws', 'sandbox', 'you')`, ts(16))
+	_, err = s.raw.Exec(`INSERT INTO cred_audit (ts, action, kind, name, actor) VALUES (?, 'aws_checked', 'aws', 'sandbox', 'cli')`, ts(16))
 	rec(err)
-	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'unlocked', 'you', '')`, ts(17))
+	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'unlocked', 'web', '')`, ts(17))
 	rec(err)
-	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'value_set', 'you', 'cf-token')`, ts(18))
+	_, err = s.raw.Exec(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (?, 'value_set', 'daemon', 'cf-token')`, ts(18))
 	rec(err)
 
 	p, err := s.open().Query(Query{From: ts(1), To: ts(18), Limit: 100})
@@ -75,9 +76,9 @@ func TestDescribe(t *testing.T) {
 		{13, "egress", "evil.example:80", "denied", "", "", 4, false},
 		{14, "egress", "dl.example:443 · 1.5 GB down", "allowed", "", "", 0, false},
 		{15, "settings", "token cloudflare-dns created", "created", "you", "", 0, false},
-		{16, "settings", "aws sandbox aws checked", "aws_checked", "you", "", 0, false},
+		{16, "settings", "aws sandbox aws checked", "aws_checked", "cli", "", 0, false},
 		{17, "store", "encrypted store unlocked", "unlocked", "you", "", 0, false},
-		{18, "store", "encrypted store value set · cf-token", "value_set", "you", "", 0, false},
+		{18, "store", "encrypted store value set · cf-token", "value_set", "daemon", "", 0, false},
 	}
 	for _, c := range cases {
 		e, ok := byTS[ts(c.n)]
@@ -133,6 +134,45 @@ func TestDescribeMasks(t *testing.T) {
 			} else if e.Reason != "use [masked:aws-key-id] now" {
 				t.Errorf("reason = %q", e.Reason)
 			}
+		}
+	}
+}
+
+// A token-shaped free-text field must be masked before any underscore or space
+// normalisation: "ghp_..." must not become "ghp ..." and escape the masker.
+func TestDescribeMasksTokenShapedFreeText(t *testing.T) {
+	s := newSeeder(t)
+	const (
+		ghp = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789"
+		pat = "github_pat_" + "11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz0123456789ABCDEFGHIJ"
+		aws = "AKIAIOSFODNN7EXAMPLE"
+	)
+	ins := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.raw.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ins(`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (1800000001, 'created', 'token', ?, 'web', '')`, ghp)
+	ins(`INSERT INTO cred_audit (ts, action, kind, name, actor, detail) VALUES (1800000002, 'created', 'token', ?, 'web', '')`, pat)
+	ins(`INSERT INTO store_audit (ts, action, actor, detail) VALUES (1800000003, 'value_set', 'web', ?)`, pat)
+	ins(`INSERT INTO credential_audit (ts, session_id, outcome, provider, entry) VALUES (1800000004, 's1', 'fetched', 'static', ?)`, ghp)
+	ins(`INSERT INTO credential_audit (ts, session_id, outcome, provider, subject) VALUES (1800000005, 's1', 'minted', 'github', ?)`, pat)
+	ins(`INSERT INTO approval_audit (ts, session_id, action, entry, cred) VALUES (1800000006, 's1', 'granted', ?, 'cookie')`, ghp)
+	ins(`INSERT INTO egress_audit (ts, session_id, host, port, outcome) VALUES (1800000007, 's1', ?, 443, 'allowed')`, ghp)
+
+	p, err := s.open().Query(Query{})
+	if err != nil || len(p.Events) != 7 {
+		t.Fatalf("%v %+v", err, p)
+	}
+	for _, e := range p.Events {
+		for _, bad := range []string{"ghp", "github pat", "github_pat", "11ABC", "abcdefghij"} {
+			if strings.Contains(e.What, bad) {
+				t.Errorf("%s What leaks %q: %q", e.Kind, bad, e.What)
+			}
+		}
+		if !strings.Contains(e.What, "[masked:github-token]") {
+			t.Errorf("%s What not masked: %q", e.Kind, e.What)
 		}
 	}
 }

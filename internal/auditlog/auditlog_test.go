@@ -268,13 +268,16 @@ func TestQueryCaps(t *testing.T) {
 		{Filter: "everything"},
 		{Session: "has space"},
 		{Session: "a'b"},
-		{Session: string(make([]byte, 81))},
+		{Session: strings.Repeat("a", 81)},
 		{Limit: -3},
 	}
 	for _, q := range bad {
 		if _, err := r.Query(q); !errors.Is(err, ErrBadQuery) {
 			t.Errorf("%+v: err = %v, want ErrBadQuery", q, err)
 		}
+	}
+	if _, err := r.Query(Query{Session: strings.Repeat("a", 80)}); err != nil {
+		t.Errorf("80-char session: %v", err)
 	}
 	if _, err := r.Summary(-1, 0); !errors.Is(err, ErrBadQuery) {
 		t.Errorf("Summary(-1): %v", err)
@@ -381,25 +384,104 @@ func TestTsIndexesExist(t *testing.T) {
 	}
 }
 
-// The ts range must be served from the ts index, not a table scan.
-func TestQueryUsesTsIndex(t *testing.T) {
+// Every table read page() generates must be an index SEARCH, never a table
+// SCAN, for the plain, deep-cursor and session-filter shapes.
+func TestQueryPlansUseIndexes(t *testing.T) {
 	s := newSeeder(t)
-	r := s.open()
-	var plan string
-	rows, err := r.db.Query(`EXPLAIN QUERY PLAN SELECT ts, id FROM credential_audit WHERE ts BETWEEN 1 AND 2 ORDER BY ts DESC, id DESC LIMIT 5`)
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 200; i++ { // rows, so the planner has a reason to prefer an index
+		s.credential(int64(1000+i), fmt.Sprintf("s%d", i%7), broker.OutcomeMinted)
+		s.approval(int64(1000+i), fmt.Sprintf("s%d", i%7), broker.ActionGranted)
+		s.egress(int64(1000+i), fmt.Sprintf("s%d", i%7), egress.OutcomeAllowed, 0)
+		s.cred(int64(1000 + i))
+		s.store(int64(1000 + i))
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var a, b, c int
-		var d string
-		if err := rows.Scan(&a, &b, &c, &d); err != nil {
+	r := s.open()
+	deep := formatCursor(1100, srcApproval, 50)
+	for name, q := range map[string]Query{
+		"plain":          {From: 1, To: 5000},
+		"cursor":         {From: 1, To: 5000, Before: deep},
+		"session":        {From: 1, To: 5000, Session: "s3"},
+		"session+cursor": {From: 1, To: 5000, Session: "s3", Before: deep},
+		"credentials":    {From: 1, To: 5000, Filter: "credentials", Before: deep},
+		"elevations":     {From: 1, To: 5000, Filter: "elevations", Before: deep},
+	} {
+		q, err := normalize(q)
+		if err != nil {
 			t.Fatal(err)
 		}
-		plan += d + "\n"
+		tabs, err := tablesFor(q.Filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cur *cursor
+		if q.Before != "" {
+			c, err := parseCursor(q.Before)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cur = &c
+		}
+		from, to, _ := rng(q.From, q.To)
+		sqlText, args := buildPage(tabs, q, from, to, cur)
+		rows, err := r.db.Query("EXPLAIN QUERY PLAN "+sqlText, args...)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var plan []string
+		for rows.Next() {
+			var a, b, c int
+			var d string
+			if err := rows.Scan(&a, &b, &c, &d); err != nil {
+				t.Fatal(err)
+			}
+			plan = append(plan, d)
+		}
+		rows.Close()
+		searches := 0
+		for _, d := range plan {
+			if strings.HasPrefix(d, "SCAN ") && !strings.Contains(d, "USING") && !strings.HasPrefix(d, "SCAN (subquery") {
+				t.Errorf("%s: table scan in plan: %s", name, d)
+			}
+			if strings.HasPrefix(d, "SEARCH ") && strings.Contains(d, "INDEX") {
+				searches++
+			}
+		}
+		want := 0 // tables that can match: a session filter drops settings and store
+		for _, tb := range tabs {
+			if q.Session == "" || tb.sess {
+				want++
+			}
+		}
+		if searches != want {
+			t.Errorf("%s: %d index searches for %d tables\n%s", name, searches, want, strings.Join(plan, "\n"))
+		}
 	}
-	if !strings.Contains(plan, "idx_credential_ts") {
-		t.Errorf("plan does not use idx_credential_ts:\n%s", plan)
+}
+
+// The cursor is folded into the ts range bound (an index range that starts at
+// the cursor), not added as a separate filter.
+func TestWhereFoldsCursorIntoRange(t *testing.T) {
+	cur := &cursor{ts: 500, src: srcApproval, id: 9}
+	for _, c := range []struct {
+		tb    table
+		hi    int64
+		extra bool
+	}{
+		{tCredential, 499, false}, // higher src: strictly older seconds only
+		{tApproval, 500, true},    // same src: ts = T needs the id test
+		{tEgress, 500, false},     // lower src: ts = T rows all follow
+		{tStore, 500, false},
+	} {
+		w, args, ok := where(c.tb, Query{}, 10, 9000, cur)
+		if !ok || args[0] != int64(10) || args[1] != c.hi {
+			t.Errorf("%s: where=%q args=%v, want hi %d", c.tb.name, w, args, c.hi)
+		}
+		if got := strings.Contains(w, "id <"); got != c.extra {
+			t.Errorf("%s: residual id test = %v, want %v (%q)", c.tb.name, got, c.extra, w)
+		}
+	}
+	// A cursor beyond the range's To does not widen it.
+	if _, args, _ := where(tCredential, Query{}, 10, 300, cur); args[1] != int64(300) {
+		t.Errorf("hi widened past To: %v", args)
 	}
 }

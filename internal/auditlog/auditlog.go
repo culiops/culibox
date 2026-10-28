@@ -57,8 +57,10 @@ type Event struct {
 
 // Query selects one page. Filter is the HTTP ?kind= value: "" (all),
 // "credentials" (credential + signin), "elevations", "egress" or "settings"
-// (settings + store). From and To are inclusive unix seconds; To 0 means no
-// upper bound. Before is the Cursor of the last row of the previous page.
+// (settings + store). From and To are inclusive unix seconds. To == 0 means no
+// upper bound (an open-ended read); callers that expose this over HTTP should
+// always pass an explicit To. Before is the Cursor of the last row of the
+// previous page.
 type Query struct {
 	Filter, Session string
 	From, To        int64
@@ -214,31 +216,41 @@ func rng(from, to int64) (int64, int64, error) {
 // table's own filter, the session filter, and (when cur != nil) the keyset
 // predicate "strictly after the cursor in ts DESC, src DESC, id DESC order".
 // src is constant per table, so the predicate is picked here, not in SQL.
+//
+// The cursor is folded into the ts range bound, not added as a separate
+// filter: a deep cursor then starts the index range at the cursor instead of
+// scanning from the top of the range. Only the same-src case keeps a residual
+// id test, and only for rows at ts = T.
 func where(t table, q Query, from, to int64, cur *cursor) (string, []any, bool) {
 	if q.Session != "" && !t.sess {
 		return "", nil, false // settings and store rows have no session
 	}
+	hi := to
+	var resid string
+	var resArgs []any
+	if cur != nil {
+		switch {
+		case t.src > cur.src:
+			hi = min(to, cur.ts-1)
+		case t.src < cur.src:
+			hi = min(to, cur.ts)
+		default:
+			hi = min(to, cur.ts)
+			resid, resArgs = "(ts < ? OR id < ?)", []any{cur.ts, cur.id}
+		}
+	}
 	conds := []string{"ts BETWEEN ? AND ?"}
-	args := []any{from, to}
+	args := []any{from, hi}
+	if resid != "" {
+		conds = append(conds, resid)
+		args = append(args, resArgs...)
+	}
 	if t.filter != "" {
 		conds = append(conds, t.filter)
 	}
 	if q.Session != "" {
 		conds = append(conds, "session_id = ?")
 		args = append(args, q.Session)
-	}
-	if cur != nil {
-		switch {
-		case t.src > cur.src:
-			conds = append(conds, "ts < ?")
-			args = append(args, cur.ts)
-		case t.src < cur.src:
-			conds = append(conds, "ts <= ?")
-			args = append(args, cur.ts)
-		default:
-			conds = append(conds, "(ts < ? OR (ts = ? AND id < ?))")
-			args = append(args, cur.ts, cur.ts, cur.id)
-		}
 	}
 	return strings.Join(conds, " AND "), args, true
 }
@@ -284,21 +296,13 @@ func (r *Reader) page(q Query, withTotal bool) (Page, error) {
 		cur = &c
 	}
 
-	var parts []string
-	var args []any
 	total := 0
-	for _, t := range tabs {
-		w, a, ok := where(t, q, from, to, cur)
-		if !ok {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf(
-			`SELECT * FROM (SELECT ts, %d AS src, id, %s FROM %s WHERE %s ORDER BY ts DESC, id DESC LIMIT ?)`,
-			t.src, t.cols, t.name, w))
-		args = append(args, a...)
-		args = append(args, q.Limit+1)
-		if withTotal {
-			cw, ca, _ := where(t, q, from, to, nil)
+	if withTotal {
+		for _, t := range tabs {
+			cw, ca, ok := where(t, q, from, to, nil)
+			if !ok {
+				continue
+			}
 			var n int
 			if err := r.db.QueryRow(`SELECT COUNT(*) FROM `+t.name+` WHERE `+cw, ca...).Scan(&n); err != nil {
 				return Page{}, err
@@ -307,11 +311,11 @@ func (r *Reader) page(q Query, withTotal bool) (Page, error) {
 		}
 	}
 	page := Page{Events: []Event{}, Total: total}
-	if len(parts) == 0 {
+	query, args := buildPage(tabs, q, from, to, cur)
+	if query == "" {
 		return page, nil
 	}
-	rows, err := r.db.Query(strings.Join(parts, " UNION ALL ")+` ORDER BY ts DESC, src DESC, id DESC LIMIT ?`,
-		append(args, q.Limit+1)...)
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return Page{}, err
 	}
@@ -329,6 +333,28 @@ func (r *Reader) page(q Query, withTotal bool) (Page, error) {
 		page.Events = append(page.Events, describe(rr))
 	}
 	return page, rows.Err()
+}
+
+// buildPage returns the UNION query for one page (q already normalised and
+// validated) and its arguments; "" when no table can match.
+func buildPage(tabs []table, q Query, from, to int64, cur *cursor) (string, []any) {
+	var parts []string
+	var args []any
+	for _, t := range tabs {
+		w, a, ok := where(t, q, from, to, cur)
+		if !ok {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf(
+			`SELECT * FROM (SELECT ts, %d AS src, id, %s FROM %s WHERE %s ORDER BY ts DESC, id DESC LIMIT ?)`,
+			t.src, t.cols, t.name, w))
+		args = append(args, a...)
+		args = append(args, q.Limit+1)
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return strings.Join(parts, " UNION ALL ") + ` ORDER BY ts DESC, src DESC, id DESC LIMIT ?`, append(args, q.Limit+1)
 }
 
 // Each walks the matching events newest first, calling fn for each, until max

@@ -28,6 +28,13 @@ type rawRow struct {
 const oneMB = 1 << 20
 
 func describe(r rawRow) Event {
+	// Mask every free-text slot first, before any word-splitting or
+	// underscore handling can break a credential shape (a token-shaped name
+	// like ghp_... must not become "ghp ..." and slip past the masker). The
+	// slots hold identifiers, outcomes and free text alike; masking a plain
+	// word is a no-op.
+	r.a, r.b, r.c, r.d, r.e, r.f = mask.Display(r.a), mask.Display(r.b), mask.Display(r.c),
+		mask.Display(r.d), mask.Display(r.e), mask.Display(r.f)
 	ev := Event{TS: r.ts, Cursor: formatCursor(r.ts, r.src, r.id), Session: r.session}
 	switch r.src {
 	case srcCredential:
@@ -44,16 +51,16 @@ func describe(r rawRow) Event {
 			ev.Count = 1 + int(r.n3)
 		}
 	case srcCred:
-		ev.Kind, ev.Outcome, ev.Actor = KindSettings, r.a, r.d
-		ev.What = words(r.b, r.c, r.a)
+		ev.Kind, ev.Outcome, ev.Actor = KindSettings, r.a, actorName(r.d)
+		ev.What = joinNonEmpty(words(r.b), r.c, words(r.a)) // kind and action are fixed words; the name is free text
 	case srcStore:
-		ev.Kind, ev.Outcome, ev.Actor = KindStore, r.a, r.b
+		ev.Kind, ev.Outcome, ev.Actor = KindStore, r.a, actorName(r.b)
 		ev.What = "encrypted store " + words(r.a)
 		if r.c != "" {
 			ev.What += " · " + r.c
 		}
 	}
-	ev.What = mask.Display(ev.What)
+	ev.What = mask.Display(ev.What) // backstop; the slots were masked above
 	return ev
 }
 
@@ -121,16 +128,29 @@ func first(s ...string) string {
 	return ""
 }
 
-// words joins the non-empty parts with spaces, turning the underscores of the
-// stored action words into spaces ("value_set" -> "value set").
-func words(parts ...string) string {
+// words turns the underscores of a fixed action or kind word into spaces
+// ("value_set" -> "value set"). Never use it on free text (names, hosts,
+// details): that would reshape a credential before it is masked.
+func words(w string) string { return strings.ReplaceAll(w, "_", " ") }
+
+// joinNonEmpty joins the non-empty parts with spaces.
+func joinNonEmpty(parts ...string) string {
 	var out []string
 	for _, p := range parts {
-		if p = strings.ReplaceAll(p, "_", " "); p != "" {
+		if p != "" {
 			out = append(out, p)
 		}
 	}
 	return strings.Join(out, " ")
+}
+
+// actorName shows the web UI's own audit actor ("web", see web.storeActor) as
+// "you"; any other actor is shown as recorded.
+func actorName(a string) string {
+	if a == "web" {
+		return "you"
+	}
+	return a
 }
 
 func plural(n int64, one, many string) string {
