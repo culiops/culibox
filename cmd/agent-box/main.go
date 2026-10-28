@@ -820,6 +820,8 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			svc.SetBoxState(filepath.Join(dataDir, "boxstate"))
 			analyticsSvc = svc
 			srv.Analytics = svc
+			// Only a live service: a nil *Service must never reach the manager.
+			mgr.SetCostSource(svc)
 			log.Printf("analytics: db %s, %d root(s), ingest every %s", dbPath, len(roots), interval)
 		}
 	}

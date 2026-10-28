@@ -507,6 +507,27 @@ GROUP BY session_id, project, model`, from, to)
 }
 
 // Tools returns attribution aggregates (skill/plugin/mcp) in [from,to], busiest first.
+// ConversationCosts returns the total cost per conversation id (session_id)
+// over every day it ran. It is the whole history, not a window: a session's
+// price is what its conversations cost since they began.
+func (s *Store) ConversationCosts() (map[string]float64, error) {
+	rows, err := s.db.Query(`SELECT session_id, SUM(cost_usd) FROM session_rollup GROUP BY session_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]float64{}
+	for rows.Next() {
+		var sid string
+		var c float64
+		if err := rows.Scan(&sid, &c); err != nil {
+			return nil, err
+		}
+		out[sid] = c
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) Tools(from, to string, limit int) ([]ToolRow, error) {
 	rows, err := s.db.Query(`
 SELECT kind, name, SUM(records) AS r

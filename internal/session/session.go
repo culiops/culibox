@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -549,6 +550,13 @@ type Info struct {
 	// re-lists after a spawn and never renders a row from those responses; a
 	// new surface that needs it must go through List or take m.mu itself.
 	Claude bool `json:"claude"`
+	// CostUSD is the summed analytics cost of every conversation this session
+	// has had since spawn. Present only for a claude session whose whole
+	// conversation history is known (costComplete) while a cost source is set:
+	// a partial history would understate it, and an understated price is a
+	// guess. Present and 0 means no cost has been ingested yet (ingest lags the
+	// transcript), not that the session is free. Filled by List only.
+	CostUSD *float64 `json:"cost_usd,omitempty"`
 	// Need says why a waiting claude session needs you: "ask" (blocked on a
 	// permission/choice prompt) or "turn" (it finished its turn); or "sso" (a
 	// bound session, claude or not, whose AWS sign-in on the host has expired;
@@ -1288,6 +1296,7 @@ type Manager struct {
 	clone       CloneHooks  // nil = clone mode unavailable; clone profiles are refused
 	home        string      // daemon user's home; where a host session's ~/.claude lives
 	stateDir    string      // data dir; a boxed session's ~/.claude lives under <stateDir>/boxstate/<box>
+	costSrc     CostSource  // prices a session's conversations (analytics); nil = off, no session reports a cost
 	repliesOn   bool        // config replies_enabled kill-switch; false = no reply, answer or opt-in
 
 	// contextCheck is the on-disk check of one context path (existence,
@@ -1354,6 +1363,27 @@ func (m *Manager) SetBroker(h BrokerHooks) {
 	if h != nil {
 		h.SetBaseNotify(m.baseProbed) // outside m.mu: the broker takes its own lock
 	}
+}
+
+// CostSource prices conversations by their Claude conversation id. The
+// analytics service implements it; it is an interface so this package does not
+// import analytics.
+type CostSource interface {
+	CostOf(sids []string) float64
+}
+
+// SetCostSource sets where List reads each session's cost. A nil interface, or
+// a typed nil (a nil *Service stored in the interface, which compares non-nil
+// and would panic on first use), means "no source".
+func (m *Manager) SetCostSource(c CostSource) {
+	if c != nil {
+		if v := reflect.ValueOf(c); v.Kind() == reflect.Pointer && v.IsNil() {
+			c = nil
+		}
+	}
+	m.mu.Lock()
+	m.costSrc = c
+	m.mu.Unlock()
 }
 
 // SetStoreLocked installs the store's current-state probe. A listed session the
@@ -2498,12 +2528,25 @@ func (m *Manager) List() []Info {
 		defer m.mu.Unlock()
 		return m.storeLocked
 	}()
+	costSrc := func() CostSource {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.costSrc
+	}()
 	// The critical section is a closure so the unlock is a defer again: it used
 	// to be an explicit Unlock (so PeekFor, which takes the same non-reentrant
 	// mutex, could run after it), which meant a panic inside s.Info() would
 	// leave m.mu held forever and wedge every spawn, kill, get and list for the
 	// process lifetime. The closure keeps BOTH properties, and makes "no early
 	// return between Lock and Unlock" structural rather than a rule to remember.
+	// Conversation histories are copied inside the critical section (s.mu under
+	// m.mu is the order Info() already takes) and priced after it: CostOf takes
+	// the analytics lock, which is never held together with a session lock.
+	type history struct {
+		ids      []string
+		complete bool
+	}
+	histories := map[string]history{}
 	out := func() []Info {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -2514,6 +2557,10 @@ func (m *Manager) List() []Info {
 			// it can be read without racing.
 			i.Claude = isClaudeBin(s.Bin)
 			i.Resumable = i.Exited && resumeFor(s.Runtime, s.Bin, s.claudeSID(), s.Exclusive) != ""
+			if costSrc != nil && i.Claude {
+				ids, complete := s.conversations()
+				histories[i.ID] = history{ids, complete}
+			}
 			o = append(o, i)
 		}
 		return o
@@ -2524,6 +2571,13 @@ func (m *Manager) List() []Info {
 	// the daemon on the first poll.
 	var storeIsLocked *bool
 	for i := range out {
+		// A cost is shown only for a history known to be whole: a partial sum
+		// would understate it. A whole history with no cost ingested yet is a
+		// real $0.00 (ingest lags the transcript), so it is present, not absent.
+		if h, ok := histories[out[i].ID]; ok && h.complete {
+			c := costSrc.CostOf(h.ids)
+			out[i].CostUSD = &c
+		}
 		p, ok, blocked := m.peekAndBlocked(out[i].ID)
 		if ok {
 			out[i].Summary = summaryLine(p.Text)

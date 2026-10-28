@@ -24,6 +24,13 @@ type Service struct {
 	interval time.Duration
 	boxState string     // <dataDir>/boxstate; roots inside it are walked through os.Root
 	mu       sync.Mutex // held for the duration of one Ingest pass
+
+	// costs is the all-days cost per conversation id, rebuilt after every
+	// ingest pass (see refreshCosts) so a session list reads a map, not SQL.
+	// costMu guards only the map pointer; it is never held across a query and
+	// never while taking another lock.
+	costMu sync.RWMutex
+	costs  map[string]float64
 }
 
 // New opens the analytics DB at dbPath and returns a Service over the given
@@ -37,7 +44,37 @@ func New(dbPath string, roots []string, interval time.Duration) (*Service, error
 	if interval <= 0 {
 		interval = 24 * time.Hour
 	}
-	return &Service{store: st, roots: roots, interval: interval}, nil
+	svc := &Service{store: st, roots: roots, interval: interval}
+	// Seed the map from what is already stored, so a restart does not show
+	// $0.00 for a whole interval while the first ingest is still scanning.
+	svc.refreshCosts()
+	return svc, nil
+}
+
+// refreshCosts rebuilds the cost map from the store. On a query error it keeps
+// the previous map: a stale price beats wiping every session to $0.00.
+func (s *Service) refreshCosts() {
+	m, err := s.store.ConversationCosts()
+	if err != nil {
+		log.Printf("analytics: cost map refresh failed, keeping the previous one: %v", err)
+		return
+	}
+	s.costMu.Lock()
+	s.costs = m
+	s.costMu.Unlock()
+}
+
+// CostOf sums the cached cost of the given conversation ids (an id with no
+// rows counts 0). It reads the map built by the last ingest pass; it never
+// touches SQLite, so it is cheap enough for every session-list poll.
+func (s *Service) CostOf(sids []string) float64 {
+	s.costMu.RLock()
+	defer s.costMu.RUnlock()
+	var sum float64
+	for _, id := range sids {
+		sum += s.costs[id]
+	}
+	return sum
 }
 
 // SetBoxState names the directory whose subtrees a contained agent writes
@@ -82,6 +119,7 @@ func (s *Service) Ingest() (IngestStats, error) {
 			ingestRoot(s.store, root, &st)
 		}
 	}
+	s.refreshCosts()
 	return st, nil
 }
 
