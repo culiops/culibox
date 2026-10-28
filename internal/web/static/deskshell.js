@@ -155,6 +155,16 @@ function fmtSessionCost(n) {
   return "$" + n.toFixed(2);
 }
 
+// headerSyncKey: what syncHeaderName compares to decide the pane header must be
+// rebuilt on a poll. The header is gated (a rebuild per poll eats a press), so
+// every polled value it paints outside tab.onUpdate has to be in this key: the
+// session's name and its formatted cost (cost_usd moves on the 2m ingest with no
+// other signal, e.g. on an idle session). The cost is formatted here, not taken
+// from paneHeaderModel, so a narrow pane (which hides it) does not look stale.
+function headerSyncKey(name, session) {
+  return JSON.stringify([name || "", session ? fmtSessionCost(session.cost_usd) : null]);
+}
+
 // paneHeaderModel: the pane header's one line, in fixed slot order: containment,
 // cloud, model, ctx, cost. Below the narrow threshold only ONE chip survives (the
 // write chip if there is one, else containment) and model/ctx/cost are dropped, so
@@ -374,5 +384,5 @@ function paneTitle(name, tab, session, tabCount) {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { deskGroups, deskOrder, jumpOrder, sessionElevated, elevatedCount, costTodayRange, rowChip, rowSubline,
-    paneHeaderModel, fmtSessionCost, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
+    paneHeaderModel, fmtSessionCost, headerSyncKey, drawerFor, needStripModel, stripLabel, stripKey, stripHoldKey, emptyStateModel, pushRecentProfile, readRecent, writeRecent, deskStorage, shortcutRows, shortcutText, bootFlags, paneTitle };
 }

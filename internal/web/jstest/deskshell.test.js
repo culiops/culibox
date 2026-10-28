@@ -471,3 +471,14 @@ test("paneHeaderModel: cost is the last slot on a wide pane, null when narrow, i
   assert.equal(d.paneHeaderModel({ tab, session: working, nowMs: NOW, boxRuntime: "runc", narrow: false }).cost, null);
   assert.equal(d.paneHeaderModel({ tab, session: { ...working, cost_usd: 0 }, nowMs: NOW, boxRuntime: "runc", narrow: false }).cost, "$0.00");
 });
+
+test("headerSyncKey moves with the name and with cost_usd, and not with anything else", () => {
+  const k = d.headerSyncKey("api", { ...working, cost_usd: 1.5 });
+  assert.notEqual(d.headerSyncKey("api2", { ...working, cost_usd: 1.5 }), k, "rename");
+  assert.notEqual(d.headerSyncKey("api", { ...working, cost_usd: 1.6 }), k, "cost moved (idle session, no other signal)");
+  assert.notEqual(d.headerSyncKey("api", { ...working }), k, "cost appeared where there was none");
+  assert.notEqual(d.headerSyncKey("api", { ...working, cost_usd: 0 }), d.headerSyncKey("api", { ...working }), "0 is shown, absent is not");
+  assert.equal(d.headerSyncKey("api", { ...working, cost_usd: 1.5, activity: "idle" }), k, "unrelated field: no repaint");
+  assert.equal(d.headerSyncKey("api", { ...working, cost_usd: 1.5004 }), k, "same displayed cents: no repaint per poll");
+  assert.equal(d.headerSyncKey("api", null), d.headerSyncKey("api", null));
+});
