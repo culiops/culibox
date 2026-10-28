@@ -58,6 +58,7 @@ test("openDialog offers the dialog to the page host before showModal", () => {
 const pageCloseHooks = [
   ["tabs.js", "openTerminal"], ["tabs.js", "openPaneView"], ["tabs.js", "applyCap"], ["tabs.js", "toggleMax"],
   ["app.js", "spawnShellIn"], ["app.js", "spawnSession"], ["app.js", "toggleDrawer"], ["app.js", "openDrawer"],
+  ["tabs.js", "dockShellBesideParent"],
 ];
 for (const [file, name] of pageCloseHooks) {
   test(name + " (" + file + ") closes an open page", () => {
@@ -117,4 +118,21 @@ test("desktop.css hides the panes behind a page and makes the dialog fill the ho
 
 test("base CSS keeps #page-host off on mobile", () => {
   assert.match(read("app.css"), /#side-top, #side-foot, #drawer, #page-host \{ display: none; \}/);
+});
+
+test("with a page open, zoom and Ctrl+P stand down to the browser", () => {
+  const guard = /if \(typeof currentPage === "function" && currentPage\(\)\) return;/;
+  const app = read("app.js");
+  const zoom = app.indexOf('if (!(e.ctrlKey || e.metaKey) || e.altKey) return;');
+  assert.ok(zoom >= 0);
+  assert.match(app.slice(zoom, zoom + 300), guard);
+  const fd = read("filesdrawer.js");
+  const p = fd.indexOf('if (e.code !== "KeyP"');
+  assert.ok(p >= 0);
+  assert.match(fd.slice(p, p + 300), guard);
+});
+
+test("classnames HOOKS lists the page-<id> body classes for every PAGE_ID", () => {
+  const src = fs.readFileSync(path.join(__dirname, "classnames.test.js"), "utf8");
+  for (const id of PAGE_IDS) assert.ok(src.includes('"page-' + id + '"'), "page-" + id);
 });

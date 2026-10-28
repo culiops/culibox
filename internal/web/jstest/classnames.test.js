@@ -34,6 +34,10 @@ const HOOKS = new Set([
   "fs-dec",  // app.js initSettings/bumpFs: classList.contains("fs-dec") picks the decrement button
   "fs-inc",  // app.js initSettings/bumpFs: classList.contains("fs-inc") picks the increment button
   "fs-val",  // app.js initSettings/bumpFs: querySelector('.fs-val[data-fs="…"]'); visual styling comes from .stepper .val
+  // pagehost.js openPage: body.classList.add("page-" + id), the S4 contract's
+  // per-page body hook for later page CSS; built by concatenation, so the
+  // extractor above cannot see it.
+  "page-settings-modal", "page-analytics-modal", "page-audit-page",
 ]);
 
 function stripComments(css) {

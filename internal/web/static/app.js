@@ -5840,6 +5840,8 @@ document.addEventListener("keydown", (e) => {
 // sees the combo; preventDefault stops the browser's own page zoom.
 document.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  // A page hides the panes: leave the key to the browser's own zoom.
+  if (typeof currentPage === "function" && currentPage()) return;
   if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   let delta = null, doReset = false;
   if (e.key === "=" || e.key === "+") delta = +fontPrefs.STEP;

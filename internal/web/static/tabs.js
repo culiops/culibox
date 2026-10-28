@@ -1770,6 +1770,7 @@ function openTerminal(id, name, opts) {
 // anywhere is only activated where it is (openTerminal), never attached twice.
 // false, touching nothing, when no pane holds the parent: the caller decides.
 function dockShellBesideParent(s, placement) {
+  closePage(); // the shell docks beside a pane a page would hide
   const at = placeShell({ cells: cells.map((c) => ({ tabs: c.tabs, dock: c.dock })) }, s.id, s.parent_id || null);
   if (at.action === "own") return false;
   if (at.action === "activate") { openTerminal(s.id, s.name); return true; }
