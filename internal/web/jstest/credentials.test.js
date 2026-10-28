@@ -556,3 +556,15 @@ test("table mode keys on the as-page class, and the card path never looks at it"
   for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
   assert.ok(/credTableMode\(\)/.test(body("credSection")));
 });
+
+// Desktop Credentials table: a status cell wraps between words, never inside
+// one, so a long status ("Stored (store locked)", "Not set in the daemon's
+// environment") stays inside its column instead of printing over Used by.
+test("desktop creds table: status wraps at word boundaries only", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
+  const rule = css.match(/#creds \.ctab \.st \{([^}]*)\}/);
+  assert.ok(rule, "a #creds .ctab .st rule exists");
+  assert.match(rule[1], /white-space:\s*normal/);
+  assert.match(rule[1], /overflow-wrap:\s*normal/);
+  assert.doesNotMatch(rule[1], /nowrap/);
+});

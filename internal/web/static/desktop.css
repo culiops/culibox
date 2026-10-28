@@ -1186,14 +1186,15 @@
   #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
   /* AWS sizes its columns to content: a name holds its column open whole. */
   #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm { white-space: nowrap; }
-  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: nowrap; }
+  /* Status wraps between words, never inside one: long statuses ("Stored (store locked)") stay in their column. */
+  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: normal; overflow-wrap: normal; }
   #page-host > #settings-modal.as-page #creds .ctab .pv { overflow-wrap: normal; }
   /* The GitHub and token tables share one set of column starts (pg-2). AWS has
      its own columns and keeps the automatic layout. */
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 22%; }
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 30%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 96px; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 120px; }
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 136px; }
   #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
   #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
