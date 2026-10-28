@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -375,10 +376,17 @@ func (l located) openTranscript() (*os.File, os.FileInfo, bool) {
 // names, so an exited session can be restarted into it. Only a change costs a
 // sidecar write. Called by locate with no lock held; e.SessionID already
 // matched sessionIDRe inside readClaudeRegistry.
+//
+// It also keeps the session's conversation history (every sid since spawn):
+// all appending goes through addConversationLocked.
 func (m *Manager) noteClaudeSessionID(s *Session, id, sid string) {
 	s.mu.Lock()
 	changed := s.claudeSessionID != sid
 	s.claudeSessionID = sid
+	if s.addConversationLocked(sid) {
+		changed = true
+	}
+	ids, complete := slices.Clone(s.claudeSessionIDs), s.costComplete
 	s.mu.Unlock()
 	if !changed {
 		return
@@ -387,7 +395,7 @@ func (m *Manager) noteClaudeSessionID(s *Session, id, sid string) {
 	sc := m.sidecar
 	m.mu.Unlock()
 	if sc != nil {
-		sc.setClaudeSessionID(id, sid)
+		sc.setClaudeSessionID(id, sid, ids, complete)
 	}
 }
 

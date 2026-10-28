@@ -123,6 +123,7 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	}
 	s.restarting = true
 	name, sid := s.name, s.claudeSessionID
+	oldIDs, oldComplete := slices.Clone(s.claudeSessionIDs), s.costComplete
 	s.mu.Unlock()
 
 	// Always explicit: "" would fall back to the profile's CURRENT account, and
@@ -149,9 +150,15 @@ func (m *Manager) Restart(id string) (*Session, error) {
 		s.mu.Unlock()
 		return nil, err
 	}
+	// The replacement is a new session that resumes the old conversation: its
+	// cost is everything the old one spent plus its own.
+	ids, complete := ns.inheritConversations(oldIDs, oldComplete)
 	m.mu.Lock()
-	backend := m.backend
+	backend, sc := m.backend, m.sidecar
 	m.mu.Unlock()
+	if sc != nil {
+		sc.setClaudeSessionID(ns.ID, ns.claudeSID(), ids, complete)
+	}
 	if backend != nil {
 		_ = backend.Kill(id) // idempotent: the pidfile + socket of an agent that already exited
 	}

@@ -700,6 +700,11 @@ type Session struct {
 	// claudeSessionID is Claude Code's conversation id as last validated by
 	// locate (registry), so it follows /clear. Guarded by mu.
 	claudeSessionID string
+	// claudeSessionIDs is every conversation id noted since spawn, oldest
+	// first, at most maxConversationIDs; costComplete says it is the whole
+	// history (see sessionMeta.CostComplete). Guarded by mu.
+	claudeSessionIDs []string
+	costComplete     bool
 	// cwdFormsCache is cwdFormsOf(Cwd), filled on first use (cwdForms); Cwd is
 	// immutable, so it is never invalidated. Guarded by mu.
 	cwdFormsCache []string
@@ -1138,6 +1143,47 @@ func (s *Session) claudeSID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.claudeSessionID
+}
+
+// conversations returns a copy of every conversation id this session has had
+// since spawn and whether that list is the whole history.
+func (s *Session) conversations() (ids []string, complete bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.claudeSessionIDs), s.costComplete
+}
+
+// addConversationLocked appends sid to the history unless it is already there.
+// A sid that fails sessionIDRe, or one past maxConversationIDs, is not
+// recorded and leaves the history incomplete. It reports whether anything
+// changed. s.mu must be held.
+func (s *Session) addConversationLocked(sid string) (changed bool) {
+	if slices.Contains(s.claudeSessionIDs, sid) {
+		return false
+	}
+	if !sessionIDRe.MatchString(sid) || len(s.claudeSessionIDs) >= maxConversationIDs {
+		changed = s.costComplete
+		s.costComplete = false
+		return changed
+	}
+	s.claudeSessionIDs = append(s.claudeSessionIDs, sid)
+	return true
+}
+
+// inheritConversations folds a predecessor's history in front of this
+// session's own (Restart: the replacement is a new session that resumes the
+// old conversation). It is complete only if both were. It returns the merged
+// state for the caller to persist.
+func (s *Session) inheritConversations(ids []string, wasComplete bool) ([]string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	own := s.claudeSessionIDs
+	s.claudeSessionIDs = nil
+	s.costComplete = s.costComplete && wasComplete
+	for _, sid := range slices.Concat(ids, own) {
+		s.addConversationLocked(sid)
+	}
+	return slices.Clone(s.claudeSessionIDs), s.costComplete
 }
 
 // SetName updates the mutable display label.
@@ -2088,6 +2134,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	}
 	sess.Exclusive = exclusive
 	sess.cwdFormsCache = cwdForms
+	// Only a claude session born here has seen every conversation it will
+	// have; its history starts empty and is complete until proven otherwise.
+	sess.costComplete = isClaudeBin(bin)
 	sess.resumeSkipped = resumeSkipped
 	sess.base = maps.Clone(baseAccess) // its own: a re-probe writes into it
 	sess.onSubmitted = m.submittedHook(id)
@@ -2106,7 +2155,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
-			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID})
+			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -2849,6 +2898,25 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.ParentID = md.ParentID
 	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
 		sess.claudeSessionID = md.ClaudeSessionID
+	}
+	// The history is trusted only whole: one entry that is not a plain id (a
+	// hand-edited or corrupt file) drops them all and the cost reads partial.
+	// A record from before the list holds just the singular id and can never
+	// be complete, since earlier conversations were not kept.
+	sess.costComplete = md.CostComplete
+	if slices.ContainsFunc(md.ClaudeSessionIDs, func(sid string) bool { return !sessionIDRe.MatchString(sid) }) {
+		sess.costComplete = false
+	} else {
+		sess.claudeSessionIDs = slices.Clone(md.ClaudeSessionIDs)
+	}
+	if len(sess.claudeSessionIDs) > maxConversationIDs {
+		sess.claudeSessionIDs, sess.costComplete = sess.claudeSessionIDs[:maxConversationIDs], false
+	}
+	if sess.claudeSessionID != "" {
+		sess.addConversationLocked(sess.claudeSessionID) // not yet published: no lock needed
+		if !slices.Contains(md.ClaudeSessionIDs, sess.claudeSessionID) {
+			sess.costComplete = false // the list did not know its own current conversation
+		}
 	}
 	// nil = a record written before the flag existed, or an orphan adopted with
 	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).

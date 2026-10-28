@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,6 +52,15 @@ type sessionMeta struct {
 	// ClaudeSessionID is Claude Code's own conversation id, as last validated
 	// through its live registry (follows /clear). Restart resumes it.
 	ClaudeSessionID string `json:"claude_session_id,omitempty"`
+	// ClaudeSessionIDs is every Claude conversation this session has had since
+	// spawn, oldest first (a /clear starts a new one), capped at
+	// maxConversationIDs. Per-session cost is the sum over these.
+	ClaudeSessionIDs []string `json:"claude_session_ids,omitempty"`
+	// CostComplete says ClaudeSessionIDs is the whole history: true only for a
+	// claude session created by a spawn that has recorded every conversation
+	// since. A record from before this field, a dropped bad entry or a hit cap
+	// leaves it false, so a cost summed from the list is shown as partial.
+	CostComplete bool `json:"cost_complete,omitempty"`
 	// Account is the agent account the session runs under; empty = default.
 	// Restart re-spawns under it, so its credentials and transcripts match.
 	Account string `json:"account,omitempty"`
@@ -197,16 +207,21 @@ func (sc *sidecar) setSubmitted(id string) {
 	_ = sc.flushLocked()
 }
 
-// setClaudeSessionID records the conversation id. No-op if the id is absent,
-// so a concurrent retention-prune can never be resurrected.
-func (sc *sidecar) setClaudeSessionID(id, sid string) {
+// maxConversationIDs bounds a session's conversation history so a hostile or
+// runaway /clear loop cannot grow the sidecar without limit.
+const maxConversationIDs = 256
+
+// setClaudeSessionID records the current conversation id together with the
+// whole history and its completeness. No-op if the id is absent, so a
+// concurrent retention-prune can never be resurrected, and if nothing changed.
+func (sc *sidecar) setClaudeSessionID(id, sid string, ids []string, complete bool) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	md, ok := sc.m[id]
-	if !ok || md.ClaudeSessionID == sid {
+	if !ok || (md.ClaudeSessionID == sid && md.CostComplete == complete && slices.Equal(md.ClaudeSessionIDs, ids)) {
 		return
 	}
-	md.ClaudeSessionID = sid
+	md.ClaudeSessionID, md.ClaudeSessionIDs, md.CostComplete = sid, slices.Clone(ids), complete
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }
