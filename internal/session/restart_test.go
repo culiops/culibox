@@ -672,3 +672,46 @@ func TestRestartOfAnIncompleteSessionStaysIncomplete(t *testing.T) {
 		t.Fatal("the restarted session's sidecar claims completeness")
 	}
 }
+
+// A snapshot taken before a newer one but written after it must not shorten
+// the stored list or lift its completeness (the stale-write interleaving).
+func TestSidecarNeverShortensStoredHistory(t *testing.T) {
+	sc, err := openSidecar(filepath.Join(t.TempDir(), "sessions.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.put("s1", sessionMeta{Agent: "claude", CostComplete: true})
+	sc.setClaudeSessionID("s1", "bbbb-2", []string{"aaaa-1", "bbbb-2"}, true) // the newer snapshot, written first
+	sc.setClaudeSessionID("s1", "aaaa-1", []string{"aaaa-1"}, true)           // the older one, arriving late
+	md := sc.all()["s1"]
+	if !slices.Equal(md.ClaudeSessionIDs, []string{"aaaa-1", "bbbb-2"}) || !md.CostComplete {
+		t.Fatalf("stale write: ids=%v complete=%v want [aaaa-1 bbbb-2] true", md.ClaudeSessionIDs, md.CostComplete)
+	}
+	// An incomplete record is never lifted back to complete by a later write.
+	sc.setClaudeSessionID("s1", "bbbb-2", []string{"aaaa-1", "bbbb-2"}, false)
+	sc.setClaudeSessionID("s1", "bbbb-2", []string{"aaaa-1", "bbbb-2"}, true)
+	if sc.all()["s1"].CostComplete {
+		t.Fatal("a later write lifted cost_complete back to true")
+	}
+}
+
+// Many concurrent notes must leave the sidecar equal to the in-memory history
+// (run with -race): per-session ordering of snapshot+write.
+func TestConcurrentNotesPersistTheWholeHistory(t *testing.T) {
+	m, s, path := spawnClaude(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.noteClaudeSessionID(s, s.ID, fmt.Sprintf("conv-%d", i))
+		}()
+	}
+	wg.Wait()
+	ids, complete := s.conversations()
+	md := sidecarEntry(t, path, s.ID)
+	if len(ids) != 40 || !complete || !slices.Equal(md.ClaudeSessionIDs, ids) || !md.CostComplete || md.ClaudeSessionID != claudeSIDOf(s) {
+		t.Fatalf("sidecar diverged: mem %d ids complete=%v, disk %d ids complete=%v sid=%q/%q",
+			len(ids), complete, len(md.ClaudeSessionIDs), md.CostComplete, md.ClaudeSessionID, claudeSIDOf(s))
+	}
+}

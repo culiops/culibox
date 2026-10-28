@@ -386,11 +386,24 @@ func (m *Manager) noteClaudeSessionID(s *Session, id, sid string) {
 	if s.addConversationLocked(sid) {
 		changed = true
 	}
-	ids, complete := slices.Clone(s.claudeSessionIDs), s.costComplete
 	s.mu.Unlock()
 	if !changed {
 		return
 	}
+	m.persistConversations(s, id)
+}
+
+// persistConversations writes the session's current conversation id, history
+// and completeness to the sidecar. Snapshot and write happen under one
+// per-session lock, so two concurrent callers cannot land out of order and
+// persist a shorter, older list over a newer one (the setter also refuses to
+// drop ids already stored, as a second line of defence).
+func (m *Manager) persistConversations(s *Session, id string) {
+	s.convMu.Lock()
+	defer s.convMu.Unlock()
+	s.mu.Lock()
+	sid, ids, complete := s.claudeSessionID, slices.Clone(s.claudeSessionIDs), s.costComplete
+	s.mu.Unlock()
 	m.mu.Lock()
 	sc := m.sidecar
 	m.mu.Unlock()

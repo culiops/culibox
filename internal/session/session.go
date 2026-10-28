@@ -705,6 +705,9 @@ type Session struct {
 	// history (see sessionMeta.CostComplete). Guarded by mu.
 	claudeSessionIDs []string
 	costComplete     bool
+	// convMu orders the sidecar writes of the three fields above (and
+	// claudeSessionID): taken before the snapshot, held across the write.
+	convMu sync.Mutex
 	// cwdFormsCache is cwdFormsOf(Cwd), filled on first use (cwdForms); Cwd is
 	// immutable, so it is never invalidated. Guarded by mu.
 	cwdFormsCache []string

@@ -152,13 +152,11 @@ func (m *Manager) Restart(id string) (*Session, error) {
 	}
 	// The replacement is a new session that resumes the old conversation: its
 	// cost is everything the old one spent plus its own.
-	ids, complete := ns.inheritConversations(oldIDs, oldComplete)
+	ns.inheritConversations(oldIDs, oldComplete)
+	m.persistConversations(ns, ns.ID)
 	m.mu.Lock()
-	backend, sc := m.backend, m.sidecar
+	backend := m.backend
 	m.mu.Unlock()
-	if sc != nil {
-		sc.setClaudeSessionID(ns.ID, ns.claudeSID(), ids, complete)
-	}
 	if backend != nil {
 		_ = backend.Kill(id) // idempotent: the pidfile + socket of an agent that already exited
 	}

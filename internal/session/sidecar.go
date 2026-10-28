@@ -214,14 +214,32 @@ const maxConversationIDs = 256
 // setClaudeSessionID records the current conversation id together with the
 // whole history and its completeness. No-op if the id is absent, so a
 // concurrent retention-prune can never be resurrected, and if nothing changed.
+//
+// The write is monotonic: ids already stored are never dropped (a stale
+// snapshot arriving late keeps them, after the snapshot's own, in order), and
+// the result is complete only if both the stored record and the snapshot are.
+// A union past maxConversationIDs is cut there and marked incomplete.
 func (sc *sidecar) setClaudeSessionID(id, sid string, ids []string, complete bool) {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	md, ok := sc.m[id]
-	if !ok || (md.ClaudeSessionID == sid && md.CostComplete == complete && slices.Equal(md.ClaudeSessionIDs, ids)) {
+	if !ok {
 		return
 	}
-	md.ClaudeSessionID, md.ClaudeSessionIDs, md.CostComplete = sid, slices.Clone(ids), complete
+	merged := slices.Clone(ids)
+	for _, old := range md.ClaudeSessionIDs {
+		if !slices.Contains(merged, old) {
+			merged = append(merged, old)
+		}
+	}
+	complete = complete && md.CostComplete
+	if len(merged) > maxConversationIDs {
+		merged, complete = merged[:maxConversationIDs], false
+	}
+	if md.ClaudeSessionID == sid && md.CostComplete == complete && slices.Equal(md.ClaudeSessionIDs, merged) {
+		return
+	}
+	md.ClaudeSessionID, md.ClaudeSessionIDs, md.CostComplete = sid, merged, complete
 	sc.m[id] = md
 	_ = sc.flushLocked()
 }
