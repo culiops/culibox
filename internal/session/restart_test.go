@@ -581,6 +581,29 @@ func TestRestoreDropsHistoryWithABadEntry(t *testing.T) {
 	}
 }
 
+// A singular id that is not a plain id is dropped, and with it the proof that
+// the history is whole: the cost must read partial, not complete.
+func TestRestoreBadSingularSIDMarksIncomplete(t *testing.T) {
+	fb := newFakeBackend()
+	fb.seedLive("claude-2")
+	path := writeSidecar(t, t.TempDir(), map[string]sessionMeta{
+		"claude-2": {Agent: "claude", Cwd: "/w", Created: time.Now(), CostComplete: true,
+			ClaudeSessionID: "../../etc", ClaudeSessionIDs: []string{"aaaa-1"}},
+	})
+	m := newReconcileManager(t, fb, path)
+	if err := m.Reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	s, _ := m.Get("claude-2")
+	t.Cleanup(func() { _ = m.Kill("claude-2") })
+	if _, complete := s.conversations(); complete {
+		t.Fatal("a dropped singular sid left the history complete")
+	}
+	if got := claudeSIDOf(s); got != "" {
+		t.Fatalf("bad singular sid kept: %q", got)
+	}
+}
+
 func TestRestoreKeepsACompleteHistory(t *testing.T) {
 	fb := newFakeBackend()
 	fb.seedLive("claude-2")

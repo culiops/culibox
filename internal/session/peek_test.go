@@ -614,6 +614,7 @@ func TestListCostOnlyWhenComplete(t *testing.T) {
 	const claude = "/usr/local/bin/claude"
 	add("complete", claude, []string{"c1", "c2"}, true)
 	add("zero", claude, nil, true)
+	add("one", claude, []string{"o1"}, true)
 	add("partial", claude, []string{"p1"}, false)
 	add("codex", "/usr/local/bin/codex", []string{"x1"}, true)
 	delete(m.sessions, "s1")
@@ -629,7 +630,7 @@ func TestListCostOnlyWhenComplete(t *testing.T) {
 	}
 
 	// No cost source: never present.
-	for _, id := range []string{"complete", "zero", "partial", "codex"} {
+	for _, id := range []string{"complete", "zero", "one", "partial", "codex"} {
 		if c := cost(m.List(), id); c != nil {
 			t.Errorf("no source: %s cost_usd=%v, want absent", id, *c)
 		}
@@ -641,9 +642,14 @@ func TestListCostOnlyWhenComplete(t *testing.T) {
 	if c := cost(out, "complete"); c == nil || *c != 3.0 {
 		t.Errorf("complete claude session: cost_usd=%v, want 3", c)
 	}
-	// Complete with no conversations yet: a real $0.00 (lag), not absent.
-	if c := cost(out, "zero"); c == nil || *c != 0 {
-		t.Errorf("complete empty session: cost_usd=%v, want 0 present", c)
+	// Complete but no conversation recorded: we never saw one, so a $0.00 would
+	// be a guess (the registry may never validate). Absent.
+	if c := cost(out, "zero"); c != nil {
+		t.Errorf("complete, no ids: cost_usd=%v, want absent", *c)
+	}
+	// One known conversation with no ingested rows yet: a real $0.00 (lag).
+	if c := cost(out, "one"); c == nil || *c != 1.5 {
+		t.Errorf("complete, one id: cost_usd=%v, want 1.5 present", c)
 	}
 	if c := cost(out, "partial"); c != nil {
 		t.Errorf("incomplete history: cost_usd=%v, want absent", *c)
@@ -659,11 +665,18 @@ func TestListCostOnlyWhenComplete(t *testing.T) {
 		}
 	}
 
+	// One id with no ingested rows prices to 0: present, and exactly 0.
+	m.SetCostSource(&fakeCost{per: 0})
+	if c := cost(m.List(), "one"); c == nil || *c != 0 {
+		t.Errorf("one id, no ingested rows: cost_usd=%v, want 0 present", c)
+	}
+	m.SetCostSource(fc)
+
 	// Absent means the key is missing from the JSON; zero means "cost_usd":0.
 	for _, i := range out {
 		raw, _ := json.Marshal(i)
 		has := strings.Contains(string(raw), `"cost_usd"`)
-		if want := i.ID == "complete" || i.ID == "zero"; has != want {
+		if want := i.ID == "complete" || i.ID == "one"; has != want {
 			t.Errorf("%s: cost_usd key present=%v, want %v (%s)", i.ID, has, want, raw)
 		}
 	}

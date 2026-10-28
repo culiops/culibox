@@ -2572,9 +2572,11 @@ func (m *Manager) List() []Info {
 	var storeIsLocked *bool
 	for i := range out {
 		// A cost is shown only for a history known to be whole: a partial sum
-		// would understate it. A whole history with no cost ingested yet is a
-		// real $0.00 (ingest lags the transcript), so it is present, not absent.
-		if h, ok := histories[out[i].ID]; ok && h.complete {
+		// would understate it. A known conversation with no cost ingested yet is
+		// a real $0.00 (ingest lags the transcript), so it is present. A whole
+		// history with no conversation at all is absent: we never saw one (the
+		// registry may never validate), so $0.00 would be a guess.
+		if h, ok := histories[out[i].ID]; ok && h.complete && len(h.ids) > 0 {
 			c := costSrc.CostOf(h.ids)
 			out[i].CostUSD = &c
 		}
@@ -2958,14 +2960,16 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	sess.replyable = md.Replyable && m.repliesOn
 	sess.options = md.Options
 	sess.ParentID = md.ParentID
+	sess.costComplete = md.CostComplete
 	if sessionIDRe.MatchString(md.ClaudeSessionID) { // never trust a path-ish id, even our own file's
 		sess.claudeSessionID = md.ClaudeSessionID
+	} else if md.ClaudeSessionID != "" {
+		sess.costComplete = false // dropped: the history cannot vouch for its own current conversation
 	}
 	// The history is trusted only whole: one entry that is not a plain id (a
 	// hand-edited or corrupt file) drops them all and the cost reads partial.
 	// A record from before the list holds just the singular id and can never
 	// be complete, since earlier conversations were not kept.
-	sess.costComplete = md.CostComplete
 	if slices.ContainsFunc(md.ClaudeSessionIDs, func(sid string) bool { return !sessionIDRe.MatchString(sid) }) {
 		sess.costComplete = false
 	} else {
