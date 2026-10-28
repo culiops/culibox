@@ -1181,20 +1181,25 @@
   #page-host > #settings-modal.as-page #creds .ctab { width: 100%; border-collapse: collapse; }
   #page-host > #settings-modal.as-page #creds .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
   #page-host > #settings-modal.as-page #creds .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
-  /* Names and statuses break between words, never inside one ("Missin/g"). */
+  /* Names break between words, never inside one ("Missin/g"). */
   #page-host > #settings-modal.as-page #creds .ctab .c-main { overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
   /* AWS sizes its columns to content: a name holds its column open whole. */
   #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm { white-space: nowrap; }
-  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: nowrap; }
+  /* Status wraps between words ("Stored (store locked)" stays in its column).
+     break-word, not anywhere: a word only splits if it alone is wider than the column. */
+  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: normal; overflow-wrap: break-word; }
   #page-host > #settings-modal.as-page #creds .ctab .pv { overflow-wrap: normal; }
   /* The GitHub and token tables share one set of column starts (pg-2). AWS has
-     its own columns and keeps the automatic layout. */
+     its own columns and keeps the automatic layout. Every width is a share of the
+     table: fixed px columns starved Used by to 0px below a ~1150px window. */
   #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 22%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 30%; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 96px; }
-  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 136px; }
+  /* Headers wrap between words in the share-sized columns: "Env · agent may reach" ran over Status below ~1250px. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th { white-space: normal; overflow-wrap: normal; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 20%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 25%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 15%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 16%; }
   #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
   #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
   #page-host > #settings-modal.as-page #creds .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }

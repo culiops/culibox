@@ -556,3 +556,26 @@ test("table mode keys on the as-page class, and the card path never looks at it"
   for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
   assert.ok(/credTableMode\(\)/.test(body("credSection")));
 });
+
+// Desktop Credentials table: a status cell wraps between words, never inside
+// one, so a long status ("Stored (store locked)", "Not set in the daemon's
+// environment") stays inside its column instead of printing over Used by.
+test("desktop creds table: status wraps at word boundaries only", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
+  const rule = css.match(/#creds \.ctab \.st \{([^}]*)\}/);
+  assert.ok(rule, "a #creds .ctab .st rule exists");
+  assert.match(rule[1], /white-space:\s*normal/);
+  assert.match(rule[1], /overflow-wrap:\s*break-word/);
+  assert.doesNotMatch(rule[1], /nowrap|anywhere/);
+});
+
+// The fixed-layout tables size every column as a share of the table: a px
+// column left Used by 0px wide in a ~1000px window.
+test("desktop creds table: fixed-layout column widths are percentages", () => {
+  const css = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "static", "desktop.css"), "utf8");
+  const widths = [...css.matchAll(/\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th:nth-child\(\d\) \{ width: ([^;]+); \}/g)].map((m) => m[1]);
+  assert.ok(widths.length >= 4, "column widths are declared");
+  for (const w of widths) assert.match(w, /^\d+%$/);
+  assert.ok(widths.reduce((n, w) => n + parseInt(w, 10), 0) < 100, "Used by keeps a share");
+  assert.match(css, /\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th \{ white-space: normal;/, "headers wrap in share-sized columns");
+});
