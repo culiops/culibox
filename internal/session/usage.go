@@ -148,17 +148,34 @@ func parseUsageTail(b []byte) (Usage, bool) {
 	return Usage{}, false
 }
 
-// contextMax maps a model id to its context window. opus-4.8 is 1M (measured:
-// real sessions read ~597k, above any 200k). Unknown → ok=false (raw-only display).
+// contextWindows lists model-id prefixes and their context window (max input
+// tokens). First match wins. A model matching no prefix is unknown: no guessed
+// number, so no percentage.
+var contextWindows = []struct {
+	prefix string
+	max    int
+}{
+	{"claude-opus-5", 1_000_000},
+	{"claude-opus-4-8", 1_000_000},
+	{"claude-opus-4-7", 1_000_000},
+	{"claude-opus-4-6", 1_000_000},
+	{"claude-sonnet-5", 1_000_000},
+	{"claude-sonnet-4-6", 1_000_000},
+	{"claude-haiku-5", 1_000_000},
+	{"claude-fable-5", 1_000_000},
+	{"claude-mythos-5", 1_000_000},
+	{"claude-haiku-4-5", 200_000},
+}
+
+// contextMax maps a model id to its context window by prefix. Unknown →
+// ok=false (raw-only display, never a guessed percentage).
 func contextMax(model string) (int, bool) {
-	switch model {
-	case "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5":
-		return 1_000_000, true
-	case "claude-haiku-4-5-20251001":
-		return 200_000, true
-	default:
-		return 0, false
+	for _, w := range contextWindows {
+		if strings.HasPrefix(model, w.prefix) {
+			return w.max, true
+		}
 	}
+	return 0, false
 }
 
 // transcriptPathIn is transcriptPath for a boxed session. It never trusts what
