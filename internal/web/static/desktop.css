@@ -385,6 +385,11 @@
   .cell .xterm .xterm-scrollable-element > .scrollbar > .slider { background: var(--line); border-radius: 4px; }
   .cell .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 8px !important; }
   .cell .xterm .xterm-scrollable-element > .scrollbar.horizontal > .slider { height: 8px !important; }
+  /* Always visible (D27): xterm hides an idle bar after ~500ms (class
+     "invisible fade", opacity 0). That class pair means "scrollable but idle";
+     with nothing to scroll xterm sets plain "invisible" (no "fade"), which this
+     leaves hidden, so a short terminal shows no bar. */
+  .cell .xterm .xterm-scrollable-element > .scrollbar.invisible.fade { opacity: 1; pointer-events: auto; transition: none; }
   .cell .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
   .cell .xterm .xterm-scrollable-element > .scrollbar > .slider.active { background: var(--faint); }
 

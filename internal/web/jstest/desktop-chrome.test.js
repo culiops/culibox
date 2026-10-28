@@ -63,3 +63,14 @@ test("the xterm scrollbar (.scrollbar > .slider, not the native viewport bar) is
   assert.ok(rulesFor(".cell .xterm .xterm-scrollable-element > .scrollbar > .slider").some((b) => /var\(--line\)/.test(b)));
   assert.ok(rulesFor(".cell .xterm .xterm-scrollable-element > .scrollbar > .slider:hover").some((b) => /var\(--faint\)/.test(b)));
 });
+
+test("the xterm bar stays visible at rest, but only when there is something to scroll (D27)", () => {
+  // xterm hides an idle bar as "invisible fade"; a bar with nothing to scroll is
+  // plain "invisible". Only the former may be forced visible.
+  const sel = ".cell .xterm .xterm-scrollable-element > .scrollbar.invisible.fade";
+  const r = rulesFor(sel);
+  assert.ok(r.some((b) => /opacity:\s*1\b/.test(b)), "idle bar is opaque");
+  assert.ok(r.some((b) => /transition:\s*none/.test(b)), "no fade-out transition");
+  assert.ok(r.some((b) => /pointer-events:\s*auto/.test(b)), "still draggable");
+  assert.ok(rulesFor(".cell .xterm .xterm-scrollable-element > .scrollbar.invisible").length === 0, "plain .invisible (nothing to scroll) is not overridden");
+});
