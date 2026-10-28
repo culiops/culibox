@@ -3269,6 +3269,10 @@ function renderPfOptions(current) {
   $("pf-options").replaceChildren(...optionDefs.filter((o) => optApplies(o, bin)).map((o) => {
     const row = document.createElement("div");
     row.className = "frow";
+    // The desktop Settings page places a row by its key (model and effort sit
+    // in the Agent block, the rest under Advanced) with CSS alone: the row has
+    // to stay inside #pf-options, which is what readForm scans.
+    row.dataset.opt = o.key;
     const col = document.createElement("div");
     col.className = "fcol";
     const lbl = document.createElement("label");
@@ -3393,6 +3397,7 @@ function applyCredLists(meta) {
   renderAwscPicker(ticksAfterRefresh(readAwscTicked(), oldAwsc, names(awscs)));
   renderGhOwners(readGhRows()); // a row on a removed App or token keeps it, shown, for the server to name
   syncEditorActions();
+  renderPfTouch();
 }
 let credListsPainted = false;
 // refreshCredLists re-reads /api/meta and repaints the pickers: when the
@@ -3400,11 +3405,58 @@ let credListsPainted = false;
 // failed fetch leaves the lists as they were.
 let credListsSeq = 0;
 async function refreshCredLists() {
+  refreshPfCreds();
   const seq = ++credListsSeq;
   let meta;
   try { meta = await api("/api/meta"); } catch (_) { return; }
   if (seq !== credListsSeq) return;
   applyCredLists(meta);
+}
+
+// --- the profile form's "Can touch" line (desktop Settings page) ------------
+// pfCredsView: what GET /api/credentials said when the Profiles tab was last
+// shown (the store lock and the elevate windows), or null: never fetched, or
+// it failed, and the line then has no Store part and no window. Desktop only,
+// like the New session box that reads the same view (spawnpanel.js).
+let pfCredsView = null;
+let pfCredsSeq = 0;
+async function refreshPfCreds() {
+  if (!drawerDesktop()) return;
+  const seq = ++pfCredsSeq;
+  let got = null;
+  try {
+    const v = await api("/api/credentials", { signal: deadlineSignal(5000) });
+    if (v && typeof v === "object") got = v;
+  } catch (_) { /* no creds answer: no Store part, no window */ }
+  if (seq !== pfCredsSeq) return;
+  pfCredsView = got;
+  renderPfTouch();
+}
+// renderPfTouch paints #pf-touch from what the form holds right now, with the
+// New session box's own rules (reachRows) and renderer (paintReachRows). Run
+// from fillForm, after the credential lists repaint, and (debounced) on every
+// edit inside the form. Base CSS hides the box on a phone, where it is skipped.
+function renderPfTouch() {
+  const box = $("pf-touch");
+  if (!box || !drawerDesktop()) return;
+  const form = readForm();
+  const view = profiles.find((x) => x.name === selectedProfileName()) || null;
+  // Without a box layer every session is host, whatever the seg shows.
+  const tier = (metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host" ? "host" : "box";
+  const rows = reachRows({
+    // "open" is only ever reported when egress is mandatory for every boxed spawn.
+    profile: pfTouchProfile(form, { view, claude: isClaudeBinName(form.bin), egressAll: profiles.some((x) => x.network === "open") }),
+    tier,
+    cwd: shortPath(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
+    meta: { aws_connections: awscEntries },
+    creds: pfCredsView,
+  });
+  paintReachRows(box, rows, { inline: true, title: "Can touch" });
+}
+let pfTouchTimer = 0;
+function schedulePfTouch() {
+  clearTimeout(pfTouchTimer);
+  pfTouchTimer = setTimeout(renderPfTouch, 150);
 }
 
 // The stored binding as loaded: the editor has no field for its extra egress
@@ -3778,6 +3830,7 @@ function fillForm(p) {
   $("pf-awsc-err").hidden = true;
   syncPfReplyable();
   syncEditorActions();
+  renderPfTouch();
 }
 // syncEditorActions is the single place that decides what the editor may do,
 // so a dimmed button and the reason it is dimmed can never disagree. .off is
@@ -4072,6 +4125,25 @@ $("pf-back").addEventListener("click", () => {
 });
 $("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
 $("pf-duplicate").addEventListener("click", duplicateProfile);
+// Discard (desktop page footer): back to what the server holds for this
+// profile, or a blank form when the editor holds an unsaved draft.
+function discardProfileEdits() {
+  const name = selectedProfileName();
+  if (name) editProfile(name);
+  else newProfile();
+}
+$("pf-discard").addEventListener("click", discardProfileEdits);
+// Advanced (desktop page): folds base environment, the other options, replies,
+// args and the allowlist. CSS only hides them; every field stays in the form.
+$("pf-adv").addEventListener("click", () => {
+  const ped = $("pf-adv").closest(".ped");
+  const open = !ped.classList.contains("adv-open");
+  ped.classList.toggle("adv-open", open);
+  $("pf-adv").setAttribute("aria-expanded", open ? "true" : "false");
+});
+// Any edit in the form re-derives the Can touch line; a seg or a picker change
+// is a click, so clicks count too.
+for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);
 // The two "+ add" buttons append a blank row of the matching kind and hand
 // focus to its name field, so typing the variable name is the very next thing
 // that happens.

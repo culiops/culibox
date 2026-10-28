@@ -929,4 +929,198 @@
   #page-host > dialog.as-page { position: static; inset: auto; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none; border: 0; border-radius: 0; padding: 0; background: var(--bg); display: flex; flex-direction: column; box-shadow: none; }
   /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
   #page-host > dialog.as-page[box-]::before { display: none; }
+
+  /* --- Settings page (S4): grouped nav, the regrouped profile form ---------- */
+  /* Every rule starts at #page-host > #settings-modal.as-page: the modal's own
+     #settings-modal rules in app.css carry an id, and this outranks them. A
+     grid: the header across, the nav down the left, the open panel and its
+     footer to the right. */
+  #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: 12px; }
+  #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
+
+  /* The nav: Agents (Profiles, Agent accounts) · Access (Credentials, API
+     tokens) · App (Appearance, About). The DOM keeps the mobile strip's order;
+     `order` regroups it here. */
+  #page-host > #settings-modal.as-page > #settings-tabs {
+    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 2px;
+    padding: 10px 8px; border: 0; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto;
+  }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 6px; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="creds"] { order: 5; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 6; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 7; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t {
+    padding: 7px 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
+    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--muted);
+  }
+  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
+
+  /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
+     and ✕ close the page, so every Done goes, and the two footers that held
+     nothing else go with them. */
+  #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
+  #page-host > #settings-modal.as-page > .dbd.pad { padding: 22px 28px; }
+  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: 56px; gap: 10px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--panel); }
+  #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
+  #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
+  #page-host > #settings-modal.as-page > .dft .btn {
+    padding: 7px 14px; border: 1px solid transparent; border-radius: var(--r-ctl);
+    background: var(--raise); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page > .dft .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > .dft .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  #page-host > #settings-modal.as-page > .dft .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  #page-host > #settings-modal.as-page > .dft .btn.gh { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page > .dft .btn.gh:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > .dft .btn.dgr { background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > .dft .btn.dgr:hover { background: var(--danger-tint); }
+  #page-host > #settings-modal.as-page > .dft .fld { min-height: 32px; padding: 6px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-size: 13px; }
+
+  /* Profiles: the list (200px) runs the full height, and the sticky footer
+     starts at the form column. #manage spans the footer's row too, so the form
+     scrolls under the footer and keeps room for it at the bottom. */
+  #page-host > #settings-modal.as-page > #manage { grid-row: 2 / 4; }
+  #page-host > #settings-modal.as-page > #foot-manage { position: relative; z-index: 1; margin-left: 200px; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-delete { order: 1; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate { order: 2; }
+  #page-host > #settings-modal.as-page > #foot-manage .grow { order: 3; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-discard { order: 4; display: inline-block; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-save { order: 5; }
+  /* Duplicate reads as a quiet action beside Delete…; a built-in profile
+     makes it the primary (syncEditorActions adds .pri) and the rule above fills it. */
+  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri) { background: transparent; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri):hover { background: var(--raise); }
+
+  #page-host > #settings-modal.as-page #manage .plist { width: 200px; padding: 10px 8px; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+  #page-host > #settings-modal.as-page #manage .plist > .grow { display: none; }
+  #page-host > #settings-modal.as-page #manage .plist ul { display: flex; flex-direction: column; gap: 2px; overflow: visible; }
+  #page-host > #settings-modal.as-page #manage .pitem {
+    padding: 8px 10px; border: 0; border-left: 2px solid transparent; border-radius: var(--r-chip);
+    box-shadow: none; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page #manage .pitem:hover { background: var(--raise); }
+  #page-host > #settings-modal.as-page #manage .pitem.on { background: var(--raise); border-left-color: var(--accent); box-shadow: none; }
+  #page-host > #settings-modal.as-page #manage .pitem .lk { font-size: 12px; color: var(--faint); }
+  #page-host > #settings-modal.as-page #manage .plist-foot { padding: 8px 10px; border: 0; }
+  #page-host > #settings-modal.as-page #manage .plist-foot .btn { width: auto; padding: 0; border: 0; background: none; font-family: var(--font-ui); font-size: 13px; color: var(--accent); }
+  #page-host > #settings-modal.as-page #manage .plist-foot .btn:hover { text-decoration: underline; }
+
+  /* The form: a 4-track grid, so a field takes half (two tracks) and model ·
+     effort share one half. The three unnamed .frow wrappers and #pf-options
+     are display: contents, so their columns are grid items placed by `order`
+     (visual only: readForm scans #pf-options, and mobile keeps DOM order).
+     Rows with an id keep their own display, so their [hidden] still hides them.
+       Can touch
+       AGENT          name | account; binary | model · effort
+       WHERE IT RUNS  containment | default workspace; readable host paths
+       WHAT IT CAN TOUCH  AWS connections | GitHub; legacy AWS; tokens
+       Advanced ▸     base environment, the other options, replies, args, allowlist */
+  #page-host > #settings-modal.as-page #manage .ped {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 14px; align-content: start;
+    padding: 18px 22px 84px; background: var(--bg);
+  }
+  #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
+  #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }
+  #page-host > #settings-modal.as-page #manage #pf-lock { order: 1; }
+  #page-host > #settings-modal.as-page #manage #pf-touch { order: 2; }
+  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="agent"] { order: 10; }
+  #page-host > #settings-modal.as-page #manage #pf-name-col { order: 11; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-account-col { order: 12; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-bin-col { order: 13; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] { order: 14; grid-column: 3 / span 1; }
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effort"], #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effortLevel"] { order: 15; grid-column: 4 / span 1; }
+  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
+  #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 23; }
+  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
+  #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-aws-block { order: 33; }
+  #page-host > #settings-modal.as-page #manage #pf-st-block { order: 34; }
+  #page-host > #settings-modal.as-page #manage #pf-adv { order: 40; }
+  #page-host > #settings-modal.as-page #manage #pf-base-col { order: 41; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #pf-options > .frow { order: 42; grid-column: span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-replyable-row { order: 43; }
+  #page-host > #settings-modal.as-page #manage #pf-args-row { order: 44; }
+  #page-host > #settings-modal.as-page #manage #pf-env-block { order: 45; }
+  #page-host > #settings-modal.as-page #manage .ped > .hint { order: 46; }
+  #page-host > #settings-modal.as-page #manage #settings-err { order: 50; }
+  /* Advanced, folded: the fields are still in the form (readForm reads them),
+     just not drawn. */
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-base-col,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-options > .frow:not([data-opt="model"]):not([data-opt="effort"]):not([data-opt="effortLevel"]),
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-replyable-row,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-args-row,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-env-block,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) > .hint { display: none; }
+
+  #page-host > #settings-modal.as-page #manage .pf-touch {
+    display: flex; gap: 22px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: var(--r-card); font-size: 13px; line-height: 1.5;
+  }
+  .sr-ik { flex: none; color: var(--muted); }
+  .sr-iv { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+  .sr-part.tone-warn { color: var(--amber); }
+  #page-host > #settings-modal.as-page #manage .pf-sec { display: block; margin: 6px 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #settings-modal.as-page #manage .pf-adv {
+    display: block; width: 100%; margin: 4px 0 14px; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line);
+    background: none; text-align: left; font-family: var(--font-ui); font-size: 13px; color: var(--muted); cursor: pointer;
+  }
+  #page-host > #settings-modal.as-page #manage .pf-adv::before { content: "▸ "; }
+  #page-host > #settings-modal.as-page #manage .ped.adv-open .pf-adv::before { content: "▾ "; }
+  #page-host > #settings-modal.as-page #manage .pf-adv:hover { color: var(--fg); }
+
+  /* Labels and fields per pg-1b: sentence-case 12.5px labels, 34px fields with
+     6px corners; mono only for machine text (paths, binaries, model names). */
+  #page-host > #settings-modal.as-page #manage .flab { margin-bottom: 6px; font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--muted); }
+  #page-host > #settings-modal.as-page #manage .fld {
+    min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl);
+    background: var(--bg); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page #manage textarea.fld { min-height: 0; line-height: 1.5; }
+  #page-host > #settings-modal.as-page #manage #pf-bin, #page-host > #settings-modal.as-page #manage #pf-cwd, #page-host > #settings-modal.as-page #manage #pf-cwd-custom, #page-host > #settings-modal.as-page #manage #pf-context, #page-host > #settings-modal.as-page #manage #pf-args,
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] .fld, #page-host > #settings-modal.as-page #manage #pf-env-rows .fld { font-family: var(--font-mono); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #manage .seg { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #settings-modal.as-page #manage .seg button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #manage .seg button.dgr.on { background: var(--danger-tint); color: var(--danger); }
+  #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #manage .lockbar, #page-host > #settings-modal.as-page #manage .pf-sumbox, #page-host > #settings-modal.as-page #manage .pf-confirm { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #manage .warnbox { border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page #manage .ped .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #manage .ped .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  #page-host > #settings-modal.as-page #manage .ped .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page #manage .hint { font-size: 12px; line-height: 1.6; }
+
+  /* Agent accounts, API tokens, Appearance, About: the same content, on the
+     page's tokens. */
+  #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #tokens .btn, #page-host > #settings-modal.as-page > #accounts .btn, #page-host > #settings-modal.as-page > #settings .btn, #page-host > #settings-modal.as-page > #about .btn {
+    padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl); background: var(--raise);
+    font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page > #tokens .btn.gh { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #tokens .btn.dgr, #page-host > #settings-modal.as-page > #accounts .btn.dgr { background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: 13px; }
+  #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: 12px; }
+  #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
+  #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page .reveal .tk { border-radius: var(--r-ctl); font-family: var(--font-mono); }
+  #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: 13px; }
+  #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
+  #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }
+  #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #about-version { font-size: 14px; color: var(--fg); }
+  #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: 12.5px; color: var(--muted); }
 }

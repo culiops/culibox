@@ -383,3 +383,38 @@ test("readable host paths: hidden on an empty host profile, flagged on a filled 
   // with the "needs runtime: box" hint instead of hiding the conflict.
   assert.deepStrictEqual(contextRowState("host", "/a\n"), { hidden: false, hint: true });
 });
+
+// pfTouchProfile turns what the editor holds (readForm's request body) into the
+// ProfileView shape reachRows reads, so the Settings page's "Can touch" line and
+// the New session box are drawn by the same rules.
+const { pfTouchProfile } = require("../static/profileform.js");
+
+test("pfTouchProfile maps the form's bindings to the view fields reachRows reads", () => {
+  const form = {
+    name: "sre", bin: "claude", account: "work",
+    aws_connections: ["culipulse-prod"],
+    github: { owners: [{ owner: "culiops", app: "ci" }, { owner: "", app: "x" }], permissions: { contents: "read" } },
+    tokens: ["npm"],
+  };
+  assert.deepStrictEqual(pfTouchProfile(form, { claude: true }), {
+    bin: "claude", account: "work", claude: true,
+    aws_connections: ["culipulse-prod"], github_owners: ["culiops"], tokens: ["npm"],
+    network: "allowlist",
+  });
+});
+
+test("pfTouchProfile names the inline binding from the saved view, else from the form", () => {
+  const view = { aws_inline: { name: "legacy", prod: true, elevate_max_minutes: 30 } };
+  assert.deepStrictEqual(pfTouchProfile({ bin: "claude", aws: { role_arn: "r" } }, { view }).aws_inline, view.aws_inline);
+  assert.deepStrictEqual(pfTouchProfile({ bin: "claude", aws: { label: "ops", prod: true } }, {}).aws_inline, { name: "ops", prod: true });
+  assert.deepStrictEqual(pfTouchProfile({ bin: "claude", aws: {} }, {}).aws_inline, { name: "aws", prod: false });
+  // Remove pressed: readForm leaves `aws` out, and so does the touch line.
+  assert.strictEqual(pfTouchProfile({ bin: "claude" }, { view }).aws_inline, undefined);
+});
+
+test("pfTouchProfile: unbound is open only when egress is mandatory, else no posture", () => {
+  assert.strictEqual(pfTouchProfile({ bin: "claude" }, { egressAll: true }).network, "open");
+  assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
+  assert.strictEqual(pfTouchProfile({ bin: "claude", tokens: ["t"] }, {}).network, "allowlist");
+  assert.strictEqual(pfTouchProfile(null, null).claude, false);
+});

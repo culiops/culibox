@@ -1322,6 +1322,10 @@
        700px): the profile list, the reach box, the footer hint, and the "Model ·"
        lead of the Effort label. Not rendered at all on a phone. */
     #spawn-plist, #spawn-reach, #spawn-foot-hint, .spawn-lbl-model { display: none; }
+    /* Desktop-only parts of the Settings page (desktop.css shows them on the
+       page above 700px): the nav's group labels, the profile form's Can touch
+       box, section heads and Advanced fold, Discard, and About's runtime line. */
+    .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime { display: none; }
     .spawn-adv-label {
       display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--muted); margin-bottom: 8px;
