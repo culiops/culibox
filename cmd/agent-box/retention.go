@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"github.com/culiops/agent-box/internal/egress"
@@ -29,11 +30,11 @@ func startRetention(ctx context.Context, a *egress.Audit, days int, every time.D
 		cutoff := time.Now().AddDate(0, 0, -days)
 		n, err := a.Prune(cutoff, retentionBatch)
 		if err != nil {
-			logf("audit: prune of egress rows older than %d days failed after %d deleted: %v", days, n, err)
+			logf("audit: prune of egress rows older than %s failed after %d deleted: %v", retentionDays(days), n, err)
 			return
 		}
 		if n > 0 {
-			logf("audit: pruned %d egress rows older than %d days", n, days)
+			logf("audit: pruned %d egress rows older than %s", n, retentionDays(days))
 		}
 	}
 	run()
@@ -47,6 +48,14 @@ func startRetention(ctx context.Context, a *egress.Audit, days int, every time.D
 			run()
 		}
 	}
+}
+
+// retentionDays is the window in words for the log: "1 day", "90 days".
+func retentionDays(days int) string {
+	if days == 1 {
+		return "1 day"
+	}
+	return strconv.Itoa(days) + " days"
 }
 
 // runRetention starts startRetention in the background and returns the step

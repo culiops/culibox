@@ -129,3 +129,24 @@ func TestRunRetentionStopWaits(t *testing.T) {
 	runRetention(nil, 90, func(string, ...any) {})()
 	runRetention(a, 0, func(string, ...any) {})()
 }
+
+// The prune log names the window in words: "1 day", not "1 days".
+func TestRetentionDaysWording(t *testing.T) {
+	for _, c := range []struct {
+		days int
+		want string
+	}{{1, "1 day"}, {2, "2 days"}, {90, "90 days"}} {
+		if got := retentionDays(c.days); got != c.want {
+			t.Errorf("retentionDays(%d) = %q, want %q", c.days, got, c.want)
+		}
+	}
+	a := openRetentionAudit(t, 2)
+	var logs []string
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	startRetention(ctx, a, 1, time.Hour, func(f string, args ...any) { logs = append(logs, fmt.Sprintf(f, args...)) })
+	want := "audit: pruned 2 egress rows older than 1 day"
+	if len(logs) != 1 || logs[0] != want {
+		t.Errorf("logs = %q, want [%q]", logs, want)
+	}
+}
