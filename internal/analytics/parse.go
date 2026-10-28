@@ -340,17 +340,45 @@ func newDedupe(seen []string) *dedupe {
 	if len(seen) > maxSeenIDs {
 		seen = seen[len(seen)-maxSeenIDs:]
 	}
-	d := &dedupe{set: make(map[string]struct{}, maxSeenIDs+1), ring: append([]string(nil), seen...)}
-	for _, id := range d.ring {
-		d.set[id] = struct{}{}
+	d := &dedupe{set: make(map[string]struct{}, maxSeenIDs+1)}
+	for _, id := range seen {
+		// Defensive: persisted state is ours, but never trust an entry's shape.
+		if !safeMsgID(id) {
+			continue
+		}
+		if _, dup := d.set[id]; !dup {
+			d.set[id] = struct{}{}
+			d.ring = append(d.ring, id)
+		}
 	}
 	return d
 }
 
+// maxMsgIDLen bounds a remembered message id. Transcripts can be written by a
+// contained, untrusted agent, so ids are checked before they reach the seen
+// set or the persisted state.
+const maxMsgIDLen = 128
+
+// safeMsgID reports whether id matches ^[A-Za-z0-9_-]{1,128}$ (a byte loop,
+// no regexp). Real Claude ids (msg_...) match; anything else is treated like
+// an empty id.
+func safeMsgID(id string) bool {
+	if len(id) == 0 || len(id) > maxMsgIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // first reports whether a record with this message id should be counted, and
-// remembers the id. An empty id is always counted and never remembered.
+// remembers the id. An empty or unsafe id is always counted and never remembered.
 func (d *dedupe) first(id string) bool {
-	if id == "" {
+	if !safeMsgID(id) {
 		return true
 	}
 	if _, dup := d.set[id]; dup {

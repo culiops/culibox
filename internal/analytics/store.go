@@ -133,6 +133,7 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 	const upsertState = `
 INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids) VALUES(?,?,?,?,?)
 ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids`
+	// seen ids are whitespace-free by construction (safeMsgID), so Join/Fields round-trips.
 	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " ")); err != nil {
 		return fmt.Errorf("state upsert: %w", err)
 	}

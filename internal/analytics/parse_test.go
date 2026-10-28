@@ -250,3 +250,29 @@ func TestSeenRingCappedAt64(t *testing.T) {
 		t.Fatalf("seen not oldest-first: last=%q", seen[63])
 	}
 }
+
+// Transcripts can be written by a contained agent: an id that is too long or has
+// a space is treated like an empty id (counted per record, never remembered).
+func TestUnsafeMessageIDsCountPerRecordAndAreNotRemembered(t *testing.T) {
+	u := `{"input_tokens":1,"output_tokens":1}`
+	long := strings.Repeat("a", 200)
+	j := msgRec(long, "2026-08-05T10:00:01Z", u) + msgRec(long, "2026-08-05T10:00:02Z", u) +
+		msgRec("msg A", "2026-08-05T10:00:03Z", u) + msgRec("msg A", "2026-08-05T10:00:04Z", u) +
+		msgRec("msg_ok", "2026-08-05T10:00:05Z", u) + msgRec("msg_ok", "2026-08-05T10:00:06Z", u)
+	p, _, _, _, seen, err := parseTranscript(strings.NewReader(j), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-4-8"}]
+	if tok.Input != 5 { // 2 long + 2 spaced + 1 deduped
+		t.Fatalf("input = %d want 5", tok.Input)
+	}
+	if len(seen) != 1 || seen[0] != "msg_ok" {
+		t.Fatalf("seen = %v want [msg_ok]", seen)
+	}
+	// Defensive: unsafe entries loaded from state are dropped.
+	_, _, _, _, seen, _ = parseTranscript(strings.NewReader(""), []string{long, "a b", "msg_ok"})
+	if len(seen) != 1 || seen[0] != "msg_ok" {
+		t.Fatalf("loaded seen = %v want [msg_ok]", seen)
+	}
+}
