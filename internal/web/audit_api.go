@@ -33,6 +33,8 @@ const (
 // request may proceed: GET only, and the signed-in browser only (a bearer
 // token, a PAT or no credential gets 403).
 func auditGate(w http.ResponseWriter, r *http.Request) bool {
+	// Audit text is for one viewer at one moment: never cached, errors included.
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodGet {
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return false
@@ -215,9 +217,11 @@ func (s *Server) handleAuditCSV(w http.ResponseWriter, r *http.Request) {
 }
 
 // auditHasMore reports whether a row follows the cursor of the last exported
-// one. A failed probe reads as "no": the file is still correct, just unmarked.
+// one. It reads one row through Each: a single indexed page, no COUNT scans. A
+// failed probe reads as "no": the file is still correct, just unmarked.
 func (s *Server) auditHasMore(q auditlog.Query, last string) bool {
-	q.Before, q.Limit = last, 1
-	p, err := s.Audit.Query(q)
-	return err == nil && len(p.Events) > 0
+	q.Before = last
+	found := false
+	err := s.Audit.Each(q, 1, func(auditlog.Event) error { found = true; return nil })
+	return err == nil && found
 }

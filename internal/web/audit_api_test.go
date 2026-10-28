@@ -96,8 +96,12 @@ func TestAuditRoutesCookieOnly(t *testing.T) {
 		if rec := auditReq(h, "GET", p, nil, bearer); rec.Code != 403 || !strings.Contains(rec.Body.String(), "audit is read from the web UI") {
 			t.Fatalf("%s bearer: got %d %s", p, rec.Code, rec.Body)
 		}
-		if rec := auditReq(h, "GET", p, ck, ""); rec.Code != 200 {
+		rec := auditReq(h, "GET", p, ck, "")
+		if rec.Code != 200 {
 			t.Fatalf("%s cookie: got %d %s", p, rec.Code, rec.Body)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Fatalf("%s Cache-Control = %q, want no-store", p, cc)
 		}
 	}
 	// No credential at all never reaches the handler through the router (401);
@@ -295,5 +299,24 @@ func TestMetaAuditFlag(t *testing.T) {
 	}
 	if got := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, Audit: f.rd})["audit"]; got != true {
 		t.Fatalf("with a reader audit = %v", got)
+	}
+}
+
+func TestCSVCell(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"=1+1", "'=1+1"},
+		{"+1", "'+1"},
+		{"-1", "'-1"},
+		{"@SUM(A1)", "'@SUM(A1)"},
+		{"\tx", "'\tx"},
+		{"\rx", "'\rx"},
+		{"", ""},
+		{"write on prod", "write on prod"},
+		{"a=b", "a=b"},
+		{"s1", "s1"},
+	} {
+		if got := csvCell(c.in); got != c.want {
+			t.Errorf("csvCell(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
