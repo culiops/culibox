@@ -184,7 +184,7 @@ func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 func TestByProject(t *testing.T) {
 	s := openTemp(t)
 	s.Apply("S1", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
 	s.Apply("S3", "beta", "/t/c.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
 	rows, err := s.ByProject("2026-08-01", "2026-08-31")
 	if err != nil {
@@ -214,7 +214,7 @@ func TestSessionCosts(t *testing.T) {
 	// One session spanning two days and two models → one aggregate, cost summed,
 	// model "mixed", day = the later one.
 	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
-	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
 	// A cheaper single-model session.
 	s.Apply("S2", "p", "/t/c.jsonl", delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")

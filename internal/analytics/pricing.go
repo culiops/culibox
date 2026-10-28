@@ -2,40 +2,47 @@ package analytics
 
 import "strings"
 
-// Model pricing, USD per 1,000,000 tokens. Prices verified 2026-09-23 against the
-// claude-api skill (first-party Claude API rates):
+// Model pricing, USD per 1,000,000 tokens. Rates per the claude-api skill
+// (first-party Claude API rates), refreshed 2026-10-28:
 //
-//	opus-5.5                 : input $4,  output $20, cache read $0.20
-//	opus / opus-5 / opus-4.x : input $5,  output $25
-//	sonnet / sonnet-5        : input $3,  output $15
-//	haiku                    : input $1,  output $5
-//	fable-5.1                : input $10, output $50, cache read $0.25
-//	fable / fable-5          : input $10, output $50
+//	opus-5-5                         : input $4,  output $20, cache read $0.20
+//	opus-5 / opus-4-8/4-7/4-6        : input $5,  output $25
+//	sonnet-5-5 / sonnet-5            : input $2,  output $10, cache read $0.20
+//	sonnet-4-6 and other sonnet      : input $3,  output $15
+//	haiku-5-5, prompt <= 100K tokens : input $0.10, output $0.50
+//	haiku-5-5, prompt >  100K tokens : input $0.50, output $2.50
+//	haiku-4-5 and other haiku        : input $1,  output $5
+//	fable-5-1 / fable                : input $10, output $50, fable-5-1 cache read $0.25
 //
 // Cache is normally derived from the input rate: a cache READ costs 0.1x input,
-// a cache WRITE (cache_creation, 5-minute TTL) costs 1.25x input. A family whose
-// published cache rate does not follow the 0.1x rule sets cacheRead explicitly —
-// Opus 5.5 reads at $0.20 on a $4 input rate (0.05x) and Fable 5.1 at $0.25 on
-// a $10 rate (0.025x), so deriving those would overcharge them 2x and 4x
-// respectively. Cache reads dominate real usage, so this is the most
+// a 5-minute cache WRITE costs 1.25x input and a 1-hour cache WRITE costs 2x
+// input. A family whose published cache-read rate does not follow the 0.1x rule
+// sets cacheRead explicitly (Opus 5.5, Sonnet 5.x, Fable 5.1), so deriving those
+// would overcharge them. Cache reads dominate real usage, so this is the most
 // consequential number in this file.
 //
-// Sonnet 5's introductory $2/$10 (through 2026-08-31) is deliberately IGNORED —
-// v1 uses the standard $3/$15 for every day. Refreshing rates is a one-file edit.
+// Haiku 5.5 is tiered by prompt size: a message whose prompt (input + cache read
+// + both cache writes) exceeds 100K tokens is priced at the upper tier, with
+// cache reads and writes derived from that tier's input rate.
 //
 // The table is keyed by a substring of the model id and is matched
 // MOST-SPECIFIC-FIRST: "claude-opus-5-5" contains "opus" and
-// "claude-fable-5-1" contains "fable", so the order of familyRates below is
-// load-bearing — a new, more specific key must be listed above the generic
-// family it would otherwise fall through to. An id that
-// matches no family prices to zero — the row is still shown with its raw token
-// counts; only its dollar figure is 0.
+// "claude-haiku-5-5" contains "haiku", so the order of familyRates below is
+// load-bearing: a new, more specific key must be listed above the generic
+// family it would otherwise fall through to. An id that matches no family
+// prices to zero (never a guessed number): the row is still shown with its raw
+// token counts; only its dollar figure is 0.
 type modelRate struct {
 	input  float64 // $ per 1M input tokens
 	output float64 // $ per 1M output tokens
 
 	// cacheRead overrides the derived 0.1x input rate when non-zero.
 	cacheRead float64 // $ per 1M cache-read tokens
+
+	// tier, when set, replaces this rate for any message whose prompt exceeds
+	// tierAbove tokens (Haiku 5.5 only).
+	tierAbove int64
+	tier      *modelRate
 }
 
 // familyRates is matched in order, most specific key first. Keys are NOT
@@ -46,7 +53,11 @@ var familyRates = []struct {
 }{
 	{"opus-5-5", modelRate{input: 4, output: 20, cacheRead: 0.2}},
 	{"opus", modelRate{input: 5, output: 25}},
+	{"sonnet-5-5", modelRate{input: 2, output: 10, cacheRead: 0.2}},
+	{"sonnet-5", modelRate{input: 2, output: 10, cacheRead: 0.2}},
 	{"sonnet", modelRate{input: 3, output: 15}},
+	{"haiku-5-5", modelRate{input: 0.10, output: 0.50, tierAbove: 100_000,
+		tier: &modelRate{input: 0.50, output: 2.50}}},
 	{"haiku", modelRate{input: 1, output: 5}},
 	{"fable-5-1", modelRate{input: 10, output: 50, cacheRead: 0.25}},
 	{"fable", modelRate{input: 10, output: 50}},
@@ -60,6 +71,8 @@ var familyRates = []struct {
 const (
 	cacheReadMult  = 0.1  // cache_read costs 0.1x the input rate, unless overridden
 	cacheWriteMult = 1.25 // cache_creation (5m) costs 1.25x the input rate
+
+	cacheWrite1hMult = 2.0 // cache_creation (1h) costs 2x the input rate
 )
 
 // rateFor returns the pricing for a model id, and whether a family matched.
@@ -82,19 +95,34 @@ func (r modelRate) cacheReadRate() float64 {
 	return r.input * cacheReadMult
 }
 
-// CostUSD returns the dollar cost of a token bundle for the given model. Cache
-// read is the family's published rate (or 0.1x input), cache write is 1.25x
-// input. Unknown model families (including "" and "<synthetic>") return 0.
-func CostUSD(model string, input, output, cacheRead, cacheCreation int64) float64 {
+// MsgUsage is the token usage of one assistant message.
+type MsgUsage struct {
+	Input, Output, CacheRead, CacheWrite5m, CacheWrite1h int64
+}
+
+// MessageCostUSD returns the dollar cost of one message. Pricing is per message
+// because the Haiku 5.5 tier depends on that message's own prompt size. Unknown
+// model families (including "" and "<synthetic>") return 0.
+func MessageCostUSD(model string, u MsgUsage) float64 {
 	r, ok := rateFor(model)
 	if !ok {
 		return 0
 	}
+	if r.tier != nil && u.Input+u.CacheRead+u.CacheWrite5m+u.CacheWrite1h > r.tierAbove {
+		r = *r.tier
+	}
 	perTok := func(n int64, ratePerM float64) float64 {
 		return float64(n) / 1_000_000 * ratePerM
 	}
-	return perTok(input, r.input) +
-		perTok(output, r.output) +
-		perTok(cacheRead, r.cacheReadRate()) +
-		perTok(cacheCreation, r.input*cacheWriteMult)
+	return perTok(u.Input, r.input) +
+		perTok(u.Output, r.output) +
+		perTok(u.CacheRead, r.cacheReadRate()) +
+		perTok(u.CacheWrite5m, r.input*cacheWriteMult) +
+		perTok(u.CacheWrite1h, r.input*cacheWrite1hMult)
+}
+
+// CostUSD prices a pre-summed token bundle, treating cacheCreation as 5m writes.
+// Kept for the aggregate callers in store.go until they price per message.
+func CostUSD(model string, input, output, cacheRead, cacheCreation int64) float64 {
+	return MessageCostUSD(model, MsgUsage{Input: input, Output: output, CacheRead: cacheRead, CacheWrite5m: cacheCreation})
 }
