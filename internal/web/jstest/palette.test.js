@@ -203,3 +203,49 @@ test("paletteProfileSpawns: one entry per profile, no hint (bin is not shown), o
   cmds.forEach((c) => c.run());
   assert.deepEqual(opened, ["host-zsh", "claude"]);
 });
+
+// S4: on desktop Settings, Analytics and Audit open as pages, and the palette
+// reaches each Settings section directly. Mobile keeps exactly the two v0.4.0
+// Settings entries and gets no page entries.
+test("palettePageCommands: desktop lists Audit, Analytics and the six Settings sections", () => {
+  const { palettePageCommands } = require("../static/palette.js");
+  const ran = [];
+  const h = { audit: () => ran.push("audit"), analytics: () => ran.push("analytics"), settings: (t) => ran.push("settings:" + t) };
+  const cmds = palettePageCommands(true, { analytics: true, audit: true }, h);
+  assert.deepEqual(cmds.map((c) => c.label), [
+    "Audit", "Analytics",
+    "Settings · Profiles", "Settings · Agent accounts", "Settings · Credentials",
+    "Settings · API tokens", "Settings · Appearance", "Settings · About",
+  ]);
+  for (const c of cmds) assert.ok(c.kind === "settings" || c.kind === "view", c.label + " kind " + c.kind);
+  cmds.forEach((c) => c.run());
+  assert.deepEqual(ran, ["audit", "analytics",
+    "settings:manage", "settings:accounts", "settings:creds", "settings:tokens", "settings:settings", "settings:about"]);
+});
+
+test("palettePageCommands: desktop without analytics drops only Analytics (7 entries)", () => {
+  const { palettePageCommands } = require("../static/palette.js");
+  const labels = palettePageCommands(true, { analytics: false, audit: true }, {}).map((c) => c.label);
+  assert.equal(labels.length, 7);
+  assert.ok(!labels.includes("Analytics"));
+  assert.ok(labels.includes("Audit"));
+});
+
+test("palettePageCommands: desktop without the audit store offers no Audit (its link is hidden too)", () => {
+  const { palettePageCommands } = require("../static/palette.js");
+  const labels = palettePageCommands(true, { analytics: true, audit: false }, {}).map((c) => c.label);
+  assert.ok(!labels.includes("Audit"));
+  assert.equal(labels.length, 7);
+});
+
+test("palettePageCommands: mobile keeps exactly today's two Settings entries", () => {
+  const { palettePageCommands } = require("../static/palette.js");
+  const ran = [];
+  const cmds = palettePageCommands(false, { analytics: true, audit: true }, { settings: (t) => ran.push(t) });
+  assert.deepEqual(cmds.map((c) => [c.kind, c.label, c.hint]), [
+    ["settings", "Settings · Profiles", ""],
+    ["settings", "Settings · Font sizes", ""],
+  ]);
+  cmds.forEach((c) => c.run());
+  assert.deepEqual(ran, ["manage", "settings"]);
+});

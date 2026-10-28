@@ -109,6 +109,7 @@
           <span id="side-elevated">0 elevated</span>
         </div>
         <div class="side-links">
+          <button id="side-audit" type="button" hidden>Audit</button>
           <button id="side-analytics" type="button" hidden>Analytics</button>
           <button id="side-settings" type="button">Settings</button>
         </div>
@@ -150,6 +151,7 @@
         </div>
       </div>
     </aside>
+    <div id="page-host" hidden></div>
     <aside id="steer-rail" class="rail" aria-label="Session detail" hidden>
       <div class="rsec" id="steer-head"></div>
       <div class="rsec" id="steer-elev" hidden></div>
@@ -614,6 +616,14 @@
     </div>
   </dialog>
 
+  <!-- Desktop only (pagehost.js): the Audit page. Task 7 fills it. -->
+  <dialog id="audit-page" aria-label="Audit">
+    <div class="dhd">
+      <span class="grow" role="heading" aria-level="2">Audit</span>
+      <button type="button" class="btn gh" data-close="audit-page" aria-label="Close" title="Close (Esc)">&times;</button>
+    </div>
+  </dialog>
+
   <script src="/xterm/xterm.js"></script>
   <script src="/xterm/addon-fit.js"></script>
   <script src="/xterm/addon-webgl.js"></script>
@@ -677,6 +687,7 @@
   <script src="/dirpicker.js"></script>
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
+  <script src="/pagehost.js"></script>
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
   <script src="/store.js"></script>

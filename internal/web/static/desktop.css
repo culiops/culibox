@@ -133,6 +133,7 @@
   }
   .side-links button:hover { color: var(--fg); background: var(--raise); }
   .side-links button[hidden] { display: none; }
+  .side-links .on { color: var(--fg); font-weight: 600; } /* the open page's link */
 
 
   /* --- the 52px rail (sidebar hidden) ------------------------------------- */
@@ -915,4 +916,17 @@
     background: var(--panel); border-top: 1px solid var(--line);
   }
   #spawn-foot-hint { display: inline; margin-right: auto; font-size: 12px; color: var(--faint); }
+
+  /* --- pages (S4): Settings, Analytics and Audit in the pane area ---------- */
+  /* pagehost.js re-parents the dialog into #page-host and shows it non-modally;
+     the panes stay laid out underneath, just not displayed. */
+  body.page-open #grid, body.page-open #drawer { display: none; }
+  #page-host { flex: 1; min-width: 0; display: flex; background: var(--bg); }
+  #page-host[hidden] { display: none; }
+  /* The rule is `dialog.as-page`; the #page-host prefix is only there to outrank
+     the modal sizing each dialog carries by id (#settings-modal's 940x660,
+     #analytics-modal's fixed centring), which a class selector alone loses to. */
+  #page-host > dialog.as-page { position: static; inset: auto; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none; border: 0; border-radius: 0; padding: 0; background: var(--bg); display: flex; flex-direction: column; box-shadow: none; }
+  /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
+  #page-host > dialog.as-page[box-]::before { display: none; }
 }

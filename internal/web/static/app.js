@@ -163,6 +163,7 @@ function drawerDesktop() {
 // that is what is already showing, or switches.
 function toggleDrawer(kind, sessionId) {
   if (!drawerDesktop()) return;
+  closePage(); // a drawer hangs over the panes, which a page hides
   applyDrawer(drawerFor(drawerState, kind, sessionId == null ? null : sessionId));
 }
 
@@ -172,6 +173,7 @@ function toggleDrawer(kind, sessionId) {
 // the tree even if it already follows the session; see drawerRootTree.
 function openDrawer(kind, sessionId, opts) {
   if (!drawerDesktop()) return;
+  closePage();
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
@@ -508,9 +510,11 @@ function paintRailMeters() {
   box.hidden = !any;
 }
 
-// Live count of open dialogs, for shortcutsBlocked (shell.js): the same source
-// shouldRefocusTerminal already reads from.
-const dialogsOpen = () => document.querySelectorAll("dialog[open]").length;
+// Live count of open MODAL dialogs, for shortcutsBlocked (shell.js) and the
+// page host's Esc. A desktop page (pagehost.js, `.as-page`) is not one: with
+// Settings open as a page, Alt+1..9 or a layout switch must still work, and
+// they close the page on their way.
+const dialogsOpen = () => document.querySelectorAll("dialog[open]:not(.as-page)").length;
 
 // Per-pane collapse. The state is two independent booleans and both collapsed
 // at once is legal — you get two header bars and an empty rail.
@@ -4466,6 +4470,7 @@ function loadLastSpawn() {
 // what "+ New session" does.
 async function spawnSession(req, opts) {
   opts = opts || {};
+  closePage(); // the new session's pane must be on screen, not behind a page
   const s = await api("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5483,6 +5488,7 @@ async function killSession(id) {
 const shellSpawning = new WeakSet();
 async function spawnShellIn(cell, placement = "below") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
+  closePage();
   shellSpawning.add(cell);
   try {
     // Only a gate and the form fallback's preselection now: the shell endpoint
@@ -5623,6 +5629,7 @@ window.addEventListener("resize", fitAll);
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);
+$("side-audit").addEventListener("click", openAuditPage);
 $("side-palette").addEventListener("click", openPalette);
 // "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
 setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
@@ -5732,6 +5739,8 @@ initMobileShell();
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     const sideAn = $("side-analytics");
     if (sideAn) sideAn.hidden = !(meta && meta.analytics);
+    const sideAudit = $("side-audit");
+    if (sideAudit) sideAudit.hidden = !(meta && meta.audit); // only with an audit store
     sideCostOn = !!(meta && meta.analytics);
     paintSideCost();
     lastRateLimits = (meta && meta.rate_limits) || null;
@@ -5783,6 +5792,8 @@ setInterval(refreshSessions, 3000);
 // for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
+    // A phone has no pages: the dialog goes home closed, the panes come back.
+    closePage();
     // Mobile's Files screen expects #files-pane back in #sidebar.
     // The pane-collapse html classes follow the layout: the stored state on
     // mobile (as at a fresh load), none on desktop, where app.css's

@@ -1523,6 +1523,7 @@ function cellTerminal(cell) {
 // sidebar's "SSO expired · Sign in" use it. false on mobile, which has no views.
 function openPaneView(sid, kind) {
   if (typeof mobileActive === "function" && mobileActive(window.innerWidth)) return false;
+  closePage();
   const model = () => ({ cells: cells.map((c) => ({ term: (cellTerminal(c) || {}).id || null, tabs: c.tabs, dock: c.dock })) });
   let at = paneViewTarget(model(), sid, cells.indexOf(focusedCell));
   if (!at && sid != null) {
@@ -1609,6 +1610,7 @@ function removeCell(cell) {
 }
 
 function toggleMax(cell) {
+  closePage();
   maximized = maximized === cell ? null : cell;
   renderGrid();
   scheduleSaveLayout();
@@ -1657,6 +1659,7 @@ function fitAll() {
 // current window count collapses the extra windows: their tabs move into the last
 // kept cell (so "1" instantly stacks everything into one window).
 function applyCap(n) {
+  closePage(); // the layout the user just chose must be on screen
   cap = n;
   // Every .layouts group: the header's (mobile) and the sidebar top's (desktop).
   for (const b of document.querySelectorAll(".layouts button")) {
@@ -1710,6 +1713,7 @@ function applyCap(n) {
 // typeof-guarded because tabs.js is a classic script loaded before the mobile
 // globals (mobileActive/setMobileScreen live in mobileshell.js/app.js).
 function openTerminal(id, name, opts) {
+  closePage(); // a page hides the panes: showing a session closes it first
   opts = opts || {};
   // One terminal, one place: a docked shell is already attached, in its dock.
   // placeShell finds where (a dock or a tab: those never share an id).
