@@ -1,8 +1,11 @@
 package analytics
 
 import (
+	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func openTemp(t *testing.T) *Store {
@@ -17,17 +20,19 @@ func openTemp(t *testing.T) *Store {
 
 func delta(day, model string, in, out, cr, cc, prompts int64) *Parsed {
 	p := newParsed()
-	p.Tokens[TokKey{Day: day, Model: model}] = &Tok{Input: in, Output: out, CacheRead: cr, CacheCreation: cc, Prompts: prompts}
+	// Cost is what the parser would have stored: the bundle priced as one message.
+	cost := bundleCost(model, in, out, cr, cc)
+	p.Tokens[TokKey{Day: day, Model: model}] = &Tok{Input: in, Output: out, CacheRead: cr, CacheCreation: cc, Prompts: prompts, Cost: cost}
 	return p
 }
 
 func TestApplyIsAdditive(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 100, 20, 5, 3, 2), 500, 500, 1); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 100, 20, 5, 3, 2), 500, 500, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	// A second batch for the same session/day/model adds to the first.
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 50, 10, 1, 0, 1), 800, 800, 2); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", delta("2026-08-05", "m1", 50, 10, 1, 0, 1), 800, 800, 2, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.ByDayModel("2026-08-01", "2026-08-31")
@@ -45,13 +50,13 @@ func TestApplyIsAdditive(t *testing.T) {
 
 func TestStateRoundTrip(t *testing.T) {
 	s := openTemp(t)
-	if _, _, ok, _ := s.State("/t/a.jsonl"); ok {
+	if _, _, ok, _, _ := s.State("/t/a.jsonl"); ok {
 		t.Fatal("state should be absent before any Apply")
 	}
-	if err := s.Apply("S1", "proj", "/t/a.jsonl", newParsed(), 1234, 1200, 42); err != nil {
+	if err := s.Apply("S1", "proj", "/t/a.jsonl", newParsed(), 1234, 1200, 42, nil); err != nil {
 		t.Fatal(err)
 	}
-	size, off, ok, err := s.State("/t/a.jsonl")
+	size, off, ok, _, err := s.State("/t/a.jsonl")
 	if err != nil || !ok {
 		t.Fatalf("state missing after Apply: ok=%v err=%v", ok, err)
 	}
@@ -64,10 +69,10 @@ func TestStateRoundTrip(t *testing.T) {
 // agent-console → agent-box rename produced exactly this).
 func TestProjectDisambiguatesSameSession(t *testing.T) {
 	s := openTemp(t)
-	if err := s.Apply("SAME", "agent-console", "/t/old.jsonl", delta("2026-08-05", "m1", 100, 0, 0, 0, 1), 1, 1, 1); err != nil {
+	if err := s.Apply("SAME", "agent-console", "/t/old.jsonl", delta("2026-08-05", "m1", 100, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", delta("2026-08-05", "m1", 200, 0, 0, 0, 1), 1, 1, 1); err != nil {
+	if err := s.Apply("SAME", "agent-box", "/t/new.jsonl", delta("2026-08-05", "m1", 200, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err := s.Sessions("2026-08-01", "2026-08-31", 10)
@@ -82,7 +87,7 @@ func TestProjectDisambiguatesSameSession(t *testing.T) {
 func TestTokensPerPrompt(t *testing.T) {
 	s := openTemp(t)
 	// 300 total tokens (100+20+... let's make it clean), 4 prompts → 75/prompt.
-	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "m1", 200, 60, 30, 10, 4), 1, 1, 1); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "m1", 200, 60, 30, 10, 4), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	rows, err := s.Sessions("2026-08-01", "2026-08-31", 10)
@@ -111,11 +116,11 @@ func TestIngestRefusesConcurrent(t *testing.T) {
 	}
 }
 
-// ByDayModel and Sessions attach a dollar cost derived from CostUSD.
+// ByDayModel and Sessions attach a dollar cost read from the stored cost_usd column.
 func TestRowsCarryCost(t *testing.T) {
 	s := openTemp(t)
 	// 1,000,000 opus input tokens = $5 exactly.
-	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	dm, err := s.ByDayModel("2026-08-01", "2026-08-31")
@@ -139,10 +144,10 @@ func TestRowsCarryCost(t *testing.T) {
 func TestByModel(t *testing.T) {
 	s := openTemp(t)
 	// Two sessions, same model, different days → 1 model row, 2 sessions.
-	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
-	s.Apply("S2", "p", "/t/b.jsonl", delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1, nil)
+	s.Apply("S2", "p", "/t/b.jsonl", delta("2026-08-06", "claude-opus-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
 	// A different model.
-	s.Apply("S3", "p", "/t/c.jsonl", delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S3", "p", "/t/c.jsonl", delta("2026-08-06", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.ByModel("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -168,8 +173,8 @@ func TestByModel(t *testing.T) {
 // under two project slugs is two sessions (the rename case the PK guards).
 func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.ByModel("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -183,9 +188,9 @@ func TestByModelSessionsCountAcrossProjects(t *testing.T) {
 // project totals and the per-project model mix in one call.
 func TestByProject(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("S1", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("S3", "beta", "/t/c.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S1", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S2", "alpha", "/t/b.jsonl", delta("2026-08-05", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("S3", "beta", "/t/c.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.ByProject("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -213,10 +218,10 @@ func TestSessionCosts(t *testing.T) {
 	s := openTemp(t)
 	// One session spanning two days and two models → one aggregate, cost summed,
 	// model "mixed", day = the later one.
-	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1)
-	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-5", 1_000_000, 0, 0, 0, 3), 1, 1, 1)
+	s.Apply("S1", "p", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 2), 1, 1, 1, nil)
+	s.Apply("S1", "p", "/t/b.jsonl", delta("2026-08-06", "claude-sonnet-4-6", 1_000_000, 0, 0, 0, 3), 1, 1, 1, nil)
 	// A cheaper single-model session.
-	s.Apply("S2", "p", "/t/c.jsonl", delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("S2", "p", "/t/c.jsonl", delta("2026-08-05", "claude-haiku-4-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -239,8 +244,8 @@ func TestSessionCosts(t *testing.T) {
 // keep them separate, matching the rollup PK.
 func TestSessionCostsProjectDisambiguates(t *testing.T) {
 	s := openTemp(t)
-	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
-	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1)
+	s.Apply("SAME", "alpha", "/t/a.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
+	s.Apply("SAME", "beta", "/t/b.jsonl", delta("2026-08-05", "claude-opus-5", 1_000_000, 0, 0, 0, 1), 1, 1, 1, nil)
 	rows, err := s.SessionCosts("2026-08-01", "2026-08-31")
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +260,7 @@ func TestToolsAggregate(t *testing.T) {
 	p := newParsed()
 	p.Attrs[AttrKey{Day: "2026-08-05", Kind: "skill", Name: "brainstorming"}] = 3
 	p.Attrs[AttrKey{Day: "2026-08-05", Kind: "mcp_server", Name: "playwright"}] = 1
-	if err := s.Apply("S1", "p", "/t/a.jsonl", p, 1, 1, 1); err != nil {
+	if err := s.Apply("S1", "p", "/t/a.jsonl", p, 1, 1, 1, nil); err != nil {
 		t.Fatal(err)
 	}
 	tools, err := s.Tools("2026-08-01", "2026-08-31", 10)
@@ -264,5 +269,241 @@ func TestToolsAggregate(t *testing.T) {
 	}
 	if len(tools) != 2 || tools[0].Name != "brainstorming" || tools[0].Records != 3 {
 		t.Fatalf("tools wrong: %+v", tools)
+	}
+}
+
+// v0Schema is the analytics schema before the dedupe fix: no seen_ids, no
+// cache_creation_1h, no cost_usd, user_version 0.
+const v0Schema = `
+CREATE TABLE ingest_state (path TEXT PRIMARY KEY, size INTEGER NOT NULL, read_offset INTEGER NOT NULL, mtime INTEGER NOT NULL);
+CREATE TABLE session_rollup (
+  day TEXT NOT NULL, session_id TEXT NOT NULL, project TEXT NOT NULL, model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read INTEGER NOT NULL DEFAULT 0, cache_creation INTEGER NOT NULL DEFAULT 0,
+  prompts INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, session_id, project, model));
+CREATE TABLE attribution_rollup (
+  day TEXT NOT NULL, session_id TEXT NOT NULL, project TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL,
+  records INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, session_id, project, kind, name));
+INSERT INTO ingest_state VALUES ('/t/a.jsonl', 10, 10, 1);
+INSERT INTO session_rollup(day,session_id,project,model,input_tokens) VALUES ('2026-08-05','S1','p','m1',777);
+INSERT INTO attribution_rollup VALUES ('2026-08-05','S1','p','skill','x',3);
+`
+
+// makeV0DB builds an old-schema DB in WAL mode. The returned connection is left
+// OPEN so the data sits in the -wal file, like a live PROD DB.
+func makeV0DB(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(v0Schema); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func countRows(t *testing.T, path, table string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil {
+		t.Fatalf("count %s in %s: %v", table, path, err)
+	}
+	return n
+}
+
+func userVersion(t *testing.T, s *Store) int {
+	t.Helper()
+	var v int
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// An old (v0) DB is backed up through SQLite, wiped, and rebuilt empty exactly
+// once; a second boot neither re-wipes nor touches the backup.
+func TestOpenMigratesOnceAndBacksUp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analytics.db")
+	old := makeV0DB(t, path)
+	defer old.Close()
+	bak := path + ".pre-dedupe.bak"
+
+	s, err := Open(path) // old connection still open: its rows live in the WAL
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := userVersion(t, s); v != 2 {
+		t.Errorf("user_version = %d, want 2", v)
+	}
+	for _, tbl := range []string{"session_rollup", "ingest_state", "attribution_rollup"} {
+		if n := countRows(t, path, tbl); n != 0 {
+			t.Errorf("%s has %d rows after migration, want 0", tbl, n)
+		}
+	}
+	if n := countRows(t, bak, "session_rollup"); n != 1 {
+		t.Errorf("backup session_rollup rows = %d, want 1 (WAL content must be in the backup)", n)
+	}
+	if n := countRows(t, bak, "ingest_state"); n != 1 {
+		t.Errorf("backup ingest_state rows = %d, want 1", n)
+	}
+	if _, err := os.Stat(bak + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("temp backup file left behind: %v", err)
+	}
+	fi, err := os.Stat(bak)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := fi.ModTime()
+
+	// New data after the rebuild must survive a second boot.
+	if err := s.Apply("S2", "p", "/t/b.jsonl", delta("2026-08-06", "claude-opus-5", 5, 0, 0, 0, 1), 1, 1, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	time.Sleep(20 * time.Millisecond)
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if n := countRows(t, path, "session_rollup"); n != 1 {
+		t.Errorf("rows after second boot = %d, want 1 (no re-wipe)", n)
+	}
+	fi2, err := os.Stat(bak)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi2.ModTime().Equal(before) {
+		t.Errorf("backup was rewritten: mtime %v -> %v", before, fi2.ModTime())
+	}
+	if n := countRows(t, bak, "session_rollup"); n != 1 {
+		t.Errorf("backup rows after second boot = %d, want 1", n)
+	}
+}
+
+// A DB that already has a backup (e.g. a crash after the backup but before the
+// wipe committed) is wiped without the backup being overwritten.
+func TestOpenKeepsExistingBackup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "analytics.db")
+	old := makeV0DB(t, path)
+	defer old.Close()
+	bak := path + ".pre-dedupe.bak"
+	if err := os.WriteFile(bak, []byte("precious"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if b, _ := os.ReadFile(bak); string(b) != "precious" {
+		t.Errorf("existing backup was overwritten: %q", b)
+	}
+	if n := countRows(t, path, "session_rollup"); n != 0 {
+		t.Errorf("rows = %d, want 0 after migration", n)
+	}
+}
+
+// A brand-new DB gets the current schema and no backup.
+func TestOpenFreshDBMakesNoBackup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analytics.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if v := userVersion(t, s); v != 2 {
+		t.Errorf("user_version = %d, want 2", v)
+	}
+	if _, err := os.Stat(path + ".pre-dedupe.bak"); !os.IsNotExist(err) {
+		t.Errorf("fresh DB made a backup: %v", err)
+	}
+}
+
+// If the backup cannot be made, Open fails and the old data is untouched.
+func TestOpenBackupFailureKeepsOldData(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analytics.db")
+	old := makeV0DB(t, path)
+	defer old.Close()
+	// A directory squatting on the backup path makes a valid backup impossible.
+	if err := os.Mkdir(path+".pre-dedupe.bak", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := Open(path); err == nil {
+		s.Close()
+		t.Fatal("Open succeeded without a usable backup")
+	}
+	if n := countRows(t, path, "session_rollup"); n != 1 {
+		t.Errorf("old rows = %d, want 1: data must survive a failed backup", n)
+	}
+}
+
+// The backup target is a bound parameter, not spliced into the SQL text; a quote
+// in the path must not break the statement (or fail the backup).
+func TestOpenBackupPathWithQuote(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "it's a dir")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "an'alytics.db")
+	old := makeV0DB(t, path)
+	defer old.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if n := countRows(t, path+".pre-dedupe.bak", "session_rollup"); n != 1 {
+		t.Errorf("backup rows = %d, want 1", n)
+	}
+}
+
+// Every query reports the cost stored at ingest (Tok.Cost), not one recomputed
+// from the summed tokens.
+func TestRowsCarryStoredCost(t *testing.T) {
+	s := openTemp(t)
+	p := newParsed()
+	p.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-5"}] = &Tok{Input: 10, Output: 1, CacheCreation: 7, CacheWrite1h: 4, Prompts: 1, Cost: 1.23}
+	if err := s.Apply("S1", "p", "/t/a.jsonl", p, 1, 1, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A second batch accumulates on upsert.
+	p2 := newParsed()
+	p2.Tokens[TokKey{Day: "2026-08-05", Model: "claude-opus-5"}] = &Tok{CacheCreation: 3, CacheWrite1h: 2, Cost: 0.77}
+	if err := s.Apply("S1", "p", "/t/a.jsonl", p2, 2, 2, 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	const want = 2.0
+	dm, err := s.ByDayModel("2026-08-01", "2026-08-31")
+	if err != nil || len(dm) != 1 || !approx(dm[0].Cost, want) {
+		t.Errorf("ByDayModel = %+v err=%v, want cost %v", dm, err, want)
+	}
+	bm, err := s.ByModel("2026-08-01", "2026-08-31")
+	if err != nil || len(bm) != 1 || !approx(bm[0].Cost, want) {
+		t.Errorf("ByModel = %+v err=%v, want cost %v", bm, err, want)
+	}
+	bp, err := s.ByProject("2026-08-01", "2026-08-31")
+	if err != nil || len(bp) != 1 || !approx(bp[0].Cost, want) {
+		t.Errorf("ByProject = %+v err=%v, want cost %v", bp, err, want)
+	}
+	ss, err := s.Sessions("2026-08-01", "2026-08-31", 10)
+	if err != nil || len(ss) != 1 || !approx(ss[0].Cost, want) {
+		t.Errorf("Sessions = %+v err=%v, want cost %v", ss, err, want)
+	}
+	sc, err := s.SessionCosts("2026-08-01", "2026-08-31")
+	if err != nil || len(sc) != 1 || !approx(sc[0].Cost, want) {
+		t.Errorf("SessionCosts = %+v err=%v, want cost %v", sc, err, want)
+	}
+	var cc1h int64
+	if err := s.db.QueryRow(`SELECT cache_creation_1h FROM session_rollup`).Scan(&cc1h); err != nil || cc1h != 6 {
+		t.Errorf("cache_creation_1h = %d err=%v, want 6", cc1h, err)
 	}
 }

@@ -49,6 +49,35 @@ func TestContextMax(t *testing.T) {
 	}
 }
 
+func TestContextMaxCurrentModels(t *testing.T) {
+	cases := []struct {
+		model string
+		max   int
+		ok    bool
+	}{
+		{"claude-opus-5-5", 1_000_000, true},
+		{"claude-sonnet-5-5", 1_000_000, true},
+		{"claude-haiku-5-5", 1_000_000, true},
+		{"claude-fable-5-1", 1_000_000, true},
+		{"claude-mythos-5", 1_000_000, true},
+		{"claude-opus-4-8", 1_000_000, true},
+		{"claude-opus-4-7", 1_000_000, true},
+		{"claude-opus-4-6", 1_000_000, true},
+		{"claude-sonnet-4-6", 1_000_000, true},
+		{"claude-haiku-4-5-20251001", 200_000, true},
+		{"<synthetic>", 0, false},
+		{"", 0, false},
+		{"gpt-5", 0, false},
+		{"claude-sonnet-4-5", 0, false},
+	}
+	for _, c := range cases {
+		m, ok := contextMax(c.model)
+		if m != c.max || ok != c.ok {
+			t.Errorf("contextMax(%q) = (%d, %v), want (%d, %v)", c.model, m, ok, c.max, c.ok)
+		}
+	}
+}
+
 func TestTranscriptPath_newestAfterCreated(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".claude", "projects", "-x")

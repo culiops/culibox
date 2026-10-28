@@ -357,6 +357,42 @@
     content: ""; position: absolute; inset: 0; z-index: 6; pointer-events: none;
     box-shadow: inset 0 0 0 1px var(--accent);
   }
+  /* The ring marks which pane takes the keys, so it only means something with
+     2+ panes on screen (D26). One pane, or one maximized out of 2/4, has no
+     ring. Keyboard focus on every control stays visible (the :focus-visible
+     rules below). */
+  #grid.cols-1 .cell.focus::before, #grid.maximized .cell.focus::before { content: none; }
+
+  /* Quiet scrollbars (D27): 8px, no track, a --line thumb with round ends,
+     --faint on hover or drag, always shown. Desktop only: mobile keeps the OS
+     overlay bars. */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active { background: var(--faint); }
+  /* Firefox has no ::-webkit-scrollbar. Chrome 121+ lets scrollbar-width and
+     scrollbar-color override it, so this must not apply there. */
+  @supports not selector(::-webkit-scrollbar) {
+    * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  }
+  /* The terminal paints its own bar (.scrollbar > .slider inside
+     .xterm-scrollable-element), not the native viewport bar, and sets its
+     14px width and its colours inline or in an injected stylesheet of equal
+     specificity, hence .cell in front and !important on the widths. z-index 11
+     (xterm.css) stays: #grid isolates it, so the drawer still covers it. */
+  .cell .xterm .xterm-scrollable-element > .scrollbar.vertical { width: 8px !important; }
+  .cell .xterm .xterm-scrollable-element > .scrollbar.horizontal { height: 8px !important; }
+  .cell .xterm .xterm-scrollable-element > .scrollbar > .slider { background: var(--line); border-radius: 4px; }
+  .cell .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider { width: 8px !important; }
+  .cell .xterm .xterm-scrollable-element > .scrollbar.horizontal > .slider { height: 8px !important; }
+  /* Always visible (D27): xterm hides an idle bar after ~500ms (class
+     "invisible fade", opacity 0). That class pair means "scrollable but idle";
+     with nothing to scroll xterm sets plain "invisible" (no "fade"), which this
+     leaves hidden, so a short terminal shows no bar. */
+  .cell .xterm .xterm-scrollable-element > .scrollbar.invisible.fade { opacity: 1; pointer-events: auto; transition: none; }
+  .cell .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
+  .cell .xterm .xterm-scrollable-element > .scrollbar > .slider.active { background: var(--faint); }
+
   /* The amber pane frame is gone on desktop: the ask strip under the header
      carries "this agent needs you" (spec 5.3), and the focus ring stays alone. */
   .cell.needs::after { content: none; }

@@ -24,7 +24,7 @@ func boxSvc(t *testing.T, base string) *Service {
 
 func recorded(t *testing.T, svc *Service, path string) bool {
 	t.Helper()
-	_, off, _, err := svc.store.State(path)
+	_, off, _, _, err := svc.store.State(path)
 	if err != nil {
 		t.Fatal(err)
 	}

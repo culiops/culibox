@@ -69,9 +69,7 @@ func TestBoxedUnknownSidIgnoresOlderTranscripts(t *testing.T) {
 	}
 	// A file at or after Created is used.
 	writeTx(t, bd, locCwd, "newer-2", "from during the session", now.Add(time.Minute))
-	if got := peekText(t, m, "s1"); got != "from during the session" {
-		t.Errorf("peek=%q want the post-Created file", got)
-	}
+	wantHeuristicButUnbound(t, m, "s1", "newer-2.jsonl")
 }
 
 // M4: the box runs claude in the resolved dir, so the transcript sits under the
@@ -88,9 +86,7 @@ func TestBoxedFallbackUsesResolvedCwd(t *testing.T) {
 	}
 	m.sessions["s1"].Cwd = link
 	writeTx(t, bd, real, "res-1", "from resolved", time.Now())
-	if got := peekText(t, m, "s1"); got != "from resolved" {
-		t.Errorf("heuristic peek=%q want %q", got, "from resolved")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "res-1.jsonl")
 	// The same through the known-sid lookup.
 	s := m.sessions["s1"]
 	s.mu.Lock()
@@ -111,9 +107,7 @@ func TestBoxedFallbackSkipsOddEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeBoxFile(t, filepath.Join(dir, "bad name.jsonl"), `{"message":{"role":"assistant","content":[{"type":"text","text":"odd"}]}}`+"\n", now)
-	if got := peekText(t, m, "s1"); got != "good" {
-		t.Errorf("peek=%q want %q", got, "good")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "good-1.jsonl")
 }
 
 // M3: ranking a directory costs one os.Root, not one per entry.
@@ -165,7 +159,5 @@ func TestBoxedFreshUnknownSidSkipsSiblingTranscript(t *testing.T) {
 	}
 	// A transcript no sibling claims is still found by the heuristic.
 	writeTx(t, bd, locCwd, "cccc-3", "unclaimed", now.Add(-time.Second))
-	if got := peekText(t, m, "s2"); got != "unclaimed" {
-		t.Errorf("s2 peek=%q want the unclaimed file", got)
-	}
+	wantHeuristicButUnbound(t, m, "s2", "cccc-3.jsonl")
 }

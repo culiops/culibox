@@ -83,6 +83,28 @@ func newLocatorManager(t *testing.T) (*Manager, string) {
 	return m, home
 }
 
+// wantHeuristicButUnbound pins both halves of #21 for a session with no
+// validated registry entry and no persisted conversation id: locate's cwd
+// heuristic still names wantBase (nothing in production uses it: locate's only
+// caller, boundTranscript, discards it), but peek, usage
+// and attribution refuse to read it because it is not proven to be this
+// session's.
+func wantHeuristicButUnbound(t *testing.T, m *Manager, id, wantBase string) {
+	t.Helper()
+	if got := filepath.Base(m.locate(id).path); got != wantBase {
+		t.Errorf("locate(%s) heuristic path=%q want %q", id, got, wantBase)
+	}
+	if p, ok := m.PeekFor(id); ok {
+		t.Errorf("PeekFor(%s) read an unbound transcript: %q", id, p.Text)
+	}
+	if u, ok := m.UsageFor(id); ok {
+		t.Errorf("UsageFor(%s) read an unbound transcript: %+v", id, u)
+	}
+	if _, ok := m.AttributionFor(id); ok {
+		t.Errorf("AttributionFor(%s) read an unbound transcript", id)
+	}
+}
+
 func peekText(t *testing.T, m *Manager, id string) string {
 	t.Helper()
 	p, ok := m.PeekFor(id)
@@ -129,10 +151,9 @@ func TestLocateFallsBack(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m, home := newLocatorManager(t)
 			writeReg(t, home, 101, c.body)
-			// Fallback = the cwd+mtime heuristic = the newest transcript (B).
-			if got := peekText(t, m, "s1"); got != "from B" {
-				t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
-			}
+			// locate falls back to the cwd+mtime heuristic = the newest
+			// transcript (B), but nothing reads it: s1 is unbound.
+			wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
 		})
 	}
 }
@@ -176,9 +197,7 @@ func TestLocateRejectsCwdMismatch(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Errorf("cwd mismatch accepted; reg=%+v", l.reg)
 	}
-	if got := peekText(t, m, "s1"); got != "from B" {
-		t.Errorf("peek=%q want heuristic fallback %q", got, "from B")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl")
 }
 
 // TestLocateRejectsSymlinkRegistryFile: a registry entry reached through a
@@ -198,9 +217,7 @@ func TestLocateRejectsSymlinkRegistryFile(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Error("symlinked registry file accepted")
 	}
-	if got := peekText(t, m, "s1"); got != "from B" {
-		t.Errorf("peek=%q want heuristic fallback %q (symlink must be ignored)", got, "from B")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl") // symlink must be ignored
 }
 
 // TestLocateRejectsOversizedRegistryFile: a registry file over registryMaxBytes
@@ -213,9 +230,7 @@ func TestLocateRejectsOversizedRegistryFile(t *testing.T) {
 	if l := m.locate("s1"); l.reg != nil {
 		t.Error("oversized registry file accepted")
 	}
-	if got := peekText(t, m, "s1"); got != "from B" {
-		t.Errorf("peek=%q want heuristic fallback %q (oversized file must be ignored)", got, "from B")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "bbbb-2.jsonl") // oversized file must be ignored
 }
 
 // TestLocateMissingTranscriptBlocksWithoutPeek: a validated "waiting" registry
@@ -250,9 +265,7 @@ func TestLocateBoxedIgnoresHostRegistry(t *testing.T) {
 	m.stateDir = state
 	m.sessions["s1"].Box = "box-1"
 	writeTx(t, filepath.Join(state, "boxstate", "box-1"), locCwd, "dddd-4", "from box", time.Now())
-	if got := peekText(t, m, "s1"); got != "from box" {
-		t.Errorf("boxed peek=%q want %q", got, "from box")
-	}
+	wantHeuristicButUnbound(t, m, "s1", "dddd-4.jsonl") // the box's file, never the host registry's A
 }
 
 func TestLocateReportsRegistryStatus(t *testing.T) {
@@ -437,5 +450,84 @@ func TestLocateFollowsSessionConfigDir(t *testing.T) {
 	}
 	if l := m.locate("s1"); l.reg != nil || l.path != want {
 		t.Fatalf("heuristic path: locate = %q reg=%v, want %q", l.path, l.reg, want)
+	}
+}
+
+// An unbound session (no live registry entry, nothing persisted) must show no
+// usage, attribution or summary: the newest-by-cwd heuristic would hand it a
+// sibling conversation's data (#21).
+func TestUnboundSessionShowsNoSiblingData(t *testing.T) {
+	m, home := newLocatorManager(t)
+	if err := os.Remove(filepath.Join(home, ".claude", "sessions", "101.json")); err != nil {
+		t.Fatal(err)
+	}
+	if u, ok := m.UsageFor("s1"); ok {
+		t.Errorf("UsageFor(unbound s1) ok=true, usage=%+v; want ok=false", u)
+	}
+	if a, ok := m.AttributionFor("s1"); ok {
+		t.Errorf("AttributionFor(unbound s1) ok=true, attribution=%+v; want ok=false", a)
+	}
+	var got, sib string
+	var found bool
+	for _, i := range m.List() {
+		switch i.ID {
+		case "s1":
+			got, found = i.Summary, true
+		case "s2":
+			sib = i.Summary
+		}
+	}
+	if !found {
+		t.Fatal("s1 missing from List()")
+	}
+	if got != "" {
+		t.Errorf("unbound s1 Summary=%q want empty (sibling's text must not leak)", got)
+	}
+	if sib != "from B" {
+		t.Errorf("bound s2 Summary=%q want %q", sib, "from B")
+	}
+}
+
+func TestBoundSessionUnchanged(t *testing.T) {
+	m, _ := newLocatorManager(t)
+	u, ok := m.UsageFor("s1")
+	if !ok || u.Model != "model-aaaa-1" {
+		t.Errorf("UsageFor(s1) model=%q ok=%v want model-aaaa-1", u.Model, ok)
+	}
+	if _, ok := m.AttributionFor("s1"); !ok {
+		t.Error("AttributionFor(s1) ok=false for a bound session")
+	}
+	found := false
+	for _, i := range m.List() {
+		if i.ID == "s1" {
+			found = true
+			if i.Summary != "from A" {
+				t.Errorf("s1 Summary=%q want %q", i.Summary, "from A")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("s1 missing from List()")
+	}
+}
+
+// An exited session has no live registry entry; its persisted claudeSessionID
+// still binds it to its own <sid>.jsonl, never a newer sibling's.
+func TestExitedSessionUsesPersistedSID(t *testing.T) {
+	m, home := newLocatorManager(t)
+	if err := os.Remove(filepath.Join(home, ".claude", "sessions", "101.json")); err != nil {
+		t.Fatal(err)
+	}
+	s := m.sessions["s1"]
+	s.mu.Lock()
+	s.status = statusExited
+	s.claudeSessionID = "aaaa-1"
+	s.mu.Unlock()
+	u, ok := m.UsageFor("s1")
+	if !ok || u.Model != "model-aaaa-1" {
+		t.Errorf("exited s1 usage model=%q ok=%v want its own model-aaaa-1", u.Model, ok)
+	}
+	if _, ok := m.AttributionFor("s1"); !ok {
+		t.Error("exited s1 AttributionFor ok=false; want its own transcript")
 	}
 }

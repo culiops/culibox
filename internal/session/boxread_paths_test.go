@@ -28,6 +28,15 @@ func projDirIn(home string) string {
 	return filepath.Join(home, ".claude", "projects", projectSlug(locCwd))
 }
 
+// bindSID gives a session the persisted conversation id that binds it to
+// <sid>.jsonl (boundTranscript's only route when no registry validated).
+func bindSID(m *Manager, id, sid string) {
+	s := m.sessions[id]
+	s.mu.Lock()
+	s.claudeSessionID = sid
+	s.mu.Unlock()
+}
+
 // within2s fails the test if f does not return in time: a read that blocks on
 // a FIFO is the failure mode these tests exist for.
 func within2s(t *testing.T, what string, f func()) {
@@ -60,17 +69,26 @@ func TestBoxedPeekIgnoresFIFOTranscript(t *testing.T) {
 	writeTx(t, bd, locCwd, "older-1", "from regular", now.Add(-10*time.Minute))
 	mkFifo(t, filepath.Join(projDirIn(bd), "x.jsonl"), now)
 
-	var p Peek
+	// The heuristic still ranks past the FIFO to the regular file.
+	var l located
+	within2s(t, "locate", func() { l = m.locate("s1") })
+	if got := filepath.Base(l.path); got != "older-1.jsonl" {
+		t.Errorf("locate path=%q, want the FIFO skipped and older-1.jsonl chosen", got)
+	}
+	// A session bound to the FIFO's own name (its persisted sid) must miss
+	// without ever opening it.
+	bindSID(m, "s1", "x")
 	var ok bool
-	within2s(t, "PeekFor", func() { p, ok = m.PeekFor("s1") })
-	if !ok || p.Text != "from regular" {
-		t.Errorf("peek=%q ok=%v, want the FIFO skipped and the older regular transcript used", p.Text, ok)
+	within2s(t, "PeekFor", func() { _, ok = m.PeekFor("s1") })
+	if ok {
+		t.Error("PeekFor hit a FIFO transcript")
 	}
 }
 
 func TestBoxedPeekOnlyFIFOMisses(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	mkFifo(t, filepath.Join(projDirIn(bd), "x.jsonl"), time.Now())
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check is what refuses
 	var ok bool
 	within2s(t, "PeekFor", func() { _, ok = m.PeekFor("s1") })
 	if ok {
@@ -87,6 +105,7 @@ func TestBoxedPeekIgnoresSymlinkedTranscript(t *testing.T) {
 	if err := os.Symlink(host, filepath.Join(projDirIn(bd), "x.jsonl")); err != nil {
 		t.Fatal(err)
 	}
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check (not "unbound") is what refuses
 	if p, ok := m.PeekFor("s1"); ok {
 		t.Errorf("peek hit through a symlinked transcript: %q", p.Text)
 	}
@@ -105,6 +124,7 @@ func TestBoxedPeekIgnoresSymlinkedProjectsDir(t *testing.T) {
 	if err := os.Symlink(projDirIn(hostHome), projDirIn(bd)); err != nil {
 		t.Fatal(err)
 	}
+	bindSID(m, "s1", "hostfile") // bound; the slug dir is the symlink, so transcriptPathIn's directory check (root.Lstat + IsDir) refuses
 	if p, ok := m.PeekFor("s1"); ok {
 		t.Errorf("peek hit through a symlinked projects dir: %q", p.Text)
 	}
@@ -113,6 +133,7 @@ func TestBoxedPeekIgnoresSymlinkedProjectsDir(t *testing.T) {
 func TestBoxedReadsRegularTranscript(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	writeTx(t, bd, locCwd, "ok-1", "from box", time.Now())
+	bindSID(m, "s1", "ok-1") // bound by its persisted conversation id
 	if got := peekText(t, m, "s1"); got != "from box" {
 		t.Errorf("peek=%q want %q", got, "from box")
 	}
@@ -127,6 +148,7 @@ func TestBoxedReadsRegularTranscript(t *testing.T) {
 func TestAttributionBoxedRefusesFIFO(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	mkFifo(t, filepath.Join(projDirIn(bd), "x.jsonl"), time.Now())
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check is what refuses
 	var ok bool
 	within2s(t, "AttributionFor", func() { _, ok = m.AttributionFor("s1") })
 	if ok {
@@ -143,6 +165,7 @@ func TestAttributionBoxedRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(host, filepath.Join(projDirIn(bd), "x.jsonl")); err != nil {
 		t.Fatal(err)
 	}
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check (not "unbound") is what refuses
 	if _, ok := m.AttributionFor("s1"); ok {
 		t.Error("AttributionFor followed a symlinked transcript")
 	}

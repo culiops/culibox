@@ -3,7 +3,11 @@ package analytics
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	_ "modernc.org/sqlite" // pure-Go driver, registered as "sqlite" (no CGO)
 )
@@ -24,7 +28,8 @@ CREATE TABLE IF NOT EXISTS ingest_state (
   path TEXT PRIMARY KEY,
   size INTEGER NOT NULL,
   read_offset INTEGER NOT NULL,
-  mtime INTEGER NOT NULL
+  mtime INTEGER NOT NULL,
+  seen_ids TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS session_rollup (
   day TEXT NOT NULL,
@@ -35,6 +40,8 @@ CREATE TABLE IF NOT EXISTS session_rollup (
   output_tokens INTEGER NOT NULL DEFAULT 0,
   cache_read INTEGER NOT NULL DEFAULT 0,
   cache_creation INTEGER NOT NULL DEFAULT 0,
+  cache_creation_1h INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
   prompts INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (day, session_id, project, model)
 );
@@ -66,32 +73,146 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := migrate(db, path); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("schema: %w", err)
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
 
+// schemaVersion is the PRAGMA user_version this code writes. Version 2 stores the
+// per-message cost and the 1h cache-write split, and counts each message once;
+// rollups written before that (version 0) are ~2x inflated and are rebuilt.
+const schemaVersion = 2
+
+// migrate brings a DB to schemaVersion. A DB from before v2 is not converted: its
+// numbers are wrong, so the analytics tables are dropped and the next ingest pass
+// rebuilds them from the transcripts on disk (ingest_state is empty, so every
+// transcript is read from offset 0). The old DB is first copied to
+// <path>.pre-dedupe.bak through SQLite (VACUUM INTO — a consistent snapshot that
+// includes the WAL, safe while the DB is live). The backup is made once and never
+// overwritten. If it cannot be made, nothing is dropped and the error is returned.
+func migrate(db *sql.DB, path string) error {
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return fmt.Errorf("read user_version: %w", err)
+	}
+	if version >= schemaVersion {
+		return nil
+	}
+	var existing int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('ingest_state','session_rollup','attribution_rollup')`).Scan(&existing); err != nil {
+		return fmt.Errorf("inspect schema: %w", err)
+	}
+	rebuilt := existing > 0
+	if rebuilt {
+		if err := backupOnce(db, path+".pre-dedupe.bak"); err != nil {
+			return err
+		}
+	}
+	// One transaction: the wipe, the new schema and the version bump land together
+	// or not at all (DDL and PRAGMA user_version are transactional in SQLite).
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if rebuilt {
+		if _, err := tx.Exec(`DROP TABLE IF EXISTS attribution_rollup; DROP TABLE IF EXISTS session_rollup; DROP TABLE IF EXISTS ingest_state;`); err != nil {
+			return fmt.Errorf("drop old rollups: %w", err)
+		}
+	}
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("schema: %w", err)
+	}
+	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {
+		return fmt.Errorf("set user_version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if rebuilt {
+		log.Printf("analytics: schema v2 — rebuilt rollups from transcripts (backup %s)", path+".pre-dedupe.bak")
+	}
+	return nil
+}
+
+// backupOnce writes a SQLite snapshot of db to dst unless a backup is already
+// there. It writes to dst+".tmp" and renames, so a crash mid-copy can never leave
+// a truncated file that a later boot would mistake for a finished backup.
+func backupOnce(db *sql.DB, dst string) error {
+	if fi, err := os.Stat(dst); err == nil {
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("backup %s exists and is not a regular file", dst)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("backup %s: %w", dst, err)
+	}
+	tmp := dst + ".tmp"
+	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("clear stale backup temp: %w", err)
+	}
+	// The target is a bound parameter, never spliced into the SQL text.
+	if _, err := db.Exec(`VACUUM INTO ?`, tmp); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("backup old analytics DB: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	// SQLite does not fsync VACUUM INTO output; make the bytes durable before the
+	// rename publishes them, so a power loss can't leave a renamed empty backup.
+	f, err := os.Open(tmp)
+	if err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("sync backup: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync backup: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("sync backup: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("finalize backup: %w", err)
+	}
+	// Make the rename durable. Best effort, like the other atomic writers here
+	// (store, auth, credfile): not every platform supports fsync on a directory.
+	if d, err := os.Open(filepath.Dir(dst)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
+}
+
 func (s *Store) Close() error { return s.db.Close() }
 
-// State returns the recorded size and read offset for a transcript path.
-func (s *Store) State(path string) (size, offset int64, ok bool, err error) {
-	row := s.db.QueryRow(`SELECT size, read_offset FROM ingest_state WHERE path=?`, path)
-	switch err = row.Scan(&size, &offset); err {
+// State returns the recorded size and read offset for a transcript path, and the
+// message ids already counted near that offset (oldest first), which let a
+// message split across two ingest batches be counted once.
+func (s *Store) State(path string) (size, offset int64, ok bool, seen []string, err error) {
+	var ids string
+	row := s.db.QueryRow(`SELECT size, read_offset, seen_ids FROM ingest_state WHERE path=?`, path)
+	switch err = row.Scan(&size, &offset, &ids); err {
 	case nil:
-		return size, offset, true, nil
+		return size, offset, true, strings.Fields(ids), nil
 	case sql.ErrNoRows:
-		return 0, 0, false, nil
+		return 0, 0, false, nil, nil
 	default:
-		return 0, 0, false, err
+		return 0, 0, false, nil, err
 	}
 }
 
 // Apply writes one transcript batch's rollup deltas AND the new ingest_state row
 // in a single transaction, so a crash can never advance the offset without the
 // matching rows (or vice versa). session_id and project tag every delta row.
-func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, mtime int64) error {
+func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, mtime int64, seen []string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -99,17 +220,19 @@ func (s *Store) Apply(sessionID, project, path string, p *Parsed, size, offset, 
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
 	const upsertSession = `
-INSERT INTO session_rollup(day,session_id,project,model,input_tokens,output_tokens,cache_read,cache_creation,prompts)
-VALUES(?,?,?,?,?,?,?,?,?)
+INSERT INTO session_rollup(day,session_id,project,model,input_tokens,output_tokens,cache_read,cache_creation,cache_creation_1h,cost_usd,prompts)
+VALUES(?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(day,session_id,project,model) DO UPDATE SET
   input_tokens=input_tokens+excluded.input_tokens,
   output_tokens=output_tokens+excluded.output_tokens,
   cache_read=cache_read+excluded.cache_read,
   cache_creation=cache_creation+excluded.cache_creation,
+  cache_creation_1h=cache_creation_1h+excluded.cache_creation_1h,
+  cost_usd=cost_usd+excluded.cost_usd,
   prompts=prompts+excluded.prompts`
 	for k, t := range p.Tokens {
 		if _, err := tx.Exec(upsertSession, k.Day, sessionID, project, k.Model,
-			t.Input, t.Output, t.CacheRead, t.CacheCreation, t.Prompts); err != nil {
+			t.Input, t.Output, t.CacheRead, t.CacheCreation, t.CacheWrite1h, t.Cost, t.Prompts); err != nil {
 			return fmt.Errorf("session upsert: %w", err)
 		}
 	}
@@ -126,9 +249,10 @@ ON CONFLICT(day,session_id,project,kind,name) DO UPDATE SET
 	}
 
 	const upsertState = `
-INSERT INTO ingest_state(path,size,read_offset,mtime) VALUES(?,?,?,?)
-ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime`
-	if _, err := tx.Exec(upsertState, path, size, offset, mtime); err != nil {
+INSERT INTO ingest_state(path,size,read_offset,mtime,seen_ids) VALUES(?,?,?,?,?)
+ON CONFLICT(path) DO UPDATE SET size=excluded.size, read_offset=excluded.read_offset, mtime=excluded.mtime, seen_ids=excluded.seen_ids`
+	// seen ids are whitespace-free by construction (safeMsgID), so Join/Fields round-trips.
+	if _, err := tx.Exec(upsertState, path, size, offset, mtime, strings.Join(seen, " ")); err != nil {
 		return fmt.Errorf("state upsert: %w", err)
 	}
 
@@ -217,7 +341,7 @@ type ToolRow struct {
 func (s *Store) ByDayModel(from, to string) ([]DayModelRow, error) {
 	rows, err := s.db.Query(`
 SELECT day, model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts)
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
 FROM session_rollup WHERE day BETWEEN ? AND ?
 GROUP BY day, model ORDER BY day, model`, from, to)
 	if err != nil {
@@ -227,10 +351,9 @@ GROUP BY day, model ORDER BY day, model`, from, to)
 	var out []DayModelRow
 	for rows.Next() {
 		var r DayModelRow
-		if err := rows.Scan(&r.Day, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts); err != nil {
+		if err := rows.Scan(&r.Day, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts, &r.Cost); err != nil {
 			return nil, err
 		}
-		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -242,7 +365,7 @@ GROUP BY day, model ORDER BY day, model`, from, to)
 func (s *Store) ByModel(from, to string) ([]ModelRow, error) {
 	rows, err := s.db.Query(`
 SELECT model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts),
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd),
   COUNT(DISTINCT session_id || char(31) || project)
 FROM session_rollup WHERE day BETWEEN ? AND ?
 GROUP BY model`, from, to)
@@ -253,10 +376,9 @@ GROUP BY model`, from, to)
 	var out []ModelRow
 	for rows.Next() {
 		var r ModelRow
-		if err := rows.Scan(&r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts, &r.Sessions); err != nil {
+		if err := rows.Scan(&r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts, &r.Cost, &r.Sessions); err != nil {
 			return nil, err
 		}
-		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -272,7 +394,7 @@ GROUP BY model`, from, to)
 func (s *Store) ByProject(from, to string) ([]ProjectRow, error) {
 	rows, err := s.db.Query(`
 SELECT project, model,
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts)
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
 FROM session_rollup WHERE day BETWEEN ? AND ?
 GROUP BY project, model`, from, to)
 	if err != nil {
@@ -282,10 +404,9 @@ GROUP BY project, model`, from, to)
 	var out []ProjectRow
 	for rows.Next() {
 		var r ProjectRow
-		if err := rows.Scan(&r.Project, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts); err != nil {
+		if err := rows.Scan(&r.Project, &r.Model, &r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts, &r.Cost); err != nil {
 			return nil, err
 		}
-		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -295,7 +416,7 @@ GROUP BY project, model`, from, to)
 // first, with tokens/prompt derived (0 when a row has no prompts).
 func (s *Store) Sessions(from, to string, limit int) ([]SessionRow, error) {
 	rows, err := s.db.Query(`
-SELECT day, session_id, project, model, input_tokens, output_tokens, cache_read, cache_creation, prompts
+SELECT day, session_id, project, model, input_tokens, output_tokens, cache_read, cache_creation, prompts, cost_usd
 FROM session_rollup WHERE day BETWEEN ? AND ?
 ORDER BY day DESC, (input_tokens+output_tokens+cache_read+cache_creation) DESC
 LIMIT ?`, from, to, limit)
@@ -307,14 +428,13 @@ LIMIT ?`, from, to, limit)
 	for rows.Next() {
 		var r SessionRow
 		if err := rows.Scan(&r.Day, &r.SessionID, &r.Project, &r.Model,
-			&r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts); err != nil {
+			&r.Input, &r.Output, &r.CacheRead, &r.CacheCreation, &r.Prompts, &r.Cost); err != nil {
 			return nil, err
 		}
 		if r.Prompts > 0 {
 			total := r.Input + r.Output + r.CacheRead + r.CacheCreation
 			r.TokensPerPrompt = float64(total) / float64(r.Prompts)
 		}
-		r.Cost = CostUSD(r.Model, r.Input, r.Output, r.CacheRead, r.CacheCreation)
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -329,7 +449,7 @@ LIMIT ?`, from, to, limit)
 func (s *Store) SessionCosts(from, to string) ([]SessionAggRow, error) {
 	rows, err := s.db.Query(`
 SELECT session_id, project, model, MAX(day),
-  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts)
+  SUM(input_tokens), SUM(output_tokens), SUM(cache_read), SUM(cache_creation), SUM(prompts), SUM(cost_usd)
 FROM session_rollup WHERE day BETWEEN ? AND ?
 GROUP BY session_id, project, model`, from, to)
 	if err != nil {
@@ -345,7 +465,8 @@ GROUP BY session_id, project, model`, from, to)
 	for rows.Next() {
 		var sid, project, model, day string
 		var in, out, cr, cc, prompts int64
-		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts); err != nil {
+		var cost float64
+		if err := rows.Scan(&sid, &project, &model, &day, &in, &out, &cr, &cc, &prompts, &cost); err != nil {
 			return nil, err
 		}
 		k := sid + "\x1f" + project
@@ -360,7 +481,7 @@ GROUP BY session_id, project, model`, from, to)
 		a.row.CacheRead += cr
 		a.row.CacheCreation += cc
 		a.row.Prompts += prompts
-		a.row.Cost += CostUSD(model, in, out, cr, cc)
+		a.row.Cost += cost
 		if day > a.row.Day {
 			a.row.Day = day
 		}

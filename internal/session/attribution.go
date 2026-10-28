@@ -134,10 +134,10 @@ func attributeTools(r io.Reader) Attribution {
 }
 
 // AttributionFor streams a claude session's transcript into attributeTools. Same
-// gate/locator as UsageFor. ok=false for non-claude / no-transcript / unreadable.
+// bound-transcript gate as UsageFor. ok=false for non-claude / no-transcript / unreadable.
 func (m *Manager) AttributionFor(id string) (Attribution, bool) {
-	l := m.locate(id)
-	if !l.claude || l.path == "" {
+	l, ok := m.boundTranscript(id)
+	if !ok {
 		return Attribution{}, false
 	}
 	f, _, ok := l.openTranscript()

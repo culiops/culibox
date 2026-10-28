@@ -27,8 +27,10 @@ type Tok struct {
 	Input         int64
 	Output        int64
 	CacheRead     int64
-	CacheCreation int64
+	CacheCreation int64 // total of the 5m and 1h cache writes
+	CacheWrite1h  int64 // the 1h part of CacheCreation (the rest is 5m)
 	Prompts       int64
+	Cost          float64 // USD: the sum of MessageCostUSD per counted message
 }
 
 // AttrKey identifies a skill/plugin/MCP attribution bucket. Kind is one of
@@ -94,6 +96,7 @@ type record struct {
 	AttributionMcpServer string `json:"attributionMcpServer"`
 	AttributionMcpTool   string `json:"attributionMcpTool"`
 	Message              *struct {
+		ID      string          `json:"id"`
 		Role    string          `json:"role"`
 		Model   string          `json:"model"`
 		Content json.RawMessage `json:"content"`
@@ -102,6 +105,12 @@ type record struct {
 			Output        int64 `json:"output_tokens"`
 			CacheRead     int64 `json:"cache_read_input_tokens"`
 			CacheCreation int64 `json:"cache_creation_input_tokens"`
+			// CacheSplit is absent in transcripts written before Claude Code
+			// split cache writes by TTL; then the whole total is a 5m write.
+			CacheSplit *struct {
+				E1h int64 `json:"ephemeral_1h_input_tokens"`
+				E5m int64 `json:"ephemeral_5m_input_tokens"`
+			} `json:"cache_creation"`
 		} `json:"usage"`
 	} `json:"message"`
 }
@@ -179,7 +188,7 @@ func trimSpace(b []byte) []byte {
 // a thinking block — can exceed Scanner's 64 KiB cap and be silently truncated.
 // It is capped at boxread.MaxLineBytes instead of unbounded.
 func ParseTranscript(r io.Reader) (*Parsed, string, int64, error) {
-	p, sid, consumed, _, err := parseTranscript(r)
+	p, sid, consumed, _, _, err := parseTranscript(r, nil)
 	return p, sid, consumed, err
 }
 
@@ -189,8 +198,16 @@ func ParseTranscript(r io.Reader) (*Parsed, string, int64, error) {
 //
 // Lines longer than the cap are skipped, not parsed: a box can create a sparse
 // file with no newline, and an unbounded read would buffer all of it.
-func parseTranscript(r io.Reader) (*Parsed, string, int64, bool, error) {
+//
+// Claude Code writes one record per content block (thinking, text, tool_use) of
+// an assistant message, each repeating the message's full usage, so usage is
+// counted once per message id. seen holds the ids counted so far (last
+// maxSeenIDs, oldest first) so a message split across two ingest batches is
+// still counted once; the updated list is returned. A record without an id is
+// always counted (old transcripts).
+func parseTranscript(r io.Reader, seen []string) (*Parsed, string, int64, bool, []string, error) {
 	p := newParsed()
+	dd := newDedupe(seen)
 	lr := boxread.NewLineReader(r, boxread.MaxLineBytes)
 
 	// Prompts precede the assistant message that answers them, so a prompt is held
@@ -216,7 +233,7 @@ func parseTranscript(r io.Reader) (*Parsed, string, int64, bool, error) {
 		if err == nil { // newline-terminated: consumed, parsed unless over-long
 			consumed += int64(n)
 			if !over {
-				processLine(line, p, pending, &cur, &sessionID, flushPending)
+				processLine(line, p, dd, pending, &cur, &sessionID, flushPending)
 			}
 			continue
 		}
@@ -235,13 +252,13 @@ func parseTranscript(r io.Reader) (*Parsed, string, int64, bool, error) {
 			p.tok(day, cur).Prompts += c
 		}
 	}
-	return p, sessionID, consumed, overlongTail, nil
+	return p, sessionID, consumed, overlongTail, dd.list(), nil
 }
 
 // processLine folds one complete JSONL line into the rollup. cur/pending carry the
 // prompt→answering-model state across lines; flushPending assigns held prompts;
 // sessionID captures the first non-empty session id seen.
-func processLine(line []byte, p *Parsed, pending map[string]int64, cur, sessionID *string, flushPending func(string)) {
+func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, cur, sessionID *string, flushPending func(string)) {
 	var rec record
 	if json.Unmarshal(line, &rec) != nil {
 		return
@@ -267,12 +284,36 @@ func processLine(line []byte, p *Parsed, pending map[string]int64, cur, sessionI
 		return
 	}
 	if rec.Message.Role == "assistant" && rec.Message.Usage != nil {
+		if !dd.first(rec.Message.ID) {
+			// Another content block of a message already counted: no tokens or
+			// cost, but it is still the answering model for held prompts.
+			*cur = rec.Message.Model
+			flushPending(*cur)
+			return
+		}
 		u := rec.Message.Usage
+		// Transcripts are untrusted (a contained agent writes them): a negative
+		// count must never lower the shared totals or the stored cost, and a huge
+		// one must not overflow them.
+		in, out, cr := clampTokens(u.Input), clampTokens(u.Output), clampTokens(u.CacheRead)
+		cc := clampTokens(u.CacheCreation)
+		w1h := int64(0)
+		if u.CacheSplit != nil {
+			w1h = clampTokens(u.CacheSplit.E1h)
+			if w1h > cc {
+				w1h = cc // the record's total is the authority; never count more
+			}
+		}
 		t := p.tok(day, rec.Message.Model)
-		t.Input += u.Input
-		t.Output += u.Output
-		t.CacheRead += u.CacheRead
-		t.CacheCreation += u.CacheCreation
+		t.Input += in
+		t.Output += out
+		t.CacheRead += cr
+		t.CacheCreation += cc
+		t.CacheWrite1h += w1h
+		t.Cost += MessageCostUSD(rec.Message.Model, MsgUsage{
+			Input: in, Output: out, CacheRead: cr,
+			CacheWrite5m: cc - w1h, CacheWrite1h: w1h,
+		})
 		*cur = rec.Message.Model
 		flushPending(*cur)
 		return
@@ -281,3 +322,88 @@ func processLine(line []byte, p *Parsed, pending map[string]int64, cur, sessionI
 		pending[day]++
 	}
 }
+
+// maxTokensPerRecord caps any one count in a record: real messages are bounded by
+// a <=1M-token context window, so more than this is hostile and would overflow int64 totals.
+const maxTokensPerRecord = 1_000_000_000
+
+// clampTokens bounds a token count from an untrusted transcript to [0, maxTokensPerRecord].
+func clampTokens(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+	if n > maxTokensPerRecord {
+		return maxTokensPerRecord
+	}
+	return n
+}
+
+// maxSeenIDs bounds the remembered message ids per transcript. A message's
+// content-block records are adjacent, so a small window covers any batch seam.
+const maxSeenIDs = 64
+
+// dedupe remembers recently counted message ids: a set for lookup and a ring
+// (oldest first) for eviction.
+type dedupe struct {
+	set  map[string]struct{}
+	ring []string
+}
+
+func newDedupe(seen []string) *dedupe {
+	if len(seen) > maxSeenIDs {
+		seen = seen[len(seen)-maxSeenIDs:]
+	}
+	d := &dedupe{set: make(map[string]struct{}, maxSeenIDs+1)}
+	for _, id := range seen {
+		// Defensive: persisted state is ours, but never trust an entry's shape.
+		if !safeMsgID(id) {
+			continue
+		}
+		if _, dup := d.set[id]; !dup {
+			d.set[id] = struct{}{}
+			d.ring = append(d.ring, id)
+		}
+	}
+	return d
+}
+
+// maxMsgIDLen bounds a remembered message id. Transcripts can be written by a
+// contained, untrusted agent, so ids are checked before they reach the seen
+// set or the persisted state.
+const maxMsgIDLen = 128
+
+// safeMsgID reports whether id matches ^[A-Za-z0-9_-]{1,128}$ (a byte loop,
+// no regexp). Real Claude ids (msg_...) match; anything else is treated like
+// an empty id.
+func safeMsgID(id string) bool {
+	if len(id) == 0 || len(id) > maxMsgIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// first reports whether a record with this message id should be counted, and
+// remembers the id. An empty or unsafe id is always counted and never remembered.
+func (d *dedupe) first(id string) bool {
+	if !safeMsgID(id) {
+		return true
+	}
+	if _, dup := d.set[id]; dup {
+		return false
+	}
+	d.set[id] = struct{}{}
+	d.ring = append(d.ring, id)
+	if len(d.ring) > maxSeenIDs {
+		delete(d.set, d.ring[0])
+		d.ring = d.ring[1:]
+	}
+	return true
+}
+
+func (d *dedupe) list() []string { return d.ring }
