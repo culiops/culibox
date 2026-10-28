@@ -85,7 +85,8 @@ func newLocatorManager(t *testing.T) (*Manager, string) {
 
 // wantHeuristicButUnbound pins both halves of #21 for a session with no
 // validated registry entry and no persisted conversation id: locate's cwd
-// heuristic still names wantBase (other callers rely on it), but peek, usage
+// heuristic still names wantBase (nothing in production uses it: locate's only
+// caller, boundTranscript, discards it), but peek, usage
 // and attribution refuse to read it because it is not proven to be this
 // session's.
 func wantHeuristicButUnbound(t *testing.T, m *Manager, id, wantBase string) {
@@ -496,10 +497,17 @@ func TestBoundSessionUnchanged(t *testing.T) {
 	if _, ok := m.AttributionFor("s1"); !ok {
 		t.Error("AttributionFor(s1) ok=false for a bound session")
 	}
+	found := false
 	for _, i := range m.List() {
-		if i.ID == "s1" && i.Summary != "from A" {
-			t.Errorf("s1 Summary=%q want %q", i.Summary, "from A")
+		if i.ID == "s1" {
+			found = true
+			if i.Summary != "from A" {
+				t.Errorf("s1 Summary=%q want %q", i.Summary, "from A")
+			}
 		}
+	}
+	if !found {
+		t.Fatal("s1 missing from List()")
 	}
 }
 

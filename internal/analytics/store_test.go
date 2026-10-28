@@ -446,8 +446,8 @@ func TestOpenBackupFailureKeepsOldData(t *testing.T) {
 	}
 }
 
-// The backup target is a SQL string literal; a quote in the path must not break
-// out of it (or fail the backup).
+// The backup target is a bound parameter, not spliced into the SQL text; a quote
+// in the path must not break the statement (or fail the backup).
 func TestOpenBackupPathWithQuote(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "it's a dir")
 	if err := os.Mkdir(dir, 0o700); err != nil {

@@ -168,6 +168,37 @@ func TestUsageCountedOncePerMessageID(t *testing.T) {
 	}
 }
 
+// Transcripts are untrusted: negative counts must contribute nothing, and must
+// not drag down the totals or cost of records around them.
+func TestNegativeTokenCountsClampedToZero(t *testing.T) {
+	neg := `{"input_tokens":-1000,"output_tokens":-500,"cache_read_input_tokens":-2000}`
+	norm := `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":100}`
+	day, model := "2026-08-05", "claude-opus-4-8"
+
+	p, _, _, err := ParseTranscript(strings.NewReader(msgRec("n1", day+"T10:00:01Z", neg)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := p.Tokens[TokKey{Day: day, Model: model}]
+	if tok == nil {
+		t.Fatal("no row for negative record")
+	}
+	if tok.Input != 0 || tok.Output != 0 || tok.CacheRead != 0 || tok.Cost != MessageCostUSD(model, MsgUsage{}) {
+		t.Fatalf("negative record = %+v, want zero tokens and zero-usage cost", tok)
+	}
+
+	p, _, _, err = ParseTranscript(strings.NewReader(
+		msgRec("n1", day+"T10:00:01Z", neg) + msgRec("n2", day+"T10:00:02Z", norm)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok = p.Tokens[TokKey{Day: day, Model: model}]
+	want := MessageCostUSD(model, MsgUsage{Input: 10, Output: 5, CacheRead: 100})
+	if tok.Input != 10 || tok.Output != 5 || tok.CacheRead != 100 || want == 0 || tok.Cost != want {
+		t.Fatalf("after normal record = %+v, want in=10 out=5 cr=100 cost=%v", tok, want)
+	}
+}
+
 func TestCacheSplitLegacyAndMixed(t *testing.T) {
 	// Legacy: total only -> whole total is a 5m write.
 	legacy := `{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":40}`

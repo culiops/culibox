@@ -88,7 +88,7 @@ func TestBoxedPeekIgnoresFIFOTranscript(t *testing.T) {
 func TestBoxedPeekOnlyFIFOMisses(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	mkFifo(t, filepath.Join(projDirIn(bd), "x.jsonl"), time.Now())
-	bindSID(m, "s1", "x") // bound, so the FIFO guard is what refuses
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check is what refuses
 	var ok bool
 	within2s(t, "PeekFor", func() { _, ok = m.PeekFor("s1") })
 	if ok {
@@ -105,7 +105,7 @@ func TestBoxedPeekIgnoresSymlinkedTranscript(t *testing.T) {
 	if err := os.Symlink(host, filepath.Join(projDirIn(bd), "x.jsonl")); err != nil {
 		t.Fatal(err)
 	}
-	bindSID(m, "s1", "x") // bound, so the symlink guard (not "unbound") is what refuses
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check (not "unbound") is what refuses
 	if p, ok := m.PeekFor("s1"); ok {
 		t.Errorf("peek hit through a symlinked transcript: %q", p.Text)
 	}
@@ -124,7 +124,7 @@ func TestBoxedPeekIgnoresSymlinkedProjectsDir(t *testing.T) {
 	if err := os.Symlink(projDirIn(hostHome), projDirIn(bd)); err != nil {
 		t.Fatal(err)
 	}
-	bindSID(m, "s1", "hostfile") // bound, so the symlink guard is what refuses
+	bindSID(m, "s1", "hostfile") // bound, so transcriptPathIn's regular-file Lstat check is what refuses
 	if p, ok := m.PeekFor("s1"); ok {
 		t.Errorf("peek hit through a symlinked projects dir: %q", p.Text)
 	}
@@ -148,7 +148,7 @@ func TestBoxedReadsRegularTranscript(t *testing.T) {
 func TestAttributionBoxedRefusesFIFO(t *testing.T) {
 	m, bd := boxedLocManager(t)
 	mkFifo(t, filepath.Join(projDirIn(bd), "x.jsonl"), time.Now())
-	bindSID(m, "s1", "x") // bound, so the FIFO guard is what refuses
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check is what refuses
 	var ok bool
 	within2s(t, "AttributionFor", func() { _, ok = m.AttributionFor("s1") })
 	if ok {
@@ -165,7 +165,7 @@ func TestAttributionBoxedRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(host, filepath.Join(projDirIn(bd), "x.jsonl")); err != nil {
 		t.Fatal(err)
 	}
-	bindSID(m, "s1", "x") // bound, so the symlink guard (not "unbound") is what refuses
+	bindSID(m, "s1", "x") // bound, so transcriptPathIn's regular-file Lstat check (not "unbound") is what refuses
 	if _, ok := m.AttributionFor("s1"); ok {
 		t.Error("AttributionFor followed a symlinked transcript")
 	}

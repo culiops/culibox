@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -161,9 +162,31 @@ func backupOnce(db *sql.DB, dst string) error {
 		os.Remove(tmp)
 		return err
 	}
+	// SQLite does not fsync VACUUM INTO output; make the bytes durable before the
+	// rename publishes them, so a power loss can't leave a renamed empty backup.
+	f, err := os.Open(tmp)
+	if err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("sync backup: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync backup: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("sync backup: %w", err)
+	}
 	if err := os.Rename(tmp, dst); err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("finalize backup: %w", err)
+	}
+	// Make the rename durable. Best effort, like the other atomic writers here
+	// (store, auth, credfile): not every platform supports fsync on a directory.
+	if d, err := os.Open(filepath.Dir(dst)); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
 }

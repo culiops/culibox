@@ -292,6 +292,18 @@ func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, c
 			return
 		}
 		u := rec.Message.Usage
+		// Transcripts are untrusted (a contained agent writes them): a negative
+		// count must never lower the shared totals or the stored cost.
+		in, out, cr := u.Input, u.Output, u.CacheRead
+		if in < 0 {
+			in = 0
+		}
+		if out < 0 {
+			out = 0
+		}
+		if cr < 0 {
+			cr = 0
+		}
 		cc := u.CacheCreation
 		if cc < 0 {
 			cc = 0
@@ -307,13 +319,13 @@ func processLine(line []byte, p *Parsed, dd *dedupe, pending map[string]int64, c
 			}
 		}
 		t := p.tok(day, rec.Message.Model)
-		t.Input += u.Input
-		t.Output += u.Output
-		t.CacheRead += u.CacheRead
+		t.Input += in
+		t.Output += out
+		t.CacheRead += cr
 		t.CacheCreation += cc
 		t.CacheWrite1h += w1h
 		t.Cost += MessageCostUSD(rec.Message.Model, MsgUsage{
-			Input: u.Input, Output: u.Output, CacheRead: u.CacheRead,
+			Input: in, Output: out, CacheRead: cr,
 			CacheWrite5m: cc - w1h, CacheWrite1h: w1h,
 		})
 		*cur = rec.Message.Model
