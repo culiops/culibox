@@ -5715,7 +5715,7 @@ window.addEventListener("resize", fitAll);
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);
-$("side-audit").addEventListener("click", openAuditPage);
+$("side-audit").addEventListener("click", () => openAudit());
 $("side-palette").addEventListener("click", openPalette);
 // "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
 setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);

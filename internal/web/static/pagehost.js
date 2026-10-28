@@ -108,14 +108,6 @@ function pageClosed(dlg) {
   });
 }
 
-// openAuditPage: the sidebar's Audit link and the palette's Audit entry.
-// Task 7's openAudit loads the page's data; until it exists the page opens
-// empty. Read off globalThis so the linker check accepts the forward reference.
-function openAuditPage() {
-  if (typeof globalThis.openAudit === "function") globalThis.openAudit();
-  else openDialog("audit-page");
-}
-
 // Esc closes the page. Bubble phase, and only when nothing above it took the
 // key: a modal over the page (bug report, confirm, palette, spawn) closes
 // itself, and a field that handles its own Esc calls preventDefault.

@@ -252,7 +252,7 @@ function paletteCommands(mac) {
     const deskPages = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
     const linkShown = (id) => { const b = document.getElementById(id); return !!b && !b.hidden; };
     cmds.push(...palettePageCommands(deskPages, { audit: linkShown("side-audit"), analytics: linkShown("side-analytics") },
-      { audit: openAuditPage, analytics: openAnalytics, settings: (tab) => openSettings(tab) }));
+      { audit: () => openAudit(), analytics: openAnalytics, settings: (tab) => openSettings(tab) }));
   }
   // toggleSidebar is a no-op on mobile, so don't offer it there.
   if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {

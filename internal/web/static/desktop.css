@@ -1185,4 +1185,59 @@
   #page-host > #settings-modal.as-page #creds .vfold > summary:hover { color: var(--fg); }
   #page-host > #settings-modal.as-page #creds .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
   #page-host > #settings-modal.as-page #creds .vfold-b > .btn { align-self: flex-start; }
+
+  /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */
+  /* Colour roles: red = elevation rows and refused/denied/write outcomes only,
+     green = status words only; everything else is neutral text. Prefixed
+     #page-host > #audit-page.as-page so the page rules outrank the dialog's own. */
+  .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+  .ac-link:hover { text-decoration: underline; }
+  #page-host > #audit-page.as-page > .dhd { height: 52px; flex: none; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #audit-page.as-page > .dhd h2 { margin: 0; font: inherit; }
+  #page-host > #audit-page.as-page #au-range { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #audit-page.as-page #au-range button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-range button:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #audit-page.as-page #au-range button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #audit-page.as-page #au-csv { display: inline-flex; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; text-decoration: none; }
+  #page-host > #audit-page.as-page #au-csv:hover { background: var(--line); }
+  #page-host > #audit-page.as-page #au-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-esc::before { content: "Esc"; font-size: 12px; }
+  #page-host > #audit-page.as-page #au-esc:hover { color: var(--fg); background: var(--raise); }
+
+  #page-host > #audit-page.as-page .au-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); flex: none; border-bottom: 1px solid var(--line); }
+  #page-host > #audit-page.as-page .au-kpi { padding: 14px 20px; min-width: 0; }
+  #page-host > #audit-page.as-page .au-kpi + .au-kpi { border-left: 1px solid var(--line); }
+  #page-host > #audit-page.as-page .au-n { font-size: 20px; font-weight: 600; color: var(--fg); }
+  #page-host > #audit-page.as-page .au-l { margin-top: 2px; font-size: 13px; color: var(--muted); }
+
+  #page-host > #audit-page.as-page .au-filters { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+  #page-host > #audit-page.as-page .au-filters .grow { flex: 1; }
+  #page-host > #audit-page.as-page .au-filters button { padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; cursor: pointer; }
+  #page-host > #audit-page.as-page .au-filters button:hover { color: var(--fg); }
+  #page-host > #audit-page.as-page .au-filters button.on { background: var(--raise); color: var(--fg); border-color: var(--faint); }
+  #page-host > #audit-page.as-page #au-session { min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 13px; }
+
+  #page-host > #audit-page.as-page .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+  #page-host > #audit-page.as-page #au-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #audit-page.as-page #au-table th:nth-child(1) { width: 120px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(2) { width: 160px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 96px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(5) { width: 220px; }
+  #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
+  #page-host > #audit-page.as-page #au-table td.au-kind { color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table td.au-what { font-family: var(--font-mono); font-size: 12px; }
+  #page-host > #audit-page.as-page #au-table td.au-what .au-reason { font-family: var(--font-ui); font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table tr.au-elev { background: color-mix(in srgb, var(--red) 8%, var(--bg)); }
+  #page-host > #audit-page.as-page #au-table td.au-bad { color: var(--red); }
+  #page-host > #audit-page.as-page #au-table td.au-ok { color: var(--ok); }
+  #page-host > #audit-page.as-page #au-table td.au-empty { height: 96px; padding: 0 20px; text-align: center; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table td.au-empty.au-bad { color: var(--red); }
+
+  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: 12px; flex: none; position: sticky; bottom: 0; height: 40px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--bg); font-size: 12px; color: var(--faint); }
+  #page-host > #audit-page.as-page .au-foot .grow { flex: 1; }
+  #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 12px; color: var(--fg); }
+  #page-host > #audit-page.as-page #au-more:hover { background: var(--raise); }
+  #page-host > #audit-page.as-page #au-more[hidden] { display: none; }
 }

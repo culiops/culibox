@@ -626,11 +626,39 @@
     </div>
   </dialog>
 
-  <!-- Desktop only (pagehost.js): the Audit page. Task 7 fills it. -->
+  <!-- Desktop only (pagehost.js; auditpage.js fills it): the Audit page. -->
   <dialog id="audit-page" aria-label="Audit">
     <div class="dhd">
-      <span class="grow" role="heading" aria-level="2">Audit</span>
-      <button type="button" class="btn gh" data-close="audit-page" aria-label="Close" title="Close (Esc)">&times;</button>
+      <h2 class="grow">Audit</h2>
+      <div class="seg" id="au-range" role="group" aria-label="Range">
+        <button type="button" data-range="24h">24h</button>
+        <button type="button" data-range="7d">7d</button>
+        <button type="button" data-range="30d">30d</button>
+      </div>
+      <a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
+      <button type="button" class="btn gh" id="au-esc" data-close="audit-page" aria-label="Close" title="Close (Esc)">&times;</button>
+    </div>
+    <div id="au-kpis" class="au-kpis"></div>
+    <div id="au-filters" class="au-filters" role="group" aria-label="Kind">
+      <button type="button" data-filter="">All</button>
+      <button type="button" data-filter="credentials">Credentials</button>
+      <button type="button" data-filter="elevations">Elevations</button>
+      <button type="button" data-filter="egress">Egress</button>
+      <button type="button" data-filter="settings">Settings changes</button>
+      <span class="grow"></span>
+      <select id="au-session" class="fld" aria-label="Session"></select>
+    </div>
+    <div id="au-scroll" class="au-scroll">
+      <table id="au-table">
+        <thead><tr><th>Time</th><th>Session</th><th>Kind</th><th>What</th><th>Outcome</th></tr></thead>
+        <tbody id="au-body"></tbody>
+      </table>
+    </div>
+    <div id="au-foot" class="au-foot">
+      <span id="au-count"></span>
+      <button type="button" class="btn gh" id="au-more" hidden>Show more</button>
+      <span class="grow"></span>
+      <span id="au-policy"></span>
     </div>
   </dialog>
 
@@ -710,6 +738,8 @@
   <script src="/steerrail.js"></script>
   <script src="/accessmodel.js"></script>
   <script src="/accesstab.js"></script>
+  <script src="/auditmodel.js"></script>
+  <script src="/auditpage.js"></script>
   <script src="/activitymodel.js"></script>
   <script src="/activitytab.js"></script>
   <script src="/envrows.js"></script>
