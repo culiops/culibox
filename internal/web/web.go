@@ -318,7 +318,10 @@ func (s *Server) Handler() http.Handler {
 		root.HandleFunc("/"+name, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache")
 			if strings.HasSuffix(name, ".woff2") {
+				// embed.FS has no ETag, so no-cache would re-download 352 KB on
+				// every login view. The font is vendored and versioned by path.
 				w.Header().Set("Content-Type", "font/woff2")
+				w.Header().Set("Cache-Control", "public, max-age=86400")
 			}
 			http.ServeFileFS(w, r, staticFS, "static/"+name)
 		})

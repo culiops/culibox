@@ -187,6 +187,25 @@ func TestSharedStylesheetsArePublic(t *testing.T) {
 		if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, ct) {
 			t.Fatalf("%s: Content-Type=%q, want %s", p, got, ct)
 		}
+		// The CSS must revalidate; the font has no ETag (embed.FS), so it is
+		// cached for a day instead of re-downloaded on every login view.
+		wantCC := "no-cache"
+		if ct == "font/woff2" {
+			wantCC = "public, max-age=86400"
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != wantCC {
+			t.Fatalf("%s: Cache-Control=%q, want %q", p, cc, wantCC)
+		}
+	}
+	// The public set is exact files, not a prefix or subtree: nothing else under
+	// vendor/inter, no directory listing and no trailing-slash alias may be
+	// reachable without a cookie.
+	for _, p := range []string{"/vendor/inter/LICENSE.txt", "/vendor/inter/", "/vendor/", "/desktop.css/"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code == http.StatusOK {
+			t.Fatalf("%s served without a cookie; only the exact public files may be", p)
+		}
 	}
 	// app.css is not part of the login page and must stay behind the guard.
 	rec := httptest.NewRecorder()
