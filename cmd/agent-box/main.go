@@ -53,6 +53,10 @@ import (
 // fall back to the cwd heuristic in production.
 var _ session.PidResolver = (*abduco.Adapter)(nil)
 
+// conversationPollEvery is how often live claude sessions are checked for a
+// new conversation (/clear), so history stays whole with no browser open.
+const conversationPollEvery = 5 * time.Second
+
 func main() {
 	args, err := parseArgs(os.Args[1:])
 	if err != nil {
@@ -858,6 +862,10 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	if analyticsSvc != nil {
 		go analyticsSvc.Start(analyticsCtx)
 	}
+
+	// Record /clear conversations for every live claude session even with no
+	// browser open; stops with the same context.
+	go mgr.PollConversations(analyticsCtx, conversationPollEvery)
 
 	// Prune old egress audit rows (once at start, then daily) while the egress
 	// audit store is open; StopRetention waits for it before StopEgress closes it.

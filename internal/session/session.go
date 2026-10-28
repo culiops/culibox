@@ -705,6 +705,11 @@ type Session struct {
 	// history (see sessionMeta.CostComplete). Guarded by mu.
 	claudeSessionIDs []string
 	costComplete     bool
+	// restoredUnchecked is set when the session was re-attached after a daemon
+	// restart and no registry read has happened since: the first sid noted
+	// decides whether a /clear slipped by while nobody was watching. Memory
+	// only; guarded by mu.
+	restoredUnchecked bool
 	// convMu orders the sidecar writes of the three fields above (and
 	// claudeSessionID): taken before the snapshot, held across the write.
 	convMu sync.Mutex
@@ -2921,6 +2926,9 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 			sess.costComplete = false // the list did not know its own current conversation
 		}
 	}
+	// The daemon was down for an unknown stretch: until the first registry read
+	// the current conversation is only what the sidecar last saw.
+	sess.restoredUnchecked = true
 	// nil = a record written before the flag existed, or an orphan adopted with
 	// no sidecar: restore as submitted (a stale amber beats a hidden waiter).
 	sess.submitted = md.Submitted == nil || *md.Submitted

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -378,13 +379,28 @@ func (l located) openTranscript() (*os.File, os.FileInfo, bool) {
 // matched sessionIDRe inside readClaudeRegistry.
 //
 // It also keeps the session's conversation history (every sid since spawn):
-// all appending goes through addConversationLocked.
+// all appending goes through addConversationLocked. The first note after a
+// daemon restart also applies the downtime rule (see restoredUnchecked).
 func (m *Manager) noteClaudeSessionID(s *Session, id, sid string) {
 	s.mu.Lock()
+	prev := s.claudeSessionID
+	if prev == "" && len(s.claudeSessionIDs) > 0 {
+		prev = s.claudeSessionIDs[len(s.claudeSessionIDs)-1]
+	}
 	changed := s.claudeSessionID != sid
 	s.claudeSessionID = sid
 	if s.addConversationLocked(sid) {
 		changed = true
+	}
+	if s.restoredUnchecked {
+		// First look since a daemon restart. A different conversation means
+		// one or more /clears happened while nobody was watching, and the ones
+		// in between cannot be recovered: absent beats wrong.
+		s.restoredUnchecked = false
+		if sid != prev && s.costComplete {
+			s.costComplete = false
+			changed = true
+		}
 	}
 	s.mu.Unlock()
 	if !changed {
@@ -468,4 +484,47 @@ func (m *Manager) boundTranscript(id string) (located, bool) {
 	}
 	l.path = filepath.Join(claudeDir, "projects", projectSlug(filepath.Clean(l.cwd)), sid+".jsonl")
 	return l, true
+}
+
+// PollConversations keeps every live claude session's conversation history
+// current with no browser open: each tick locates the session, and locate
+// notes the registry's current sid as a side effect, so a /clear is recorded
+// within one interval. It blocks until ctx is done; run it in its own
+// goroutine. No lock is held across locate, which does its own file I/O.
+func (m *Manager) PollConversations(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		for _, id := range m.liveClaudeIDs() {
+			if ctx.Err() != nil {
+				return
+			}
+			m.locate(id)
+		}
+	}
+}
+
+// liveClaudeIDs returns the ids of the sessions worth polling: claude and not
+// exited (locate would skip an exited one's registry anyway).
+func (m *Manager) liveClaudeIDs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []string
+	for id, s := range m.sessions {
+		if !isClaudeBin(s.Bin) {
+			continue
+		}
+		s.mu.Lock() // nested under m.mu, as locate does
+		exited := s.status == statusExited
+		s.mu.Unlock()
+		if !exited {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
