@@ -120,9 +120,3 @@ func MessageCostUSD(model string, u MsgUsage) float64 {
 		perTok(u.CacheWrite5m, r.input*cacheWriteMult) +
 		perTok(u.CacheWrite1h, r.input*cacheWrite1hMult)
 }
-
-// CostUSD prices a pre-summed token bundle, treating cacheCreation as 5m writes.
-// Kept for the aggregate callers in store.go until they price per message.
-func CostUSD(model string, input, output, cacheRead, cacheCreation int64) float64 {
-	return MessageCostUSD(model, MsgUsage{Input: input, Output: output, CacheRead: cacheRead, CacheWrite5m: cacheCreation})
-}

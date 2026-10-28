@@ -9,7 +9,13 @@ const M = 1_000_000
 
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
 
-func TestCostUSDPerFamily(t *testing.T) {
+// bundleCost prices a pre-summed token bundle as one message, treating
+// cacheCr as 5m writes — the shape the per-family rate tests are written in.
+func bundleCost(model string, input, output, cacheRead, cacheCr int64) float64 {
+	return MessageCostUSD(model, MsgUsage{Input: input, Output: output, CacheRead: cacheRead, CacheWrite5m: cacheCr})
+}
+
+func TestBundleCostPerFamily(t *testing.T) {
 	cases := []struct {
 		name                        string
 		model                       string
@@ -58,20 +64,20 @@ func TestCostUSDPerFamily(t *testing.T) {
 		{"synthetic", "<synthetic>", M, M, M, M, 0},
 	}
 	for _, c := range cases {
-		got := CostUSD(c.model, c.in, c.out, c.cacheRead, c.cacheCr)
+		got := bundleCost(c.model, c.in, c.out, c.cacheRead, c.cacheCr)
 		if !approx(got, c.want) {
-			t.Errorf("%s: CostUSD = %v, want %v", c.name, got, c.want)
+			t.Errorf("%s: bundleCost = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
-func TestCostUSDScalesLinearly(t *testing.T) {
+func TestBundleCostScalesLinearly(t *testing.T) {
 	// Half a million input tokens on opus = half of $5.
-	if got := CostUSD("claude-opus-5", M/2, 0, 0, 0); !approx(got, 2.5) {
+	if got := bundleCost("claude-opus-5", M/2, 0, 0, 0); !approx(got, 2.5) {
 		t.Errorf("half input = %v, want 2.5", got)
 	}
 	// Real-ish magnitude: 24.2B cache-read on opus should be a sane number, not overflow.
-	if got := CostUSD("claude-opus-5", 0, 0, 24_200_000_000, 0); !approx(got, 24_200_000_000.0/M*0.5) {
+	if got := bundleCost("claude-opus-5", 0, 0, 24_200_000_000, 0); !approx(got, 24_200_000_000.0/M*0.5) {
 		t.Errorf("big cache-read = %v", got)
 	}
 }
@@ -80,7 +86,7 @@ func TestCostUSDScalesLinearly(t *testing.T) {
 // the substring "opus" and "claude-fable-5-1" contains "fable", so a
 // generic-first order would silently price either as its parent family. This
 // test pins the ordering guarantee, not just the rates.
-func TestCostUSDPrefersMostSpecificFamily(t *testing.T) {
+func TestBundleCostPrefersMostSpecificFamily(t *testing.T) {
 	// Each pair is a specific id and the generic id it would fall through to,
 	// with the token bundle that must tell them apart.
 	pairs := []struct {
@@ -92,15 +98,15 @@ func TestCostUSDPrefersMostSpecificFamily(t *testing.T) {
 		{"claude-fable-5-1", "claude-fable-5", 0, 0, M, 0},
 	}
 	for _, p := range pairs {
-		sp := CostUSD(p.specific, p.in, p.out, p.cacheRead, p.cacheCr)
-		gn := CostUSD(p.generic, p.in, p.out, p.cacheRead, p.cacheCr)
+		sp := bundleCost(p.specific, p.in, p.out, p.cacheRead, p.cacheCr)
+		gn := bundleCost(p.generic, p.in, p.out, p.cacheRead, p.cacheCr)
 		if approx(sp, gn) {
 			t.Errorf("%s priced as %s (%v); most-specific match lost", p.specific, p.generic, sp)
 		}
 	}
 	// Every other member of the Opus line keeps the generic rate.
 	for _, m := range []string{"claude-opus-5", "claude-opus-4-8", "claude-opus-4-7"} {
-		if got := CostUSD(m, M, 0, 0, 0); !approx(got, 5) {
+		if got := bundleCost(m, M, 0, 0, 0); !approx(got, 5) {
 			t.Errorf("%s input = %v, want 5", m, got)
 		}
 	}
