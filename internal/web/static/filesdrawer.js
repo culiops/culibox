@@ -454,6 +454,8 @@ function initDrawerGoto() {
   // Ctrl+P (readline's previous-history); the shortcut works from anywhere else.
   document.addEventListener("keydown", (e) => {
     if (e.code !== "KeyP" || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return;
+    // A page hides the drawer: the browser keeps its Ctrl+P (print).
+    if (typeof currentPage === "function" && currentPage()) return;
     const ae = document.activeElement;
     if (ae && ae.classList && ae.classList.contains("xterm-helper-textarea")) return;
     if (typeof dialogsOpen === "function" && dialogsOpen() > 0) return;

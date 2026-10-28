@@ -64,8 +64,12 @@ function focusTerminal() {
   if (tab && tab.term) tab.term.focus();
 }
 
+// openDialog: on desktop, Settings, Analytics and Audit open as pages in the
+// pane area (pagehost.js openPage); everything else, and every dialog on a
+// phone, opens modally as before.
 function openDialog(id) {
   const d = document.getElementById(id);
+  if (typeof openPage === "function" && openPage(id)) return d;
   if (d && !d.open) d.showModal();
   return d;
 }
@@ -108,6 +112,8 @@ function openSettings(tab, group) {
   if (tab === "creds" && group && typeof credFocusGroup === "function") credFocusGroup(group);
   selectSettingsTab(tab || "manage");
   openDialog("settings-modal");
+  // On the desktop page Profiles opens on a profile, not a blank draft (app.js).
+  if ((tab || "manage") === "manage" && typeof preselectPageProfile === "function") preselectPageProfile();
   // shell.js loads before app.js, so initNotifyToggle may not exist yet on the
   // very first paint — guard it. Reopening Settings must reflect a permission
   // revoked in the browser meanwhile, so this re-reads on every open.
@@ -151,6 +157,7 @@ function selectSettingsTab(name) {
   // API or in another tab). loadProfiles repaints the list, never the editor,
   // so an open form keeps its unsaved edits.
   if (name === "manage" && typeof loadProfiles === "function") loadProfiles(false);
+  if (name === "manage" && typeof preselectPageProfile === "function") preselectPageProfile();
 }
 
 function initDialogs() {
@@ -170,8 +177,11 @@ function initDialogs() {
     // backdrop click and dismiss the profile editor mid-edit.
     let pressedBackdrop = false;
     d.addEventListener("mousedown", (e) => { pressedBackdrop = e.target === d; });
-    d.addEventListener("click", (e) => { if (pressedBackdrop && e.target === d) d.close(); });
-    // Fires for Esc, ×, backdrop and programmatic close alike.
+    // A page (pagehost.js) has no backdrop: its empty area is part of the page.
+    d.addEventListener("click", (e) => { if (pressedBackdrop && e.target === d && !d.classList.contains("as-page")) d.close(); });
+    // Fires for Esc, ×, backdrop and programmatic close alike. A page goes back
+    // to its home first: focusTerminal cannot focus a pane while #grid is hidden.
+    d.addEventListener("close", () => { if (typeof pageClosed === "function") pageClosed(d); });
     d.addEventListener("close", focusTerminal);
     // Sheets attach a one-shot onClose callback (openSheet's opts.onClose);
     // every other dialog leaves __onClose unset, so this is a no-op for them.

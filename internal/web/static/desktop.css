@@ -26,6 +26,13 @@
        /error only. */
     --bg: #0d0f12; --panel: #14171b; --fg: #e6e8eb; --muted: #8b939e;
     --accent: #6ea8fe; --ok: #4ccf8a;
+    /* Analytics chart palette (S4 Task 8): categorical, no green/amber/red
+       (those are status colours). Hues are >= 25 degrees of HSL hue from --ok,
+       --amber and --red (desktop-scope.test.js). Order validated with the
+       dataviz validator, dark mode, surface #14171b. */
+    --an-1: #3d86ea; --an-2: #d462b1; --an-3: #3a6fd0; --an-4: #af6af2;
+    --an-5: #07a2c6; --an-6: #994c96; --an-7: #7b84e8;
+    --an-up: #d462b1; --an-down: #3d86ea;
     --border: #23282f; --rule: #23282f;
     --background0: #0d0f12; --background1: #14171b; --background2: #1b1f24;
     --background3: #2a3038;
@@ -133,6 +140,14 @@
   }
   .side-links button:hover { color: var(--fg); background: var(--raise); }
   .side-links button[hidden] { display: none; }
+  .side-links .on { color: var(--fg); font-weight: 600; } /* the open page's link */
+  /* "Audit · Analytics · Settings": a dot between shown links, in the 2px gap,
+     outside the button's hover fill. */
+  .side-links button { position: relative; }
+  .side-links button:not([hidden]) ~ button:not([hidden])::before {
+    content: "·"; position: absolute; left: -1px; top: 50%; transform: translate(-50%, -50%);
+    font-weight: 400; color: var(--faint); pointer-events: none;
+  }
 
 
   /* --- the 52px rail (sidebar hidden) ------------------------------------- */
@@ -915,4 +930,559 @@
     background: var(--panel); border-top: 1px solid var(--line);
   }
   #spawn-foot-hint { display: inline; margin-right: auto; font-size: 12px; color: var(--faint); }
+
+  /* --- pages (S4): Settings, Analytics and Audit in the pane area ---------- */
+  /* pagehost.js re-parents the dialog into #page-host and shows it non-modally;
+     the panes stay laid out underneath, just not displayed. */
+  body.page-open #grid, body.page-open #drawer { display: none; }
+  #page-host { flex: 1; min-width: 0; display: flex; background: var(--bg); }
+  #page-host[hidden] { display: none; }
+  /* The rule is `dialog.as-page`; the #page-host prefix is only there to outrank
+     the modal sizing each dialog carries by id (#settings-modal's 940x660,
+     #analytics-modal's fixed centring), which a class selector alone loses to. */
+  #page-host > dialog.as-page { position: static; inset: auto; margin: 0; width: 100%; height: 100%; max-width: none; max-height: none; border: 0; border-radius: 0; padding: 0; background: var(--bg); display: flex; flex-direction: column; box-shadow: none; }
+  /* box.css's synthetic frame (#analytics-modal's box-="square") is modal chrome. */
+  #page-host > dialog.as-page[box-]::before { display: none; }
+
+  /* --- Settings page (S4): grouped nav, the regrouped profile form ---------- */
+  /* Every rule starts at #page-host > #settings-modal.as-page: the modal's own
+     #settings-modal rules in app.css carry an id, and this outranks them. A
+     grid: the header across, the nav down the left, the open panel and its
+     footer to the right. */
+  #page-host > #settings-modal.as-page { display: grid; grid-template-columns: 170px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  #page-host > #settings-modal.as-page > .dhd { grid-column: 1 / -1; grid-row: 1; height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #settings-modal.as-page #settings-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page #settings-esc::before { content: "Esc"; font-size: 12px; }
+  #page-host > #settings-modal.as-page #settings-esc:hover { color: var(--fg); background: var(--raise); }
+
+  /* The nav: Agents (Profiles, Agent accounts) · Access (Credentials, API
+     tokens) · App (Appearance, About). The DOM keeps the mobile strip's order;
+     `order` regroups it here. */
+  #page-host > #settings-modal.as-page > #settings-tabs {
+    grid-column: 1; grid-row: 2 / 4; flex-direction: column; align-items: stretch; gap: 2px;
+    padding: 10px 8px; border: 0; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto;
+  }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group { display: block; padding: 14px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(1) { order: 1; padding-top: 6px; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="manage"] { order: 2; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="accounts"] { order: 3; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(2) { order: 4; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="creds"] { order: 5; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="tokens"] { order: 6; }
+  #page-host > #settings-modal.as-page > #settings-tabs .pg-group:nth-of-type(3) { order: 7; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="settings"] { order: 8; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t[data-tab="about"] { order: 9; }
+  #page-host > #settings-modal.as-page > #settings-tabs .t {
+    padding: 7px 10px; text-align: left; border: 0; border-radius: var(--r-chip); box-shadow: none;
+    background: transparent; font-family: var(--font-ui); font-size: 13px; color: var(--muted);
+  }
+  #page-host > #settings-modal.as-page > #settings-tabs .t:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > #settings-tabs .t.on { background: var(--raise); color: var(--fg); box-shadow: none; }
+
+  /* Panels and their footers sit right of the nav. Done is modal chrome: Esc
+     and ✕ close the page, so every Done goes, and the two footers that held
+     nothing else go with them. */
+  #page-host > #settings-modal.as-page > .dbd { grid-column: 2; grid-row: 2; background: var(--bg); }
+  #page-host > #settings-modal.as-page > .dbd.pad { padding: 22px 28px; }
+  #page-host > #settings-modal.as-page > .dft { grid-column: 2; grid-row: 3; height: 56px; gap: 10px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--panel); }
+  #page-host > #settings-modal.as-page [data-close]:not(#settings-esc) { display: none; }
+  #page-host > #settings-modal.as-page > #foot-creds, #page-host > #settings-modal.as-page > #foot-about { display: none; }
+  #page-host > #settings-modal.as-page > .dft .btn {
+    padding: 7px 14px; border: 1px solid transparent; border-radius: var(--r-ctl);
+    background: var(--raise); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page > .dft .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page > .dft .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  #page-host > #settings-modal.as-page > .dft .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  #page-host > #settings-modal.as-page > .dft .btn.gh { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page > .dft .btn.gh:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page > .dft .btn.dgr { background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page > .dft .btn.dgr:hover { background: var(--danger-tint); }
+  #page-host > #settings-modal.as-page > .dft .fld { min-height: 32px; padding: 6px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-size: 13px; }
+
+  /* Profiles: the list (200px) runs the full height, and the sticky footer
+     starts at the form column. #manage spans the footer's row too, so the form
+     scrolls under the footer and keeps room for it at the bottom. */
+  #page-host > #settings-modal.as-page > #manage { grid-row: 2 / 4; }
+  #page-host > #settings-modal.as-page > #foot-manage { position: relative; z-index: 1; margin-left: 200px; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-delete { order: 1; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate { order: 2; }
+  #page-host > #settings-modal.as-page > #foot-manage .grow { order: 3; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-discard { order: 4; display: inline-block; }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-save { order: 5; }
+  /* Duplicate reads as a quiet action beside Delete…; a built-in profile
+     makes it the primary (syncEditorActions adds .pri) and the rule above fills it. */
+  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri) { background: transparent; color: var(--fg); }
+  #page-host > #settings-modal.as-page > #foot-manage #pf-duplicate:not(.pri):hover { background: var(--raise); }
+
+  #page-host > #settings-modal.as-page #manage .plist { width: 200px; padding: 10px 8px; border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; }
+  #page-host > #settings-modal.as-page #manage .plist > .grow { display: none; }
+  #page-host > #settings-modal.as-page #manage .plist ul { display: flex; flex-direction: column; gap: 2px; overflow: visible; }
+  #page-host > #settings-modal.as-page #manage .pitem {
+    padding: 8px 10px; border: 0; border-left: 2px solid transparent; border-radius: var(--r-chip);
+    box-shadow: none; font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page #manage .pitem:hover { background: var(--raise); }
+  #page-host > #settings-modal.as-page #manage .pitem.on { background: var(--raise); border-left-color: var(--accent); box-shadow: none; }
+  /* Two lines (pg-1b): the name, then "claude · box" / "built-in · host", which
+     carries the built-in marker, so the right-hand "built-in" goes. */
+  #page-host > #settings-modal.as-page #manage .pitem { flex-wrap: wrap; row-gap: 1px; }
+  #page-host > #settings-modal.as-page #manage .pitem .lk { display: none; }
+  #page-host > #settings-modal.as-page #manage .pitem .psub { display: block; flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--faint); }
+  #page-host > #settings-modal.as-page #manage .plist-foot { padding: 8px 10px; border: 0; }
+  #page-host > #settings-modal.as-page #manage .plist-foot .btn { width: auto; padding: 0; border: 0; background: none; font-family: var(--font-ui); font-size: 13px; color: var(--accent); }
+  #page-host > #settings-modal.as-page #manage .plist-foot .btn:hover { text-decoration: underline; }
+
+  /* The form: a 4-track grid, so a field takes half (two tracks) and model ·
+     effort share one half. The three unnamed .frow wrappers and #pf-options
+     are display: contents, so their columns are grid items placed by `order`
+     (visual only: readForm scans #pf-options, and mobile keeps DOM order).
+     Rows with an id keep their own display, so their [hidden] still hides them.
+       Can touch
+       AGENT          name | account; binary | model · effort
+       WHERE IT RUNS  containment | default workspace; readable host paths
+       WHAT IT CAN TOUCH  AWS connections | GitHub; legacy AWS; tokens
+       Advanced ▸     base environment, the other options, replies, args, allowlist */
+  #page-host > #settings-modal.as-page #manage .ped {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 14px; align-content: start;
+    padding: 18px 22px 84px; background: var(--bg);
+  }
+  #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
+  #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }
+  #page-host > #settings-modal.as-page #manage #pf-lock { order: 1; }
+  #page-host > #settings-modal.as-page #manage #pf-touch { order: 2; }
+  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="agent"] { order: 10; }
+  #page-host > #settings-modal.as-page #manage #pf-name-col { order: 11; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-account-col { order: 12; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-bin-col { order: 13; grid-column: 1 / span 2; }
+  /* Model and effort stack in the right half, beside Binary: their segmented
+     controls carry real model ids, which never fit side by side in a quarter. */
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] { order: 14; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effort"], #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="effortLevel"] { order: 15; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
+  #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 23; }
+  #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
+  #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-aws-block { order: 33; }
+  #page-host > #settings-modal.as-page #manage #pf-st-block { order: 34; }
+  #page-host > #settings-modal.as-page #manage #pf-adv { order: 40; }
+  #page-host > #settings-modal.as-page #manage #pf-base-col { order: 41; grid-column: 1 / span 2; }
+  #page-host > #settings-modal.as-page #pf-options > .frow { order: 42; grid-column: span 2; }
+  #page-host > #settings-modal.as-page #manage #pf-replyable-row { order: 43; }
+  #page-host > #settings-modal.as-page #manage #pf-args-row { order: 44; }
+  #page-host > #settings-modal.as-page #manage #pf-env-block { order: 45; }
+  #page-host > #settings-modal.as-page #manage .ped > .hint { order: 46; }
+  #page-host > #settings-modal.as-page #manage #settings-err { order: 50; }
+  /* Advanced, folded: the fields are still in the form (readForm reads them),
+     just not drawn. */
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-base-col,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-options > .frow:not([data-opt="model"]):not([data-opt="effort"]):not([data-opt="effortLevel"]),
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-replyable-row,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-args-row,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) #pf-env-block,
+  #page-host > #settings-modal.as-page #manage .ped:not(.adv-open) > .hint { display: none; }
+
+  #page-host > #settings-modal.as-page #manage .pf-touch {
+    display: flex; gap: 22px; margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--line);
+    border-radius: var(--r-card); font-size: 13px; line-height: 1.5;
+  }
+  .sr-ik { flex: none; color: var(--muted); }
+  .sr-iv { min-width: 0; overflow-wrap: anywhere; color: var(--fg); }
+  .sr-part.tone-warn { color: var(--amber); }
+  #page-host > #settings-modal.as-page #manage .pf-sec { display: block; margin: 6px 0 10px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #settings-modal.as-page #manage .pf-adv {
+    display: block; width: 100%; margin: 4px 0 14px; padding: 12px 0 0; border: 0; border-top: 1px solid var(--line);
+    background: none; text-align: left; font-family: var(--font-ui); font-size: 13px; color: var(--muted); cursor: pointer;
+  }
+  #page-host > #settings-modal.as-page #manage .pf-adv::before { content: "▸ "; }
+  #page-host > #settings-modal.as-page #manage .ped.adv-open .pf-adv::before { content: "▾ "; }
+  #page-host > #settings-modal.as-page #manage .pf-adv:hover { color: var(--fg); }
+
+  /* Labels and fields per pg-1b: sentence-case 12.5px labels, 34px fields with
+     6px corners; mono only for machine text (paths, binaries, model names). */
+  #page-host > #settings-modal.as-page #manage .flab { margin-bottom: 6px; font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--muted); }
+  #page-host > #settings-modal.as-page #manage .fld {
+    min-height: 34px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl);
+    background: var(--bg); font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page #manage textarea.fld { min-height: 0; line-height: 1.5; }
+  #page-host > #settings-modal.as-page #manage #pf-bin, #page-host > #settings-modal.as-page #manage #pf-cwd, #page-host > #settings-modal.as-page #manage #pf-cwd-custom, #page-host > #settings-modal.as-page #manage #pf-context, #page-host > #settings-modal.as-page #manage #pf-args,
+  #page-host > #settings-modal.as-page #pf-options > .frow[data-opt="model"] .fld, #page-host > #settings-modal.as-page #manage #pf-env-rows .fld { font-family: var(--font-mono); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #manage .seg { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #settings-modal.as-page #manage .seg button { padding: 5px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #settings-modal.as-page #manage .seg button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #manage .seg button.dgr.on { background: var(--danger-tint); color: var(--danger); }
+  /* An option's segmented control wraps inside its column rather than run past it. */
+  #page-host > #settings-modal.as-page #pf-options .seg { display: inline-flex; flex-wrap: wrap; max-width: 100%; }
+  #page-host > #settings-modal.as-page #pf-options .seg button { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  #page-host > #settings-modal.as-page #manage input[type="checkbox"] { accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #manage .lockbar, #page-host > #settings-modal.as-page #manage .pf-sumbox, #page-host > #settings-modal.as-page #manage .pf-confirm { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page #manage .warnbox { border-radius: var(--r-ctl); }
+  #page-host > #settings-modal.as-page #manage .ped .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #manage .ped .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  #page-host > #settings-modal.as-page #manage .ped .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page #manage .hint { font-size: 12px; line-height: 1.6; }
+
+  /* Agent accounts, API tokens, Appearance, About: the same content, on the
+     page's tokens. */
+  #page-host > #settings-modal.as-page > #tokens .hint, #page-host > #settings-modal.as-page > #accounts .hint, #page-host > #settings-modal.as-page > #settings .hint, #page-host > #settings-modal.as-page > #about .hint { font-size: 12.5px; line-height: 1.6; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #tokens .btn, #page-host > #settings-modal.as-page > #accounts .btn, #page-host > #settings-modal.as-page > #settings .btn, #page-host > #settings-modal.as-page > #about .btn {
+    padding: 6px 12px; border: 1px solid transparent; border-radius: var(--r-ctl); background: var(--raise);
+    font-family: var(--font-ui); font-size: 13px; color: var(--fg);
+  }
+  #page-host > #settings-modal.as-page > #tokens .btn.gh { background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page > #tokens .btn.dgr, #page-host > #settings-modal.as-page > #accounts .btn.dgr { background: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page .tokrow, #page-host > #settings-modal.as-page .acct-row { border-bottom-color: var(--line); font-size: 13px; }
+  #page-host > #settings-modal.as-page .tokrow .meta, #page-host > #settings-modal.as-page .acct-meta { font-size: 12px; }
+  #page-host > #settings-modal.as-page .tokrow.arm { border-radius: var(--r-chip); }
+  #page-host > #settings-modal.as-page .reveal { border-radius: var(--r-card); }
+  #page-host > #settings-modal.as-page .reveal .tk { border-radius: var(--r-ctl); font-family: var(--font-mono); }
+  #page-host > #settings-modal.as-page .fsrow { padding: 14px 0; border-bottom-color: var(--line); font-size: 13px; }
+  #page-host > #settings-modal.as-page .fsrow .lbl { width: 140px; color: var(--fg); }
+  #page-host > #settings-modal.as-page .sample { border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-mono); }
+  #page-host > #settings-modal.as-page .notify-opt input[type="checkbox"] { accent-color: var(--accent); }
+  #page-host > #settings-modal.as-page #about-version { font-size: 14px; color: var(--fg); }
+  #page-host > #settings-modal.as-page #about-runtime { display: block; margin-top: -6px; font-size: 12.5px; color: var(--muted); }
+
+  /* Credentials as tables (S4 Task 6, pg-2): a quiet store strip, then one
+     bordered table per provider. Colour roles (D23): amber = needs you (missing,
+     locked, expired, not checked), red = write / prod / error, green = status;
+     mono only for machine text (account ids, role names, client ids, env names,
+     hosts). The card rules in app.css stay for the mobile modal. */
+  #page-host > #settings-modal.as-page #creds-body { gap: 14px; }
+  #page-host > #settings-modal.as-page #creds .cstrip { gap: 8px 14px; padding: 12px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); }
+  #page-host > #settings-modal.as-page #creds .cstrip.need { border-color: var(--warn); background: var(--warn-bg); }
+  #page-host > #settings-modal.as-page #creds .cstrip .txt { font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .cstrip .txt b { color: var(--fg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #creds .cstrip.need .txt b { color: var(--amber); }
+  #page-host > #settings-modal.as-page #creds .st { padding: 0; border: 0; font-size: 13px; line-height: 1.4; }
+  #page-host > #settings-modal.as-page #creds .st::before { display: none; }
+  #page-host > #settings-modal.as-page #creds .cstrip .st { gap: 7px; }
+  #page-host > #settings-modal.as-page #creds .cstrip .st::before { display: inline-block; }
+  #page-host > #settings-modal.as-page #creds .st.ready { color: var(--ok); }
+  #page-host > #settings-modal.as-page #creds .st.missing, #page-host > #settings-modal.as-page #creds .st.locked, #page-host > #settings-modal.as-page #creds .st.notset { color: var(--amber); }
+  #page-host > #settings-modal.as-page #creds .st.invalid { color: var(--red); }
+  #page-host > #settings-modal.as-page #creds .hint { font-size: 12.5px; line-height: 1.6; }
+  #page-host > #settings-modal.as-page #creds .btn { padding: 5px 11px; border-color: var(--line); border-radius: var(--r-ctl); background: var(--raise); font-family: var(--font-ui); font-size: 12.5px; color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .btn:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #creds .btn.pri { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
+  #page-host > #settings-modal.as-page #creds .btn.dgr { background: transparent; border-color: transparent; color: var(--red); }
+  #page-host > #settings-modal.as-page #creds .btn.dgr:hover { background: var(--danger-tint); }
+  #page-host > #settings-modal.as-page #creds .warnbox, #page-host > #settings-modal.as-page #creds .amberbox, #page-host > #settings-modal.as-page #creds .confirm { border-radius: var(--r-ctl); }
+
+  #page-host > #settings-modal.as-page #creds .ctab-sec { gap: 0; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--bg); overflow: hidden; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h { min-height: 48px; padding: 0 16px; border-bottom: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .count { font-weight: 400; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .hint, #page-host > #settings-modal.as-page #creds .ctab-sec > .honest { padding: 12px 16px; border-top: 1px solid var(--line); color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > div:not(.sec-h) { padding: 4px 16px 10px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #creds .ctab { width: 100%; border-collapse: collapse; }
+  #page-host > #settings-modal.as-page #creds .ctab th { padding: 10px 16px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab td { padding: 12px 16px; vertical-align: top; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+  /* Names and statuses break between words, never inside one ("Missin/g"). */
+  #page-host > #settings-modal.as-page #creds .ctab .c-main { overflow-wrap: break-word; }
+  #page-host > #settings-modal.as-page #creds .ctab .c-nm { display: inline-block; max-width: 100%; }
+  /* AWS sizes its columns to content: a name holds its column open whole. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec[data-group="aws"] .ctab .c-nm { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab .st { white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab .pv { overflow-wrap: normal; }
+  /* The GitHub and token tables share one set of column starts (pg-2). AWS has
+     its own columns and keeps the automatic layout. */
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab { table-layout: fixed; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(1) { width: 22%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(2) { width: 30%; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(3) { width: 96px; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec:not([data-group="aws"]) .ctab th:nth-child(5) { width: 136px; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri { background: var(--raise); border-color: var(--line); color: var(--fg); font-weight: 400; }
+  #page-host > #settings-modal.as-page #creds .ctab-sec > .sec-h .btn.pri:hover { background: var(--line); }
+  #page-host > #settings-modal.as-page #creds .ctab tbody.crow + tbody.crow > tr:first-child > td { border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #creds .ctab .c-main { color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .ctab .c-main.mono { font-size: 12.5px; }
+  #page-host > #settings-modal.as-page #creds .ctab .c-sub { margin-top: 3px; font-size: 11.5px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab .c-sub.mono { font-size: 11.5px; }
+  #page-host > #settings-modal.as-page #creds .ctab .bdg { margin-left: 6px; padding: 0 5px; border-radius: var(--r-chip); font-size: 10px; line-height: 15px; letter-spacing: .04em; vertical-align: 1px; }
+  #page-host > #settings-modal.as-page #creds .ctab .bdg.prod { color: var(--red); border-color: var(--red); font-weight: 700; }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.ok { color: var(--ok); }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.ok::before { content: "✓ "; }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.warn { color: var(--amber); }
+  #page-host > #settings-modal.as-page #creds .ctab .pv.bad { color: var(--red); }
+  #page-host > #settings-modal.as-page #creds .ctab tr.danger > td:first-child { box-shadow: inset 2px 0 0 var(--red); }
+  #page-host > #settings-modal.as-page #creds .ctab .ctab-act { width: 1%; padding-left: 8px; text-align: right; white-space: nowrap; }
+  #page-host > #settings-modal.as-page #creds .ctab .ent-act { justify-content: flex-end; }
+  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr) { border-color: transparent; background: transparent; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .ctab .ent-act .btn:not(.dgr):hover { background: var(--raise); color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .ctab .ctab-x > td { padding: 0; }
+  #page-host > #settings-modal.as-page #creds .ctab .ctab-ex > * { margin: 0 16px 12px; }
+
+  #page-host > #settings-modal.as-page #creds .ctab-fold { gap: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+  #page-host > #settings-modal.as-page #creds .vfold > summary { padding: 8px 0; list-style: none; cursor: pointer; font-size: 13px; color: var(--muted); }
+  #page-host > #settings-modal.as-page #creds .vfold > summary::-webkit-details-marker { display: none; }
+  #page-host > #settings-modal.as-page #creds .vfold > summary::before { content: "▸ "; }
+  #page-host > #settings-modal.as-page #creds .vfold[open] > summary::before { content: "▾ "; }
+  #page-host > #settings-modal.as-page #creds .vfold > summary:hover { color: var(--fg); }
+  #page-host > #settings-modal.as-page #creds .vfold-b { display: flex; flex-direction: column; gap: 12px; padding: 6px 0 4px; }
+  #page-host > #settings-modal.as-page #creds .vfold-b > .btn { align-self: flex-start; }
+
+  /* --- Audit page (S4; pg-3b.png) -------------------------------------------- */
+  /* Colour roles: red = elevation rows and refused/denied/write outcomes only,
+     green = status words only; everything else is neutral text. Prefixed
+     #page-host > #audit-page.as-page so the page rules outrank the dialog's own. */
+  .ac-link { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; cursor: pointer; }
+  .ac-link:hover { text-decoration: underline; }
+  #page-host > #audit-page.as-page > .dhd { height: 52px; flex: none; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 16px; font-weight: 600; color: var(--fg); }
+  #page-host > #audit-page.as-page > .dhd h2 { margin: 0; font: inherit; }
+  #page-host > #audit-page.as-page #au-range { padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #audit-page.as-page #au-range button { padding: 4px 12px; border: 0; border-radius: var(--r-chip); font-family: var(--font-ui); font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-range button:hover { background: var(--raise); color: var(--fg); }
+  #page-host > #audit-page.as-page #au-range button.on { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #audit-page.as-page #au-csv { display: inline-flex; align-items: center; padding: 5px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; text-decoration: none; }
+  #page-host > #audit-page.as-page #au-csv:hover { background: var(--line); }
+  #page-host > #audit-page.as-page #au-esc { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-esc::before { content: "Esc"; font-size: 12px; }
+  #page-host > #audit-page.as-page #au-esc:hover { color: var(--fg); background: var(--raise); }
+
+  #page-host > #audit-page.as-page .au-kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); flex: none; border-bottom: 1px solid var(--line); }
+  #page-host > #audit-page.as-page .au-kpi { padding: 14px 20px; min-width: 0; }
+  #page-host > #audit-page.as-page .au-kpi + .au-kpi { border-left: 1px solid var(--line); }
+  #page-host > #audit-page.as-page .au-n { font-size: 20px; font-weight: 600; color: var(--fg); }
+  #page-host > #audit-page.as-page .au-l { margin-top: 2px; font-size: 13px; color: var(--muted); }
+
+  #page-host > #audit-page.as-page .au-filters { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+  #page-host > #audit-page.as-page .au-filters .grow { flex: 1; }
+  #page-host > #audit-page.as-page .au-filters button { flex: none; white-space: nowrap; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; cursor: pointer; }
+  #page-host > #audit-page.as-page .au-filters button:hover { color: var(--fg); }
+  #page-host > #audit-page.as-page .au-filters button.on { background: var(--raise); color: var(--fg); border-color: var(--faint); }
+  #page-host > #audit-page.as-page #au-session { flex: 0 1 auto; width: auto; min-width: 0; max-width: 240px; min-height: 30px; padding: 4px 10px; border-color: var(--line); border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 13px; }
+
+  #page-host > #audit-page.as-page .au-scroll { flex: 1 1 0; min-height: 0; overflow: auto; }
+  #page-host > #audit-page.as-page #au-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  #page-host > #audit-page.as-page #au-table th { position: sticky; top: 0; z-index: 1; padding: 0 20px; height: 32px; background: var(--bg); border-bottom: 1px solid var(--line); text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+  #page-host > #audit-page.as-page #au-table th:nth-child(1) { width: 120px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(2) { width: 160px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(3) { width: 116px; }
+  #page-host > #audit-page.as-page #au-table th:nth-child(5) { width: 220px; }
+  #page-host > #audit-page.as-page #au-table td { height: 32px; padding: 0 20px; border-bottom: 1px solid var(--line); color: var(--fg); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #page-host > #audit-page.as-page #au-table td.au-time { font-family: var(--font-mono); font-size: 12px; color: var(--faint); }
+  #page-host > #audit-page.as-page #au-table td.au-kind { color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table td.au-what { font-family: var(--font-mono); font-size: 12px; }
+  #page-host > #audit-page.as-page #au-table td.au-what .au-reason { font-family: var(--font-ui); font-size: 13px; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table tr.au-elev { background: color-mix(in srgb, var(--red) 8%, var(--bg)); }
+  #page-host > #audit-page.as-page #au-table td.au-bad { color: var(--red); }
+  #page-host > #audit-page.as-page #au-table td.au-ok { color: var(--ok); }
+  #page-host > #audit-page.as-page #au-table td.au-empty { height: 96px; padding: 0 20px; text-align: center; color: var(--muted); }
+  #page-host > #audit-page.as-page #au-table td.au-empty.au-bad { color: var(--red); }
+
+  #page-host > #audit-page.as-page .au-foot { display: flex; align-items: center; gap: 12px; flex: none; position: sticky; bottom: 0; height: 40px; padding: 0 20px; border-top: 1px solid var(--line); background: var(--bg); font-size: 12px; color: var(--faint); }
+  #page-host > #audit-page.as-page .au-foot .grow { flex: 1; }
+  #page-host > #audit-page.as-page #au-more { padding: 3px 10px; border-radius: var(--r-ctl); font-family: var(--font-ui); font-size: 12px; color: var(--fg); }
+  #page-host > #audit-page.as-page #au-more:hover { background: var(--raise); }
+  #page-host > #audit-page.as-page #au-more[hidden] { display: none; }
+
+  /* --- Analytics page (S4; pg-4.png) ------------------------------------------ */
+  /* The dialog is re-parented into #page-host (pagehost.js). A grid puts the
+     title and the tab/controls head on one 52px row; the body spans below. The
+     range caption moves into the first chart's hint (analytics.js), so the
+     header's own #analytics-range is hidden. */
+  #page-host > #analytics-modal.as-page { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-rows: minmax(52px, auto) minmax(0, 1fr); }
+  #page-host > #analytics-modal.as-page > .dlg-title {
+    grid-column: 1; grid-row: 1; position: static; transform: none; pointer-events: auto; align-self: stretch; width: auto; max-width: none;
+    margin: 0; padding: 15px 8px 0 20px; background: var(--bg); border-bottom: 1px solid var(--line);
+    font-size: 16px; font-weight: 600; letter-spacing: 0; color: var(--fg);
+    /* Level with the head's first row, also when the head wraps to two. */
+    display: flex; align-items: flex-start; white-space: nowrap;
+  }
+  /* The head wraps when it cannot fit one row (below ~1280): the range,
+     Compare, Re-scan and ✕ drop to a second row, right-aligned, never clipped. */
+  #page-host > #analytics-modal.as-page > .dlg-head { grid-column: 2; grid-row: 1; flex-wrap: wrap; justify-content: flex-end; gap: 8px 6px; min-width: 0; padding: 9px 20px 9px 0; border-bottom: 1px solid var(--line); background: var(--bg); }
+  #page-host > #analytics-modal.as-page > .dlg-head > * { flex: none; }
+  #page-host > #analytics-modal.as-page > .dlg-head > .spacer { flex: 1 1 0; }
+  #page-host > #analytics-modal.as-page #analytics-range { display: none; }
+  #page-host > #analytics-modal.as-page #an-ctl { display: flex; align-items: center; }
+  #page-host > #analytics-modal.as-page #an-tabs { flex-wrap: nowrap; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); }
+  #page-host > #analytics-modal.as-page #an-tabs button { padding: 4px 9px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-tabs button:hover { color: var(--fg); background: var(--raise); }
+  #page-host > #analytics-modal.as-page #an-tabs button.act { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-controls { flex-wrap: nowrap; gap: 2px; margin: 0; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-controls > span { display: none; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip { padding: 4px 8px; border: 0; border-radius: var(--r-chip); background: transparent; color: var(--muted); font-family: var(--font-ui); font-size: 13px; white-space: nowrap; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip:hover { color: var(--fg); background: var(--raise); }
+  #page-host > #analytics-modal.as-page #an-ctl .an-chip.on { background: var(--raise); color: var(--fg); font-weight: 600; }
+  #page-host > #analytics-modal.as-page #an-ctl .an-controls > .an-chip:last-child { margin-left: 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); }
+  #page-host > #analytics-modal.as-page #analytics-refresh { white-space: nowrap; padding: 5px 10px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page #analytics-refresh:hover { background: var(--line); }
+  #page-host > #analytics-modal.as-page #analytics-refresh:disabled { opacity: .6; cursor: default; }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x::before { content: "Esc"; font-size: 12px; }
+  #page-host > #analytics-modal.as-page .dlg-head > .dlg-x:hover { color: var(--fg); background: var(--raise); }
+  #page-host > #analytics-modal.as-page > .dlg-body { grid-column: 1 / -1; grid-row: 2; padding: 20px; background: var(--bg); }
+
+  /* Cards: --panel, --r-card, 1px --line. */
+  #page-host > #analytics-modal.as-page .an-customrow { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+  #page-host > #analytics-modal.as-page .an-customrow .an-chip { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--raise); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page .an-date { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--r-ctl); background: var(--bg); font-family: var(--font-ui); font-size: 13px; }
+  #page-host > #analytics-modal.as-page .an-kpis { gap: 12px; margin-bottom: 16px; }
+  #page-host > #analytics-modal.as-page .an-kpi { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #analytics-modal.as-page .an-kpi .v { font-size: 22px; font-weight: 600; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-kpi .v.cost { color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-kpi .l { margin-top: 4px; font-size: 13px; letter-spacing: 0; text-transform: none; }
+  #page-host > #analytics-modal.as-page .an-box { padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-card); background: var(--panel); }
+  #page-host > #analytics-modal.as-page .an-box h4 { font-size: 13px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-section { margin: 0 0 16px; }
+  #page-host > #analytics-modal.as-page .an-section h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--fg); }
+  #page-host > #analytics-modal.as-page .an-hint { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+  #page-host > #analytics-modal.as-page .an-grid2 { gap: 12px; }
+  #page-host > #analytics-modal.as-page .an-hbar .track { background: var(--raise); }
+  /* Compare: the diverging bars and their numbers share --an-up / --an-down;
+     a cost rise is not "red" here, it is a palette hue. The amber note stripe is
+     needs-you only, so the compare note goes neutral. */
+  #page-host > #analytics-modal.as-page .an-divrow .val.an-up { color: var(--an-up); }
+  #page-host > #analytics-modal.as-page .an-divrow .val.an-down { color: var(--an-down); }
+  /* KPI deltas: neutral text, the up/down arrow carries the direction. The
+     base red/green (and good/bad) pairs are status colours (D23). */
+  #page-host > #analytics-modal.as-page .an-kdelta { color: var(--muted); }
+  #page-host > #analytics-modal.as-page .an-cmpnote { border-left-color: var(--faint); background: var(--raise); }
+
+  /* --- chrome for the remaining modals, palette, toast, store banner, login (S4, spec 5.13) --- */
+  /* No behaviour change: only the tokens and type move. Generic dialog chrome is
+     scoped to modal dialogs that are not pages (.as-page has its own rules above),
+     not box-framed (the spawn dialog keeps its frame; the ask dialog is restyled
+     below) and not the mobile sheet. */
+  /* Not the box-framed spawn and analytics dialogs: they keep their S3 look. */
+  dialog:not([box-])::backdrop, #ask-modal::backdrop { background: rgba(5, 7, 9, .62); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: var(--r-dlg);
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px/1.45 var(--font-ui); overflow: hidden;
+  }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dhd {
+    height: 52px; padding: 0 20px; gap: 12px; border-bottom: 1px solid var(--line); background: var(--panel);
+    font-size: 15px; font-weight: 600; color: var(--fg);
+  }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dbd.pad { padding: 16px 20px; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) > .dft {
+    height: 56px; padding: 0 20px; gap: 10px; border-top: 1px solid var(--line); background: var(--panel);
+  }
+  /* Buttons: secondary = --raise, primary = filled accent with dark text, ghost = text
+     only, destructive = red text. */
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn {
+    padding: 6px 12px; font: 400 13px var(--font-ui); color: var(--fg); background: var(--raise);
+    border: 0; border-radius: var(--r-ctl);
+  }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:hover { background: var(--background3); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.pri { background: var(--accent); color: var(--bg); font-weight: 600; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.gh { background: transparent; color: var(--muted); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.gh:hover { background: var(--raise); color: var(--fg); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.dgr { background: transparent; color: var(--red); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.dgr:hover { background: var(--danger-tint); }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:disabled,
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn.off { opacity: .5; cursor: default; text-decoration: none; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .dhd .btn.gh { padding: 2px 8px; font-size: 18px; line-height: 1; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .btn:focus-visible,
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  dialog:not(.as-page):not([box-]):not(.sheet-dialog) .fld { border-color: var(--line); border-radius: var(--r-ctl); font: 13px var(--font-ui); }
+
+  /* Report a problem. */
+  #bug-modal { width: 760px; }
+  #bug-modal .flab { display: block; margin-bottom: 6px; font-size: 12px; color: var(--muted); }
+  #bug-modal #bug-what { min-height: 64px; margin-bottom: 14px; padding: 8px 10px; border-radius: var(--r-ctl); }
+  #bug-modal #bug-preview {
+    padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl);
+    font: 12px/1.5 var(--font-mono); color: var(--fg);
+  }
+  #bug-modal .hint { margin: 10px 0 0; font-size: 12px; color: var(--muted); }
+  #bug-modal #bug-status { margin: 0; color: var(--muted); }
+  #bug-modal #bug-status a { color: var(--accent); }
+
+  /* Ask / confirm / prompt dialog (shell.js askDialog). The box frame is hidden: a
+     plain card, the title as a header, the close cross in the corner. */
+  #ask-modal { width: 420px; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px/1.5 var(--font-ui); overflow: hidden; }
+  #ask-modal::before { display: none; }
+  #ask-modal .dlg-title {
+    position: static; transform: none; align-self: stretch; pointer-events: auto; max-width: none;
+    margin: 0; padding: 16px 44px 4px 20px; background: none; font-size: 15px; font-weight: 600; color: var(--fg);
+    /* A long title wraps (the whole name of what is deleted stays readable) and
+       keeps 44px clear for the close cross. */
+    box-sizing: border-box; width: 100%; min-width: 0; white-space: normal; overflow: visible; overflow-wrap: anywhere; line-height: 1.35;
+  }
+  #ask-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
+  #ask-modal .dlg-x { padding: 2px 8px; border-radius: var(--r-ctl); }
+  #ask-modal .dlg-x:hover { background: var(--raise); color: var(--fg); }
+  #ask-modal .dlg-x:focus-visible, #ask-modal .ask-actions button:focus-visible, #ask-modal #ask-input:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #ask-modal .dlg-body { padding: 4px 20px 18px; }
+  #ask-modal #ask-body { margin: 6px 0 10px; font-size: 13px; color: var(--muted); }
+  #ask-modal #ask-label { display: block; margin: 0 0 6px; font-size: 12px; color: var(--muted); }
+  #ask-modal #ask-input { padding: 7px 10px; background: var(--bg); border-color: var(--line); border-radius: var(--r-ctl); font: 13px var(--font-ui); }
+  #ask-modal .ask-actions { gap: 8px; margin-top: 16px; }
+  #ask-modal .ask-actions button { padding: 6px 14px; font: 400 13px var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
+  #ask-modal .ask-actions button:hover { background: var(--background3); border: 0; }
+  #ask-modal #ask-ok { background: var(--accent); color: var(--bg); font-weight: 600; }
+  #ask-modal #ask-ok:hover { background: var(--accent); filter: brightness(1.08); }
+  #ask-modal #ask-ok:disabled { opacity: .5; cursor: default; filter: none; text-decoration: none; }
+  /* Destructive confirm: red text on a clear button, never a red fill. */
+  #ask-modal.danger #ask-ok { background: transparent; color: var(--red); box-shadow: inset 0 0 0 1px var(--red); }
+  #ask-modal.danger #ask-ok:hover { background: var(--danger-tint); }
+
+  /* Command palette. */
+  #palette { width: 620px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); box-shadow: 0 18px 60px rgba(0, 0, 0, .55); font: 13px var(--font-ui); overflow: hidden; }
+  #pal-inputwrap { border-bottom: 1px solid var(--line); }
+  #pal-prompt { font: 14px var(--font-mono); }
+  #pal-input { background: transparent; font: 14px var(--font-ui); }
+  #pal-hints { font-size: 11.5px; color: var(--faint); }
+  #pal-list { padding: 6px; }
+  #pal-list .pal-head { padding: 10px 12px 4px; font-size: 11px; letter-spacing: .06em; color: var(--faint); border-left-width: 2px; }
+  #pal-list .pal-head:first-child { padding-top: 4px; }
+  #pal-list li.pal-row { padding: 7px 10px; border-left-width: 2px; border-radius: var(--r-ctl); font-size: 13px; }
+  #pal-list li.pal-row:hover { background: var(--raise); }
+  #pal-list li.pal-row.sel { background: var(--raise); border-left-color: var(--accent); }
+  #pal-list .pal-hint { font-family: var(--font-mono); color: var(--faint); }
+  #pal-list li.pal-row.sel .pal-hint { color: var(--muted); }
+  #pal-list .pal-copy { border-radius: var(--r-chip); }
+  #pal-list .pal-copy:hover { background: var(--line); }
+  #pal-list .pal-copy:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #pal-empty { padding: 16px 20px; font-size: 13px; color: var(--muted); }
+
+  /* Toast: a --raise card, a left rule only for error (red) and warn (amber; the clone
+     "needs you" case). Undo is an accent ghost button. */
+  #toast {
+    gap: 12px; padding: 10px 12px 10px 14px; background: var(--raise); border: 1px solid var(--line);
+    border-left: 3px solid var(--line); border-radius: var(--r-card); box-shadow: 0 10px 34px rgba(0, 0, 0, .5);
+    font: 13px/1.45 var(--font-ui); color: var(--fg);
+  }
+  #toast.err { border-left-color: var(--red); }
+  #toast.warn { border-left-color: var(--amber); }
+  #toast-undo { padding: 3px 10px; background: transparent; color: var(--accent); border: 0; border-radius: var(--r-ctl); font: 500 12.5px var(--font-ui); }
+  #toast-undo:hover { background: var(--sel-soft); color: var(--accent); }
+  #toast-x { padding: 1px 6px; border-radius: var(--r-chip); color: var(--muted); }
+  #toast-x:hover { background: var(--line); color: var(--fg); }
+  #toast-undo:focus-visible, #toast-x:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+  #toast-bar { height: 3px; background: var(--line); border-radius: 2px; }
+  #toast-bar > i { background: var(--accent); }
+
+  /* Store-locked banner: a --panel strip. It is only ever shown while the store is
+     locked and blocks spawns, so the one amber use is the leading dot and the message. */
+  #store-banner { padding: 8px 16px; gap: 8px 14px; background: var(--panel); color: var(--fg); border-bottom: 1px solid var(--line); font-size: 13px; }
+  #store-banner .storebanner-msg { color: var(--amber); }
+  #store-banner .storebanner-msg::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 8px; vertical-align: middle; border-radius: 50%; background: var(--amber); }
+  #store-banner .storepass { padding: 5px 10px; border-color: var(--line); border-radius: var(--r-ctl); font: 13px var(--font-ui); }
+  #store-banner .btn { padding: 5px 12px; font: 400 13px var(--font-ui); color: var(--fg); background: var(--raise); border: 0; border-radius: var(--r-ctl); }
+  #store-banner .btn:hover { background: var(--background3); }
+  #store-banner .btn.pri { background: var(--accent); color: var(--bg); font-weight: 600; }
+  #store-banner .btn.pri:hover { background: var(--accent); filter: brightness(1.08); }
+  #store-banner .storeerr { color: var(--red); }
+  #store-banner .storepass:focus-visible, #store-banner .btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+  /* Login (login.html links desktop.css after primitives.css; its inline <style> comes
+     later, so these are prefixed to outrank it). The tokens above already remap its
+     colours and type: this adds the 360px card and the control radii. */
+  body > main.card { max-width: 360px; padding: 28px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-dlg); }
+  body > main.card h1 { font-size: 18px; font-weight: 600; letter-spacing: 0; }
+  body > main.card .sub { font-size: 13px; color: var(--muted); }
+  body > main.card label { font-size: 12px; }
+  body > main.card input[type=password] { padding: 9px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-ctl); font-size: 13px; }
+  body > main.card input[type=password]:focus-visible { outline: 1px solid var(--accent); outline-offset: 0; border-color: var(--accent); }
+  body > main.card button { padding: 9px 12px; background: var(--accent); color: var(--bg); border-radius: var(--r-ctl); font-size: 13px; font-weight: 600; }
+  body > main.card button:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+  body > main.card .err { background: color-mix(in srgb, var(--red) 10%, var(--panel)); border-color: var(--red); border-radius: var(--r-ctl); color: var(--red); font-size: 13px; }
 }

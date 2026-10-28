@@ -178,6 +178,9 @@ func shutdownSignalsFor(ignored func(os.Signal) bool) []os.Signal {
 type shutdownSteps struct {
 	DetachAll     func() int // release attach clients; returns how many
 	StopAnalytics func()
+	// StopRetention cancels the egress audit pruning job and waits for it, so
+	// StopEgress does not close the audit store under a delete. Nil when none runs.
+	StopRetention func()
 	// StopEgress stops the egress proxy (waiting for every tunnel to be audited)
 	// and closes its audit store. Nil when egress control is not running. It runs
 	// before the broker: a tunnel in flight is not worth keeping once we drain.
@@ -200,6 +203,9 @@ func awaitShutdown(stop <-chan os.Signal, s shutdownSteps, logf func(string, ...
 	sig := <-stop
 	logf("received %v: releasing %d attach client(s), agents stay running", sig, s.DetachAll())
 	s.StopAnalytics()
+	if s.StopRetention != nil {
+		s.StopRetention()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if s.StopEgress != nil {

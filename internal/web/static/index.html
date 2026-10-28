@@ -109,6 +109,7 @@
           <span id="side-elevated">0 elevated</span>
         </div>
         <div class="side-links">
+          <button id="side-audit" type="button" hidden>Audit</button>
           <button id="side-analytics" type="button" hidden>Analytics</button>
           <button id="side-settings" type="button">Settings</button>
         </div>
@@ -150,6 +151,7 @@
         </div>
       </div>
     </aside>
+    <div id="page-host" hidden></div>
     <aside id="steer-rail" class="rail" aria-label="Session detail" hidden>
       <div class="rsec" id="steer-head"></div>
       <div class="rsec" id="steer-elev" hidden></div>
@@ -277,10 +279,13 @@
       <button type="button" class="btn gh" id="settings-esc" data-close="settings-modal" aria-label="Close" title="Close (Esc)">&times;</button>
     </div>
     <div class="tabs" id="settings-tabs" role="tablist">
+      <span class="pg-group" role="presentation">Agents</span>
+      <span class="pg-group" role="presentation">Access</span>
+      <span class="pg-group" role="presentation">App</span>
       <button type="button" class="t on" data-tab="manage" role="tab" aria-selected="true" aria-controls="manage">Profiles</button>
       <button type="button" class="t" data-tab="creds" role="tab" aria-selected="false" aria-controls="creds">Credentials</button>
       <button type="button" class="t" data-tab="settings" role="tab" aria-selected="false" aria-controls="settings">Appearance</button>
-      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">Access tokens</button>
+      <button type="button" class="t" data-tab="tokens" role="tab" aria-selected="false" aria-controls="tokens">API tokens</button>
       <button type="button" class="t" data-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts">Agent accounts</button>
       <button type="button" class="t" data-tab="about" role="tab" aria-selected="false" aria-controls="about">About</button>
     </div>
@@ -294,11 +299,15 @@
         </div>
       </div>
       <div class="ped">
+        <div id="pf-touch" class="pf-touch" aria-live="polite"></div>
+        <h3 class="pf-sec" data-sec="agent">Agent</h3>
+        <h3 class="pf-sec" data-sec="where">Where it runs</h3>
+        <h3 class="pf-sec" data-sec="touch">What it can touch</h3>
         <div class="lockbar" id="pf-lock" hidden>Built-in profile — read only. Duplicate it to make one you own.</div>
         <div class="frow">
-          <div class="fcol"><label class="flab" for="pf-name">Profile name</label>
+          <div class="fcol" id="pf-name-col"><label class="flab" for="pf-name">Profile name</label>
             <input id="pf-name" class="fld" type="text" placeholder="my-profile"></div>
-          <div class="fcol"><label class="flab" for="pf-bin">Binary</label>
+          <div class="fcol" id="pf-bin-col"><label class="flab" for="pf-bin">Binary</label>
             <input id="pf-bin" class="fld" type="text" list="pf-bins" placeholder="claude"></div>
         </div>
         <datalist id="pf-bins"><option value="claude"></option><option value="bash"></option><option value="codex"></option></datalist>
@@ -312,7 +321,7 @@
               socket. Use it only where a box genuinely cannot work.
             </div>
           </div>
-          <div class="fcol"><label class="flab" for="pf-base">Base environment</label>
+          <div class="fcol" id="pf-base-col"><label class="flab" for="pf-base">Base environment</label>
             <select id="pf-base" class="fld">
               <option value="inherit">inherit: full env</option>
               <option value="clean">clean: no secrets</option>
@@ -320,7 +329,7 @@
             </select></div>
         </div>
         <div class="frow">
-          <div class="fcol"><label class="flab" for="pf-cwd">Default workspace</label>
+          <div class="fcol" id="pf-cwd-col"><label class="flab" for="pf-cwd">Default workspace</label>
             <select id="pf-cwd" class="fld"></select>
             <input id="pf-cwd-custom" class="fld" type="text" placeholder="/custom/path" autocomplete="off" hidden></div>
           <div class="fcol" id="pf-account-col">
@@ -392,11 +401,12 @@
           <p class="warnbox tiny" id="pf-st-warn">The agent can read this token. It is long-lived and is not revoked when the session ends.</p>
           <p class="warnbox tiny" id="pf-st-err" role="alert" hidden></p>
         </div>
+        <button id="pf-adv" class="pf-adv" type="button" aria-expanded="false" aria-controls="pf-base-col pf-options pf-replyable-row pf-args-row pf-env-block">Advanced · base environment, options, args, environment variables, replies</button>
         <div id="pf-options"></div>
         <div class="frow" id="pf-replyable-row" hidden>
           <label class="pf-check"><input type="checkbox" id="pf-replyable"> Allow replies by default</label>
         </div>
-        <div class="frow">
+        <div class="frow" id="pf-args-row">
           <div class="fcol"><label class="flab" for="pf-args">Args (one per line)</label>
             <textarea id="pf-args" class="fld" rows="2" spellcheck="false" placeholder="--some-flag"></textarea></div>
         </div>
@@ -478,6 +488,7 @@
 
     <div class="dbd pad" id="about" role="tabpanel" hidden>
       <p id="about-version">Culibox</p>
+      <p id="about-runtime"></p>
       <p class="hint">Something not working? Build a report with your version, settings and a health check, with secrets and paths redacted. You review the text before anything leaves this page.</p>
       <p><button type="button" class="btn" id="bug-open">Report a problem</button></p>
     </div>
@@ -491,6 +502,7 @@
       <button id="pf-delete" type="button" class="btn dgr" disabled>Delete…</button>
       <span class="grow"></span>
       <button id="pf-duplicate" type="button" class="btn" disabled>Duplicate</button>
+      <button id="pf-discard" class="btn gh" type="button">Discard</button>
       <button id="pf-save" type="button" class="btn pri">Save</button>
       <button type="button" class="btn" data-close="settings-modal">Done</button>
     </div>
@@ -606,11 +618,48 @@
       </div>
       <span class="spacer"></span>
       <span id="analytics-range" class="an-caption" style="margin:0"></span>
+      <span id="an-ctl"></span>
       <button id="analytics-refresh" type="button" title="Re-scan transcripts now">Re-scan</button>
       <button class="dlg-x" type="button" data-close="analytics-modal" title="Close">×</button>
     </div>
     <div class="dlg-body">
       <div id="analytics-body"></div>
+    </div>
+  </dialog>
+
+  <!-- Desktop only (pagehost.js; auditpage.js fills it): the Audit page. -->
+  <dialog id="audit-page" aria-label="Audit">
+    <div class="dhd">
+      <h2 class="grow">Audit</h2>
+      <div class="seg" id="au-range" role="group" aria-label="Range">
+        <button type="button" data-range="24h">24h</button>
+        <button type="button" data-range="7d">7d</button>
+        <button type="button" data-range="30d">30d</button>
+      </div>
+      <a class="btn" id="au-csv" href="/api/audit.csv" download>Export CSV</a>
+      <button type="button" class="btn gh" id="au-esc" data-close="audit-page" aria-label="Close" title="Close (Esc)">&times;</button>
+    </div>
+    <div id="au-kpis" class="au-kpis"></div>
+    <div id="au-filters" class="au-filters" role="group" aria-label="Kind">
+      <button type="button" data-filter="">All</button>
+      <button type="button" data-filter="credentials">Credentials</button>
+      <button type="button" data-filter="elevations">Elevations</button>
+      <button type="button" data-filter="egress">Egress</button>
+      <button type="button" data-filter="settings">Settings changes</button>
+      <span class="grow"></span>
+      <select id="au-session" class="fld" aria-label="Session"></select>
+    </div>
+    <div id="au-scroll" class="au-scroll">
+      <table id="au-table">
+        <thead><tr><th>Time</th><th>Session</th><th>Kind</th><th>What</th><th>Outcome</th></tr></thead>
+        <tbody id="au-body"></tbody>
+      </table>
+    </div>
+    <div id="au-foot" class="au-foot">
+      <span id="au-count"></span>
+      <button type="button" class="btn gh" id="au-more" hidden>Show more</button>
+      <span class="grow"></span>
+      <span id="au-policy"></span>
     </div>
   </dialog>
 
@@ -677,6 +726,7 @@
   <script src="/dirpicker.js"></script>
   <script src="/filetree.js"></script>
   <script src="/shell.js"></script>
+  <script src="/pagehost.js"></script>
   <script src="/tokens.js"></script>
   <script src="/bugreport.js"></script>
   <script src="/store.js"></script>
@@ -689,6 +739,8 @@
   <script src="/steerrail.js"></script>
   <script src="/accessmodel.js"></script>
   <script src="/accesstab.js"></script>
+  <script src="/auditmodel.js"></script>
+  <script src="/auditpage.js"></script>
   <script src="/activitymodel.js"></script>
   <script src="/activitytab.js"></script>
   <script src="/envrows.js"></script>

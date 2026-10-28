@@ -152,16 +152,21 @@ function versionLabel(v) {
 }
 
 // loadAboutInfo shows the build in the About tab. /api/meta is the one place
-// the commit is published.
+// the commit is published. #about-runtime names the box layer (desktop only:
+// base CSS hides it on a phone); an empty box_runtime means every session runs
+// on the host.
 async function loadAboutInfo() {
   const el = document.getElementById("about-version");
   if (!el) return;
+  const rt = document.getElementById("about-runtime");
   try {
     const meta = await api("/api/meta");
     const v = meta && meta.version ? meta.version + " · " : "";
     el.textContent = "Culibox " + v + (meta && meta.commit ? "commit " + meta.commit : "(unknown build)");
+    if (rt) rt.textContent = "Box runtime: " + ((meta && meta.box_runtime) || "none (host only)");
   } catch (_) {
     el.textContent = "Culibox (build unknown)";
+    if (rt) rt.textContent = "";
   }
 }
 

@@ -203,6 +203,24 @@ function paletteProfileSpawns(list, open) {
   return list.map((p) => ({ kind: "new", label: "New session · " + p.name, hint: "", run: () => open(p.name) }));
 }
 
+// palettePageCommands: the page entries (S4). Desktop opens Audit, Analytics
+// and each Settings section as a page; Audit and Analytics only when the
+// server has them (`flags` mirrors /api/meta's audit/analytics, as their
+// sidebar links do). Mobile keeps exactly the two v0.4.0 Settings entries.
+// h = { audit(), analytics(), settings(tab) }; the tab ids are the panel ids.
+function palettePageCommands(desktop, flags, h) {
+  const settings = (label, tab) => ({ kind: "settings", label: "Settings · " + label, hint: "", run: () => h.settings(tab) });
+  if (!desktop) return [settings("Profiles", "manage"), settings("Font sizes", "settings")];
+  const out = [];
+  if (flags && flags.audit) out.push({ kind: "view", label: "Audit", hint: "", run: () => h.audit() });
+  if (flags && flags.analytics) out.push({ kind: "view", label: "Analytics", hint: "", run: () => h.analytics() });
+  out.push(
+    settings("Profiles", "manage"), settings("Agent accounts", "accounts"), settings("Credentials", "creds"),
+    settings("API tokens", "tokens"), settings("Appearance", "settings"), settings("About", "about"),
+  );
+  return out;
+}
+
 function paletteCommands(mac) {
   const cmds = [];
   // Every spawn goes through the form: under containment the workspace choice
@@ -230,8 +248,12 @@ function paletteCommands(mac) {
   for (const n of [1, 2, 4]) {
     cmds.push({ kind: "layout", label: "Layout · " + n + (n === 1 ? " window" : " windows"), hint: "", run: () => applyCap(n) });
   }
-  cmds.push({ kind: "settings", label: "Settings · Profiles", hint: "", run: () => openSettings("manage") });
-  cmds.push({ kind: "settings", label: "Settings · Font sizes", hint: "", run: () => openSettings("settings") });
+  {
+    const deskPages = !(typeof mobileActive === "function" && mobileActive(window.innerWidth));
+    const linkShown = (id) => { const b = document.getElementById(id); return !!b && !b.hidden; };
+    cmds.push(...palettePageCommands(deskPages, { audit: linkShown("side-audit"), analytics: linkShown("side-analytics") },
+      { audit: () => openAudit(), analytics: openAnalytics, settings: (tab) => openSettings(tab) }));
+  }
   // toggleSidebar is a no-op on mobile, so don't offer it there.
   if (!(typeof mobileActive === "function" && mobileActive(window.innerWidth))) {
     cmds.push({ kind: "view", label: "Toggle sidebar", hint: mac ? "⌘B" : "Ctrl+Shift+B", run: toggleSidebar });
@@ -242,9 +264,10 @@ function paletteCommands(mac) {
   const focusedId = () => (cellTerminal(focusedCell) || {}).id;
   const shell = paletteShellCommands(mac, desktop, {
     shortcuts: showShortcuts,
-    filesDrawer: () => toggleDrawer("files", focusedId()),
-    activityView: () => { if (focusedCell) focusedCell.toggleView("activity"); },
-    accessView: () => { if (focusedCell) focusedCell.toggleView("access"); },
+    filesDrawer: () => toggleDrawer("files", focusedId()), // toggleDrawer closes a page itself
+    // A page hides the panes: the view must open where the user can see it.
+    activityView: () => { closePage(); if (focusedCell) focusedCell.toggleView("activity"); },
+    accessView: () => { closePage(); if (focusedCell) focusedCell.toggleView("access"); },
     steerRail: toggleSteerRail,
     toggleFiles: () => togglePane("files"),
   });
@@ -570,5 +593,5 @@ function initPalette() {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns };
+  module.exports = { isPaletteHotkey, isInsertHotkey, palSection, palGroup, palPreferDir, palSessionMatchText, palModHint, paletteShellCommands, paletteShellSpawn, palSessionRun, paletteProfileSpawns, palettePageCommands };
 }

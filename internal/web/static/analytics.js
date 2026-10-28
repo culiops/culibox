@@ -231,11 +231,15 @@ function dowBuckets(rows) {
   return out;
 }
 
-// ---- model colour (Catppuccin categorical, stable per index) ----------------
-const AN_COLORS = ["#89b4fa", "#a6e3a1", "#fab387", "#cba6f7", "#f38ba8", "#94e2d5", "#f9e2af"];
+// ---- model colour (categorical, stable per index) --------------------------
+// The hues live in CSS as --an-1..7: app.css keeps the Catppuccin set on mobile,
+// desktop.css swaps in a palette with no green, amber or red (those are status
+// colours there). DOM bars take the var() through style.background, SVG marks
+// through style.fill / style.stroke.
+const AN_SLOTS = 7;
 function modelColor(models, model) {
   const i = (models || []).indexOf(model);
-  return AN_COLORS[(i < 0 ? 0 : i) % AN_COLORS.length];
+  return "var(--an-" + (((i < 0 ? 0 : i) % AN_SLOTS) + 1) + ")";
 }
 function shortModel(m) { return (m || "(unknown)").replace(/^claude-/, "").replace(/-20\d{6}$/, ""); }
 function projShort(p) {
@@ -387,22 +391,91 @@ function anRender() {
   const range = document.getElementById("analytics-range");
   if (range && AN.data) range.textContent = `${AN.data.from} → ${AN.data.to} (UTC)`;
   body.replaceChildren();
-  body.appendChild(anControls());
+  // On the desktop page the range chips + Compare live in the page header
+  // (#an-ctl); the modal keeps them at the top of the body.
+  const page = anIsPage();
+  const ctl = document.getElementById("an-ctl");
+  if (ctl) ctl.replaceChildren();
+  if (page && ctl) {
+    ctl.appendChild(anControls(true));
+    // Custom's two date inputs would not fit the header: a second row, first in the body.
+    if (AN.customOpen || AN.range === "custom") body.appendChild(anCustomRow());
+  } else {
+    body.appendChild(anControls(false));
+  }
   const d = AN.data;
   if (!d || !d.costByDay.days.length) {
+    if (page) body.appendChild(el("p", "an-hint", `${d ? d.from : AN.from} → ${d ? d.to : AN.to} (UTC)`));
     body.appendChild(anEmpty("No usage recorded in this window. Try a wider range or Re-scan."));
     return;
   }
   const R = { overview: anOverview, models: anModels, projects: anProjects, sessions: anSessions, tools: anTools };
   (R[AN.tab] || anOverview)(body);
+  // The mockup shows the window in the first chart's caption; the header's own
+  // #analytics-range caption is hidden on the page.
+  if (page) {
+    const win = `${d.from} → ${d.to} (UTC)`;
+    const hint = body.querySelector(".an-section .an-hint");
+    if (hint) hint.textContent += " · " + win;
+    else body.insertBefore(el("p", "an-hint", win), body.querySelector(".an-section"));
+  }
   // Time-series charts read left→right oldest→newest; open scrolled to the most
   // recent day so a window with a leading empty gap doesn't render blank.
   const tw = body.querySelector(".an-timewrap");
   if (tw) tw.scrollLeft = tw.scrollWidth;
+  anFitTimeChart();
 }
 
-// control strip: range presets + compare toggle
-function anControls() {
+// anFitTimeChart: on the desktop page the daily chart is redrawn at its card's
+// width, so it fills a wide card and fits a narrow one (the modal keeps its
+// fixed 720px floor and scrolls). Called after each render and on resize.
+function anFitTimeChart() {
+  const body = document.getElementById("analytics-body");
+  const d = AN.data;
+  if (!body || !d || !anIsPage()) return;
+  const tw = body.querySelector(".an-timewrap");
+  if (!tw) return;
+  const w = Math.floor(tw.clientWidth);
+  if (w <= 0 || String(w) === tw.dataset.fitw) return;
+  const fresh = anStackedTime(d.costByDay, d.from, d.to, w);
+  fresh.dataset.fitw = String(w);
+  tw.replaceWith(fresh);
+  fresh.scrollLeft = fresh.scrollWidth;
+}
+if (typeof document !== "undefined" && typeof ResizeObserver === "function") {
+  const anBody = document.getElementById("analytics-body");
+  if (anBody) new ResizeObserver(() => anFitTimeChart()).observe(anBody);
+}
+
+// anIsPage: the dialog is re-parented as a desktop page (pagehost.js).
+function anIsPage() {
+  const dlg = document.getElementById("analytics-modal");
+  return !!(dlg && dlg.classList.contains("as-page"));
+}
+
+// the Custom range's date inputs + Apply, as one list of nodes
+function anCustomInputs() {
+  const from = el("input", "an-date"); from.type = "date"; from.value = AN.from || "";
+  const to = el("input", "an-date"); to.type = "date"; to.value = AN.to || "";
+  const dash = el("span", "an-clabel", "→");
+  const apply = el("button", "an-chip", "Apply");
+  apply.type = "button";
+  apply.onclick = () => {
+    if (!from.value || !to.value) return;
+    const r = clampRange(from.value, to.value);
+    AN.range = "custom"; AN.from = r.from; AN.to = r.to; anLoad();
+  };
+  return [from, dash, to, apply];
+}
+function anCustomRow() {
+  const row = el("div", "an-customrow");
+  row.append(el("span", "an-clabel", "Custom range"), ...anCustomInputs());
+  return row;
+}
+
+// control strip: range presets + compare toggle. `page` = the desktop header
+// slot: no inline date inputs (anCustomRow), and the shorter Compare label.
+function anControls(page) {
   const wrap = el("div", "an-controls");
   const lbl = el("span", "an-clabel", "Range");
   wrap.appendChild(lbl);
@@ -417,21 +490,9 @@ function anControls() {
   custom.type = "button";
   custom.onclick = () => { AN.customOpen = !AN.customOpen; anRender(); };
   wrap.appendChild(custom);
-  if (AN.customOpen || AN.range === "custom") {
-    const from = el("input", "an-date"); from.type = "date"; from.value = AN.from || "";
-    const to = el("input", "an-date"); to.type = "date"; to.value = AN.to || "";
-    const dash = el("span", "an-clabel", "→");
-    const apply = el("button", "an-chip", "Apply");
-    apply.type = "button";
-    apply.onclick = () => {
-      if (!from.value || !to.value) return;
-      const r = clampRange(from.value, to.value);
-      AN.range = "custom"; AN.from = r.from; AN.to = r.to; anLoad();
-    };
-    wrap.append(from, dash, to, apply);
-  }
+  if (!page && (AN.customOpen || AN.range === "custom")) wrap.append(...anCustomInputs());
   const spacer = el("span"); spacer.style.width = "12px"; wrap.appendChild(spacer);
-  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), "⇄ Compare vs prev period");
+  const cmp = el("button", "an-chip" + (AN.compare ? " on" : ""), page ? "⇄ Compare" : "⇄ Compare vs prev period");
   cmp.type = "button";
   cmp.title = "Compare this window to the equal-length window immediately before it";
   cmp.onclick = () => { AN.compare = !AN.compare; anLoad(); };
@@ -587,7 +648,7 @@ function anTools(root) {
   }
   const kinds = {};
   for (const t of d.tools) (kinds[t.kind] = kinds[t.kind] || []).push(t);
-  const kc = { skill: "#a6e3a1", plugin: "#cba6f7", mcp_server: "#fab387", mcp_tool: "#89b4fa" };
+  const kc = { skill: "var(--an-2)", plugin: "var(--an-4)", mcp_server: "var(--an-3)", mcp_tool: "var(--an-1)" };
   const g = el("div", "an-grid2");
   for (const kind of Object.keys(kinds)) {
     const box = el("div", "an-box"); box.appendChild(el("h4", null, kind));
@@ -652,7 +713,7 @@ function anDiverging(title, items) {
     const track = el("div", "an-divtrack"); track.appendChild(el("div", "mid"));
     const fill = el("div", "fill");
     fill.style.width = (Math.abs(r.d) / max * 50) + "%";
-    fill.style.background = r.d >= 0 ? "var(--danger)" : "var(--ok)";
+    fill.style.background = r.d >= 0 ? "var(--an-up)" : "var(--an-down)";
     if (r.d >= 0) fill.style.left = "50%"; else fill.style.right = "50%";
     track.appendChild(fill); row.appendChild(track);
     row.appendChild(el("div", "val " + (r.d >= 0 ? "an-up" : "an-down"), (r.d >= 0 ? "+" : "−") + usd(Math.abs(r.d))));
@@ -705,10 +766,10 @@ function anDowOverlay() {
     d.forEach((x, i) => { dd += (i ? "L" : "M") + xs(i).toFixed(1) + " " + ys(x[key]).toFixed(1) + " "; });
     const p = document.createElementNS(NS, "path");
     p.setAttribute("d", dd); p.setAttribute("fill", "none");
-    p.setAttribute("stroke", color); p.setAttribute("stroke-width", "1.6");
+    p.style.stroke = color; p.setAttribute("stroke-width", "1.6");
     if (dash) p.setAttribute("stroke-dasharray", "3 3");
     svg.appendChild(p);
-    d.forEach((x, i) => { const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", xs(i)); c.setAttribute("cy", ys(x[key])); c.setAttribute("r", "2.2"); c.setAttribute("fill", color); svg.appendChild(c); });
+    d.forEach((x, i) => { const c = document.createElementNS(NS, "circle"); c.setAttribute("cx", xs(i)); c.setAttribute("cy", ys(x[key])); c.setAttribute("r", "2.2"); c.style.fill = color; svg.appendChild(c); });
   };
   line("prev", "var(--muted)", true);
   line("cur", "var(--accent)", false);
@@ -772,18 +833,19 @@ function anHbarSegs(parent, name, total, max, segs, fmtVal) {
 const NS = "http://www.w3.org/2000/svg";
 function anSvg(w, h) { const s = document.createElementNS(NS, "svg"); s.setAttribute("viewBox", "0 0 " + w + " " + h); s.setAttribute("width", w); s.setAttribute("height", h); s.setAttribute("class", "an-axis"); return s; }
 function anWrapSvg(s) { const d = el("div", "an-svgwrap"); d.appendChild(s); return d; }
-function anRect(x, y, w, h, f) { const r = document.createElementNS(NS, "rect"); r.setAttribute("x", x); r.setAttribute("y", y); r.setAttribute("width", w); r.setAttribute("height", Math.max(h, 0)); r.setAttribute("fill", f); return r; }
-function anLine(x1, y1, x2, y2, st, sw) { const l = document.createElementNS(NS, "line"); l.setAttribute("x1", x1); l.setAttribute("y1", y1); l.setAttribute("x2", x2); l.setAttribute("y2", y2); l.setAttribute("stroke", st); l.setAttribute("stroke-width", sw); return l; }
+function anRect(x, y, w, h, f) { const r = document.createElementNS(NS, "rect"); r.setAttribute("x", x); r.setAttribute("y", y); r.setAttribute("width", w); r.setAttribute("height", Math.max(h, 0)); r.style.fill = f; return r; }
+function anLine(x1, y1, x2, y2, st, sw) { const l = document.createElementNS(NS, "line"); l.setAttribute("x1", x1); l.setAttribute("y1", y1); l.setAttribute("x2", x2); l.setAttribute("y2", y2); l.style.stroke = st; l.setAttribute("stroke-width", sw); return l; }
 function anText(x, y, t, anchor) { const e = document.createElementNS(NS, "text"); e.setAttribute("x", x); e.setAttribute("y", y); e.setAttribute("text-anchor", anchor); e.textContent = t; return e; }
 function anTitle(t) { const e = document.createElementNS(NS, "title"); e.textContent = t; return e; }
 
 // stacked daily cost bars. Bars sit at their true date offset within [from,to]
 // (empty days show as gaps) unless the span is very wide, where stackedLayout
-// falls back to sequential positioning.
-function anStackedTime(agg, from, to) {
+// falls back to sequential positioning. `fitW` (the desktop page) draws it at
+// that width, with a narrower floor per day; without it the width is fixed.
+function anStackedTime(agg, from, to, fitW) {
   const lay = stackedLayout(agg.days, from, to);
   const slots = Math.max(1, lay.slots);
-  const H = 170, pad = 24, W = Math.max(slots * 22, 720);
+  const H = 170, pad = 24, W = fitW ? Math.max(slots * 8, fitW) : Math.max(slots * 22, 720);
   const max = Math.max(1, agg.maxCost);
   const slotW = (W - 2 * pad) / slots;
   const bw = Math.min(16, Math.max(2, slotW - 3));

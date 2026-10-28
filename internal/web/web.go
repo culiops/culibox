@@ -132,6 +132,12 @@ type Server struct {
 	// feature is disabled: no routes registered, no data shown.
 	Analytics *analytics.Service
 
+	// Audit reads audit.db for the Audit page. Nil → the feature is off: no
+	// routes registered, "audit": false in /api/meta. AuditRetentionDays is the
+	// egress pruning policy (0 = kept forever) the summary reports to the footer.
+	Audit              AuditReader
+	AuditRetentionDays int
+
 	// MaxUploadBytes caps a single uploaded file; MaxArchiveBytes/Files cap a
 	// directory download. Zero means the built-in default in every case — unset
 	// must never be read as "unlimited".
@@ -217,6 +223,7 @@ func (s *Server) Handler() http.Handler {
 			"shell_profile": s.quickShell(),
 			"box_runtime":   s.BoxRuntime,
 			"analytics":     s.Analytics != nil,
+			"audit":         s.Audit != nil,
 			"replies":       s.RepliesEnabled,
 			"commit":        s.Commit,
 			"version":       s.Version,
@@ -260,6 +267,11 @@ func (s *Server) Handler() http.Handler {
 
 	// Analytics routes only exist when the feature is enabled; the POST /ingest
 	// inherits csrfGuard's same-origin check like every other state-changing call.
+	if s.Audit != nil {
+		protected.HandleFunc("/api/audit", s.handleAudit)
+		protected.HandleFunc("/api/audit/summary", s.handleAuditSummary)
+		protected.HandleFunc("/api/audit.csv", s.handleAuditCSV)
+	}
 	if s.Analytics != nil {
 		protected.HandleFunc("/api/analytics/summary", s.handleAnalyticsSummary)
 		protected.HandleFunc("/api/analytics/models", s.handleAnalyticsModels)
@@ -297,11 +309,20 @@ func (s *Server) Handler() http.Handler {
 	})
 	// The login page is public, so the stylesheets it links must be too, or the
 	// <link> is answered by authGuard's redirect and the page renders unstyled.
-	// Only tokens.css and primitives.css are exposed: a colour palette, which the
-	// login page's own appearance already reveals. app.css stays protected.
-	for _, name := range []string{"tokens.css", "primitives.css"} {
+	// Only tokens.css, primitives.css and desktop.css (plus the one Inter file
+	// desktop.css's @font-face names) are exposed: a colour palette and type,
+	// which the login page's own appearance already reveals. app.css stays
+	// protected. desktop.css carries UI selector names but no data, and the
+	// source is public.
+	for _, name := range []string{"tokens.css", "primitives.css", "desktop.css", "vendor/inter/InterVariable.woff2"} {
 		root.HandleFunc("/"+name, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache")
+			if strings.HasSuffix(name, ".woff2") {
+				// embed.FS has no ETag, so no-cache would re-download 352 KB on
+				// every login view. The font is vendored and versioned by path.
+				w.Header().Set("Content-Type", "font/woff2")
+				w.Header().Set("Cache-Control", "public, max-age=86400")
+			}
 			http.ServeFileFS(w, r, staticFS, "static/"+name)
 		})
 	}

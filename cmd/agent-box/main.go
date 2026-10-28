@@ -26,6 +26,7 @@ import (
 	"github.com/culiops/agent-box/internal/abduco"
 	"github.com/culiops/agent-box/internal/account"
 	"github.com/culiops/agent-box/internal/analytics"
+	"github.com/culiops/agent-box/internal/auditlog"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxedws"
@@ -769,6 +770,18 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	mgr.SetStoreLocked(func() bool { return vstore.Status().Locked })
 	configureServer(srv, cfg)
 
+	// Audit page: a read-only view of audit.db, opened after the broker and
+	// egress audits so their schemas exist. Not fatal: without it the routes are
+	// not registered and /api/meta says audit=false.
+	var auditReader *auditlog.Reader
+	if r, aerr := auditlog.Open(filepath.Join(dataDir, "audit.db")); aerr != nil {
+		log.Printf("audit page disabled: %v", aerr)
+	} else {
+		auditReader = r // a typed nil must never reach srv.Audit
+		srv.Audit = r
+		srv.AuditRetentionDays = cfg.EgressRetentionDays()
+	}
+
 	// Analytics: durable token/prompt rollups mined from the Claude Code
 	// transcripts. Enabled by default; only an explicit config false turns it off.
 	// Roots default to ~/.claude/projects (all host + direct usage — the bulk) plus
@@ -846,6 +859,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		go analyticsSvc.Start(analyticsCtx)
 	}
 
+	// Prune old egress audit rows (once at start, then daily) while the egress
+	// audit store is open; StopRetention waits for it before StopEgress closes it.
+	stopRetention := func() {}
+	if egressSvc != nil {
+		stopRetention = runRetention(egressSvc.Audit, cfg.EgressRetentionDays(), log.Printf)
+	}
+
 	// No WriteTimeout, deliberately: on macOS the first boxed spawn holds its
 	// POST while the box VM starts (20-30 s, see boxLayer.prepare), and the
 	// UI's spawn request has no deadline either. Adding a write timeout here
@@ -862,9 +882,17 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 				_ = analyticsSvc.Close()
 			}
 		},
-		StopEgress:   stopEgress,
-		StopBroker:   stopBroker,
-		ShutdownHTTP: httpSrv.Shutdown,
+		StopRetention: stopRetention,
+		StopEgress:    stopEgress,
+		StopBroker:    stopBroker,
+		ShutdownHTTP: func(ctx context.Context) error {
+			// The reader closes after the drain, so no request reads a closed handle.
+			err := httpSrv.Shutdown(ctx)
+			if auditReader != nil {
+				_ = auditReader.Close()
+			}
+			return err
+		},
 	}, log.Printf)
 
 	log.Printf("agent-box listening on %s (allowed hosts: %s)", cfg.BindAddr, strings.Join(cfg.HostAllowlist(), ", "))

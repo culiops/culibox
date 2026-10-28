@@ -357,6 +357,35 @@ function ticksAfterRefresh(ticked, oldNames, newNames) {
   return (ticked || []).filter((n) => !(was.has(n) && !now.has(n)));
 }
 
+// pfTouchProfile: what the editor holds now (readForm's request body) in the
+// ProfileView shape reachRows reads (spawnpreview.js), so the Settings page's
+// "Can touch" line and the New session box follow one set of rules.
+//   o.view       the saved ProfileView of this profile, or null for a draft
+//   o.claude     the form's binary is claude (spawnform.js isClaudeBinName)
+//   o.egressAll  every boxed spawn goes through the egress proxy
+// Network mirrors session.EgressMode: bound = allowlist, unbound = open only
+// when egress is mandatory. The inline AWS binding is not edited here, so its
+// name and flags come from the saved view while the form still carries it.
+function pfTouchProfile(form, o) {
+  const f = form || {};
+  const x = o || {};
+  const list = (l) => (Array.isArray(l) ? l.filter((n) => typeof n === "string" && n !== "") : []);
+  const out = { bin: String(f.bin || ""), account: String(f.account || ""), claude: x.claude === true };
+  const conns = list(f.aws_connections);
+  if (conns.length) out.aws_connections = conns;
+  if (f.aws && typeof f.aws === "object") {
+    const saved = x.view && x.view.aws_inline;
+    out.aws_inline = saved ? saved : { name: String(f.aws.label || "") || "aws", prod: f.aws.prod === true };
+  }
+  const owners = list(((f.github && f.github.owners) || []).map((w) => w && w.owner));
+  if (owners.length) out.github_owners = owners;
+  const tokens = list(f.tokens);
+  if (tokens.length) out.tokens = tokens;
+  const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
+  out.network = bound ? "allowlist" : x.egressAll === true ? "open" : "";
+  return out;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText };
+  module.exports = { saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
 }

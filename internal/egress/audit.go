@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS egress_audit (
   suppressed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_egress_session ON egress_audit(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_egress_ts ON egress_audit(ts);
+-- Covers the Audit page's Summary (counts and session list), so that range read
+-- is index-only. Created on existing databases at the next daemon start.
+CREATE INDEX IF NOT EXISTS idx_egress_cover ON egress_audit(ts, session_id, outcome, suppressed);
 `
 
 // Audit is the egress audit log, a table in the same file as the broker's
@@ -113,6 +117,37 @@ func cleanHost(h string) string {
 		b.WriteByte(c)
 	}
 	return b.String()
+}
+
+// pruneGap is the pause between Prune batches, so a large backlog does not hold
+// the shared audit file's write lock back to back.
+const pruneGap = 50 * time.Millisecond
+
+// Prune deletes egress rows older than before, at most batch rows per statement
+// (an index scan over idx_egress_ts), pausing between batches so the proxy's
+// own Record calls are not starved. It returns the number deleted. Only
+// egress_audit is touched; the broker and store tables in the same file are not.
+func (a *Audit) Prune(before time.Time, batch int) (int64, error) {
+	if batch < 1 {
+		batch = 1000
+	}
+	var total int64
+	for {
+		res, err := a.db.Exec(`DELETE FROM egress_audit WHERE id IN
+			(SELECT id FROM egress_audit WHERE ts < ? ORDER BY ts LIMIT ?)`, before.Unix(), batch)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += n
+		if n < int64(batch) {
+			return total, nil
+		}
+		time.Sleep(pruneGap)
+	}
 }
 
 // ForSession returns up to limit rows for a session, newest first.

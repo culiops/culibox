@@ -139,6 +139,8 @@ CREATE TABLE IF NOT EXISTS approval_audit (
   error TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_approval_session ON approval_audit(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_credential_ts ON credential_audit(ts);
+CREATE INDEX IF NOT EXISTS idx_approval_ts ON approval_audit(ts);
 CREATE TABLE IF NOT EXISTS store_audit (
   id INTEGER PRIMARY KEY,
   ts INTEGER NOT NULL,
@@ -146,6 +148,7 @@ CREATE TABLE IF NOT EXISTS store_audit (
   actor TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_store_ts ON store_audit(ts);
 CREATE TABLE IF NOT EXISTS cred_audit (
   id INTEGER PRIMARY KEY,
   ts INTEGER NOT NULL,
@@ -155,6 +158,7 @@ CREATE TABLE IF NOT EXISTS cred_audit (
   actor TEXT NOT NULL DEFAULT '',
   detail TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX IF NOT EXISTS idx_cred_ts ON cred_audit(ts);
 `
 
 // Audit is the SQLite-backed credential audit log (<data_dir>/audit.db).

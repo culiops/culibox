@@ -7,6 +7,7 @@ const {
   awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsConnFromRow, awsRoleARN, awsCheckView, awsErrText, CRED_D4_REMEDY,
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
+  credTableRows, credTableHead,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -460,4 +461,98 @@ test("a timed-out sign-in goes back to the Sign in state with a note", () => {
   const s = awsSSOTimedOut();
   assert.strictEqual(s.state, "gone");
   assert.ok(/timed out/i.test(s.msg));
+});
+
+// --- Settings page: one table per provider (desktop only) ---------------------
+
+const awsE = (name, extra) => ({
+  name, kind: "aws", account_id: "226198813800", role_arn: "arn:aws:iam::226198813800:role/CuliShopLabAccess",
+  region: "ap-southeast-1", status: "ok", source: "web", prod: false, used_by: [], base: null, ...extra,
+});
+
+test("credTableHead: the columns of each provider table, then the actions column", () => {
+  assert.deepStrictEqual(credTableHead("aws"), ["Connection", "Account · role", "SSO", "Write probe", "Used by", ""]);
+  assert.deepStrictEqual(credTableHead("github"), ["App", "Client ID · key", "Status", "Used by", ""]);
+  assert.deepStrictEqual(credTableHead("token:datadog"), ["Token", "Env · agent may reach", "Status", "Used by", ""]);
+});
+
+test("credTableRows aws: PROD with elevate, no elevation, and a can-write row marked danger", () => {
+  const g = credGroups(view({
+    aws: [
+      awsE("culipulse-prod", {
+        prod: true, role_arn: "arn:aws:iam::402100009917:role/agent-investigate", account_id: "402100009917",
+        elevate: { role_arn: "arn:aws:iam::402100009917:role/agent-ops", max_minutes: 60 },
+        used_by: ["a", "b"], base: { state: "none_found", checked_at: "2020-01-02T03:04:00Z" },
+      }),
+      awsE("sandbox", { status: "missing" }),
+      awsE("wr", { base: { state: "writes", actions: ["s3:PutObject"], checked_at: "2020-01-02T03:04:00Z" } }),
+    ],
+  })).find((x) => x.key === "aws");
+  const rows = credTableRows(g);
+  assert.strictEqual(rows.length, 3);
+  const [a, b, c] = rows;
+  assert.strictEqual(a.cells[0].text, "culipulse-prod");
+  assert.strictEqual(a.cells[0].tag, "PROD");
+  assert.strictEqual(a.cells[0].sub, "elevate: agent-ops · max 60m");
+  assert.deepStrictEqual([a.cells[1].text, a.cells[1].sub, a.cells[1].mono], ["402100009917", "agent-investigate", true]);
+  assert.deepStrictEqual([a.cells[2].text, a.cells[2].cls], ["Ready", "ready"]);
+  assert.deepStrictEqual([a.cells[3].text, a.cells[3].cls], ["No broad write access found", "ok"]);
+  assert.ok(/^checked 2020-01-0[123]$/.test(a.cells[3].sub), a.cells[3].sub);
+  assert.strictEqual(a.cells[4].text, "a, b");
+  assert.strictEqual(a.danger, false);
+  assert.strictEqual(a.entry.name, "culipulse-prod");
+  // Not prod, no elevation; a missing connection is a "needs you" status and has no probe to show.
+  assert.strictEqual(b.cells[0].tag, "");
+  assert.strictEqual(b.cells[0].sub, "no elevation");
+  assert.deepStrictEqual([b.cells[2].text, b.cells[2].cls], ["Missing", "missing"]);
+  assert.strictEqual(b.cells[3].text, "–");
+  assert.strictEqual(b.cells[4].text, "nothing");
+  assert.strictEqual(b.danger, false);
+  // can write: red verdict, short text (the full D4 sentence is the warnbox under the row), row is danger.
+  assert.deepStrictEqual([c.cells[3].text, c.cells[3].cls], ["Can write", "bad"]);
+  assert.strictEqual(c.danger, true);
+});
+
+test("credTableRows aws: an elevate role without a max just names the role", () => {
+  const g = { key: "aws", entries: [awsE("x", { elevate: { role_arn: "arn:aws:iam::1:role/ops" } })] };
+  assert.strictEqual(credTableRows(g)[0].cells[0].sub, "elevate: ops");
+});
+
+test("credTableRows github: app, client id with key kind, status, used by", () => {
+  const g = credGroups(view({ github_apps: [{ name: "culibox-agents", client_id: "Iv23li", key_ref_kind: "store", status: "ok", source: "web", used_by: ["p1"] }] })).find((x) => x.key === "github");
+  const [r] = credTableRows(g);
+  assert.strictEqual(r.cells.length, 4);
+  assert.strictEqual(r.cells[0].text, "culibox-agents");
+  assert.deepStrictEqual([r.cells[1].text, r.cells[1].sub, r.cells[1].mono], ["Iv23li", "store", true]);
+  assert.deepStrictEqual([r.cells[2].text, r.cells[2].cls], ["Ready", "ready"]);
+  assert.strictEqual(r.cells[3].text, "p1");
+  assert.strictEqual(r.danger, false);
+});
+
+test("credTableRows token: name with label, env with hosts, status, used by; a missing value is flagged", () => {
+  const g = credGroups(view({ tokens: [
+    tok("datadog-read", "datadog", { label: "Datadog", env: ["DD_API_KEY", "DD_APP_KEY"], hosts: ["api.datadoghq.eu"], used_by: ["p"], description: "read only" }),
+    tok("cf", "cloudflare", { status: "missing" }),
+  ] })).find((x) => x.key === "token:datadog");
+  const [r] = credTableRows(g);
+  assert.strictEqual(r.cells.length, 4);
+  assert.deepStrictEqual([r.cells[0].text, r.cells[0].sub, r.cells[0].title], ["datadog-read", "Datadog", "read only"]);
+  assert.deepStrictEqual([r.cells[1].text, r.cells[1].sub, r.cells[1].mono, r.cells[1].subMono], ["DD_API_KEY, DD_APP_KEY", "api.datadoghq.eu", true, true]);
+  assert.deepStrictEqual([r.cells[2].text, r.cells[2].cls], ["Ready", "ready"]);
+  const g2 = credGroups(view({ tokens: [tok("cf", "cloudflare", { status: "missing" })] })).find((x) => x.key === "token:cloudflare");
+  assert.deepStrictEqual([credTableRows(g2)[0].cells[2].text, credTableRows(g2)[0].cells[2].cls], ["Missing", "missing"]);
+});
+
+test("table mode keys on the as-page class, and the card path never looks at it", () => {
+  const fs = require("node:fs");
+  const src = fs.readFileSync(require("node:path").join(__dirname, "..", "static", "credentials.js"), "utf8");
+  const body = (name) => {
+    const i = src.indexOf("function " + name + "(");
+    assert.ok(i >= 0, name);
+    return src.slice(i, src.indexOf("\n}\n", i));
+  };
+  assert.ok(/as-page/.test(body("credTableMode")));
+  assert.ok(!/innerWidth|matchMedia/.test(body("credTableMode")), "table mode is not width-based");
+  for (const n of ["credAWSCard", "credAppCard", "credTokenCard", "credCard"]) assert.ok(!/credTableMode/.test(body(n)), n);
+  assert.ok(/credTableMode\(\)/.test(body("credSection")));
 });

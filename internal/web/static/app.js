@@ -163,6 +163,7 @@ function drawerDesktop() {
 // that is what is already showing, or switches.
 function toggleDrawer(kind, sessionId) {
   if (!drawerDesktop()) return;
+  closePage(); // a drawer hangs over the panes, which a page hides
   applyDrawer(drawerFor(drawerState, kind, sessionId == null ? null : sessionId));
 }
 
@@ -172,6 +173,7 @@ function toggleDrawer(kind, sessionId) {
 // the tree even if it already follows the session; see drawerRootTree.
 function openDrawer(kind, sessionId, opts) {
   if (!drawerDesktop()) return;
+  closePage();
   applyDrawer({ open: kind, sessionId: sessionId == null ? null : sessionId }, opts);
 }
 
@@ -508,9 +510,11 @@ function paintRailMeters() {
   box.hidden = !any;
 }
 
-// Live count of open dialogs, for shortcutsBlocked (shell.js): the same source
-// shouldRefocusTerminal already reads from.
-const dialogsOpen = () => document.querySelectorAll("dialog[open]").length;
+// Live count of open MODAL dialogs, for shortcutsBlocked (shell.js) and the
+// page host's Esc. A desktop page (pagehost.js, `.as-page`) is not one: with
+// Settings open as a page, Alt+1..9 or a layout switch must still work, and
+// they close the page on their way.
+const dialogsOpen = () => document.querySelectorAll("dialog[open]:not(.as-page)").length;
 
 // Per-pane collapse. The state is two independent booleans and both collapsed
 // at once is legal — you get two header bars and an empty rail.
@@ -3265,6 +3269,10 @@ function renderPfOptions(current) {
   $("pf-options").replaceChildren(...optionDefs.filter((o) => optApplies(o, bin)).map((o) => {
     const row = document.createElement("div");
     row.className = "frow";
+    // The desktop Settings page places a row by its key (model and effort sit
+    // in the Agent block, the rest under Advanced) with CSS alone: the row has
+    // to stay inside #pf-options, which is what readForm scans.
+    row.dataset.opt = o.key;
     const col = document.createElement("div");
     col.className = "fcol";
     const lbl = document.createElement("label");
@@ -3389,6 +3397,7 @@ function applyCredLists(meta) {
   renderAwscPicker(ticksAfterRefresh(readAwscTicked(), oldAwsc, names(awscs)));
   renderGhOwners(readGhRows()); // a row on a removed App or token keeps it, shown, for the server to name
   syncEditorActions();
+  renderPfTouch();
 }
 let credListsPainted = false;
 // refreshCredLists re-reads /api/meta and repaints the pickers: when the
@@ -3396,11 +3405,65 @@ let credListsPainted = false;
 // failed fetch leaves the lists as they were.
 let credListsSeq = 0;
 async function refreshCredLists() {
+  refreshPfCreds();
   const seq = ++credListsSeq;
   let meta;
   try { meta = await api("/api/meta"); } catch (_) { return; }
   if (seq !== credListsSeq) return;
   applyCredLists(meta);
+}
+
+// --- the profile form's "Can touch" line (desktop Settings page) ------------
+// pfCredsView: what GET /api/credentials said when the Profiles tab was last
+// shown (the store lock and the elevate windows), or null: never fetched, or
+// it failed, and the line then has no Store part and no window. Desktop only,
+// like the New session box that reads the same view (spawnpanel.js).
+let pfCredsView = null;
+let pfCredsSeq = 0;
+async function refreshPfCreds() {
+  if (!drawerDesktop()) return;
+  const seq = ++pfCredsSeq;
+  let got = null;
+  try {
+    const v = await api("/api/credentials", { signal: deadlineSignal(5000) });
+    if (v && typeof v === "object") got = v;
+  } catch (_) { /* no creds answer: no Store part, no window */ }
+  if (seq !== pfCredsSeq) return;
+  pfCredsView = got;
+  renderPfTouch();
+}
+// renderPfTouch paints #pf-touch from what the form holds right now, with the
+// New session box's own rules (reachRows) and renderer (paintReachRows). Run
+// from fillForm, after the credential lists repaint, and (debounced) on every
+// edit inside the form. Base CSS hides the box on a phone, where it is skipped.
+// pfTouchKey: what #pf-touch shows now. The box is aria-live, so it is only
+// repainted when the text changes; a keystroke that changes nothing it says
+// must not make a screen reader read the whole line again.
+let pfTouchKey = "";
+function renderPfTouch() {
+  const box = $("pf-touch");
+  if (!box || !drawerDesktop()) return;
+  const form = readForm();
+  const view = profiles.find((x) => x.name === selectedProfileName()) || null;
+  // Without a box layer every session is host, whatever the seg shows.
+  const tier = (metaLoaded && !boxRuntime) || segValue($("pf-runtime")) === "host" ? "host" : "box";
+  const rows = reachRows({
+    // "open" is only ever reported when egress is mandatory for every boxed spawn.
+    profile: pfTouchProfile(form, { view, claude: isClaudeBinName(form.bin), egressAll: profiles.some((x) => x.network === "open") }),
+    tier,
+    cwd: shortPath(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
+    meta: { aws_connections: awscEntries },
+    creds: pfCredsView,
+  });
+  const key = JSON.stringify(rows);
+  if (key === pfTouchKey && box.childNodes.length) return;
+  pfTouchKey = key;
+  paintReachRows(box, rows, { inline: true, title: "Can touch" });
+}
+let pfTouchTimer = 0;
+function schedulePfTouch() {
+  clearTimeout(pfTouchTimer);
+  pfTouchTimer = setTimeout(renderPfTouch, 150);
 }
 
 // The stored binding as loaded: the editor has no field for its extra egress
@@ -3774,6 +3837,7 @@ function fillForm(p) {
   $("pf-awsc-err").hidden = true;
   syncPfReplyable();
   syncEditorActions();
+  renderPfTouch();
 }
 // syncEditorActions is the single place that decides what the editor may do,
 // so a dimmed button and the reason it is dimmed can never disagree. .off is
@@ -3919,22 +3983,30 @@ function readForm() {
 // These three run while #settings-modal is open, so their errors go to the
 // dialog's own inline line. A toast is fixed-position and paints beneath a modal
 // backdrop, which would leave the failure invisible.
+// pfSaveError: a Save that did not happen. On the desktop page the line can be
+// about a field folded under Advanced (the allowlist's rows, or a server refusal
+// naming args, an option or the base environment), so any failed Save opens the
+// fold: a message pointing at a field nobody can see is a dead end.
+function pfSaveError(msg) {
+  setDialogError("settings-modal", msg);
+  setPfAdvOpen(true);
+}
 async function saveProfile() {
   const p = readForm();
   setDialogError("settings-modal", "");
-  if (!p.name || !p.bin) { setDialogError("settings-modal", "Name and Command are required."); return; }
+  if (!p.name || !p.bin) { pfSaveError("Name and Command are required."); return; }
   const rowsErr = rowError(pfEnvRows);
-  if (rowsErr) { setDialogError("settings-modal", rowsErr); return; }
+  if (rowsErr) { pfSaveError(rowsErr); return; }
   // No permission ticked: shown on the GH block itself as well as in the dialog's line.
   const ghErr = ghFormError({ owners: readGhRows(), permissions: readGhPerms() });
   $("pf-gh-perm-err").textContent = ghErr;
   $("pf-gh-perm-err").hidden = !ghErr;
-  if (ghErr) { setDialogError("settings-modal", ghErr); return; }
+  if (ghErr) { pfSaveError(ghErr); return; }
   // From the editor's state, not the typed name: a saved profile's name is
   // read-only, and a draft (New, Duplicate) always creates, so Save cannot
   // leave a copy behind.
   const target = saveTarget(selectedProfile, p.name, profiles.map((x) => x.name));
-  if (target.error) { setDialogError("settings-modal", target.error); return; }
+  if (target.error) { pfSaveError(target.error); return; }
   // Containment is the one field whose consequence is worth naming before it is
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
@@ -3948,7 +4020,7 @@ async function saveProfile() {
   try {
     saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
   } catch (e) {
-    setDialogError("settings-modal", "Save failed: " + e.message);
+    pfSaveError("Save failed: " + e.message);
     // A refusal that names a token entry is also shown on the Tokens block.
     if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
       $("pf-st-err").textContent = String(e.message);
@@ -3968,6 +4040,7 @@ async function saveProfile() {
   // The profile now exists, so the editor is no longer a draft even if the
   // reload below fails (a second Save must PUT, not POST again).
   selectedProfile = p.name;
+  pfUserDraft = false;
   try {
     // No background retry: one that succeeds later would leave the "Saved, but
     // reloading it failed" line on screen next to a good list.
@@ -3991,6 +4064,7 @@ function duplicateProfile() {
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
   selectedProfile = "";
+  pfUserDraft = true;
   fillForm(draft);
   setDialogError("settings-modal", "");
   $("settings-modal").classList.add("editing");
@@ -4002,6 +4076,7 @@ function duplicateProfile() {
 async function editProfile(name) {
   setDialogError("settings-modal", "");
   selectedProfile = name;
+  pfUserDraft = false;
   // Same drill-down as newProfile(); inert above 700px, where both columns
   // are already on screen.
   $("settings-modal").classList.add("editing");
@@ -4031,6 +4106,44 @@ async function deleteProfile(name) {
 // marker is not inferred from the name.
 let selectedProfile = "";
 function selectedProfileName() { return selectedProfile; }
+// pfUserDraft: the editor holds a draft the user started (+ new profile,
+// Duplicate), which the page's preselect below must never replace.
+let pfUserDraft = false;
+let pfPreselecting = false;
+// pfMarkDraft: any edit to the editor while no profile is selected makes the
+// form a draft, so a preselect still in flight leaves it alone. A selected
+// profile needs no flag (the preselect bails on selectedProfile), and fillForm
+// is programmatic, so it fires none of these events. A click counts only on a
+// segmented control (tier, runtime), the one input that is a button.
+function pfMarkDraft(e) {
+  if (selectedProfile) return;
+  if (e.type === "click" && !(e.target.closest && e.target.closest(".seg button"))) return;
+  pfUserDraft = true;
+}
+// preselectPageProfile: the desktop Settings page opens Profiles on a profile
+// (pg-1b), the first one you own, else the first one, rather than on a blank
+// draft. Page only: a phone keeps its list-first view.
+async function preselectPageProfile() {
+  const page = () => $("settings-modal").classList.contains("as-page");
+  if (!page() || selectedProfile || pfUserDraft || pfPreselecting) return;
+  pfPreselecting = true;
+  try {
+    if (!profilesLoaded) await loadProfiles(false);
+    const p = profiles.find((x) => x.editable) || profiles[0];
+    if (!p || !page() || selectedProfile || pfUserDraft) return;
+    const full = await api("/api/profiles/" + encodeURIComponent(p.name));
+    if (!page() || selectedProfile || pfUserDraft) return;
+    selectedProfile = p.name;
+    fillForm(full);
+    setDialogError("settings-modal", "");
+    renderProfileList();
+    syncEditorActions();
+  } catch (_) {
+    // Nothing chosen: the blank form stays, as before.
+  } finally {
+    pfPreselecting = false;
+  }
+}
 function renderProfileList() {
   $("pf-list").replaceChildren(...profiles.map((p) => {
     const li = document.createElement("li");
@@ -4046,6 +4159,12 @@ function renderProfileList() {
       lk.textContent = "built-in";
       b.appendChild(lk);
     }
+    // The desktop page's second line (pg-1b): "claude · box", "built-in · host".
+    // Hidden at <= 700px, where the row stays one line.
+    const sub = document.createElement("span");
+    sub.className = "psub";
+    sub.textContent = [p.editable ? p.bin : "built-in", p.runtime].filter(Boolean).join(" · ");
+    b.appendChild(sub);
     b.onclick = () => editProfile(p.name);
     li.appendChild(b);
     return li;
@@ -4057,6 +4176,7 @@ $("pf-save").addEventListener("click", saveProfile);
 // mobile editor view, so the class is added here, at the actual button press,
 // rather than inside newProfile() itself.
 $("pf-new").addEventListener("click", () => {
+  pfUserDraft = true;
   newProfile();
   $("settings-modal").classList.add("editing");
 });
@@ -4068,6 +4188,25 @@ $("pf-back").addEventListener("click", () => {
 });
 $("pf-delete").addEventListener("click", () => deleteProfile(selectedProfileName()));
 $("pf-duplicate").addEventListener("click", duplicateProfile);
+// Discard (desktop page footer): back to what the server holds for this
+// profile, or a blank form when the editor holds an unsaved draft.
+function discardProfileEdits() {
+  const name = selectedProfileName();
+  if (name) editProfile(name);
+  else newProfile();
+}
+$("pf-discard").addEventListener("click", discardProfileEdits);
+// Advanced (desktop page): folds base environment, the other options, replies,
+// args and the allowlist. CSS only hides them; every field stays in the form.
+function setPfAdvOpen(open) {
+  $("pf-adv").closest(".ped").classList.toggle("adv-open", open);
+  $("pf-adv").setAttribute("aria-expanded", open ? "true" : "false");
+}
+$("pf-adv").addEventListener("click", () => setPfAdvOpen(!$("pf-adv").closest(".ped").classList.contains("adv-open")));
+// Any edit in the form re-derives the Can touch line; a seg or a picker change
+// is a click, so clicks count too.
+for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);
+for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, pfMarkDraft);
 // The two "+ add" buttons append a blank row of the matching kind and hand
 // focus to its name field, so typing the variable name is the very next thing
 // that happens.
@@ -4466,6 +4605,7 @@ function loadLastSpawn() {
 // what "+ New session" does.
 async function spawnSession(req, opts) {
   opts = opts || {};
+  closePage(); // the new session's pane must be on screen, not behind a page
   const s = await api("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -5483,6 +5623,7 @@ async function killSession(id) {
 const shellSpawning = new WeakSet();
 async function spawnShellIn(cell, placement = "below") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
+  closePage();
   shellSpawning.add(cell);
   try {
     // Only a gate and the form fallback's preselection now: the shell endpoint
@@ -5623,6 +5764,7 @@ window.addEventListener("resize", fitAll);
 // Analytics view (button revealed by initEnv only when the feature is enabled).
 $("analytics-open").addEventListener("click", openAnalytics);
 $("side-analytics").addEventListener("click", openAnalytics);
+$("side-audit").addEventListener("click", () => openAudit());
 $("side-palette").addEventListener("click", openPalette);
 // "$ today" is a glance, so it refreshes on a slow clock; skipped while hidden.
 setInterval(() => { if (!document.hidden) paintSideCost(); }, 5 * 60 * 1000);
@@ -5732,6 +5874,8 @@ initMobileShell();
     if (anBtn) anBtn.hidden = !(meta && meta.analytics); // only when the feature is on
     const sideAn = $("side-analytics");
     if (sideAn) sideAn.hidden = !(meta && meta.analytics);
+    const sideAudit = $("side-audit");
+    if (sideAudit) sideAudit.hidden = !(meta && meta.audit); // only with an audit store
     sideCostOn = !!(meta && meta.analytics);
     paintSideCost();
     lastRateLimits = (meta && meta.rate_limits) || null;
@@ -5783,6 +5927,8 @@ setInterval(refreshSessions, 3000);
 // for the next action that happens to call renderGrid().
 if (typeof mobileMediaQuery === "function" && window.matchMedia) {
   window.matchMedia(mobileMediaQuery()).addEventListener("change", () => {
+    // A phone has no pages: the dialog goes home closed, the panes come back.
+    closePage();
     // Mobile's Files screen expects #files-pane back in #sidebar.
     // The pane-collapse html classes follow the layout: the stored state on
     // mobile (as at a fresh load), none on desktop, where app.css's
@@ -5829,6 +5975,8 @@ document.addEventListener("keydown", (e) => {
 // sees the combo; preventDefault stops the browser's own page zoom.
 document.addEventListener("keydown", (e) => {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  // A page hides the panes: leave the key to the browser's own zoom.
+  if (typeof currentPage === "function" && currentPage()) return;
   if (shortcutsBlocked(document.activeElement, dialogsOpen())) return;
   let delta = null, doReset = false;
   if (e.key === "=" || e.key === "+") delta = +fontPrefs.STEP;

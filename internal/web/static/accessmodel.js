@@ -306,5 +306,5 @@ function grantFormState(f) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { accessModel, grantFormState, accEventTime, accReadReply, accLoadDone, ACCESS_EVENTS };
+  module.exports = { accessModel, grantFormState, accEventTime, accReadReply, accLoadDone, accTone, ACCESS_EVENTS };
 }

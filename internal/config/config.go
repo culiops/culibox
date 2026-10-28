@@ -195,6 +195,13 @@ type Config struct {
 	BrokerPort        int     `json:"broker_port,omitempty"`          // macOS: credential broker TCP port on 127.0.0.1; 0 → 9071
 	EgressPort        int     `json:"egress_port,omitempty"`          // egress proxy TCP port; 0 → 9072
 
+	// AuditEgressRetentionDays is how long egress audit rows are kept; a daemon
+	// job deletes older ones once a day. A pointer, deliberately unlike every
+	// other int key here: unset → 90 days, but an explicit 0 → keep forever
+	// (0 cannot mean "default" for a retention). Range 0-36500. Only the egress
+	// table is pruned; every other audit table is kept forever.
+	AuditEgressRetentionDays *int `json:"audit_egress_retention_days,omitempty"`
+
 	// ExtraCACerts are PEM files of CA certificates every box trusts on top of
 	// the image's own (a corporate TLS-inspection root). Operator-only: there is
 	// no per-profile equivalent. Read at daemon start.
@@ -301,6 +308,22 @@ func (c Config) BoxIdleTTL() time.Duration {
 	return time.Duration(c.BoxIdleTTLSeconds) * time.Second
 }
 
+// DefaultEgressRetentionDays is how long egress audit rows are kept when
+// audit_egress_retention_days is unset.
+const DefaultEgressRetentionDays = 90
+
+// MaxEgressRetentionDays is the largest audit_egress_retention_days (100 years).
+const MaxEgressRetentionDays = 36500
+
+// EgressRetentionDays is how many days of egress audit rows to keep: unset → 90,
+// 0 → 0, which means keep forever.
+func (c Config) EgressRetentionDays() int {
+	if c.AuditEgressRetentionDays == nil {
+		return DefaultEgressRetentionDays
+	}
+	return *c.AuditEgressRetentionDays
+}
+
 // Load reads and parses a JSON config file.
 func Load(path string) (Config, error) {
 	b, err := os.ReadFile(path)
@@ -404,6 +427,9 @@ func (c Config) validateInto(tolerate func(UndefinedRefError) bool, tolerated *[
 	}
 	if c.EgressPort < 0 || c.EgressPort > 65535 {
 		return fmt.Errorf("config: egress_port %d out of range (want 1-65535, or 0 for the default)", c.EgressPort)
+	}
+	if d := c.EgressRetentionDays(); d < 0 || d > MaxEgressRetentionDays {
+		return fmt.Errorf("config: audit_egress_retention_days %d out of range (0 = keep forever, max %d)", d, MaxEgressRetentionDays)
 	}
 	if c.EgressPortOrDefault() == c.BrokerPortOrDefault() {
 		return fmt.Errorf("config: egress_port %d must differ from broker_port", c.EgressPortOrDefault())

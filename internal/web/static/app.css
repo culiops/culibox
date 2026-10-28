@@ -8,6 +8,17 @@
       font-display: block;
     }
     .nf { font-family: "Symbols Nerd Font"; font-size: 1em; line-height: 1; }
+    /* Analytics chart colours (analytics.js reads them as var(--an-N)). These are
+       today's Catppuccin hexes and today's compare colours, so mobile is
+       unchanged; desktop.css swaps in a palette with no status hue. */
+    :root {
+      --an-1: #89b4fa; --an-2: #a6e3a1; --an-3: #fab387; --an-4: #cba6f7;
+      --an-5: #f38ba8; --an-6: #94e2d5; --an-7: #f9e2af;
+      --an-up: var(--danger); --an-down: var(--ok);
+    }
+    /* The desktop page's header slot for the range chips; on mobile the chips
+       stay in the body, and an empty flex item would still add one gap. */
+    #an-ctl { display: none; }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
     body {
@@ -53,9 +64,9 @@
     #term-chips, #term-input, #keybar-more { display: none; }
     /* Mobile terminal session topbar (M2, slice 5c) — same reasoning. */
     #term-topbar { display: none; }
-    /* The desktop shell's sidebar top and footer, and its drawer (desktop.css
-       shows them above 700px): mobile never sees them. */
-    #side-top, #side-foot, #drawer { display: none; }
+    /* The desktop shell's sidebar top and footer, its drawer and the page host
+       (desktop.css shows them above 700px): mobile never sees them. */
+    #side-top, #side-foot, #drawer, #page-host { display: none; }
     /* Placeholder only — real mobile-nav styling (icon size, active state, the
        pip badge) belongs to the @media (max-width:700px) block a later task
        adds. This exists solely so classnames.test.js (every class used has
@@ -1322,6 +1333,10 @@
        700px): the profile list, the reach box, the footer hint, and the "Model ·"
        lead of the Effort label. Not rendered at all on a phone. */
     #spawn-plist, #spawn-reach, #spawn-foot-hint, .spawn-lbl-model { display: none; }
+    /* Desktop-only parts of the Settings page (desktop.css shows them on the
+       page above 700px): the nav's group labels, the profile form's Can touch
+       box, section heads and Advanced fold, Discard, and About's runtime line. */
+    .pg-group, .pf-touch, .pf-sec, .pf-adv, #pf-discard, #about-runtime { display: none; }
     .spawn-adv-label {
       display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
       color: var(--muted); margin-bottom: 8px;
@@ -1380,6 +1395,7 @@
     .pitem:hover { background: var(--surface-2); }
     .pitem.on { background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
     .pitem .lk { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .pitem .psub { display: none; } /* the desktop page shows it (desktop.css) */
 
     .ped { flex: 1; min-width: 0; padding: 20px 22px; overflow-y: auto; }
     /* A built-in profile, seen from the editor. Accent rather than danger: it

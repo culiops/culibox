@@ -409,9 +409,14 @@ function accCreds(m, s, ctx) {
   return card;
 }
 
-function accEventsCard(m, d, nowMs) {
+function accEventsCard(m, d, nowMs, sid) {
   const card = accEl("section", "ac-card");
-  card.appendChild(accCardHead("Recent credential events", "last " + ACCESS_EVENTS + " · full history in Audit"));
+  const top = accCardHead("Recent credential events", "last " + ACCESS_EVENTS + " · ");
+  const full = accEl("button", "ac-link", "full history in Audit");
+  full.type = "button";
+  full.addEventListener("click", () => openAudit({ session: sid }));
+  top.lastChild.appendChild(full);
+  card.appendChild(top);
   if (!m.events.length) {
     const msg = d && d.failed && !d.loaded ? "Could not read the credential log." : d && d.loaded ? "No credential events yet." : "Loading…";
     card.appendChild(accEl("div", "ac-empty", msg));
@@ -529,7 +534,7 @@ function mountAccess(host, sid0) {
     const k3 = JSON.stringify([model.events, model.approvalsKnown, hasCreds, d ? [d.loaded, d.failed] : 0, new Date(now).getDate()]);
     if (!hasCreds && !model.events.length) {
       if (keys.events !== "-") { keys.events = "-"; put(slots.events, null); }
-    } else if (force || k3 !== keys.events) { keys.events = k3; put(slots.events, accEventsCard(model, d, now)); }
+    } else if (force || k3 !== keys.events) { keys.events = k3; put(slots.events, accEventsCard(model, d, now, sid)); }
 
     if (lastSsoFor && !model.creds.ssoFor) accLoad(sid, true); // signed in: re-read the status
     lastSsoFor = model.creds.ssoFor;

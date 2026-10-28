@@ -126,3 +126,53 @@ func TestSessionIDsDistinct(t *testing.T) {
 		t.Fatalf("SessionIDs = %v, %v", got, err)
 	}
 }
+
+func TestPruneBatchesAndKeepsOthers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	b, err := broker.OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	a, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	now := time.Unix(1792166400, 0)
+	old, recent := now.Add(-100*24*time.Hour), now.Add(-time.Hour)
+	for i := 0; i < 2500; i++ {
+		if err := a.Record(Row{Time: old.Add(time.Duration(i) * time.Second), SessionID: "s1", Host: "old.example", Port: 443, Outcome: OutcomeAllowed}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 10; i++ {
+		if err := a.Record(Row{Time: recent, SessionID: "s1", Host: "new.example", Port: 443, Outcome: OutcomeAllowed}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if err := b.Record(broker.Row{Time: old, SessionID: "s1", Outcome: broker.OutcomeMinted}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := a.Prune(now.Add(-90*24*time.Hour), 1000)
+	if err != nil || n != 2500 {
+		t.Fatalf("Prune = %d, %v; want 2500", n, err)
+	}
+	got, err := a.ForSession("s1", 100)
+	if err != nil || len(got) != 10 {
+		t.Fatalf("egress rows left = %d, %v; want 10", len(got), err)
+	}
+	for _, r := range got {
+		if r.Host != "new.example" {
+			t.Fatalf("an old row survived: %+v", r)
+		}
+	}
+	if br, err := b.ForSession("s1", 100); err != nil || len(br) != 3 {
+		t.Fatalf("broker rows = %d, %v; want 3 (Prune must touch egress only)", len(br), err)
+	}
+	if n, err := a.Prune(now.Add(-90*24*time.Hour), 1000); err != nil || n != 0 {
+		t.Fatalf("second Prune = %d, %v; want 0", n, err)
+	}
+}
