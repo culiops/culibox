@@ -63,6 +63,14 @@ test("index.html links desktop.css after app.css", () => {
   assert.ok(d > a, "desktop.css must come after app.css so it wins the cascade");
 });
 
+test("login.html links desktop.css after primitives.css (the login page gets the desktop tokens above 700px)", () => {
+  const html = read("login.html");
+  const p = html.indexOf('href="/primitives.css"');
+  const d = html.indexOf('href="/desktop.css"');
+  assert.ok(p >= 0, "primitives.css link present");
+  assert.ok(d > p, "desktop.css must come after primitives.css so it wins the cascade");
+});
+
 test("desktop :root defines the colour-role tokens", () => {
   const css = stripComments(read("desktop.css"));
   assert.match(css, /:root\s*\{[^}]*--amber:\s*#f5b94a/);

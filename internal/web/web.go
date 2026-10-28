@@ -309,11 +309,17 @@ func (s *Server) Handler() http.Handler {
 	})
 	// The login page is public, so the stylesheets it links must be too, or the
 	// <link> is answered by authGuard's redirect and the page renders unstyled.
-	// Only tokens.css and primitives.css are exposed: a colour palette, which the
-	// login page's own appearance already reveals. app.css stays protected.
-	for _, name := range []string{"tokens.css", "primitives.css"} {
+	// Only tokens.css, primitives.css and desktop.css (plus the one Inter file
+	// desktop.css's @font-face names) are exposed: a colour palette and type,
+	// which the login page's own appearance already reveals. app.css stays
+	// protected. desktop.css carries UI selector names but no data, and the
+	// source is public.
+	for _, name := range []string{"tokens.css", "primitives.css", "desktop.css", "vendor/inter/InterVariable.woff2"} {
 		root.HandleFunc("/"+name, func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-cache")
+			if strings.HasSuffix(name, ".woff2") {
+				w.Header().Set("Content-Type", "font/woff2")
+			}
 			http.ServeFileFS(w, r, staticFS, "static/"+name)
 		})
 	}
