@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS egress_audit (
   suppressed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_egress_session ON egress_audit(session_id, ts);
+CREATE INDEX IF NOT EXISTS idx_egress_ts ON egress_audit(ts);
 `
 
 // Audit is the egress audit log, a table in the same file as the broker's
