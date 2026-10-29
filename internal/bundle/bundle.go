@@ -210,15 +210,38 @@ func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err err
 		}, nil)
 	}
 	// The MCP file lives outside the source dir; fold it in so a change there
-	// rebuilds too.
-	if fi, err := os.Stat(m.opts.MCPFile); err == nil {
-		fmt.Fprintf(h, "mcp\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
-	}
+	// rebuilds too. By content, not mtime: see mcpFingerprint.
+	fmt.Fprintf(h, "mcp\x00%s\n", mcpFingerprint(m.opts.MCPFile))
 	if fi, err := os.Stat(filepath.Join(m.opts.Source, "settings.json")); err == nil {
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
 	fmt.Fprintf(h, "plugins\x00%t\n", pluginsMounted)
 	return hex.EncodeToString(h.Sum(nil))[:16], imageID, nil
+}
+
+// mcpFingerprint is what of the MCP file can reach the bundle: its top-level
+// mcpServers (filterMCP, mcpCommands), or whether it is absent or invalid. The
+// file is ~/.claude.json, which host claude rewrites constantly with tips,
+// stats and project state, so folding its mtime in made a new, identical bundle
+// dir on nearly every spawn (#3). Marshalling the decoded map sorts its keys, so
+// a reordered rewrite fingerprints the same.
+func mcpFingerprint(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "absent"
+	}
+	var doc struct {
+		MCPServers map[string]any `json:"mcpServers"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return "invalid"
+	}
+	b, err := json.Marshal(doc.MCPServers)
+	if err != nil {
+		return "invalid"
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // entryCommands is the sorted, de-duplicated Options.EntryCommands.
