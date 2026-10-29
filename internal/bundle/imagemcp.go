@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -140,8 +139,8 @@ func (r resolvedProber) Resolves(cmds []string) map[string]bool {
 
 // mcpCommands lists the stdio commands of the user's MCP file. A missing or
 // invalid file yields none; filterMCP reports it.
-func mcpCommands(path string) []string {
-	raw, err := os.ReadFile(path)
+func mcpCommands(src mcpSource) []string {
+	raw, err := src.raw, src.err
 	if err != nil {
 		return nil
 	}

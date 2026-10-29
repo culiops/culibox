@@ -1,6 +1,8 @@
 package egress
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,7 +158,7 @@ func TestPruneBatchesAndKeepsOthers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n, err := a.Prune(now.Add(-90*24*time.Hour), 1000)
+	n, err := a.Prune(context.Background(), now.Add(-90*24*time.Hour), 1000)
 	if err != nil || n != 2500 {
 		t.Fatalf("Prune = %d, %v; want 2500", n, err)
 	}
@@ -172,7 +174,54 @@ func TestPruneBatchesAndKeepsOthers(t *testing.T) {
 	if br, err := b.ForSession("s1", 100); err != nil || len(br) != 3 {
 		t.Fatalf("broker rows = %d, %v; want 3 (Prune must touch egress only)", len(br), err)
 	}
-	if n, err := a.Prune(now.Add(-90*24*time.Hour), 1000); err != nil || n != 0 {
+	if n, err := a.Prune(context.Background(), now.Add(-90*24*time.Hour), 1000); err != nil || n != 0 {
 		t.Fatalf("second Prune = %d, %v; want 0", n, err)
+	}
+}
+
+// #24: shutdown cancels a prune mid-backlog; it must stop within one batch and
+// say why, not run on until the store is closed under it.
+func TestPruneStopsOnCancel(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	old := time.Now().Add(-200 * 24 * time.Hour)
+	for i := 0; i < 2000; i++ {
+		if err := a.Record(Row{Time: old, SessionID: "s", Host: "h.example", Port: 443, Outcome: OutcomeAllowed}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cut := time.Now().Add(-90 * 24 * time.Hour)
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+	if n, err := a.Prune(done, cut, 100); n != 0 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prune(cancelled) = %d, %v; want 0, context.Canceled", n, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(3*pruneGap/2, cancel) // inside the second gap
+	start := time.Now()
+	n, err := a.Prune(ctx, cut, 100)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prune err = %v; want context.Canceled", err)
+	}
+	if n == 0 || n >= 2000 {
+		t.Fatalf("Prune deleted %d; want some but not all of 2000", n)
+	}
+	if el := time.Since(start); el > 10*pruneGap {
+		t.Fatalf("Prune took %s after cancel; want it to stop within a batch", el)
+	}
+}
+
+// Prune on a closed store reports an error rather than panicking.
+func TestPruneAfterClose(t *testing.T) {
+	a, err := OpenAudit(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	if _, err := a.Prune(context.Background(), time.Now(), 10); err == nil {
+		t.Fatal("Prune after Close = nil error")
 	}
 }

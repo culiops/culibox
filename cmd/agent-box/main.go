@@ -36,6 +36,7 @@ import (
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/doctor"
+	"github.com/culiops/agent-box/internal/egress"
 	"github.com/culiops/agent-box/internal/instancelock"
 	"github.com/culiops/agent-box/internal/launcher"
 	"github.com/culiops/agent-box/internal/logring"
@@ -783,7 +784,13 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	} else {
 		auditReader = r // a typed nil must never reach srv.Audit
 		srv.Audit = r
-		srv.AuditRetentionDays = cfg.EgressRetentionDays()
+		// What the retention job will really do: without an egress audit store it
+		// never starts, and the footer must not claim a policy that is not run.
+		var egressAudit *egress.Audit
+		if egressSvc != nil {
+			egressAudit = egressSvc.Audit
+		}
+		srv.AuditRetentionDays = retentionInEffect(egressAudit, cfg.EgressRetentionDays())
 	}
 
 	// Analytics: durable token/prompt rollups mined from the Claude Code

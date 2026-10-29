@@ -4336,6 +4336,18 @@ function initSpawnWsPicker() {
     swsReopen();
   });
   swsInput.addEventListener("keydown", swsKeydown);
+  // Tabbing on from the field (or from the scrollable list) closes the list, so
+  // it never sits over the next field. A pointer press on a non-focusable row
+  // moves focus to an ANCESTOR of the list (Chrome: the <dialog>), never to a
+  // field, and closing then would empty the rows before the click picks one;
+  // the click handlers below own pointer dismissal. Tab never lands on a
+  // container, so skipping ancestors exempts only pointer presses.
+  const swsFocusOut = (e) => {
+    const to = e.relatedTarget;
+    if (to && to !== swsInput && !swsList.contains(to) && !to.contains(swsList)) swsClose();
+  };
+  swsInput.addEventListener("focusout", swsFocusOut);
+  swsList.addEventListener("focusout", swsFocusOut);
   document.addEventListener("click", (e) => {
     if (e.target !== swsInput && !swsList.contains(e.target)) swsClose();
   });
@@ -4516,8 +4528,8 @@ function swsKeydown(e) {
   if (e.key === "ArrowUp") { e.preventDefault(); swsMove(-1); return; }
   if (e.key === "Escape") { swsClose(); return; }
   if (e.key !== "Enter") return;
-  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl), which asks
-  // spawnHotkeyAction and calls swsEnter itself when the field is not settled:
+  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl); its submit
+  // handler asks spawnHotkeyAction and settles the field itself (swsSettle):
   // handling it here too would act twice.
   if (e.ctrlKey || e.metaKey) return;
   // Prevented unconditionally: this field lives inside the #spawn form, and
@@ -4535,6 +4547,18 @@ function swsEnter() {
   const act = pickerEnterAction(c.mode, swsRows.length);
   if (act === "resolve") swsResolvePath(c.value);
   else if (act === "first") swsChoose(0);
+}
+// swsSettle: a submit found the field showing something other than the directory
+// in use (spawnHotkeyAction). Do what Enter does; when that settles nothing (a
+// Spawn click closed the list, so a fuzzy query has no rows to take), put the
+// user back in the field with its matches open instead of spawning anywhere.
+function swsSettle() {
+  swsEnter();
+  if (classifyPickerQuery(swsInput.value).mode === "path") return; // resolving
+  if (swsInput.value.trim() === swsCwd.trim()) return;
+  swsSetCaption("Pick a workspace first");
+  if (document.activeElement !== swsInput) swsInput.focus(); // its focus handler reopens the list
+  else swsReopen();
 }
 
 // A typed absolute path is resolved by /api/fs/list — see dpResolvePath's
@@ -4975,17 +4999,12 @@ function initSpawnControl() {
   const foot = $("spawn-foot-hint");
   if (foot) foot.textContent = (mac ? "\u2318" : "Ctrl") + "+Enter to spawn";
   // From any field of the form (it bubbles up from the first message, the name,
-  // the selects). A button keeps its own Enter; the workspace field spawns only
-  // when it shows the directory in use, else the key picks/resolves like Enter.
+  // the selects). A button keeps its own Enter. The submit handler spawns only
+  // when the workspace field shows the directory in use.
   $("spawn").addEventListener("keydown", (e) => {
     if (!isSubmitHotkey(e, mac)) return;
     if (e.target && (e.target.tagName === "BUTTON" || (e.target.closest && e.target.closest("#spawn-unlock")))) return;
     e.preventDefault();
-    if (e.target === $("spawn-ws-input")) {
-      // The field may show text that is not the directory in use (spawnHotkeyAction).
-      const act = spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden });
-      if (act === "pick") { swsEnter(); return; }
-    }
     $("spawn").requestSubmit();
   });
 }
@@ -5038,6 +5057,13 @@ function showSpawnUnlock(message) {
 $("spawn").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   if (spawnBusy) return;
+  // The workspace field may show text that is not the directory in use: settle
+  // it first, never spawn in the previously resolved one (#20).
+  if (spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden, highlighted: swsActive >= 0 }) === "pick") {
+    swsSettle();
+    return;
+  }
+  swsClose(); // the field shows the directory in use; an open list is just left over
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) goBtn.disabled = true;

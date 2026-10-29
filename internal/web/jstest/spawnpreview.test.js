@@ -200,8 +200,8 @@ test("hotkey from the workspace field picks/resolves instead of spawning in the 
   // a fuzzy query typed over a resolved directory: swsCwd still holds the old one
   assert.strictEqual(spawnHotkeyAction({ text: "culi", cwd: "/home/u/old", listOpen: false }), "pick");
   assert.strictEqual(spawnHotkeyAction({ text: "~/proj", cwd: "/home/u/proj", listOpen: false }), "pick");
-  // an open list always picks first, even when the text matches
-  assert.strictEqual(spawnHotkeyAction({ text: "/home/u/proj", cwd: "/home/u/proj", listOpen: true }), "pick");
+  // an open list with a highlighted row takes that row, even when the text matches
+  assert.strictEqual(spawnHotkeyAction({ text: "/home/u/proj", cwd: "/home/u/proj", listOpen: true, highlighted: true }), "pick");
   assert.strictEqual(spawnHotkeyAction({}), "submit");
 });
 
@@ -211,6 +211,27 @@ test("swsKeydown ignores Ctrl/Cmd+Enter so the form hotkey is the only handler, 
   assert.match(body, /if \(e\.ctrlKey \|\| e\.metaKey\) return;/);
   assert.ok(body.indexOf("e.ctrlKey || e.metaKey") < body.indexOf("e.preventDefault();\n  swsEnter"));
   assert.match(app, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\)/);
+});
+
+// #20 review: a list left open (tabbing past the field opens it) must not block
+// a submit from another field when the field already shows the directory in use.
+test("a settled field submits with its list open and nothing highlighted", () => {
+  assert.strictEqual(spawnHotkeyAction({ text: "/home/u/proj", cwd: "/home/u/proj", listOpen: true, highlighted: false }), "submit");
+  assert.strictEqual(spawnHotkeyAction({ text: "", cwd: "", listOpen: true }), "submit");
+  assert.strictEqual(spawnHotkeyAction({ text: "culi", cwd: "/home/u/proj", listOpen: true }), "pick");
+});
+
+// #20: the Spawn button and every other submit (hotkey from any field, Retry
+// after unlock) go through the form's submit handler, so the guard lives there.
+test("every submit of the spawn form asks the guard before spawning", () => {
+  const app = read("app.js");
+  const at = app.indexOf('$("spawn").addEventListener("submit"');
+  assert.ok(at > 0);
+  const body = app.slice(at, app.indexOf("spawnBusy = true;", at));
+  assert.match(body, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\), listOpen: !\$\("spawn-ws-list"\)\.hidden, highlighted: swsActive >= 0 \}\) === "pick"/);
+  assert.match(body, /swsSettle\(\);\s*return;/);
+  const settle = app.slice(app.indexOf("function swsSettle"), app.indexOf("function swsResolvePath"));
+  assert.match(settle, /swsEnter\(\);/);
 });
 
 // A legacy inline AWS binding (profile.aws_inline: name, prod, elevate_max_minutes)

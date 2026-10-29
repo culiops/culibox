@@ -211,3 +211,40 @@ func TestAllowlistNames(t *testing.T) {
 		t.Fatalf("AllowlistNames = %s", got)
 	}
 }
+
+// #3: host claude rewrites ~/.claude.json constantly (tips, stats, project
+// state). Only its mcpServers reach the bundle, so only they may move the hash;
+// before, every spawn materialized an identical new bundle dir.
+func TestMCPFileChurnOutsideMCPServersReusesTheBundle(t *testing.T) {
+	src := realisticSource(t)
+	mcp := filepath.Join(src, "..", ".claude.json")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(mcp, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"numStartups": 1, "mcpServers": {"a": {"command": "npx", "args": ["x"]}}}`)
+	a := buildForTest(t, src)
+	// Same servers, other keys changed, keys reordered, file grown.
+	write(`{"tipsHistory": {"t": 9}, "mcpServers": {"a": {"args": ["x"], "command": "npx"}}, "numStartups": 2}`)
+	bb := buildForTest(t, src)
+	if a.Hash != bb.Hash || !bb.Reused {
+		t.Fatalf("churn outside mcpServers rebuilt the bundle: %s -> %s (reused %v)", a.Hash, bb.Hash, bb.Reused)
+	}
+	write(`{"mcpServers": {"a": {"command": "npx", "args": ["y"]}}}`)
+	c := buildForTest(t, src)
+	if c.Hash == bb.Hash {
+		t.Fatal("editing an MCP server must change the bundle hash")
+	}
+	// Absent and invalid files each build a bundle saying so, apart from a valid one.
+	write(`{not json`)
+	d := buildForTest(t, src)
+	if err := os.Remove(mcp); err != nil {
+		t.Fatal(err)
+	}
+	e := buildForTest(t, src)
+	if d.Hash == c.Hash || e.Hash == c.Hash || d.Hash == e.Hash {
+		t.Fatalf("absent/invalid MCP file must hash apart: valid %s invalid %s absent %s", c.Hash, d.Hash, e.Hash)
+	}
+}
