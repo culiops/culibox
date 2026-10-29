@@ -129,17 +129,16 @@ func TestRunRetentionStopWaits(t *testing.T) {
 		logs = append(logs, fmt.Sprintf(f, args...))
 	})
 	stop()
-	// Stopped right after start, the run either finished or never began; in
-	// both cases it is over, so closing the store now fails nothing.
+	// stop waits for the run, which either finished or never began; in both
+	// cases it is over, so closing the store now fails nothing.
 	if got := countRows(t, a); got != 1 && got != 4 {
 		t.Fatalf("rows = %d, want 1 (pruned) or 4 (stopped before the run)", got)
 	}
 	a.Close()
-	time.Sleep(3 * pruneGapForTest)
 	mu.Lock()
 	for _, l := range logs {
 		if strings.Contains(l, "failed") {
-			t.Errorf("a prune ran after stop returned: %q", l)
+			t.Errorf("a prune failed: %q", l)
 		}
 	}
 	mu.Unlock()
@@ -183,6 +182,3 @@ func TestRetentionInEffect(t *testing.T) {
 		t.Errorf("egress on, keep forever = %d, want 0", got)
 	}
 }
-
-// pruneGapForTest mirrors egress.pruneGap (unexported) for the wait above.
-const pruneGapForTest = 50 * time.Millisecond

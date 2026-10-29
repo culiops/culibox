@@ -157,7 +157,8 @@ func (m *Manager) Ensure() (*Built, error) {
 	// even if the host plugin dir changes mid-call.
 	ps := pluginSnapshot(m.opts.Source, m.opts.Root)
 	mounted := len(ps.mounts) > 0
-	hash, imageID, err := m.sourceHash(mounted)
+	mcp := readMCPSource(m.opts.MCPFile)
+	hash, imageID, err := m.sourceHash(mounted, mcp)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +166,7 @@ func (m *Manager) Ensure() (*Built, error) {
 	var built *Built
 	if lock, ok := readLock(dir); ok {
 		built = &Built{Dir: dir, Hash: hash, Lock: lock, Reused: true}
-	} else if built, err = m.materialize(hash, imageID, dir, mounted); err != nil {
+	} else if built, err = m.materialize(hash, imageID, dir, mounted, mcp); err != nil {
 		return nil, err
 	}
 	built.pluginMounts, built.pluginDrops = ps.mounts, ps.drops
@@ -190,7 +191,7 @@ func (m *Manager) Ensure() (*Built, error) {
 // reuse compares mount destinations, not host paths, and neither kind of dir is
 // ever removed (no GC), so its settings and its plugins still match each other.
 // It sees a newer plugin snapshot only once it is recreated.
-func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err error) {
+func (m *Manager) sourceHash(pluginsMounted bool, mcp mcpSource) (hash, imageID string, err error) {
 	h := sha256.New()
 	io.WriteString(h, layoutMarker)
 	for _, c := range m.entryCommands() {
@@ -211,7 +212,7 @@ func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err err
 	}
 	// The MCP file lives outside the source dir; fold it in so a change there
 	// rebuilds too. By content, not mtime: see mcpFingerprint.
-	fmt.Fprintf(h, "mcp\x00%s\n", mcpFingerprint(m.opts.MCPFile))
+	fmt.Fprintf(h, "mcp\x00%s\n", mcpFingerprint(mcp))
 	if fi, err := os.Stat(filepath.Join(m.opts.Source, "settings.json")); err == nil {
 		fmt.Fprintf(h, "settings\x00%d\x00%d\n", fi.Size(), fi.ModTime().UnixNano())
 	}
@@ -225,8 +226,8 @@ func (m *Manager) sourceHash(pluginsMounted bool) (hash, imageID string, err err
 // stats and project state, so folding its mtime in made a new, identical bundle
 // dir on nearly every spawn (#3). Marshalling the decoded map sorts its keys, so
 // a reordered rewrite fingerprints the same.
-func mcpFingerprint(path string) string {
-	raw, err := os.ReadFile(path)
+func mcpFingerprint(src mcpSource) string {
+	raw, err := src.raw, src.err
 	if err != nil {
 		return "absent"
 	}
@@ -319,7 +320,7 @@ func pathologicalTarget(source, target string) (string, bool) {
 
 // materialize builds into a temp dir and renames, writing the lock last as the
 // completion sentinel.
-func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) (*Built, error) {
+func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool, mcp mcpSource) (*Built, error) {
 	// The image is probed before anything is written. A failed probe publishes
 	// nothing: a cached bundle would pin "no image servers" and "every stdio
 	// server dropped" until the source changed, while an error lets the spawn
@@ -329,7 +330,7 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) 
 	var facts ImageFacts
 	if ip, ok := m.opts.Prober.(ImageProbe); ok {
 		var err error
-		cmds := mcpCommands(m.opts.MCPFile)
+		cmds := mcpCommands(mcp)
 		for _, c := range entryCmds {
 			if !slices.Contains(cmds, c) {
 				cmds = append(cmds, c)
@@ -404,7 +405,7 @@ func (m *Manager) materialize(hash, imageID, final string, pluginsMounted bool) 
 
 	// mcp.json: shape-classified, never name-matched; the image's own servers
 	// are merged in after the user filter.
-	servers, mdrops := filterMCP(m.opts.MCPFile, prober)
+	servers, mdrops := filterMCPSource(mcp, prober)
 	servers, mdrops, imageServers := mergeImageMCP(servers, mdrops, facts)
 	lock.Dropped = append(lock.Dropped, mdrops...)
 	if sum, err := writeJSON(filepath.Join(tmp, mcpName), map[string]any{"mcpServers": servers}); err == nil {

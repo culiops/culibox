@@ -4336,6 +4336,15 @@ function initSpawnWsPicker() {
     swsReopen();
   });
   swsInput.addEventListener("keydown", swsKeydown);
+  // Tabbing on from the field (or from the scrollable list) closes the list, so
+  // it never sits over the next field. relatedTarget is null for a click on a
+  // non-focusable row, which the click handlers below own.
+  const swsFocusOut = (e) => {
+    const to = e.relatedTarget;
+    if (to && to !== swsInput && !swsList.contains(to)) swsClose();
+  };
+  swsInput.addEventListener("focusout", swsFocusOut);
+  swsList.addEventListener("focusout", swsFocusOut);
   document.addEventListener("click", (e) => {
     if (e.target !== swsInput && !swsList.contains(e.target)) swsClose();
   });
@@ -4516,8 +4525,8 @@ function swsKeydown(e) {
   if (e.key === "ArrowUp") { e.preventDefault(); swsMove(-1); return; }
   if (e.key === "Escape") { swsClose(); return; }
   if (e.key !== "Enter") return;
-  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl), which asks
-  // spawnHotkeyAction and calls swsEnter itself when the field is not settled:
+  // Ctrl/Cmd+Enter is the form's spawn hotkey (initSpawnControl); its submit
+  // handler asks spawnHotkeyAction and settles the field itself (swsSettle):
   // handling it here too would act twice.
   if (e.ctrlKey || e.metaKey) return;
   // Prevented unconditionally: this field lives inside the #spawn form, and
@@ -5047,10 +5056,11 @@ $("spawn").addEventListener("submit", async (ev) => {
   if (spawnBusy) return;
   // The workspace field may show text that is not the directory in use: settle
   // it first, never spawn in the previously resolved one (#20).
-  if (spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden }) === "pick") {
+  if (spawnHotkeyAction({ text: $("spawn-ws-input").value, cwd: getCwd(), listOpen: !$("spawn-ws-list").hidden, highlighted: swsActive >= 0 }) === "pick") {
     swsSettle();
     return;
   }
+  swsClose(); // the field shows the directory in use; an open list is just left over
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
   if (goBtn) goBtn.disabled = true;

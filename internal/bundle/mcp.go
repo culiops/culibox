@@ -74,10 +74,29 @@ func FilterMCP(path string, prober Prober) (map[string]any, []Drop) {
 // filterMCP classifies servers by SHAPE. No server is ever matched by name: the
 // same rule has to work for configs this project has never seen.
 func filterMCP(path string, prober Prober) (map[string]any, []Drop) {
+	return filterMCPSource(readMCPSource(path), prober)
+}
+
+// mcpSource is the MCP file as read once per Ensure, so the hash, the image
+// probe and the filter all see the same bytes: a content hash computed from one
+// read and a bundle built from another would label a dir with servers it does
+// not hold, and a later identical file would reuse it.
+type mcpSource struct {
+	path string
+	raw  []byte
+	err  error
+}
+
+func readMCPSource(path string) mcpSource {
 	raw, err := os.ReadFile(path)
+	return mcpSource{path: path, raw: raw, err: err}
+}
+
+func filterMCPSource(src mcpSource, prober Prober) (map[string]any, []Drop) {
+	raw, err := src.raw, src.err
 	if err != nil {
 		return map[string]any{}, []Drop{{Kind: "mcp", Name: "*",
-			Reason: "no MCP configuration file at " + path}}
+			Reason: "no MCP configuration file at " + src.path}}
 	}
 	var doc struct {
 		MCPServers map[string]mcpServer `json:"mcpServers"`
