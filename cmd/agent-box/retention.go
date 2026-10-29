@@ -28,7 +28,10 @@ func startRetention(ctx context.Context, a *egress.Audit, days int, every time.D
 	}
 	run := func() {
 		cutoff := time.Now().AddDate(0, 0, -days)
-		n, err := a.Prune(cutoff, retentionBatch)
+		n, err := a.Prune(ctx, cutoff, retentionBatch)
+		if err != nil && ctx.Err() != nil {
+			return // shutdown; the rest is pruned on the next start
+		}
 		if err != nil {
 			logf("audit: prune of egress rows older than %s failed after %d deleted: %v", retentionDays(days), n, err)
 			return
@@ -58,11 +61,21 @@ func retentionDays(days int) string {
 	return strconv.Itoa(days) + " days"
 }
 
+// retentionInEffect is the egress retention the job will really apply, for the
+// Audit footer: 0 (kept forever) when there is no egress audit store to prune,
+// since then the job never starts whatever the config says (#24).
+func retentionInEffect(a *egress.Audit, days int) int {
+	if a == nil || days <= 0 {
+		return 0
+	}
+	return days
+}
+
 // runRetention starts startRetention in the background and returns the step
 // that cancels it and waits (bounded) for it to finish. Nil audit or days == 0
 // starts nothing and returns a no-op.
 func runRetention(a *egress.Audit, days int, logf func(string, ...any)) (stop func()) {
-	if a == nil || days <= 0 {
+	if retentionInEffect(a, days) == 0 {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
