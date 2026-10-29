@@ -152,11 +152,12 @@ function pickSpawnCwd(o) {
   return spawnDep("defaultWorkspace", "./tier.js")(x.workspaces || [], x.tier);
 }
 
-// spawnHotkeyAction: what Ctrl/Cmd+Enter does from the workspace field. The field
+// spawnHotkeyAction: what a submit of the New session form does (the Spawn button,
+// Ctrl/Cmd+Enter from any field, Retry after unlock). The workspace field
 // doubles as a live search box, so its text can differ from the directory that
 // will really be used (a fuzzy query, a path not resolved yet) and its dropdown
 // can be open. Spawning then would start the session in the PREVIOUS directory
-// while the field shows another, so the keypress does what plain Enter does (pick
+// while the field shows another, so the submit does what plain Enter does (pick
 // or resolve) and the next one spawns. Only a field that shows exactly the
 // directory in use, with its list closed, spawns.
 function spawnHotkeyAction(o) {

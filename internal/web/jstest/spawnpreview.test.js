@@ -213,6 +213,19 @@ test("swsKeydown ignores Ctrl/Cmd+Enter so the form hotkey is the only handler, 
   assert.match(app, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\)/);
 });
 
+// #20: the Spawn button and every other submit (hotkey from any field, Retry
+// after unlock) go through the form's submit handler, so the guard lives there.
+test("every submit of the spawn form asks the guard before spawning", () => {
+  const app = read("app.js");
+  const at = app.indexOf('$("spawn").addEventListener("submit"');
+  assert.ok(at > 0);
+  const body = app.slice(at, app.indexOf("spawnBusy = true;", at));
+  assert.match(body, /spawnHotkeyAction\(\{ text: \$\("spawn-ws-input"\)\.value, cwd: getCwd\(\), listOpen: !\$\("spawn-ws-list"\)\.hidden \}\) === "pick"/);
+  assert.match(body, /swsSettle\(\);\s*return;/);
+  const settle = app.slice(app.indexOf("function swsSettle"), app.indexOf("function swsResolvePath"));
+  assert.match(settle, /swsEnter\(\);/);
+});
+
 // A legacy inline AWS binding (profile.aws_inline: name, prod, elevate_max_minutes)
 // is shown like a named connection everywhere the dialog summarises reach.
 const legacy = { name: "legacy", runtime: "box", bin: "claude", claude: true, aws_inline: { name: "legacy-prod", prod: true, elevate_max_minutes: 30 } };
