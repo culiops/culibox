@@ -4337,11 +4337,14 @@ function initSpawnWsPicker() {
   });
   swsInput.addEventListener("keydown", swsKeydown);
   // Tabbing on from the field (or from the scrollable list) closes the list, so
-  // it never sits over the next field. relatedTarget is null for a click on a
-  // non-focusable row, which the click handlers below own.
+  // it never sits over the next field. A pointer press on a non-focusable row
+  // moves focus to an ANCESTOR of the list (Chrome: the <dialog>), never to a
+  // field, and closing then would empty the rows before the click picks one;
+  // the click handlers below own pointer dismissal. Tab never lands on a
+  // container, so skipping ancestors exempts only pointer presses.
   const swsFocusOut = (e) => {
     const to = e.relatedTarget;
-    if (to && to !== swsInput && !swsList.contains(to)) swsClose();
+    if (to && to !== swsInput && !swsList.contains(to) && !to.contains(swsList)) swsClose();
   };
   swsInput.addEventListener("focusout", swsFocusOut);
   swsList.addEventListener("focusout", swsFocusOut);
