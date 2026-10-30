@@ -22,6 +22,7 @@ import (
 	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/awsscope"
 	"github.com/culiops/agent-box/internal/broker"
+	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/ssologin"
 	"github.com/culiops/agent-box/internal/web"
@@ -39,6 +40,9 @@ const (
 	rolesTimeout = 20 * time.Second
 	// ssoKeyTimeout bounds reading the host config for a profile's SSO session.
 	ssoKeyTimeout = 5 * time.Second
+	// ssoCheckTimeout bounds one sso_direct check: the broker's mint (20 s) and
+	// its gate (15 s), with a margin.
+	ssoCheckTimeout = 40 * time.Second
 	// fallbackIAMRegion is used when the profile names none: IAM is global, the
 	// client only needs a region to pick an endpoint.
 	fallbackIAMRegion = "us-east-1"
@@ -47,6 +51,14 @@ const (
 // iamListRoles is the one IAM call the roles listing makes (*iam.Client).
 type iamListRoles interface {
 	ListRoles(ctx context.Context, in *iam.ListRolesInput, opts ...func(*iam.Options)) (*iam.ListRolesOutput, error)
+}
+
+// ssoGater is the broker's sso_direct mint-and-gate for a binding or a named
+// connection (*broker.Broker). It writes the probe audit rows and hands out no
+// credential.
+type ssoGater interface {
+	CheckSSODirect(ctx context.Context, bnd config.AWSBinding) (awsprobe.GateResult, time.Time)
+	CheckSSODirectConn(ctx context.Context, c config.AWSConnection) (awsprobe.GateResult, time.Time)
 }
 
 // awsCredService is the credentials screen's use of the host's AWS signer. It
@@ -60,9 +72,11 @@ type awsCredService struct {
 	sso    ssoRunner // nil = no aws CLI on the daemon's PATH
 	newIAM func(aws.Config) iamListRoles
 	rec    web.CredRecorder // the sign-in result row; nil = none
+	gate   ssoGater         // nil = no broker gate: sso_direct checks are unverified
 
 	// Test seams; zero = the constants above.
 	checkTimeout time.Duration
+	ssoTimeout   time.Duration
 	rolesCap     int
 	scanCap      int
 }
@@ -78,6 +92,9 @@ func awsServiceFor(b *brokerService, rec web.CredRecorder) (web.BaseRoleChecker,
 		return nil, nil
 	}
 	svc := &awsCredService{minter: b.Minter, sim: b.Sim, rec: rec}
+	if b.Hooks.B != nil { // a nil *Broker must stay a nil interface
+		svc.gate = b.Hooks.B
+	}
 	if b.SSO != nil { // a nil *Runner must stay a nil interface
 		svc.sso = b.SSO
 	}
@@ -99,6 +116,37 @@ func (s *awsCredService) Check(ctx context.Context, t broker.ProbeTarget) awspro
 		return awsprobe.Fail(awsprobe.ReasonError, time.Now())
 	}
 	return broker.ProbeRole(ctx, s.minter, s.sim, t, awsscope.SessionName("check-"+hex.EncodeToString(b[:])), time.Now)
+}
+
+// CheckSSODirect mints the profile's SSO permission-set credentials and runs
+// the read-only gate on them, behind a timeout (broker.CheckSSODirect, as a
+// spawn makes it). A cancelled or expired ctx cannot pass: the gate reads that
+// as unverified. With no broker gate wired the answer is unverified too.
+func (s *awsCredService) CheckSSODirect(ctx context.Context, profile, region string) (awsprobe.GateResult, time.Time) {
+	if s.gate == nil {
+		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonProbeDisabled, CheckedAt: time.Now()}, time.Time{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.ssoCheckTimeout())
+	defer cancel()
+	return s.gate.CheckSSODirect(ctx, config.AWSBinding{SourceProfile: profile, Region: region, Mode: config.AWSModeSSODirect})
+}
+
+// CheckSSODirectConn is CheckSSODirect for a named connection (its audit row
+// carries the connection's name and definition hash). It is what a save runs.
+func (s *awsCredService) CheckSSODirectConn(ctx context.Context, c config.AWSConnection) (awsprobe.GateResult, time.Time) {
+	if s.gate == nil {
+		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonProbeDisabled, CheckedAt: time.Now()}, time.Time{}
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.ssoCheckTimeout())
+	defer cancel()
+	return s.gate.CheckSSODirectConn(ctx, c)
+}
+
+func (s *awsCredService) ssoCheckTimeout() time.Duration {
+	if s.ssoTimeout > 0 {
+		return s.ssoTimeout
+	}
+	return ssoCheckTimeout
 }
 
 // Roles lists the IAM roles visible to the host profile, read-only and capped.

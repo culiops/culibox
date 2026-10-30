@@ -18,6 +18,7 @@ import (
 
 	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/broker"
+	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/ssologin"
 	"github.com/culiops/agent-box/internal/web"
 )
@@ -368,5 +369,88 @@ func TestAWSServiceForNoBrokerIsUntypedNil(t *testing.T) {
 	// A broker whose aws CLI is missing: SSO stays a nil interface.
 	if _, err := svc.SSOStart("dev"); err == nil {
 		t.Fatal("no CLI, no sign-in")
+	}
+}
+
+// fakeGater records the sso_direct calls and answers them.
+type fakeGater struct {
+	bnd      []config.AWSBinding
+	conn     []config.AWSConnection
+	res      awsprobe.GateResult
+	exp      time.Time
+	deadline time.Duration
+	wait     bool // block until ctx ends, then answer unverified
+}
+
+func (f *fakeGater) answer(ctx context.Context) (awsprobe.GateResult, time.Time) {
+	if d, ok := ctx.Deadline(); ok {
+		f.deadline = time.Until(d)
+	}
+	if f.wait {
+		<-ctx.Done()
+		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonTimeout}, time.Time{}
+	}
+	return f.res, f.exp
+}
+
+func (f *fakeGater) CheckSSODirect(ctx context.Context, b config.AWSBinding) (awsprobe.GateResult, time.Time) {
+	f.bnd = append(f.bnd, b)
+	return f.answer(ctx)
+}
+
+func (f *fakeGater) CheckSSODirectConn(ctx context.Context, c config.AWSConnection) (awsprobe.GateResult, time.Time) {
+	f.conn = append(f.conn, c)
+	return f.answer(ctx)
+}
+
+func TestAWSCredServiceCheckSSODirect(t *testing.T) {
+	exp := time.Unix(1_800_000_000, 0)
+	g := &fakeGater{res: awsprobe.GateResult{State: awsprobe.GateReadOnly, RoleARN: "arn:aws:iam::123456789012:role/r"}, exp: exp}
+	s := &awsCredService{gate: g}
+	res, got := s.CheckSSODirect(context.Background(), "p", "us-east-1")
+	if res.State != awsprobe.GateReadOnly || !got.Equal(exp) {
+		t.Fatalf("%+v %v", res, got)
+	}
+	if len(g.bnd) != 1 || g.bnd[0].SourceProfile != "p" || g.bnd[0].Region != "us-east-1" || !g.bnd[0].SSODirect() || g.bnd[0].RoleARN != "" {
+		t.Fatalf("binding %+v", g.bnd)
+	}
+	if g.deadline <= 0 || g.deadline > 40*time.Second || g.deadline < 30*time.Second {
+		t.Fatalf("the check is not bounded to about 40 s: %v", g.deadline)
+	}
+	c := config.AWSConnection{Name: "c", AWSBinding: g.bnd[0]}
+	if res, _ = s.CheckSSODirectConn(context.Background(), c); res.State != awsprobe.GateReadOnly || len(g.conn) != 1 || g.conn[0].Name != "c" {
+		t.Fatalf("%+v %+v", res, g.conn)
+	}
+}
+
+// A check that runs out of time is unverified, never a pass; the same for a
+// service with no gate.
+func TestAWSCredServiceCheckSSODirectFailsClosed(t *testing.T) {
+	g := &fakeGater{wait: true}
+	s := &awsCredService{gate: g, ssoTimeout: 20 * time.Millisecond}
+	if res, exp := s.CheckSSODirect(context.Background(), "p", "us-east-1"); res.State != awsprobe.GateUnverified || !exp.IsZero() {
+		t.Fatalf("%+v %v", res, exp)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if res, _ := s.CheckSSODirectConn(ctx, config.AWSConnection{}); res.State != awsprobe.GateUnverified {
+		t.Fatalf("cancelled: %+v", res)
+	}
+	none := &awsCredService{}
+	if res, _ := none.CheckSSODirect(context.Background(), "p", "us-east-1"); res.State != awsprobe.GateUnverified {
+		t.Fatalf("no gate: %+v", res)
+	}
+	if res, _ := none.CheckSSODirectConn(context.Background(), config.AWSConnection{}); res.State != awsprobe.GateUnverified {
+		t.Fatalf("no gate: %+v", res)
+	}
+}
+
+// With no *Broker in Hooks the service has no gate (a nil *Broker must not sit
+// in the interface and panic).
+func TestAWSServiceForWithoutBrokerHasNoGate(t *testing.T) {
+	_, svc := awsServiceFor(&brokerService{Minter: &recMinter{}, Sim: denySim{}}, &recCred{})
+	res, _ := svc.CheckSSODirect(context.Background(), "p", "us-east-1")
+	if res.State != awsprobe.GateUnverified {
+		t.Fatalf("%+v", res)
 	}
 }

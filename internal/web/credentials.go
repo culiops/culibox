@@ -41,6 +41,14 @@ type BaseRoleChecker interface {
 	Check(ctx context.Context, t broker.ProbeTarget) awsprobe.Result
 }
 
+// SSODirectChecker runs the sso_direct read-only gate for a named connection
+// (the broker's mint and gate, no credential leaves it). A BaseRoleChecker that
+// does not implement it cannot vouch for an sso_direct connection, and a save
+// of one is refused as unverified.
+type SSODirectChecker interface {
+	CheckSSODirectConn(ctx context.Context, conn config.AWSConnection) (awsprobe.GateResult, time.Time)
+}
+
 // Errors of the CredentialManager. None of them ever carries a secret value.
 var (
 	ErrCredExists   = errors.New("already defined")
@@ -89,6 +97,26 @@ type ErrNeedsAck struct{ Result awsprobe.Result }
 
 func (e ErrNeedsAck) Error() string {
 	return "the base role can write to this AWS account; acknowledge to save"
+}
+
+// ErrSSOGate refuses an sso_direct save that the read-only gate did not pass:
+// the permission set is not read-only, or that could not be verified. There is
+// no acknowledgement for it. Gate is the result to show.
+type ErrSSOGate struct{ Gate awsprobe.GateResult }
+
+func (e ErrSSOGate) Error() string {
+	if e.Gate.State == awsprobe.GateNotReadOnly {
+		return "the SSO permission set is not read-only; nothing was saved"
+	}
+	return "the SSO permission set could not be verified as read-only; nothing was saved"
+}
+
+// Code is the error code of the 409: not_read_only or unverified.
+func (e ErrSSOGate) Code() string {
+	if e.Gate.State == awsprobe.GateNotReadOnly {
+		return "not_read_only"
+	}
+	return "unverified"
 }
 
 // kindLabel names a credfile kind in messages.
@@ -758,6 +786,11 @@ func (c *CredentialManager) checkRole(ctx context.Context, conn config.AWSConnec
 // presence and change rules are re-run under the lock before the write, and a
 // check is made there if a concurrent save made one necessary.
 func (c *CredentialManager) PutAWS(ctx context.Context, conn config.AWSConnection, create, ackWrite bool) (awsprobe.Result, error) {
+	if conn.SSODirect() {
+		// ackWrite has no meaning here: only the gate lets this mode save.
+		_, _, err := c.PutSSODirect(ctx, conn, create)
+		return awsprobe.NotChecked(), err
+	}
 	conn = conn.Clone()
 	c.mu.Lock()
 	needs, err := c.prepAWS(conn, create)
@@ -808,6 +841,82 @@ func (c *CredentialManager) PutAWS(ctx context.Context, conn config.AWSConnectio
 		return res, err
 	}
 	return res, c.persistLocked(cand, merged, src, events)
+}
+
+// checkSSODirect runs the read-only gate for conn, audits the call and charges
+// the save-check budget. It does not need c.mu. Any result but GateReadOnly
+// with a role ARN is carried as the caller's refusal; the gate's own mint and
+// IAM calls bound themselves, and a cancelled ctx can only make it unverified.
+func (c *CredentialManager) checkSSODirect(ctx context.Context, conn config.AWSConnection) (awsprobe.GateResult, time.Time, error) {
+	chk, ok := c.chk.(SSODirectChecker)
+	if c.chk == nil {
+		return awsprobe.GateResult{}, time.Time{}, ErrNoBroker
+	}
+	if wait, ok := c.checkLimit.allow(); !ok {
+		return awsprobe.GateResult{}, time.Time{}, ErrCheckLimited{Wait: wait}
+	}
+	detail := "sso_direct " + conn.SourceProfile
+	if err := c.rec.RecordCred(broker.CredEvent{Action: broker.CredChecked, Kind: credfile.KindAWS, Name: conn.Name,
+		Actor: storeActor, Detail: detail + " started"}); err != nil {
+		return awsprobe.GateResult{}, time.Time{}, fmt.Errorf("%w: audit: %w", ErrCredPersist, err)
+	}
+	res, exp := awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonProbeDisabled}, time.Time{}
+	if ok {
+		res, exp = chk.CheckSSODirectConn(ctx, conn)
+	}
+	res, exp = normalizeGate(res, exp)
+	detail += " " + string(res.State)
+	if res.Reason != "" {
+		detail += " " + string(res.Reason)
+	}
+	if err := c.rec.RecordCred(broker.CredEvent{Action: broker.CredChecked, Kind: credfile.KindAWS, Name: conn.Name,
+		Actor: storeActor, Detail: detail}); err != nil {
+		return res, exp, fmt.Errorf("%w: audit: %w", ErrCredPersist, err)
+	}
+	return res, exp, nil
+}
+
+// PutSSODirect creates or replaces an sso_direct AWS connection. It always runs
+// the read-only gate (create or edit: the permission set behind the profile
+// may have changed since) and saves only on GateReadOnly; a not-read-only or
+// unverified result is ErrSSOGate and nothing is written. There is no
+// override. The result is the gate's, with the credentials' expiration (zero
+// when none were fetched).
+func (c *CredentialManager) PutSSODirect(ctx context.Context, conn config.AWSConnection, create bool) (awsprobe.GateResult, time.Time, error) {
+	conn = conn.Clone()
+	if !conn.SSODirect() {
+		return awsprobe.GateResult{}, time.Time{}, errors.New("not an sso_direct connection")
+	}
+	c.mu.Lock()
+	_, err := c.prepAWS(conn, create)
+	c.mu.Unlock()
+	if err != nil {
+		return awsprobe.GateResult{}, time.Time{}, err
+	}
+	gate, exp, err := c.checkSSODirect(ctx, conn)
+	if err != nil {
+		return gate, exp, err
+	}
+	if gate.State != awsprobe.GateReadOnly {
+		return gate, exp, ErrSSOGate{Gate: gate}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, err = c.prepAWS(conn, create); err != nil { // a concurrent save may have changed the rules
+		return gate, exp, err
+	}
+	cand := c.cloneFile()
+	if j := c.fileIndex(credfile.KindAWS, conn.Name); j >= 0 {
+		cand.AWSConnections[j] = conn
+	} else {
+		cand.AWSConnections = append(cand.AWSConnections, conn)
+	}
+	merged, src, err := c.checkLocked(cand, []string{credfile.KindAWS + "/" + conn.Name}, nil)
+	if err != nil {
+		return gate, exp, err
+	}
+	return gate, exp, c.persistLocked(cand, merged, src, []broker.CredEvent{{Action: action(create), Kind: credfile.KindAWS, Name: conn.Name}})
 }
 
 // Delete removes a web entry. A config.json entry is ErrCredSeed; an entry any
