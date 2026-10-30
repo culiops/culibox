@@ -34,9 +34,10 @@ const EgressSubnet = "172.29.72.0/24"
 const EgressGateway = "172.29.72.1"
 
 // LimaHostGateway is lima's host gateway (host.lima.internal), measured in the
-// M2 spike. The loopback check dials it from an unbound box and fails closed if
-// the address is wrong. Bound boxes sit on an internal network with no route to
-// it: they reach the Mac only through the relay on EgressGateway.
+// M2 spike. The loopback check dials it by address from both unbound and bound
+// boxes and fails closed if the address is wrong. Bound boxes sit on an internal
+// network with no route to it (and no host.lima.internal): they reach the Mac
+// only through the relay on EgressGateway.
 const LimaHostGateway = "192.168.5.2"
 
 // sunPathMax is macOS sockaddr_un.sun_path, NUL included.

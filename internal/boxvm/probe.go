@@ -42,12 +42,17 @@ func probeScript(port int) string {
 		probeTail + `});`
 }
 
-// probeBoundScript is probeScript for a bound box, whose DNS is closed on
-// purpose: no DNS control (the egress probe's ALLOW 200 is the positive
-// control), and host.lima.internal resolves from the box's own /etc/hosts
-// (--add-host), with the measured gateway address as the by-address attempt.
+// probeBoundScript is probeScript for a bound box, which sits on an internal
+// network: no DNS (closed on purpose; the egress probe's ALLOW 200 is the
+// positive control) and no host.lima.internal (it does not resolve there), so
+// both targets are dialled by address. The first is the lima host gateway, past
+// the internal network (spike row c6). The second is the egress gateway on the
+// listener's port (spike row c6c): the relay forwards only the egress and
+// broker ports, which are already bound on the Mac's 127.0.0.1, so the
+// listener's port is never one of them. Both must be BLOCKED.
 func probeBoundScript(port int) string {
-	return probeHead(port) + probeTail
+	return probeHead(port) +
+		"Promise.all(['" + LimaHostGateway + "','" + EgressGateway + "'].map(tryc)).then(r=>r.forEach(l=>console.log(l)));"
 }
 
 func probeHead(port int) string {
@@ -70,8 +75,10 @@ func ProbeLoopback(ctx context.Context, exec ExecFunc) error {
 
 // ProbeLoopbackBound is ProbeLoopback for a box on the egress network, whose
 // DNS is closed: no DNS control is required (the egress probe's ALLOW 200 is
-// the positive control and runs first). It still fails on any REACHED, on any
-// accept at the listener, on a probe that could not run, and on no BLOCKED.
+// the positive control and runs first). It dials the lima host gateway and the
+// egress gateway by address, since the box cannot resolve host.lima.internal.
+// It still fails on any REACHED, on any accept at the listener, on a probe that
+// could not run, and on no BLOCKED.
 func ProbeLoopbackBound(ctx context.Context, exec ExecFunc) error {
 	return probeLoopback(ctx, exec, probeBoundScript, false)
 }
