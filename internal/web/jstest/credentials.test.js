@@ -7,7 +7,7 @@ const {
   awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsConnFromRow, awsRoleARN, awsCheckView, awsErrText, CRED_D4_REMEDY,
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
-  credTableRows, credTableHead,
+  credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -578,4 +578,62 @@ test("desktop creds table: fixed-layout column widths are percentages", () => {
   for (const w of widths) assert.match(w, /^\d+%$/);
   assert.ok(widths.reduce((n, w) => n + parseInt(w, 10), 0) < 100, "Used by keeps a share");
   assert.match(css, /\.ctab-sec:not\(\[data-group="aws"\]\) \.ctab th \{ white-space: normal;/, "headers wrap in share-sized columns");
+});
+
+const roleList = (...names) => names.map((n) => ({ name: n, arn: "arn:aws:iam::226198813800:role/" + n }));
+
+test("awsRolesShown: filters by name, case-insensitively, and caps what it renders", () => {
+  const roles = roleList("agentbox-agent", "AWSServiceRoleForECS", "ecs-task-api", "Lab-reader");
+  assert.deepStrictEqual(awsRolesShown(roles, "", 50).list.map((r) => r.name), roles.map((r) => r.name));
+  const ecs = awsRolesShown(roles, "  ECS ", 50);
+  assert.deepStrictEqual(ecs.list.map((r) => r.name), ["AWSServiceRoleForECS", "ecs-task-api"]);
+  assert.strictEqual(ecs.matched, 2);
+  const capped = awsRolesShown(roles, "", 2);
+  assert.strictEqual(capped.list.length, 2);
+  assert.strictEqual(capped.matched, 4);
+  assert.strictEqual(awsRolesShown(roles, "nothing", 50).matched, 0);
+});
+
+test("awsRolesShown: the chosen role stays shown even when the filter or the cap hides it", () => {
+  const roles = roleList("a", "b", "c", "d");
+  const out = awsRolesShown(roles, "a", 50, roles[3].arn);
+  assert.deepStrictEqual(out.list.map((r) => r.name), ["a", "d"]);
+  assert.deepStrictEqual(awsRolesShown(roles, "", 2, roles[3].arn).list.map((r) => r.name), ["a", "b", "d"]);
+});
+
+test("awsAgentRolePick: preselects the one agentbox-* role over an unfinished role field", () => {
+  const roles = roleList("agentbox-agent", "Admin", "ecs-task");
+  assert.strictEqual(awsAgentRolePick(roles, ""), roles[0].arn);
+  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::226198813800:role/"), roles[0].arn);
+  assert.strictEqual(awsAgentRolePick(roleList("AgentBox-Agent"), ""), "arn:aws:iam::226198813800:role/AgentBox-Agent");
+});
+
+test("awsAgentRolePick: never overrides a typed role, never guesses between several", () => {
+  const roles = roleList("agentbox-agent", "Admin");
+  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::226198813800:role/Admin"), "");
+  assert.strictEqual(awsAgentRolePick(roleList("agentbox-agent", "agentbox-agent-write"), ""), "");
+  assert.strictEqual(awsAgentRolePick(roleList("Admin"), ""), "");
+  assert.strictEqual(awsAgentRolePick([], ""), "");
+});
+
+test("awsRolesNote: an empty, capped or agent-role-less list points at the agent role doc", () => {
+  assert.ok(AWS_AGENT_ROLE_DOC.endsWith("docs/aws/agent-role/README.md"));
+  const empty = awsRolesNote({ roles: [] });
+  assert.match(empty.text, /No roles/);
+  assert.strictEqual(empty.doc, true);
+  const capped = awsRolesNote({ roles: roleList("agentbox-agent"), capped: true });
+  assert.match(capped.text, /first 1/);
+  assert.strictEqual(capped.doc, true);
+  const noAgent = awsRolesNote({ roles: roleList("Admin") });
+  assert.match(noAgent.text, /agentbox-/);
+  assert.strictEqual(noAgent.doc, true);
+  const fine = awsRolesNote({ roles: roleList("agentbox-agent", "Admin") });
+  assert.strictEqual(fine.doc, false);
+  assert.match(fine.text, /type the role ARN/);
+});
+
+test("awsRolesNote: denied, failed and SSO-expired listings keep their own notes, no doc link", () => {
+  assert.deepStrictEqual(awsRolesNote({ access_denied: true }), { text: "This profile can't list roles; type the role name", doc: false });
+  assert.deepStrictEqual(awsRolesNote({ failed: true }), { text: "Could not list the roles. Type the role ARN yourself.", doc: false });
+  assert.deepStrictEqual(awsRolesNote({ sso_expired: true }), { text: "", doc: false });
 });

@@ -1,11 +1,16 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"log"
+	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -25,6 +30,9 @@ import (
 const (
 	// maxListedRoles caps the roles one listing returns.
 	maxListedRoles = 1000
+	// maxScannedRoles caps the roles one listing reads before it sorts and
+	// caps them, so an agentbox-* role past the first thousand still shows.
+	maxScannedRoles = 5000
 	// checkTimeout bounds one base-role check: a mint, then a simulation.
 	checkTimeout = 15 * time.Second
 	// rolesTimeout bounds a whole role listing, every page of it.
@@ -56,6 +64,7 @@ type awsCredService struct {
 	// Test seams; zero = the constants above.
 	checkTimeout time.Duration
 	rolesCap     int
+	scanCap      int
 }
 
 var _ web.AWSCredService = (*awsCredService)(nil)
@@ -112,9 +121,12 @@ func (s *awsCredService) Roles(ctx context.Context, profile string) web.RolesRes
 	} else {
 		client = iam.NewFromConfig(cfg)
 	}
-	limit := s.rolesCap
+	limit, scan := s.rolesCap, s.scanCap
 	if limit <= 0 {
 		limit = maxListedRoles
+	}
+	if scan <= 0 {
+		scan = maxScannedRoles
 	}
 	var res web.RolesResult
 	var marker *string
@@ -124,17 +136,105 @@ func (s *awsCredService) Roles(ctx context.Context, profile string) web.RolesRes
 			return rolesFailure(err)
 		}
 		for _, r := range out.Roles {
-			res.Roles = append(res.Roles, web.RoleRef{Name: aws.ToString(r.RoleName), ARN: aws.ToString(r.Arn)})
+			arn := aws.ToString(r.Arn)
+			res.Roles = append(res.Roles, web.RoleRef{Name: aws.ToString(r.RoleName), ARN: arn,
+				SSOTrust: ssoTrust(aws.ToString(r.AssumeRolePolicyDocument), awsscope.AccountOf(arn))})
 		}
-		if len(res.Roles) >= limit {
-			res.Roles = res.Roles[:limit]
-			return res
+		more := out.IsTruncated && out.Marker != nil && *out.Marker != ""
+		if len(res.Roles) >= scan {
+			res.Roles, res.Capped = res.Roles[:scan], res.Capped || more || len(res.Roles) > scan
+			break
 		}
-		if !out.IsTruncated || out.Marker == nil || *out.Marker == "" {
-			return res
+		if !more {
+			break
 		}
 		marker = out.Marker
 	}
+	sortRoles(res.Roles)
+	if len(res.Roles) > limit {
+		res.Roles, res.Capped = res.Roles[:limit], true
+	}
+	return res
+}
+
+// sortRoles puts the roles a binding should pick first: agentbox-* (the agent
+// role from docs/aws/agent-role; IAM names ignore case), then roles whose trust names the account or
+// an SSO role, then the rest, each group by name.
+func sortRoles(roles []web.RoleRef) {
+	rank := func(r web.RoleRef) int {
+		switch {
+		case strings.HasPrefix(strings.ToLower(r.Name), "agentbox-"):
+			return 0
+		case r.SSOTrust:
+			return 1
+		}
+		return 2
+	}
+	slices.SortStableFunc(roles, func(a, b web.RoleRef) int {
+		if c := cmp.Compare(rank(a), rank(b)); c != 0 {
+			return c
+		}
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+}
+
+// ssoTrust reads a role's trust policy (URL-encoded, as ListRoles returns it)
+// and says whether an Allow statement trusts this account's root, the account
+// id, or an AWSReservedSSO_ role, in its principal or its conditions. It is a
+// hint for ordering the list: anything unreadable is false.
+func ssoTrust(doc, account string) bool {
+	if dec, err := url.QueryUnescape(doc); err == nil {
+		doc = dec
+	}
+	var pol struct {
+		Statement json.RawMessage
+	}
+	if json.Unmarshal([]byte(doc), &pol) != nil || len(pol.Statement) == 0 {
+		return false
+	}
+	type statement struct {
+		Effect    string
+		Principal json.RawMessage
+		Condition json.RawMessage
+	}
+	var stmts []statement
+	if pol.Statement[0] == '[' {
+		if json.Unmarshal(pol.Statement, &stmts) != nil {
+			return false
+		}
+	} else {
+		var one statement
+		if json.Unmarshal(pol.Statement, &one) != nil {
+			return false
+		}
+		stmts = []statement{one}
+	}
+	for _, st := range stmts {
+		if st.Effect != "Allow" {
+			continue
+		}
+		if strings.Contains(string(st.Condition), "AWSReservedSSO_") {
+			return true
+		}
+		var p struct{ AWS json.RawMessage }
+		if json.Unmarshal(st.Principal, &p) != nil || len(p.AWS) == 0 {
+			continue
+		}
+		var ids []string
+		if json.Unmarshal(p.AWS, &ids) != nil {
+			var one string
+			if json.Unmarshal(p.AWS, &one) != nil {
+				continue
+			}
+			ids = []string{one}
+		}
+		for _, id := range ids {
+			if strings.Contains(id, "AWSReservedSSO_") || (account != "" && (id == account || id == "arn:aws:iam::"+account+":root")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // rolesFailure maps a failed listing to one of the outcomes the screen acts

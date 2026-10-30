@@ -26,18 +26,23 @@ import (
 	"github.com/culiops/agent-box/internal/ssologin"
 )
 
-// RoleRef is one IAM role as the roles list returns it.
+// RoleRef is one IAM role as the roles list returns it. SSOTrust is a hint
+// read from the role's trust policy (it trusts the account root or an
+// AWSReservedSSO_ role), never a promise that the profile can assume it.
 type RoleRef struct {
-	Name string `json:"name"`
-	ARN  string `json:"arn"`
+	Name     string `json:"name"`
+	ARN      string `json:"arn"`
+	SSOTrust bool   `json:"sso_trust,omitempty"`
 }
 
 // RolesResult is the outcome of listing the roles a host profile can see.
 // Exactly one outcome is set: Roles (possibly none), SSOExpired (the profile
 // needs a sign-in), AccessDenied (the profile may not list roles: the screen
-// falls back to typing the role name), or Failed (anything else).
+// falls back to typing the role name), or Failed (anything else). Capped says
+// Roles is not every role the profile can see.
 type RolesResult struct {
 	Roles        []RoleRef `json:"roles,omitempty"`
+	Capped       bool      `json:"capped,omitempty"`
 	SSOExpired   bool      `json:"sso_expired,omitempty"`
 	AccessDenied bool      `json:"access_denied,omitempty"`
 	Failed       bool      `json:"failed,omitempty"`
