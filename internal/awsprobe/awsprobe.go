@@ -77,7 +77,8 @@ func (r Result) Definite() bool { return r.State == Writes || r.State == NoneFou
 
 var knownReasons = map[Reason]bool{
 	ReasonSSOExpired: true, ReasonAssumeDenied: true, ReasonSimulateDenied: true, ReasonTimeout: true,
-	ReasonError: true, ReasonNotChecked: true, ReasonProbeDisabled: true,
+	ReasonError: true, ReasonNotChecked: true, ReasonProbeDisabled: true, ReasonMissingPerms: true,
+	ReasonMissingContext: true,
 }
 
 // Normalize makes a possibly pre-feature or corrupt record safe to show: an
@@ -184,6 +185,10 @@ func ReasonText(r Reason) string {
 		return "not checked"
 	case ReasonProbeDisabled:
 		return "probe disabled"
+	case ReasonMissingPerms:
+		return "permission set cannot read its own policies"
+	case ReasonMissingContext:
+		return "simulation needs condition context"
 	}
 	return "check failed"
 }

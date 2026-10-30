@@ -71,7 +71,8 @@ type Minter interface {
 }
 
 // ErrSSOExpired is wrapped by a Minter when the host's SSO login has lapsed.
-var ErrSSOExpired = errors.New("SSO session expired")
+// It is awsprobe's sentinel, so the sso_direct gate recognises the same error.
+var ErrSSOExpired = awsprobe.ErrSSOExpired
 
 // MintError is a failed mint. Code is the AWS error code (or a generic one) and
 // is the only part of the failure the box is shown, next to a static hint;

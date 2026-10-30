@@ -183,6 +183,13 @@ func notActionCovers(exempt []string, a string) bool {
 	return true
 }
 
+// The Allow shapes Residual refuses: well-formed policy, not read-only. Other
+// Residual errors mean the document could not be read.
+var (
+	errAllowNotAction = errors.New("an Allow with NotAction grants everything it does not list")
+	errAllowNoAction  = errors.New("an Allow without Action")
+)
+
 // Residual returns the Allow action patterns across the permission set's
 // policy documents that no unconditional Resource "*" Deny provably covers
 // (gate step 4). Patterns are deduplicated ignoring case and sorted. Read
@@ -201,10 +208,10 @@ func Residual(docs []string) ([]string, error) {
 			switch {
 			case strings.EqualFold(s.effect, "Allow"):
 				if s.hasNotAction {
-					return nil, fmt.Errorf("document %d: an Allow with NotAction grants everything it does not list", i+1)
+					return nil, fmt.Errorf("document %d: %w", i+1, errAllowNotAction)
 				}
 				if !s.hasAction {
-					return nil, fmt.Errorf("document %d: an Allow without Action", i+1)
+					return nil, fmt.Errorf("document %d: %w", i+1, errAllowNoAction)
 				}
 				allows = append(allows, s.action...)
 			case s.effect == "Deny":
