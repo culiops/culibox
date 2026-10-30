@@ -39,6 +39,10 @@ provision:
       # egress (M3c): boxes on the internal egress network reach only the relay on
       # its gateway (broker and egress ports); nobody else reaches the relay.
       sub=172.29.72.0/24
+      # Forward-path backstop, independent of the network's --internal flag. Top of
+      # DOCKER-USER (this block runs last); INPUT and the VM's own OUTPUT are untouched.
+      while iptables -w -D DOCKER-USER -s "$sub" -j DROP 2>/dev/null; do :; done
+      iptables -w -I DOCKER-USER 1 -s "$sub" -j DROP
       egw=172.29.72.1
       while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport 9072 -j ACCEPT 2>/dev/null; do :; done
       while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport 9071 -j ACCEPT 2>/dev/null; do :; done

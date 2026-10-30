@@ -307,9 +307,9 @@ func runProvisionFull(t *testing.T, gw string, seed []string, runs int) []string
 }
 
 // runProvision is the DOCKER-USER chain as the M2 gateway rules left it: the
-// egress subnet's own rules (-s EgressSubnet) are left out, so the M2 order
-// tests keep describing the gateway/DNS/broker rules and nothing else.
-// TestProvisionHasNoEgressDockerUserRules checks there are none.
+// egress subnet's one forward DROP (-s EgressSubnet) is left out, so the M2
+// order tests keep describing the gateway/DNS/broker rules and nothing else.
+// TestProvisionKeepsAForwardDropForTheEgressSubnet covers that rule.
 func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 	t.Helper()
 	var out []string
@@ -543,12 +543,35 @@ func TestProvisionInputRepairsAnOptionASeed(t *testing.T) {
 	checkInput(t, "repaired", input)
 }
 
-// Option (c) keeps nothing for the subnet in DOCKER-USER: the network is
-// internal, so docker never forwards its traffic out.
-func TestProvisionHasNoEgressDockerUserRules(t *testing.T) {
-	for _, r := range runProvisionFull(t, "192.168.5.2", nil, 2) {
-		if strings.Contains(r, "-s "+EgressSubnet) {
-			t.Errorf("DOCKER-USER carries an egress-subnet rule: %q", r)
+// The one DOCKER-USER rule for the subnet is a forward-path DROP: a backstop
+// that does not depend on the network having been created --internal. It drops
+// forwarded traffic only; the relay path is INPUT, and the relay's own traffic
+// to the lima gateway is the VM's OUTPUT, so neither is touched.
+func TestProvisionKeepsAForwardDropForTheEgressSubnet(t *testing.T) {
+	gw := "192.168.5.2"
+	chain := runProvisionFull(t, gw, nil, 2)
+	n := 0
+	for _, r := range chain {
+		if strings.Contains(r, EgressSubnet) {
+			if r != "-s "+EgressSubnet+" -j DROP" {
+				t.Errorf("unexpected egress-subnet rule in DOCKER-USER: %q", r)
+			}
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("want exactly one egress-subnet rule in DOCKER-USER, got %d:\n%s", n, strings.Join(chain, "\n"))
+	}
+	for _, c := range []struct {
+		p    pkt
+		want string
+	}{
+		{pkt{"172.29.72.5", "1.1.1.1", "tcp", 443}, "DROP"},
+		{pkt{"172.29.72.5", gw, "tcp", 9072}, "DROP"},
+		{pkt{"172.17.0.5", gw, "tcp", 9071}, "RETURN"},
+	} {
+		if got := verdict(t, chain, c.p); got != c.want {
+			t.Errorf("%+v: %s, want %s\nchain:\n%s", c.p, got, c.want, strings.Join(chain, "\n"))
 		}
 	}
 }
@@ -626,7 +649,7 @@ func TestYAMLWithoutCAUnchanged(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("YAML with no CA changed:\n%s\nwant\n%s", got, want)
 	}
-	if h := yamlHash(got); h != "db911906c9400c288353713b92de8d94c866004e9ecd9dbcacb9b014a1061f2c" {
+	if h := yamlHash(got); h != "7e1deba79e51d99dc098c175e459e0e01194133692892d1c7437ddcf5aa7a5f9" {
 		t.Fatalf("hash %s is not the pre-feature hash", h)
 	}
 	c := testCfg()

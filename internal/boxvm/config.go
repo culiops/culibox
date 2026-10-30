@@ -200,9 +200,15 @@ iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport %d -j RETURN
 // forwarded, so DOCKER-USER does not see it. Each rule is removed and the four
 // re-inserted at position 1 in reverse on every boot, so the order holds
 // whatever the chain looked like before (including option (a)'s lone DROP).
+// The one DOCKER-USER rule for the subnet is a forward-path DROP, a backstop
+// that holds even if the network were ever created without --internal.
 const provisionEgress = `# egress (M3c): boxes on the internal egress network reach only the relay on
 # its gateway (broker and egress ports); nobody else reaches the relay.
 sub=` + EgressSubnet + `
+# Forward-path backstop, independent of the network's --internal flag. Top of
+# DOCKER-USER (this block runs last); INPUT and the VM's own OUTPUT are untouched.
+while iptables -w -D DOCKER-USER -s "$sub" -j DROP 2>/dev/null; do :; done
+iptables -w -I DOCKER-USER 1 -s "$sub" -j DROP
 egw=` + EgressGateway + `
 while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport %d -j ACCEPT 2>/dev/null; do :; done
 while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport %d -j ACCEPT 2>/dev/null; do :; done
