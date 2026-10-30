@@ -22,8 +22,8 @@ type ServiceOptions struct {
 	Instance  string
 	Port      int
 	Want      Want
-	ProxyHost string                                           // the host boxes use in HTTPS_PROXY; "" on Linux = the gateway IP; darwin: "host.lima.internal"
-	NoProxy   string                                           // darwin: "host.lima.internal"
+	ProxyHost string                                           // the host boxes use in HTTPS_PROXY; "" = the gateway IP (Linux and darwin)
+	NoProxy   string                                           // hosts boxes reach directly, not through the proxy
 	ExtraEnv  []string                                         // from Task 1's verdict (Task 11 fills it)
 	Listen    func(network, addr string) (net.Listener, error) // nil → net.Listen; tests inject
 	HostAddrs func() ([]netip.Addr, error)                     // the host's own addresses the proxy never dials; nil → HostAddrs
