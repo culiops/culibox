@@ -196,43 +196,15 @@ var (
 // verbs are kept: later gate steps expand them. An Allow with NotAction, an
 // Allow without Action, or an unparseable document is an error.
 func Residual(docs []string) ([]string, error) {
-	var allows []string
-	var denies [][]string // each: the Action list of one covering Deny
-	var exempts [][]string
-	for i, d := range docs {
-		stmts, err := parseDoc(d)
-		if err != nil {
-			return nil, fmt.Errorf("document %d: %w", i+1, err)
-		}
-		for _, s := range stmts {
-			switch {
-			case strings.EqualFold(s.effect, "Allow"):
-				if s.hasNotAction {
-					return nil, fmt.Errorf("document %d: %w", i+1, errAllowNotAction)
-				}
-				if !s.hasAction {
-					return nil, fmt.Errorf("document %d: %w", i+1, errAllowNoAction)
-				}
-				allows = append(allows, s.action...)
-			case s.effect == "Deny":
-				if !s.unconditionalAll() {
-					continue
-				}
-				if s.hasNotAction {
-					exempts = append(exempts, s.notAction)
-				} else if s.hasAction {
-					denies = append(denies, s.action)
-				}
-			default:
-				return nil, fmt.Errorf("document %d: unknown Effect %q", i+1, s.effect)
-			}
-		}
+	allows, ds, err := analyse(docs)
+	if err != nil {
+		return nil, err
 	}
 	seen := map[string]bool{}
 	var out []string
 	for _, a := range allows {
 		k := strings.ToLower(a)
-		if seen[k] || covered(a, denies, exempts) {
+		if seen[k] || covered(a, ds.actions, ds.exempts) {
 			continue
 		}
 		seen[k] = true
@@ -240,6 +212,76 @@ func Residual(docs []string) ([]string, error) {
 	}
 	slices.SortFunc(out, func(x, y string) int { return strings.Compare(strings.ToLower(x), strings.ToLower(y)) })
 	return out, nil
+}
+
+// DenySet is the permission set's unconditional Deny statements: no
+// Condition, no NotResource, Resource includes "*". Only these prove an
+// action denied for every request; a conditional or resource-scoped Deny, or
+// one in an SCP or permissions boundary, is not in it.
+type DenySet struct {
+	actions [][]string // each: the Action list of one Deny
+	exempts [][]string // each: the NotAction list of one Deny
+}
+
+// UnconditionalDenies collects the DenySet of the policy documents. It fails
+// on the same documents Residual does.
+func UnconditionalDenies(docs []string) (DenySet, error) {
+	_, ds, err := analyse(docs)
+	return ds, err
+}
+
+// Denies reports whether a statement in the set denies the concrete action:
+// an Action entry matches it, or a NotAction list is non-empty and no entry
+// matches it. Matching ignores case.
+func (d DenySet) Denies(action string) bool {
+	for _, ds := range d.actions {
+		for _, p := range ds {
+			if MatchAction(p, action) {
+				return true
+			}
+		}
+	}
+	for _, ex := range d.exempts {
+		if len(ex) > 0 && !slices.ContainsFunc(ex, func(e string) bool { return MatchAction(e, action) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// analyse parses every document once and returns the Allow action patterns
+// and the unconditional Denies.
+func analyse(docs []string) (allows []string, ds DenySet, err error) {
+	for i, d := range docs {
+		stmts, err := parseDoc(d)
+		if err != nil {
+			return nil, DenySet{}, fmt.Errorf("document %d: %w", i+1, err)
+		}
+		for _, s := range stmts {
+			switch {
+			case strings.EqualFold(s.effect, "Allow"):
+				if s.hasNotAction {
+					return nil, DenySet{}, fmt.Errorf("document %d: %w", i+1, errAllowNotAction)
+				}
+				if !s.hasAction {
+					return nil, DenySet{}, fmt.Errorf("document %d: %w", i+1, errAllowNoAction)
+				}
+				allows = append(allows, s.action...)
+			case s.effect == "Deny":
+				if !s.unconditionalAll() {
+					continue
+				}
+				if s.hasNotAction {
+					ds.exempts = append(ds.exempts, s.notAction)
+				} else if s.hasAction {
+					ds.actions = append(ds.actions, s.action)
+				}
+			default:
+				return nil, DenySet{}, fmt.Errorf("document %d: unknown Effect %q", i+1, s.effect)
+			}
+		}
+	}
+	return allows, ds, nil
 }
 
 func covered(a string, denies, exempts [][]string) bool {

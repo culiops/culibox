@@ -2,6 +2,7 @@ package awsprobe
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -108,20 +109,42 @@ func refusedPatterns(r GateResult) []string {
 	return out
 }
 
-// TestGateGuardrailExtendedToDenyMintingScreenPasses: ReadOnlyAccess plus the
-// anonymised guardrail passes ONLY because this fake simulation says
-// explicitDeny for sqs:ReceiveMessage, every credential-minting action in
-// guardrailMustDeny and every WriteAction. The real guardrail does not deny
-// most of guardrailMustDeny, so in AWS that permission set is refused until
-// its guardrail is extended to deny them. This is not proof the real policy
-// passes.
-func TestGateGuardrailExtendedToDenyMintingScreenPasses(t *testing.T) {
+// denyDoc is an unconditional Resource "*" Deny of actions: the only kind of
+// statement that backs a simulated explicitDeny.
+func denyDoc(actions ...string) string {
+	b, _ := json.Marshal(map[string]any{"Statement": map[string]any{"Effect": "Deny", "Action": actions, "Resource": "*"}})
+	return string(b)
+}
+
+// guardrailExtended is everything the gate needs denied for ReadOnlyAccess
+// plus the anonymised guardrail: sqs:ReceiveMessage, the minting screen, the
+// WriteActions and the data reads.
+func guardrailExtended() []string {
+	return slices.Concat([]string{"sqs:ReceiveMessage"}, guardrailMustDeny, WriteActions, DataReadActions)
+}
+
+// newExtendedGuardrailGate is ReadOnlyAccess + the anonymised guardrail +
+// an in-test unconditional Deny of guardrailExtended(), with a simulation that
+// explicitDenies all of it. The committed guardrail fixture does not deny most
+// of guardrailMustDeny, so in AWS the real permission set is refused until its
+// guardrail is extended this way.
+func newExtendedGuardrailGate(t *testing.T) *fakeGate {
 	f := newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	f.docs = append(f.docs, denyDoc(guardrailExtended()...))
+	f.set(SimDecision{Decision: "explicitDeny"}, guardrailExtended()...)
+	return f
+}
+
+// TestGateGuardrailExtendedToDenyMintingScreenPasses: ReadOnlyAccess plus the
+// anonymised guardrail passes ONLY once the guardrail is extended (in this
+// test, not in the fixture) with an unconditional Deny of sqs:ReceiveMessage,
+// every credential-minting action in guardrailMustDeny, every WriteAction and
+// the data reads, and the simulation agrees. The real guardrail does not deny
+// most of guardrailMustDeny, so in AWS that permission set is refused. This is
+// not proof the real policy passes.
+func TestGateGuardrailExtendedToDenyMintingScreenPasses(t *testing.T) {
+	f := newExtendedGuardrailGate(t)
 	f.def = gateAllowed // anything the gate did not need denied would show up
-	f.set(SimDecision{Decision: "explicitDeny"}, "sqs:ReceiveMessage")
-	f.set(SimDecision{Decision: "explicitDeny"}, guardrailMustDeny...)
-	f.set(SimDecision{Decision: "explicitDeny"}, WriteActions...)
-	f.set(SimDecision{Decision: "explicitDeny"}, DataReadActions...)
 	now := time.Date(2026, 10, 30, 1, 2, 3, 0, time.UTC)
 	r := Gate(context.Background(), f, gateAcct, now)
 	if r.State != GateReadOnly {
@@ -141,9 +164,35 @@ func TestGateGuardrailExtendedToDenyMintingScreenPasses(t *testing.T) {
 			t.Errorf("DataReads[%d] = %+v", i, d)
 		}
 	}
-	// One simulation covers the union, each action once.
-	want := lowerSorted(slices.Concat(WriteActions, []string{"sqs:ReceiveMessage"}, guardrailMustDeny, DataReadActions))
-	want = slices.Compact(want)
+	// One simulation, each action once. The in-test Deny names some concrete
+	// actions ReadOnlyAccess also grants by name (apigateway:GET, ...), so
+	// Residual drops those Allows and they are not simulated: the simulated
+	// set is a subset of the union, holding every WriteAction, data read and
+	// side-effect action.
+	got := lowerSorted(f.simulated)
+	if !slices.Equal(got, slices.Compact(slices.Clone(got))) {
+		t.Errorf("simulated has duplicates: %v", got)
+	}
+	union := lowerSet(guardrailExtended())
+	for _, a := range got {
+		if !union[a] {
+			t.Errorf("simulated %s, outside the union", a)
+		}
+	}
+	for _, a := range slices.Concat(WriteActions, []string{"sqs:ReceiveMessage"}, DataReadActions) {
+		if !slices.Contains(got, strings.ToLower(a)) {
+			t.Errorf("did not simulate %s", a)
+		}
+	}
+}
+
+// TestGateGuardrailSimulatesTheUnion: without the in-test Deny, the one
+// simulation for ReadOnlyAccess + guardrail is exactly the union of
+// WriteActions, sqs:ReceiveMessage, guardrailMustDeny and the data reads.
+func TestGateGuardrailSimulatesTheUnion(t *testing.T) {
+	f := newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
+	Gate(context.Background(), f, gateAcct, time.Now())
+	want := slices.Compact(lowerSorted(guardrailExtended()))
 	if got := lowerSorted(f.simulated); !slices.Equal(got, want) {
 		t.Errorf("simulated:\n got %v\nwant %v", got, want)
 	}
@@ -226,6 +275,8 @@ func TestGateDataReadsDescriptive(t *testing.T) {
 	// (ReadOnlyAccess grants dynamodb:Get*) is reported as still readable.
 	f := newFakeGate(t)
 	f.docs = []string{`{"Statement":{"Effect":"Allow","Action":["dynamodb:Get*","s3:Get*","ec2:DescribeInstances"],"Resource":"*"}}`}
+	minters, _ := MintingScreen([]string{"dynamodb:Get*", "s3:Get*", "ec2:DescribeInstances"})
+	f.docs = append(f.docs, denyDoc(slices.Concat(WriteActions, minters, DataReadActions)...))
 	f.set(gateAllowed, "s3:GetObject")
 	f.set(gateImplicit, "dynamodb:GetItem")
 	r := Gate(context.Background(), f, gateAcct, time.Now())
@@ -240,28 +291,113 @@ func TestGateDataReadsDescriptive(t *testing.T) {
 	}
 }
 
+// conditionalAllowDocs grants ec2:DescribeInstances, and ec2:GetPasswordData
+// only under a condition: what the simulator reports as implicitDeny with
+// MissingContextValues when it is not given the key.
+var conditionalAllowDocs = []string{`{"Statement":[
+	{"Effect":"Allow","Action":"ec2:DescribeInstances","Resource":"*"},
+	{"Effect":"Allow","Action":"ec2:GetPasswordData","Resource":"*","Condition":{"StringEquals":{"aws:ResourceTag/env":"dev"}}}]}`}
+
 func TestGateMissingContextIsUnverified(t *testing.T) {
-	f := newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
-	f.set(SimDecision{Decision: "explicitDeny", MissingContext: true}, "ec2:GetPasswordData")
+	f := newFakeGate(t)
+	f.docs = conditionalAllowDocs
+	f.def = gateImplicit // nothing else is granted
+	f.set(SimDecision{Decision: "implicitDeny", MissingContext: true}, "ec2:GetPasswordData")
 	r := Gate(context.Background(), f, gateAcct, time.Now())
 	if r.State != GateUnverified || r.Reason != ReasonMissingContext {
-		t.Fatalf("state = %s reason %s", r.State, r.Reason)
+		t.Fatalf("state = %s reason %s refused %v", r.State, r.Reason, r.Refused)
 	}
-	if !slices.Contains(refusedPatterns(r), "ec2:getpassworddata") {
+	if !slices.Equal(refusedPatterns(r), []string{"ec2:getpassworddata"}) {
 		t.Errorf("Refused should name the action: %v", r.Refused)
 	}
 
-	// Missing context on a write action too.
-	f = newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
-	f.set(SimDecision{Decision: "implicitDeny", MissingContext: true}, "s3:PutObject")
-	if r := Gate(context.Background(), f, gateAcct, time.Now()); r.State != GateUnverified {
-		t.Fatalf("write action: state = %s", r.State)
-	}
-
 	// A definite refusal wins over missing context.
-	f.set(gateAllowed, "sqs:ReceiveMessage")
+	f.set(gateAllowed, "s3:PutObject")
 	if r := Gate(context.Background(), f, gateAcct, time.Now()); r.State != GateNotReadOnly {
 		t.Fatalf("with a refusal: state = %s", r.State)
+	}
+}
+
+// R18: allowed with missing context is allowed under some condition.
+func TestGateAllowedWithMissingContextRefuses(t *testing.T) {
+	f := newFakeGate(t)
+	f.docs = conditionalAllowDocs
+	f.def = gateImplicit
+	f.set(SimDecision{Decision: "allowed", MissingContext: true}, "ec2:GetPasswordData")
+	r := Gate(context.Background(), f, gateAcct, time.Now())
+	if r.State != GateNotReadOnly || !slices.Equal(refusedPatterns(r), []string{"ec2:getpassworddata"}) ||
+		!strings.Contains(r.Refused[0].Why, "condition") {
+		t.Fatalf("state = %s refused %v", r.State, r.Refused)
+	}
+}
+
+// R17: a simulated explicitDeny counts only when an unconditional Resource "*"
+// Deny in the permission set's own documents covers the action. The
+// simulator reports explicitDeny with empty MissingContextValues for a Deny
+// with a Condition or NotResource, so the simulation alone proves nothing.
+func TestGateExplicitDenyMustBeUnconditional(t *testing.T) {
+	minters, _ := MintingScreen([]string{"ec2:Get*"})
+	if !slices.Contains(minters, "ec2:GetPasswordData") {
+		t.Fatalf("screen = %v", minters)
+	}
+	var others []string
+	for _, a := range minters {
+		if a != "ec2:GetPasswordData" {
+			others = append(others, a)
+		}
+	}
+	allow := `{"Statement":{"Effect":"Allow","Action":"ec2:Get*","Resource":"*"}}`
+	for _, tc := range []struct {
+		name, deny string // deny: the statement for ec2:GetPasswordData ("" = none in the docs)
+		want       GateState
+	}{
+		{"unconditional", `{"Effect":"Deny","Action":"ec2:GetPasswordData","Resource":"*"}`, GateReadOnly},
+		{"unconditional glob", `{"Effect":"Deny","Action":"EC2:getpassword*","Resource":["*"]}`, GateReadOnly},
+		{"condition ResourceTag", `{"Effect":"Deny","Action":"ec2:GetPasswordData","Resource":"*","Condition":{"StringNotEquals":{"aws:ResourceTag/env":"dev"}}}`, GateNotReadOnly},
+		{"condition PrincipalTag", `{"Effect":"Deny","Action":"ec2:GetPasswordData","Resource":"*","Condition":{"StringEquals":{"aws:PrincipalTag/team":"ops"}}}`, GateNotReadOnly},
+		{"condition SourceIp", `{"Effect":"Deny","Action":"ec2:GetPasswordData","Resource":"*","Condition":{"NotIpAddress":{"aws:SourceIp":"10.0.0.0/8"}}}`, GateNotReadOnly},
+		{"empty condition", `{"Effect":"Deny","Action":"ec2:GetPasswordData","Resource":"*","Condition":{}}`, GateNotReadOnly},
+		{"NotResource", `{"Effect":"Deny","Action":"ec2:GetPasswordData","NotResource":"arn:aws:ec2:*:*:instance/i-dev"}`, GateNotReadOnly},
+		{"narrow Resource", `{"Effect":"Deny","Action":"ec2:GetPasswordData","Resource":"arn:aws:ec2:*:*:instance/*"}`, GateNotReadOnly},
+		{"NotAction exempts it", `{"Effect":"Deny","NotAction":["ec2:Describe*","ec2:GetPass*"],"Resource":"*"}`, GateNotReadOnly},
+		{"absent (SCP or boundary)", "", GateNotReadOnly},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeGate(t)
+			f.docs = []string{allow, denyDoc(slices.Concat(WriteActions, others, DataReadActions)...)}
+			if tc.deny != "" {
+				f.docs = append(f.docs, `{"Statement":[`+tc.deny+`]}`)
+			}
+			// What the real simulator says in every case: explicitDeny, no
+			// missing context.
+			f.set(SimDecision{Decision: "explicitDeny"}, minters...)
+			r := Gate(context.Background(), f, gateAcct, time.Now())
+			if r.State != tc.want {
+				t.Fatalf("state %s, want %s (refused %v)", r.State, tc.want, r.Refused)
+			}
+			if tc.want == GateNotReadOnly {
+				if !slices.Equal(refusedPatterns(r), []string{"ec2:getpassworddata"}) || !strings.Contains(r.Refused[0].Why, "unconditional") {
+					t.Errorf("Refused = %v", r.Refused)
+				}
+			}
+		})
+	}
+}
+
+func TestGateConditionalDenyDataReadStillReadable(t *testing.T) {
+	// A data read the simulation explicitly denies through a conditional Deny
+	// is reported as still readable.
+	f := newExtendedGuardrailGate(t)
+	f.docs[len(f.docs)-1] = denyDoc(slices.DeleteFunc(guardrailExtended(), func(a string) bool { return a == "s3:GetObject" })...)
+	f.docs = append(f.docs, `{"Statement":{"Effect":"Deny","Action":"s3:GetObject","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"false"}}}}`)
+	r := Gate(context.Background(), f, gateAcct, time.Now())
+	if r.State != GateReadOnly {
+		t.Fatalf("state %s refused %v", r.State, r.Refused)
+	}
+	for _, d := range r.DataReads {
+		if d.Denied != (d.Action != "s3:GetObject") {
+			t.Errorf("%s Denied = %v", d.Action, d.Denied)
+		}
 	}
 }
 
@@ -299,8 +435,7 @@ func TestGateUnverified(t *testing.T) {
 		{"ctx deadline", expired, func(*fakeGate) {}, ReasonTimeout, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newFakeGate(t, "ReadOnlyAccess.json", "guardrail.json")
-			f.set(SimDecision{Decision: "explicitDeny"}, "sqs:ReceiveMessage")
+			f := newExtendedGuardrailGate(t)
 			tc.mut(f)
 			ctx := tc.ctx
 			if ctx == nil {
@@ -361,6 +496,7 @@ func TestGateAllowNotActionRefuses(t *testing.T) {
 func TestGateUnknownActionRefuses(t *testing.T) {
 	f := newFakeGate(t)
 	f.docs = []string{`{"Statement":{"Effect":"Allow","Action":"ec2:DescribeSomethingNew2099","Resource":"*"}}`}
+	f.def = gateImplicit
 	r := Gate(context.Background(), f, gateAcct, time.Now())
 	if r.State != GateNotReadOnly || len(r.Refused) != 1 || !strings.Contains(r.Refused[0].Why, "gencatalog") {
 		t.Fatalf("state %s refused %v", r.State, r.Refused)
@@ -370,6 +506,7 @@ func TestGateUnknownActionRefuses(t *testing.T) {
 func TestGateSideEffectAllowedRefuses(t *testing.T) {
 	f := newFakeGate(t)
 	f.docs = []string{`{"Statement":{"Effect":"Allow","Action":["sqs:Receive*","sqs:ListQueues"],"Resource":"*"}}`}
+	f.def = gateImplicit
 	f.set(gateAllowed, "sqs:ReceiveMessage")
 	r := Gate(context.Background(), f, gateAcct, time.Now())
 	if r.State != GateNotReadOnly || len(r.Refused) != 1 || !strings.Contains(r.Refused[0].Why, "sqs:Receive*") {
@@ -674,10 +811,19 @@ func TestIAMGateSimulateBatches(t *testing.T) {
 func TestIAMGateEndToEnd(t *testing.T) {
 	// The SDK-backed gate over fakes: four pages of documents (ReadOnlyAccess,
 	// ViewOnlyAccess, the guardrail and one inline), a simulation that denies
-	// everything explicitly (so, like the guardrail test, it passes only
-	// because the fake denies the minting screen; it shows the plumbing, not
-	// that a real policy passes).
+	// everything explicitly, backed by an in-test unconditional Deny (so, like
+	// the guardrail test, it passes only because the minting screen is
+	// extended into the policy; it shows the plumbing, not that a real policy
+	// passes).
 	f := newFakeGateIAM(t)
+	viewMinters, _ := MintingScreen(fixtureResidual(t, "ViewOnlyAccess.json"))
+	var back struct{ Statement []map[string]any }
+	back.Statement = []map[string]any{
+		{"Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*"},
+		{"Effect": "Deny", "Action": slices.Concat(guardrailExtended(), viewMinters), "Resource": "*"},
+	}
+	b, _ := json.Marshal(back)
+	f.inlineDocs["second"] = url.PathEscape(string(b))
 	f.sim = func(in *iam.SimulatePrincipalPolicyInput) (*iam.SimulatePrincipalPolicyOutput, error) {
 		return &iam.SimulatePrincipalPolicyOutput{EvaluationResults: evals(in.ActionNames, iamtypes.PolicyEvaluationDecisionTypeExplicitDeny)}, nil
 	}

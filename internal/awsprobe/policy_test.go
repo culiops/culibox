@@ -348,3 +348,42 @@ func TestNonStandardEntriesWellFormed(t *testing.T) {
 		}
 	}
 }
+
+func TestUnconditionalDenies(t *testing.T) {
+	ds, err := UnconditionalDenies([]string{
+		`{"Statement":[
+			{"Effect":"Allow","Action":"*","Resource":"*"},
+			{"Effect":"Deny","Action":["ec2:GetPasswordData","lambda:Get*"],"Resource":"*"},
+			{"Effect":"Deny","NotAction":["s3:*","ec2:*","lambda:*","sqs:*","kms:*"],"Resource":["*"]},
+			{"Effect":"Deny","Action":"sqs:ReceiveMessage","Resource":"*","Condition":{"Bool":{"aws:SecureTransport":"false"}}},
+			{"Effect":"Deny","Action":"s3:GetObject","NotResource":"arn:aws:s3:::public/*"},
+			{"Effect":"Deny","Action":"kms:Decrypt","Resource":"arn:aws:kms:*:*:key/*"}]}`,
+		url.PathEscape(`{"Statement":{"Effect":"Deny","Action":"s3:PutObject","Resource":"*"}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for a, want := range map[string]bool{
+		"ec2:GetPasswordData":   true,
+		"EC2:getpassworddata":   true,
+		"lambda:GetFunction":    true,
+		"iam:CreateUser":        true, // NotAction: iam is not exempt
+		"s3:PutObject":          true, // second (URL-encoded) document
+		"ec2:DescribeInstances": false,
+		"sqs:ReceiveMessage":    false, // conditional
+		"s3:GetObject":          false, // NotResource
+		"kms:Decrypt":           false, // narrower Resource
+	} {
+		if got := ds.Denies(a); got != want {
+			t.Errorf("Denies(%s) = %v, want %v", a, got, want)
+		}
+	}
+	if _, err := UnconditionalDenies([]string{"{nope"}); err == nil {
+		t.Error("unparseable document: want error")
+	}
+	// A NotAction Deny with an exempt entry without a service exempts all.
+	ds, _ = UnconditionalDenies([]string{`{"Statement":{"Effect":"Deny","NotAction":["*"],"Resource":"*"}}`})
+	if ds.Denies("iam:CreateUser") {
+		t.Error(`NotAction ["*"] denies nothing`)
+	}
+}

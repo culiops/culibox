@@ -115,12 +115,27 @@ func screened(action string) bool {
 // gate's descriptive data-read step reports them and nothing here denies them.
 var SecretReturning = map[string]string{
 	"lambda:getfunction":                 "Code.Location in the response is a presigned URL to the function's code package",
+	"lambda:getlayerversion":             "Content.Location in the response is a presigned URL to the layer archive",
 	"cognito-idp:describeuserpoolclient": "the response includes the app client's ClientSecret",
 	"apigateway:get":                     "GET /apikeys?includeValues=true returns API key values",
 	"sts:assumerole":                     "mints temporary credentials for the assumed role",
 	"sts:assumerolewithsaml":             "mints temporary credentials from a SAML assertion",
 	"sts:assumerolewithwebidentity":      "mints temporary credentials from a web identity token",
 	"sts:assumeroot":                     "mints temporary root credentials for a member account",
+}
+
+// RetiredServices lists service prefixes AWS has retired and removed from the
+// service reference (lowercased prefix -> reason), although managed policies
+// such as ReadOnlyAccess still grant them. A pattern of one of these services
+// that expands to nothing is not reported as unknown: regenerating the
+// snapshot cannot bring it back. Nothing else is exempted. A test fails the
+// build if a refreshed catalog lists one of them again.
+var RetiredServices = map[string]string{
+	"codestar":     "retired by AWS: granted by ReadOnlyAccess, absent from the service reference snapshot (CatalogDate)",
+	"deepcomposer": "retired by AWS: granted by ReadOnlyAccess, absent from the service reference snapshot (CatalogDate)",
+	"evidently":    "retired by AWS: granted by ReadOnlyAccess, absent from the service reference snapshot (CatalogDate)",
+	"iot1click":    "retired by AWS: granted by ReadOnlyAccess, absent from the service reference snapshot (CatalogDate)",
+	"iotevents":    "retired by AWS: granted by ReadOnlyAccess, absent from the service reference snapshot (CatalogDate)",
 }
 
 // MintingScreen expands the residual Allow patterns against the catalog.
@@ -135,6 +150,9 @@ func MintingScreen(residual []string) (mustDeny []string, unknown []string) {
 	for _, p := range residual {
 		expanded := Expand(p)
 		if len(expanded) == 0 {
+			if svc, _, _ := strings.Cut(strings.ToLower(p), ":"); RetiredServices[svc] != "" {
+				continue
+			}
 			if k := strings.ToLower(p); !seenUnknown[k] {
 				seenUnknown[k] = true
 				unknown = append(unknown, p)

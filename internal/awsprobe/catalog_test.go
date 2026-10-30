@@ -137,6 +137,7 @@ var guardrailMustDeny = []string{
 	"ecr:getauthorizationtoken",
 	"ecr:getdownloadurlforlayer",
 	"lambda:getfunction",
+	"lambda:getlayerversion",
 	"pi:describedimensionkeys",
 	"pi:getdimensionkeydetails",
 	"pricing:getpricelistfileurl",
@@ -212,6 +213,7 @@ func TestSecretReturning(t *testing.T) {
 	}
 	for _, c := range []struct{ pattern, want string }{
 		{"lambda:Get*", "lambda:GetFunction"},
+		{"lambda:Get*", "lambda:GetLayerVersion"},
 		{"cognito-idp:Describe*", "cognito-idp:DescribeUserPoolClient"},
 		{"apigateway:GET", "apigateway:GET"},
 		{"sts:Assume*", "sts:AssumeRole"},
@@ -234,5 +236,46 @@ func TestSecretReturning(t *testing.T) {
 	// A neighbouring read is not swept in.
 	if deny, _ := MintingScreen([]string{"lambda:GetFunctionConfiguration"}); len(deny) != 0 {
 		t.Errorf("lambda:GetFunctionConfiguration mustDeny = %v", deny)
+	}
+}
+
+func TestRetiredServicesNotInCatalog(t *testing.T) {
+	loadCatalog()
+	for svc, why := range RetiredServices {
+		if svc != strings.ToLower(svc) || strings.TrimSpace(why) == "" {
+			t.Errorf("bad RetiredServices entry %q", svc)
+		}
+		if _, ok := cat[svc]; ok {
+			t.Errorf("%s is in the catalog again: remove it from RetiredServices", svc)
+		}
+	}
+}
+
+func TestRetiredServicesSuppressOnlyUnknown(t *testing.T) {
+	_, unknown := MintingScreen(fixtureResidual(t, "ReadOnlyAccess.json"))
+	for _, p := range unknown {
+		svc, _, _ := strings.Cut(strings.ToLower(p), ":")
+		if _, retired := RetiredServices[svc]; retired {
+			t.Errorf("retired service pattern %s still unknown", p)
+		}
+	}
+	for _, svc := range []string{"codestar", "deepcomposer", "evidently", "iot1click", "iotevents"} {
+		if _, ok := RetiredServices[svc]; !ok {
+			t.Errorf("%s missing from RetiredServices", svc)
+		}
+	}
+	// Other unknowns still refuse, including a wildcard service that only
+	// resembles a retired one.
+	_, unknown = MintingScreen([]string{"codestar:GetProject", "nosuch:Get*", "iot1click*:Get*"})
+	if !slices.Equal(unknown, []string{"iot1click*:Get*", "nosuch:Get*"}) {
+		t.Errorf("unknown = %v", unknown)
+	}
+}
+
+func TestLayerVersionByArnIsNotAnIAMAction(t *testing.T) {
+	// GetLayerVersionByArn is an API operation authorised by
+	// lambda:GetLayerVersion, so SecretReturning lists only the latter.
+	if Known("lambda:GetLayerVersionByArn") || !Known("lambda:GetLayerVersion") {
+		t.Error("catalog changed: revisit the lambda layer SecretReturning entries")
 	}
 }

@@ -134,6 +134,10 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 	case err != nil: // unreadable document: nothing is proven either way
 		return g.unverified(ReasonError)
 	}
+	denies, err := UnconditionalDenies(docs)
+	if err != nil { // Residual parsed the same documents; kept fail-closed
+		return g.unverified(ReasonError)
+	}
 
 	// Step 5: classify, then screen what passed for credential minting. A
 	// refused pattern already names everything it covers, so it is not
@@ -209,8 +213,20 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 			incomplete = true
 			continue
 		}
+		// What denied means (spec, amended by R17): explicitDeny backed by
+		// an unconditional Resource "*" Deny in the permission set's own
+		// documents (the simulator reports a conditional or NotResource Deny
+		// as explicitDeny with no missing context, and an SCP or boundary
+		// Deny is invisible here), or implicitDeny with no residual Allow
+		// covering the action.
 		cover := coveringAllow(residual, a)
-		denied := !d.MissingContext && (d.Decision == "explicitDeny" || (d.Decision == "implicitDeny" && cover == ""))
+		var denied bool
+		switch d.Decision {
+		case "explicitDeny":
+			denied = denies.Denies(a)
+		case "implicitDeny":
+			denied = cover == ""
+		}
 		if dataRead[k] {
 			g.res.DataReads = append(g.res.DataReads, DataRead{Action: a, Denied: denied})
 		}
@@ -219,10 +235,16 @@ func Gate(ctx context.Context, api GateAPI, account string, now time.Time) GateR
 			continue
 		}
 		switch {
-		case d.MissingContext:
-			missingCtx = append(missingCtx, Verdict{Pattern: a, Why: w + "; the simulation needs condition context values it cannot know"})
+		case d.Decision == "allowed" && d.MissingContext:
+			g.res.Refused = append(g.res.Refused, Verdict{Pattern: a, Why: w + " and is allowed under a condition the simulation could not evaluate"})
 		case d.Decision == "allowed":
 			g.res.Refused = append(g.res.Refused, Verdict{Pattern: a, Why: w + " and is allowed"})
+		case d.Decision == "explicitDeny":
+			g.res.Refused = append(g.res.Refused, Verdict{Pattern: a, Why: w + "; the simulation denies it, but no unconditional Deny (no Condition, no NotResource, " +
+				`Resource "*") in the permission set's own policies covers it: the deny is conditional, resource-scoped, or in an SCP or boundary. Make it unconditional`})
+		case d.MissingContext: // implicitDeny under a conditional covering Allow
+			missingCtx = append(missingCtx, Verdict{Pattern: a, Why: w + "; the Allow " + cover +
+				" covers it and the simulation needs condition context values it cannot know"})
 		default: // implicitDeny under a covering Allow
 			g.res.Refused = append(g.res.Refused, Verdict{Pattern: a, Why: w + "; implicitly denied, but the Allow " + cover +
 				" covers it (a resource- or condition-scoped grant the simulation cannot see)"})
