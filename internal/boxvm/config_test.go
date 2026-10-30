@@ -254,8 +254,8 @@ esac
 
 // runProvisionBoth runs provisionScript against fakeIptables and a getent that
 // resolves host.lima.internal to gw, starting from the DOCKER-USER chain in
-// seed, and returns the DOCKER-USER and INPUT chains afterwards.
-func runProvisionBoth(t *testing.T, gw string, seed []string, runs int) (dockerUser, input []string) {
+// seed and the INPUT chain in inputSeed, and returns both chains afterwards.
+func runProvisionBoth(t *testing.T, gw string, seed, inputSeed []string, runs int) (dockerUser, input []string) {
 	t.Helper()
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -269,6 +269,11 @@ func runProvisionBoth(t *testing.T, gw string, seed []string, runs int) (dockerU
 		}
 	}
 	getent := "#!/bin/sh\n[ \"$2\" = host.lima.internal ] && echo '" + gw + "       STREAM host.lima.internal'\n"
+	if len(inputSeed) > 0 {
+		if err := os.WriteFile(chain+".input", []byte(strings.Join(inputSeed, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for name, body := range map[string]string{"iptables": fakeIptables, "getent": getent, "provision.sh": provisionScript(9071, 9072)} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil {
 			t.Fatal(err)
@@ -294,18 +299,17 @@ func runProvisionBoth(t *testing.T, gw string, seed []string, runs int) (dockerU
 	return read(chain), read(chain + ".input")
 }
 
-// runProvisionFull is the whole DOCKER-USER chain, the egress subnet's rules
-// included.
+// runProvisionFull is the whole DOCKER-USER chain.
 func runProvisionFull(t *testing.T, gw string, seed []string, runs int) []string {
 	t.Helper()
-	c, _ := runProvisionBoth(t, gw, seed, runs)
+	c, _ := runProvisionBoth(t, gw, seed, nil, runs)
 	return c
 }
 
 // runProvision is the DOCKER-USER chain as the M2 gateway rules left it: the
-// egress subnet's own rules (-s EgressSubnet, M3c) are left out, so the M2
-// order tests keep describing the gateway/DNS/broker rules and nothing else.
-// TestProvisionEgressOrder covers the subnet's rules.
+// egress subnet's own rules (-s EgressSubnet) are left out, so the M2 order
+// tests keep describing the gateway/DNS/broker rules and nothing else.
+// TestProvisionHasNoEgressDockerUserRules checks there are none.
 func runProvision(t *testing.T, gw string, seed []string, runs int) []string {
 	t.Helper()
 	var out []string
@@ -457,107 +461,108 @@ func verdict(t *testing.T, chain []string, p pkt) string {
 	return "ACCEPT"
 }
 
-func egressCases(gw string) []struct {
+// inputCases are the packets the INPUT chain must judge: the VM's own listeners
+// (the relay on the egress network's gateway, sshd, the bridge gateway) as seen
+// from a bound box on the internal egress network and from an unbound box. No
+// match is ACCEPT, the VM's INPUT policy. Traffic a bound box sends to the lima
+// gateway is forwarded, never INPUT; the --internal network closes it (spike
+// row c6), so it has no row here.
+func inputCases() []struct {
 	p    pkt
 	want string
 } {
-	eg := "172.29.72.5"
+	eg, egw, unbound := "172.29.72.5", EgressGateway, "172.17.0.5"
 	return []struct {
 		p    pkt
 		want string
 	}{
-		{pkt{eg, gw, "tcp", 9072}, "RETURN"},
-		{pkt{eg, gw, "tcp", 9071}, "RETURN"},
-		{pkt{eg, gw, "udp", 53}, "DROP"},
-		{pkt{eg, gw, "tcp", 53}, "DROP"},
-		{pkt{eg, gw, "tcp", 22}, "DROP"},
-		{pkt{eg, "1.1.1.1", "tcp", 443}, "DROP"},
-		// Another box on the egress network. Same-bridge isolation is really enforced
-		// by icc=false (egress.Want.NoICC); this row only models the case where
-		// br_netfilter routes bridged traffic through DOCKER-USER.
-		{pkt{eg, "172.29.72.6", "tcp", 8080}, "DROP"},
-		{pkt{"172.17.0.5", gw, "udp", 53}, "RETURN"}, // unbound boxes: unchanged
-		{pkt{"172.17.0.5", gw, "tcp", 9071}, "RETURN"},
-		{pkt{"172.17.0.5", gw, "tcp", 9072}, "DROP"}, // the egress proxy is for the egress network only
-		{pkt{"172.17.0.5", gw, "tcp", 22}, "DROP"},
-		{pkt{"172.17.0.5", "1.1.1.1", "tcp", 443}, "ACCEPT"},
+		{pkt{eg, egw, "tcp", 9072}, "ACCEPT"},
+		{pkt{eg, egw, "tcp", 9071}, "ACCEPT"},
+		{pkt{eg, egw, "tcp", 22}, "DROP"},
+		{pkt{eg, egw, "tcp", 18080}, "DROP"},
+		{pkt{eg, egw, "udp", 53}, "DROP"},
+		{pkt{eg, "172.17.0.1", "tcp", 22}, "DROP"},
+		{pkt{unbound, egw, "tcp", 9072}, "DROP"},
+		{pkt{unbound, egw, "tcp", 9071}, "DROP"},
+		// Unchanged: unbound boxes reach VM listeners on the default bridge (open
+		// item in the spec).
+		{pkt{unbound, "172.17.0.1", "tcp", 22}, "ACCEPT"},
 	}
 }
 
-// The boxes on the egress network reach the broker and the egress proxy on the
-// lima host gateway and nothing else, whatever the chain looked like before.
-func TestProvisionEgressOrder(t *testing.T) {
-	gw := "192.168.5.2"
-	for _, runs := range []int{1, 2} {
-		chain := runProvisionFull(t, gw, nil, runs)
-		for _, c := range egressCases(gw) {
-			if got := verdict(t, chain, c.p); got != c.want {
-				t.Errorf("runs=%d %+v: %s, want %s\nchain:\n%s", runs, c.p, got, c.want, strings.Join(chain, "\n"))
-			}
-		}
-	}
-}
-
-// The evaluator is not a rubber stamp: the same cases FAIL on a chain whose
-// egress DROP sits at the bottom, which is what a boot that only appended
-// would leave.
-func TestProvisionEgressEvaluatorSeesAWrongOrder(t *testing.T) {
-	gw := "192.168.5.2"
-	bad := []string{"-d " + gw + " -p tcp --dport 9071 -j RETURN", "-d " + gw + " -p udp --dport 53 -j RETURN",
-		"-d " + gw + " -j DROP", "-s " + EgressSubnet + " -j DROP"}
-	if got := verdict(t, bad, pkt{"172.29.72.5", gw, "udp", 53}); got != "RETURN" {
-		t.Fatalf("a bottom DROP must let the egress subnet's DNS through (that is the bug): %s", got)
-	}
-}
-
-func TestProvisionEgressRepairsAWrongOrderSeed(t *testing.T) {
-	gw := "192.168.5.2"
-	seed := []string{
-		"-d " + gw + " -p tcp --dport 9071 -j RETURN",
-		"-d " + gw + " -p udp --dport 53 -j RETURN",
-		"-d " + gw + " -j DROP",
-		"-s " + EgressSubnet + " -d " + gw + " -p tcp --dport 9072 -j RETURN",
+// wantInput is the INPUT chain the script must leave, top down.
+func wantInput(egressPort, brokerPort int) []string {
+	return []string{
+		fmt.Sprintf("-s %s -d %s -p tcp --dport %d -j ACCEPT", EgressSubnet, EgressGateway, egressPort),
+		fmt.Sprintf("-s %s -d %s -p tcp --dport %d -j ACCEPT", EgressSubnet, EgressGateway, brokerPort),
 		"-s " + EgressSubnet + " -j DROP",
+		"-d " + EgressGateway + " -j DROP",
 	}
-	chain := runProvisionFull(t, gw, seed, 1)
-	for _, c := range egressCases(gw) {
+}
+
+func checkInput(t *testing.T, label string, chain []string) {
+	t.Helper()
+	for _, c := range inputCases() {
 		if got := verdict(t, chain, c.p); got != c.want {
-			t.Errorf("%+v: %s, want %s\nchain:\n%s", c.p, got, c.want, strings.Join(chain, "\n"))
+			t.Errorf("%s %+v: %s, want %s\nchain:\n%s", label, c.p, got, c.want, strings.Join(chain, "\n"))
 		}
 	}
-	// Re-inserted, not duplicated.
-	for _, r := range chain {
-		n := 0
-		for _, o := range chain {
-			if o == r {
-				n++
-			}
-		}
-		if n != 1 {
-			t.Errorf("rule %q appears %d times:\n%s", r, n, strings.Join(chain, "\n"))
+	want := wantInput(9072, 9071)
+	if strings.Join(chain, "\n") != strings.Join(want, "\n") {
+		t.Errorf("%s: INPUT =\n%s\nwant exactly, in order:\n%s", label, strings.Join(chain, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// Boxes on the internal egress network reach the relay on the network's gateway
+// (broker and egress ports) and nothing else on the VM; no other box reaches
+// the relay. One run or two, the chain is the same four rules.
+func TestProvisionInputOrder(t *testing.T) {
+	for _, runs := range []int{1, 2} {
+		_, input := runProvisionBoth(t, "192.168.5.2", nil, nil, runs)
+		checkInput(t, fmt.Sprintf("runs=%d", runs), input)
+	}
+}
+
+// The evaluator is not a rubber stamp: a chain with the DROPs above the ACCEPTs
+// (what an insert that did not re-order would leave) fails the bound box's
+// egress port.
+func TestProvisionInputEvaluatorSeesAWrongOrder(t *testing.T) {
+	want := wantInput(9072, 9071)
+	bad := []string{want[2], want[3], want[0], want[1]}
+	if got := verdict(t, bad, pkt{"172.29.72.5", EgressGateway, "tcp", 9072}); got != "DROP" {
+		t.Fatalf("a DROP above the ACCEPTs must drop the egress port (that is the bug): %s", got)
+	}
+}
+
+// A VM provisioned by option (a) has the subnet DROP at the top of INPUT and no
+// ACCEPTs above it; one boot repairs it to the four-rule order, no duplicates.
+func TestProvisionInputRepairsAnOptionASeed(t *testing.T) {
+	want := wantInput(9072, 9071)
+	seed := []string{"-s " + EgressSubnet + " -j DROP", want[0], want[1]}
+	_, input := runProvisionBoth(t, "192.168.5.2", nil, seed, 1)
+	checkInput(t, "repaired", input)
+}
+
+// Option (c) keeps nothing for the subnet in DOCKER-USER: the network is
+// internal, so docker never forwards its traffic out.
+func TestProvisionHasNoEgressDockerUserRules(t *testing.T) {
+	for _, r := range runProvisionFull(t, "192.168.5.2", nil, 2) {
+		if strings.Contains(r, "-s "+EgressSubnet) {
+			t.Errorf("DOCKER-USER carries an egress-subnet rule: %q", r)
 		}
 	}
 }
 
 func TestProvisionUsesTheConfiguredEgressPort(t *testing.T) {
 	s := provisionScript(9071, 9300)
-	if !strings.Contains(s, "--dport 9300 -j RETURN") || strings.Contains(s, "9072") {
+	if !strings.Contains(s, "--dport 9300 -j ACCEPT") || strings.Contains(s, "9072") {
 		t.Fatalf("the egress port must come from the config:\n%s", s)
 	}
-	if !strings.Contains(s, "sub="+EgressSubnet+"\n") {
-		t.Fatal("the subnet is the fixed EgressSubnet")
+	if !strings.Contains(s, "sub="+EgressSubnet+"\n") || !strings.Contains(s, "egw="+EgressGateway+"\n") {
+		t.Fatal("the subnet and its gateway are the fixed EgressSubnet and EgressGateway")
 	}
 	if strings.Contains(s, "%!") {
 		t.Fatalf("a format verb leaked into the script:\n%s", s)
-	}
-}
-
-// The VM's own INPUT chain: nothing from the egress subnet reaches the VM itself
-// (the bridge gateway, sshd), once, however many times the VM boots.
-func TestProvisionAddsInputDropOnce(t *testing.T) {
-	_, input := runProvisionBoth(t, "192.168.5.2", nil, 2)
-	if len(input) != 1 || input[0] != "-s "+EgressSubnet+" -j DROP" {
-		t.Fatalf("INPUT = %q, want exactly one egress-subnet DROP", input)
 	}
 }
 
@@ -578,7 +583,7 @@ func TestEgressRulesChangeTheYAMLHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"-s \"$sub\" -j DROP", EgressSubnet, "--dport 9072 -j RETURN", "iptables -w -I INPUT 1"} {
+	for _, want := range []string{"-s \"$sub\" -j DROP", EgressSubnet, "--dport 9072 -j ACCEPT", "iptables -w -I INPUT 1"} {
 		if !strings.Contains(string(y), want) {
 			t.Errorf("yaml missing %q:\n%s", want, y)
 		}
@@ -621,7 +626,7 @@ func TestYAMLWithoutCAUnchanged(t *testing.T) {
 	if string(got) != string(want) {
 		t.Fatalf("YAML with no CA changed:\n%s\nwant\n%s", got, want)
 	}
-	if h := yamlHash(got); h != "483c85c2ce56512ce8bf5c9c77a612754a88589d26e37b5acb8dc7108e1c28ba" {
+	if h := yamlHash(got); h != "db911906c9400c288353713b92de8d94c866004e9ecd9dbcacb9b014a1061f2c" {
 		t.Fatalf("hash %s is not the pre-feature hash", h)
 	}
 	c := testCfg()

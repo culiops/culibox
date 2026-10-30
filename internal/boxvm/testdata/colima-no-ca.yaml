@@ -36,14 +36,15 @@ provision:
       # credential broker (loopback on the Mac): one TCP port through the gateway DROP.
       while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport 9071 -j RETURN 2>/dev/null; do :; done
       iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport 9071 -j RETURN
-      # egress (M3c): boxes on the egress network reach only the broker and the
-      # egress proxy on the Mac. No udp/53 for this subnet: their DNS is closed.
+      # egress (M3c): boxes on the internal egress network reach only the relay on
+      # its gateway (broker and egress ports); nobody else reaches the relay.
       sub=172.29.72.0/24
-      while iptables -w -D DOCKER-USER -s "$sub" -j DROP 2>/dev/null; do :; done
-      iptables -w -I DOCKER-USER 1 -s "$sub" -j DROP
-      while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport 9072 -j RETURN 2>/dev/null; do :; done
-      iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport 9072 -j RETURN
-      while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport 9071 -j RETURN 2>/dev/null; do :; done
-      iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport 9071 -j RETURN
-      # The VM itself (its bridge gateway, sshd): nothing from this subnet.
-      iptables -w -C INPUT -s "$sub" -j DROP 2>/dev/null || iptables -w -I INPUT 1 -s "$sub" -j DROP
+      egw=172.29.72.1
+      while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport 9072 -j ACCEPT 2>/dev/null; do :; done
+      while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport 9071 -j ACCEPT 2>/dev/null; do :; done
+      while iptables -w -D INPUT -s "$sub" -j DROP 2>/dev/null; do :; done
+      while iptables -w -D INPUT -d "$egw" -j DROP 2>/dev/null; do :; done
+      iptables -w -I INPUT 1 -d "$egw" -j DROP
+      iptables -w -I INPUT 1 -s "$sub" -j DROP
+      iptables -w -I INPUT 1 -s "$sub" -d "$egw" -p tcp --dport 9071 -j ACCEPT
+      iptables -w -I INPUT 1 -s "$sub" -d "$egw" -p tcp --dport 9072 -j ACCEPT
