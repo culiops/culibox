@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/netip"
 	"strconv"
@@ -101,9 +102,11 @@ func normaliseRule(f []string) string {
 }
 
 // Docker is the docker CLI as the relay needs it: args after "docker".
-// box.CLIClient satisfies it.
+// box.CLIClient satisfies it. Stdout returns stdout alone: a CLI or context
+// warning on stderr must not be read as the answer.
 type Docker interface {
 	Run(ctx context.Context, args []string) (string, error)
+	Stdout(ctx context.Context, args []string) (string, error)
 }
 
 // Relay is the container on the VM's host network that listens on the egress
@@ -138,6 +141,22 @@ func (r *Relay) docker(ctx context.Context, args ...string) (string, error) {
 	return r.Docker.Run(ctx, args)
 }
 
+func (r *Relay) dockerStdout(ctx context.Context, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, relayDockerTimeout)
+	defer cancel()
+	return r.Docker.Stdout(ctx, args)
+}
+
+// removeAlso is the failure-path removal: it returns err, joined with the
+// removal's own error when that failed, so the operator learns a relay may
+// still be up.
+func (r *Relay) removeAlso(ctx context.Context, err error) error {
+	if rmErr := r.remove(ctx); rmErr != nil {
+		return errors.Join(err, fmt.Errorf("removing the relay: %w", rmErr))
+	}
+	return err
+}
+
 // remove is `rm -f` that tolerates an absent container. It runs on a context
 // that outlives the caller's cancellation: a relay left behind by a cancelled
 // Ensure is exactly what must not survive.
@@ -152,6 +171,13 @@ func (r *Relay) remove(ctx context.Context) error {
 // Ensure makes the relay run for gateway gw, or returns an error and leaves no
 // relay behind. The INPUT rules are checked live first, every time: they are
 // what keeps an unbound box off the relay, so a VM without them gets no relay.
+//
+// Rules read and wrong: the relay is removed. Rules that could not be read
+// (colima ssh error, timeout): this Ready is refused but a running relay is
+// left alone. The relay only ever started after the rules were verified this
+// boot; a VM reboot or dockerd restart stops it (no restart policy); and a
+// transient ssh failure must not cut every live bound session's proxy and
+// broker.
 func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 	if r.Image == "" || r.Instance == "" || r.EgressPort <= 0 || r.BrokerPort <= 0 {
 		return fmt.Errorf("relay: image, instance and both ports are required")
@@ -160,16 +186,16 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return fmt.Errorf("relay: network gateway %s is not the provisioned %s", gw, EgressGateway)
 	}
 	rules, err := r.VM.InputRules(ctx)
-	if err == nil {
-		err = CheckInputRules(rules, r.EgressPort, r.BrokerPort)
-	}
 	if err != nil {
-		_ = r.remove(ctx) // best effort: nothing may keep relaying without the rules
-		return err
+		return fmt.Errorf("the box VM's firewall rules could not be read (%w); refusing to start the relay on them", err)
+	}
+	if err := CheckInputRules(rules, r.EgressPort, r.BrokerPort); err != nil {
+		// Read and wrong: nothing may keep relaying without the rules.
+		return r.removeAlso(ctx, err)
 	}
 
 	name, hash := RelayName(r.Instance), r.configHash(gw)
-	out, err := r.docker(ctx, "inspect", "--type", "container", "--format",
+	out, err := r.dockerStdout(ctx, "inspect", "--type", "container", "--format",
 		`{{.State.Running}}`+"\t"+`{{index .Config.Labels "`+relayConfigLabel+`"}}`, name)
 	switch {
 	case err == nil:
@@ -194,12 +220,10 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		args = append(args, strconv.Itoa(p), LimaHostGateway, strconv.Itoa(p))
 	}
 	if _, err := r.docker(ctx, args...); err != nil {
-		_ = r.remove(ctx)
-		return fmt.Errorf("starting the relay: %w", err)
+		return r.removeAlso(ctx, fmt.Errorf("starting the relay: %w", err))
 	}
 	if err := r.waitListening(ctx, name, bind); err != nil {
-		_ = r.remove(ctx)
-		return err
+		return r.removeAlso(ctx, err)
 	}
 	return nil
 }

@@ -287,7 +287,7 @@ type Options struct {
 type Egress struct {
 	Network  string
 	Verify   func(ctx context.Context, box string) error // runs INSTEAD of Options.Verify for these boxes
-	AddHosts []string                                    // --add-host values (darwin: "host.lima.internal:192.168.5.2")
+	AddHosts []string                                    // --add-host values, e.g. "name:10.0.0.1" (darwin no longer uses it)
 }
 
 // Manager tracks one box per workspace and keeps their lifecycle honest.

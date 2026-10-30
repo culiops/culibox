@@ -43,9 +43,24 @@ type fakeDocker struct {
 	logs    string
 	logsErr error
 	rmErr   error
+	// warn simulates a docker CLI warning on stderr: Run (combined output)
+	// prefixes it to every answer, Stdout never sees it.
+	warn string
 }
 
-func (f *fakeDocker) Run(_ context.Context, args []string) (string, error) {
+func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
+	out, err := f.answer(args)
+	if err == nil && f.warn != "" {
+		out = f.warn + "\n" + out
+	}
+	return out, err
+}
+
+func (f *fakeDocker) Stdout(ctx context.Context, args []string) (string, error) {
+	return f.answer(args)
+}
+
+func (f *fakeDocker) answer(args []string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, append([]string(nil), args...))
@@ -155,6 +170,34 @@ func TestEnsureRefusesWhenTheRulesCannotBeRead(t *testing.T) {
 	err := testRelay(fakeVM{err: errors.New("ssh: connection refused")}, d).Ensure(context.Background(), gw)
 	if err == nil || len(d.find("run")) != 0 {
 		t.Fatalf("err = %v, calls = %v", err, d.calls)
+	}
+	if len(d.find("rm")) != 0 {
+		t.Fatalf("a rules read error removed the relay: %v", d.subcommands())
+	}
+	if !strings.Contains(err.Error(), "could not be read") || !strings.Contains(err.Error(), "ssh: connection refused") ||
+		strings.Contains(err.Error(), "recreate") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestEnsureReportsAFailedRemovalAfterARuleMismatch(t *testing.T) {
+	d := &fakeDocker{rmErr: errors.New("permission denied")}
+	err := testRelay(fakeVM{out: "-P INPUT ACCEPT\n"}, d).Ensure(context.Background(), gw)
+	if err == nil || !strings.Contains(err.Error(), "box setup -recreate") ||
+		!strings.Contains(err.Error(), "removing the relay") || !strings.Contains(err.Error(), "permission denied") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestEnsureReadsTheInspectFromStdoutOnly(t *testing.T) {
+	r := testRelay(fakeVM{out: goodRules}, nil)
+	d := &fakeDocker{inspect: "true\t" + r.configHash(gw) + "\n", warn: "WARNING: current context is not the default", logs: bothListening}
+	r.Docker = d
+	if err := r.Ensure(context.Background(), gw); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.find("rm")) != 0 || len(d.find("run")) != 0 {
+		t.Fatalf("a stderr warning churned the relay: %v", d.subcommands())
 	}
 }
 

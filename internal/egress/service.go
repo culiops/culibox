@@ -102,7 +102,9 @@ func (s *Service) Exists(ctx context.Context) bool {
 	return err == nil && ok
 }
 
-// Ready is idempotent: it ensures the network (refusing a wrong one), refreshes
+// Ready is idempotent: it ensures the network (refusing a wrong one), runs
+// AfterNetwork on every call right after that, before anything else (under the
+// service lock, so Close may wait for it), refreshes
 // the host's own addresses (every call, so an address that appears later is
 // refused too), points the proxy at the network, and starts listening once. Any failure leaves nothing listening
 // that was not already, and a later call retries.
