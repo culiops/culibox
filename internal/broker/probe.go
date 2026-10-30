@@ -101,12 +101,17 @@ func (b *Broker) SetSimulator(s awsprobe.Simulator) { b.sim = s }
 // Stats or the SSO state: its only side effects are an audit row per fresh
 // mint, a log line and the definite-result cache. It never fails the caller.
 func (b *Broker) ProbeBase(sid, agent string, bs config.Bindings) map[string]awsprobe.Result {
+	// An sso_direct binding has no agent role to assume or simulate: its
+	// read-only proof is the gate the spawn runs (CheckSSODirect), so it is
+	// left out here and has no key in the result.
 	targets := map[string]ProbeTarget{}
-	if bs.AWS != nil {
+	if bs.AWS != nil && !bs.AWS.SSODirect() {
 		targets[""] = TargetOf(*bs.AWS)
 	}
 	for _, c := range bs.AWSConns {
-		targets[c.Name] = TargetOf(c.AWSBinding)
+		if !c.SSODirect() {
+			targets[c.Name] = TargetOf(c.AWSBinding)
+		}
 	}
 	out := make(map[string]awsprobe.Result, len(targets))
 	if b.sim == nil {

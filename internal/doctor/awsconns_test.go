@@ -371,3 +371,127 @@ func TestAWSProberMintsAsDoctorWithDeadline(t *testing.T) {
 		t.Errorf("result = %+v, want unverified sso_expired", res)
 	}
 }
+
+// fakeGate answers by connection name ("" = an inline binding) and counts calls.
+type fakeGate struct {
+	mu    sync.Mutex
+	by    map[string]awsprobe.GateResult
+	calls []string
+}
+
+func (f *fakeGate) gate(_ context.Context, _ config.AWSBinding, conn string) awsprobe.GateResult {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, conn)
+	return f.by[conn]
+}
+
+func ssoDirectConn(name, src string) config.AWSConnection {
+	return config.AWSConnection{Name: name, AWSBinding: config.AWSBinding{SourceProfile: src, Region: "ap-southeast-1", Mode: config.AWSModeSSODirect}}
+}
+
+func TestDoctorSSODirectGateLines(t *testing.T) {
+	f := &fakeAWS{profiles: []string{"p"}, sso: map[string]string{"p": "corp"}}
+	fg := &fakeGate{by: map[string]awsprobe.GateResult{
+		"clean": {State: awsprobe.GateReadOnly, RoleARN: "arn:aws:iam::1:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_RO_x"},
+		"bad": {State: awsprobe.GateNotReadOnly, Refused: []awsprobe.Verdict{
+			{Pattern: "s3:*", Why: "allows every S3 action"}, {Pattern: "ssm:SendCommand", Why: "runs commands"}}},
+		"unk":  {State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSSOExpired},
+		"perm": {State: awsprobe.GateUnverified, Reason: awsprobe.ReasonMissingPerms, MissingPerms: []string{"iam:GetRolePolicy"}},
+		// A read-only verdict that names no role is not a proof.
+		"norole": {State: awsprobe.GateReadOnly},
+	}}
+	fp := &fakeProbe{}
+	c := config.Config{AWSConnections: []config.AWSConnection{
+		ssoDirectConn("clean", "p"), ssoDirectConn("bad", "p"), ssoDirectConn("unk", "p"), ssoDirectConn("perm", "p"),
+		ssoDirectConn("norole", "p"), connRole("ar", "p", "agent")}}
+	got := byCheck(checkAWSConnsGate(context.Background(), c, nil, nil, f, fp.probe, fg.gate))
+
+	pass := got["aws-connection clean read-only gate"]
+	if pass.Status != Pass || !strings.Contains(pass.Detail, "read-only (sso_direct)") {
+		t.Errorf("clean = %s %q", pass.Status, pass.Detail)
+	}
+	bad := got["aws-connection bad read-only gate"]
+	if bad.Status != Fail || !strings.Contains(bad.Detail, "not read-only") || !strings.Contains(bad.Detail, "s3:*: allows every S3 action") ||
+		!strings.Contains(bad.Detail, "ssm:SendCommand") {
+		t.Errorf("bad = %s %q", bad.Status, bad.Detail)
+	}
+	unk := got["aws-connection unk read-only gate"]
+	if unk.Status != Fail || !strings.Contains(unk.Detail, "could not verify") || !strings.Contains(unk.Detail, "SSO expired") {
+		t.Errorf("unverified = %s %q", unk.Status, unk.Detail)
+	}
+	if p := got["aws-connection perm read-only gate"]; p.Status != Fail || !strings.Contains(p.Detail, "iam:GetRolePolicy") {
+		t.Errorf("missing perms = %s %q", p.Status, p.Detail)
+	}
+	if n := got["aws-connection norole read-only gate"]; n.Status != Fail {
+		t.Errorf("read-only without a role = %s %q", n.Status, n.Detail)
+	}
+	// The assume_role connection keeps its base-role line, and sso_direct ones have none.
+	if _, ok := got["aws-connection ar base role"]; !ok {
+		t.Error("assume_role connection lost its base-role line")
+	}
+	for _, name := range []string{"clean", "bad", "unk", "perm", "norole"} {
+		if _, ok := got["aws-connection "+name+" base role"]; ok {
+			t.Errorf("%s has a base-role line", name)
+		}
+	}
+	if len(fp.calls) != 1 || fp.calls[0].RoleARN != roleARN("agent") {
+		t.Errorf("base-role probes = %+v: an sso_direct target was probed as an assumed role", fp.calls)
+	}
+}
+
+func TestDoctorSSODirectGateSkippedWhenSignInFails(t *testing.T) {
+	f := &fakeAWS{profiles: []string{"a"}, sso: map[string]string{"a": "corp"}, expired: map[string]bool{"a": true}}
+	fg := &fakeGate{}
+	c := config.Config{AWSConnections: []config.AWSConnection{ssoDirectConn("x", "a"), ssoDirectConn("y", "gone")}}
+	got := byCheck(checkAWSConnsGate(context.Background(), c, nil, nil, f, noneProbe, fg.gate))
+	if r := got["aws-connection x read-only gate"]; r.Status != Warn || !strings.Contains(r.Detail, "sso expired") {
+		t.Errorf("x = %s %q", r.Status, r.Detail)
+	}
+	if r := got["aws-connection y"]; r.Status != Fail {
+		t.Errorf("y connection line = %s %q", r.Status, r.Detail)
+	}
+	if r := got["aws-connection y read-only gate"]; r.Status != Warn || !strings.Contains(r.Detail, "missing") {
+		t.Errorf("y = %s %q", r.Status, r.Detail)
+	}
+	if len(fg.calls) != 0 {
+		t.Errorf("gate ran with no usable sign-in: %v", fg.calls)
+	}
+}
+
+func TestDoctorSSODirectInlineBindingAndNoGate(t *testing.T) {
+	f := &fakeAWS{profiles: []string{"p"}, sso: map[string]string{"p": "corp"}}
+	stored := []config.AgentConfig{{Name: "ro-agent", AWS: &config.AWSBinding{SourceProfile: "p", Region: "r", Mode: config.AWSModeSSODirect}}}
+	fg := &fakeGate{by: map[string]awsprobe.GateResult{"": {State: awsprobe.GateNotReadOnly}}}
+	got := byCheck(checkAWSConnsGate(context.Background(), config.Config{}, stored, nil, f, noneProbe, fg.gate))
+	if r := got["aws-binding ro-agent read-only gate"]; r.Status != Fail {
+		t.Errorf("inline = %s %q", r.Status, r.Detail)
+	}
+	// The plain entry point has no gate: such a binding is reported, not skipped silently.
+	got = byCheck(checkAWSConns(context.Background(), config.Config{}, stored, nil, f, noneProbe))
+	if r := got["aws-binding ro-agent read-only gate"]; r.Status != Warn || !strings.Contains(r.Detail, "not run") {
+		t.Errorf("no gate = %s %q", r.Status, r.Detail)
+	}
+}
+
+// The real gate passes the check a deadline, so a hung mint cannot hang doctor.
+func TestNewSSOGateBoundsTheCheck(t *testing.T) {
+	var dl time.Duration
+	g := newSSOGate(deadlineMinter{&dl})
+	res := g(context.Background(), config.AWSBinding{SourceProfile: "p", Mode: config.AWSModeSSODirect}, "c")
+	if res.State == awsprobe.GateReadOnly {
+		t.Fatalf("a failing mint passed the gate: %+v", res)
+	}
+	if dl <= 0 || dl > awsGateTimeout {
+		t.Fatalf("mint deadline %v, want within %v", dl, awsGateTimeout)
+	}
+}
+
+type deadlineMinter struct{ dl *time.Duration }
+
+func (m deadlineMinter) Mint(ctx context.Context, _ broker.MintInput) (broker.Creds, error) {
+	if d, ok := ctx.Deadline(); ok {
+		*m.dl = time.Until(d)
+	}
+	return broker.Creds{}, errors.New("no")
+}

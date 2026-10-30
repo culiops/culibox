@@ -419,6 +419,11 @@ type AWSInfo struct {
 	AccountID string `json:"account_id"`
 	RoleARN   string `json:"role_arn"`
 	Prod      bool   `json:"prod"`
+	// Mode is "sso_direct" when the agent holds the SSO permission set's own
+	// credentials; absent for the usual assumed agent role. Hours is how long
+	// those credentials were valid at spawn, rounded up; absent otherwise.
+	Mode  string `json:"mode,omitempty"`
+	Hours int    `json:"hours,omitempty"`
 	// Elevate is the write role a human may widen the session to; absent when
 	// the binding allows none. It names no source profile: how the daemon signs
 	// in stays off the list (the sign-in command travels only in GET .../aws).
@@ -443,6 +448,9 @@ type AWSConnInfo struct {
 	RoleARN   string `json:"role_arn"`
 	Region    string `json:"region"`
 	Prod      bool   `json:"prod"`
+	// Mode and Hours as in AWSInfo.
+	Mode  string `json:"mode,omitempty"`
+	Hours int    `json:"hours,omitempty"`
 	// WriteCapable: the connection names an elevate role, so a human may widen
 	// it to write.
 	WriteCapable bool         `json:"write_capable"`
@@ -681,6 +689,10 @@ type Session struct {
 	// fields: a re-probe changes it. nil for a record from before the probe,
 	// which reads as "not checked".
 	base map[string]awsprobe.Result
+	// sso is what the sso_direct gate left per AWS binding key at spawn (hours
+	// of validity, the account). Fixed before the session is published, so it
+	// needs no lock; nil without an sso_direct binding.
+	sso map[string]ssoSpawnInfo
 	// persistMu serializes a re-probe's snapshot of base with its writes to
 	// the sidecar and aws.json, so two re-probes landing together never
 	// persist an older snapshot last. Outermost: taken with no other lock held.
@@ -1084,11 +1096,18 @@ func (s *Session) Info() Info {
 	if s.AWS != nil {
 		in.AWS = &AWSInfo{Label: s.AWS.Label, AccountID: awsscope.AccountOf(s.AWS.RoleARN), RoleARN: s.AWS.RoleARN, Prod: s.AWS.Prod,
 			Elevate: elevateInfo(s.AWS.Elevate), Fields: awsprobe.Lookup(s.base, "").Fields()}
+		if s.AWS.SSODirect() {
+			in.AWS.Mode, in.AWS.Hours, in.AWS.AccountID = config.AWSModeSSODirect, s.sso[""].Hours, s.sso[""].AccountID
+		}
 	}
 	for _, c := range s.AWSConns {
-		in.AWSConnections = append(in.AWSConnections, AWSConnInfo{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
+		ci := AWSConnInfo{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
 			RoleARN: c.RoleARN, Region: c.Region, Prod: c.Prod, WriteCapable: c.Elevate != nil, Elevate: elevateInfo(c.Elevate),
-			Fields: awsprobe.Lookup(s.base, c.Name).Fields()})
+			Fields: awsprobe.Lookup(s.base, c.Name).Fields()}
+		if c.SSODirect() {
+			ci.Mode, ci.Hours, ci.AccountID = config.AWSModeSSODirect, s.sso[c.Name].Hours, s.sso[c.Name].AccountID
+		}
+		in.AWSConnections = append(in.AWSConnections, ci)
 	}
 	slices.SortFunc(in.AWSConnections, func(a, b AWSConnInfo) int { return strings.Compare(a.Name, b.Name) })
 	if g := s.GitHub; g != nil {
@@ -1892,6 +1911,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	// place for the box's first mint; a spawn that fails after that must drop
 	// the watch, or the broker would keep it for an id that never ran.
 	var baseAccess map[string]awsprobe.Result
+	var ssoInfo map[string]ssoSpawnInfo // the sso_direct gate's per-key info
 	watched := false
 	started := false
 	defer func() {
@@ -1927,8 +1947,22 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 				}
 			}
 			if bs.AWS != nil || len(bs.AWSConns) > 0 {
+				// An sso_direct binding hands the agent the human's own
+				// permission-set credentials, so unlike an assumed role it is
+				// refused unless the read-only gate says so. A passed gate is a
+				// definite base result for its key.
+				var gated map[string]awsprobe.Result
+				var err error
+				gated, ssoInfo, err = gateSSODirect(brk, bs, spec.Agent)
+				if err != nil {
+					return nil, err
+				}
 				// Warn, never block: the probe has no error, only results.
 				baseAccess = brk.ProbeBase(id, spec.Agent, bs)
+				if baseAccess == nil {
+					baseAccess = map[string]awsprobe.Result{}
+				}
+				maps.Copy(baseAccess, gated)
 				if keys := awsprobe.NeedsRecheck(baseAccess, awsKeysOf(bs)); len(keys) > 0 {
 					brk.WatchBase(id, keys)
 					watched = true
@@ -2177,6 +2211,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	sess.costComplete = isClaudeBin(bin)
 	sess.resumeSkipped = resumeSkipped
 	sess.base = maps.Clone(baseAccess) // its own: a re-probe writes into it
+	sess.sso = ssoInfo
 	sess.onSubmitted = m.submittedHook(id)
 	sess.agentKind = isAgentBin(bin) // before publication: no reader can see sess yet
 	sess.replyable = replyable
@@ -2193,7 +2228,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			Replyable: replyable, Submitted: boolPtr(submitted), Options: opts,
 			Account: acctName, ConfigDir: cfgDir, AWS: binding, AWSConns: awsConns, GitHub: ghBinding, Tokens: tokens, PATs: pats, BrokerNonce: nonce, EgressNonce: enonce, BundleDrops: bundleDrops, Clone: cloneInfo.copy(), Exclusive: exclusive,
 			ContextPaths: slices.Clone(ctxPaths), CloneOf: sess.CloneOf,
-			BaseAccess: maps.Clone(baseAccess), ParentID: spec.ParentID, CostComplete: sess.costComplete})
+			BaseAccess: maps.Clone(baseAccess), SSODirect: maps.Clone(ssoInfo), ParentID: spec.ParentID, CostComplete: sess.costComplete})
 	}
 	m.watchRetention(id, sess)
 	return sess, nil
@@ -2952,6 +2987,7 @@ func (m *Manager) reattach(id string, md sessionMeta) error {
 	// nil for a record from before the probe: every key reads "not checked"
 	// and is watched below, never a clean result.
 	sess.base = maps.Clone(md.BaseAccess)
+	sess.sso = maps.Clone(md.SSODirect)
 	// Restored from the sidecar as-is: a pre-feature record decodes Replyable
 	// to false (its zero value), so a session can never become repliable by
 	// merely surviving a restart. With the kill-switch off the persisted value

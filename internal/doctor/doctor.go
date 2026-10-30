@@ -183,8 +183,8 @@ func Checks(in Input) []Result {
 	if storeErr == nil {
 		stored = st.List()
 	}
-	out = append(out, checkAWSConns(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
-		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}))...)
+	out = append(out, checkAWSConnsGate(context.Background(), c, stored, storeErr, boxvm.ExecRunner{},
+		newAWSProber(broker.STSMinter{}, awsprobe.IAMSimulator{}), newSSOGate(broker.STSMinter{}))...)
 	out = append(out, boxTierResults(runtime.GOOS, gatherBoxFacts(c, dataDir, in.Home, runtime.GOOS), ClaudeBoxToken(c, vst))...)
 	out = append(out, checkClaudeRegistry(in.Home)...)
 	return out

@@ -943,3 +943,43 @@ func TestEnvListWritesWithoutActions(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+// An sso_direct connection has no role to name and no agent-role probe: the
+// listing says it is the SSO role directly, with the account from the host
+// profile, and that the read-only gate passed at spawn.
+func TestEnvListSSODirectConnection(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(cfg, []byte("[profile sso-ro]\nsso_session = s\nsso_account_id = 333333333333\nsso_role_name = ReadOnlyAccess\nregion = eu-west-1\n\n"+
+		"[sso-session s]\nsso_region = eu-west-1\nsso_start_url = https://d-0000000000.awsapps.com/start\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
+	bs := config.Bindings{AWSConns: []config.AWSConnection{{Name: "ro", AWSBinding: config.AWSBinding{SourceProfile: "sso-ro",
+		Region: "eu-west-1", Mode: config.AWSModeSSODirect}}}}
+	dir, err := EnsureBindingDirWith(t.TempDir(), bs, map[string]awsprobe.Result{"ro": {State: awsprobe.NoneFound}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, AWSListFile))
+	if !strings.Contains(string(raw), `"mode":"sso_direct"`) || strings.Contains(string(raw), "sso-ro") {
+		t.Fatalf("aws.json = %s", raw)
+	}
+	js := filepath.Join(dir, "agentbox-env.js")
+	out, stderr, code := runNode(t, "", "", []string{js, "--list"},
+		"AGENTBOX_ENV_LIST_FILE="+filepath.Join(dir, TokensFile), "AGENTBOX_ENV_AWS_FILE="+filepath.Join(dir, AWSListFile))
+	if code != 0 || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	want := "AWS connections\n" +
+		"ro\n" +
+		"  account 333333333333 · SSO role directly · region eu-west-1\n" +
+		"  read-only: the permission set passed agent-box's read-only check when this session started\n" +
+		"  use: aws --profile ro …   terraform: provider \"aws\" { profile = \"ro\" }\n"
+	if !strings.HasPrefix(out, want) {
+		t.Fatalf("listing:\n%s\nwant prefix:\n%s", out, want)
+	}
+	if strings.Contains(out, "· role ") {
+		t.Errorf("listing names a role: %s", out)
+	}
+}

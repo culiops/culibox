@@ -535,3 +535,49 @@ func TestCheckSSODirectConnRowMatchesServe(t *testing.T) {
 		t.Fatalf("gone: %+v", res)
 	}
 }
+
+// Hooks.CheckSSODirect picks the inline binding for key "" and the named
+// connection otherwise, and refuses (unverified) anything that is not an
+// sso_direct binding, so the gate can never vouch for an AssumeRole one.
+func TestHooksCheckSSODirect(t *testing.T) {
+	g := &fakeGate{results: []awsprobe.GateResult{readOnly()}}
+	b, fm, rec, now := ssoDirectSetup(t, g)
+	h := Hooks{B: b}
+	bnd := *ssoDirectBinding()
+
+	res, exp := h.CheckSSODirect(context.Background(), config.Bindings{AWS: &bnd}, "")
+	if res.State != awsprobe.GateReadOnly || !exp.Equal(now.Add(time.Hour)) {
+		t.Fatalf("inline: %+v %v", res, exp)
+	}
+	if r := lastRow(rec); r.Entry != "" || r.ScopeHash != bnd.Hash() {
+		t.Fatalf("inline row %+v", r)
+	}
+
+	conn := config.AWSConnection{Name: "ro", AWSBinding: bnd}
+	g.results = []awsprobe.GateResult{readOnly()}
+	res, _ = h.CheckSSODirect(context.Background(), config.Bindings{AWSConns: []config.AWSConnection{conn}}, "ro")
+	if res.State != awsprobe.GateReadOnly {
+		t.Fatalf("conn: %+v", res)
+	}
+	if r := lastRow(rec); r.Entry != "ro" || r.ScopeHash != conn.DefHash() {
+		t.Fatalf("conn row %+v", r)
+	}
+
+	n := fm.callCount()
+	ar := config.AWSConnection{Name: "ar", AWSBinding: config.AWSBinding{SourceProfile: "p", RoleARN: "arn:aws:iam::1:role/r", Region: "r1"}}
+	for _, c := range []struct {
+		bs  config.Bindings
+		key string
+	}{
+		{config.Bindings{AWSConns: []config.AWSConnection{ar}}, "ar"},       // assume_role connection
+		{config.Bindings{AWSConns: []config.AWSConnection{conn}}, "absent"}, // no such connection
+		{config.Bindings{}, ""}, // no inline binding
+	} {
+		if res, exp = h.CheckSSODirect(context.Background(), c.bs, c.key); res.State != awsprobe.GateUnverified || !exp.IsZero() {
+			t.Errorf("%q: %+v %v, want unverified", c.key, res, exp)
+		}
+	}
+	if fm.callCount() != n {
+		t.Fatalf("a non-sso_direct key fetched credentials (%d mints)", fm.callCount()-n)
+	}
+}
