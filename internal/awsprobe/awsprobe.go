@@ -3,9 +3,15 @@
 // classification of a simulation reply, and the SDK simulator. The glue that
 // mints credentials and calls the simulator lives in the broker.
 //
-// The probe is a warning, never a gate. A clean result means "no broad writes
-// found" among a short fixed action list; scoped write grants are not detected.
-// Anything the probe cannot establish is Unverified, never NoneFound.
+// For an assume_role binding the probe is a warning, never a gate. A clean
+// result means "no broad writes found" among a short fixed action list; scoped
+// write grants are not detected. Anything the probe cannot establish is
+// Unverified, never NoneFound.
+//
+// For an sso_direct binding the package also holds the pure half of a
+// fail-closed gate: policy.go reads the permission set's policy documents,
+// removes only what an unconditional Deny provably covers, and classifies what
+// is left by verb (verbs.go). Anything it cannot prove read-only refuses.
 package awsprobe
 
 import (
