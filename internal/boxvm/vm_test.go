@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -370,5 +371,22 @@ func TestStateFilesAreOwnerOnly(t *testing.T) {
 		if err != nil || fi.Mode().Perm() != 0o600 {
 			t.Fatalf("%s: %v %v", filepath.Base(p), fi.Mode(), err)
 		}
+	}
+}
+
+func TestInputRulesRunsIptablesOverColimaSSH(t *testing.T) {
+	r := &fakeRunner{}
+	v := setUpVM(t, r)
+	r.mu.Lock()
+	r.calls = nil
+	r.mu.Unlock()
+	if _, err := v.InputRules(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(r.calls, "|"), "ssh --profile agent-box -- sudo iptables -w -S INPUT"; got != want {
+		t.Fatalf("calls = %q, want %q (it must never start the VM)", got, want)
+	}
+	if !slices.Equal(r.envs["ssh"], v.env()) {
+		t.Fatalf("ssh env = %v, want the pinned env", r.envs["ssh"])
 	}
 }

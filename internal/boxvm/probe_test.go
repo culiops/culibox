@@ -158,21 +158,24 @@ func TestProbeLoopbackBoundFailsWhenTheListenerAccepts(t *testing.T) {
 	}
 }
 
-// The bound script tries the gateway by name and by the measured address, and
-// does not wait on a DNS lookup that a bound box cannot answer.
+// A bound box is on an internal network that cannot resolve or reach
+// host.lima.internal, so the bound script dials by address only: the lima host
+// gateway (past the internal net) and the egress gateway (a non-relayed port).
 func TestProbeLoopbackBoundScript(t *testing.T) {
 	var script string
 	_ = ProbeLoopbackBound(context.Background(), func(_ context.Context, s string) (string, error) {
 		script = s
 		return "BLOCKED a\n", nil
 	})
-	for _, want := range []string{"host.lima.internal", LimaHostGateway, "Promise.all"} {
+	for _, want := range []string{LimaHostGateway, EgressGateway, "Promise.all"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("bound script missing %q:\n%s", want, script)
 		}
 	}
-	if strings.Contains(script, "api.anthropic.com") {
-		t.Errorf("bound script must not use the DNS control:\n%s", script)
+	for _, bad := range []string{"host.lima.internal", "dns.lookup", "api.anthropic.com"} {
+		if strings.Contains(script, bad) {
+			t.Errorf("bound script must not contain %q:\n%s", bad, script)
+		}
 	}
 	if node, err := exec.LookPath("node"); err == nil {
 		f := filepath.Join(t.TempDir(), "p.js")
@@ -182,5 +185,29 @@ func TestProbeLoopbackBoundScript(t *testing.T) {
 		if out, err := exec.Command(node, "--check", f).CombinedOutput(); err != nil {
 			t.Fatalf("bound script does not parse: %v\n%s", err, out)
 		}
+	}
+}
+
+// Both addresses are dialled on the probe listener's own port, so a Mac-side
+// listener that answers on either is caught by the accept count.
+func TestProbeLoopbackBoundDialsTheListenerPortOnBoth(t *testing.T) {
+	var script string
+	var listenerPort int
+	_ = ProbeLoopbackBound(context.Background(), func(_ context.Context, s string) (string, error) {
+		script = s
+		if m := portRe.FindStringSubmatch(s); m != nil {
+			listenerPort, _ = strconv.Atoi(m[1])
+		}
+		return "BLOCKED a\n", nil
+	})
+	if listenerPort <= 0 {
+		t.Fatalf("script must embed the listener's port:\n%s", script)
+	}
+	want := "['" + LimaHostGateway + "','" + EgressGateway + "'].map(tryc)"
+	if !strings.Contains(script, want) {
+		t.Errorf("script must dial both addresses with tryc (which uses port %d), want %q:\n%s", listenerPort, want, script)
+	}
+	if strings.Count(script, "const port=") != 1 {
+		t.Errorf("exactly one port must be in play:\n%s", script)
 	}
 }

@@ -22,8 +22,8 @@ type ServiceOptions struct {
 	Instance  string
 	Port      int
 	Want      Want
-	ProxyHost string                                           // the host boxes use in HTTPS_PROXY; "" on Linux = the gateway IP; darwin: "host.lima.internal"
-	NoProxy   string                                           // darwin: "host.lima.internal"
+	ProxyHost string                                           // the host boxes use in HTTPS_PROXY; "" = the gateway IP (Linux and darwin)
+	NoProxy   string                                           // hosts boxes reach directly, not through the proxy
 	ExtraEnv  []string                                         // from Task 1's verdict (Task 11 fills it)
 	Listen    func(network, addr string) (net.Listener, error) // nil → net.Listen; tests inject
 	HostAddrs func() ([]netip.Addr, error)                     // the host's own addresses the proxy never dials; nil → HostAddrs
@@ -32,6 +32,10 @@ type ServiceOptions struct {
 	// on Linux, so config load cannot check it; the proxy never dials that
 	// subnet regardless).
 	StaticTokens []config.StaticToken
+	// AfterNetwork (darwin only; nil on Linux) runs on every Ready call, right
+	// after the network is ensured and before anything else, so a failure keeps
+	// boxes off an egress path whose VM firewall rules no longer hold.
+	AfterNetwork func(ctx context.Context, n Net) error
 }
 
 // Endpoint is where a box reaches the proxy.
@@ -98,7 +102,9 @@ func (s *Service) Exists(ctx context.Context) bool {
 	return err == nil && ok
 }
 
-// Ready is idempotent: it ensures the network (refusing a wrong one), refreshes
+// Ready is idempotent: it ensures the network (refusing a wrong one), runs
+// AfterNetwork on every call right after that, before anything else (under the
+// service lock, so Close may wait for it), refreshes
 // the host's own addresses (every call, so an address that appears later is
 // refused too), points the proxy at the network, and starts listening once. Any failure leaves nothing listening
 // that was not already, and a later call retries.
@@ -111,6 +117,11 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	n, err := EnsureNetwork(ctx, s.o.Docker, s.Network(), s.o.Instance, s.o.Want)
 	if err != nil {
 		return Endpoint{}, err
+	}
+	if s.o.AfterNetwork != nil {
+		if err := s.o.AfterNetwork(ctx, n); err != nil {
+			return Endpoint{}, fmt.Errorf("egress: network %s: %w", n.Name, err)
+		}
 	}
 	if err := s.RefreshHostAddrs(); err != nil {
 		return Endpoint{}, err

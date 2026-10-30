@@ -556,7 +556,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 		default:
 			egressSvc = svc
 			mgr.SetEgress(svc.Svc)
-			boxes.SetEgress(box.Egress{Network: svc.Svc.Network(), Verify: layer.egressVerify(svc.Svc), AddHosts: svc.AddHosts})
+			boxes.SetEgress(box.Egress{Network: svc.Svc.Network(), Verify: layer.egressVerify(svc.Svc)})
 			log.Printf("egress control: network %s, port %d", svc.Svc.Network(), cfg.EgressPortOrDefault())
 		}
 	}

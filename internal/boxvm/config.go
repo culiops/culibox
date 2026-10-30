@@ -23,14 +23,21 @@ import (
 // <COLIMA_HOME>/_lima/colima-<profile>/, and macOS caps a socket path at 103 bytes.
 const Profile = "agent-box"
 
-// EgressSubnet is the egress network's subnet for bound boxes (M3c). It is
-// fixed, not chosen by docker: the provision script runs before the network
-// exists and must name it.
+// EgressSubnet is the subnet of the --internal egress network for bound boxes
+// (M3c). It is fixed, not chosen by docker: the provision script runs before the
+// network exists and must name it.
 const EgressSubnet = "172.29.72.0/24"
 
+// EgressGateway is the egress network's gateway, fixed with the subnet. The
+// relay listens on it (inside the VM), so the INPUT rules below name it. Like
+// EgressSubnet it is a plain literal: no % can reach the formatted script.
+const EgressGateway = "172.29.72.1"
+
 // LimaHostGateway is lima's host gateway (host.lima.internal), measured in the
-// M2 spike. Bound boxes get it as `--add-host host.lima.internal:<it>` and the
-// loopback check dials it; the check fails closed if the address is wrong.
+// M2 spike. The loopback check dials it by address from both unbound and bound
+// boxes and fails closed if the address is wrong. Bound boxes sit on an internal
+// network with no route to it (and no host.lima.internal): they reach the Mac
+// only through the relay on EgressGateway.
 const LimaHostGateway = "192.168.5.2"
 
 // sunPathMax is macOS sockaddr_un.sun_path, NUL included.
@@ -47,9 +54,9 @@ type Config struct {
 	// BrokerPort is the Mac-loopback TCP port of the credential broker; the
 	// provision script lets boxes through the gateway DROP on exactly this port.
 	BrokerPort int
-	// EgressPort is the Mac-loopback TCP port of the egress proxy; boxes on the
-	// egress network are let through the gateway DROP on exactly this port and
-	// the broker's.
+	// EgressPort is the TCP port of the egress proxy; the relay serves it on
+	// EgressGateway, and the INPUT rules let the egress subnet reach exactly this
+	// port and the broker's there.
 	EgressPort int
 	// ExtraCAPEM is the canonical PEM of extra_ca_certs; empty means none, and
 	// then the YAML is byte-identical to what it was before the feature.
@@ -147,10 +154,10 @@ func (c Config) Mounts() []string {
 // whole broke DNS in every box and in the image build), so udp/53 passes.
 // DOCKER-USER is the chain docker evaluates first and never rewrites; creating
 // it here is harmless if docker has not started yet (docker keeps it).
-// provisionEgress comes last so the egress subnet's rules end up on top.
+// provisionEgress adds the INPUT rules for the internal egress network.
 func provisionScript(brokerPort, egressPort int) string {
 	return provisionBase + fmt.Sprintf(provisionBroker, brokerPort, brokerPort) +
-		fmt.Sprintf(provisionEgress, egressPort, egressPort, brokerPort, brokerPort)
+		fmt.Sprintf(provisionEgress, egressPort, brokerPort, brokerPort, egressPort)
 }
 
 const provisionBase = `#!/bin/sh
@@ -181,24 +188,37 @@ while iptables -w -D DOCKER-USER -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/nul
 iptables -w -I DOCKER-USER 1 -d "$gw" -p tcp --dport %d -j RETURN
 `
 
-// provisionEgress is formatted with only the two ports (the subnet is a literal
-// from EgressSubnet, so no % can come from it). Boxes bound to cloud credentials
-// sit on the egress network and may reach the Mac only through the gateway's
-// broker and egress-proxy ports; everything else from the subnet is dropped,
-// DNS included, and so is any packet to the VM itself. Each rule is removed and
-// re-inserted at position 1 on every boot, the DROP first, so the order holds
-// whatever the chain looked like before.
-const provisionEgress = `# egress (M3c): boxes on the egress network reach only the broker and the
-# egress proxy on the Mac. No udp/53 for this subnet: their DNS is closed.
+// provisionEgress is formatted with only the two ports, egress then broker,
+// each in a delete line and an insert line (the subnet and gateway are literals
+// from EgressSubnet and EgressGateway, so no % can come from them). Bound boxes
+// sit on an --internal docker network, which has no route to the lima gateway
+// and none out; the relay that serves them listens on that network's gateway,
+// inside the VM, so these INPUT rules are what guard it. They are load-bearing
+// (measured on the Mac, spike c9/c7): without them an unbound box reaches the
+// relay and a bound box reaches every other VM listener. Top down: the relay's
+// two ports for the subnet, then the subnet to anywhere, then anyone to the
+// relay's address. INPUT, not DOCKER-USER: traffic to the VM itself is never
+// forwarded, so DOCKER-USER does not see it. Each rule is removed and the four
+// re-inserted at position 1 in reverse on every boot, so the order holds
+// whatever the chain looked like before (including option (a)'s lone DROP).
+// The one DOCKER-USER rule for the subnet is a forward-path DROP, a backstop
+// that holds even if the network were ever created without --internal.
+const provisionEgress = `# egress (M3c): boxes on the internal egress network reach only the relay on
+# its gateway (broker and egress ports); nobody else reaches the relay.
 sub=` + EgressSubnet + `
+# Forward-path backstop, independent of the network's --internal flag. Top of
+# DOCKER-USER (this block runs last); INPUT and the VM's own OUTPUT are untouched.
 while iptables -w -D DOCKER-USER -s "$sub" -j DROP 2>/dev/null; do :; done
 iptables -w -I DOCKER-USER 1 -s "$sub" -j DROP
-while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
-iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN
-while iptables -w -D DOCKER-USER -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN 2>/dev/null; do :; done
-iptables -w -I DOCKER-USER 1 -s "$sub" -d "$gw" -p tcp --dport %d -j RETURN
-# The VM itself (its bridge gateway, sshd): nothing from this subnet.
-iptables -w -C INPUT -s "$sub" -j DROP 2>/dev/null || iptables -w -I INPUT 1 -s "$sub" -j DROP
+egw=` + EgressGateway + `
+while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport %d -j ACCEPT 2>/dev/null; do :; done
+while iptables -w -D INPUT -s "$sub" -d "$egw" -p tcp --dport %d -j ACCEPT 2>/dev/null; do :; done
+while iptables -w -D INPUT -s "$sub" -j DROP 2>/dev/null; do :; done
+while iptables -w -D INPUT -d "$egw" -j DROP 2>/dev/null; do :; done
+iptables -w -I INPUT 1 -d "$egw" -j DROP
+iptables -w -I INPUT 1 -s "$sub" -j DROP
+iptables -w -I INPUT 1 -s "$sub" -d "$egw" -p tcp --dport %d -j ACCEPT
+iptables -w -I INPUT 1 -s "$sub" -d "$egw" -p tcp --dport %d -j ACCEPT
 `
 
 // caTerminator ends caBlock's heredoc. A PEM never contains it (base64 and

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -105,7 +106,8 @@ case "$1 $2" in
 	while [ $# -gt 0 ]; do case "$1" in --subnet) echo "$2" > "$d/net"; shift ;; --internal) echo internal >> "$d/flags" ;; -o) echo "$2" >> "$d/opts"; shift ;; esac; shift; done
 	: > "$d/created" ;;
 "network inspect") icc=true; grep -q 'enable_icc=false' "$d/opts" 2>/dev/null && icc=false
-	printf '{"Internal":false,"Options":{"com.docker.network.bridge.enable_icc":"%s"},"IPAM":{"Config":[{"Subnet":"%s","Gateway":"172.29.72.1"}]}}' "$icc" "$(cat "$d/net")" ;;
+	int=false; [ -f "$d/flags" ] && int=true
+	printf '{"Internal":'$int',"Options":{"com.docker.network.bridge.enable_icc":"%s"},"IPAM":{"Config":[{"Subnet":"%s","Gateway":"172.29.72.1"}]}}' "$icc" "$(cat "$d/net")" ;;
 exec*) cat "$d/exec" 2>/dev/null ;;
 esac
 exit 0
@@ -126,8 +128,9 @@ func freePort(t *testing.T) int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-// darwin option (a): a non-internal network on the fixed subnet, the proxy on
-// the Mac's 127.0.0.1, and boxes finding it as host.lima.internal.
+// darwin option (c): an internal network on the fixed subnet and gateway, the
+// proxy on the Mac's 127.0.0.1, and boxes dialling the gateway (the VM relay
+// carries them to it), with no --add-host.
 func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
 	bin, dir := statefulEgressDocker(t)
 	port := freePort(t)
@@ -136,9 +139,6 @@ func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
 		t.Fatalf("darwin must start egress now: %v", err)
 	}
 	defer svc.Stop(context.Background())
-	if want := []string{"host.lima.internal:" + boxvm.LimaHostGateway}; !reflect.DeepEqual(svc.AddHosts, want) {
-		t.Errorf("AddHosts = %q, want %q", svc.AddHosts, want)
-	}
 	if b, _ := os.ReadFile(filepath.Join(dir, "created")); b != nil {
 		t.Error("boot created the network (the first bound spawn does)")
 	}
@@ -153,19 +153,19 @@ func TestStartEgressDarwinUsesLoopbackAndFixedSubnet(t *testing.T) {
 	if o, _ := os.ReadFile(filepath.Join(dir, "opts")); !strings.Contains(string(o), "com.docker.network.bridge.enable_icc=false") {
 		t.Errorf("darwin's network must be created with inter-container traffic off (boxes must not reach each other): opts %q", o)
 	}
-	if f, _ := os.ReadFile(filepath.Join(dir, "flags")); strings.Contains(string(f), "internal") || strings.Contains(string(log), "--internal") {
-		t.Errorf("darwin's network must not be --internal (boxes would lose the route to the gateway):\n%s", log)
+	if !strings.Contains(string(log), "--internal") || !strings.Contains(string(log), "--gateway "+boxvm.EgressGateway) {
+		t.Errorf("darwin's network must be --internal with --gateway %s:\n%s", boxvm.EgressGateway, log)
 	}
 	joined := strings.Join(env, "\n")
-	if !strings.Contains(joined, "@host.lima.internal:"+strconv.Itoa(port)) {
-		t.Errorf("HTTPS_PROXY must name host.lima.internal:%d:\n%s", port, redactTokens(joined))
+	if !strings.Contains(joined, "@"+boxvm.EgressGateway+":"+strconv.Itoa(port)) {
+		t.Errorf("HTTPS_PROXY must name the gateway %s:%d:\n%s", boxvm.EgressGateway, port, redactTokens(joined))
 	}
-	if !strings.Contains(joined, "NO_PROXY=") || !strings.Contains(joined, "host.lima.internal") {
-		t.Errorf("NO_PROXY must keep host.lima.internal (the broker) direct:\n%s", redactTokens(joined))
+	if strings.Contains(joined, "host.lima.internal") {
+		t.Errorf("no box env may name host.lima.internal any more:\n%s", redactTokens(joined))
 	}
 	// The listener is on the Mac's loopback and nowhere wider.
 	ep, err := svc.Svc.Ready(context.Background())
-	if err != nil || ep.Port != port || ep.ProxyHost != "host.lima.internal" || ep.Net.Subnet.String() != boxvm.EgressSubnet {
+	if err != nil || ep.Port != port || ep.ProxyHost != boxvm.EgressGateway || ep.Net.Subnet.String() != boxvm.EgressSubnet {
 		t.Fatalf("endpoint = %+v, %v", ep, err)
 	}
 	c, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
@@ -199,11 +199,14 @@ func TestEgressServiceOptionsPerPlatform(t *testing.T) {
 		t.Errorf("linux options changed: %+v", lin)
 	}
 	dar := egressServiceOptions(cfg, "darwin", nil, nil)
-	if dar.Want.Internal || !dar.Want.NoICC || dar.Want.Subnet != boxvm.EgressSubnet {
-		t.Errorf("darwin wants a non-internal network on %s with inter-container traffic off: %+v", boxvm.EgressSubnet, dar.Want)
+	if lin.Want.Gateway != "" || lin.AfterNetwork != nil {
+		t.Errorf("linux must have no pinned gateway and no network hook: %+v", lin)
 	}
-	if dar.ProxyHost != "host.lima.internal" || !strings.Contains(dar.NoProxy, "host.lima.internal") || dar.GOOS != "darwin" {
-		t.Errorf("darwin proxy host / no_proxy: %+v", dar)
+	if want := (egress.Want{Internal: true, NoICC: true, Subnet: boxvm.EgressSubnet, Gateway: boxvm.EgressGateway}); dar.Want != want {
+		t.Errorf("darwin wants %+v, got %+v", want, dar.Want)
+	}
+	if dar.ProxyHost != "" || dar.NoProxy != lin.NoProxy || dar.GOOS != "darwin" {
+		t.Errorf("darwin dials the gateway like Linux: proxy host / no_proxy: %+v", dar)
 	}
 	if dar.Port != cfg.EgressPortOrDefault() {
 		t.Errorf("darwin port = %d", dar.Port)
@@ -238,6 +241,93 @@ func TestStartEgressDarwinBootChecksTheNetworkWhenTheVMRuns(t *testing.T) {
 	defer svc.Stop(context.Background())
 	if !strings.Contains(d.log(), "network ls") {
 		t.Fatalf("a running VM's egress network must be looked up at boot:\n%s", d.log())
+	}
+}
+
+// goodInputRules is `iptables -S INPUT` on a VM provisioned for option (c).
+func goodInputRules(egressPort, brokerPort int) string {
+	return fmt.Sprintf(`-P INPUT ACCEPT
+-A INPUT -s %[1]s -d %[2]s/32 -p tcp -m tcp --dport %[3]d -j ACCEPT
+-A INPUT -s %[1]s -d %[2]s/32 -p tcp -m tcp --dport %[4]d -j ACCEPT
+-A INPUT -s %[1]s -j DROP
+-A INPUT -d %[2]s/32 -j DROP
+`, boxvm.EgressSubnet, boxvm.EgressGateway, egressPort, brokerPort)
+}
+
+// relayDarwin is a darwin layer whose VM runs and whose egress network exists,
+// with a docker that records every call and answers the relay's: no relay
+// container yet, and a log that reports both listeners.
+func relayDarwin(t *testing.T, rules string, egressPort, brokerPort int) (*boxLayer, *fakeColima, *fakeDocker) {
+	t.Helper()
+	l, fc, d := darwinLayer(t, false)
+	fc.running = true
+	fc.rules = rules
+	fc.onSSH = func() {
+		f, err := os.OpenFile(filepath.Join(d.dir, "log"), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+		if err == nil {
+			fmt.Fprintln(f, "COLIMA ssh iptables")
+			f.Close()
+		}
+	}
+	script := `#!/bin/sh
+d=` + d.dir + `
+echo "$*" >> "$d/log"
+while [ "$1" = --host ] || [ "$1" = --config ]; do shift 2; done
+case "$1 $2" in
+"network ls") echo agentbox-egress-default ;;
+"network inspect") printf '{"Internal":true,"Options":{"com.docker.network.bridge.enable_icc":"false"},"IPAM":{"Config":[{"Subnet":"` + boxvm.EgressSubnet + `","Gateway":"` + boxvm.EgressGateway + `"}]}}' ;;
+"inspect --type") echo "Error: No such object" >&2; exit 1 ;;
+"logs agentbox-relay-default") echo "listening ` + boxvm.EgressGateway + `:` + strconv.Itoa(egressPort) + `"; echo "listening ` + boxvm.EgressGateway + `:` + strconv.Itoa(brokerPort) + `" ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(d.bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return l, fc, d
+}
+
+// darwin option (c): the boot Ready of an existing network verifies the VM's
+// INPUT rules over colima ssh before it starts the relay container.
+func TestStartEgressDarwinWiresTheRelay(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	l, _, d := relayDarwin(t, goodInputRules(ep, bp), ep, bp)
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: ep, BrokerPort: bp}, "darwin", noSessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.Stop(context.Background())
+	log := d.log()
+	rules, run := strings.Index(log, "COLIMA ssh iptables"), strings.Index(log, "run -d --init --name agentbox-relay-default")
+	if rules < 0 || run < 0 || rules > run {
+		t.Fatalf("the INPUT rules must be read before the relay runs (rules at %d, run at %d):\n%s", rules, run, log)
+	}
+	if !strings.Contains(log, "--user "+strconv.Itoa(os.Getuid())+":"+strconv.Itoa(os.Getgid())) {
+		t.Errorf("the relay must run as the daemon's uid:gid:\n%s", log)
+	}
+}
+
+// Rules that do not match leave no relay: the daemon still starts (the first
+// bound spawn is refused instead), and the reason is logged.
+func TestStartEgressDarwinBadInputRulesStartNoRelay(t *testing.T) {
+	ep, bp := freePort(t), freePort(t)
+	l, _, d := relayDarwin(t, "-P INPUT ACCEPT\n", ep, bp)
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+	svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: ep, BrokerPort: bp}, "darwin", noSessions)
+	if err != nil {
+		t.Fatalf("a refused relay must not fail the daemon: %v", err)
+	}
+	defer svc.Stop(context.Background())
+	if strings.Contains(d.log(), "run -d") {
+		t.Fatalf("a relay started without the INPUT rules:\n%s", d.log())
+	}
+	if !strings.Contains(buf.String(), "INPUT rules are missing") {
+		t.Errorf("the refusal must be logged:\n%s", buf.String())
+	}
+	if _, err := svc.Svc.Ready(context.Background()); err == nil || !strings.Contains(err.Error(), "INPUT rules") {
+		t.Errorf("a bound spawn must be refused while the rules are wrong: %v", err)
 	}
 }
 
@@ -288,6 +378,9 @@ func TestEgressServiceOptionsLinux(t *testing.T) {
 	// Gate G2: plain Node fetch needs NODE_USE_ENV_PROXY=1 to honour HTTPS_PROXY.
 	if want := []string{"NODE_USE_ENV_PROXY=1"}; !reflect.DeepEqual(o.ExtraEnv, want) {
 		t.Fatalf("ExtraEnv = %q, want %q", o.ExtraEnv, want)
+	}
+	if o.Want.Gateway != "" || o.AfterNetwork != nil {
+		t.Fatalf("linux must keep docker's gateway and have no network hook: %+v", o)
 	}
 }
 
@@ -434,7 +527,7 @@ func TestEgressVerifyDarwinRunsTheProbeThenTheLoopbackCheck(t *testing.T) {
 	if err := l.egressVerify(svc.Svc)(context.Background(), "agent-box-x"); err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	if !reflect.DeepEqual(order, []string{"probe"}) || target.ProxyHost != "host.lima.internal" || target.Port != port {
+	if !reflect.DeepEqual(order, []string{"probe"}) || target.ProxyHost != boxvm.EgressGateway || target.Port != port {
 		t.Fatalf("probe order %v target %+v", order, target)
 	}
 	log, _ := os.ReadFile(filepath.Join(dir, "log"))
@@ -493,6 +586,7 @@ func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
 	} {
 		bin, _ := statefulEgressDocker(t)
 		l := &boxLayer{goos: "darwin", cli: box.CLIClient{Bin: bin}}
+		var vm *boxvm.VM
 		if !tc.novm {
 			dl, _, _ := darwinLayer(t, true)
 			if !tc.drifted {
@@ -510,12 +604,16 @@ func TestEgressVerifyDarwinRefusalHintsRecreateOnlyWhenDrifted(t *testing.T) {
 			if dl.vm.Drifted() != tc.drifted {
 				t.Fatalf("%s: setup Drifted = %v", name, dl.vm.Drifted())
 			}
-			l.vm = dl.vm
+			vm = dl.vm
 		}
+		// The VM joins the layer after startEgress: this test is about the
+		// refusal's hint, so Ready must not run the relay hook (a VM in the
+		// layer at that point gets one; see TestStartEgressDarwinWiresTheRelay).
 		svc, err := startEgress(t.TempDir(), l, config.Config{EgressPort: freePort(t)}, "darwin", noSessions)
 		if err != nil {
 			t.Fatal(err)
 		}
+		l.vm = vm
 		l.egressProbe = func(context.Context, *egress.Proxy, string, egress.ProbeTarget, egress.ExecInput) error {
 			return errors.New("egress check failed: the box can reach x directly; its network is not the egress network")
 		}

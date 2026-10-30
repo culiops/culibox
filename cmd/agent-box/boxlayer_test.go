@@ -28,6 +28,8 @@ type fakeColima struct {
 	mount   string // mount_type reported while running; "" = virtiofs
 	garbled bool   // status exits 0 with output that is not colima's JSON
 	hang    bool   // status blocks until its context ends (a wedged hostagent)
+	rules   string // what `ssh … iptables -S INPUT` prints
+	onSSH   func() // called on each ssh (lets a test order it against docker calls)
 	calls   []string
 }
 
@@ -55,6 +57,11 @@ func (f *fakeColima) Run(ctx context.Context, _ []string, _ string, args ...stri
 		}
 		return fmt.Sprintf(`{"driver":"macOS Virtualization.Framework","arch":"aarch64","mount_type":%q,"docker_socket":"unix://%s"}`,
 			mount, f.socket), nil
+	case "ssh":
+		if f.onSSH != nil {
+			f.onSSH()
+		}
+		return f.rules, nil
 	case "start":
 		f.running = true
 	case "stop":

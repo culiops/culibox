@@ -112,13 +112,20 @@ context and never edits `~/.ssh/config`.
 ### Boxes with credential bindings
 
 A profile with any binding (an `aws` binding, named AWS connections, a `github`
-binding or static tokens) gets a locked-down network. Its box can reach only the
-credential broker and Culibox's egress proxy on your Mac (the proxy listens
-on `127.0.0.1`, port `egress_port`, default 9072; boxes call it
-`host.lima.internal`), and the proxy lets through only the hosts the
-profile's bindings allow. Everything else is dropped by rules inside the VM:
-direct connections, DNS, and other boxes. Profiles without a binding are
-unchanged and keep normal outbound access.
+binding or static tokens) gets a locked-down network. Its box sits on an
+internal Docker network inside the VM (`172.29.72.0/24`, gateway `172.29.72.1`),
+with no route to the internet, no DNS, and no route to other boxes. The only
+way out is a small relay container, `agentbox-relay-<instance>`, that runs on
+the VM's own network and listens on `172.29.72.1` only. It forwards exactly
+two ports from there to your Mac: Culibox's egress proxy (port `egress_port`,
+default 9072) and the credential broker (port `broker_port`, default 9071),
+both of which listen on `127.0.0.1` on the Mac. The proxy lets through only the
+hosts the profile's bindings allow. Rules in the VM's firewall let the bound
+subnet reach those two ports and nothing else, and keep every other box off the
+relay. If those rules are missing or out of order, agent-box refuses to start a
+bound session and tells you to run `agent-box box setup -recreate`; it checks
+them again on every bound spawn. Profiles without a binding are unchanged and
+keep normal outbound access.
 
 Egress control for macOS boxes is new and has not yet been verified on a Mac.
 
@@ -127,7 +134,15 @@ Egress control for macOS boxes is new and has not yet been verified on a Mac.
   `agent-box doctor` warns "box VM config changed since setup" until you do.
   Like any recreate, it refuses while a box is running unless you add `-force`,
   and Culibox must be restarted afterwards.
-- The bound network uses the fixed subnet `172.29.72.0/24` inside the VM.
+- The bound network uses the fixed subnet `172.29.72.0/24` inside the VM. An
+  egress network left over from the previous build (an open one, or one with a
+  different subnet) is refused with a message that suggests
+  `docker network rm`. After an upgrade, run `agent-box box setup -recreate`
+  instead: it deletes the VM, so its networks and rules come back fresh. Then
+  restart Culibox.
+- The relay container has no restart policy. After a VM restart the next bound
+  session checks the firewall rules and starts it again, so that spawn can be
+  a little slower than later ones.
 - A tool that ignores `HTTPS_PROXY` cannot connect, by design: there is no
   direct route to fall back on. A connection that fails with a timeout, not a
   clear error, is usually such a tool.

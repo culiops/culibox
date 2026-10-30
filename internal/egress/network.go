@@ -38,6 +38,7 @@ type Net struct {
 type Want struct {
 	Internal bool   // Linux: true
 	Subnet   string // darwin: the fixed egress subnet; "" = docker chooses
+	Gateway  string // darwin: the subnet's gateway, passed explicitly (colima's docker leaves it unset for a --subnet-only network); "" = docker chooses
 	NoICC    bool   // Linux: true, boxes on the network must not reach each other
 }
 
@@ -135,6 +136,9 @@ func EnsureNetwork(ctx context.Context, d Docker, name, instance string, w Want)
 		if w.Subnet != "" {
 			args = append(args, "--subnet", w.Subnet)
 		}
+		if w.Gateway != "" {
+			args = append(args, "--gateway", w.Gateway)
+		}
 		args = append(args, "--label", InstanceLabel+"="+instance, name)
 		if _, cerr := run(ctx, d, args...); cerr != nil {
 			if !strings.Contains(cerr.Error(), "already exists") {
@@ -169,6 +173,16 @@ func EnsureNetwork(ctx context.Context, d Docker, name, instance string, w Want)
 		if n.Subnet != want.Masked() {
 			return Net{}, fmt.Errorf("egress network %s has subnet %s, want %s. Remove it (docker network rm %s) and retry",
 				name, n.Subnet, want.Masked(), name)
+		}
+	}
+	if w.Gateway != "" {
+		want, perr := netip.ParseAddr(w.Gateway)
+		if perr != nil {
+			return Net{}, fmt.Errorf("egress: configured gateway %q: %w", w.Gateway, perr)
+		}
+		if n.Gateway != want.Unmap() {
+			return Net{}, fmt.Errorf("egress network %s has gateway %s, want %s. Remove it (docker network rm %s) and retry",
+				name, n.Gateway, want.Unmap(), name)
 		}
 	}
 	if !n.Subnet.IsValid() || !n.Gateway.IsValid() {

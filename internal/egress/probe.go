@@ -20,7 +20,7 @@ type ExecInput func(ctx context.Context, script, stdin string) (string, error)
 
 // ProbeTarget says where the box finds the proxy and what the probe tries.
 type ProbeTarget struct {
-	ProxyHost string // what the box dials: the gateway IP (Linux) or "host.lima.internal" (darwin)
+	ProxyHost string // what the box dials: the gateway IP
 	Port      int
 	DenyHost  string // "" → "example.com"
 	Direct    string // "" → "1.1.1.1:443"
