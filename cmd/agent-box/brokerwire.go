@@ -12,6 +12,8 @@ import (
 	"slices"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/awsprobe"
 	"github.com/culiops/agent-box/internal/broker"
@@ -87,6 +89,14 @@ func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []
 		Live: !s.Exited(), AWS: s.AWS, AWSConns: s.AWSConns, Exclusive: s.Exclusive, Tokens: defined(s.Tokens), PATs: defined(s.PATs)}
 }
 
+// ssoDirectGate is the broker's sso_direct read-only gate: the real IAM/STS
+// reads, made with the permission set's own freshly fetched credentials.
+func ssoDirectGate(ctx context.Context, c broker.Creds, region, account string) awsprobe.GateResult {
+	creds := aws.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken,
+		Source: "agentbox-gate", CanExpire: true, Expires: c.Expiration}
+	return awsprobe.Gate(ctx, awsprobe.NewIAMGate(creds, region), account, time.Now())
+}
+
 // startBroker brings the credential broker up: the persisted HMAC secret, the
 // audit store, the listener and the HTTP server. dataDir holds broker.secret and
 // audit.db; stateRoot (symlink-resolved on darwin) holds the socket and the
@@ -139,6 +149,7 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 		return brokerSessionView(s, defined), true
 	}, stsMinter, audit)
 	brk.SetSimulator(simulator)
+	brk.SetGate(ssoDirectGate)
 	// The minter always exists, so an App defined from the web after boot works
 	// at once (credLive.Apply -> SetApps); with no App defined every check and
 	// mint fails as an unknown App.

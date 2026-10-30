@@ -923,3 +923,54 @@ func TestAuditActivityQueries(t *testing.T) {
 		t.Fatalf("approvals before = %+v", got)
 	}
 }
+
+// A store written before sso_direct has no mode column; opening it adds the
+// column, old rows read back with an empty Mode, and new rows keep theirs.
+func TestAuditModeColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(m3aSchema); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE credential_audit ADD COLUMN elevated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE credential_audit ADD COLUMN provider TEXT NOT NULL DEFAULT 'aws'`,
+		`ALTER TABLE credential_audit ADD COLUMN subject TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE credential_audit ADD COLUMN installation INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE credential_audit ADD COLUMN repos INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE credential_audit ADD COLUMN entry TEXT NOT NULL DEFAULT ''`,
+		`INSERT INTO credential_audit (ts, session_id, outcome, role_arn) VALUES (1, 'm-1', 'minted', 'arn:aws:iam::123456789012:role/agentbox-agent')`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.Close()
+	first, err := OpenAudit(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	a, err := OpenAudit(path) // idempotent
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if err := a.Record(Row{Time: time.Unix(2, 0), SessionID: "m-1", Outcome: OutcomeDeniedNotReadOnly, Mode: "sso_direct",
+		Error: "not read-only: s3:*: not a read verb"}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.ForSession("m-1", 10)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("rows %+v %v", rows, err)
+	}
+	if rows[0].Mode != "sso_direct" || rows[0].Outcome != OutcomeDeniedNotReadOnly || rows[1].Mode != "" {
+		t.Fatalf("rows %+v", rows)
+	}
+	if OutcomeDeniedNotReadOnly != "denied_not_read_only" {
+		t.Fatal(OutcomeDeniedNotReadOnly)
+	}
+}

@@ -22,6 +22,10 @@ const (
 	OutcomeSTSError      Outcome = "sts_error"
 	OutcomeRateLimited   Outcome = "rate_limited"
 
+	// An sso_direct mint the read-only gate did not pass (not read-only, or
+	// unverified): the credential was fetched on the host and never left it.
+	OutcomeDeniedNotReadOnly Outcome = "denied_not_read_only"
+
 	// Base-role write probe: a mint made only to simulate the role's own write
 	// access. The credential never leaves the host.
 	OutcomeProbeMinted Outcome = "probe_minted"
@@ -74,6 +78,9 @@ type Row struct {
 	// Entry names the tokens entry a fetch used (a static token, or the PAT entry
 	// behind a GitHub owner); empty for rows that used none.
 	Entry string `json:"entry,omitempty"`
+	// Mode is the AWS binding's mode: "" for AssumeRole (and every non-AWS
+	// row), config.AWSModeSSODirect for the permission set's own credentials.
+	Mode string `json:"mode,omitempty"`
 }
 
 // Action classifies one row of the approval log: a human decision about write
@@ -187,6 +194,7 @@ func OpenAudit(path string) (*Audit, error) {
 		{"installation", "INTEGER NOT NULL DEFAULT 0"},
 		{"repos", "INTEGER NOT NULL DEFAULT 0"},
 		{"entry", "TEXT NOT NULL DEFAULT ''"},
+		{"mode", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := addColumnIfMissing(db, "credential_audit", c[0], c[1]); err != nil {
 			db.Close()
@@ -237,10 +245,10 @@ func (a *Audit) Record(r Row) error {
 	}
 	_, err := a.db.Exec(`INSERT INTO credential_audit
 		(ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-		 provider, subject, installation, repos, entry)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 provider, subject, installation, repos, entry, mode)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.Time.Unix(), r.SessionID, r.Profile, r.AccountID, r.RoleARN, r.SourceIdentity, r.ScopeHash, exp, string(r.Outcome), r.Error, b2i(r.Elevated),
-		provider, r.Subject, r.Installation, r.Repos, r.Entry)
+		provider, r.Subject, r.Installation, r.Repos, r.Entry, r.Mode)
 	return err
 }
 
@@ -440,7 +448,7 @@ func b2i(b bool) int {
 // auditCols is the credential_audit column list every row query selects, in
 // the order queryRows reads it.
 const auditCols = `ts, session_id, profile, account_id, role_arn, source_identity, scope_hash, expires, outcome, error, elevated,
-	provider, subject, installation, repos, entry`
+	provider, subject, installation, repos, entry, mode`
 
 // ForSession returns up to limit rows for a session, newest first.
 func (a *Audit) ForSession(sessionID string, limit int) ([]Row, error) {
@@ -499,7 +507,7 @@ func (a *Audit) queryRows(query string, args ...any) ([]Row, error) {
 		var o string
 		var elevated int
 		if err := rows.Scan(&ts, &r.SessionID, &r.Profile, &r.AccountID, &r.RoleARN, &r.SourceIdentity, &r.ScopeHash, &exp, &o, &r.Error, &elevated,
-			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry); err != nil {
+			&r.Provider, &r.Subject, &r.Installation, &r.Repos, &r.Entry, &r.Mode); err != nil {
 			return nil, err
 		}
 		r.Time, r.Outcome, r.Elevated = time.Unix(ts, 0), Outcome(o), elevated != 0
