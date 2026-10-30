@@ -43,12 +43,23 @@ type fakeDocker struct {
 	logs    string
 	logsErr error
 	rmErr   error
+	// state answers the readiness poll's `inspect {{.State.Running}}`; "" =
+	// "true". stateErr overrides it.
+	state    string
+	stateErr error
+	// rmCtxErr is ctx.Err() as each rm saw it.
+	rmCtxErr []error
 	// warn simulates a docker CLI warning on stderr: Run (combined output)
 	// prefixes it to every answer, Stdout never sees it.
 	warn string
 }
 
 func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
+	if args[0] == "rm" {
+		f.mu.Lock()
+		f.rmCtxErr = append(f.rmCtxErr, ctx.Err())
+		f.mu.Unlock()
+	}
 	out, err := f.answer(args)
 	if err == nil && f.warn != "" {
 		out = f.warn + "\n" + out
@@ -66,6 +77,15 @@ func (f *fakeDocker) answer(args []string) (string, error) {
 	f.calls = append(f.calls, append([]string(nil), args...))
 	switch args[0] {
 	case "inspect":
+		if isStateInspect(args) {
+			if f.stateErr != nil {
+				return "", f.stateErr
+			}
+			if f.state == "" {
+				return "true\n", nil
+			}
+			return f.state, nil
+		}
 		if f.inspErr != nil {
 			return "", f.inspErr
 		}
@@ -81,11 +101,25 @@ func (f *fakeDocker) answer(args []string) (string, error) {
 	return "", nil
 }
 
+// isStateInspect tells the readiness poll's inspect from Ensure's first one.
+func isStateInspect(args []string) bool {
+	for i, a := range args {
+		if a == "--format" && i+1 < len(args) {
+			return args[i+1] == "{{.State.Running}}"
+		}
+	}
+	return false
+}
+
 func (f *fakeDocker) subcommands() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var s []string
 	for _, c := range f.calls {
+		if isStateInspect(c) {
+			s = append(s, "state")
+			continue
+		}
 		s = append(s, c[0])
 	}
 	return s
@@ -136,6 +170,13 @@ func TestCheckInputRulesRefuses(t *testing.T) {
 		"wider subnet DROP":     "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + "-A INPUT -s 172.29.0.0/16 -j DROP\n" + gwDrop,
 		"gateway DROP is /24":   "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + subDrop + "-A INPUT -d 172.29.72.0/24 -j DROP\n",
 		"accept for other dest": "-P INPUT ACCEPT\n-A INPUT -s 172.29.72.0/24 -d 172.29.72.9/32 -p tcp -m tcp --dport 9072 -j ACCEPT\n" + acc(9071) + subDrop + gwDrop,
+		"negated source ACCEPT": "-P INPUT ACCEPT\n-A INPUT ! -s 172.29.72.0/24 -d 172.29.72.1/32 -p tcp -m tcp --dport 9072 -j ACCEPT\n" + acc(9071) + subDrop + gwDrop,
+		"negated subnet DROP":   "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + "-A INPUT ! -s 172.29.72.0/24 -j DROP\n" + gwDrop,
+		"subnet RETURN":         "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + "-A INPUT -s 172.29.72.0/24 -j RETURN\n" + gwDrop,
+		"subnet LOG":            "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + "-A INPUT -s 172.29.72.0/24 -j LOG\n" + gwDrop,
+		"gateway RETURN":        "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + subDrop + "-A INPUT -d 172.29.72.1/32 -j RETURN\n",
+		"gateway LOG":           "-P INPUT ACCEPT\n" + acc(9072) + acc(9071) + subDrop + "-A INPUT -d 172.29.72.1/32 -j LOG\n",
+		"udp ACCEPT":            "-P INPUT ACCEPT\n-A INPUT -s 172.29.72.0/24 -d 172.29.72.1/32 -p udp -m udp --dport 9072 -j ACCEPT\n" + acc(9071) + subDrop + gwDrop,
 	}
 	for name, out := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -209,6 +250,9 @@ func TestEnsureRefusesAnOptionAVM(t *testing.T) {
 	}
 	if n := len(d.find("run")); n != 0 {
 		t.Fatalf("%d run calls on an option (a) VM", n)
+	}
+	if rm := d.find("rm"); len(rm) != 1 || strings.Join(rm[0], " ") != "rm -f agentbox-relay-prod" {
+		t.Fatalf("rm calls = %v, want the relay removed", rm)
 	}
 }
 
@@ -339,12 +383,14 @@ func TestEnsureRemovesARelayThatDidNotListen(t *testing.T) {
 
 func TestEnsureRefusesAListenerOnTheWrongAddress(t *testing.T) {
 	d := &fakeDocker{logs: "listening 0.0.0.0:9072\nlistening 0.0.0.0:9071\n"}
+	r := testRelay(fakeVM{out: goodRules}, d)
+	r.ReadyTimeout = 30 * time.Second
 	start := time.Now()
-	err := testRelay(fakeVM{out: goodRules}, d).Ensure(context.Background(), gw)
+	err := r.Ensure(context.Background(), gw)
 	if err == nil {
 		t.Fatal("accepted a wildcard listener")
 	}
-	if time.Since(start) > 250*time.Millisecond {
+	if time.Since(start) > 5*time.Second {
 		t.Error("a wrong address should fail at once, not wait out the timeout")
 	}
 	if calls := d.subcommands(); calls[len(calls)-1] != "rm" {
@@ -368,6 +414,52 @@ func TestEnsureHonoursContextCancellation(t *testing.T) {
 	if calls := d.subcommands(); calls[len(calls)-1] != "rm" {
 		t.Fatalf("calls = %v, want a final rm", calls)
 	}
+	if len(d.rmCtxErr) != 1 || d.rmCtxErr[0] != nil {
+		t.Fatalf("rm ran on a cancelled context: %v", d.rmCtxErr)
+	}
+}
+
+func TestEnsureFailsFastOnARelayThatExited(t *testing.T) {
+	for name, logs := range map[string]string{
+		"no output": "",
+		"one port":  "listening 172.29.72.1:9072\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := &fakeDocker{logs: logs, state: "false\n"}
+			r := testRelay(fakeVM{out: goodRules}, d)
+			r.ReadyTimeout = 30 * time.Second
+			start := time.Now()
+			err := r.Ensure(context.Background(), gw)
+			if err == nil {
+				t.Fatal("reported ready")
+			}
+			if time.Since(start) > 5*time.Second {
+				t.Errorf("an exited relay waited %s instead of failing at once", time.Since(start))
+			}
+			if !strings.Contains(err.Error(), "exited") {
+				t.Errorf("err = %v, want it to say the relay exited", err)
+			}
+			if calls := d.subcommands(); calls[len(calls)-1] != "rm" {
+				t.Fatalf("calls = %v, want a final rm", calls)
+			}
+		})
+	}
+}
+
+func TestEnsureFailsOnARelayThatVanished(t *testing.T) {
+	d := &fakeDocker{stateErr: errors.New("Error: No such container: agentbox-relay-prod")}
+	r := testRelay(fakeVM{out: goodRules}, d)
+	r.ReadyTimeout = 30 * time.Second
+	start := time.Now()
+	if err := r.Ensure(context.Background(), gw); err == nil {
+		t.Fatal("reported ready")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Error("a vanished relay should fail at once")
+	}
+	if calls := d.subcommands(); calls[len(calls)-1] != "rm" {
+		t.Fatalf("calls = %v, want a final rm", calls)
+	}
 }
 
 func TestRelayName(t *testing.T) {
@@ -382,15 +474,46 @@ func TestRelayName(t *testing.T) {
 func TestConfigHashCoversWhatTheRelayDoes(t *testing.T) {
 	base := testRelay(fakeVM{}, nil)
 	h := base.configHash(gw)
+	if other := base.configHash(netip.MustParseAddr("172.29.73.1")); other == h {
+		t.Error("gateway change leaves the hash unchanged")
+	}
 	for name, mod := range map[string]func(*Relay){
 		"image":  func(r *Relay) { r.Image = "other" },
 		"egress": func(r *Relay) { r.EgressPort = 1 },
 		"broker": func(r *Relay) { r.BrokerPort = 1 },
+		"uid":    func(r *Relay) { r.UID = 1 },
+		"gid":    func(r *Relay) { r.GID = 1 },
 	} {
 		r := testRelay(fakeVM{}, nil)
 		mod(r)
 		if r.configHash(gw) == h {
 			t.Errorf("%s change leaves the hash unchanged", name)
+		}
+	}
+}
+
+// Every element of the run argv (flags, script, ports) feeds the hash, so a
+// change to any of them alone replaces a running relay.
+func TestConfigHashCoversEveryRunArg(t *testing.T) {
+	r := testRelay(fakeVM{}, nil)
+	args := r.runArgs(gw)
+	h := hashArgs(args)
+	if r.configHash(gw) != h {
+		t.Fatal("configHash is not the hash of runArgs")
+	}
+	for i := range args {
+		mod := append([]string(nil), args...)
+		mod[i] += "x"
+		if hashArgs(mod) == h {
+			t.Errorf("changing arg %d (%q) leaves the hash unchanged", i, args[i])
+		}
+		if hashArgs(append(append([]string(nil), args[:i]...), args[i+1:]...)) == h {
+			t.Errorf("dropping arg %d (%q) leaves the hash unchanged", i, args[i])
+		}
+	}
+	for _, a := range args {
+		if strings.HasPrefix(a, relayConfigLabel) {
+			t.Fatalf("runArgs carries the hash label: %q", a)
 		}
 	}
 }

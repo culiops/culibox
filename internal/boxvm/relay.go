@@ -125,14 +125,36 @@ type Relay struct {
 	ReadyTimeout    time.Duration // default 10s
 }
 
-// configHash identifies everything the running relay was built from: a relay
-// whose label differs (new ports, new image, new script) is replaced.
-func (r *Relay) configHash(gw netip.Addr) string {
+// runArgs is the relay's whole `docker run` argv; extra flags go in after the
+// fixed ones, before the image. Without extras it is what configHash hashes;
+// Ensure adds the config label that carries that hash.
+func (r *Relay) runArgs(gw netip.Addr, extra ...string) []string {
+	args := []string{"run", "-d", "--init", "--name", RelayName(r.Instance), "--network", "host", "--entrypoint", "node",
+		"--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "64", "--pull=never",
+		"--user", fmt.Sprintf("%d:%d", r.UID, r.GID),
+		"--label", relayLabel + "=" + r.Instance}
+	args = append(args, extra...)
+	args = append(args, r.Image, "-e", relayScript, gw.String())
+	for _, p := range []int{r.EgressPort, r.BrokerPort} {
+		args = append(args, strconv.Itoa(p), LimaHostGateway, strconv.Itoa(p))
+	}
+	return args
+}
+
+// hashArgs is a short hash of an argv, each element length-prefixed so no two
+// argvs share an encoding.
+func hashArgs(args []string) string {
 	h := sha256.New()
-	for _, s := range []string{r.Image, gw.String(), strconv.Itoa(r.EgressPort), strconv.Itoa(r.BrokerPort), LimaHostGateway, relayScript} {
+	for _, s := range args {
 		fmt.Fprintf(h, "%d:%s\n", len(s), s)
 	}
 	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// configHash identifies everything the running relay was built from: a relay
+// whose label differs (any run flag, image, script, port or user) is replaced.
+func (r *Relay) configHash(gw netip.Addr) string {
+	return hashArgs(r.runArgs(gw))
 }
 
 func (r *Relay) docker(ctx context.Context, args ...string) (string, error) {
@@ -210,26 +232,20 @@ func (r *Relay) Ensure(ctx context.Context, gw netip.Addr) error {
 		return fmt.Errorf("inspecting the relay: %w", err)
 	}
 
-	bind := gw.String()
-	args := []string{"run", "-d", "--init", "--name", name, "--network", "host", "--entrypoint", "node",
-		"--cap-drop=ALL", "--security-opt", "no-new-privileges", "--read-only", "--pids-limit", "64", "--pull=never",
-		"--user", fmt.Sprintf("%d:%d", r.UID, r.GID),
-		"--label", relayLabel + "=" + r.Instance, "--label", relayConfigLabel + "=" + hash,
-		r.Image, "-e", relayScript, bind}
-	for _, p := range []int{r.EgressPort, r.BrokerPort} {
-		args = append(args, strconv.Itoa(p), LimaHostGateway, strconv.Itoa(p))
-	}
-	if _, err := r.docker(ctx, args...); err != nil {
+	if _, err := r.docker(ctx, r.runArgs(gw, "--label", relayConfigLabel+"="+hash)...); err != nil {
 		return r.removeAlso(ctx, fmt.Errorf("starting the relay: %w", err))
 	}
-	if err := r.waitListening(ctx, name, bind); err != nil {
+	if err := r.waitListening(ctx, name, gw.String()); err != nil {
 		return r.removeAlso(ctx, err)
 	}
 	return nil
 }
 
 // waitListening reads the relay's own log until it reports both listeners on
-// the gateway address. It never dials: the INPUT rules drop that too.
+// the gateway address. It never dials: the INPUT rules drop that too. While
+// not ready it also asks whether the relay still runs, so one that exited
+// without an ERR line (say, an image without node) fails at once instead of
+// waiting out the timeout.
 func (r *Relay) waitListening(ctx context.Context, name, bind string) error {
 	want := map[string]bool{
 		"listening " + bind + ":" + strconv.Itoa(r.EgressPort): false,
@@ -270,6 +286,18 @@ func (r *Relay) waitListening(ctx context.Context, name, bind string) error {
 		}
 		if ready == len(want) {
 			return nil
+		}
+		running, err := r.dockerStdout(ctx, "inspect", "--type", "container", "--format", "{{.State.Running}}", name)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			return fmt.Errorf("checking that the relay runs: %w", err)
+		case err == nil && strings.TrimSpace(running) != "true":
+			// The log is complete once the relay has exited: read it again for
+			// whatever it printed after the read above.
+			if final, lerr := r.docker(ctx, "logs", name); lerr == nil {
+				logs = final
+			}
+			return fmt.Errorf("the relay exited before reporting both listeners; log: %q", strings.TrimSpace(logs))
 		}
 		select {
 		case <-ctx.Done():
