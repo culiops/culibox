@@ -277,6 +277,51 @@ function awsRoleARN(accountId, text) {
   return /^[A-Za-z0-9+=,.@_\/-]+$/.test(t) ? "arn:aws:iam::" + accountId + ":role/" + t : t;
 }
 
+// AWS_AGENT_ROLE_DOC: how to create the agent role a binding should pick.
+const AWS_AGENT_ROLE_DOC = "https://github.com/culiops/agent-box/blob/main/docs/aws/agent-role/README.md";
+
+// awsIsAgentRole: the agent role from docs/aws/agent-role is named agentbox-*
+// (IAM role names ignore case).
+function awsIsAgentRole(r) { return String(r && r.name).toLowerCase().startsWith("agentbox-"); }
+
+// awsRolesShown: the roles to render for a filter (a case-insensitive name
+// substring), at most `limit` of them, plus the chosen role wherever it sits so
+// the selection never disappears. `matched` counts every match.
+function awsRolesShown(roles, filter, limit, chosen) {
+  const q = String(filter == null ? "" : filter).trim().toLowerCase();
+  const hits = (roles || []).filter((r) => !q || String(r.name).toLowerCase().includes(q));
+  const list = hits.slice(0, limit);
+  if (chosen && !list.some((r) => r.arn === chosen)) {
+    const c = (roles || []).find((r) => r.arn === chosen);
+    if (c) list.push(c);
+  }
+  return { list, matched: hits.length };
+}
+
+// awsAgentRolePick: the role to preselect after a listing: the one agentbox-*
+// role, but only while the role field is empty or the bare "...:role/" prefix,
+// so nothing the operator typed is replaced. Several agent roles (say
+// agentbox-agent and agentbox-agent-write) are the operator's call.
+function awsAgentRolePick(roles, current) {
+  const cur = String(current || "").trim();
+  if (cur && !/^arn:aws[a-z-]*:iam::[0-9]{12}:role\/$/.test(cur)) return "";
+  const agent = (roles || []).filter(awsIsAgentRole);
+  return agent.length === 1 ? agent[0].arn : "";
+}
+
+// awsRolesNote: the line under a roles listing, and whether it links the agent
+// role doc: an empty or capped list, or one without an agentbox-* role.
+function awsRolesNote(res) {
+  if (!res || res.sso_expired) return { text: "", doc: false };
+  if (res.access_denied) return { text: "This profile can't list roles; type the role name", doc: false };
+  if (res.failed) return { text: "Could not list the roles. Type the role ARN yourself.", doc: false };
+  const roles = res.roles || [];
+  if (!roles.length) return { text: "No roles found for this profile. Create the agent role, or type the role ARN yourself.", doc: true };
+  if (res.capped) return { text: "Showing the first " + roles.length + " roles, agentbox-* first. If the agent role is not here, create it or type its ARN.", doc: true };
+  if (!roles.some(awsIsAgentRole)) return { text: "No agentbox-* role here. Create the agent role, or type the role ARN yourself.", doc: true };
+  return { text: "Or type the role ARN yourself if the list does not show it.", doc: false };
+}
+
 // awsConnFromRow: the connection object the save routes take. Fields that are
 // empty are left out, so an edit that clears them clears them.
 function awsConnFromRow(row) {
@@ -547,6 +592,7 @@ if (typeof module !== "undefined" && module.exports) {
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
+    awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
   };
 }
@@ -1103,7 +1149,7 @@ function awsNewRow(base, extra) {
   return {
     ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false,
     assume: null, verdict: null, actions: [], reason: "", reasonText: "", acked: false,
-    busy: "", err: "", roles: null, rolesNote: "", signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
+    busy: "", err: "", roles: null, rolesNote: "", rolesDoc: false, rolesFilter: "", rolesFilterIn: null, signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
   };
 }
 
@@ -1372,14 +1418,38 @@ function awsBuildRow(row) {
   return art;
 }
 
+// AWS_ROLES_SHOWN caps the radios one listing renders; the filter finds the rest.
+const AWS_ROLES_SHOWN = 50;
+
+// awsPaintRoles: the filter box, the matching roles as radios, then the note.
+// The filter is a fixed child of rolesBox and only the list beside it is
+// repainted: detaching a focused input blurs it, so typing would stop.
 function awsPaintRoles(row) {
   if (!row.rolesBox) return;
+  if (!row.rolesListBox) row.rolesListBox = awsEl("div", null);
   const nodes = [];
+  const fixed = [];
+  if (row.roles && row.roles.length > 8) {
+    if (!row.rolesFilterIn) {
+      const fin = document.createElement("input");
+      fin.type = "search"; fin.className = "fld rolefilter"; fin.autocomplete = "off"; fin.spellcheck = false;
+      fin.setAttribute("aria-label", "Filter roles by name");
+      fin.oninput = () => { row.rolesFilter = fin.value; awsPaintRoles(row); };
+      row.rolesFilterIn = fin;
+    }
+    row.rolesFilterIn.placeholder = "Filter " + row.roles.length + " roles by name";
+    if (row.rolesFilterIn.value !== (row.rolesFilter || "")) row.rolesFilterIn.value = row.rolesFilter || "";
+    fixed.push(row.rolesFilterIn);
+  }
+  fixed.push(row.rolesListBox);
+  const cur = Array.from(row.rolesBox.children);
+  if (cur.length !== fixed.length || cur.some((c, i) => c !== fixed[i])) row.rolesBox.replaceChildren(...fixed);
   if (row.roles && row.roles.length) {
+    const shown = awsRolesShown(row.roles, row.rolesFilter, AWS_ROLES_SHOWN, row.role_arn);
     const grp = awsEl("div", "roles");
     grp.setAttribute("role", "radiogroup");
     grp.setAttribute("aria-label", "Roles found for " + row.source_profile);
-    for (const r of row.roles) {
+    for (const r of shown.list) {
       const lab = awsEl("label", row.role_arn === r.arn ? "on" : "");
       const rb = document.createElement("input");
       rb.type = "radio";
@@ -1393,12 +1463,26 @@ function awsPaintRoles(row) {
         awsPaintFoot();
       };
       lab.append(rb, document.createTextNode(" " + r.name));
+      if (awsIsAgentRole(r)) lab.appendChild(awsEl("span", "bdg rolebdg", "agent role"));
+      else if (r.sso_trust) lab.appendChild(awsEl("span", "bdg rolebdg", "trusts your account"));
       grp.appendChild(lab);
     }
+    if (!shown.matched) grp.appendChild(awsEl("p", "hint", "No role name matches."));
     nodes.push(grp);
+    if (shown.matched > AWS_ROLES_SHOWN) {
+      nodes.push(awsEl("p", "hint", "Showing " + AWS_ROLES_SHOWN + " of " + shown.matched + " matching roles; type to narrow."));
+    }
   }
-  if (row.rolesNote) nodes.push(awsEl("p", "hint", row.rolesNote));
-  row.rolesBox.replaceChildren(...nodes);
+  if (row.rolesNote) {
+    const p = awsEl("p", "hint", row.rolesNote);
+    if (row.rolesDoc) {
+      const a = awsEl("a", null, "How to create the agent role");
+      a.href = AWS_AGENT_ROLE_DOC; a.target = "_blank"; a.rel = "noopener noreferrer";
+      p.append(" ", a);
+    }
+    nodes.push(p);
+  }
+  row.rolesListBox.replaceChildren(...nodes);
 }
 
 function awsLine(cls, glyph, text) {
@@ -1605,11 +1689,20 @@ async function awsFindRoles(row) {
     const res = await awsPost("/api/credentials/aws/roles", body);
     if (awsFlow !== f) return;
     row.roles = null;
+    row.rolesFilter = "";
     if (res.sso_expired) row.signIn = "roles";
-    else if (res.access_denied) row.rolesNote = "This profile can't list roles; type the role name";
-    else if (res.failed) row.rolesNote = "Could not list the roles. Type the role ARN yourself.";
-    else if (!res.roles || !res.roles.length) row.rolesNote = "No roles found for this profile. Type the role ARN yourself.";
-    else { row.roles = res.roles; row.rolesNote = "Or type the role ARN yourself if the list does not show it."; }
+    const note = awsRolesNote(res);
+    row.rolesNote = note.text;
+    row.rolesDoc = note.doc;
+    if (res.roles && res.roles.length && !res.sso_expired) {
+      row.roles = res.roles;
+      const pick = awsAgentRolePick(res.roles, row.role_arn);
+      if (pick) {
+        row.role_arn = pick;
+        row.roleInput.value = pick;
+        awsInvalidate(row);
+      }
+    }
   } catch (e) {
     if (awsFlow !== f) return;
     row.err = awsErrText(e);

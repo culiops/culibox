@@ -419,6 +419,8 @@
     #creds .roles label { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border: 1px solid var(--border); min-width: 0; overflow-wrap: anywhere; }
     #creds .roles label.on { border-color: var(--accent); background: var(--sel-soft); }
     #creds .rolesbox .hint { margin-top: 7px; }
+    #creds .rolefilter { margin-top: 8px; width: 100%; box-sizing: border-box; }
+    #creds .roles .rolebdg { margin-left: auto; flex-shrink: 0; }
     #creds .pf-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
     #creds .warnbox .pf-check { color: var(--fg); margin-top: 10px; }
     #creds .res { display: flex; flex-direction: column; gap: 8px; font-size: 12px; min-width: 0; }

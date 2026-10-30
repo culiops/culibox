@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,7 @@ func (blockMinter) Mint(ctx context.Context, _ broker.MintInput) (broker.Creds, 
 // fakeIAM serves canned pages of roles, then the canned error.
 type fakeIAM struct {
 	pages [][]string
+	trust map[string]string // role name -> AssumeRolePolicyDocument (URL-encoded, as IAM returns it)
 	err   error
 	calls int
 	got   []*iam.ListRolesInput
@@ -112,7 +114,11 @@ func (f *fakeIAM) ListRoles(_ context.Context, in *iam.ListRolesInput, _ ...func
 	f.calls++
 	out := &iam.ListRolesOutput{}
 	for _, n := range f.pages[i] {
-		out.Roles = append(out.Roles, iamtypes.Role{RoleName: aws.String(n), Arn: aws.String("arn:aws:iam::123456789012:role/" + n)})
+		role := iamtypes.Role{RoleName: aws.String(n), Arn: aws.String("arn:aws:iam::123456789012:role/" + n)}
+		if d, ok := f.trust[n]; ok {
+			role.AssumeRolePolicyDocument = aws.String(d)
+		}
+		out.Roles = append(out.Roles, role)
 	}
 	if i+1 < len(f.pages) {
 		out.IsTruncated = true
@@ -150,15 +156,114 @@ func TestRolesPagesAndCaps(t *testing.T) {
 		t.Fatalf("paging: calls=%d", f.calls)
 	}
 
+	if res.Capped {
+		t.Fatal("a whole listing is marked capped")
+	}
+
 	f = &fakeIAM{pages: [][]string{{"a", "b"}, {"c", "d"}, {"e", "f"}}}
 	s := rolesSvc(f)
 	s.rolesCap = 3
 	res = s.Roles(context.Background(), "p")
-	if len(res.Roles) != 3 || res.Roles[2].Name != "c" {
+	if len(res.Roles) != 3 || res.Roles[2].Name != "c" || !res.Capped {
 		t.Fatalf("cap: %+v", res)
 	}
-	if f.calls != 2 {
-		t.Fatalf("kept paging past the cap: %d calls", f.calls)
+	if f.calls != 3 {
+		t.Fatalf("the listing stopped at the cap instead of scanning on: %d calls", f.calls)
+	}
+
+	// The scan itself is bounded: it stops at scanCap and says so.
+	f = &fakeIAM{pages: [][]string{{"a", "b"}, {"c", "d"}, {"e", "f"}}}
+	s = rolesSvc(f)
+	s.scanCap = 4
+	res = s.Roles(context.Background(), "p")
+	if f.calls != 2 || len(res.Roles) != 4 || !res.Capped {
+		t.Fatalf("scan cap: calls=%d %+v", f.calls, res)
+	}
+}
+
+// A page that fails after the first keeps the roles already read.
+func TestRolesKeepsReadPagesOnALaterFailure(t *testing.T) {
+	hostConfig(t)
+	f := &failAfterIAM{fakeIAM: fakeIAM{pages: [][]string{{"b", "agentbox-agent"}, {"c"}}}, after: 1}
+	res := (&awsCredService{newIAM: func(aws.Config) iamListRoles { return f }}).Roles(context.Background(), "p")
+	if res.Failed || len(res.Roles) != 2 || res.Roles[0].Name != "agentbox-agent" || !res.Capped {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// failAfterIAM serves `after` pages, then throttles.
+type failAfterIAM struct {
+	fakeIAM
+	after int
+}
+
+func (f *failAfterIAM) ListRoles(ctx context.Context, in *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
+	if f.calls >= f.after {
+		return nil, &smithy.GenericAPIError{Code: "Throttling"}
+	}
+	return f.fakeIAM.ListRoles(ctx, in, o...)
+}
+
+// The agent role must survive the cap: in a company account it can sit on
+// page three behind a thousand service roles.
+func TestRolesPutsAgentRolesFirstBeforeTheCap(t *testing.T) {
+	hostConfig(t)
+	f := &fakeIAM{
+		pages: [][]string{{"Zeta", "aws-ecs-task", "beta"}, {"svc-1", "AgentBox-x"}, {"agentbox-agent", "alpha"}},
+		trust: map[string]string{"beta": url.QueryEscape(ssoTrustDoc)},
+	}
+	s := rolesSvc(f)
+	s.rolesCap = 3
+	res := s.Roles(context.Background(), "p")
+	var names []string
+	for _, r := range res.Roles {
+		names = append(names, r.Name)
+	}
+	if got := strings.Join(names, ","); got != "agentbox-agent,AgentBox-x,beta" {
+		t.Fatalf("order = %s, want agentbox-* first, then SSO-trusting, then by name", got)
+	}
+	if !res.Roles[2].SSOTrust || res.Roles[0].SSOTrust || res.Roles[1].SSOTrust {
+		t.Fatalf("sso_trust = %+v", res.Roles)
+	}
+	if !res.Capped {
+		t.Fatal("not marked capped")
+	}
+}
+
+const ssoTrustDoc = `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"AWS":"arn:aws:iam::123456789012:root"},` +
+	`"Action":["sts:AssumeRole","sts:SetSourceIdentity"],"Condition":{"ArnLike":{"aws:PrincipalArn":` +
+	`["arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_Lab_*"]}}}]}`
+
+func TestSSOTrustHint(t *testing.T) {
+	const acct = "123456789012"
+	stmt := func(effect, principal string) string {
+		return `{"Version":"2012-10-17","Statement":[{"Effect":"` + effect + `","Principal":` + principal + `,"Action":"sts:AssumeRole"}]}`
+	}
+	cases := []struct {
+		name string
+		doc  string
+		want bool
+	}{
+		{"agent role (root + SSO condition)", ssoTrustDoc, true},
+		{"SSO role principal", stmt("Allow", `{"AWS":["arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/ap-southeast-1/AWSReservedSSO_Admin_abc"]}`), true},
+		{"account root", stmt("Allow", `{"AWS":"arn:aws:iam::123456789012:root"}`), true},
+		{"bare account id", stmt("Allow", `{"AWS":"123456789012"}`), true},
+		{"service role", stmt("Allow", `{"Service":"ecs-tasks.amazonaws.com"}`), false},
+		{"other account root", stmt("Allow", `{"AWS":"arn:aws:iam::999999999999:root"}`), false},
+		{"deny only", stmt("Deny", `{"AWS":"arn:aws:iam::123456789012:root"}`), false},
+		{"SAML federation", stmt("Allow", `{"Federated":"arn:aws:iam::123456789012:saml-provider/x"}`), false},
+		{"SSO excluded, not trusted", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole","Condition":{"StringNotLike":{"aws:PrincipalArn":"*AWSReservedSSO_*"}}}]}`, false},
+		{"empty", "", false},
+		{"not JSON", "%%%", false},
+	}
+	for _, c := range cases {
+		if got := ssoTrust(url.QueryEscape(c.doc), acct); got != c.want {
+			t.Errorf("%s: ssoTrust = %v, want %v", c.name, got, c.want)
+		}
+	}
+	// IAM returns the document URL-encoded; a plain one must parse too.
+	if !ssoTrust(ssoTrustDoc, acct) {
+		t.Error("an unencoded document was not read")
 	}
 }
 
