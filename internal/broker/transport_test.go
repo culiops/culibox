@@ -2,12 +2,15 @@ package broker
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/culiops/agent-box/internal/boxvm"
 )
 
 func TestListenLinuxUnixSocket(t *testing.T) {
@@ -112,11 +115,13 @@ func TestListenDarwinLoopbackTCP(t *testing.T) {
 	if host := ep.Listener.Addr().String(); !strings.HasPrefix(host, "127.0.0.1:") {
 		t.Fatalf("darwin broker must bind loopback only, got %s", host)
 	}
-	if len(ep.Mounts) != 0 || !strings.HasPrefix(ep.BoxURL, "http://host.lima.internal:") {
+	if len(ep.Mounts) != 0 {
 		t.Fatalf("endpoint %+v", ep)
 	}
+	// Boxes sit on the internal egress network; the relay on its gateway
+	// forwards the broker port to the Mac's loopback listener.
 	_, port, _ := net.SplitHostPort(ep.Listener.Addr().String())
-	if ep.BoxURL != "http://host.lima.internal:"+port {
-		t.Fatalf("box URL %q does not name the bound port %s", ep.BoxURL, port)
+	if want := fmt.Sprintf("http://%s:%s", boxvm.EgressGateway, port); ep.BoxURL != want {
+		t.Fatalf("box URL %q, want %q", ep.BoxURL, want)
 	}
 }

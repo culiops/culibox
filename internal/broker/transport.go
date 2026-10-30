@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/boxvm"
 )
 
 // SockBoxDir is where the socket directory is mounted (read-only) inside a box.
@@ -24,8 +25,11 @@ type Endpoint struct {
 // Listen opens the broker's listener. Linux: a unix socket in a 0700 dir that
 // boxes get read-only (the DIR is mounted, so a socket recreated after a restart
 // stays visible). darwin: unix sockets do not cross the colima VM (measured in
-// M2), so TCP on the Mac's loopback, reached from boxes via host.lima.internal
-// through the provision script's single RETURN exception. The token guards it.
+// M2), so TCP on the Mac's loopback. Only bound sessions get AGENTBOX_BROKER
+// (session.go calls BoxFor under bs.Any()), and on darwin every bound box sits
+// on the internal egress network, where host.lima.internal does not resolve:
+// the relay on the network's gateway forwards the broker port to the Mac's
+// loopback, so boxes are handed the gateway address. The token guards it.
 func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 	if goos == "darwin" {
 		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -33,7 +37,7 @@ func Listen(goos, stateRoot string, port int) (Endpoint, error) {
 			return Endpoint{}, fmt.Errorf("broker: listening on 127.0.0.1:%d: %w", port, err)
 		}
 		p := l.Addr().(*net.TCPAddr).Port
-		return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://host.lima.internal:%d", p)}, nil
+		return Endpoint{Listener: l, BoxURL: fmt.Sprintf("http://%s:%d", boxvm.EgressGateway, p)}, nil
 	}
 	return listenUnix(stateRoot)
 }
