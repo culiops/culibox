@@ -97,6 +97,9 @@ func (f *fakeDocker) Run(ctx context.Context, args []string) (string, error) {
 				p := netip.MustParsePrefix(subnet)
 				gw = p.Addr().Next().String()
 			}
+			if a == "--gateway" {
+				gw = args[i+1]
+			}
 		}
 		f.nets[name] = inspectJSONOpts(name, internal, opts, [2]string{subnet, gw})
 		return "id123", nil
@@ -408,6 +411,49 @@ func TestOpenNetworkRefusalSaysBoxes(t *testing.T) {
 	f.nets["n"] = inspectJSON("n", false, [2]string{"172.21.0.0/16", "172.21.0.1"})
 	_, err := EnsureNetwork(context.Background(), f, "n", "DEV", Want{Internal: true})
 	if err == nil || strings.Contains(err.Error(), "bound boxes") || !strings.Contains(err.Error(), "for boxes") {
+		t.Fatalf("err: %v", err)
+	}
+}
+
+func TestEnsureNetworkPassesTheGateway(t *testing.T) {
+	f := newFakeDocker()
+	n, err := EnsureNetwork(context.Background(), f, "agentbox-egress-DEV", "DEV",
+		Want{Internal: true, NoICC: true, Subnet: "172.29.72.0/24", Gateway: "172.29.72.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs := f.createCalls()
+	if len(cs) != 1 {
+		t.Fatalf("creates: %v", cs)
+	}
+	c := cs[0]
+	if !has(c, "--subnet", "172.29.72.0/24") || !has(c, "--gateway", "172.29.72.1") || !has(c, "--internal") {
+		t.Fatalf("argv: %v", c)
+	}
+	if n.Gateway != netip.MustParseAddr("172.29.72.1") {
+		t.Fatalf("net: %+v", n)
+	}
+}
+
+func TestEnsureNetworkNoGatewayFlagWhenUnset(t *testing.T) {
+	f := newFakeDocker()
+	if _, err := EnsureNetwork(context.Background(), f, "agentbox-egress-DEV", "DEV", Want{Internal: true, NoICC: true}); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range f.createCalls()[0] {
+		if a == "--gateway" {
+			t.Fatalf("linux must let docker choose the gateway: %v", f.createCalls()[0])
+		}
+	}
+}
+
+func TestEnsureNetworkRefusesAWrongGateway(t *testing.T) {
+	f := newFakeDocker()
+	f.nets["agentbox-egress-DEV"] = inspectJSONOpts("agentbox-egress-DEV", true, map[string]string{iccOption: "false"},
+		[2]string{"172.29.72.0/24", "172.29.72.254"})
+	_, err := EnsureNetwork(context.Background(), f, "agentbox-egress-DEV", "DEV",
+		Want{Internal: true, NoICC: true, Subnet: "172.29.72.0/24", Gateway: "172.29.72.1"})
+	if err == nil || !strings.Contains(err.Error(), "gateway 172.29.72.254") || !strings.Contains(err.Error(), "docker network rm") {
 		t.Fatalf("err: %v", err)
 	}
 }

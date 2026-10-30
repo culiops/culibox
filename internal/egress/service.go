@@ -32,6 +32,10 @@ type ServiceOptions struct {
 	// on Linux, so config load cannot check it; the proxy never dials that
 	// subnet regardless).
 	StaticTokens []config.StaticToken
+	// AfterNetwork (darwin only; nil on Linux) runs on every Ready call, right
+	// after the network is ensured and before anything else, so a failure keeps
+	// boxes off an egress path whose VM firewall rules no longer hold.
+	AfterNetwork func(ctx context.Context, n Net) error
 }
 
 // Endpoint is where a box reaches the proxy.
@@ -111,6 +115,11 @@ func (s *Service) Ready(ctx context.Context) (Endpoint, error) {
 	n, err := EnsureNetwork(ctx, s.o.Docker, s.Network(), s.o.Instance, s.o.Want)
 	if err != nil {
 		return Endpoint{}, err
+	}
+	if s.o.AfterNetwork != nil {
+		if err := s.o.AfterNetwork(ctx, n); err != nil {
+			return Endpoint{}, fmt.Errorf("egress: network %s: %w", n.Name, err)
+		}
 	}
 	if err := s.RefreshHostAddrs(); err != nil {
 		return Endpoint{}, err

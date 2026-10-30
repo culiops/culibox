@@ -595,3 +595,77 @@ func TestServiceWarnsOnCIDROverlap(t *testing.T) {
 		t.Fatalf("log = %q", out)
 	}
 }
+
+func TestReadyRunsAfterNetworkOnEveryCall(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	var got []Net
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen,
+		AfterNetwork: func(_ context.Context, n Net) error { got = append(got, n); return nil }})
+	defer s.Close(context.Background())
+	for i := 0; i < 2; i++ {
+		if _, err := s.Ready(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("hook calls: %d", len(got))
+	}
+	for _, n := range got {
+		if n.Name != "agentbox-egress-DEV" || n.Gateway != netip.MustParseAddr("172.21.0.1") || n.Subnet != netip.MustParsePrefix("172.21.0.0/16") {
+			t.Fatalf("hook net: %+v", n)
+		}
+	}
+}
+
+func TestReadyFailsWhenAfterNetworkFails(t *testing.T) {
+	boom := errors.New("rules missing")
+	// First call fails: nothing may listen.
+	f, lr := newFakeDocker(), &listenRec{}
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen,
+		AfterNetwork: func(context.Context, Net) error { return boom }})
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("err: %v", err)
+	}
+	if lr.count() != 0 {
+		t.Fatal("listened although the hook failed")
+	}
+
+	// A later call, after a successful one, still fails with the hook's error.
+	f2, lr2 := newFakeDocker(), &listenRec{}
+	fail := false
+	s2 := NewService(ServiceOptions{Proxy: testProxy(), Docker: f2, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr2.listen,
+		AfterNetwork: func(context.Context, Net) error {
+			if fail {
+				return boom
+			}
+			return nil
+		}})
+	defer s2.Close(context.Background())
+	if _, err := s2.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fail = true
+	if _, err := s2.Ready(context.Background()); !errors.Is(err, boom) {
+		t.Fatalf("later err: %v", err)
+	}
+}
+
+func TestReadySkipsAfterNetworkWhenTheNetworkFails(t *testing.T) {
+	f, lr := newFakeDocker(), &listenRec{}
+	f.nets["agentbox-egress-DEV"] = inspectJSON("agentbox-egress-DEV", false, [2]string{"172.21.0.0/16", "172.21.0.1"})
+	called := false
+	s := NewService(ServiceOptions{Proxy: testProxy(), Docker: f, GOOS: "linux", Instance: "DEV", Port: 9072,
+		Want: Want{Internal: true}, Listen: lr.listen,
+		AfterNetwork: func(context.Context, Net) error { called = true; return nil }})
+	defer s.Close(context.Background())
+	if _, err := s.Ready(context.Background()); err == nil {
+		t.Fatal("expected the network error")
+	}
+	if called {
+		t.Fatal("hook ran against a refused network")
+	}
+}
