@@ -43,7 +43,11 @@ func loadCatalog() {
 		if err := json.NewDecoder(zr).Decode(&d); err != nil {
 			panic("awsprobe: corrupt actions.json.gz: " + err.Error())
 		}
-		if d.Date != CatalogDate || len(d.Services) < 100 {
+		total := 0
+		for _, names := range d.Services {
+			total += len(names)
+		}
+		if d.Date != CatalogDate || len(d.Services) < 400 || total < 20000 {
 			panic("awsprobe: actions.json.gz does not match CatalogDate or is truncated")
 		}
 		cat = map[string][]string{}
@@ -100,6 +104,25 @@ func screened(action string) bool {
 	return false
 }
 
+// SecretReturning lists actions whose response carries a credential or secret
+// although their names pass the screen words (or are not read verbs at all)
+// (lowercased action -> reason). MintingScreen puts each in mustDeny whenever a
+// residual pattern covers it, regardless of the name screen and HarmlessMinting.
+//
+// Known limit: secrets stored in configuration are NOT screened. Lambda
+// environment variables, EC2 user data and launch-template data, CloudFront
+// origin custom headers and SSM parameters are plain data to the catalog; the
+// gate's descriptive data-read step reports them and nothing here denies them.
+var SecretReturning = map[string]string{
+	"lambda:getfunction":                 "Code.Location in the response is a presigned URL to the function's code package",
+	"cognito-idp:describeuserpoolclient": "the response includes the app client's ClientSecret",
+	"apigateway:get":                     "GET /apikeys?includeValues=true returns API key values",
+	"sts:assumerole":                     "mints temporary credentials for the assumed role",
+	"sts:assumerolewithsaml":             "mints temporary credentials from a SAML assertion",
+	"sts:assumerolewithwebidentity":      "mints temporary credentials from a web identity token",
+	"sts:assumeroot":                     "mints temporary root credentials for a member account",
+}
+
 // MintingScreen expands the residual Allow patterns against the catalog.
 // mustDeny is every covered action whose name matches a screen word, minus
 // HarmlessMinting; the gate then needs the simulation to prove each of them
@@ -120,11 +143,16 @@ func MintingScreen(residual []string) (mustDeny []string, unknown []string) {
 		}
 		for _, a := range expanded {
 			k := strings.ToLower(a)
-			if seen[k] || !screened(a) {
+			if seen[k] {
 				continue
 			}
-			if _, ok := HarmlessMinting[k]; ok {
-				continue
+			if _, secret := SecretReturning[k]; !secret {
+				if !screened(a) {
+					continue
+				}
+				if _, ok := HarmlessMinting[k]; ok {
+					continue
+				}
 			}
 			seen[k] = true
 			mustDeny = append(mustDeny, a)
@@ -152,7 +180,7 @@ var HarmlessMinting = map[string]string{
 	"iam:getloginprofile":                                     "returns key or credential metadata (IDs, dates, last use), never the secret",
 	"iam:getcredentialreport":                                 "returns key or credential metadata (IDs, dates, last use), never the secret",
 	"iam:generatecredentialreport":                            "returns key or credential metadata (IDs, dates, last use), never the secret",
-	"iam:getaccountpasswordpolicy":                            "returns key or credential metadata (IDs, dates, last use), never the secret",
+	"iam:getaccountpasswordpolicy":                            "returns the account password policy (length, rotation rules), not a password",
 	"codebuild:listsourcecredentials":                         "returns key or credential metadata (IDs, dates, last use), never the secret",
 	"secretsmanager:listsecrets":                              "returns key or credential metadata (IDs, dates, last use), never the secret",
 	"secretsmanager:describesecret":                           "returns key or credential metadata (IDs, dates, last use), never the secret",
@@ -184,9 +212,9 @@ var HarmlessMinting = map[string]string{
 	"kms:listkeypolicies":                                     "KMS key metadata, policy or rotation state; never key material",
 	"kms:listkeyrotations":                                    "KMS key metadata, policy or rotation state; never key material",
 	"kms:listkeys":                                            "KMS key metadata, policy or rotation state; never key material",
-	"ec2:getebsdefaultkmskeyid":                               "KMS key metadata, policy or rotation state; never key material",
+	"ec2:getebsdefaultkmskeyid":                               "returns the ID of the default EBS KMS key, not key material",
 	"ec2:describekeypairs":                                    "EC2 key pair or serial-console setting; names, fingerprints and status only, no private key",
-	"ec2:getserialconsoleaccessstatus":                        "EC2 key pair or serial-console setting; names, fingerprints and status only, no private key",
+	"ec2:getserialconsoleaccessstatus":                        "returns whether serial console access is enabled for the account, not a credential",
 	"cloudfront:getkeygroup":                                  "CloudFront configuration (key groups, origin access identity or control, key-value store metadata)",
 	"cloudfront:getkeygroupconfig":                            "CloudFront configuration (key groups, origin access identity or control, key-value store metadata)",
 	"cloudfront:listkeygroups":                                "CloudFront configuration (key groups, origin access identity or control, key-value store metadata)",
@@ -223,9 +251,9 @@ var HarmlessMinting = map[string]string{
 	"s3:listaccesspoints":                                     "S3 access point, Access Grants or public-access-block configuration; no credential (s3:GetDataAccess mints and stays denied)",
 	"s3:listaccesspointsforobjectlambda":                      "S3 access point, Access Grants or public-access-block configuration; no credential (s3:GetDataAccess mints and stays denied)",
 	"s3:listmultiregionaccesspoints":                          "S3 access point, Access Grants or public-access-block configuration; no credential (s3:GetDataAccess mints and stays denied)",
-	"s3:getaccountpublicaccessblock":                          "S3 access point, Access Grants or public-access-block configuration; no credential (s3:GetDataAccess mints and stays denied)",
-	"s3:getbucketpublicaccessblock":                           "S3 access point, Access Grants or public-access-block configuration; no credential (s3:GetDataAccess mints and stays denied)",
-	"elasticfilesystem:describeaccesspoints":                  "S3 access point, Access Grants or public-access-block configuration; no credential (s3:GetDataAccess mints and stays denied)",
+	"s3:getaccountpublicaccessblock":                          "returns the account's S3 Block Public Access settings; no credential",
+	"s3:getbucketpublicaccessblock":                           "returns a bucket's S3 Block Public Access settings; no credential",
+	"elasticfilesystem:describeaccesspoints":                  "describes EFS access points (path, POSIX user, root directory); no credential",
 	"ec2:describeverifiedaccessendpoints":                     "EC2 Verified Access or network-analysis configuration; no credential",
 	"ec2:describeverifiedaccessgroups":                        "EC2 Verified Access or network-analysis configuration; no credential",
 	"ec2:describeverifiedaccessinstanceloggingconfigurations": "EC2 Verified Access or network-analysis configuration; no credential",
@@ -239,13 +267,13 @@ var HarmlessMinting = map[string]string{
 	"ec2:describenetworkinsightsaccessscopes":                 "EC2 Verified Access or network-analysis configuration; no credential",
 	"ec2:getnetworkinsightsaccessscopeanalysisfindings":       "EC2 Verified Access or network-analysis configuration; no credential",
 	"ec2:getnetworkinsightsaccessscopecontent":                "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:describeclientvpnauthorizationrules":                 "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:describetrafficmirrorsessions":                       "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:describevpcblockpublicaccessexclusions":              "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:describevpcblockpublicaccessoptions":                 "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:getimageblockpublicaccessstate":                      "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:getsnapshotblockpublicaccessstate":                   "EC2 Verified Access or network-analysis configuration; no credential",
-	"ec2:getcapacitymanagermonitoredtagkeys":                  "EC2 Verified Access or network-analysis configuration; no credential",
+	"ec2:describeclientvpnauthorizationrules":                 "describes Client VPN authorization rules (CIDR and group); no credential",
+	"ec2:describetrafficmirrorsessions":                       "describes traffic mirror sessions (source, target, filter); no credential",
+	"ec2:describevpcblockpublicaccessexclusions":              "describes VPC Block Public Access exclusions; configuration only",
+	"ec2:describevpcblockpublicaccessoptions":                 "describes VPC Block Public Access options; configuration only",
+	"ec2:getimageblockpublicaccessstate":                      "returns the AMI Block Public Access state; configuration only",
+	"ec2:getsnapshotblockpublicaccessstate":                   "returns the snapshot Block Public Access state; configuration only",
+	"ec2:getcapacitymanagermonitoredtagkeys":                  "returns the tag keys EC2 Capacity Manager monitors; tag names only",
 	"lambda:getfunctionurlconfig":                             "Lambda function URL configuration: the public endpoint and its auth type, not a signed URL",
 	"lambda:listfunctionurlconfigs":                           "Lambda function URL configuration: the public endpoint and its auth type, not a signed URL",
 	"sqs:getqueueurl":                                         "returns an SQS queue URL, an unsigned endpoint address",
@@ -255,6 +283,4 @@ var HarmlessMinting = map[string]string{
 	"route53:listvpcassociationauthorizations":                "session, service-access or tag-key metadata; no credential",
 	"tag:gettagkeys":                                          "session, service-access or tag-key metadata; no credential",
 	"wafv2:getratebasedstatementmanagedkeys":                  "session, service-access or tag-key metadata; no credential",
-	"pi:describedimensionkeys":                                "Performance Insights dimension data (metric dimensions, SQL text); data, not a credential",
-	"pi:getdimensionkeydetails":                               "Performance Insights dimension data (metric dimensions, SQL text); data, not a credential",
 }

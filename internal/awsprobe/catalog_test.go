@@ -109,36 +109,41 @@ func TestMintingScreenCatchesKnownMinters(t *testing.T) {
 // The guardrail residual's mustDeny list: screened actions that a surviving
 // ReadOnlyAccess pattern covers and HarmlessMinting does not excuse. The gate
 // needs the simulation to prove each one denied. The guardrail itself denies
-// only ec2:GetPasswordData and ecr:GetDownloadUrlForLayer; the rest are real
-// minters or actions not documented as harmless, and stay here (when unsure an
+// ec2:GetPasswordData, ecr:GetDownloadUrlForLayer and lambda:GetFunction (all
+// three listed by name); the rest are real minters, SecretReturning entries or
+// actions not documented as harmless, and stay here (when unsure an
 // action stays in mustDeny). Reviewed by hand: a change is a security change.
 var guardrailMustDeny = []string{
-	"acm:GetAcmeExternalAccountBindingCredentials",
-	"aidevops:SearchServiceAccessibleResource",
-	"cloudfront-keyvaluestore:GetKey",
-	"cloudfront-keyvaluestore:ListKeys",
-	"cloudwatch:GetAccessGrant",
-	"cloudwatch:GetAccessProfile",
-	"cloudwatch:GetDomainAccessGrantForOrganization",
-	"cloudwatch:GetSpaceCredentials",
-	"cloudwatch:GetSpaceCredentialsForOrganization",
-	"cloudwatch:ListAccessGrants",
-	"cloudwatch:ListAccessProfiles",
-	"cloudwatch:ListDomainAccessGrantsForOrganization",
-	"cloudwatch:ListSpaceAccess",
-	"cloudwatch:ListTelemetryQuerySessions",
-	"codebuild:ListConnectedOAuthAccounts",
-	"ec2:DescribeIpamExternalResourceVerificationTokens",
-	"ec2:DescribeVerifiedAccessTrustProviders",
-	"ec2:GetIpamRouteOriginAuthorizations",
-	"ec2:GetPasswordData",
-	"ecr:GetAuthorizationToken",
-	"ecr:GetDownloadUrlForLayer",
-	"pricing:GetPriceListFileUrl",
-	"s3:GetDataAccess",
-	"ssm:GetAccessToken",
-	"wafv2:GetDecryptedAPIKey",
-	"wafv2:ListAPIKeys",
+	"acm:getacmeexternalaccountbindingcredentials",
+	"aidevops:searchserviceaccessibleresource",
+	"apigateway:get",
+	"cloudfront-keyvaluestore:getkey",
+	"cloudfront-keyvaluestore:listkeys",
+	"cloudwatch:getaccessgrant",
+	"cloudwatch:getaccessprofile",
+	"cloudwatch:getdomainaccessgrantfororganization",
+	"cloudwatch:getspacecredentials",
+	"cloudwatch:getspacecredentialsfororganization",
+	"cloudwatch:listaccessgrants",
+	"cloudwatch:listaccessprofiles",
+	"cloudwatch:listdomainaccessgrantsfororganization",
+	"cloudwatch:listspaceaccess",
+	"cloudwatch:listtelemetryquerysessions",
+	"codebuild:listconnectedoauthaccounts",
+	"ec2:describeipamexternalresourceverificationtokens",
+	"ec2:describeverifiedaccesstrustproviders",
+	"ec2:getipamrouteoriginauthorizations",
+	"ec2:getpassworddata",
+	"ecr:getauthorizationtoken",
+	"ecr:getdownloadurlforlayer",
+	"lambda:getfunction",
+	"pi:describedimensionkeys",
+	"pi:getdimensionkeydetails",
+	"pricing:getpricelistfileurl",
+	"s3:getdataaccess",
+	"ssm:getaccesstoken",
+	"wafv2:getdecryptedapikey",
+	"wafv2:listapikeys",
 }
 
 func TestMintingScreenGuardrail(t *testing.T) {
@@ -193,5 +198,41 @@ func TestHarmlessHaveReasons(t *testing.T) {
 		if !Known(a) {
 			t.Errorf("%s is not in the catalog", a)
 		}
+	}
+}
+
+func TestSecretReturning(t *testing.T) {
+	for a, why := range SecretReturning {
+		if a != strings.ToLower(a) || strings.TrimSpace(why) == "" || !Known(a) {
+			t.Errorf("bad SecretReturning entry %q (lowercase, non-empty reason, in catalog)", a)
+		}
+		if _, ok := HarmlessMinting[a]; ok {
+			t.Errorf("%s is in both SecretReturning and HarmlessMinting", a)
+		}
+	}
+	for _, c := range []struct{ pattern, want string }{
+		{"lambda:Get*", "lambda:GetFunction"},
+		{"cognito-idp:Describe*", "cognito-idp:DescribeUserPoolClient"},
+		{"apigateway:GET", "apigateway:GET"},
+		{"sts:Assume*", "sts:AssumeRole"},
+		{"sts:Assume*", "sts:AssumeRoleWithSAML"},
+		{"sts:Assume*", "sts:AssumeRoleWithWebIdentity"},
+		{"sts:Assume*", "sts:AssumeRoot"},
+		{"*", "lambda:GetFunction"},
+	} {
+		deny, _ := MintingScreen([]string{c.pattern})
+		if !slices.Contains(deny, c.want) {
+			t.Errorf("%s does not put %s in mustDeny", c.pattern, c.want)
+		}
+	}
+	// Each entry is caught even if someone adds it to HarmlessMinting.
+	HarmlessMinting["lambda:getfunction"] = "test"
+	defer delete(HarmlessMinting, "lambda:getfunction")
+	if deny, _ := MintingScreen([]string{"lambda:GetFunction"}); !slices.Contains(deny, "lambda:GetFunction") {
+		t.Error("HarmlessMinting overrides SecretReturning")
+	}
+	// A neighbouring read is not swept in.
+	if deny, _ := MintingScreen([]string{"lambda:GetFunctionConfiguration"}); len(deny) != 0 {
+		t.Errorf("lambda:GetFunctionConfiguration mustDeny = %v", deny)
 	}
 }

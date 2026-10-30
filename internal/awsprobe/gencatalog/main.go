@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -133,13 +134,41 @@ func main() {
 		fatal(err)
 	}
 	var buf bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression) // zero Header: no mtime, no name
-	zw.Write(raw)
-	zw.Close()
-	if err := os.WriteFile(*out, buf.Bytes(), 0o644); err != nil {
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression) // zero Header: no mtime, no name
+	if err != nil {
+		fatal(err)
+	}
+	if _, err := zw.Write(raw); err != nil {
+		fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		fatal(err)
+	}
+	if err := writeAtomic(*out, buf.Bytes()); err != nil {
 		fatal(err)
 	}
 	fmt.Printf("wrote %s: date=%s services=%d actions=%d gz=%d bytes\n", *out, cat.Date, len(cat.Services), total, buf.Len())
+}
+
+// writeAtomic writes to a temp file beside path and renames it over, so a
+// failed run never leaves a truncated catalog behind.
+func writeAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".actions-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func fatal(err error) {
