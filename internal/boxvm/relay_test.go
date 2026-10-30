@@ -457,6 +457,9 @@ func TestEnsureFailsOnARelayThatVanished(t *testing.T) {
 	if time.Since(start) > 5*time.Second {
 		t.Error("a vanished relay should fail at once")
 	}
+	if calls := d.subcommands(); calls[len(calls)-1] != "rm" {
+		t.Fatalf("calls = %v, want a final rm", calls)
+	}
 }
 
 func TestRelayName(t *testing.T) {
