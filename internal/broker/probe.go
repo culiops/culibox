@@ -270,8 +270,8 @@ func (b *Broker) SetBaseNotify(f func(sid, key string, r awsprobe.Result)) {
 	b.mu.Unlock()
 }
 
-// StopProbes stops starting re-probes and waits, at most d, for the ones in
-// flight to finish (each is bounded by probeTimeout), so their audit rows are
+// StopProbes stops starting re-probes and sso_direct flights and waits, at
+// most d, for the ones in flight to finish (each is bounded by probeTimeout), so their audit rows are
 // written before the audit store closes. For daemon shutdown.
 //
 // Ordering (as revokeAsync): probeWG.Add runs under b.mu and only while
@@ -282,7 +282,7 @@ func (b *Broker) StopProbes(d time.Duration) {
 	b.probeClosing = true
 	b.mu.Unlock()
 	idle := make(chan struct{})
-	go func() { b.probeWG.Wait(); close(idle) }() // ends when the re-probes do
+	go func() { b.probeWG.Wait(); b.ssoWG.Wait(); close(idle) }() // ends when the re-probes and sso_direct flights do
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {

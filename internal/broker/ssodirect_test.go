@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -22,16 +23,30 @@ type gateCall struct {
 	budget          time.Duration // the ctx deadline left when the gate was called
 }
 
-// fakeGate returns its results in order, then Unverified (error).
+// fakeGate returns its results in order, then Unverified (error). With
+// release set, each call signals entered and blocks until release is closed,
+// then records whether its ctx was cancelled meanwhile.
 type fakeGate struct {
-	mu      sync.Mutex
-	results []awsprobe.GateResult
-	calls   []gateCall
+	mu        sync.Mutex
+	results   []awsprobe.GateResult
+	calls     []gateCall
+	entered   chan struct{}
+	release   chan struct{}
+	cancelled bool
 }
 
+func (g *fakeGate) callCount() int { g.mu.Lock(); defer g.mu.Unlock(); return len(g.calls) }
+
 func (g *fakeGate) fn(ctx context.Context, c Creds, region, account string) awsprobe.GateResult {
+	if g.release != nil {
+		g.entered <- struct{}{}
+		<-g.release
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if ctx.Err() != nil {
+		g.cancelled = true
+	}
 	var budget time.Duration
 	if d, ok := ctx.Deadline(); ok {
 		budget = time.Until(d)
@@ -241,7 +256,26 @@ func TestServeSSODirectNoAccountRefuses(t *testing.T) {
 	if w.Code == 200 || len(g.calls) != 0 {
 		t.Fatalf("status %d gates %d", w.Code, len(g.calls))
 	}
-	if r := lastRow(rec); r.Outcome != OutcomeDeniedNotReadOnly {
+	if r := lastRow(rec); r.Outcome != OutcomeDeniedNotReadOnly || w.Code != http.StatusForbidden {
+		t.Fatalf("status %d row %+v", w.Code, r)
+	}
+}
+
+// A profile the host file does not (or no longer) have is a read failure, not
+// a verdict: 503 with the unverified message, so the box retries.
+func TestServeSSODirectAccountReadFailureIsUnverified(t *testing.T) {
+	g := &fakeGate{results: []awsprobe.GateResult{readOnly()}}
+	b, _, rec, _ := ssoDirectSetup(t, g)
+	sv := ssoDirectLive()
+	sv.AWS.SourceProfile = "gone-from-the-file"
+	b.lookup = func(string) (SessionView, bool) { return sv, true }
+	w := call(b, tokA("s-1"))
+	var body struct{ Error string }
+	_ = json.Unmarshal(w.Body.Bytes(), &body)
+	if w.Code != http.StatusServiceUnavailable || body.Error != boxUnverified || len(g.calls) != 0 {
+		t.Fatalf("status %d body %s gates %d", w.Code, w.Body, len(g.calls))
+	}
+	if r := lastRow(rec); r.Outcome != OutcomeDeniedNotReadOnly || !strings.Contains(r.Error, "unverified") {
 		t.Fatalf("row %+v", r)
 	}
 }
@@ -329,5 +363,175 @@ func TestCheckSSODirect(t *testing.T) {
 	b2, fm2, _, _ := ssoDirectSetup(t, nil)
 	if res, exp = b2.CheckSSODirect(context.Background(), bnd); res.State != awsprobe.GateUnverified || !exp.IsZero() || fm2.callCount() != 0 {
 		t.Fatalf("no gate: %+v mints %d", res, fm2.callCount())
+	}
+}
+
+// callCtx is call with the request's context.
+func callCtx(ctx context.Context, b *Broker, tok string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, "/v1/credentials", nil).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	b.Handler().ServeHTTP(w, r)
+	return w
+}
+
+// R21: the box's helper gives up after 10 s. A slow but read-only gate must
+// not be cancelled with the request: the flight finishes on its own contexts,
+// caches the passing credential, and the retry is served from the cache.
+func TestServeSSODirectSurvivesTheRequestEnding(t *testing.T) {
+	g := &fakeGate{results: []awsprobe.GateResult{readOnly()}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	b, fm, rec, _ := ssoDirectSetup(t, g)
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan *httptest.ResponseRecorder)
+	go func() { got <- callCtx(ctx, b, tokA("s-1")) }()
+	<-g.entered
+	cancel() // the helper's deadline, or a dropped connection
+	w := <-got
+	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), "ASIAFAKE") {
+		t.Fatalf("ended request: status %d body %s", w.Code, w.Body)
+	}
+	close(g.release)
+	b.ssoWG.Wait()
+	if g.cancelled {
+		t.Fatal("the gate's context was cancelled with the request")
+	}
+	if r := lastRow(rec); r.Outcome != OutcomeMinted || r.Mode != config.AWSModeSSODirect {
+		t.Fatalf("row %+v", r)
+	}
+	if w = call(b, tokA("s-1")); w.Code != 200 || fm.callCount() != 1 || g.callCount() != 1 {
+		t.Fatalf("retry: status %d mints %d gates %d", w.Code, fm.callCount(), g.callCount())
+	}
+	if st, _ := b.Stats("s-1"); st.Mints != 1 || st.CacheHits != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+	b.mu.Lock()
+	n := len(b.ssoFlights)
+	b.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d flights left in the table", n)
+	}
+}
+
+// A retry that arrives while the flight is still running joins it.
+func TestServeSSODirectRetryJoinsTheFlight(t *testing.T) {
+	g := &fakeGate{results: []awsprobe.GateResult{readOnly()}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	b, fm, _, _ := ssoDirectSetup(t, g)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan *httptest.ResponseRecorder)
+	go func() { first <- callCtx(ctx, b, tokA("s-1")) }()
+	<-g.entered
+	cancel()
+	<-first
+	second := make(chan *httptest.ResponseRecorder)
+	go func() { second <- call(b, tokA("s-1")) }()
+	waitFor(t, func() bool { return fm.callCount() == 1 && flightWaiters(b) == 2 })
+	close(g.release)
+	if w := <-second; w.Code != 200 || !strings.Contains(w.Body.String(), "ASIAFAKE") {
+		t.Fatalf("joined request: status %d body %s", w.Code, w.Body)
+	}
+	b.ssoWG.Wait()
+	if fm.callCount() != 1 || g.callCount() != 1 {
+		t.Fatalf("mints %d gates %d", fm.callCount(), g.callCount())
+	}
+}
+
+// Concurrent requests run exactly one mint and one gate, and share its verdict.
+func TestServeSSODirectConcurrentRequestsShareOneGate(t *testing.T) {
+	for _, res := range []awsprobe.GateResult{readOnly(), {State: awsprobe.GateNotReadOnly, Refused: []awsprobe.Verdict{{Pattern: "s3:*", Why: "x"}}}} {
+		g := &fakeGate{results: []awsprobe.GateResult{res}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+		b, fm, rec, _ := ssoDirectSetup(t, g)
+		const n = 6
+		codes := make(chan int, n)
+		for range n {
+			go func() { codes <- call(b, tokA("s-1")).Code }()
+		}
+		<-g.entered
+		waitFor(t, func() bool { return flightWaiters(b) == n })
+		close(g.release)
+		want := 200
+		if res.State != awsprobe.GateReadOnly {
+			want = http.StatusForbidden
+		}
+		for range n {
+			if c := <-codes; c != want {
+				t.Fatalf("%s: status %d, want %d", res.State, c, want)
+			}
+		}
+		b.ssoWG.Wait()
+		if fm.callCount() != 1 || g.callCount() != 1 || len(rec.rows) != 1 {
+			t.Fatalf("%s: mints %d gates %d rows %+v", res.State, fm.callCount(), g.callCount(), rec.rows)
+		}
+		if res.State != awsprobe.GateReadOnly { // a refusal is never cached: the next request runs a new flight
+			g.entered, g.release = nil, nil
+			g.results = []awsprobe.GateResult{res}
+			if w := call(b, tokA("s-1")); w.Code != http.StatusForbidden || g.callCount() != 2 || fm.callCount() != 2 {
+				t.Fatalf("after refusal: status %d gates %d mints %d", w.Code, g.callCount(), fm.callCount())
+			}
+		}
+	}
+}
+
+// A session forgotten while its flight runs gets nothing cached.
+func TestServeSSODirectForgetDuringFlightCachesNothing(t *testing.T) {
+	g := &fakeGate{results: []awsprobe.GateResult{readOnly()}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	b, _, _, _ := ssoDirectSetup(t, g)
+	done := make(chan struct{})
+	go func() { call(b, tokA("s-1")); close(done) }()
+	<-g.entered
+	b.Forget("s-1")
+	close(g.release)
+	<-done
+	b.ssoWG.Wait()
+	b.mu.Lock()
+	_, cachedIt := b.cache[connKey{"s-1", ""}]
+	_, hasStats := b.stats["s-1"]
+	b.mu.Unlock()
+	if cachedIt || hasStats {
+		t.Fatalf("cached %v stats %v after Forget", cachedIt, hasStats)
+	}
+}
+
+// flightWaiters is the waiter count of the one registered flight (0 if none).
+func flightWaiters(b *Broker) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, f := range b.ssoFlights {
+		return f.waiters
+	}
+	return 0
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if cond() {
+			return
+		}
+	}
+	t.Fatal("condition not reached")
+}
+
+func TestCheckSSODirectConnRowMatchesServe(t *testing.T) {
+	g := &fakeGate{results: []awsprobe.GateResult{readOnly(), readOnly()}}
+	b, _, rec, _ := ssoDirectSetup(t, g)
+	c := config.AWSConnection{Name: "ro", AWSBinding: *ssoDirectBinding()}
+	if res, _ := b.CheckSSODirectConn(context.Background(), c); res.State != awsprobe.GateReadOnly {
+		t.Fatalf("%+v", res)
+	}
+	if r := lastRow(rec); r.ScopeHash != c.DefHash() || r.Entry != "ro" {
+		t.Fatalf("conn row %+v", r)
+	}
+	if _, _ = b.CheckSSODirect(context.Background(), *ssoDirectBinding()); lastRow(rec).ScopeHash != ssoDirectBinding().Hash() || lastRow(rec).Entry != "" {
+		t.Fatalf("inline row %+v", lastRow(rec))
+	}
+	// A profile without sso_account_id is a definite refusal; an unreadable one is unverified.
+	bad := *ssoDirectBinding()
+	bad.SourceProfile = "static"
+	if res, _ := b.CheckSSODirect(context.Background(), bad); res.State != awsprobe.GateNotReadOnly {
+		t.Fatalf("static: %+v", res)
+	}
+	bad.SourceProfile = "gone-from-the-file"
+	if res, _ := b.CheckSSODirect(context.Background(), bad); res.State != awsprobe.GateUnverified {
+		t.Fatalf("gone: %+v", res)
 	}
 }

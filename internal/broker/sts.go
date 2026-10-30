@@ -144,16 +144,21 @@ func ssoDirectCreds(ctx context.Context, p aws.CredentialsProvider) (Creds, erro
 		Expiration: c.Expires}, nil
 }
 
+// ErrNoSSOAccount is SSOAccountOf's error for a profile that was read but has
+// no sso_account_id: it can never be used in sso_direct mode. Any other error
+// is a read failure, which a retry may fix.
+var ErrNoSSOAccount = errors.New("no sso_account_id")
+
 // SSOAccountOf is the source profile's sso_account_id, the account the
 // sso_direct gate requires the credentials to be for. A profile without one is
-// an error.
+// ErrNoSSOAccount.
 func SSOAccountOf(ctx context.Context, profile string) (string, error) {
 	sc, err := loadProfile(ctx, profile)
 	if err != nil {
 		return "", err
 	}
 	if sc.SSOAccountID == "" {
-		return "", fmt.Errorf("profile %q has no sso_account_id", profile)
+		return "", fmt.Errorf("profile %q has %w", profile, ErrNoSSOAccount)
 	}
 	return sc.SSOAccountID, nil
 }

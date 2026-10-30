@@ -94,7 +94,12 @@ func brokerSessionView(s *session.Session, defined func([]config.StaticToken) []
 func ssoDirectGate(ctx context.Context, c broker.Creds, region, account string) awsprobe.GateResult {
 	creds := aws.Credentials{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken,
 		Source: "agentbox-gate", CanExpire: true, Expires: c.Expiration}
-	return awsprobe.Gate(ctx, awsprobe.NewIAMGate(creds, region), account, time.Now())
+	api, err := awsprobe.NewIAMGate(ctx, creds, region)
+	if err != nil { // the host's AWS config did not load: nothing was proved
+		log.Printf("broker: sso_direct gate: %v", err)
+		return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonError, CheckedAt: time.Now()}
+	}
+	return awsprobe.Gate(ctx, api, account, time.Now())
 }
 
 // startBroker brings the credential broker up: the persisted HMAC secret, the

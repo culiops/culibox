@@ -6,9 +6,12 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+
+	"github.com/culiops/agent-box/internal/awshost"
 )
 
 // simulateBatch caps the ActionNames of one SimulatePrincipalPolicy request.
@@ -37,13 +40,29 @@ type iamGate struct {
 
 // NewIAMGate is the SDK-backed GateAPI, calling AWS with the permission set's
 // own credentials. Errors are returned wrapped, never swallowed, so Gate can
-// classify them; a missing field in a reply is an error.
-func NewIAMGate(creds aws.Credentials, region string) GateAPI {
-	cfg := aws.Config{
-		Region:      region,
-		Credentials: credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken),
+// classify them; a missing field in a reply is an error. The client config is
+// the SDK's default load (host shared files, AWS_CA_BUNDLE / ca_bundle, retry
+// settings) with only the credentials and region fixed, so the gate reaches
+// AWS the way every other host-side client does. A config that cannot load
+// is an error, which the caller treats as unverified.
+func NewIAMGate(ctx context.Context, creds aws.Credentials, region string) (GateAPI, error) {
+	cfg, err := gateConfig(ctx, creds, region)
+	if err != nil {
+		return nil, err
 	}
-	return iamGate{iam: iam.NewFromConfig(cfg), sts: sts.NewFromConfig(cfg)}
+	return iamGate{iam: iam.NewFromConfig(cfg), sts: sts.NewFromConfig(cfg)}, nil
+}
+
+// gateConfig loads the default config with creds as a static provider (it
+// wins over any environment or profile credentials) and region.
+func gateConfig(ctx context.Context, creds aws.Credentials, region string) (aws.Config, error) {
+	opts := append(awshost.LoadOpts(), awsconfig.WithRegion(region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(creds.AccessKeyID, creds.SecretAccessKey, creds.SessionToken)))
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return aws.Config{}, fmt.Errorf("load AWS config for the gate: %w", err)
+	}
+	return cfg, nil
 }
 
 func (g iamGate) CallerARN(ctx context.Context) (string, error) {

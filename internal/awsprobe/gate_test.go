@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -844,13 +845,38 @@ func TestIAMGateEndToEnd(t *testing.T) {
 }
 
 func TestNewIAMGate(t *testing.T) {
-	g, ok := NewIAMGate(aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}, "ap-southeast-1").(iamGate)
-	if !ok || g.iam == nil || g.sts == nil {
-		t.Fatalf("NewIAMGate = %#v", g)
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAENVENVENVENVENV0") // the static provider must win over the environment
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "env")
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(t.TempDir(), "none"))
+	t.Setenv("AWS_PROFILE", "")
+	api, err := NewIAMGate(context.Background(), aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}, "ap-southeast-1")
+	g, ok := api.(iamGate)
+	if err != nil || !ok || g.iam == nil || g.sts == nil {
+		t.Fatalf("NewIAMGate = %#v, %v", api, err)
 	}
 	opts := g.iam.(*iam.Client).Options()
 	cr, err := opts.Credentials.Retrieve(context.Background())
 	if err != nil || cr.AccessKeyID != "AK" || cr.SessionToken != "TK" || opts.Region != "ap-southeast-1" {
 		t.Fatalf("iam options: %+v %v", cr, err)
+	}
+}
+
+// The gate's client config is the SDK's default load: retry settings and the
+// CA bundle from the environment apply, like every other host-side client.
+func TestNewIAMGateLoadsTheDefaultConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_MAX_ATTEMPTS", "7")
+	creds := aws.Credentials{AccessKeyID: "AK", SecretAccessKey: "SK", SessionToken: "TK"}
+	cfg, err := gateConfig(context.Background(), creds, "eu-west-1")
+	if err != nil || cfg.RetryMaxAttempts != 7 || cfg.Region != "eu-west-1" {
+		t.Fatalf("cfg retry=%d region=%q err=%v", cfg.RetryMaxAttempts, cfg.Region, err)
+	}
+	t.Setenv("AWS_CA_BUNDLE", filepath.Join(dir, "no-such-bundle.pem"))
+	if _, err := NewIAMGate(context.Background(), creds, "eu-west-1"); err == nil {
+		t.Fatal("a missing AWS_CA_BUNDLE was not read: the gate ignores the host's CA settings")
 	}
 }

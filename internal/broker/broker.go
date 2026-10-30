@@ -169,8 +169,10 @@ type Broker struct {
 	// Base-role write probe (probe.go). sim is set before the broker serves
 	// (SetSimulator); probeCache is guarded by mu.
 	sim          awsprobe.Simulator
-	gate         GateFunc      // the sso_direct read-only gate (ssodirect.go); set before serving, nil refuses every sso_direct mint
-	probeTimeout time.Duration // per probe; New sets 5s, tests shrink it
+	gate         GateFunc                    // the sso_direct read-only gate (ssodirect.go); set before serving, nil refuses every sso_direct mint
+	ssoFlights   map[ssoFlightKey]*ssoFlight // in-flight sso_direct mints and gates; guarded by mu
+	ssoWG        sync.WaitGroup              // every sso_direct flight goroutine; StopProbes and tests Wait on it
+	probeTimeout time.Duration               // per probe; New sets 5s, tests shrink it
 	probeCache   map[probeKey]probeCached
 
 	// Recover-on-mint (probe.go): a successful base mint of a watched key
@@ -213,7 +215,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		srcKeys:     map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
-		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{},
+		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{}, ssoFlights: map[ssoFlightKey]*ssoFlight{},
 		baseWatch: map[connKey]uint64{}, reprobing: map[connKey]uint64{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
@@ -270,6 +272,11 @@ func (b *Broker) Forget(sessionID string) {
 	for k := range b.baseWatch {
 		if k.sid == sessionID {
 			delete(b.baseWatch, k)
+		}
+	}
+	for k := range b.ssoFlights { // a flight still answers its waiters but caches nothing for a gone session
+		if k.ck.sid == sessionID {
+			delete(b.ssoFlights, k)
 		}
 	}
 	for k := range b.reprobing { // an in-flight re-probe finds its generation gone and reports nothing
@@ -484,6 +491,12 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 // lapsed: it flags the source's sign-in (the UI's prompt) for this session and
 // connection, audits sso_expired and replies 503 with the sign-in hint.
 func (b *Broker) failSSOExpired(w http.ResponseWriter, row Row, ck connKey, profile string, err error, now time.Time) {
+	replyErr(w, http.StatusServiceUnavailable, b.noteSSOExpired(row, ck, profile, err, now))
+}
+
+// noteSSOExpired is failSSOExpired without the reply: it flags the sign-in,
+// audits sso_expired and returns the box message.
+func (b *Broker) noteSSOExpired(row Row, ck connKey, profile string, err error, now time.Time) string {
 	key := b.SourceKeyOf(profile)
 	b.mu.Lock()
 	b.ssoBad[key], b.ssoNeed[ck] = now, key
@@ -496,7 +509,8 @@ func (b *Broker) failSSOExpired(w http.ResponseWriter, row Row, ck connKey, prof
 	if errors.As(err, &me) && me.Detail != "" { // a misclassified failure must stay debuggable from the audit
 		hostMsg += ": " + sanitize(me.Detail)
 	}
-	b.failSplit(w, row, OutcomeSSOExpired, http.StatusServiceUnavailable, boxMsg, hostMsg)
+	b.noteFail(row, OutcomeSSOExpired, hostMsg)
+	return boxMsg
 }
 
 // discardReasonLocked says why a freshly minted elevated credential must be
@@ -560,12 +574,17 @@ func (b *Broker) fail(w http.ResponseWriter, row Row, o Outcome, status int, msg
 // failSplit replies to the box with boxMsg but keeps hostMsg (which may carry
 // host-side detail) for the audit row and Stats.LastError.
 func (b *Broker) failSplit(w http.ResponseWriter, row Row, o Outcome, status int, boxMsg, hostMsg string) {
+	b.noteFail(row, o, hostMsg)
+	replyErr(w, status, boxMsg)
+}
+
+// noteFail is failSplit without the reply: Stats.LastError and the audit row.
+func (b *Broker) noteFail(row Row, o Outcome, hostMsg string) {
 	b.mu.Lock()
 	b.eachStatsLocked(connKey{row.SessionID, row.Entry}, func(st *Stats) { st.LastError = hostMsg }) // Entry is the connection ("" = legacy)
 	b.mu.Unlock()
 	row.Outcome, row.Error = o, hostMsg
 	b.record(row)
-	replyErr(w, status, boxMsg)
 }
 
 // safeCode keeps an error code to a short identifier, so a Minter cannot smuggle
