@@ -299,10 +299,12 @@ function awsRolesShown(roles, filter, limit, chosen) {
 }
 
 // awsAgentRolePick: the role to preselect after a listing: the one agentbox-*
-// role, but only while the role field holds no complete ARN. Several agent
-// roles (say agentbox-agent and agentbox-agent-write) are the operator's call.
+// role, but only while the role field is empty or the bare "...:role/" prefix,
+// so nothing the operator typed is replaced. Several agent roles (say
+// agentbox-agent and agentbox-agent-write) are the operator's call.
 function awsAgentRolePick(roles, current) {
-  if (AWS_ROLE_RE.test(String(current || ""))) return "";
+  const cur = String(current || "").trim();
+  if (cur && !/^arn:aws[a-z-]*:iam::[0-9]{12}:role\/$/.test(cur)) return "";
   const agent = (roles || []).filter(awsIsAgentRole);
   return agent.length === 1 ? agent[0].arn : "";
 }
@@ -1419,24 +1421,30 @@ function awsBuildRow(row) {
 // AWS_ROLES_SHOWN caps the radios one listing renders; the filter finds the rest.
 const AWS_ROLES_SHOWN = 50;
 
-// awsPaintRoles: the filter box (kept across repaints so typing keeps its
-// focus), the matching roles as radios, then the note.
+// awsPaintRoles: the filter box, the matching roles as radios, then the note.
+// The filter is a fixed child of rolesBox and only the list beside it is
+// repainted: detaching a focused input blurs it, so typing would stop.
 function awsPaintRoles(row) {
   if (!row.rolesBox) return;
+  if (!row.rolesListBox) row.rolesListBox = awsEl("div", null);
   const nodes = [];
-  if (row.roles && row.roles.length) {
-    if (row.roles.length > 8) {
-      if (!row.rolesFilterIn) {
-        const fin = document.createElement("input");
-        fin.type = "search"; fin.className = "fld rolefilter"; fin.autocomplete = "off"; fin.spellcheck = false;
-        fin.placeholder = "Filter " + row.roles.length + " roles by name";
-        fin.setAttribute("aria-label", "Filter roles by name");
-        fin.oninput = () => { row.rolesFilter = fin.value; awsPaintRoles(row); };
-        row.rolesFilterIn = fin;
-      }
-      row.rolesFilterIn.value = row.rolesFilter || "";
-      nodes.push(row.rolesFilterIn);
+  const fixed = [];
+  if (row.roles && row.roles.length > 8) {
+    if (!row.rolesFilterIn) {
+      const fin = document.createElement("input");
+      fin.type = "search"; fin.className = "fld rolefilter"; fin.autocomplete = "off"; fin.spellcheck = false;
+      fin.setAttribute("aria-label", "Filter roles by name");
+      fin.oninput = () => { row.rolesFilter = fin.value; awsPaintRoles(row); };
+      row.rolesFilterIn = fin;
     }
+    row.rolesFilterIn.placeholder = "Filter " + row.roles.length + " roles by name";
+    if (row.rolesFilterIn.value !== (row.rolesFilter || "")) row.rolesFilterIn.value = row.rolesFilter || "";
+    fixed.push(row.rolesFilterIn);
+  }
+  fixed.push(row.rolesListBox);
+  const cur = Array.from(row.rolesBox.children);
+  if (cur.length !== fixed.length || cur.some((c, i) => c !== fixed[i])) row.rolesBox.replaceChildren(...fixed);
+  if (row.roles && row.roles.length) {
     const shown = awsRolesShown(row.roles, row.rolesFilter, AWS_ROLES_SHOWN, row.role_arn);
     const grp = awsEl("div", "roles");
     grp.setAttribute("role", "radiogroup");
@@ -1456,7 +1464,7 @@ function awsPaintRoles(row) {
       };
       lab.append(rb, document.createTextNode(" " + r.name));
       if (awsIsAgentRole(r)) lab.appendChild(awsEl("span", "bdg rolebdg", "agent role"));
-      else if (r.sso_trust) lab.appendChild(awsEl("span", "bdg rolebdg", "trusts SSO"));
+      else if (r.sso_trust) lab.appendChild(awsEl("span", "bdg rolebdg", "trusts your account"));
       grp.appendChild(lab);
     }
     if (!shown.matched) grp.appendChild(awsEl("p", "hint", "No role name matches."));
@@ -1464,8 +1472,6 @@ function awsPaintRoles(row) {
     if (shown.matched > AWS_ROLES_SHOWN) {
       nodes.push(awsEl("p", "hint", "Showing " + AWS_ROLES_SHOWN + " of " + shown.matched + " matching roles; type to narrow."));
     }
-  } else {
-    row.rolesFilterIn = null;
   }
   if (row.rolesNote) {
     const p = awsEl("p", "hint", row.rolesNote);
@@ -1476,7 +1482,7 @@ function awsPaintRoles(row) {
     }
     nodes.push(p);
   }
-  row.rolesBox.replaceChildren(...nodes);
+  row.rolesListBox.replaceChildren(...nodes);
 }
 
 function awsLine(cls, glyph, text) {

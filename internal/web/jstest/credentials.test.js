@@ -611,6 +611,8 @@ test("awsAgentRolePick: preselects the one agentbox-* role over an unfinished ro
 test("awsAgentRolePick: never overrides a typed role, never guesses between several", () => {
   const roles = roleList("agentbox-agent", "Admin");
   assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::226198813800:role/Admin"), "");
+  assert.strictEqual(awsAgentRolePick(roles, "Admin"), "");
+  assert.strictEqual(awsAgentRolePick(roles, "arn:aws:iam::22619881380:role/Ad"), "");
   assert.strictEqual(awsAgentRolePick(roleList("agentbox-agent", "agentbox-agent-write"), ""), "");
   assert.strictEqual(awsAgentRolePick(roleList("Admin"), ""), "");
   assert.strictEqual(awsAgentRolePick([], ""), "");

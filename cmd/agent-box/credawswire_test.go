@@ -181,6 +181,29 @@ func TestRolesPagesAndCaps(t *testing.T) {
 	}
 }
 
+// A page that fails after the first keeps the roles already read.
+func TestRolesKeepsReadPagesOnALaterFailure(t *testing.T) {
+	hostConfig(t)
+	f := &failAfterIAM{fakeIAM: fakeIAM{pages: [][]string{{"b", "agentbox-agent"}, {"c"}}}, after: 1}
+	res := (&awsCredService{newIAM: func(aws.Config) iamListRoles { return f }}).Roles(context.Background(), "p")
+	if res.Failed || len(res.Roles) != 2 || res.Roles[0].Name != "agentbox-agent" || !res.Capped {
+		t.Fatalf("%+v", res)
+	}
+}
+
+// failAfterIAM serves `after` pages, then throttles.
+type failAfterIAM struct {
+	fakeIAM
+	after int
+}
+
+func (f *failAfterIAM) ListRoles(ctx context.Context, in *iam.ListRolesInput, o ...func(*iam.Options)) (*iam.ListRolesOutput, error) {
+	if f.calls >= f.after {
+		return nil, &smithy.GenericAPIError{Code: "Throttling"}
+	}
+	return f.fakeIAM.ListRoles(ctx, in, o...)
+}
+
 // The agent role must survive the cap: in a company account it can sit on
 // page three behind a thousand service roles.
 func TestRolesPutsAgentRolesFirstBeforeTheCap(t *testing.T) {
@@ -229,6 +252,7 @@ func TestSSOTrustHint(t *testing.T) {
 		{"other account root", stmt("Allow", `{"AWS":"arn:aws:iam::999999999999:root"}`), false},
 		{"deny only", stmt("Deny", `{"AWS":"arn:aws:iam::123456789012:root"}`), false},
 		{"SAML federation", stmt("Allow", `{"Federated":"arn:aws:iam::123456789012:saml-provider/x"}`), false},
+		{"SSO excluded, not trusted", `{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole","Condition":{"StringNotLike":{"aws:PrincipalArn":"*AWSReservedSSO_*"}}}]}`, false},
 		{"empty", "", false},
 		{"not JSON", "%%%", false},
 	}

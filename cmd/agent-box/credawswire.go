@@ -133,7 +133,13 @@ func (s *awsCredService) Roles(ctx context.Context, profile string) web.RolesRes
 	for {
 		out, err := client.ListRoles(ctx, &iam.ListRolesInput{Marker: marker, MaxItems: aws.Int32(1000)})
 		if err != nil {
-			return rolesFailure(err)
+			if len(res.Roles) == 0 {
+				return rolesFailure(err)
+			}
+			// A later page failed (throttled, timed out): keep what was read.
+			rolesFailure(err) // logs the code
+			res.Capped = true
+			break
 		}
 		for _, r := range out.Roles {
 			arn := aws.ToString(r.Arn)
@@ -213,8 +219,14 @@ func ssoTrust(doc, account string) bool {
 		if st.Effect != "Allow" {
 			continue
 		}
-		if strings.Contains(string(st.Condition), "AWSReservedSSO_") {
-			return true
+		// Only a positive operator names who may assume: StringNotLike and
+		// friends name who may not.
+		var conds map[string]json.RawMessage
+		_ = json.Unmarshal(st.Condition, &conds)
+		for op, v := range conds {
+			if !strings.Contains(op, "Not") && strings.Contains(string(v), "AWSReservedSSO_") {
+				return true
+			}
 		}
 		var p struct{ AWS json.RawMessage }
 		if json.Unmarshal(st.Principal, &p) != nil || len(p.AWS) == 0 {
