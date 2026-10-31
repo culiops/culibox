@@ -3837,23 +3837,59 @@ function readGhRows() {
     };
   });
 }
-function renderGhPerms(checked) {
+// renderGhPerms draws one row per permission: a checkbox (ticked = read) and, for
+// the keys the server lets be written, a read | write seg that shows only while
+// the row is ticked. levels = ghPermLevels' shape.
+function renderGhPerms(levels) {
   const host = $("pf-gh-perms");
   host.replaceChildren();
   for (const k of GH_PERMS) {
+    const lev = levels[k] || "off";
+    const row = document.createElement("div");
+    row.className = "pf-gh-perm";
     const lab = document.createElement("label");
     lab.className = "pf-check";
     const cb = document.createElement("input");
-    cb.type = "checkbox"; cb.dataset.perm = k; cb.checked = !!checked[k];
-    cb.addEventListener("change", () => { $("pf-gh-perm-err").hidden = true; });
+    cb.type = "checkbox"; cb.dataset.perm = k; cb.checked = lev !== "off";
     lab.append(cb, document.createTextNode(k.replace(/_/g, " ")));
-    host.append(lab);
+    row.append(lab);
+    let seg = null;
+    if (GH_WRITABLE.includes(k)) {
+      seg = document.createElement("div");
+      seg.className = "seg pf-gh-level";
+      seg.dataset.permLevel = k;
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", k.replace(/_/g, " ") + " level");
+      buildSeg(seg, [{ value: "read", label: "read" }, { value: "write", label: "write" }], lev === "write" ? "write" : "read", () => syncGhWriteWarn());
+      seg.hidden = !cb.checked;
+      row.append(seg);
+    }
+    cb.addEventListener("change", () => {
+      $("pf-gh-perm-err").hidden = true;
+      if (seg) { seg.hidden = !cb.checked; if (!cb.checked) setSegValue(seg, "read"); }
+      syncGhWriteWarn();
+    });
+    host.append(row);
   }
+  syncGhWriteWarn();
 }
 function readGhPerms() {
   const out = {};
-  for (const cb of $("pf-gh-perms").querySelectorAll("input[data-perm]")) out[cb.dataset.perm] = cb.checked;
+  for (const cb of $("pf-gh-perms").querySelectorAll("input[data-perm]")) {
+    const seg = $("pf-gh-perms").querySelector('.pf-gh-level[data-perm-level="' + cb.dataset.perm + '"]');
+    out[cb.dataset.perm] = !cb.checked ? "off" : seg && segValue(seg) === "write" ? "write" : "read";
+  }
   return out;
+}
+// syncGhWriteWarn shows the one-line write warning under the permissions. The
+// wording depends on the work mode (a copy can push, a folder profile cannot),
+// so syncPfMode calls it too.
+function syncGhWriteWarn() {
+  const el = $("pf-gh-write-warn");
+  if (!el) return;
+  const text = ghWriteWarning(readGhPerms(), pfMode() !== "copy");
+  el.textContent = text;
+  el.hidden = !text;
 }
 $("pf-gh-add").addEventListener("click", () => {
   renderGhOwners([...readGhRows(), { owner: "", app: "", token: "", repos: "" }]);
@@ -4128,7 +4164,7 @@ function fillForm(p) {
   const gh = p.github || null;
   pfLoadedGh = gh;
   renderGhOwners(((gh && gh.owners) || []).map((o) => ({ owner: o.owner, app: o.app, token: o.token, repos: (o.repos || []).join("\n") })));
-  renderGhPerms(ghPermsChecked(gh));
+  renderGhPerms(ghPermLevels(gh));
   renderStPicker(Array.isArray(p.tokens) ? p.tokens : []);
   $("pf-st-err").hidden = true;
   renderAwscPicker(Array.isArray(p.aws_connections) ? p.aws_connections : []);
@@ -4212,7 +4248,7 @@ function syncEditorActions() {
   $("pf-awsc-note").hidden = !excl.pickerDisabled || aws.disabled;
   syncPfAwsAck();
   // The GH block closes on exactly the same terms (lock, host tier).
-  for (const f of $("pf-gh-block").querySelectorAll(".fld, .btn, input[type=checkbox]")) {
+  for (const f of $("pf-gh-block").querySelectorAll(".fld, .btn, input[type=checkbox], .seg button")) {
     f.classList.toggle("off", aws.disabled);
     f.disabled = aws.disabled;
   }
@@ -4242,6 +4278,7 @@ function syncPfMode() {
   const view = profiles.find((p) => p.name === selectedProfileName()) || null;
   const st = wmCardState({ runtime: segValue($("pf-runtime")), mode, unavailable: cloneUnavailable, locked: editorState(view).locked });
   $("pf-cwd-lab").textContent = mode === "copy" ? "Folder to copy" : "Default workspace";
+  syncGhWriteWarn();
   $("pf-copy-block").hidden = mode !== "copy";
   const folderRadio = document.querySelector('input[name="pf-mode"][value="folder"]');
   const copyRadio = document.querySelector('input[name="pf-mode"][value="copy"]');

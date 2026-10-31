@@ -431,10 +431,11 @@
           <p class="tiny mut" id="pf-gh-noapps" hidden>No GitHub App is defined. <a href="#" class="lnk" data-creds-group="github">Add one in Credentials › GitHub Apps</a>.</p>
           <div id="pf-gh-owners"></div>
           <button id="pf-gh-add" type="button" class="btn">+ owner</button>
-          <span class="flab" id="pf-gh-perms-lab">Read permissions</span>
+          <span class="flab" id="pf-gh-perms-lab">Permissions</span>
           <div id="pf-gh-perms" role="group" aria-labelledby="pf-gh-perms-lab"></div>
           <p class="warnbox tiny" id="pf-gh-perm-err" role="alert" hidden></p>
-          <p class="tiny" id="pf-gh-help">Agents get 1-hour read-only tokens for these repos. The agent can read the token while it runs.</p>
+          <p class="warnbox tiny" id="pf-gh-write-warn" hidden></p>
+          <p class="tiny" id="pf-gh-help">App owners get 1-hour tokens with the permissions below: read-only unless you pick write. The agent can read the token while it runs.</p>
         </div>
         <div id="pf-st-block">
           <span class="flab">Tokens</span>

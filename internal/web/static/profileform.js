@@ -154,26 +154,32 @@ function replyableToSend(rowVisible, checked, stored) {
 }
 
 // The GH block (N1). The permission list and the defaults mirror
-// config.githubPermissionKeys / DefaultGitHubPermissions: every one is read-only,
-// and the server refuses anything else, so the form only ever sends "read".
+// config.githubPermissionKeys / DefaultGitHubPermissions. Every key may be read;
+// only GH_WRITABLE (config.githubWritableKeys) may be write, and the server
+// refuses any other value, so the form never sends write for the rest.
 const GH_PERMS = ["actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"];
 const GH_DEFAULT_PERMS = ["actions", "checks", "contents", "pull_requests", "issues", "metadata"];
+const GH_WRITABLE = ["contents", "pull_requests", "issues"];
 
-// ghPermsChecked: which permission boxes a stored binding lights. No stored
-// permissions means the defaults, exactly as the server reads it.
-function ghPermsChecked(binding) {
-  const stored = binding && binding.permissions && Object.keys(binding.permissions);
-  const on = stored && stored.length ? stored : GH_DEFAULT_PERMS;
-  return Object.fromEntries(GH_PERMS.map((k) => [k, on.includes(k)]));
+// ghPermLevels: each permission's level for a stored binding, "off" | "read" |
+// "write". No stored permissions means the six defaults, all read, exactly as
+// the server reads it.
+function ghPermLevels(binding) {
+  const stored = binding && binding.permissions;
+  if (stored && Object.keys(stored).length) {
+    return Object.fromEntries(GH_PERMS.map((k) => [k, !(k in stored) ? "off" : stored[k] === "write" && GH_WRITABLE.includes(k) ? "write" : "read"]));
+  }
+  return Object.fromEntries(GH_PERMS.map((k) => [k, GH_DEFAULT_PERMS.includes(k) ? "read" : "off"]));
 }
 
 // ghBindingFromForm: the editor's GH block as the object the server stores, or
 // undefined when no owner row has anything in it (an empty block means "no
 // binding", not an invalid one). fields = { owners: [{owner, app | token, repos}],
-// permissions: {key: checked} } with repos the textarea's raw text. A row that is
-// only half filled is kept, so the server's validation names what is missing. A
-// permission set equal to the defaults is left out, so a default binding keeps
-// the same stored shape (and the same box key) however the boxes were clicked.
+// permissions: {key: "off"|"read"|"write"} } with repos the textarea's raw text.
+// A row that is only half filled is kept, so the server's validation names what
+// is missing. A permission set equal to the six reads is left out, so a default
+// binding keeps the same stored shape (and the same box key) however the boxes
+// were clicked.
 function ghBindingFromForm(fields) {
   const rows = ((fields && fields.owners) || []).map((r) => {
     const owner = String(r.owner || "").trim();
@@ -186,9 +192,11 @@ function ghBindingFromForm(fields) {
   if (!rows.length) return undefined;
   const out = { owners: rows };
   const perms = (fields && fields.permissions) || {};
-  const on = GH_PERMS.filter((k) => perms[k]);
-  const isDefault = on.length === GH_DEFAULT_PERMS.length && GH_DEFAULT_PERMS.every((k) => on.includes(k));
-  if (!isDefault) out.permissions = Object.fromEntries(on.map((k) => [k, "read"]));
+  const on = GH_PERMS.filter((k) => perms[k] === "read" || perms[k] === "write");
+  // write survives only on a writable key; anywhere else it is sent as read.
+  const level = (k) => (perms[k] === "write" && GH_WRITABLE.includes(k) ? "write" : "read");
+  const isDefault = on.length === GH_DEFAULT_PERMS.length && GH_DEFAULT_PERMS.every((k) => on.includes(k) && level(k) === "read");
+  if (!isDefault) out.permissions = Object.fromEntries(on.map((k) => [k, level(k)]));
   // The editor has no field for the binding's extra egress hosts; carry them.
   if (fields && Array.isArray(fields.egress_allow) && fields.egress_allow.length) out.egress_allow = fields.egress_allow.slice();
   return out;
@@ -200,9 +208,31 @@ function ghBindingFromForm(fields) {
 function ghFormError(fields) {
   const b = ghBindingFromForm(fields);
   if (b && b.permissions && Object.keys(b.permissions).length === 0) {
-    return "GitHub: tick at least one read permission, or the agent gets none.";
+    return "GitHub: tick at least one permission, or the agent gets none.";
   }
   return "";
+}
+
+// ghWriteWarning: the one line shown under the permissions while any writable
+// key is set to write, or "". inPlace = the profile works in the user's own
+// folder (not a private copy): there the agent cannot git push, it can only
+// write through the API, so the wording differs.
+function ghWriteWarning(levels, inPlace) {
+  const l = levels || {};
+  if (!GH_WRITABLE.some((k) => l[k] === "write")) return "";
+  if (inPlace) {
+    return "Write: this profile works in your folder, so the agent cannot git push, but it can open PRs and issues and change files on these repositories through the GitHub API for the session's lifetime; tokens expire in 1 hour.";
+  }
+  return "Write: the agent can push and open PRs on these repositories for the session's lifetime; tokens expire in 1 hour.";
+}
+
+// ghRouteOf: the stored binding's route, mirroring Go's PushRoute / HasPAT.
+// pat = some owner uses a personal access token. write = a PAT owner, or the
+// effective permissions (stored, else the defaults) have contents: write.
+function ghRouteOf(binding) {
+  const owners = (binding && binding.owners) || [];
+  const pat = owners.some((o) => o && typeof o.token === "string" && o.token !== "");
+  return { write: pat || ghPermLevels(binding).contents === "write", pat };
 }
 
 // The Tokens block (N3). entries are /api/meta's static_tokens (names and
@@ -370,6 +400,9 @@ function pfTouchProfile(form, o) {
   }
   const owners = list(((f.github && f.github.owners) || []).map((w) => w && w.owner));
   if (owners.length) out.github_owners = owners;
+  const route = ghRouteOf(f.github);
+  if (route.write) out.github_write = true;
+  if (route.pat) out.github_pat = true;
   const tokens = list(f.tokens);
   if (tokens.length) out.tokens = tokens;
   if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
@@ -387,5 +420,5 @@ function autoReturnToSend(checked) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
+  module.exports = { autoReturnToSend, saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE, ghPermLevels, ghBindingFromForm, ghFormError, ghWriteWarning, ghRouteOf, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
 }

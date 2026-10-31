@@ -3,10 +3,10 @@
 // halves are pure functions so the rules can be read and tested without a DOM.
 const test = require("node:test");
 const assert = require("node:assert");
-const { ghBindingFromForm, ghFormError, ghPermsChecked, GH_PERMS, GH_DEFAULT_PERMS } = require("../static/profileform.js");
+const { ghBindingFromForm, ghFormError, ghPermLevels, ghWriteWarning, ghRouteOf, GH_PERMS, GH_DEFAULT_PERMS, GH_WRITABLE } = require("../static/profileform.js");
 const { ghRowText, ghRailRows } = require("../static/steerrail.js");
 
-const allDefaults = () => Object.fromEntries(GH_PERMS.map((k) => [k, GH_DEFAULT_PERMS.includes(k)]));
+const allDefaults = () => Object.fromEntries(GH_PERMS.map((k) => [k, GH_DEFAULT_PERMS.includes(k) ? "read" : "off"]));
 
 test("the GitHub permission list and its defaults are the server's", () => {
   assert.deepStrictEqual(GH_PERMS, ["actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"]);
@@ -45,15 +45,39 @@ test("ghBindingFromForm is undefined when every row is empty", () => {
   assert.strictEqual(ghBindingFromForm(undefined), undefined);
 });
 
-test("ghBindingFromForm sends a changed permission set as read, and only read", () => {
+test("ghBindingFromForm sends a changed permission set as read", () => {
   const perms = allDefaults();
-  perms.statuses = true;
-  perms.actions = false;
+  perms.statuses = "read";
+  perms.actions = "off";
   const got = ghBindingFromForm({ owners: [{ owner: "acme", app: "main", repos: "api" }], permissions: perms });
   assert.deepStrictEqual(got.permissions, {
     checks: "read", contents: "read", pull_requests: "read", issues: "read", metadata: "read", statuses: "read",
   });
-  for (const v of Object.values(got.permissions)) assert.strictEqual(v, "read");
+});
+
+test("ghBindingFromForm: write is sent for contents, pull_requests and issues only", () => {
+  const rows = [{ owner: "acme", app: "main", repos: "api" }];
+  const got = ghBindingFromForm({ owners: rows, permissions: { ...allDefaults(), contents: "write" } });
+  assert.strictEqual(got.permissions.contents, "write");
+  for (const k of ["actions", "checks", "pull_requests", "issues", "metadata"]) assert.strictEqual(got.permissions[k], "read");
+  assert.ok(!("statuses" in got.permissions));
+  // The UI never offers write on the others: a stray one goes out as read.
+  const stray = ghBindingFromForm({ owners: rows, permissions: { ...allDefaults(), actions: "write", metadata: "write", statuses: "read" } });
+  assert.strictEqual(stray.permissions.actions, "read");
+  assert.strictEqual(stray.permissions.metadata, "read");
+  // Stray writes alone leave the six reads: the default shape, no key.
+  assert.ok(!("permissions" in ghBindingFromForm({ owners: rows, permissions: { ...allDefaults(), actions: "write" } })));
+});
+
+test("ghBindingFromForm: write back to read stores read again, and the warning goes", () => {
+  const rows = [{ owner: "acme", app: "main", repos: "api" }];
+  const on = { ...allDefaults(), pull_requests: "write" };
+  assert.strictEqual(ghBindingFromForm({ owners: rows, permissions: on }).permissions.pull_requests, "write");
+  assert.notStrictEqual(ghWriteWarning(on, false), "");
+  const back = { ...on, pull_requests: "read" };
+  // Six reads and statuses off is the default again: no permissions key at all.
+  assert.ok(!("permissions" in ghBindingFromForm({ owners: rows, permissions: back })));
+  assert.strictEqual(ghWriteWarning(back, false), "");
 });
 
 test("ghBindingFromForm: a token row sends {owner, token, repos} with no app key", () => {
@@ -81,22 +105,53 @@ test("ghBindingFromForm carries the stored extra egress hosts the form has no fi
   assert.ok(!("egress_allow" in ghBindingFromForm({ owners: rows, permissions: allDefaults() })));
 });
 
-test("an all-unchecked permission set is refused, not turned into the defaults", () => {
-  const none = Object.fromEntries(GH_PERMS.map((k) => [k, false]));
+test("an all-off permission set is refused, not turned into the defaults", () => {
+  const none = Object.fromEntries(GH_PERMS.map((k) => [k, "off"]));
   const rows = [{ owner: "acme", app: "main", repos: "api" }];
   assert.deepStrictEqual(ghBindingFromForm({ owners: rows, permissions: none }).permissions, {});
-  assert.match(ghFormError({ owners: rows, permissions: none }), /tick at least one/);
+  assert.strictEqual(ghFormError({ owners: rows, permissions: none }), "GitHub: tick at least one permission, or the agent gets none.");
   // The defaults, a changed set, and no owner rows at all are all fine.
   assert.strictEqual(ghFormError({ owners: rows, permissions: allDefaults() }), "");
-  assert.strictEqual(ghFormError({ owners: rows, permissions: { ...none, statuses: true } }), "");
+  assert.strictEqual(ghFormError({ owners: rows, permissions: { ...none, statuses: "read" } }), "");
   assert.strictEqual(ghFormError({ owners: [{ owner: "", app: "main", repos: "" }], permissions: none }), "");
 });
 
-test("ghPermsChecked: a stored set lights exactly its keys, none stored lights the defaults", () => {
-  assert.deepStrictEqual(ghPermsChecked(undefined), allDefaults());
-  assert.deepStrictEqual(ghPermsChecked({ owners: [] }), allDefaults());
-  const got = ghPermsChecked({ permissions: { contents: "read", statuses: "read" } });
-  assert.deepStrictEqual(Object.keys(got).filter((k) => got[k]), ["contents", "statuses"]);
+test("GH_WRITABLE is the server's writable set", () => {
+  assert.deepStrictEqual(GH_WRITABLE, ["contents", "pull_requests", "issues"]);
+});
+
+test("ghPermLevels: a stored set lights its keys at their level, none stored lights the six reads", () => {
+  assert.deepStrictEqual(ghPermLevels(undefined), allDefaults());
+  assert.deepStrictEqual(ghPermLevels({ owners: [] }), allDefaults());
+  const got = ghPermLevels({ permissions: { contents: "write", statuses: "read" } });
+  assert.strictEqual(got.contents, "write");
+  assert.strictEqual(got.statuses, "read");
+  assert.strictEqual(got.actions, "off");
+  assert.deepStrictEqual(Object.keys(got), GH_PERMS);
+});
+
+test("ghWriteWarning: fixed copy for a private copy and for a folder profile, empty with no write", () => {
+  assert.strictEqual(ghWriteWarning({ contents: "write" }, false),
+    "Write: the agent can push and open PRs on these repositories for the session's lifetime; tokens expire in 1 hour.");
+  assert.strictEqual(ghWriteWarning({ issues: "write" }, true),
+    "Write: this profile works in your folder, so the agent cannot git push, but it can open PRs and issues and change files on these repositories through the GitHub API for the session's lifetime; tokens expire in 1 hour.");
+  assert.strictEqual(ghWriteWarning({ contents: "read", issues: "read" }, false), "");
+  assert.strictEqual(ghWriteWarning({}, true), "");
+  assert.strictEqual(ghWriteWarning(undefined, true), "");
+  // Only the writable keys count.
+  assert.strictEqual(ghWriteWarning({ actions: "write" }, false), "");
+});
+
+test("ghRouteOf mirrors Go PushRoute/HasPAT: a PAT owner or contents write is the write route", () => {
+  const app = { owners: [{ owner: "acme", app: "main", repos: ["api"] }] };
+  assert.deepStrictEqual(ghRouteOf(undefined), { write: false, pat: false });
+  assert.deepStrictEqual(ghRouteOf(app), { write: false, pat: false });
+  assert.deepStrictEqual(ghRouteOf({ ...app, permissions: { contents: "write" } }), { write: true, pat: false });
+  // Write on the other keys does not open the push route.
+  assert.deepStrictEqual(ghRouteOf({ ...app, permissions: { contents: "read", issues: "write" } }), { write: false, pat: false });
+  const pat = { owners: [{ owner: "acme", app: "main", repos: [] }, { owner: "org", token: "gh-pat", repos: ["x"] }] };
+  assert.deepStrictEqual(ghRouteOf(pat), { write: true, pat: true });
+  assert.deepStrictEqual(ghRouteOf({ owners: [{ owner: "o", token: "", repos: [] }] }), { write: false, pat: false });
 });
 
 function localHHMM(iso) {
