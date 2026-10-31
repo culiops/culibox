@@ -21,6 +21,10 @@
     #an-ctl { display: none; }
     * { box-sizing: border-box; }
     html, body { height: 100%; margin: 0; }
+    /* accent-color only tints a CHECKED box; an unchecked one is drawn in the
+       light scheme (a white square on this dark page) unless the control itself
+       is told the scheme. One rule here so every page gets it. */
+    input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); color-scheme: dark; }
     body {
       background: var(--bg); color: var(--fg);
       font: 14px/1.5 var(--font-family);
