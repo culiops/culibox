@@ -551,7 +551,13 @@ func TestCloneSpawnAcceptsItsCloneSpelledRelatively(t *testing.T) {
 // cloneGHLauncher gives the clone profile a GitHub binding too.
 type cloneGHLauncher struct {
 	cloneLauncher
-	gh *config.GitHubBinding
+	gh  *config.GitHubBinding
+	env []string // the profile's own env, added to Build's
+}
+
+func (l cloneGHLauncher) Build(spec launcher.SpawnSpec) ([]string, []string, error) {
+	argv, env, err := l.cloneLauncher.Build(spec)
+	return argv, append(slices.Clone(env), l.env...), err
 }
 
 func (l cloneGHLauncher) GitHubFor(agent string) *config.GitHubBinding {
@@ -561,10 +567,10 @@ func (l cloneGHLauncher) GitHubFor(agent string) *config.GitHubBinding {
 	return l.gh.Clone()
 }
 
-func spawnCloneGH(t *testing.T, gh *config.GitHubBinding, hooks *fakeCloneHooks) (*fakeBoxes, error) {
+func spawnCloneGH(t *testing.T, gh *config.GitHubBinding, hooks *fakeCloneHooks, profileEnv ...string) (*fakeBoxes, *Session, error) {
 	t.Helper()
 	cl, dir := testCloneLauncher(t, config.RuntimeBox)
-	m := NewManager(cloneGHLauncher{cloneLauncher: cl, gh: gh}, nil, 1<<16, time.Minute)
+	m := NewManager(cloneGHLauncher{cloneLauncher: cl, gh: gh, env: profileEnv}, nil, 1<<16, time.Minute)
 	boxes := &fakeBoxes{}
 	m.SetBoxes(boxes)
 	m.SetClone(hooks)
@@ -574,45 +580,114 @@ func spawnCloneGH(t *testing.T, gh *config.GitHubBinding, hooks *fakeCloneHooks)
 	if err == nil {
 		t.Cleanup(func() { _ = m.Kill(s.ID) })
 	}
-	return boxes, err
+	return boxes, s, err
 }
 
 func TestSpawnCloneSetsGHRepo(t *testing.T) {
 	bound := &config.GitHubBinding{Owners: []config.GitHubOwner{
 		{Owner: "culiops", App: "main", Repos: []string{"agent-box", "other"}},
 	}}
+	// The same owner list with contents write: the App token can push.
+	write := &config.GitHubBinding{Owners: bound.Owners,
+		Permissions: map[string]string{"contents": "write", "metadata": "read"}}
+	pat := &config.GitHubBinding{Owners: []config.GitHubOwner{
+		{Owner: "culiops", Token: "gh-pat", Repos: []string{"agent-box"}},
+	}}
+	const rewriteKey = "GIT_CONFIG_KEY_2=url.https://github.com/culiops/agent-box.git.pushInsteadOf"
+	origin := "https://github.com/culiops/agent-box.git"
 	cases := []struct {
-		name   string
-		hooks  *fakeCloneHooks
-		binds  *config.GitHubBinding
-		want   []string
-		wantOf bool // HostOrigin must have been asked about clone_of
+		name         string
+		hooks        *fakeCloneHooks
+		binds        *config.GitHubBinding
+		profileEnv   []string
+		want         []string
+		wantPush     []string // GIT_CONFIG_KEY_2 / GIT_CONFIG_VALUE_2 / COUNT, in env order
+		wantPushRepo string
+		wantOf       bool // HostOrigin must have been asked about clone_of
 	}{
-		{"origin in binding", &fakeCloneHooks{origin: "https://github.com/culiops/agent-box.git"}, bound, []string{"GH_REPO=culiops/agent-box"}, true},
-		{"ssh form, other case", &fakeCloneHooks{origin: "git@github.com:Culiops/Agent-Box.git"}, bound, []string{"GH_REPO=Culiops/Agent-Box"}, true},
-		{"repo not in binding", &fakeCloneHooks{origin: "https://github.com/culiops/secret"}, bound, nil, true},
-		{"owner not in binding", &fakeCloneHooks{origin: "https://github.com/evil/agent-box"}, bound, nil, true},
-		{"not a github origin", &fakeCloneHooks{origin: "/srv/git/agent-box.git"}, bound, nil, true},
-		{"no origin", &fakeCloneHooks{}, bound, nil, true},
-		{"origin read fails", &fakeCloneHooks{originErr: errors.New("boom")}, bound, nil, true},
-		{"no github binding", &fakeCloneHooks{origin: "https://github.com/culiops/agent-box"}, nil, nil, false},
+		{"origin in binding", &fakeCloneHooks{origin: origin}, bound, nil,
+			[]string{"GH_REPO=culiops/agent-box"}, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"origin in binding, contents write", &fakeCloneHooks{origin: origin}, write, nil,
+			[]string{"GH_REPO=culiops/agent-box"},
+			[]string{"GIT_CONFIG_COUNT=3", rewriteKey, "GIT_CONFIG_VALUE_2=/home/u/repo"}, "culiops/agent-box", true},
+		{"origin in binding, PAT owner", &fakeCloneHooks{origin: origin}, pat, nil,
+			[]string{"GH_REPO=culiops/agent-box"},
+			[]string{"GIT_CONFIG_COUNT=3", rewriteKey, "GIT_CONFIG_VALUE_2=/home/u/repo"}, "culiops/agent-box", true},
+		{"profile env cannot keep its own index 2", &fakeCloneHooks{origin: origin}, write,
+			[]string{"GIT_CONFIG_KEY_2=core.sshCommand", "GIT_CONFIG_VALUE_2=evil"},
+			[]string{"GH_REPO=culiops/agent-box"},
+			[]string{"GIT_CONFIG_COUNT=3", rewriteKey, "GIT_CONFIG_VALUE_2=/home/u/repo"}, "culiops/agent-box", true},
+		{"profile env index 2 dies without a push route", &fakeCloneHooks{origin: origin}, bound,
+			[]string{"GIT_CONFIG_KEY_2=core.sshCommand", "GIT_CONFIG_VALUE_2=evil"},
+			[]string{"GH_REPO=culiops/agent-box"}, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"ssh form, other case", &fakeCloneHooks{origin: "git@github.com:Culiops/Agent-Box.git"}, bound, nil,
+			[]string{"GH_REPO=Culiops/Agent-Box"}, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"repo not in binding", &fakeCloneHooks{origin: "https://github.com/culiops/secret"}, write, nil,
+			nil, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"owner not in binding", &fakeCloneHooks{origin: "https://github.com/evil/agent-box"}, write, nil,
+			nil, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"not a github origin", &fakeCloneHooks{origin: "/srv/git/agent-box.git"}, write, nil,
+			nil, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"no origin", &fakeCloneHooks{}, write, nil, nil, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"origin read fails", &fakeCloneHooks{originErr: errors.New("boom")}, write, nil,
+			nil, []string{"GIT_CONFIG_COUNT=2"}, "", true},
+		{"no github binding", &fakeCloneHooks{origin: origin}, nil, nil, nil, nil, "", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			boxes, err := spawnCloneGH(t, c.binds, c.hooks)
+			boxes, s, err := spawnCloneGH(t, c.binds, c.hooks, c.profileEnv...)
 			if err != nil {
 				t.Fatalf("spawn must succeed whatever the origin says: %v", err)
 			}
 			if got := envNamed(boxes.lastEnv, "GH_REPO"); !slices.Equal(got, c.want) {
 				t.Fatalf("GH_REPO env = %q, want %q", got, c.want)
 			}
+			var gotPush []string
+			for _, name := range []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_2", "GIT_CONFIG_VALUE_2"} {
+				gotPush = append(gotPush, envNamed(boxes.lastEnv, name)...)
+			}
+			if !slices.Equal(gotPush, c.wantPush) {
+				t.Fatalf("git config env = %q, want %q", gotPush, c.wantPush)
+			}
+			if got := s.Info().Clone.PushRepo; got != c.wantPushRepo {
+				t.Fatalf("Clone.PushRepo = %q, want %q", got, c.wantPushRepo)
+			}
 			if c.wantOf && !slices.Equal(c.hooks.originOf, []string{"/home/u/repo"}) {
-				t.Fatalf("HostOrigin asked about %q, want the host repo only", c.hooks.originOf)
+				t.Fatalf("HostOrigin asked about %q, want the host repo only (once)", c.hooks.originOf)
 			}
 			if !c.wantOf && len(c.hooks.originOf) != 0 {
 				t.Fatalf("HostOrigin called for a session without a GitHub binding: %q", c.hooks.originOf)
 			}
 		})
+	}
+}
+
+func TestWithGitPushRewrite(t *testing.T) {
+	const key = "GIT_CONFIG_KEY_2=url.https://github.com/o/r.git.pushInsteadOf"
+	cases := []struct {
+		name string
+		env  []string
+		want []string
+	}{
+		{"extends the count and appends the pair",
+			[]string{"A=1", "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_0=a"},
+			[]string{"A=1", "GIT_CONFIG_COUNT=3", "GIT_CONFIG_KEY_0=a", key, "GIT_CONFIG_VALUE_2=/of"}},
+		{"drops an existing pair at the new index",
+			[]string{"GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_2=core.sshCommand", "GIT_CONFIG_VALUE_2=evil"},
+			[]string{"GIT_CONFIG_COUNT=3", key, "GIT_CONFIG_VALUE_2=/of"}},
+		{"no count: unchanged", []string{"A=1", "GIT_CONFIG_KEY_2=x"}, []string{"A=1", "GIT_CONFIG_KEY_2=x"}},
+		{"count not a number: unchanged", []string{"GIT_CONFIG_COUNT=two"}, []string{"GIT_CONFIG_COUNT=two"}},
+		{"negative count: unchanged", []string{"GIT_CONFIG_COUNT=-1"}, []string{"GIT_CONFIG_COUNT=-1"}},
+	}
+	for _, c := range cases {
+		in := slices.Clone(c.env)
+		got := withGitPushRewrite(in, "/of", "o/r")
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+		if !slices.Equal(in, c.env) {
+			t.Errorf("%s: the input slice was modified: %q", c.name, in)
+		}
 	}
 }
 

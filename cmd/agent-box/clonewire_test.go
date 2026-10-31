@@ -690,9 +690,13 @@ func TestCloneInfoOf(t *testing.T) {
 		t.Fatalf("cloneInfoOf =\n%+v\nwant\n%+v", got, want)
 	}
 	// Every CloneInfo field is filled from the result: a field added later
-	// without a copy shows up here as zero.
+	// without a copy shows up here as zero. PushRepo is the one exception: the
+	// session sets it at spawn from the GitHub binding, not from a refresh.
 	v := reflect.ValueOf(got)
 	for i := 0; i < v.NumField(); i++ {
+		if v.Type().Field(i).Name == "PushRepo" {
+			continue
+		}
 		if v.Field(i).IsZero() {
 			t.Errorf("CloneInfo.%s is not copied", v.Type().Field(i).Name)
 		}
