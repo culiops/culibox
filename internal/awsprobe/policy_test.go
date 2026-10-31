@@ -1,6 +1,7 @@
 package awsprobe
 
 import (
+	"encoding/json"
 	"net/url"
 	"os"
 	"reflect"
@@ -385,5 +386,15 @@ func TestUnconditionalDenies(t *testing.T) {
 	ds, _ = UnconditionalDenies([]string{`{"Statement":{"Effect":"Deny","NotAction":["*"],"Resource":"*"}}`})
 	if ds.Denies("iam:CreateUser") {
 		t.Error(`NotAction ["*"] denies nothing`)
+	}
+}
+
+func TestVerdictJSONKeysAreSnakeCase(t *testing.T) {
+	b, err := json.Marshal(GateResult{State: GateNotReadOnly, Refused: []Verdict{{Pattern: "iam:*", Why: "writes"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"refused":[{"pattern":"iam:*","why":"writes"}]`) {
+		t.Errorf("verdict wire shape = %s", b)
 	}
 }

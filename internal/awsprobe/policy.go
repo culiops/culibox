@@ -301,7 +301,10 @@ func covered(a string, denies, exempts [][]string) bool {
 }
 
 // Verdict names a residual pattern the gate refuses, and why.
-type Verdict struct{ Pattern, Why string }
+type Verdict struct {
+	Pattern string `json:"pattern"`
+	Why     string `json:"why"`
+}
 
 // Classified is the outcome of gate step 5 (before the credential-minting
 // screen). Refused lists every refusing pattern, not just the first, so an
