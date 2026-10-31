@@ -1182,7 +1182,10 @@
   #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
   #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 23; }
+  #page-host > #settings-modal.as-page #manage #pf-mode-block { order: 23; }
+  #page-host > #settings-modal.as-page #manage #pf-mode-block .pf-mode-cards { display: grid; grid-template-columns: 1fr 1fr; }
+  #page-host > #settings-modal.as-page #manage #pf-copy-block { order: 24; }
+  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 25; }
   #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
   #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }

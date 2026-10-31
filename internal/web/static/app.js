@@ -3640,7 +3640,7 @@ function renderPfTouch() {
     // "open" is only ever reported when egress is mandatory for every boxed spawn.
     profile: pfTouchProfile(form, { view, claude: isClaudeBinName(form.bin), egressAll: profiles.some((x) => x.network === "open") }),
     tier,
-    cwd: shortPath(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
+    cwd: shortPath(pfMode() === "copy" ? $("pf-copy-dir").value.trim() : pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value)),
     meta: { aws_connections: awscEntries },
     creds: pfCredsView,
   });
@@ -3980,10 +3980,15 @@ let pfEnvRows = [];
 // The stored profile's own runtime string ("" when it names none), kept for
 // runtimeToSend's fallback.
 let pfStoredRuntime = "";
-// The stored profile as loaded (GET /api/profiles/{name}, the full config): the
-// editor has no clone fields, so clone_of/clone_share are carried unchanged; see
-// cloneToSend.
-let pfLoadedClone = null;
+// The stored profile as loaded (GET /api/profiles/{name}, the full config). The
+// work-mode fields (clone_of, default_cwd, clone_share) are read back from their
+// own inputs on save (wmFieldsToSend), so this only keeps what the form has no
+// control for (replyable).
+let pfLoaded = null;
+// The work mode and copy directory the loaded profile was saved with, for the
+// "switching never deletes the copy" note (wmSwitchNote). Set by fillForm.
+let pfSavedMode = "folder";
+let pfSavedCopyDir = "";
 // The stored profile's inline AWS binding exactly as loaded (null when it has
 // none), and whether Remove was pressed since. readForm sends the binding back
 // unchanged unless it was removed (awsInlineToSend).
@@ -3996,7 +4001,7 @@ function fillForm(p) {
   $("pf-bin").value = p.bin || "";
   $("pf-base").value = p.base || "inherit";
   pfStoredRuntime = p.runtime || "";
-  pfLoadedClone = p;
+  pfLoaded = p;
   // A profile naming no tier runs on the instance default; /api/profiles has
   // already resolved it, so the seg lights the tier it really runs on.
   const resolved = (profiles.find((x) => x.name === p.name) || {}).runtime;
@@ -4005,7 +4010,17 @@ function fillForm(p) {
   $("pf-args").value = (p.args || []).join("\n");
   pfEnvRows = envRows(p);
   renderEnvRows($("pf-env-rows"), pfEnvRows, () => setDialogError("settings-modal", rowError(pfEnvRows)));
-  renderPfWorkspaceOptions(p.default_cwd || "");
+  // A private copy's workspace field is the folder it copies (clone_of), which
+  // need not be one of the workspace options: the custom-path branch shows it.
+  const copy = wmModeOf(p) === "copy";
+  pfSavedMode = copy ? "copy" : "folder";
+  pfSavedCopyDir = copy ? p.default_cwd || "" : "";
+  for (const r of document.querySelectorAll('input[name="pf-mode"]')) r.checked = r.value === pfSavedMode;
+  renderPfWorkspaceOptions(copy ? p.clone_of : p.default_cwd || "");
+  $("pf-copy-dir").value = pfSavedCopyDir;
+  $("pf-copy-share").value = contextPathsToText(p.clone_share);
+  $("pf-copy-warn").hidden = true;
+  $("pf-copy-err").hidden = true;
   renderPfOptions(p.options || {});
   $("pf-context").value = contextPathsToText(p.context_paths);
   $("pf-context-warn").hidden = true;
@@ -4052,7 +4067,7 @@ function syncEditorActions() {
   // class of their own), and the allowlist's row buttons and "+ add" triggers
   // (.btn) — a read-only profile that still lets a row be added or removed is
   // the exact thing #pf-lock's caption is promising will not happen.
-  for (const f of $("manage").querySelectorAll(".ped .fld, .ped .seg button, .ped .btn, .ped input[type=checkbox]")) {
+  for (const f of $("manage").querySelectorAll(".ped .fld, .ped .seg button, .ped .btn, .ped input[type=checkbox], .ped input[type=radio]")) {
     f.classList.toggle("off", st.locked);
     f.disabled = st.locked;
   }
@@ -4114,6 +4129,49 @@ function syncEditorActions() {
     f.disabled = aws.disabled;
   }
   $("pf-st-hint").hidden = !aws.hint;
+  // Last: the lock loop above re-enabled every radio, and this is the pass that
+  // knows the tier, the instance and the lock together.
+  syncPfMode();
+}
+// pfMode: the work mode the editor shows. A disabled radio that is checked still
+// matches :checked, so a copy profile on a host seg or a copy-less instance
+// reads as "copy" and keeps its fields on save.
+function pfMode() {
+  const r = document.querySelector('input[name="pf-mode"]:checked');
+  return r && r.value === "copy" ? "copy" : "folder";
+}
+// syncPfMode: display only, safe on every input event. It never touches the
+// network and never reads layout, and it never un-checks a radio: a copy that
+// cannot run here is still a copy, it only says why.
+function syncPfMode() {
+  const mode = pfMode();
+  const view = profiles.find((p) => p.name === selectedProfileName()) || null;
+  const st = wmCardState({ runtime: segValue($("pf-runtime")), mode, unavailable: cloneUnavailable, locked: editorState(view).locked });
+  $("pf-cwd-lab").textContent = mode === "copy" ? "Folder to copy" : "Default workspace";
+  $("pf-copy-block").hidden = mode !== "copy";
+  const folderRadio = document.querySelector('input[name="pf-mode"][value="folder"]');
+  const copyRadio = document.querySelector('input[name="pf-mode"][value="copy"]');
+  copyRadio.disabled = st.copyDisabled;
+  copyRadio.classList.toggle("off", st.copyDisabled);
+  $("pf-mode-copy-card").classList.toggle("off", st.copyDisabled);
+  folderRadio.closest(".pf-mode-card").classList.toggle("off", folderRadio.disabled);
+  $("pf-mode-copy-why").textContent = st.copyReason;
+  $("pf-mode-hint").textContent = st.hint;
+  $("pf-mode-hint").hidden = !st.hint;
+  const note = wmSwitchNote(pfSavedMode, mode, pfSavedCopyDir, window.HOME_DIR || "");
+  $("pf-mode-switch").textContent = note;
+  $("pf-mode-switch").hidden = !note;
+  const ghBinding = ghBindingFromForm({ owners: readGhRows(), permissions: readGhPerms() });
+  $("pf-copy-gh").hidden = st.copyDisabled || !wmNeedsGitHubHint(mode, ghBinding, readStTicked(), stEntries);
+}
+// pfFillCopyDir: a copy with no directory yet gets ~/box-clones/<folder name>,
+// never a directory another profile already writes. Only fills an empty field.
+function pfFillCopyDir() {
+  if (pfMode() !== "copy" || $("pf-copy-dir").value.trim()) return;
+  const me = selectedProfileName();
+  const taken = profiles.filter((x) => x.name !== me).map((x) => x.default_cwd).filter(Boolean);
+  const dir = wmCopyDirSuggestion(pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value), window.HOME_DIR || "", taken);
+  if (dir) $("pf-copy-dir").value = dir;
 }
 // The editor lives in a closed <dialog> at boot, where focus() is a silent
 // no-op; only grab focus when the dialog is actually on screen.
@@ -4145,7 +4203,6 @@ function readForm() {
   // AWS binding saved on the host tier.
   const rt = runtimeToSend(segValue($("pf-runtime")), pfStoredRuntime, !metaLoaded || !!boxRuntime);
   if (rt) p.runtime = rt;
-  Object.assign(p, cloneToSend(pfLoadedClone));
   const acct = $("pf-account").value;
   if (acct && acct !== ACCT_DEFAULT) p.account = acct;
   const args = $("pf-args").value.split("\n").map((s) => s.trim()).filter(Boolean);
@@ -4164,11 +4221,16 @@ function readForm() {
     } else if (ctrl.value) opts[ctrl.dataset.optkey] = ctrl.value;
   }
   if (Object.keys(opts).length) p.options = opts;
-  const cwd = pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value);
-  if (cwd) p.default_cwd = cwd;
+  // default_cwd, and for a private copy clone_of and clone_share too, come from
+  // the work-mode fields only: a copy saved without edits keeps all three.
+  Object.assign(p, wmFieldsToSend(pfMode(), {
+    folder: pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value),
+    copyDir: $("pf-copy-dir").value,
+    shareText: $("pf-copy-share").value,
+  }));
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;
-  if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoadedClone && pfLoadedClone.replyable)) p.replyable = true;
+  if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoaded && pfLoaded.replyable)) p.replyable = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
@@ -4193,6 +4255,12 @@ async function saveProfile() {
   $("pf-gh-perm-err").textContent = ghErr;
   $("pf-gh-perm-err").hidden = !ghErr;
   if (ghErr) { pfSaveError(ghErr); return; }
+  // A copy with no folder or no directory must never go out: the server would
+  // read it as a plain profile. Shown on the block as well as in the dialog's line.
+  const wmErr = wmFormError(pfMode(), { folder: pfCwdValue($("pf-cwd").value, $("pf-cwd-custom").value), copyDir: $("pf-copy-dir").value });
+  $("pf-copy-err").textContent = wmErr;
+  $("pf-copy-err").hidden = !wmErr;
+  if (wmErr) { pfSaveError(wmErr); return; }
   // From the editor's state, not the typed name: a saved profile's name is
   // read-only, and a draft (New, Duplicate) always creates, so Save cannot
   // leave a copy behind.
@@ -4215,6 +4283,8 @@ async function saveProfile() {
       $("pf-st-err").hidden = true;
       $("pf-awsc-err").hidden = true;
       $("pf-context-warn").hidden = true;
+      $("pf-copy-warn").hidden = true;
+      $("pf-copy-err").hidden = true;
       let saved = null;
       try {
         saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
@@ -4230,6 +4300,12 @@ async function saveProfile() {
         if (/aws_connections/.test(e.message)) {
           $("pf-awsc-err").textContent = String(e.message);
           $("pf-awsc-err").hidden = false;
+        }
+        // A refusal about the private copy's fields, worded with the labels on screen.
+        const ce = wmErrText(pfMode(), e.message);
+        if (ce) {
+          $("pf-copy-err").textContent = ce;
+          $("pf-copy-err").hidden = false;
         }
         return;
       }
@@ -4253,6 +4329,9 @@ async function saveProfile() {
       const warn = contextWarningsText(saved);
       $("pf-context-warn").textContent = warn;
       $("pf-context-warn").hidden = !warn;
+      const shareWarn = wmShareWarningsText(saved);
+      $("pf-copy-warn").textContent = shareWarn;
+      $("pf-copy-warn").hidden = !shareWarn;
     });
   } finally {
     syncEditorActions();
@@ -4266,6 +4345,13 @@ function duplicateProfile() {
   const name = selectedProfileName();
   if (!name) return;
   const draft = duplicateDraft(readForm(), name, profiles.map((x) => x.name));
+  // Two profiles writing one clone directory would share a .git: a duplicate of
+  // a private copy gets its own.
+  if (draft.clone_of) {
+    const fresh = wmCopyDirSuggestion(draft.clone_of, window.HOME_DIR || "", profiles.map((x) => x.default_cwd).filter(Boolean));
+    if (fresh) draft.default_cwd = fresh;
+    else delete draft.default_cwd;
+  }
   selectedProfile = "";
   pfUserDraft = true;
   fillForm(draft);
@@ -4409,6 +4495,9 @@ $("pf-adv").addEventListener("click", () => setPfAdvOpen(!$("pf-adv").closest(".
 // Any edit in the form re-derives the Can touch line; a seg or a picker change
 // is a click, so clicks count too.
 for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, schedulePfTouch);
+// The GitHub hint follows the GitHub and Tokens blocks, so every edit re-derives
+// the work-mode display (syncPfMode is display only and cheap).
+for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, syncPfMode);
 for (const ev of ["input", "change", "click"]) $("pf-adv").closest(".ped").addEventListener(ev, pfMarkDraft);
 // The two "+ add" buttons append a blank row of the matching kind and hand
 // focus to its name field, so typing the variable name is the very next thing
@@ -4434,6 +4523,21 @@ $("pf-bin").addEventListener("input", () => {
 });
 $("pf-cwd").addEventListener("change", () => {
   $("pf-cwd-custom").hidden = $("pf-cwd").value !== "__custom__";
+  pfFillCopyDir();
+  syncPfMode();
+});
+$("pf-cwd-custom").addEventListener("change", () => { pfFillCopyDir(); syncPfMode(); });
+for (const r of document.querySelectorAll('input[name="pf-mode"]')) {
+  r.addEventListener("change", () => {
+    pfFillCopyDir();
+    syncEditorActions();
+    renderPfTouch();
+  });
+}
+$("pf-copy-gh-link").addEventListener("click", (e) => {
+  e.preventDefault();
+  $("pf-gh-block").scrollIntoView({ block: "center" });
+  $("pf-gh-add").focus();
 });
 $("pf-account").addEventListener("change", syncPfAccountWarn);
 // pf-runtime's own change is handled by renderPfRuntime's buildSeg onChange —
@@ -4801,6 +4905,10 @@ function updateTierExplain() {
 // or "" when containment is unavailable. Empty means every session is host tier,
 // and the tier chooser is hidden rather than offering a choice that does nothing.
 let boxRuntime = "";
+// cloneUnavailable: why this instance cannot run private copies (/api/meta
+// clone_unavailable), "" when it can. It only explains; a profile that is a
+// copy still opens, saves and shows as one (wmCardState).
+let cloneUnavailable = "";
 // metaLoaded: /api/meta has answered at least once. boxRuntime is "" both for a
 // box-less instance and before meta loads, so "no containment here" may only be
 // concluded after a positive answer (see readForm); until then it fails closed.
@@ -5998,6 +6106,7 @@ async function currentShellProfile() {
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    cloneUnavailable = (meta && meta.clone_unavailable) || "";
     refreshEmptyState();
     cells.forEach((c) => c.renderBar()); // reflect a profile that appeared/disappeared
   } catch (_) { /* keep the cached value */ }
@@ -6144,6 +6253,7 @@ initMobileShell();
     window.shellProfile = (meta && meta.shell_profile) || "";
     boxRuntime = (meta && meta.box_runtime) || "";
     metaLoaded = true;
+    cloneUnavailable = (meta && meta.clone_unavailable) || "";
     refreshEmptyState();
     if (seq === credListsSeq) applyCredLists(meta); // the Tokens, connections and App pickers, now that the names are known
     const anBtn = $("analytics-open");
