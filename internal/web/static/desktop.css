@@ -954,7 +954,7 @@
     box-sizing: border-box; width: 100%; margin: 0; padding: 16px 20px; background: none;
     border-bottom: 1px solid var(--line); font-size: 15px; font-weight: 600; color: var(--fg);
   }
-  #spawn-modal .dlg-head { position: absolute; top: 10px; right: 10px; padding: 0; border: 0; background: none; }
+  #spawn-modal .dlg-head { position: absolute; top: 26px; right: 10px; transform: translateY(-50%); padding: 0; border: 0; background: none; }
   #spawn-modal .dlg-x { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--r-ctl); font-size: 15px; font-weight: 400; color: var(--muted); }
   #spawn-modal .dlg-x::before { content: "Esc"; font-size: 12px; }
   #spawn-modal .dlg-x:hover { color: var(--fg); background: var(--raise); }

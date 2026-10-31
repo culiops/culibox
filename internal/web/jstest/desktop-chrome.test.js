@@ -86,6 +86,10 @@ test("the New session dialog is a plain rounded card with a header and Esc, not 
   assert.ok(/border-bottom:\s*1px solid var\(--line\)/.test(title), "header rule");
   assert.ok(rulesFor("#spawn-modal .dlg-head").some((b) => /position:\s*absolute/.test(b)), "close in the corner");
   assert.ok(rulesFor("#spawn-modal .dlg-x::before").some((b) => /content:\s*"Esc"/.test(b)), "Esc hint");
+  // Centred on the ~52px header (title: 16px padding + one 15px line), not pinned
+  // by a fixed top that only matches one control height.
+  const head = rulesFor("#spawn-modal .dlg-head").join(" ");
+  assert.ok(/top:\s*26px/.test(head) && /transform:\s*translateY\(-50%\)/.test(head), "close centred on the header");
   assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /var\(--raise\)/.test(b)));
 });
 
