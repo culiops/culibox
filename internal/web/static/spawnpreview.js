@@ -22,7 +22,7 @@ function spawnAWS(p) {
   const out = spawnNames(p && p.aws_connections).map((name) => ({ name }));
   const inl = p && p.aws_inline;
   if (inl && typeof inl.name === "string" && inl.name !== "") {
-    out.push({ name: inl.name, inline: true, prod: inl.prod === true, max: Number(inl.elevate_max_minutes) > 0 ? Number(inl.elevate_max_minutes) : 0 });
+    out.push({ name: inl.name, inline: true, mode: inl.mode, prod: inl.prod === true, max: Number(inl.elevate_max_minutes) > 0 ? Number(inl.elevate_max_minutes) : 0 });
   }
   return out;
 }
@@ -93,8 +93,12 @@ function reachRows(o) {
     const prod = m.prod === true || c.prod === true;
     const elevate = ent.inline ? (ent.max > 0 ? { max_minutes: ent.max } : null) : c.elevate && typeof c.elevate === "object" ? c.elevate : null;
     const writable = m.write_capable === true || !!elevate;
+    const direct = ent.mode === "sso_direct" || m.mode === "sso_direct" || c.mode === "sso_direct";
     let v = name + " · read";
-    if (writable) {
+    if (direct) {
+      // The gate admits read-only permission sets only and there is no elevate.
+      v += " only · SSO role directly";
+    } else if (writable) {
       const max = elevate && Number(elevate.max_minutes) > 0 ? Number(elevate.max_minutes) : 0;
       v += " · write only after you elevate" + (max ? " (max " + max + " min)" : "");
     } else {

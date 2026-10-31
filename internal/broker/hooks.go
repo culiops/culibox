@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	"slices"
 	"time"
 
@@ -68,6 +69,25 @@ func (h Hooks) RevokeGitHub(id string) { h.B.RevokeGitHub(id) }
 // ProbeBase checks, at spawn, whether each bound AWS base role can write.
 func (h Hooks) ProbeBase(id, agent string, bs config.Bindings) map[string]awsprobe.Result {
 	return h.B.ProbeBase(id, agent, bs)
+}
+
+// CheckSSODirect gates an sso_direct binding of bs at spawn: key "" is the
+// inline binding, else a connection name. It is the session layer's read-only
+// check (session.SSODirectChecker). A key that is not an sso_direct binding is
+// unverified, so the gate can never vouch for an AssumeRole binding.
+func (h Hooks) CheckSSODirect(ctx context.Context, bs config.Bindings, key string) (awsprobe.GateResult, time.Time) {
+	if key == "" {
+		if bs.AWS != nil && bs.AWS.SSODirect() {
+			return h.B.CheckSSODirect(ctx, *bs.AWS)
+		}
+	} else {
+		for _, c := range bs.AWSConns {
+			if c.Name == key && c.SSODirect() {
+				return h.B.CheckSSODirectConn(ctx, c)
+			}
+		}
+	}
+	return awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonError, CheckedAt: h.B.now()}, time.Time{}
 }
 
 // WatchBase re-probes the session's unverified base roles (keys as in

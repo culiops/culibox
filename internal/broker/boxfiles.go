@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -252,12 +253,15 @@ func AWSConfigFor(conns []config.AWSConnection) []byte {
 // nothing more. There is deliberately no field for the source profile, the
 // elevate role, s3_read or egress.
 type awsListEntry struct {
-	Name         string `json:"name"`
-	Label        string `json:"label,omitempty"`
-	Prod         bool   `json:"prod"`
-	AccountID    string `json:"account_id"`
-	RoleARN      string `json:"role_arn"`
-	Region       string `json:"region"`
+	Name      string `json:"name"`
+	Label     string `json:"label,omitempty"`
+	Prod      bool   `json:"prod"`
+	AccountID string `json:"account_id"`
+	RoleARN   string `json:"role_arn"`
+	Region    string `json:"region"`
+	// Mode is "sso_direct" for a connection that uses the SSO role directly
+	// (it has no role_arn); absent for an assumed agent role.
+	Mode         string `json:"mode,omitempty"`
 	WriteCapable bool   `json:"write_capable"`
 	Description  string `json:"description,omitempty"`
 	awsprobe.Fields
@@ -275,6 +279,13 @@ func AWSListing(conns []config.AWSConnection, base map[string]awsprobe.Result) [
 		out[i] = awsListEntry{Name: c.Name, Label: c.Label, Prod: c.Prod, AccountID: awsscope.AccountOf(c.RoleARN),
 			RoleARN: c.RoleARN, Region: c.Region, WriteCapable: c.Elevate != nil, Description: c.Description,
 			Fields: awsprobe.Lookup(base, c.Name).Fields()}
+		if c.SSODirect() {
+			// No role ARN to read the account from: it is the profile's
+			// sso_account_id, from the host's files (no network). Unreadable is
+			// shown as no account, which fails nothing.
+			out[i].Mode = config.AWSModeSSODirect
+			out[i].AccountID, _ = SSOAccountOf(context.Background(), c.SourceProfile)
+		}
 	}
 	b, err := json.Marshal(out)
 	if err != nil { // plain strings and bools: cannot happen

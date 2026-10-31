@@ -1,0 +1,18 @@
+Policy fixtures for the sso_direct gate's analyser (policy_test.go). Each file is
+the policy *document* only.
+
+ReadOnlyAccess.json  arn:aws:iam::aws:policy/ReadOnlyAccess, version v190
+                     (created 2026-09-24), fetched 2026-10-30 with
+                     aws iam get-policy-version --version-id v190
+ViewOnlyAccess.json  arn:aws:iam::aws:policy/job-function/ViewOnlyAccess,
+                     version v47 (created 2026-10-14), fetched 2026-10-30 with
+                     aws iam get-policy-version --version-id v47
+guardrail.json       an anonymised real-world all-Deny inline policy: a
+                     NotAction service allowlist plus a concrete action
+                     denylist, and an S3 object-read deny outside two log
+                     buckets (placeholder names). ReadOnlyAccess + this
+                     guardrail is the permission set the gate must pass.
+
+When AWS publishes a new default version, refresh the two managed-policy files
+and this README, then rerun the tests: a new non-read verb in either policy
+needs a reviewed NonStandard entry (verbs.go) before the tests pass again.

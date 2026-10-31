@@ -329,3 +329,78 @@ func TestElevateJSONRoundTrip(t *testing.T) {
 		t.Fatalf("a binding without elevate must not marshal the key: %s", out)
 	}
 }
+
+func ssoBinding() AWSBinding {
+	return AWSBinding{SourceProfile: "co-ro", Region: "ap-southeast-1", Mode: AWSModeSSODirect}
+}
+
+func TestSSODirectValidates(t *testing.T) {
+	b := ssoBinding()
+	if err := b.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !b.SSODirect() {
+		t.Fatal("SSODirect() must be true for mode sso_direct")
+	}
+	if (AWSBinding{}).SSODirect() {
+		t.Fatal("SSODirect() must be false for the default mode")
+	}
+}
+
+func TestSSODirectRefuses(t *testing.T) {
+	cases := []struct {
+		name string
+		mod  func(*AWSBinding)
+		want string
+	}{
+		{"role_arn", func(b *AWSBinding) { b.RoleARN = "arn:aws:iam::123456789012:role/x" }, "role_arn"},
+		{"elevate", func(b *AWSBinding) { b.Elevate = &AWSElevate{RoleARN: "arn:aws:iam::123456789012:role/w"} }, "elevate"},
+		{"s3_read", func(b *AWSBinding) { b.S3Read = []string{"bucket"} }, "s3_read"},
+		{"upper-case mode", func(b *AWSBinding) { b.Mode = "SSO_DIRECT" }, "mode"},
+		{"bogus mode", func(b *AWSBinding) { b.Mode = "bogus" }, "mode"},
+		{"empty region", func(b *AWSBinding) { b.Region = "" }, "region"},
+		{"bad profile", func(b *AWSBinding) { b.SourceProfile = "bad profile" }, "source_profile"},
+		{"long label", func(b *AWSBinding) { b.Label = strings.Repeat("x", 41) }, "label"},
+		{"bad egress", func(b *AWSBinding) { b.EgressAllow = []string{"not a host"} }, "egress_allow"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := ssoBinding()
+			c.mod(&b)
+			err := b.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("want an error mentioning %q, got %v", c.want, err)
+			}
+			if c.want != "mode" && c.want != "region" && c.want != "source_profile" && c.want != "label" && c.want != "egress_allow" &&
+				!strings.Contains(err.Error(), "not used in sso_direct mode") {
+				t.Fatalf("error must say the field is not used in sso_direct mode, got %v", err)
+			}
+		})
+	}
+}
+
+func TestAssumeRoleStillNeedsRoleARN(t *testing.T) {
+	b := AWSBinding{SourceProfile: "co-ro", Region: "ap-southeast-1"}
+	err := b.Validate()
+	if err == nil || !strings.Contains(err.Error(), "role_arn") {
+		t.Fatalf("an assume_role binding without role_arn must fail, got %v", err)
+	}
+}
+
+func TestModeKeepsOldHashes(t *testing.T) {
+	b := AWSBinding{SourceProfile: "co-ro", Region: "ap-southeast-1",
+		RoleARN: "arn:aws:iam::123456789012:role/agentbox-agent", S3Read: []string{"b", "a"}, Label: "x", Prod: true}
+	// Golden computed on the code before Mode existed.
+	if got := b.Hash(); got != "f13569b44e35" {
+		t.Fatalf("a mode-less binding's hash changed: %s", got)
+	}
+	plain := AWSBinding{SourceProfile: "co-ro", Region: "ap-southeast-1"}
+	if got := plain.Hash(); got != "7511859a28d4" {
+		t.Fatalf("a mode-less binding's hash changed: %s", got)
+	}
+	sso := plain
+	sso.Mode = AWSModeSSODirect
+	if sso.Hash() == plain.Hash() {
+		t.Fatal("sso_direct and assume_role bindings with otherwise equal fields must hash differently")
+	}
+}

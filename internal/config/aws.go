@@ -31,7 +31,19 @@ type AWSBinding struct {
 	// session to. omitempty on a nil pointer keeps a pre-M3b binding's hash
 	// unchanged.
 	Elevate *AWSElevate `json:"elevate,omitempty"`
+	// Mode picks how the credentials are made. "" is assume_role (the agent
+	// role plus a session policy); AWSModeSSODirect hands the agent the SSO
+	// permission set's own credentials. omitempty keeps every existing
+	// binding's hash unchanged.
+	Mode string `json:"mode,omitempty"`
 }
+
+// AWSModeSSODirect is the opt-in binding mode in which the source profile's
+// SSO role is used directly, with no AssumeRole and no session policy.
+const AWSModeSSODirect = "sso_direct"
+
+// SSODirect reports whether the binding uses the SSO role directly.
+func (b AWSBinding) SSODirect() bool { return b.Mode == AWSModeSSODirect }
 
 // AWSElevate lets a human widen one running session to a second, write-capable
 // role for a fixed window (M3b). It is part of the binding, so it is in Hash
@@ -57,25 +69,35 @@ var profileNameRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 // Validate refuses a binding whose fields could not be used safely: each value
 // is later written into an INI file or a policy document.
 func (b AWSBinding) Validate() error {
+	switch b.Mode {
+	case "", AWSModeSSODirect:
+	default:
+		return fmt.Errorf("aws.mode must be \"\" or %q, got %q", AWSModeSSODirect, b.Mode)
+	}
 	if !profileNameRe.MatchString(b.SourceProfile) {
 		return fmt.Errorf("aws.source_profile %q must be a profile name from ~/.aws/config (letters, digits, . _ -)", b.SourceProfile)
+	}
+	if b.SSODirect() {
+		// No role is assumed and no session policy is built, so these fields
+		// would be silently ignored; refuse them instead. The source profile
+		// being an SSO profile is checked where the profile is read (save,
+		// spawn and every mint), not here.
+		if b.RoleARN != "" {
+			return errors.New("aws.role_arn is not used in sso_direct mode; clear it")
+		}
+		if b.Elevate != nil {
+			return errors.New("aws.elevate is not used in sso_direct mode; clear it")
+		}
+		if len(b.S3Read) > 0 {
+			return errors.New("aws.s3_read is not used in sso_direct mode; clear it")
+		}
+		return b.validateCommon()
 	}
 	if err := awsscope.ValidRoleARN(b.RoleARN); err != nil {
 		return fmt.Errorf("aws.%w", err)
 	}
-	if err := awsscope.ValidRegion(b.Region); err != nil {
-		return fmt.Errorf("aws.%w", err)
-	}
-	if len(b.Label) > 40 {
-		return errors.New("aws.label is longer than 40 characters")
-	}
-	if len(b.EgressAllow) > maxEgressAllow {
-		return fmt.Errorf("aws.egress_allow has more than %d entries", maxEgressAllow)
-	}
-	for i, p := range b.EgressAllow {
-		if err := hostmatch.ValidPattern(p); err != nil {
-			return fmt.Errorf("aws.egress_allow[%d] %q: %v", i, p, err)
-		}
+	if err := b.validateCommon(); err != nil {
+		return err
 	}
 	if e := b.Elevate; e != nil {
 		if err := awsscope.ValidRoleARN(e.RoleARN); err != nil {
@@ -100,6 +122,25 @@ func (b AWSBinding) Validate() error {
 	}
 	if _, err := awsscope.SessionPolicy(awsscope.PartitionOf(b.RoleARN), b.S3Read); err != nil {
 		return fmt.Errorf("aws: %w", err)
+	}
+	return nil
+}
+
+// validateCommon checks the fields both modes share: region, label, egress.
+func (b AWSBinding) validateCommon() error {
+	if err := awsscope.ValidRegion(b.Region); err != nil {
+		return fmt.Errorf("aws.%w", err)
+	}
+	if len(b.Label) > 40 {
+		return errors.New("aws.label is longer than 40 characters")
+	}
+	if len(b.EgressAllow) > maxEgressAllow {
+		return fmt.Errorf("aws.egress_allow has more than %d entries", maxEgressAllow)
+	}
+	for i, p := range b.EgressAllow {
+		if err := hostmatch.ValidPattern(p); err != nil {
+			return fmt.Errorf("aws.egress_allow[%d] %q: %v", i, p, err)
+		}
 	}
 	return nil
 }

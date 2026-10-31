@@ -61,9 +61,13 @@ type Creds struct {
 	Expiration                                 time.Time
 }
 
+// MintInput is one mint. Mode "" is AssumeRole into RoleARN with Policy for
+// Duration; config.AWSModeSSODirect returns the source profile's own SSO
+// credentials and uses only SourceProfile and Region.
 type MintInput struct {
 	SourceProfile, Region, RoleARN, SessionName, Policy string
 	Duration                                            time.Duration
+	Mode                                                string
 }
 
 type Minter interface {
@@ -71,7 +75,8 @@ type Minter interface {
 }
 
 // ErrSSOExpired is wrapped by a Minter when the host's SSO login has lapsed.
-var ErrSSOExpired = errors.New("SSO session expired")
+// It is awsprobe's sentinel, so the sso_direct gate recognises the same error.
+var ErrSSOExpired = awsprobe.ErrSSOExpired
 
 // MintError is a failed mint. Code is the AWS error code (or a generic one) and
 // is the only part of the failure the box is shown, next to a static hint;
@@ -164,7 +169,10 @@ type Broker struct {
 	// Base-role write probe (probe.go). sim is set before the broker serves
 	// (SetSimulator); probeCache is guarded by mu.
 	sim          awsprobe.Simulator
-	probeTimeout time.Duration // per probe; New sets 5s, tests shrink it
+	gate         GateFunc                    // the sso_direct read-only gate (ssodirect.go); set before serving, nil refuses every sso_direct mint
+	ssoFlights   map[ssoFlightKey]*ssoFlight // in-flight sso_direct mints and gates; guarded by mu
+	ssoWG        sync.WaitGroup              // every sso_direct flight goroutine; StopProbes and tests Wait on it
+	probeTimeout time.Duration               // per probe; New sets 5s, tests shrink it
 	probeCache   map[probeKey]probeCached
 
 	// Recover-on-mint (probe.go): a successful base mint of a watched key
@@ -207,7 +215,7 @@ func New(secret []byte, lookup Lookup, m Minter, rec Recorder) *Broker {
 		srcKeys:     map[string]string{}, ssoBad: map[string]time.Time{}, ssoNeed: map[connKey]string{},
 		ghCache: map[ghKey]ghCached{}, ghIssued: map[string][]issued{}, ghFlight: map[string]map[*ghFlight]struct{}{},
 		ghRevokeTimeout: ghRevokeTimeout, ghTokenTimeout: ghTokenTimeout,
-		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{},
+		probeTimeout: probeTimeout, probeCache: map[probeKey]probeCached{}, ssoFlights: map[ssoFlightKey]*ssoFlight{},
 		baseWatch: map[connKey]uint64{}, reprobing: map[connKey]uint64{},
 		after: func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }}
 	b.appr, _ = rec.(ApprovalRecorder)
@@ -264,6 +272,11 @@ func (b *Broker) Forget(sessionID string) {
 	for k := range b.baseWatch {
 		if k.sid == sessionID {
 			delete(b.baseWatch, k)
+		}
+	}
+	for k := range b.ssoFlights { // a flight still answers its waiters but caches nothing for a gone session
+		if k.ck.sid == sessionID {
+			delete(b.ssoFlights, k)
 		}
 	}
 	for k := range b.reprobing { // an in-flight re-probe finds its generation gone and reports nothing
@@ -356,6 +369,10 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		scope = bnd.Hash()
 	}
 	ck := connKey{sid, conn}
+	if bnd.SSODirect() { // its own path (ssodirect.go): no AssumeRole, no session policy, the gate on every mint
+		b.serveSSODirect(w, r, sv.Agent, nonce, ck, scope, bnd, now)
+		return
+	}
 	base := Row{Time: now, SessionID: sid, Profile: sv.Agent, AccountID: awsscope.AccountOf(bnd.RoleARN),
 		RoleARN: bnd.RoleARN, SourceIdentity: awsscope.SessionName(sid), ScopeHash: scope, Entry: conn}
 
@@ -398,19 +415,7 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 		c, err := b.minter.Mint(r.Context(), MintInput{SourceProfile: bnd.SourceProfile, Region: bnd.Region,
 			RoleARN: p.role, SessionName: base.SourceIdentity, Policy: policy, Duration: credTTL})
 		if errors.Is(err, ErrSSOExpired) {
-			key := b.SourceKeyOf(bnd.SourceProfile)
-			b.mu.Lock()
-			b.ssoBad[key], b.ssoNeed[ck] = now, key
-			b.mu.Unlock()
-			boxMsg := fmt.Sprintf(
-				`SSO session for profile %q expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile %s" on the host).`,
-				bnd.SourceProfile, bnd.SourceProfile)
-			hostMsg := boxMsg
-			var me *MintError
-			if errors.As(err, &me) && me.Detail != "" { // a misclassified failure must stay debuggable from the audit
-				hostMsg += ": " + sanitize(me.Detail)
-			}
-			b.failSplit(w, row, OutcomeSSOExpired, http.StatusServiceUnavailable, boxMsg, hostMsg)
+			b.failSSOExpired(w, row, ck, bnd.SourceProfile, err, now)
 			return
 		}
 		if err != nil {
@@ -482,6 +487,32 @@ func (b *Broker) serveCredentials(w http.ResponseWriter, r *http.Request) {
 	b.fail(w, base, OutcomeSTSError, http.StatusBadGateway, "no credential could be minted")
 }
 
+// failSSOExpired answers a mint that failed because the host's SSO login has
+// lapsed: it flags the source's sign-in (the UI's prompt) for this session and
+// connection, audits sso_expired and replies 503 with the sign-in hint.
+func (b *Broker) failSSOExpired(w http.ResponseWriter, row Row, ck connKey, profile string, err error, now time.Time) {
+	replyErr(w, http.StatusServiceUnavailable, b.noteSSOExpired(row, ck, profile, err, now))
+}
+
+// noteSSOExpired is failSSOExpired without the reply: it flags the sign-in,
+// audits sso_expired and returns the box message.
+func (b *Broker) noteSSOExpired(row Row, ck connKey, profile string, err error, now time.Time) string {
+	key := b.SourceKeyOf(profile)
+	b.mu.Lock()
+	b.ssoBad[key], b.ssoNeed[ck] = now, key
+	b.mu.Unlock()
+	boxMsg := fmt.Sprintf(
+		`SSO session for profile %q expired. agent-box has asked a human to sign in; retry after they do (or run "aws sso login --profile %s" on the host).`,
+		profile, profile)
+	hostMsg := boxMsg
+	var me *MintError
+	if errors.As(err, &me) && me.Detail != "" { // a misclassified failure must stay debuggable from the audit
+		hostMsg += ": " + sanitize(me.Detail)
+	}
+	b.noteFail(row, OutcomeSSOExpired, hostMsg)
+	return boxMsg
+}
+
 // discardReasonLocked says why a freshly minted elevated credential must be
 // discarded rather than handed out ("" = keep it). The hard bound (spec §5.2):
 // a write credential never outlives the window it was minted under, and is
@@ -523,7 +554,7 @@ type mintPlan struct {
 // grant.
 func (b *Broker) planLocked(sid, conn string, bnd config.AWSBinding, key string, now time.Time, forceRead bool) mintPlan {
 	p := mintPlan{key: key, role: bnd.RoleARN}
-	if forceRead || bnd.Elevate == nil {
+	if forceRead || bnd.Elevate == nil || bnd.SSODirect() { // sso_direct never elevates
 		return p
 	}
 	if e, ok := b.elevatedLocked(sid, now); ok && e.conn == conn {
@@ -543,12 +574,17 @@ func (b *Broker) fail(w http.ResponseWriter, row Row, o Outcome, status int, msg
 // failSplit replies to the box with boxMsg but keeps hostMsg (which may carry
 // host-side detail) for the audit row and Stats.LastError.
 func (b *Broker) failSplit(w http.ResponseWriter, row Row, o Outcome, status int, boxMsg, hostMsg string) {
+	b.noteFail(row, o, hostMsg)
+	replyErr(w, status, boxMsg)
+}
+
+// noteFail is failSplit without the reply: Stats.LastError and the audit row.
+func (b *Broker) noteFail(row Row, o Outcome, hostMsg string) {
 	b.mu.Lock()
 	b.eachStatsLocked(connKey{row.SessionID, row.Entry}, func(st *Stats) { st.LastError = hostMsg }) // Entry is the connection ("" = legacy)
 	b.mu.Unlock()
 	row.Outcome, row.Error = o, hostMsg
 	b.record(row)
-	replyErr(w, status, boxMsg)
 }
 
 // safeCode keeps an error code to a short identifier, so a Minter cannot smuggle
@@ -580,6 +616,8 @@ func stsHint(code string) string {
 		return "the binding's source profile could not be loaded on the host"
 	case "Throttling", "ThrottlingException":
 		return "AWS is throttling; retry shortly"
+	case codeNotSSOProfile, codeNotSSOCredentials:
+		return "sso_direct needs an IAM Identity Center (SSO) source profile; fix the profile or the connection"
 	}
 	return "see the agent-box audit log on the host for details"
 }

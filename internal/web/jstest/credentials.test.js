@@ -8,6 +8,7 @@ const {
   templateForm, fromTemplateBody, valueFieldCleared, credUniqueName, credKeep, credState, credErrText,
   tokenEditBody, appBody, storeCreateCheck, valueIdsText, CRED_SECRET_KEYS, ghKeyID, awsSSOTimedOut, credTemplateSuffixes,
   credTableRows, credTableHead, awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
+  awsGateView, awsGateBoxEmpty, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
 } = require("../static/credentials.js");
 
 const view = (over) => ({
@@ -638,4 +639,178 @@ test("awsRolesNote: denied, failed and SSO-expired listings keep their own notes
   assert.deepStrictEqual(awsRolesNote({ access_denied: true }), { text: "This profile can't list roles; type the role name", doc: false });
   assert.deepStrictEqual(awsRolesNote({ failed: true }), { text: "Could not list the roles. Type the role ARN yourself.", doc: false });
   assert.deepStrictEqual(awsRolesNote({ sso_expired: true }), { text: "", doc: false });
+});
+
+// --- sso_direct: the mode text, the gate verdict, the connection body ----------
+
+const MODE_TEXT = (n) => "SSO role directly: the agent gets your permission set's own credentials, valid for up to " + n +
+  " h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.";
+
+test("awsModeText fills N, rounded up, and falls back to the 12 h SSO maximum", () => {
+  assert.strictEqual(awsModeText(1), MODE_TEXT(1));
+  assert.strictEqual(awsModeText(12), MODE_TEXT(12));
+  assert.strictEqual(awsModeText(2.2), MODE_TEXT(3));
+  assert.strictEqual(awsModeText(0), MODE_TEXT(12));
+  assert.strictEqual(awsModeText(undefined), MODE_TEXT(12));
+  assert.strictEqual(awsModeText(99), MODE_TEXT(12));
+});
+
+test("awsHoursFromExpiry: whole hours until the expiry, rounded up, 0 when unknown or past", () => {
+  const now = Date.parse("2027-01-15T08:00:00Z");
+  assert.strictEqual(awsHoursFromExpiry("2027-01-15T16:00:00Z", now), 8);
+  assert.strictEqual(awsHoursFromExpiry("2027-01-15T08:20:00Z", now), 1);
+  assert.strictEqual(awsHoursFromExpiry("", now), 0);
+  assert.strictEqual(awsHoursFromExpiry("nope", now), 0);
+  assert.strictEqual(awsHoursFromExpiry("2027-01-15T07:00:00Z", now), 0);
+});
+
+test("awsDataReadName maps actions to the friendly names", () => {
+  assert.strictEqual(awsDataReadName("secretsmanager:GetSecretValue"), "secret values");
+  assert.strictEqual(awsDataReadName("ssm:GetParametersByPath"), "SSM parameters");
+  assert.strictEqual(awsDataReadName("DynamoDB:Scan"), "DynamoDB items");
+  assert.strictEqual(awsDataReadName("s3:GetObject"), "S3 objects");
+  assert.strictEqual(awsDataReadName("kms:Decrypt"), "KMS decrypt");
+  assert.strictEqual(awsDataReadName("ec2:Foo"), "ec2:Foo");
+});
+
+test("awsGateView: read_only is ok and reports the data reads", () => {
+  const v = awsGateView({
+    state: "read_only", role_arn: "arn:aws:iam::1:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ReadOnly_abc",
+    data_reads: [
+      { action: "secretsmanager:GetSecretValue", denied: true }, { action: "ssm:GetParameter", denied: true },
+      { action: "dynamodb:GetItem", denied: true }, { action: "dynamodb:Scan", denied: true },
+      { action: "s3:GetObject", denied: false }, { action: "kms:Decrypt", denied: false },
+    ],
+  });
+  assert.strictEqual(v.tone, "ok");
+  assert.strictEqual(v.badge, "Read-only");
+  assert.strictEqual(v.signIn, false);
+  assert.deepStrictEqual(v.refused, []);
+  assert.deepStrictEqual(v.dataReads, { denied: ["secret values", "SSM parameters", "DynamoDB items"], readable: ["S3 objects", "KMS decrypt"] });
+  assert.strictEqual(v.dataReadText, "Your permission set denies: secret values, SSM parameters, DynamoDB items. Still readable: S3 objects, KMS decrypt.");
+});
+
+test("awsGateView: a friendly name with any action still readable counts as readable", () => {
+  const v = awsGateView({ state: "read_only", data_reads: [
+    { action: "dynamodb:GetItem", denied: true }, { action: "dynamodb:Scan", denied: false } ] });
+  assert.deepStrictEqual(v.dataReads, { denied: [], readable: ["DynamoDB items"] });
+  assert.strictEqual(v.dataReadText, "Your permission set denies: nothing. Still readable: DynamoDB items.");
+  assert.strictEqual(awsGateView({ state: "read_only" }).dataReadText, "");
+});
+
+test("awsGateView: not_read_only lists every refusing pattern with its reason", () => {
+  const v = awsGateView({ state: "not_read_only", refused: [
+    { pattern: "*", why: "allows every action" }, { Pattern: "s3:Put*", Why: "writes data" } ] });
+  assert.strictEqual(v.tone, "bad");
+  assert.strictEqual(v.badge, "Not read-only");
+  assert.deepStrictEqual(v.refused, ["* — allows every action", "s3:Put* — writes data"]);
+  assert.strictEqual(v.signIn, false);
+  assert.match(v.text, /cannot be saved/);
+});
+
+test("awsGateView: unverified sso_expired offers the sign-in", () => {
+  const v = awsGateView({ state: "unverified", reason: "sso_expired" });
+  assert.strictEqual(v.tone, "warn");
+  assert.strictEqual(v.badge, "SSO expired");
+  assert.strictEqual(v.signIn, true);
+});
+
+test("awsGateView: missing_permissions lists the IAM actions to grant", () => {
+  const v = awsGateView({ state: "unverified", reason: "missing_permissions", missing_perms: ["iam:GetRolePolicy", "iam:GetPolicy"] });
+  assert.strictEqual(v.badge, "Cannot read its own policy");
+  assert.deepStrictEqual(v.missing, ["iam:GetRolePolicy", "iam:GetPolicy"]);
+  assert.strictEqual(v.signIn, false);
+  assert.match(v.text, /iam:GetRolePolicy, iam:GetPolicy/);
+});
+
+test("awsGateView: missing_context labels the actions as needing context, not as writes", () => {
+  const v = awsGateView({ state: "unverified", reason: "missing_context", refused: [{ pattern: "s3:Put*", why: "needs a condition value" }] });
+  assert.strictEqual(v.tone, "warn");
+  assert.strictEqual(v.badge, "Needs context");
+  assert.deepStrictEqual(v.refused, ["s3:Put* — needs context: needs a condition value"]);
+  assert.doesNotMatch(v.text, /can write/);
+});
+
+test("awsGateView: other unverified reasons are warnings, never ok; unknown input is unverified", () => {
+  for (const reason of ["timeout", "error", "simulate_denied", "probe_disabled", "weird"]) {
+    const v = awsGateView({ state: "unverified", reason });
+    assert.strictEqual(v.tone, "warn", reason);
+    assert.strictEqual(v.signIn, false, reason);
+  }
+  assert.strictEqual(awsGateView(null).tone, "warn");
+  assert.strictEqual(awsGateView({ state: "read_only_maybe" }).tone, "warn");
+});
+
+test("awsConnFromRow in sso_direct sends the mode and none of role, elevate or s3 read", () => {
+  const row = { name: "a", source_profile: "p", role_arn: "arn:aws:iam::1:role/x", region: "r", mode: "sso_direct", label: "L",
+    s3: "b", elevRole: "arn:aws:iam::1:role/w", elevMinutes: "30", elevIAM: true, egress: "h.example.com" };
+  assert.deepStrictEqual(awsConnFromRow(row), { name: "a", source_profile: "p", region: "r", mode: "sso_direct", label: "L", egress_allow: ["h.example.com"] });
+  const ar = awsConnFromRow({ name: "a", source_profile: "p", role_arn: "arn:aws:iam::1:role/x", region: "r" });
+  assert.strictEqual("mode" in ar, false);
+  assert.strictEqual(ar.role_arn, "arn:aws:iam::1:role/x");
+});
+
+test("rowSaveState: sso_direct saves only on a read_only gate, and an unchanged edit gets no exemption", () => {
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct" }), { canSave: false, needsAck: false });
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", unchanged: true }), { canSave: false, needsAck: false });
+  for (const state of ["not_read_only", "unverified", "x"]) {
+    assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: { state } }), { canSave: false, needsAck: false }, state);
+  }
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", gate: { state: "read_only" } }), { canSave: true, needsAck: false });
+  assert.deepStrictEqual(rowSaveState({ mode: "sso_direct", assume: "ok", verdict: "writes" }), { canSave: false, needsAck: false });
+  // assume_role behaves as before
+  assert.deepStrictEqual(rowSaveState({ assume: "ok", verdict: "none_found" }), { canSave: true, needsAck: false });
+});
+
+test("awsRowStateFor: an edit that only changes the label still needs the gate in sso_direct", () => {
+  const row = { mode: "sso_direct", source_profile: "p", role_arn: "", orig: { source_profile: "p", role_arn: "" }, gate: null };
+  assert.strictEqual(awsRowStateFor(row).canSave, false);
+  row.gate = { state: "read_only" };
+  assert.strictEqual(awsRowStateFor(row).canSave, true);
+  const ar = { source_profile: "p", role_arn: "arn:aws:iam::1:role/x", orig: { source_profile: "p", role_arn: "arn:aws:iam::1:role/x" } };
+  assert.strictEqual(awsRowStateFor(ar).canSave, true);
+});
+
+test("credTableRows aws: an sso_direct row shows the mode, the account and a gate note, never the AssumeRole 'Not checked'", () => {
+  const e = awsE("sbx", { mode: "sso_direct", role_arn: "", account_id: "123456789012", base: { state: "not_checked" } });
+  const [r] = credTableRows({ key: "aws", entries: [e] });
+  assert.deepStrictEqual([r.cells[1].text, r.cells[1].sub], ["123456789012", "SSO role directly"]);
+  assert.deepStrictEqual([r.cells[3].text, r.cells[3].cls, r.cells[3].sub], ["Read-only gate runs on every use", "", ""]);
+  assert.doesNotMatch(JSON.stringify(r.cells), /Not checked/);
+  assert.strictEqual(r.danger, false);
+  // an unreadable profile leaves the account empty, not a made-up one
+  const [u] = credTableRows({ key: "aws", entries: [awsE("x", { mode: "sso_direct", role_arn: "", account_id: "" })] });
+  assert.strictEqual(u.cells[1].text, "");
+  // an invalid entry keeps the plain dash, as for any row
+  const [bad] = credTableRows({ key: "aws", entries: [awsE("y", { mode: "sso_direct", status: "invalid" })] });
+  assert.strictEqual(bad.cells[3].text, "–");
+  // assume_role rows are unchanged
+  const [a] = credTableRows({ key: "aws", entries: [awsE("z", { base: { state: "none_found" } })] });
+  assert.strictEqual(a.cells[1].sub, "CuliShopLabAccess");
+});
+
+test("credAWSCard: an sso_direct connection names the mode and the gate, not an empty Role and 'Not checked'", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
+  const card = src.slice(src.indexOf("function credAWSCard"), src.indexOf("function credAWSCard") + 1800);
+  assert.match(card, /direct \? \["Mode", CRED_SSO_DIRECT_LABEL\] : \["Role"/);
+  assert.match(card, /e\.status === "ok" && direct/);
+});
+
+test("awsGateBoxEmpty: a bare sign-in gate draws no empty amber box; anything else to show keeps it", () => {
+  const bare = awsGateView({ state: "unverified", reason: "sso_expired" });
+  assert.strictEqual(bare.signIn, true);
+  assert.strictEqual(awsGateBoxEmpty(bare), true);
+  const withReads = awsGateView({ state: "unverified", reason: "sso_expired", data_reads: [{ action: "secretsmanager:GetSecretValue", denied: true }] });
+  if (withReads.dataReadText) assert.strictEqual(awsGateBoxEmpty(withReads), false);
+  assert.strictEqual(awsGateBoxEmpty(awsGateView({ state: "unverified", reason: "timeout" })), false);
+  assert.strictEqual(awsGateBoxEmpty(awsGateView({ state: "not_read_only", refused: [{ pattern: "s3:Put*", why: "writes" }] })), false);
+  assert.strictEqual(awsGateBoxEmpty(awsGateView({ state: "read_only" })), false);
+});
+
+test("the save 409 branch for a gate that did not pass resets the stale hours and repaints the mode note", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "../static/credentials.js"), "utf8");
+  const i = src.indexOf('e.code === "not_read_only" || e.code === "unverified"');
+  const branch = src.slice(i, src.indexOf("needs_ack", i));
+  assert.match(branch, /row\.hours = 0;\s*awsPaintModeNote\(row\);/);
+  assert.match(src, /if \(!awsGateBoxEmpty\(g\)\) nodes\.push\(awsGateNode\(g\)\)/);
 });

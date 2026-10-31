@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials/ssocreds"
 	"github.com/aws/smithy-go"
 )
@@ -121,5 +122,123 @@ func TestMintAfterALogoutAsksForALogin(t *testing.T) {
 		RoleARN: "arn:aws:iam::123456789012:role/r", SessionName: "agentbox-x", Policy: "{}", Duration: 15 * time.Minute})
 	if !errors.Is(err, ErrSSOExpired) {
 		t.Fatalf("got %v, want ErrSSOExpired", err)
+	}
+}
+
+// ssoDirectFiles points the SDK at a config with one pure SSO profile and
+// every non-SSO shape sso_direct must refuse, and returns the directory.
+func ssoDirectFiles(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config")
+	ini := "[sso-session s]\nsso_start_url = https://example.awsapps.com/start\nsso_region = ap-southeast-1\n" +
+		"[profile sso-ro]\nsso_session = s\nsso_account_id = 123456789012\nsso_role_name = ReadOnly\nregion = ap-southeast-1\n" +
+		"[profile legacy-sso]\nsso_start_url = https://example.awsapps.com/start\nsso_region = ap-southeast-1\n" +
+		"sso_account_id = 210987654321\nsso_role_name = ReadOnly\n" +
+		"[profile static]\nregion = ap-southeast-1\n" +
+		"[profile process]\ncredential_process = /bin/echo {}\n" +
+		"[profile chain]\nrole_arn = arn:aws:iam::123456789012:role/r\nsource_profile = sso-ro\n" +
+		"[profile sso-chain]\nsso_session = s\nsso_account_id = 123456789012\nsso_role_name = ReadOnly\n" +
+		"role_arn = arn:aws:iam::123456789012:role/r\nsource_profile = sso-ro\n" +
+		"[profile sso-static]\nsso_session = s\nsso_account_id = 123456789012\nsso_role_name = ReadOnly\n" +
+		"[profile sso-process]\nsso_session = s\nsso_account_id = 123456789012\nsso_role_name = ReadOnly\ncredential_process = /bin/echo {}\n"
+	creds := "[static]\naws_access_key_id = AKIAEXAMPLEEXAMPLE00\naws_secret_access_key = secret\n" +
+		"[sso-static]\naws_access_key_id = AKIAEXAMPLEEXAMPLE00\naws_secret_access_key = secret\n"
+	if err := os.WriteFile(cfg, []byte(ini), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "credentials"), []byte(creds), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", cfg)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+	t.Setenv("HOME", dir) // no ~/.aws/sso/cache
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	return dir
+}
+
+// Review Focus 1: in sso_direct a static-key, credential_process or
+// assume-role profile is refused before any credential is read, so the mode
+// never vends a long-lived key. Each would otherwise resolve locally (static
+// keys need no network at all).
+func TestSTSMintSSODirectRefusesNonSSOProfile(t *testing.T) {
+	ssoDirectFiles(t)
+	for _, p := range []string{"static", "process", "chain", "sso-chain", "sso-static", "sso-process"} {
+		c, err := STSMinter{}.Mint(context.Background(), MintInput{SourceProfile: p, Region: "ap-southeast-1", Mode: "sso_direct"})
+		var me *MintError
+		if !errors.As(err, &me) || me.Code != "NotSSOProfile" {
+			t.Errorf("%s: got %v, want NotSSOProfile", p, err)
+		}
+		if c != (Creds{}) {
+			t.Errorf("%s: credentials handed back: %+v", p, c)
+		}
+	}
+}
+
+// A pure SSO profile goes on to the SSO cache; with none (just after `aws sso
+// logout`) the mint asks for a sign-in exactly as AssumeRole does.
+func TestSTSMintSSODirectAfterLogoutAsksForALogin(t *testing.T) {
+	ssoDirectFiles(t)
+	for _, p := range []string{"sso-ro", "legacy-sso"} {
+		_, err := STSMinter{}.Mint(context.Background(), MintInput{SourceProfile: p, Region: "ap-southeast-1", Mode: "sso_direct"})
+		if !errors.Is(err, ErrSSOExpired) {
+			t.Errorf("%s: got %v, want ErrSSOExpired", p, err)
+		}
+	}
+}
+
+func TestSTSMintSSODirectNeedsExpiringCreds(t *testing.T) {
+	exp := time.Unix(1_800_003_600, 0)
+	good := aws.Credentials{AccessKeyID: "ASIAX", SecretAccessKey: "s", SessionToken: "t", Source: ssocreds.ProviderName,
+		CanExpire: true, Expires: exp}
+	cases := map[string]func(*aws.Credentials){
+		"cannot expire":    func(c *aws.Credentials) { c.CanExpire = false },
+		"no session token": func(c *aws.Credentials) { c.SessionToken = "" },
+		"no expiry":        func(c *aws.Credentials) { c.Expires = time.Time{} },
+		"not from SSO":     func(c *aws.Credentials) { c.Source = "EnvConfigCredentials" },
+		"no key":           func(c *aws.Credentials) { c.AccessKeyID = "" },
+	}
+	for name, mut := range cases {
+		c := good
+		mut(&c)
+		got, err := ssoDirectCreds(context.Background(), aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return c, nil }))
+		var me *MintError
+		if !errors.As(err, &me) || me.Code != "NotSSOCredentials" || got != (Creds{}) {
+			t.Errorf("%s: got %+v, %v", name, got, err)
+		}
+	}
+	got, err := ssoDirectCreds(context.Background(), aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) { return good, nil }))
+	if err != nil || got != (Creds{AccessKeyID: "ASIAX", SecretAccessKey: "s", SessionToken: "t", Expiration: exp}) {
+		t.Fatalf("good: %+v %v", got, err)
+	}
+	_, err = ssoDirectCreds(context.Background(), aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+		return aws.Credentials{}, &ssocreds.InvalidTokenError{Err: errors.New("expired")}
+	}))
+	if !errors.Is(err, ErrSSOExpired) {
+		t.Fatalf("an expired login: %v", err)
+	}
+}
+
+func TestSSOAccountOf(t *testing.T) {
+	ssoDirectFiles(t)
+	for p, want := range map[string]string{"sso-ro": "123456789012", "legacy-sso": "210987654321"} {
+		if got, err := SSOAccountOf(context.Background(), p); err != nil || got != want {
+			t.Errorf("%s: %q %v", p, got, err)
+		}
+	}
+	for _, p := range []string{"static", "chain", "no-such-profile"} {
+		if got, err := SSOAccountOf(context.Background(), p); err == nil {
+			t.Errorf("%s: %q, want an error", p, got)
+		}
+	}
+}
+
+// AssumeRole never sets the mode.
+func TestAssumeRoleMintInputHasNoMode(t *testing.T) {
+	b, fm, _, _ := setup(t, map[string]SessionView{"claude-3": live()})
+	if w := call(b, tokA("claude-3")); w.Code != 200 || fm.calls[0].Mode != "" {
+		t.Fatalf("status %d input %+v", w.Code, fm.calls[0])
 	}
 }

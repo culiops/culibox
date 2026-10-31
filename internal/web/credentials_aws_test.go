@@ -32,6 +32,33 @@ type fakeAWSSvc struct {
 	calls     []string
 	targets   []broker.ProbeTarget
 	onCheck   func()
+
+	// The sso_direct gate: gate and gateExp are answered to every call; gated
+	// records each call's connection (profile and region for the check route).
+	gate    awsprobe.GateResult
+	gateExp time.Time
+	gated   []config.AWSConnection
+	onGate  func()
+}
+
+func (f *fakeAWSSvc) runGate(c config.AWSConnection) (awsprobe.GateResult, time.Time) {
+	f.note("gate")
+	f.mu.Lock()
+	f.gated = append(f.gated, c)
+	hook, g, exp := f.onGate, f.gate, f.gateExp
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return g, exp
+}
+
+func (f *fakeAWSSvc) CheckSSODirect(_ context.Context, profile, region string) (awsprobe.GateResult, time.Time) {
+	return f.runGate(config.AWSConnection{AWSBinding: config.AWSBinding{SourceProfile: profile, Region: region, Mode: config.AWSModeSSODirect}})
+}
+
+func (f *fakeAWSSvc) CheckSSODirectConn(_ context.Context, c config.AWSConnection) (awsprobe.GateResult, time.Time) {
+	return f.runGate(c)
 }
 
 func (f *fakeAWSSvc) note(s string) {
@@ -704,5 +731,305 @@ func TestAWSUnackedLoopIsLimited(t *testing.T) {
 	}
 	if a.svc.n() != 60 {
 		t.Fatalf("checks %d", a.svc.n())
+	}
+}
+
+// --- sso_direct: check and save --------------------------------------------
+
+const ssoCheckBody = `{"mode":"sso_direct","source_profile":"p","region":"us-east-1"}`
+
+func ssoConnJSON(name string) string {
+	return `{"connection":{"name":"` + name + `","mode":"sso_direct","source_profile":"p","region":"us-east-1"}}`
+}
+
+func readOnlyGate() awsprobe.GateResult {
+	return awsprobe.GateResult{State: awsprobe.GateReadOnly, RoleARN: "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_X_1"}
+}
+
+func TestCheckSSODirect(t *testing.T) {
+	a := newAWSRoutes(t)
+	exp := time.Unix(1_800_000_000, 0).UTC()
+	a.svc.gate, a.svc.gateExp = readOnlyGate(), exp
+	code, body, _ := a.call("POST", pathAWS+"/check", ssoCheckBody)
+	gate, _ := body["gate"].(map[string]any)
+	if code != 200 || gate["state"] != "read_only" || body["expires"] != exp.Format(time.RFC3339) {
+		t.Fatalf("%d %v", code, body)
+	}
+	if body["verdict"] != nil || body["assume"] != nil {
+		t.Fatalf("an AssumeRole verdict leaked into the sso_direct answer: %v", body)
+	}
+	if len(a.svc.gated) != 1 || a.svc.gated[0].SourceProfile != "p" || a.svc.gated[0].Region != "us-east-1" || !a.svc.gated[0].SSODirect() {
+		t.Fatalf("gate called with %+v", a.svc.gated)
+	}
+	if slices.Contains(a.svc.calls, "check") {
+		t.Fatal("the AssumeRole check ran for an sso_direct check")
+	}
+	// Nothing for the entries list: no verdict is kept for this mode.
+	if v := a.fx.cm.Verdict("p", ""); v.State != awsprobe.NotChecked().State {
+		t.Fatalf("verdict kept: %+v", v)
+	}
+}
+
+func TestCheckSSODirectNotReadOnlyAndUnverified(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.gate = awsprobe.GateResult{State: awsprobe.GateNotReadOnly, Refused: []awsprobe.Verdict{{Pattern: "s3:*", Why: "allows writes"}}}
+	code, body, _ := a.call("POST", pathAWS+"/check", ssoCheckBody)
+	gate, _ := body["gate"].(map[string]any)
+	if code != 200 || gate["state"] != "not_read_only" || body["expires"] != "" {
+		t.Fatalf("%d %v", code, body)
+	}
+	a.svc.gate = awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSSOExpired}
+	code, body, _ = a.call("POST", pathAWS+"/check", ssoCheckBody)
+	gate, _ = body["gate"].(map[string]any)
+	if code != 200 || gate["state"] != "unverified" || gate["reason"] != "sso_expired" {
+		t.Fatalf("%d %v", code, body)
+	}
+}
+
+func TestCheckSSODirectBadInputs(t *testing.T) {
+	a := newAWSRoutes(t)
+	for name, body := range map[string]string{
+		"role_arn present": `{"mode":"sso_direct","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1"}`,
+		"profile":          `{"mode":"sso_direct","source_profile":"a b","region":"us-east-1"}`,
+		"region":           `{"mode":"sso_direct","source_profile":"p","region":"mars"}`,
+		"no region":        `{"mode":"sso_direct","source_profile":"p"}`,
+		"unknown mode":     `{"mode":"admin","source_profile":"p","region":"us-east-1"}`,
+	} {
+		if code, _, _ := a.call("POST", pathAWS+"/check", body); code != 400 {
+			t.Errorf("%s: %d", name, code)
+		}
+	}
+	if a.svc.n() != 0 || len(a.fx.rec.events) != 0 {
+		t.Fatalf("invalid input reached AWS or the audit: %v", a.svc.calls)
+	}
+	// "assume_role" spelled out is the same as no mode.
+	body := `{"mode":"assume_role","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1"}`
+	if code, _, _ := a.call("POST", pathAWS+"/check", body); code != 200 {
+		t.Fatalf("assume_role spelled out: %d", code)
+	}
+}
+
+func TestCheckSSODirectAudited(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.gate = readOnlyGate()
+	var before []broker.CredEvent
+	a.svc.onGate = func() { before = slices.Clone(a.fx.rec.events) }
+	a.call("POST", pathAWS+"/check", ssoCheckBody)
+	if len(before) != 1 || before[0].Action != broker.CredChecked || !strings.Contains(before[0].Detail, "sso_direct") || !strings.HasSuffix(before[0].Detail, " started") {
+		t.Fatalf("no audit row before the gate ran: %+v", before)
+	}
+	if len(a.fx.rec.events) != 2 {
+		t.Fatalf("%+v", a.fx.rec.events)
+	}
+	if e := a.fx.rec.events[1]; e.Action != broker.CredChecked || e.Kind != "aws" || !strings.Contains(e.Detail, "sso_direct") || !strings.Contains(e.Detail, "read_only") {
+		t.Fatalf("%+v", e)
+	}
+}
+
+func TestCheckSSODirectRefusedWhenAuditFails(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.fx.rec.err = errors.New("disk full")
+	if code, body, _ := a.call("POST", pathAWS+"/check", ssoCheckBody); code != 500 || body["gate"] != nil || a.svc.n() != 0 {
+		t.Fatalf("%d %v", code, body)
+	}
+}
+
+func TestCheckSSODirectNoBroker(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.srv.CredAWS = nil
+	if code, m, _ := a.call("POST", pathAWS+"/check", ssoCheckBody); code != 409 || m["code"] != "no_broker" {
+		t.Fatalf("%d %v", code, m)
+	}
+}
+
+func TestSaveSSODirectReadOnly(t *testing.T) {
+	a := newAWSRoutes(t)
+	exp := time.Unix(1_800_000_000, 0).UTC()
+	a.svc.gate, a.svc.gateExp = readOnlyGate(), exp
+	code, body, _ := a.call("POST", pathAWS, ssoConnJSON("ro"))
+	gate, _ := body["gate"].(map[string]any)
+	if code != 201 || body["name"] != "ro" || gate["state"] != "read_only" || body["expires"] != exp.Format(time.RFC3339) {
+		t.Fatalf("%d %v", code, body)
+	}
+	got := a.fx.file(t).AWSConnections
+	if len(got) != 1 || got[0].Mode != config.AWSModeSSODirect || got[0].RoleARN != "" {
+		t.Fatalf("file: %+v", got)
+	}
+	if len(a.svc.gated) != 1 || a.svc.gated[0].Name != "ro" {
+		t.Fatalf("gate saw %+v", a.svc.gated)
+	}
+	if slices.Contains(a.svc.calls, "check") {
+		t.Fatal("AssumeRole check ran")
+	}
+	acts := a.fx.rec.actions()
+	if len(acts) != 3 || acts[0] != broker.CredChecked || acts[1] != broker.CredChecked || acts[2] != broker.CredCreated {
+		t.Fatalf("audit %v", acts)
+	}
+	// Edit (a label change) gates again: the permission set may have changed.
+	put := `{"connection":{"name":"ro","mode":"sso_direct","source_profile":"p","region":"us-east-1","label":"RO"}}`
+	if code, _, _ = a.call("PUT", pathAWS+"/ro", put); code != 200 || len(a.svc.gated) != 2 {
+		t.Fatalf("edit: %d gated=%d", code, len(a.svc.gated))
+	}
+}
+
+func TestSaveSSODirectRefusedAndNothingWritten(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gate awsprobe.GateResult
+		code string
+	}{
+		{"not read only", awsprobe.GateResult{State: awsprobe.GateNotReadOnly, Refused: []awsprobe.Verdict{{Pattern: "s3:*", Why: "allows writes"}}}, "not_read_only"},
+		{"unverified", awsprobe.GateResult{State: awsprobe.GateUnverified, Reason: awsprobe.ReasonSSOExpired}, "unverified"},
+		{"read only with no role ARN", awsprobe.GateResult{State: awsprobe.GateReadOnly}, "unverified"},
+		{"junk state", awsprobe.GateResult{State: "yes"}, "unverified"},
+	} {
+		for _, ack := range []string{"", `,"ack_write":true`} {
+			a := newAWSRoutes(t)
+			a.svc.gate = tc.gate
+			body := strings.TrimSuffix(ssoConnJSON("ro"), "}") + ack + "}"
+			code, m, _ := a.call("POST", pathAWS, body)
+			g, _ := m["gate"].(map[string]any)
+			if code != 409 || m["code"] != tc.code || g == nil {
+				t.Errorf("%s ack=%q: %d %v", tc.name, ack, code, m)
+			}
+			if a.fx.fileBytes(t) != "" || a.fx.applyCount() != 0 {
+				t.Errorf("%s ack=%q: something was saved", tc.name, ack)
+			}
+			if slices.Contains(a.fx.rec.actions(), broker.CredWriteAck) || slices.Contains(a.fx.rec.actions(), broker.CredCreated) {
+				t.Errorf("%s ack=%q: audit %v", tc.name, ack, a.fx.rec.actions())
+			}
+		}
+	}
+}
+
+func TestSaveSSODirectAckWriteIgnoredWhenReadOnly(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.gate = readOnlyGate()
+	body := strings.TrimSuffix(ssoConnJSON("ro"), "}") + `,"ack_write":true}`
+	if code, _, _ := a.call("POST", pathAWS, body); code != 201 {
+		t.Fatalf("%d", code)
+	}
+	if slices.Contains(a.fx.rec.actions(), broker.CredWriteAck) {
+		t.Fatalf("an acknowledgement was recorded for a mode that has none: %v", a.fx.rec.actions())
+	}
+}
+
+func TestSaveSSODirectStaleAssumeRoleFieldsRefused(t *testing.T) {
+	a := newAWSRoutes(t)
+	create := `{"connection":{"name":"c","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1"}}`
+	if code, _, _ := a.call("POST", pathAWS, create); code != 201 {
+		t.Fatal(code)
+	}
+	before := a.fx.fileBytes(t)
+	for name, conn := range map[string]string{
+		"role_arn": `{"name":"c","mode":"sso_direct","source_profile":"p","role_arn":"arn:aws:iam::123456789012:role/R","region":"us-east-1"}`,
+		"elevate":  `{"name":"c","mode":"sso_direct","source_profile":"p","region":"us-east-1","elevate":{"role_arn":"arn:aws:iam::123456789012:role/W"}}`,
+		"s3_read":  `{"name":"c","mode":"sso_direct","source_profile":"p","region":"us-east-1","s3_read":["b"]}`,
+	} {
+		a.svc.gate = readOnlyGate()
+		n := len(a.svc.gated)
+		code, m, _ := a.call("PUT", pathAWS+"/c", `{"connection":`+conn+`}`)
+		if code != 400 {
+			t.Errorf("%s: %d %v", name, code, m)
+		}
+		if len(a.svc.gated) != n {
+			t.Errorf("%s: the gate ran for a binding that cannot be valid", name)
+		}
+	}
+	if a.fx.fileBytes(t) != before {
+		t.Fatal("the file changed")
+	}
+}
+
+// A cached AssumeRole verdict for the same profile is not shown for, or used
+// by, an sso_direct connection.
+func TestSSODirectIgnoresAssumeRoleVerdict(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.fx.cm.RecordVerdict("p", "", awsprobe.Result{State: awsprobe.NoneFound, CheckedAt: time.Now()})
+	a.svc.gate = awsprobe.GateResult{State: awsprobe.GateNotReadOnly}
+	if code, _, _ := a.call("POST", pathAWS, ssoConnJSON("ro")); code != 409 {
+		t.Fatalf("a stored AssumeRole verdict let an sso_direct save through: %d", code)
+	}
+	a.svc.gate = readOnlyGate()
+	if code, _, _ := a.call("POST", pathAWS, ssoConnJSON("ro")); code != 201 {
+		t.Fatal(code)
+	}
+	a.fx.cm.RecordVerdict("p", "", awsprobe.Result{State: awsprobe.Writes, Actions: []string{"s3:PutObject"}, CheckedAt: time.Now()})
+	snap := a.fx.cm.snapshot()
+	if len(snap.aws) != 1 || snap.aws[0].base.State != awsprobe.NotChecked().State {
+		t.Fatalf("entries list shows an AssumeRole verdict for an sso_direct connection: %+v", snap.aws)
+	}
+}
+
+func TestSaveSSODirectNoBrokerOrNoGate(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.fx.cm.chk = nil
+	if code, m, _ := a.call("POST", pathAWS, ssoConnJSON("ro")); code != 409 || m["code"] != "no_broker" {
+		t.Fatalf("no checker: %d %v", code, m)
+	}
+	// A checker that cannot gate is unverified, never a pass.
+	a.fx.cm.chk = a.fx.chk
+	code, m, _ := a.call("POST", pathAWS, ssoConnJSON("ro"))
+	if code != 409 || m["code"] != "unverified" || a.fx.fileBytes(t) != "" {
+		t.Fatalf("%d %v", code, m)
+	}
+}
+
+func TestSaveSSODirectGateAuditFailure(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.gate = readOnlyGate()
+	a.fx.rec.err = errors.New("disk full")
+	code, m, _ := a.call("POST", pathAWS, ssoConnJSON("ro"))
+	if code != 500 || m["gate"] != nil || a.svc.n() != 0 || a.fx.fileBytes(t) != "" {
+		t.Fatalf("%d %v", code, m)
+	}
+}
+
+// The entries list and the profile editor's picker carry the mode, so an edit
+// form can send it back and a picker can mark the connection.
+func TestSSODirectModeIsShown(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.gate = readOnlyGate()
+	if code, _, _ := a.call("POST", pathAWS, ssoConnJSON("ro")); code != 201 {
+		t.Fatal(code)
+	}
+	body := a.srv.credView()
+	if len(body.AWS) != 1 || body.AWS[0].Mode != config.AWSModeSSODirect {
+		t.Fatalf("%+v", body.AWS)
+	}
+	b, _ := json.Marshal(body.AWS[0])
+	if !strings.Contains(string(b), `"mode":"sso_direct"`) {
+		t.Fatalf("%s", b)
+	}
+	// An assume_role entry does not grow a mode field.
+	ar := awsConn("c", "p", arnRead)
+	if _, err := a.fx.cm.PutAWS(context.Background(), ar, true, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range a.srv.credView().AWS {
+		b, _ = json.Marshal(e)
+		if e.Name == "c" && strings.Contains(string(b), `"mode"`) {
+			t.Fatalf("%s", b)
+		}
+	}
+	metas := a.fx.pm.AWSConnectionMetaList()
+	modes := map[string]string{}
+	for _, m := range metas {
+		modes[m.Name] = m.Mode
+	}
+	if modes["ro"] != config.AWSModeSSODirect || modes["c"] != "" {
+		t.Fatalf("%+v", metas)
+	}
+}
+
+// PutAWS itself cannot be used to skip the gate, whatever ackWrite says.
+func TestPutAWSRoutesSSODirectThroughTheGate(t *testing.T) {
+	a := newAWSRoutes(t)
+	a.svc.gate = awsprobe.GateResult{State: awsprobe.GateNotReadOnly}
+	conn := config.AWSConnection{Name: "ro", AWSBinding: config.AWSBinding{SourceProfile: "p", Region: "us-east-1", Mode: config.AWSModeSSODirect}}
+	_, err := a.fx.cm.PutAWS(context.Background(), conn, true, true)
+	var g ErrSSOGate
+	if !errors.As(err, &g) || g.Code() != "not_read_only" || a.fx.fileBytes(t) != "" {
+		t.Fatalf("%v", err)
 	}
 }

@@ -11,7 +11,7 @@ import (
 // rawRow is one row of the UNION in the shared shape. What the slots hold
 // depends on src (see the table definitions in auditlog.go):
 //
-//	credential: a=provider b=entry c=subject d=account_id e=role_arn f=outcome n1=elevated n2=repos
+//	credential: a=provider b=entry c=subject d=account_id e=role_arn f=outcome n1=elevated n2=repos n3=sso_direct
 //	approval:   a=action   b=entry c=account_id d=profile e=reason f=cred n1=minutes
 //	egress:     a=host     b=outcome            n1=port n2=bytes_down n3=suppressed
 //	cred:       a=action b=kind c=name d=actor
@@ -83,6 +83,9 @@ func credentialWhat(r rawRow) string {
 	}
 	if r.n1 != 0 {
 		w += " · elevated"
+	}
+	if r.n3 != 0 {
+		w += " · SSO role directly"
 	}
 	return w
 }

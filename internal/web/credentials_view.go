@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"maps"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/culiops/agent-box/internal/awsprobe"
+	"github.com/culiops/agent-box/internal/broker"
 	"github.com/culiops/agent-box/internal/config"
 	"github.com/culiops/agent-box/internal/credfile"
 	"github.com/culiops/agent-box/internal/credref"
@@ -102,8 +104,15 @@ func (c *CredentialManager) snapshot() credSnapshot {
 	pending := func(kind, name string) bool { return c.src[kind+"/"+name] == "" }
 
 	for _, a := range c.merged.AWSConnections {
+		// An AssumeRole verdict never stands for an sso_direct connection: it has
+		// no base role, and its read-only proof is the gate, run at every save,
+		// spawn and mint.
+		base := awsprobe.NotChecked()
+		if !a.SSODirect() {
+			base = awsprobe.Lookup(c.verdicts, verdictKey(a.SourceProfile, a.RoleARN))
+		}
 		sn.aws = append(sn.aws, credAWSEntry{conn: a, src: c.src[credfile.KindAWS+"/"+a.Name],
-			usedBy: used(credfile.KindAWS, a.Name), base: awsprobe.Lookup(c.verdicts, verdictKey(a.SourceProfile, a.RoleARN))})
+			usedBy: used(credfile.KindAWS, a.Name), base: base})
 	}
 	for _, a := range c.file.AWSConnections {
 		if pending(credfile.KindAWS, a.Name) {
@@ -165,6 +174,7 @@ type credAWSBody struct {
 	Source        string           `json:"source"`
 	SourceProfile string           `json:"source_profile"`
 	RoleARN       string           `json:"role_arn"`
+	Mode          string           `json:"mode,omitempty"` // "" = assume_role
 	Elevate       *credElevateBody `json:"elevate"`
 	// EgressAllow and S3Read are what the Edit form must send back unchanged:
 	// a save replaces the whole connection, so a form that did not know them
@@ -251,6 +261,22 @@ func accountOf(arn string) string {
 		return parts[4]
 	}
 	return ""
+}
+
+// connAccount is the account a connection's row shows: the role ARN's for
+// assume_role; for sso_direct (no role ARN) the source profile's
+// sso_account_id read from the host's AWS files, "" when unreadable.
+func connAccount(c config.AWSConnection) string {
+	if !c.SSODirect() {
+		return accountOf(c.RoleARN)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	id, err := broker.SSOAccountOf(ctx, c.SourceProfile)
+	if err != nil {
+		return ""
+	}
+	return id
 }
 
 // hostLabel is how an egress rule reads on the card: host, host:port for a
@@ -340,8 +366,8 @@ func (s *Server) credView() credViewBody {
 	}
 
 	for _, e := range sn.aws {
-		b := credAWSBody{Name: e.conn.Name, Label: e.conn.Label, Description: e.conn.Description, AccountID: accountOf(e.conn.RoleARN),
-			Region: e.conn.Region, Prod: e.conn.Prod, Source: e.src, SourceProfile: e.conn.SourceProfile, RoleARN: e.conn.RoleARN,
+		b := credAWSBody{Name: e.conn.Name, Label: e.conn.Label, Description: e.conn.Description, AccountID: connAccount(e.conn),
+			Region: e.conn.Region, Prod: e.conn.Prod, Source: e.src, SourceProfile: e.conn.SourceProfile, RoleARN: e.conn.RoleARN, Mode: e.conn.Mode,
 			EgressAllow: slices.Clone(e.conn.EgressAllow), S3Read: slices.Clone(e.conn.S3Read),
 			Status: credOK, Error: e.err, UsedBy: orEmpty(e.usedBy), Base: verdictOf(e.base)}
 		if e.err != "" {

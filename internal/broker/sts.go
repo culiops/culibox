@@ -3,6 +3,7 @@ package broker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/aws/smithy-go"
 
 	"github.com/culiops/agent-box/internal/awshost"
+	"github.com/culiops/agent-box/internal/config"
 )
 
 const mintTimeout = 20 * time.Second
@@ -27,6 +29,9 @@ type STSMinter struct{}
 func (STSMinter) Mint(ctx context.Context, in MintInput) (Creds, error) {
 	ctx, cancel := context.WithTimeout(ctx, mintTimeout)
 	defer cancel()
+	if in.Mode == config.AWSModeSSODirect {
+		return mintSSODirect(ctx, in)
+	}
 	opts := append(awshost.LoadOpts(), awsconfig.WithSharedConfigProfile(in.SourceProfile), awsconfig.WithRegion(in.Region))
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
@@ -49,10 +54,7 @@ func (STSMinter) Mint(ctx context.Context, in MintInput) (Creds, error) {
 // profile (no sso_session) keys on its own name; so does an unreadable one, but
 // that comes back with the read error so the caller does not cache it.
 func (STSMinter) SourceKey(ctx context.Context, profile string) (string, error) {
-	cfgs, creds := awshost.SharedFiles()
-	sc, err := awsconfig.LoadSharedConfigProfile(ctx, profile, func(o *awsconfig.LoadSharedConfigOptions) {
-		o.ConfigFiles, o.CredentialsFiles = cfgs, creds
-	})
+	sc, err := loadProfile(ctx, profile)
 	if err != nil {
 		return profile, err
 	}
@@ -60,6 +62,114 @@ func (STSMinter) SourceKey(ctx context.Context, profile string) (string, error) 
 		return sc.SSOSessionName, nil
 	}
 	return profile, nil
+}
+
+// Codes of a refused sso_direct mint.
+const (
+	codeNotSSOProfile     = "NotSSOProfile"     // the source profile is not a pure IAM Identity Center profile
+	codeNotSSOCredentials = "NotSSOCredentials" // what it returned is not short-lived SSO role credentials
+)
+
+// mintSSODirect hands back the source profile's own SSO permission-set
+// credentials (no AssumeRole, no session policy). It refuses, before any
+// credential is read, a profile that is not purely an IAM Identity Center
+// profile: static keys, credential_process, credential_source, web identity,
+// login sessions or an assume-role chain would each resolve to something else
+// (static keys first of all, ahead of the SSO settings). What comes back must
+// still be SSO role credentials that expire (see ssoDirectCreds), so a profile
+// edited between the check and the load is caught too. Never a long-lived key.
+func mintSSODirect(ctx context.Context, in MintInput) (Creds, error) {
+	sc, err := loadProfile(ctx, in.SourceProfile)
+	if err != nil {
+		return Creds{}, withCode(classify(err), "ConfigError")
+	}
+	if why := notSSOProfile(sc); why != "" {
+		return Creds{}, &MintError{Code: codeNotSSOProfile, Detail: fmt.Sprintf("profile %q %s", in.SourceProfile, why)}
+	}
+	opts := append(awshost.LoadOpts(), awsconfig.WithSharedConfigProfile(in.SourceProfile), awsconfig.WithRegion(in.Region))
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return Creds{}, withCode(classify(err), "ConfigError")
+	}
+	if cfg.Credentials == nil {
+		return Creds{}, &MintError{Code: codeNotSSOCredentials, Detail: "the profile resolved to no credential provider"}
+	}
+	return ssoDirectCreds(ctx, cfg.Credentials)
+}
+
+// notSSOProfile says why sc is not a pure IAM Identity Center profile ("" when
+// it is one).
+func notSSOProfile(sc awsconfig.SharedConfig) string {
+	switch {
+	case sc.SSOSessionName == "" && sc.SSOAccountID == "":
+		return "is not an IAM Identity Center (SSO) profile (no sso_session or sso_account_id)"
+	case sc.Credentials.HasKeys():
+		return "has static access keys"
+	case sc.CredentialProcess != "":
+		return "has a credential_process"
+	case sc.CredentialSource != "":
+		return "has a credential_source"
+	case sc.WebIdentityTokenFile != "":
+		return "has a web_identity_token_file"
+	case sc.LoginSession != "":
+		return "has a login_session"
+	case sc.RoleARN != "" || sc.SourceProfileName != "" || sc.Source != nil:
+		return "assumes a role (role_arn/source_profile)"
+	}
+	return ""
+}
+
+// ssoDirectCreds retrieves from p and accepts only short-lived SSO role
+// credentials: from the SSO provider, with a session token and an expiry.
+func ssoDirectCreds(ctx context.Context, p aws.CredentialsProvider) (Creds, error) {
+	c, err := p.Retrieve(ctx)
+	if err != nil {
+		return Creds{}, classify(err)
+	}
+	var why string
+	switch {
+	case c.Source != ssocreds.ProviderName:
+		why = "the credentials did not come from IAM Identity Center (source " + c.Source + ")"
+	case !c.CanExpire || c.Expires.IsZero():
+		why = "the credentials do not expire"
+	case c.SessionToken == "":
+		why = "the credentials have no session token"
+	case c.AccessKeyID == "" || c.SecretAccessKey == "":
+		why = "the credentials are incomplete"
+	}
+	if why != "" {
+		return Creds{}, &MintError{Code: codeNotSSOCredentials, Detail: why}
+	}
+	return Creds{AccessKeyID: c.AccessKeyID, SecretAccessKey: c.SecretAccessKey, SessionToken: c.SessionToken,
+		Expiration: c.Expires}, nil
+}
+
+// ErrNoSSOAccount is SSOAccountOf's error for a profile that was read but has
+// no sso_account_id: it can never be used in sso_direct mode. Any other error
+// is a read failure, which a retry may fix.
+var ErrNoSSOAccount = errors.New("no sso_account_id")
+
+// SSOAccountOf is the source profile's sso_account_id, the account the
+// sso_direct gate requires the credentials to be for. A profile without one is
+// ErrNoSSOAccount.
+func SSOAccountOf(ctx context.Context, profile string) (string, error) {
+	sc, err := loadProfile(ctx, profile)
+	if err != nil {
+		return "", err
+	}
+	if sc.SSOAccountID == "" {
+		return "", fmt.Errorf("profile %q has %w", profile, ErrNoSSOAccount)
+	}
+	return sc.SSOAccountID, nil
+}
+
+// loadProfile reads one profile from the host's shared config files, as the
+// SDK resolves it, without touching the network.
+func loadProfile(ctx context.Context, profile string) (awsconfig.SharedConfig, error) {
+	cfgs, creds := awshost.SharedFiles()
+	return awsconfig.LoadSharedConfigProfile(ctx, profile, func(o *awsconfig.LoadSharedConfigOptions) {
+		o.ConfigFiles, o.CredentialsFiles = cfgs, creds
+	})
 }
 
 // assumeRoleInput carries the session name as both RoleSessionName and

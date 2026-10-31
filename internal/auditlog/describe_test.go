@@ -176,3 +176,32 @@ func TestDescribeMasksTokenShapedFreeText(t *testing.T) {
 		}
 	}
 }
+
+// An sso_direct row says so; a refused one counts as refused.
+func TestDescribeSSODirect(t *testing.T) {
+	s := newSeeder(t)
+	const role = "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_ReadOnly_0123456789abcdef"
+	for i, o := range []broker.Outcome{broker.OutcomeMinted, broker.OutcomeDeniedNotReadOnly} {
+		if err := s.b.Record(broker.Row{Time: time.Unix(int64(1_800_000_001+i), 0), SessionID: "s1", AccountID: "123456789012",
+			RoleARN: role, Outcome: o, Entry: "company-ro", Mode: "sso_direct"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.b.Record(broker.Row{Time: time.Unix(1_800_000_003, 0), SessionID: "s1", Outcome: broker.OutcomeMinted, Entry: "sandbox"}); err != nil {
+		t.Fatal(err)
+	}
+	r := s.open()
+	p, err := r.Query(Query{From: 1_800_000_000, To: 1_800_000_010, Limit: 10})
+	if err != nil || len(p.Events) != 3 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	const what = "aws company-ro · role AWSReservedSSO_ReadOnly_0123456789abcdef · SSO role directly"
+	if p.Events[2].What != what || p.Events[1].What != what || p.Events[1].Outcome != "denied_not_read_only" ||
+		p.Events[0].What != "aws sandbox" {
+		t.Fatalf("events %+v", p.Events)
+	}
+	sum, err := r.Summary(1_800_000_000, 1_800_000_010)
+	if err != nil || sum.Issued != 2 || sum.Refused != 1 {
+		t.Fatalf("summary %+v %v", sum, err)
+	}
+}

@@ -1009,3 +1009,30 @@ func TestProbeBaseKeysDoNotShareActions(t *testing.T) {
 		t.Fatalf("keys share a backing array: %v", got["b"].Actions)
 	}
 }
+
+// An sso_direct binding has no agent role to probe: ProbeBase makes no
+// AssumeRole mint and no simulation for it, and leaves its key to the spawn's
+// read-only gate. An assume_role binding next to it is probed as before.
+func TestProbeBaseSkipsSSODirect(t *testing.T) {
+	fs := &fakeSim{}
+	b, fm, rec, _ := probeSetup(t, fs)
+	sso := config.AWSConnection{Name: "ro", AWSBinding: config.AWSBinding{SourceProfile: "pro", Region: "r1", Mode: config.AWSModeSSODirect}}
+	got := b.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{sso, connOf("a", "pa", roleA, "r1")}})
+	if _, ok := got["ro"]; ok || got["a"].State != awsprobe.NoneFound || len(got) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+	if len(fm.calls) != 1 || fm.calls[0].RoleARN != roleA || fs.callCount() != 1 {
+		t.Fatalf("mints %+v sims %d: the sso_direct target was probed", fm.calls, fs.callCount())
+	}
+
+	fm.calls, rec.rows = nil, nil
+	bnd := config.AWSBinding{SourceProfile: "pro", Region: "r1", Mode: config.AWSModeSSODirect}
+	if got = b.ProbeBase("s-1", "claude", config.Bindings{AWS: &bnd}); len(got) != 0 || len(fm.calls) != 0 || len(rec.rows) != 0 {
+		t.Fatalf("legacy sso_direct: got %+v mints %d rows %d", got, len(fm.calls), len(rec.rows))
+	}
+	// Without a simulator the key is still absent, not "probe disabled".
+	b2, _, _, _ := probeSetup(t, nil)
+	if got = b2.ProbeBase("s-1", "claude", config.Bindings{AWSConns: []config.AWSConnection{sso}}); len(got) != 0 {
+		t.Fatalf("no simulator: got %+v", got)
+	}
+}

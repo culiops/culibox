@@ -78,6 +78,8 @@ type ProfileAWSInline struct {
 	Name              string `json:"name"`
 	Prod              bool   `json:"prod,omitempty"`
 	ElevateMaxMinutes int    `json:"elevate_max_minutes,omitempty"`
+	// Mode is the binding's mode ("" = assume_role, "sso_direct").
+	Mode string `json:"mode,omitempty"`
 }
 
 // profileStore is the subset of *store.Store the manager needs (injectable).
@@ -248,6 +250,7 @@ type AWSConnectionMeta struct {
 	Description  string `json:"description"`
 	Prod         bool   `json:"prod"`
 	WriteCapable bool   `json:"write_capable"`
+	Mode         string `json:"mode,omitempty"` // "" = assume_role; "sso_direct"
 }
 
 // AWSConnectionMetaList lists the instance's aws_connections for the profile
@@ -258,7 +261,7 @@ func (m *ProfileManager) AWSConnectionMetaList() []AWSConnectionMeta {
 	out := make([]AWSConnectionMeta, 0, len(m.awsConns))
 	for _, c := range m.awsConns {
 		out = append(out, AWSConnectionMeta{Name: c.Name, Label: c.Label, AccountID: awsscope.AccountOf(c.RoleARN),
-			Region: c.Region, Description: c.Description, Prod: c.Prod, WriteCapable: c.Elevate != nil})
+			Region: c.Region, Description: c.Description, Prod: c.Prod, WriteCapable: c.Elevate != nil, Mode: c.Mode})
 	}
 	return out
 }
@@ -419,7 +422,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			CloneOf:        a.CloneOf,
 		}
 		if a.AWS != nil {
-			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod}
+			in := &ProfileAWSInline{Name: a.AWS.Label, Prod: a.AWS.Prod, Mode: a.AWS.Mode}
 			if in.Name == "" {
 				in.Name = "aws"
 			}

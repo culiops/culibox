@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -89,6 +90,10 @@ var dataReadDenies = []string{
 	"secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath",
 	"dynamodb:GetItem", "dynamodb:BatchGetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:PartiQLSelect",
 }
+
+// DataReadDenies returns a copy of the data-read actions the investigate scope
+// denies outright (secret values, SSM parameters, DynamoDB items).
+func DataReadDenies() []string { return slices.Clone(dataReadDenies) }
 
 // investigateStatements are the "investigate" scope's statements, in order:
 // Allow *, then S3 object reads outside the allowlist, secret/parameter values,

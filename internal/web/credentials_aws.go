@@ -54,6 +54,11 @@ type RolesResult struct {
 // Server means no broker is running.
 type AWSCredService interface {
 	BaseRoleChecker
+	// CheckSSODirect mints the profile's SSO permission-set credentials and runs
+	// the read-only gate on them. The time is the credentials' expiration (zero
+	// when none were fetched). It bounds itself and never fails open: every
+	// failure is an unverified or not-read-only result.
+	CheckSSODirect(ctx context.Context, profile, region string) (awsprobe.GateResult, time.Time)
 	Roles(ctx context.Context, profile string) RolesResult
 	SSOStart(profile string) (ssologin.State, error)
 	SSOStatus(profile string) (ssologin.State, bool)
@@ -343,11 +348,21 @@ func (s *Server) credAWSCheck(w http.ResponseWriter, r *http.Request, _ string) 
 		return
 	}
 	var req struct {
+		Mode          string `json:"mode"`
 		SourceProfile string `json:"source_profile"`
 		RoleARN       string `json:"role_arn"`
 		Region        string `json:"region"`
 	}
 	if !decodeCredJSON(w, r, &req) {
+		return
+	}
+	switch req.Mode {
+	case "", "assume_role":
+	case config.AWSModeSSODirect:
+		s.credAWSCheckSSODirect(w, r, req.SourceProfile, req.RoleARN, req.Region)
+		return
+	default:
+		writeErr(w, http.StatusBadRequest, "mode must be assume_role or sso_direct")
 		return
 	}
 	switch {
@@ -385,6 +400,76 @@ func (s *Server) credAWSCheck(w http.ResponseWriter, r *http.Request, _ string) 
 		"assume": assumeOf(res), "verdict": v.State, "actions": v.Actions,
 		"reason": v.Reason, "reason_text": v.ReasonText, "checked_at": v.CheckedAt,
 	})
+}
+
+// ssoCheckTimeout bounds one sso_direct check: the mint (20 s) and the gate
+// (15 s) it runs, with a margin. The result is never made better by the
+// deadline: a gate that runs out of time answers unverified.
+const ssoCheckTimeout = 40 * time.Second
+
+// credAWSCheckSSODirect is the sso_direct branch of POST .../check: it mints
+// the profile's permission-set credentials and runs the read-only gate, exactly
+// as a save and a spawn do, and answers {"gate": ..., "expires": ...}. No
+// credential is returned, and no AssumeRole verdict is read or written.
+func (s *Server) credAWSCheckSSODirect(w http.ResponseWriter, r *http.Request, profile, roleARN, region string) {
+	switch {
+	case !credProfileRe.MatchString(profile):
+		writeErr(w, http.StatusBadRequest, "source_profile must be letters, digits, . _ - (at most 64)")
+		return
+	case roleARN != "":
+		writeErr(w, http.StatusBadRequest, "role_arn is not used in sso_direct mode; leave it out")
+		return
+	case awsscope.ValidRegion(region) != nil:
+		writeErr(w, http.StatusBadRequest, "region must be an AWS region name (e.g. ap-southeast-1)")
+		return
+	}
+	if s.credLimited(w) {
+		return
+	}
+	detail := "sso_direct " + profile
+	if !s.credAudit(w, broker.CredChecked, detail+" started") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ssoCheckTimeout)
+	defer cancel()
+	res, exp := s.CredAWS.CheckSSODirect(ctx, profile, region)
+	res, exp = normalizeGate(res, exp)
+	detail += " " + string(res.State)
+	if res.Reason != "" {
+		detail += " " + string(res.Reason)
+	}
+	if !s.credAudit(w, broker.CredChecked, detail) {
+		return
+	}
+	writeJSON(w, http.StatusOK, gateBody(res, exp))
+}
+
+// normalizeGate makes the fail-closed reading of a gate result: only a
+// read_only result that names its role stands as read_only, and any state it
+// does not know is unverified. A refusal keeps its own state.
+func normalizeGate(res awsprobe.GateResult, exp time.Time) (awsprobe.GateResult, time.Time) {
+	switch {
+	case res.State == awsprobe.GateReadOnly && res.RoleARN != "":
+		return res, exp
+	case res.State == awsprobe.GateNotReadOnly:
+		return res, time.Time{}
+	}
+	res.State = awsprobe.GateUnverified
+	if res.Reason == "" {
+		res.Reason = awsprobe.ReasonError
+	}
+	return res, time.Time{}
+}
+
+// gateBody is the body of an sso_direct check or save: the gate result and the
+// credentials' expiration (RFC 3339, "" when none), from which the form derives
+// the N hours of its warning.
+func gateBody(res awsprobe.GateResult, exp time.Time) map[string]any {
+	e := ""
+	if !exp.IsZero() {
+		e = exp.UTC().Format(time.RFC3339)
+	}
+	return map[string]any{"gate": res, "expires": e}
 }
 
 // credAWSSSO is POST (start) and GET (status) .../sso-login.
@@ -472,6 +557,24 @@ func (s *Server) credAWSSave(w http.ResponseWriter, r *http.Request, name string
 		writeErr(w, http.StatusBadRequest, "that name is reserved")
 		return
 	}
+	if conn.SSODirect() {
+		// No acknowledgement exists for this mode: ack_write is not read.
+		ctx, cancel := context.WithTimeout(r.Context(), ssoCheckTimeout)
+		defer cancel()
+		gate, exp, err := s.Creds.PutSSODirect(ctx, conn, create)
+		if err != nil {
+			writeCredErr(w, err)
+			return
+		}
+		code := http.StatusOK
+		if create {
+			code = http.StatusCreated
+		}
+		body := gateBody(gate, exp)
+		body["name"] = conn.Name
+		writeJSON(w, code, body)
+		return
+	}
 	res, err := s.Creds.PutAWS(r.Context(), conn, create, req.AckWrite)
 	if err != nil {
 		writeCredErr(w, err)
@@ -509,7 +612,11 @@ func writeCredErr(w http.ResponseWriter, err error) {
 	var inUse ErrCredInUse
 	var ack ErrNeedsAck
 	var limited ErrCheckLimited
+	var gate ErrSSOGate
 	switch {
+	case errors.As(err, &gate):
+		g, _ := normalizeGate(gate.Gate, time.Time{})
+		writeJSON(w, http.StatusConflict, map[string]any{"error": gate.Error(), "code": gate.Code(), "gate": g})
 	case errors.Is(err, secretstore.ErrTooLarge):
 		writeErrCode(w, http.StatusRequestEntityTooLarge, "the value is larger than 64 KiB", "too_large")
 	case errors.Is(err, secretstore.ErrNoSuchValue):

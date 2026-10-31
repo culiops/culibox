@@ -167,9 +167,12 @@ function awsSection(conns) {
     const state = baseState(c);
     if (state === 'writes') head.push('[role can write]');
     else if (state === 'unverified') head.push('[base role: unverified]');
+    const direct = c.mode === 'sso_direct';
     const role = String(c.role_arn || '').split('/').pop();
-    const lines = [head.join(' '), '  account ' + c.account_id + ' · role ' + role + ' · region ' + c.region];
-    if (state === 'writes') {
+    const lines = [head.join(' '), '  account ' + c.account_id + ' · ' + (direct ? 'SSO role directly' : 'role ' + role) + ' · region ' + c.region];
+    if (direct && state === 'none_found') {
+      lines.push("  read-only: the permission set passed agent-box's read-only check when this session started");
+    } else if (state === 'writes') {
       const acts = Array.isArray(c.base_write_actions) ? c.base_write_actions.filter((a) => typeof a === 'string') : [];
       lines.push(acts.length ? '  base role allows: ' + acts.join(', ') : '  base role allows writes');
     } else if (state === 'none_found') {

@@ -27,6 +27,9 @@ import (
 // The broker is the only implementation of session.BrokerHooks.
 var _ session.BrokerHooks = broker.Hooks{}
 
+// The sso_direct read-only gate at spawn is the broker's too.
+var _ session.SSODirectChecker = broker.Hooks{}
+
 // errBrokerListen marks the one startup failure that is not fatal: the broker
 // could not open its listener. The console still runs; profiles with an AWS
 // binding are then refused at spawn, with the reason in the log.
@@ -139,6 +142,7 @@ func startBrokerWithStore(dataDir, stateRoot, goos string, port int, get func(id
 		return brokerSessionView(s, defined), true
 	}, stsMinter, audit)
 	brk.SetSimulator(simulator)
+	brk.SetGate(broker.IAMGate)
 	// The minter always exists, so an App defined from the web after boot works
 	// at once (credLive.Apply -> SetApps); with no App defined every check and
 	// mint fails as an unknown App.

@@ -108,6 +108,7 @@ function accSSO(c, aws) {
 function accRow(c, o) {
   const { aws, conns, nowMs, stats, hostWarning, legacy } = o;
   const roleName = accDep("roleName", "./sessionrow.js");
+  const roleText = accDep("roleText", "./sessionrow.js");
   const hhmm = accDep("hhmm", "./sessionrow.js");
   const isElevated = accDep("isElevated", "./sessionrow.js");
   const elevActions = accDep("elevActions", "./sessionrow.js");
@@ -124,11 +125,15 @@ function accRow(c, o) {
     : null;
   const b = live ? null : baseScope(c);
   const t = stats ? accValidTime(stats.last_mint) : null;
+  // An sso_direct binding without a role name shows the mode label instead of an
+  // empty "role ".
+  const roleArn = live && c.elevate ? c.elevate.role_arn : c.role_arn;
   const sub = [c.label && c.label !== c.name ? c.label : "", "account " + c.account_id,
-    "role " + roleName(live && c.elevate ? c.elevate.role_arn : c.role_arn), c.region].filter(Boolean).join(" · ");
+    roleName(roleArn) ? "role " + roleName(roleArn) : roleText(c, roleArn), c.region].filter(Boolean).join(" · ");
   return {
     kind: "aws", name: c.name, conn: c.conn, prod: !!c.prod, sub,
     scope: live ? "write (elevated)" : "read",
+    mode: c.mode === "sso_direct" ? "sso_direct" : "",
     sso: accSSO(c, aws),
     last: stats ? (t ? hhmm(stats.last_mint) : "never") : "",
     actions: list,

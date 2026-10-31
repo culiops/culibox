@@ -40,7 +40,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 
 ### Cloud access, audit and secrets
 
-- **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`. A profile can instead bind several named AWS connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)).
+- **AWS credential broker.** A boxed profile can carry an `aws` binding. The host mints 15-minute credentials by assuming a read-only IAM role from your own SSO session, with an inline session policy that narrows the role further (see [Security model](#security-model)). The box never sees your SSO session. Credentials reach the AWS CLI and Terraform inside the box through `credential_process`. A profile can instead bind several named AWS connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)). Where you cannot create that role, a binding can opt in to using a read-only SSO permission set directly, behind a read-only gate (see [SSO role directly](#sso-role-directly-opt-in)).
 - **GitHub access.** A boxed profile can carry a `github` binding. The broker mints one-hour, read-only GitHub App installation tokens scoped to the repos you list; `git` and `gh` in the box use them, and the box never holds a personal access token (see [GitHub access for agents](#github-access-for-agents)).
 - **Attribution and audit.** Credentials are minted with `SourceIdentity` and role session name `agentbox-<session id>`, so CloudTrail records the agent session rather than you. The broker also writes every mint, refusal and failure to a local SQLite audit log, with no credential values in it.
 - **Secrets by reference.** Config names secrets rather than containing them. Values are resolved at spawn time from the environment, a file or the encrypted store, injected only into the agent that declares them, and never logged.
@@ -442,6 +442,7 @@ Each entry takes the fields of the inline `aws` binding (see [docs/aws/agent-rol
 | `name` | Required, unique. `^[a-z0-9][a-z0-9-]{0,62}$`. `default` and `agentbox` are reserved. Profiles refer to the connection by it, and it is the AWS profile name inside the box. |
 | `description` | Optional, at most 200 characters, one line. Shown in the UI and in `agentbox-env --list`. |
 | `region` | Required for every connection. |
+| `mode` | Optional. Absent means the agent role. `"sso_direct"` uses the SSO permission set directly (see [SSO role directly](#sso-role-directly-opt-in)); then `role_arn`, `elevate` and `s3_read` must be left out. |
 
 **2. Pick them in a profile.** Set `"runtime": "box"` explicitly, then tick the connections in the profile form, or write the names in `config.json`:
 
@@ -485,7 +486,7 @@ Read-only comes from the role, not from Culibox: point each connection's `role_a
 
 "No broad writes found" is not proof of read-only. A write grant scoped to one resource or behind a condition is not detected, and permission boundaries and SCPs count only as far as IAM simulation evaluates them.
 
-The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a role change. An unverified result is checked again after the next successful base (non-elevated) credential mint for that connection, for example after an SSO sign-in. The exceptions are `role cannot simulate itself` and `assume-role denied`: a sign-in cannot fix those, so the check stops. Fix the role, then respawn. A custom role needs `iam:SimulatePrincipalPolicy` on itself (`ReadOnlyAccess` includes it). The check only warns. It never refuses a spawn.
+The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a role change. An unverified result is checked again after the next successful base (non-elevated) credential mint for that connection, for example after an SSO sign-in. The exceptions are `role cannot simulate itself` and `assume-role denied`: a sign-in cannot fix those, so the check stops. Fix the role, then respawn. A custom role needs `iam:SimulatePrincipalPolicy` on itself (`ReadOnlyAccess` includes it). The check only warns. It never refuses a spawn. (A connection in `sso_direct` mode has no agent role; it gets the read-only gate below instead, which does refuse.)
 
 **Limits and operations**
 
@@ -493,6 +494,41 @@ The result is fixed at spawn and cached for up to 1 hour. Respawn to pick up a r
 - Each connection signs in through its own `source_profile`. If connections use different SSO sessions and one expires, only that connection's credential requests fail, and the UI shows which source to sign in to.
 - `agent-box doctor` prints one `aws-connection <name>` line per connection: whether the `source_profile` exists in the host's AWS config (a missing one fails), whether its SSO login is valid or expired (checked once per SSO session, so connections sharing a login cost one check), and whether the connection can be elevated. It reads the shell's own AWS config, not the daemon's environment. A second line, `aws-connection <name> base role`, runs the base-role check above; inline `aws` bindings (from `config.json` and the profile store) get `aws-binding <profile>`. A base role that can write, or one that could not be checked, is a WARN; none found is a PASS. The check is never a FAIL.
 - **Rolling back to an older binary (operator step).** An older Culibox ignores the `aws_connections` key, so a profile that uses it spawns **unbound**: no AWS credentials, and also no egress allowlist, so its box gets an open network like any unbound profile. Saving such a profile in the old UI drops the key permanently, and restored sessions get a fresh box. So before rolling back, kill every session that uses `aws_connections`, and do not edit those profiles in the old UI until you roll forward. Profiles with the inline `aws` binding are unaffected.
+
+## SSO role directly (opt-in)
+
+The recommended way to give an agent AWS access is the **agent role** described above: a role you create (see [docs/aws/agent-role](docs/aws/agent-role/README.md)), assumed for 15 minutes at a time with a session policy that narrows it, and recorded in CloudTrail as the agent session. That stays the default.
+
+In some accounts you cannot create that role. For those, a binding can opt in to **`"mode": "sso_direct"`** (in the credentials screen, "SSO role directly" next to "Agent role (recommended)"): the agent is given your SSO permission set's own credentials. It is meant for permission sets that are **read-only**, and Culibox uses it only when the gate passes: a check of the permission set's own identity policies (see "What the gate does not see" below).
+
+```json
+"aws_connections": [
+  { "name": "company-read", "label": "Company, read-only", "mode": "sso_direct",
+    "source_profile": "company-sso", "region": "eu-west-1" }
+]
+```
+
+The UI states what you give up:
+
+> SSO role directly: the agent gets your permission set's own credentials, valid for up to N h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.
+
+- **No session policy, no S3-read scoping, no elevate.** Nothing narrows the permission set, and a write window cannot be granted in this mode.
+- **Long-lived.** Credentials keep the expiry of your SSO role credentials (up to N hours), not 15 minutes, and cannot be revoked when the agent session ends.
+- **No agent attribution.** CloudTrail shows you, not an `agentbox-*` session.
+- **SSO profiles only.** The `source_profile` must be a plain IAM Identity Center profile. Static keys, a `credential_process` or an assume-role chain are refused, so no long-lived key is ever handed out.
+
+**The read-only gate.** Culibox reads the permission set's own inline and attached policies. Every Allow must be a read verb or a reviewed non-standard one, only an unconditional `Resource: "*"` Deny removes an Allow, and a screen over an embedded catalog of AWS actions, plus a reviewed list of secret-returning reads, requires credential-minting and secret-returning actions to be denied. An IAM policy simulation then confirms that writes, side-effecting reads (such as `sqs:ReceiveMessage`) and those actions are denied. The gate runs when you save, when a session spawns, in `agent-box doctor`, and on **every** credential mint (a refresh, about 5 minutes before expiry, is a mint). A permission set that gains a write mid-session is refused at the next mint; credentials already issued keep working until they expire (up to N hours), under the permission set's current policy, because the gate only re-checks at a mint. Anything it cannot verify (SSO expired, a timeout, a missing IAM read permission) refuses; there is no override. The refusal lists every action that failed.
+
+**`ReadOnlyAccess` alone is refused.** It allows `sqs:ReceiveMessage`, `ec2:GetPasswordData`, ECR and CodeArtifact authorization tokens and more, about 270 actions in all. Add an inline Deny to the same permission set that denies them unconditionally (no `Condition`, `Resource: "*"`); a tag- or principal-based exception is refused. The refusal message gives the list to write the guardrail from, and [docs/aws/agent-role](docs/aws/agent-role/README.md#sso-direct-mode-read-only-permission-sets) has an example and the permission set's own IAM read requirements.
+
+**What the gate does not see.** This is a check of the permission set's identity policies, not a guarantee.
+
+- Resource-based policies (bucket, queue and key policies) are invisible: AWS cannot simulate them for roles.
+- Denies that live only in an SCP or a permission boundary do not count.
+- Secrets stored in configuration (Lambda environment variables, EC2 user data and launch templates, CloudFront origin headers, SSM parameters) are only reported by the data-read report, never blocked.
+- Actions AWS adds after the catalog snapshot (2026-10-30) are unscreened under a wildcard the permission set already allows, until it is refreshed with `go run ./internal/awsprobe/gencatalog`.
+
+Prefer the agent role whenever you can create it. The account guidance in [docs/aws/agent-role](docs/aws/agent-role/README.md#which-accounts) applies to this mode too.
 
 ## Store
 
@@ -546,7 +582,7 @@ Culibox starts shells and agents on your machine, so authentication is never opt
 - **Login.** Either a generated token (printed once in a URL, kept at `0600` in the data root) or a password from the env var named by `password_env`. Failed logins are throttled. Browsers get a signed 30-day cookie; delete `cookie.secret` to log everyone out. Named, revocable bearer tokens exist for programmatic clients and are stored as hashes.
 - **Network exposure.** The default bind is loopback. Binding all interfaces is refused unless `allow_public` is set. Requests whose `Host` header is not in the allowlist are refused (DNS-rebinding defence), and state-changing requests are checked for same-origin.
 - **Containment.** The boxed tier described above. Roughly, containment comes from what is absent inside the box. The hardening flags are the smaller part. A box cannot reach services on the host's loopback, other than Culibox's own credential broker and, for boxes with a credential binding, the egress proxy; on macOS Culibox checks this on every new box and refuses the box if the check fails.
-- **Cloud access.** The broker mints credentials only for live boxed sessions, with a per-spawn token, rate limits, and a 15-minute lifetime. The role is capped by `ReadOnlyAccess`, and a generated session policy denies reading S3 objects (outside an allowlist you set per binding), Secrets Manager values, SSM parameters, DynamoDB items and KMS decrypt. Trust is limited to the SSO permission sets you name and requires a `SourceIdentity` of `agentbox-*`. Create the role with [docs/aws/agent-role](docs/aws/agent-role/README.md). The inline `aws` binding gets the same base-role write check as named connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)).
+- **Cloud access.** The broker mints credentials only for live boxed sessions, with a per-spawn token, rate limits, and a 15-minute lifetime. The role is capped by `ReadOnlyAccess`, and a generated session policy denies reading S3 objects (outside an allowlist you set per binding), Secrets Manager values, SSM parameters, DynamoDB items and KMS decrypt. Trust is limited to the SSO permission sets you name and requires a `SourceIdentity` of `agentbox-*`. Create the role with [docs/aws/agent-role](docs/aws/agent-role/README.md). The inline `aws` binding gets the same base-role write check as named connections (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)). The opt-in [SSO role directly](#sso-role-directly-opt-in) mode has none of these protections: it hands the agent your read-only permission set's own credentials, so it is allowed only after a read-only gate passes on every mint, its credentials keep the expiry of your SSO role credentials (up to N hours), CloudTrail shows you, and the gate cannot see resource-based policies. Prefer the agent role.
 - **Store.** Values held in the [store](#store) are encrypted against disk snapshots and backups. While it is unlocked, host-tier agents can read them; boxed agents cannot.
 - **Static tokens.** A bound token is fetched per command through the broker, is audited, and reaches only the hosts its entry names. The agent can still read it, and it is long-lived and not revoked when the session ends. See [Static tokens for agents](#static-tokens-for-agents).
 

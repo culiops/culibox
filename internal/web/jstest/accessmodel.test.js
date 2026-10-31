@@ -359,3 +359,19 @@ test("accesstab.js: re-targeting to another session blurs the grant panel and fo
   assert.match(branch, /paint\(true\)/, "the whole view repaints, past typing()");
   assert.match(branch, /return;/, "the soft paint(false) does not follow");
 });
+
+test("accessModel: an sso_direct row shows the mode in its base line, not the AssumeRole wording", () => {
+  const conn = { name: "sbx", label: "sbx", account_id: "123456789012", role_arn: "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_RO_abc", mode: "sso_direct", hours: 4, base_access: "none_found" };
+  const m = model({ session: sess({ aws_connections: [conn] }) });
+  const row = m.creds.rows[0];
+  assert.ok(row.base.endsWith("· SSO role directly"), row.base);
+  assert.strictEqual(row.baseWarn, false);
+  assert.doesNotMatch(JSON.stringify(row), /no broad writes found/);
+});
+
+test("accessModel: an sso_direct row without a role name shows the mode label, not an empty role", () => {
+  const conn = { name: "sbx", label: "sbx", account_id: "123456789012", role_arn: "", mode: "sso_direct", region: "eu-west-1", hours: 4 };
+  const row = model({ session: sess({ aws_connections: [conn] }) }).creds.rows[0];
+  assert.strictEqual(row.sub, "account 123456789012 · SSO role directly · eu-west-1");
+  assert.doesNotMatch(row.sub, /role\s+·/);
+});
