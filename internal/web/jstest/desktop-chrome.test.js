@@ -74,3 +74,36 @@ test("the xterm bar stays visible at rest, but only when there is something to s
   assert.ok(r.some((b) => /pointer-events:\s*auto/.test(b)), "still draggable");
   assert.ok(rulesFor(".cell .xterm .xterm-scrollable-element > .scrollbar.invisible").length === 0, "plain .invisible (nothing to scroll) is not overridden");
 });
+
+test("the New session dialog is a plain rounded card with a header and Esc, not the box frame", () => {
+  assert.ok(rulesFor("#spawn-modal::before").some((b) => /display:\s*none/.test(b)), "box frame hidden");
+  const card = rulesFor("#spawn-modal").join(" ");
+  assert.ok(/border-radius:\s*var\(--r-dlg\)/.test(card), "rounded card");
+  assert.ok(/background:\s*var\(--panel\)/.test(card) && /border:\s*1px solid var\(--line\)/.test(card));
+  assert.ok(/width:\s*820px/.test(card) && /max-height:\s*calc\(100vh - 32px\)/.test(card), "size unchanged");
+  const title = rulesFor("#spawn-modal .dlg-title").join(" ");
+  assert.ok(/position:\s*static/.test(title) && /transform:\s*none/.test(title), "no legend in the border");
+  assert.ok(/border-bottom:\s*1px solid var\(--line\)/.test(title), "header rule");
+  assert.ok(rulesFor("#spawn-modal .dlg-head").some((b) => /position:\s*absolute/.test(b)), "close in the corner");
+  assert.ok(rulesFor("#spawn-modal .dlg-x::before").some((b) => /content:\s*"Esc"/.test(b)), "Esc hint");
+  assert.ok(rulesFor("#spawn-modal .dlg-x:hover").some((b) => /var\(--raise\)/.test(b)));
+});
+
+test("the profile list does not size the dialog: the form decides the height and the list scrolls", () => {
+  const r = rulesFor("#spawn-plist").join(" ");
+  assert.ok(/contain:\s*size/.test(r), "contain: size");
+  assert.ok(/align-self:\s*stretch/.test(r), "stretch to the form's height");
+  assert.ok(/overflow-y:\s*auto/.test(r), "still scrolls");
+});
+
+test("the Model select is a styled native select that never clips a long id", () => {
+  const r = rulesFor("#effort-slot select").join(" ");
+  assert.ok(/appearance:\s*none/.test(r), "own chevron");
+  assert.ok(!/max-width:\s*190px/.test(r), "no 190px cap");
+  assert.ok(/max-width:\s*none/.test(r) || !/max-width/.test(r));
+  assert.ok(/padding-right:\s*28px/.test(r) && /url\(/.test(r) && /border-radius:\s*var\(--r-ctl\)/.test(r));
+});
+
+test("checkboxes in the New session form use the accent colour", () => {
+  assert.ok(rulesFor('#spawn input[type="checkbox"]').some((b) => /accent-color:\s*var\(--accent\)/.test(b)));
+});
