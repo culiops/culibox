@@ -104,7 +104,9 @@ function spawnPlistSearchKey(e) {
   } else if (e.key === "Enter") {
     const first = $("spawn-plist").querySelector("button.sp-item:not([hidden])");
     e.preventDefault();
-    if (first) spawnPlistPick(first.dataset.name);
+    // Empty search: Enter is a no-op, so it cannot drop the last-used
+    // preselection (and flip boxed -> host by accident).
+    if (first && input.value.trim() !== "") spawnPlistPick(first.dataset.name);
   } else if (e.key === "Escape" && input.value !== "") {
     // keydown's default action is what asks the <dialog> to close; stopping it
     // here keeps the dialog (and any document-level Escape handler) out of it.

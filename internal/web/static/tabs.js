@@ -729,7 +729,7 @@ class Cell {
       add.setAttribute("aria-label", add.title);
       add.onclick = (e) => {
         e.stopPropagation();
-        spawnShellIn(this, this.dock ? this.dock.placement : "below", add);
+        spawnShellIn(this, this.dock ? this.dock.placement : "below", add, "…");
       };
       strip.append(dot, add);
     }
@@ -847,11 +847,12 @@ class Cell {
     sh.className = "cell-sh"; sh.textContent = "+sh";
     sh.title = "New shell beside this session, same directory and tier (Ctrl+Shift+`)";
     sh.hidden = !window.shellProfile; // no detected shell → no quick shell
-    // spawnShellIn disables the button while in flight (and says "Starting
-    // shell…" if it is slow), so the ignored second click is visible, not silent.
+    // spawnShellIn disables the button while in flight (and shows a bare "…" if
+    // it is slow, to keep the chip its size), so the ignored second click is
+    // visible, not silent.
     sh.onclick = (e) => {
       e.stopPropagation();
-      spawnShellIn(this, undefined, sh);
+      spawnShellIn(this, undefined, sh, "…");
     };
     const max = document.createElement("button");
     max.className = "cell-max"; max.textContent = maximized === this ? "❐" : "⛶";

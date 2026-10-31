@@ -74,8 +74,8 @@ test("restartSession: a trigger gets withPending, no trigger gets a toast cleare
 
 test("spawnShellIn: a trigger gets withPending, no trigger gets a toast over the shell call only", () => {
   const src = read("app.js");
-  assert.match(src, /async function spawnShellIn\(cell, placement = "below", trigger\)/);
-  assert.match(body(src, "spawnShellIn"), /withPending\(trigger, "Starting shell…"/);
+  assert.match(src, /async function spawnShellIn\(cell, placement = "below", trigger, label = "Starting shell…"\)/);
+  assert.match(body(src, "spawnShellIn"), /withPending\(trigger, label,/);
   const run = body(src, "spawnShellRun");
   const start = run.indexOf('pendingToast("Starting shell…")');
   assert.ok(start >= 0, "toast helper");
@@ -93,6 +93,13 @@ test("killSession: a toast covers the DELETE, cleared in finally before the erro
   const start = b.indexOf('pendingToast("Ending " + ');
   assert.ok(start >= 0, "toast helper with an Ending… label");
   assert.ok(start < b.indexOf('method: "DELETE"'), "started before the DELETE");
+  // The 300ms clock starts at the click, not after the row re-render.
+  assert.ok(start < b.indexOf("await refreshSessions()"), "started before the first refreshSessions");
+  assert.ok(b.indexOf("lastSessions") < start, "name lookup precedes the toast");
+  assert.ok(b.indexOf("killing.add(id)") < start, "after the early return and killing.add");
+  // The first refresh sits inside the try, so a throw still reaches finally.
+  const tryAt = b.indexOf("try {", start);
+  assert.ok(tryAt >= 0 && tryAt < b.indexOf("await refreshSessions()"), "refresh inside try");
   const fin = finallyBlock(b, start);
   assert.match(fin, /done\(\)/);
   // The error toast must come after done(), so done() cannot hide it.
@@ -105,8 +112,11 @@ test("trigger buttons hand themselves to the action instead of a disabled/finall
   assert.match(term, /restartSession\(\{ id: this\.id \}, rb\)/);
   assert.ok(!/rb\.disabled = (true|false)/.test(term), "no ad-hoc guard on the restart button");
   const tabs = read("tabs.js");
-  assert.match(tabs, /spawnShellIn\(this, this\.dock \? this\.dock\.placement : "below", add\)/);
-  assert.match(tabs, /spawnShellIn\(this, undefined, sh\)/);
+  // The icon-sized buttons (dock "+" in an overflow:hidden strip, flex:none
+  // "+sh") pass a short label so they do not grow into a sentence; "+ Shell"
+  // keeps the default "Starting shell…".
+  assert.match(tabs, /spawnShellIn\(this, this\.dock \? this\.dock\.placement : "below", add, "…"\)/);
+  assert.match(tabs, /spawnShellIn\(this, undefined, sh, "…"\)/);
   assert.match(tabs, /spawnShellIn\(this, this\.dock \? this\.dock\.placement : "below", sh\)/);
   assert.ok(!/(add|sh)\.disabled = (true|false)/.test(tabs), "no ad-hoc guards on the + Shell buttons");
 });

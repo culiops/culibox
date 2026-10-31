@@ -72,11 +72,17 @@ function pendingRegion(container, text) {
 }
 
 // pendingToast(text) -> done: for waits with no container of their own. After
-// the delay it shows a sticky toast. done() hides it only if the toast still
-// reads `text`, so an error toast that replaced it is left alone.
+// the delay it shows a sticky toast, unless some other showToast call has
+// claimed the slot since pendingToast started (a fast error must not be
+// overwritten by "Working…" while cleanup is still running). done() hides it
+// only if the toast still reads `text`, so an error toast that replaced it is
+// left alone. toastSeqNow comes from shell.js and is read at run time only; the
+// typeof guard covers test harnesses that stub showToast without it.
 function pendingToast(text) {
+  const seq = typeof toastSeqNow === "function" ? toastSeqNow() : null;
   let shown = false;
   const timer = setTimeout(() => {
+    if (seq !== null && toastSeqNow() !== seq) return;
     shown = true;
     showToast(text, { sticky: true });
   }, PENDING_DELAY_MS);

@@ -5833,14 +5833,15 @@ async function confirmKill(id, name) {
 async function killSession(id) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
-  await refreshSessions(); // re-render → row shows "ending…"
-  // A boxed session's docker stop can take seconds: a toast covers the DELETE
-  // after the pending delay. done() runs before the error toast is shown, so
-  // the toast cannot hide "End failed".
+  // A boxed session's docker stop can take seconds: a toast covers the wait
+  // after the pending delay. It starts here, at the click, so the 300ms clock
+  // is not spent on the re-render below. done() runs (in finally) before the
+  // error toast is shown, so the toast cannot hide "End failed".
   const sess = (lastSessions || []).find((s) => s.id === id);
   const done = pendingToast("Ending " + ((sess && (sess.name || sess.id)) || id) + "…");
   let failure = null;
   try {
+    await refreshSessions(); // re-render → row shows "ending…"
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
     failure = e;
@@ -5873,10 +5874,13 @@ const shellSpawning = new WeakSet();
 // wait itself ("Starting shell…") and its re-entry guard replaces the caller's
 // own disabled/finally dance. Without one (palette, keyboard) a toast covers
 // the shell request after the pending delay.
-async function spawnShellIn(cell, placement = "below", trigger) {
+//
+// label: the text the trigger shows while pending. Icon-sized buttons (the dock
+// "+", the "+sh" chip) pass "…" so they do not grow into a sentence.
+async function spawnShellIn(cell, placement = "below", trigger, label = "Starting shell…") {
   if (!window.shellProfile || !cell || shellSpawning.has(cell)) return;
   closePage();
-  if (trigger) return withPending(trigger, "Starting shell…", () => spawnShellRun(cell, placement, false));
+  if (trigger) return withPending(trigger, label, () => spawnShellRun(cell, placement, false));
   return spawnShellRun(cell, placement, true);
 }
 

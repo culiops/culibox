@@ -60,8 +60,14 @@ test("search keydown: submit hotkey, Escape-clears, ArrowDown, Enter", () => {
 
 test("Enter in the search selects the first visible match and keeps focus in the input", () => {
   const b = body(panel, "spawnPlistSearchKey");
-  const enter = b.slice(b.indexOf('e.key === "Enter"'));
+  // Isolate the Enter branch: stop before the Escape branch that follows it.
+  const from = b.indexOf('e.key === "Enter"');
+  const enter = b.slice(from, b.indexOf('e.key === "Escape"', from));
   assert.match(enter, /sp-item:not\(\[hidden\]\)/);
+  // Enter in an EMPTY search is a no-op: picking the first row would drop the
+  // last-used preselection and can flip boxed -> host.
+  assert.match(enter, /preventDefault\(\)/);
+  assert.match(enter, /if \(first && input\.value\.trim\(\) !== ""\) spawnPlistPick\(first\.dataset\.name\)/);
   assert.match(enter, /dataset\.name/);
   assert.doesNotMatch(enter, /\.close\(|closeDialog\(|requestSubmit\(|\.focus\(/);
 });
