@@ -279,3 +279,59 @@ test("pendingToast: the toast is sticky, so it survives past the normal auto-hid
   t.mock.timers.tick(6000);
   assert.strictEqual(ui.visible(), false);
 });
+
+// A click can re-render the control's container, so by the time the delay
+// fires the clicked node is detached and relabelling it is invisible. The
+// feedback then goes to the toast slot instead.
+test("withPending: a detached element shows its label as a sticky toast, not on the node", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ui = installRealToast(t);
+  const el = fakeEl("+ Shell");
+  el.isConnected = true;
+  const d = deferred();
+  const p = withPending(el, "Starting shell…", () => d.promise);
+  el.isConnected = false; // the pane header re-rendered
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  assert.strictEqual(ui.msg.textContent, "Starting shell…");
+  assert.strictEqual(ui.visible(), true);
+  assert.strictEqual(el.textContent, "+ Shell", "the detached node is left alone");
+  assert.strictEqual(el.classList.contains("busy"), false);
+  t.mock.timers.tick(60000);
+  assert.strictEqual(ui.visible(), true, "sticky");
+  d.resolve();
+  await p;
+  assert.strictEqual(ui.visible(), false, "finally hides its own toast");
+});
+
+test("withPending: detached + another toast before the delay -> no pending toast", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ui = installRealToast(t);
+  const el = fakeEl("+ Shell");
+  el.isConnected = false;
+  const d = deferred();
+  const p = withPending(el, "Starting shell…", () => d.promise);
+  t.mock.timers.tick(PENDING_DELAY_MS - 1);
+  showToast("Could not start shell", { error: true });
+  t.mock.timers.tick(PENDING_DELAY_MS * 2);
+  assert.strictEqual(ui.msg.textContent, "Could not start shell");
+  d.resolve();
+  await p;
+  assert.strictEqual(ui.msg.textContent, "Could not start shell", "not ours, left alone");
+  assert.strictEqual(ui.visible(), true);
+});
+
+test("withPending: a connected element is relabelled in place, no toast", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const ui = installRealToast(t);
+  const el = fakeEl("+ Shell");
+  el.isConnected = true;
+  const d = deferred();
+  const p = withPending(el, "Starting shell…", () => d.promise);
+  t.mock.timers.tick(PENDING_DELAY_MS);
+  assert.strictEqual(el.textContent, "Starting shell…");
+  assert.strictEqual(ui.visible(), false);
+  d.resolve();
+  await p;
+  assert.strictEqual(el.textContent, "+ Shell");
+  assert.strictEqual(ui.visible(), false);
+});

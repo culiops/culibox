@@ -18,6 +18,10 @@ const pendingInFlight = new WeakMap();
 // an `el` that is already pending returns the in-flight promise and does not
 // call fn again.
 //
+// If `el` has been detached by the time the delay fires (its container was
+// re-rendered), the label is shown as a sticky toast instead of on the node, and
+// hidden again in the finally under the same own-text rule as pendingToast.
+//
 // Restores only what is still its own: the text if it still reads `label`,
 // `disabled` if it is still true as we set it. If the owner rewrote either
 // while we waited (e.g. "Saved", or re-enabled), the owner wins.
@@ -29,7 +33,16 @@ function withPending(el, label, fn) {
   el.disabled = true;
   el.setAttribute("aria-busy", "true");
   let original = null; // the text to put back; set only once we swap in `label`
+  let toastShown = false; // set when `el` was detached and the label went to the toast
+  const seq = pendingToastSeq();
   const timer = setTimeout(() => {
+    // A click can re-render the control's container, leaving `el` detached:
+    // relabelling it would be invisible, so the same feedback goes to the toast.
+    // (typeof guard: plain test fakes carry no isConnected and keep the in-place path.)
+    if (typeof el.isConnected === "boolean" && !el.isConnected) {
+      toastShown = showPendingToast(label, seq);
+      return;
+    }
     original = el.textContent;
     el.classList.add("busy");
     el.textContent = label;
@@ -44,6 +57,7 @@ function withPending(el, label, fn) {
       el.classList.remove("busy");
       if (original !== null && el.textContent === label) el.textContent = original;
       if (el.disabled === true) el.disabled = wasDisabled;
+      if (toastShown) hidePendingToast(label);
     }
   };
   const p = run();
@@ -79,20 +93,34 @@ function pendingRegion(container, text) {
 // left alone. toastSeqNow comes from shell.js and is read at run time only; the
 // typeof guard covers test harnesses that stub showToast without it.
 function pendingToast(text) {
-  const seq = typeof toastSeqNow === "function" ? toastSeqNow() : null;
+  const seq = pendingToastSeq();
   let shown = false;
-  const timer = setTimeout(() => {
-    if (seq !== null && toastSeqNow() !== seq) return;
-    shown = true;
-    showToast(text, { sticky: true });
-  }, PENDING_DELAY_MS);
+  const timer = setTimeout(() => { shown = showPendingToast(text, seq); }, PENDING_DELAY_MS);
   return () => {
     clearTimeout(timer);
     if (!shown) return;
     shown = false;
-    const msg = document.getElementById("toast-msg");
-    if (msg && msg.textContent === text) hideToast();
+    hidePendingToast(text);
   };
+}
+
+// The toast-slot counter at this moment, or null when shell.js's is not present.
+function pendingToastSeq() {
+  return typeof toastSeqNow === "function" ? toastSeqNow() : null;
+}
+
+// Paints the sticky pending toast unless another showToast has claimed the slot
+// since `seq` was read. Returns whether it was shown.
+function showPendingToast(text, seq) {
+  if (seq !== null && toastSeqNow() !== seq) return false;
+  showToast(text, { sticky: true });
+  return true;
+}
+
+// Hides the toast only while it still reads `text`: an error that replaced it stays.
+function hidePendingToast(text) {
+  const msg = document.getElementById("toast-msg");
+  if (msg && msg.textContent === text) hideToast();
 }
 
 if (typeof module !== "undefined" && module.exports) {
