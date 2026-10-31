@@ -389,6 +389,12 @@
             <p class="tiny mut">One absolute path per line. List a folder rather than a single file where you can: a file replaced on disk (git checkout, most editors) is not seen by a running box. The box can read these, and it has internet access, so never list secrets.</p>
             <p class="warnbox tiny" id="pf-context-warn" role="status" hidden></p></div>
         </div>
+        <div class="frow" id="pf-imports-row" hidden>
+          <div class="fcol"><label class="pf-check"><input type="checkbox" id="pf-imports" checked> Give the box the files my CLAUDE.md imports</label>
+            <p class="tiny mut" id="pf-imports-list"></p>
+            <p class="warnbox tiny" id="pf-imports-warn" role="status" hidden></p>
+            <p class="warnbox tiny" id="pf-imports-refused" hidden></p></div>
+        </div>
         <div id="pf-awsc-block">
           <span class="flab">AWS connections (boxed only)</span>
           <p class="tiny mut" id="pf-awsc-hint" hidden>AWS connections need runtime: box. The host tier cannot contain credentials.</p>
@@ -780,6 +786,7 @@
   <script src="/reconcile.js"></script>
   <script src="/attention.js"></script>
   <script src="/elevation.js"></script>
+  <script src="/importsmodel.js"></script>
   <script src="/profileform.js"></script>
   <script src="/workmode.js"></script>
   <script src="/steerrail.js"></script>

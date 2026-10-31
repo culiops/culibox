@@ -3632,6 +3632,7 @@ function paintPfAccount(value) {
   }));
   sel.value = value || "";
   syncPfAccountWarn();
+  paintPfImports();
 }
 // syncPfAccountWarn: a non-default account on the host tier is config kept
 // apart, not a security boundary — say so where the choice is made.
@@ -3692,6 +3693,67 @@ async function refreshCredLists() {
   try { meta = await api("/api/meta"); } catch (_) { return; }
   if (seq !== credListsSeq) return;
   applyCredLists(meta);
+}
+
+// --- the profile form's CLAUDE.md imports row -------------------------------
+// pfImportsSet: what GET /api/bundle/imports said when the form was last
+// filled (the files a box would get, and what was left out), or null before the
+// first answer and after a failure (pfImportsFailed tells the two apart).
+// pfImportsAbsent: the route answered 404, which is how the server says "no box
+// layer or the bundle is off". The row is then hidden, not shown as an error:
+// there is nothing to give and nothing the user did wrong. The stored
+// imports_off still rides along on Save (importsOffToSend).
+let pfImportsSet = null;
+let pfImportsFailed = false;
+let pfImportsAbsent = false;
+let pfImportsSeq = 0;
+async function refreshPfImports() {
+  const seq = ++pfImportsSeq;
+  let set = null;
+  let failed = false;
+  let absent = false;
+  try {
+    const v = await api("/api/bundle/imports", { signal: deadlineSignal(5000) });
+    if (v && typeof v === "object" && Array.isArray(v.files)) set = v;
+    else failed = true;
+  } catch (e) {
+    if (e && e.status === 404) absent = true;
+    else failed = true;
+  }
+  if (seq !== pfImportsSeq) return;
+  pfImportsSet = set;
+  pfImportsFailed = failed;
+  pfImportsAbsent = absent;
+  paintPfImports();
+}
+// paintPfImports applies importsRowState to the row. The checkbox is the source
+// of truth for the switch (fillForm sets it from the stored imports_off), so
+// this never writes its checked state. Run from syncEditorActions (after its
+// lock loop, which re-enables every checkbox) and on a tier, account or switch
+// change, so the row and the profile it describes cannot disagree.
+function paintPfImports() {
+  const row = $("pf-imports-row");
+  if (!row) return;
+  const view = profiles.find((x) => x.name === selectedProfileName()) || null;
+  const tier = (metaLoaded && !boxRuntime) || pfImportsAbsent || segValue($("pf-runtime")) === "host" ? "host" : "box";
+  const st = importsRowState({
+    tier,
+    account: $("pf-account").value,
+    accounts: accountsCache,
+    set: pfImportsSet,
+    failed: pfImportsFailed,
+    off: !$("pf-imports").checked,
+  });
+  row.hidden = st.hidden;
+  const cb = $("pf-imports");
+  const locked = editorState(view).locked;
+  cb.disabled = st.disabled || locked;
+  cb.classList.toggle("off", cb.disabled);
+  $("pf-imports-list").textContent = st.list;
+  $("pf-imports-warn").textContent = st.warn;
+  $("pf-imports-warn").hidden = !st.warn;
+  $("pf-imports-refused").textContent = st.refused;
+  $("pf-imports-refused").hidden = !st.refused;
 }
 
 // --- the profile form's "Can touch" line (desktop Settings page) ------------
@@ -4110,8 +4172,9 @@ let pfEnvRows = [];
 let pfStoredRuntime = "";
 // The stored profile as loaded (GET /api/profiles/{name}, the full config). The
 // work-mode fields (clone_of, default_cwd, clone_share) are read back from their
-// own inputs on save (wmFieldsToSend), so this only keeps what the form has no
-// control for (replyable).
+// own inputs on save (wmFieldsToSend), so this only keeps the values a hidden
+// row cannot speak for: replyable (replyableToSend) and imports_off
+// (importsOffToSend) are written back as stored when their row is not usable.
 let pfLoaded = null;
 // The work mode and copy directory the loaded profile was saved with, for the
 // "switching never deletes the copy" note (wmSwitchNote). Set by fillForm.
@@ -4155,6 +4218,8 @@ function fillForm(p) {
   $("pf-context").value = contextPathsToText(p.context_paths);
   $("pf-context-warn").hidden = true;
   $("pf-replyable").checked = !!p.replyable;
+  // Checked = the box gets the files the CLAUDE.md imports; imports_off absent means on.
+  $("pf-imports").checked = !p.imports_off;
   // The inline AWS binding is not editable here: it is carried as loaded and
   // shown as a summary (paintPfAws) until it is converted or removed.
   pfInlineAws = p.aws && typeof p.aws === "object" ? p.aws : null;
@@ -4172,6 +4237,7 @@ function fillForm(p) {
   syncPfReplyable();
   syncEditorActions();
   renderPfTouch();
+  refreshPfImports();
 }
 // syncEditorActions is the single place that decides what the editor may do,
 // so a dimmed button and the reason it is dimmed can never disagree. .off is
@@ -4214,6 +4280,8 @@ function syncEditorActions() {
   const ctxRow = contextRowState(segValue($("pf-runtime")), $("pf-context").value);
   $("pf-context-row").hidden = ctxRow.hidden;
   $("pf-context-hint").hidden = !ctxRow.hint;
+  // After the lock loop above, which re-enabled the imports checkbox too.
+  paintPfImports();
   // After the lock loop above, which re-enabled every .fld: the AWS blocks are
   // also closed by the host tier, and this is the only pass that knows both.
   const aws = awsFieldsState(st.locked, segValue($("pf-runtime")));
@@ -4405,8 +4473,10 @@ function readForm() {
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;
   if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoaded && pfLoaded.replyable)) p.replyable = true;
-  // No editor control yet: a profile set through the API keeps imports_off on a save from here.
-  if (pfLoaded && pfLoaded.imports_off) p.imports_off = true;
+  // A row the user cannot use (host tier, no box layer, an account without personal
+  // config, a locked profile) keeps the stored value rather than dropping it.
+  const importsUsable = !$("pf-imports-row").hidden && !$("pf-imports").disabled;
+  if (importsOffToSend(importsUsable, $("pf-imports").checked, pfLoaded && pfLoaded.imports_off)) p.imports_off = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the
@@ -4741,7 +4811,8 @@ $("pf-copy-gh-link").addEventListener("click", (e) => {
   $("pf-gh-block").scrollIntoView({ block: "center" });
   $("pf-gh-add").focus();
 });
-$("pf-account").addEventListener("change", syncPfAccountWarn);
+$("pf-account").addEventListener("change", () => { syncPfAccountWarn(); paintPfImports(); });
+$("pf-imports").addEventListener("change", paintPfImports);
 // pf-runtime's own change is handled by renderPfRuntime's buildSeg onChange —
 // a .seg is buttons, not a form control, so it has no native "change" event.
 // workspacesCache backs the tier-aware re-render: switching Runtime must be able
