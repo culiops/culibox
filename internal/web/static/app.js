@@ -5075,7 +5075,8 @@ $("spawn").addEventListener("submit", async (ev) => {
   swsClose(); // the field shows the directory in use; an open list is just left over
   spawnBusy = true;
   const goBtn = $("spawn").querySelector('button[type="submit"]');
-  if (goBtn) goBtn.disabled = true;
+  const goLabel = goBtn ? goBtn.textContent : "";
+  if (goBtn) { goBtn.disabled = true; goBtn.classList.add("busy"); goBtn.setAttribute("aria-busy", "true"); goBtn.textContent = "Starting…"; }
   const req = spawnPayload({
     agent: $("agent").value, name: $("sess-name").value, cwd: getCwd(), options: getOptions(),
     runtime: segValue($("runtime-seg")), prompt: $("spawn-prompt").value,
@@ -5092,6 +5093,14 @@ $("spawn").addEventListener("submit", async (ev) => {
     $("spawn-prompt").value = "";
   };
   hideSpawnUnlock();
+  // The POST returns only once the session exists (#36): say it is working.
+  const prog = $("spawn-progress");
+  const rt = req.runtime || (currentProfile() || {}).runtime || "";
+  const t0 = Date.now();
+  const paintProg = () => { prog.textContent = spawnProgressText((Date.now() - t0) / 1000, rt); };
+  paintProg();
+  prog.hidden = false;
+  const progTimer = setInterval(paintProg, 1000);
   try {
     await spawnSession(req, { onCreated: closeSpawn });
   } catch (e) {
@@ -5103,8 +5112,10 @@ $("spawn").addEventListener("submit", async (ev) => {
       showToast("Spawn failed: " + e.message + (draft.trim() ? " — your first message is kept" : ""), { error: true });
     }
   } finally {
+    clearInterval(progTimer);
+    prog.hidden = true;
     spawnBusy = false;
-    if (goBtn) goBtn.disabled = false;
+    if (goBtn) { goBtn.disabled = false; goBtn.classList.remove("busy"); goBtn.removeAttribute("aria-busy"); goBtn.textContent = goLabel; }
   }
 });
 // The row's actions menu. One persistent node outside the list, rebuilt on
