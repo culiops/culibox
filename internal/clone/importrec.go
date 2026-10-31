@@ -109,9 +109,13 @@ func AppendImported(dataDir, of string, shas []string) error {
 }
 
 // seedImportRecord runs once per of, when no record exists: it records the
-// commits reachable only from refs/heads/box/*, so a box/* branch fetched before
-// this guard does not refuse its own next return. Those commits are already
-// reachable in the user's repo; seeding them exposes nothing new.
+// commits reachable from refs/heads/box/* but from no other branch or tag, so a
+// box/* branch fetched before this guard does not refuse its own next return.
+// Those commits are already reachable in the user's repo; seeding them exposes
+// nothing new. Like the check it counts only branches and tags, not HEAD,
+// refs/original, refs/stash or remote-tracking refs: with HEAD on box/feat a query
+// over --all would be empty, and the empty record would still count as existing.
+// A commit already behind a box/* branch at this point is taken as the box's.
 func seedImportRecord(ctx context.Context, g Git, dataDir, of string) error {
 	name, err := cloneKeyHash(of)
 	if err != nil {
@@ -126,7 +130,7 @@ func seedImportRecord(ctx context.Context, g Git, dataDir, of string) error {
 		return err
 	}
 	out, err := g.Run(ctx, of, noReplaceEnv(), hardened("rev-list", "--branches=box/*", "--not",
-		"--exclude=refs/agent-box/*", "--exclude=refs/heads/box/*", "--all")...)
+		"--exclude=box/*", "--branches", "--tags")...)
 	if err != nil {
 		return err
 	}
@@ -258,46 +262,50 @@ func writeImportList(dir *os.Root, name string, list []string) error {
 // the user's repo must not change which commit these checks see.
 func noReplaceEnv() []string { return append(CleanEnv(), "GIT_NO_REPLACE_OBJECTS=1") }
 
-// missingBefore returns the objects named in the pack index at idx that of lacks
-// (show-index | cat-file --batch-check). It must run before the import moves
-// any object into of. A thin pack's completed bases are in the index too, but of
-// has them, so they are not in the result.
-func missingBefore(ctx context.Context, g Git, of, idx string) (map[string]bool, error) {
+// missingBefore reads the objects of the pack whose index is idx (git
+// verify-pack -v, which prints each object's type) and returns those of lacks, and
+// the commits among them. It must run before the import moves any object into of:
+// the commits it returns are the box's own, and are recorded before the import so
+// an import cut short cannot leave them unrecorded. A thin pack's completed bases
+// are in the index too, but of has them, so they are not in the result.
+func missingBefore(ctx context.Context, g Git, of, idx string) (missing map[string]bool, commits []string, err error) {
 	sg, ok := g.(StdinGit)
 	if !ok {
-		return nil, errors.New("this git runner cannot take stdin")
+		return nil, nil, errors.New("this git runner cannot take stdin")
 	}
-	f, err := os.Open(idx)
+	out, err := g.Run(ctx, of, noReplaceEnv(), hardened("verify-pack", "-v", idx)...)
 	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	out, err := sg.RunStdin(ctx, of, noReplaceEnv(), f, hardened("show-index")...)
-	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var shas []string
-	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
-		if line == "" {
-			continue
+	kind := map[string]string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fl := strings.Fields(line) // <sha> <type> <size> <size-in-pack> <offset> [<depth> <base>]
+		if len(fl) < 2 || !shaRE.MatchString(fl[0]) {
+			continue // the summary lines after the objects
 		}
-		fl := strings.Fields(line) // <offset> <sha> [(<crc>)]
-		if len(fl) < 2 || !shaRE.MatchString(fl[1]) {
-			return nil, fmt.Errorf("show-index: unexpected line %q", sanitize(line))
+		switch fl[1] {
+		case "commit", "tree", "blob", "tag":
+		default:
+			return nil, nil, fmt.Errorf("verify-pack: unexpected line %q", sanitize(line))
 		}
-		shas = append(shas, fl[1])
+		shas = append(shas, fl[0])
+		kind[fl[0]] = fl[1]
 	}
 	types, err := objectTypes(ctx, sg, of, shas)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	missing := map[string]bool{}
+	missing = map[string]bool{}
 	for _, s := range shas {
 		if types[s] == "missing" {
 			missing[s] = true
+			if kind[s] == "commit" {
+				commits = append(commits, s)
+			}
 		}
 	}
-	return missing, nil
+	return missing, commits, nil
 }
 
 // objectTypes asks of for the type of each SHA: "commit", "blob"..., or "missing".
@@ -324,32 +332,11 @@ func objectTypes(ctx context.Context, sg StdinGit, of string, shas []string) (ma
 	return types, nil
 }
 
-// onlyCommits is the SHAs of set that are commits in of, sorted.
-func onlyCommits(ctx context.Context, g Git, of string, set map[string]bool) ([]string, error) {
-	sg, ok := g.(StdinGit)
-	if !ok {
-		return nil, errors.New("this git runner cannot take stdin")
-	}
-	shas := make([]string, 0, len(set))
-	for s := range set {
-		shas = append(shas, s)
-	}
-	slices.Sort(shas)
-	types, err := objectTypes(ctx, sg, of, shas)
-	if err != nil {
-		return nil, err
-	}
-	var commits []string
-	for _, s := range shas {
-		if types[s] == "commit" {
-			commits = append(commits, s)
-		}
-	}
-	return commits, nil
-}
-
-// rewrittenAway returns the first commit of tip's history that (a) no ref outside
-// refs/agent-box/ and refs/heads/box/ reaches, (b) of had before this import (not
+// rewrittenAway returns the first commit of tip's history that (a) no branch other
+// than refs/heads/box/* and no tag reaches (HEAD, refs/original, refs/stash,
+// remote-tracking refs and refs/agent-box/ do not count, so a commit only they
+// hold reads as rewritten away; --exclude=box/* is matched against the name
+// after refs/heads/, as git documents for --branches), (b) of had before this import (not
 // in missing), and (c) is not in boxMade: a commit the host had that nothing there
 // holds any more. Else it returns the first such commit (a) whose SHA is an <old>
 // with a different <new> in <of>/.git/filter-repo/commit-map (filter-repo prunes
@@ -364,7 +351,7 @@ func rewrittenAway(ctx context.Context, g Git, of, tip string, missing, boxMade 
 		return "", fmt.Errorf("tip %q is not a commit SHA", sanitize(tip))
 	}
 	out, err := sg.RunStdin(ctx, of, noReplaceEnv(), strings.NewReader(tip+"\n"), hardened("rev-list", "--topo-order", "--stdin",
-		"--not", "--exclude=refs/agent-box/*", "--exclude=refs/heads/box/*", "--all")...)
+		"--not", "--exclude=box/*", "--branches", "--tags")...)
 	if err != nil {
 		return "", err
 	}

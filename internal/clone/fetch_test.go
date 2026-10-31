@@ -1234,6 +1234,11 @@ func TestFetchRefusesRewrittenAwayHostCommit(t *testing.T) {
 	wantRewrittenRefusal(t, err, y, x.of)
 	x.noBoxRef("feat")
 	x.tempEmpty()
+	// Y is inside the pack here, present in clone_of, and the record must not take
+	// it for the box's: only commits clone_of lacked are recorded.
+	if x.imported()[y] {
+		t.Error("the refused host commit was recorded as box-made")
+	}
 }
 
 // A bundle `feat ^Y` names the unreachable Y as a prerequisite and does not carry
@@ -1426,7 +1431,7 @@ func TestFetchRewrittenAwayCheckFailureRefusesEvenWithFlag(t *testing.T) {
 	x.hostRewrittenAway()
 	x.req.AllowOldHistory = true
 	g := &argsGit{g: x.rec, fail: func(args []string) error {
-		if slices.Contains(args, "rev-list") && slices.Contains(args, "--exclude=refs/agent-box/*") {
+		if slices.Contains(args, "rev-list") && slices.Contains(args, "--exclude=box/*") {
 			return errors.New("git rev-list: output larger than 16777216 bytes")
 		}
 		return nil
@@ -1437,4 +1442,132 @@ func TestFetchRewrittenAwayCheckFailureRefusesEvenWithFlag(t *testing.T) {
 	}
 	x.noBoxRef("feat")
 	x.tempEmpty()
+}
+
+// postGit runs a host git call for real and then fails it when the predicate
+// says so: the call's effect is there, its result is lost (a cut-short import).
+type postGit struct {
+	g    StdinGit
+	fail func(args []string) error
+}
+
+func (p *postGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return p.RunStdin(ctx, dir, env, nil, args...)
+}
+
+func (p *postGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	out, err := p.g.RunStdin(ctx, dir, env, stdin, args...)
+	if err == nil {
+		err = p.fail(args)
+	}
+	return out, err
+}
+
+// The import puts the objects into clone_of before anything else runs. If it is
+// cut short, the retry finds them present and in no ref: they must already be
+// recorded as the box's, or the guard would name them as host history for good.
+func TestFetchRetriesAfterInterruptedImport(t *testing.T) {
+	x := newFetchFx(t)
+	cut := true
+	g := &postGit{g: x.rec, fail: func(args []string) error {
+		if cut && slices.Contains(args, "fetch") {
+			return errors.New("git fetch: killed")
+		}
+		return nil
+	}}
+	if _, err := Fetch(context.Background(), g, x.dock, x.req); err == nil || !strings.Contains(err.Error(), "killed") {
+		t.Fatalf("err = %v, want the cut-short import", err)
+	}
+	tip := gitIn(t, x.req.Clone.Dir, "", "rev-parse", "refs/heads/feat")
+	if _, err := x.ofRev(tip + "^{commit}"); err != nil {
+		t.Fatalf("the box's commit did not land in clone_of; the scenario is not the interrupted one: %v", err)
+	}
+	x.noBoxRef("feat")
+	cut = false
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("the retry after an interrupted import: %v", err)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != tip {
+		t.Fatalf("box/feat = %s, want %s", got, tip)
+	}
+}
+
+// Only host branches and tags count as a host holding a commit. HEAD,
+// refs/original (filter-branch), refs/stash and remote-tracking refs do not, so
+// a commit that only they reach is still "rewritten away".
+func TestFetchWhichHostRefsCountAsReachable(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(x *fetchFx, y string)
+		pass  bool
+	}{
+		{"a non-box branch counts", func(x *fetchFx, y string) { fixtureGit(t, x.of, "update-ref", "refs/heads/hostfeat", y) }, true},
+		{"a tag counts", func(x *fetchFx, y string) { fixtureGit(t, x.of, "update-ref", "refs/tags/keep", y) }, true},
+		{"refs/original does not", func(x *fetchFx, y string) {
+			fixtureGit(t, x.of, "update-ref", "refs/original/refs/heads/main", y)
+		}, false},
+		{"refs/stash does not", func(x *fetchFx, y string) { fixtureGit(t, x.of, "update-ref", "refs/stash", y) }, false},
+		{"a remote-tracking ref does not", func(x *fetchFx, y string) {
+			fixtureGit(t, x.of, "update-ref", "refs/remotes/origin/main", y)
+		}, false},
+		{"HEAD on box/feat does not", func(x *fetchFx, y string) {
+			fixtureGit(t, x.of, "update-ref", "refs/heads/box/feat", y)
+			fixtureGit(t, x.of, "symbolic-ref", "HEAD", "refs/heads/box/feat")
+		}, false},
+	} {
+		x := newFetchFx(t)
+		y := x.hostRewrittenAway()
+		// A record that exists, so the seed (which would take Y from box/feat) is not what is tested.
+		if err := AppendImported(x.req.DataDir, x.of, []string{shaN(1)}); err != nil {
+			t.Fatal(err)
+		}
+		tc.setup(x, y)
+		_, err := x.fetch()
+		if tc.pass {
+			if err != nil {
+				t.Errorf("%s: %v", tc.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), "it carries commit "+y[:12]) {
+			t.Errorf("%s: err = %v, want a refusal naming %s", tc.name, err, y[:12])
+		}
+	}
+}
+
+// The seed counts branches and tags only: with HEAD on box/feat a query over
+// --all comes back empty, and that empty record would then count as existing.
+func TestFetchSeedsWithHeadOnABoxBranch(t *testing.T) {
+	x := newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	b1, _ := x.ofRev("refs/heads/box/feat")
+	if err := os.Remove(importPath(t, x.req.DataDir, x.of)); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, x.of, "symbolic-ref", "HEAD", "refs/heads/box/feat")
+	x.commitInClone("feat2.txt", "2", "b2")
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("a fetch of a branch fetched before the guard, with HEAD on box/feat: %v", err)
+	}
+	if !x.imported()[b1] {
+		t.Error("the seed did not record box/feat's box-only commit")
+	}
+}
+
+// Accepted residual, documented, not a goal: a host commit that was pruned
+// (gc --prune=now, BFG...) and that no commit-map names is indistinguishable from
+// a box-made commit once the box sends it again. The README says the same.
+func TestFetchAcceptsPrunedRewrittenCommitWithoutCommitMap_AcceptedResidual(t *testing.T) {
+	x := newFetchFx(t)
+	y := x.hostRewrittenAway()
+	fixtureGit(t, x.of, "reflog", "expire", "--expire=now", "--all")
+	fixtureGit(t, x.of, "gc", "-q", "--prune=now")
+	if _, err := x.ofRev(y + "^{commit}"); err == nil {
+		t.Fatal("Y survived gc; the scenario needs it pruned")
+	}
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("the accepted residual is that this passes; got %v", err)
+	}
 }

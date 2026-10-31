@@ -445,21 +445,34 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 
 	// 6c. Which objects of this pack clone_of lacks, before the import moves any
 	// into it: those are the box's own, and the only commits that may be in the
-	// tip's history without a host ref reaching them (7d). The import record
-	// holds the ones earlier fetches brought; it is seeded once from the box/*
-	// branches that already exist. A check that cannot run refuses, flag or not.
+	// tip's history without a host branch or tag reaching them (7d). The import
+	// record holds the ones earlier fetches brought; it is seeded once from the
+	// box/* branches that already exist. A check that cannot run refuses, flag or not.
 	cannot := func(err error) error {
 		if ctx.Err() != nil {
 			return fmt.Errorf("clone fetch: %w", ctx.Err())
 		}
 		return fmt.Errorf("clone fetch: cannot check %s against host history: %s", r.Branch, sanitizeN(err.Error(), maxLongErr))
 	}
-	missing, err := missingBefore(ctx, g, c.Of, strings.TrimSuffix(packOut, ".pack")+".idx")
+	missing, packCommits, err := missingBefore(ctx, g, c.Of, strings.TrimSuffix(packOut, ".pack")+".idx")
 	if err != nil {
 		return res, cannot(err)
 	}
+	// The pack's new commits are the box's whatever happens next, so they are
+	// recorded BEFORE the import: objects that land in clone_of while the fetch is
+	// cut short (a failed ref update, a timeout, a restart) must not read as host
+	// history on the retry. They are absent from clone_of now, so this cannot
+	// launder a commit the host had.
+	var boxMade map[string]bool
 	if r.DataDir != "" {
-		if err := seedImportRecord(ctx, g, r.DataDir, c.Of); err != nil {
+		err := seedImportRecord(ctx, g, r.DataDir, c.Of)
+		if err == nil {
+			err = AppendImported(r.DataDir, c.Of, packCommits)
+		}
+		if err == nil {
+			boxMade, _, err = ReadImportRecord(r.DataDir, c.Of)
+		}
+		if err != nil {
 			return res, cannot(err)
 		}
 	}
@@ -471,22 +484,6 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		"fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules",
 		tmp, "+refs/heads/"+r.Branch+":"+quarantine); err != nil {
 		return res, fmt.Errorf("clone fetch: %w", err)
-	}
-	// The commits this import brought are the box's, whatever a later check
-	// decides: a retry (after a refusal below, or a not-ff one) finds them in
-	// clone_of and must not read them as host history.
-	var boxMade map[string]bool
-	if r.DataDir != "" {
-		commits, err := onlyCommits(ctx, g, c.Of, missing)
-		if err == nil {
-			err = AppendImported(r.DataDir, c.Of, commits)
-		}
-		if err == nil {
-			boxMade, _, err = ReadImportRecord(r.DataDir, c.Of)
-		}
-		if err != nil {
-			return res, cannot(err)
-		}
 	}
 	out, err = hostGit("rev-parse", "--verify", "--end-of-options", quarantine+"^{commit}")
 	if err != nil {
