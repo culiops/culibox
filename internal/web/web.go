@@ -47,6 +47,9 @@ type Server struct {
 	// BoxRuntime is the detected isolation runtime ("runc"/"sysbox-runc"), or ""
 	// when containment is unavailable and every session runs on the host tier.
 	BoxRuntime string
+	// CloneUnavailable is why clone mode cannot run on this instance; empty when
+	// it can. Published in /api/meta as "clone_unavailable".
+	CloneUnavailable string
 	// ShellProfile is the profile the UI's quick-shell (+sh) button spawns —
 	// the auto-detected $SHELL seed, or the user's own profile for that binary.
 	// Empty → the UI offers no quick shell.
@@ -218,15 +221,16 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/logout", s.handleLogout)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
 		meta := map[string]any{
-			"env_label":     s.EnvLabel,
-			"env_color":     s.EnvColor,
-			"shell_profile": s.quickShell(),
-			"box_runtime":   s.BoxRuntime,
-			"analytics":     s.Analytics != nil,
-			"audit":         s.Audit != nil,
-			"replies":       s.RepliesEnabled,
-			"commit":        s.Commit,
-			"version":       s.Version,
+			"env_label":         s.EnvLabel,
+			"env_color":         s.EnvColor,
+			"shell_profile":     s.quickShell(),
+			"box_runtime":       s.BoxRuntime,
+			"clone_unavailable": s.CloneUnavailable,
+			"analytics":         s.Analytics != nil,
+			"audit":             s.Audit != nil,
+			"replies":           s.RepliesEnabled,
+			"commit":            s.Commit,
+			"version":           s.Version,
 		}
 		// The App names the profile editor offers; [] when none are defined.
 		meta["github_apps"] = []string{}

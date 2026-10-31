@@ -354,3 +354,14 @@ func TestAuditWindowCap(t *testing.T) {
 		}
 	}
 }
+
+func TestMetaCloneUnavailable(t *testing.T) {
+	m := metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}})
+	if got, ok := m["clone_unavailable"]; !ok || got != "" {
+		t.Fatalf("unset clone_unavailable = %#v (present %v), want the empty string", got, ok)
+	}
+	m = metaGet(t, &Server{AllowedHosts: []string{"example.com"}, API: &API{}, CloneUnavailable: "no containment layer"})
+	if got := m["clone_unavailable"]; got != "no containment layer" {
+		t.Fatalf("clone_unavailable = %#v", got)
+	}
+}

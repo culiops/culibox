@@ -697,3 +697,21 @@ func TestSweepCloneContainers(t *testing.T) {
 		t.Fatalf("count = %d, removed %q", n, removed)
 	}
 }
+
+func TestCloneUnavailableReason(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		goos string
+		h    *cloneHooks
+		want string
+	}{
+		{"not linux", "darwin", nil, "private copies need Linux for now"},
+		{"linux without hooks", "linux", nil, "private copies need Linux for now"},
+		{"linux, no layer", "linux", &cloneHooks{unavailable: "no containment layer"}, "no containment layer"},
+		{"linux, available", "linux", &cloneHooks{}, ""},
+	} {
+		if got := cloneUnavailableReason(c.goos, c.h); got != c.want {
+			t.Errorf("%s: cloneUnavailableReason = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
