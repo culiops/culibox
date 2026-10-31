@@ -720,16 +720,17 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	creds.SetFileBad(credBad)
 
 	srv := &web.Server{
-		API:        api,
-		Session:    sess,
-		Tokens:     tokens,
-		Password:   login.Secret,
-		Profiles:   pm,
-		Home:       home,
-		Protected:  protected,
-		Terminal:   terminal.NewAttachHandler(mgr.Get),
-		BoxRuntime: boxRuntime,
-		BoxTrees:   boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
+		API:              api,
+		Session:          sess,
+		Tokens:           tokens,
+		Password:         login.Secret,
+		Profiles:         pm,
+		Home:             home,
+		Protected:        protected,
+		Terminal:         terminal.NewAttachHandler(mgr.Get),
+		BoxRuntime:       boxRuntime,
+		CloneUnavailable: cloneUnavailableReason(runtime.GOOS, h),
+		BoxTrees:         boxTreesFunc(fsDenied, boxedReg, mgr.BoxedCwds, lnch.Clones),
 
 		ShellProfile: shellProfile,
 		ShellBin:     config.DetectShell(),

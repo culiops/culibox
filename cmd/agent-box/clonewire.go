@@ -390,6 +390,16 @@ func (h *cloneHooks) record(dir string) error {
 	return nil
 }
 
+// cloneUnavailableReason is why clone mode cannot run on this instance, or ""
+// when it can. Published in /api/meta so the profile editor can say so before a
+// session fails. Clone mode is Linux-only, so a non-Linux host has no hooks.
+func cloneUnavailableReason(goos string, h *cloneHooks) string {
+	if goos != "linux" || h == nil {
+		return "private copies need Linux for now"
+	}
+	return h.unavailable
+}
+
 // newCloneHooks builds the clone-mode hooks. Clone mode is Linux-only in
 // Phase A, so it returns nil, nil elsewhere. On Linux it ALWAYS returns hooks:
 // the host-tier box-owned guard (BoxOwned) needs neither the box layer nor git,

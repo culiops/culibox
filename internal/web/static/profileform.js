@@ -112,17 +112,6 @@ function runtimeToSend(seg, stored, boxAvailable) {
   return stored === "box" || stored === "host" ? stored : "";
 }
 
-// cloneToSend: the stored profile's clone fields, sent back on save. The editor
-// has no clone field, and a save that omits clone_of turns the profile into a
-// plain boxed one. Only a non-empty clone_of is a clone; clone_share is a copy
-// and omitted when the profile has none.
-function cloneToSend(loaded) {
-  if (!loaded || typeof loaded.clone_of !== "string" || !loaded.clone_of) return undefined;
-  const out = { clone_of: loaded.clone_of };
-  if (Array.isArray(loaded.clone_share)) out.clone_share = loaded.clone_share.slice();
-  return out;
-}
-
 // The readable-host-paths field (context_paths): one absolute path per line.
 // contextPathsFromText is what readForm sends: trimmed, blanks dropped, order
 // kept. The server does the real validation, so nothing is judged here.
@@ -147,10 +136,12 @@ function contextRowState(runtime, text) {
 }
 
 // contextWarningsText: the save response's warnings as the lines shown under the
-// field. A clean PUT is a 204, which api() returns as null, so a missing body or
-// missing list gives "" rather than throwing.
+// field, minus the clone_share ones. A clean PUT is a 204, which api() returns as
+// null, so a missing body or missing list gives "" rather than throwing.
 function contextWarningsText(body) {
-  return body && Array.isArray(body.warnings) ? body.warnings.join("\n") : "";
+  if (!body || !Array.isArray(body.warnings)) return "";
+  // clone_share lines belong to the private-copy block (workmode.js).
+  return body.warnings.filter((line) => !/^clone_share /.test(line)).join("\n");
 }
 
 // replyableToSend: whether a save writes replyable:true. A visible row is the
@@ -381,11 +372,12 @@ function pfTouchProfile(form, o) {
   if (owners.length) out.github_owners = owners;
   const tokens = list(f.tokens);
   if (tokens.length) out.tokens = tokens;
+  if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
   const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
   out.network = bound ? "allowlist" : x.egressAll === true ? "open" : "";
   return out;
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
+  module.exports = { saveTarget, duplicateDraft, ticksAfterRefresh, awscPickerRows, awscExclusiveState, awscToSend, stGroups, stEntryLine, stTokensToSend, editorState, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState, replyableToSend, GH_PERMS, GH_DEFAULT_PERMS, ghPermsChecked, ghBindingFromForm, ghFormError, inlineAWSSummary, awsInlineToSend, convertConnName, convertAWSConfirm, convertAWSErrText, pfTouchProfile };
 }

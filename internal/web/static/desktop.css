@@ -1166,6 +1166,10 @@
   #page-host > #settings-modal.as-page #manage .ped {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 14px; align-content: start;
     padding: 18px 22px 84px; background: var(--bg);
+    /* The footer (#foot-manage) is 56px and overlays the bottom of this
+       scroller, so scroll-into-view "nearest" (setDialogError) would count a
+       line under it as visible. 72px = footer 56px + 16px clearance. */
+    scroll-padding-bottom: 72px;
   }
   #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]), #page-host > #settings-modal.as-page #pf-options { display: contents; }
   #page-host > #settings-modal.as-page #manage .ped > *, #page-host > #settings-modal.as-page #manage .ped > .frow:not([id]) > .fcol, #page-host > #settings-modal.as-page #pf-options > .frow { grid-column: 1 / -1; min-width: 0; margin: 0 0 14px; }
@@ -1182,7 +1186,10 @@
   #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="where"] { order: 20; }
   #page-host > #settings-modal.as-page #manage #pf-runtime-col { order: 21; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-cwd-col { order: 22; grid-column: 3 / span 2; }
-  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 23; }
+  #page-host > #settings-modal.as-page #manage #pf-mode-block { order: 23; }
+  #page-host > #settings-modal.as-page #manage #pf-mode-block .pf-mode-cards { display: grid; grid-template-columns: 1fr 1fr; }
+  #page-host > #settings-modal.as-page #manage #pf-copy-block { order: 24; }
+  #page-host > #settings-modal.as-page #manage #pf-context-row { order: 25; }
   #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
   #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }

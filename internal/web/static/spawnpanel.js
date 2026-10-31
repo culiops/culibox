@@ -243,6 +243,7 @@ function paintReachRows(box, rows, opts) {
 // from the places the form already re-derives itself (profile change, tier or
 // workspace change, account change), so it never needs a poll. A no-op on mobile.
 function syncSpawnPreview() {
+  syncSpawnCopyLine();
   const nm = $("sess-name");
   if (!spawnPanelOn()) {
     if (nm && nm.placeholder !== SPAWN_NAME_DEFAULT_PLACEHOLDER) nm.placeholder = SPAWN_NAME_DEFAULT_PLACEHOLDER;
@@ -251,6 +252,17 @@ function syncSpawnPreview() {
   spawnPlistSelect();
   renderSpawnReach();
   if (nm) nm.placeholder = spawnNamePlaceholder(getCwd());
+}
+
+// syncSpawnCopyLine: "Private copy of ~/x" under the workspace field when the
+// picked profile is a private copy; hidden otherwise. Runs before the
+// spawnPanelOn() early return so the phone layout gets it too. textContent only.
+function syncSpawnCopyLine() {
+  const el = $("spawn-copy-line");
+  if (!el) return;
+  const text = wmCopyLine((currentProfile() || {}).clone_of || "", window.HOME_DIR);
+  el.textContent = text;
+  el.hidden = text === "";
 }
 
 // spawnPanelOpen: the dialog is about to show. Build the list, paint the box from

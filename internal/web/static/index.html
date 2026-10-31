@@ -229,6 +229,7 @@
                  aria-autocomplete="list" placeholder="~/project">
           <div id="spawn-ws-list" role="listbox" aria-label="Directories" hidden></div>
           <div class="form-hint" id="spawn-ws-note"></div>
+          <div class="form-hint" id="spawn-copy-line" hidden></div>
         </div>
         <div class="span2" id="spawn-prompt-row" hidden>
           <label for="spawn-prompt">First message</label>
@@ -333,7 +334,7 @@
             </select></div>
         </div>
         <div class="frow">
-          <div class="fcol" id="pf-cwd-col"><label class="flab" for="pf-cwd">Default workspace</label>
+          <div class="fcol" id="pf-cwd-col"><label class="flab" id="pf-cwd-lab" for="pf-cwd">Default workspace</label>
             <select id="pf-cwd" class="fld"></select>
             <input id="pf-cwd-custom" class="fld" type="text" placeholder="/custom/path" autocomplete="off" hidden></div>
           <div class="fcol" id="pf-account-col">
@@ -342,6 +343,42 @@
             <div class="warnbox" id="pf-account-warn" hidden>Host tier: this account's sessions run as your
               OS user and can read the default account's files. Use box containment to keep accounts apart.</div>
           </div>
+        </div>
+        <div id="pf-mode-block">
+          <span class="flab" id="pf-mode-lab">How the agent works on the folder</span>
+          <div class="pf-mode-cards" role="radiogroup" aria-labelledby="pf-mode-lab">
+            <label class="pf-mode-card"><input type="radio" name="pf-mode" value="folder" checked>
+              <span class="pf-mode-txt"><b>Work in this folder</b>
+              <span class="tiny mut" id="pf-mode-folder-body">The agent edits your files directly. Your git history stays read-only: you review and commit yourself.</span></span></label>
+            <label class="pf-mode-card" id="pf-mode-copy-card"><input type="radio" name="pf-mode" value="copy">
+              <span class="pf-mode-txt"><b>Work on a private copy</b>
+              <span class="tiny mut">The agent gets its own copy: it can commit, branch and push. Your folder is untouched until its work comes home.</span>
+              <span id="pf-mode-copy-why" class="tiny"></span></span></label>
+          </div>
+          <p class="warnbox tiny" id="pf-mode-hint" hidden></p>
+          <p class="tiny mut" id="pf-mode-switch" hidden></p>
+          <details id="pf-mode-diff"><summary>What's the difference?</summary>
+            <table>
+              <thead><tr><th scope="col"></th><th scope="col">Work in this folder</th><th scope="col">Work on a private copy</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Sees changes live</th><td>Yes, in your folder</td><td>No: they stay in the copy until they come home</td></tr>
+                <tr><th scope="row">Agent can commit</th><td id="pf-mode-diff-commit">No: your git history is read-only</td><td>Yes: commit, branch and push</td></tr>
+                <tr><th scope="row">How work comes home</th><td>It is already there; you commit</td><td>As box/&lt;branch&gt; when you run agent-box clone fetch, or as a PR the agent pushes</td></tr>
+                <tr><th scope="row">Good for</th><td>Small changes you review as they happen</td><td>Longer tasks, branches and PRs</td></tr>
+              </tbody>
+            </table>
+          </details>
+        </div>
+        <div id="pf-copy-block" hidden>
+          <label class="flab" for="pf-copy-dir">Copy lives in</label>
+          <input id="pf-copy-dir" class="fld" type="text" placeholder="/home/you/box-clones/repo" autocomplete="off" spellcheck="false">
+          <p class="tiny mut">CuliBox creates it on the first session. Keep it outside folders where you run host sessions.</p>
+          <label class="flab" for="pf-copy-share">Read-only paths from the original</label>
+          <textarea id="pf-copy-share" class="fld" rows="3" spellcheck="false" placeholder="CLAUDE.md"></textarea>
+          <p class="tiny mut">One path per line, relative to the folder, at most 8. The box can read them and has internet access. CuliBox warns for names like .env*, *.pem, *.key and config*.json.</p>
+          <p class="tiny" id="pf-copy-gh" hidden>To push and open PRs, <a href="#pf-gh-block" class="lnk" id="pf-copy-gh-link">add a GitHub token</a></p>
+          <p class="warnbox tiny" id="pf-copy-warn" role="status" hidden></p>
+          <p class="warnbox tiny" id="pf-copy-err" role="alert" hidden></p>
         </div>
         <div class="frow" id="pf-context-row">
           <div class="fcol"><label class="flab" for="pf-context">Readable host paths</label>
@@ -741,6 +778,7 @@
   <script src="/attention.js"></script>
   <script src="/elevation.js"></script>
   <script src="/profileform.js"></script>
+  <script src="/workmode.js"></script>
   <script src="/steerrail.js"></script>
   <script src="/accessmodel.js"></script>
   <script src="/accesstab.js"></script>

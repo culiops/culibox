@@ -170,6 +170,8 @@ Two profile fields turn it on:
 
 The profile's `default_cwd` is the clone's directory. The two must not overlap: neither may be inside the other. The profile must be boxed: `runtime: "host"` is refused, and so is a profile that sets no runtime while the instance's `default_runtime` is `host`, both when you save it and when you spawn it. The first spawn creates the clone with host `git clone`. Spawn the session in the clone's root, not a subdirectory.
 
+In the web UI, pick **Work on a private copy** in Settings › Profiles: the folder field is `clone_of`, **Copy lives in** is `default_cwd`, and **Read-only paths** is `clone_share`.
+
 **What the box gets**
 
 | In the box | Mode | What it is |

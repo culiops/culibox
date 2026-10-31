@@ -5,7 +5,7 @@
 // is the whole point of the control.
 const test = require("node:test");
 const assert = require("node:assert");
-const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, cloneToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState } =
+const { editorState, saveTarget, duplicateDraft, saveLabel, duplicateName, containmentConfirm, segValue, setSegValue, awsFieldsState, segFromRuntime, runtimeToSend, replyableToSend, contextPathsFromText, contextPathsToText, contextWarningsText, contextRowState } =
   require("../static/profileform.js");
 
 test("a new profile can be saved but not deleted or duplicated", () => {
@@ -138,17 +138,6 @@ test("readForm never sends a box override", () => {
   assert.doesNotMatch(b, /\bp\.box\b/);
   assert.doesNotMatch(b, /boxToSend/);
   assert.doesNotMatch(b, /pfLoadedBox/);
-});
-
-test("cloneToSend returns the stored clone fields and nothing else", () => {
-  const loaded = { clone_of: "/r", clone_share: ["a"], other: 1 };
-  const got = cloneToSend(loaded);
-  assert.deepStrictEqual(got, { clone_of: "/r", clone_share: ["a"] });
-  assert.notStrictEqual(got.clone_share, loaded.clone_share); // a copy, not the loaded array
-  assert.deepStrictEqual(cloneToSend({ clone_of: "/r" }), { clone_of: "/r" }); // clone_share omitted when absent
-  for (const v of [undefined, null, {}, { clone_of: "" }, { clone_of: 42 }, { clone_share: ["a"] }]) {
-    assert.strictEqual(cloneToSend(v), undefined, JSON.stringify(v));
-  }
 });
 
 test("a hidden replies row keeps what the profile stored", () => {
@@ -365,6 +354,8 @@ test("context paths fill the textarea one per line, empty when there are none", 
 
 test("context warnings come from the save response body, safely absent", () => {
   assert.strictEqual(contextWarningsText({ warnings: ["x", "y"] }), "x\ny");
+  // clone_share lines belong to the private-copy block (wmShareWarningsText)
+  assert.strictEqual(contextWarningsText({ warnings: ['clone_share "a" …', "x", "y"] }), "x\ny");
   assert.strictEqual(contextWarningsText({ warnings: [] }), "");
   assert.strictEqual(contextWarningsText({}), "");
   assert.strictEqual(contextWarningsText(null), "");
@@ -417,4 +408,11 @@ test("pfTouchProfile: unbound is open only when egress is mandatory, else no pos
   assert.strictEqual(pfTouchProfile({ bin: "claude" }, {}).network, "");
   assert.strictEqual(pfTouchProfile({ bin: "claude", tokens: ["t"] }, {}).network, "allowlist");
   assert.strictEqual(pfTouchProfile(null, null).claude, false);
+});
+
+test("pfTouchProfile carries clone_of only for a private copy", () => {
+  const { pfTouchProfile } = require("../static/profileform.js");
+  assert.strictEqual(pfTouchProfile({ clone_of: "/h/r", bin: "claude" }, {}).clone_of, "/h/r");
+  assert.ok(!("clone_of" in pfTouchProfile({ bin: "claude" }, {})));
+  assert.ok(!("clone_of" in pfTouchProfile({ clone_of: "", bin: "claude" }, {})));
 });
