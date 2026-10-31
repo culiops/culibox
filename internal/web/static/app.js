@@ -4405,6 +4405,8 @@ function readForm() {
   const ctx = contextPathsFromText($("pf-context").value);
   if (ctx.length) p.context_paths = ctx;
   if (replyableToSend(!$("pf-replyable-row").hidden, $("pf-replyable").checked, pfLoaded && pfLoaded.replyable)) p.replyable = true;
+  // No editor control yet: a profile set through the API keeps imports_off on a save from here.
+  if (pfLoaded && pfLoaded.imports_off) p.imports_off = true;
   return p;
 }
 // These three run while #settings-modal is open, so their errors go to the

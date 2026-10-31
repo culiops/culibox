@@ -138,6 +138,10 @@ type AgentConfig struct {
 	// (the sidebar/card may type into it). Only a claude session ever honours
 	// it; the spawn form can override it per run.
 	Replyable bool `json:"replyable,omitempty"`
+
+	// ImportsOff: a boxed claude gets the files the bundled CLAUDE.md @-imports
+	// unless this is set. No effect on the host tier, which reads them directly.
+	ImportsOff bool `json:"imports_off,omitempty"`
 }
 
 // RuntimePolicy returns the effective tier, defaulting to box. An empty value

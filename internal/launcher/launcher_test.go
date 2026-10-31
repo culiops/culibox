@@ -757,3 +757,16 @@ func TestBoxedDefaultCwds(t *testing.T) {
 		t.Fatalf("no profiles: got %v", got)
 	}
 }
+
+func TestImportsOffFor(t *testing.T) {
+	l := New([]config.AgentConfig{
+		{Name: "off", Bin: "claude", ImportsOff: true},
+		{Name: "plain", Bin: "claude"},
+	}, fakeResolver{}, nil)
+	if !l.ImportsOffFor("off") {
+		t.Fatal("a profile with imports_off must report it")
+	}
+	if l.ImportsOffFor("plain") || l.ImportsOffFor("missing") {
+		t.Fatal("a profile without the switch, or an unknown one, must report false")
+	}
+}

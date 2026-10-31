@@ -578,6 +578,13 @@ func (l *AgentLauncher) ContextPathsFor(agent string) ([]string, error) {
 	return cfg.ContextPathList()
 }
 
+// ImportsOffFor reports whether the profile turns off the files the bundled
+// CLAUDE.md imports; false for an unknown profile.
+func (l *AgentLauncher) ImportsOffFor(agent string) bool {
+	cfg, ok := l.agent(agent)
+	return ok && cfg.ImportsOff
+}
+
 // Clones returns the clone spec of every profile with clone_of set and an
 // absolute, clean default_cwd, ordered by directory. It feeds the host-tier
 // box-owned-directory check, which must cover a directory a box may have

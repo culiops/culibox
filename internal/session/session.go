@@ -226,6 +226,12 @@ type ContextResolver interface {
 	ContextPathsFor(agent string) ([]string, error)
 }
 
+// ImportsResolver is implemented by launchers that know a profile's imports_off
+// switch. Optional, like ContextResolver: without it the imports are mounted.
+type ImportsResolver interface {
+	ImportsOffFor(agent string) bool
+}
+
 // CloneHooks is what spawning a clone-mode session needs from the clone layer,
 // kept as an interface so this package does not import it. A nil CloneHooks
 // means clone mode is unavailable (Linux only), and clone profiles are refused.
@@ -1755,6 +1761,10 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		}
 		ctxPaths = p
 	}
+	var importsOff bool
+	if r, ok := m.launcher.(ImportsResolver); ok {
+		importsOff = r.ImportsOffFor(spec.Agent)
+	}
 	if len(ctxPaths) > 0 && runtime != config.RuntimeBox {
 		// ErrUnboxableWorkspace so the UI shows the refusal (writeSpawnErr).
 		return nil, fmt.Errorf("%w: profile %q: %w", box.ErrUnboxableWorkspace, spec.Agent, config.ErrContextNeedsBox)
@@ -1884,6 +1894,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 	var bundleHash string
 	var bundleFailed bool // mounts unknown, not empty: see box.BoxKey.PartialMounts
 	var preTrust bool     // the agent gets --setting-sources user: see box.BoxKey.PreTrust
+	var noImports bool    // the bundle was asked without the CLAUDE.md imports: see box.BoxKey.NoImports
+	var importMounts int  // CLAUDE.md import mounts the bundle granted
 	var bundleDrops []bundle.Drop
 	if runtime == config.RuntimeBox {
 		m.mu.Lock()
@@ -1894,7 +1906,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// account is part of the box key, so this gate never differs between
 		// two sessions that share a box.
 		if bundles != nil && (acct.IsDefault || acct.InheritPersonal) {
-			g, err := bundles.For(bin, true)
+			g, err := bundles.For(bin, !importsOff)
+			noImports = importsOff
 			if err != nil {
 				bundleFailed = true
 				// One row, not silence. The reason is a fixed string: err can
@@ -1905,6 +1918,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			mounts, bundleHash = g.Mounts, g.Hash
 			if err == nil {
 				bundleDrops = g.Drops
+				importMounts = g.Imports
 			}
 			// The flag itself, not "the bundle applied": only the claude layout
 			// carries it, so a shell, codex or wrapper-bin spawn that creates the
@@ -1987,7 +2001,7 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		boxes := m.boxes
 		recordBoxed := m.boxedRecorder
 		m.mu.Unlock()
-		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust}
+		key := box.BoxKey{Account: acctName, PartialMounts: bundleFailed, Clone: cloneMounts, PreTrust: preTrust, NoImports: noImports}
 		var bm []box.Mount
 		var benv, penv []string
 		if bs.Any() {
@@ -2193,6 +2207,9 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 			// Logged per spawn so a box still carrying an older bundle is
 			// visible rather than silent.
 			log.Printf("session %s: box %s, config bundle %s", id, boxName, bundleHash)
+		}
+		if importMounts > 0 {
+			log.Printf("session %s (profile %s): %d CLAUDE.md import(s) mounted read-only", id, spec.Agent, importMounts)
 		}
 	}
 

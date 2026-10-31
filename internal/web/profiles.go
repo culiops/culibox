@@ -73,6 +73,9 @@ type ProfileView struct {
 	// clone-mode profile clones.
 	ContextPaths []string `json:"context_paths,omitempty"`
 	CloneOf      string   `json:"clone_of,omitempty"`
+	// ImportsOff: a boxed claude of this profile does not get the files the
+	// bundled CLAUDE.md imports.
+	ImportsOff bool `json:"imports_off,omitempty"`
 	// AutoReturn: a clone profile whose work comes home on its own (the switch
 	// is on). NotHome is what the clone's last return left behind, if anything.
 	AutoReturn bool                  `json:"auto_return,omitempty"`
@@ -439,6 +442,7 @@ func (m *ProfileManager) Views() []ProfileView {
 			AWSConnections: slices.Clone(a.AWSConnections),
 			ContextPaths:   slices.Clone(a.ContextPaths),
 			CloneOf:        a.CloneOf,
+			ImportsOff:     a.ImportsOff,
 		}
 		if c, err := a.Clone(); err == nil && c != nil {
 			pv.AutoReturn = !c.NoAutoReturn
