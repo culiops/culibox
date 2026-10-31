@@ -519,17 +519,26 @@ function setDrawerMax(on) {
 wireDrawerSplit($("drawer-edge"), "width");
 wireDrawerSplit($("drawer-split"), "tree");
 $("drawer-max").onclick = () => setDrawerMax($("drawer").dataset.max !== "1");
-// Escape restores a maximized drawer, unless a field, the editor or a menu in
-// it has the key (their Escape is their own). Neither menu takes focus when it
-// opens (focus stays on its ⋯), so an open one is checked by state, not target:
-// its own document-level Escape closes it, and that press must do only that.
-$("drawer").addEventListener("keydown", (e) => {
-  if (e.key !== "Escape" || $("drawer").dataset.max !== "1") return;
+// Escape restores a maximized drawer (maxEscapeRestores decides). On the
+// document, not the drawer: a tree row click leaves focus on body. Neither menu
+// takes focus when it opens (focus stays on its ⋯), so an open one is checked
+// by state, and a closer that ran first (filesdrawer.js loads earlier; the page
+// host) marks the press used with preventDefault. Not a capture listener: its
+// preventDefault would stop the page host closing a page.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const dr = $("drawer");
   const t = e.target;
-  if (t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")) return;
   const dm = $("drawer-menu");
   const rm = $("ft-menu");
-  if ((dm && !dm.hidden) || (rm && rm.classList.contains("open"))) return;
+  const restore = maxEscapeRestores({
+    max: !!dr && dr.dataset.max === "1",
+    where: t === document.body || t === document.documentElement ? "body" : dr && dr.contains(t) ? "drawer" : "other",
+    owned: !!(t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")),
+    menuOpen: !!((dm && !dm.hidden) || (rm && rm.classList.contains("open"))),
+    prevented: e.defaultPrevented,
+  });
+  if (!restore) return;
   e.preventDefault();
   setDrawerMax(false);
 });

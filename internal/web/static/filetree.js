@@ -648,7 +648,14 @@ async function initFileTree() {
     const menu = document.getElementById("ft-menu");
     if (menu && menu.classList.contains("open") && !menu.contains(e.target)) closeRowMenu();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeRowMenu(); });
+  // Only a press that closes an open menu is marked used (preventDefault): the
+  // maximized drawer's Escape (app.js) then leaves it alone.
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const menu = document.getElementById("ft-menu");
+    if (menu && menu.classList.contains("open")) e.preventDefault();
+    closeRowMenu();
+  });
 
   // Manual re-read. The tree loads lazily and never polls, so anything the AGENT
   // writes, which is most of what changes in this app, is invisible until the

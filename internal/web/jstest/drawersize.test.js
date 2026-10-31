@@ -94,3 +94,18 @@ test("splitAria: a drawn share outside the bounds reports inside them", () => {
   assert.equal(d.splitAria(0.27, "width").now, Math.round(d.DRAWER_W_MIN * 100));
   assert.equal(d.splitAria(0.99, "width").now, Math.round(d.DRAWER_W_MAX * 100));
 });
+
+test("maxEscapeRestores: only a maximized drawer, focus on the page or in the drawer, nothing else owning Escape", () => {
+  const base = { max: true, where: "body", owned: false, menuOpen: false };
+  assert.equal(d.maxEscapeRestores(base), true);                        // a tree row click leaves focus on body
+  assert.equal(d.maxEscapeRestores({ ...base, where: "drawer" }), true);
+  assert.equal(d.maxEscapeRestores({ ...base, max: false }), false);
+  assert.equal(d.maxEscapeRestores({ ...base, where: "other" }), false); // a terminal, the sidebar, a dialog
+  assert.equal(d.maxEscapeRestores({ ...base, owned: true }), false);    // a field, the editor, a menu item
+  assert.equal(d.maxEscapeRestores({ ...base, menuOpen: true }), false); // its Escape closes the menu only
+  assert.equal(d.maxEscapeRestores(null), false);
+});
+
+test("maxEscapeRestores: a press another handler already used (closed a menu or a page) is left alone", () => {
+  assert.equal(d.maxEscapeRestores({ max: true, where: "body", owned: false, menuOpen: false, prevented: true }), false);
+});
