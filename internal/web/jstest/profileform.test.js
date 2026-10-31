@@ -409,3 +409,10 @@ test("pfTouchProfile: unbound is open only when egress is mandatory, else no pos
   assert.strictEqual(pfTouchProfile({ bin: "claude", tokens: ["t"] }, {}).network, "allowlist");
   assert.strictEqual(pfTouchProfile(null, null).claude, false);
 });
+
+test("pfTouchProfile carries clone_of only for a private copy", () => {
+  const { pfTouchProfile } = require("../static/profileform.js");
+  assert.strictEqual(pfTouchProfile({ clone_of: "/h/r", bin: "claude" }, {}).clone_of, "/h/r");
+  assert.ok(!("clone_of" in pfTouchProfile({ bin: "claude" }, {})));
+  assert.ok(!("clone_of" in pfTouchProfile({ clone_of: "", bin: "claude" }, {})));
+});

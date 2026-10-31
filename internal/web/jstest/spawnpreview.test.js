@@ -21,7 +21,7 @@ test("touch line: box with aws and gh", () => {
 
 test("touch line: box with several names, clone and nothing", () => {
   assert.strictEqual(profileTouchLine({ runtime: "box", aws_connections: ["a", "b"] }), "box · aws a, b");
-  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "learning-hubs" }), "box · clone of learning-hubs");
+  assert.strictEqual(profileTouchLine({ runtime: "box", clone_of: "learning-hubs" }), "box · private copy of learning-hubs");
   assert.strictEqual(profileTouchLine({ runtime: "box" }), "box · no credentials");
   assert.strictEqual(profileTouchLine({}), "box · no credentials");
 });
@@ -283,4 +283,15 @@ test("reach rows: an inline sso_direct binding ends with the mode label", () => 
   const q = { ...p, aws_inline: { name: "old" } };
   const rows2 = reachRows({ profile: q, tier: "box", cwd: "/w", meta: null, creds: { store: { initialized: true, locked: false, platform: "linux" }, aws: [] } });
   assert.strictEqual(byK(rows2, "AWS")[0].v, "old · read only");
+});
+
+test("reach rows: a private copy names the read-only original right after Files", () => {
+  const rows = reachRows({ profile: { clone_of: "/h/r" }, tier: "box", cwd: "~/box-clones/r" });
+  assert.deepStrictEqual(rows[1], { k: "Original", v: "/h/r/.git read-only · the box cannot change your history" });
+  assert.strictEqual(rows[0].k, "Files");
+});
+
+test("reach rows: no Original row on the host tier or without a copy", () => {
+  assert.strictEqual(byK(reachRows({ profile: { clone_of: "/h/r" }, tier: "host" }), "Original").length, 0);
+  assert.strictEqual(byK(reachRows({ profile: {}, tier: "box", cwd: "~/x" }), "Original").length, 0);
 });

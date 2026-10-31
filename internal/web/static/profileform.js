@@ -372,6 +372,7 @@ function pfTouchProfile(form, o) {
   if (owners.length) out.github_owners = owners;
   const tokens = list(f.tokens);
   if (tokens.length) out.tokens = tokens;
+  if (typeof f.clone_of === "string" && f.clone_of !== "") out.clone_of = f.clone_of;
   const bound = !!(out.aws_connections || out.aws_inline || f.github || out.tokens);
   out.network = bound ? "allowlist" : x.egressAll === true ? "open" : "";
   return out;

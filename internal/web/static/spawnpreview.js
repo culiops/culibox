@@ -48,7 +48,7 @@ function profileTouchLine(p, boxRuntime) {
   if (aws.length) parts.push("aws " + aws.join(", "));
   if (gh.length) parts.push("gh " + gh.join(", "));
   if (tok.length) parts.push("tok " + tok.join(", "));
-  if (prof.clone_of) parts.push("clone of " + prof.clone_of);
+  if (prof.clone_of) parts.push("private copy of " + prof.clone_of);
   if (parts.length === 1) parts.push("no credentials");
   return parts.join(" · ");
 }
@@ -80,6 +80,10 @@ function reachRows(o) {
   rows.push(host
     ? { k: "Files", v: "your whole user account" }
     : { k: "Files", v: (x.cwd || "the workspace") + " read/write · nothing else on this machine" });
+  // A private copy: the box edits its own copy; the original's history is mounted read-only.
+  if (!host && typeof p.clone_of === "string" && p.clone_of !== "") {
+    rows.push({ k: "Original", v: spawnDep("shortPath", "./fsops.js")(p.clone_of) + "/.git read-only · the box cannot change your history" });
+  }
 
   const metaConns = x.meta && Array.isArray(x.meta.aws_connections) ? x.meta.aws_connections : [];
   const credConns = x.creds && Array.isArray(x.creds.aws) ? x.creds.aws : [];

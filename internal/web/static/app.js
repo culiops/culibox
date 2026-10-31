@@ -2034,7 +2034,7 @@ function renderSession(s, opts) {
   if (!compact) {
     const smeta = document.createElement("div");
     smeta.className = "smeta";
-    smeta.textContent = sessionMeta(s, s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
+    smeta.textContent = sessionMeta(s, s.clone_of ? wmCopyLine(s.clone_of, window.HOME_DIR) : s.cwd ? shortPath(s.cwd) : "", needLabel(s) || act.title);
     grow.appendChild(smeta);
   }
   li.appendChild(grow);
@@ -2148,6 +2148,7 @@ function paintCompactRow(li, sname, grow, s) {
   if (ab) facts.push(ab.title);
   const aws = awsBadge(s, nowMs);
   if (aws) facts.push("AWS: " + aws.title);
+  if (s.clone_of) facts.push(wmCopyLine(s.clone_of, window.HOME_DIR));
   li.title = facts.join("\n");
   // The session's cost, muted mono, before the chip. cost_usd is absent unless
   // the whole conversation history is known, and then no "$" is shown at all.
