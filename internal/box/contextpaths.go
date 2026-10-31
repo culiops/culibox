@@ -184,7 +184,10 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, shared []strin
 			}
 		}
 	}
-	if reason := ProtectedOverlap(p, protected); reason != "" {
+	if reason, hint := ProtectedOverlapHint(p, protected); reason != "" {
+		if hint != "" {
+			reason += "; " + hint
+		}
 		return nil, ctxPathRefuse(p, "%s", reason)
 	}
 	if len(shared) > 0 && !UnderMount(p, shared) {
