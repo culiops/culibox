@@ -16,6 +16,7 @@ import (
 	boximage "github.com/culiops/agent-box/docker/agent-box"
 	"github.com/culiops/agent-box/internal/box"
 	"github.com/culiops/agent-box/internal/boxvm"
+	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/config"
 )
 
@@ -741,7 +742,7 @@ func TestProtectedDirsReachTheBoxManager(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := t.TempDir()
 	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(cfgDir, "config.json")},
-		filepath.Join(root, "profiles.json"), "")
+		filepath.Join(root, "profiles.json"), "", "")
 	if len(prot) != 2 || prot[0].What != "agent-box's data directory" || prot[1].What != "agent-box's config directory" {
 		t.Fatalf("want data root + the outside config dir, deduped: %+v", prot)
 	}
@@ -780,7 +781,7 @@ func TestProtectedDirsFollowSymlinkedConfigAndProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	prot := protectedDirs(root, []string{filepath.Join(root, "config.json"), filepath.Join(xdgDir, "config.json")},
-		filepath.Join(root, "profiles.json"), "")
+		filepath.Join(root, "profiles.json"), "", "")
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
 	if err != nil {
 		t.Fatal(err)
@@ -814,7 +815,7 @@ func TestProfilesInHomeLeavesProjectsBoxable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(home, "profiles.json"), "")
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(home, "profiles.json"), "", "")
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
 	if err != nil {
 		t.Fatal(err)
@@ -843,7 +844,7 @@ func TestProtectedDirsIncludeThePersonalConfigDir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(root, "profiles.json"), personal)
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(root, "profiles.json"), personal, "")
 	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
 	if err != nil {
 		t.Fatal(err)
@@ -855,5 +856,66 @@ func TestProtectedDirsIncludeThePersonalConfigDir(t *testing.T) {
 	}
 	if reason, bad := l.boxes.Unboxable(proj); bad {
 		t.Fatalf("a sibling project of ~/.claude must stay boxable: %q", reason)
+	}
+}
+
+// A custom bundle_source is the bundle's Source: its files' own @-imports are
+// followed, so no box may write it. It gets the same protection as ~/.claude,
+// and the same directory under two spellings is listed once.
+func TestProtectedDirsIncludeACustomBundleSource(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(t.TempDir(), "data")
+	personal := filepath.Join(home, ".claude")
+	custom := filepath.Join(home, "cfg", "claude")
+	proj := filepath.Join(home, "proj")
+	for _, d := range []string{root, personal, custom, proj} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prot := protectedDirs(root, []string{filepath.Join(root, "config.json")}, filepath.Join(root, "profiles.json"), personal, custom)
+	l, err := newBoxLayer(config.Config{DockerBin: "/bin/sh"}, root, home, "linux", nil, prot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ws := range []string{custom, filepath.Join(home, "cfg"), filepath.Join(custom, "context")} {
+		if reason, bad := l.boxes.Unboxable(ws); !bad || !strings.Contains(reason, "personal config directory") {
+			t.Errorf("%s must be refused: %q %v", ws, reason, bad)
+		}
+	}
+	if reason, bad := l.boxes.Unboxable(proj); bad {
+		t.Fatalf("a sibling project must stay boxable: %q", reason)
+	}
+
+	// The default source spelled through a link is the same directory: one row.
+	alias := filepath.Join(home, "alias")
+	if err := os.Symlink(personal, alias); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, d := range protectedDirs(root, nil, filepath.Join(root, "profiles.json"), personal, alias) {
+		if d.What == "the personal config directory" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("personal config rows = %d, want 1", n)
+	}
+	// "" (bundle off) adds nothing.
+	if got, want := len(protectedDirs(root, nil, filepath.Join(root, "profiles.json"), personal, "")),
+		len(protectedDirs(root, nil, filepath.Join(root, "profiles.json"), personal, personal)); got != want {
+		t.Fatalf("off vs same source: %d rows vs %d", got, want)
+	}
+}
+
+func TestBundleSourceOf(t *testing.T) {
+	if got := bundleSourceOf(config.Config{BundleSource: "off"}); got != "" {
+		t.Errorf("off = %q", got)
+	}
+	if got := bundleSourceOf(config.Config{}); got != bundle.DefaultSource() {
+		t.Errorf("default = %q, want %q", got, bundle.DefaultSource())
+	}
+	if got := bundleSourceOf(config.Config{BundleSource: "/x/cfg"}); got != "/x/cfg" {
+		t.Errorf("custom = %q", got)
 	}
 }

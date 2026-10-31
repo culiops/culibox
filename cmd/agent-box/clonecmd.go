@@ -125,7 +125,7 @@ func runClone(a cliArgs, cfg config.Config, home string, cfgFiles []string, w io
 		Instance:  cfg.BoxInstance(),
 		TempDir:   filepath.Join(dataDir, "clone-fetch"),
 		Home:      home,
-		Protected: protectedDirs(dataDir, cfgFiles, profilesPath, bundle.DefaultSource()),
+		Protected: protectedDirs(dataDir, cfgFiles, profilesPath, bundle.DefaultSource(), bundleSourceOf(cfg)),
 
 		DataDir:         dataDir,
 		AllowOldHistory: a.AllowOldHistory,

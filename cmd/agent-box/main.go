@@ -179,8 +179,16 @@ func profilesPathFor(cfg config.Config, dataDir string) string {
 // could write any of them could change the binaries agent-box runs. personalDir
 // is the default account's config dir (~/.claude): host sessions run its hooks
 // and inheriting accounts copy its settings, so a box must not write there.
-func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir string) []box.ProtectedDir {
+//
+// bundleSrc is the config bundle's source ("" with the bundle off). The files
+// under it have their own CLAUDE.md imports followed, so a custom one that is
+// not personalDir gets the same protection: a box that could write it could
+// add an "@" line that pulls a host file into the next box.
+func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir, bundleSrc string) []box.ProtectedDir {
 	out := []box.ProtectedDir{box.DataDirProtected(dataDir), box.PersonalConfigDirProtected(personalDir)}
+	if bundleSrc != "" && !sameDir(bundleSrc, personalDir) {
+		out = append(out, box.PersonalConfigDirProtected(bundleSrc))
+	}
 	for _, f := range cfgFiles {
 		for _, d := range box.FileDirs(f) {
 			out = append(out, box.ConfigDirProtected(d))
@@ -190,6 +198,29 @@ func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir 
 		out = append(out, box.ProfilesDirProtected(d))
 	}
 	return box.DedupeProtected(out)
+}
+
+// sameDir reports whether a and b name one directory: the same spelling, or
+// the same path once links are resolved (a missing path compares as spelled).
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
+// bundleSourceOf is the config bundle's source dir: "" with bundle_source
+// "off", the configured dir, or bundle.DefaultSource().
+func bundleSourceOf(cfg config.Config) string {
+	if cfg.BundleSource == "off" {
+		return ""
+	}
+	if src := bundle.ExpandTilde(cfg.BundleSource); src != "" {
+		return src
+	}
+	return bundle.DefaultSource()
 }
 
 // importDenyDirs is the host directories no CLAUDE.md import may come from: the
@@ -421,7 +452,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	boxRuntime := ""
 	var layer *boxLayer
 	var boxes *box.Manager
-	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource())
+	protected := protectedDirs(dataDir, cfgFiles, profilesPathFor(cfg, dataDir), bundle.DefaultSource(), bundleSourceOf(cfg))
 	if l, err := newBoxLayer(cfg, dataDir, home, runtime.GOOS, boxvm.ExecRunner{}, protected); err != nil {
 		// Not fatal: without containment the console still runs, on the host
 		// tier, and says so rather than pretending to be contained.
@@ -489,11 +520,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// below as the memory root.
 	bundleSrc := ""
 	var bundleImports func() bundle.ImportSet
-	if layer != nil && cfg.BundleSource != "off" {
-		src := bundle.ExpandTilde(cfg.BundleSource)
-		if src == "" {
-			src = bundle.DefaultSource()
-		}
+	if src := bundleSourceOf(cfg); layer != nil && src != "" {
 		bundleSrc = src
 		// Root is under the layer's state root: on macOS the symlink-resolved
 		// data root, the spelling the VM mounts, since the bundle is mounted
