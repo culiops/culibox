@@ -9,8 +9,11 @@
 
 // workHomeSuffix: the line after a private copy's folder. The server omits
 // auto_return when it is false (omitempty), so only a true value means on.
-function workHomeSuffix(p) {
+// pr: the copy's GitHub binding can push, so work leaves as a pull request
+// whatever auto_return says.
+function workHomeSuffix(p, pr) {
   if (!p || typeof p.clone_of !== "string" || p.clone_of === "") return "";
+  if (pr) return " · work comes home as a PR";
   return p.auto_return
     ? " · work comes home as box/* branches"
     : " · work stays in the copy (auto-return off)";

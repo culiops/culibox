@@ -1626,7 +1626,7 @@ async function bringHomeNow(s) {
 // suffix (workHomeSuffix of a bare clone_of would wrongly say auto-return is off).
 function sessionWorkHome(s) {
   const p = profiles.find((x) => x.name === s.agent);
-  return p ? workHomeSuffix(p) : "";
+  return p ? workHomeSuffix(p, !!(s.clone && s.clone.push_repo)) : "";
 }
 
 // toastReturnSuffix: the spawn toast's tail for the return that ran before the
@@ -5453,7 +5453,7 @@ function emptyFirstEl() {
     // profile already opens on the box tier.
     step(2, "Put it in a box", "A container that sees only its workspace. Needs Docker" + docker + ".", "Create box profile", "btn",
       () => { openSettings("manage"); $("pf-new").click(); }),
-    step(3, "Connect your cloud", "AWS SSO or a GitHub App. Agents get short-lived, read-only credentials.", "Add credentials", "btn",
+    step(3, "Connect your cloud", "AWS SSO, or GitHub (an App or a token). Read-only by default; you choose where agents may write.", "Add credentials", "btn",
       () => openSettings("creds")),
   );
   root.append(steps, emptyEl("div", "empst-hint", "Settings \u2192 Profiles \u00b7 Credentials"));

@@ -2,7 +2,7 @@
 // spawnpreview.js: the New session dialog's pure decisions (spec 5.6).
 const test = require("node:test");
 const assert = require("node:assert");
-const { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction } = require("../static/spawnpreview.js");
+const { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, ghReachValue } = require("../static/spawnpreview.js");
 
 const sre = {
   name: "culipulse-sre", runtime: "box", bin: "claude", claude: true,
@@ -294,4 +294,18 @@ test("reach rows: a private copy names the read-only original right after Files"
 test("reach rows: no Original row on the host tier or without a copy", () => {
   assert.strictEqual(byK(reachRows({ profile: { clone_of: "/h/r" }, tier: "host" }), "Original").length, 0);
   assert.strictEqual(byK(reachRows({ profile: {}, tier: "box", cwd: "~/x" }), "Original").length, 0);
+});
+
+test("ghReachValue: read, read and write, and personal access token wording", () => {
+  assert.strictEqual(ghReachValue(["culiops"], false, false), "culiops/* · read, 1-hour tokens");
+  assert.strictEqual(ghReachValue(["culiops"], true, false), "culiops/* · read and write, 1-hour tokens");
+  assert.strictEqual(ghReachValue(["culiops"], true, true), "culiops/* · personal access token: what the token allows");
+  assert.strictEqual(ghReachValue(["a", "b"], false, false), "a/*, b/* · read, 1-hour tokens");
+});
+
+test("reach rows: a write App and a PAT binding say so on the GitHub row", () => {
+  const wr = reachRows({ profile: { ...sre, github_write: true }, tier: "box", cwd: "~/x", meta, creds: creds() });
+  assert.strictEqual(byK(wr, "GitHub")[0].v, "culiops/* · read and write, 1-hour tokens");
+  const pat = reachRows({ profile: { ...sre, github_write: true, github_pat: true }, tier: "box", cwd: "~/x", meta, creds: creds() });
+  assert.strictEqual(byK(pat, "GitHub")[0].v, "culiops/* · personal access token: what the token allows");
 });

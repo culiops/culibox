@@ -199,10 +199,10 @@ test("work-home text from box and server stays text: no innerHTML in the new ren
 
 test("a session with no profile gets no work-home suffix; the spawn line and the rows call workHomeSuffix", () => {
   const b = body(app, "sessionWorkHome");
-  assert.match(b, /p \? workHomeSuffix\(p\) : ""/);
+  assert.match(b, /p \? workHomeSuffix\(p, !!\(s\.clone && s\.clone\.push_repo\)\) : ""/);
   assert.match(app, /wmCopyLine\(s\.clone_of, window\.HOME_DIR\) \+ sessionWorkHome\(s\)/);
   const sp = fs.readFileSync(path.join(STATIC, "spawnpanel.js"), "utf8");
-  assert.match(body(sp, "syncSpawnCopyLine"), /workHomeSuffix\(p\)/);
+  assert.match(body(sp, "syncSpawnCopyLine"), /workHomeSuffix\(p, !!\(p\.clone_of && p\.github_write\)\)/);
   assert.match(body(sp, "renderSpawnPlist"), /sp-nothome/);
 });
 

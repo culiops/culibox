@@ -114,7 +114,7 @@ function reachRows(o) {
   }
 
   const owners = spawnNames(p.github_owners);
-  if (owners.length) rows.push({ k: "GitHub", v: owners.map((n) => n + "/*").join(", ") + " · read, 1-hour tokens" });
+  if (owners.length) rows.push({ k: "GitHub", v: ghReachValue(owners, p.github_write === true, p.github_pat === true) });
 
   const tokens = spawnNames(p.tokens);
   if (tokens.length) rows.push({ k: "Tokens", v: tokens.join(", ") });
@@ -175,6 +175,14 @@ function spawnHotkeyAction(o) {
   return String(x.text == null ? "" : x.text).trim() === String(x.cwd == null ? "" : x.cwd).trim() ? "submit" : "pick";
 }
 
+// ghReachValue: the GitHub row of "This agent will be able to". A PAT's reach is
+// whatever the token was scoped to on GitHub, which CuliBox cannot read.
+function ghReachValue(owners, write, pat) {
+  const names = owners.map((n) => n + "/*").join(", ");
+  if (pat) return names + " · personal access token: what the token allows";
+  return names + (write ? " · read and write, 1-hour tokens" : " · read, 1-hour tokens");
+}
+
 // spawnNamePlaceholder: what the Name field says it will use when left empty.
 function spawnNamePlaceholder(cwd) {
   const b = spawnBase(cwd);
@@ -182,5 +190,5 @@ function spawnNamePlaceholder(cwd) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf };
+  module.exports = { profileTouchLine, reachRows, pickSpawnProfile, pickSpawnCwd, spawnNamePlaceholder, spawnHotkeyAction, spawnStoreLocked, spawnTierOf, ghReachValue };
 }

@@ -7,6 +7,16 @@ const { workHomeSuffix, notHomeCount, notHomeLabel, notHomeReasonText, notHomeTi
 const ON = " · work comes home as box/* branches";
 const OFF = " · work stays in the copy (auto-return off)";
 
+test("suffix: pr says the work comes home as a PR, whatever auto_return is", () => {
+  const PR = " · work comes home as a PR";
+  assert.strictEqual(workHomeSuffix({ clone_of: "/r", auto_return: true }, true), PR);
+  assert.strictEqual(workHomeSuffix({ clone_of: "/r", auto_return: false }, true), PR);
+  assert.strictEqual(workHomeSuffix({ clone_of: "/r", auto_return: true }, false), ON);
+  assert.strictEqual(workHomeSuffix({ clone_of: "/r" }, false), OFF);
+  assert.strictEqual(workHomeSuffix({ clone_of: "" }, true), "");
+  assert.strictEqual(workHomeSuffix(null, true), "");
+});
+
 test("suffix: on and off for a private copy, empty for anything else", () => {
   assert.strictEqual(workHomeSuffix({ clone_of: "/r", auto_return: true }), ON);
   assert.strictEqual(workHomeSuffix({ clone_of: "/r", auto_return: false }), OFF);

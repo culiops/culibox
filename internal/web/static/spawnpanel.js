@@ -270,7 +270,7 @@ function syncSpawnCopyLine() {
   const p = currentProfile() || {};
   const line = wmCopyLine(p.clone_of || "", window.HOME_DIR);
   // The suffix is workHomeSuffix's alone; no profile means no line at all.
-  const text = line ? line + workHomeSuffix(p) : "";
+  const text = line ? line + workHomeSuffix(p, !!(p.clone_of && p.github_write)) : "";
   el.textContent = text;
   el.hidden = text === "";
 }
