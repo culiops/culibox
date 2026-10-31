@@ -331,8 +331,9 @@ func TestFetchNeverRunsHostGitInTheClone(t *testing.T) {
 		if c.dir != x.of {
 			t.Errorf("git %v ran in %q, want only %q", c.args, c.dir, x.of)
 		}
-		if !slices.Equal(c.env, clean) {
-			t.Errorf("git %v: env is not CleanEnv()", c.args)
+		// The history checks add GIT_NO_REPLACE_OBJECTS=1 and nothing else.
+		if !slices.Equal(c.env, clean) && !slices.Equal(c.env, append(slices.Clone(clean), "GIT_NO_REPLACE_OBJECTS=1")) {
+			t.Errorf("git %v: env is neither CleanEnv() nor CleanEnv()+GIT_NO_REPLACE_OBJECTS=1", c.args)
 		}
 		for _, a := range c.args {
 			if a == x.req.Clone.Dir || strings.HasPrefix(a, x.req.Clone.Dir+"/") {
@@ -1127,6 +1128,312 @@ func TestFetchRefusesATipChangedDuringTheCheck(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(),
 		"clone fetch: refusing feat: the imported tip changed while it was checked (a concurrent fetch?); retry") {
 		t.Fatalf("err = %v, want the changed-tip refusal", err)
+	}
+	x.noBoxRef("feat")
+	x.tempEmpty()
+}
+
+// The rewritten-away guard (clone-refresh follow-up 11): a branch must not bring
+// back a host commit the host rewrote away after the box fetched it.
+
+// hostCommit commits file on the host's checked-out main and returns the commit.
+func (x *fetchFx) hostCommit(file, content, msg string) string {
+	x.t.Helper()
+	if err := os.WriteFile(filepath.Join(x.of, file), []byte(content), 0o644); err != nil {
+		x.t.Fatal(err)
+	}
+	fixtureGit(x.t, x.of, "add", file)
+	fixtureGit(x.t, x.of, "commit", "-q", "-m", msg)
+	sha, err := x.ofRev("HEAD")
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	return sha
+}
+
+// boxFetchesHost has the box `git fetch origin` and start feat on origin/main.
+func (x *fetchFx) boxFetchesHost() {
+	x.t.Helper()
+	x.inClone("fetch", "-q", "origin")
+	x.inClone("checkout", "-q", "-B", "feat", "origin/main")
+}
+
+// hostRewrittenAway is the scenario: host main gets Y, the box fetches it and
+// commits feat on it, then the host resets main to where it was (no gc, so Y is
+// still in clone_of's object store). It returns Y.
+func (x *fetchFx) hostRewrittenAway() string {
+	x.t.Helper()
+	b0, err := x.ofRev("refs/heads/main")
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	y := x.hostCommit("secret", "s", "Y")
+	x.boxFetchesHost()
+	x.commitInClone("feat.txt", "1", "feat on Y")
+	fixtureGit(x.t, x.of, "reset", "-q", "--hard", b0)
+	return y
+}
+
+func (x *fetchFx) imported() map[string]bool {
+	x.t.Helper()
+	m, _, err := ReadImportRecord(x.req.DataDir, x.of)
+	if err != nil {
+		x.t.Fatal(err)
+	}
+	return m
+}
+
+// bundleDocker stands in for a box that hands over a bundle it prepared.
+type bundleDocker struct{ path string }
+
+func (bundleDocker) Remove(context.Context, string) error { return nil }
+
+func (b bundleDocker) RunStream(_ context.Context, _ []string, stdout io.Writer) error {
+	f, err := os.Open(b.path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(stdout, f)
+	return err
+}
+
+// argsGit fails any host git call whose argv the predicate picks.
+type argsGit struct {
+	g    StdinGit
+	fail func(args []string) error
+}
+
+func (a *argsGit) Run(ctx context.Context, dir string, env []string, args ...string) ([]byte, error) {
+	return a.RunStdin(ctx, dir, env, nil, args...)
+}
+
+func (a *argsGit) RunStdin(ctx context.Context, dir string, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	if err := a.fail(args); err != nil {
+		return nil, err
+	}
+	return a.g.RunStdin(ctx, dir, env, stdin, args...)
+}
+
+func wantRewrittenRefusal(t *testing.T, err error, y, of string) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "clone fetch: refusing feat: it carries commit "+y[:12]+" that "+of+
+		" had but no branch there reaches any more (history rewritten away, or a branch you deleted). "+
+		"In the box: git rebase origin/main. After review: -allow-old-history") {
+		t.Fatalf("err = %v, want a rewritten-away refusal naming %s", err, y[:12])
+	}
+}
+
+func TestFetchRefusesRewrittenAwayHostCommit(t *testing.T) {
+	x := newFetchFx(t)
+	y := x.hostRewrittenAway()
+	if _, err := x.ofRev(y + "^{commit}"); err != nil {
+		t.Fatalf("Y is not still in clone_of: %v", err)
+	}
+	_, err := x.fetch()
+	wantRewrittenRefusal(t, err, y, x.of)
+	x.noBoxRef("feat")
+	x.tempEmpty()
+}
+
+// A bundle `feat ^Y` names the unreachable Y as a prerequisite and does not carry
+// it, so the pack alone shows nothing: the tip's history is what carries Y.
+func TestFetchRefusesUnreachablePrerequisite(t *testing.T) {
+	x := newFetchFx(t)
+	y := x.hostRewrittenAway()
+	bundle := filepath.Join(t.TempDir(), "crafted.bundle")
+	x.inClone("bundle", "create", bundle, "feat", "^"+y)
+	_, err := Fetch(context.Background(), x.rec, bundleDocker{bundle}, x.req)
+	wantRewrittenRefusal(t, err, y, x.of)
+	x.noBoxRef("feat")
+	x.tempEmpty()
+}
+
+func TestFetchAllowsOrdinaryNewCommits(t *testing.T) {
+	x := newFetchFx(t)
+	x.hostCommit("later", "l", "later on host")
+	x.boxFetchesHost()
+	x.commitInClone("feat.txt", "1", "box one")
+	x.commitInClone("feat.txt", "2", "box two")
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	tip, err := x.ofRev("refs/heads/box/feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev, _ := x.ofRev("refs/heads/box/feat~1")
+	rec := x.imported()
+	if !rec[tip] || !rec[prev] {
+		t.Errorf("import record %v lacks the box's commits %s, %s", rec, tip, prev)
+	}
+	if hostTip, _ := x.ofRev("refs/heads/main"); rec[hostTip] {
+		t.Error("a commit the host already had was recorded as box-made")
+	}
+	for s := range rec {
+		if out := gitIn(t, x.of, s+"\n", "cat-file", "--batch-check"); !strings.Contains(out, " commit ") {
+			t.Errorf("record holds %s, which is not a commit: %q", s, out)
+		}
+	}
+}
+
+func TestFetchAllowsHostCommitsStillReachable(t *testing.T) {
+	x := newFetchFx(t)
+	fixtureGit(t, x.of, "checkout", "-q", "-b", "hostfeat")
+	x.hostCommit("hostfeat.txt", "h", "on hostfeat")
+	fixtureGit(t, x.of, "checkout", "-q", "main")
+	x.hostCommit("m1.txt", "m", "on main")
+	x.boxFetchesHost()
+	x.inClone("merge", "-q", "--no-edit", "origin/hostfeat")
+	x.commitInClone("feat.txt", "1", "box work")
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.ofRev("refs/heads/box/feat"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFetchAllowsGrowingBranch(t *testing.T) {
+	x := newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	b1, _ := x.ofRev("refs/heads/box/feat")
+	x.commitInClone("feat2.txt", "2", "b2")
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("the second return of a growing branch: %v", err)
+	}
+	if b2, _ := x.ofRev("refs/heads/box/feat"); b2 == b1 {
+		t.Fatal("box/feat did not move")
+	}
+}
+
+func TestFetchAllowsAfterBoxRefDeleted(t *testing.T) {
+	x := newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	fixtureGit(t, x.of, "update-ref", "-d", "refs/heads/box/feat")
+	x.commitInClone("feat2.txt", "2", "b2")
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("a fetch after the user deleted box/feat: %v", err)
+	}
+
+	// It is the record that lets it through: b1 is then in clone_of and in no ref.
+	x = newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	b1, _ := x.ofRev("refs/heads/box/feat")
+	fixtureGit(t, x.of, "update-ref", "-d", "refs/heads/box/feat")
+	if err := os.Remove(importPath(t, x.req.DataDir, x.of)); err != nil {
+		t.Fatal(err)
+	}
+	x.commitInClone("feat2.txt", "2", "b2")
+	_, err := x.fetch()
+	wantRewrittenRefusal(t, err, b1, x.of)
+}
+
+func TestFetchSeedsImportRecordFromExistingBoxRefs(t *testing.T) {
+	x := newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	b1, _ := x.ofRev("refs/heads/box/feat")
+	// box/feat dates from before this guard: no record.
+	if err := os.Remove(importPath(t, x.req.DataDir, x.of)); err != nil {
+		t.Fatal(err)
+	}
+	x.commitInClone("feat2.txt", "2", "b2")
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("a fetch of a branch fetched before the guard: %v", err)
+	}
+	b2, _ := x.ofRev("refs/heads/box/feat")
+	rec := x.imported()
+	if !rec[b1] || !rec[b2] {
+		t.Errorf("record %v lacks box/feat's box-only commits %s (seeded) and %s (imported)", rec, b1, b2)
+	}
+	if hostTip, _ := x.ofRev("refs/heads/main"); rec[hostTip] {
+		t.Error("the seed recorded a commit reachable from host main")
+	}
+}
+
+func TestFetchRefusesFilterRepoRewrittenCommit(t *testing.T) {
+	if _, err := exec.LookPath("git-filter-repo"); err != nil {
+		t.Skip("git-filter-repo is not installed")
+	}
+	x := newFetchFx(t)
+	y := x.hostCommit("secret", "s", "Y")
+	x.boxFetchesHost()
+	x.commitInClone("feat.txt", "1", "feat on Y")
+	cmd := exec.Command("git", "-C", x.of, "filter-repo", "--invert-paths", "--path", "secret", "--force")
+	cmd.Env = append(CleanEnv(), "GIT_AUTHOR_NAME=F", "GIT_AUTHOR_EMAIL=f@x", "GIT_COMMITTER_NAME=F", "GIT_COMMITTER_EMAIL=f@x")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("filter-repo: %v: %s", err, out)
+	}
+	if _, err := x.ofRev(y + "^{commit}"); err == nil {
+		t.Fatal("filter-repo left Y in clone_of; the scenario needs it pruned")
+	}
+	_, err := x.fetch()
+	wantRewrittenRefusal(t, err, y, x.of)
+	x.noBoxRef("feat")
+	x.tempEmpty()
+}
+
+// A recorded base tip the host rewrote away and then pruned is caught by the
+// base record (7b), which runs after the import has put the tip back.
+func TestFetchPrunedRecordedTipStillCaught(t *testing.T) {
+	x := newFetchFx(t)
+	tip := x.rewriteHostMain()
+	fixtureGit(t, x.of, "reflog", "expire", "--expire=now", "--all")
+	fixtureGit(t, x.of, "gc", "-q", "--prune=now")
+	if _, err := x.ofRev(tip + "^{commit}"); err == nil {
+		t.Fatal("the recorded tip survived gc; the scenario needs it pruned")
+	}
+	_, err := x.fetch()
+	if err == nil || !strings.Contains(err.Error(), "refusing feat: it carries history host main no longer has (recorded tip "+tip[:12]+
+		" is an ancestor of feat)") {
+		t.Fatalf("err = %v, want the base-record refusal naming %s", err, tip[:12])
+	}
+	x.noBoxRef("feat")
+	x.tempEmpty()
+}
+
+func TestFetchAllowOldHistoryOverridesRewrittenAway(t *testing.T) {
+	x := newFetchFx(t)
+	y := x.hostRewrittenAway()
+	x.req.AllowOldHistory = true
+	res, err := x.fetch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := x.ofRev("refs/heads/box/feat"); err != nil {
+		t.Fatalf("box/feat missing after an overridden fetch: %v", err)
+	}
+	if len(res.Warnings) == 0 || !strings.HasPrefix(res.Warnings[0], "-allow-old-history: the history check was overridden (") ||
+		!strings.Contains(res.Warnings[0], y[:12]) || !strings.HasSuffix(res.Warnings[0], "; review box/feat before any merge or push") {
+		t.Fatalf("Warnings = %q", res.Warnings)
+	}
+	if q := x.quarantineRefs(); q != "" {
+		t.Errorf("quarantine refs left: %q", q)
+	}
+}
+
+// A check that cannot run refuses, flag or not: it is the same rule as 7b.
+func TestFetchRewrittenAwayCheckFailureRefusesEvenWithFlag(t *testing.T) {
+	x := newFetchFx(t)
+	x.hostRewrittenAway()
+	x.req.AllowOldHistory = true
+	g := &argsGit{g: x.rec, fail: func(args []string) error {
+		if slices.Contains(args, "rev-list") && slices.Contains(args, "--exclude=refs/agent-box/*") {
+			return errors.New("git rev-list: output larger than 16777216 bytes")
+		}
+		return nil
+	}}
+	_, err := Fetch(context.Background(), g, x.dock, x.req)
+	if err == nil || !strings.Contains(err.Error(), "clone fetch: cannot check feat against host history: git rev-list: output larger") {
+		t.Fatalf("err = %v, want a cannot-check refusal", err)
 	}
 	x.noBoxRef("feat")
 	x.tempEmpty()
