@@ -136,6 +136,23 @@ test("a failed Save opens the Advanced fold", () => {
   assert.ok(!/setDialogError\("settings-modal", "Name and Command|setDialogError\("settings-modal", rowsErr|setDialogError\("settings-modal", "Save failed/.test(save), "no failed-Save path bypasses the fold");
 });
 
+// The error scrolls itself into view, so the fold must already be open when it
+// does: opening it afterwards adds ~580px above the line and pushes it off screen.
+// Likewise the per-block lines (#pf-copy-err, #pf-st-err, #pf-awsc-err) sit above
+// the dialog's line, so each is un-hidden before the scroll, not after.
+test("a failed Save opens the fold first and scrolls to the error last", () => {
+  const e = body(APP, "pfSaveError");
+  assert.ok(e.indexOf("setPfAdvOpen(") >= 0 && e.indexOf("setDialogError(") >= 0);
+  assert.ok(e.indexOf("setPfAdvOpen(") < e.indexOf("setDialogError("), "fold open before the scrolling error");
+  const save = body(APP, "saveProfile");
+  const at = save.indexOf('pfSaveError("Save failed: " + e.message)');
+  assert.ok(at > 0, "the server refusal goes through pfSaveError");
+  for (const shown of ['$("pf-st-err").hidden = false', '$("pf-awsc-err").hidden = false', '$("pf-copy-err").hidden = false']) {
+    const i = save.indexOf(shown);
+    assert.ok(i > 0 && i < at, shown + " must run before the final pfSaveError scroll");
+  }
+});
+
 // Fix round 1: #pf-touch is aria-live, so an unchanged line is not repainted.
 test("Can touch repaints only when its text changes", () => {
   const r = body(APP, "renderPfTouch");
