@@ -5,6 +5,8 @@ import (
 	"crypto/rsa"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -146,13 +148,14 @@ func (m *Minter) Mint(ctx context.Context, in MintInput) (Minted, error) {
 		return Minted{}, errors.New("mint needs an owner and at least one repository")
 	}
 	// Fail closed: an absent permissions object makes the API grant everything
-	// the installation has, and this package only ever mints read tokens.
+	// the installation has. The same rule as config validation applies: read,
+	// or write on contents, pull_requests and issues only.
 	if len(in.Permissions) == 0 {
-		return Minted{}, errors.New("mint needs an explicit read-only permission set")
+		return Minted{}, errors.New("mint needs an explicit permission set")
 	}
-	for k, v := range in.Permissions {
-		if v != "read" {
-			return Minted{}, fmt.Errorf("permission %q must be \"read\", got %q", k, v)
+	for _, k := range slices.Sorted(maps.Keys(in.Permissions)) {
+		if v := in.Permissions[k]; !config.GitHubPermissionAllowed(k, v) {
+			return Minted{}, fmt.Errorf("permission %q cannot be %q: only %s may be \"write\", every other permission is \"read\"", k, v, strings.Join(config.GitHubWritablePermissions(), ", "))
 		}
 	}
 	a, key, err := m.key(in.App)

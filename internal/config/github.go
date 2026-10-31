@@ -102,9 +102,10 @@ type GitHubOwner struct {
 	Token string   `json:"token,omitempty"`
 }
 
-// GitHubBinding gives a boxed profile read-only GitHub access through the
-// credential broker. Every field shapes the scope, so all of them go into Hash
-// and therefore into the box key.
+// GitHubBinding gives a boxed profile GitHub access through the credential
+// broker: read by default, write only on the keys GitHubWritablePermissions
+// lists. Every field shapes the scope, so all of them go into Hash and
+// therefore into the box key.
 type GitHubBinding struct {
 	Owners      []GitHubOwner     `json:"owners"`
 	Permissions map[string]string `json:"permissions,omitempty"` // empty = DefaultGitHubPermissions()
@@ -121,9 +122,55 @@ var (
 	githubClientIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 )
 
-// githubPermissionKeys are the only permissions a binding may ask for, and
-// every one of them is read-only.
+// githubPermissionKeys are the only permissions a binding may ask for. Each is
+// "read" at most, except the ones GitHubWritablePermissions lists.
 var githubPermissionKeys = []string{"actions", "checks", "contents", "pull_requests", "issues", "metadata", "statuses"}
+
+// githubWritableKeys are the only permissions that may be "write": what an
+// agent needs to push a branch and open a PR or issue. Everything else stays
+// read, so a leaked token can never touch workflows, checks or settings.
+var githubWritableKeys = []string{"contents", "pull_requests", "issues"}
+
+// GitHubWritablePermissions lists the permission keys that may be "write". The
+// result is a fresh slice the caller may keep.
+func GitHubWritablePermissions() []string { return slices.Clone(githubWritableKeys) }
+
+// GitHubPermissionAllowed reports whether a binding may ask for key at level:
+// "read" on any known key, "write" only on a writable one. Config validation
+// and the minter both call it, so the rule has one definition.
+func GitHubPermissionAllowed(key, level string) bool {
+	if !slices.Contains(githubPermissionKeys, key) {
+		return false
+	}
+	return level == "read" || (level == "write" && slices.Contains(githubWritableKeys, key))
+}
+
+// HasPAT reports whether any owner takes its credential from a static token.
+func (b GitHubBinding) HasPAT() bool {
+	for _, o := range b.Owners {
+		if o.Token != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// PushRoute reports whether the binding can push to some repository, which is
+// when a box needs its push URL routed to GitHub: a PAT owner, or an App
+// binding granted contents write.
+func (b GitHubBinding) PushRoute() bool {
+	return b.HasPAT() || b.EffectivePermissions()["contents"] == "write"
+}
+
+// CanPush reports whether the binding can push to owner/repo: the repository is
+// bound, and the credential is a PAT or the App token holds contents write.
+func (b GitHubBinding) CanPush(owner, repo string) bool {
+	o, ok := b.OwnerEntry(owner)
+	if !ok || !slices.ContainsFunc(o.Repos, func(r string) bool { return strings.EqualFold(r, repo) }) {
+		return false
+	}
+	return o.Token != "" || b.EffectivePermissions()["contents"] == "write"
+}
 
 // DefaultGitHubPermissions is what an empty Permissions means: read access to
 // code, issues, PRs and CI results.
@@ -162,7 +209,8 @@ func ValidGitHubRepo(s string) bool {
 }
 
 // Validate refuses a binding that could not be used safely: every permission
-// is read-only and every owner, repo and host is well formed.
+// is read, or write on a writable key, and every owner, repo and host is well
+// formed.
 func (b GitHubBinding) Validate() error {
 	if len(b.Owners) == 0 {
 		return errors.New("github.owners needs at least one owner")
@@ -209,8 +257,8 @@ func (b GitHubBinding) Validate() error {
 		if !slices.Contains(githubPermissionKeys, k) {
 			return fmt.Errorf("github.permissions: %q is not an allowed permission (want one of %s)", k, strings.Join(githubPermissionKeys, ", "))
 		}
-		if v := b.Permissions[k]; v != "read" {
-			return fmt.Errorf("github.permissions: %q must be \"read\", got %q: agent-box mints read-only tokens", k, v)
+		if v := b.Permissions[k]; !GitHubPermissionAllowed(k, v) {
+			return fmt.Errorf("github.permissions: %q cannot be %q: only %s may be \"write\", every other permission is \"read\"", k, v, strings.Join(githubWritableKeys, ", "))
 		}
 	}
 	if len(b.EgressAllow) > maxEgressAllow {

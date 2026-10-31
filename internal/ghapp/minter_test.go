@@ -74,7 +74,7 @@ func TestMinterUnknownApp(t *testing.T) {
 	}
 }
 
-func TestMinterRefusesEmptyOrWritePermissions(t *testing.T) {
+func TestMinterRefusesEmptyOrIllegalPermissions(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer srv.Close()
@@ -87,7 +87,7 @@ func TestMinterRefusesEmptyOrWritePermissions(t *testing.T) {
 	}{
 		{"nil", nil, ""},
 		{"empty", map[string]string{}, ""},
-		{"write", map[string]string{"contents": "write"}, "contents"},
+		{"metadata write", map[string]string{"metadata": "write"}, "metadata"},
 		{"mixed", map[string]string{"metadata": "read", "issues": "admin"}, "issues"},
 	}
 	for _, tc := range cases {
@@ -101,6 +101,34 @@ func TestMinterRefusesEmptyOrWritePermissions(t *testing.T) {
 	}
 	if n := calls.Load(); n != 0 {
 		t.Fatalf("http calls = %d, want 0", n)
+	}
+}
+
+func TestMinterPassesWritePermissions(t *testing.T) {
+	p := writeKey(t, t.TempDir(), "k.pem", 0o600, false, genKey(t))
+	var body atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			io.WriteString(w, `{"id":9}`)
+		case r.URL.Path == "/app/installations/9/access_tokens":
+			b, _ := io.ReadAll(r.Body)
+			body.Store(strings.TrimSpace(string(b)))
+			w.WriteHeader(201)
+			io.WriteString(w, `{"token":"ghs_w","expires_at":"2026-10-19T12:00:00Z"}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	m := NewMinter([]config.GitHubApp{{Name: "app", ClientID: "cid", PrivateKey: config.KeyRef{Type: "file", Path: p}}}, Client{BaseURL: srv.URL})
+	_, err := m.Mint(context.Background(), MintInput{App: "app", Owner: "o", Repos: []string{"r"}, Permissions: map[string]string{"contents": "write", "metadata": "read"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"repositories":["r"],"permissions":{"contents":"write","metadata":"read"}}`
+	if got, _ := body.Load().(string); got != want {
+		t.Fatalf("CreateToken body = %s, want %s", got, want)
 	}
 }
 
