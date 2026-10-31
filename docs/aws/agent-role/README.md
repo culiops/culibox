@@ -75,15 +75,16 @@ role.
 
 Some accounts do not let you create `agentbox-agent` (a company account, say). For those a
 binding can opt in to `"mode": "sso_direct"`: the agent gets the SSO permission set's **own**
-credentials, with no role to create. It is opt-in per binding, for permission sets that are
-**provably read-only**, and it gives up the protections of the agent role:
+credentials, with no role to create. It is opt-in per binding, for permission sets that pass a
+read-only gate (a check of the permission set's own identity policies; see Known limits below),
+and it gives up the protections of the agent role:
 
 - **No narrowing.** There is no session policy and no S3-read scoping. The agent can do
   whatever the permission set allows, and nothing narrows it further.
 - **No elevate.** A binding in this mode cannot be widened to a write role (`role_arn`,
   `elevate` and `s3_read` must be empty; the save is refused otherwise).
-- **Lifetime.** The credentials last as long as your SSO session (up to N hours, N shown
-  in the UI), not 15 minutes. They cannot be revoked when the agent session ends.
+- **Lifetime.** The credentials keep the expiry of your SSO role credentials (up to N hours,
+  N shown in the UI), not 15 minutes. They cannot be revoked when the agent session ends.
 - **Attribution.** CloudTrail shows **you**, not an `agentbox-*` session.
 
 The UI says this next to the mode choice (`Agent role (recommended)` / `SSO role directly`):
@@ -104,12 +105,13 @@ in `~/.aws/config`). A profile with static keys, a `credential_process`, a `cred
 or an assume-role chain is refused at save, spawn and every mint, so this mode never hands out
 a long-lived key. The same `mode` key works in a named connection (`aws_connections`).
 
-The "Which accounts" warning above applies to this mode too, more so: nothing here narrows data
-reads, and the data-read report only describes them.
+The "Which accounts" caveat applies to this mode too: agent output can carry anything the
+permission set can read, and output redaction has not shipped.
 
 ### The read-only gate
 
-A permission set is used only when the **gate** proves it read-only. Only a definite "read-only"
+A permission set is used only when the **gate** passes it (see Known limits for what that
+does and does not cover). Only a definite "read-only"
 lets credentials out, a save happen or a spawn proceed. Anything the gate cannot verify (SSO
 expired, a timeout, a throttled call, a missing permission, a policy it cannot parse) refuses.
 There is no "I understand" override. The gate runs when you save the connection, when a session
@@ -158,8 +160,8 @@ credentials, `sts:GetCallerIdentity`, `iam:GetRole`, `iam:ListRolePolicies`,
 `iam:GetRolePolicy`, `iam:ListAttachedRolePolicies`, `iam:GetPolicy` and
 `iam:GetPolicyVersion`, plus `iam:SimulatePrincipalPolicy` on its own role. `ReadOnlyAccess`
 includes them. A custom permission set that lacks one is refused, and the message names the
-IAM actions to grant (the simulation is the one step that reports "cannot simulate its own
-policy" instead).
+IAM actions to grant (the simulation is the one step that reports `role cannot simulate itself`
+instead).
 
 ### ReadOnlyAccess alone is refused
 
@@ -180,7 +182,8 @@ Despite the name it allows reads that hand the caller something it should not ha
 `Condition`, no `NotResource` and `Resource: "*"`, and between them cover every action in the
 refusal: `sqs:ReceiveMessage`, the credential-minting reads, and the secret-returning reads. A
 tag- or principal-based exception is refused. A `NotAction` Deny that lists only the services you
-keep is accepted too.
+keep is accepted too. Denying data reads (Secrets Manager values, SSM parameters, DynamoDB items,
+S3 objects, KMS decrypt) is optional: the gate only reports them.
 
 An illustration of the shape, **not a complete list**: take the full list from your own refusal
 message, because it depends on the policy version and on the catalog snapshot.
@@ -241,7 +244,7 @@ the agent can do no harm:
 - **Retired services.** The catalog no longer lists `codestar`, `deepcomposer`, `evidently`,
   `iot1click` and `iotevents`, which `ReadOnlyAccess` still grants. Those patterns are skipped
   by the screen (they expand to nothing) instead of being reported as unknown.
-- Credentials already issued stay valid until they expire, up to your SSO session length,
+- Credentials already issued stay valid until their own expiry (shown in the UI as up to N h),
   after the agent session ends or the permission set changes.
 
 ## Known limits between sessions
