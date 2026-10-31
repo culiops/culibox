@@ -236,6 +236,11 @@ func (h *cloneHooks) HostOrigin(ctx context.Context, of string) (string, error) 
 	return clone.HostOriginURL(ctx, h.env.Git, of)
 }
 
+// ReturnWork is a stub until the next commit wires the real return.
+func (h *cloneHooks) ReturnWork(ctx context.Context, c config.Clone, o session.ReturnOpts) session.ReturnSummary {
+	return session.ReturnSummary{Trigger: o.Trigger, At: time.Now(), Skipped: "unavailable"}
+}
+
 // BoxOwned checks the live profiles' clones plus every recorded dir. An
 // unreadable or corrupt record fails closed: everything is reported owned.
 func (h *cloneHooks) BoxOwned(cwd string) (string, bool) {

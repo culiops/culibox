@@ -246,6 +246,11 @@ type CloneHooks interface {
 	// HostOrigin is the host repo's remote.origin.url ("" when unset). It reads
 	// `of`, the user's repo, never the box's clone.
 	HostOrigin(ctx context.Context, of string) (string, error)
+	// ReturnWork brings the clone's branches home (or, with c.NoAutoReturn and a
+	// non-"now" trigger, records what is not home). Never an error: failures are
+	// in the summary. It takes the clone's lock; with Trigger != ReturnNow it
+	// skips ("in-use") when o.LiveSession reports true after the lock is held.
+	ReturnWork(ctx context.Context, c config.Clone, o ReturnOpts) ReturnSummary
 }
 
 // cloneRefreshTimeout bounds one Refresh. It is best-effort and never fails a
@@ -261,6 +266,8 @@ type RefreshOpts struct {
 	// before releasing it, so a call made after waiting for the lock sees it.
 	// nil means false.
 	LiveSession func() bool
+	// ReturnBudget > 0 runs the spawn-time return first, bounded by this.
+	ReturnBudget time.Duration
 }
 
 // CloneInfo is the outcome of the clone refresh done before a clone-mode box
@@ -284,6 +291,8 @@ type CloneInfo struct {
 	StaleBranches []string `json:"stale_branches,omitempty"`
 	Rewritten     bool     `json:"rewritten,omitempty"`
 	Unverified    bool     `json:"unverified,omitempty"`
+	// Return is the spawn-time return that ran before this refresh.
+	Return *ReturnSummary `json:"return,omitempty"`
 }
 
 // copy returns an independent CloneInfo (own slice, own pointer), nil for nil.
@@ -293,6 +302,7 @@ func (c *CloneInfo) copy() *CloneInfo {
 	}
 	out := *c
 	out.StaleBranches = slices.Clone(c.StaleBranches)
+	out.Return = c.Return.copy()
 	if c.HeadInHost != nil {
 		v := *c.HeadInHost
 		out.HeadInHost = &v
@@ -616,6 +626,9 @@ type Info struct {
 	// Clone is what refreshing the clone before this spawn did. Clone-mode
 	// sessions only; absent otherwise.
 	Clone *CloneInfo `json:"clone,omitempty"`
+	// Return is the latest exit or "Bring work home now" return of a clone-mode
+	// session; absent until one has run.
+	Return *ReturnSummary `json:"return,omitempty"`
 	// ContextPaths are the host paths the box can read (the profile's
 	// context_paths at spawn, mounted read-only at the same path); CloneOf is
 	// the host repo a clone-mode session was cloned from. Both are snapshots
@@ -675,6 +688,11 @@ type Session struct {
 	// Clone is the clone refresh result for a clone-mode session. Immutable
 	// after publication, read without the lock; Info hands out a deep copy.
 	Clone *CloneInfo
+	// ret is the latest exit or "now" return, returning that a "now" is running.
+	// Both guarded by mu; ret is not persisted (a restart drops it, the clone's
+	// state file keeps the truth).
+	ret       *ReturnSummary
+	returning bool
 	// ContextPaths and CloneOf are the spawn-time snapshots Info reports (see
 	// Info.ContextPaths). Immutable after publication, read without the lock;
 	// Info hands out a copy.
@@ -1091,6 +1109,7 @@ func (s *Session) Info() Info {
 	in.Egress = EgressMode(s.EgressNonce != "", s.Bindings().Any())
 	in.BundleDrops = slices.Clone(s.BundleDrops)
 	in.Clone = s.Clone.copy()
+	in.Return = s.ret.copy()
 	in.ContextPaths = slices.Clone(s.ContextPaths)
 	in.CloneOf = s.CloneOf
 	if s.AWS != nil {
@@ -1802,24 +1821,8 @@ func (m *Manager) Spawn(spec launcher.SpawnSpec) (*Session, error) {
 		// The scan runs under m.mu but only when the hooks call it, after they
 		// hold the per-clone lock. Refresh itself runs outside m.mu: it can
 		// take a while and must not stall the manager.
-		live := func() bool {
-			m.mu.Lock()
-			defer m.mu.Unlock()
-			for _, o := range m.sessions {
-				if o.Runtime != config.RuntimeBox || !box.Overlaps(o.Cwd, cl.Dir) {
-					continue
-				}
-				o.mu.Lock()
-				alive := o.status != statusExited
-				o.mu.Unlock()
-				if alive {
-					return true
-				}
-			}
-			return false
-		}
-		rctx, rcancel := context.WithTimeout(context.Background(), cloneRefreshTimeout)
-		info, release := ch.Refresh(rctx, *cl, RefreshOpts{Created: created, LiveSession: live})
+		rctx, rcancel := context.WithTimeout(context.Background(), cloneRefreshTimeout+cloneSpawnReturnBudget)
+		info, release := ch.Refresh(rctx, *cl, RefreshOpts{Created: created, LiveSession: m.cloneLive(cl.Dir, nil), ReturnBudget: cloneSpawnReturnBudget})
 		rcancel()
 		releaseClone = sync.OnceFunc(release)
 		cloneInfo = &info
@@ -2507,6 +2510,7 @@ func (m *Manager) watchRetention(id string, sess *Session) {
 			// and stop the box under a session we intend to recover.
 			m.releaseSessionBox(sess)
 			m.brokerRevoke(sess)
+			go m.returnWork(sess, ReturnOnExit)
 		case <-sess.detachedCh: // agent alive, pipe lost → keep listed for restart recovery
 			return
 		}

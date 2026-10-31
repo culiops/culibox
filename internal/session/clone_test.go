@@ -73,6 +73,42 @@ type fakeCloneHooks struct {
 	locks     map[string]chan struct{} // per-clone-dir lock, like the real hooks'
 	entered   chan struct{}            // optional: signalled on entry to Refresh, before the lock
 	afterLock func()                   // optional: runs once the lock is held, before LiveSession is asked
+
+	deadlines []time.Time // the ctx deadline Refresh was given, per call
+	returns   []returnCall
+	retSum    ReturnSummary // what ReturnWork answers (Trigger is filled in)
+	retEnter  chan struct{} // optional: signalled on entry to ReturnWork
+	retHold   chan struct{} // optional: ReturnWork waits for this to be closed
+}
+
+// returnCall is one ReturnWork call: what the manager passed, and what the
+// LiveSession it passed answered.
+type returnCall struct {
+	trigger string
+	clone   config.Clone
+	live    bool
+}
+
+func (f *fakeCloneHooks) ReturnWork(_ context.Context, c config.Clone, o ReturnOpts) ReturnSummary {
+	if f.retEnter != nil {
+		f.retEnter <- struct{}{}
+	}
+	if f.retHold != nil {
+		<-f.retHold
+	}
+	live := o.LiveSession != nil && o.LiveSession()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.returns = append(f.returns, returnCall{trigger: o.Trigger, clone: c, live: live})
+	sum := f.retSum
+	sum.Trigger = o.Trigger
+	return sum
+}
+
+func (f *fakeCloneHooks) returnCalls() []returnCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.returns)
 }
 
 func (f *fakeCloneHooks) HostOrigin(_ context.Context, of string) (string, error) {
@@ -95,7 +131,7 @@ func (f *fakeCloneHooks) Prepare(_ context.Context, c config.Clone, withMemory b
 
 // Refresh takes the clone's lock first and only then asks LiveSession, as the
 // real hooks must; release drops the lock.
-func (f *fakeCloneHooks) Refresh(_ context.Context, c config.Clone, o RefreshOpts) (CloneInfo, func()) {
+func (f *fakeCloneHooks) Refresh(ctx context.Context, c config.Clone, o RefreshOpts) (CloneInfo, func()) {
 	if f.entered != nil {
 		f.entered <- struct{}{}
 	}
@@ -117,6 +153,8 @@ func (f *fakeCloneHooks) Refresh(_ context.Context, c config.Clone, o RefreshOpt
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.refreshes = append(f.refreshes, o)
+	dl, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, dl)
 	f.lives = append(f.lives, live)
 	f.order.add("refresh")
 	return f.info, func() {
