@@ -430,6 +430,11 @@
     #creds .res .ent-err { margin: 0; }
     #creds details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
     #creds details[open] summary { margin-bottom: 10px; }
+    #creds .modechoice { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 4px; }
+    #creds .gate { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+    #creds .gate .gatelist { margin: 0; padding-left: 18px; overflow-wrap: anywhere; font-size: 11.5px; }
+    #creds .gate .hint { margin: 0; }
+    #creds .gate.bad, #creds .gate.warn { padding: 10px 12px; }
     #creds .ssopanel { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-bg); }
     #creds .ssopanel .hint { margin: 0; }
     #creds .ssocode { font-size: 18px; letter-spacing: .12em; font-weight: 700; }

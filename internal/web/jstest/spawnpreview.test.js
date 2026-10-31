@@ -261,3 +261,17 @@ test("reach rows: a locked store warns for a profile whose only binding is the i
   const rows = reachRows({ profile: legacy, tier: "box", cwd: "~/x", meta: null, creds: locked });
   assert.strictEqual(byK(rows, "Store").length, 1);
 });
+
+test("reach rows: an sso_direct connection says so and never claims write after elevate", () => {
+  const p = { runtime: "box", bin: "claude", claude: true, aws_connections: ["sbx"], network: "allowlist" };
+  const rows = reachRows({ profile: p, tier: "box", cwd: "/w",
+    meta: { aws_connections: [{ name: "sbx", prod: false, write_capable: false, mode: "sso_direct" }] },
+    creds: { store: { initialized: true, locked: false, platform: "linux" }, aws: [{ name: "sbx", mode: "sso_direct" }] } });
+  assert.deepStrictEqual(byK(rows, "AWS").map((r) => r.v), ["sbx · read only · SSO role directly"]);
+  // the credentials list alone is enough when meta lacks the entry
+  const r2 = reachRows({ profile: p, tier: "box", cwd: "/w", meta: {}, creds: { aws: [{ name: "sbx", mode: "sso_direct" }] } });
+  assert.strictEqual(byK(r2, "AWS")[0].v, "sbx · read only · SSO role directly");
+  // assume_role entries are unchanged
+  const r3 = reachRows({ profile: p, tier: "box", cwd: "/w", meta: { aws_connections: [{ name: "sbx" }] }, creds: { aws: [{ name: "sbx" }] } });
+  assert.strictEqual(byK(r3, "AWS")[0].v, "sbx · read only");
+});

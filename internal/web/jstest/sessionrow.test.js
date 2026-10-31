@@ -608,3 +608,36 @@ test("no unqualified read-only", () => {
   }
   for (const t of texts) assert.doesNotMatch(t, /read-only/i, t);
 });
+
+// --- sso_direct: rail, chip and signature key on mode, never on base_access ----
+
+const SSOA = { label: "sbx", account_id: "123456789012", role_arn: "arn:aws:iam::123456789012:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_RO_abc", mode: "sso_direct", hours: 8, base_access: "none_found" };
+
+test("sso_direct: the scope row ends with the mode label and never says no broad writes found", () => {
+  const scope = awsRailRows({ aws: SSOA }, null, NOW).find((r) => r.k === "scope");
+  assert.strictEqual(scope.v, "read-only gate passed · up to 8 h · SSO role directly");
+  assert.ok(scope.v.endsWith("· SSO role directly"));
+  assert.doesNotMatch(JSON.stringify(awsRailRows({ aws: SSOA }, null, NOW)), /no broad writes found/);
+  assert.strictEqual(awsRailRows({ aws: { ...SSOA, hours: 0 } }, null, NOW).find((r) => r.k === "scope").v, "read-only gate passed · SSO role directly");
+});
+
+test("sso_direct: the connection block and the chip title carry the mode, not the AssumeRole wording", () => {
+  const b = awsConnRailRows({ aws_connections: [{ name: "sbx", ...SSOA }] }, null, NOW)[0];
+  assert.ok(b.base.endsWith("· SSO role directly"));
+  assert.strictEqual(b.baseWarn, false);
+  const chip = awsBadge({ aws: SSOA }, NOW);
+  assert.match(chip.title, /SSO role directly/);
+  assert.doesNotMatch(chip.title, /no broad writes found|scoped write grants/);
+});
+
+test("sso_direct: awsSig changes with the mode and the hours", () => {
+  const a = { label: "sbx", account_id: "1", role_arn: "arn:aws:iam::1:role/x", base_access: "none_found" };
+  assert.notStrictEqual(awsSig({ aws: a }, NOW), awsSig({ aws: { ...a, mode: "sso_direct" } }, NOW));
+  assert.notStrictEqual(awsSig({ aws: { ...a, mode: "sso_direct", hours: 8 } }, NOW), awsSig({ aws: { ...a, mode: "sso_direct", hours: 4 } }, NOW));
+  const cs = (c) => ({ aws_connections: [{ name: "n", ...a, ...c }] });
+  assert.notStrictEqual(awsSig(cs({}), NOW), awsSig(cs({ mode: "sso_direct" }), NOW));
+});
+
+test("baseScope: sso_direct is its own state", () => {
+  assert.strictEqual(baseScope(SSOA).state, "sso_direct");
+});

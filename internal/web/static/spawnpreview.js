@@ -93,8 +93,12 @@ function reachRows(o) {
     const prod = m.prod === true || c.prod === true;
     const elevate = ent.inline ? (ent.max > 0 ? { max_minutes: ent.max } : null) : c.elevate && typeof c.elevate === "object" ? c.elevate : null;
     const writable = m.write_capable === true || !!elevate;
+    const direct = !ent.inline && (m.mode === "sso_direct" || c.mode === "sso_direct");
     let v = name + " · read";
-    if (writable) {
+    if (direct) {
+      // The gate admits read-only permission sets only and there is no elevate.
+      v += " only · SSO role directly";
+    } else if (writable) {
       const max = elevate && Number(elevate.max_minutes) > 0 ? Number(elevate.max_minutes) : 0;
       v += " · write only after you elevate" + (max ? " (max " + max + " min)" : "");
     } else {

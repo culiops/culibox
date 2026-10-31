@@ -208,12 +208,19 @@ function baseReasonText(r) {
   return Object.prototype.hasOwnProperty.call(BASE_REASON, r) ? BASE_REASON[r] : "check failed";
 }
 
+// SSO_DIRECT is the AWS binding mode that hands the agent the operator's own SSO
+// permission-set credentials behind the read-only gate. The wire's base_access is
+// "none_found" for it (there is no base-role probe); every surface keys on mode.
+const SSO_DIRECT = "sso_direct";
+const SSO_DIRECT_LABEL = "SSO role directly";
+
 // baseState: the base role's measured write access of a binding, from the wire
 // fields base_access / base_write_actions / base_access_reason. A missing or
 // unknown state (an older daemon, a sidecar from before the probe) is
 // unverified, never "no writes".
 function baseState(a) {
   const x = a || {};
+  if (x.mode === SSO_DIRECT) return SSO_DIRECT;
   if (x.base_access === "writes" || x.base_access === "none_found") return x.base_access;
   return "unverified";
 }
@@ -233,6 +240,11 @@ function baseUnverifiedReason(a) {
 // short fixed set of broad write actions and does not see scoped grants.
 function baseScope(a) {
   const state = baseState(a);
+  if (state === SSO_DIRECT) {
+    const h = Number(a.hours) > 0 ? " \u00b7 up to " + Math.ceil(Number(a.hours)) + " h" : "";
+    return { state, text: "read-only gate passed" + h + " \u00b7 " + SSO_DIRECT_LABEL,
+      title: "the permission set passed the read-only gate at spawn \u00b7 CloudTrail shows the operator, not the agent \u00b7 not revocable when the session ends" };
+  }
   const at = hhmm(a && a.base_checked_at);
   const checked = at ? "checked " + at + " \u00b7 " : "";
   if (state === "writes") {
@@ -250,7 +262,7 @@ function baseScope(a) {
 // baseChipTail: the end of the chip's title for a binding with no open window.
 function baseChipTail(a) {
   const b = baseScope(a);
-  if (b.state === "writes") return b.text;
+  if (b.state === "writes" || b.state === SSO_DIRECT) return b.text;
   if (b.state === "none_found") return b.text + " (scoped write grants are not detected)";
   return "base role unverified (" + baseReasonText(baseUnverifiedReason(a)) + ")";
 }
@@ -316,11 +328,13 @@ function awsBadgeParts(s, nowMs = Date.now()) {
   const names = (state) => idle.filter((c) => baseState(c) === state).map((c) => c.name).join(", ");
   const canWrite = names("writes");
   const unverified = names("unverified");
+  const direct = names(SSO_DIRECT);
   return { label: "AWS \u00d7" + cs.length, prod, write, roleWrite,
     title: "AWS connections: " + cs.map((c) => c.name).join(", ") +
       live.map((c) => " \u00b7 write on " + c.name + " until " + hhmm(c.elevated_until)).join("") +
       (canWrite ? " \u00b7 role can write on " + canWrite : "") +
-      (unverified ? " \u00b7 unverified on " + unverified : "") };
+      (unverified ? " \u00b7 unverified on " + unverified : "") +
+      (direct ? " \u00b7 " + SSO_DIRECT_LABEL + " on " + direct : "") };
 }
 
 // WRITE_SUFFIX is what awsBadge appends while a window is open.
@@ -342,7 +356,7 @@ function badgeParts(ab) {
 // re-check that finds the same thing does not rebuild every tab.
 function baseSig(a) {
   const st = baseState(a);
-  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : ""].join("/");
+  return [st, st === "writes" ? baseActions(a).join(",") : "", st === "unverified" ? baseUnverifiedReason(a) : st === SSO_DIRECT ? String(Number(a.hours) || 0) : ""].join("/");
 }
 
 // awsSig: everything the AWS chip draws, as one string. A terminal tab keeps its
@@ -503,6 +517,6 @@ function elevActions(a, nowMs = Date.now()) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
+  module.exports = { SSO_DIRECT_LABEL, NEW_CRED_MIN, attachedElsewhere, rowClasses, sessionMeta, menuItems, jumpTarget, canInterrupt, paletteActionItems, actionFailText, restartNotice, roleName, awsBadge, badgeParts, baseScope, baseReasonText, BASE_REASON, ROLE_WRITE_SUFFIX, awsSig, awsRailRows, awsConnRailRows, awsBadgeParts, liveWindowConn, connWindowLine,
     hhmm, minutesLeft, isElevated, elevActions };
 }

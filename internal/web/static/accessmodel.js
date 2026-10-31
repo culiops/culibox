@@ -129,6 +129,7 @@ function accRow(c, o) {
   return {
     kind: "aws", name: c.name, conn: c.conn, prod: !!c.prod, sub,
     scope: live ? "write (elevated)" : "read",
+    mode: c.mode === "sso_direct" ? "sso_direct" : "",
     sso: accSSO(c, aws),
     last: stats ? (t ? hhmm(stats.last_mint) : "never") : "",
     actions: list,

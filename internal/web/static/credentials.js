@@ -257,6 +257,9 @@ function awsRowFromProfile(p) {
 // needs no check: the server does not re-check it either.
 function rowSaveState(row) {
   const r = row || {};
+  // sso_direct has no assume step and no "I understand": only a read-only gate
+  // lets it save, and an unchanged edit is not exempt (the server re-runs the gate).
+  if (r.mode === "sso_direct") return { canSave: !!r.gate && r.gate.state === "read_only", needsAck: false };
   if (r.unchanged === true) return { canSave: true, needsAck: false };
   if (r.assume !== "ok") return { canSave: false, needsAck: false };
   if (r.verdict === "writes") return r.acked === true ? { canSave: true, needsAck: false } : { canSave: false, needsAck: true };
@@ -323,21 +326,152 @@ function awsRolesNote(res) {
 }
 
 // awsConnFromRow: the connection object the save routes take. Fields that are
-// empty are left out, so an edit that clears them clears them.
+// empty are left out, so an edit that clears them clears them. An sso_direct
+// connection has no role, no elevate and no S3 read list, whatever the row still
+// holds from the other mode.
 function awsConnFromRow(row) {
-  const c = { name: row.name, source_profile: row.source_profile, role_arn: row.role_arn, region: row.region };
+  const direct = row.mode === "sso_direct";
+  const c = { name: row.name, source_profile: row.source_profile, region: row.region };
+  if (direct) c.mode = "sso_direct"; else c.role_arn = row.role_arn;
   if (row.label) c.label = row.label;
   if (row.description) c.description = row.description;
   if (row.prod) c.prod = true;
   const egress = awsSplitList(row.egress);
   if (egress.length) c.egress_allow = egress;
   const s3 = awsSplitList(row.s3);
-  if (s3.length) c.s3_read = s3;
-  if (row.elevRole) {
+  if (s3.length && !direct) c.s3_read = s3;
+  if (row.elevRole && !direct) {
     c.elevate = { role_arn: row.elevRole, max_minutes: parseInt(row.elevMinutes, 10) === 30 ? 30 : 60 };
     if (row.elevIAM) c.elevate.allow_iam = true;
   }
   return c;
+}
+
+// --- sso_direct: the trade-off text and the gate verdict ----------------------
+
+// AWS_SSO_MAX_HOURS: the longest an SSO permission-set session can last. Before a
+// check there is no expiry to read, so the text states this bound rather than a
+// shorter number it does not know.
+const AWS_SSO_MAX_HOURS = 12;
+
+// awsModeText: the trade-off the operator accepts by picking SSO role directly.
+// N is the credentials' remaining life in whole hours, rounded up; unknown or out
+// of range reads as the SSO maximum.
+function awsModeText(hours) {
+  const h = Math.ceil(Number(hours));
+  const n = Number.isFinite(h) && h >= 1 && h <= AWS_SSO_MAX_HOURS ? h : AWS_SSO_MAX_HOURS;
+  return "SSO role directly: the agent gets your permission set's own credentials, valid for up to " + n +
+    " h. CloudTrail shows you, not the agent, and they cannot be revoked when the session ends. Read-only permission sets only.";
+}
+
+// awsHoursFromExpiry: whole hours from now to an RFC 3339 expiry, rounded up; 0
+// when the expiry is empty, unreadable or past.
+function awsHoursFromExpiry(expires, nowMs) {
+  const t = Date.parse(expires);
+  if (!Number.isFinite(t) || t <= nowMs) return 0;
+  return Math.ceil((t - nowMs) / 3600000);
+}
+
+// The gate's descriptive data-read actions (awsprobe.DataReadActions) by the
+// friendly name the report uses, in the order the spec lists them.
+const AWS_DATA_READ_NAMES = [
+  ["secret values", (a) => a === "secretsmanager:getsecretvalue"],
+  ["SSM parameters", (a) => a.startsWith("ssm:")],
+  ["DynamoDB items", (a) => a.startsWith("dynamodb:")],
+  ["S3 objects", (a) => a.startsWith("s3:")],
+  ["KMS decrypt", (a) => a.startsWith("kms:")],
+];
+
+// awsDataReadName: the friendly name of one data-read action; an action this
+// table does not know is shown as it is.
+function awsDataReadName(action) {
+  const a = String(action || "").toLowerCase();
+  const hit = AWS_DATA_READ_NAMES.find(([, test]) => test(a));
+  return hit ? hit[0] : String(action || "");
+}
+
+// awsDataReadSummary: the step-6 report as friendly names. A name is "denied"
+// only when every action behind it is denied; one still readable action makes the
+// whole name readable, so the report never understates what the agent can read.
+function awsDataReadSummary(reads) {
+  const by = new Map();
+  for (const r of Array.isArray(reads) ? reads : []) {
+    if (!r) continue;
+    const name = awsDataReadName(r.action);
+    by.set(name, (by.get(name) !== false) && r.denied === true);
+  }
+  const order = AWS_DATA_READ_NAMES.map(([n]) => n);
+  const names = [...by.keys()].sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+  return { denied: names.filter((n) => by.get(n)), readable: names.filter((n) => !by.get(n)) };
+}
+
+// awsRefusedLine: one refused item as a line. The server's Verdict has no JSON tags
+// (Pattern/Why); lower-case keys are read too.
+function awsRefusedLine(v, needsContext) {
+  const pat = String((v && (v.pattern != null ? v.pattern : v.Pattern)) || "");
+  const why = String((v && (v.why != null ? v.why : v.Why)) || "");
+  return pat + (why ? " \u2014 " + (needsContext ? "needs context: " : "") + why : needsContext ? " \u2014 needs context" : "");
+}
+
+// awsGateView: how the read-only gate's answer reads on a form row.
+//   tone      ok | warn | bad
+//   badge, text
+//   refused   one line per refusing pattern or action (for missing_context they are
+//             labelled "needs context": nothing proved them to be writes)
+//   missing   IAM actions the permission set needs to read its own policy
+//   signIn    the SSO login expired: offer the in-UI sign-in and a retry
+//   dataReads / dataReadText   the descriptive step-6 report
+// Anything that is not read_only or not_read_only is a warning: it never saves.
+function awsGateView(gate) {
+  const g = gate || {};
+  const out = { tone: "warn", badge: "Not verified", text: "", refused: [], missing: [], signIn: false,
+    dataReads: awsDataReadSummary(g.data_reads), dataReadText: "" };
+  const dr = out.dataReads;
+  if (Array.isArray(g.data_reads) && g.data_reads.length) {
+    out.dataReadText = "Your permission set denies: " + (dr.denied.join(", ") || "nothing") + ". Still readable: " + (dr.readable.join(", ") || "nothing") + ".";
+  }
+  const list = Array.isArray(g.refused) ? g.refused : [];
+  if (g.state === "read_only") {
+    out.tone = "ok";
+    out.badge = "Read-only";
+    out.text = "The read-only gate passed for this permission set.";
+    return out;
+  }
+  if (g.state === "not_read_only") {
+    out.tone = "bad";
+    out.badge = "Not read-only";
+    out.text = "This permission set can write or reach credentials, so it cannot be saved as SSO role directly. Use a read-only permission set, or the agent role.";
+    out.refused = list.map((v) => awsRefusedLine(v, false));
+    return out;
+  }
+  switch (g.reason) {
+    case "sso_expired":
+      out.badge = "SSO expired";
+      out.text = "Sign in again on this host, then check again.";
+      out.signIn = true;
+      break;
+    case "missing_permissions": {
+      out.badge = "Cannot read its own policy";
+      out.missing = (Array.isArray(g.missing_perms) ? g.missing_perms : []).map(String);
+      out.text = "The gate could not read the permission set's own policy" + (out.missing.length ? "; it needs " + out.missing.join(", ") : "") + ". Nothing is saved until it can.";
+      break;
+    }
+    case "missing_context":
+      out.badge = "Needs context";
+      out.text = "These actions depend on condition values the gate cannot know, so it could not prove them read-only. Nothing is saved until it can.";
+      out.refused = list.map((v) => awsRefusedLine(v, true));
+      break;
+    case "timeout":
+      out.text = "The check timed out. Check again."; break;
+    case "simulate_denied":
+      out.text = "The permission set cannot simulate its own policy, so the gate could not verify it."; break;
+    case "probe_disabled":
+      out.text = "The access check is switched off on this host, so a permission set cannot be verified."; break;
+    default:
+      out.text = "The check could not finish. Check again.";
+      out.refused = list.map((v) => awsRefusedLine(v, false));
+  }
+  return out;
 }
 
 const CRED_TRUST_HELP = "The role does not trust the signer. Ask the account admin for a role without write access that trusts Culibox's signing identity; Culibox does not create it.";
@@ -373,6 +507,14 @@ function awsCheckView(res) {
       out.text = "Could not finish the check" + (r.reason_text ? ": " + r.reason_text : ".");
   }
   return out;
+}
+
+// awsRowStateFor: rowSaveState with the edit rule filled in (an edit that leaves
+// the role and its signing profile alone needs no check). The mode is part of
+// "alone": switching mode is a change, and sso_direct never counts as unchanged.
+function awsRowStateFor(row) {
+  const unchanged = row.orig ? row.source_profile === row.orig.source_profile && row.role_arn === row.orig.role_arn && (row.mode || "") === (row.orig.mode || "") : undefined;
+  return rowSaveState({ assume: row.assume, verdict: row.verdict, acked: row.acked, unchanged, mode: row.mode, gate: row.gate });
 }
 
 // awsErrText: a failed AWS-screen request in words. The server's own sentence is
@@ -592,6 +734,7 @@ if (typeof module !== "undefined" && module.exports) {
     credGroups, statusText, statusClass, baseText, credWriteActions, usedByText, entryActions, isSeed,
     providerTitle, checkedText, credRoleName, valueRefsText, valueUpdatedText, credTableRows, credTableHead,
     awsConnName, awsRowFromProfile, rowSaveState, awsSplitList, awsRoleARN, awsConnFromRow, awsCheckView, awsErrText,
+    awsGateView, awsModeText, awsHoursFromExpiry, awsDataReadName, awsRowStateFor,
     awsRolesShown, awsAgentRolePick, awsRolesNote, AWS_AGENT_ROLE_DOC,
     CRED_D4, CRED_N3, CRED_FILE_BAD, CRED_D4_REMEDY,
   };
@@ -1140,7 +1283,8 @@ function awsOpenEdit(entry) {
   row.elevRole = el ? el.role_arn : "";
   row.elevMinutes = el && el.max_minutes === 30 ? "30" : "60";
   row.elevIAM = !!(el && el.allow_iam);
-  row.orig = { source_profile: row.source_profile, role_arn: row.role_arn };
+  row.mode = entry.mode === "sso_direct" ? "sso_direct" : "";
+  row.orig = { source_profile: row.source_profile, role_arn: row.role_arn, mode: row.mode };
   awsFlow = { mode: "edit", rows: [row], profiles: [], selected: new Set(), sso: {}, timers: new Set(), saving: false, msg: "", loadErr: "" };
   awsPaintFlow();
 }
@@ -1149,6 +1293,7 @@ function awsNewRow(base, extra) {
   return {
     ...base, ...extra, id: ++awsRowSeq, description: "", egress: "", s3: "", elevRole: "", elevMinutes: "60", elevIAM: false,
     assume: null, verdict: null, actions: [], reason: "", reasonText: "", acked: false,
+    mode: "", gate: null, hours: 0,
     busy: "", err: "", roles: null, rolesNote: "", rolesDoc: false, rolesFilter: "", rolesFilterIn: null, signIn: "", el: null, res: null, rolesBox: null, roleInput: null,
   };
 }
@@ -1156,8 +1301,7 @@ function awsNewRow(base, extra) {
 // awsRowState: rowSaveState with the edit rule filled in (an edit that leaves
 // the role and its signing profile alone needs no check).
 function awsRowState(row) {
-  const unchanged = row.orig ? row.source_profile === row.orig.source_profile && row.role_arn === row.orig.role_arn : undefined;
-  return rowSaveState({ assume: row.assume, verdict: row.verdict, acked: row.acked, unchanged });
+  return awsRowStateFor(row);
 }
 
 async function awsExit() {
@@ -1317,7 +1461,9 @@ function awsField(row, key, label, opts) {
 // earlier check no longer describes this row.
 function awsInvalidate(row) {
   row.assume = null; row.verdict = null; row.actions = []; row.reason = ""; row.reasonText = ""; row.acked = false;
+  row.gate = null; row.hours = 0;
   row.err = ""; row.signIn = "";
+  awsPaintModeNote(row);
   awsPaintRes(row);
 }
 
@@ -1341,7 +1487,11 @@ function awsBuildRow(row) {
   grid.append(name.col, label.col);
 
   // Role: a text field (a bare name is expanded with the SSO account), Find roles when the profile has no role of its own.
+  // Mode: the agent role (AssumeRole) or the operator's own SSO role behind the read-only gate.
+  // SSO direct needs an SSO profile, so a row from any other profile shows no choice.
+  if (edit || row.kind === "sso") grid.appendChild(awsModeChoice(row));
   const rcol = awsEl("div", "fcol full");
+  row.roleCol = rcol;
   const rid = "aws-r" + row.id + "-role_arn";
   const rlab = awsEl("label", "flab", "Role ARN");
   rlab.htmlFor = rid;
@@ -1363,6 +1513,12 @@ function awsBuildRow(row) {
   row.rolesBox = awsEl("div", "rolesbox");
   rcol.append(rlab, line, row.rolesBox);
   grid.appendChild(rcol);
+  row.modeNote = awsEl("div", "amberbox modenote");
+  row.modeNote.setAttribute("role", "note");
+  const nfull = awsEl("div", "fcol full");
+  nfull.appendChild(row.modeNote);
+  grid.appendChild(nfull);
+  row.modeNoteCol = nfull;
 
   grid.appendChild(awsField(row, "source_profile", "Source profile", { readonly: !edit, invalidates: true }).col);
   grid.appendChild(awsField(row, "region", "Region", { invalidates: true, placeholder: "ap-southeast-1" }).col);
@@ -1384,12 +1540,15 @@ function awsBuildRow(row) {
 
   // Advanced (collapsed): egress hosts, S3 read, elevate. Same validation as the server's.
   const det = document.createElement("details");
-  det.appendChild(awsEl("summary", null, "Advanced: egress hosts, S3 read, elevate"));
+  row.advSummary = awsEl("summary", null, "Advanced: egress hosts, S3 read, elevate");
+  det.appendChild(row.advSummary);
   det.open = !!(row.egress || row.s3 || row.elevRole);
   const adv = awsEl("div", "frow");
   adv.appendChild(awsField(row, "egress", "Extra hosts the agent may reach", { area: true, full: true, placeholder: "one per line, e.g. *.example.com" }).col);
-  adv.appendChild(awsField(row, "s3", "S3 buckets the agent may read", { area: true, full: true, placeholder: "one per line" }).col);
-  adv.appendChild(awsField(row, "elevRole", "Elevate role ARN (optional)", { full: true, placeholder: "arn:aws:iam::<account>:role/<write role>" }).col);
+  const s3f = awsField(row, "s3", "S3 buckets the agent may read", { area: true, full: true, placeholder: "one per line" });
+  adv.appendChild(s3f.col);
+  const elf = awsField(row, "elevRole", "Elevate role ARN (optional)", { full: true, placeholder: "arn:aws:iam::<account>:role/<write role>" });
+  adv.appendChild(elf.col);
   const mcol = awsEl("div", "fcol");
   const mlab = awsEl("label", "flab", "Elevate window");
   mlab.htmlFor = "aws-r" + row.id + "-mins";
@@ -1410,12 +1569,80 @@ function awsBuildRow(row) {
   ilab.append(icb, document.createTextNode(" Elevate may change IAM"));
   icol.appendChild(ilab);
   adv.appendChild(icol);
+  // What sso_direct hides and clears: S3 read, elevate and its window and IAM flag.
+  row.modeHidden = [s3f.col, elf.col, mcol, icol];
+  row.modeClear = () => {
+    row.s3 = ""; s3f.inp.value = "";
+    row.elevRole = ""; elf.inp.value = "";
+    row.elevMinutes = "60"; sel.value = "60";
+    row.elevIAM = false; icb.checked = false;
+  };
   det.appendChild(adv);
   art.appendChild(det);
 
+  awsApplyMode(row);
   awsPaintRoles(row);
   awsPaintRes(row);
   return art;
+}
+
+// awsModeChoice: the two-way choice beside the role field.
+function awsModeChoice(row) {
+  const col = awsEl("div", "fcol full");
+  col.appendChild(awsEl("span", "flab", "Credentials the agent gets"));
+  const grp = awsEl("div", "modechoice");
+  grp.setAttribute("role", "radiogroup");
+  grp.setAttribute("aria-label", "Credentials the agent gets");
+  for (const [value, label] of [["", "Agent role (recommended)"], ["sso_direct", "SSO role directly"]]) {
+    const lab = awsEl("label", "pf-check");
+    const rb = document.createElement("input");
+    rb.type = "radio";
+    rb.name = "aws-r" + row.id + "-mode";
+    rb.value = value;
+    rb.checked = (row.mode || "") === value;
+    rb.onchange = () => { if (rb.checked) awsSetMode(row, value); };
+    lab.append(rb, document.createTextNode(" " + label));
+    grp.appendChild(lab);
+  }
+  col.appendChild(grp);
+  return col;
+}
+
+// awsSetMode: switch a row's mode. Going to SSO direct clears the role, S3 read and
+// elevate values (the server refuses them there, and a stale value must not come
+// back on the way out); going back starts the role from the account prefix again.
+function awsSetMode(row, mode) {
+  if ((row.mode || "") === mode) return;
+  row.mode = mode;
+  if (mode === "sso_direct") {
+    row.role_arn = "";
+    if (row.modeClear) row.modeClear();
+  } else {
+    row.role_arn = row.accountId ? "arn:aws:iam::" + row.accountId + ":role/" : "";
+  }
+  if (row.roleInput) row.roleInput.value = row.role_arn;
+  awsInvalidate(row);
+  awsApplyMode(row);
+  awsPaintRoles(row);
+  awsPaintFoot();
+}
+
+// awsApplyMode: show or hide what the row's mode does not use.
+function awsApplyMode(row) {
+  const direct = row.mode === "sso_direct";
+  if (row.roleCol) row.roleCol.hidden = direct;
+  if (row.modeNoteCol) row.modeNoteCol.hidden = !direct;
+  for (const c of row.modeHidden || []) c.hidden = direct;
+  if (row.advSummary) row.advSummary.textContent = direct ? "Advanced: egress hosts" : "Advanced: egress hosts, S3 read, elevate";
+  if (row.checkBtn) row.checkBtn.textContent = "Check";
+  awsPaintModeNote(row);
+}
+
+// awsPaintModeNote: the trade-off, always visible in SSO direct mode. N comes from
+// the last check's credentials when there is one.
+function awsPaintModeNote(row) {
+  if (!row.modeNote) return;
+  row.modeNote.textContent = awsModeText(row.hours);
 }
 
 // AWS_ROLES_SHOWN caps the radios one listing renders; the filter finds the rest.
@@ -1505,7 +1732,13 @@ function awsPaintRes(row) {
     nodes.push(e);
   }
   let needSignIn = row.signIn !== "";
-  if (row.assume) {
+  if (row.mode === "sso_direct") {
+    if (row.gate) {
+      const g = awsGateView(row.gate);
+      nodes.push(awsGateNode(g));
+      if (g.signIn) needSignIn = true;
+    }
+  } else if (row.assume) {
     const v = awsCheckView({ assume: row.assume, verdict: row.verdict, actions: row.actions, reason: row.reason, reason_text: row.reasonText });
     if (v.assume === "ok") {
       nodes.push(awsLine("ok", "✓", v.text));
@@ -1521,7 +1754,33 @@ function awsPaintRes(row) {
   }
   if (needSignIn) nodes.push(awsSignInNode(row));
   row.res.replaceChildren(...nodes);
-  if (row.el) row.el.classList.toggle("danger", row.assume === "ok" && row.verdict === "writes");
+  if (row.el) row.el.classList.toggle("danger", row.mode === "sso_direct" ? !!row.gate && row.gate.state === "not_read_only" : row.assume === "ok" && row.verdict === "writes");
+}
+
+// awsGateNode: the read-only gate's verdict, the lines that refused and the data-read report.
+function awsGateNode(g) {
+  if (g.tone === "ok") {
+    const box = awsEl("div", "gate ok");
+    box.appendChild(awsLine("ok", "✓", g.badge + ". " + g.text));
+    if (g.dataReadText) box.appendChild(awsEl("p", "hint", g.dataReadText));
+    return box;
+  }
+  const box = awsEl("div", "gate " + (g.tone === "bad" ? "bad warnbox" : "warn amberbox"));
+  box.setAttribute("role", "alert");
+  if (!g.signIn) {
+    const l = awsEl("div", "l");
+    l.appendChild(awsEl("span", "bdg " + (g.tone === "bad" ? "prod" : "warnb"), g.badge));
+    l.appendChild(awsEl("span", null, g.text));
+    box.appendChild(l);
+  }
+  if (g.refused.length) {
+    const ul = awsEl("ul", "gatelist");
+    for (const r of g.refused) ul.appendChild(awsEl("li", null, r));
+    box.appendChild(ul);
+  }
+  if (g.missing.length) box.appendChild(awsEl("div", "remedy", "Grant: " + g.missing.join(", ")));
+  if (g.dataReadText) box.appendChild(awsEl("p", "hint", g.dataReadText));
+  return box;
 }
 
 function awsVerdictNode(row, v) {
@@ -1670,6 +1929,7 @@ function awsAfterSignIn(f, prof) {
   for (const r of f.rows.filter((x) => x.source_profile === prof)) {
     if (r.signIn === "roles") { r.signIn = ""; awsFindRoles(r); }
     else if (r.assume === "sso_expired") awsCheckRow(r);
+    else if (r.mode === "sso_direct" && r.gate && r.gate.state === "unverified" && r.gate.reason === "sso_expired") awsCheckRow(r);
   }
 }
 
@@ -1718,7 +1978,8 @@ async function awsCheckRow(row) {
   const f = awsFlow;
   if (row.busy) return false;
   if (!row.source_profile) { row.err = "Choose a source profile first."; awsPaintRes(row); return false; }
-  if (!AWS_ROLE_RE.test(row.role_arn)) {
+  const direct = row.mode === "sso_direct";
+  if (!direct && !AWS_ROLE_RE.test(row.role_arn)) {
     row.err = row.needsRole ? "Choose or type the role first: arn:aws:iam::<account>:role/<name>." : "The role ARN looks wrong: arn:aws:iam::<account>:role/<name>.";
     awsPaintRes(row);
     return false;
@@ -1729,6 +1990,17 @@ async function awsCheckRow(row) {
   awsPaintFoot();
   let ok = true;
   try {
+    if (direct) {
+      const res = await awsPost("/api/credentials/aws/check", { mode: "sso_direct", source_profile: row.source_profile, region: row.region });
+      if (awsFlow !== f) return false;
+      row.gate = res.gate || { state: "unverified", reason: "error" };
+      row.hours = row.gate.state === "read_only" ? awsHoursFromExpiry(res.expires, Date.now()) : 0;
+      awsPaintModeNote(row);
+      row.busy = "";
+      awsPaintRes(row);
+      awsPaintFoot();
+      return true;
+    }
     const res = await awsPost("/api/credentials/aws/check", { source_profile: row.source_profile, role_arn: row.role_arn, region: row.region });
     if (awsFlow !== f) return false;
     row.assume = res.assume || "error";
@@ -1752,7 +2024,7 @@ async function awsCheckAll() {
   const f = awsFlow;
   if (!f) return;
   for (const row of f.rows) {
-    if (row.assume === "ok" || row.busy) continue;
+    if (row.assume === "ok" || (row.mode === "sso_direct" && row.gate && row.gate.state === "read_only") || row.busy) continue;
     // A rate limit or a missing signer ends the run; the rows left stay as they were.
     if (!(await awsCheckRow(row)) && row.err && /Too many|no AWS signer/.test(row.err)) break;
     if (awsFlow !== f) return;
@@ -1780,7 +2052,7 @@ function awsPaintFoot() {
   let text = "";
   if (waiting) text = waiting + (waiting === 1 ? " row is" : " rows are") + " waiting for “I understand”.";
   else if (f.rows.length && !edit) text = ready + " of " + f.rows.length + " ready to save." + (ready && unchecked ? " Rows that did not pass a check are left as they are." : "");
-  else if (edit && !ready) text = "Check the new role before saving.";
+  else if (edit && !ready) text = f.rows.some((r) => r.mode === "sso_direct") ? "Check that the permission set is read-only before saving." : "Check the new role before saving.";
   note.textContent = text;
   if (f.noteBox) f.noteBox.textContent = text;
   if (f.msgBox) f.msgBox.textContent = f.msg || "";
@@ -1818,7 +2090,11 @@ async function awsSaveAll() {
       if (awsFlow !== f) return;
       row.busy = "";
       const v = e.body && e.body.verdict;
-      if (e.status === 409 && e.code === "needs_ack") {
+      if (e.status === 409 && (e.code === "not_read_only" || e.code === "unverified") && e.body && e.body.gate) {
+        // The server re-ran the gate (a label-only edit does too) and it did not pass.
+        row.gate = e.body.gate;
+        row.err = "";
+      } else if (e.status === 409 && e.code === "needs_ack") {
         // The server checked and found write access the client had not seen (or the role changed).
         row.assume = "ok"; row.verdict = (v && v.state) || "writes"; row.actions = (v && v.actions) || []; row.acked = false;
         row.err = "";
