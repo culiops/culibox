@@ -1193,15 +1193,19 @@
   #page-host > #settings-modal.as-page #manage .pf-sec[data-sec="touch"] { order: 30; }
   #page-host > #settings-modal.as-page #manage #pf-awsc-block { order: 31; grid-column: 1 / span 2; }
   #page-host > #settings-modal.as-page #manage #pf-gh-block { order: 32; grid-column: 3 / span 2; }
-  /* The GitHub block is only half the editor wide, so the owner row's flex lanes
-     (150px picker + two flex cells + remove) squeeze the owner and repos fields
-     under 120px. Two equal columns for App or token and Owner, remove at the
-     end, repos and the PAT note on a row of their own. */
-  #page-host > #settings-modal.as-page .frow.pf-gh-owner { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; column-gap: 10px; align-items: start; }
+  /* The GitHub block is only half the editor wide, so an owner row cannot hold
+     App or token, Owner and remove side by side (the fields shrink under
+     120px). Same stack as the phone: App or token with remove at the end of
+     the first line, then Owner and Repositories each on a full line, then the
+     PAT note. */
+  #page-host > #settings-modal.as-page .frow.pf-gh-owner { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 10px; align-items: start; }
   #page-host > #settings-modal.as-page .pf-gh-owner .fcol.app { flex: none; grid-column: 1; grid-row: 1; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.own { grid-column: 2; grid-row: 1; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { grid-column: 3; grid-row: 1; }
-  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.repos, #page-host > #settings-modal.as-page .pf-gh-owner .pf-gh-pat-note { grid-column: 1 / -1; }
+  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { grid-column: 2; grid-row: 1; align-self: end; }
+  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.own, #page-host > #settings-modal.as-page .pf-gh-owner .fcol.repos, #page-host > #settings-modal.as-page .pf-gh-owner .pf-gh-pat-note { grid-column: 1 / -1; }
+  /* The remove cell is a .fcol with the class "rm", which collides with the
+     3px progress-bar .rm rule above (grey fill, fixed height): it painted an
+     empty dark box over the x. Reset the bar's paint so only the button shows. */
+  #page-host > #settings-modal.as-page .pf-gh-owner .fcol.rm { height: auto; padding: 0; background: none; border-radius: 0; position: static; }
   #page-host > #settings-modal.as-page #manage #pf-aws-block { order: 33; }
   #page-host > #settings-modal.as-page #manage #pf-st-block { order: 34; }
   #page-host > #settings-modal.as-page #manage #pf-adv { order: 40; }
