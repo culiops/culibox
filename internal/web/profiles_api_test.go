@@ -614,3 +614,31 @@ func TestProfilesAPIContextWarnings(t *testing.T) {
 		t.Fatalf("PUT clean: code %d body %q, want 204 and no body", rec.Code, rec.Body)
 	}
 }
+
+func TestProfileImportsOffRoundTripsThroughTheAPI(t *testing.T) {
+	pm := NewProfileManager(nil, nil, "", nil, newFakeStore(), func([]config.AgentConfig) {})
+	s := &Server{Profiles: pm}
+	rec := httptest.NewRecorder()
+	s.handleProfiles(rec, httptest.NewRequest("POST", "/api/profiles",
+		strings.NewReader(`{"name":"io","bin":"claude","runtime":"box","imports_off":true}`)))
+	if rec.Code != 201 {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	s.handleProfile(rec, httptest.NewRequest("GET", "/api/profiles/io", nil))
+	if !strings.Contains(rec.Body.String(), `"imports_off":true`) {
+		t.Fatalf("GET lost imports_off: %s", rec.Body)
+	}
+	found := false
+	for _, v := range pm.Views() {
+		if v.Name == "io" {
+			found = true
+			if !v.ImportsOff {
+				t.Fatal("the list view does not report imports_off")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("profile missing from the list view")
+	}
+}

@@ -22,28 +22,33 @@ type ProtectedDir struct {
 	What   string // e.g. "agent-box's data directory"
 	Why    string // what a box could do there, e.g. "holds the box VM's controls"
 	Inside bool   // also refuse a workspace below Path
+
+	// ContextHint, when set, is appended to a context_paths refusal that names
+	// this directory (never to a workspace refusal): where to go instead.
+	ContextHint string
 }
 
 // DataDirProtected is the data root: the box VM's colima.yaml (its provision
 // script runs as root in the VM), lima's SSH key for the VM user, and by
 // default the config and profiles.
 func DataDirProtected(p string) ProtectedDir {
-	return ProtectedDir{p, "agent-box's data directory",
-		"holds the box VM's controls, its SSH key and, by default, agent-box's config and profiles", true}
+	return ProtectedDir{Path: p, What: "agent-box's data directory",
+		Why:    "holds the box VM's controls, its SSH key and, by default, agent-box's config and profiles",
+		Inside: true}
 }
 
 // ConfigDirProtected is a directory agent-box reads its config file from. The
 // config names the binaries agent-box runs (docker_bin, colima_bin, agents).
 func ConfigDirProtected(p string) ProtectedDir {
-	return ProtectedDir{p, "agent-box's config directory",
-		"holds the config that names the binaries agent-box runs", false}
+	return ProtectedDir{Path: p, What: "agent-box's config directory",
+		Why: "holds the config that names the binaries agent-box runs"}
 }
 
 // ProfilesDirProtected is the directory of profiles.json, which names the
 // binaries sessions run and their tier.
 func ProfilesDirProtected(p string) ProtectedDir {
-	return ProtectedDir{p, "agent-box's profiles directory",
-		"holds the profiles that name the binaries sessions run and whether they are contained", false}
+	return ProtectedDir{Path: p, What: "agent-box's profiles directory",
+		Why: "holds the profiles that name the binaries sessions run and whether they are contained"}
 }
 
 // PersonalConfigDirProtected is the default account's config dir (~/.claude).
@@ -51,8 +56,10 @@ func ProfilesDirProtected(p string) ProtectedDir {
 // session, and inheriting agent accounts copy that settings.json. Inside is
 // set: the scripts a hook names sit in subdirectories.
 func PersonalConfigDirProtected(p string) ProtectedDir {
-	return ProtectedDir{p, "the personal config directory",
-		"holds the hooks, scripts and settings that host sessions and inheriting accounts run", true}
+	return ProtectedDir{Path: p, What: "the personal config directory",
+		Why:         "holds the hooks, scripts and settings that host sessions and inheriting accounts run",
+		Inside:      true,
+		ContextHint: "to give the box files your CLAUDE.md imports, use imports (on by default)"}
 }
 
 // DedupeProtected drops later entries that name an earlier entry's directory
@@ -238,7 +245,19 @@ func ProtectedOverlap(workspace string, dirs []ProtectedDir) string {
 	return protectedOverlap(workspace, dirs, runtime.GOOS == "darwin")
 }
 
+// ProtectedOverlapHint is ProtectedOverlap for a context_paths entry: it also
+// returns the matched directory's ContextHint ("" when it has none), so the
+// refusal can say where to go instead. A workspace refusal does not use it.
+func ProtectedOverlapHint(p string, dirs []ProtectedDir) (reason, hint string) {
+	return protectedOverlapHint(p, dirs, runtime.GOOS == "darwin")
+}
+
 func protectedOverlap(workspace string, dirs []ProtectedDir, fold bool) string {
+	reason, _ := protectedOverlapHint(workspace, dirs, fold)
+	return reason
+}
+
+func protectedOverlapHint(workspace string, dirs []ProtectedDir, fold bool) (string, string) {
 	ws := resolveExisting(workspace)
 	for _, d := range dirs {
 		if d.Path == "" {
@@ -269,10 +288,10 @@ func protectedOverlap(workspace string, dirs []ProtectedDir, fold bool) string {
 			default:
 				continue
 			}
-			return how + d.What + " (" + p + "), which " + d.Why
+			return how + d.What + " (" + p + "), which " + d.Why, d.ContextHint
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // pathWithin reports whether child is parent or below it, comparing whole

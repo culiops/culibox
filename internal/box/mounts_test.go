@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -463,5 +464,62 @@ func TestLiveBoxWithoutTheOutMountIsReused(t *testing.T) {
 	}
 	if f.stops() != 0 || f.runs() != 0 {
 		t.Fatalf("a box with a live session is never replaced: stops=%d runs=%d", f.stops(), f.runs())
+	}
+}
+
+func TestYieldCoveredDropsImportsInsideOtherMounts(t *testing.T) {
+	skills := Mount{Host: "/b/skills", Box: "/home/agent/.claude/skills", Optional: true}
+	ctx := Mount{Host: "/srv/c", Box: "/c"}
+	extras := []Mount{
+		skills,
+		ctx,
+		{Host: "/h/notes.md", Box: "/w/notes.md", Yield: true},
+		{Host: "/h/x.md", Box: "/c/x.md", Yield: true},
+		{Host: "/h/s.md", Box: "/home/agent/.claude/skills/s/SKILL.md", Yield: true},
+		{Host: "/h/a.md", Box: "/home/agent/.claude/context/a.md", Yield: true},
+		{Host: "/h/same.md", Box: "/c", Yield: true}, // equality counts as covered
+	}
+	before := slices.Clone(extras)
+	got := yieldCovered("/w", extras)
+	want := []Mount{skills, ctx, {Host: "/h/a.md", Box: "/home/agent/.claude/context/a.md", Yield: true}}
+	if !slices.EqualFunc(got, want, func(a, b Mount) bool { return a == b }) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	if !slices.EqualFunc(extras, before, func(a, b Mount) bool { return a == b }) {
+		t.Fatalf("the input slice was written: %+v", extras)
+	}
+}
+
+func TestYieldCoveredYieldMountsDoNotCoverEachOther(t *testing.T) {
+	extras := []Mount{
+		{Host: "/h/d", Box: "/d", Yield: true},
+		{Host: "/h/d/e.md", Box: "/d/e.md", Yield: true},
+	}
+	if got := yieldCovered("/w", extras); len(got) != 2 {
+		t.Fatalf("a yield mount must be checked against non-yield extras only: %+v", got)
+	}
+}
+
+func TestWrapAppliesYieldAfterCloneAndGuardMounts(t *testing.T) {
+	m, f := newTestManagerWithFake(t)
+	ws := realTemp(t)
+	extras := []Mount{
+		bundleRoot,
+		{Host: "/h/notes.md", Box: filepath.Join(ws, "notes.md"), Optional: true, Yield: true},
+		{Host: "/h/a.md", Box: "/home/agent/.claude/context/a.md", Optional: true, Yield: true},
+		{Host: "/h/r.md", Box: "/r/of/.git/r.md", Optional: true, Yield: true}, // under the clone's .git mount
+	}
+	if _, _, _, err := m.Wrap(context.Background(), ws, "s1", cloneKey(ws, "h"), []string{"bash"}, nil, extras); err != nil {
+		t.Fatal(err)
+	}
+	args := f.runArgs[0]
+	if hasDst(args, filepath.Join(ws, "notes.md")) {
+		t.Errorf("a yield mount inside the workspace must not be mounted: %q", args)
+	}
+	if hasDst(args, "/r/of/.git/r.md") {
+		t.Errorf("a yield mount inside a clone mount must not be mounted: %q", args)
+	}
+	if !hasDst(args, "/home/agent/.claude/context/a.md") || !hasDst(args, bundleRoot.Box) {
+		t.Errorf("an uncovered yield mount and the bundle must stay: %q", args)
 	}
 }

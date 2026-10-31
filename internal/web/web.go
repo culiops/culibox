@@ -14,6 +14,7 @@ import (
 	"github.com/culiops/agent-box/internal/analytics"
 	"github.com/culiops/agent-box/internal/auth"
 	"github.com/culiops/agent-box/internal/box"
+	"github.com/culiops/agent-box/internal/bundle"
 	"github.com/culiops/agent-box/internal/secretchain"
 	"github.com/culiops/agent-box/internal/secretstore"
 	"github.com/culiops/agent-box/internal/session"
@@ -89,6 +90,10 @@ type Server struct {
 	// 503. It returns ErrBugReportBusy while an earlier build is still running;
 	// the builder, not the handler, owns that in-flight state.
 	BugReport func(ctx context.Context) (markdown, issueURL string, err error)
+	// Imports resolves the CLAUDE.md imports a box would get, behind
+	// GET /api/bundle/imports. Nil → the route is not registered (bundle off, or
+	// no box layer).
+	Imports func() bundle.ImportSet
 
 	// Accounts is the agent-account registry behind /api/accounts. Nil → the
 	// feature is off: no routes, and only the default account's quota is shown.
@@ -218,6 +223,9 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("/api/tokens", s.handleTokens)
 	protected.HandleFunc("/api/tokens/", s.handleToken)
 	protected.HandleFunc("/api/bugreport", s.handleBugReport)
+	if s.Imports != nil {
+		protected.HandleFunc("/api/bundle/imports", s.handleBundleImports)
+	}
 	protected.HandleFunc("/logout", s.handleLogout)
 	protected.HandleFunc("/api/meta", func(w http.ResponseWriter, r *http.Request) {
 		meta := map[string]any{

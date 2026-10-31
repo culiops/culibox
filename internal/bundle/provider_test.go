@@ -30,13 +30,13 @@ func providerForTest(t *testing.T) *Provider {
 // flags are the bin's own, so a shell is still never handed agent flags.
 func TestEveryBinGetsTheSameBoxMounts(t *testing.T) {
 	p := providerForTest(t)
-	cg, err := p.For("claude")
+	cg, err := p.For("claude", true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cm, cf, ch := cg.Mounts, cg.Flags, cg.Hash
 	for _, bin := range []string{"bash", "/usr/bin/zsh", ""} {
-		bg, err := p.For(bin)
+		bg, err := p.For(bin, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -67,7 +67,7 @@ func TestEveryBinGetsTheSameBoxMounts(t *testing.T) {
 // A shell reads none of it, so for a shell even the root is optional: it must
 // never be refused a box over a mount it does not use (review round 1).
 func TestOnlyTheBundleRootIsARequiredMount(t *testing.T) {
-	g, err := providerForTest(t).For("claude")
+	g, err := providerForTest(t).For("claude", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestOnlyTheBundleRootIsARequiredMount(t *testing.T) {
 func TestNothingIsRequiredForABinWithoutALayout(t *testing.T) {
 	p := providerForTest(t)
 	for _, bin := range []string{"bash", "/usr/bin/zsh", ""} {
-		g, err := p.For(bin)
+		g, err := p.For(bin, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestProviderGrantCarriesPluginsAndLockDrops(t *testing.T) {
 		return NewProvider(m)
 	}
 	p := mk()
-	g, err := p.For("claude")
+	g, err := p.For("claude", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestProviderGrantCarriesPluginsAndLockDrops(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(src, "plugins", "cache")); err != nil {
 		t.Fatal(err)
 	}
-	g2, err := p.For("claude")
+	g2, err := p.For("claude", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +184,8 @@ func TestProviderGrantCarriesPluginsAndLockDrops(t *testing.T) {
 
 	// A bin without a layout gets the same mounts, all optional, and no flags.
 	pluginTree(t, src)
-	gc, _ := p.For("claude")
-	gb, err := p.For("bash")
+	gc, _ := p.For("claude", true)
+	gb, err := p.For("bash", true)
 	if err != nil {
 		t.Fatal(err)
 	}

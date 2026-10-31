@@ -1458,6 +1458,9 @@
     #pf-replyable-row[hidden] { display: none; }
     #pf-context-row[hidden] { display: none; }
     #pf-context-warn { white-space: pre-line; overflow-wrap: anywhere; }
+    #pf-imports-row[hidden] { display: none; }
+    #pf-imports-list { margin: 4px 0 8px; overflow-wrap: anywhere; }
+    #pf-imports-warn, #pf-imports-refused { white-space: pre-line; overflow-wrap: anywhere; }
     #pf-context-hint { margin: 0 0 8px; }
     /* Work mode: two cards, stacked full width on a phone (the desktop page puts
        them side by side). The copy card dims, with its reason, when it cannot be

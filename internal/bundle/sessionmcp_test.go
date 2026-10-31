@@ -258,13 +258,13 @@ func TestBundleWritesImageMCP(t *testing.T) {
 
 func TestEntryCommandsChangeTheSourceHash(t *testing.T) {
 	m, _ := entryManager(t, nil, nil)
-	h0, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile))
+	h0, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile), ImportSet{})
 	m.opts.EntryCommands = []string{"mcp-grafana", "agentbox-env"}
-	h1, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile))
+	h1, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile), ImportSet{})
 	m.opts.EntryCommands = []string{"agentbox-env", "mcp-grafana", "agentbox-env"}
-	h2, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile))
+	h2, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile), ImportSet{})
 	m.opts.EntryCommands = []string{"agentbox-env"}
-	h3, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile))
+	h3, _, _ := m.sourceHash(false, readMCPSource(m.opts.MCPFile), ImportSet{})
 	if h0 == h1 || h1 == h3 || h0 == h3 {
 		t.Fatalf("entry commands do not move the hash: %s %s %s", h0, h1, h3)
 	}

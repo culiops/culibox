@@ -184,7 +184,10 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, shared []strin
 			}
 		}
 	}
-	if reason := ProtectedOverlap(p, protected); reason != "" {
+	if reason, hint := ProtectedOverlapHint(p, protected); reason != "" {
+		if hint != "" {
+			reason += "; " + hint
+		}
 		return nil, ctxPathRefuse(p, "%s", reason)
 	}
 	if len(shared) > 0 && !UnderMount(p, shared) {
@@ -207,6 +210,16 @@ func CheckContextPathID(p, home string, protected []ProtectedDir, shared []strin
 // hostSocketDirs are directories under home that hold the sockets or keys of
 // host services (the docker, colima and lima daemons, ssh keys and agent).
 var hostSocketDirs = []string{".colima", ".lima", ".docker", ".ssh"}
+
+// HostSocketDirs returns hostSocketDirs joined to home: the host directories a
+// bundled file must never be read from.
+func HostSocketDirs(home string) []string {
+	out := make([]string, 0, len(hostSocketDirs))
+	for _, d := range hostSocketDirs {
+		out = append(out, filepath.Join(home, d))
+	}
+	return out
+}
 
 // socketScanMaxEntries bounds findSocketOrPipe's walk. A tree bigger than this
 // is refused, not allowed unscanned: a socket anywhere in it would go unseen. A
@@ -299,6 +312,9 @@ func SecretFiles(dir string) []string {
 	})
 	return found
 }
+
+// LooksSecret reports whether a base name matches SecretFilePatterns.
+func LooksSecret(name string) bool { return looksSecret(name) }
 
 func looksSecret(name string) bool {
 	for _, pat := range SecretFilePatterns {

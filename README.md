@@ -34,7 +34,7 @@ It is built first for ops, cloud, DevOps and SRE work, where you want a control 
 
 - **Boxed runtime (the default).** Each project gets its own Docker container: only the project directory is mounted writable, with no host home, no `~/.ssh`, no Docker socket and no inherited daemon environment. The container runs as your uid, drops all capabilities, sets `no-new-privileges`, uses a read-only root filesystem, and has a PID limit and a memory cap (`box_memory`). Idle boxes are removed after a timeout. A `host` tier (no containment) exists for work that needs the machine, and you choose it explicitly.
 - **macOS.** Boxes run in CuliBox's own [colima](https://github.com/abiosoft/colima) VM, separate from any Docker setup you already have. See [docs/MACOS.md](docs/MACOS.md).
-- **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied. Your Claude Code plugins come along as a read-only, git-free copy. If any part of the plugin set is a symlink, or a marketplace URL in it carries credentials, the whole set is left out and recorded as a drop. The box image can declare its own MCP servers in `/etc/agent-box/mcp.json`; they replace same-named servers from your config, and each replacement is recorded as a drop. The image ships Chromium and the Playwright MCP server (`playwright`), which writes its output to `/tmp/playwright-mcp`.
+- **Config bundle.** A boxed session gets an allowlisted slice of your agent configuration (`CLAUDE.md`, skills, agents, commands, a filtered `settings.json`, and MCP servers that can run inside the image). Credentials, history and transcripts are never copied. Your Claude Code plugins come along as a read-only, git-free copy. If any part of the plugin set is a symlink, or a marketplace URL in it carries credentials, the whole set is left out and recorded as a drop. The box image can declare its own MCP servers in `/etc/agent-box/mcp.json`; they replace same-named servers from your config, and each replacement is recorded as a drop. The image ships Chromium and the Playwright MCP server (`playwright`), which writes its output to `/tmp/playwright-mcp`. The files your `CLAUDE.md` `@`-imports come along too, read-only; this is on by default and off per profile with `imports_off` (see [CLAUDE.md imports](#claudemd-imports-in-boxed-sessions)).
 - **Box shell.** A boxed shell profile whose shell is missing in the image (a Mac's quick shell is `$SHELL`, for example `/opt/homebrew/bin/zsh`) runs the image's shell of the same name, or else `/bin/bash` with a notice. Agent binaries never fall back. The image ships zsh with history search (fzf: Ctrl-R, Ctrl-T, Alt-C), autosuggestions, syntax highlighting, and completion for aws, terraform, kubectl (`k`), helm, stern, yq and gh. Its prompt shows the time, `box`, the directory, and only the context that is set: git branch, AWS profile and region, kube context and namespace, a non-default terraform workspace, and how long a slow command took. A value that looks like production (`prod`, `prd`, `production`, `live`) is shown in red. Defaults live in `/etc/agent-box/zshrc`; your own `~/.zshrc` loads after it. `ping`, `mtr`, `traceroute`, `tracepath` and `httping` are not installed. On Linux a box reaches the internet only through the HTTPS proxy, so these would measure the fence, not the target. Each name is a stand-in that says so and exits 127. Diagnose the network on the target or from a host-tier profile. `ipcalc`, `tree`, `file`, `bc` and `nano` work offline.
 - **Multiple accounts.** Run sessions under named agent accounts, each with its own config directory and its own token, kept apart from your personal login. Only Claude accounts can launch sessions.
 
@@ -155,7 +155,7 @@ Everything CuliBox writes lives in one data root: `$AGENT_BOX_HOME` (an absolute
 
 `box_pids_limit`, `box_tmp_size`, `box_memory` and `box_cpus` apply to boxes created after a restart; a running box keeps its limits until it is recreated.
 
-Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `default_cwd`, `account`, `aws`, `aws_connections` (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)), `github` (see [GitHub access for agents](#github-access-for-agents)), `tokens` (see [Static tokens for agents](#static-tokens-for-agents)), `clone_of` and `clone_share` (see [Clone mode](#clone-mode)), `context_paths` (see [Reading other repos](#reading-other-repos-context_paths)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles. A profile only honours per-spawn overrides for options it lists, with one exception: an enum option with `offer_unset` is pickable on every profile whose `bin` it applies to, starting blank (the agent's own default). `offer_unset` defaults to true for `model`, `effort` and `effortLevel` and false for every other key; set it to false to turn that off, and never set it on an enum whose choices grant a capability (a permission mode). Bool options are never offered unset; `POST /api/sessions` reports any it ignored in an `options_dropped` list of `{key, reason}` in the 201 body. Images are instance-wide: set `box_image`. A profile carrying `box.image` is refused on save and ignored, with a log line, when loaded from an older store or config.
+Each entry in `agents` takes `name` and `bin` (required), plus `args`, `base`, `env`, `secrets`, `options`, `runtime`, `default_cwd`, `account`, `aws`, `aws_connections` (see [Several AWS accounts in one session](#several-aws-accounts-in-one-session)), `github` (see [GitHub access for agents](#github-access-for-agents)), `tokens` (see [Static tokens for agents](#static-tokens-for-agents)), `clone_of` and `clone_share` (see [Clone mode](#clone-mode)), `context_paths` (see [Reading other repos](#reading-other-repos-context_paths)), `imports_off` (see [CLAUDE.md imports](#claudemd-imports-in-boxed-sessions)). `base` is the environment policy: `inherit` (the default; the daemon's environment minus Claude session markers), `clean` (a minimal environment with only what you grant by name) or `login` (run through `$SHELL -l`). Top-level `options` define the launch toggles. A profile only honours per-spawn overrides for options it lists, with one exception: an enum option with `offer_unset` is pickable on every profile whose `bin` it applies to, starting blank (the agent's own default). `offer_unset` defaults to true for `model`, `effort` and `effortLevel` and false for every other key; set it to false to turn that off, and never set it on an enum whose choices grant a capability (a permission mode). Bool options are never offered unset; `POST /api/sessions` reports any it ignored in an `options_dropped` list of `{key, reason}` in the 201 body. Images are instance-wide: set `box_image`. A profile carrying `box.image` is refused on save and ignored, with a log line, when loaded from an older store or config.
 
 ## Clone mode
 
@@ -270,6 +270,48 @@ The box gets the list in `AGENTBOX_CONTEXT_PATHS`, `:`-separated, so the agent (
 **Known limits**
 
 - On macOS the identity comparison is not made: inode numbers seen through the box VM's file share do not match the host's. A path that is swapped for a symlink between the last check and the box starting (for example by another box that can write its parent) is mounted as the link's target. Do not list a path inside a directory another box can write.
+
+## CLAUDE.md imports in boxed sessions
+
+A boxed Claude gets your `CLAUDE.md` (see Config bundle above). If that file `@`-imports other files (`@docs/style.md`, `@~/notes/team.md`), a box that got only the `CLAUDE.md` would show those lines pointing at nothing. So CuliBox also gives the box the files it imports, read-only. This is on by default for a boxed profile that uses your personal config, and each profile can turn it off.
+
+**What is followed**
+
+- Imports are found the way Claude Code finds them: a path relative to the importing file, `~/...`, or an absolute path under your home. Up to four hops are followed.
+- An `@` inside a code span, a fenced code block or an HTML comment is not an import, and neither is a quoted path. A file that does not exist is skipped without a message.
+- **Imports inside an imported file are followed only when that file is inside your `~/.claude` folder** (the config folder the bundle is built from). A file imported from anywhere else is still given to the box, but its own imports are not followed, and if it has any the profile editor lists it as left out. The reason: a box can rewrite files it can see, such as one in its workspace, and a new `@` line there would otherwise pull one of your secrets into the next box.
+
+**Where files land in the box**
+
+- `~` maps to `/home/agent`, so `@~/notes/team.md` is at `/home/agent/notes/team.md`. An absolute path keeps its spelling.
+- A relative import lands beside the file that imports it. From your `CLAUDE.md`, which the box has at `/home/agent/.claude/CLAUDE.md`, `@docs/style.md` lands at `/home/agent/.claude/docs/style.md`.
+- A file the box can already see (the workspace, a `context_paths` entry, a clone share, `skills/`) is not mounted a second time. The box sees the live file there.
+- CuliBox copies each file into a folder beside the bundle and mounts it read-only, one file at a time, so nothing else in that folder is exposed. The copy is what was hashed: `bundle.lock` has an `imports` list with each file's in-box path and sha256.
+
+**Refusals** (the file is left out and the profile editor says why)
+
+- A path that resolves, after symlinks, outside your home. A symlinked file must stay in the folder it is imported from.
+- A path that goes through a folder symlink outside your `~/.claude` folder. A folder symlink on an import's path is followed only when the link itself is inside `~/.claude` (so `~/.claude/context` linked to `~/dotfiles/context` works). A box can replace a folder in its workspace with a link, and the import would then reach a file of the same name anywhere in your home. If you link a folder elsewhere, import it by its real path.
+- Anything that is not a regular file: a directory, socket, named pipe or device.
+- A file over 256 KiB, or more than 64 files or 4 MiB in total.
+- A path the box provides itself: `/opt/agent-bundle` and anything under it, `/home/agent/.claude/CLAUDE.md`, `/home/agent/.claude.json`, `/home/agent/.claude/settings.json` and `/home/agent/.claude/.credentials.json`.
+- Two different host files that map to the same in-box path.
+- Anything inside CuliBox's own data, state and config folders, `~/.ssh`, `~/.docker`, `~/.colima`, `~/.lima`, `~/.aws`, `~/.config/gh`, `~/.kube`, `~/.gnupg`, `~/.netrc` or `~/.git-credentials`, and the config files the bundle rewrites or never copies (`~/.claude.json`, `settings.json`, `settings.local.json`, `.credentials.json`). These are checked by file identity, not by spelling, so a link or a different capitalisation does not get around them.
+
+**Warnings** (the file is still given to the box)
+
+- A file whose name looks like a secret (`secrets.zsh`, `*_key`, `*token*`, `*password*`, `.env*`, `*.pem` and the like), or one that has a line that looks like a credential (an API token, a private key header, `export NAME=value` for a secret-looking name). The editor names the file and line, never the value. The box can read and send what it is given: edit the file, or turn imports off.
+
+**Turning it off**
+
+Set `imports_off: true` on the profile, or untick "Give the box the files my CLAUDE.md imports" under "What it can touch" in the profile editor. A profile with imports off and one with imports on never share a box. Host-tier profiles are not affected, and an agent account that does not use your personal config gets no imports.
+
+**Lifecycle**
+
+- An edited import reaches a running box only when the box is recreated, like the rest of the bundle. A changed file gives the next spawn a new bundle.
+- `bundle.lock` stays readable in the box even with imports off. It shows the paths and hashes of the files that would have been imported, not their contents, and lists the import spellings that were refused, with the reason.
+- `context_paths` still refuses `~/.claude`; its error now points here.
+- A custom `bundle_source` gets the same protection as `~/.claude`: no workspace, `context_paths` entry or clone share may be it or contain it, because the files in it have their own imports followed.
 
 ## GitHub access for agents
 

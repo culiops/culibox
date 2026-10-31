@@ -362,3 +362,42 @@ func TestCheckContextPathRefusesUnreadableSubdir(t *testing.T) {
 	wantCtxErr(t, CheckContextPath(d, "/h", nil, nil), d,
 		"cannot read locked to scan for unix sockets and named pipes")
 }
+
+func TestHostSocketDirs(t *testing.T) {
+	got := HostSocketDirs("/h")
+	want := []string{"/h/.colima", "/h/.lima", "/h/.docker", "/h/.ssh"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestContextPathInPersonalConfigHintsImports(t *testing.T) {
+	tmp := ctxTmp(t)
+	cfg := filepath.Join(tmp, ".claude")
+	ctx := filepath.Join(cfg, "context")
+	if err := os.MkdirAll(ctx, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := CheckContextPath(ctx, "/h", []ProtectedDir{PersonalConfigDirProtected(cfg)}, nil)
+	wantCtxErr(t, err, ctx, "the personal config directory")
+	const hint = "; to give the box files your CLAUDE.md imports, use imports (on by default)"
+	if !strings.HasSuffix(err.Error(), hint) {
+		t.Errorf("error %q must end with %q", err, hint)
+	}
+}
+
+func TestWorkspaceInPersonalConfigHasNoImportsHint(t *testing.T) {
+	tmp := ctxTmp(t)
+	cfg := filepath.Join(tmp, ".claude")
+	ctx := filepath.Join(cfg, "context")
+	if err := os.MkdirAll(ctx, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reason := ProtectedOverlap(ctx, []ProtectedDir{PersonalConfigDirProtected(cfg)})
+	if reason == "" {
+		t.Fatal("workspace inside the personal config dir must still be refused")
+	}
+	if strings.Contains(reason, "imports") {
+		t.Errorf("workspace refusal must not carry the imports hint: %q", reason)
+	}
+}

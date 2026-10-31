@@ -297,10 +297,14 @@ type fakeBundles struct {
 	order    *callLog // optional: shared with fakeBoxes to pin call order
 	askedBin string
 	calls    int
-	mounts   []box.Mount
-	flags    []string
-	drops    []bundle.Drop
-	err      error // returned, with no mounts or flags, when set
+	// withImports is the switch of the last For call.
+	withImports bool
+	// imports is the Grant.Imports it answers.
+	imports int
+	mounts  []box.Mount
+	flags   []string
+	drops   []bundle.Drop
+	err     error // returned, with no mounts or flags, when set
 
 	// SessionMCP: what it was asked, and what it answers (a zero smcp answers a
 	// plain document whose drops are the ones it was given).
@@ -346,15 +350,16 @@ func (f *fakeBundles) SessionMCP(includeUser bool, drops []bundle.Drop, entries 
 	return bundle.SessionMCP{Doc: []byte(`{"mcpServers":{}}`), Key: key, Drops: drops}, nil
 }
 
-func (f *fakeBundles) For(bin string) (bundle.Grant, error) {
+func (f *fakeBundles) For(bin string, withImports bool) (bundle.Grant, error) {
 	f.askedBin = bin
+	f.withImports = withImports
 	f.calls++
 	if f.err != nil {
 		f.order.add("bundle")
 		return bundle.Grant{}, f.err
 	}
 	f.order.add("bundle")
-	return bundle.Grant{Mounts: f.mounts, Flags: f.flags, Hash: "deadbeef", Drops: f.drops}, nil
+	return bundle.Grant{Mounts: f.mounts, Flags: f.flags, Hash: "deadbeef", Drops: f.drops, Imports: f.imports}, nil
 }
 
 // The bundle's flags must reach the agent, and its mounts must reach the box.
