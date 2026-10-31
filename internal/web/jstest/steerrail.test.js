@@ -378,7 +378,7 @@ test("cloneRow: master base is used in every clause", () => {
 
 test("cloneRow: in-use, other-instance and no-base texts", () => {
   assert.strictEqual(cloneRow({ clone: { skipped: "in-use" } }).v, "not refreshed: another session is using this clone");
-  assert.strictEqual(cloneRow({ clone: { skipped: "other-instance" } }).v, "not refreshed: a box from another Culibox instance holds this clone");
+  assert.strictEqual(cloneRow({ clone: { skipped: "other-instance" } }).v, "not refreshed: a box from another CuliBox instance holds this clone");
   assert.strictEqual(cloneRow({ clone: { skipped: "no-base" } }).v, "not refreshed: host repo has neither main nor master");
 });
 

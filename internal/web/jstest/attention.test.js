@@ -40,10 +40,10 @@ test("non-claude waiting card offers Open only", () => {
 });
 
 test("attentionTitle prefixes the waiting count only when there is one", () => {
-  assert.strictEqual(attentionTitle(0, "DEV"), "[DEV] Culibox");
-  assert.strictEqual(attentionTitle(2, "DEV"), "(2) [DEV] Culibox");
-  assert.strictEqual(attentionTitle(1, ""), "(1) Culibox");
-  assert.strictEqual(attentionTitle(0, ""), "Culibox");
+  assert.strictEqual(attentionTitle(0, "DEV"), "[DEV] CuliBox");
+  assert.strictEqual(attentionTitle(2, "DEV"), "(2) [DEV] CuliBox");
+  assert.strictEqual(attentionTitle(1, ""), "(1) CuliBox");
+  assert.strictEqual(attentionTitle(0, ""), "CuliBox");
 });
 
 test("faviconHref flips to the amber-dot icon while anything needs you", () => {
@@ -82,7 +82,7 @@ test("idle, done and unknown states never fire", () => {
 test("notifyAvailability: insecure origin disables with the HTTPS hint", () => {
   const a = notifyAvailability(false, "default");
   assert.strictEqual(a.enabled, false);
-  assert.match(a.reason, /Requires HTTPS — open Culibox over an https:\/\/ URL/);
+  assert.match(a.reason, /Requires HTTPS — open CuliBox over an https:\/\/ URL/);
   assert.strictEqual(notifyAvailability(true, "unsupported").enabled, false);
   assert.deepEqual(notifyAvailability(true, "default"), { enabled: true, reason: "" });
 });

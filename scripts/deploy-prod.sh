@@ -74,7 +74,7 @@ if [ "${AB_PROD_CONFIRM:-}" != "yes" ]; then
 fi
 
 mkdir -p "$(dirname "$BIN")"
-echo "building Culibox $version → $BIN"
+echo "building CuliBox $version → $BIN"
 "$GO" build -ldflags "-X main.version=$version -X main.commit=$(git -C "$REPO" rev-parse HEAD)" -o "$BIN" "$REPO/cmd/agent-box"
 echo "restarting $SERVICE"
 systemctl --user restart "$SERVICE"

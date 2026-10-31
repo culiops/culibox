@@ -1,5 +1,5 @@
 name: Bug report
-description: Something in Culibox does not work
+description: Something in CuliBox does not work
 labels: ["bug"]
 body:
   - type: textarea

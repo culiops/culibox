@@ -32,7 +32,7 @@ with pidfiles under `<data_dir>/sessions/pids`. If `data_dir` is inside the
 container's ephemeral layer, a container replacement wipes the sockets and the
 surviving agents become unreachable, and persistence is defeated.
 
-Point the data root at a named volume (or host bind mount). Everything Culibox
+Point the data root at a named volume (or host bind mount). Everything CuliBox
 writes lives there, its `config.json` included, so nothing lands on the container's
 ephemeral filesystem:
 

@@ -1540,7 +1540,7 @@ function buildEnableRepliesButton(id, after) {
   en.type = "button";
   en.className = "btn";
   en.textContent = "Enable replies";
-  en.title = "Allow answering this session from Culibox";
+  en.title = "Allow answering this session from CuliBox";
   en.onclick = async (e) => {
     e.stopPropagation();
     en.disabled = true;
@@ -3681,7 +3681,7 @@ function renderGhOwners(rows) {
     sel.value = r.token ? "token:" + r.token : r.app ? "app:" + r.app : apps.length ? "app:" + apps[0] : pats.length ? "token:" + pats[0] : "";
     const note = document.createElement("p");
     note.className = "tiny pf-gh-pat-note";
-    note.textContent = "A personal access token is not narrowed by Culibox: the permissions above do not apply to it and it may reach more than these repositories. Culibox only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
+    note.textContent = "A personal access token is not narrowed by CuliBox: the permissions above do not apply to it and it may reach more than these repositories. CuliBox only checks that each request names one of them. It is long-lived and is not revoked when the session ends.";
     note.hidden = !sel.value.startsWith("token:");
     sel.addEventListener("change", () => { note.hidden = !sel.value.startsWith("token:"); });
     const owner = document.createElement("input");
@@ -5086,7 +5086,7 @@ function emptyNoneEl(m) {
 function emptyFirstEl() {
   const root = emptyEl("div", "placeholder empst");
   root.append(
-    emptyEl("h1", "empst-title", "Welcome to Culibox"),
+    emptyEl("h1", "empst-title", "Welcome to CuliBox"),
     emptyEl("p", "empst-sub", "Run AI agents, keep them contained, and let them touch your cloud safely. Three steps:"),
   );
   const docker = !metaLoaded ? "" : (boxRuntime ? " (found)" : " (not found)");
@@ -6085,9 +6085,9 @@ initMobileShell();
     if (globalThis.repliesEnabled && typeof renderSteerRail === "function") renderSteerRail(); // the rail was built before this answer
     if (window.shellProfile || globalThis.repliesEnabled) cells.forEach((c) => c.renderBar()); // reveal +sh, and the reply strip of a waiting pane
     const ver = $("version-badge"), vl = versionLabel(meta && meta.version);
-    if (ver && vl) { ver.textContent = vl; ver.title = "Culibox " + meta.version; ver.hidden = false; }
+    if (ver && vl) { ver.textContent = vl; ver.title = "CuliBox " + meta.version; ver.hidden = false; }
     const sideVer = $("side-version");
-    if (sideVer && vl) { sideVer.textContent = vl; sideVer.title = "Culibox " + meta.version; sideVer.hidden = false; }
+    if (sideVer && vl) { sideVer.textContent = vl; sideVer.title = "CuliBox " + meta.version; sideVer.hidden = false; }
     if (!meta || !meta.env_label) return;
     const badge = $("env-badge"), strip = $("env-strip");
     badge.textContent = meta.env_label;
@@ -6101,7 +6101,7 @@ initMobileShell();
       sideEnv.hidden = false;
     }
     strip.hidden = false;
-    signalAttention(); // title = (N) [ENV] Culibox, now that ENV is known
+    signalAttention(); // title = (N) [ENV] CuliBox, now that ENV is known
     updateStatusLine();
   } catch (_) {
     if (retry) setTimeout(() => initEnv(false), 2000); // else: no badge, no +sh

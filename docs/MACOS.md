@@ -1,7 +1,7 @@
-# Running Culibox on macOS
+# Running CuliBox on macOS
 
 Sessions run as your user (host tier, **not contained**) unless you set up the
-boxed tier, which runs them in a container inside Culibox's own colima VM; see
+boxed tier, which runs them in a container inside CuliBox's own colima VM; see
 [Boxed tier](#boxed-tier-contained-sessions) below.
 
 ## Install (from source)
@@ -24,29 +24,29 @@ to paste into an issue.
 
     ./agent-box serve
 
-With no config file, Culibox listens on `127.0.0.1:8899` and prints a login
+With no config file, CuliBox listens on `127.0.0.1:8899` and prints a login
 URL containing a login token (`#token=…`), generated on first start and kept in
 `~/.local/share/agent-box/login.token`. Open the URL in a browser on the same Mac.
 
-Closing the terminal tab stops Culibox but not your sessions; run
-`agent-box serve` again and they reattach. Only one Culibox can serve a data
+Closing the terminal tab stops CuliBox but not your sessions; run
+`agent-box serve` again and they reattach. Only one CuliBox can serve a data
 directory at a time.
 
 ## Configure
 
-Everything Culibox writes lives in one directory, `~/.local/share/agent-box`
+Everything CuliBox writes lives in one directory, `~/.local/share/agent-box`
 (set `AGENT_BOX_HOME` to an absolute path to move it): its config, login token,
 session records, profiles and analytics. Back it up, move it or delete it as a
-unit. Claude Code's own files stay in `~/.claude`; Culibox only reads them. The one
+unit. Claude Code's own files stay in `~/.claude`; CuliBox only reads them. The one
 exception is the abduco socket directory, `/tmp/agent-box-<uid>-<hash>`, because macOS
 caps a socket path at 103 bytes; it holds only live sockets.
 
 Optional config: `~/.local/share/agent-box/config.json` (see `config.example.json`), or
 pass `-config <path>`. When `AGENT_BOX_HOME` is unset, `~/.config/agent-box/config.json`
 (or `$XDG_CONFIG_HOME/agent-box/config.json`) is still read as a fallback. A
-`config.json` in the current directory is deliberately not read, so running Culibox
+`config.json` in the current directory is deliberately not read, so running CuliBox
 inside a cloned repo never loads that repo's config. To reach
-Culibox through a reverse proxy, add its hostname to `allowed_hosts`; any other
+CuliBox through a reverse proxy, add its hostname to `allowed_hosts`; any other
 Host header is refused.
 
 ## Rotate credentials
@@ -58,7 +58,7 @@ Both files sit in the data directory (default `~/.local/share/agent-box`).
 
 ## Boxed tier (contained sessions)
 
-A boxed session runs in a container inside Culibox's **own** colima VM, which
+A boxed session runs in a container inside CuliBox's **own** colima VM, which
 lives under the data root (`<data root>/vm`). It never becomes your docker
 context and never edits `~/.ssh/config`.
 
@@ -72,9 +72,9 @@ context and never edits `~/.ssh/config`.
   config.json). It refuses while any box is running, even
   an idle one; `agent-box box stop -force` stops the VM anyway and ends those
   sessions. `agent-box box status` shows the VM, the image and the boxes.
-- **Upgrading with the size unset.** A VM created by an older Culibox has 4
+- **Upgrading with the size unset.** A VM created by an older CuliBox has 4
   CPUs / 4 GiB, and an existing VM keeps the size it was created with: while
-  `box_vm_cpus` and `box_vm_memory_gib` are unset, Culibox reads them back
+  `box_vm_cpus` and `box_vm_memory_gib` are unset, CuliBox reads them back
   from the VM and nothing reads as changed. The host-derived default (every
   core, half the RAM) applies only when the VM is first set up, or after
   `agent-box box setup -recreate`, which deletes the VM, so its images and
@@ -87,11 +87,11 @@ context and never edits `~/.ssh/config`.
 - Workspaces must be under your home directory (the VM shares only that), and
   must not be, contain or sit inside the data root (it holds the VM's own
   settings and SSH key). They also must not be or contain the directory of the
-  config file Culibox reads, or of `profiles_path` (symlinks are followed to
+  config file CuliBox reads, or of `profiles_path` (symlinks are followed to
   their targets); a folder below those is fine.
 - A box cannot reach services listening on your Mac's 127.0.0.1, other than
-  Culibox's own credential broker and, for boxes with a binding, the egress
-  proxy (see below). Culibox checks this on every new box and refuses the box
+  CuliBox's own credential broker and, for boxes with a binding, the egress
+  proxy (see below). CuliBox checks this on every new box and refuses the box
   if the check fails.
 - Claude Code keeps its macOS login in the Keychain, which a box cannot read.
   Create a token for boxes with `claude setup-token`, store it as a secret
@@ -105,7 +105,7 @@ context and never edits `~/.ssh/config`.
   running, and also when the VM is not running (its boxes cannot be checked
   then); add `-force` to go ahead and end any sessions in it.
 - Restart `agent-box serve` after any `box setup -recreate`. A running
-  Culibox keeps the VM settings it read when it started, so until the
+  CuliBox keeps the VM settings it read when it started, so until the
   restart it sizes new boxes from the old VM, and a failed boxed spawn can
   still tell you to recreate. `agent-box doctor` reads the VM fresh each run.
 
@@ -117,7 +117,7 @@ internal Docker network inside the VM (`172.29.72.0/24`, gateway `172.29.72.1`),
 with no route to the internet, no DNS, and no route to other boxes. The only
 way out is a small relay container, `agentbox-relay-<instance>`, that runs on
 the VM's own network and listens on `172.29.72.1` only. It forwards exactly
-two ports from there to your Mac: Culibox's egress proxy (port `egress_port`,
+two ports from there to your Mac: CuliBox's egress proxy (port `egress_port`,
 default 9072) and the credential broker (port `broker_port`, default 9071),
 both of which listen on `127.0.0.1` on the Mac. The proxy lets through only the
 hosts the profile's bindings allow. Rules in the VM's firewall let the bound
@@ -133,13 +133,13 @@ Egress control for macOS boxes is new and has not yet been verified on a Mac.
   the VM's provisioning, so an existing VM has none until it is recreated;
   `agent-box doctor` warns "box VM config changed since setup" until you do.
   Like any recreate, it refuses while a box is running unless you add `-force`,
-  and Culibox must be restarted afterwards.
+  and CuliBox must be restarted afterwards.
 - The bound network uses the fixed subnet `172.29.72.0/24` inside the VM. An
   egress network left over from the previous build (an open one, or one with a
   different subnet) is refused with a message that suggests
   `docker network rm`. After an upgrade, run `agent-box box setup -recreate`
   instead: it deletes the VM, so its networks and rules come back fresh. Then
-  restart Culibox.
+  restart CuliBox.
 - The relay container has no restart policy. After a VM restart the next bound
   session checks the firewall rules and starts it again, so that spawn can be
   a little slower than later ones.
@@ -172,7 +172,7 @@ sees for the failing host and the export command below with the name filled in
 
    A config file replaces the built-in defaults. If you have none yet, create
    `~/.local/share/agent-box/config.json` (or `$AGENT_BOX_HOME/config.json`) with
-   the defaults as well, or Culibox refuses it for having no agents:
+   the defaults as well, or CuliBox refuses it for having no agents:
 
        {
          "bind_addr": "127.0.0.1:8899",
@@ -190,7 +190,7 @@ sees for the failing host and the export command below with the name filled in
 
    It refuses while a box is running; add `-force` to end those sessions.
 
-4. Restart Culibox. `extra_ca_certs` is read at daemon start only, so a running
+4. Restart CuliBox. `extra_ca_certs` is read at daemon start only, so a running
    `agent-box serve` keeps the old list until you restart it (your sessions
    survive the restart and reattach).
 
@@ -199,7 +199,7 @@ sees for the failing host and the export command below with the name filled in
     PASS extra-ca: <subject> sha256:<fingerprint> expires <YYYY-MM-DD>
 
 An expired CA (or one not yet valid) shows as `WARN extra-ca:` with the same
-detail. It does not stop Culibox, but trust through it will fail.
+detail. It does not stop CuliBox, but trust through it will fail.
 
 What the file may hold:
 
@@ -223,10 +223,10 @@ mounted over `/etc/ssl/certs/ca-certificates.crt`, and the usual variables
 the list while a box with live sessions is running, new sessions in that box
 are refused until the old ones end (on macOS, `agent-box box stop` also ends them).
 
-On Linux there is no VM. After a change, restart Culibox; a box created after
+On Linux there is no VM. After a change, restart CuliBox; a box created after
 that uses the new list, and the image build needs `agent-box box setup -rebuild`. A registry pull (a
 `box_image` that is a `ghcr.io` digest) goes through the host's Docker daemon,
-which uses the host's own trust store. Culibox does not manage that: install
+which uses the host's own trust store. CuliBox does not manage that: install
 the proxy's root there (on Debian or Ubuntu, copy it into
 `/usr/local/share/ca-certificates/` as a `.crt`, run `update-ca-certificates`
 and restart docker). `box setup` prints this as a hint when a pull fails.

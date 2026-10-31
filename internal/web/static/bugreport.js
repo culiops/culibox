@@ -162,10 +162,10 @@ async function loadAboutInfo() {
   try {
     const meta = await api("/api/meta");
     const v = meta && meta.version ? meta.version + " · " : "";
-    el.textContent = "Culibox " + v + (meta && meta.commit ? "commit " + meta.commit : "(unknown build)");
+    el.textContent = "CuliBox " + v + (meta && meta.commit ? "commit " + meta.commit : "(unknown build)");
     if (rt) rt.textContent = "Box runtime: " + ((meta && meta.box_runtime) || "none (host only)");
   } catch (_) {
-    el.textContent = "Culibox (build unknown)";
+    el.textContent = "CuliBox (build unknown)";
     if (rt) rt.textContent = "";
   }
 }
