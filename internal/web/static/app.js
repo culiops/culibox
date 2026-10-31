@@ -459,29 +459,36 @@ function wireDrawerSplit(el, kind) {
     }
   };
   el.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || el.classList.contains("dragging")) return; // one drag at a time
     e.preventDefault();
-    el.setPointerCapture(e.pointerId);
+    const pid = e.pointerId;
+    el.setPointerCapture(pid);
     el.classList.add("dragging");
     const rect = (width ? $("grid") : $("drawer-body")).getBoundingClientRect();
     let r = null;
     const move = (ev) => {
+      if (ev.pointerId !== pid) return;
       const v = width ? drawerWidthFromPointer(rect, ev.clientX) : treeRatioFromPointer(rect, ev.clientX);
       if (v === null) return;
       r = v;
       paintLive(r);
     };
     const up = (ev) => {
-      try { el.releasePointerCapture(ev.pointerId); } catch (_) {}
+      if (ev.pointerId !== pid) return;
+      try { el.releasePointerCapture(pid); } catch (_) {}
       el.classList.remove("dragging");
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
+      el.removeEventListener("lostpointercapture", up);
       if (r !== null) setDrawerSize(Object.assign({}, drawerSize, { [kind]: r }));
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", up);
+    // A capture lost without pointerup (window blur, element hidden by ⛶)
+    // still ends the drag, or "dragging" would stick and refuse every press.
+    el.addEventListener("lostpointercapture", up);
   });
   el.addEventListener("dblclick", () => {
     setDrawerSize(Object.assign({}, drawerSize, width ? { width: null } : { tree: TREE_DEFAULT }));
@@ -513,11 +520,16 @@ wireDrawerSplit($("drawer-edge"), "width");
 wireDrawerSplit($("drawer-split"), "tree");
 $("drawer-max").onclick = () => setDrawerMax($("drawer").dataset.max !== "1");
 // Escape restores a maximized drawer, unless a field, the editor or a menu in
-// it has the key (their Escape is their own).
+// it has the key (their Escape is their own). Neither menu takes focus when it
+// opens (focus stays on its ⋯), so an open one is checked by state, not target:
+// its own document-level Escape closes it, and that press must do only that.
 $("drawer").addEventListener("keydown", (e) => {
   if (e.key !== "Escape" || $("drawer").dataset.max !== "1") return;
   const t = e.target;
   if (t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")) return;
+  const dm = $("drawer-menu");
+  const rm = $("ft-menu");
+  if ((dm && !dm.hidden) || (rm && rm.classList.contains("open"))) return;
   e.preventDefault();
   setDrawerMax(false);
 });

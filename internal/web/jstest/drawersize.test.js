@@ -88,3 +88,9 @@ test("splitAria: valuenow/min/max are whole percents", () => {
   assert.deepEqual(d.splitAria(0.4, "tree"), { now: 40, min: Math.round(d.TREE_MIN * 100), max: Math.round(d.TREE_MAX * 100) });
   assert.deepEqual(d.splitAria(0.615, "width"), { now: 62, min: Math.round(d.DRAWER_W_MIN * 100), max: Math.round(d.DRAWER_W_MAX * 100) });
 });
+
+test("splitAria: a drawn share outside the bounds reports inside them", () => {
+  // An undragged 960px drawer on a >3200px grid is drawn under the 30% floor.
+  assert.equal(d.splitAria(0.27, "width").now, Math.round(d.DRAWER_W_MIN * 100));
+  assert.equal(d.splitAria(0.99, "width").now, Math.round(d.DRAWER_W_MAX * 100));
+});

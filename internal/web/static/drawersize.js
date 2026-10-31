@@ -89,10 +89,12 @@ function stepSplit(r, key, kind, drawn) {
   return clampShare(cur, kind);
 }
 
-// splitAria: the separator's aria-valuenow/min/max, in whole percents.
+// splitAria: the separator's aria-valuenow/min/max, in whole percents. now
+// stays inside min..max: an undragged drawer (960px) on a grid wider than
+// 3200px is drawn under the 30% floor, and the first key press snaps it there.
 function splitAria(r, kind) {
   const [lo, hi] = splitBounds(kind);
-  return { now: Math.round(r * 100), min: Math.round(lo * 100), max: Math.round(hi * 100) };
+  return { now: Math.round(Math.min(hi, Math.max(lo, r)) * 100), min: Math.round(lo * 100), max: Math.round(hi * 100) };
 }
 
 if (typeof module !== "undefined" && module.exports) {
