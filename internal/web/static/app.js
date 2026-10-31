@@ -228,6 +228,7 @@ function applyDrawer(next, opts) {
   if (next.open === "files") moveIntoDrawer($("files-pane"), $("drawer-tree") || body);
   dr.dataset.kind = next.open || "";
   dr.hidden = !next.open;
+  if (!next.open) setDrawerMax(false); // ⛶ lasts one opening: it hides the panes
   paintDrawerHead();
   positionDrawer();
   if (next.open === "files") drawerRootTree(next.sessionId, !!(opts && opts.explicitRoot));
@@ -327,8 +328,8 @@ function drawerTabClosed(id) {
   drawerFollowFocus();
 }
 
-// positionDrawer: below the focused pane's header (and its ask strip), over the right of the grid,
-// min(720px, 62% of the grid) wide (the width is CSS; it needs the grid's px).
+// positionDrawer: below the focused pane's header (and its ask strip), over the right of the grid.
+// The width is CSS (default min(960px, 62% of the grid), or the dragged share); it needs the grid's px.
 function positionDrawer() {
   const dr = $("drawer");
   if (!dr || dr.hidden) return;
@@ -347,6 +348,7 @@ function positionDrawer() {
   }
   dr.style.top = Math.max(0, Math.round(top - lr.top)) + "px";
   dr.style.setProperty("--grid-w", Math.round(gr.width) + "px");
+  paintDrawerSize();
 }
 
 // restoreDrawerNodes puts every moved node back exactly where it came from and
@@ -364,6 +366,7 @@ function restoreDrawerNodes() {
   drawerState = { open: null, sessionId: null };
   const dr = $("drawer");
   if (dr) { dr.hidden = true; dr.dataset.kind = ""; }
+  setDrawerMax(false);
   for (const c of cells) c.setView("terminal");
 }
 
@@ -389,6 +392,148 @@ function paintSteerToggle() {
 }
 
 $("drawer-x").onclick = () => closeDrawerFor();
+
+// --- Files drawer size (#34): drawersize.js decides, this applies ----------
+// Two separators: the drawer's left edge (its share of the grid) and the
+// tree/viewer splitter (the tree's share of the body). desktop.css turns the
+// shares into widths, with px floors. ⛶ covers the grid for one opening.
+function drawerStorage() {
+  try { return window.localStorage; } catch (_) { return null; }
+}
+let drawerSize = loadDrawerSize(drawerStorage());
+
+// drawnDrawerShare: the share the drawer is drawn at, for an edge never
+// dragged (its width is the CSS default). null while it is not on screen.
+function drawnDrawerShare() {
+  const dr = $("drawer");
+  const grid = $("grid");
+  if (!dr || !grid || dr.hidden) return null;
+  const g = grid.getBoundingClientRect().width;
+  return g > 0 ? dr.getBoundingClientRect().width / g : null;
+}
+
+function setSplitAria(el, r, kind) {
+  if (!el || typeof r !== "number") return;
+  const a = splitAria(r, kind);
+  el.setAttribute("aria-valuenow", String(a.now));
+  el.setAttribute("aria-valuemin", String(a.min));
+  el.setAttribute("aria-valuemax", String(a.max));
+}
+
+function paintDrawerSize() {
+  const dr = $("drawer");
+  const body = $("drawer-body");
+  if (!dr || !body) return;
+  if (drawerSize.width == null) {
+    delete dr.dataset.sized;
+    dr.style.removeProperty("--dr-w");
+  } else {
+    dr.dataset.sized = "1";
+    dr.style.setProperty("--dr-w", String(drawerSize.width));
+  }
+  body.style.setProperty("--dr-tree", String(drawerSize.tree));
+  setSplitAria($("drawer-split"), drawerSize.tree, "tree");
+  setSplitAria($("drawer-edge"), drawerSize.width == null ? drawnDrawerShare() : drawerSize.width, "width");
+}
+
+function setDrawerSize(next) {
+  drawerSize = normalizeDrawerSize(next);
+  saveDrawerSize(drawerStorage(), drawerSize);
+  paintDrawerSize();
+  if (typeof drawerGoPosition === "function") drawerGoPosition();
+}
+
+// wireDrawerSplit: drag, arrow keys and double-click (reset) for one
+// separator. Like the dock splitter (tabs.js), a drag writes only the CSS
+// variable per move, against a box measured once at the press; the share is
+// saved once, on release.
+function wireDrawerSplit(el, kind) {
+  if (!el) return;
+  const width = kind === "width";
+  const paintLive = (r) => {
+    if (width) {
+      $("drawer").dataset.sized = "1";
+      $("drawer").style.setProperty("--dr-w", String(r));
+    } else {
+      $("drawer-body").style.setProperty("--dr-tree", String(r));
+    }
+  };
+  el.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || el.classList.contains("dragging")) return; // one drag at a time
+    e.preventDefault();
+    const pid = e.pointerId;
+    el.setPointerCapture(pid);
+    el.classList.add("dragging");
+    const rect = (width ? $("grid") : $("drawer-body")).getBoundingClientRect();
+    let r = null;
+    const move = (ev) => {
+      if (ev.pointerId !== pid) return;
+      const v = width ? drawerWidthFromPointer(rect, ev.clientX) : treeRatioFromPointer(rect, ev.clientX);
+      if (v === null) return;
+      r = v;
+      paintLive(r);
+    };
+    const up = (ev) => {
+      if (ev.pointerId !== pid) return;
+      try { el.releasePointerCapture(pid); } catch (_) {}
+      el.classList.remove("dragging");
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      el.removeEventListener("lostpointercapture", up);
+      if (r !== null) setDrawerSize(Object.assign({}, drawerSize, { [kind]: r }));
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    // A capture lost without pointerup (window blur, element hidden by ⛶)
+    // still ends the drag, or "dragging" would stick and refuse every press.
+    el.addEventListener("lostpointercapture", up);
+  });
+  el.addEventListener("dblclick", () => {
+    setDrawerSize(Object.assign({}, drawerSize, width ? { width: null } : { tree: TREE_DEFAULT }));
+  });
+  el.addEventListener("keydown", (e) => {
+    const v = stepSplit(drawerSize[kind], e.key, kind, width ? drawnDrawerShare() : null);
+    if (v === null) return;
+    e.preventDefault();
+    setDrawerSize(Object.assign({}, drawerSize, { [kind]: v }));
+  });
+}
+
+function setDrawerMax(on) {
+  const dr = $("drawer");
+  const b = $("drawer-max");
+  if (!dr) return;
+  if (on) dr.dataset.max = "1";
+  else delete dr.dataset.max;
+  if (b) {
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    b.textContent = on ? "❐" : "⛶";
+    b.title = on ? "Restore the drawer's width" : "Expand the drawer over the panes";
+    b.setAttribute("aria-label", on ? "Restore the drawer" : "Expand the drawer");
+  }
+  if (typeof drawerGoPosition === "function") drawerGoPosition();
+}
+
+wireDrawerSplit($("drawer-edge"), "width");
+wireDrawerSplit($("drawer-split"), "tree");
+$("drawer-max").onclick = () => setDrawerMax($("drawer").dataset.max !== "1");
+// Escape restores a maximized drawer, unless a field, the editor or a menu in
+// it has the key (their Escape is their own). Neither menu takes focus when it
+// opens (focus stays on its ⋯), so an open one is checked by state, not target:
+// its own document-level Escape closes it, and that press must do only that.
+$("drawer").addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || $("drawer").dataset.max !== "1") return;
+  const t = e.target;
+  if (t && t.closest && t.closest("input, textarea, [contenteditable], .CodeMirror, [role=menu]")) return;
+  const dm = $("drawer-menu");
+  const rm = $("ft-menu");
+  if ((dm && !dm.hidden) || (rm && rm.classList.contains("open"))) return;
+  e.preventDefault();
+  setDrawerMax(false);
+});
+paintDrawerSize();
 if (typeof ResizeObserver === "function") new ResizeObserver(() => positionDrawer()).observe($("grid"));
 
 // renderRail48 paints the icon rail. It rebuilds, so it is guarded by a
