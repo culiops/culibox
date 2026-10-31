@@ -629,7 +629,11 @@ function initFilesDrawer() {
   };
   menu.replaceChildren(...Object.values(drawerMenuBtns));
   document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) drawerMenuOpen(false); });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !menu.hidden) drawerMenuOpen(false); });
+  // preventDefault marks the press as used, so the maximized drawer's own
+  // Escape (app.js) leaves it alone.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !menu.hidden) { e.preventDefault(); drawerMenuOpen(false); }
+  });
 }
 
 initFilesDrawer();

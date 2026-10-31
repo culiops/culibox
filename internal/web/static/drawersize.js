@@ -101,9 +101,11 @@ function splitAria(r, kind) {
 // where focus is: "body" (nothing focused, e.g. after a tree row click, which
 // re-renders the row), "drawer", or "other" (a terminal, the sidebar, a
 // dialog: their Escape is theirs). `owned`: a field, the editor or a menu item
-// has focus. An open menu takes the press to close itself, and only that.
+// has focus. An open menu takes the press to close itself, and only that;
+// `prevented`: a handler that ran first already used it (a menu or page it
+// closed has hidden itself by then, so the state check alone would miss it).
 function maxEscapeRestores(s) {
-  if (!s || !s.max || s.owned || s.menuOpen) return false;
+  if (!s || !s.max || s.owned || s.menuOpen || s.prevented) return false;
   return s.where === "body" || s.where === "drawer";
 }
 

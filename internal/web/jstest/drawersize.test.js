@@ -105,3 +105,7 @@ test("maxEscapeRestores: only a maximized drawer, focus on the page or in the dr
   assert.equal(d.maxEscapeRestores({ ...base, menuOpen: true }), false); // its Escape closes the menu only
   assert.equal(d.maxEscapeRestores(null), false);
 });
+
+test("maxEscapeRestores: a press another handler already used (closed a menu or a page) is left alone", () => {
+  assert.equal(d.maxEscapeRestores({ max: true, where: "body", owned: false, menuOpen: false, prevented: true }), false);
+});
