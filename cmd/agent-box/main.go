@@ -488,6 +488,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	// bundleSrc stays empty with the bundle off or no layer; clone mode reads it
 	// below as the memory root.
 	bundleSrc := ""
+	var bundleImports func() bundle.ImportSet
 	if layer != nil && cfg.BundleSource != "off" {
 		src := bundle.ExpandTilde(cfg.BundleSource)
 		if src == "" {
@@ -513,6 +514,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)
 		} else {
 			mgr.SetBundles(bundle.NewProvider(bm))
+			bundleImports = bm.Imports
 			log.Printf("config bundle source: %s", src)
 		}
 	}
@@ -737,6 +739,7 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 	creds.SetFileBad(credBad)
 
 	srv := &web.Server{
+		Imports:          bundleImports,
 		API:              api,
 		Session:          sess,
 		Tokens:           tokens,
