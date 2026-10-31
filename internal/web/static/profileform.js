@@ -147,10 +147,12 @@ function contextRowState(runtime, text) {
 }
 
 // contextWarningsText: the save response's warnings as the lines shown under the
-// field. A clean PUT is a 204, which api() returns as null, so a missing body or
-// missing list gives "" rather than throwing.
+// field, minus the clone_share ones. A clean PUT is a 204, which api() returns as
+// null, so a missing body or missing list gives "" rather than throwing.
 function contextWarningsText(body) {
-  return body && Array.isArray(body.warnings) ? body.warnings.join("\n") : "";
+  if (!body || !Array.isArray(body.warnings)) return "";
+  // clone_share lines belong to the private-copy block (workmode.js).
+  return body.warnings.filter((line) => !/^clone_share /.test(line)).join("\n");
 }
 
 // replyableToSend: whether a save writes replyable:true. A visible row is the

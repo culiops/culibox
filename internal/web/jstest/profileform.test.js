@@ -365,6 +365,8 @@ test("context paths fill the textarea one per line, empty when there are none", 
 
 test("context warnings come from the save response body, safely absent", () => {
   assert.strictEqual(contextWarningsText({ warnings: ["x", "y"] }), "x\ny");
+  // clone_share lines belong to the private-copy block (wmShareWarningsText)
+  assert.strictEqual(contextWarningsText({ warnings: ['clone_share "a" …', "x", "y"] }), "x\ny");
   assert.strictEqual(contextWarningsText({ warnings: [] }), "");
   assert.strictEqual(contextWarningsText({}), "");
   assert.strictEqual(contextWarningsText(null), "");
