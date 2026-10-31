@@ -58,3 +58,28 @@ test("saveProfile picks create vs update from the draft state, not the typed nam
   assert.match(b, /saveTarget\(/);
   assert.doesNotMatch(b, /profiles\.some\(/);
 });
+
+// A slow save must show "Saving…" and ignore a second click. The wrap starts
+// after the containment confirm (validation and the question stay outside) and
+// before the write; afterwards the form's own sync runs again so the owner of
+// #pf-save's text/disabled has the last word over the helper's restore.
+test("saveProfile wraps the save chain in withPending after the confirm", () => {
+  const b = body("saveProfile");
+  const confirm = b.indexOf("await askConfirm(");
+  const wrap = b.indexOf("withPending(");
+  const write = b.search(/method:\s*editing/);
+  assert.ok(confirm >= 0, "saveProfile no longer confirms");
+  assert.ok(wrap > confirm, "withPending( must come after the askConfirm");
+  assert.ok(write > wrap, "withPending( must come before the PUT/POST");
+  assert.match(b, /withPending\(\s*\$\("pf-save"\),\s*"Saving…"/);
+  // Validation early returns stay outside the wrap.
+  assert.ok(b.indexOf("Name and Command are required.") < wrap);
+});
+
+test("saveProfile re-runs syncEditorActions after withPending settles", () => {
+  const b = body("saveProfile");
+  const wrap = b.indexOf("withPending(");
+  const after = b.indexOf("syncEditorActions()", wrap);
+  assert.ok(after > wrap, "syncEditorActions() must follow withPending(");
+  assert.match(b.slice(wrap), /finally\s*\{\s*syncEditorActions\(\);\s*\}/);
+});

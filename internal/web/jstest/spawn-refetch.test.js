@@ -105,3 +105,15 @@ test("metaLoaded is set wherever boxRuntime is assigned from /api/meta", () => {
   assert.ok(all.length >= 2);
   assert.strictEqual(assigns.length, all.length, "every meta assignment of boxRuntime must set metaLoaded");
 });
+
+// The persistent New-session buttons show "Opening…" while openSpawnDialog
+// waits on loadProfiles. The sidebar menu item has no persistent button, so it
+// is exempt; spawnOpening stays for the callers that have no button to wrap.
+test("New session triggers show Opening… while profiles load", () => {
+  for (const id of ["spawn-go", "side-new"]) {
+    const m = new RegExp('\\$\\("' + id + '"\\)\\.onclick\\s*=\\s*([^\\n]*)').exec(APP);
+    assert.ok(m, id + " handler not found");
+    assert.match(m[1], new RegExp('withPending\\(\\s*\\$\\("' + id + '"\\),\\s*"Opening…",[^;]*openSpawnDialog\\('), id + " must wrap openSpawnDialog in withPending");
+  }
+  assert.match(APP, /let spawnOpening = false;/);
+});

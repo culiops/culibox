@@ -4175,49 +4175,61 @@ async function saveProfile() {
   // written. box needs no question; host gives up the whole point of the box.
   const ask = containmentConfirm(segValue($("pf-runtime")), p.name);
   if (ask && !(await askConfirm(ask))) return;
-  const editing = target.method === "PUT";
-  const path = editing ? "/api/profiles/" + encodeURIComponent(target.name) : "/api/profiles";
-  $("pf-st-err").hidden = true;
-  $("pf-awsc-err").hidden = true;
-  $("pf-context-warn").hidden = true;
-  let saved = null;
+  // From here the save is the slow part (PUT, refetch, fill), so the button
+  // shows "Saving…" if it runs long and a second click is ignored. Validation
+  // and the confirm above stay outside: they answer at once or by the user.
+  // withPending restores only what is still its own, and fillForm re-syncs the
+  // button mid-save, so re-run the form's own sync afterwards: its owner
+  // (syncEditorActions: saveLabel text, off/disabled) has the last word.
   try {
-    saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
-  } catch (e) {
-    pfSaveError("Save failed: " + e.message);
-    // A refusal that names a token entry is also shown on the Tokens block.
-    if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
-      $("pf-st-err").textContent = String(e.message);
-      $("pf-st-err").hidden = false;
-    }
-    // Likewise a refusal that names aws_connections (an undefined name, too
-    // many, or both bindings at once) shows on the connections block.
-    if (/aws_connections/.test(e.message)) {
-      $("pf-awsc-err").textContent = String(e.message);
-      $("pf-awsc-err").hidden = false;
-    }
-    return;
+    await withPending($("pf-save"), "Saving…", async () => {
+      const editing = target.method === "PUT";
+      const path = editing ? "/api/profiles/" + encodeURIComponent(target.name) : "/api/profiles";
+      $("pf-st-err").hidden = true;
+      $("pf-awsc-err").hidden = true;
+      $("pf-context-warn").hidden = true;
+      let saved = null;
+      try {
+        saved = await api(path, { method: editing ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+      } catch (e) {
+        pfSaveError("Save failed: " + e.message);
+        // A refusal that names a token entry is also shown on the Tokens block.
+        if (/^tokens?\b/.test(e.message) || (p.tokens || []).some((n) => String(e.message).includes(n))) {
+          $("pf-st-err").textContent = String(e.message);
+          $("pf-st-err").hidden = false;
+        }
+        // Likewise a refusal that names aws_connections (an undefined name, too
+        // many, or both bindings at once) shows on the connections block.
+        if (/aws_connections/.test(e.message)) {
+          $("pf-awsc-err").textContent = String(e.message);
+          $("pf-awsc-err").hidden = false;
+        }
+        return;
+      }
+      // Show what the server now holds, not what was typed: the editor and the
+      // stored profile can only disagree on screen if this step is skipped. The
+      // write succeeded, so a failure here must not say "Save failed".
+      // The profile now exists, so the editor is no longer a draft even if the
+      // reload below fails (a second Save must PUT, not POST again).
+      selectedProfile = p.name;
+      pfUserDraft = false;
+      try {
+        // No background retry: one that succeeds later would leave the "Saved, but
+        // reloading it failed" line on screen next to a good list.
+        if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
+        fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
+      } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
+      renderProfileList();
+      // After fillForm, which clears the warning: the save is done, and what the box
+      // may read is the user's call, so the warnings stay on the field (a toast would
+      // paint beneath the modal) for as long as the editor is showing this profile.
+      const warn = contextWarningsText(saved);
+      $("pf-context-warn").textContent = warn;
+      $("pf-context-warn").hidden = !warn;
+    });
+  } finally {
+    syncEditorActions();
   }
-  // Show what the server now holds, not what was typed: the editor and the
-  // stored profile can only disagree on screen if this step is skipped. The
-  // write succeeded, so a failure here must not say "Save failed".
-  // The profile now exists, so the editor is no longer a draft even if the
-  // reload below fails (a second Save must PUT, not POST again).
-  selectedProfile = p.name;
-  pfUserDraft = false;
-  try {
-    // No background retry: one that succeeds later would leave the "Saved, but
-    // reloading it failed" line on screen next to a good list.
-    if (!(await loadProfiles(false))) throw new Error("the profile list could not be refreshed");
-    fillForm(await api("/api/profiles/" + encodeURIComponent(p.name)));
-  } catch (e) { setDialogError("settings-modal", "Saved, but reloading it failed: " + e.message); }
-  renderProfileList();
-  // After fillForm, which clears the warning: the save is done, and what the box
-  // may read is the user's call, so the warnings stay on the field (a toast would
-  // paint beneath the modal) for as long as the editor is showing this profile.
-  const warn = contextWarningsText(saved);
-  $("pf-context-warn").textContent = warn;
-  $("pf-context-warn").hidden = !warn;
 }
 // Duplicate is what makes a read-only built-in useful: a copy you own, seeded
 // with what it does. It opens an UNSAVED draft, as New profile does, so Save
@@ -5144,8 +5156,12 @@ function initSpawnControl() {
   // The .seg's own buildSeg onChange (wired in syncRuntimeField) already calls
   // updateRuntimeWarning on every click — a .seg is buttons, not a form
   // control, so there is no native "change" event to hook here.
-  $("spawn-go").onclick = () => openSpawnDialog();
-  $("side-new").onclick = () => openSpawnDialog(); // the sidebar top's button: the same flow as "+ new"
+  // openSpawnDialog awaits loadProfiles (up to 5s), so a slow open reads
+  // "Opening…" on the button instead of looking dead. Both are persistent
+  // buttons; the sidebar menu item has none, so it stays unwrapped.
+  $("spawn-go").onclick = () => withPending($("spawn-go"), "Opening…", () => openSpawnDialog());
+  // the sidebar top's button: the same flow as "+ new"
+  $("side-new").onclick = () => withPending($("side-new"), "Opening…", () => openSpawnDialog());
   $("spawn-replyable").onchange = () => syncSpawnExtras(false);
   $("spawn-account").addEventListener("change", syncSpawnPreview);
   const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || "");
