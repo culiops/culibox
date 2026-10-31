@@ -636,3 +636,34 @@ func TestEgressRetentionDays(t *testing.T) {
 		t.Errorf("explicit 0 from JSON: %+v, %v", c.AuditEgressRetentionDays, err)
 	}
 }
+
+// OfferedBy (#35, review A-1): an option a profile sets a default for is always
+// offered. An unset one is offered only when it opts in (offer_unset), which
+// defaults on for model and effort alone: any other enum can be a capability
+// (--permission-mode bypassPermissions), and a bool can never opt in.
+func TestOptionOfferedBy(t *testing.T) {
+	yes, no := true, false
+	bare := AgentConfig{Name: "p", Bin: "claude"}
+	set := AgentConfig{Name: "q", Bin: "claude", Options: map[string]any{"mode": "default"}}
+	cases := []struct {
+		def  OptionDef
+		a    AgentConfig
+		want bool
+	}{
+		{OptionDef{Key: "model", Type: OptEnum, Bins: []string{"claude"}}, bare, true},
+		{OptionDef{Key: "effort", Type: OptEnum, Bins: []string{"claude"}}, bare, true},
+		{OptionDef{Key: "effortLevel", Type: OptEnum}, bare, true},
+		{OptionDef{Key: "model", Type: OptEnum, Bins: []string{"claude"}}, AgentConfig{Bin: "bash"}, false},
+		{OptionDef{Key: "model", Type: OptEnum, OfferUnset: &no}, bare, false},
+		{OptionDef{Key: "mode", Type: OptEnum}, bare, false}, // an unknown enum stays opt-in
+		{OptionDef{Key: "mode", Type: OptEnum, OfferUnset: &yes}, bare, true},
+		{OptionDef{Key: "mode", Type: OptEnum}, set, true},
+		{OptionDef{Key: "skip_permissions", Type: OptBool}, bare, false},
+		{OptionDef{Key: "skip_permissions", Type: OptBool, OfferUnset: &yes}, bare, false}, // never for a bool
+	}
+	for i, c := range cases {
+		if got := c.def.OfferedBy(c.a); got != c.want {
+			t.Errorf("case %d (%s on %s): OfferedBy = %v, want %v", i, c.def.Key, c.a.Bin, got, c.want)
+		}
+	}
+}

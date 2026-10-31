@@ -56,7 +56,7 @@
 
   "options": [
     { "comment": "bool → append flag when on", "key": "skip_permissions", "label": "Skip permissions", "type": "bool", "flag": "--dangerously-skip-permissions", "bins": ["claude"] },
-    { "comment": "enum → --effort <value>", "key": "effort", "label": "Effort", "type": "enum", "choices": ["low", "medium", "high", "xhigh", "max"], "flag": "--effort", "bins": ["claude"] },
+    { "comment": "enum → --effort <value>. model and effort are pickable on every claude profile even unset (offer_unset defaults on for those two keys only)", "key": "effort", "label": "Effort", "type": "enum", "choices": ["low", "medium", "high", "xhigh", "max"], "flag": "--effort", "bins": ["claude"] },
     { "comment": "enum → set env var", "key": "model", "label": "Model", "type": "enum", "choices": ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-sonnet-5"], "env": "ANTHROPIC_MODEL", "bins": ["claude"] }
   ],
 

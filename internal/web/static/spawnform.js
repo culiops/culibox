@@ -95,7 +95,7 @@ function spawnProgressText(seconds, runtime) {
   const s = Math.max(0, Math.floor(seconds || 0));
   let line = "Starting session…";
   if (s > 0) line += " " + (s < 60 ? s + "s" : Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s");
-  if (runtime === "box" && s >= 3) line += " · starting the box (the VM and its container can take a minute after an idle spell)";
+  if (runtime === "box" && s >= 3) line += " · starting the box (this can take a minute after an idle spell)";
   return line;
 }
 

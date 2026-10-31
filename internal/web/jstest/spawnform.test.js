@@ -120,7 +120,7 @@ test("spawnRefusedLocked: only a 423 carrying the store_locked code", () => {
 test("spawnProgressText counts up and explains a slow boxed spawn", () => {
   assert.strictEqual(spawnProgressText(0, "box"), "Starting session…");
   assert.strictEqual(spawnProgressText(2, "box"), "Starting session… 2s");
-  assert.match(spawnProgressText(3, "box"), /^Starting session… 3s · .*box/);
+  assert.match(spawnProgressText(3, "box"), /^Starting session… 3s · starting the box/);
   assert.strictEqual(spawnProgressText(12, "host"), "Starting session… 12s");
   assert.strictEqual(spawnProgressText(65, "box").split(" · ")[0], "Starting session… 1m 05s");
 });
