@@ -220,7 +220,8 @@ func returnBranches(ctx context.Context, g Git, d Docker, r ReturnRequest, prev 
 		fr, err := Fetch(ctx, g, d, FetchRequest{
 			Clone: r.Clone, Branch: b, Base: bb, Image: r.Image, Instance: r.Instance, TempDir: r.TempDir,
 			Home: r.Home, Protected: r.Protected, DataDir: r.DataDir,
-			FastForwardOnly: r.Mode == ReturnAuto,
+			FastForwardOnly:  r.Mode == ReturnAuto,
+			RefuseCheckedOut: true,
 		})
 		var refusal *Refusal
 		switch {

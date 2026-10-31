@@ -190,7 +190,7 @@ Everything else is as in any boxed session: no host home, no Docker socket, egre
 
 **Bringing code home**
 
-Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `agent-box clone fetch` stays the manual override: it forces the update, as does "Bring work home now" in the session.
+Work comes home by itself as `box/<branch>` in `clone_of`, the base branch included, when the session's agent exits and at each spawn of the clone. It moves a ref only as a fast-forward of your `box/<branch>`, and never while you have that branch checked out. When a branch cannot come home, the profile shows "N branches not home" with the reason for each. The profile field `clone_no_auto_return` turns this off (the checkbox is "Bring work home automatically", on by default); the profile then only reports what is not home. `agent-box clone fetch` stays the manual override: it forces the update. "Bring work home now" in the session forces it too, but still never moves a `box/<branch>` you have checked out.
 
 ```sh
 agent-box clone fetch [-config <path>] [-base <branch>] [-allow-old-history] <profile> <branch>

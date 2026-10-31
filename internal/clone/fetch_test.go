@@ -1699,6 +1699,56 @@ func TestFetchFastForwardOnlyRefusesCheckedOutRef(t *testing.T) {
 	}
 }
 
+func TestFetchForcedRefuseCheckedOutRef(t *testing.T) {
+	// Forced overwrite (not fast-forward only) that still never moves a branch a
+	// host worktree has checked out: "Bring work home now" sets the field, the CLI does not.
+	x, first := ffOnlyFx(t)
+	x.req.FastForwardOnly = false
+	x.req.RefuseCheckedOut = true
+	wt := filepath.Join(t.TempDir(), "wt")
+	fixtureGit(t, x.of, "worktree", "add", "-q", wt, "box/feat")
+	// Diverge the box so a forced update would overwrite, not fast-forward.
+	x.inClone("reset", "-q", "--hard", "main")
+	x.commitInClone("other.txt", "x", "other")
+	_, err := x.fetch()
+	r := wantReason(t, err, ReasonCheckedOut)
+	if want := "box/feat is checked out in " + wt + "; not moved"; !strings.Contains(r.Error(), want) {
+		t.Errorf("err = %q, want it to say %q", r.Error(), want)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != first {
+		t.Errorf("box/feat = %s, want it unchanged at %s", got, first)
+	}
+	if head := strings.TrimSpace(gitIn(t, wt, "", "rev-parse", "HEAD")); head != first {
+		t.Errorf("worktree HEAD = %s, want it unchanged at %s", head, first)
+	}
+	if q := x.quarantineRefs(); q != "" {
+		t.Errorf("quarantine refs left: %q", q)
+	}
+
+	// Not checked out: the forced update still overwrites.
+	fixtureGit(t, x.of, "worktree", "remove", "--force", wt)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != x.cloneTip() {
+		t.Errorf("box/feat = %s, want the clone's %s", got, x.cloneTip())
+	}
+}
+
+func TestFetchCLIForcedStillMovesACheckedOutRef(t *testing.T) {
+	// The CLI leaves RefuseCheckedOut false and keeps today's behaviour.
+	x, _ := ffOnlyFx(t)
+	x.req.FastForwardOnly = false
+	wt := filepath.Join(t.TempDir(), "wt")
+	fixtureGit(t, x.of, "worktree", "add", "-q", wt, "box/feat")
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != x.cloneTip() {
+		t.Errorf("box/feat = %s, want %s", got, x.cloneTip())
+	}
+}
+
 func TestFetchFastForwardOnlyLosesARaceSafely(t *testing.T) {
 	x, _ := ffOnlyFx(t)
 	racer := strings.TrimSpace(gitIn(t, x.of, "", "commit-tree", "-m", "racer", "HEAD^{tree}"))

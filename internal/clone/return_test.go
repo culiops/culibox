@@ -213,6 +213,24 @@ func TestReturnForcedModeOverwritesADivergedBoxRef(t *testing.T) {
 	}
 }
 
+func TestReturnForcedModeRefusesACheckedOutBoxRef(t *testing.T) {
+	x := newReturnFx(t)
+	x.ret(ReturnAuto) // box/main and box/feat exist
+	fixtureGit(t, x.of, "checkout", "-q", "box/main")
+	before, _ := x.ofRev("refs/heads/box/main")
+	x.inClone("commit", "-q", "--allow-empty", "-m", "more")
+	res := x.ret(ReturnForced)
+	if len(res.Home) != 0 { // box/feat has nothing new
+		t.Errorf("Home = %q, want none", res.Home)
+	}
+	if want := []string{"main:checked-out"}; !slices.Equal(branchesOf(res.NotHome), want) {
+		t.Errorf("NotHome = %q, want %q", branchesOf(res.NotHome), want)
+	}
+	if got, _ := x.ofRev("refs/heads/box/main"); got != before {
+		t.Errorf("box/main = %s, want it unchanged at %s", got, before)
+	}
+}
+
 func refsOutsideBox(t *testing.T, of string) string {
 	t.Helper()
 	var keep []string

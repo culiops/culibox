@@ -163,8 +163,16 @@ type FetchRequest struct {
 
 	// FastForwardOnly is auto-return only: box/<Branch> is created, or moved
 	// forward, and never overwritten or moved while checked out. False is the
-	// forced update the CLI and "Bring work home now" use.
+	// forced update the CLI and "Bring work home now" use (the latter also
+	// sets RefuseCheckedOut).
 	FastForwardOnly bool
+
+	// RefuseCheckedOut refuses a box/<Branch> that a worktree of clone_of has
+	// checked out, even when the update is forced: moving it would leave that
+	// work tree at the old commit, so git status shows the new work as reverted
+	// changes. Return sets it for every mode that fetches; the CLI leaves it
+	// false. FastForwardOnly implies it.
+	RefuseCheckedOut bool
 }
 
 // Refusal is a Fetch error with a reason Return records. Error() is the
@@ -582,8 +590,15 @@ func Fetch(ctx context.Context, g Git, d Docker, r FetchRequest) (res FetchResul
 		if err := fastForwardRef(ctx, g, c.Of, r.Branch, ref, tip); err != nil {
 			return res, err
 		}
-	} else if _, err := hostGit("update-ref", ref, tip); err != nil {
-		return res, fmt.Errorf("clone fetch: %w", err)
+	} else {
+		if r.RefuseCheckedOut {
+			if err := refuseCheckedOut(ctx, g, c.Of, r.Branch, ref); err != nil {
+				return res, err
+			}
+		}
+		if _, err := hostGit("update-ref", ref, tip); err != nil {
+			return res, fmt.Errorf("clone fetch: %w", err)
+		}
 	}
 	res = FetchResult{Ref: ref, BaseSHA: base}
 	if len(overridden) > 0 {
@@ -804,6 +819,34 @@ func strictIndexPack(ctx context.Context, g Git, of, bundle, packOut string) err
 	return err
 }
 
+// gitFail words a failed host git call: the context's error when it ran out,
+// else the sanitized git output.
+func gitFail(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("clone fetch: %w", ctx.Err())
+	}
+	return fmt.Errorf("clone fetch: %s", sanitizeN(err.Error(), maxLongErr))
+}
+
+// refuseCheckedOut returns a ReasonCheckedOut refusal when a worktree of of has
+// ref checked out. Every update of box/<branch> that must not leave a host work
+// tree behind its ref goes through it.
+func refuseCheckedOut(ctx context.Context, g Git, of, branch, ref string) error {
+	out, err := g.Run(ctx, of, CleanEnv(), hardened("worktree", "list", "--porcelain")...)
+	if err != nil {
+		return gitFail(ctx, err)
+	}
+	var where string
+	for _, line := range strings.Split(string(out), "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok {
+			where = p
+		} else if line == "branch "+ref {
+			return refused(ReasonCheckedOut, fmt.Errorf("box/%s is checked out in %s; not moved", branch, sanitizeN(where, maxErrRunes)))
+		}
+	}
+	return nil
+}
+
 // fastForwardRef moves ref to tip only when it is new or tip descends from it,
 // and never while a worktree of of has it checked out. update-ref carries the
 // value read here as its old value, so a ref that moved since is refused, not
@@ -812,12 +855,7 @@ func fastForwardRef(ctx context.Context, g Git, of, branch, ref, tip string) err
 	run := func(args ...string) ([]byte, error) {
 		return g.Run(ctx, of, CleanEnv(), hardened(args...)...)
 	}
-	fail := func(err error) error {
-		if ctx.Err() != nil {
-			return fmt.Errorf("clone fetch: %w", ctx.Err())
-		}
-		return fmt.Errorf("clone fetch: %s", sanitizeN(err.Error(), maxLongErr))
-	}
+	fail := func(err error) error { return gitFail(ctx, err) }
 	// read is the commit ref names; "" when there is no such ref (exit 1 of --quiet).
 	read := func() (string, error) {
 		out, err := run("rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
@@ -839,17 +877,8 @@ func fastForwardRef(ctx context.Context, g Git, of, branch, ref, tip string) err
 		return err
 	}
 
-	out, err := run("worktree", "list", "--porcelain")
-	if err != nil {
-		return fail(err)
-	}
-	var where string
-	for _, line := range strings.Split(string(out), "\n") {
-		if p, ok := strings.CutPrefix(line, "worktree "); ok {
-			where = p
-		} else if line == "branch "+ref {
-			return refused(ReasonCheckedOut, fmt.Errorf("box/%s is checked out in %s; not moved", branch, sanitizeN(where, maxErrRunes)))
-		}
+	if err := refuseCheckedOut(ctx, g, of, branch, ref); err != nil {
+		return err
 	}
 
 	notFF := refused(ReasonNotFF, fmt.Errorf("box/%s on the host has commits %s lacks; not overwritten (agent-box clone fetch overwrites it)", branch, branch))
