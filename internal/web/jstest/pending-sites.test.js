@@ -87,6 +87,19 @@ test("spawnShellIn: a trigger gets withPending, no trigger gets a toast over the
   assert.ok(run.indexOf(fin) < run.indexOf("await refreshSessions()"));
 });
 
+test("killSession: a toast covers the DELETE, cleared in finally before the error toast", () => {
+  const src = read("app.js");
+  const b = body(src, "killSession");
+  const start = b.indexOf('pendingToast("Ending " + ');
+  assert.ok(start >= 0, "toast helper with an Ending… label");
+  assert.ok(start < b.indexOf('method: "DELETE"'), "started before the DELETE");
+  const fin = finallyBlock(b, start);
+  assert.match(fin, /done\(\)/);
+  // The error toast must come after done(), so done() cannot hide it.
+  assert.ok(b.indexOf(fin) < b.indexOf('"End failed: "'), "done() runs before the error toast");
+  assert.ok(b.indexOf('"End failed: "') > 0, "error toast still present");
+});
+
 test("trigger buttons hand themselves to the action instead of a disabled/finally guard", () => {
   const term = read("terminal-tab.js");
   assert.match(term, /restartSession\(\{ id: this\.id \}, rb\)/);

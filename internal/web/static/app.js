@@ -5834,12 +5834,23 @@ async function killSession(id) {
   if (killing.has(id)) return; // already tearing down: ignore repeat clicks
   killing.add(id);
   await refreshSessions(); // re-render → row shows "ending…"
+  // A boxed session's docker stop can take seconds: a toast covers the DELETE
+  // after the pending delay. done() runs before the error toast is shown, so
+  // the toast cannot hide "End failed".
+  const sess = (lastSessions || []).find((s) => s.id === id);
+  const done = pendingToast("Ending " + ((sess && (sess.name || sess.id)) || id) + "…");
+  let failure = null;
   try {
     await api("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
   } catch (e) {
+    failure = e;
+  } finally {
+    done();
+  }
+  if (failure) {
     killing.delete(id);
     await refreshSessions();
-    showToast("End failed: " + e.message, { error: true });
+    showToast("End failed: " + failure.message, { error: true });
     return;
   }
   killing.delete(id);
