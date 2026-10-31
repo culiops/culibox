@@ -1540,6 +1540,9 @@
     #pf-gh-perms { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-bottom: 10px; }
     .pf-gh-perm { display: flex; align-items: center; gap: 8px; }
     .pf-gh-level[hidden] { display: none; }
+    /* The phone rule `#settings-modal .seg { display: flex }` outranks the line
+       above, so an unticked permission kept its read/write switch. */
+    #settings-modal .seg.pf-gh-level[hidden] { display: none; }
     #pf-gh-write-warn { margin-bottom: 10px; }
     .fcol { flex: 1; min-width: 0; }
     .flab {
