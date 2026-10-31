@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
@@ -140,16 +141,16 @@ func TestResolveImportsMapsThreeForms(t *testing.T) {
 func TestResolveImportsNestedFourHops(t *testing.T) {
 	tmp := t.TempDir()
 	home, src := impFixture(t, tmp)
-	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/x/a1.md\n")
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/.claude/x/a1.md\n")
 	for i := 1; i <= 5; i++ {
-		impWrite(t, filepath.Join(home, "x", fmt.Sprintf("a%d.md", i)), fmt.Sprintf("@a%d.md\n", i+1))
+		impWrite(t, filepath.Join(src, "x", fmt.Sprintf("a%d.md", i)), fmt.Sprintf("@a%d.md\n", i+1))
 	}
 	s := resolveImports(importOpts{Source: src, HostHome: home})
-	want := []string{"/home/agent/x/a1.md", "/home/agent/x/a2.md", "/home/agent/x/a3.md", "/home/agent/x/a4.md"}
+	want := []string{"/home/agent/.claude/x/a1.md", "/home/agent/.claude/x/a2.md", "/home/agent/.claude/x/a3.md", "/home/agent/.claude/x/a4.md"}
 	if got := impBoxes(s); !reflect.DeepEqual(got, want) {
 		t.Fatalf("boxes = %v, want %v (refused %v)", got, want, s.Refused)
 	}
-	if s.Files[1].Host != filepath.Join(home, "x", "a2.md") {
+	if s.Files[1].Host != filepath.Join(src, "x", "a2.md") {
 		t.Errorf("a2 host = %q", s.Files[1].Host)
 	}
 }
@@ -223,8 +224,8 @@ func TestResolveImportsSymlinkInsideFolderFollowed(t *testing.T) {
 		tmp := t.TempDir()
 		home, src := impFixture(t, tmp)
 		impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/.claude/context/a.md\n")
-		impWrite(t, filepath.Join(tmp, "dotfiles", "context", "a.md"), "DOT")
-		if err := os.Symlink(filepath.Join(tmp, "dotfiles", "context"), filepath.Join(src, "context")); err != nil {
+		impWrite(t, filepath.Join(home, "dotfiles", "context", "a.md"), "DOT")
+		if err := os.Symlink(filepath.Join(home, "dotfiles", "context"), filepath.Join(src, "context")); err != nil {
 			t.Fatal(err)
 		}
 		s := resolveImports(importOpts{Source: src, HostHome: home})
@@ -370,10 +371,19 @@ func TestResolveImportsAbsoluteOutsideHome(t *testing.T) {
 func TestResolveImportsReserved(t *testing.T) {
 	tmp := t.TempDir()
 	home, src := impFixture(t, tmp)
-	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/.claude/CLAUDE.md\n")
+	spellings := []string{"~/.claude/CLAUDE.md", "~/.claude.json", "settings.json", "~/.claude/.credentials.json"}
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@"+strings.Join(spellings, "\n@")+"\n")
+	impWrite(t, filepath.Join(home, ".claude.json"), "{}")
+	impWrite(t, filepath.Join(src, "settings.json"), "{}")
+	impWrite(t, filepath.Join(src, ".credentials.json"), "{}")
 	s := resolveImports(importOpts{Source: src, HostHome: home})
-	if len(s.Files) != 0 || impRefusal(s, "~/.claude/CLAUDE.md") != ReasonImportReserved {
-		t.Fatalf("got %+v", s)
+	if len(s.Files) != 0 {
+		t.Fatalf("files = %v", impBoxes(s))
+	}
+	for _, sp := range spellings {
+		if got := impRefusal(s, sp); got != ReasonImportReserved {
+			t.Errorf("%s: reason %q", sp, got)
+		}
 	}
 }
 
@@ -393,7 +403,7 @@ func TestResolveImportsConflict(t *testing.T) {
 	// on the same in-box path from two different host files.
 	tmp := t.TempDir()
 	home, _ := impFixture(t, tmp)
-	src := filepath.Join(tmp, "cfg")
+	src := filepath.Join(home, "cfg")
 	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@x.md\n@~/.claude/x.md\n")
 	impWrite(t, filepath.Join(src, "x.md"), "cfg")
 	impWrite(t, filepath.Join(home, ".claude", "x.md"), "home")
@@ -428,10 +438,10 @@ func TestReadImportRefusesSymlinkedComponent(t *testing.T) {
 	if err := os.Symlink(filepath.Join(tmp, "real"), filepath.Join(tmp, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := readImport(filepath.Join(tmp, "real", "f.md"), maxImportBytes); err != nil {
+	if _, _, _, err := readImport(filepath.Join(tmp, "real", "f.md"), maxImportBytes, nil); err != nil {
 		t.Fatalf("real path: %v", err)
 	}
-	if _, _, err := readImport(filepath.Join(tmp, "link", "f.md"), maxImportBytes); !errors.Is(err, errImportChanged) {
+	if _, _, _, err := readImport(filepath.Join(tmp, "link", "f.md"), maxImportBytes, nil); !errors.Is(err, errImportChanged) {
 		t.Fatalf("linked component: err = %v", err)
 	}
 }
@@ -472,7 +482,7 @@ func TestReadImportNeverBlocksOnFIFO(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
-	go func() { _, _, err := readImport(p, maxImportBytes); done <- err }()
+	go func() { _, _, _, err := readImport(p, maxImportBytes, nil); done <- err }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, errImportChanged) {
@@ -480,5 +490,136 @@ func TestReadImportNeverBlocksOnFIFO(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("readImport blocked on a FIFO")
+	}
+}
+
+func TestResolveImportsDirLinkOutsideHomeRefused(t *testing.T) {
+	tmp := t.TempDir()
+	home, src := impFixture(t, tmp)
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@context/a.md\n")
+	impWrite(t, filepath.Join(tmp, "elsewhere", "a.md"), "OUT")
+	if err := os.Symlink(filepath.Join(tmp, "elsewhere"), filepath.Join(src, "context")); err != nil {
+		t.Fatal(err)
+	}
+	s := resolveImports(importOpts{Source: src, HostHome: home})
+	if len(s.Files) != 0 || impRefusal(s, "context/a.md") != ReasonImportOutsideHome {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+func TestResolveImportsSourceOutsideHome(t *testing.T) {
+	// A config dir outside home: its relative imports resolve outside home too.
+	tmp := t.TempDir()
+	home, _ := impFixture(t, tmp)
+	src := filepath.Join(tmp, "cfg")
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@x.md\n")
+	impWrite(t, filepath.Join(src, "x.md"), "x")
+	s := resolveImports(importOpts{Source: src, HostHome: home})
+	if len(s.Files) != 0 || impRefusal(s, "x.md") != ReasonImportOutsideHome {
+		t.Fatalf("got %+v", s)
+	}
+}
+
+func TestResolveImportsNotFollowedOutsideClaudeDir(t *testing.T) {
+	// A file outside ~/.claude may be box-writable (a workspace); an "@" line
+	// planted in it must not pull a host secret into the next box.
+	tmp := t.TempDir()
+	home, src := impFixture(t, tmp)
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/notes/n.md\n@~/notes/plain.md\n")
+	impWrite(t, filepath.Join(home, "notes", "n.md"), "see @~/.aws/credentials\n")
+	impWrite(t, filepath.Join(home, "notes", "plain.md"), "no imports here\n")
+	impWrite(t, filepath.Join(home, ".aws", "credentials"), "[default]\n")
+	s := resolveImports(importOpts{Source: src, HostHome: home})
+	want := []string{"/home/agent/notes/n.md", "/home/agent/notes/plain.md"}
+	if got := impBoxes(s); !reflect.DeepEqual(got, want) {
+		t.Fatalf("boxes = %v, want %v", got, want)
+	}
+	if len(s.Refused) != 1 || s.Refused[0] != (ImportRefusal{Import: "~/notes/n.md", Reason: ReasonImportNotFollowed}) {
+		t.Fatalf("refused = %v", s.Refused)
+	}
+}
+
+func TestResolveImportsDenyByIdentity(t *testing.T) {
+	// The deny entry is spelled through an alias, so no spelling compare can
+	// match the real path; only the walk's identity check refuses it. (On a
+	// case-insensitive macOS volume, ~/.SSH is the same case.)
+	tmp := t.TempDir()
+	home, src := impFixture(t, tmp)
+	impWrite(t, filepath.Join(home, "vault", "x.md"), "SECRET")
+	alias := filepath.Join(tmp, "alias")
+	if err := os.Symlink(filepath.Join(home, "vault"), alias); err != nil {
+		t.Fatal(err)
+	}
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/vault/x.md\n")
+	s := resolveImports(importOpts{Source: src, HostHome: home, Deny: []string{alias}})
+	if len(s.Files) != 0 || impRefusal(s, "~/vault/x.md") != ReasonImportDenied {
+		t.Fatalf("got %+v", s)
+	}
+	// A denied FILE matches by identity too.
+	s = resolveImports(importOpts{Source: src, HostHome: home, Deny: []string{filepath.Join(alias, "x.md")}})
+	if len(s.Files) != 0 || impRefusal(s, "~/vault/x.md") != ReasonImportDenied {
+		t.Fatalf("file deny: got %+v", s)
+	}
+}
+
+func TestReadImportDeniesByIdentity(t *testing.T) {
+	tmp := t.TempDir()
+	impWrite(t, filepath.Join(tmp, "secret", "f.md"), "F")
+	if err := os.Symlink(filepath.Join(tmp, "secret"), filepath.Join(tmp, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(filepath.Join(tmp, "alias"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := &importIDs{deny: []fs.FileInfo{fi}}
+	if _, _, _, err := readImport(filepath.Join(tmp, "secret", "f.md"), maxImportBytes, ids); !errors.Is(err, errImportDenied) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestResolveImportsRefusalsDedupedAndBounded(t *testing.T) {
+	tmp := t.TempDir()
+	home, src := impFixture(t, tmp)
+	var md strings.Builder
+	for i := 0; i < 500; i++ {
+		md.WriteString("@/e ")
+	}
+	md.WriteString("\n")
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&md, "@/e%d\n", i)
+	}
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), md.String())
+	s := resolveImports(importOpts{Source: src, HostHome: home})
+	if len(s.Refused) != maxImportFiles+1 {
+		t.Fatalf("refused rows = %d, want %d", len(s.Refused), maxImportFiles+1)
+	}
+	n := 0
+	for _, r := range s.Refused {
+		if r.Import == "/e" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("/e rows = %d, want 1", n)
+	}
+	if last := s.Refused[len(s.Refused)-1]; last.Reason != ReasonImportTooMany {
+		t.Errorf("last row = %v", last)
+	}
+}
+
+func TestResolveImportsEmptyHostHome(t *testing.T) {
+	tmp := t.TempDir()
+	_, src := impFixture(t, tmp)
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/a.md\n@/x/b.md\n@rel.md\n")
+	impWrite(t, filepath.Join(src, "rel.md"), "r")
+	s := resolveImports(importOpts{Source: src})
+	if len(s.Files) != 0 {
+		t.Fatalf("files = %v", impBoxes(s))
+	}
+	for _, sp := range []string{"~/a.md", "/x/b.md", "rel.md"} {
+		if got := impRefusal(s, sp); got != ReasonImportOutsideHome {
+			t.Errorf("%s: reason %q", sp, got)
+		}
 	}
 }

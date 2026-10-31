@@ -147,7 +147,8 @@ const KindImport = "import"
 
 // Caps on what a CLAUDE.md's imports can pull into a box. Hops count from the
 // root CLAUDE.md: its own imports are hop 1, and a file at maxImportHops is
-// bundled but its imports are not followed.
+// bundled but its imports are not followed. maxImportFiles also bounds the
+// refusal rows.
 const (
 	maxImportHops  = 4
 	maxImportFiles = 64
@@ -167,7 +168,18 @@ const (
 	ReasonImportReserved      = "would land on a path the box reserves"
 	ReasonImportChanged       = "changed while it was read"
 	ReasonImportConflict      = "resolves to the same in-box path as another import from a different file"
+	ReasonImportNotFollowed   = "imports inside files outside your ~/.claude folder are not followed"
 )
+
+// reservedBoxFiles are in-box files the box itself provides (the bundle's
+// CLAUDE.md mount, and the agent's own config and credentials). An import may
+// never land on one. BoxBundleDir and everything under it is reserved too.
+var reservedBoxFiles = []string{
+	filepath.Join(boxHome, ".claude", "CLAUDE.md"),
+	filepath.Join(boxHome, ".claude.json"),
+	filepath.Join(boxHome, ".claude", "settings.json"),
+	filepath.Join(boxHome, ".claude", ".credentials.json"),
+}
 
 // ImportFile is one file a CLAUDE.md imports, resolved and read. content is
 // exactly the bytes that were hashed, so what is materialized is what was
@@ -199,7 +211,7 @@ type ImportSet struct {
 type importOpts struct {
 	Source   string   // config dir holding CLAUDE.md
 	HostHome string   // resolved host home
-	Deny     []string // host dirs no import may come from
+	Deny     []string // host dirs (or files) no import may come from
 }
 
 // importNode is the file whose imports are being resolved: where a relative
@@ -211,18 +223,34 @@ type importNode struct {
 	hop             int
 }
 
+// importIDs are the identities readImport's walk compares every directory
+// (and the leaf) against. Identity, not spelling: on a case-insensitive
+// filesystem ~/.SSH is ~/.ssh, and a deny dir reached through any alias is
+// still the same directory.
+type importIDs struct {
+	deny         []fs.FileInfo
+	home, source fs.FileInfo // nil when unresolved: never seen
+}
+
+// importSeen reports which anchors the walk passed through.
+type importSeen struct{ home, source bool }
+
 type importWalk struct {
-	o       importOpts
-	deny    []string
-	seen    map[string]string // in-box path -> host path it was mapped from
-	total   int64
-	stopped bool
-	set     ImportSet
+	o        importOpts
+	home     string // EvalSymlinks(HostHome), "" when unresolved
+	denySpel []string
+	ids      importIDs
+	seen     map[string]string // in-box path -> host path it was mapped from
+	refused  map[ImportRefusal]bool
+	total    int64
+	stopped  bool
+	set      ImportSet
 }
 
 var (
 	errImportChanged  = errors.New("bundle: import changed while it was read")
 	errImportTooLarge = errors.New("bundle: import is too large")
+	errImportDenied   = errors.New("bundle: import is in a denied directory")
 )
 
 // resolveImports resolves the @-imports of Source/CLAUDE.md, recursively, to
@@ -231,13 +259,32 @@ var (
 // file that does not exist), then against the other imports (one host file per
 // in-box path), then on the filesystem, where a box may have planted links,
 // FIFOs or devices in anything it can write. A missing file is skipped.
+//
+// Only files under Source have their own imports followed: a file elsewhere
+// (a workspace the box can write, say) could otherwise gain an "@" line that
+// pulls a host secret into the next box.
 func resolveImports(o importOpts) ImportSet {
-	w := &importWalk{o: o, seen: map[string]string{}, set: ImportSet{Files: []ImportFile{}}}
-	for _, d := range append(slices.Clone(o.Deny), box.HostSocketDirs(o.HostHome)...) {
-		w.deny = append(w.deny, filepath.Clean(d))
-		if rd, err := filepath.EvalSymlinks(d); err == nil && rd != filepath.Clean(d) {
-			w.deny = append(w.deny, rd)
+	w := &importWalk{
+		o: o, seen: map[string]string{}, refused: map[ImportRefusal]bool{},
+		set: ImportSet{Files: []ImportFile{}},
+	}
+	deny := slices.Clone(o.Deny)
+	if o.HostHome != "" {
+		if h, err := filepath.EvalSymlinks(o.HostHome); err == nil {
+			w.home = h
+			w.ids.home, _ = os.Stat(h)
+			deny = append(deny, box.HostSocketDirs(h)...)
 		}
+		deny = append(deny, box.HostSocketDirs(o.HostHome)...)
+	}
+	for _, d := range deny {
+		w.denySpel = append(w.denySpel, filepath.Clean(d))
+		if fi, err := os.Stat(d); err == nil {
+			w.ids.deny = append(w.ids.deny, fi)
+		}
+	}
+	if s, err := filepath.EvalSymlinks(o.Source); err == nil {
+		w.ids.source, _ = os.Stat(s)
 	}
 	// The root is read the way the bundle copies it (resolveIn): links
 	// followed. It is the user's own config, but the read still never blocks
@@ -246,7 +293,7 @@ func resolveImports(o importOpts) ImportSet {
 	if err != nil {
 		return w.set
 	}
-	md, _, err := readImport(root, maxImportTotal)
+	md, _, _, err := readImport(root, maxImportTotal, nil)
 	if err != nil {
 		return w.set
 	}
@@ -273,7 +320,7 @@ func (w *importWalk) walk(spellings []string, n importNode) {
 			continue
 		}
 		w.seen[bx] = host
-		f, reason := w.load(sp, host, bx)
+		f, underSource, reason := w.load(sp, host, bx)
 		if reason != "" {
 			w.refuse(sp, reason)
 			continue
@@ -283,21 +330,51 @@ func (w *importWalk) walk(spellings []string, n importNode) {
 		}
 		if len(w.set.Files) >= maxImportFiles || w.total+f.Size > maxImportTotal {
 			w.refuse(sp, ReasonImportTooMany)
-			w.stopped = true
 			return
 		}
 		w.set.Files = append(w.set.Files, *f)
 		w.total += f.Size
-		if hop := n.hop + 1; hop < maxImportHops {
-			w.walk(parseImports(f.content), importNode{
-				hostDir: filepath.Dir(host), boxDir: filepath.Dir(bx), absFrame: absFrame, hop: hop,
-			})
+		hop := n.hop + 1
+		if hop >= maxImportHops {
+			continue
 		}
+		nested := parseImports(f.content)
+		if !underSource {
+			if len(nested) > 0 {
+				w.refuse(sp, ReasonImportNotFollowed)
+			}
+			continue
+		}
+		w.walk(nested, importNode{
+			hostDir: filepath.Dir(host), boxDir: filepath.Dir(bx), absFrame: absFrame, hop: hop,
+		})
 	}
 }
 
+// refuse records one refusal row, once per (import, reason). The rows are
+// bounded like the files: at maxImportFiles rows the walk stops with one
+// TooMany row, so a CLAUDE.md of a thousand bad spellings cannot grow the set
+// (or the bundle lock it is written to) without limit.
 func (w *importWalk) refuse(sp, reason string) {
-	w.set.Refused = append(w.set.Refused, ImportRefusal{Import: sp, Reason: reason})
+	r := ImportRefusal{Import: sp, Reason: reason}
+	if w.refused[r] {
+		return
+	}
+	w.refused[r] = true
+	w.set.Refused = append(w.set.Refused, r)
+	if reason == ReasonImportTooMany {
+		w.stopped = true
+		return
+	}
+	if len(w.set.Refused) >= maxImportFiles {
+		for _, x := range w.set.Refused {
+			if x.Reason == ReasonImportTooMany {
+				w.stopped = true
+				return
+			}
+		}
+		w.refuse(sp, ReasonImportTooMany)
+	}
 }
 
 // mapImport maps a spelling to its host file and in-box path, and refuses it
@@ -305,10 +382,14 @@ func (w *importWalk) refuse(sp, reason string) {
 // path is accepted only under the host home and is mounted at the same path. A
 // relative one joins the importer's dir on each side and stays in the
 // importer's frame: under the box home, or under the host home for a file that
-// was itself imported by absolute path.
+// was itself imported by absolute path. With no host home, "~" and absolute
+// imports are refused rather than resolved against the daemon's cwd.
 func (w *importWalk) mapImport(sp string, n importNode) (host, bx string, absFrame bool, reason string) {
 	switch {
 	case sp == "~" || strings.HasPrefix(sp, "~/"):
+		if w.o.HostHome == "" {
+			return "", "", false, ReasonImportOutsideHome
+		}
 		rest := strings.TrimPrefix(sp, "~")
 		bx = filepath.Join(boxHome, rest)
 		host = filepath.Join(w.o.HostHome, rest)
@@ -337,132 +418,175 @@ func (w *importWalk) mapImport(sp string, n importNode) (host, bx string, absFra
 	if r := box.MountUnsafe(bx); r != "" {
 		return "", "", false, r
 	}
-	if box.UnderMount(bx, []string{BoxBundleDir}) || bx == filepath.Join(boxHome, ".claude", "CLAUDE.md") {
+	if box.UnderMount(bx, []string{BoxBundleDir}) || slices.Contains(reservedBoxFiles, bx) {
 		return "", "", false, ReasonImportReserved
 	}
 	return host, bx, absFrame, ""
 }
 
-// load runs the filesystem checks and reads the file. (nil, "") is a silent
+// load runs the filesystem checks and reads the file. (nil, _, "") is a silent
 // skip: the file, or a directory on the way to it, does not exist or cannot be
-// read.
-func (w *importWalk) load(sp, host, bx string) (*ImportFile, string) {
+// read. underSource is true when the read passed through Source, which is what
+// lets the file's own imports be followed.
+func (w *importWalk) load(sp, host, bx string) (f *ImportFile, underSource bool, reason string) {
 	realDir, err := filepath.EvalSymlinks(filepath.Dir(host))
 	if err != nil {
-		return nil, ""
+		return nil, false, ""
+	}
+	// Resolved, the file must still sit under the resolved home: a directory
+	// link out of home would hand the box files the spelling never named.
+	if w.home == "" || !box.UnderMount(realDir, []string{w.home}) {
+		return nil, false, ReasonImportOutsideHome
 	}
 	real := filepath.Join(realDir, filepath.Base(host))
 	li, err := os.Lstat(real)
 	if err != nil {
-		return nil, ""
+		return nil, false, ""
 	}
 	if li.Mode()&os.ModeSymlink != 0 {
 		target, err := filepath.EvalSymlinks(real)
 		if err != nil {
-			return nil, ""
+			return nil, false, ""
 		}
 		if !box.UnderMount(target, []string{realDir}) {
-			return nil, ReasonImportSymlinkEscape
+			return nil, false, ReasonImportSymlinkEscape
 		}
 		real = target
 	}
 	fi, err := os.Lstat(real)
 	if err != nil {
-		return nil, ""
+		return nil, false, ""
 	}
-	if box.UnderMount(real, w.deny) {
-		return nil, ReasonImportDenied
+	// A fast spelling pass; readImport's walk decides by identity.
+	if box.UnderMount(real, w.denySpel) {
+		return nil, false, ReasonImportDenied
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, ReasonImportNotRegular
+		return nil, false, ReasonImportNotRegular
 	}
 	if fi.Size() > maxImportBytes {
-		return nil, ReasonImportTooLarge
+		return nil, false, ReasonImportTooLarge
 	}
-	b, rfi, err := readImport(real, maxImportBytes)
+	b, rfi, seen, err := readImport(real, maxImportBytes, &w.ids)
 	switch {
+	case errors.Is(err, errImportDenied):
+		return nil, false, ReasonImportDenied
 	case errors.Is(err, errImportTooLarge):
-		return nil, ReasonImportTooLarge
+		return nil, false, ReasonImportTooLarge
 	case errors.Is(err, errImportChanged):
-		return nil, ReasonImportChanged
+		return nil, false, ReasonImportChanged
 	case err != nil:
-		return nil, ""
+		return nil, false, ""
 	case !os.SameFile(rfi, fi):
-		return nil, ReasonImportChanged
+		return nil, false, ReasonImportChanged
+	case !seen.home:
+		return nil, false, ReasonImportOutsideHome
 	}
 	sum := sha256.Sum256(b)
 	return &ImportFile{
 		Import: sp, Name: filepath.Base(bx), Box: bx, Host: real,
 		Size: int64(len(b)), SHA256: hex.EncodeToString(sum[:]), content: b,
-	}, ""
+	}, seen.source, ""
 }
 
 // readImport reads the regular file at real, an absolute path with no links in
-// it, and returns its bytes and the identity it was read from. The path is
-// walked from "/" one component at a time, each directory opened relative to
-// the one before and checked to be the very directory Lstat saw, so a
-// component swapped for a link after the caller resolved the path cannot
-// redirect the read: the text of real is then truly where the bytes came from,
-// which is what the deny check judged. The open never blocks (O_NONBLOCK: a
-// FIFO swapped in does not hang the daemon) and never follows a leaf link.
-func readImport(real string, limit int64) ([]byte, fs.FileInfo, error) {
+// it, and returns its bytes, the identity it was read from, and which of ids'
+// anchors (home, source) it passed through. The path is walked from "/" one
+// component at a time, each directory opened relative to the one before and
+// checked to be the very directory Lstat saw, so a component swapped for a link
+// after the caller resolved the path cannot redirect the read. Every directory
+// opened, and the leaf, is compared by identity with ids.deny (errImportDenied)
+// and the anchors. The open never blocks (O_NONBLOCK: a FIFO swapped in does
+// not hang the daemon) and never follows a leaf link. ids may be nil.
+func readImport(real string, limit int64, ids *importIDs) ([]byte, fs.FileInfo, importSeen, error) {
+	var seen importSeen
+	if ids == nil {
+		ids = &importIDs{}
+	}
 	if !filepath.IsAbs(real) || filepath.Clean(real) != real || real == "/" {
-		return nil, nil, errImportChanged
+		return nil, nil, seen, errImportChanged
 	}
 	cur, err := os.OpenRoot("/")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, seen, err
 	}
 	defer func() { cur.Close() }()
+	visit := func(fi fs.FileInfo) error {
+		for _, d := range ids.deny {
+			if os.SameFile(fi, d) {
+				return errImportDenied
+			}
+		}
+		if ids.home != nil && os.SameFile(fi, ids.home) {
+			seen.home = true
+		}
+		if ids.source != nil && os.SameFile(fi, ids.source) {
+			seen.source = true
+		}
+		return nil
+	}
+	st, err := cur.Stat(".")
+	if err != nil {
+		return nil, nil, seen, err
+	}
+	if err := visit(st); err != nil {
+		return nil, nil, seen, err
+	}
 	parts := strings.Split(real[1:], "/")
 	for _, c := range parts[:len(parts)-1] {
 		di, err := cur.Lstat(c)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, seen, err
 		}
 		if !di.IsDir() {
-			return nil, nil, errImportChanged
+			return nil, nil, seen, errImportChanged
 		}
 		next, err := cur.OpenRoot(c)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, seen, err
 		}
 		cur.Close()
 		cur = next
 		if st, err := cur.Stat("."); err != nil || !os.SameFile(st, di) {
-			return nil, nil, errImportChanged
+			return nil, nil, seen, errImportChanged
+		}
+		if err := visit(di); err != nil {
+			return nil, nil, seen, err
 		}
 	}
 	leaf := parts[len(parts)-1]
 	fi, err := cur.Lstat(leaf)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, seen, err
+	}
+	if err := visit(fi); err != nil {
+		return nil, nil, seen, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, nil, errImportChanged
+		return nil, nil, seen, errImportChanged
 	}
 	if fi.Size() > limit {
-		return nil, nil, errImportTooLarge
+		return nil, nil, seen, errImportTooLarge
 	}
 	f, err := cur.OpenFile(leaf, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, seen, err
 	}
 	defer f.Close()
 	if st, err := f.Stat(); err != nil || !os.SameFile(st, fi) || !st.Mode().IsRegular() {
-		return nil, nil, errImportChanged
+		return nil, nil, seen, errImportChanged
 	}
 	b, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, seen, err
 	}
 	if int64(len(b)) > limit {
-		return nil, nil, errImportTooLarge
+		return nil, nil, seen, errImportTooLarge
 	}
 	if int64(len(b)) != fi.Size() {
-		return nil, nil, errImportChanged
+		return nil, nil, seen, errImportChanged
 	}
-	return b, fi, nil
+	return b, fi, seen, nil
 }
 
 // fingerprint identifies the set for the bundle hash: the in-box path and
