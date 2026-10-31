@@ -1571,3 +1571,241 @@ func TestFetchAcceptsPrunedRewrittenCommitWithoutCommitMap_AcceptedResidual(t *t
 		t.Fatalf("the accepted residual is that this passes; got %v", err)
 	}
 }
+
+// wantReason fails unless err is a *Refusal with the reason, whose text is the
+// wrapped error's, unchanged.
+func wantReason(t *testing.T, err error, reason string) *Refusal {
+	t.Helper()
+	var r *Refusal
+	if !errors.As(err, &r) {
+		t.Fatalf("err = %v (%T), want a *Refusal", err, err)
+	}
+	if r.Reason != reason {
+		t.Fatalf("Reason = %q, want %q (err: %v)", r.Reason, reason, err)
+	}
+	if r.Err == nil || r.Error() != r.Err.Error() || errors.Unwrap(r) != r.Err {
+		t.Fatalf("Refusal text %q is not the wrapped error's %v", r.Error(), r.Err)
+	}
+	return r
+}
+
+// ffOnlyFx has a box/feat on the host (one commit), then one more commit in the
+// box, with the fetch set to fast-forward only. It returns box/feat's first value.
+func ffOnlyFx(t *testing.T) (*fetchFx, string) {
+	t.Helper()
+	x := newFetchFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := x.ofRev("refs/heads/box/feat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	x.commitInClone("feat2.txt", "2", "b2")
+	x.req.FastForwardOnly = true
+	return x, first
+}
+
+func (x *fetchFx) cloneTip() string {
+	x.t.Helper()
+	return strings.TrimSpace(gitIn(x.t, x.req.Clone.Dir, "", "rev-parse", "refs/heads/feat"))
+}
+
+func TestFetchFastForwardOnlyCreatesNewRef(t *testing.T) {
+	x := newFetchFx(t)
+	x.req.FastForwardOnly = true
+	res, err := x.fetch()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := x.ofRev("refs/heads/box/feat")
+	if got != x.cloneTip() || res.Ref != "refs/heads/box/feat" {
+		t.Errorf("box/feat = %s (res %q), want the tip %s", got, res.Ref, x.cloneTip())
+	}
+	if q := x.quarantineRefs(); q != "" {
+		t.Errorf("quarantine refs left: %q", q)
+	}
+}
+
+func TestFetchFastForwardOnlyAdvances(t *testing.T) {
+	x, first := ffOnlyFx(t)
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := x.ofRev("refs/heads/box/feat")
+	if got != x.cloneTip() || got == first {
+		t.Errorf("box/feat = %s, want the new tip %s (was %s)", got, x.cloneTip(), first)
+	}
+}
+
+func TestFetchFastForwardOnlyRefusesDiverged(t *testing.T) {
+	x, first := ffOnlyFx(t)
+	// The box drops its first commit and commits something else: the host's
+	// box/feat has a commit the new tip lacks.
+	x.inClone("reset", "-q", "--hard", "main")
+	x.commitInClone("other.txt", "x", "other")
+	_, err := x.fetch()
+	r := wantReason(t, err, ReasonNotFF)
+	if want := "box/feat on the host has commits feat lacks; not overwritten (agent-box clone fetch overwrites it)"; !strings.Contains(r.Error(), want) {
+		t.Errorf("err = %q, want it to say %q", r.Error(), want)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != first {
+		t.Errorf("box/feat = %s, want it unchanged at %s", got, first)
+	}
+	if q := x.quarantineRefs(); q != "" {
+		t.Errorf("quarantine refs left: %q", q)
+	}
+	x.tempEmpty()
+
+	// The CLI's forced update still takes it.
+	x.req.FastForwardOnly = false
+	if _, err := x.fetch(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != x.cloneTip() {
+		t.Errorf("forced: box/feat = %s, want %s", got, x.cloneTip())
+	}
+}
+
+func TestFetchFastForwardOnlyRefusesCheckedOutRef(t *testing.T) {
+	// In a linked worktree of clone_of.
+	x, first := ffOnlyFx(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	fixtureGit(t, x.of, "worktree", "add", "-q", wt, "box/feat")
+	_, err := x.fetch()
+	r := wantReason(t, err, ReasonCheckedOut)
+	if want := "box/feat is checked out in " + wt + "; not moved"; !strings.Contains(r.Error(), want) {
+		t.Errorf("err = %q, want it to say %q", r.Error(), want)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != first {
+		t.Errorf("box/feat = %s, want it unchanged at %s", got, first)
+	}
+	x.tempEmpty()
+
+	// In clone_of itself.
+	x, first = ffOnlyFx(t)
+	fixtureGit(t, x.of, "checkout", "-q", "box/feat")
+	_, err = x.fetch()
+	r = wantReason(t, err, ReasonCheckedOut)
+	if want := "box/feat is checked out in " + x.of + "; not moved"; !strings.Contains(r.Error(), want) {
+		t.Errorf("err = %q, want it to say %q", r.Error(), want)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != first {
+		t.Errorf("box/feat = %s, want it unchanged at %s", got, first)
+	}
+}
+
+func TestFetchFastForwardOnlyLosesARaceSafely(t *testing.T) {
+	x, _ := ffOnlyFx(t)
+	racer := strings.TrimSpace(gitIn(t, x.of, "", "commit-tree", "-m", "racer", "HEAD^{tree}"))
+	moved := false
+	g := &hookGit{g: x.rec, fail: func(sub string) error {
+		if sub == "update-ref" && !moved {
+			moved = true
+			fixtureGit(t, x.of, "update-ref", "refs/heads/box/feat", racer)
+		}
+		return nil
+	}}
+	_, err := Fetch(context.Background(), g, x.dock, x.req)
+	wantReason(t, err, ReasonNotFF)
+	if !moved {
+		t.Fatal("the race never happened")
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != racer {
+		t.Errorf("box/feat = %s, want the racer's %s", got, racer)
+	}
+}
+
+func TestFetchRefusalReasons(t *testing.T) {
+	// unrelated history: no prerequisite commits
+	x := newFetchFx(t)
+	x.inClone("checkout", "-q", "--orphan", "orphan")
+	x.inClone("commit", "-q", "-m", "unrelated root")
+	x.req.Branch = "orphan"
+	_, err := x.fetch()
+	wantReason(t, err, ReasonRefused)
+	if !strings.Contains(err.Error(), "refusing orphan: it shares no history with main in "+x.of) {
+		t.Errorf("unrelated: err = %v", err)
+	}
+
+	// stale history
+	x = newFetchFx(t)
+	old := x.rewriteHostMain()
+	_, err = x.fetch()
+	wantReason(t, err, ReasonRefused)
+	if !strings.Contains(err.Error(), "refusing feat: it carries history host main no longer has (recorded tip "+old[:12]+" is an ancestor of feat)") {
+		t.Errorf("stale: err = %v", err)
+	}
+
+	// unverified record
+	x = newFetchFx(t)
+	p, perr := baseRecordPath(x.req.DataDir, x.req.Clone.Dir)
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	os.Remove(p)
+	_, err = x.fetch()
+	wantReason(t, err, ReasonRefused)
+	if want := "clone fetch: this clone's history is unverified (created before refresh tracking); " +
+		"recreate the clone, or pass -allow-old-history once you have checked feat"; err.Error() != want {
+		t.Errorf("unverified: err = %q, want %q", err, want)
+	}
+
+	// no main or master on the host
+	x = newFetchFx(t)
+	fixtureGit(t, x.of, "branch", "-m", "main", "trunk")
+	x.req.Base = "trunk"
+	_, err = x.fetch()
+	wantReason(t, err, ReasonRefused)
+	if want := "clone fetch: cannot check feat against host history: " + x.of + " has no main or master branch"; err.Error() != want {
+		t.Errorf("no base: err = %q, want %q", err, want)
+	}
+
+	// rewritten away on the host
+	x = newFetchFx(t)
+	y := x.hostRewrittenAway()
+	_, err = x.fetch()
+	wantReason(t, err, ReasonRefused)
+	wantRewrittenRefusal(t, err, y, x.of)
+
+	// too large
+	x = newFetchFx(t)
+	oldMax := maxBundleBytes
+	maxBundleBytes = 16
+	t.Cleanup(func() { maxBundleBytes = oldMax })
+	_, err = x.fetch()
+	wantReason(t, err, ReasonTooLarge)
+	if want := "clone fetch: the bundle is larger than 16 bytes; refusing it"; err.Error() != want {
+		t.Errorf("too large: err = %q, want %q", err, want)
+	}
+	maxBundleBytes = oldMax
+
+	// empty: the branch is already home
+	x = newFetchFx(t)
+	x.dock.stderr = "fatal: Refusing to create empty bundle."
+	_, err = x.fetch()
+	wantReason(t, err, reasonEmpty)
+	if want := "nothing to fetch: feat has no commits that main lacks"; err.Error() != want {
+		t.Errorf("empty: err = %q, want %q", err, want)
+	}
+}
+
+func TestFetchAllowsRetryAfterRefusal(t *testing.T) {
+	x, first := ffOnlyFx(t)
+	x.inClone("reset", "-q", "--hard", "main")
+	x.commitInClone("other.txt", "x", "other")
+	_, err := x.fetch()
+	wantReason(t, err, ReasonNotFF)
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != first {
+		t.Fatalf("box/feat = %s, want %s", got, first)
+	}
+	// The host drops its diverged box/feat. The commits the refused run brought
+	// are the box's, so they must not read as host history now.
+	fixtureGit(t, x.of, "update-ref", "-d", "refs/heads/box/feat")
+	if _, err := x.fetch(); err != nil {
+		t.Fatalf("retry after the host deleted its diverged box/feat: %v", err)
+	}
+	if got, _ := x.ofRev("refs/heads/box/feat"); got != x.cloneTip() {
+		t.Errorf("box/feat = %s, want %s", got, x.cloneTip())
+	}
+}
