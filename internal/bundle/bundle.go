@@ -174,8 +174,15 @@ func New(opts Options) (*Manager, error) {
 }
 
 // Imports resolves the files CLAUDE.md imports, fresh from the host. It writes
-// nothing. Claude Code's OAuth credentials are always denied: the file name has
-// a leading dot, so the resolver's credentials* secret glob does not match it.
+// nothing.
+//
+// Besides Options.ImportDeny and the resolver's own list, it denies by identity
+// every host file the bundle sanitizes or replaces (the MCP file, settings.json,
+// settings.local.json) and the credentials the box must not hold. The resolver's
+// reserved-path check sees only the in-box spelling, so an absolute or linked
+// import of one of these files would otherwise keep its host path in the box and
+// hand over the unsanitized original. Claude Code's OAuth credentials need an
+// explicit entry too: the leading dot keeps them out of the credentials* glob.
 func (m *Manager) Imports() ImportSet {
 	home := m.opts.HostHome
 	if home == "" {
@@ -189,11 +196,22 @@ func (m *Manager) Imports() ImportSet {
 		home = h
 	}
 	deny := slices.Clone(m.opts.ImportDeny)
-	deny = append(deny,
-		filepath.Join(home, ".claude", ".credentials.json"),
-		filepath.Join(m.opts.Source, ".credentials.json"))
+	if m.opts.MCPFile != "" {
+		deny = append(deny, m.opts.MCPFile)
+	}
+	for _, f := range []string{"settings.json", "settings.local.json", ".credentials.json"} {
+		deny = append(deny, filepath.Join(m.opts.Source, f))
+	}
+	deny = append(deny, filepath.Join(home, ".claude", ".credentials.json"))
+	for _, p := range homeCredentialPaths {
+		deny = append(deny, filepath.Join(home, p))
+	}
 	return resolveImports(importOpts{Source: m.opts.Source, HostHome: home, Deny: deny})
 }
+
+// homeCredentialPaths are credential stores under the home that are not already
+// covered by box.HostSocketDirs (which holds .ssh, .docker and the like).
+var homeCredentialPaths = []string{".aws", ".config/gh", ".kube", ".gnupg", ".netrc", ".git-credentials"}
 
 // Ensure returns a bundle for the current source, building it if the source
 // changed. Reuse requires the lock file, which is written last — so a build that

@@ -268,3 +268,96 @@ func rewriteLock(b *Built) error {
 	_, err := writeJSON(filepath.Join(b.Dir, lockName), b.Lock)
 	return err
 }
+
+// The resolver's reserved check sees only the in-box spelling, so a file the
+// bundle sanitizes or replaces must be denied by identity.
+func TestImportsDenySanitizedConfigFiles(t *testing.T) {
+	m, home, src := importsManager(t)
+	mcp := filepath.Join(home, ".claude.json")
+	impWrite(t, mcp, `{"mcpServers":{"x":{"command":"npx","env":{"TOKEN":"sk-live"}}}}`)
+	impWrite(t, filepath.Join(src, "settings.json"), `{"env":{"TOKEN":"sk-literal"}}`)
+	impWrite(t, filepath.Join(src, "settings.local.json"), `{"env":{"TOKEN":"sk-local"}}`)
+	// A directory link that leads to the config dir: the file's identity, not its
+	// spelling, is what is denied.
+	if err := os.Symlink(src, filepath.Join(home, "cfg")); err != nil {
+		t.Fatal(err)
+	}
+	spell := []string{
+		mcp,
+		filepath.Join(src, "settings.json"),
+		filepath.Join(src, "settings.local.json"),
+		"~/cfg/settings.json",
+	}
+	var md strings.Builder
+	for _, sp := range spell {
+		md.WriteString("@" + sp + "\n")
+	}
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), md.String())
+	set := m.Imports()
+	if len(set.Files) != 0 {
+		t.Fatalf("bundled: %v", impBoxes(set))
+	}
+	for _, sp := range spell {
+		if got := impRefusal(set, sp); got != ReasonImportDenied {
+			t.Errorf("%s: reason %q", sp, got)
+		}
+	}
+}
+
+func TestImportsDenyHostCredentialDirs(t *testing.T) {
+	m, home, src := importsManager(t)
+	files := map[string]string{
+		"~/.aws/config":          "[default]",
+		"~/.config/gh/hosts.yml": "github.com:",
+		"~/.kube/config":         "apiVersion: v1",
+		"~/.gnupg/pubring.kbx":   "k",
+		"~/.netrc":               "machine x",
+		"~/.git-credentials":     "https://u:p@x",
+	}
+	var md strings.Builder
+	for sp, body := range files {
+		impWrite(t, filepath.Join(home, strings.TrimPrefix(sp, "~/")), body)
+		md.WriteString("@" + sp + "\n")
+	}
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), md.String())
+	set := m.Imports()
+	if len(set.Files) != 0 {
+		t.Fatalf("bundled: %v", impBoxes(set))
+	}
+	for sp := range files {
+		if got := impRefusal(set, sp); got != ReasonImportDenied {
+			t.Errorf("%s: reason %q", sp, got)
+		}
+	}
+}
+
+func TestProviderForSkipsMissingImportFile(t *testing.T) {
+	m, _, src := importsManager(t)
+	impWrite(t, filepath.Join(src, "CLAUDE.md"), "@~/.claude/context/a.md\n@~/.claude/context/b.md\n")
+	impWrite(t, filepath.Join(src, "context", "b.md"), "BBB")
+	built, err := m.Ensure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(built.Lock.Imports) != 2 {
+		t.Fatalf("lock imports = %+v", built.Lock.Imports)
+	}
+	if err := os.Remove(filepath.Join(importsDir(built.Dir), "home/agent/.claude/context/a.md")); err != nil {
+		t.Fatal(err)
+	}
+	g, err := NewProvider(m).For("claude", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Imports != 1 || hasMount(g, importMount(built.Dir)) {
+		t.Fatalf("missing file still mounted: imports=%d %+v", g.Imports, g.Mounts)
+	}
+	b := box.Mount{
+		Host:     filepath.Join(importsDir(built.Dir), "home/agent/.claude/context/b.md"),
+		Box:      "/home/agent/.claude/context/b.md",
+		Optional: true, Yield: true,
+	}
+	if !hasMount(g, b) {
+		t.Fatalf("the other import must stay mounted: %+v", g.Mounts)
+	}
+}

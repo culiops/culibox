@@ -34,6 +34,8 @@ var pathEscapes = map[string]int{
 	// symlinks resolve to the whole home, and the home CLAUDE.md imports resolve
 	// against (read-only).
 	"internal/bundle/bundle.go os.UserHomeDir": 4,
+	// ~/.config/gh in the import deny list (a deny, never a read or a write).
+	"internal/bundle/bundle.go literal .config": 1,
 	// Lists the profiles of the host's ~/.aws/config for the credentials screen (a read of
 	// the user's own AWS config, never a write; AWS_CONFIG_FILE wins when set).
 	"internal/awshost/profiles.go os.UserHomeDir": 1,

@@ -192,6 +192,17 @@ func protectedDirs(dataDir string, cfgFiles []string, profilesPath, personalDir 
 	return box.DedupeProtected(out)
 }
 
+// importDenyDirs is the host directories no CLAUDE.md import may come from: the
+// same sources as protectedDirs (data root, each config file's and the profiles
+// file's directories, symlink hops included) plus the box state root.
+func importDenyDirs(dataDir, stateRoot string, cfgFiles []string, profilesPath string) []string {
+	out := []string{dataDir, stateRoot}
+	for _, f := range cfgFiles {
+		out = append(out, box.FileDirs(f)...)
+	}
+	return append(out, box.FileDirs(profilesPath)...)
+}
+
 // warnLeftBehindProfiles: before profiles.json followed the data dir it always
 // sat in the default root. A config with a custom data_dir and no profiles_path
 // would otherwise start with only the seed profiles and say nothing.
@@ -494,8 +505,9 @@ func serve(cfg, baseCfg config.Config, credFile credfile.File, credBad bool, hom
 			// Probed with the user's MCP commands, so a token entry's server is
 			// only offered to a session when the image can run it.
 			EntryCommands: entryMCPCommands(cfg.StaticTokens),
-			// CLAUDE.md imports may not come from agent-box's own data or state.
-			ImportDeny: []string{dataDir, layer.stateRoot},
+			// CLAUDE.md imports may not come from agent-box's own data, state
+			// or config files.
+			ImportDeny: importDenyDirs(dataDir, layer.stateRoot, cfgFiles, profilesPathFor(cfg, dataDir)),
 		})
 		if err != nil {
 			log.Printf("config bundle disabled (%v); boxed sessions will run without user config", err)

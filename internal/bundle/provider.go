@@ -91,10 +91,16 @@ func (p *Provider) For(bin string, withImports bool) (Grant, error) {
 			if !validImportBox(li.Box) || seen[li.Box] {
 				continue // the lock is host-owned, but a mount is not worth trusting it blindly
 			}
+			host := filepath.Join(importsDir(built.Dir), strings.TrimPrefix(li.Box, "/"))
+			// A missing source makes docker refuse the whole spawn, so a file
+			// someone removed from the imports dir is left out, not mounted.
+			if fi, err := os.Lstat(host); err != nil || !fi.Mode().IsRegular() {
+				continue
+			}
 			seen[li.Box] = true
 			imports++
 			mounts = append(mounts, box.Mount{
-				Host:     filepath.Join(importsDir(built.Dir), strings.TrimPrefix(li.Box, "/")),
+				Host:     host,
 				Box:      li.Box,
 				Optional: true,
 				Yield:    true,
